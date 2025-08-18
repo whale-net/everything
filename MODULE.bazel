@@ -1,0 +1,42 @@
+module(
+    name = "everything",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "bazel_skylib", version = "1.5.0")
+
+# Gazelle
+bazel_dep(name = "gazelle", version = "0.45.0")
+
+# Go
+bazel_dep(name = "rules_go", version = "0.56.1")
+
+# Python
+bazel_dep(name = "rules_python", version = "0.40.0")
+bazel_dep(name = "rules_uv", version = "0.87.0")
+
+# Docker
+bazel_dep(name = "rules_oci", version = "2.2.6")
+
+oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
+oci.pull(
+    name = "distroless_base",
+    image = "gcr.io/distroless/base",
+    platforms = ["linux/amd64"],
+    tag = "latest",  # For reproducibility, it is recommended to use a digest instead of 'latest'
+)
+use_repo(oci, "distroless_base", "distroless_base_linux_amd64")
+
+pip = use_extension("@rules_uv//uv:extensions.bzl", "pip")
+pip.parse(
+    name = "pip",
+    requirements_lock = "//:requirements.txt",
+)
+use_repo(pip, "pip")
+
+# Private registry
+# http_archive(
+#     name = "private_registry",
+#     urls = ["file:./tools/registry.py"],
+#     sha256 = "...", # placeholder
+# )

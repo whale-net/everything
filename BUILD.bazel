@@ -1,0 +1,14 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+exports_files([
+    "requirements.txt",
+    ".venv",
+])
+
+py_library(
+    name = "pip_deps",
+    # deps = [
+    #     "@pip//:flask",
+    # ],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,5 @@
+py_binary(
+    name = "headless",
+    srcs = ["main.py"],
+    # No deps needed as they are installed in the virtual environment
+)
