@@ -4,7 +4,7 @@ from libs.python.utils import format_greeting, get_version
 
 def get_message():
     """Get a greeting message."""
-    return format_greeting("world from uv and Bazel")
+    return format_greeting("world from uv and Bazel test")
 
 def main():
     """Main entry point."""
