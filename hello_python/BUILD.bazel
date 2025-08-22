@@ -16,6 +16,7 @@ py_binary(
         ":main_lib",
         "//libs/python",
     ],
+    visibility = ["//visibility:public"],
 )
 
 py_test(

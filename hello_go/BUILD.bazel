@@ -4,6 +4,7 @@ go_binary(
     name = "hello_go",
     srcs = ["main.go"],
     deps = ["//libs/go"],
+    visibility = ["//visibility:public"],
 )
 
 go_test(

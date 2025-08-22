@@ -29,3 +29,14 @@ gazelle(
     ],
     command = "update-repos",
 )
+
+# Convenient aliases
+alias(
+    name = "run-python",
+    actual = "//hello_python:hello_python",
+)
+
+alias(
+    name = "run-go", 
+    actual = "//hello_go:hello_go",
+)

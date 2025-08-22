@@ -28,7 +28,7 @@ This is a Bazel monorepo that supports both Python and Go development with a cle
 ### Building and Testing
 
 ```bash
-# Run all tests
+# Run all tests (most common workflow)
 bazel test //...
 
 # Run specific tests
@@ -41,6 +41,13 @@ bazel run //hello_go:hello_go
 
 # Build all targets
 bazel build //...
+
+# Using convenient aliases
+bazel run //:run-python
+bazel run //:run-go
+
+# Run tests with detailed output
+bazel test --config=ci //...
 ```
 
 ### Adding Dependencies
