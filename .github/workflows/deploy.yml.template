@@ -1,0 +1,40 @@
+# Future deployment workflow
+# Uncomment and customize when ready to deploy
+
+# name: Deploy
+
+# on:
+#   push:
+#     branches: [ main ]
+#   workflow_run:
+#     workflows: ["CI"]
+#     types:
+#       - completed
+
+# jobs:
+#   deploy:
+#     name: Deploy
+#     runs-on: ubuntu-latest
+#     # Only deploy if CI passed
+#     if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    
+#     steps:
+#     - name: Checkout code
+#       uses: actions/checkout@v4
+      
+#     - name: Download build artifacts
+#       uses: actions/download-artifact@v4
+#       with:
+#         name: build-artifacts
+#         path: ./artifacts
+        
+#     - name: Deploy Python app
+#       run: |
+#         echo "Deploy Python app"
+#         # Add deployment commands here
+#         # e.g., docker build, push to registry, deploy to k8s, etc.
+        
+#     - name: Deploy Go app  
+#       run: |
+#         echo "Deploy Go app"
+#         # Add deployment commands here

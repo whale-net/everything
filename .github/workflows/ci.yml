@@ -7,7 +7,9 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
+  # Build job - builds applications first
+  build:
+    name: Build
     runs-on: ubuntu-latest
     
     steps:
@@ -35,8 +37,62 @@ jobs:
         path: |
           ~/.cache/bazel
           ~/.cache/bazelisk
-        key: ${{ runner.os }}-bazel-${{ hashFiles('**/BUILD.bazel', '**/*.bzl', 'MODULE.bazel', 'go.mod', 'requirements.lock.txt') }}
+        key: ${{ runner.os }}-bazel-build-${{ hashFiles('**/BUILD.bazel', '**/*.bzl', 'MODULE.bazel', 'go.mod', 'requirements.lock.txt') }}
         restore-keys: |
+          ${{ runner.os }}-bazel-build-
+          ${{ runner.os }}-bazel-
+          
+    - name: Build applications
+      run: |
+        # Build all binary targets (not libraries or tests)
+        bazel query "kind('.*_binary', //...)" | xargs bazel build
+        
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-artifacts
+        path: |
+          bazel-bin/*/
+          !bazel-bin/**/runfiles/
+          !bazel-bin/**/*.runfiles/
+          !bazel-bin/**/*_test*
+          !bazel-bin/**/*.so
+        retention-days: 3
+
+  # Test job - runs tests after successful build
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Bazelisk
+      uses: bazelbuild/setup-bazelisk@v3
+      
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+        
+    - name: Mount Bazel cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/bazel
+          ~/.cache/bazelisk
+        key: ${{ runner.os }}-bazel-test-${{ hashFiles('**/BUILD.bazel', '**/*.bzl', 'MODULE.bazel', 'go.mod', 'requirements.lock.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-bazel-test-
           ${{ runner.os }}-bazel-
           
     - name: Run tests
@@ -44,10 +100,6 @@ jobs:
         # Bazel automatically handles incremental testing
         # Only rebuilds and retests what's affected by changes
         bazel test --config=ci //...
-        
-    - name: Build applications
-      run: |
-        bazel build //hello_python:hello_python //hello_go:hello_go
         
     - name: Upload test results
       uses: actions/upload-artifact@v4

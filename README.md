@@ -94,3 +94,28 @@ bazel test --config=ci //...
 - `MODULE.bazel`: Defines external dependencies
 - `go.mod`: Go module configuration
 - `requirements.in`: Python dependencies specification
+
+## CI/CD Pipeline
+
+The repository uses GitHub Actions for continuous integration with a sequential build → test workflow:
+
+```mermaid
+graph TD
+    A[Push/PR] --> B[Build Job]
+    B --> C{Build Success?}
+    C -->|Yes| D[Test Job]
+    C -->|No| E[Pipeline Fails]
+    D --> F[Upload Test Results]
+    B --> G[Upload Build Artifacts]
+    
+    style B fill:#e1f5fe
+    style D fill:#f3e5f5
+    style E fill:#ffebee
+    style F fill:#e8f5e8
+    style G fill:#e8f5e8
+```
+
+### CI Jobs:
+- **Build**: Compiles applications and uploads artifacts
+- **Test**: Runs all tests (only if build succeeds)
+- **Future**: Deploy job will depend on both build and test success
