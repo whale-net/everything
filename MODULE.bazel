@@ -3,40 +3,27 @@ module(
     version = "0.0.0",
 )
 
-bazel_dep(name = "bazel_skylib", version = "1.5.0")
-
-# Gazelle
-bazel_dep(name = "gazelle", version = "0.45.0")
-
-# Go
-bazel_dep(name = "rules_go", version = "0.56.1")
-
-# Python
-bazel_dep(name = "rules_python", version = "0.40.0")
+bazel_dep(name = "bazel_skylib", version = "1.8.1")
+bazel_dep(name = "rules_python", version = "1.5.3")
 bazel_dep(name = "rules_uv", version = "0.87.0")
+bazel_dep(name = "rules_go", version = "0.50.1")
+bazel_dep(name = "gazelle", version = "0.39.1")
 
-# Docker
-bazel_dep(name = "rules_oci", version = "2.2.6")
-
-oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
-oci.pull(
-    name = "distroless_base",
-    image = "gcr.io/distroless/base",
-    platforms = ["linux/amd64"],
-    tag = "latest",  # For reproducibility, it is recommended to use a digest instead of 'latest'
-)
-use_repo(oci, "distroless_base", "distroless_base_linux_amd64")
-
-pip = use_extension("@rules_uv//uv:extensions.bzl", "pip")
+pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
 pip.parse(
-    name = "pip",
-    requirements_lock = "//:requirements.txt",
+    hub_name = "everything_pip_deps",
+    python_version = "3.11",
+    requirements_lock = "//:requirements.lock.txt",
 )
-use_repo(pip, "pip")
+use_repo(pip, "everything_pip_deps")
 
-# Private registry
-# http_archive(
-#     name = "private_registry",
-#     urls = ["file:./tools/registry.py"],
-#     sha256 = "...", # placeholder
-# )
+# Go setup
+go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.download(version = "1.21.5")
+
+go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
+go_deps.from_file(go_mod = "//:go.mod")
+use_repo(
+    go_deps,
+    # Add Go dependencies here as needed
+)

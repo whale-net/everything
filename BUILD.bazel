@@ -1,14 +1,31 @@
+load("@rules_uv//uv:pip.bzl", "pip_compile")
+load("@gazelle//:def.bzl", "gazelle")
 load("@rules_python//python:defs.bzl", "py_library")
 
-exports_files([
-    "requirements.txt",
-    ".venv",
-])
+# Python dependencies
+pip_compile(
+    name = "pip_compile",
+    requirements_in = "requirements.in",
+    requirements_txt = "requirements.lock.txt",
+)
 
+# Root Python library to make imports work
 py_library(
-    name = "pip_deps",
-    # deps = [
-    #     "@pip//:flask",
-    # ],
+    name = "root",
+    srcs = ["__init__.py"],
     visibility = ["//visibility:public"],
+)
+
+# Go setup
+# gazelle:prefix github.com/example/everything
+gazelle(name = "gazelle")
+
+gazelle(
+    name = "gazelle-update-repos",
+    args = [
+        "-from_file=go.mod",
+        "-to_macro=deps.bzl%go_dependencies",
+        "-prune",
+    ],
+    command = "update-repos",
 )

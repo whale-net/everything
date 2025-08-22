@@ -1,0 +1,7 @@
+# Common Bazel options
+build --symlink_prefix=bazel-
+test --test_output=errors
+build --incompatible_strict_action_env
+
+# Python options
+build --python_version=PY3

@@ -1,5 +1,0 @@
-py_binary(
-    name = "temporal",
-    srcs = ["main.py"],
-    # No deps needed as they are installed in the virtual environment
-)

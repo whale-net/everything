@@ -1,0 +1,28 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
+load("@everything_pip_deps//:requirements.bzl", "requirement")
+
+py_library(
+    name = "lib",
+    srcs = ["main.py"],
+    deps = ["//libs/common_py"],
+    visibility = ["//apps/hello_python:__pkg__"],
+)
+
+py_binary(
+    name = "hello_python",
+    srcs = ["main.py"],
+    main = "main.py",
+    deps = [
+        ":lib",
+        "//libs/common_py",
+    ],
+)
+
+py_test(
+    name = "test_main",
+    srcs = ["test_main.py"],
+    deps = [
+        ":lib",
+        requirement("pytest"),
+    ],
+)
