@@ -1,5 +1,5 @@
-// Package common provides common utilities for Go applications.
-package common
+// Package go_lib provides common utilities for Go applications.
+package go_lib
 
 import "fmt"
 

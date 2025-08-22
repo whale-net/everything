@@ -2,11 +2,11 @@ package main
 
 import (
 	"testing"
-	"github.com/example/everything/libs/common_go"
+	"github.com/example/everything/libs/go"
 )
 
 func TestFormatGreeting(t *testing.T) {
-	result := common.FormatGreeting("test")
+	result := go_lib.FormatGreeting("test")
 	expected := "Hello, test from Go!"
 	if result != expected {
 		t.Errorf("Expected %q, got %q", expected, result)
@@ -14,7 +14,7 @@ func TestFormatGreeting(t *testing.T) {
 }
 
 func TestGetVersion(t *testing.T) {
-	version := common.GetVersion()
+	version := go_lib.GetVersion()
 	if version == "" {
 		t.Error("Version should not be empty")
 	}

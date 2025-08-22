@@ -1,7 +1,7 @@
 """Tests for the hello_python application."""
 
 import pytest
-from apps.hello_python.main import get_message
+from hello_python.main import get_message
 
 def test_get_message():
     """Test the get_message function."""

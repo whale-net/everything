@@ -9,7 +9,7 @@ pip_compile(
     requirements_txt = "requirements.lock.txt",
 )
 
-# Root Python library to make imports work
+# Root Python library
 py_library(
     name = "root",
     srcs = ["__init__.py"],

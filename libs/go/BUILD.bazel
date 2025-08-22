@@ -1,8 +1,8 @@
 load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
-    name = "common_go",
+    name = "go",
     srcs = ["utils.go"],
-    importpath = "github.com/example/everything/libs/common_go",
+    importpath = "github.com/example/everything/libs/go",
     visibility = ["//visibility:public"],
 )

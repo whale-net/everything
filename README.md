@@ -5,12 +5,11 @@ This is a Bazel monorepo that supports both Python and Go development with a cle
 ## Structure
 
 ```
-├── apps/                   # Applications
-│   ├── hello_python/      # Python application
-│   └── hello_go/          # Go application
+├── hello_python/          # Python application
+├── hello_go/              # Go application
 ├── libs/                  # Shared libraries
-│   ├── common_py/         # Python common library
-│   └── common_go/         # Go common library
+│   ├── python/            # Python common library
+│   └── go/                # Go common library
 ├── MODULE.bazel           # Bazel module definition
 ├── BUILD.bazel            # Root build file
 ├── go.mod                 # Go module definition
@@ -33,12 +32,12 @@ This is a Bazel monorepo that supports both Python and Go development with a cle
 bazel test //...
 
 # Run specific tests
-bazel test //apps/hello_python:test_main
-bazel test //apps/hello_go:main_test
+bazel test //hello_python:test_main
+bazel test //hello_go:main_test
 
 # Run applications
-bazel run //apps/hello_python:hello_python
-bazel run //apps/hello_go:hello_go
+bazel run //hello_python:hello_python
+bazel run //hello_go:hello_go
 
 # Build all targets
 bazel build //...
@@ -59,16 +58,16 @@ bazel build //...
 ### Development Workflow
 
 #### Adding a New Python App
-1. Create directory under `apps/`
+1. Create directory at top level
 2. Add Python source files
 3. Create `BUILD.bazel` with appropriate `py_binary` and `py_test` targets
-4. Reference shared libraries from `//libs/common_py`
+4. Reference shared libraries from `//libs/python`
 
 #### Adding a New Go App
-1. Create directory under `apps/`
+1. Create directory at top level
 2. Add Go source files
 3. Create `BUILD.bazel` with appropriate `go_binary` and `go_test` targets
-4. Reference shared libraries from `//libs/common_go`
+4. Reference shared libraries from `//libs/go`
 
 #### Adding Shared Libraries
 - Python: Create under `libs/` with appropriate `py_library` targets

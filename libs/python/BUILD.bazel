@@ -1,7 +1,7 @@
 load("@rules_python//python:defs.bzl", "py_library")
 
 py_library(
-    name = "common_py",
+    name = "python",
     srcs = [
         "__init__.py",
         "utils.py",

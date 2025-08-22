@@ -1,6 +1,6 @@
 """Hello Python application."""
 
-from libs.common_py.utils import format_greeting, get_version
+from libs.python.utils import format_greeting, get_version
 
 def get_message():
     """Get a greeting message."""
