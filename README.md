@@ -104,18 +104,98 @@ graph TD
     A[Push/PR] --> B[Build Job]
     B --> C{Build Success?}
     C -->|Yes| D[Test Job]
-    C -->|No| E[Pipeline Fails]
-    D --> F[Upload Test Results]
-    B --> G[Upload Build Artifacts]
+    C -->|Yes| E[Docker Job]
+    C -->|No| F[Pipeline Fails]
+    D --> G[Upload Test Results]
+    E --> H[Build Docker Images]
+    B --> I[Upload Build Artifacts]
+    E --> J{Main Branch?}
+    J -->|Yes| K[Push to Registry]
+    J -->|No| L[Save as Artifacts]
     
     style B fill:#e1f5fe
     style D fill:#f3e5f5
-    style E fill:#ffebee
-    style F fill:#e8f5e8
+    style E fill:#fff3e0
+    style F fill:#ffebee
     style G fill:#e8f5e8
+    style H fill:#e8f5e8
+    style I fill:#e8f5e8
+    style K fill:#e3f2fd
+    style L fill:#f1f8e9
 ```
 
 ### CI Jobs:
 - **Build**: Compiles applications and uploads artifacts
 - **Test**: Runs all tests (only if build succeeds)
-- **Future**: Deploy job will depend on both build and test success
+- **Docker**: Builds container images for each binary
+- **Future**: Deploy job will use the Docker images
+
+## Docker Images
+
+Each application is automatically containerized using Bazel's integrated OCI image rules with optimized distroless images.
+
+### Generic OCI Image Rules
+The repository provides reusable OCI image building rules in `//tools:oci.bzl`:
+
+#### Python Applications
+```starlark
+load("//tools:oci.bzl", "python_oci_image")
+
+python_oci_image(
+    name = "my_app_image",
+    binary = "my_app_binary",
+    repo_tag = "my-app:latest",  # optional, defaults to name:latest
+)
+```
+
+#### Go Applications  
+```starlark
+load("//tools:oci.bzl", "go_oci_image")
+
+go_oci_image(
+    name = "my_app_image", 
+    binary = "my_app_binary",
+    repo_tag = "my-app:latest",  # optional, defaults to name:latest
+)
+```
+
+#### Generic Applications
+```starlark
+load("//tools:oci.bzl", "generic_oci_image")
+
+generic_oci_image(
+    name = "my_app_image",
+    binary = "my_app_binary", 
+    base_image = "@some_base_image",
+    binary_path = "/app/myapp",  # optional, defaults to /binary_name/binary_name
+    repo_tag = "my-app:latest",  # optional, defaults to name:latest
+)
+```
+
+### Features of Generic Rules
+- **Automatic layer creation**: Binary is automatically packaged into a tar layer
+- **Consistent naming**: Image and tarball targets follow predictable patterns
+- **Distroless base images**: Uses secure, minimal base images by default
+- **Docker integration**: Each rule creates both an image and a tarball for Docker loading
+- **Flexible configuration**: Support for custom base images, paths, and tags
+
+### Building Images with Bazel
+```bash
+# Build individual images
+bazel build --platforms=@rules_go//go/toolchain:linux_amd64 //hello_python:hello_python_image
+bazel build --platforms=@rules_go//go/toolchain:linux_amd64 //hello_go:hello_go_image
+
+# Build all images in the workspace
+bazel build --platforms=@rules_go//go/toolchain:linux_amd64 $(bazel query "kind('oci_image', //...)")
+
+# Build and load into Docker
+bazel run --platforms=@rules_go//go/toolchain:linux_amd64 //hello_python:hello_python_image_tarball
+bazel run --platforms=@rules_go//go/toolchain:linux_amd64 //hello_go:hello_go_image_tarball
+```
+
+### CI/CD Docker Workflow
+- **Integrated builds**: CI uses Bazel OCI rules directly, no external Dockerfiles needed
+- **Automatic image discovery**: CI automatically finds and builds all OCI image targets
+- **PR builds**: Docker images saved as artifacts for testing
+- **Main branch**: Images automatically tagged and pushed to Docker registry
+- **Consistent tagging**: Images tagged with both `latest` and commit SHA

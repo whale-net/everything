@@ -1,0 +1,4 @@
+# Tools and shared build rules for the monorepo
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["oci.bzl"])

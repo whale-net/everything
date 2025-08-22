@@ -1,5 +1,6 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("@everything_pip_deps//:requirements.bzl", "requirement")
+load("//tools:oci.bzl", "python_oci_image", "python_oci_image_multiplatform")
 
 py_library(
     name = "main_lib",
@@ -17,6 +18,14 @@ py_binary(
         "//libs/python",
     ],
     visibility = ["//visibility:public"],
+)
+
+# OCI images for the Python application using generic rules
+# Creates hello_python_image (amd64), hello_python_image_amd64, and hello_python_image_arm64
+python_oci_image_multiplatform(
+    name = "hello_python_image",
+    binary = ":hello_python",
+    repo_tag = "hello_python:latest",
 )
 
 py_test(
