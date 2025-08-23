@@ -8,6 +8,28 @@ go_binary(
     visibility = ["//visibility:public"],
 )
 
+# Linux amd64 static binary for containers
+go_binary(
+    name = "hello_go_linux_amd64",
+    srcs = ["main.go"],
+    deps = ["//libs/go"],
+    visibility = ["//visibility:public"],
+    goos = "linux",
+    goarch = "amd64",
+    static = "on",
+)
+
+# Linux arm64 static binary for containers
+go_binary(
+    name = "hello_go_linux_arm64",
+    srcs = ["main.go"],
+    deps = ["//libs/go"],
+    visibility = ["//visibility:public"],
+    goos = "linux",
+    goarch = "arm64",
+    static = "on",
+)
+
 # OCI images for the Go application using generic rules
 # Creates hello_go_image (amd64), hello_go_image_amd64, and hello_go_image_arm64
 go_oci_image_multiplatform(

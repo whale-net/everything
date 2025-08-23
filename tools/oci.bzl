@@ -3,6 +3,10 @@
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load")
 load("@aspect_bazel_lib//lib:tar.bzl", "tar")
 
+# Using appropriate base images for maximum compatibility:
+# - Python: python:3.11-slim (includes Python runtime and common libraries)
+# - Go: alpine:3.18 (lightweight Linux with package manager for dependencies)
+
 def oci_image_with_binary(
     name,
     binary,
@@ -56,7 +60,7 @@ def _get_platform_base_image(base_prefix, platform = None):
     """Get the platform-specific base image name.
     
     Args:
-        base_prefix: Base image prefix (e.g., "distroless_python3", "distroless_static")
+        base_prefix: Base image prefix (e.g., "python_slim", "alpine")
         platform: Target platform (defaults to linux/amd64)
     
     Returns:
@@ -80,6 +84,8 @@ def python_oci_image(name, binary, repo_tag = None, platform = None, **kwargs):
     """Build an OCI image for a Python binary.
     
     This is a convenience wrapper around oci_image_with_binary with Python-specific defaults.
+    Uses python:3.11-slim base image for compatibility and included Python runtime.
+    For Python applications, we use the source files from the runfiles with the container's Python interpreter.
     
     Args:
         name: Name of the image target
@@ -88,10 +94,15 @@ def python_oci_image(name, binary, repo_tag = None, platform = None, **kwargs):
         platform: Target platform (defaults to linux/amd64)
         **kwargs: Additional arguments passed to oci_image_with_binary
     """
-    base_image = _get_platform_base_image("distroless_python3", platform)
+    base_image = _get_platform_base_image("python_slim", platform)
     binary_name = binary.split(":")[-1] if ":" in binary else binary
-    # Python binaries are typically at /<binary_name>/<binary_name>
-    entrypoint = ["/" + binary_name + "/" + binary_name]
+    
+    # For Python, we use the container's Python interpreter and run the source files from runfiles
+    # The PYTHONPATH needs to include the runfiles directory
+    entrypoint = [
+        "python3",
+        "/" + binary_name + "/" + binary_name + ".runfiles/_main/" + binary_name + "/main.py"
+    ]
     
     oci_image_with_binary(
         name = name,
@@ -100,6 +111,9 @@ def python_oci_image(name, binary, repo_tag = None, platform = None, **kwargs):
         entrypoint = entrypoint,
         repo_tag = repo_tag,
         platform = platform,
+        env = {
+            "PYTHONPATH": "/" + binary_name + "/" + binary_name + ".runfiles/_main:/" + binary_name + "/" + binary_name + ".runfiles"
+        },
         **kwargs
     )
 
@@ -107,6 +121,7 @@ def go_oci_image(name, binary, repo_tag = None, platform = None, **kwargs):
     """Build an OCI image for a Go binary.
     
     This is a convenience wrapper around oci_image_with_binary with Go-specific defaults.
+    Uses alpine:3.18 base image for compatibility with unknown host dependencies.
     
     Args:
         name: Name of the image target
@@ -115,14 +130,21 @@ def go_oci_image(name, binary, repo_tag = None, platform = None, **kwargs):
         platform: Target platform (defaults to linux/amd64)
         **kwargs: Additional arguments passed to oci_image_with_binary
     """
-    base_image = _get_platform_base_image("distroless_static", platform)
+    base_image = _get_platform_base_image("alpine", platform)
+    
+    # For Go, try to use platform-specific binary if available
     binary_name = binary.split(":")[-1] if ":" in binary else binary
+    if platform == "linux/arm64":
+        platform_binary = binary.replace(":" + binary_name, ":" + binary_name + "_linux_arm64")
+    else:
+        platform_binary = binary.replace(":" + binary_name, ":" + binary_name + "_linux_amd64")
+    
     # Go binaries are typically at /<binary_name>/<binary_name>_/<binary_name>
-    entrypoint = ["/" + binary_name + "/" + binary_name + "_/" + binary_name]
+    entrypoint = ["/" + binary_name.replace("_linux_amd64", "").replace("_linux_arm64", "") + "/" + platform_binary.split(":")[-1] + "_/" + platform_binary.split(":")[-1]]
     
     oci_image_with_binary(
         name = name,
-        binary = binary,
+        binary = platform_binary,
         base_image = base_image,
         entrypoint = entrypoint,
         repo_tag = repo_tag,
