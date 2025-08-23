@@ -4,6 +4,17 @@ build --incompatible_strict_action_env
 build --python_version=PY3
 build:fast --jobs=auto
 
+# CI optimizations
+build:ci --noshow_progress
+build:ci --disk_cache=/tmp/bazel-cache
+build:ci --repository_cache=/tmp/bazel-repo-cache
+build:ci --jobs=auto
+build:ci --remote_download_minimal
+build:ci --verbose_failures
+build:ci --action_env=CI=true
+build:ci --show_timestamps
+build:ci --announce_rc
+
 # Test configurations
 test --test_output=errors
 test:ci --test_output=errors --test_summary=detailed
