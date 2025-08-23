@@ -5,7 +5,7 @@ This is a modernized Bazel monorepo that supports both Python and Go development
 ## 🎯 Status: Fully Modernized ✅
 
 This monorepo has been completely refactored and modernized with:
-- **Latest Bazel dependencies**: rules_python 1.5.3, rules_go 0.57.0, rules_oci 2.2.6
+- **Latest Bazel dependencies**: rules_python 1.5.3, rules_go 0.57.0, rules_oci 2.2.6, rules_uv 0.87.0, gazelle 0.39.1, aspect_bazel_lib 2.21.1, bazel_skylib 1.8.1
 - **Multiplatform OCI images**: Full AMD64/ARM64 support for both Python and Go
 - **Production-ready containers**: Robust base images (python:3.11-slim, alpine:3.18)
 - **Cross-platform compatibility**: Verified working on both architectures
@@ -20,8 +20,12 @@ This monorepo has been completely refactored and modernized with:
 ├── libs/                  # Shared libraries
 │   ├── python/            # Python common library
 │   └── go/                # Go common library
+├── tools/                 # Build tools and OCI rules
+├── docker/                # Reference Dockerfiles (not used by Bazel)
+├── .github/               # CI/CD workflows
 ├── MODULE.bazel           # Bazel module definition
 ├── BUILD.bazel            # Root build file
+├── .bazelversion          # Bazel version specification
 ├── go.mod                 # Go module definition
 ├── requirements.in        # Python dependencies
 ├── requirements.lock.txt  # Locked Python dependencies
@@ -31,9 +35,9 @@ This monorepo has been completely refactored and modernized with:
 ## Quick Start
 
 ### Prerequisites
-- Bazel 7.0+ with bzlmod support
+- Bazel 8.3+ with bzlmod support
 - Python 3.11+
-- Go 1.21+
+- Go 1.25+
 
 ### Building and Testing
 
