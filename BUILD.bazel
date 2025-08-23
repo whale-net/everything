@@ -42,6 +42,16 @@ alias(
     actual = "//hello_go:hello_go",
 )
 
+alias(
+    name = "init-go-cache",
+    actual = "//tools:init_go_cache",
+)
+
+alias(
+    name = "go-env-info",
+    actual = "//tools:go_env_info",
+)
+
 # Test suites using Starlark (no shell scripts!)
 monorepo_test_suite(name = "test_all")
 quick_test_suite(name = "test_quick") 
