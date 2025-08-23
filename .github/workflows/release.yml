@@ -1,0 +1,314 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags like v1.0.0
+  workflow_dispatch:
+    inputs:
+      apps:
+        description: 'Comma-separated list of apps to release (e.g., hello_python,hello_go) or "all" for all apps'
+        required: true
+        default: 'all'
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+      dry_run:
+        description: 'Dry run - build but do not publish'
+        type: boolean
+        default: false
+
+env:
+  CACHE_KEY_FILES: '**/BUILD.bazel,**/*.bzl,MODULE.bazel,MODULE.bazel.lock,go.mod,requirements.lock.txt,.bazelrc,.bazelversion'
+
+jobs:
+  # Detect what apps have changed and build release plan
+  plan-release:
+    name: Plan Release
+    runs-on: ubuntu-latest
+    outputs:
+      release-matrix: ${{ steps.plan.outputs.matrix }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Bazelisk
+      uses: bazelbuild/setup-bazelisk@v3
+      
+    - name: Mount Bazel cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          /tmp/bazel-cache
+          /tmp/bazel-repo-cache
+          ~/.cache/bazelisk
+        key: ${{ runner.os }}-bazel-${{ hashFiles(env.CACHE_KEY_FILES) }}
+        restore-keys: |
+          ${{ runner.os }}-bazel-
+          
+    - name: Configure Bazel
+      run: mkdir -p /tmp/bazel-cache /tmp/bazel-repo-cache
+        
+    - name: Plan release
+      id: plan
+      run: |
+        # Determine version
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          VERSION="${{ github.event.inputs.version }}"
+        else
+          VERSION="${GITHUB_REF#refs/tags/}"
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        
+        # Discover all apps using Bazel queries
+        echo "Discovering apps..."
+        ALL_APPS=$(bazel query --config=ci "kind('app_metadata', //...)" --output=label | sed 's|//\([^:]*\):.*|\1|' | sort -u)
+        echo "Found apps: $ALL_APPS"
+        
+        # Determine which apps to release
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          # Manual dispatch - use input
+          if [[ "${{ github.event.inputs.apps }}" == "all" ]]; then
+            RELEASE_APPS="$ALL_APPS"
+          else
+            # Convert comma-separated to space-separated
+            RELEASE_APPS=$(echo "${{ github.event.inputs.apps }}" | tr ',' ' ')
+          fi
+        else
+          # Tag push - detect changes since last tag
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [[ -z "$PREVIOUS_TAG" ]]; then
+            # No previous tag, release all apps
+            RELEASE_APPS="$ALL_APPS"
+          else
+            # Find changed directories since last tag
+            CHANGED_DIRS=$(git diff --name-only "$PREVIOUS_TAG"..HEAD | cut -d'/' -f1 | sort -u)
+            RELEASE_APPS=""
+            
+            for app in $ALL_APPS; do
+              if echo "$CHANGED_DIRS" | grep -q "^$app$"; then
+                RELEASE_APPS="$RELEASE_APPS $app"
+              fi
+            done
+            
+            # If no app changes but there are changes, release all (infrastructure changes)
+            if [[ -z "$RELEASE_APPS" && -n "$CHANGED_DIRS" ]]; then
+              RELEASE_APPS="$ALL_APPS"
+            fi
+          fi
+        fi
+        
+        # Validate apps exist
+        for app in $RELEASE_APPS; do
+          if ! echo "$ALL_APPS" | grep -q "^$app$"; then
+            echo "ERROR: App '$app' not found. Available: $ALL_APPS"
+            exit 1
+          fi
+        done
+        
+        # Create matrix JSON
+        if [[ -z "$RELEASE_APPS" ]]; then
+          echo "matrix={\"include\":[]}" >> $GITHUB_OUTPUT
+          echo "No apps to release"
+        else
+          MATRIX_ITEMS=""
+          for app in $RELEASE_APPS; do
+            if [[ -n "$MATRIX_ITEMS" ]]; then
+              MATRIX_ITEMS="$MATRIX_ITEMS,"
+            fi
+            MATRIX_ITEMS="$MATRIX_ITEMS{\"app\":\"$app\",\"binary\":\"$app\",\"image\":\"${app}_image\"}"
+          done
+          echo "matrix={\"include\":[$MATRIX_ITEMS]}" >> $GITHUB_OUTPUT
+          echo "Release plan: $RELEASE_APPS"
+        fi
+
+  # Build and release selected apps
+  release:
+    name: Release ${{ matrix.app }}
+    runs-on: ubuntu-latest
+    needs: plan-release
+    if: needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
+    strategy:
+      matrix: ${{ fromJson(needs.plan-release.outputs.release-matrix) }}
+      fail-fast: false
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Bazelisk
+      uses: bazelbuild/setup-bazelisk@v3
+      
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.25'
+        
+    - name: Mount Bazel cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          /tmp/bazel-cache
+          /tmp/bazel-repo-cache
+          ~/.cache/bazelisk
+        key: ${{ runner.os }}-bazel-${{ hashFiles(env.CACHE_KEY_FILES) }}
+        restore-keys: |
+          ${{ runner.os }}-bazel-
+          
+    - name: Configure Bazel
+      run: mkdir -p /tmp/bazel-cache /tmp/bazel-repo-cache
+        
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Log in to GitHub Container Registry
+      if: ${{ !github.event.inputs.dry_run }}
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Build and release app
+      env:
+        APP: ${{ matrix.app }}
+        VERSION: ${{ needs.plan-release.outputs.version }}
+        DRY_RUN: ${{ github.event.inputs.dry_run }}
+      run: |
+        echo "Building and releasing $APP version $VERSION"
+        
+        # Validate targets exist using Bazel query
+        if ! bazel query --config=ci "//$APP:$APP" &>/dev/null; then
+          echo "ERROR: Binary target //$APP:$APP not found"
+          exit 1
+        fi
+        
+        if ! bazel query --config=ci "//$APP:${APP}_image_tarball" &>/dev/null; then
+          echo "ERROR: Image target //$APP:${APP}_image_tarball not found"
+          exit 1
+        fi
+        
+        # Build the OCI image
+        echo "Building //$APP:${APP}_image_tarball..."
+        bazel build --config=ci "//$APP:${APP}_image_tarball"
+        
+        # Load the image into Docker
+        echo "Loading image into Docker..."
+        bazel run "//$APP:${APP}_image_tarball"
+        
+        # Verify image was loaded
+        ORIGINAL_IMAGE="${APP}:latest"
+        if ! docker images | grep -q "$ORIGINAL_IMAGE"; then
+          echo "ERROR: Image $ORIGINAL_IMAGE not found after loading"
+          docker images
+          exit 1
+        fi
+        
+        # Prepare GHCR tags
+        APP_LOWER=$(echo "$APP" | tr '[:upper:]' '[:lower:]')
+        REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+        
+        GHCR_LATEST="ghcr.io/$REPO_OWNER/$APP_LOWER:latest"
+        GHCR_VERSION="ghcr.io/$REPO_OWNER/$APP_LOWER:$VERSION"
+        GHCR_COMMIT="ghcr.io/$REPO_OWNER/$APP_LOWER:${{ github.sha }}"
+        
+        echo "Tagging images:"
+        echo "  - $GHCR_LATEST"
+        echo "  - $GHCR_VERSION" 
+        echo "  - $GHCR_COMMIT"
+        
+        docker tag "$ORIGINAL_IMAGE" "$GHCR_LATEST"
+        docker tag "$ORIGINAL_IMAGE" "$GHCR_VERSION"
+        docker tag "$ORIGINAL_IMAGE" "$GHCR_COMMIT"
+        
+        if [[ "$DRY_RUN" == "true" ]]; then
+          echo "DRY RUN: Would push the following images:"
+          echo "  - $GHCR_LATEST"
+          echo "  - $GHCR_VERSION"
+          echo "  - $GHCR_COMMIT"
+        else
+          echo "Pushing to GHCR..."
+          docker push "$GHCR_LATEST"
+          docker push "$GHCR_VERSION"
+          docker push "$GHCR_COMMIT"
+          echo "Successfully pushed $APP $VERSION to GHCR"
+        fi
+        
+    - name: Create GitHub Release
+      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && !github.event.inputs.dry_run
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ needs.plan-release.outputs.version }}
+        name: ${{ matrix.app }} ${{ needs.plan-release.outputs.version }}
+        body: |
+          ## ${{ matrix.app }} Release ${{ needs.plan-release.outputs.version }}
+          
+          ### 🐳 Container Images (GHCR)
+          ```bash
+          docker pull ghcr.io/${{ github.repository_owner }}/${{ matrix.app }}:${{ needs.plan-release.outputs.version }}
+          docker pull ghcr.io/${{ github.repository_owner }}/${{ matrix.app }}:latest
+          ```
+          
+          ### 🔄 Usage
+          ```bash
+          docker run --rm ghcr.io/${{ github.repository_owner }}/${{ matrix.app }}:${{ needs.plan-release.outputs.version }}
+          ```
+          
+          ### 📝 Details
+          - **Commit:** ${{ github.sha }}
+          - **Built with:** Bazel + OCI rules
+          - **Registry:** GitHub Container Registry (GHCR)
+          - **Platforms:** linux/amd64, linux/arm64
+        draft: false
+        prerelease: ${{ contains(needs.plan-release.outputs.version, '-') }}
+
+  # Summary job
+  release-summary:
+    name: Release Summary
+    runs-on: ubuntu-latest
+    needs: [plan-release, release]
+    if: always()
+    steps:
+    - name: Generate summary
+      run: |
+        echo "## 🚀 Release Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        MATRIX='${{ needs.plan-release.outputs.release-matrix }}'
+        if [[ "$MATRIX" == "" || "$MATRIX" == '{"include":[]}' ]]; then
+          echo "🔍 **Result:** No apps detected for release" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "✅ **Result:** Release completed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Extract app names from matrix
+          APPS=$(echo "$MATRIX" | jq -r '.include[].app' | tr '\n' ' ')
+          echo "� **Apps:** $APPS" >> $GITHUB_STEP_SUMMARY
+          echo "🏷️  **Version:** ${{ needs.plan-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "📝 **Trigger:** Manual dispatch" >> $GITHUB_STEP_SUMMARY
+            if [[ "${{ github.event.inputs.dry_run }}" == "true" ]]; then
+              echo "🧪 **Mode:** Dry run (no images published)" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "📝 **Trigger:** Git tag push" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🐳 Container Images" >> $GITHUB_STEP_SUMMARY
+          echo "Published to GitHub Container Registry:" >> $GITHUB_STEP_SUMMARY
+          for app in $APPS; do
+            app_lower=$(echo "$app" | tr '[:upper:]' '[:lower:]')
+            echo "- \`ghcr.io/${{ github.repository_owner }}/$app_lower:${{ needs.plan-release.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          done
+        fi

@@ -1,6 +1,7 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("@everything_pip_deps//:requirements.bzl", "requirement")
 load("//tools:oci.bzl", "python_oci_image", "python_oci_image_multiplatform")
+load("//tools:release.bzl", "release_app")
 
 py_library(
     name = "main_lib",
@@ -35,4 +36,11 @@ py_test(
         ":main_lib",
         requirement("pytest"),
     ],
+)
+
+# Release metadata for this app
+release_app(
+    name = "hello_python",
+    binary_target = ":hello_python",
+    description = "Python hello world application with pytest",
 )
