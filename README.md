@@ -224,7 +224,8 @@ graph TD
 Each application is automatically containerized using the consolidated `release_app` macro, which creates both release metadata and OCI images with multiplatform support.
 
 ### Consolidated Release System
-The `release_app` macro in `//tools:release.bzl` automatically creates both release metadata and OCI images:
+
+The `release_app` macro in `//tools:release.bzl` automatically creates both release metadata and multiplatform OCI images:
 
 ```starlark
 load("//tools:release.bzl", "release_app")
@@ -233,6 +234,7 @@ load("//tools:release.bzl", "release_app")
 # - Release metadata (JSON file with app info)
 # - OCI images for multiple platforms (amd64, arm64)
 # - Proper container registry configuration
+# - All necessary tarball targets for local testing
 release_app(
     name = "hello_python",
     binary_target = ":hello_python",
@@ -241,48 +243,31 @@ release_app(
 )
 ```
 
-### Manual OCI Rules (Advanced Use Cases)
-For advanced scenarios, you can still use the individual OCI image rules in `//tools:oci.bzl`:
+**Generated Targets:**
+- `hello_python_image` - Default multiplatform image
+- `hello_python_image_amd64` - AMD64-specific image
+- `hello_python_image_arm64` - ARM64-specific image
+- `hello_python_image_tarball` - Default tarball for Docker loading
+- `hello_python_image_amd64_tarball` - AMD64 tarball
+- `hello_python_image_arm64_tarball` - ARM64 tarball
 
-#### Python Applications
-```starlark
-load("//tools:oci.bzl", "python_oci_image_multiplatform")
+### Building Images with Bazel
 
-# Creates hello_python_image, hello_python_image_amd64, and hello_python_image_arm64
-python_oci_image_multiplatform(
-    name = "hello_python_image",
-    binary = ":hello_python",
-    repo_tag = "hello_python:latest",
-)
-```
+```bash
+# Build individual platform images
+bazel build //hello_python:hello_python_image_amd64
+bazel build //hello_python:hello_python_image_arm64
 
-#### Go Applications  
-```starlark
-load("//tools:oci.bzl", "go_oci_image_multiplatform")
+# Build all platform variants
+bazel build //hello_python:hello_python_image
 
-# Creates hello_go_image, hello_go_image_amd64, and hello_go_image_arm64
-go_oci_image_multiplatform(
-    name = "hello_go_image", 
-    binary = ":hello_go",
-    repo_tag = "hello_go:latest",
-)
-```
+# Build and load into Docker (for testing)
+bazel run //hello_python:hello_python_image_amd64_tarball
+bazel run //hello_go:hello_go_image_arm64_tarball
 
-#### Single Platform Images
-```starlark
-load("//tools:oci.bzl", "python_oci_image", "go_oci_image")
-
-python_oci_image(
-    name = "my_python_app_image",
-    binary = ":my_python_app",
-    platform = "linux/amd64",  # or linux/arm64
-)
-
-go_oci_image(
-    name = "my_go_app_image",
-    binary = ":my_go_app", 
-    platform = "linux/arm64",  # or linux/amd64
-)
+# Run the containers
+docker run --rm hello_python:latest  # ✅ Works correctly!
+docker run --rm hello_go:latest      # ✅ Works correctly!
 ```
 
 ### Base Images & Architecture
@@ -291,7 +276,7 @@ go_oci_image(
 - **Platforms**: Full support for both `linux/amd64` and `linux/arm64`
 - **Cross-compilation**: Automatically handles platform-specific builds
 
-### Features of OCI Rules
+### Features
 - **Multiplatform support**: Automatic AMD64 and ARM64 image generation
 - **Container-native Python**: Uses container Python interpreter, not host binary
 - **Static Go binaries**: Platform-specific static binaries for minimal attack surface
@@ -299,22 +284,22 @@ go_oci_image(
 - **Docker integration**: Each rule creates both images and tarballs for loading
 - **Production ready**: Robust base images suitable for production deployment
 
-### Building Images with Bazel
-```bash
-# Build individual platform images
-bazel build //hello_python:hello_python_image_arm64
-bazel build //hello_go:hello_go_image_amd64
+### Advanced: Manual OCI Rules
 
-# Build all platform variants
-bazel build //hello_python:hello_python_image //hello_python:hello_python_image_amd64 //hello_python:hello_python_image_arm64
+> **Note:** The `release_app` macro handles all standard use cases. Manual OCI rules are only needed for highly specialized scenarios.
 
-# Build and load into Docker (for testing)
-bazel run //hello_python:hello_python_image_arm64_tarball
-bazel run //hello_go:hello_go_image_amd64_tarball
+For edge cases requiring custom OCI configuration, individual rules are available in `//tools:oci.bzl`:
 
-# Run the containers
-docker run --rm hello_python:latest  # ✅ Works correctly!
-docker run --rm hello_go:latest      # ✅ Works correctly!
+```starlark
+load("//tools:oci.bzl", "python_oci_image", "go_oci_image")
+
+# Single platform image with custom configuration
+python_oci_image(
+    name = "custom_python_image",
+    binary = ":my_binary",
+    platform = "linux/amd64",
+    # ... custom OCI parameters
+)
 ```
 
 ### CI/CD Docker Workflow
