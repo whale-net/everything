@@ -193,31 +193,32 @@ graph TD
     A[Push/PR] --> B[Build Job]
     B --> C{Build Success?}
     C -->|Yes| D[Test Job]
-    C -->|Yes| E[Docker Job]
     C -->|No| F[Pipeline Fails]
-    D --> G[Upload Test Results]
-    E --> H[Build Docker Images]
-    B --> I[Upload Build Artifacts]
-    E --> J{Main Branch?}
-    J -->|Yes| K[Push to Registry]
-    J -->|No| L[Save as Artifacts]
+    D --> G{Test Success?}
+    G -->|Yes| H[Docker Job]
+    G -->|No| F
+    D --> I[Upload Test Results]
+    H --> J[Build Docker Images]
+    B --> K[Upload Build Artifacts]
+    H --> L{Main Branch?}
+    L -->|Yes| M[Push to Registry]
+    L -->|No| N[Save as Artifacts]
     
     style B fill:#e1f5fe
     style D fill:#f3e5f5
-    style E fill:#fff3e0
+    style H fill:#fff3e0
     style F fill:#ffebee
-    style G fill:#e8f5e8
-    style H fill:#e8f5e8
     style I fill:#e8f5e8
-    style K fill:#e3f2fd
-    style L fill:#f1f8e9
+    style J fill:#e8f5e8
+    style K fill:#e8f5e8
+    style M fill:#e3f2fd
+    style N fill:#f1f8e9
 ```
 
 ### CI Jobs:
 - **Build**: Compiles applications and uploads artifacts
 - **Test**: Runs all tests (only if build succeeds)
-- **Docker**: Builds container images for each binary
-- **Future**: Deploy job will use the Docker images
+- **Docker**: Builds container images and pushes to registry (only if tests pass)
 
 ## Docker Images ✅
 
@@ -271,8 +272,8 @@ docker run --rm hello_go:latest      # ✅ Works correctly!
 ```
 
 ### Base Images & Architecture
-- **Python**: Uses `python:3.11-slim` for full Python runtime compatibility
-- **Go**: Uses `alpine:3.18` for minimal size with package manager support
+- **Python**: Uses `python:3.11-slim` (Python 3.11.13 on Debian 12)
+- **Go**: Uses `alpine:3.20` (Alpine 3.20.3 for minimal size)
 - **Platforms**: Full support for both `linux/amd64` and `linux/arm64`
 - **Cross-compilation**: Automatically handles platform-specific builds
 
@@ -342,6 +343,7 @@ load("//tools:release.bzl", "release_app")
 release_app(
     name = "hello_python",
     binary_target = ":hello_python",
+    language = "python",
     description = "Python hello world application with pytest",
 )
 ```
@@ -587,59 +589,3 @@ This monorepo demonstrates a **modern, shell-script-free** approach to building,
 - **🔧 Developer Experience**: Rich tooling, quick feedback loops
 
 Everything is designed to be **maintainable**, **reproducible**, and **platform-agnostic** while avoiding the pitfalls of shell scripts and complex release processes.
-
-#### Using the Release Helper Tool
-
-The monorepo includes a powerful release helper tool for local development and debugging:
-
-```bash
-# List all apps with release metadata
-bazel run //tools:release -- list
-
-# Show metadata for a specific app
-bazel run //tools:release -- metadata hello_python
-
-# Build and load a container image locally
-bazel run //tools:release -- build hello_python
-bazel run //tools:release -- build hello_python --platform arm64
-
-# Full release workflow (build, tag, push)
-bazel run //tools:release -- release hello_python --version v1.2.3 --dry-run
-bazel run //tools:release -- release hello_python --version v1.2.3 --commit abc123
-```
-
-The release helper automatically:
-- Uses the app's release metadata for registry configuration
-- Handles multiplatform image building
-- Formats registry tags correctly (`latest`, version, commit SHA)
-- Supports dry-run mode for testing
-
-#### Advanced Release Helper Commands
-
-The release helper tool provides powerful commands for CI/CD automation and version management:
-
-```bash
-# Validate version format and registry availability
-bazel run //tools:release -- validate-version hello_python v1.2.3
-
-# Plan a release (generates GitHub Actions matrix)
-bazel run //tools:release -- plan --event-type workflow_dispatch --apps "hello_python,hello_go" --version v1.2.3 --format github
-
-# Detect changed apps since a tag
-bazel run //tools:release -- changes --since-tag v1.2.0
-
-# Validate that apps exist
-bazel run //tools:release -- validate hello_python hello_go
-
-# Generate release summary for GitHub Actions
-bazel run //tools:release -- summary \
-  --matrix '{"include":[{"app":"hello_python"}]}' \
-  --version v1.2.3 \
-  --event-type workflow_dispatch \
-  --repository-owner myorg
-
-# Emergency overwrite (use with extreme caution)
-bazel run //tools:release -- release hello_python --version v1.2.3 --allow-overwrite --dry-run
-```
-
-These commands have **dramatically simplified our CI pipeline** by moving complex logic out of shell scripts and into maintainable Python code with proper error handling, version validation, and testing capabilities.
