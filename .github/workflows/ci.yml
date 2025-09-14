@@ -6,10 +6,6 @@ on:
   push:
     branches: [ main ]
 
-env:
-  # Shared cache key components for consistent caching across jobs
-  CACHE_KEY_FILES: '**/BUILD.bazel,**/*.bzl,MODULE.bazel,MODULE.bazel.lock,go.mod,requirements.lock.txt,.bazelrc,.bazelversion'
-
 jobs:
   # Build job - builds applications first
   build:
@@ -22,44 +18,24 @@ jobs:
       with:
         fetch-depth: 0
         
-    - name: Setup Bazelisk
-      uses: bazelbuild/setup-bazelisk@v3
+    - name: Setup Bazelisk with caching
+      uses: ./.github/actions/setup-bazelisk-cache
+      with:
+        cache-suffix: 'build'
+      id: bazel-cache
       
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
         
-    - name: Setup Go
-      uses: actions/setup-go@v5
+    - name: Setup Go with caching
+      uses: ./.github/actions/setup-go-cache
       with:
         go-version: '1.25'  # Match MODULE.bazel version
         
-    - name: Setup Go module cache
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/go/pkg/mod
-          ~/.cache/go-build
-        key: ${{ runner.os }}-go-${{ hashFiles('go.mod', 'go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
-        
-    - name: Mount Bazel cache
-      uses: actions/cache@v4
-      with:
-        path: |
-          /tmp/bazel-cache
-          /tmp/bazel-repo-cache
-          ~/.cache/bazelisk
-        key: ${{ runner.os }}-bazel-${{ hashFiles(env.CACHE_KEY_FILES) }}
-        restore-keys: |
-          ${{ runner.os }}-bazel-
-          
-    - name: Configure Bazel and Go caches
+    - name: Initialize Go cache
       run: |
-        # Create Bazel cache directories
-        mkdir -p /tmp/bazel-cache /tmp/bazel-repo-cache
         # Initialize Go cache directories using Bazel tool
         bazel run //:init-go-cache
         
@@ -92,52 +68,35 @@ jobs:
       with:
         fetch-depth: 0
         
-    - name: Setup Bazelisk
-      uses: bazelbuild/setup-bazelisk@v3
+    - name: Setup Bazelisk with caching
+      uses: ./.github/actions/setup-bazelisk-cache
+      with:
+        cache-suffix: 'test'
+      id: bazel-cache
       
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
         
-    - name: Setup Go
-      uses: actions/setup-go@v5
+    - name: Setup Go with caching
+      uses: ./.github/actions/setup-go-cache
       with:
         go-version: '1.25'  # Match MODULE.bazel version
         
-    - name: Setup Go module cache
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/go/pkg/mod
-          ~/.cache/go-build
-        key: ${{ runner.os }}-go-${{ hashFiles('go.mod', 'go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
-        
-    - name: Mount Bazel cache
-      uses: actions/cache@v4
-      with:
-        path: |
-          /tmp/bazel-cache
-          /tmp/bazel-repo-cache
-          ~/.cache/bazelisk
-        key: ${{ runner.os }}-bazel-${{ hashFiles(env.CACHE_KEY_FILES) }}
-        restore-keys: |
-          ${{ runner.os }}-bazel-
-          
-    - name: Configure Bazel and Go caches
+    - name: Initialize Go cache
       run: |
-        # Create Bazel cache directories
-        mkdir -p /tmp/bazel-cache /tmp/bazel-repo-cache
         # Initialize Go cache directories using Bazel tool
         bazel run //:init-go-cache
         
     - name: Run tests
+      env:
+        GO_CACHE_HIT: ${{ steps.bazel-cache.outputs.go-cache-hit }}
+        PYTHON_CACHE_HIT: ${{ steps.bazel-cache.outputs.python-cache-hit }}
       run: |
-        # Bazel automatically handles incremental testing
-        # Only rebuilds and retests what's affected by changes
-        bazel test --config=ci //...
+        # Use incremental testing based on cache state
+        # Only tests domains that had cache misses (indicating changes)
+        bazel run //:test_incremental
         
     - name: Upload test results
       uses: actions/upload-artifact@v4
@@ -157,47 +116,27 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Setup Bazelisk
-      uses: bazelbuild/setup-bazelisk@v3
+    - name: Setup Bazelisk with caching
+      uses: ./.github/actions/setup-bazelisk-cache
+      with:
+        cache-suffix: 'docker'
+      id: bazel-cache
       
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
         
-    - name: Setup Go
-      uses: actions/setup-go@v5
+    - name: Setup Go with caching
+      uses: ./.github/actions/setup-go-cache
       with:
         go-version: '1.25'  # Match MODULE.bazel version
         
-    - name: Setup Go module cache
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/go/pkg/mod
-          ~/.cache/go-build
-        key: ${{ runner.os }}-go-${{ hashFiles('go.mod', 'go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
-        
-    - name: Mount Bazel cache
-      uses: actions/cache@v4
-      with:
-        path: |
-          /tmp/bazel-cache
-          /tmp/bazel-repo-cache
-          ~/.cache/bazelisk
-        key: ${{ runner.os }}-bazel-${{ hashFiles(env.CACHE_KEY_FILES) }}
-        restore-keys: |
-          ${{ runner.os }}-bazel-
-          
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
       
-    - name: Configure Bazel and Go caches
+    - name: Initialize Go cache
       run: |
-        # Create Bazel cache directories
-        mkdir -p /tmp/bazel-cache /tmp/bazel-repo-cache
         # Initialize Go cache directories using Bazel tool
         bazel run //:init-go-cache
       

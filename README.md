@@ -181,8 +181,15 @@ monorepo_test_suite(
 
 - `.bazelrc`: Contains common Bazel configuration
 - `MODULE.bazel`: Defines external dependencies
-- `go.mod`: Go module configuration
+- `go.mod`: Go module configuration (note: no `go.sum` needed for internal-only dependencies)
 - `requirements.in`: Python dependencies specification
+
+### CI Cache Optimization
+
+The CI workflow is optimized to handle Go modules gracefully:
+- When using only internal Go packages (no external dependencies), no `go.sum` file is generated
+- Cache keys use separate `hashFiles()` calls for `go.mod` and `go.sum` to handle missing files
+- This prevents "Dependencies file is not found" warnings and optimizes cache performance
 
 ## CI/CD Pipeline
 
@@ -364,15 +371,16 @@ Each released app gets published to GitHub Container Registry with multiple tags
 The release system includes robust version validation and protection:
 
 #### Semantic Versioning Enforcement
-All versions must follow the `v{major}.{minor}.{patch}` format:
-- ✅ Valid: `v1.0.0`, `v2.1.3`, `v1.0.0-beta1`, `v3.2.1-rc2`
+Versions must follow the `v{major}.{minor}.{patch}` format, with the special exception of `latest` for main builds:
+- ✅ Valid: `v1.0.0`, `v2.1.3`, `v1.0.0-beta1`, `v3.2.1-rc2`, `latest`
 - ❌ Invalid: `1.0.0`, `v1.0`, `v1`, `release-1.0.0`
 
 #### Version Overwrite Protection
 - **Automatic checks**: Before releasing, the system checks if the version already exists
 - **Registry validation**: Uses Docker manifest inspection to verify version availability
 - **Safety first**: Releases are blocked if a version already exists in the registry
-- **Override option**: Use `--allow-overwrite` flag for emergency situations (not recommended)
+- **`latest` exception**: The `latest` tag can always be overwritten (main branch workflow)
+- **Override option**: Use `--allow-overwrite` flag for emergency situations with versioned releases (not recommended)
 
 #### Version Validation Commands
 ```bash
@@ -569,11 +577,11 @@ gh workflow run release.yml \
 
 1. **Use GitHub UI**: Prevents typos and provides validation
 2. **Test with dry runs**: Always test releases before publishing
-3. **Semantic versioning**: Use `vMAJOR.MINOR.PATCH` format (enforced automatically)
+3. **Semantic versioning**: Use `vMAJOR.MINOR.PATCH` format or `latest` for main builds (enforced automatically)
 4. **App-specific releases**: Only release what changed
 5. **Monitor CI logs**: Check build outputs for any issues
 6. **Update documentation**: Keep README and app docs current
-7. **Never overwrite versions**: Use new version numbers instead of overwriting existing ones
+7. **Never overwrite versions**: Use new version numbers instead of overwriting existing versions (except `latest` which is automatically handled)
 8. **Version validation**: Use `validate-version` command to check versions before releasing
 
 ---
