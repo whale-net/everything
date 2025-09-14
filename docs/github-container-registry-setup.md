@@ -2,7 +2,11 @@
 
 ## Issue Resolution
 
-The release workflow has been updated to fix the "unauthorized" error when pushing Docker images to GitHub Container Registry (GHCR).
+The CI and release workflows have been updated to fix the "unauthorized" error when pushing Docker images to GitHub Container Registry (GHCR).
+
+## Background
+
+Both the CI workflow (`.github/workflows/ci.yml`) and release workflow (`.github/workflows/release.yml`) push Docker images to GHCR. The `GITHUB_TOKEN` provided by GitHub Actions has limited permissions and lacks the `write:packages` scope required for pushing to GHCR.
 
 ## Required Setup
 
@@ -31,7 +35,10 @@ The workflow maintains backwards compatibility by falling back to `GITHUB_TOKEN`
 
 ## Verification
 
-After setting up the `GHCR_PAT` secret, test the release workflow to ensure Docker images can be successfully pushed to GHCR.
+After setting up the `GHCR_PAT` secret, test both workflows to ensure Docker images can be successfully pushed to GHCR:
+
+1. **CI Workflow**: Push to the main branch to trigger automatic image pushes
+2. **Release Workflow**: Create a release or use the manual dispatch to test the release process
 
 ## Security Notes
 
