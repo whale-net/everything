@@ -1,4 +1,13 @@
-# Setup Bazelisk with Caching
+# Setup Bazelisk w## Solution
+
+This action uses a robust cache key generation approach:
+- ✅ Uses a bash step to generate cache keys with proper conditional logic
+- ✅ Handles optional cache suffixes correctly using shell scripting
+- ✅ Focuses on core configuration files that affect build dependencies  
+- ✅ Generates valid cache keys that won't cause 400 errors
+- ✅ Provides hierarchical restore-keys for better cache hit rates
+- ✅ Creates cache directories proactively to avoid path errors
+- ✅ Includes cache status information for debuggingg
 
 This composite action sets up Bazelisk with optimized Bazel caching for CI/CD workflows.
 
@@ -8,13 +17,13 @@ This action was created to solve CI cache failures and eliminate code duplicatio
 
 ## Problem Solved
 
-Before this action, Bazelisk caching was duplicated across multiple workflows and suffered from cache key generation issues similar to the Go caching problems. The cache configuration used:
+Before this action, Bazelisk caching was duplicated across multiple workflows and suffered from cache key generation issues. The original implementation used invalid GitHub Actions expression syntax that caused "Cache service responded with 400" errors:
 
 ```yaml
-key: ${{ runner.os }}-bazel-${{ hashFiles(env.CACHE_KEY_FILES) }}
+key: ${{ runner.os }}-bazel-${{ hashFiles(...) }}${{ inputs.cache-suffix && format('-{0}', inputs.cache-suffix) || '' }}
 ```
 
-This approach failed when `hashFiles()` with multiple file patterns encountered missing files or when patterns didn't match properly, causing "Cache service responded with 400" errors.
+The issue was the invalid conditional expression syntax (`&&` and `||` operators are not supported in GitHub Actions expressions).
 
 ## Solution
 
@@ -69,15 +78,22 @@ This action uses an optimized cache key generation approach:
 
 ## Cache Strategy
 
-The action creates an optimized cache key based on core configuration files that affect build dependencies:
-1. `MODULE.bazel` - Core Bazel module configuration
-2. `MODULE.bazel.lock` - Locked dependency versions  
-3. `.bazelrc` - Bazel configuration
-4. `.bazelversion` - Bazel version specification
-5. `go.mod` - Go module dependencies (if applicable)
-6. `requirements.lock.txt` - Python dependencies (if applicable)
+The action creates an optimized cache key using a bash script that properly handles conditional logic:
 
-The cache key is optimized to stay under GitHub Actions' 512-character limit by using a single `hashFiles()` call with multiple files, which generates one combined hash instead of concatenating individual hashes.
+```bash
+BASE_KEY="${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelrc', '.bazelversion', 'go.mod', 'requirements.lock.txt') }}-cache"
+if [[ -n "${{ inputs.cache-suffix }}" ]]; then
+  CACHE_KEY="${BASE_KEY}-${{ inputs.cache-suffix }}"
+else
+  CACHE_KEY="${BASE_KEY}-default"
+fi
+```
+
+This approach:
+- Uses `hashFiles()` to generate a stable hash of core configuration files
+- Handles optional cache suffixes with proper bash conditional logic
+- Ensures cache keys are always valid and won't cause 400 errors
+- Provides consistent cache key generation across different workflows
 
 The restore-keys provide hierarchical fallback options, ensuring good cache hit rates even when some files change.
 

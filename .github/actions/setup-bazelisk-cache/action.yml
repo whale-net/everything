@@ -33,6 +33,18 @@ runs:
         # Ensure bazelisk cache directory exists
         mkdir -p ~/.cache/bazelisk
 
+    - name: Generate cache key
+      id: cache-key
+      shell: bash
+      run: |
+        BASE_KEY="${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelrc', '.bazelversion', 'go.mod', 'requirements.lock.txt') }}-cache"
+        if [[ -n "${{ inputs.cache-suffix }}" ]]; then
+          CACHE_KEY="${BASE_KEY}-${{ inputs.cache-suffix }}"
+        else
+          CACHE_KEY="${BASE_KEY}-default"
+        fi
+        echo "key=${CACHE_KEY}" >> $GITHUB_OUTPUT
+
     - name: Mount Bazel cache
       id: bazel-cache
       uses: actions/cache@v4
@@ -41,14 +53,12 @@ runs:
           /tmp/bazel-cache
           /tmp/bazel-repo-cache
           ~/.cache/bazelisk
-        # Optimized cache key under 512 character limit
-        # Focus on core Bazel configuration files that affect build dependencies
-        key: ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelrc', '.bazelversion', 'go.mod', 'requirements.lock.txt') }}${{ inputs.cache-suffix && format('-{0}', inputs.cache-suffix) || '' }}
+        key: ${{ steps.cache-key.outputs.key }}
         restore-keys: |
-          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelrc', '.bazelversion') }}
-          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock') }}
-          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel') }}
-          ${{ runner.os }}-bazel-
+          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelrc', '.bazelversion') }}-cache-
+          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock') }}-cache-
+          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel') }}-cache-
+          ${{ runner.os }}-bazel-cache-
 
     - name: Cache status
       shell: bash
