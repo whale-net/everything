@@ -1,13 +1,4 @@
-name: 'Setup Boutputs:
-  cache-hit:
-    description: 'A boolean value indicating if there was a cache hit for Bazel'
-    value: ${{ steps.bazel-cache.outputs.cache-hit }}
-  go-cache-hit:
-    description: 'A boolean value indicating if there was a cache hit for Go domain'
-    value: ${{ steps.go-cache.outputs.cache-hit }}
-  python-cache-hit:
-    description: 'A boolean value indicating if there was a cache hit for Python domain'
-    value: ${{ steps.python-cache.outputs.cache-hit }}isk with Caching'
+name: 'Setup Bazelisk with Caching'
 description: 'Sets up Bazelisk with optimized Bazel caching for CI/CD workflows'
 
 inputs:
