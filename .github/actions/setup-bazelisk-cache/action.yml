@@ -1,0 +1,66 @@
+name: 'Setup Bazelisk with Caching'
+description: 'Sets up Bazelisk with optimized Bazel caching for CI/CD workflows'
+
+inputs:
+  bazelisk-version:
+    description: 'Bazelisk version to use (e.g., "1.x" for latest 1.x, or specific like "1.27.0")'
+    required: false
+    default: '1.x'
+  
+  cache-suffix:
+    description: 'Additional suffix for cache key to avoid conflicts between workflows'
+    required: false
+    default: ''
+
+outputs:
+  cache-hit:
+    description: 'A boolean value to indicate if there was a cache hit for Bazel'
+    value: ${{ steps.bazel-cache.outputs.cache-hit }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Bazelisk
+      uses: bazelbuild/setup-bazelisk@v3
+      with:
+        bazelisk-version: ${{ inputs.bazelisk-version }}
+
+    - name: Create Bazel cache directories
+      shell: bash
+      run: |
+        # Create Bazel cache directories early to ensure they exist
+        mkdir -p /tmp/bazel-cache /tmp/bazel-repo-cache
+        # Ensure bazelisk cache directory exists
+        mkdir -p ~/.cache/bazelisk
+
+    - name: Mount Bazel cache
+      id: bazel-cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          /tmp/bazel-cache
+          /tmp/bazel-repo-cache
+          ~/.cache/bazelisk
+        # Optimized cache key under 512 character limit
+        # Focus on core Bazel configuration files that affect build dependencies
+        key: ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelrc', '.bazelversion', 'go.mod', 'requirements.lock.txt') }}${{ inputs.cache-suffix && format('-{0}', inputs.cache-suffix) || '' }}
+        restore-keys: |
+          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelrc', '.bazelversion') }}
+          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock') }}
+          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel') }}
+          ${{ runner.os }}-bazel-
+
+    - name: Cache status
+      shell: bash
+      run: |
+        if [[ "${{ steps.bazel-cache.outputs.cache-hit }}" == "true" ]]; then
+          echo "✅ Bazel cache hit - using cached dependencies"
+        else
+          echo "🔄 Bazel cache miss - will populate cache for future runs"
+        fi
+        
+        # Show cache directory sizes for debugging
+        echo "Cache directory sizes:"
+        du -sh /tmp/bazel-cache 2>/dev/null || echo "  /tmp/bazel-cache: not found"
+        du -sh /tmp/bazel-repo-cache 2>/dev/null || echo "  /tmp/bazel-repo-cache: not found"
+        du -sh ~/.cache/bazelisk 2>/dev/null || echo "  ~/.cache/bazelisk: not found"
