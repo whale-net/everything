@@ -147,11 +147,11 @@ jobs:
         path: bazel-testlogs/
         retention-days: 7
 
-  # Docker job - builds container images using Bazel OCI rules
+  # Docker job - builds container images using the release tool
   docker:
     name: Build Docker Images
     runs-on: ubuntu-latest
-    needs: test  # Changed from build to test since we build everything in this job
+    needs: test
     
     steps:
     - name: Checkout code
@@ -211,64 +211,58 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
         
-    - name: Build and load Docker images with Bazel
+    - name: Build Docker images using release tool
+      env:
+        GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
       run: |
-        # First, build all OCI images using Bazel with CI optimizations
-        echo "Building OCI images..."
-        bazel build --config=ci $(bazel query "kind('oci_load', //...)")
+        # Use the release tool to build images consistently
+        echo "Building Docker images using release tool..."
         
-        # Show what tarball scripts were generated
-        echo "Generated OCI tarball scripts:"
-        ls -la bazel-bin/*/*tarball.sh || echo "No tarball scripts found"
+        # Get list of all apps
+        APPS=$(bazel run //tools:release -- list)
+        echo "Apps to build: $APPS"
         
-        # Then load images into Docker daemon using the generated scripts
-        echo "Loading images into Docker daemon..."
-        for script in bazel-bin/*/*tarball.sh; do
-          if [[ -x "$script" ]]; then
-            echo "Loading image from $script"
-            "$script"
-          else
-            echo "Warning: Script not executable or not found: $script"
-          fi
+        # Build images for all apps using the release tool
+        for app in $APPS; do
+          echo "Building image for $app..."
+          bazel run //tools:release -- build "$app"
         done
         
         # Show loaded Docker images
-        echo "Loaded Docker images:"
+        echo "Built Docker images:"
         docker images
         
-        # Tag and push images if on main branch
-        if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
-          # Get all loaded images and tag/push them to GHCR
-          for image in $(docker images --format "table {{.Repository}}:{{.Tag}}" | grep -v REPOSITORY | grep -v "<none>"); do
-            if [[ "$image" != *"/"* ]]; then  # Skip images that already have a registry prefix
-              # Convert to lowercase for GHCR compatibility
-              app_name=$(echo "${image%:*}" | tr '[:upper:]' '[:lower:]')
-              ghcr_image="ghcr.io/${{ github.repository_owner }}/$app_name:latest"
-              ghcr_commit_image="ghcr.io/${{ github.repository_owner }}/$app_name:${{ github.sha }}"
-              
-              echo "Tagging and pushing $image as $ghcr_image and $ghcr_commit_image"
-              docker tag "$image" "$ghcr_image"
-              docker tag "$image" "$ghcr_commit_image"
-              docker push "$ghcr_image"
-              docker push "$ghcr_commit_image"
-            fi
-          done
-        fi
+    - name: Push images to registry (main branch only)
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      env:
+        GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+      run: |
+        # Use the release tool to publish images with latest and commit tags
+        echo "Publishing Docker images using release tool..."
         
-    - name: Save Docker images as artifacts
+        # Get list of all apps
+        APPS=$(bazel run //tools:release -- list)
+        
+        # Publish images for all apps using the release tool
+        for app in $APPS; do
+          echo "Publishing $app with latest and commit tags..."
+          bazel run //tools:release -- release "$app" --version "latest" --commit "${{ github.sha }}"
+        done
+        
+    - name: Save Docker images as artifacts (PR builds)
       if: github.event_name == 'pull_request'
       run: |
         # Save images for PR builds
         mkdir -p docker-images
-        for image in $(docker images --format "table {{.Repository}}:{{.Tag}}" | grep -v REPOSITORY | grep -v "<none>"); do
-          if [[ "$image" != *"/"* ]]; then  # Skip images that already have a registry prefix
-            safe_name=$(echo "$image" | tr ':/' '_')
-            echo "Saving image $image as docker-images/${safe_name}.tar.gz"
-            docker save "$image" | gzip > "docker-images/${safe_name}.tar.gz"
-          fi
+        APPS=$(bazel run //tools:release -- list)
+        
+        for app in $APPS; do
+          echo "Saving image for $app..."
+          safe_name="${app}_latest"
+          docker save "${app}:latest" | gzip > "docker-images/${safe_name}.tar.gz"
         done
         
-    - name: Upload Docker images
+    - name: Upload Docker images (PR builds)
       if: github.event_name == 'pull_request'
       uses: actions/upload-artifact@v4
       with:
