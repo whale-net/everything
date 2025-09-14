@@ -63,9 +63,9 @@ jobs:
         fi
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         
-        # Discover all apps using Bazel queries
+        # Discover all apps using our release helper tool
         echo "Discovering apps..."
-        ALL_APPS=$(bazel query --config=ci "kind('app_metadata', //...)" --output=label | sed 's|//\([^:]*\):.*|\1|' | sort -u)
+        ALL_APPS=$(bazel run --config=ci //tools:release -- list)
         echo "Found apps: $ALL_APPS"
         
         # Determine which apps to release
@@ -109,7 +109,7 @@ jobs:
           fi
         done
         
-        # Create matrix JSON
+        # Create matrix JSON - simplified since release helper handles everything
         if [[ -z "$RELEASE_APPS" ]]; then
           echo "matrix={\"include\":[]}" >> $GITHUB_OUTPUT
           echo "No apps to release"
@@ -119,7 +119,7 @@ jobs:
             if [[ -n "$MATRIX_ITEMS" ]]; then
               MATRIX_ITEMS="$MATRIX_ITEMS,"
             fi
-            MATRIX_ITEMS="$MATRIX_ITEMS{\"app\":\"$app\",\"binary\":\"$app\",\"image\":\"${app}_image\"}"
+            MATRIX_ITEMS="$MATRIX_ITEMS{\"app\":\"$app\"}"
           done
           echo "matrix={\"include\":[$MATRIX_ITEMS]}" >> $GITHUB_OUTPUT
           echo "Release plan: $RELEASE_APPS"
@@ -178,69 +178,23 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
         
-    - name: Build and release app
+    - name: Build and release app using consolidated release helper
       env:
         APP: ${{ matrix.app }}
         VERSION: ${{ needs.plan-release.outputs.version }}
         DRY_RUN: ${{ github.event.inputs.dry_run }}
+        GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
       run: |
-        echo "Building and releasing $APP version $VERSION"
+        echo "Building and releasing $APP version $VERSION using consolidated release system"
         
-        # Validate targets exist using Bazel query
-        if ! bazel query --config=ci "//$APP:$APP" &>/dev/null; then
-          echo "ERROR: Binary target //$APP:$APP not found"
-          exit 1
-        fi
-        
-        if ! bazel query --config=ci "//$APP:${APP}_image_tarball" &>/dev/null; then
-          echo "ERROR: Image target //$APP:${APP}_image_tarball not found"
-          exit 1
-        fi
-        
-        # Build the OCI image
-        echo "Building //$APP:${APP}_image_tarball..."
-        bazel build --config=ci "//$APP:${APP}_image_tarball"
-        
-        # Load the image into Docker
-        echo "Loading image into Docker..."
-        bazel run "//$APP:${APP}_image_tarball"
-        
-        # Verify image was loaded
-        ORIGINAL_IMAGE="${APP}:latest"
-        if ! docker images | grep -q "$ORIGINAL_IMAGE"; then
-          echo "ERROR: Image $ORIGINAL_IMAGE not found after loading"
-          docker images
-          exit 1
-        fi
-        
-        # Prepare GHCR tags
-        APP_LOWER=$(echo "$APP" | tr '[:upper:]' '[:lower:]')
-        REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-        
-        GHCR_LATEST="ghcr.io/$REPO_OWNER/$APP_LOWER:latest"
-        GHCR_VERSION="ghcr.io/$REPO_OWNER/$APP_LOWER:$VERSION"
-        GHCR_COMMIT="ghcr.io/$REPO_OWNER/$APP_LOWER:${{ github.sha }}"
-        
-        echo "Tagging images:"
-        echo "  - $GHCR_LATEST"
-        echo "  - $GHCR_VERSION" 
-        echo "  - $GHCR_COMMIT"
-        
-        docker tag "$ORIGINAL_IMAGE" "$GHCR_LATEST"
-        docker tag "$ORIGINAL_IMAGE" "$GHCR_VERSION"
-        docker tag "$ORIGINAL_IMAGE" "$GHCR_COMMIT"
-        
+        # Use our release helper tool to handle the entire release process
         if [[ "$DRY_RUN" == "true" ]]; then
-          echo "DRY RUN: Would push the following images:"
-          echo "  - $GHCR_LATEST"
-          echo "  - $GHCR_VERSION"
-          echo "  - $GHCR_COMMIT"
+          echo "DRY RUN: Building and testing release process without publishing"
+          bazel run --config=ci //tools:release -- release "$APP" --version "$VERSION" --commit "${{ github.sha }}" --dry-run
         else
-          echo "Pushing to GHCR..."
-          docker push "$GHCR_LATEST"
-          docker push "$GHCR_VERSION"
-          docker push "$GHCR_COMMIT"
-          echo "Successfully pushed $APP $VERSION to GHCR"
+          echo "Building and publishing $APP $VERSION"
+          bazel run --config=ci //tools:release -- release "$APP" --version "$VERSION" --commit "${{ github.sha }}"
+          echo "Successfully released $APP $VERSION"
         fi
         
     - name: Create GitHub Release
@@ -265,9 +219,18 @@ jobs:
           
           ### 📝 Details
           - **Commit:** ${{ github.sha }}
-          - **Built with:** Bazel + OCI rules
+          - **Built with:** Bazel + Consolidated Release System
           - **Registry:** GitHub Container Registry (GHCR)
           - **Platforms:** linux/amd64, linux/arm64
+          
+          ### 🛠️ Local Development
+          ```bash
+          # View app metadata
+          bazel run //tools:release -- metadata ${{ matrix.app }}
+          
+          # Build and test locally  
+          bazel run //tools:release -- build ${{ matrix.app }}
+          ```
         draft: false
         prerelease: ${{ contains(needs.plan-release.outputs.version, '-') }}
 

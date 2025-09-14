@@ -105,7 +105,13 @@ def get_image_targets(app_name: str) -> Dict[str, str]:
 def format_registry_tags(registry: str, repo_name: str, version: str, commit_sha: Optional[str] = None) -> Dict[str, str]:
     """Format container registry tags for an app."""
     repo_lower = repo_name.lower()
-    base_repo = f"{registry}/{repo_lower}"
+    
+    # For GHCR, include the repository owner
+    if registry == "ghcr.io" and "GITHUB_REPOSITORY_OWNER" in os.environ:
+        owner = os.environ["GITHUB_REPOSITORY_OWNER"].lower()
+        base_repo = f"{registry}/{owner}/{repo_lower}"
+    else:
+        base_repo = f"{registry}/{repo_lower}"
     
     tags = {
         "latest": f"{base_repo}:latest",
