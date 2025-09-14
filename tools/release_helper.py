@@ -437,8 +437,8 @@ def check_version_exists_in_registry(app_name: str, version: str) -> bool:
 
 def validate_release_version(app_name: str, version: str, allow_overwrite: bool = False) -> None:
     """Validate that a release version is valid and doesn't already exist."""
-    # Check semantic versioning
-    if not validate_semantic_version(version):
+    # Check semantic versioning (skip for "latest" which is always valid for main builds)
+    if version != "latest" and not validate_semantic_version(version):
         raise ValueError(
             f"Version '{version}' does not follow semantic versioning format. "
             f"Expected format: v{{major}}.{{minor}}.{{patch}} (e.g., v1.0.0, v2.1.3, v1.0.0-beta1)"
