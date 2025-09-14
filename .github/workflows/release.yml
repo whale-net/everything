@@ -52,78 +52,51 @@ jobs:
     - name: Configure Bazel
       run: mkdir -p /tmp/bazel-cache /tmp/bazel-repo-cache
         
-    - name: Plan release
+    - name: Plan release using release helper tool
       id: plan
       run: |
         # Determine version
         if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
           VERSION="${{ github.event.inputs.version }}"
+          EVENT_TYPE="workflow_dispatch"
+          APPS_INPUT="${{ github.event.inputs.apps }}"
         else
           VERSION="${GITHUB_REF#refs/tags/}"
+          EVENT_TYPE="tag_push"
+          APPS_INPUT=""
         fi
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         
-        # Discover all apps using our release helper tool
-        echo "Discovering apps..."
-        ALL_APPS=$(bazel run --config=ci //tools:release -- list)
-        echo "Found apps: $ALL_APPS"
-        
-        # Determine which apps to release
-        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-          # Manual dispatch - use input
-          if [[ "${{ github.event.inputs.apps }}" == "all" ]]; then
-            RELEASE_APPS="$ALL_APPS"
-          else
-            # Convert comma-separated to space-separated
-            RELEASE_APPS=$(echo "${{ github.event.inputs.apps }}" | tr ',' ' ')
-          fi
+        # Use release helper to plan the release
+        echo "Planning release with version $VERSION, event type $EVENT_TYPE"
+        if [[ "$EVENT_TYPE" == "workflow_dispatch" ]]; then
+          PLAN_OUTPUT=$(bazel run --config=ci //tools:release -- plan \
+            --event-type "$EVENT_TYPE" \
+            --apps "$APPS_INPUT" \
+            --version "$VERSION" \
+            --format github)
         else
-          # Tag push - detect changes since last tag
-          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          if [[ -z "$PREVIOUS_TAG" ]]; then
-            # No previous tag, release all apps
-            RELEASE_APPS="$ALL_APPS"
-          else
-            # Find changed directories since last tag
-            CHANGED_DIRS=$(git diff --name-only "$PREVIOUS_TAG"..HEAD | cut -d'/' -f1 | sort -u)
-            RELEASE_APPS=""
-            
-            for app in $ALL_APPS; do
-              if echo "$CHANGED_DIRS" | grep -q "^$app$"; then
-                RELEASE_APPS="$RELEASE_APPS $app"
-              fi
-            done
-            
-            # If no app changes but there are changes, release all (infrastructure changes)
-            if [[ -z "$RELEASE_APPS" && -n "$CHANGED_DIRS" ]]; then
-              RELEASE_APPS="$ALL_APPS"
-            fi
-          fi
+          # For tag pushes, let the tool detect previous tag automatically
+          PLAN_OUTPUT=$(bazel run --config=ci //tools:release -- plan \
+            --event-type "$EVENT_TYPE" \
+            --version "$VERSION" \
+            --format github)
         fi
         
-        # Validate apps exist
-        for app in $RELEASE_APPS; do
-          if ! echo "$ALL_APPS" | grep -q "^$app$"; then
-            echo "ERROR: App '$app' not found. Available: $ALL_APPS"
-            exit 1
+        # Parse output from release helper
+        echo "$PLAN_OUTPUT" | while IFS= read -r line; do
+          if [[ "$line" == matrix=* ]]; then
+            echo "${line}" >> $GITHUB_OUTPUT
+          elif [[ "$line" == apps=* ]]; then
+            echo "${line}" >> $GITHUB_OUTPUT
+            APPS_LIST="${line#apps=}"
+            if [[ -n "$APPS_LIST" ]]; then
+              echo "Release plan: $APPS_LIST"
+            else
+              echo "No apps to release"
+            fi
           fi
         done
-        
-        # Create matrix JSON - simplified since release helper handles everything
-        if [[ -z "$RELEASE_APPS" ]]; then
-          echo "matrix={\"include\":[]}" >> $GITHUB_OUTPUT
-          echo "No apps to release"
-        else
-          MATRIX_ITEMS=""
-          for app in $RELEASE_APPS; do
-            if [[ -n "$MATRIX_ITEMS" ]]; then
-              MATRIX_ITEMS="$MATRIX_ITEMS,"
-            fi
-            MATRIX_ITEMS="$MATRIX_ITEMS{\"app\":\"$app\"}"
-          done
-          echo "matrix={\"include\":[$MATRIX_ITEMS]}" >> $GITHUB_OUTPUT
-          echo "Release plan: $RELEASE_APPS"
-        fi
 
   # Build and release selected apps
   release:
@@ -241,9 +214,27 @@ jobs:
     needs: [plan-release, release]
     if: always()
     steps:
-    - name: Generate summary
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Bazelisk
+      uses: bazelbuild/setup-bazelisk@v3
+      
+    - name: Generate summary using release helper
       run: |
-        echo "## 🚀 Release Summary" >> $GITHUB_STEP_SUMMARY
+        # Use our release helper tool to generate the summary
+        MATRIX='${{ needs.plan-release.outputs.release-matrix }}'
+        EVENT_TYPE="${{ github.event_name == 'workflow_dispatch' && 'workflow_dispatch' || 'tag_push' }}"
+        DRY_RUN="${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}"
+        
+        SUMMARY=$(bazel run //tools:release -- summary \
+          --matrix "$MATRIX" \
+          --version "${{ needs.plan-release.outputs.version }}" \
+          --event-type "$EVENT_TYPE" \
+          --repository-owner "${{ github.repository_owner }}" \
+          $DRY_RUN)
+        
+        echo "$SUMMARY" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
         MATRIX='${{ needs.plan-release.outputs.release-matrix }}'

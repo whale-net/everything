@@ -583,3 +583,27 @@ The release helper automatically:
 - Handles multiplatform image building
 - Formats registry tags correctly (`latest`, version, commit SHA)
 - Supports dry-run mode for testing
+
+#### Advanced Release Helper Commands
+
+The release helper tool provides powerful commands for CI/CD automation:
+
+```bash
+# Plan a release (generates GitHub Actions matrix)
+bazel run //tools:release -- plan --event-type workflow_dispatch --apps "hello_python,hello_go" --version v1.2.3 --format github
+
+# Detect changed apps since a tag
+bazel run //tools:release -- changes --since-tag v1.2.0
+
+# Validate that apps exist
+bazel run //tools:release -- validate hello_python hello_go
+
+# Generate release summary for GitHub Actions
+bazel run //tools:release -- summary \
+  --matrix '{"include":[{"app":"hello_python"}]}' \
+  --version v1.2.3 \
+  --event-type workflow_dispatch \
+  --repository-owner myorg
+```
+
+These commands have **dramatically simplified our CI pipeline** by moving complex logic out of shell scripts and into maintainable Python code with proper error handling and testing capabilities.
