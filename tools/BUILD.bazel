@@ -1,5 +1,6 @@
 # Tools and shared build rules for the monorepo
 load("//tools:go.bzl", "go_cache_init", "go_env_info")
+load("@rules_python//python:defs.bzl", "py_binary")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -7,6 +8,21 @@ exports_files([
     "oci.bzl",
     "go.bzl",
 ])
+
+# Release helper tool for managing app releases and container images
+py_binary(
+    name = "release_helper",
+    srcs = ["release_helper.py"],
+    main = "release_helper.py",
+    visibility = ["//visibility:public"],
+)
+
+# Convenient alias for release helper
+alias(
+    name = "release",
+    actual = ":release_helper",
+    visibility = ["//visibility:public"],
+)
 
 # Go cache initialization tool
 go_cache_init(name = "init_go_cache")

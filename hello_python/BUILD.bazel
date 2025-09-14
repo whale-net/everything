@@ -1,6 +1,5 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("@everything_pip_deps//:requirements.bzl", "requirement")
-load("//tools:oci.bzl", "python_oci_image", "python_oci_image_multiplatform")
 load("//tools:release.bzl", "release_app")
 
 py_library(
@@ -21,14 +20,6 @@ py_binary(
     visibility = ["//visibility:public"],
 )
 
-# OCI images for the Python application using generic rules
-# Creates hello_python_image (amd64), hello_python_image_amd64, and hello_python_image_arm64
-python_oci_image_multiplatform(
-    name = "hello_python_image",
-    binary = ":hello_python",
-    repo_tag = "hello_python:latest",
-)
-
 py_test(
     name = "test_main",
     srcs = ["test_main.py"],
@@ -38,9 +29,10 @@ py_test(
     ],
 )
 
-# Release metadata for this app
+# Release metadata and OCI images for this app
 release_app(
     name = "hello_python",
     binary_target = ":hello_python",
+    language = "python",
     description = "Python hello world application with pytest",
 )

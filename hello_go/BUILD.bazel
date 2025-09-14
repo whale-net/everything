@@ -1,5 +1,4 @@
 load("@rules_go//go:def.bzl", "go_binary", "go_test")
-load("//tools:oci.bzl", "go_oci_image", "go_oci_image_multiplatform")
 load("//tools:release.bzl", "release_app")
 
 go_binary(
@@ -31,23 +30,16 @@ go_binary(
     static = "on",
 )
 
-# OCI images for the Go application using generic rules
-# Creates hello_go_image (amd64), hello_go_image_amd64, and hello_go_image_arm64
-go_oci_image_multiplatform(
-    name = "hello_go_image", 
-    binary = ":hello_go",
-    repo_tag = "hello_go:latest",
-)
-
 go_test(
     name = "main_test",
     srcs = ["main_test.go"],
     deps = ["//libs/go"],
 )
 
-# Release metadata for this app
+# Release metadata and OCI images for this app
 release_app(
     name = "hello_go",
     binary_target = ":hello_go",
+    language = "go",
     description = "Go hello world application with static binaries",
 )

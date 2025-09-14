@@ -221,10 +221,28 @@ graph TD
 
 ## Docker Images ✅
 
-Each application is automatically containerized using Bazel's integrated OCI image rules with robust, production-ready base images.
+Each application is automatically containerized using the consolidated `release_app` macro, which creates both release metadata and OCI images with multiplatform support.
 
-### Generic OCI Image Rules
-The repository provides reusable OCI image building rules in `//tools:oci.bzl` with full multiplatform support:
+### Consolidated Release System
+The `release_app` macro in `//tools:release.bzl` automatically creates both release metadata and OCI images:
+
+```starlark
+load("//tools:release.bzl", "release_app")
+
+# This single declaration creates:
+# - Release metadata (JSON file with app info)
+# - OCI images for multiple platforms (amd64, arm64)
+# - Proper container registry configuration
+release_app(
+    name = "hello_python",
+    binary_target = ":hello_python",
+    language = "python",
+    description = "Python hello world application with pytest",
+)
+```
+
+### Manual OCI Rules (Advanced Use Cases)
+For advanced scenarios, you can still use the individual OCI image rules in `//tools:oci.bzl`:
 
 #### Python Applications
 ```starlark
@@ -463,12 +481,11 @@ git diff --name-only $PREVIOUS_TAG..HEAD | cut -d'/' -f1
 
 ### 🛠️ Adding Release Support to New Apps
 
-When creating a new app, add the release metadata:
+When creating a new app, just add the consolidated release metadata - it automatically creates both release metadata and OCI images:
 
 ```starlark
 # In new_app/BUILD.bazel
 load("//tools:release.bzl", "release_app")
-load("//tools:oci.bzl", "python_oci_image_multiplatform")  # or go_oci_image_multiplatform
 
 py_binary(  # or go_binary
     name = "new_app",
@@ -476,17 +493,11 @@ py_binary(  # or go_binary
     visibility = ["//visibility:public"],
 )
 
-# OCI image for the app
-python_oci_image_multiplatform(  # or go_oci_image_multiplatform
-    name = "new_app_image",
-    binary = ":new_app",
-    repo_tag = "new_app:latest",
-)
-
-# Release metadata
+# This single macro creates both release metadata AND OCI images!
 release_app(
     name = "new_app",
     binary_target = ":new_app",
+    language = "python",  # or "go"
     description = "Description of what this app does",
 )
 ```
@@ -546,3 +557,29 @@ This monorepo demonstrates a **modern, shell-script-free** approach to building,
 - **🔧 Developer Experience**: Rich tooling, quick feedback loops
 
 Everything is designed to be **maintainable**, **reproducible**, and **platform-agnostic** while avoiding the pitfalls of shell scripts and complex release processes.
+
+#### Using the Release Helper Tool
+
+The monorepo includes a powerful release helper tool for local development and debugging:
+
+```bash
+# List all apps with release metadata
+bazel run //tools:release -- list
+
+# Show metadata for a specific app
+bazel run //tools:release -- metadata hello_python
+
+# Build and load a container image locally
+bazel run //tools:release -- build hello_python
+bazel run //tools:release -- build hello_python --platform arm64
+
+# Full release workflow (build, tag, push)
+bazel run //tools:release -- release hello_python --version v1.2.3 --dry-run
+bazel run //tools:release -- release hello_python --version v1.2.3 --commit abc123
+```
+
+The release helper automatically:
+- Uses the app's release metadata for registry configuration
+- Handles multiplatform image building
+- Formats registry tags correctly (`latest`, version, commit SHA)
+- Supports dry-run mode for testing
