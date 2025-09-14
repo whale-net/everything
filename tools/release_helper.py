@@ -444,6 +444,12 @@ def validate_release_version(app_name: str, version: str, allow_overwrite: bool 
             f"Expected format: v{{major}}.{{minor}}.{{patch}} (e.g., v1.0.0, v2.1.3, v1.0.0-beta1)"
         )
     
+    # Automatically allow overwriting for "latest" version (main branch workflow)
+    # or when explicitly allowing overwrite
+    if version == "latest":
+        print(f"✓ Allowing overwrite of 'latest' tag for app '{app_name}' (main branch workflow)")
+        return
+    
     # Check if version already exists (unless explicitly allowing overwrite)
     if not allow_overwrite:
         if check_version_exists_in_registry(app_name, version):

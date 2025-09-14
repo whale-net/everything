@@ -377,7 +377,8 @@ Versions must follow the `v{major}.{minor}.{patch}` format, with the special exc
 - **Automatic checks**: Before releasing, the system checks if the version already exists
 - **Registry validation**: Uses Docker manifest inspection to verify version availability
 - **Safety first**: Releases are blocked if a version already exists in the registry
-- **Override option**: Use `--allow-overwrite` flag for emergency situations (not recommended)
+- **`latest` exception**: The `latest` tag can always be overwritten (main branch workflow)
+- **Override option**: Use `--allow-overwrite` flag for emergency situations with versioned releases (not recommended)
 
 #### Version Validation Commands
 ```bash
@@ -578,7 +579,7 @@ gh workflow run release.yml \
 4. **App-specific releases**: Only release what changed
 5. **Monitor CI logs**: Check build outputs for any issues
 6. **Update documentation**: Keep README and app docs current
-7. **Never overwrite versions**: Use new version numbers instead of overwriting existing ones
+7. **Never overwrite versions**: Use new version numbers instead of overwriting existing versions (except `latest` which is automatically handled)
 8. **Version validation**: Use `validate-version` command to check versions before releasing
 
 ---
