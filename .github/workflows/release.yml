@@ -150,7 +150,7 @@ jobs:
     # NOTE: GHCR_PAT secret should be created with write:packages and read:packages scopes
     # Falls back to GITHUB_TOKEN if GHCR_PAT is not available (limited permissions)
     - name: Log in to GitHub Container Registry
-      if: ${{ github.event_name != 'workflow_dispatch' || !github.event.inputs.dry_run }}
+      if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run == 'false' }}
       uses: docker/login-action@v3
       with:
         registry: ghcr.io
