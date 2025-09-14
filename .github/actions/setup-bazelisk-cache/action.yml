@@ -41,15 +41,13 @@ runs:
           /tmp/bazel-cache
           /tmp/bazel-repo-cache
           ~/.cache/bazelisk
-        # Use separate hashFiles calls to handle missing files gracefully
-        # This prevents cache failures when optional files don't exist
-        key: ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel') }}-${{ hashFiles('MODULE.bazel.lock') }}-${{ hashFiles('.bazelrc') }}-${{ hashFiles('.bazelversion') }}-${{ hashFiles('**/BUILD.bazel') }}-${{ hashFiles('**/*.bzl') }}-${{ hashFiles('go.mod') }}-${{ hashFiles('requirements.lock.txt') }}${{ inputs.cache-suffix && format('-{0}', inputs.cache-suffix) || '' }}
+        # Optimized cache key under 512 character limit
+        # Focus on core Bazel configuration files that affect build dependencies
+        key: ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelrc', '.bazelversion', 'go.mod', 'requirements.lock.txt') }}${{ inputs.cache-suffix && format('-{0}', inputs.cache-suffix) || '' }}
         restore-keys: |
-          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel') }}-${{ hashFiles('MODULE.bazel.lock') }}-${{ hashFiles('.bazelrc') }}-${{ hashFiles('.bazelversion') }}-${{ hashFiles('**/BUILD.bazel') }}-${{ hashFiles('**/*.bzl') }}-${{ hashFiles('go.mod') }}-
-          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel') }}-${{ hashFiles('MODULE.bazel.lock') }}-${{ hashFiles('.bazelrc') }}-${{ hashFiles('.bazelversion') }}-${{ hashFiles('**/BUILD.bazel') }}-
-          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel') }}-${{ hashFiles('MODULE.bazel.lock') }}-${{ hashFiles('.bazelrc') }}-${{ hashFiles('.bazelversion') }}-
-          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel') }}-${{ hashFiles('MODULE.bazel.lock') }}-
-          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel') }}-
+          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelrc', '.bazelversion') }}
+          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock') }}
+          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel') }}
           ${{ runner.os }}-bazel-
 
     - name: Cache status

@@ -18,7 +18,9 @@ This approach failed when `hashFiles()` with multiple file patterns encountered 
 
 ## Solution
 
-This action uses separate `hashFiles()` calls for each file pattern:
+This action uses an optimized cache key generation approach:
+- ✅ Uses single `hashFiles()` call with multiple files to stay under 512-character limit
+- ✅ Focuses on core configuration files that affect build dependencies  
 - ✅ Handles missing files gracefully (returns empty string for missing files)
 - ✅ Generates valid cache keys based on existing files
 - ✅ Provides hierarchical restore-keys for better cache hit rates
@@ -67,17 +69,17 @@ This action uses separate `hashFiles()` calls for each file pattern:
 
 ## Cache Strategy
 
-The action creates a hierarchical cache key based on:
+The action creates an optimized cache key based on core configuration files that affect build dependencies:
 1. `MODULE.bazel` - Core Bazel module configuration
-2. `MODULE.bazel.lock` - Locked dependency versions
+2. `MODULE.bazel.lock` - Locked dependency versions  
 3. `.bazelrc` - Bazel configuration
 4. `.bazelversion` - Bazel version specification
-5. `**/BUILD.bazel` - All BUILD files across the repository
-6. `**/*.bzl` - All Starlark extension files
-7. `go.mod` - Go module dependencies (if applicable)
-8. `requirements.lock.txt` - Python dependencies (if applicable)
+5. `go.mod` - Go module dependencies (if applicable)
+6. `requirements.lock.txt` - Python dependencies (if applicable)
 
-The restore-keys provide fallback options, ensuring good cache hit rates even when some files change.
+The cache key is optimized to stay under GitHub Actions' 512-character limit by using a single `hashFiles()` call with multiple files, which generates one combined hash instead of concatenating individual hashes.
+
+The restore-keys provide hierarchical fallback options, ensuring good cache hit rates even when some files change.
 
 ## Caches Created
 
