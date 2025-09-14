@@ -11,7 +11,8 @@ build:ci --repository_cache=/tmp/bazel-repo-cache
 build:ci --jobs=auto
 build:ci --remote_download_minimal
 build:ci --verbose_failures
-build:ci --action_env=CI=true
+# Removed --action_env=CI=true to improve test result caching
+# The CI environment variable is not needed by tests or builds
 build:ci --show_timestamps
 build:ci --announce_rc
 
