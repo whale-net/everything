@@ -362,8 +362,8 @@ Each released app gets published to GitHub Container Registry with multiple tags
 The release system includes robust version validation and protection:
 
 #### Semantic Versioning Enforcement
-All versions must follow the `v{major}.{minor}.{patch}` format:
-- ✅ Valid: `v1.0.0`, `v2.1.3`, `v1.0.0-beta1`, `v3.2.1-rc2`
+Versions must follow the `v{major}.{minor}.{patch}` format, with the special exception of `latest` for main builds:
+- ✅ Valid: `v1.0.0`, `v2.1.3`, `v1.0.0-beta1`, `v3.2.1-rc2`, `latest`
 - ❌ Invalid: `1.0.0`, `v1.0`, `v1`, `release-1.0.0`
 
 #### Version Overwrite Protection
@@ -567,7 +567,7 @@ gh workflow run release.yml \
 
 1. **Use GitHub UI**: Prevents typos and provides validation
 2. **Test with dry runs**: Always test releases before publishing
-3. **Semantic versioning**: Use `vMAJOR.MINOR.PATCH` format (enforced automatically)
+3. **Semantic versioning**: Use `vMAJOR.MINOR.PATCH` format or `latest` for main builds (enforced automatically)
 4. **App-specific releases**: Only release what changed
 5. **Monitor CI logs**: Check build outputs for any issues
 6. **Update documentation**: Keep README and app docs current
