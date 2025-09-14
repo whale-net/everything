@@ -1,6 +1,5 @@
 # Generic Dockerfile for Python applications
-# Build stage - using specific hash for better caching
-FROM python@sha256:dadfa97a4c813cdc19b45dcca10e9c687bab1eed2074c49d067c5945b5eafb1e AS builder
+FROM python:3.11-slim AS builder
 
 # Accept build arguments
 ARG BINARY_PATH
@@ -10,8 +9,8 @@ ARG BINARY_NAME
 COPY ${BINARY_PATH} /app/${BINARY_NAME}
 RUN chmod +x /app/${BINARY_NAME}
 
-# Runtime stage - use distroless Python for security with specific hash
-FROM gcr.io/distroless/python3-debian12@sha256:283edd3782bb8b122b71bce2d5f5e89cdc170f62e6b8625e4ea7b0a317b809bc
+# Runtime stage - use distroless Python for security
+FROM gcr.io/distroless/python3-debian12:latest
 
 # Accept runtime arguments  
 ARG BINARY_NAME

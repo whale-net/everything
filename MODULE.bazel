@@ -11,27 +11,25 @@ bazel_dep(name = "gazelle", version = "0.39.1")
 bazel_dep(name = "rules_oci", version = "2.2.6")
 bazel_dep(name = "aspect_bazel_lib", version = "2.21.1")
 
-# OCI/Docker setup - using specific hashes for better caching and reproducibility
+# OCI/Docker setup
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 oci.pull(
     name = "python_slim",
-    digest = "sha256:dadfa97a4c813cdc19b45dcca10e9c687bab1eed2074c49d067c5945b5eafb1e",
     image = "python",
+    tag = "3.11-slim",
     platforms = [
         "linux/amd64",
         "linux/arm64/v8",
     ],
-    # Python 3.11.13-slim-trixie - latest stable with Debian 12
 )
 oci.pull(
     name = "alpine",
-    digest = "sha256:beefdbd8a1da6d2915566fde36db9db0b524eb737fc57cd1367effd16dc0d06d",
     image = "alpine",
+    tag = "latest",
     platforms = [
         "linux/amd64",
         "linux/arm64/v8",
     ],
-    # Alpine 3.20.3 - latest stable
 )
 use_repo(oci, "python_slim", "python_slim_linux_amd64", "python_slim_linux_arm64_v8", "alpine", "alpine_linux_amd64", "alpine_linux_arm64_v8")
 
