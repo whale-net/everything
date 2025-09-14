@@ -211,16 +211,28 @@ jobs:
         
     - name: Build and load Docker images with Bazel
       run: |
-        # Build all OCI images using Bazel with CI optimizations
+        # First, build all OCI images using Bazel with CI optimizations
+        echo "Building OCI images..."
         bazel build --config=ci $(bazel query "kind('oci_load', //...)")
         
-        # Load images into Docker daemon
-        for tarball in $(bazel query --output=files "kind('oci_load', //...)" | grep -E '\.sh$'); do
-          if [[ -f "$tarball" ]]; then
-            echo "Loading image from $tarball"
-            "$tarball"
+        # Show what tarball scripts were generated
+        echo "Generated OCI tarball scripts:"
+        ls -la bazel-bin/*/*tarball.sh || echo "No tarball scripts found"
+        
+        # Then load images into Docker daemon using the generated scripts
+        echo "Loading images into Docker daemon..."
+        for script in bazel-bin/*/*tarball.sh; do
+          if [[ -x "$script" ]]; then
+            echo "Loading image from $script"
+            "$script"
+          else
+            echo "Warning: Script not executable or not found: $script"
           fi
         done
+        
+        # Show loaded Docker images
+        echo "Loaded Docker images:"
+        docker images
         
         # Tag and push images if on main branch
         if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
