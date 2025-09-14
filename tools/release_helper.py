@@ -11,6 +11,7 @@ import subprocess
 import sys
 import argparse
 import os
+import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -149,9 +150,13 @@ def tag_and_push_image(
     app_name: str, 
     version: str, 
     commit_sha: Optional[str] = None,
-    dry_run: bool = False
+    dry_run: bool = False,
+    allow_overwrite: bool = False
 ) -> None:
     """Tag and push container images to registry."""
+    # Validate version before proceeding
+    validate_release_version(app_name, version, allow_overwrite)
+    
     metadata = get_app_metadata(app_name)
     registry = metadata["registry"]
     repo_name = metadata["repo_name"]
@@ -255,6 +260,14 @@ def plan_release(
     since_tag: Optional[str] = None
 ) -> Dict:
     """Plan a release and return the matrix configuration for CI."""
+    
+    # Validate version format if provided
+    if version and version != "latest":
+        if not validate_semantic_version(version):
+            raise ValueError(
+                f"Version '{version}' does not follow semantic versioning format. "
+                f"Expected format: v{{major}}.{{minor}}.{{patch}} (e.g., v1.0.0, v2.1.3, v1.0.0-beta1)"
+            )
     
     if event_type == "workflow_dispatch":
         # Manual release
@@ -373,6 +386,77 @@ def generate_release_summary(
     return "\n".join(summary)
 
 
+def validate_semantic_version(version: str) -> bool:
+    """Validate that version follows semantic versioning format v{major}.{minor}.{patch}."""
+    # Match semantic version pattern: v followed by major.minor.patch
+    # Allow optional pre-release suffix like -alpha, -beta, -rc1, etc.
+    pattern = r'^v(\d+)\.(\d+)\.(\d+)(?:-[a-zA-Z0-9\-\.]+)?$'
+    return bool(re.match(pattern, version))
+
+
+def check_version_exists_in_registry(app_name: str, version: str) -> bool:
+    """Check if a version already exists in the container registry."""
+    metadata = get_app_metadata(app_name)
+    registry = metadata["registry"]
+    repo_name = metadata["repo_name"].lower()
+    
+    # Build the image reference to check
+    if registry == "ghcr.io" and "GITHUB_REPOSITORY_OWNER" in os.environ:
+        owner = os.environ["GITHUB_REPOSITORY_OWNER"].lower()
+        image_ref = f"{registry}/{owner}/{repo_name}:{version}"
+    else:
+        image_ref = f"{registry}/{repo_name}:{version}"
+    
+    try:
+        # Try to pull the image manifest to check if it exists
+        # Use docker manifest inspect which doesn't download the image
+        result = subprocess.run(
+            ["docker", "manifest", "inspect", image_ref],
+            capture_output=True,
+            text=True,
+            check=False  # Don't raise exception on non-zero exit
+        )
+        
+        if result.returncode == 0:
+            return True  # Image exists
+        elif any(phrase in result.stderr.lower() for phrase in ["manifest unknown", "not found", "name invalid", "unauthorized"]):
+            # These errors typically mean the image doesn't exist or we don't have access
+            # In CI with proper credentials, "unauthorized" shouldn't happen for existing images
+            return False  # Image doesn't exist or we can't access it (assume it doesn't exist)
+        else:
+            # Some other error occurred, be conservative and assume it exists
+            print(f"Warning: Could not definitively check if {image_ref} exists: {result.stderr}")
+            print("Proceeding with caution - this may overwrite an existing version")
+            return False
+            
+    except FileNotFoundError:
+        # Docker not available, skip the check
+        print("Warning: Docker not available to check for existing versions")
+        return False
+
+
+def validate_release_version(app_name: str, version: str, allow_overwrite: bool = False) -> None:
+    """Validate that a release version is valid and doesn't already exist."""
+    # Check semantic versioning
+    if not validate_semantic_version(version):
+        raise ValueError(
+            f"Version '{version}' does not follow semantic versioning format. "
+            f"Expected format: v{{major}}.{{minor}}.{{patch}} (e.g., v1.0.0, v2.1.3, v1.0.0-beta1)"
+        )
+    
+    # Check if version already exists (unless explicitly allowing overwrite)
+    if not allow_overwrite:
+        if check_version_exists_in_registry(app_name, version):
+            raise ValueError(
+                f"Version '{version}' already exists for app '{app_name}'. "
+                f"Refusing to overwrite existing version. Use a different version number."
+            )
+        else:
+            print(f"✓ Version '{version}' is available for app '{app_name}'")
+    else:
+        print(f"⚠️  Allowing overwrite of version '{version}' for app '{app_name}' (if it exists)")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Release helper for Everything monorepo")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -395,6 +479,7 @@ def main():
     release_parser.add_argument("--version", default="latest", help="Version tag")
     release_parser.add_argument("--commit", help="Commit SHA for additional tag")
     release_parser.add_argument("--dry-run", action="store_true", help="Show what would be pushed without actually pushing")
+    release_parser.add_argument("--allow-overwrite", action="store_true", help="Allow overwriting existing versions (dangerous!)")
     
     # Plan release command (for CI)
     plan_parser = subparsers.add_parser("plan", help="Plan a release and output CI matrix")
@@ -411,6 +496,12 @@ def main():
     # Validate apps command
     validate_parser = subparsers.add_parser("validate", help="Validate that apps exist")
     validate_parser.add_argument("apps", nargs="+", help="App names to validate")
+    
+    # Validate version command
+    validate_version_parser = subparsers.add_parser("validate-version", help="Validate version format and availability")
+    validate_version_parser.add_argument("app", help="App name")
+    validate_version_parser.add_argument("version", help="Version to validate")
+    validate_version_parser.add_argument("--allow-overwrite", action="store_true", help="Allow overwriting existing versions")
     
     # Summary command (for CI)
     summary_parser = subparsers.add_parser("summary", help="Generate release summary for GitHub Actions")
@@ -441,7 +532,7 @@ def main():
             print(f"Image loaded as: {image_tag}")
         
         elif args.command == "release":
-            tag_and_push_image(args.app, args.version, args.commit, args.dry_run)
+            tag_and_push_image(args.app, args.version, args.commit, args.dry_run, args.allow_overwrite)
         
         elif args.command == "plan":
             plan = plan_release(
@@ -480,6 +571,14 @@ def main():
                 print(f"All apps are valid: {', '.join(valid_apps)}")
             except ValueError as e:
                 print(f"Validation failed: {e}", file=sys.stderr)
+                sys.exit(1)
+        
+        elif args.command == "validate-version":
+            try:
+                validate_release_version(args.app, args.version, args.allow_overwrite)
+                print(f"✓ Version '{args.version}' is valid for app '{args.app}'")
+            except ValueError as e:
+                print(f"Version validation failed: {e}", file=sys.stderr)
                 sys.exit(1)
         
         elif args.command == "summary":

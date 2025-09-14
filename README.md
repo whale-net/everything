@@ -335,6 +335,8 @@ This monorepo uses a **shell-script-free**, Starlark and GitHub Actions-based re
 - **Multi-Platform Images**: Automatically builds and publishes AMD64 and ARM64 container images
 - **GitHub Container Registry**: All images published to `ghcr.io` with proper versioning
 - **Zero Shell Scripts**: Pure Bazel queries and GitHub Actions orchestration
+- **Semantic Versioning**: Enforces `v{major}.{minor}.{patch}` format for all releases
+- **Version Protection**: Prevents overwriting existing versions in the registry
 
 ### 📦 How It Works
 
@@ -370,7 +372,34 @@ Each released app gets published to GitHub Container Registry with multiple tags
 - `ghcr.io/OWNER/APP:latest` (latest release)
 - `ghcr.io/OWNER/APP:COMMIT_SHA` (commit-specific)
 
-### 🔧 Release Methods
+### � Version Validation & Protection
+
+The release system includes robust version validation and protection:
+
+#### Semantic Versioning Enforcement
+All versions must follow the `v{major}.{minor}.{patch}` format:
+- ✅ Valid: `v1.0.0`, `v2.1.3`, `v1.0.0-beta1`, `v3.2.1-rc2`
+- ❌ Invalid: `1.0.0`, `v1.0`, `v1`, `release-1.0.0`
+
+#### Version Overwrite Protection
+- **Automatic checks**: Before releasing, the system checks if the version already exists
+- **Registry validation**: Uses Docker manifest inspection to verify version availability
+- **Safety first**: Releases are blocked if a version already exists in the registry
+- **Override option**: Use `--allow-overwrite` flag for emergency situations (not recommended)
+
+#### Version Validation Commands
+```bash
+# Validate version format and availability
+bazel run //tools:release -- validate-version hello_python v1.2.3
+
+# Allow overwriting existing versions (dangerous!)
+bazel run //tools:release -- validate-version hello_python v1.2.3 --allow-overwrite
+
+# Validation happens automatically during plan and release
+bazel run //tools:release -- plan --event-type workflow_dispatch --apps hello_python --version v1.2.3
+```
+
+### �🔧 Release Methods
 
 #### Method 1: GitHub Actions UI (Recommended) ⭐
 
@@ -526,6 +555,20 @@ bazel run //hello_python:hello_python_image_tarball
 docker run --rm hello_python:latest
 ```
 
+#### Version Issues
+```bash
+# Validate version format before releasing
+bazel run //tools:release -- validate-version hello_python v1.2.3
+
+# If you get "version already exists" errors:
+# 1. Check what versions exist in the registry
+# 2. Use a new version number (recommended)
+# 3. Or use --allow-overwrite flag (dangerous!)
+
+# For emergency overwrites only:
+bazel run //tools:release -- release hello_python --version v1.2.3 --allow-overwrite --dry-run
+```
+
 #### Dry Run Releases
 Always use dry run mode when testing:
 ```bash
@@ -539,10 +582,12 @@ gh workflow run release.yml \
 
 1. **Use GitHub UI**: Prevents typos and provides validation
 2. **Test with dry runs**: Always test releases before publishing
-3. **Semantic versioning**: Use `vMAJOR.MINOR.PATCH` format
+3. **Semantic versioning**: Use `vMAJOR.MINOR.PATCH` format (enforced automatically)
 4. **App-specific releases**: Only release what changed
 5. **Monitor CI logs**: Check build outputs for any issues
 6. **Update documentation**: Keep README and app docs current
+7. **Never overwrite versions**: Use new version numbers instead of overwriting existing ones
+8. **Version validation**: Use `validate-version` command to check versions before releasing
 
 ---
 
@@ -586,9 +631,12 @@ The release helper automatically:
 
 #### Advanced Release Helper Commands
 
-The release helper tool provides powerful commands for CI/CD automation:
+The release helper tool provides powerful commands for CI/CD automation and version management:
 
 ```bash
+# Validate version format and registry availability
+bazel run //tools:release -- validate-version hello_python v1.2.3
+
 # Plan a release (generates GitHub Actions matrix)
 bazel run //tools:release -- plan --event-type workflow_dispatch --apps "hello_python,hello_go" --version v1.2.3 --format github
 
@@ -604,6 +652,9 @@ bazel run //tools:release -- summary \
   --version v1.2.3 \
   --event-type workflow_dispatch \
   --repository-owner myorg
+
+# Emergency overwrite (use with extreme caution)
+bazel run //tools:release -- release hello_python --version v1.2.3 --allow-overwrite --dry-run
 ```
 
-These commands have **dramatically simplified our CI pipeline** by moving complex logic out of shell scripts and into maintainable Python code with proper error handling and testing capabilities.
+These commands have **dramatically simplified our CI pipeline** by moving complex logic out of shell scripts and into maintainable Python code with proper error handling, version validation, and testing capabilities.
