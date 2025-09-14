@@ -16,6 +16,10 @@ build:ci --verbose_failures
 build:ci --show_timestamps
 build:ci --announce_rc
 
+# Domain-specific caching (for partitioned cache strategy)
+build:go --disk_cache=/tmp/bazel-cache/go
+build:python --disk_cache=/tmp/bazel-cache/python
+
 # Test configurations
 test --test_output=errors
 test:ci --test_output=errors --test_summary=detailed

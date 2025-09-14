@@ -1,4 +1,13 @@
-name: 'Setup Bazelisk with Caching'
+name: 'Setup Boutputs:
+  cache-hit:
+    description: 'A boolean value indicating if there was a cache hit for Bazel'
+    value: ${{ steps.bazel-cache.outputs.cache-hit }}
+  go-cache-hit:
+    description: 'A boolean value indicating if there was a cache hit for Go domain'
+    value: ${{ steps.go-cache.outputs.cache-hit }}
+  python-cache-hit:
+    description: 'A boolean value indicating if there was a cache hit for Python domain'
+    value: ${{ steps.python-cache.outputs.cache-hit }}isk with Caching'
 description: 'Sets up Bazelisk with optimized Bazel caching for CI/CD workflows'
 
 inputs:
@@ -37,13 +46,25 @@ runs:
       id: cache-key
       shell: bash
       run: |
-        BASE_KEY="${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelrc', '.bazelversion', 'go.mod', 'requirements.lock.txt') }}-cache"
-        if [[ -n "${{ inputs.cache-suffix }}" ]]; then
-          CACHE_KEY="${BASE_KEY}-${{ inputs.cache-suffix }}"
-        else
-          CACHE_KEY="${BASE_KEY}-default"
-        fi
-        echo "key=${CACHE_KEY}" >> $GITHUB_OUTPUT
+        # Generate domain-specific cache keys
+        BASE_KEY="${{ runner.os }}-bazel"
+        
+        # Core configuration hash (shared across domains)
+        CONFIG_HASH=$(hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelrc', '.bazelversion') 2>/dev/null || echo "no-config")
+        
+        # Domain-specific hashes
+        GO_HASH=$(hashFiles('go.mod', 'go.sum', 'hello_go/**', 'libs/go/**') 2>/dev/null || echo "no-go")
+        PYTHON_HASH=$(hashFiles('requirements.in', 'requirements.lock.txt', 'hello_python/**', 'libs/python/**') 2>/dev/null || echo "no-python")
+        
+        # Create domain-specific cache keys
+        GO_CACHE_KEY="${BASE_KEY}-go-${CONFIG_HASH}-${GO_HASH}-${{ inputs.cache-suffix }}"
+        PYTHON_CACHE_KEY="${BASE_KEY}-python-${CONFIG_HASH}-${PYTHON_HASH}-${{ inputs.cache-suffix }}"
+        SHARED_CACHE_KEY="${BASE_KEY}-shared-${CONFIG_HASH}-${{ inputs.cache-suffix }}"
+        
+        # Export cache keys for use in cache steps
+        echo "go-key=${GO_CACHE_KEY}" >> $GITHUB_OUTPUT
+        echo "python-key=${PYTHON_CACHE_KEY}" >> $GITHUB_OUTPUT
+        echo "shared-key=${SHARED_CACHE_KEY}" >> $GITHUB_OUTPUT
 
     - name: Mount Bazel cache
       id: bazel-cache
@@ -53,24 +74,64 @@ runs:
           /tmp/bazel-cache
           /tmp/bazel-repo-cache
           ~/.cache/bazelisk
-        key: ${{ steps.cache-key.outputs.key }}
+        key: ${{ steps.cache-key.outputs.shared-key }}
         restore-keys: |
-          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelrc', '.bazelversion') }}-cache-
-          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock') }}-cache-
-          ${{ runner.os }}-bazel-${{ hashFiles('MODULE.bazel') }}-cache-
+          ${{ runner.os }}-bazel-shared-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelrc', '.bazelversion') }}-
+          ${{ runner.os }}-bazel-cache-
+
+    - name: Mount Go domain cache
+      id: go-cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          /tmp/bazel-cache/go
+          /tmp/bazel-repo-cache/go
+        key: ${{ steps.cache-key.outputs.go-key }}
+        restore-keys: |
+          ${{ runner.os }}-bazel-go-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelrc', '.bazelversion') }}-
+          ${{ runner.os }}-bazel-cache-
+
+    - name: Mount Python domain cache
+      id: python-cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          /tmp/bazel-cache/python
+          /tmp/bazel-repo-cache/python
+        key: ${{ steps.cache-key.outputs.python-key }}
+        restore-keys: |
+          ${{ runner.os }}-bazel-python-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelrc', '.bazelversion') }}-
           ${{ runner.os }}-bazel-cache-
 
     - name: Cache status
       shell: bash
       run: |
-        if [[ "${{ steps.bazel-cache.outputs.cache-hit }}" == "true" ]]; then
-          echo "✅ Bazel cache hit - using cached dependencies"
+        SHARED_HIT="${{ steps.bazel-cache.outputs.cache-hit }}"
+        GO_HIT="${{ steps.go-cache.outputs.cache-hit }}"
+        PYTHON_HIT="${{ steps.python-cache.outputs.cache-hit }}"
+        
+        if [[ "$SHARED_HIT" == "true" ]]; then
+          echo "✅ Shared Bazel cache hit"
         else
-          echo "🔄 Bazel cache miss - will populate cache for future runs"
+          echo "🔄 Shared Bazel cache miss"
+        fi
+        
+        if [[ "$GO_HIT" == "true" ]]; then
+          echo "✅ Go domain cache hit"
+        else
+          echo "🔄 Go domain cache miss"
+        fi
+        
+        if [[ "$PYTHON_HIT" == "true" ]]; then
+          echo "✅ Python domain cache hit"
+        else
+          echo "🔄 Python domain cache miss"
         fi
         
         # Show cache directory sizes for debugging
         echo "Cache directory sizes:"
         du -sh /tmp/bazel-cache 2>/dev/null || echo "  /tmp/bazel-cache: not found"
+        du -sh /tmp/bazel-cache/go 2>/dev/null || echo "  /tmp/bazel-cache/go: not found"
+        du -sh /tmp/bazel-cache/python 2>/dev/null || echo "  /tmp/bazel-cache/python: not found"
         du -sh /tmp/bazel-repo-cache 2>/dev/null || echo "  /tmp/bazel-repo-cache: not found"
         du -sh ~/.cache/bazelisk 2>/dev/null || echo "  ~/.cache/bazelisk: not found"

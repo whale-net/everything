@@ -22,6 +22,7 @@ jobs:
       uses: ./.github/actions/setup-bazelisk-cache
       with:
         cache-suffix: 'build'
+      id: bazel-cache
       
     - name: Setup Python
       uses: actions/setup-python@v5
@@ -71,6 +72,7 @@ jobs:
       uses: ./.github/actions/setup-bazelisk-cache
       with:
         cache-suffix: 'test'
+      id: bazel-cache
       
     - name: Setup Python
       uses: actions/setup-python@v5
@@ -88,10 +90,13 @@ jobs:
         bazel run //:init-go-cache
         
     - name: Run tests
+      env:
+        GO_CACHE_HIT: ${{ steps.bazel-cache.outputs.go-cache-hit }}
+        PYTHON_CACHE_HIT: ${{ steps.bazel-cache.outputs.python-cache-hit }}
       run: |
-        # Bazel automatically handles incremental testing
-        # Only rebuilds and retests what's affected by changes
-        bazel test --config=ci //...
+        # Use incremental testing based on cache state
+        # Only tests domains that had cache misses (indicating changes)
+        bazel run //:test_incremental
         
     - name: Upload test results
       uses: actions/upload-artifact@v4
@@ -115,6 +120,7 @@ jobs:
       uses: ./.github/actions/setup-bazelisk-cache
       with:
         cache-suffix: 'docker'
+      id: bazel-cache
       
     - name: Setup Python
       uses: actions/setup-python@v5
