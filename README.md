@@ -181,8 +181,15 @@ monorepo_test_suite(
 
 - `.bazelrc`: Contains common Bazel configuration
 - `MODULE.bazel`: Defines external dependencies
-- `go.mod`: Go module configuration
+- `go.mod`: Go module configuration (note: no `go.sum` needed for internal-only dependencies)
 - `requirements.in`: Python dependencies specification
+
+### CI Cache Optimization
+
+The CI workflow is optimized to handle Go modules gracefully:
+- When using only internal Go packages (no external dependencies), no `go.sum` file is generated
+- Cache keys use separate `hashFiles()` calls for `go.mod` and `go.sum` to handle missing files
+- This prevents "Dependencies file is not found" warnings and optimizes cache performance
 
 ## CI/CD Pipeline
 
