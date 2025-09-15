@@ -11,118 +11,34 @@ import subprocess
 import sys
 import argparse
 import os
-import re
-from pathlib import Path
 from typing import Dict, List, Optional
 
+# Import shared utilities
+from shared_utils import (
+    find_workspace_root, run_bazel, list_all_apps, get_app_metadata,
+    validate_apps, detect_changed_files, detect_changed_apps,
+    get_previous_tag, validate_semantic_version, get_image_targets,
+    format_registry_tags
+)
 
-def find_workspace_root() -> Path:
-    """Find the workspace root directory."""
-    # When run via bazel run, BUILD_WORKSPACE_DIRECTORY is set to the workspace root
-    if "BUILD_WORKSPACE_DIRECTORY" in os.environ:
-        return Path(os.environ["BUILD_WORKSPACE_DIRECTORY"])
+
+def detect_changed_apps_since_tag(since_tag: Optional[str] = None) -> List[str]:
+    """Detect which apps have changed since a given tag."""
+    all_apps = list_all_apps()
     
-    # When run directly, look for workspace markers
-    current = Path.cwd()
-    for path in [current] + list(current.parents):
-        if (path / "WORKSPACE").exists() or (path / "MODULE.bazel").exists():
-            return path
+    if not since_tag:
+        # No previous tag, return all apps
+        return all_apps
     
-    # As a last resort, assume current directory
-    return current
-
-
-def run_bazel(args: List[str], capture_output: bool = True) -> subprocess.CompletedProcess:
-    """Run a bazel command with consistent configuration."""
-    workspace_root = find_workspace_root()
-    cmd = ["bazel"] + args
     try:
-        return subprocess.run(
-            cmd, 
-            capture_output=capture_output, 
-            text=True, 
-            check=True,
-            cwd=workspace_root
-        )
-    except subprocess.CalledProcessError as e:
-        print(f"Bazel command failed: {' '.join(cmd)}")
-        print(f"Working directory: {workspace_root}")
-        if e.stderr:
-            print(f"stderr: {e.stderr}")
-        if e.stdout:
-            print(f"stdout: {e.stdout}")
-        raise
-
-
-def get_app_metadata(app_name: str) -> Dict:
-    """Get release metadata for an app by building and reading its metadata target."""
-    metadata_target = f"//{app_name}:{app_name}_metadata"
-    
-    # Build the metadata target
-    run_bazel(["build", metadata_target])
-    
-    # Read the generated JSON file
-    workspace_root = find_workspace_root()
-    metadata_file = workspace_root / f"bazel-bin/{app_name}/{app_name}_metadata_metadata.json"
-    if not metadata_file.exists():
-        raise FileNotFoundError(f"Metadata file not found: {metadata_file}")
-    
-    with open(metadata_file) as f:
-        return json.load(f)
-
-
-def list_all_apps() -> List[str]:
-    """List all apps in the monorepo that have release metadata."""
-    # Query for all metadata targets
-    result = run_bazel(["query", "kind(app_metadata, //...)", "--output=label"])
-    
-    apps = []
-    for line in result.stdout.strip().split('\n'):
-        if line and '_metadata' in line:
-            # Extract app name from target like "//hello_python:hello_python_metadata"
-            parts = line.split(':')
-            if len(parts) == 2:
-                target_name = parts[1]
-                if target_name.endswith('_metadata'):
-                    app_name = target_name[:-9]  # Remove "_metadata" suffix
-                    apps.append(app_name)
-    
-    return sorted(apps)
-
-
-def get_image_targets(app_name: str) -> Dict[str, str]:
-    """Get all image-related targets for an app."""
-    base_name = f"{app_name}_image"
-    return {
-        "base": f"//{app_name}:{base_name}",
-        "tarball": f"//{app_name}:{base_name}_tarball", 
-        "amd64": f"//{app_name}:{base_name}_amd64",
-        "arm64": f"//{app_name}:{base_name}_arm64",
-        "amd64_tarball": f"//{app_name}:{base_name}_amd64_tarball",
-        "arm64_tarball": f"//{app_name}:{base_name}_arm64_tarball",
-    }
-
-
-def format_registry_tags(registry: str, repo_name: str, version: str, commit_sha: Optional[str] = None) -> Dict[str, str]:
-    """Format container registry tags for an app."""
-    repo_lower = repo_name.lower()
-    
-    # For GHCR, include the repository owner
-    if registry == "ghcr.io" and "GITHUB_REPOSITORY_OWNER" in os.environ:
-        owner = os.environ["GITHUB_REPOSITORY_OWNER"].lower()
-        base_repo = f"{registry}/{owner}/{repo_lower}"
-    else:
-        base_repo = f"{registry}/{repo_lower}"
-    
-    tags = {
-        "latest": f"{base_repo}:latest",
-        "version": f"{base_repo}:{version}",
-    }
-    
-    if commit_sha:
-        tags["commit"] = f"{base_repo}:{commit_sha}"
+        # Get changed files since the tag
+        changed_files = detect_changed_files(f"{since_tag}..HEAD")
+        return detect_changed_apps(changed_files)
         
-    return tags
+    except Exception as e:
+        print(f"Error detecting changes since {since_tag}: {e}")
+        # On error, return all apps to be safe
+        return all_apps
 
 
 def build_and_load_image(app_name: str, platform: Optional[str] = None) -> str:
@@ -183,76 +99,6 @@ def tag_and_push_image(
         print(f"Successfully pushed {app_name} {version}")
 
 
-def validate_apps(requested_apps: List[str]) -> List[str]:
-    """Validate that requested apps exist and return the valid ones."""
-    all_apps = list_all_apps()
-    
-    valid_apps = []
-    invalid_apps = []
-    
-    for app in requested_apps:
-        if app in all_apps:
-            valid_apps.append(app)
-        else:
-            invalid_apps.append(app)
-    
-    if invalid_apps:
-        available = ", ".join(sorted(all_apps))
-        invalid = ", ".join(invalid_apps)
-        raise ValueError(f"Invalid apps: {invalid}. Available apps: {available}")
-    
-    return valid_apps
-
-
-def detect_changed_apps(since_tag: Optional[str] = None) -> List[str]:
-    """Detect which apps have changed since a given tag."""
-    all_apps = list_all_apps()
-    
-    if not since_tag:
-        # No previous tag, return all apps
-        return all_apps
-    
-    try:
-        # Get changed files since the tag
-        result = subprocess.run(
-            ["git", "diff", "--name-only", f"{since_tag}..HEAD"],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        
-        changed_files = result.stdout.strip().split('\n') if result.stdout.strip() else []
-        
-        # Extract directories from changed files
-        changed_dirs = set()
-        for file_path in changed_files:
-            if file_path:
-                dir_name = file_path.split('/')[0]
-                changed_dirs.add(dir_name)
-        
-        # Find apps that have changes
-        changed_apps = []
-        for app in all_apps:
-            if app in changed_dirs:
-                changed_apps.append(app)
-        
-        # If no apps changed but there are infrastructure changes, release all
-        if not changed_apps and changed_dirs:
-            # Check if changes are in infrastructure directories
-            infra_dirs = {'tools', '.github', 'libs', 'docker'}
-            if any(d in infra_dirs for d in changed_dirs):
-                print(f"Infrastructure changes detected in: {', '.join(changed_dirs & infra_dirs)}")
-                print("Releasing all apps due to infrastructure changes")
-                return all_apps
-        
-        return changed_apps
-        
-    except subprocess.CalledProcessError as e:
-        print(f"Error detecting changes since {since_tag}: {e}")
-        # On error, return all apps to be safe
-        return all_apps
-
-
 def plan_release(
     event_type: str,
     requested_apps: Optional[str] = None,
@@ -291,7 +137,7 @@ def plan_release(
             if since_tag:
                 print(f"Auto-detected previous tag: {since_tag}")
         
-        release_apps = detect_changed_apps(since_tag)
+        release_apps = detect_changed_apps_since_tag(since_tag)
     
     else:
         raise ValueError(f"Unknown event type: {event_type}")
@@ -310,20 +156,6 @@ def plan_release(
         "version": version,
         "event_type": event_type
     }
-
-
-def get_previous_tag() -> Optional[str]:
-    """Get the previous Git tag."""
-    try:
-        result = subprocess.run(
-            ["git", "describe", "--tags", "--abbrev=0", "HEAD^"],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        return result.stdout.strip()
-    except subprocess.CalledProcessError:
-        return None
 
 
 def generate_release_summary(
@@ -386,21 +218,7 @@ def generate_release_summary(
     return "\n".join(summary)
 
 
-def validate_semantic_version(version: str) -> bool:
-    """Validate that version follows semantic versioning format v{major}.{minor}.{patch}."""
-    # Match semantic version pattern: v followed by major.minor.patch
-    # Allow optional pre-release suffix like -alpha, -beta, -rc1, etc.
-    pattern = r'^v(\d+)\.(\d+)\.(\d+)(?:-[a-zA-Z0-9\-\.]+)?$'
-    return bool(re.match(pattern, version))
-
-
 def check_version_exists_in_registry(app_name: str, version: str) -> bool:
-    """Check if a version already exists in the container registry."""
-    metadata = get_app_metadata(app_name)
-    registry = metadata["registry"]
-    repo_name = metadata["repo_name"].lower()
-    
-    # Build the image reference to check
     if registry == "ghcr.io" and "GITHUB_REPOSITORY_OWNER" in os.environ:
         owner = os.environ["GITHUB_REPOSITORY_OWNER"].lower()
         image_ref = f"{registry}/{owner}/{repo_name}:{version}"
@@ -567,7 +385,7 @@ def main():
             else:
                 print("No previous tag found, considering all apps as changed")
                 
-            changed_apps = detect_changed_apps(since_tag)
+            changed_apps = detect_changed_apps_since_tag(since_tag)
             for app in changed_apps:
                 print(app)
         

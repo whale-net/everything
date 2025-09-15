@@ -83,11 +83,98 @@ jobs:
           fi
         done
 
-  # Build and release selected apps
-  release:
-    name: Release ${{ matrix.app }}
+  # Test the apps being released
+  test-release:
+    name: Test ${{ matrix.app }}
     runs-on: ubuntu-latest
     needs: plan-release
+    if: needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
+    strategy:
+      matrix: ${{ fromJson(needs.plan-release.outputs.release-matrix) }}
+      fail-fast: false
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Bazelisk with caching
+      uses: ./.github/actions/setup-bazelisk-cache
+      with:
+        cache-suffix: 'release-test'
+      
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Setup Go with caching
+      uses: ./.github/actions/setup-go-cache
+      with:
+        go-version: '1.25'
+        
+    - name: Initialize Go cache
+      run: |
+        # Initialize Go cache directories using Bazel tool
+        bazel run //:init-go-cache
+        
+  # Test the apps being released
+  test-release:
+    name: Test ${{ matrix.app }}
+    runs-on: ubuntu-latest
+    needs: plan-release
+    if: needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
+    strategy:
+      matrix: ${{ fromJson(needs.plan-release.outputs.release-matrix) }}
+      fail-fast: false
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Bazelisk with caching
+      uses: ./.github/actions/setup-bazelisk-cache
+      with:
+        cache-suffix: 'release-test'
+      
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Setup Go with caching
+      uses: ./.github/actions/setup-go-cache
+      with:
+        go-version: '1.25'
+        
+    - name: Initialize Go cache
+      run: |
+        # Initialize Go cache directories using Bazel tool
+        bazel run //:init-go-cache
+        
+    - name: Test release app
+      env:
+        RELEASE_APP: ${{ matrix.app }}
+      run: |
+        echo "Testing $RELEASE_APP for release"
+        
+        # Use test helper to run comprehensive tests for this specific app
+        bazel run //tools:test -- run --context=release --release-app="$RELEASE_APP" --config=ci
+        
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: release-test-results-${{ matrix.app }}
+        path: bazel-testlogs/
+        retention-days: 7
+
+  # Build and release selected apps
+  release-apps:
+    name: Release ${{ matrix.app }}
+    runs-on: ubuntu-latest
+    needs: [plan-release, test-release]
     if: needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
     strategy:
       matrix: ${{ fromJson(needs.plan-release.outputs.release-matrix) }}
@@ -190,7 +277,7 @@ jobs:
   release-summary:
     name: Release Summary
     runs-on: ubuntu-latest
-    needs: [plan-release, release]
+    needs: [plan-release, test-release, release-apps]
     if: always()
     steps:
     - name: Checkout code
@@ -221,9 +308,9 @@ jobs:
         MATRIX='${{ needs.plan-release.outputs.release-matrix }}'
         if [[ "$MATRIX" == "" || "$MATRIX" == '{"include":[]}' ]]; then
           echo "🔍 **Result:** No apps detected for release" >> $GITHUB_STEP_SUMMARY
-        elif [[ "${{ needs.release.result }}" == "skipped" ]]; then
+        elif [[ "${{ needs.release-apps.result }}" == "skipped" ]]; then
           echo "⏭️ **Result:** Release job was skipped" >> $GITHUB_STEP_SUMMARY
-        elif [[ "${{ needs.release.result }}" == "success" ]]; then
+        elif [[ "${{ needs.release-apps.result }}" == "success" ]]; then
           echo "✅ **Result:** Release completed successfully" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
@@ -255,7 +342,7 @@ jobs:
         else
           echo "❌ **Result:** Release failed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Status:** ${{ needs.release.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ${{ needs.release-apps.result }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Please check the release job logs for details about the failure." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

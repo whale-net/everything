@@ -9,18 +9,41 @@ exports_files([
     "go.bzl",
 ])
 
+# Shared utilities module
+py_library(
+    name = "shared_utils",
+    srcs = ["shared_utils.py"],
+    visibility = ["//visibility:public"],
+)
+
 # Release helper tool for managing app releases and container images
 py_binary(
     name = "release_helper",
     srcs = ["release_helper.py"],
     main = "release_helper.py",
+    deps = [":shared_utils"],
     visibility = ["//visibility:public"],
 )
 
-# Convenient alias for release helper
+# Test helper tool for intelligent testing strategies
+py_binary(
+    name = "test_helper",
+    srcs = ["test_helper.py"],
+    main = "test_helper.py",
+    deps = [":shared_utils"],
+    visibility = ["//visibility:public"],
+)
+
+# Convenient aliases
 alias(
     name = "release",
     actual = ":release_helper",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "test",
+    actual = ":test_helper",
     visibility = ["//visibility:public"],
 )
 

@@ -56,7 +56,7 @@ jobs:
           !bazel-bin/**/*.so
         retention-days: 3
 
-  # Test job - runs tests after successful build
+  # Test job - runs intelligent tests based on context
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -66,7 +66,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0
+        fetch-depth: 0  # Full history for change detection
         
     - name: Setup Bazelisk with caching
       uses: ./.github/actions/setup-bazelisk-cache
@@ -89,14 +89,46 @@ jobs:
         # Initialize Go cache directories using Bazel tool
         bazel run //:init-go-cache
         
-    - name: Run tests
+    - name: Plan tests
+      id: test-plan
+      run: |
+        # Use test helper to determine what to test based on context
+        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          CONTEXT="pr"
+        elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          CONTEXT="main"
+        else
+          CONTEXT="local"
+        fi
+        
+        echo "Test context: $CONTEXT"
+        
+        # Get test plan from helper
+        PLAN_OUTPUT=$(bazel run //tools:test -- plan --context="$CONTEXT" --format=github)
+        
+        # Extract values from output
+        while IFS='=' read -r key value; do
+          case $key in
+            context) echo "context=$value" >> $GITHUB_OUTPUT ;;
+            apps) echo "apps=$value" >> $GITHUB_OUTPUT ;;
+            test_targets) echo "test_targets=$value" >> $GITHUB_OUTPUT ;;
+          esac
+        done <<< "$PLAN_OUTPUT"
+        
+    - name: Run intelligent tests
       env:
         GO_CACHE_HIT: ${{ steps.bazel-cache.outputs.go-cache-hit }}
         PYTHON_CACHE_HIT: ${{ steps.bazel-cache.outputs.python-cache-hit }}
       run: |
-        # Use incremental testing based on cache state
-        # Only tests domains that had cache misses (indicating changes)
-        bazel run //:test_incremental
+        # Run tests based on the plan
+        TEST_TARGETS="${{ steps.test-plan.outputs.test_targets }}"
+        
+        if [[ -n "$TEST_TARGETS" ]]; then
+          echo "Running tests for: $TEST_TARGETS"
+          bazel test --config=ci $TEST_TARGETS
+        else
+          echo "No tests to run based on change detection"
+        fi
         
     - name: Upload test results
       uses: actions/upload-artifact@v4
