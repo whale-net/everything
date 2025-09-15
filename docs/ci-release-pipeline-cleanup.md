@@ -1,7 +1,7 @@
-# CI and Release Pipeline Cleanup
+# CI and Release Pipeline Consolidation
 
 ## Overview
-This document summarizes the cleanup performed on the CI and release pipelines to eliminate duplication and ensure consistent use of the release tool.
+This document summarizes the consolidation performed on the CI and release pipelines to eliminate duplication, ensure consistent use of the release tool, and unify the caching infrastructure.
 
 ## Issues Identified
 
@@ -27,9 +27,14 @@ done
 # Manual tagging and pushing with complex name manipulation
 ```
 
+### 3. **Inconsistent Caching Infrastructure**
+- **CI Pipeline**: Used sophisticated multi-layered caching via `bazel-contrib/setup-bazel@0.15.0`
+- **Release Pipeline**: Used simpler custom caching via `./.github/actions/setup-bazelisk-cache`
+- This created different cache behaviors and performance characteristics between pipelines
+
 ## Solution Implemented
 
-### **Unified Approach Using Release Tool**
+### **1. Unified Release Tool Usage**
 Updated the CI pipeline to consistently use the release helper tool:
 
 ```yaml
@@ -43,6 +48,21 @@ done
 for app in $APPS; do
   bazel run //tools:release -- release "$app" --version "latest" --commit "${{ github.sha }}"
 done
+```
+
+### **2. Consolidated Caching Infrastructure**
+Updated the release pipeline to use the same multi-layered caching as CI:
+
+```yaml
+# Unified caching approach (AFTER)
+- name: Setup Bazel with Multi-Layered Caching
+  uses: bazel-contrib/setup-bazel@0.15.0
+  with:
+    bazelisk-cache: true
+    repository-cache: true
+    disk-cache: "monorepo"
+    bazelrc: |
+      import %workspace%/.github/.bazelrc.ci
 ```
 
 ### **Key Changes Made**
@@ -81,15 +101,21 @@ done
 - Easier to debug image issues since there's only one code path
 - Release tool provides consistent logging and error handling
 
+### **5. Unified Caching Performance**
+- Both pipelines now benefit from the same sophisticated multi-layered caching
+- Consistent cache hit rates and build performance across CI and release contexts
+- Reduced cache storage duplication between pipeline types
+
 ## File Changes
 
 ### **Modified Files**
 - `.github/workflows/ci.yml` - Simplified Docker job to use release tool
+- `.github/workflows/release.yml` - Updated to use same multi-layered caching as CI pipeline
 
-### **Unchanged Files**
-- `.github/workflows/release.yml` - Already using release tool correctly
-- `tools/release_helper.py` - No changes needed, already well-designed
-- `tools/release.bzl` - No changes needed
+### **Caching Consolidation**
+- **Before**: Release pipeline used custom `setup-bazelisk-cache` action with simpler caching
+- **After**: Release pipeline uses `bazel-contrib/setup-bazel@0.15.0` with identical multi-layered caching as CI
+- **Result**: Both pipelines now use the same sophisticated caching infrastructure for consistency and performance
 
 ## Usage Examples
 
