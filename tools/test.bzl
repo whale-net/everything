@@ -61,7 +61,7 @@ def test_suite(name = "test"):
         "bazel run //hello_go:hello_go",
         "",
         "echo '=== Building container images (Bazel incremental) ==='",
-        "bazel build --config=ci $(bazel query \"kind('oci_load', //...)\")",
+        "bazel build --config=ci $(bazel query 'kind(\"oci_load\", //...)')",
         "",
         "echo '=== Test suite completed! ==='",
     ]
