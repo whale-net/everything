@@ -18,10 +18,26 @@ jobs:
       with:
         fetch-depth: 0
         
-    - name: Setup Bazelisk with caching
-      uses: ./.github/actions/setup-bazelisk-cache
+    # This implements the multi-layered caching architecture from the design document
+    - name: Setup Bazel with Multi-Layered Caching
+      uses: bazel-contrib/setup-bazel@v0.15.0
       with:
-        cache-suffix: 'build'
+        # Layer 1: Enable global caching for Bazel binaries and dependencies.
+        # The action internally generates appropriate keys based on .bazelversion
+        # and lockfiles.
+        bazelisk-cache: true
+        repository-cache: true
+
+        # Layer 2: Enable unified disk cache for all build artifacts.
+        # Using "monorepo" as the namespace for the entire repository.
+        disk-cache: "monorepo"
+        
+        # Injects the content of the CI-specific .bazelrc file into the
+        # user configuration, applying flags like --experimental_remote_cache_async.
+        bazelrc: |
+          import %workspace%/.github/.bazelrc.ci
+          build --config=ci
+          test --config=ci
       id: bazel-cache
       
     - name: Setup Python
@@ -68,10 +84,24 @@ jobs:
       with:
         fetch-depth: 0
         
-    - name: Setup Bazelisk with caching
-      uses: ./.github/actions/setup-bazelisk-cache
+    # This implements the multi-layered caching architecture from the design document
+    - name: Setup Bazel with Multi-Layered Caching
+      uses: bazel-contrib/setup-bazel@v0.15.0
       with:
-        cache-suffix: 'test'
+        # Layer 1: Enable global caching for Bazel binaries and dependencies.
+        bazelisk-cache: true
+        repository-cache: true
+
+        # Layer 2: Enable unified disk cache for all build artifacts.
+        # Using "monorepo" as the namespace for the entire repository.
+        disk-cache: "monorepo"
+        
+        # Injects the content of the CI-specific .bazelrc file into the
+        # user configuration, applying flags like --experimental_remote_cache_async.
+        bazelrc: |
+          import %workspace%/.github/.bazelrc.ci
+          build --config=ci
+          test --config=ci
       id: bazel-cache
       
     - name: Setup Python
@@ -90,12 +120,9 @@ jobs:
         bazel run //:init-go-cache
         
     - name: Run tests
-      env:
-        GO_CACHE_HIT: ${{ steps.bazel-cache.outputs.go-cache-hit }}
-        PYTHON_CACHE_HIT: ${{ steps.bazel-cache.outputs.python-cache-hit }}
       run: |
-        # Use incremental testing based on cache state
-        # Only tests domains that had cache misses (indicating changes)
+        # Use incremental testing - Bazel will automatically use cached results
+        # for tests whose transitive dependencies have not changed
         bazel run //:test_incremental
         
     - name: Upload test results
@@ -116,10 +143,24 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Setup Bazelisk with caching
-      uses: ./.github/actions/setup-bazelisk-cache
+    # This implements the multi-layered caching architecture from the design document
+    - name: Setup Bazel with Multi-Layered Caching
+      uses: bazel-contrib/setup-bazel@v0.15.0
       with:
-        cache-suffix: 'docker'
+        # Layer 1: Enable global caching for Bazel binaries and dependencies.
+        bazelisk-cache: true
+        repository-cache: true
+
+        # Layer 2: Enable unified disk cache for all build artifacts.
+        # Using "monorepo" as the namespace for the entire repository.
+        disk-cache: "monorepo"
+        
+        # Injects the content of the CI-specific .bazelrc file into the
+        # user configuration, applying flags like --experimental_remote_cache_async.
+        bazelrc: |
+          import %workspace%/.github/.bazelrc.ci
+          build --config=ci
+          test --config=ci
       id: bazel-cache
       
     - name: Setup Python
@@ -140,15 +181,14 @@ jobs:
         # Initialize Go cache directories using Bazel tool
         bazel run //:init-go-cache
       
-    # NOTE: GHCR_PAT secret should be created with write:packages and read:packages scopes
-    # Falls back to GITHUB_TOKEN if GHCR_PAT is not available (limited permissions)
+    # Log in to GitHub Container Registry using GITHUB_TOKEN
     - name: Log in to GitHub Container Registry
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       uses: docker/login-action@v3
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
-        password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
+        password: ${{ secrets.GITHUB_TOKEN }}
         
     - name: Build Docker images using release tool
       env:
