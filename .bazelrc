@@ -16,4 +16,4 @@ build:ci --announce_rc
 
 # Test configurations
 test --test_output=errors
-test:ci --test_output=errors --test_summary=detailed
+test:ci --test_output=errors

@@ -59,17 +59,17 @@ jobs:
         # Build all binary targets (not libraries or tests) with CI optimizations
         bazel query "kind('.*_binary', //...)" | xargs bazel build --config=ci
         
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-artifacts
-        path: |
-          bazel-bin/*/
-          !bazel-bin/**/runfiles/
-          !bazel-bin/**/*.runfiles/
-          !bazel-bin/**/*_test*
-          !bazel-bin/**/*.so
-        retention-days: 3
+    # - name: Upload build artifacts
+    #   uses: actions/upload-artifact@v4
+    #   with:
+    #     name: build-artifacts
+    #     path: |
+    #       bazel-bin/*/
+    #       !bazel-bin/**/runfiles/
+    #       !bazel-bin/**/*.runfiles/
+    #       !bazel-bin/**/*_test*
+    #       !bazel-bin/**/*.so
+    #     retention-days: 3
 
   # Test job - runs tests after successful build
   test:
