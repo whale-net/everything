@@ -20,7 +20,7 @@ jobs:
         
     # This implements the multi-layered caching architecture from the design document
     - name: Setup Bazel with Multi-Layered Caching
-      uses: bazel-contrib/setup-bazel@v0.15.0
+      uses: bazel-contrib/setup-bazel@0.15.0
       with:
         # Layer 1: Enable global caching for Bazel binaries and dependencies.
         # The action internally generates appropriate keys based on .bazelversion
@@ -86,7 +86,7 @@ jobs:
         
     # This implements the multi-layered caching architecture from the design document
     - name: Setup Bazel with Multi-Layered Caching
-      uses: bazel-contrib/setup-bazel@v0.15.0
+      uses: bazel-contrib/setup-bazel@0.15.0
       with:
         # Layer 1: Enable global caching for Bazel binaries and dependencies.
         bazelisk-cache: true
@@ -145,7 +145,7 @@ jobs:
       
     # This implements the multi-layered caching architecture from the design document
     - name: Setup Bazel with Multi-Layered Caching
-      uses: bazel-contrib/setup-bazel@v0.15.0
+      uses: bazel-contrib/setup-bazel@0.15.0
       with:
         # Layer 1: Enable global caching for Bazel binaries and dependencies.
         bazelisk-cache: true

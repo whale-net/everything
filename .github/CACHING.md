@@ -27,7 +27,7 @@ Contains all CI-specific Bazel flags:
 Each job in the CI pipeline uses the same caching configuration:
 ```yaml
 - name: Setup Bazel with Multi-Layered Caching
-  uses: bazel-contrib/setup-bazel@v0.15.0
+  uses: bazel-contrib/setup-bazel@0.15.0
   with:
     bazelisk-cache: true      # Layer 1: Bazel binary cache
     repository-cache: true    # Layer 1: Dependencies cache
