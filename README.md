@@ -113,23 +113,29 @@ bazel test --config=ci //...
 - **Modern Tooling**: Uses bzlmod for dependency management
 - **Shell-Script-Free**: All automation in Starlark and GitHub Actions
 
-## 🧪 Test Utilities
+## 🧪 Simplified Test Utilities
 
-The monorepo includes comprehensive Starlark-based test utilities (no shell scripts!) located in `//tools:test.bzl`:
+The monorepo uses a **simplified testing strategy** that leverages Bazel's native incremental builds and caching instead of complex custom test infrastructure. All test utilities are in `//tools:test.bzl`.
+
+### Key Benefits of Simplified Approach
+- **Leverages Bazel's expertise**: Uses Bazel's battle-tested incremental builds and caching
+- **Reduced complexity**: Removed ~300 lines of custom testing infrastructure
+- **Better performance**: Bazel's native caching is more sophisticated than custom logic
+- **Easier maintenance**: No custom cache management to debug
 
 ### Test Suites
 
 #### Quick Test Suite (`bazel run //:test_quick`)
-Perfect for rapid development feedback:
-- Runs all unit tests
-- Builds all targets to catch compilation errors
-- Fast execution for tight development loops
+Perfect for rapid development feedback with Bazel's incremental builds:
+- Runs all unit tests (Bazel caches unchanged tests)
+- Builds all targets to catch compilation errors (Bazel caches unchanged builds)
+- Fast execution leveraging Bazel's native caching
 
 #### Full Test Suite (`bazel run //:test_all`)
-Comprehensive testing including:
-- All unit tests with CI configuration
-- App execution tests (ensures binaries work)
-- Container image build verification
+Comprehensive testing with Bazel's native incremental capabilities:
+- All unit tests with CI configuration (automatic caching)
+- App execution tests (ensures binaries work) 
+- Container image build verification (incremental builds)
 - End-to-end functionality validation
 
 #### Integration Test Suite (`bazel run //:test_integration`)
@@ -140,29 +146,27 @@ End-to-end testing:
 - Verifies Docker images are created correctly
 
 #### CI Test Suite (`bazel run //:test_ci`)
-Matches the GitHub Actions CI workflow:
-- Follows the exact CI build → test → docker sequence
+Simplified CI workflow using Bazel's native capabilities:
+- Uses Bazel queries for target discovery instead of custom Python scripts
+- Follows build → test → docker sequence with native incremental builds
 - Uses `--config=ci` for consistent CI behavior
-- Perfect for local CI debugging
+- Perfect for local CI debugging without complex cache management
 
-### Custom Test Suites
+### Creating Custom Test Suites
 
-You can create your own test suites using the Starlark macros:
+You can create your own test suites using the simplified Starlark macros:
 
 ```starlark
-load("//tools:test.bzl", "test_suite", "monorepo_test_suite")
+load("//tools:test.bzl", "simple_test_suite", "monorepo_test_suite")
 
-# Custom test suite
-test_suite(
-    name = "my_custom_tests",
-    commands = [
-        "bazel test //my_app:...",
-        "bazel run //my_app:integration_test",
-        "echo 'Custom tests completed!'",
-    ],
+# Simple test suite using Bazel queries
+simple_test_suite(
+    name = "my_app_tests",
+    targets = ["//my_app/..."],
+    description = "My app test suite",
 )
 
-# Customized monorepo suite
+# Customized monorepo suite with native caching
 monorepo_test_suite(
     name = "backend_tests",
     test_targets = ["//backend/..."],
@@ -170,12 +174,14 @@ monorepo_test_suite(
 )
 ```
 
-### Benefits of Starlark Test Utils
+### Benefits of Simplified Test Strategy
 - **No shell scripts**: Everything in Bazel's native Starlark language
 - **Consistent execution**: Same commands work across all platforms
-- **Bazel integration**: Proper dependency tracking and caching
-- **Maintainable**: Easy to modify and extend test logic
+- **Bazel integration**: Proper dependency tracking and native caching
+- **Maintainable**: Simple, easy to modify and extend test logic
 - **IDE support**: Full syntax highlighting and validation
+- **Performance**: Leverages Bazel's sophisticated incremental builds
+- **Reliability**: Uses battle-tested Bazel caching instead of custom logic
 
 ## Configuration
 
