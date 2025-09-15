@@ -1,13 +1,4 @@
-name: 'Setup Boutputs:
-  cache-hit:
-    description: 'A boolean value indicating if there was a cache hit for Bazel'
-    value: ${{ steps.bazel-cache.outputs.cache-hit }}
-  go-cache-hit:
-    description: 'A boolean value indicating if there was a cache hit for Go domain'
-    value: ${{ steps.go-cache.outputs.cache-hit }}
-  python-cache-hit:
-    description: 'A boolean value indicating if there was a cache hit for Python domain'
-    value: ${{ steps.python-cache.outputs.cache-hit }}isk with Caching'
+name: 'Setup Bazelisk with Caching'
 description: 'Sets up Bazelisk with optimized Bazel caching for CI/CD workflows'
 
 inputs:
@@ -50,11 +41,12 @@ runs:
         BASE_KEY="${{ runner.os }}-bazel"
         
         # Core configuration hash (shared across domains)
-        CONFIG_HASH=$(hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelrc', '.bazelversion') 2>/dev/null || echo "no-config")
+        CONFIG_FILES="MODULE.bazel MODULE.bazel.lock .bazelrc .bazelversion"
+        CONFIG_HASH=$(find . -name "MODULE.bazel" -o -name "MODULE.bazel.lock" -o -name ".bazelrc" -o -name ".bazelversion" | sort | xargs cat 2>/dev/null | sha256sum | cut -d' ' -f1 || echo "no-config")
         
         # Domain-specific hashes
-        GO_HASH=$(hashFiles('go.mod', 'go.sum', 'hello_go/**', 'libs/go/**') 2>/dev/null || echo "no-go")
-        PYTHON_HASH=$(hashFiles('requirements.in', 'requirements.lock.txt', 'hello_python/**', 'libs/python/**') 2>/dev/null || echo "no-python")
+        GO_HASH=$(find . -name "go.mod" -o -name "go.sum" -o -path "./hello_go/*" -o -path "./libs/go/*" | sort | xargs cat 2>/dev/null | sha256sum | cut -d' ' -f1 || echo "no-go")
+        PYTHON_HASH=$(find . -name "requirements.in" -o -name "requirements.lock.txt" -o -path "./hello_python/*" -o -path "./libs/python/*" | sort | xargs cat 2>/dev/null | sha256sum | cut -d' ' -f1 || echo "no-python")
         
         # Create domain-specific cache keys
         GO_CACHE_KEY="${BASE_KEY}-go-${CONFIG_HASH}-${GO_HASH}-${{ inputs.cache-suffix }}"
