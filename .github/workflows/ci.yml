@@ -119,9 +119,8 @@ jobs:
         
     - name: Run tests
       run: |
-        # Use incremental testing with CI configuration - Bazel will automatically use cached results
-        # for tests whose transitive dependencies have not changed
-        bazel run //:test_incremental --config=ci
+        # Use simplified incremental testing - just run CI test suite which relies on Bazel's caching
+        bazel run //:test_ci --config=ci
         
     - name: Upload test results
       uses: actions/upload-artifact@v4

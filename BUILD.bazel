@@ -2,7 +2,6 @@ load("@rules_uv//uv:pip.bzl", "pip_compile")
 load("@gazelle//:def.bzl", "gazelle")
 load("@rules_python//python:defs.bzl", "py_library")
 load("//tools:test.bzl", "monorepo_test_suite", "quick_test_suite", "integration_test_suite", "ci_test_suite")
-load("//tools:incremental_test.bzl", "incremental_test_suite")
 
 # Python dependencies
 pip_compile(
@@ -58,4 +57,9 @@ monorepo_test_suite(name = "test_all")
 quick_test_suite(name = "test_quick") 
 integration_test_suite(name = "test_integration")
 ci_test_suite(name = "test_ci")
-incremental_test_suite(name = "test_incremental")
+
+# Simple incremental testing using Bazel's native capabilities
+alias(
+    name = "test_incremental", 
+    actual = ":test_ci",
+)

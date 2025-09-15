@@ -17,25 +17,10 @@ py_binary(
     visibility = ["//visibility:public"],
 )
 
-# Test helper tool for managing test execution and discovery
-py_binary(
-    name = "test_helper",
-    srcs = ["test_helper.py"],
-    main = "test_helper.py",
-    visibility = ["//visibility:public"],
-)
-
 # Convenient alias for release helper
 alias(
     name = "release",
     actual = ":release_helper",
-    visibility = ["//visibility:public"],
-)
-
-# Convenient alias for test helper
-alias(
-    name = "test",
-    actual = ":test_helper",
     visibility = ["//visibility:public"],
 )
 
