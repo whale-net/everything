@@ -18,46 +18,12 @@ jobs:
       with:
         fetch-depth: 0
         
-    # This implements the multi-layered caching architecture from the design document
-    - name: Setup Bazel with Multi-Layered Caching
-      uses: bazel-contrib/setup-bazel@0.15.0
-      with:
-        # Layer 1: Enable global caching for Bazel binaries and dependencies.
-        # The action internally generates appropriate keys based on .bazelversion
-        # and lockfiles.
-        bazelisk-cache: true
-        repository-cache: true
-
-        # Layer 2: Enable unified disk cache for all build artifacts.
-        # Using "monorepo" as the namespace for the entire repository.
-        disk-cache: "monorepo"
-        
-        # Injects the content of the CI-specific .bazelrc file into the
-        # user configuration. We import the CI config but let bazel commands
-        # explicitly specify --config=ci to avoid duplication.
-        bazelrc: |
-          import %workspace%/.github/.bazelrc.ci
-      id: bazel-cache
-      
-    - name: Setup Python
-      uses: actions/setup-python@v5
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
       with:
         python-version: '3.11'
-        
-    - name: Setup Go with caching
-      uses: ./.github/actions/setup-go-cache
-      with:
-        go-version: '1.25'  # Match MODULE.bazel version
-        
-    - name: Initialize Go cache
-      run: |
-        # Initialize Go cache directories using Bazel tool
-        bazel run //:init-go-cache
-        
-    - name: Build applications
-      run: |
-        # Build all binary targets (not libraries or tests) with CI optimizations
-        bazel query "kind('.*_binary', //...)" | xargs bazel build --config=ci
+        go-version: '1.25'
+        setup-docker: 'true'
         
     # - name: Upload build artifacts
     #   uses: actions/upload-artifact@v4
@@ -83,39 +49,11 @@ jobs:
       with:
         fetch-depth: 0
         
-    # This implements the multi-layered caching architecture from the design document
-    - name: Setup Bazel with Multi-Layered Caching
-      uses: bazel-contrib/setup-bazel@0.15.0
-      with:
-        # Layer 1: Enable global caching for Bazel binaries and dependencies.
-        bazelisk-cache: true
-        repository-cache: true
-
-        # Layer 2: Enable unified disk cache for all build artifacts.
-        # Using "monorepo" as the namespace for the entire repository.
-        disk-cache: "monorepo"
-        
-        # Injects the content of the CI-specific .bazelrc file into the
-        # user configuration. We import the CI config but let bazel commands
-        # explicitly specify --config=ci to avoid duplication.
-        bazelrc: |
-          import %workspace%/.github/.bazelrc.ci
-      id: bazel-cache
-      
-    - name: Setup Python
-      uses: actions/setup-python@v5
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
       with:
         python-version: '3.11'
-        
-    - name: Setup Go with caching
-      uses: ./.github/actions/setup-go-cache
-      with:
-        go-version: '1.25'  # Match MODULE.bazel version
-        
-    - name: Initialize Go cache
-      run: |
-        # Initialize Go cache directories using Bazel tool
-        bazel run //:init-go-cache
+        go-version: '1.25'
         
     - name: Run tests
       run: |
