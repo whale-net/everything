@@ -19,9 +19,10 @@ The implementation uses `bazel-contrib/setup-bazel` to provide a unified, multi-
 ### 1. Centralized Configuration (`.github/.bazelrc.ci`)
 Contains all CI-specific Bazel flags:
 - Remote caching protocol configuration
-- Asynchronous cache uploads
+- Asynchronous cache uploads (using updated `--remote_cache_async` flag)
 - Performance optimizations
 - Test output configurations
+- Updated to use non-deprecated flags
 
 ### 2. Multi-Layered Caching Setup
 Each job in the CI pipeline uses the same caching configuration:
@@ -32,11 +33,11 @@ Each job in the CI pipeline uses the same caching configuration:
     bazelisk-cache: true      # Layer 1: Bazel binary cache
     repository-cache: true    # Layer 1: Dependencies cache
     disk-cache: "monorepo"    # Layer 2: Build artifacts cache
-    bazelrc: |               # Apply CI configuration
+    bazelrc: |               # Import CI configuration
       import %workspace%/.github/.bazelrc.ci
-      build --config=ci
-      test --config=ci
 ```
+
+**Important**: The CI configuration is imported but not automatically applied. Bazel commands must explicitly use `--config=ci` to apply the CI-specific settings and avoid config duplication warnings.
 
 ## Cache Key Strategy
 

@@ -6,8 +6,8 @@ common:ci --show_timestamps
 # Enables asynchronous uploading of cache artifacts. This allows the build
 # to proceed to dependent actions without waiting for the upload of a
 # previous action's outputs to complete, speeding up the critical path.
-# Available since Bazel 5.0.
-common:ci --experimental_remote_cache_async
+# Updated to use the non-deprecated flag.
+common:ci --remote_cache_async
 
 # Configures Bazel to use the remote caching protocol. The URL is a placeholder;
 # the setup-bazel action will configure the disk cache to act as a remote
@@ -18,12 +18,13 @@ build:ci --remote_accept_cached=true
 
 # A recommended flag to protect the external cache from corruption when
 # input files are modified concurrently during a build.
-build:ci --experimental_guard_against_concurrent_changes
+# Updated to use the non-deprecated flag.
+build:ci --guard_against_concurrent_changes
 
 # Additional performance optimizations for CI
-build:ci --noshow_progress
+# Note: --noshow_progress and --jobs=auto are already set in main .bazelrc
+# so we avoid duplicating them here
 build:ci --noshow_loading_progress
-build:ci --jobs=auto
 build:ci --keep_going
 
 # Test-specific configurations

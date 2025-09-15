@@ -33,11 +33,10 @@ jobs:
         disk-cache: "monorepo"
         
         # Injects the content of the CI-specific .bazelrc file into the
-        # user configuration, applying flags like --experimental_remote_cache_async.
+        # user configuration. We import the CI config but let bazel commands
+        # explicitly specify --config=ci to avoid duplication.
         bazelrc: |
           import %workspace%/.github/.bazelrc.ci
-          build --config=ci
-          test --config=ci
       id: bazel-cache
       
     - name: Setup Python
@@ -97,11 +96,10 @@ jobs:
         disk-cache: "monorepo"
         
         # Injects the content of the CI-specific .bazelrc file into the
-        # user configuration, applying flags like --experimental_remote_cache_async.
+        # user configuration. We import the CI config but let bazel commands
+        # explicitly specify --config=ci to avoid duplication.
         bazelrc: |
           import %workspace%/.github/.bazelrc.ci
-          build --config=ci
-          test --config=ci
       id: bazel-cache
       
     - name: Setup Python
@@ -121,9 +119,9 @@ jobs:
         
     - name: Run tests
       run: |
-        # Use incremental testing - Bazel will automatically use cached results
+        # Use incremental testing with CI configuration - Bazel will automatically use cached results
         # for tests whose transitive dependencies have not changed
-        bazel run //:test_incremental
+        bazel run //:test_incremental --config=ci
         
     - name: Upload test results
       uses: actions/upload-artifact@v4
@@ -156,11 +154,10 @@ jobs:
         disk-cache: "monorepo"
         
         # Injects the content of the CI-specific .bazelrc file into the
-        # user configuration, applying flags like --experimental_remote_cache_async.
+        # user configuration. We import the CI config but let bazel commands
+        # explicitly specify --config=ci to avoid duplication.
         bazelrc: |
           import %workspace%/.github/.bazelrc.ci
-          build --config=ci
-          test --config=ci
       id: bazel-cache
       
     - name: Setup Python
@@ -198,13 +195,13 @@ jobs:
         echo "Building Docker images using release tool..."
         
         # Get list of all apps
-        APPS=$(bazel run //tools:release -- list)
+        APPS=$(bazel run //tools:release --config=ci -- list)
         echo "Apps to build: $APPS"
         
         # Build images for all apps using the release tool
         for app in $APPS; do
           echo "Building image for $app..."
-          bazel run //tools:release -- build "$app"
+          bazel run //tools:release --config=ci -- build "$app"
         done
         
         # Show loaded Docker images
@@ -220,12 +217,12 @@ jobs:
         echo "Publishing Docker images using release tool..."
         
         # Get list of all apps
-        APPS=$(bazel run //tools:release -- list)
+        APPS=$(bazel run //tools:release --config=ci -- list)
         
         # Publish images for all apps using the release tool
         for app in $APPS; do
           echo "Publishing $app with latest and commit tags..."
-          bazel run //tools:release -- release "$app" --version "latest" --commit "${{ github.sha }}"
+          bazel run //tools:release --config=ci -- release "$app" --version "latest" --commit "${{ github.sha }}"
         done
         
     - name: Save Docker images as artifacts (PR builds)
@@ -233,7 +230,7 @@ jobs:
       run: |
         # Save images for PR builds
         mkdir -p docker-images
-        APPS=$(bazel run //tools:release -- list)
+        APPS=$(bazel run //tools:release --config=ci -- list)
         
         for app in $APPS; do
           echo "Saving image for $app..."

@@ -5,20 +5,14 @@ build --python_version=PY3
 build:fast --jobs=auto
 
 # CI optimizations
+# Note: Cache paths are managed by bazel-contrib/setup-bazel action
+# and should not be overridden here to avoid conflicts
 build:ci --noshow_progress
-build:ci --disk_cache=/tmp/bazel-cache
-build:ci --repository_cache=/tmp/bazel-repo-cache
 build:ci --jobs=auto
 build:ci --remote_download_minimal
 build:ci --verbose_failures
-# Removed --action_env=CI=true to improve test result caching
-# The CI environment variable is not needed by tests or builds
 build:ci --show_timestamps
 build:ci --announce_rc
-
-# Domain-specific caching (for partitioned cache strategy)
-build:go --disk_cache=/tmp/bazel-cache/go
-build:python --disk_cache=/tmp/bazel-cache/python
 
 # Test configurations
 test --test_output=errors
