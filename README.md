@@ -134,7 +134,6 @@ load("//tools:release.bzl", "release_app")
 # - Release metadata (JSON file with app info)
 # - OCI images for multiple platforms (amd64, arm64)
 # - Proper container registry configuration
-# - All necessary tarball targets for local testing
 release_app(
     name = "hello_python",
     binary_target = ":hello_python",
@@ -147,9 +146,6 @@ release_app(
 - `hello_python_image` - Default multiplatform image
 - `hello_python_image_amd64` - AMD64-specific image
 - `hello_python_image_arm64` - ARM64-specific image
-- `hello_python_image_tarball` - Default tarball for Docker loading
-- `hello_python_image_amd64_tarball` - AMD64 tarball
-- `hello_python_image_arm64_tarball` - ARM64 tarball
 
 ### Building Images with Bazel
 
@@ -161,11 +157,10 @@ bazel build //hello_python:hello_python_image_arm64
 # Build all platform variants
 bazel build //hello_python:hello_python_image
 
-# Build and load into Docker (for testing)
-bazel run //hello_python:hello_python_image_amd64_tarball
-bazel run //hello_go:hello_go_image_arm64_tarball
+# Build and load into Docker (for testing) - use the release tool for consistency
+bazel run //tools:release -- build hello_python
 
-# Run the containers
+# Run the containers (after building)
 docker run --rm hello_python:latest  # ✅ Works correctly!
 docker run --rm hello_go:latest      # ✅ Works correctly!
 ```
@@ -403,14 +398,12 @@ bazel query "kind('app_metadata', //...)"
 
 # Verify your app's targets exist
 bazel query "//your_app:your_app"
-bazel query "//your_app:your_app_image_tarball"
 ```
 
 #### Test Release Locally
 ```bash
-# Build and test the release targets
-bazel build //hello_python:hello_python_image_tarball
-bazel run //hello_python:hello_python_image_tarball
+# Build and test the release targets using the release tool
+bazel run //tools:release -- build hello_python
 
 # Verify the image works
 docker run --rm hello_python:latest
