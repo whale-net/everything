@@ -8,7 +8,7 @@ import sys
 
 from tools.release_helper.changes import detect_changed_apps
 from tools.release_helper.git import get_previous_tag
-from tools.release_helper.images import build_and_load_image
+from tools.release_helper.images import build_image
 from tools.release_helper.metadata import get_app_metadata, list_all_apps
 from tools.release_helper.release import plan_release, tag_and_push_image
 from tools.release_helper.summary import generate_release_summary
@@ -87,7 +87,7 @@ def main():
             print(json.dumps(metadata, indent=2))
 
         elif args.command == "build":
-            image_tag = build_and_load_image(args.app, args.platform)
+            image_tag = build_image(args.app, args.platform)
             print(f"Image loaded as: {image_tag}")
 
         elif args.command == "release":
