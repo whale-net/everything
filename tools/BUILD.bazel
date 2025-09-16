@@ -10,8 +10,8 @@ exports_files([
 # Release helper tool for managing app releases and container images
 py_binary(
     name = "release_helper",
-    srcs = ["release_helper.py"],
-    main = "release_helper.py",
+    srcs = ["release_helper/cli.py"],
+    main = "release_helper/cli.py",
     visibility = ["//visibility:public"],
 )
 
