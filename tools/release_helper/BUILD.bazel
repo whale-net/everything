@@ -1,0 +1,18 @@
+# Release helper package
+load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# Release helper library
+py_library(
+    name = "release_helper_lib",
+    srcs = glob(["*.py"]),
+)
+
+# Release helper tool for managing app releases and container images
+py_binary(
+    name = "release_helper",
+    srcs = ["cli.py"],
+    deps = [":release_helper_lib"],
+    main = "cli.py",
+)

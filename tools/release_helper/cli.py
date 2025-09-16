@@ -6,13 +6,13 @@ import argparse
 import json
 import sys
 
-from .changes import detect_changed_apps
-from .git import get_previous_tag
-from .images import build_and_load_image
-from .metadata import get_app_metadata, list_all_apps
-from .release import plan_release, tag_and_push_image
-from .summary import generate_release_summary
-from .validation import validate_apps, validate_release_version
+from tools.release_helper.changes import detect_changed_apps
+from tools.release_helper.git import get_previous_tag
+from tools.release_helper.images import build_and_load_image
+from tools.release_helper.metadata import get_app_metadata, list_all_apps
+from tools.release_helper.release import plan_release, tag_and_push_image
+from tools.release_helper.summary import generate_release_summary
+from tools.release_helper.validation import validate_apps, validate_release_version
 
 
 def main():

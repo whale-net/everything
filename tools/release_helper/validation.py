@@ -5,9 +5,10 @@ Validation utilities for the release helper.
 import os
 import re
 import subprocess
+import sys
 from typing import List
 
-from .metadata import get_app_metadata, list_all_apps
+from tools.release_helper.metadata import get_app_metadata, list_all_apps
 
 
 def validate_semantic_version(version: str) -> bool:

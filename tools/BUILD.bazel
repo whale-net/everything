@@ -1,5 +1,4 @@
 # Tools and shared build rules for the monorepo
-load("@rules_python//python:defs.bzl", "py_binary")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -7,17 +6,9 @@ exports_files([
     "oci.bzl",
 ])
 
-# Release helper tool for managing app releases and container images
-py_binary(
-    name = "release_helper",
-    srcs = ["release_helper/cli.py"],
-    main = "release_helper/cli.py",
-    visibility = ["//visibility:public"],
-)
-
 # Convenient alias for release helper
 alias(
     name = "release",
-    actual = ":release_helper",
+    actual = "//tools/release_helper:release_helper",
     visibility = ["//visibility:public"],
 )

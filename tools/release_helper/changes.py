@@ -3,9 +3,10 @@ Change detection utilities for the release helper.
 """
 
 import subprocess
+import sys
 from typing import List, Optional
 
-from .metadata import list_all_apps
+from tools.release_helper.metadata import list_all_apps
 
 
 def detect_changed_apps(since_tag: Optional[str] = None) -> List[str]:

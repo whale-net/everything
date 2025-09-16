@@ -6,11 +6,11 @@ import json
 import subprocess
 from typing import Dict, List, Optional
 
-from .changes import detect_changed_apps
-from .git import create_git_tag, format_git_tag, get_previous_tag, push_git_tag
-from .images import build_and_load_image, format_registry_tags
-from .metadata import get_app_metadata, list_all_apps
-from .validation import validate_apps, validate_release_version, validate_semantic_version
+from tools.release_helper.changes import detect_changed_apps
+from tools.release_helper.git import create_git_tag, format_git_tag, get_previous_tag, push_git_tag
+from tools.release_helper.images import build_and_load_image, format_registry_tags
+from tools.release_helper.metadata import get_app_metadata, list_all_apps
+from tools.release_helper.validation import validate_apps, validate_release_version, validate_semantic_version
 
 
 def plan_release(

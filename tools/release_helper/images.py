@@ -6,7 +6,7 @@ import os
 import subprocess
 from typing import Dict, Optional
 
-from .metadata import get_image_targets
+from tools.release_helper.metadata import get_image_targets
 
 
 def format_registry_tags(registry: str, repo_name: str, version: str, commit_sha: Optional[str] = None) -> Dict[str, str]:
@@ -33,7 +33,7 @@ def format_registry_tags(registry: str, repo_name: str, version: str, commit_sha
 
 def build_and_load_image(app_name: str, platform: Optional[str] = None) -> str:
     """Build and load a container image for an app."""
-    from .core import run_bazel
+    from tools.release_helper.core import run_bazel
 
     image_targets = get_image_targets(app_name)
 
