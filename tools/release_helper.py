@@ -45,12 +45,12 @@ def run_bazel(args: List[str], capture_output: bool = True) -> subprocess.Comple
             cwd=workspace_root
         )
     except subprocess.CalledProcessError as e:
-        print(f"Bazel command failed: {' '.join(cmd)}")
-        print(f"Working directory: {workspace_root}")
+        print(f"Bazel command failed: {' '.join(cmd)}", file=sys.stderr)
+        print(f"Working directory: {workspace_root}", file=sys.stderr)
         if e.stderr:
-            print(f"stderr: {e.stderr}")
+            print(f"stderr: {e.stderr}", file=sys.stderr)
         if e.stdout:
-            print(f"stdout: {e.stdout}")
+            print(f"stdout: {e.stdout}", file=sys.stderr)
         raise
 
 
@@ -225,7 +225,7 @@ def tag_and_push_image(
                 push_git_tag(git_tag)
                 print(f"Successfully created and pushed Git tag: {git_tag}")
             except subprocess.CalledProcessError as e:
-                print(f"Warning: Failed to create/push Git tag {git_tag}: {e}")
+                print(f"Warning: Failed to create/push Git tag {git_tag}: {e}", file=sys.stderr)
                 # Don't fail the entire release if Git tagging fails
 
 
@@ -471,13 +471,13 @@ def check_version_exists_in_registry(app_name: str, version: str) -> bool:
             return False  # Image doesn't exist or we can't access it (assume it doesn't exist)
         else:
             # Some other error occurred, be conservative and assume it exists
-            print(f"Warning: Could not definitively check if {image_ref} exists: {result.stderr}")
-            print("Proceeding with caution - this may overwrite an existing version")
+            print(f"Warning: Could not definitively check if {image_ref} exists: {result.stderr}", file=sys.stderr)
+            print("Proceeding with caution - this may overwrite an existing version", file=sys.stderr)
             return False
             
     except FileNotFoundError:
         # Docker not available, skip the check
-        print("Warning: Docker not available to check for existing versions")
+        print("Warning: Docker not available to check for existing versions", file=sys.stderr)
         return False
 
 
@@ -493,7 +493,7 @@ def validate_release_version(app_name: str, version: str, allow_overwrite: bool 
     # Automatically allow overwriting for "latest" version (main branch workflow)
     # or when explicitly allowing overwrite
     if version == "latest":
-        print(f"✓ Allowing overwrite of 'latest' tag for app '{app_name}' (main branch workflow)")
+        print(f"✓ Allowing overwrite of 'latest' tag for app '{app_name}' (main branch workflow)", file=sys.stderr)
         return
     
     # Check if version already exists (unless explicitly allowing overwrite)
@@ -504,9 +504,9 @@ def validate_release_version(app_name: str, version: str, allow_overwrite: bool 
                 f"Refusing to overwrite existing version. Use a different version number."
             )
         else:
-            print(f"✓ Version '{version}' is available for app '{app_name}'")
+            print(f"✓ Version '{version}' is available for app '{app_name}'", file=sys.stderr)
     else:
-        print(f"⚠️  Allowing overwrite of version '{version}' for app '{app_name}' (if it exists)")
+        print(f"⚠️  Allowing overwrite of version '{version}' for app '{app_name}' (if it exists)", file=sys.stderr)
 
 
 def main():
