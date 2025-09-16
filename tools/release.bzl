@@ -14,6 +14,7 @@ def _app_metadata_impl(ctx):
         "language": ctx.attr.language,
         "registry": ctx.attr.registry,
         "repo_name": ctx.attr.repo_name,
+        "domain": ctx.attr.domain,
     }
     
     output = ctx.actions.declare_file(ctx.label.name + "_metadata.json")
@@ -34,10 +35,11 @@ app_metadata = rule(
         "language": attr.string(mandatory = True),
         "registry": attr.string(default = "ghcr.io"),
         "repo_name": attr.string(mandatory = True),
+        "domain": attr.string(mandatory = True),
     },
 )
 
-def release_app(name, binary_target, language, description = "", version = "latest", registry = "ghcr.io", custom_repo_name = None):
+def release_app(name, binary_target, language, domain, description = "", version = "latest", registry = "ghcr.io", custom_repo_name = None):
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
@@ -47,6 +49,7 @@ def release_app(name, binary_target, language, description = "", version = "late
         name: App name (should match directory name)
         binary_target: The py_binary or go_binary target for this app
         language: Programming language ("python" or "go")
+        domain: Domain/category for the app (e.g., "demo", "api", "web")
         description: Optional description of the app
         version: Default version (can be overridden at release time)
         registry: Container registry (defaults to ghcr.io)
@@ -84,6 +87,7 @@ def release_app(name, binary_target, language, description = "", version = "late
         language = language,
         registry = registry,
         repo_name = repo_name,
+        domain = domain,
         visibility = ["//visibility:public"],
     )
 

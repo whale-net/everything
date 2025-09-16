@@ -157,16 +157,23 @@ jobs:
       env:
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
       run: |
-        # Use the release tool to publish images with latest and commit tags
-        echo "Publishing Docker images using release tool..."
+        # Use the release planning function to determine which apps have changed
+        echo "Detecting changed apps using release planning..."
         
-        # Get list of all apps
-        APPS=$(bazel run //tools:release --config=ci -- list)
+        # Detect changed apps since the last tag
+        CHANGED_APPS=$(bazel run //tools:release --config=ci -- changes)
         
-        # Publish images for all apps using the release tool
-        for app in $APPS; do
+        if [ -z "$CHANGED_APPS" ]; then
+          echo "No apps detected as changed. Skipping image push."
+          exit 0
+        fi
+        
+        echo "Changed apps: $CHANGED_APPS"
+        
+        # Publish images only for changed apps using the release tool
+        for app in $CHANGED_APPS; do
           echo "Publishing $app with latest and commit tags..."
-          bazel run //tools:release --config=ci -- release "$app" --version "latest" --commit "${{ github.sha }}"
+          bazel run //tools:release --config=ci -- release "$app" --version "latest" --commit "${{ github.sha }}" --create-git-tag
         done
         
     - name: Save Docker images as artifacts (PR builds)

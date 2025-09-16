@@ -146,20 +146,49 @@ def build_and_load_image(app_name: str, platform: Optional[str] = None) -> str:
     return f"{app_name}:latest"
 
 
+def format_git_tag(domain: str, app_name: str, version: str) -> str:
+    """Format a Git tag in the domain-app-name-version format."""
+    return f"{domain}-{app_name}-{version}"
+
+
+def create_git_tag(tag_name: str, commit_sha: Optional[str] = None, message: Optional[str] = None) -> None:
+    """Create a Git tag on the specified commit."""
+    cmd = ["git", "tag"]
+    
+    if message:
+        cmd.extend(["-a", tag_name, "-m", message])
+    else:
+        cmd.append(tag_name)
+    
+    if commit_sha:
+        cmd.append(commit_sha)
+    
+    print(f"Creating Git tag: {tag_name}")
+    subprocess.run(cmd, check=True)
+
+
+def push_git_tag(tag_name: str) -> None:
+    """Push a Git tag to the remote repository."""
+    print(f"Pushing Git tag: {tag_name}")
+    subprocess.run(["git", "push", "origin", tag_name], check=True)
+
+
 def tag_and_push_image(
     app_name: str, 
     version: str, 
     commit_sha: Optional[str] = None,
     dry_run: bool = False,
-    allow_overwrite: bool = False
+    allow_overwrite: bool = False,
+    create_git_tag_flag: bool = False
 ) -> None:
-    """Tag and push container images to registry."""
+    """Tag and push container images to registry, optionally creating Git tags."""
     # Validate version before proceeding
     validate_release_version(app_name, version, allow_overwrite)
     
     metadata = get_app_metadata(app_name)
     registry = metadata["registry"]
     repo_name = metadata["repo_name"]
+    domain = metadata.get("domain", "unknown")  # Fallback for backward compatibility
     
     # Build and load the image
     original_tag = build_and_load_image(app_name)
@@ -176,11 +205,28 @@ def tag_and_push_image(
         print("DRY RUN: Would push the following images:")
         for tag in tags.values():
             print(f"  - {tag}")
+        
+        if create_git_tag_flag:
+            git_tag = format_git_tag(domain, app_name, version)
+            print(f"DRY RUN: Would create Git tag: {git_tag}")
     else:
         print("Pushing to registry...")
         for tag in tags.values():
             subprocess.run(["docker", "push", tag], check=True)
         print(f"Successfully pushed {app_name} {version}")
+        
+        # Create and push Git tag if requested
+        if create_git_tag_flag:
+            git_tag = format_git_tag(domain, app_name, version)
+            tag_message = f"Release {app_name} {version}"
+            
+            try:
+                create_git_tag(git_tag, commit_sha, tag_message)
+                push_git_tag(git_tag)
+                print(f"Successfully created and pushed Git tag: {git_tag}")
+            except subprocess.CalledProcessError as e:
+                print(f"Warning: Failed to create/push Git tag {git_tag}: {e}")
+                # Don't fail the entire release if Git tagging fails
 
 
 def validate_apps(requested_apps: List[str]) -> List[str]:
@@ -486,6 +532,7 @@ def main():
     release_parser.add_argument("--commit", help="Commit SHA for additional tag")
     release_parser.add_argument("--dry-run", action="store_true", help="Show what would be pushed without actually pushing")
     release_parser.add_argument("--allow-overwrite", action="store_true", help="Allow overwriting existing versions (dangerous!)")
+    release_parser.add_argument("--create-git-tag", action="store_true", help="Create and push a Git tag for this release")
     
     # Plan release command (for CI)
     plan_parser = subparsers.add_parser("plan", help="Plan a release and output CI matrix")
@@ -538,7 +585,7 @@ def main():
             print(f"Image loaded as: {image_tag}")
         
         elif args.command == "release":
-            tag_and_push_image(args.app, args.version, args.commit, args.dry_run, args.allow_overwrite)
+            tag_and_push_image(args.app, args.version, args.commit, args.dry_run, args.allow_overwrite, args.create_git_tag)
         
         elif args.command == "plan":
             plan = plan_release(

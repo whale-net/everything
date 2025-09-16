@@ -34,5 +34,6 @@ release_app(
     name = "hello_python",
     binary_target = ":hello_python",
     language = "python",
+    domain = "demo",
     description = "Python hello world application with pytest",
 )
