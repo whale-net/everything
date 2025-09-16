@@ -31,3 +31,9 @@ build:ci --keep_going
 test:ci --test_output=errors
 test:ci --test_summary=short
 test:ci --test_verbose_timeout_warnings
+# Enable caching for test results
+test:ci --remote_upload_local_results=true
+test:ci --remote_accept_cached=true
+# Additional test caching optimizations
+test:ci --test_keep_going
+test:ci --flaky_test_attempts=3

@@ -59,6 +59,12 @@ jobs:
       run: |
         # Use native Bazel test commands with CI configuration - Bazel will automatically use cached results
         # for tests whose transitive dependencies have not changed
+        # 
+        # Caching Strategy:
+        # - Bazel automatically caches build artifacts and test results
+        # - Cache hits are indicated by "cache hit" messages in the build log
+        # - Test results are cached based on source file hashes and dependencies
+        # - Monitor cache effectiveness by looking for cache hit messages
         bazel test --config=ci //...
         
     - name: Upload test results
