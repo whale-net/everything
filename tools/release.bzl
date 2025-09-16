@@ -114,11 +114,8 @@ def get_image_targets(app_name):
     base_name = app_name + "_image"
     return {
         "base": "//" + app_name + ":" + base_name,
-        "tarball": "//" + app_name + ":" + base_name + "_tarball",
         "amd64": "//" + app_name + ":" + base_name + "_amd64",
         "arm64": "//" + app_name + ":" + base_name + "_arm64",
-        "amd64_tarball": "//" + app_name + ":" + base_name + "_amd64_tarball",
-        "arm64_tarball": "//" + app_name + ":" + base_name + "_arm64_tarball",
     }
 
 def format_registry_tags(registry, repo_name, version, commit_sha = None):

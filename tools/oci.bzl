@@ -1,6 +1,6 @@
 """Generic OCI image building rules for the monorepo."""
 
-load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load")
+load("@rules_oci//oci:defs.bzl", "oci_image")
 load("@aspect_bazel_lib//lib:tar.bzl", "tar")
 
 # Using appropriate base images for maximum compatibility:
@@ -47,13 +47,6 @@ def oci_image_with_binary(
         entrypoint = entrypoint,
         tars = [":" + name + "_layer"],
         **kwargs
-    )
-    
-    # Create a tarball for loading into Docker
-    oci_load(
-        name = name + "_tarball",
-        image = ":" + name,
-        repo_tags = [repo_tag],
     )
 
 def _get_platform_base_image(base_prefix, platform = None):

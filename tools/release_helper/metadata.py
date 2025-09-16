@@ -50,9 +50,6 @@ def get_image_targets(app_name: str) -> Dict[str, str]:
     base_name = f"{app_name}_image"
     return {
         "base": f"//{app_name}:{base_name}",
-        "tarball": f"//{app_name}:{base_name}_tarball",
         "amd64": f"//{app_name}:{base_name}_amd64",
         "arm64": f"//{app_name}:{base_name}_arm64",
-        "amd64_tarball": f"//{app_name}:{base_name}_amd64_tarball",
-        "arm64_tarball": f"//{app_name}:{base_name}_arm64_tarball",
     }

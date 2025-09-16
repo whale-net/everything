@@ -31,24 +31,21 @@ def format_registry_tags(registry: str, repo_name: str, version: str, commit_sha
     return tags
 
 
-def build_and_load_image(app_name: str, platform: Optional[str] = None) -> str:
-    """Build and load a container image for an app."""
+def build_image(app_name: str, platform: Optional[str] = None) -> str:
+    """Build a container image for an app."""
     from tools.release_helper.core import run_bazel
 
     image_targets = get_image_targets(app_name)
 
-    # Determine which tarball target to use
+    # Determine which image target to use
     if platform == "amd64":
-        target = image_targets["amd64_tarball"]
+        target = image_targets["amd64"]
     elif platform == "arm64":
-        target = image_targets["arm64_tarball"]
+        target = image_targets["arm64"]
     else:
-        target = image_targets["tarball"]  # Default (amd64)
+        target = image_targets["base"]  # Default (amd64)
 
     print(f"Building {target}...")
     run_bazel(["build", target])
-
-    print(f"Loading image into Docker...")
-    run_bazel(["run", target], capture_output=False)
 
     return f"{app_name}:latest"
