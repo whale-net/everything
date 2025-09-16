@@ -1,5 +1,5 @@
 # Tools and shared build rules for the monorepo
-load("//tools:go.bzl", "go_cache_init", "go_env_info")
+load("//tools:go.bzl", "go_env_info")
 load("@rules_python//python:defs.bzl", "py_binary")
 
 package(default_visibility = ["//visibility:public"])
@@ -23,9 +23,6 @@ alias(
     actual = ":release_helper",
     visibility = ["//visibility:public"],
 )
-
-# Go cache initialization tool
-go_cache_init(name = "init_go_cache")
 
 # Go environment information tool
 go_env_info(name = "go_env_info")

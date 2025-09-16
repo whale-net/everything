@@ -42,11 +42,6 @@ alias(
 )
 
 alias(
-    name = "init-go-cache",
-    actual = "//tools:init_go_cache",
-)
-
-alias(
     name = "go-env-info",
     actual = "//tools:go_env_info",
 )
