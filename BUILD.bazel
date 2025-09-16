@@ -7,6 +7,8 @@ pip_compile(
     name = "pip_compile",
     requirements_in = "requirements.in",
     requirements_txt = "requirements.lock.txt",
+    # Set size for generated test to prevent timeout warnings
+    test_size = "small",
 )
 
 # Root Python library
