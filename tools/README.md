@@ -25,24 +25,3 @@ bazel run //tools:release -- plan --event-type tag_push --version <version>
 ```
 
 The release helper ensures consistent handling of container images, version validation, and integration with CI/CD workflows.
-
-## Go Tools
-
-### Go Environment Info
-```bash
-bazel run //:go-env-info
-```
-Displays detailed Go environment information including:
-- Go version and installation paths
-- Cache directory locations and sizes
-- Go proxy and checksum database settings
-
-## Usage in CI/CD
-
-The CI workflow includes proper Go module caching using GitHub Actions cache.
-
-## Available Rules
-
-- `go_env_info`: Creates a Bazel executable target that displays Go environment information
-
-These rules are defined in `tools/go.bzl` and can be used in any BUILD.bazel file in the monorepo.

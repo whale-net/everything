@@ -1,12 +1,10 @@
 # Tools and shared build rules for the monorepo
-load("//tools:go.bzl", "go_env_info")
 load("@rules_python//python:defs.bzl", "py_binary")
 
 package(default_visibility = ["//visibility:public"])
 
 exports_files([
     "oci.bzl",
-    "go.bzl",
 ])
 
 # Release helper tool for managing app releases and container images
@@ -23,6 +21,3 @@ alias(
     actual = ":release_helper",
     visibility = ["//visibility:public"],
 )
-
-# Go environment information tool
-go_env_info(name = "go_env_info")
