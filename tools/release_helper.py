@@ -287,14 +287,14 @@ def detect_changed_apps(since_tag: Optional[str] = None) -> List[str]:
             # Check if changes are in infrastructure directories
             infra_dirs = {'tools', '.github', 'libs', 'docker'}
             if any(d in infra_dirs for d in changed_dirs):
-                print(f"Infrastructure changes detected in: {', '.join(changed_dirs & infra_dirs)}")
-                print("Releasing all apps due to infrastructure changes")
+                print(f"Infrastructure changes detected in: {', '.join(changed_dirs & infra_dirs)}", file=sys.stderr)
+                print("Releasing all apps due to infrastructure changes", file=sys.stderr)
                 return all_apps
         
         return changed_apps
         
     except subprocess.CalledProcessError as e:
-        print(f"Error detecting changes since {since_tag}: {e}")
+        print(f"Error detecting changes since {since_tag}: {e}", file=sys.stderr)
         # On error, return all apps to be safe
         return all_apps
 
@@ -335,7 +335,7 @@ def plan_release(
         if since_tag is None:
             since_tag = get_previous_tag()
             if since_tag:
-                print(f"Auto-detected previous tag: {since_tag}")
+                print(f"Auto-detected previous tag: {since_tag}", file=sys.stderr)
         
         release_apps = detect_changed_apps(since_tag)
     
@@ -610,9 +610,9 @@ def main():
         elif args.command == "changes":
             since_tag = args.since_tag or get_previous_tag()
             if since_tag:
-                print(f"Detecting changes since tag: {since_tag}")
+                print(f"Detecting changes since tag: {since_tag}", file=sys.stderr)
             else:
-                print("No previous tag found, considering all apps as changed")
+                print("No previous tag found, considering all apps as changed", file=sys.stderr)
                 
             changed_apps = detect_changed_apps(since_tag)
             for app in changed_apps:
