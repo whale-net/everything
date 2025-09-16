@@ -34,34 +34,21 @@ runs:
       id: setup-bazel
       uses: bazel-contrib/setup-bazel@0.15.0
       with:
-        # Layer 1: Enable global caching for Bazel binaries and dependencies.
+        # Enable global caching for Bazel binaries and dependencies
         bazelisk-cache: true
         repository-cache: true
+        # Simple disk cache - shared across workflows
+        disk-cache: true
 
-        # Layer 2: Enable unified disk cache for all build artifacts.
-        disk-cache: "monorepo"
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
 
-        # Injects the content of the CI-specific .bazelrc file into the
-        # user configuration. We import the CI config but let bazel commands
-        # explicitly specify --config=ci to avoid duplication.
-        bazelrc: |
-          import %workspace%/.github/.bazelrc.ci
-
-    # - name: Setup Python
-    #   uses: actions/setup-python@v5
-    #   with:
-    #     python-version: ${{ inputs.python-version }}
-
-    # - name: Setup Go with caching
-    #   uses: ./.github/actions/setup-go-cache
-    #   with:
-    #     go-version: ${{ inputs.go-version }}
-
-    # - name: Initialize Go cache
-    #   shell: bash
-    #   run: |
-    #     # Initialize Go cache directories using Bazel tool
-    #     bazel run //:init-go-cache
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ inputs.go-version }}
 
     - name: Set up Docker Buildx
       if: ${{ inputs.setup-docker == 'true' }}

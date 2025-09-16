@@ -20,10 +20,6 @@ jobs:
         
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
-      with:
-        python-version: '3.11'
-        go-version: '1.25'
-        setup-docker: 'true'
         
     # - name: Upload build artifacts
     #   uses: actions/upload-artifact@v4
@@ -51,13 +47,10 @@ jobs:
         
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
-      with:
-        python-version: '3.11'
-        go-version: '1.25'
         
     - name: Run tests
       run: |
-        # Use native Bazel test commands with CI configuration - Bazel will automatically use cached results
+        # Use native Bazel test commands - Bazel will automatically use cached results
         # for tests whose transitive dependencies have not changed
         # 
         # Caching Strategy:
@@ -65,7 +58,7 @@ jobs:
         # - Cache hits are indicated by "cache hit" messages in the build log
         # - Test results are cached based on source file hashes and dependencies
         # - Monitor cache effectiveness by looking for cache hit messages
-        bazel test --config=ci //...
+        bazel test //...
         
     - name: Upload test results
       uses: actions/upload-artifact@v4
@@ -85,42 +78,10 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    # This implements the multi-layered caching architecture from the design document
-    - name: Setup Bazel with Multi-Layered Caching
-      uses: bazel-contrib/setup-bazel@0.15.0
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
       with:
-        # Layer 1: Enable global caching for Bazel binaries and dependencies.
-        bazelisk-cache: true
-        repository-cache: true
-
-        # Layer 2: Enable unified disk cache for all build artifacts.
-        # Using "monorepo" as the namespace for the entire repository.
-        disk-cache: "monorepo"
-        
-        # Injects the content of the CI-specific .bazelrc file into the
-        # user configuration. We import the CI config but let bazel commands
-        # explicitly specify --config=ci to avoid duplication.
-        bazelrc: |
-          import %workspace%/.github/.bazelrc.ci
-      id: bazel-cache
-      
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-        
-    - name: Setup Go with caching
-      uses: ./.github/actions/setup-go-cache
-      with:
-        go-version: '1.25'  # Match MODULE.bazel version
-        
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-      
-    - name: Initialize Go cache
-      run: |
-        # Initialize Go cache directories using Bazel tool
-        bazel run //:init-go-cache
+        setup-docker: 'true'
       
     # Log in to GitHub Container Registry using GITHUB_TOKEN
     - name: Log in to GitHub Container Registry
@@ -139,13 +100,13 @@ jobs:
         echo "Building Docker images using release tool..."
         
         # Get list of all apps
-        APPS=$(bazel run //tools:release --config=ci -- list)
+        APPS=$(bazel run //tools:release -- list)
         echo "Apps to build: $APPS"
         
         # Build images for all apps using the release tool
         for app in $APPS; do
           echo "Building image for $app..."
-          bazel run //tools:release --config=ci -- build "$app"
+          bazel run //tools:release -- build "$app"
         done
         
         # Show loaded Docker images
@@ -161,7 +122,7 @@ jobs:
         echo "Detecting changed apps using release planning..."
         
         # Detect changed apps since the last tag
-        CHANGED_APPS=$(bazel run //tools:release --config=ci -- changes)
+        CHANGED_APPS=$(bazel run //tools:release -- changes)
         
         if [ -z "$CHANGED_APPS" ]; then
           echo "No apps detected as changed. Skipping image push."
@@ -173,7 +134,7 @@ jobs:
         # Publish images only for changed apps using the release tool
         for app in $CHANGED_APPS; do
           echo "Publishing $app with latest and commit tags..."
-          bazel run //tools:release --config=ci -- release "$app" --version "latest" --commit "${{ github.sha }}" --create-git-tag
+          bazel run //tools:release -- release "$app" --version "latest" --commit "${{ github.sha }}" --create-git-tag
         done
         
     - name: Save Docker images as artifacts (PR builds)
@@ -181,7 +142,7 @@ jobs:
       run: |
         # Save images for PR builds
         mkdir -p docker-images
-        APPS=$(bazel run //tools:release --config=ci -- list)
+        APPS=$(bazel run //tools:release -- list)
         
         for app in $APPS; do
           echo "Saving image for $app..."
