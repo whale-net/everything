@@ -9,22 +9,25 @@ from typing import Dict, List, Optional
 from tools.release_helper.metadata import list_all_apps
 
 
-def detect_changed_apps(since_tag: Optional[str] = None) -> List[Dict[str, str]]:
-    """Detect which apps have changed since a given tag.
+def detect_changed_apps(base_commit: Optional[str] = None) -> List[Dict[str, str]]:
+    """Detect which apps have changed compared to a base commit.
+    
+    Args:
+        base_commit: Base commit to compare HEAD against. If None, compares against previous tag.
     
     Returns:
         List of app dictionaries with bazel_target, name, and domain
     """
     all_apps = list_all_apps()
 
-    if not since_tag:
-        # No previous tag, return all apps
+    if not base_commit:
+        # No base commit specified, return all apps
         return all_apps
 
     try:
-        # Get changed files since the tag
+        # Get changed files compared to the base commit
         result = subprocess.run(
-            ["git", "diff", "--name-only", f"{since_tag}..HEAD"],
+            ["git", "diff", "--name-only", f"{base_commit}..HEAD"],
             capture_output=True,
             text=True,
             check=True
@@ -66,6 +69,6 @@ def detect_changed_apps(since_tag: Optional[str] = None) -> List[Dict[str, str]]
         return changed_apps
 
     except subprocess.CalledProcessError as e:
-        print(f"Error detecting changes since {since_tag}: {e}", file=sys.stderr)
+        print(f"Error detecting changes against {base_commit}: {e}", file=sys.stderr)
         # On error, return all apps to be safe
         return all_apps

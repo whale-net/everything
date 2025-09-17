@@ -41,12 +41,12 @@ def main():
     plan_parser.add_argument("--event-type", required=True, choices=["workflow_dispatch", "tag_push"], help="Type of trigger event")
     plan_parser.add_argument("--apps", help="Comma-separated list of apps or 'all' (for manual releases)")
     plan_parser.add_argument("--version", help="Release version")
-    plan_parser.add_argument("--since-tag", help="Compare changes since this tag")
+    plan_parser.add_argument("--base-commit", help="Compare changes against this commit (compares HEAD to this commit)")
     plan_parser.add_argument("--format", choices=["json", "github"], default="json", help="Output format")
 
     # Detect changes command
-    changes_parser = subparsers.add_parser("changes", help="Detect changed apps since a tag")
-    changes_parser.add_argument("--since-tag", help="Compare changes since this tag (defaults to previous tag)")
+    changes_parser = subparsers.add_parser("changes", help="Detect changed apps since a commit")
+    changes_parser.add_argument("--base-commit", help="Compare changes against this commit (compares HEAD to this commit, defaults to previous tag)")
 
     # Validate version command
     validate_version_parser = subparsers.add_parser("validate-version", help="Validate version format and availability")
@@ -94,7 +94,7 @@ def main():
                 event_type=args.event_type,
                 requested_apps=args.apps,
                 version=args.version,
-                since_tag=args.since_tag
+                base_commit=args.base_commit
             )
 
             if args.format == "github":
@@ -110,13 +110,13 @@ def main():
                 print(json.dumps(plan, indent=2))
 
         elif args.command == "changes":
-            since_tag = args.since_tag or get_previous_tag()
-            if since_tag:
-                print(f"Detecting changes since tag: {since_tag}", file=sys.stderr)
+            base_commit = args.base_commit or get_previous_tag()
+            if base_commit:
+                print(f"Detecting changes against commit: {base_commit}", file=sys.stderr)
             else:
-                print("No previous tag found, considering all apps as changed", file=sys.stderr)
+                print("No base commit specified and no previous tag found, considering all apps as changed", file=sys.stderr)
 
-            changed_apps = detect_changed_apps(since_tag)
+            changed_apps = detect_changed_apps(base_commit)
             for app in changed_apps:
                 print(app['name'])  # Print just the app name for compatibility
 

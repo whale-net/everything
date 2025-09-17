@@ -4,6 +4,7 @@ Release planning and execution utilities for the release helper.
 
 import json
 import subprocess
+import sys
 from typing import Dict, List, Optional
 
 from tools.release_helper.changes import detect_changed_apps
@@ -38,7 +39,7 @@ def plan_release(
     event_type: str,
     requested_apps: Optional[str] = None,
     version: Optional[str] = None,
-    since_tag: Optional[str] = None
+    base_commit: Optional[str] = None
 ) -> Dict:
     """Plan a release and return the matrix configuration for CI."""
 
@@ -66,13 +67,13 @@ def plan_release(
         if not version:
             raise ValueError("Tag push releases require version to be specified")
 
-        # Auto-detect previous tag if not provided
-        if since_tag is None:
-            since_tag = get_previous_tag()
-            if since_tag:
-                print(f"Auto-detected previous tag: {since_tag}", file=sys.stderr)
+        # Auto-detect previous tag if no base commit provided
+        if base_commit is None:
+            base_commit = get_previous_tag()
+            if base_commit:
+                print(f"Auto-detected previous tag: {base_commit}", file=sys.stderr)
 
-        release_apps = detect_changed_apps(since_tag)
+        release_apps = detect_changed_apps(base_commit)
 
     else:
         raise ValueError(f"Unknown event type: {event_type}")
