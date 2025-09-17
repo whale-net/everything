@@ -10,6 +10,7 @@ def main():
     """Main entry point."""
     print(get_message())
     print(f"Version: {get_version()}")
+    print("that last commit was too early")
 
 if __name__ == "__main__":
     main()
