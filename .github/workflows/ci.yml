@@ -45,8 +45,6 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
       
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
@@ -67,41 +65,46 @@ jobs:
       env:
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
       run: |
-        # Use the release tool to build images for affected apps only
-        echo "Building Docker images using release tool..."
+        # Build all Docker images (change detection disabled for reliability)
+        echo "Building all Docker images using release tool..."
         
-        # Determine what to build based on changes
-        if [ "${{ github.event_name }}" = "pull_request" ]; then
-          # For PRs, compare against the base branch
-          BASE_COMMIT="${{ github.event.pull_request.base.sha }}"
-          echo "PR detected: comparing against base commit $BASE_COMMIT"
-        elif [ "${{ github.event_name }}" = "push" ] && [ -n "${{ github.event.before }}" ]; then
-          # For pushes, compare against the previous commit
-          BASE_COMMIT="${{ github.event.before }}"
-          echo "Push detected: comparing against previous commit $BASE_COMMIT"
-          
-          # Check for null SHA (first commit on branch, force push, etc.)
-          if [ "$BASE_COMMIT" = "0000000000000000000000000000000000000000" ]; then
-            echo "Null SHA detected (first commit or force push), building all apps"
-            BASE_COMMIT=""
-          fi
-        else
-          # Fallback: build all apps
-          echo "Cannot determine base commit, building all apps"
-          BASE_COMMIT=""
-        fi
+        # # Determine what to build based on changes
+        # if [ "${{ github.event_name }}" = "pull_request" ]; then
+        #   # For PRs, compare against the base branch
+        #   BASE_COMMIT="${{ github.event.pull_request.base.sha }}"
+        #   echo "PR detected: comparing against base commit $BASE_COMMIT"
+        # elif [ "${{ github.event_name }}" = "push" ] && [ -n "${{ github.event.before }}" ]; then
+        #   # For pushes, compare against the previous commit
+        #   BASE_COMMIT="${{ github.event.before }}"
+        #   echo "Push detected: comparing against previous commit $BASE_COMMIT"
+        # else
+        #   # Fallback: build all apps
+        #   echo "Cannot determine base commit, building all apps"
+        #   BASE_COMMIT=""
+        # fi
+        # 
+        # # Get list of apps to build
+        # if [ -n "$BASE_COMMIT" ]; then
+        #   echo "Detecting changed apps using Bazel dependency analysis..."
+        #   APPS=$(bazel run //tools:release -- changes --base-commit="$BASE_COMMIT" --use-bazel-query)
+        # else
+        #   echo "Building all apps..."
+        #   APPS=$(bazel run //tools:release -- list | awk '{print $1}')
+        # fi
+        # 
+        # if [ -z "$APPS" ]; then
+        #   echo "No apps to build"
+        #   exit 0
+        # fi
+        # 
+        # echo "Apps to build: $APPS"
         
-        # Get list of apps to build
-        if [ -n "$BASE_COMMIT" ]; then
-          echo "Detecting changed apps using Bazel dependency analysis..."
-          APPS=$(bazel run //tools:release -- changes --base-commit="$BASE_COMMIT" --use-bazel-query)
-        else
-          echo "Building all apps..."
-          APPS=$(bazel run //tools:release -- list | awk '{print $1}')
-        fi
+        # Build all apps (simplified approach)
+        echo "Getting list of all apps..."
+        APPS=$(bazel run //tools:release -- list | awk '{print $1}')
         
         if [ -z "$APPS" ]; then
-          echo "No apps to build"
+          echo "No apps found to build"
           exit 0
         fi
         
@@ -122,32 +125,39 @@ jobs:
       env:
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
       run: |
-        # Use the same change detection logic for consistency
-        echo "Detecting changed apps for publishing..."
+        # Publish all apps (change detection disabled for reliability)
+        echo "Publishing all apps..."
         
-        # Use the same base commit detection as the build step
-        if [ -n "${{ github.event.before }}" ]; then
-          BASE_COMMIT="${{ github.event.before }}"
-          echo "Comparing HEAD to previous commit: $BASE_COMMIT"
-          
-          # Check for null SHA (first commit on branch, force push, etc.)
-          if [ "$BASE_COMMIT" = "0000000000000000000000000000000000000000" ]; then
-            echo "Null SHA detected (first commit or force push), publishing all apps"
-            CHANGED_APPS=$(bazel run //tools:release -- list | awk '{print $1}')
-          else
-            CHANGED_APPS=$(bazel run //tools:release -- changes --base-commit="$BASE_COMMIT" --use-bazel-query)
-          fi
-        else
-          echo "Cannot determine base commit, publishing all apps"
-          CHANGED_APPS=$(bazel run //tools:release -- list | awk '{print $1}')
-        fi
+        # # Use the same change detection logic for consistency
+        # echo "Detecting changed apps for publishing..."
+        # 
+        # # Use the same base commit detection as the build step
+        # if [ -n "${{ github.event.before }}" ]; then
+        #   BASE_COMMIT="${{ github.event.before }}"
+        #   echo "Comparing HEAD to previous commit: $BASE_COMMIT"
+        #   CHANGED_APPS=$(bazel run //tools:release -- changes --base-commit="$BASE_COMMIT" --use-bazel-query)
+        # else
+        #   echo "Cannot determine base commit, publishing all apps"
+        #   CHANGED_APPS=$(bazel run //tools:release -- list | awk '{print $1}')
+        # fi
+        # 
+        # if [ -z "$CHANGED_APPS" ]; then
+        #   echo "No apps detected as changed. Skipping image push."
+        #   exit 0
+        # fi
+        # 
+        # echo "Changed apps: $CHANGED_APPS"
+        
+        # Get all apps for publishing (simplified approach)
+        echo "Getting list of all apps for publishing..."
+        CHANGED_APPS=$(bazel run //tools:release -- list | awk '{print $1}')
         
         if [ -z "$CHANGED_APPS" ]; then
-          echo "No apps detected as changed. Skipping image push."
+          echo "No apps found to publish"
           exit 0
         fi
         
-        echo "Changed apps: $CHANGED_APPS"
+        echo "Apps to publish: $CHANGED_APPS"
         
         # Publish images only for changed apps using the release tool
         for app in $CHANGED_APPS; do
