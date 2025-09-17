@@ -5,7 +5,7 @@ Tests for the FastAPI application
 import pytest
 from fastapi.testclient import TestClient
 
-from hello_fastapi.main import app
+from demo.hello_fastapi.main import app
 
 client = TestClient(app)
 

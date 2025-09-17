@@ -13,8 +13,8 @@ Need to eventually figure out better testing strategy, but this is it for now.
 
 ```bash
 # Run applications
-bazel run //hello_python:hello_python
-bazel run //hello_go:hello_go
+bazel run //demo/hello_python:hello_python
+bazel run //demo/hello_go:hello_go
 
 # Build all targets
 bazel build //...
@@ -22,8 +22,8 @@ bazel build //...
 # Run tests with detailed output
 bazel test //... 
 # Run specific tests
-bazel test //hello_python:test_main 
-bazel test //hello_go:main_test
+bazel test //demo/hello_python:test_main 
+bazel test //demo/hello_go:main_test
 ```
 
 ### Adding Dependencies
@@ -163,14 +163,14 @@ The new OCI build system uses `oci_load` targets instead of traditional tarball 
 
 ```bash
 # Build individual platform images
-bazel build //hello_python:hello_python_image_amd64
-bazel build //hello_python:hello_python_image_arm64
+bazel build //demo/hello_python:hello_python_image_amd64
+bazel build //demo/hello_python:hello_python_image_arm64
 
 # Build all platform variants
-bazel build //hello_python:hello_python_image
+bazel build //demo/hello_python:hello_python_image
 
 # Build and load into Docker efficiently using oci_load (optimized for cache)
-bazel run //hello_python:hello_python_image_load
+bazel run //demo/hello_python:hello_python_image_load
 
 # Or use the release tool for production workflows
 bazel run //tools:release -- build hello_python
@@ -232,7 +232,7 @@ bazel query "kind('app_metadata', //...)"
 Each app declares its release metadata using the `release_app` macro:
 
 ```starlark
-# In hello_python/BUILD.bazel
+# In demo/hello_python/BUILD.bazel
 load("//tools:release.bzl", "release_app")
 
 release_app(
