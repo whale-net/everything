@@ -79,6 +79,12 @@ jobs:
           # For pushes, compare against the previous commit
           BASE_COMMIT="${{ github.event.before }}"
           echo "Push detected: comparing against previous commit $BASE_COMMIT"
+          
+          # Check for null SHA (first commit on branch, force push, etc.)
+          if [ "$BASE_COMMIT" = "0000000000000000000000000000000000000000" ]; then
+            echo "Null SHA detected (first commit or force push), building all apps"
+            BASE_COMMIT=""
+          fi
         else
           # Fallback: build all apps
           echo "Cannot determine base commit, building all apps"
@@ -123,7 +129,14 @@ jobs:
         if [ -n "${{ github.event.before }}" ]; then
           BASE_COMMIT="${{ github.event.before }}"
           echo "Comparing HEAD to previous commit: $BASE_COMMIT"
-          CHANGED_APPS=$(bazel run //tools:release -- changes --base-commit="$BASE_COMMIT" --use-bazel-query)
+          
+          # Check for null SHA (first commit on branch, force push, etc.)
+          if [ "$BASE_COMMIT" = "0000000000000000000000000000000000000000" ]; then
+            echo "Null SHA detected (first commit or force push), publishing all apps"
+            CHANGED_APPS=$(bazel run //tools:release -- list | awk '{print $1}')
+          else
+            CHANGED_APPS=$(bazel run //tools:release -- changes --base-commit="$BASE_COMMIT" --use-bazel-query)
+          fi
         else
           echo "Cannot determine base commit, publishing all apps"
           CHANGED_APPS=$(bazel run //tools:release -- list | awk '{print $1}')
