@@ -80,14 +80,30 @@ def main():
         if args.command == "list":
             apps = list_all_apps()
             for app in apps:
-                print(app)
+                print(f"{app['name']} (domain: {app['domain']}, target: {app['bazel_target']})")
 
         elif args.command == "metadata":
-            metadata = get_app_metadata(args.app)
+            # Try to find the app by name first, then use as bazel target if not found
+            try:
+                from tools.release_helper.release import find_app_bazel_target
+                bazel_target = find_app_bazel_target(args.app)
+            except ValueError:
+                # Maybe it's already a bazel target
+                bazel_target = args.app
+            
+            metadata = get_app_metadata(bazel_target)
             print(json.dumps(metadata, indent=2))
 
         elif args.command == "build":
-            image_tag = build_image(args.app, args.platform)
+            # Try to find the app by name first, then use as bazel target if not found
+            try:
+                from tools.release_helper.release import find_app_bazel_target
+                bazel_target = find_app_bazel_target(args.app)
+            except ValueError:
+                # Maybe it's already a bazel target
+                bazel_target = args.app
+            
+            image_tag = build_image(bazel_target, args.platform)
             print(f"Image loaded as: {image_tag}")
 
         elif args.command == "release":
@@ -122,19 +138,23 @@ def main():
 
             changed_apps = detect_changed_apps(since_tag)
             for app in changed_apps:
-                print(app)
+                print(app['name'])  # Print just the app name for compatibility
 
         elif args.command == "validate":
             try:
                 valid_apps = validate_apps(args.apps)
-                print(f"All apps are valid: {', '.join(valid_apps)}")
+                app_names = [app['name'] for app in valid_apps]
+                print(f"All apps are valid: {', '.join(app_names)}")
             except ValueError as e:
                 print(f"Validation failed: {e}", file=sys.stderr)
                 sys.exit(1)
 
         elif args.command == "validate-version":
             try:
-                validate_release_version(args.app, args.version, args.allow_overwrite)
+                # Try to find the app by name first
+                from tools.release_helper.release import find_app_bazel_target
+                bazel_target = find_app_bazel_target(args.app)
+                validate_release_version(bazel_target, args.version, args.allow_overwrite)
                 print(f"✓ Version '{args.version}' is valid for app '{args.app}'")
             except ValueError as e:
                 print(f"Version validation failed: {e}", file=sys.stderr)

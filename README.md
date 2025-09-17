@@ -175,9 +175,11 @@ bazel run //hello_python:hello_python_image_load
 # Or use the release tool for production workflows
 bazel run //tools:release -- build hello_python
 
-# Run the containers (after loading)
+# Run the containers (after loading - these are local development tags)
 docker run --rm hello_python:latest  # ✅ Works correctly!
 docker run --rm hello_go:latest      # ✅ Works correctly!
+
+# Registry images use domain-app format: demo-hello_python:latest
 ```
 
 ### Base Images & Architecture
@@ -248,11 +250,10 @@ TODO - review documentation to ensure accuracy
 - **Dependency awareness**: If shared libraries change, all dependent apps are released
 
 #### 3. Container Publishing
-TODO - review documentation to ensure accuracy
-Each released app gets published to GitHub Container Registry with multiple tags:
-- `ghcr.io/OWNER/APP:vX.Y.Z` (specific version)
-- `ghcr.io/OWNER/APP:latest` (latest release)
-- `ghcr.io/OWNER/APP:COMMIT_SHA` (commit-specific)
+Each released app gets published to GitHub Container Registry with multiple tags using the `<domain>-<app>:<version>` format:
+- `ghcr.io/OWNER/DOMAIN-APP:vX.Y.Z` (specific version)
+- `ghcr.io/OWNER/DOMAIN-APP:latest` (latest release)
+- `ghcr.io/OWNER/DOMAIN-APP:COMMIT_SHA` (commit-specific)
 
 ### � Version Validation & Protection
 
@@ -364,16 +365,16 @@ matrix:
 ```
 
 #### Container Image Tags
-Each released app gets tagged with:
+Each released app gets tagged with the `<domain>-<app>:<version>` format:
 ```bash
 # Version-specific
-ghcr.io/OWNER/hello_python:v1.2.3
+ghcr.io/OWNER/demo-hello_python:v1.2.3
 
 # Latest
-ghcr.io/OWNER/hello_python:latest
+ghcr.io/OWNER/demo-hello_python:latest
 
 # Commit-specific (for debugging)
-ghcr.io/OWNER/hello_python:abc123def
+ghcr.io/OWNER/demo-hello_python:abc123def
 ```
 
 
@@ -420,8 +421,8 @@ bazel query "//your_app:your_app"
 # Build and test the release targets using the release tool
 bazel run //tools:release -- build hello_python
 
-# Verify the image works
-docker run --rm hello_python:latest
+# Verify the image works (local development tag)
+docker run --rm demo-hello_python:latest
 ```
 
 #### Version Issues

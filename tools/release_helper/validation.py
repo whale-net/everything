@@ -6,7 +6,7 @@ import os
 import re
 import subprocess
 import sys
-from typing import List
+from typing import Dict, List
 
 from tools.release_helper.metadata import get_app_metadata, list_all_apps
 
@@ -19,18 +19,26 @@ def validate_semantic_version(version: str) -> bool:
     return bool(re.match(pattern, version))
 
 
-def check_version_exists_in_registry(app_name: str, version: str) -> bool:
-    """Check if a version already exists in the container registry."""
-    metadata = get_app_metadata(app_name)
+def check_version_exists_in_registry(bazel_target: str, version: str) -> bool:
+    """Check if a version already exists in the container registry.
+    
+    Args:
+        bazel_target: Full bazel target path for the app metadata
+        version: Version to check
+    """
+    metadata = get_app_metadata(bazel_target)
     registry = metadata["registry"]
-    repo_name = metadata["repo_name"].lower()
+    domain = metadata["domain"]
+    app_name = metadata["name"]
 
-    # Build the image reference to check
+    # Build the image reference using domain-app:version format
+    image_name = f"{domain}-{app_name}"
+    
     if registry == "ghcr.io" and "GITHUB_REPOSITORY_OWNER" in os.environ:
         owner = os.environ["GITHUB_REPOSITORY_OWNER"].lower()
-        image_ref = f"{registry}/{owner}/{repo_name}:{version}"
+        image_ref = f"{registry}/{owner}/{image_name}:{version}"
     else:
-        image_ref = f"{registry}/{repo_name}:{version}"
+        image_ref = f"{registry}/{image_name}:{version}"
 
     try:
         # Try to pull the image manifest to check if it exists
@@ -60,8 +68,17 @@ def check_version_exists_in_registry(app_name: str, version: str) -> bool:
         return False
 
 
-def validate_release_version(app_name: str, version: str, allow_overwrite: bool = False) -> None:
-    """Validate that a release version is valid and doesn't already exist."""
+def validate_release_version(bazel_target: str, version: str, allow_overwrite: bool = False) -> None:
+    """Validate that a release version is valid and doesn't already exist.
+    
+    Args:
+        bazel_target: Full bazel target path for the app metadata
+        version: Version to validate
+        allow_overwrite: Whether to allow overwriting existing versions
+    """
+    metadata = get_app_metadata(bazel_target)
+    app_name = metadata['name']
+    
     # Check semantic versioning (skip for "latest" which is always valid for main builds)
     if version != "latest" and not validate_semantic_version(version):
         raise ValueError(
@@ -77,7 +94,7 @@ def validate_release_version(app_name: str, version: str, allow_overwrite: bool 
 
     # Check if version already exists (unless explicitly allowing overwrite)
     if not allow_overwrite:
-        if check_version_exists_in_registry(app_name, version):
+        if check_version_exists_in_registry(bazel_target, version):
             raise ValueError(
                 f"Version '{version}' already exists for app '{app_name}'. "
                 f"Refusing to overwrite existing version. Use a different version number."
@@ -88,21 +105,29 @@ def validate_release_version(app_name: str, version: str, allow_overwrite: bool 
         print(f"⚠️  Allowing overwrite of version '{version}' for app '{app_name}' (if it exists)", file=sys.stderr)
 
 
-def validate_apps(requested_apps: List[str]) -> List[str]:
-    """Validate that requested apps exist and return the valid ones."""
+def validate_apps(requested_apps: List[str]) -> List[Dict[str, str]]:
+    """Validate that requested apps exist and return the valid ones.
+    
+    Args:
+        requested_apps: List of app names to validate
+        
+    Returns:
+        List of app dictionaries with bazel_target, name, and domain
+    """
     all_apps = list_all_apps()
+    app_lookup = {app['name']: app for app in all_apps}
 
     valid_apps = []
     invalid_apps = []
 
-    for app in requested_apps:
-        if app in all_apps:
-            valid_apps.append(app)
+    for app_name in requested_apps:
+        if app_name in app_lookup:
+            valid_apps.append(app_lookup[app_name])
         else:
-            invalid_apps.append(app)
+            invalid_apps.append(app_name)
 
     if invalid_apps:
-        available = ", ".join(sorted(all_apps))
+        available = ", ".join(sorted(app['name'] for app in all_apps))
         invalid = ", ".join(invalid_apps)
         raise ValueError(f"Invalid apps: {invalid}. Available apps: {available}")
 

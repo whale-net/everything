@@ -5,8 +5,9 @@ load("//tools:oci.bzl", "python_oci_image_multiplatform", "go_oci_image_multipla
 def _app_metadata_impl(ctx):
     """Implementation for app_metadata rule."""
     # Create a JSON file with app metadata
+    # The app name should be passed explicitly, not derived from rule name
     metadata = {
-        "name": ctx.attr.name,
+        "name": ctx.attr.app_name,  # Use explicit app_name instead of ctx.attr.name
         "version": ctx.attr.version,
         "binary_target": ctx.attr.binary_target,
         "image_target": ctx.attr.image_target,
@@ -28,6 +29,7 @@ def _app_metadata_impl(ctx):
 app_metadata = rule(
     implementation = _app_metadata_impl,
     attrs = {
+        "app_name": attr.string(mandatory = True),  # Add explicit app_name attribute
         "version": attr.string(default = "latest"),
         "binary_target": attr.string(mandatory = True),
         "image_target": attr.string(mandatory = True),
@@ -58,10 +60,10 @@ def release_app(name, binary_target, language, domain, description = "", version
     if language not in ["python", "go"]:
         fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
     
-    # Repository name for container images
-    repo_name = custom_repo_name if custom_repo_name else name
+    # Repository name for container images should use domain-app format
+    image_name = domain + "-" + name
     image_target = name + "_image"
-    repo_tag = repo_name + ":latest"
+    repo_tag = image_name + ":latest"
     
     # Create OCI images based on language
     if language == "python":
@@ -80,13 +82,14 @@ def release_app(name, binary_target, language, domain, description = "", version
     # Create release metadata
     app_metadata(
         name = name + "_metadata",
+        app_name = name,  # Pass the actual app name
         binary_target = binary_target,
         image_target = image_target,
         description = description,
         version = version,
         language = language,
         registry = registry,
-        repo_name = repo_name,
+        repo_name = image_name,  # Use domain-app format
         domain = domain,
         visibility = ["//visibility:public"],
     )
@@ -118,20 +121,21 @@ def get_image_targets(app_name):
         "arm64": "//" + app_name + ":" + base_name + "_arm64",
     }
 
-def format_registry_tags(registry, repo_name, version, commit_sha = None):
-    """Format container registry tags for an app.
+def format_registry_tags(registry, domain, app_name, version, commit_sha = None):
+    """Format container registry tags for an app using domain-app:version format.
     
     Args:
         registry: Registry hostname (e.g., "ghcr.io")
-        repo_name: Repository name
+        domain: App domain
+        app_name: App name  
         version: Version tag
         commit_sha: Optional commit SHA for additional tag
         
     Returns:
         Dict with formatted registry tags
     """
-    repo_lower = repo_name.lower()
-    base_repo = registry + "/" + repo_lower
+    image_name = domain + "-" + app_name
+    base_repo = registry + "/" + image_name
     
     tags = {
         "latest": base_repo + ":latest",
