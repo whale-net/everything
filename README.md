@@ -183,7 +183,7 @@ docker run --rm hello_go:latest      # ✅ Works correctly!
 ```
 
 ### Base Images & Architecture
-- **Python**: Uses `python:3.11-slim` (Python 3.11.13 on Debian 12)
+- **Python**: Uses `python:3.11-alpine` (Python 3.11.13 on Alpine Linux for minimal size)
 - **Go**: Uses `alpine:3.20` (Alpine 3.20.3 for minimal size)
 - **Platforms**: Full support for both `linux/amd64` and `linux/arm64`
 - **Cross-compilation**: Automatically handles platform-specific builds
