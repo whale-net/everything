@@ -15,6 +15,8 @@ Need to eventually figure out better testing strategy, but this is it for now.
 # Run applications
 bazel run //demo/hello_python:hello_python
 bazel run //demo/hello_go:hello_go
+bazel run //demo/hello_fastapi:hello_fastapi
+bazel run //demo/hello_world_test:hello_world_test
 
 # Build all targets
 bazel build //...
@@ -24,6 +26,8 @@ bazel test //...
 # Run specific tests
 bazel test //demo/hello_python:test_main 
 bazel test //demo/hello_go:main_test
+bazel test //demo/hello_fastapi:test_main
+bazel test //demo/hello_world_test:test_main
 ```
 
 ### Adding Dependencies
