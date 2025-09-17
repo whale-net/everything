@@ -57,9 +57,9 @@ def generate_release_summary(
         summary.append("# List all apps")
         summary.append("bazel run //tools:release -- list")
         summary.append("")
-        summary.append("# View app metadata")
+        summary.append("# Build and test an app locally")
         for app in apps[:2]:  # Show first 2 apps as examples
-            summary.append(f"bazel run //tools:release -- metadata {app}")
+            summary.append(f"bazel run //tools:release -- build {app}")
         summary.append("```")
     
     return "\n".join(summary)

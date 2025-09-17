@@ -120,29 +120,3 @@ def get_image_targets(app_name):
         "amd64": "//" + app_name + ":" + base_name + "_amd64",
         "arm64": "//" + app_name + ":" + base_name + "_arm64",
     }
-
-def format_registry_tags(registry, domain, app_name, version, commit_sha = None):
-    """Format container registry tags for an app using domain-app:version format.
-    
-    Args:
-        registry: Registry hostname (e.g., "ghcr.io")
-        domain: App domain
-        app_name: App name  
-        version: Version tag
-        commit_sha: Optional commit SHA for additional tag
-        
-    Returns:
-        Dict with formatted registry tags
-    """
-    image_name = domain + "-" + app_name
-    base_repo = registry + "/" + image_name
-    
-    tags = {
-        "latest": base_repo + ":latest",
-        "version": base_repo + ":" + version,
-    }
-    
-    if commit_sha:
-        tags["commit"] = base_repo + ":" + commit_sha
-        
-    return tags

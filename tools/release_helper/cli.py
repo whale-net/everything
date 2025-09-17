@@ -9,10 +9,10 @@ import sys
 from tools.release_helper.changes import detect_changed_apps
 from tools.release_helper.git import get_previous_tag
 from tools.release_helper.images import build_image
-from tools.release_helper.metadata import get_app_metadata, list_all_apps
+from tools.release_helper.metadata import list_all_apps
 from tools.release_helper.release import plan_release, tag_and_push_image
 from tools.release_helper.summary import generate_release_summary
-from tools.release_helper.validation import validate_apps, validate_release_version
+from tools.release_helper.validation import validate_release_version
 
 
 def main():
@@ -21,10 +21,6 @@ def main():
 
     # List apps command
     list_parser = subparsers.add_parser("list", help="List all apps with release metadata")
-
-    # Show metadata command
-    metadata_parser = subparsers.add_parser("metadata", help="Show metadata for an app")
-    metadata_parser.add_argument("app", help="App name")
 
     # Build image command
     build_parser = subparsers.add_parser("build", help="Build and load container image")
@@ -52,10 +48,6 @@ def main():
     changes_parser = subparsers.add_parser("changes", help="Detect changed apps since a tag")
     changes_parser.add_argument("--since-tag", help="Compare changes since this tag (defaults to previous tag)")
 
-    # Validate apps command
-    validate_parser = subparsers.add_parser("validate", help="Validate that apps exist")
-    validate_parser.add_argument("apps", nargs="+", help="App names to validate")
-
     # Validate version command
     validate_version_parser = subparsers.add_parser("validate-version", help="Validate version format and availability")
     validate_version_parser.add_argument("app", help="App name")
@@ -81,18 +73,6 @@ def main():
             apps = list_all_apps()
             for app in apps:
                 print(f"{app['name']} (domain: {app['domain']}, target: {app['bazel_target']})")
-
-        elif args.command == "metadata":
-            # Try to find the app by name first, then use as bazel target if not found
-            try:
-                from tools.release_helper.release import find_app_bazel_target
-                bazel_target = find_app_bazel_target(args.app)
-            except ValueError:
-                # Maybe it's already a bazel target
-                bazel_target = args.app
-            
-            metadata = get_app_metadata(bazel_target)
-            print(json.dumps(metadata, indent=2))
 
         elif args.command == "build":
             # Try to find the app by name first, then use as bazel target if not found
@@ -139,15 +119,6 @@ def main():
             changed_apps = detect_changed_apps(since_tag)
             for app in changed_apps:
                 print(app['name'])  # Print just the app name for compatibility
-
-        elif args.command == "validate":
-            try:
-                valid_apps = validate_apps(args.apps)
-                app_names = [app['name'] for app in valid_apps]
-                print(f"All apps are valid: {', '.join(app_names)}")
-            except ValueError as e:
-                print(f"Validation failed: {e}", file=sys.stderr)
-                sys.exit(1)
 
         elif args.command == "validate-version":
             try:
