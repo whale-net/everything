@@ -82,8 +82,6 @@ jobs:
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
-        python-version: '3.11'
-        go-version: '1.25'
         setup-docker: 'true'
         
     # Login unless it's a manual dispatch with dry_run=true

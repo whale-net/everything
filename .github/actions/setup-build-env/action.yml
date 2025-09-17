@@ -5,18 +5,6 @@ branding:
   color: 'green'
 
 inputs:
-  python-version:
-    description: 'Python version to install'
-    required: false
-    default: '3.11'
-  go-version:
-    description: 'Go version to install'
-    required: false
-    default: '1.25'
-  bazel-cache-suffix:
-    description: 'Additional suffix for Bazel cache key'
-    required: false
-    default: ''
   setup-docker:
     description: 'Whether to setup Docker Buildx'
     required: false
@@ -39,16 +27,6 @@ runs:
         repository-cache: true
         # Simple disk cache - shared across workflows
         disk-cache: true
-
-    # - name: Setup Python
-    #   uses: actions/setup-python@v5
-    #   with:
-    #     python-version: ${{ inputs.python-version }}
-
-    # - name: Setup Go
-    #   uses: actions/setup-go@v5
-    #   with:
-    #     go-version: ${{ inputs.go-version }}
 
     - name: Set up Docker Buildx
       if: ${{ inputs.setup-docker == 'true' }}

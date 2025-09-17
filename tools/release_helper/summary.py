@@ -3,6 +3,7 @@ Summary generation utilities for the release helper.
 """
 
 import json
+from tools.release_helper.metadata import list_all_apps
 
 
 def generate_release_summary(
@@ -47,9 +48,14 @@ def generate_release_summary(
             summary.append("**Dry run mode - no images were published**")
         else:
             summary.append("Published to GitHub Container Registry:")
+            # Get app metadata to determine correct image names
+            all_apps = list_all_apps()
+            app_domains = {app['name']: app['domain'] for app in all_apps}
+            
             for app in apps:
-                app_lower = app.lower()
-                summary.append(f"- `ghcr.io/{repository_owner.lower()}/{app_lower}:{version}`")
+                domain = app_domains.get(app, 'unknown')
+                image_name = f"{domain}-{app}"
+                summary.append(f"- `ghcr.io/{repository_owner.lower()}/{image_name}:{version}`")
         
         summary.append("")
         summary.append("### 🛠️ Local Development")
