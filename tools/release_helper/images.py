@@ -72,6 +72,9 @@ def build_image(bazel_target: str, platform: Optional[str] = None) -> str:
     # Build the image first to create the OCI layout
     image_target = target.replace("_load", "")
     run_bazel(["build", image_target])
+    
+    # Actually load the image into Docker with the correct name
+    run_bazel(["run", target])
 
     # Return the expected image name in domain-app format
     return f"{domain}-{app_name}:latest"
