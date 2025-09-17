@@ -10,7 +10,7 @@ def main():
     """Main entry point."""
     print(get_message())
     print(f"Version: {get_version()}")
-    
+    print("Hello Python says hi!")
 
 if __name__ == "__main__":
     main()
