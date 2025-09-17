@@ -3,11 +3,12 @@ package main
 
 import (
 	"fmt"
-	"github.com/example/everything/libs/go"
+
+	go_lib "github.com/whale-net/everything/libs/go"
 )
 
 func main() {
-	message := go_lib.FormatGreeting("world from Bazel")
+	message := go_lib.FormatGreeting("world from Bazel BASIL")
 	fmt.Println(message)
 	fmt.Printf("Version: %s\n", go_lib.GetVersion())
 }
