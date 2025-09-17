@@ -27,6 +27,10 @@ runs:
         repository-cache: true
         # Simple disk cache - shared across workflows
         disk-cache: true
+        # Enable external cache for better dependency caching
+        external-cache: true
+        # Set cache version to allow cache invalidation when needed
+        cache-version: 2
 
     - name: Set up Docker Buildx
       if: ${{ inputs.setup-docker == 'true' }}
