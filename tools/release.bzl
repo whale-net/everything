@@ -66,17 +66,20 @@ def release_app(name, binary_target, language, domain, description = "", version
     repo_tag = image_name + ":latest"
     
     # Create OCI images based on language
+    # Tag with "manual" so they're not built by //... (only when explicitly requested)
     if language == "python":
         python_oci_image_multiplatform(
             name = image_target,
             binary = binary_target,
             repo_tag = repo_tag,
+            tags = ["manual", "release"],
         )
     elif language == "go":
         go_oci_image_multiplatform(
             name = image_target,
             binary = binary_target,
             repo_tag = repo_tag,
+            tags = ["manual", "release"],
         )
     
     # Create release metadata
@@ -91,6 +94,7 @@ def release_app(name, binary_target, language, domain, description = "", version
         registry = registry,
         repo_name = image_name,  # Use domain-app format
         domain = domain,
+        tags = ["manual", "release"],  # Don't build with //...
         visibility = ["//visibility:public"],
     )
 

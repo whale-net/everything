@@ -38,9 +38,9 @@ jobs:
         
     - name: Run tests
       run: |
-        # run all tests. Bazel will cache results. if cache is cleared, it will take a while...
-        # this is the strategy for now
-        bazel test //...
+        # Run only test targets, excluding manual/release artifacts that would be built by //...
+        # This prevents cache invalidation from changes to release tooling
+        bazel test $(bazel query 'tests(//...)' --output=label)
         
     - name: Upload test results
       uses: actions/upload-artifact@v4
