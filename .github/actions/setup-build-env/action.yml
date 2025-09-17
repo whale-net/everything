@@ -30,8 +30,7 @@ runs:
         bazelisk-cache: true
         repository-cache: true
         # Simple disk cache - isolated by cache suffix
-        disk-cache: true
-        disk-cache-key-suffix: ${{ inputs.cache-suffix }}
+        disk-cache: ${{ inputs.cache-suffix || 'true' }}
 
     - name: Set up Docker Buildx
       if: ${{ inputs.setup-docker == 'true' }}

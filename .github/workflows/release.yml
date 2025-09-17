@@ -31,6 +31,8 @@ jobs:
         
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'docker'
         
     - name: Plan release using release helper tool
       id: plan
@@ -83,6 +85,7 @@ jobs:
       uses: ./.github/actions/setup-build-env
       with:
         setup-docker: 'true'
+        cache-suffix: 'docker'
         
     # Login unless it's a manual dispatch with dry_run=true
     # - Manual dispatch with dry_run=false: login (needed for publishing)
@@ -127,6 +130,8 @@ jobs:
       
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'docker'
       
     - name: Generate summary using release helper
       run: |
