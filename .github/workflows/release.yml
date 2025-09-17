@@ -1,9 +1,6 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'  # Triggers on version tags like v1.0.0
   workflow_dispatch:
     inputs:
       apps:
@@ -32,56 +29,27 @@ jobs:
       with:
         fetch-depth: 0
         
-    - name: Setup Bazel with Multi-Layered Caching
-      uses: bazel-contrib/setup-bazel@0.15.0
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
       with:
-        # Layer 1: Enable global caching for Bazel binaries and dependencies.
-        # The action internally generates appropriate keys based on .bazelversion
-        # and lockfiles.
-        bazelisk-cache: true
-        repository-cache: true
-
-        # Layer 2: Enable unified disk cache for all build artifacts.
-        # Using "monorepo" as the namespace for the entire repository.
-        disk-cache: "monorepo"
-        
-        # Injects the content of the CI-specific .bazelrc file into the
-        # user configuration. We import the CI config but let bazel commands
-        # explicitly specify --config=ci to avoid duplication.
-        bazelrc: |
-          import %workspace%/.github/.bazelrc.ci
-      id: bazel-cache
+        cache-suffix: 'docker'
         
     - name: Plan release using release helper tool
       id: plan
       run: |
         # Determine version
-        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-          VERSION="${{ github.event.inputs.version }}"
-          EVENT_TYPE="workflow_dispatch"
-          APPS_INPUT="${{ github.event.inputs.apps }}"
-        else
-          VERSION="${GITHUB_REF#refs/tags/}"
-          EVENT_TYPE="tag_push"
-          APPS_INPUT=""
-        fi
+        VERSION="${{ github.event.inputs.version }}"
+        EVENT_TYPE="workflow_dispatch"
+        APPS_INPUT="${{ github.event.inputs.apps }}"
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         
         # Use release helper to plan the release
         echo "Planning release with version $VERSION, event type $EVENT_TYPE"
-        if [[ "$EVENT_TYPE" == "workflow_dispatch" ]]; then
-          PLAN_OUTPUT=$(bazel run --config=ci //tools:release -- plan \
-            --event-type "$EVENT_TYPE" \
-            --apps "$APPS_INPUT" \
-            --version "$VERSION" \
-            --format github)
-        else
-          # For tag pushes, let the tool detect previous tag automatically
-          PLAN_OUTPUT=$(bazel run --config=ci //tools:release -- plan \
-            --event-type "$EVENT_TYPE" \
-            --version "$VERSION" \
-            --format github)
-        fi
+        PLAN_OUTPUT=$(bazel run --config=ci //tools:release -- plan \
+          --event-type "$EVENT_TYPE" \
+          --apps "$APPS_INPUT" \
+          --version "$VERSION" \
+          --format github)
         
         # Parse output from release helper
         echo "$PLAN_OUTPUT" | while IFS= read -r line; do
@@ -116,18 +84,16 @@ jobs:
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
-        python-version: '3.11'
-        go-version: '1.25'
         setup-docker: 'true'
+        cache-suffix: 'docker'
         
     # Login unless it's a manual dispatch with dry_run=true
-    # - Tag push: always login (needed for publishing)  
     # - Manual dispatch with dry_run=false: login (needed for publishing)
     # - Manual dispatch with dry_run=true: skip login (no publishing)
     # NOTE: GHCR_PAT secret should be created with write:packages and read:packages scopes
     # Falls back to GITHUB_TOKEN if GHCR_PAT is not available (limited permissions)
     - name: Log in to GitHub Container Registry
-      if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run == 'false' }}
+      if: ${{ github.event.inputs.dry_run == 'false' }}
       uses: docker/login-action@v3
       with:
         registry: ghcr.io
@@ -152,45 +118,7 @@ jobs:
           bazel run --config=ci //tools:release -- release "$APP" --version "$VERSION" --commit "${{ github.sha }}"
           echo "Successfully released $APP $VERSION"
         fi
-        
-    - name: Create GitHub Release
-      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: ${{ needs.plan-release.outputs.version }}
-        name: ${{ matrix.app }} ${{ needs.plan-release.outputs.version }}
-        body: |
-          ## ${{ matrix.app }} Release ${{ needs.plan-release.outputs.version }}
-          
-          ### 🐳 Container Images (GHCR)
-          ```bash
-          docker pull ghcr.io/${{ github.repository_owner }}/${{ matrix.app }}:${{ needs.plan-release.outputs.version }}
-          docker pull ghcr.io/${{ github.repository_owner }}/${{ matrix.app }}:latest
-          ```
-          
-          ### 🔄 Usage
-          ```bash
-          docker run --rm ghcr.io/${{ github.repository_owner }}/${{ matrix.app }}:${{ needs.plan-release.outputs.version }}
-          ```
-          
-          ### 📝 Details
-          - **Commit:** ${{ github.sha }}
-          - **Built with:** Bazel + Consolidated Release System
-          - **Registry:** GitHub Container Registry (GHCR)
-          - **Platforms:** linux/amd64, linux/arm64
-          
-          ### 🛠️ Local Development
-          ```bash
-          # View app metadata
-          bazel run //tools:release -- metadata ${{ matrix.app }}
-          
-          # Build and test locally  
-          bazel run //tools:release -- build ${{ matrix.app }}
-          ```
-        draft: false
-        prerelease: ${{ contains(needs.plan-release.outputs.version, '-') }}
 
-  # Summary job
   release-summary:
     name: Release Summary
     runs-on: ubuntu-latest
@@ -200,31 +128,16 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Setup Bazel with Multi-Layered Caching
-      uses: bazel-contrib/setup-bazel@0.15.0
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
       with:
-        # Layer 1: Enable global caching for Bazel binaries and dependencies.
-        # The action internally generates appropriate keys based on .bazelversion
-        # and lockfiles.
-        bazelisk-cache: true
-        repository-cache: true
-
-        # Layer 2: Enable unified disk cache for all build artifacts.
-        # Using "monorepo" as the namespace for the entire repository.
-        disk-cache: "monorepo"
-        
-        # Injects the content of the CI-specific .bazelrc file into the
-        # user configuration. We import the CI config but let bazel commands
-        # explicitly specify --config=ci to avoid duplication.
-        bazelrc: |
-          import %workspace%/.github/.bazelrc.ci
-      id: bazel-cache
+        cache-suffix: 'docker'
       
     - name: Generate summary using release helper
       run: |
         # Use our release helper tool to generate the summary
         MATRIX='${{ needs.plan-release.outputs.release-matrix }}'
-        EVENT_TYPE="${{ github.event_name == 'workflow_dispatch' && 'workflow_dispatch' || 'tag_push' }}"
+        EVENT_TYPE="workflow_dispatch"
         DRY_RUN="${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}"
         
         SUMMARY=$(bazel run //tools:release -- summary \
@@ -251,13 +164,9 @@ jobs:
           echo "� **Apps:** $APPS" >> $GITHUB_STEP_SUMMARY
           echo "🏷️  **Version:** ${{ needs.plan-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "📝 **Trigger:** Manual dispatch" >> $GITHUB_STEP_SUMMARY
-            if [[ "${{ github.event.inputs.dry_run }}" == "true" ]]; then
-              echo "🧪 **Mode:** Dry run (no images published)" >> $GITHUB_STEP_SUMMARY
-            fi
-          else
-            echo "📝 **Trigger:** Git tag push" >> $GITHUB_STEP_SUMMARY
+          echo "📝 **Trigger:** Manual dispatch" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ github.event.inputs.dry_run }}" == "true" ]]; then
+            echo "🧪 **Mode:** Dry run (no images published)" >> $GITHUB_STEP_SUMMARY
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY

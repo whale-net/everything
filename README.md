@@ -1,64 +1,17 @@
 # Everything Monorepo
 
-This is a modernized Bazel monorepo that supports both Python and Go development with a clean, organized structure and robust OCI image building.
-
-## 🎯 Status: Fully Modernized ✅
-
-This monorepo has been completely refactored and modernized with:
-- **Latest Bazel dependencies**: rules_python 1.5.3, rules_go 0.57.0, rules_oci 2.2.6, rules_uv 0.87.0, gazelle 0.39.1, aspect_bazel_lib 2.21.1, bazel_skylib 1.8.1
-- **Multiplatform OCI images**: Full AMD64/ARM64 support for both Python and Go
-- **Production-ready containers**: Robust base images (python:3.11-slim, alpine:3.18)
-- **Cross-platform compatibility**: Verified working on both architectures
-- **All tests passing**: 100% test success rate
-- **CI/CD ready**: Streamlined build, test, and deploy workflows
-
-## Structure
-
-```
-├── hello_python/          # Python application
-├── hello_go/              # Go application
-├── libs/                  # Shared libraries
-│   ├── python/            # Python common library
-│   └── go/                # Go common library
-├── tools/                 # Build tools and OCI rules
-├── docker/                # Reference Dockerfiles (not used by Bazel)
-├── .github/               # CI/CD workflows
-├── MODULE.bazel           # Bazel module definition
-├── BUILD.bazel            # Root build file
-├── .bazelversion          # Bazel version specification
-├── go.mod                 # Go module definition
-├── requirements.in        # Python dependencies
-├── requirements.lock.txt  # Locked Python dependencies
-└── .bazelrc              # Bazel configuration
-```
+This is a Bazel monorepo that supports both Python and Go development.
 
 ## Quick Start
 
 ### Prerequisites
-- Bazel 8.3+ with bzlmod support
-- Python 3.11+
-- Go 1.25+
+- Bazel 8.3+ with bzlmod support. use bazelisk to install
 
-### Building and Testing
+### Building and Testing 
+
+Need to eventually figure out better testing strategy, but this is it for now.
 
 ```bash
-# Quick test suite for rapid development (most common)
-bazel run //:test_quick
-
-# Comprehensive test suite (includes integration tests)
-bazel run //:test_all
-
-# Integration tests (end-to-end functionality)
-bazel run //:test_integration
-
-# CI test suite (matches GitHub Actions workflow)
-bazel run //:test_ci
-
-# Traditional Bazel commands still work
-bazel test //...                    # Run all unit tests
-bazel test //hello_python:test_main # Run specific tests
-bazel test //hello_go:main_test     # Run specific tests
-
 # Run applications
 bazel run //hello_python:hello_python
 bazel run //hello_go:hello_go
@@ -66,22 +19,23 @@ bazel run //hello_go:hello_go
 # Build all targets
 bazel build //...
 
-# Using convenient aliases
-bazel run //:run-python
-bazel run //:run-go
-
 # Run tests with detailed output
-bazel test --config=ci //...
+bazel test //... 
+# Run specific tests
+bazel test //hello_python:test_main 
+bazel test //hello_go:main_test
 ```
 
 ### Adding Dependencies
 
-#### Python Dependencies
+#### Python Dependencies 
+TODO - REVIEW
 1. Add package to `requirements.in`
 2. Run `bazel run //:pip_compile` to update `requirements.lock.txt`
 3. Use `requirement("package-name")` in BUILD.bazel files
 
 #### Go Dependencies
+TODO - REVIEW
 1. Add dependency to `go.mod`
 2. Run `bazel run //:gazelle-update-repos` to update Bazel dependencies
 3. Import normally in Go code
@@ -89,12 +43,14 @@ bazel test --config=ci //...
 ### Development Workflow
 
 #### Adding a New Python App
+TODO - review
 1. Create directory at top level
 2. Add Python source files
 3. Create `BUILD.bazel` with appropriate `py_binary` and `py_test` targets
 4. Reference shared libraries from `//libs/python`
 
 #### Adding a New Go App
+TODO - review
 1. Create directory at top level
 2. Add Go source files
 3. Create `BUILD.bazel` with appropriate `go_binary` and `go_test` targets
@@ -104,94 +60,28 @@ bazel test --config=ci //...
 - Python: Create under `libs/` with appropriate `py_library` targets
 - Go: Create under `libs/` with appropriate `go_library` targets
 
-## Features
-
-- **Multi-language Support**: Both Python and Go in the same repository
-- **Hermetic Builds**: All dependencies managed by Bazel
-- **Fast Testing**: Incremental builds and test caching
-- **Code Sharing**: Common libraries shared between applications
-- **Modern Tooling**: Uses bzlmod for dependency management
-- **Shell-Script-Free**: All automation in Starlark and GitHub Actions
-
 ## 🧪 Test Utilities
 
-The monorepo includes comprehensive Starlark-based test utilities (no shell scripts!) located in `//tools:test.bzl`:
+There are no test utilities currently.
 
-### Test Suites
-
-#### Quick Test Suite (`bazel run //:test_quick`)
-Perfect for rapid development feedback:
-- Runs all unit tests
-- Builds all targets to catch compilation errors
-- Fast execution for tight development loops
-
-#### Full Test Suite (`bazel run //:test_all`)
-Comprehensive testing including:
-- All unit tests with CI configuration
-- App execution tests (ensures binaries work)
-- Container image build verification
-- End-to-end functionality validation
-
-#### Integration Test Suite (`bazel run //:test_integration`)
-End-to-end testing:
-- Builds all binaries
-- Tests app execution
-- Builds and loads container images
-- Verifies Docker images are created correctly
-
-#### CI Test Suite (`bazel run //:test_ci`)
-Matches the GitHub Actions CI workflow:
-- Follows the exact CI build → test → docker sequence
-- Uses `--config=ci` for consistent CI behavior
-- Perfect for local CI debugging
-
-### Custom Test Suites
-
-You can create your own test suites using the Starlark macros:
-
-```starlark
-load("//tools:test.bzl", "test_suite", "monorepo_test_suite")
-
-# Custom test suite
-test_suite(
-    name = "my_custom_tests",
-    commands = [
-        "bazel test //my_app:...",
-        "bazel run //my_app:integration_test",
-        "echo 'Custom tests completed!'",
-    ],
-)
-
-# Customized monorepo suite
-monorepo_test_suite(
-    name = "backend_tests",
-    test_targets = ["//backend/..."],
-    app_targets = ["//backend/api:api", "//backend/worker:worker"],
-)
+```bash
+bazel test //...
 ```
 
-### Benefits of Starlark Test Utils
-- **No shell scripts**: Everything in Bazel's native Starlark language
-- **Consistent execution**: Same commands work across all platforms
-- **Bazel integration**: Proper dependency tracking and caching
-- **Maintainable**: Easy to modify and extend test logic
-- **IDE support**: Full syntax highlighting and validation
-
 ## Configuration
+TODO - review
 
 - `.bazelrc`: Contains common Bazel configuration
 - `MODULE.bazel`: Defines external dependencies
 - `go.mod`: Go module configuration (note: no `go.sum` needed for internal-only dependencies)
 - `requirements.in`: Python dependencies specification
 
-### CI Cache Optimization
-
-The CI workflow is optimized to handle Go modules gracefully:
-- When using only internal Go packages (no external dependencies), no `go.sum` file is generated
-- Cache keys use separate `hashFiles()` calls for `go.mod` and `go.sum` to handle missing files
-- This prevents "Dependencies file is not found" warnings and optimizes cache performance
 
 ## CI/CD Pipeline
+
+TODO - REVIEW
+TODO - rebuild mermaid chart
+TODO - add notes about how bazel caches by default
 
 The repository uses GitHub Actions for continuous integration with a sequential build → test workflow:
 
@@ -233,6 +123,8 @@ Each application is automatically containerized using the consolidated `release_
 
 ### Consolidated Release System
 
+TODO - release
+
 The `release_app` macro in `//tools:release.bzl` automatically creates both release metadata and multiplatform OCI images:
 
 ```starlark
@@ -242,7 +134,6 @@ load("//tools:release.bzl", "release_app")
 # - Release metadata (JSON file with app info)
 # - OCI images for multiple platforms (amd64, arm64)
 # - Proper container registry configuration
-# - All necessary tarball targets for local testing
 release_app(
     name = "hello_python",
     binary_target = ":hello_python",
@@ -255,9 +146,18 @@ release_app(
 - `hello_python_image` - Default multiplatform image
 - `hello_python_image_amd64` - AMD64-specific image
 - `hello_python_image_arm64` - ARM64-specific image
-- `hello_python_image_tarball` - Default tarball for Docker loading
-- `hello_python_image_amd64_tarball` - AMD64 tarball
-- `hello_python_image_arm64_tarball` - ARM64 tarball
+- `hello_python_image_load` - Efficient oci_load target for Docker loading
+- `hello_python_image_amd64_load` - AMD64 oci_load target
+- `hello_python_image_arm64_load` - ARM64 oci_load target
+
+### Cache Optimization
+
+The new OCI build system uses `oci_load` targets instead of traditional tarball generation, providing:
+
+- **Better cache hit rates** - No giant single-layer tarballs
+- **Faster CI builds** - Only rebuilds changed layers
+- **Efficient development workflow** - Direct integration with Docker/Podman
+- **No unused artifacts** - Eliminates the never-used tarball targets from CI
 
 ### Building Images with Bazel
 
@@ -269,13 +169,17 @@ bazel build //hello_python:hello_python_image_arm64
 # Build all platform variants
 bazel build //hello_python:hello_python_image
 
-# Build and load into Docker (for testing)
-bazel run //hello_python:hello_python_image_amd64_tarball
-bazel run //hello_go:hello_go_image_arm64_tarball
+# Build and load into Docker efficiently using oci_load (optimized for cache)
+bazel run //hello_python:hello_python_image_load
 
-# Run the containers
+# Or use the release tool for production workflows
+bazel run //tools:release -- build hello_python
+
+# Run the containers (after loading - these are local development tags)
 docker run --rm hello_python:latest  # ✅ Works correctly!
 docker run --rm hello_go:latest      # ✅ Works correctly!
+
+# Registry images use domain-app format: demo-hello_python:latest
 ```
 
 ### Base Images & Architecture
@@ -284,15 +188,9 @@ docker run --rm hello_go:latest      # ✅ Works correctly!
 - **Platforms**: Full support for both `linux/amd64` and `linux/arm64`
 - **Cross-compilation**: Automatically handles platform-specific builds
 
-### Features
-- **Multiplatform support**: Automatic AMD64 and ARM64 image generation
-- **Container-native Python**: Uses container Python interpreter, not host binary
-- **Static Go binaries**: Platform-specific static binaries for minimal attack surface
-- **Automatic layer creation**: Binaries and dependencies packaged optimally
-- **Docker integration**: Each rule creates both images and tarballs for loading
-- **Production ready**: Robust base images suitable for production deployment
-
 ### Advanced: Manual OCI Rules
+
+TODO - review for accuracy
 
 > **Note:** The `release_app` macro handles all standard use cases. Manual OCI rules are only needed for highly specialized scenarios.
 
@@ -310,30 +208,20 @@ python_oci_image(
 )
 ```
 
-### CI/CD Docker Workflow
-- **Fully integrated**: CI uses Bazel OCI rules directly, no external Dockerfiles needed
-- **Multiplatform builds**: Automatic AMD64 and ARM64 image creation
-- **Verified compatibility**: All images tested and working in production
-- **Efficient caching**: Bazel's incremental builds optimize image layer reuse
-- **Consistent tagging**: Images tagged with both `latest` and commit SHA
-
 ## 🚀 Release Management
 
 This monorepo uses a **shell-script-free**, Starlark and GitHub Actions-based release system that automatically detects and releases only affected applications.
 
 ### 🎯 Key Features
 
-- **Smart Change Detection**: Only releases apps that have changed since the last release
-- **Monorepo-Aware**: Detects changes in shared libraries and releases all dependent apps
-- **Multi-Platform Images**: Automatically builds and publishes AMD64 and ARM64 container images
-- **GitHub Container Registry**: All images published to `ghcr.io` with proper versioning
-- **Zero Shell Scripts**: Pure Bazel queries and GitHub Actions orchestration
-- **Semantic Versioning**: Enforces `v{major}.{minor}.{patch}` format for all releases
-- **Version Protection**: Prevents overwriting existing versions in the registry
-
 ### 📦 How It Works
 
+TODO - create mermaid chart
+TODO - release only if change
+TODO - review documentation to ensure accuracy
+
 #### 1. App Discovery (Bazel Query)
+TODO - review
 The release system uses Starlark macros and Bazel queries to discover releasable apps:
 
 ```bash
@@ -356,15 +244,16 @@ release_app(
 ```
 
 #### 2. Intelligent Change Detection
+TODO - review documentation to ensure accuracy
 - **Tag-based releases**: Compares changes since the last Git tag
 - **Manual releases**: You specify which apps to release
 - **Dependency awareness**: If shared libraries change, all dependent apps are released
 
 #### 3. Container Publishing
-Each released app gets published to GitHub Container Registry with multiple tags:
-- `ghcr.io/OWNER/APP:vX.Y.Z` (specific version)
-- `ghcr.io/OWNER/APP:latest` (latest release)
-- `ghcr.io/OWNER/APP:COMMIT_SHA` (commit-specific)
+Each released app gets published to GitHub Container Registry with multiple tags using the `<domain>-<app>:<version>` format:
+- `ghcr.io/OWNER/DOMAIN-APP:vX.Y.Z` (specific version)
+- `ghcr.io/OWNER/DOMAIN-APP:latest` (latest release)
+- `ghcr.io/OWNER/DOMAIN-APP:COMMIT_SHA` (commit-specific)
 
 ### � Version Validation & Protection
 
@@ -398,6 +287,8 @@ bazel run //tools:release -- plan --event-type workflow_dispatch --apps hello_py
 
 #### Method 1: GitHub Actions UI (Recommended) ⭐
 
+TODO - review documentation to ensure accuracy
+
 This is the **preferred method** as it provides full control and prevents mistakes:
 
 1. Go to your repository on GitHub
@@ -416,6 +307,8 @@ Dry run: false
 ```
 
 #### Method 2: GitHub CLI
+
+TODO - review documentation to ensure accuracy
 
 ```bash
 # Release specific apps
@@ -438,6 +331,8 @@ gh workflow run release.yml \
 
 #### Method 3: Git Tags (NOT Recommended) ⚠️
 
+TODO - ensure tags are not supported as a trigger for releases
+
 While supported, **manual tag pushes are discouraged** because:
 - Easy to forget to update version numbers
 - No validation of which apps should be released
@@ -451,6 +346,8 @@ git push origin v1.2.3
 ```
 
 ### 📋 Release Process Details
+
+TODO - review documentation to ensure accuracy
 
 #### Automatic Release Matrix
 The release workflow automatically creates a build matrix based on changed apps:
@@ -468,40 +365,18 @@ matrix:
 ```
 
 #### Container Image Tags
-Each released app gets tagged with:
+Each released app gets tagged with the `<domain>-<app>:<version>` format:
 ```bash
 # Version-specific
-ghcr.io/OWNER/hello_python:v1.2.3
+ghcr.io/OWNER/demo-hello_python:v1.2.3
 
 # Latest
-ghcr.io/OWNER/hello_python:latest
+ghcr.io/OWNER/demo-hello_python:latest
 
 # Commit-specific (for debugging)
-ghcr.io/OWNER/hello_python:abc123def
+ghcr.io/OWNER/demo-hello_python:abc123def
 ```
 
-#### GitHub Releases
-Each app gets its own GitHub Release with:
-- App-specific release notes
-- Container image pull commands
-- Usage instructions
-- Build and commit information
-
-### 🔄 Change Detection Logic
-
-#### Tag-Based Releases
-```bash
-# Find changed directories since last tag
-git diff --name-only $PREVIOUS_TAG..HEAD | cut -d'/' -f1
-
-# If shared libs changed, release all apps
-# If specific app dirs changed, release only those apps
-```
-
-#### Manual Releases
-- You specify exactly which apps to release
-- Full control over release scope
-- Perfect for hotfixes or selective updates
 
 ### 🛠️ Adding Release Support to New Apps
 
@@ -530,6 +405,8 @@ The release system will automatically discover and include your app in future re
 
 ### 🐛 Troubleshooting Releases
 
+TODO - review documentation to ensure accuracy
+
 #### Check App Discovery
 ```bash
 # See all discoverable apps
@@ -537,20 +414,19 @@ bazel query "kind('app_metadata', //...)"
 
 # Verify your app's targets exist
 bazel query "//your_app:your_app"
-bazel query "//your_app:your_app_image_tarball"
 ```
 
 #### Test Release Locally
 ```bash
-# Build and test the release targets
-bazel build //hello_python:hello_python_image_tarball
-bazel run //hello_python:hello_python_image_tarball
+# Build and test the release targets using the release tool
+bazel run //tools:release -- build hello_python
 
-# Verify the image works
-docker run --rm hello_python:latest
+# Verify the image works (local development tag)
+docker run --rm demo-hello_python:latest
 ```
 
 #### Version Issues
+TODO - review documentation to ensure accuracy
 ```bash
 # Validate version format before releasing
 bazel run //tools:release -- validate-version hello_python v1.2.3
@@ -572,28 +448,3 @@ gh workflow run release.yml \
   -f version=v0.0.1-test \
   -f dry_run=true
 ```
-
-### 📚 Best Practices
-
-1. **Use GitHub UI**: Prevents typos and provides validation
-2. **Test with dry runs**: Always test releases before publishing
-3. **Semantic versioning**: Use `vMAJOR.MINOR.PATCH` format or `latest` for main builds (enforced automatically)
-4. **App-specific releases**: Only release what changed
-5. **Monitor CI logs**: Check build outputs for any issues
-6. **Update documentation**: Keep README and app docs current
-7. **Never overwrite versions**: Use new version numbers instead of overwriting existing versions (except `latest` which is automatically handled)
-8. **Version validation**: Use `validate-version` command to check versions before releasing
-
----
-
-## 🎉 Summary
-
-This monorepo demonstrates a **modern, shell-script-free** approach to building, testing, and releasing applications:
-
-- **🏗️ Build System**: Latest Bazel with bzlmod, multiplatform OCI images
-- **🧪 Testing**: Starlark-based test utilities, comprehensive CI/CD
-- **🚀 Releases**: GitHub Actions + Bazel queries, smart change detection
-- **📦 Containers**: GHCR publishing, ARM64/AMD64 support
-- **🔧 Developer Experience**: Rich tooling, quick feedback loops
-
-Everything is designed to be **maintainable**, **reproducible**, and **platform-agnostic** while avoiding the pitfalls of shell scripts and complex release processes.

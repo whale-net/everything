@@ -27,6 +27,7 @@ py_test(
         ":main_lib",
         requirement("pytest"),
     ],
+    size = "small",
 )
 
 # Release metadata and OCI images for this app

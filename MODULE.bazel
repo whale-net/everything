@@ -13,15 +13,22 @@ bazel_dep(name = "aspect_bazel_lib", version = "2.21.1")
 
 # OCI/Docker setup - using proper base images for better compatibility
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
+
+# Python 3.11-slim - using manifest list digest for multi-platform support
+# This digest represents the manifest list that includes both amd64 and arm64 platforms
 oci.pull(
     name = "python_slim",
     image = "python",
     platforms = [
         "linux/amd64",
-        "linux/arm64/v8",
+        "linux/arm64/v8", 
     ],
-    tag = "3.11-slim",
+    # Using actual manifest list digest from python:3.11-slim
+    digest = "sha256:a0939570b38cddeb861b8e75d20b1c8218b21562b18f301171904b544e8cf228",
 )
+
+# Alpine 3.18 - using manifest list digest for multi-platform support  
+# This digest represents the manifest list that includes both amd64 and arm64 platforms
 oci.pull(
     name = "alpine",
     image = "alpine",
@@ -29,7 +36,8 @@ oci.pull(
         "linux/amd64",
         "linux/arm64/v8",
     ],
-    tag = "3.18",
+    # Using actual manifest list digest from alpine:3.18
+    digest = "sha256:de0eb0b3f2a47ba1eb89389859a9bd88b28e82f5826b6969ad604979713c2d4f",
 )
 use_repo(oci, "python_slim", "python_slim_linux_amd64", "python_slim_linux_arm64_v8", "alpine", "alpine_linux_amd64", "alpine_linux_arm64_v8")
 

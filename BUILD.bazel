@@ -1,5 +1,5 @@
 load("@rules_uv//uv:pip.bzl", "pip_compile")
-load("@gazelle//:def.bzl", "gazelle")
+#load("@gazelle//:def.bzl", "gazelle")
 load("@rules_python//python:defs.bzl", "py_library")
 
 # Python dependencies
@@ -18,35 +18,14 @@ py_library(
 
 # Go setup
 # gazelle:prefix github.com/example/everything
-gazelle(name = "gazelle")
+# gazelle(name = "gazelle")
 
-gazelle(
-    name = "gazelle-update-repos",
-    args = [
-        "-from_file=go.mod",
-        "-to_macro=deps.bzl%go_dependencies",
-        "-prune",
-    ],
-    command = "update-repos",
-)
-
-# Convenient aliases
-alias(
-    name = "run-python",
-    actual = "//hello_python:hello_python",
-)
-
-alias(
-    name = "run-go", 
-    actual = "//hello_go:hello_go",
-)
-
-alias(
-    name = "init-go-cache",
-    actual = "//tools:init_go_cache",
-)
-
-alias(
-    name = "go-env-info",
-    actual = "//tools:go_env_info",
-)
+# gazelle(
+#     name = "gazelle-update-repos",
+#     args = [
+#         "-from_file=go.mod",
+#         "-to_macro=deps.bzl%go_dependencies",
+#         "-prune",
+#     ],
+#     command = "update-repos",
+# )

@@ -14,11 +14,14 @@ def oci_image_with_binary(
     entrypoint = None,
     repo_tag = None,
     platform = "linux/amd64",
+    extra_layers = None,
+    tags = None,
     **kwargs):
-    """Build an OCI image with a binary.
+    """Build an OCI image with a binary using cache-optimized layering.
     
-    This is a generic rule that can build OCI images for any type of binary
-    (Python, Go, Rust, C++, etc.) with sensible defaults but full customization.
+    Uses oci_load for efficient building and loading. This approach completely 
+    eliminates the need for traditional tarball targets that were never actually
+    used in the CI pipeline.
     
     Args:
         name: Name of the image target
@@ -27,6 +30,9 @@ def oci_image_with_binary(
         entrypoint: Custom entrypoint for the container. If None, auto-detects binary location
         repo_tag: Repository tag for the image (defaults to binary_name:latest)
         platform: Target platform (defaults to linux/amd64)
+        extra_layers: List of additional tar targets to include as separate layers
+                     for better cache efficiency (e.g., dependency layers)
+        tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
         **kwargs: Additional arguments passed to oci_image
     """
     if not repo_tag:
@@ -34,26 +40,40 @@ def oci_image_with_binary(
         binary_name = binary.split(":")[-1] if ":" in binary else binary
         repo_tag = binary_name + ":latest"
     
-    # Create a layer with the binary
+    # Create binary layer with propagated tags
     tar(
-        name = name + "_layer",
+        name = name + "_binary_layer",
         srcs = [binary],
+        tags = tags,
     )
     
-    # Build the OCI image
+    # Assemble all layers with optimal ordering for cache efficiency
+    all_layers = []
+    
+    # Add extra layers first (dependencies, static files, etc. - less frequently changed)
+    if extra_layers:
+        all_layers.extend(extra_layers)
+    
+    # Add binary layer last (most frequently changed)
+    all_layers.append(":" + name + "_binary_layer")
+    
+    # Build the OCI image with optimized layer ordering and propagated tags
     oci_image(
         name = name,
         base = base_image,
         entrypoint = entrypoint,
-        tars = [":" + name + "_layer"],
+        tars = all_layers,
+        tags = tags,
         **kwargs
     )
     
-    # Create a tarball for loading into Docker
+    # Add oci_load target for efficient container runtime loading with propagated tags
+    # This replaces the unused tarball targets and integrates with CI workflows
     oci_load(
-        name = name + "_tarball",
+        name = name + "_load",
         image = ":" + name,
         repo_tags = [repo_tag],
+        tags = tags,
     )
 
 def _get_platform_base_image(base_prefix, platform = None):
@@ -80,7 +100,7 @@ def _get_platform_base_image(base_prefix, platform = None):
     
     return "@" + base_prefix + suffix
 
-def python_oci_image(name, binary, repo_tag = None, platform = None, **kwargs):
+def python_oci_image(name, binary, repo_tag = None, platform = None, tags = None, **kwargs):
     """Build an OCI image for a Python binary.
     
     This is a convenience wrapper around oci_image_with_binary with Python-specific defaults.
@@ -92,6 +112,7 @@ def python_oci_image(name, binary, repo_tag = None, platform = None, **kwargs):
         binary: The Python binary target to package
         repo_tag: Repository tag for the image (defaults to binary_name:latest)
         platform: Target platform (defaults to linux/amd64)
+        tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
         **kwargs: Additional arguments passed to oci_image_with_binary
     """
     base_image = _get_platform_base_image("python_slim", platform)
@@ -111,13 +132,14 @@ def python_oci_image(name, binary, repo_tag = None, platform = None, **kwargs):
         entrypoint = entrypoint,
         repo_tag = repo_tag,
         platform = platform,
+        tags = tags,
         env = {
             "PYTHONPATH": "/" + binary_name + "/" + binary_name + ".runfiles/_main:/" + binary_name + "/" + binary_name + ".runfiles"
         },
         **kwargs
     )
 
-def go_oci_image(name, binary, repo_tag = None, platform = None, **kwargs):
+def go_oci_image(name, binary, repo_tag = None, platform = None, tags = None, **kwargs):
     """Build an OCI image for a Go binary.
     
     This is a convenience wrapper around oci_image_with_binary with Go-specific defaults.
@@ -128,6 +150,7 @@ def go_oci_image(name, binary, repo_tag = None, platform = None, **kwargs):
         binary: The Go binary target to package
         repo_tag: Repository tag for the image (defaults to binary_name:latest)
         platform: Target platform (defaults to linux/amd64)
+        tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
         **kwargs: Additional arguments passed to oci_image_with_binary
     """
     base_image = _get_platform_base_image("alpine", platform)
@@ -149,10 +172,11 @@ def go_oci_image(name, binary, repo_tag = None, platform = None, **kwargs):
         entrypoint = entrypoint,
         repo_tag = repo_tag,
         platform = platform,
+        tags = tags,
         **kwargs
     )
 
-def python_oci_image_multiplatform(name, binary, repo_tag = None, **kwargs):
+def python_oci_image_multiplatform(name, binary, repo_tag = None, tags = None, **kwargs):
     """Build OCI images for a Python binary for both amd64 and arm64 platforms.
     
     Creates separate image targets for different platforms:
@@ -164,6 +188,7 @@ def python_oci_image_multiplatform(name, binary, repo_tag = None, **kwargs):
         name: Base name of the image targets
         binary: The Python binary target to package
         repo_tag: Repository tag for the image (defaults to binary_name:latest)
+        tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
         **kwargs: Additional arguments passed to oci_image_with_binary
     """
     # AMD64 version (default for production)
@@ -172,6 +197,7 @@ def python_oci_image_multiplatform(name, binary, repo_tag = None, **kwargs):
         binary = binary,
         repo_tag = repo_tag,
         platform = "linux/amd64",
+        tags = tags,
         **kwargs
     )
     
@@ -181,6 +207,7 @@ def python_oci_image_multiplatform(name, binary, repo_tag = None, **kwargs):
         binary = binary,
         repo_tag = repo_tag,
         platform = "linux/amd64",
+        tags = tags,
         **kwargs
     )
     
@@ -190,10 +217,11 @@ def python_oci_image_multiplatform(name, binary, repo_tag = None, **kwargs):
         binary = binary,
         repo_tag = repo_tag,
         platform = "linux/arm64",
+        tags = tags,
         **kwargs
     )
 
-def go_oci_image_multiplatform(name, binary, repo_tag = None, **kwargs):
+def go_oci_image_multiplatform(name, binary, repo_tag = None, tags = None, **kwargs):
     """Build OCI images for a Go binary for both amd64 and arm64 platforms.
     
     Creates separate image targets for different platforms:
@@ -205,6 +233,7 @@ def go_oci_image_multiplatform(name, binary, repo_tag = None, **kwargs):
         name: Base name of the image targets
         binary: The Go binary target to package
         repo_tag: Repository tag for the image (defaults to binary_name:latest)
+        tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
         **kwargs: Additional arguments passed to oci_image_with_binary
     """
     # AMD64 version (default for production)
@@ -213,6 +242,7 @@ def go_oci_image_multiplatform(name, binary, repo_tag = None, **kwargs):
         binary = binary,
         repo_tag = repo_tag,
         platform = "linux/amd64",
+        tags = tags,
         **kwargs
     )
     
@@ -222,6 +252,7 @@ def go_oci_image_multiplatform(name, binary, repo_tag = None, **kwargs):
         binary = binary,
         repo_tag = repo_tag,
         platform = "linux/amd64",
+        tags = tags,
         **kwargs
     )
     
@@ -231,5 +262,6 @@ def go_oci_image_multiplatform(name, binary, repo_tag = None, **kwargs):
         binary = binary,
         repo_tag = repo_tag,
         platform = "linux/arm64",
+        tags = tags,
         **kwargs
     )

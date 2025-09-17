@@ -4,7 +4,7 @@ build --incompatible_strict_action_env
 build --python_version=PY3
 build:fast --jobs=auto
 
-# CI optimizations
+# CI optimizations  
 # Note: Cache paths are managed by bazel-contrib/setup-bazel action
 # and should not be overridden here to avoid conflicts
 build:ci --noshow_progress
@@ -13,7 +13,11 @@ build:ci --remote_download_minimal
 build:ci --verbose_failures
 build:ci --show_timestamps
 build:ci --announce_rc
+# Bandwidth-optimized caching for CI
+build:ci --experimental_guard_against_concurrent_changes
+test:ci --cache_test_results=yes
 
 # Test configurations
 test --test_output=errors
+test --cache_test_results=yes
 test:ci --test_output=errors

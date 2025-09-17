@@ -34,6 +34,7 @@ go_test(
     name = "main_test",
     srcs = ["main_test.go"],
     deps = ["//libs/go"],
+    size = "small",
 )
 
 # Release metadata and OCI images for this app
