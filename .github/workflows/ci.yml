@@ -38,7 +38,7 @@ jobs:
         
     - name: Run tests
       run: |
-        # Run only test targets, excluding manual/release artifacts that would be built by //...
+        # Run only test targets to avoid building release artifacts unnecessarily
         # This prevents cache invalidation from changes to release tooling
         bazel test $(bazel query 'tests(//...)' --output=label)
         
