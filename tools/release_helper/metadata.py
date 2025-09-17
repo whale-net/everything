@@ -88,4 +88,5 @@ def get_image_targets(bazel_target: str) -> Dict[str, str]:
         "base": base_image_target,
         "amd64": f"{base_image_target}_amd64",
         "arm64": f"{base_image_target}_arm64",
+        "push": f"{base_image_target}_push",
     }

@@ -1,6 +1,7 @@
 """Release utilities for the Everything monorepo."""
 
 load("//tools:oci.bzl", "python_oci_image_multiplatform", "go_oci_image_multiplatform")
+load("@rules_oci//oci:defs.bzl", "oci_push")
 
 def _app_metadata_impl(ctx):
     """Implementation for app_metadata rule."""
@@ -81,6 +82,17 @@ def release_app(name, binary_target, language, domain, description = "", version
             repo_tag = repo_tag,
             tags = ["manual", "release"],
         )
+    
+    # Create oci_push target for the multi-platform image
+    # This will push a manifest that includes both AMD64 and ARM64
+    registry_repo = registry + "/whale-net/" + image_name  # Hardcode whale-net org for now
+    
+    oci_push(
+        name = image_target + "_push",
+        image = ":" + image_target,
+        repository = registry_repo,
+        tags = ["manual", "release"],
+    )
     
     # Create release metadata
     app_metadata(
