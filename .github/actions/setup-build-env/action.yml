@@ -9,6 +9,10 @@ inputs:
     description: 'Whether to setup Docker Buildx'
     required: false
     default: 'false'
+  cache-suffix:
+    description: 'Suffix to add to cache keys for isolation'
+    required: false
+    default: ''
 
 outputs:
   bazel-cache-hit:
@@ -25,8 +29,9 @@ runs:
         # Enable global caching for Bazel binaries and dependencies
         bazelisk-cache: true
         repository-cache: true
-        # Simple disk cache - shared across workflows
+        # Simple disk cache - isolated by cache suffix
         disk-cache: true
+        disk-cache-key-suffix: ${{ inputs.cache-suffix }}
 
     - name: Set up Docker Buildx
       if: ${{ inputs.setup-docker == 'true' }}

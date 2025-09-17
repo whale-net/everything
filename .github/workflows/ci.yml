@@ -20,6 +20,8 @@ jobs:
         
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'test'
         
     - name: Run tests
       run: |
@@ -48,6 +50,7 @@ jobs:
       uses: ./.github/actions/setup-build-env
       with:
         setup-docker: 'true'
+        cache-suffix: 'docker'
       
     # Log in to GitHub Container Registry using GITHUB_TOKEN
     - name: Log in to GitHub Container Registry
