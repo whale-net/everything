@@ -81,8 +81,8 @@ jobs:
         # Use the release tool to build images consistently
         echo "Building Docker images using release tool..."
         
-        # Get list of all apps
-        APPS=$(bazel run //tools:release -- list)
+        # Get list of all apps, extracting only the app names
+        APPS=$(bazel run //tools:release -- list | awk '{print $1}')
         echo "Apps to build: $APPS"
         
         # Build images for all apps using the release tool
