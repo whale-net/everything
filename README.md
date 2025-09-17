@@ -146,6 +146,18 @@ release_app(
 - `hello_python_image` - Default multiplatform image
 - `hello_python_image_amd64` - AMD64-specific image
 - `hello_python_image_arm64` - ARM64-specific image
+- `hello_python_image_load` - Efficient oci_load target for Docker loading
+- `hello_python_image_amd64_load` - AMD64 oci_load target
+- `hello_python_image_arm64_load` - ARM64 oci_load target
+
+### Cache Optimization
+
+The new OCI build system uses `oci_load` targets instead of traditional tarball generation, providing:
+
+- **Better cache hit rates** - No giant single-layer tarballs
+- **Faster CI builds** - Only rebuilds changed layers
+- **Efficient development workflow** - Direct integration with Docker/Podman
+- **No unused artifacts** - Eliminates the never-used tarball targets from CI
 
 ### Building Images with Bazel
 
@@ -157,10 +169,13 @@ bazel build //hello_python:hello_python_image_arm64
 # Build all platform variants
 bazel build //hello_python:hello_python_image
 
-# Build and load into Docker (for testing) - use the release tool for consistency
+# Build and load into Docker efficiently using oci_load (optimized for cache)
+bazel run //hello_python:hello_python_image_load
+
+# Or use the release tool for production workflows
 bazel run //tools:release -- build hello_python
 
-# Run the containers (after building)
+# Run the containers (after loading)
 docker run --rm hello_python:latest  # ✅ Works correctly!
 docker run --rm hello_go:latest      # ✅ Works correctly!
 ```

@@ -1,6 +1,6 @@
 """Generic OCI image building rules for the monorepo."""
 
-load("@rules_oci//oci:defs.bzl", "oci_image")
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load")
 load("@aspect_bazel_lib//lib:tar.bzl", "tar")
 
 # Using appropriate base images for maximum compatibility:
@@ -14,11 +14,13 @@ def oci_image_with_binary(
     entrypoint = None,
     repo_tag = None,
     platform = "linux/amd64",
+    extra_layers = None,
     **kwargs):
-    """Build an OCI image with a binary.
+    """Build an OCI image with a binary using cache-optimized layering.
     
-    This is a generic rule that can build OCI images for any type of binary
-    (Python, Go, Rust, C++, etc.) with sensible defaults but full customization.
+    Uses oci_load for efficient building and loading. This approach completely 
+    eliminates the need for traditional tarball targets that were never actually
+    used in the CI pipeline.
     
     Args:
         name: Name of the image target
@@ -27,6 +29,8 @@ def oci_image_with_binary(
         entrypoint: Custom entrypoint for the container. If None, auto-detects binary location
         repo_tag: Repository tag for the image (defaults to binary_name:latest)
         platform: Target platform (defaults to linux/amd64)
+        extra_layers: List of additional tar targets to include as separate layers
+                     for better cache efficiency (e.g., dependency layers)
         **kwargs: Additional arguments passed to oci_image
     """
     if not repo_tag:
@@ -34,19 +38,37 @@ def oci_image_with_binary(
         binary_name = binary.split(":")[-1] if ":" in binary else binary
         repo_tag = binary_name + ":latest"
     
-    # Create a layer with the binary
+    # Create binary layer
     tar(
-        name = name + "_layer",
+        name = name + "_binary_layer",
         srcs = [binary],
     )
     
-    # Build the OCI image
+    # Assemble all layers with optimal ordering for cache efficiency
+    all_layers = []
+    
+    # Add extra layers first (dependencies, static files, etc. - less frequently changed)
+    if extra_layers:
+        all_layers.extend(extra_layers)
+    
+    # Add binary layer last (most frequently changed)
+    all_layers.append(":" + name + "_binary_layer")
+    
+    # Build the OCI image with optimized layer ordering
     oci_image(
         name = name,
         base = base_image,
         entrypoint = entrypoint,
-        tars = [":" + name + "_layer"],
+        tars = all_layers,
         **kwargs
+    )
+    
+    # Add oci_load target for efficient container runtime loading
+    # This replaces the unused tarball targets and integrates with CI workflows
+    oci_load(
+        name = name + "_load",
+        image = ":" + name,
+        repo_tags = [repo_tag],
     )
 
 def _get_platform_base_image(base_prefix, platform = None):

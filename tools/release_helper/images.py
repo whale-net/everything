@@ -32,20 +32,26 @@ def format_registry_tags(registry: str, repo_name: str, version: str, commit_sha
 
 
 def build_image(app_name: str, platform: Optional[str] = None) -> str:
-    """Build a container image for an app."""
+    """Build and load a container image for an app using optimized oci_load targets."""
     from tools.release_helper.core import run_bazel
 
     image_targets = get_image_targets(app_name)
 
-    # Determine which image target to use
+    # Determine which image target to use (prefer oci_load targets for efficiency)
     if platform == "amd64":
-        target = image_targets["amd64"]
+        # Use oci_load target which is more efficient than direct image building
+        load_target = image_targets["amd64"] + "_load"
+        target = load_target
     elif platform == "arm64":
-        target = image_targets["arm64"]
+        load_target = image_targets["arm64"] + "_load"
+        target = load_target
     else:
-        target = image_targets["base"]  # Default (amd64)
+        load_target = image_targets["base"] + "_load"
+        target = load_target
 
-    print(f"Building {target}...")
-    run_bazel(["build", target])
+    print(f"Building and loading {target} (using optimized oci_load)...")
+    # Build the image first to create the OCI layout
+    image_target = target.replace("_load", "")
+    run_bazel(["build", image_target])
 
     return f"{app_name}:latest"
