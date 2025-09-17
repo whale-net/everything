@@ -65,14 +65,41 @@ jobs:
       env:
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
       run: |
-        # Use the release tool to build images consistently
+        # Use the release tool to build images for affected apps only
         echo "Building Docker images using release tool..."
         
-        # Get list of all apps, extracting only the app names
-        APPS=$(bazel run //tools:release -- list | awk '{print $1}')
+        # Determine what to build based on changes
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          # For PRs, compare against the base branch
+          BASE_COMMIT="${{ github.event.pull_request.base.sha }}"
+          echo "PR detected: comparing against base commit $BASE_COMMIT"
+        elif [ "${{ github.event_name }}" = "push" ] && [ -n "${{ github.event.before }}" ]; then
+          # For pushes, compare against the previous commit
+          BASE_COMMIT="${{ github.event.before }}"
+          echo "Push detected: comparing against previous commit $BASE_COMMIT"
+        else
+          # Fallback: build all apps
+          echo "Cannot determine base commit, building all apps"
+          BASE_COMMIT=""
+        fi
+        
+        # Get list of apps to build
+        if [ -n "$BASE_COMMIT" ]; then
+          echo "Detecting changed apps using Bazel dependency analysis..."
+          APPS=$(bazel run //tools:release -- changes --base-commit="$BASE_COMMIT" --use-bazel-query)
+        else
+          echo "Building all apps..."
+          APPS=$(bazel run //tools:release -- list | awk '{print $1}')
+        fi
+        
+        if [ -z "$APPS" ]; then
+          echo "No apps to build"
+          exit 0
+        fi
+        
         echo "Apps to build: $APPS"
         
-        # Build images for all apps using the release tool
+        # Build images for affected apps using the release tool
         for app in $APPS; do
           echo "Building image for $app..."
           bazel run //tools:release -- build "$app"
@@ -87,12 +114,18 @@ jobs:
       env:
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
       run: |
-        # Use the release planning function to determine which apps have changed
-        echo "Detecting changed apps using release planning..."
+        # Use the same change detection logic for consistency
+        echo "Detecting changed apps for publishing..."
         
-        # Detect changed apps compared to the previous commit
-        echo "Comparing HEAD to previous commit: ${{ github.event.before }}"
-        CHANGED_APPS=$(bazel run //tools:release -- changes --base-commit="${{ github.event.before }}")
+        # Use the same base commit detection as the build step
+        if [ -n "${{ github.event.before }}" ]; then
+          BASE_COMMIT="${{ github.event.before }}"
+          echo "Comparing HEAD to previous commit: $BASE_COMMIT"
+          CHANGED_APPS=$(bazel run //tools:release -- changes --base-commit="$BASE_COMMIT" --use-bazel-query)
+        else
+          echo "Cannot determine base commit, publishing all apps"
+          CHANGED_APPS=$(bazel run //tools:release -- list | awk '{print $1}')
+        fi
         
         if [ -z "$CHANGED_APPS" ]; then
           echo "No apps detected as changed. Skipping image push."

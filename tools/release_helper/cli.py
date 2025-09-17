@@ -47,6 +47,8 @@ def main():
     # Detect changes command
     changes_parser = subparsers.add_parser("changes", help="Detect changed apps since a commit")
     changes_parser.add_argument("--base-commit", help="Compare changes against this commit (compares HEAD to this commit, defaults to previous tag)")
+    changes_parser.add_argument("--use-bazel-query", action="store_true", default=True, help="Use Bazel query for precise dependency analysis (default)")
+    changes_parser.add_argument("--no-bazel-query", dest="use_bazel_query", action="store_false", help="Use simple file-based change detection instead of Bazel query")
 
     # Validate version command
     validate_version_parser = subparsers.add_parser("validate-version", help="Validate version format and availability")
@@ -116,7 +118,7 @@ def main():
             else:
                 print("No base commit specified and no previous tag found, considering all apps as changed", file=sys.stderr)
 
-            changed_apps = detect_changed_apps(base_commit)
+            changed_apps = detect_changed_apps(base_commit, use_bazel_query=args.use_bazel_query)
             for app in changed_apps:
                 print(app['name'])  # Print just the app name for compatibility
 
