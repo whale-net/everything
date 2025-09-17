@@ -103,8 +103,9 @@ jobs:
         # Use the release planning function to determine which apps have changed
         echo "Detecting changed apps using release planning..."
         
-        # Detect changed apps since the last tag
-        CHANGED_APPS=$(bazel run //tools:release -- changes)
+        # Detect changed apps compared to the previous commit
+        echo "Comparing HEAD to previous commit: ${{ github.event.before }}"
+        CHANGED_APPS=$(bazel run //tools:release -- changes --base-commit="${{ github.event.before }}")
         
         if [ -z "$CHANGED_APPS" ]; then
           echo "No apps detected as changed. Skipping image push."
