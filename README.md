@@ -14,12 +14,8 @@ This is a Bazel monorepo that supports both Python and Go development.
 ### Installation
 ```bash
 # Install Bazelisk (manages Bazel versions automatically)
-# On macOS
+# On macOS and Linux
 brew install bazelisk
-
-# On Linux
-curl -L https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64 -o bazelisk
-chmod +x bazelisk && sudo mv bazelisk /usr/local/bin/bazel
 
 # Verify installation (will auto-download Bazel 8.3.1)
 bazel version
@@ -82,6 +78,7 @@ deps = [requirement("pytest")]
 ```
 
 #### Go Dependencies
+TODO: Enable gazelle rules for full Go dependency management
 1. Add dependency to `go.mod`
 2. Run `bazel run //:gazelle-update-repos` to update Bazel dependencies (currently commented out)
 3. Import normally in Go code
@@ -591,14 +588,21 @@ release_app(
 ```
 
 #### 2. Intelligent Change Detection
-The system supports multiple detection modes:
+The system supports multiple detection modes, though the current implementation has some limitations:
+
 - **Tag-based releases**: Compares changes since the last Git tag for automatic releases
 - **Manual releases**: You specify which apps to release via GitHub Actions inputs
-- **Dependency awareness**: If shared libraries change, all dependent apps are automatically released
+- **Dependency awareness**: If shared libraries change, all dependent apps are released
 
 **Change Detection Methods:**
-- **Bazel Query**: Uses `bazel query --output=build` for precise dependency analysis (default)
+- **Bazel Query**: Uses `bazel query --output=package` for dependency analysis (default, but may have edge cases)
 - **File-based**: Simple file change detection for faster processing when Bazel query isn't needed
+
+**Known Limitations:**
+- Bazel query dependency analysis may not catch all transitive dependencies accurately
+- File-based detection uses directory prefix matching which can be overly broad
+- Infrastructure changes (tools/, .github/, MODULE.bazel) trigger all apps to rebuild as a safety measure
+- If no specific apps are detected as changed but files were modified, all apps are rebuilt conservatively
 
 #### 3. Container Publishing
 Each released app gets published to GitHub Container Registry with multiple tags using the `<domain>-<app>:<version>` format:
@@ -766,6 +770,21 @@ bazel run //tools:release -- build hello_python
 docker run --rm demo-hello_python:latest
 ```
 
+#### Change Detection Issues
+If apps aren't being detected for release when they should be:
+```bash
+# Test change detection manually
+bazel run //tools:release -- changes --base-commit HEAD~1
+
+# Use file-based detection instead of Bazel query if needed
+bazel run //tools:release -- changes --base-commit HEAD~1 --no-bazel-query
+
+# Force release specific apps manually
+gh workflow run release.yml -f apps=hello_python,hello_go -f version=v1.0.0 -f dry_run=true
+```
+
+**Note:** The change detection system may sometimes be overly conservative, rebuilding all apps when infrastructure files change or when dependency analysis fails.
+
 #### Version Issues
 If you encounter version-related problems:
 ```bash
@@ -802,7 +821,6 @@ gh workflow run release.yml \
 ### Future Improvements
 Areas that could be enhanced (noted throughout documentation):
 - **Enhanced Go Support**: Enable gazelle rules for better Go dependency management
-- **Tag-based Releases**: Add Git tag triggers to the release workflow
 - **Testing Strategy**: Expand test utilities and integration testing capabilities
 - **Documentation**: Auto-generation from code for better consistency
 
