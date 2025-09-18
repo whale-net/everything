@@ -179,6 +179,41 @@ jobs:
           echo "Successfully released $APP $VERSION"
         fi
 
+    - name: Generate release notes for app
+      if: ${{ github.event.inputs.dry_run == 'false' }}
+      env:
+        APP: ${{ matrix.app }}
+        VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
+        GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+      run: |
+        echo "Generating release notes for $APP version $VERSION"
+        
+        # Get app metadata to determine domain for tag format
+        METADATA=$(bazel run --config=ci //tools:release -- list-apps | grep "^$APP " | head -n1)
+        if [[ -n "$METADATA" ]]; then
+          DOMAIN=$(echo "$METADATA" | sed 's/.*domain: \([^,]*\).*/\1/')
+          TAG_NAME="${DOMAIN}-${APP}.${VERSION}"
+          
+          echo "## 📝 Release Notes for $TAG_NAME" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Generate release notes using the release helper
+          RELEASE_NOTES=$(bazel run --config=ci //tools:release -- release-notes "$APP" \
+            --current-tag "$TAG_NAME" \
+            --format markdown 2>/dev/null || echo "Release notes generation skipped - no previous tags found")
+          
+          echo "Release notes generated for $APP:"
+          echo "$RELEASE_NOTES"
+          
+          # Add to GitHub step summary
+          echo "$RELEASE_NOTES" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "✅ Release notes generated for $APP $VERSION"
+        else
+          echo "Warning: Could not determine domain for $APP, skipping release notes"
+        fi
+
   release-summary:
     name: Release Summary
     runs-on: ubuntu-latest
