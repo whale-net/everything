@@ -87,12 +87,18 @@ def push_image_with_tags(bazel_target: str, tags: List[str], platform: Optional[
     Args:
         bazel_target: Full bazel target path for the app metadata
         tags: List of full registry tags to push (e.g., ["ghcr.io/whale-net/demo-hello_python:v0.0.6"])
-        platform: Optional platform specification (currently ignored - always pushes multi-platform)
+        platform: Optional platform specification ("amd64" or "arm64", defaults to base/amd64)
     """
     image_targets = get_image_targets(bazel_target)
     
-    # Always use the multi-platform push target which includes both AMD64 and ARM64
-    push_target = image_targets["push"]
+    # Determine which push target to use based on platform
+    if platform == "amd64":
+        push_target = image_targets["push_amd64"]
+    elif platform == "arm64":
+        push_target = image_targets["push_arm64"]
+    else:
+        # Default to the base push target (which is AMD64)
+        push_target = image_targets["push_base"]
 
     print(f"Pushing {len(tags)} tags using {push_target}...")
     

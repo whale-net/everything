@@ -68,30 +68,45 @@ def release_app(name, binary_target, language, domain, description = "", version
     
     # Create OCI images based on language
     # Tag with "manual" so they're not built by //... (only when explicitly requested)
+    # Images are expensive to build and should only be created when needed
     if language == "python":
         python_oci_image_multiplatform(
             name = image_target,
             binary = binary_target,
             repo_tag = repo_tag,
-            tags = ["manual", "release"],
+            tags = ["manual", "container-image"],
         )
     elif language == "go":
         go_oci_image_multiplatform(
             name = image_target,
             binary = binary_target,
             repo_tag = repo_tag,
-            tags = ["manual", "release"],
+            tags = ["manual", "container-image"],
         )
     
-    # Create oci_push target for the multi-platform image
-    # This will push a manifest that includes both AMD64 and ARM64
+    # Create oci_push targets for each platform
+    # These correspond to the image targets created by the multiplatform macros
     registry_repo = registry + "/whale-net/" + image_name  # Hardcode whale-net org for now
     
     oci_push(
         name = image_target + "_push",
         image = ":" + image_target,
         repository = registry_repo,
-        tags = ["manual", "release"],
+        tags = ["manual", "container-push"],
+    )
+    
+    oci_push(
+        name = image_target + "_push_amd64",
+        image = ":" + image_target + "_amd64",
+        repository = registry_repo,
+        tags = ["manual", "container-push"],
+    )
+    
+    oci_push(
+        name = image_target + "_push_arm64",
+        image = ":" + image_target + "_arm64", 
+        repository = registry_repo,
+        tags = ["manual", "container-push"],
     )
     
     # Create release metadata
@@ -106,7 +121,7 @@ def release_app(name, binary_target, language, domain, description = "", version
         registry = registry,
         repo_name = image_name,  # Use domain-app format
         domain = domain,
-        tags = ["manual", "release"],  # Don't build with //...
+        tags = ["release-metadata"],  # No manual tag - metadata should be easily discoverable
         visibility = ["//visibility:public"],
     )
 
