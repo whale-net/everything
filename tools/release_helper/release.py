@@ -75,6 +75,17 @@ def plan_release(
 
         release_apps = detect_changed_apps(base_commit)
 
+    elif event_type in ["pull_request", "push", "fallback"]:
+        # CI builds - detect changed apps
+        if event_type == "fallback" or base_commit is None:
+            # Fallback: build all apps
+            print("Fallback mode: building all apps", file=sys.stderr)
+            release_apps = list_all_apps()
+        else:
+            # Detect changed apps using the provided base commit
+            print(f"CI build: detecting changes against {base_commit}", file=sys.stderr)
+            release_apps = detect_changed_apps(base_commit)
+
     else:
         raise ValueError(f"Unknown event type: {event_type}")
 
