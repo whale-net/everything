@@ -1,4 +1,5 @@
 load("@rules_python//python:defs.bzl", "py_library")
+load("@everything_pip_deps//:requirements.bzl", "requirement")
 
 # Database migrations library
 py_library(
@@ -9,7 +10,7 @@ py_library(
     visibility = ["//manman:__subpackages__"],
     deps = [
         "//manman/src:manman_core",
-        "@everything_pip_deps//alembic",
-        "@everything_pip_deps//sqlalchemy",
+        requirement("alembic"),
+        requirement("sqlalchemy"),
     ],
 )

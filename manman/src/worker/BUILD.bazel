@@ -1,4 +1,5 @@
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@everything_pip_deps//:requirements.bzl", "requirement")
 
 # Worker services library  
 py_library(
@@ -10,8 +11,8 @@ py_library(
     visibility = ["//manman:__subpackages__"],
     deps = [
         "//manman/src:manman_core",
-        "@everything_pip_deps//amqpstorm",
-        "@everything_pip_deps//typer",
+        requirement("amqpstorm"),
+        requirement("typer"),
     ],
 )
 
@@ -22,8 +23,8 @@ py_test(
     main = "test/test_main.py",  # Specify main test file
     deps = [
         ":manman_worker",
-        "@everything_pip_deps//pytest",
-        "@everything_pip_deps//pytest_asyncio",
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
     ],
     python_version = "PY3",
 )

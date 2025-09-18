@@ -1,4 +1,5 @@
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@everything_pip_deps//:requirements.bzl", "requirement")
 
 # Repository layer library
 py_library(
@@ -9,10 +10,10 @@ py_library(
     visibility = ["//manman:__subpackages__"],
     deps = [
         "//manman/src:manman_core",
-        "@everything_pip_deps//sqlmodel",
-        "@everything_pip_deps//asyncpg",
-        "@everything_pip_deps//alembic",
-        "@everything_pip_deps//opentelemetry_instrumentation_sqlalchemy",
+        requirement("sqlmodel"),
+        requirement("asyncpg"),
+        requirement("alembic"),
+        requirement("opentelemetry-instrumentation-sqlalchemy"),
     ],
 )
 
@@ -23,9 +24,9 @@ py_test(
     main = "test/test_database.py",  # Specify main test file
     deps = [
         ":manman_repository",
-        "@everything_pip_deps//pytest",
-        "@everything_pip_deps//pytest_asyncio",
-        "@everything_pip_deps//sqlalchemy",  # For testing database components
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+        requirement("sqlalchemy"),  # For testing database components
     ],
     python_version = "PY3",
 )
