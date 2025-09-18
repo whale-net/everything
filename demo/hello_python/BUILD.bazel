@@ -1,7 +1,6 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("@everything_pip_deps//:requirements.bzl", "requirement")
 load("//tools:release.bzl", "release_app")
-load("//tools:oci.bzl", "python_oci_image_distroless_multiplatform")
 
 py_library(
     name = "main_lib",
@@ -38,13 +37,4 @@ release_app(
     language = "python",
     domain = "demo",
     description = "Python hello world application with pytest",
-)
-
-# Alternative distroless images for maximum size reduction and security
-# These images are even smaller than Alpine and contain only the Python runtime
-python_oci_image_distroless_multiplatform(
-    name = "hello_python_image",
-    binary = ":hello_python",
-    repo_tag = "demo-hello_python-distroless:latest",
-    tags = ["manual", "container-image"],
 )

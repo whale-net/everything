@@ -468,9 +468,6 @@ bazel build //demo/hello_python:hello_python_image
 # Build and load into Docker efficiently using oci_load (optimized for cache)
 bazel run //demo/hello_python:hello_python_image_load
 
-# For maximum size reduction, use distroless images (no shell, package manager)
-bazel run //demo/hello_python:hello_python_image_distroless_load
-
 # Or use the release tool for production workflows
 bazel run //tools:release -- build hello_python
 
@@ -479,15 +476,10 @@ docker run --rm hello_python:latest  # ✅ Works correctly!
 docker run --rm hello_go:latest      # ✅ Works correctly!
 
 # Registry images use domain-app format: demo-hello_python:latest
-
-# Image size comparison:
-# demo-hello_python:latest (Alpine): ~50-60MB
-# demo-hello_python-distroless:latest (Distroless): ~30-40MB
 ```
 
 ### Base Images & Architecture
 - **Python**: Uses `python:3.11-alpine` (Python 3.11.13 on Alpine Linux for minimal size)
-  - Alternative: Distroless images available for even smaller size (~30-40MB)
 - **Go**: Uses `alpine:3.20` (Alpine 3.20.3 for minimal size)
 - **Platforms**: Full support for both `linux/amd64` and `linux/arm64`
 - **Cross-compilation**: Automatically handles platform-specific builds
@@ -505,7 +497,7 @@ load("//tools:oci.bzl", "python_oci_image", "go_oci_image", "oci_image_with_bina
 oci_image_with_binary(
     name = "custom_image",
     binary = ":my_binary",
-    base_image = "@python_slim",
+    base_image = "@python_alpine",
     platform = "linux/amd64",
     repo_tag = "custom:latest",
     # ... custom OCI parameters

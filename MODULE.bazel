@@ -25,17 +25,6 @@ oci.pull(
     ],
 )
 
-# Python distroless - even smaller than Alpine, no shell/package manager
-# Distroless images provide only the application runtime, ideal for production
-oci.pull(
-    name = "python_distroless",
-    image = "gcr.io/distroless/python3-debian12",
-    platforms = [
-        "linux/amd64",
-        "linux/arm64/v8",
-    ],
-)
-
 # Alpine 3.18 - using manifest list digest for multi-platform support  
 # This digest represents the manifest list that includes both amd64 and arm64 platforms
 oci.pull(
@@ -48,7 +37,7 @@ oci.pull(
     # Using actual manifest list digest from alpine:3.18
     digest = "sha256:de0eb0b3f2a47ba1eb89389859a9bd88b28e82f5826b6969ad604979713c2d4f",
 )
-use_repo(oci, "python_alpine", "python_alpine_linux_amd64", "python_alpine_linux_arm64_v8", "python_distroless", "python_distroless_linux_amd64", "python_distroless_linux_arm64_v8", "alpine", "alpine_linux_amd64", "alpine_linux_arm64_v8")
+use_repo(oci, "python_alpine", "python_alpine_linux_amd64", "python_alpine_linux_arm64_v8", "alpine", "alpine_linux_amd64", "alpine_linux_arm64_v8")
 
 pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
 pip.parse(
