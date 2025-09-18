@@ -108,6 +108,11 @@ def validate_release_version(bazel_target: str, version: str, allow_overwrite: b
 def validate_apps(requested_apps: List[str]) -> List[Dict[str, str]]:
     """Validate that requested apps exist and return the valid ones.
     
+    Apps can be referenced in multiple formats:
+    - Full format: domain-appname (e.g., "demo-hello_python")
+    - Short format: appname (e.g., "hello_python") - only if unambiguous
+    - Path format: domain/appname (e.g., "demo/hello_python")
+    
     Args:
         requested_apps: List of app names to validate
         
@@ -115,20 +120,75 @@ def validate_apps(requested_apps: List[str]) -> List[Dict[str, str]]:
         List of app dictionaries with bazel_target, name, and domain
     """
     all_apps = list_all_apps()
-    app_lookup = {app['name']: app for app in all_apps}
+    
+    # Create multiple lookup tables for different app reference formats
+    full_name_lookup = {}  # domain-name -> app
+    short_name_lookup = {}  # name -> [apps] (may have multiple for same name)
+    path_lookup = {}  # domain/name -> app
+    
+    for app in all_apps:
+        domain = app['domain']
+        name = app['name']
+        
+        # Full format: domain-name
+        full_name = f"{domain}-{name}"
+        full_name_lookup[full_name] = app
+        
+        # Path format: domain/name
+        path_name = f"{domain}/{name}"
+        path_lookup[path_name] = app
+        
+        # Short format: name (may have collisions)
+        if name not in short_name_lookup:
+            short_name_lookup[name] = []
+        short_name_lookup[name].append(app)
 
     valid_apps = []
     invalid_apps = []
 
-    for app_name in requested_apps:
-        if app_name in app_lookup:
-            valid_apps.append(app_lookup[app_name])
+    for requested_app in requested_apps:
+        app = None
+        
+        # Try full format first (domain-name)
+        if requested_app in full_name_lookup:
+            app = full_name_lookup[requested_app]
+        # Try path format (domain/name)
+        elif requested_app in path_lookup:
+            app = path_lookup[requested_app]
+        # Try short format (name only) - only if unambiguous
+        elif requested_app in short_name_lookup:
+            matching_apps = short_name_lookup[requested_app]
+            if len(matching_apps) == 1:
+                app = matching_apps[0]
+            else:
+                # Multiple apps with same name - show all options
+                ambiguous_apps = [f"{a['domain']}-{a['name']}" for a in matching_apps]
+                invalid_apps.append(f"{requested_app} (ambiguous, could be: {', '.join(ambiguous_apps)})")
+                continue
+        
+        if app:
+            valid_apps.append(app)
         else:
-            invalid_apps.append(app_name)
+            invalid_apps.append(requested_app)
 
     if invalid_apps:
-        available = ", ".join(sorted(app['name'] for app in all_apps))
+        # Show available apps in different formats for better UX
+        available_full = sorted(f"{app['domain']}-{app['name']}" for app in all_apps)
+        available_short = []
+        for name, apps in short_name_lookup.items():
+            if len(apps) == 1:
+                available_short.append(name)
+            else:
+                # For ambiguous names, show all options
+                for app in apps:
+                    available_short.append(f"{app['domain']}-{app['name']}")
+        
+        available_display = ", ".join(sorted(set(available_full)))
         invalid = ", ".join(invalid_apps)
-        raise ValueError(f"Invalid apps: {invalid}. Available apps: {available}")
+        raise ValueError(
+            f"Invalid apps: {invalid}.\n"
+            f"Available apps: {available_display}\n"
+            f"You can use formats like: domain-appname, domain/appname, or just appname (if unambiguous)"
+        )
 
     return valid_apps
