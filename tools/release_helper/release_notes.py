@@ -10,7 +10,54 @@ from datetime import datetime
 
 from tools.release_helper.git import get_previous_tag
 from tools.release_helper.changes import _get_changed_files
-from tools.release_helper.metadata import get_app_metadata
+from tools.release_helper.metadata import get_app_metadata, list_all_apps
+
+
+def parse_tag_info(tag_name: str) -> Tuple[str, str, str]:
+    """Parse tag name to extract domain, app name, and version.
+    
+    Args:
+        tag_name: Tag in format domain-app.vX.Y.Z (e.g., demo-hello_python.v1.0.0)
+        
+    Returns:
+        Tuple of (domain, app_name, version)
+        
+    Raises:
+        ValueError: If tag format is invalid
+    """
+    if '.v' not in tag_name or '-' not in tag_name:
+        raise ValueError(f"Invalid tag format: {tag_name}. Expected format: domain-app.vX.Y.Z")
+    
+    # Split on '.v' to separate domain-app from version
+    parts = tag_name.split('.v', 1)
+    if len(parts) != 2:
+        raise ValueError(f"Invalid tag format: {tag_name}. Expected format: domain-app.vX.Y.Z")
+    
+    domain_app, version = parts
+    
+    # Find the last dash to separate domain from app
+    if '-' not in domain_app:
+        raise ValueError(f"Invalid tag format: {tag_name}. Expected format: domain-app.vX.Y.Z")
+    
+    domain, app_name = domain_app.rsplit('-', 1)
+    
+    return domain, app_name, f"v{version}"  # Add back the 'v' prefix
+
+
+def validate_tag_format(tag_name: str) -> bool:
+    """Validate that a tag follows the expected format.
+    
+    Args:
+        tag_name: Tag name to validate
+        
+    Returns:
+        True if tag format is valid
+    """
+    try:
+        parse_tag_info(tag_name)
+        return True
+    except ValueError:
+        return False
 
 
 @dataclass
@@ -235,7 +282,6 @@ def filter_commits_by_app(commits: List[ReleaseNote], app_name: str) -> List[Rel
     """
     try:
         # Get app metadata to determine its path
-        from tools.release_helper.metadata import list_all_apps
         all_apps = list_all_apps()
         
         app_info = None
@@ -344,8 +390,6 @@ def generate_release_notes_for_all_apps(
     Returns:
         Dictionary mapping app names to their release notes
     """
-    from tools.release_helper.metadata import list_all_apps
-    
     all_apps = list_all_apps()
     release_notes = {}
     

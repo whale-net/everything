@@ -3,7 +3,7 @@ name: Release Notes
 on:
   push:
     tags:
-      - '*'  # Trigger on any tag push
+      - '*-*.v*'  # Match domain-app.vX.Y.Z format
 
 jobs:
   # Generate release notes for tag pushes
@@ -21,74 +21,72 @@ jobs:
       with:
         cache-suffix: 'release-notes'
         
-    - name: Detect affected apps for this tag
-      id: detect-apps
+    - name: Parse tag and identify app
+      id: parse-tag
       run: |
-        VERSION="${{ github.ref_name }}"
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "Detecting apps affected by tag $VERSION"
+        TAG_NAME="${{ github.ref_name }}"
+        echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+        echo "Parsing tag: $TAG_NAME"
         
-        # Use release helper to detect changed apps since previous tag
-        PLAN_OUTPUT=$(bazel run --config=ci //tools:release -- plan \
-          --event-type "tag_push" \
-          --version "$VERSION" \
-          --format github)
-        
-        # Parse output from release helper to get the matrix
-        echo "$PLAN_OUTPUT" | while IFS= read -r line; do
-          if [[ "$line" == matrix=* ]]; then
-            echo "${line}" >> $GITHUB_OUTPUT
-          elif [[ "$line" == apps=* ]]; then
-            echo "${line}" >> $GITHUB_OUTPUT
-            APPS_LIST="${line#apps=}"
-            if [[ -n "$APPS_LIST" ]]; then
-              echo "Apps affected by this tag: $APPS_LIST"
-            else
-              echo "No apps affected by this tag"
-            fi
-          fi
-        done
-        
-    - name: Generate release notes for affected apps
-      if: steps.detect-apps.outputs.matrix != '' && fromJson(steps.detect-apps.outputs.matrix).include[0] != null
-      env:
-        VERSION: ${{ steps.detect-apps.outputs.version }}
-        MATRIX: ${{ steps.detect-apps.outputs.matrix }}
-      run: |
-        echo "Generating release notes for affected apps in tag $VERSION"
-        
-        # Parse matrix to get list of apps
-        APPS=$(echo "$MATRIX" | jq -r '.include[].app' | tr '\n' ' ')
-        
-        echo "## 📝 Release Notes for Tag $VERSION" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
-        # Generate release notes for each affected app
-        for app in $APPS; do
-          echo "Generating release notes for $app..."
+        # Parse tag to extract domain, app, and version
+        # Expected format: domain-app.vX.Y.Z (e.g., demo-hello_python.v1.0.0)
+        if [[ "$TAG_NAME" =~ ^([^-]+)-([^.]+)\.v(.+)$ ]]; then
+          DOMAIN="${BASH_REMATCH[1]}"
+          APP_NAME="${BASH_REMATCH[2]}" 
+          VERSION="v${BASH_REMATCH[3]}"
           
-          RELEASE_NOTES=$(bazel run --config=ci //tools:release -- release-notes "$app" \
-            --current-tag "$VERSION" \
-            --format markdown)
+          echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
+          echo "app_name=$APP_NAME" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
           
-          echo "### $app" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "$RELEASE_NOTES" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-        done
+          echo "Parsed tag: domain=$DOMAIN, app=$APP_NAME, version=$VERSION"
+          
+          # Create matrix with single app
+          MATRIX='{"include":[{"app":"'"$APP_NAME"'","domain":"'"$DOMAIN"'"}]}'
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          echo "Matrix: $MATRIX"
+        else
+          echo "ERROR: Tag format invalid. Expected format: domain-app.vX.Y.Z (e.g., demo-hello_python.v1.0.0)"
+          echo "matrix={\"include\":[]}" >> $GITHUB_OUTPUT
+          exit 1
+        fi
         
-        echo "✅ Release notes generated for $VERSION"
-        
-    - name: No apps affected
-      if: steps.detect-apps.outputs.matrix == '' || fromJson(steps.detect-apps.outputs.matrix).include[0] == null
+    - name: Generate release notes for app
+      if: steps.parse-tag.outputs.matrix != '' && fromJson(steps.parse-tag.outputs.matrix).include[0] != null
       env:
-        VERSION: ${{ steps.detect-apps.outputs.version }}
+        APP_NAME: ${{ steps.parse-tag.outputs.app_name }}
+        DOMAIN: ${{ steps.parse-tag.outputs.domain }}
+        VERSION: ${{ steps.parse-tag.outputs.version }}
+        TAG_NAME: ${{ steps.parse-tag.outputs.tag_name }}
       run: |
-        echo "## 📝 Release Notes for Tag $VERSION" >> $GITHUB_STEP_SUMMARY
+        echo "Generating release notes for $APP_NAME (domain: $DOMAIN) version $VERSION"
+        
+        echo "## 📝 Release Notes for $TAG_NAME" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "🔍 **No applications were affected by this tag**" >> $GITHUB_STEP_SUMMARY
+        
+        # Generate release notes using the release helper
+        # This will detect changes between tags for changelog content
+        RELEASE_NOTES=$(bazel run --config=ci //tools:release -- release-notes "$APP_NAME" \
+          --current-tag "$TAG_NAME" \
+          --format markdown)
+        
+        echo "Release notes generated for $APP_NAME:"
+        echo "$RELEASE_NOTES"
+        
+        # Add to GitHub step summary
+        echo "$RELEASE_NOTES" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "This tag does not contain changes that affect any releasable applications." >> $GITHUB_STEP_SUMMARY
+        
+        echo "✅ Release notes generated for $APP_NAME $VERSION"
+        
+    - name: Handle invalid tag format
+      if: steps.parse-tag.outputs.matrix == '' || fromJson(steps.parse-tag.outputs.matrix).include[0] == null
+      env:
+        TAG_NAME: ${{ github.ref_name }}
+      run: |
+        echo "## ❌ Invalid Tag Format: $TAG_NAME" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Expected format: \`domain-app.version\` (e.g., \`demo-hello_python.v1.0.0\`)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "This tag does not follow the expected release tag format and will be ignored." >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
