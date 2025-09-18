@@ -891,13 +891,18 @@ Areas that could be enhanced (noted throughout documentation):
 - **Enhanced Go Support**: Enable gazelle rules for better Go dependency management
 - **Testing Strategy**: Expand test utilities and integration testing capabilities
 - **Documentation**: Auto-generation from code for better consistency
+- **Helm Chart Templates**: Additional template variants for different application types
+- **Chart Repository**: Enhanced index.yaml generation with proper chart metadata parsing
 
 ### Repository Structure
 ```
-├── .github/workflows/     # CI/CD workflows (ci.yml, release.yml)
+├── .github/workflows/     # CI/CD workflows (ci.yml, release.yml, deploy-helm-charts.yml)
 ├── demo/                  # Example applications
-├── libs/                  # Shared libraries
+├── docs/                  # Documentation (including HELM_CHARTS.md)
+├── libs/                  # Shared libraries  
 ├── tools/                 # Build and release tooling
+│   ├── charts/           # Helm chart templates
+│   └── release_helper/   # Python release utilities
 ├── BUILD.bazel           # Root build configuration
 ├── MODULE.bazel          # External dependencies
 └── README.md             # This file

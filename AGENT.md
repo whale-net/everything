@@ -354,6 +354,12 @@ bazel run //tools:release -- build app_name
 
 # Test image functionality
 docker run --rm domain-app:latest
+
+# Test Helm chart building
+bazel run //tools:release -- helm-build app_name
+
+# Test Helm chart validation
+bazel run //tools:release -- helm-validate app_name --lint
 ```
 
 ## 📚 Extension Points
