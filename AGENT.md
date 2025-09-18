@@ -400,4 +400,20 @@ oci_image_with_binary(
 
 ---
 
+## 📝 Documentation Status
+
+This AGENT.md provides a comprehensive framework for AI agents working with the Everything monorepo. The documentation focuses specifically on:
+
+**Detailed Coverage:**
+- `release_app` macro usage and parameters
+- Container image build system with `<domain>-<app>:<version>` naming
+- Multi-platform image generation (amd64/arm64)
+- Release workflow automation and change detection
+
+**Framework Areas:**
+- Development workflows for Python and Go applications
+- Bazel build system integration
+- GitHub Actions CI/CD processes
+- Extension points for future enhancements
+
 This framework provides the foundation for working with the Everything monorepo. Specific implementation details can be expanded as the codebase evolves, but the core principles and `release_app` system should remain stable.
