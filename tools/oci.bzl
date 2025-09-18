@@ -3,8 +3,9 @@
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load")
 load("@aspect_bazel_lib//lib:tar.bzl", "tar")
 
-# Using appropriate base images for maximum compatibility:
+# Using appropriate base images for maximum compatibility and minimal size:
 # - Python: python:3.11-alpine (lightweight Alpine Linux with Python runtime)
+# - Python Distroless: gcr.io/distroless/python3-debian12 (minimal runtime, no shell)
 # - Go: alpine:3.18 (lightweight Linux with package manager for dependencies)
 
 def oci_image_with_binary(
@@ -80,7 +81,7 @@ def _get_platform_base_image(base_prefix, platform = None):
     """Get the platform-specific base image name.
     
     Args:
-        base_prefix: Base image prefix (e.g., "python_alpine", "alpine")
+        base_prefix: Base image prefix (e.g., "python_alpine", "python_distroless", "alpine")
         platform: Target platform (defaults to linux/amd64)
     
     Returns:
@@ -120,6 +121,45 @@ def python_oci_image(name, binary, repo_tag = None, platform = None, tags = None
     
     # For Python, we use the container's Python interpreter and run the source files from runfiles
     # The PYTHONPATH needs to include the runfiles directory
+    entrypoint = [
+        "python3",
+        "/" + binary_name + "/" + binary_name + ".runfiles/_main/" + binary_name + "/main.py"
+    ]
+    
+    oci_image_with_binary(
+        name = name,
+        binary = binary,
+        base_image = base_image,
+        entrypoint = entrypoint,
+        repo_tag = repo_tag,
+        platform = platform,
+        tags = tags,
+        env = {
+            "PYTHONPATH": "/" + binary_name + "/" + binary_name + ".runfiles/_main:/" + binary_name + "/" + binary_name + ".runfiles"
+        },
+        **kwargs
+    )
+
+def python_oci_image_distroless(name, binary, repo_tag = None, platform = None, tags = None, **kwargs):
+    """Build an OCI image for a Python binary using Google's distroless base image.
+    
+    This creates the smallest possible Python images by using distroless base images
+    that contain only the Python runtime without shell, package managers, or other tools.
+    Provides maximum security and minimal size for production deployments.
+    
+    Args:
+        name: Name of the image target
+        binary: The Python binary target to package
+        repo_tag: Repository tag for the image (defaults to binary_name:latest)
+        platform: Target platform (defaults to linux/amd64)
+        tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
+        **kwargs: Additional arguments passed to oci_image_with_binary
+    """
+    base_image = _get_platform_base_image("python_distroless", platform)
+    binary_name = binary.split(":")[-1] if ":" in binary else binary
+    
+    # For distroless Python, we use the same entrypoint structure but with the distroless runtime
+    # The PYTHONPATH configuration is critical for distroless images
     entrypoint = [
         "python3",
         "/" + binary_name + "/" + binary_name + ".runfiles/_main/" + binary_name + "/main.py"
@@ -214,6 +254,55 @@ def python_oci_image_multiplatform(name, binary, repo_tag = None, tags = None, *
     # ARM64 version (for Mac development)
     python_oci_image(
         name = name + "_arm64",
+        binary = binary,
+        repo_tag = repo_tag,
+        platform = "linux/arm64",
+        tags = tags,
+        **kwargs
+    )
+
+def python_oci_image_distroless_multiplatform(name, binary, repo_tag = None, tags = None, **kwargs):
+    """Build distroless OCI images for a Python binary for both amd64 and arm64 platforms.
+    
+    Creates the smallest possible Python images using Google's distroless base images.
+    Distroless images contain only the application runtime and dependencies, no shell,
+    package managers, or debugging tools. This provides maximum security and minimal size.
+    
+    Creates separate image targets for different platforms:
+    - {name}_distroless: Default distroless image (amd64)
+    - {name}_distroless_amd64: Linux amd64 distroless image
+    - {name}_distroless_arm64: Linux arm64 distroless image
+    
+    Args:
+        name: Base name of the image targets (will have _distroless appended)
+        binary: The Python binary target to package
+        repo_tag: Repository tag for the image (defaults to binary_name:latest)
+        tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
+        **kwargs: Additional arguments passed to oci_image_with_binary
+    """
+    # AMD64 version (default for production)
+    python_oci_image_distroless(
+        name = name + "_distroless",
+        binary = binary,
+        repo_tag = repo_tag,
+        platform = "linux/amd64",
+        tags = tags,
+        **kwargs
+    )
+    
+    # AMD64 version (explicit)
+    python_oci_image_distroless(
+        name = name + "_distroless_amd64", 
+        binary = binary,
+        repo_tag = repo_tag,
+        platform = "linux/amd64",
+        tags = tags,
+        **kwargs
+    )
+    
+    # ARM64 version (for Mac development)
+    python_oci_image_distroless(
+        name = name + "_distroless_arm64",
         binary = binary,
         repo_tag = repo_tag,
         platform = "linux/arm64",
