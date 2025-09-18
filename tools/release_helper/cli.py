@@ -13,7 +13,7 @@ from tools.release_helper.changes import detect_changed_apps
 from tools.release_helper.git import get_previous_tag
 from tools.release_helper.images import build_image
 from tools.release_helper.metadata import list_all_apps
-from tools.release_helper.release import plan_release, tag_and_push_image
+from tools.release_helper.release import find_app_bazel_target, plan_release, tag_and_push_image
 from tools.release_helper.summary import generate_release_summary
 from tools.release_helper.validation import validate_release_version
 
