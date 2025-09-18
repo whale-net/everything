@@ -1,0 +1,67 @@
+load("@rules_python//python:defs.bzl", "py_library", "py_binary", "py_test")
+
+# Host API services library
+py_library(
+    name = "manman_host",
+    srcs = [
+        "__init__.py",
+        "main.py",
+    ],
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        "//manman/src:manman_core",
+        "@everything_pip_deps//fastapi",
+        "@everything_pip_deps//uvicorn",
+        "@everything_pip_deps//gunicorn",
+        "@everything_pip_deps//typer",
+        "@everything_pip_deps//alembic",
+        "@everything_pip_deps//opentelemetry_instrumentation_fastapi",
+    ],
+)
+
+# Binary targets for host services
+py_binary(
+    name = "experience_api",
+    srcs = ["main.py"],
+    main = "main.py", 
+    deps = [":manman_host"],
+    args = ["start-experience-api"],
+)
+
+py_binary(
+    name = "status_api",
+    srcs = ["main.py"],
+    main = "main.py",
+    deps = [":manman_host"], 
+    args = ["start-status-api"],
+)
+
+py_binary(
+    name = "worker_dal_api", 
+    srcs = ["main.py"],
+    main = "main.py",
+    deps = [":manman_host"],
+    args = ["start-worker-dal-api"],
+)
+
+py_binary(
+    name = "status_processor",
+    srcs = ["main.py"], 
+    main = "main.py",
+    deps = [":manman_host"],
+    args = ["start-status-processor"],
+)
+
+# Tests for host APIs
+py_test(
+    name = "manman_host_test",
+    srcs = glob(["test/*.py"]),
+    main = "test/test_main.py",  # Specify main test file
+    deps = [
+        ":manman_host",
+        "@everything_pip_deps//pytest",
+        "@everything_pip_deps//pytest_asyncio",
+        "@everything_pip_deps//httpx",  # For testing FastAPI endpoints
+    ],
+    python_version = "PY3",
+)

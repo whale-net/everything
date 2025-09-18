@@ -1,0 +1,47 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+# Re-export all manman modules for convenience
+py_library(
+    name = "manman",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//manman/src:manman_core",
+        "//manman/src/host:manman_host",
+        "//manman/src/worker:manman_worker",
+        "//manman/src/repository:manman_repository",
+        "//manman/src/migrations:manman_migrations",
+    ],
+)
+
+# Binary targets for different services (can be added as the codebase is fully migrated)
+# py_binary(
+#     name = "experience_api", 
+#     srcs = ["src/manman/host/main.py"],
+#     main = "src/manman/host/main.py",
+#     deps = [":manman"],
+# )
+
+# py_binary(
+#     name = "worker",
+#     srcs = ["src/manman/worker/main.py"], 
+#     main = "src/manman/worker/main.py",
+#     deps = [":manman"],
+# )
+
+filegroup(
+    name = "tiltfile",
+    srcs = ["Tiltfile"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "charts", 
+    srcs = glob(["charts/**/*"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "design_docs",
+    srcs = glob(["design/**/*"]),
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,29 @@
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+
+# Worker services library  
+py_library(
+    name = "manman_worker",
+    srcs = [
+        "__init__.py",
+        "main.py",
+    ],
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        "//manman/src:manman_core",
+        "@everything_pip_deps//amqpstorm",
+        "@everything_pip_deps//typer",
+    ],
+)
+
+# Tests for worker services
+py_test(
+    name = "manman_worker_test",
+    srcs = glob(["test/*.py"]),
+    main = "test/test_main.py",  # Specify main test file
+    deps = [
+        ":manman_worker",
+        "@everything_pip_deps//pytest",
+        "@everything_pip_deps//pytest_asyncio",
+    ],
+    python_version = "PY3",
+)
