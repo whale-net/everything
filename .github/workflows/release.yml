@@ -87,6 +87,12 @@ jobs:
         setup-docker: 'true'
         cache-suffix: 'docker'
         
+    # Configure Git for tagging
+    - name: Configure Git
+      run: |
+        git config --global user.name "${{ github.actor }}"
+        git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+        
     # Login unless it's a manual dispatch with dry_run=true
     # - Manual dispatch with dry_run=false: login (needed for publishing)
     # - Manual dispatch with dry_run=true: skip login (no publishing)
@@ -112,7 +118,7 @@ jobs:
         # Use our release helper tool to handle the entire release process
         if [[ "$DRY_RUN" == "true" ]]; then
           echo "DRY RUN: Building and testing release process without publishing"
-          bazel run --config=ci //tools:release -- release "$APP" --version "$VERSION" --commit "${{ github.sha }}" --dry-run
+          bazel run --config=ci //tools:release -- release "$APP" --version "$VERSION" --commit "${{ github.sha }}" --dry-run --create-git-tag
         else
           echo "Building and publishing $APP $VERSION"
           bazel run --config=ci //tools:release -- release "$APP" --version "$VERSION" --commit "${{ github.sha }}" --create-git-tag
