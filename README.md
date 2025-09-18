@@ -27,8 +27,6 @@ bazel version
 
 ### Building and Testing 
 
-Need to eventually figure out better testing strategy, but this is it for now.
-
 ```bash
 # Run applications
 bazel run //demo/hello_python:hello_python
@@ -46,6 +44,22 @@ bazel test //demo/hello_python:test_main
 bazel test //demo/hello_go:main_test
 bazel test //demo/hello_fastapi:test_main
 bazel test //demo/hello_world_test:test_main
+```
+
+### Verify Setup
+After installation, verify everything works:
+```bash
+# Check Bazel version
+bazel version
+
+# Test build system
+bazel build //demo/hello_python:hello_python
+
+# Run a quick test
+bazel test //demo/hello_python:test_main
+
+# Verify release system discovery
+bazel query "kind('app_metadata', //...)"
 ```
 
 ### Adding Dependencies
@@ -340,6 +354,11 @@ bazel test //demo/...
 - Go tests use standard Go testing package
 
 **No additional test utilities are currently provided** - each app manages its own testing using standard language tooling.
+
+### Common Testing Issues
+- **Module import errors**: Ensure `//libs/python` is included in deps for Python tests
+- **Cache issues**: Use `bazel clean` if you encounter stale test results
+- **Slow tests**: Bazel caches test results - only changed tests will re-run
 
 ## Configuration
 
@@ -769,4 +788,31 @@ gh workflow run release.yml \
   -f apps=your_app \
   -f version=v0.0.1-test \
   -f dry_run=true
+```
+
+---
+
+## 🤝 Contributing & Support
+
+### Getting Help
+- **Issues**: Check existing functionality with the verification commands in the Quick Start section
+- **Release Problems**: Use the troubleshooting section above and dry-run mode for testing
+- **Build Issues**: Ensure Bazel 8.3+ is installed and try `bazel clean` for cache issues
+
+### Future Improvements
+Areas that could be enhanced (noted throughout documentation):
+- **Enhanced Go Support**: Enable gazelle rules for better Go dependency management
+- **Tag-based Releases**: Add Git tag triggers to the release workflow
+- **Testing Strategy**: Expand test utilities and integration testing capabilities
+- **Documentation**: Auto-generation from code for better consistency
+
+### Repository Structure
+```
+├── .github/workflows/     # CI/CD workflows (ci.yml, release.yml)
+├── demo/                  # Example applications
+├── libs/                  # Shared libraries
+├── tools/                 # Build and release tooling
+├── BUILD.bazel           # Root build configuration
+├── MODULE.bazel          # External dependencies
+└── README.md             # This file
 ```
