@@ -527,6 +527,7 @@ This monorepo uses a **shell-script-free**, Starlark and GitHub Actions-based re
 - **🔒 Version Protection**: Prevents accidental overwrites with semantic versioning validation
 - **🚀 Multiple Release Methods**: GitHub UI, CLI, or Git tags with comprehensive dry-run support
 - **📋 Release Matrix**: Automatically generates build matrices for efficient parallel releases
+- **📝 Automatic Release Notes**: Generates release notes for each app on tag pushes with commit details
 - **🛠️ Shell-Script Free**: Pure Starlark and GitHub Actions implementation for maintainability
 
 ### 📦 How It Works
@@ -682,16 +683,28 @@ gh workflow run release.yml \
   -f dry_run=true
 ```
 
-#### Method 3: Git Tags (NOT Supported) ⚠️
+#### Method 3: Git Tags (Now Supported) ✅
 
-**Git tag-based releases are currently NOT configured in the workflow.** The release workflow only supports manual dispatch via GitHub Actions UI or CLI.
+**Git tag-based releases are now supported!** When you push a tag, the release workflow automatically:
+- Detects the version from the tag name
+- Automatically detects which apps have changed since the previous tag
+- Builds and publishes affected apps
+- Generates release notes for each app
 
-If tag-based releases were to be added, they would need:
-- Addition of `push: tags: ['v*']` trigger to `.github/workflows/release.yml`  
-- Logic to detect version from tag name
-- Automatic app change detection since last release
+**Usage:**
+```bash
+# Create and push a tag to trigger automatic release
+git tag v1.2.3
+git push origin v1.2.3
+```
 
-**Current limitation:** Only manual releases via `workflow_dispatch` are supported.
+**Features:**
+- **Automatic App Detection**: Only releases apps that have changed since the previous tag
+- **Release Notes Generation**: Automatically generates release notes for each app
+- **Version Detection**: Uses the tag name as the version
+- **Change Analysis**: Uses Bazel dependency analysis to detect affected apps
+
+**Tag Format**: Use semantic versioning (e.g., `v1.2.3`, `v2.0.0-beta1`)
 
 ### 📋 Release Process Details
 
@@ -808,6 +821,50 @@ gh workflow run release.yml \
   -f version=v0.0.1-test \
   -f dry_run=true
 ```
+
+## 📝 Release Notes
+
+### Automatic Release Notes Generation
+
+When using tag-based releases (Method 3), the system automatically generates release notes for each affected app:
+
+```bash
+# Create a tag to trigger release with automatic release notes
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+**Release notes include:**
+- **Commit History**: All commits since the previous tag affecting the app
+- **Author Information**: Who made each change
+- **File Changes**: Which files were modified
+- **Timestamp**: When each change was made
+
+### Manual Release Notes Generation
+
+You can also generate release notes manually using the release helper CLI:
+
+```bash
+# Generate release notes for a specific app
+bazel run //tools:release -- release-notes hello_python \
+  --current-tag v1.2.3 \
+  --previous-tag v1.2.2 \
+  --format markdown
+
+# Generate release notes for all apps
+bazel run //tools:release -- release-notes-all \
+  --current-tag v1.2.3 \
+  --format markdown \
+  --output-dir ./release-notes/
+
+# Available formats: markdown, plain, json
+```
+
+**Features:**
+- **Smart Filtering**: Only includes commits that actually affect each app
+- **Multiple Formats**: Markdown, plain text, or JSON output  
+- **Automatic Previous Tag Detection**: Finds the previous tag if not specified
+- **Infrastructure Change Detection**: Includes infrastructure changes that affect all apps
 
 ---
 
