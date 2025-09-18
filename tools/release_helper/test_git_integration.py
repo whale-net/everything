@@ -5,6 +5,8 @@ These tests use actual git repositories to test real git interactions.
 
 import os
 import subprocess
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 import pytest
 
@@ -14,6 +16,17 @@ from tools.release_helper.git import (
     get_previous_tag,
 )
 from tools.release_helper.changes import _get_changed_files
+
+
+@contextmanager
+def chdir(path):
+    """Context manager for temporarily changing directory."""
+    original_cwd = os.getcwd()
+    try:
+        os.chdir(path)
+        yield
+    finally:
+        os.chdir(original_cwd)
 
 
 class TestGitIntegration:
@@ -35,12 +48,8 @@ class TestGitIntegration:
         tag_name = "v1.0.0"
         
         # Change to the git repo directory for tag creation
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(git_repo.workspace)
+        with chdir(git_repo.workspace):
             create_git_tag(tag_name, message="First release")
-        finally:
-            os.chdir(original_cwd)
         
         # Verify tag was created
         result = git_repo.run(["git", "tag", "-l"], capture=True)
@@ -53,18 +62,12 @@ class TestGitIntegration:
         
         # Create second tag
         tag_name2 = "v2.0.0"
-        try:
-            os.chdir(git_repo.workspace)
+        with chdir(git_repo.workspace):
             create_git_tag(tag_name2, message="Second release")
-        finally:
-            os.chdir(original_cwd)
         
         # Test getting previous tag
-        try:
-            os.chdir(git_repo.workspace)
+        with chdir(git_repo.workspace):
             previous_tag = get_previous_tag()
-        finally:
-            os.chdir(original_cwd)
         
         assert previous_tag == tag_name
 
@@ -81,12 +84,8 @@ class TestGitIntegration:
         git_repo.run(["git", "commit", "-m", "Initial commit"])
         
         # Test getting previous tag when no tags exist
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(git_repo.workspace)
+        with chdir(git_repo.workspace):
             previous_tag = get_previous_tag()
-        finally:
-            os.chdir(original_cwd)
         
         assert previous_tag is None
 
@@ -118,12 +117,8 @@ class TestGitIntegration:
         git_repo.run(["git", "commit", "-m", "Add new files"])
         
         # Test getting changed files
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(git_repo.workspace)
+        with chdir(git_repo.workspace):
             changed_files = _get_changed_files(base_commit)
-        finally:
-            os.chdir(original_cwd)
         
         assert "file2.go" in changed_files
         assert "subdir/file3.yaml" in changed_files
@@ -159,33 +154,25 @@ class TestGitIntegration:
         
         # Create tag on first commit
         tag_name = "v1.0.0"
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(git_repo.workspace)
+        with chdir(git_repo.workspace):
             create_git_tag(tag_name, commit_sha=first_commit_sha, message="Tag on first commit")
-        finally:
-            os.chdir(original_cwd)
         
         # Verify the tag points to the correct commit
         result = git_repo.run(["git", "rev-list", "-n", "1", tag_name], capture=True)
         tag_commit_sha = result.strip()
         assert tag_commit_sha == first_commit_sha
 
-    def test_git_operations_error_handling(self, git_repo):
+    def test_git_operations_error_handling(self):
         """Test error handling in git operations."""
-        # Test get_previous_tag in a repository with no commits
-        empty_repo = git_repo.workspace / "empty_repo"
-        empty_repo.mkdir()
-        
-        original_cwd = os.getcwd()
-        try:
-            # Initialize empty repo
-            os.chdir(empty_repo)
-            subprocess.run(["git", "init"], check=True, capture_output=True)
+        # Test get_previous_tag in a repository with no commits using separate temp directory
+        with tempfile.TemporaryDirectory() as temp_dir:
+            empty_repo_path = Path(temp_dir) / "empty_repo"
+            empty_repo_path.mkdir()
             
-            # This should return None since there are no commits
-            previous_tag = get_previous_tag()
-            assert previous_tag is None
-            
-        finally:
-            os.chdir(original_cwd)
+            with chdir(empty_repo_path):
+                # Initialize empty repo
+                subprocess.run(["git", "init"], check=True, capture_output=True)
+                
+                # This should return None since there are no commits
+                previous_tag = get_previous_tag()
+                assert previous_tag is None
