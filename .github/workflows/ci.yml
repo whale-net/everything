@@ -155,3 +155,60 @@ jobs:
         echo "Publishing $APP image to registry..."
         bazel run //tools:release -- release "$APP" --version "latest" --commit "${{ github.sha }}"
         
+  # Build summary - collects status of all matrix jobs for branch protection
+  build-summary:
+    name: Build Summary
+    runs-on: ubuntu-latest
+    needs: [plan-docker, docker]
+    if: always()
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'summary'
+      
+    - name: Collect build results and generate summary
+      run: |
+        echo "=== CI Build Summary ===" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Check if any apps were planned for building
+        PLANNED_APPS="${{ needs.plan-docker.outputs.apps }}"
+        if [[ -z "$PLANNED_APPS" || "$PLANNED_APPS" == "null" ]]; then
+          echo "✅ **No apps required building** - all changes were in non-app areas" >> $GITHUB_STEP_SUMMARY
+          echo "Build status: **PASSED** (no builds needed)" >> $GITHUB_STEP_SUMMARY
+          echo "No apps needed building - this is expected for documentation or infrastructure-only changes"
+          exit 0
+        fi
+        
+        echo "**Apps processed:** $PLANNED_APPS" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Check the status of the matrix docker job
+        DOCKER_JOB_RESULT="${{ needs.docker.result }}"
+        PLAN_JOB_RESULT="${{ needs.plan-docker.result }}"
+        
+        echo "**Job Results:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Planning: $PLAN_JOB_RESULT" >> $GITHUB_STEP_SUMMARY
+        echo "- Docker Builds: $DOCKER_JOB_RESULT" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Determine overall status
+        if [[ "$PLAN_JOB_RESULT" == "success" && "$DOCKER_JOB_RESULT" == "success" ]]; then
+          echo "✅ **Overall Status: PASSED**" >> $GITHUB_STEP_SUMMARY
+          echo "All Docker builds completed successfully"
+          exit 0
+        elif [[ "$DOCKER_JOB_RESULT" == "skipped" ]]; then
+          echo "⚠️ **Overall Status: PASSED** (builds skipped - no changes detected)" >> $GITHUB_STEP_SUMMARY
+          echo "Docker builds were skipped - no apps needed building"
+          exit 0
+        else
+          echo "❌ **Overall Status: FAILED**" >> $GITHUB_STEP_SUMMARY
+          echo "One or more Docker builds failed"
+          echo "::error::Docker build pipeline failed"
+          exit 1
+        fi
+        
