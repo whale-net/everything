@@ -135,8 +135,11 @@ def release_app(name, binary_target, language, domain, description = "", version
     if helm_chart:
         actual_chart_version = chart_version or version
         
+        # Use domain+app naming pattern for Helm chart targets (consistent with image naming)
+        chart_target_name = domain + "_" + name + "_helm"
+        
         release_helm_chart(
-            name = name + "_helm",
+            name = chart_target_name,
             app_name = name,
             description = description or "Helm chart for " + name,
             chart_version = actual_chart_version,
@@ -171,4 +174,21 @@ def get_image_targets(app_name):
         "base": "//" + app_name + ":" + base_name,
         "amd64": "//" + app_name + ":" + base_name + "_amd64",
         "arm64": "//" + app_name + ":" + base_name + "_arm64",
+    }
+
+def get_helm_chart_targets_by_name(app_name, domain):
+    """Get all Helm chart target names for an app using domain+app pattern.
+    
+    Args:
+        app_name: Name of the app
+        domain: Domain of the app
+        
+    Returns:
+        Dict with Helm chart target names
+    """
+    chart_target_name = domain + "_" + app_name + "_helm"
+    return {
+        "chart": "//" + app_name + ":" + chart_target_name + "_chart",
+        "package": "//" + app_name + ":" + chart_target_name + "_package",
+        "chart_name": domain + "-" + app_name,  # Chart name follows domain-app pattern
     }

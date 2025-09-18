@@ -15,7 +15,7 @@ from tools.release_helper.metadata import get_app_metadata
 
 
 def get_helm_chart_targets(bazel_target: str) -> Dict[str, str]:
-    """Get all Helm chart target names for an app.
+    """Get all Helm chart target names for an app using domain+app naming.
     
     Args:
         bazel_target: Full bazel target path for the app metadata
@@ -36,10 +36,15 @@ def get_helm_chart_targets(bazel_target: str) -> Dict[str, str]:
     
     package_path = target_parts[0]
     app_name = metadata["name"]
+    domain = metadata["domain"]
+    
+    # Use domain+app naming pattern for chart targets (consistent with image naming)
+    chart_target_name = f"{domain}_{app_name}_helm"
     
     return {
-        "chart": f"//{package_path}:{app_name}_helm_chart",
-        "package": f"//{package_path}:{app_name}_helm_package",
+        "chart": f"//{package_path}:{chart_target_name}_chart",
+        "package": f"//{package_path}:{chart_target_name}_package",
+        "chart_name": f"{domain}-{app_name}",  # Chart name follows domain-app pattern
     }
 
 
@@ -71,7 +76,14 @@ def build_helm_chart(bazel_target: str) -> Optional[str]:
     # Find the generated chart directory
     from tools.release_helper.core import find_workspace_root
     workspace_root = find_workspace_root()
-    chart_dir = workspace_root / f"bazel-bin/{package_path}/{app_name}_helm_chart"
+    
+    # Use the domain+app naming pattern for the chart directory
+    metadata = get_app_metadata(bazel_target)
+    domain = metadata["domain"]
+    app_name = metadata["name"]
+    chart_target_name = f"{domain}_{app_name}_helm"
+    
+    chart_dir = workspace_root / f"bazel-bin/{package_path}/{chart_target_name}_chart"
     
     if not chart_dir.exists():
         raise FileNotFoundError(f"Generated chart directory not found: {chart_dir}")
@@ -108,7 +120,15 @@ def package_helm_chart(bazel_target: str) -> Optional[str]:
     # Find the generated package file
     from tools.release_helper.core import find_workspace_root
     workspace_root = find_workspace_root()
-    package_file = workspace_root / f"bazel-bin/{package_path}/{app_name}-{chart_version}.tgz"
+    
+    metadata = get_app_metadata(bazel_target)
+    app_name = metadata["name"]
+    domain = metadata["domain"]
+    chart_version = metadata.get("version", "latest")
+    
+    # Use domain-app naming pattern for the package file
+    chart_name = f"{domain}-{app_name}"
+    package_file = workspace_root / f"bazel-bin/{package_path}/{chart_name}-{chart_version}.tgz"
     
     if not package_file.exists():
         raise FileNotFoundError(f"Generated chart package not found: {package_file}")

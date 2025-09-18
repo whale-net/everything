@@ -14,6 +14,33 @@ The monorepo now supports automatic Helm chart generation for applications, addr
 - **Monorepo Support**: Multiple charts can be released independently
 - **Seamless Integration**: Works with existing release workflow
 
+## Chart Naming Convention
+
+Charts follow the same domain+app naming pattern as container images for consistency:
+
+**Target Names:**
+- Chart generation target: `{domain}_{app}_helm_chart`
+- Chart package target: `{domain}_{app}_helm_package`
+
+**Chart Names:**
+- Chart name in repository: `{domain}-{app}`
+- Image reference: `ghcr.io/whale-net/{domain}-{app}:{version}`
+
+**Example for `hello_fastapi` (domain: `demo`):**
+```bash
+# Bazel targets
+//demo/hello_fastapi:demo_hello_fastapi_helm_chart
+//demo/hello_fastapi:demo_hello_fastapi_helm_package
+
+# Chart name in repository
+demo-hello_fastapi
+
+# Referenced image
+ghcr.io/whale-net/demo-hello_fastapi:v1.2.3
+```
+
+This ensures direct correspondence between Helm charts and their associated container images.
+
 ## Enabling Helm Charts for an App
 
 To enable Helm chart generation for an application, update the `release_app` call in your app's `BUILD.bazel` file:

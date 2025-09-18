@@ -86,7 +86,9 @@ helm_chart = rule(
 def _helm_package_impl(ctx):
     """Implementation for helm_package rule."""
     chart_dir = ctx.file.chart_dir
-    output_tgz = ctx.actions.declare_file(ctx.attr.chart_name + "-" + ctx.attr.chart_version + ".tgz")
+    # Use domain-app naming pattern for package file
+    package_filename = ctx.attr.chart_name + "-" + ctx.attr.chart_version + ".tgz"
+    output_tgz = ctx.actions.declare_file(package_filename)
     
     # Package the chart using tar (helm package equivalent)
     ctx.actions.run_shell(
@@ -175,10 +177,10 @@ def release_helm_chart(
         template_files = template_files,
     )
     
-    # Package the chart
+    # Package the chart using domain-app naming pattern
     helm_package(
         name = name + "_package",
         chart_dir = ":" + name + "_chart",
-        chart_name = app_name,
+        chart_name = domain + "-" + app_name,  # Use domain-app pattern
         chart_version = chart_version,
     )

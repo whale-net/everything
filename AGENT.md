@@ -86,6 +86,13 @@ For each app with `release_app`, the following targets are created:
 - `<app>_image_amd64_push` - Push target for AMD64
 - `<app>_image_arm64_push` - Push target for ARM64
 
+#### Helm Chart Targets Generated (Optional)
+For apps with `helm_chart = True`, the following targets are created using domain+app naming:
+- `<domain>_<app>_helm_chart` - Generated Helm chart directory
+- `<domain>_<app>_helm_package` - Packaged chart (.tgz file)
+
+The chart name in the repository follows the `<domain>-<app>` pattern, matching the container image naming convention.
+
 #### Building Images
 ```bash
 # Build all platform variants
