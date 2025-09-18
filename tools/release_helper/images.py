@@ -4,9 +4,10 @@ Image building and tagging utilities for the release helper.
 
 import os
 import subprocess
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from tools.release_helper.metadata import get_image_targets, get_app_metadata
+from tools.release_helper.core import run_bazel
 
 
 def format_registry_tags(domain: str, app_name: str, version: str, registry: str = "ghcr.io", commit_sha: Optional[str] = None) -> Dict[str, str]:
@@ -78,3 +79,46 @@ def build_image(bazel_target: str, platform: Optional[str] = None) -> str:
 
     # Return the expected image name in domain-app format
     return f"{domain}-{app_name}:latest"
+
+
+def push_image_with_tags(bazel_target: str, tags: List[str], platform: Optional[str] = None) -> None:
+    """Push a container image with multiple tags to the registry.
+    
+    Args:
+        bazel_target: Full bazel target path for the app metadata
+        tags: List of full registry tags to push (e.g., ["ghcr.io/whale-net/demo-hello_python:v0.0.6"])
+        platform: Optional platform specification ("amd64" or "arm64", defaults to base/amd64)
+    """
+    image_targets = get_image_targets(bazel_target)
+    
+    # Determine which push target to use based on platform
+    if platform == "amd64":
+        push_target = image_targets["push_amd64"]
+    elif platform == "arm64":
+        push_target = image_targets["push_arm64"]
+    else:
+        # Default to the base push target (which is AMD64)
+        push_target = image_targets["push_base"]
+
+    print(f"Pushing {len(tags)} tags using {push_target}...")
+    
+    # The oci_push target is already configured with the repository via the macro
+    # We just need to add any additional tags as arguments
+    # Extract the tag names from the full tags
+    tag_names = [tag.split(':')[-1] for tag in tags]
+    
+    print(f"Pushing with tags: {', '.join(tag_names)}")
+    
+    # Build the bazel run command with tag arguments
+    bazel_args = ["run", push_target, "--"]
+    
+    # Add each tag as an argument (oci_push supports multiple --tag arguments)
+    for tag_name in tag_names:
+        bazel_args.extend(["--tag", tag_name])
+    
+    try:
+        run_bazel(bazel_args, capture_output=False)  # Don't capture output so we can see progress
+        print(f"Successfully pushed image with {len(tag_names)} tags")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to push image: {e}")
+        raise

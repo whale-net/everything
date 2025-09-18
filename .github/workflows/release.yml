@@ -115,7 +115,7 @@ jobs:
           bazel run --config=ci //tools:release -- release "$APP" --version "$VERSION" --commit "${{ github.sha }}" --dry-run
         else
           echo "Building and publishing $APP $VERSION"
-          bazel run --config=ci //tools:release -- release "$APP" --version "$VERSION" --commit "${{ github.sha }}"
+          bazel run --config=ci //tools:release -- release "$APP" --version "$VERSION" --commit "${{ github.sha }}" --create-git-tag
           echo "Successfully released $APP $VERSION"
         fi
 
@@ -148,48 +148,3 @@ jobs:
           $DRY_RUN)
         
         echo "$SUMMARY" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
-        MATRIX='${{ needs.plan-release.outputs.release-matrix }}'
-        if [[ "$MATRIX" == "" || "$MATRIX" == '{"include":[]}' ]]; then
-          echo "🔍 **Result:** No apps detected for release" >> $GITHUB_STEP_SUMMARY
-        elif [[ "${{ needs.release.result }}" == "skipped" ]]; then
-          echo "⏭️ **Result:** Release job was skipped" >> $GITHUB_STEP_SUMMARY
-        elif [[ "${{ needs.release.result }}" == "success" ]]; then
-          echo "✅ **Result:** Release completed successfully" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Extract app names from matrix
-          APPS=$(echo "$MATRIX" | jq -r '.include[].app' | tr '\n' ' ')
-          echo "� **Apps:** $APPS" >> $GITHUB_STEP_SUMMARY
-          echo "🏷️  **Version:** ${{ needs.plan-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          
-          echo "📝 **Trigger:** Manual dispatch" >> $GITHUB_STEP_SUMMARY
-          if [[ "${{ github.event.inputs.dry_run }}" == "true" ]]; then
-            echo "🧪 **Mode:** Dry run (no images published)" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🐳 Container Images" >> $GITHUB_STEP_SUMMARY
-          if [[ "${{ github.event.inputs.dry_run }}" == "true" ]]; then
-            echo "**Dry run mode - no images were published**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "Published to GitHub Container Registry:" >> $GITHUB_STEP_SUMMARY
-            for app in $APPS; do
-              app_lower=$(echo "$app" | tr '[:upper:]' '[:lower:]')
-              echo "- \`ghcr.io/${{ github.repository_owner }}/$app_lower:${{ needs.plan-release.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
-            done
-          fi
-        else
-          echo "❌ **Result:** Release failed" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Status:** ${{ needs.release.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Please check the release job logs for details about the failure." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Still show what was planned to be released
-          APPS=$(echo "$MATRIX" | jq -r '.include[].app' | tr '\n' ' ')
-          echo "**Planned apps:** $APPS" >> $GITHUB_STEP_SUMMARY
-          echo "**Planned version:** ${{ needs.plan-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-        fi

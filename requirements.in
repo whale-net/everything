@@ -2,3 +2,4 @@ pytest
 fastapi
 uvicorn[standard]
 httpx
+typer
