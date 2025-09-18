@@ -40,10 +40,11 @@ def oci_image_with_binary(
         binary_name = binary.split(":")[-1] if ":" in binary else binary
         repo_tag = binary_name + ":latest"
     
-    # Create binary layer with propagated tags
+    # Create binary layer with proper placement in /app/ directory
     tar(
         name = name + "_binary_layer",
         srcs = [binary],
+        package_dir = "/app",  # Place binary in /app/ directory
         tags = tags,
     )
     
@@ -118,12 +119,9 @@ def python_oci_image(name, binary, repo_tag = None, platform = None, tags = None
     base_image = _get_platform_base_image("python_slim", platform)
     binary_name = binary.split(":")[-1] if ":" in binary else binary
     
-    # For Python, we use the container's Python interpreter and run the source files from runfiles
-    # The PYTHONPATH needs to include the runfiles directory
-    entrypoint = [
-        "python3",
-        "/" + binary_name + "/" + binary_name + ".runfiles/_main/" + binary_name + "/main.py"
-    ]
+    # For Python, the binary is placed at /app/{binary_name} and can be executed directly
+    # Bazel py_binary targets are self-contained with all dependencies included
+    entrypoint = ["/app/" + binary_name]
     
     oci_image_with_binary(
         name = name,
@@ -133,9 +131,6 @@ def python_oci_image(name, binary, repo_tag = None, platform = None, tags = None
         repo_tag = repo_tag,
         platform = platform,
         tags = tags,
-        env = {
-            "PYTHONPATH": "/" + binary_name + "/" + binary_name + ".runfiles/_main:/" + binary_name + "/" + binary_name + ".runfiles"
-        },
         **kwargs
     )
 
@@ -155,15 +150,16 @@ def go_oci_image(name, binary, repo_tag = None, platform = None, tags = None, **
     """
     base_image = _get_platform_base_image("alpine", platform)
     
-    # For Go, try to use platform-specific binary if available
+    # For Go, use platform-specific binary if available and place at /app/{binary_name}
     binary_name = binary.split(":")[-1] if ":" in binary else binary
     if platform == "linux/arm64":
         platform_binary = binary.replace(":" + binary_name, ":" + binary_name + "_linux_arm64")
     else:
         platform_binary = binary.replace(":" + binary_name, ":" + binary_name + "_linux_amd64")
     
-    # Go binaries are typically at /<binary_name>/<binary_name>_/<binary_name>
-    entrypoint = ["/" + binary_name.replace("_linux_amd64", "").replace("_linux_arm64", "") + "/" + platform_binary.split(":")[-1] + "_/" + platform_binary.split(":")[-1]]
+    # The Go binary will be placed at /app/{platform_binary_name}
+    platform_binary_name = platform_binary.split(":")[-1]
+    entrypoint = ["/app/" + platform_binary_name]
     
     oci_image_with_binary(
         name = name,
