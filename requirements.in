@@ -1,4 +1,5 @@
 pytest
+pytest-git
 fastapi
 uvicorn[standard]
 httpx
