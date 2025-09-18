@@ -1,5 +1,5 @@
 # Release helper package
-load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("@everything_pip_deps//:requirements.bzl", "requirement")
 
 package(default_visibility = ["//visibility:public"])
@@ -7,7 +7,7 @@ package(default_visibility = ["//visibility:public"])
 # Release helper library
 py_library(
     name = "release_helper_lib",
-    srcs = glob(["*.py"]),
+    srcs = glob(["*.py"], exclude = ["test_*.py"]),
     deps = [
         requirement("typer"),
         requirement("pyyaml"),
@@ -21,4 +21,15 @@ py_binary(
     srcs = ["cli.py"],
     deps = [":release_helper_lib"],
     main = "cli.py",
+)
+
+# Unit tests for metadata module
+py_test(
+    name = "test_metadata",
+    srcs = ["test_metadata.py"],
+    deps = [
+        ":release_helper_lib",
+        requirement("pytest"),
+    ],
+    size = "small",
 )
