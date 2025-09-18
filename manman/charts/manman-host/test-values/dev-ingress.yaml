@@ -1,0 +1,62 @@
+# Development configuration with ingress enabled
+image:
+  name: "ghcr.io/whale-net/manman"
+  tag: "latest"
+
+namespace: manman
+
+apis:
+  experience:
+    enabled: true
+    name: manman-experience
+    replicas: 1
+    port: 8000
+    command: "start-experience-api"
+
+  workerDal:
+    enabled: true
+    name: manman-worker-dal
+    replicas: 1
+    port: 8000
+    command: "start-worker-dal-api"
+
+  status:
+    enabled: true
+    name: manman-status
+    replicas: 1
+    port: 8000
+    command: "start-status-api"
+
+processors:
+  status:
+    enabled: true
+    name: manman-status-processor
+    replicas: 1
+    command: "start-status-processor"
+
+ingress:
+  enabled: true
+  name: "manman-dev-ingress"
+  host: "localhost"
+  ingressClassName: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/use-regex: "true"
+  tls:
+    enabled: false
+
+migrations:
+  skip_migration: false
+  timeout: 300
+
+env:
+  rabbitmq:
+    port: 5672
+    host: "dev-rabbitmq"
+    user: "dev-user"
+    password: "dev-password"
+    enable_ssl: false
+    ssl_hostname: "dev-rabbitmq"
+  app_env: dev
+  db:
+    url: "postgresql+psycopg2://dev:dev@dev-db:5432/manman_dev"

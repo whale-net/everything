@@ -1,0 +1,93 @@
+{{- if .Values.apis.workerDal.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.apis.workerDal.name }}-{{ .Values.env.app_env }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: {{ .Values.apis.workerDal.name }}-{{ .Values.env.app_env }}
+    component: worker-dal-api
+  annotations:
+    # Ensure this deploys after migrations complete
+    "argocd.argoproj.io/sync-wave": "0"
+spec:
+  replicas: {{ .Values.apis.workerDal.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.apis.workerDal.name }}-{{ .Values.env.app_env }}
+  template:
+    metadata:
+      namespace: {{ .Values.namespace }}
+      labels:
+        app: {{ .Values.apis.workerDal.name }}-{{ .Values.env.app_env }}
+        component: worker-dal-api
+    spec:
+      containers:
+        - name: manman-worker-dal-api
+          image: "{{ .Values.image.name }}:{{ .Values.image.tag }}"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: 100m
+              memory: 512Mi
+          ports:
+            - containerPort: {{ .Values.apis.workerDal.port }}
+              name: http
+          args:
+            - host
+            - {{ .Values.apis.workerDal.command }}
+            # Migrations run as pre-install hook, so skip the migration check
+            - --no-should-run-migration-check
+            {{ if and .Values.env.rabbitmq.createVhost (eq .Values.env.app_env "dev") }}
+            - --create-vhost
+            {{- end }}
+            {{- if .Values.env.otel.logging_enabled }}
+            - --log-otlp
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /workerdal/health
+              port: {{ .Values.apis.workerDal.port }}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /workerdal/health
+              port: {{ .Values.apis.workerDal.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # TODO - improve how secrets are sourced in this template
+          env:
+            - name: MANMAN_POSTGRES_URL
+              value: {{ .Values.env.db.url }}
+            - name: MANMAN_RABBITMQ_HOST
+              value: {{ .Values.env.rabbitmq.host }}
+            - name: MANMAN_RABBITMQ_PORT
+              value: {{ .Values.env.rabbitmq.port | quote }}
+            - name: MANMAN_RABBITMQ_USER
+              value: {{ .Values.env.rabbitmq.user }}
+            - name: MANMAN_RABBITMQ_PASSWORD
+              value: {{ .Values.env.rabbitmq.password }}
+            - name: MANMAN_RABBITMQ_ENABLE_SSL
+              value: {{ .Values.env.rabbitmq.enable_ssl | quote }}
+            - name: MANMAN_RABBITMQ_SSL_HOSTNAME
+              value: {{ .Values.env.rabbitmq.ssl_hostname | quote }}
+            - name: APP_ENV
+              value: {{ .Values.env.app_env }}
+{{- if .Values.env.otel.logging_enabled }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ .Values.apis.workerDal.name }}-{{ .Values.env.app_env }}
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "deployment-name={{ .Values.apis.workerDal.name }}-{{ .Values.env.app_env }}"
+            - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+              value: {{ .Values.env.otelCollector.logs.endpoint }}
+            - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+              value: {{ .Values.env.otelCollector.traces.endpoint }}
+{{- end }}
+{{- end }}

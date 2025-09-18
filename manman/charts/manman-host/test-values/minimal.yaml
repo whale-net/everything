@@ -1,0 +1,54 @@
+# Minimal test configuration - only essential services
+image:
+  name: "ghcr.io/whale-net/manman"
+  tag: "v1.0.0"
+
+namespace: manman
+
+apis:
+  experience:
+    enabled: true
+    name: manman-experience
+    replicas: 1
+    port: 8000
+    command: "start-experience-api"
+
+  workerDal:
+    enabled: false
+    name: manman-worker-dal
+    replicas: 1
+    port: 8000
+    command: "start-worker-dal-api"
+
+  status:
+    enabled: true
+    name: manman-status
+    replicas: 1
+    port: 8000
+    command: "start-status-api"
+
+processors:
+  status:
+    enabled: false
+    name: manman-status-processor
+    replicas: 1
+    command: "start-status-processor"
+
+ingress:
+  enabled: false
+
+migrations:
+  skip_migration: false
+  timeout: 300
+
+env:
+  rabbitmq:
+    port: 5672
+    host: "test-rabbitmq"
+    user: "test-user"
+    password: "test-password"
+    enable_ssl: false
+    ssl_hostname: "test-ssl-hostname"
+  app_env: test
+  db:
+    url: "postgresql+psycopg2://test:test@test-db:5432/manman_test"

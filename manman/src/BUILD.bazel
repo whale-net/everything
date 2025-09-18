@@ -32,8 +32,7 @@ py_library(
 py_test(
     name = "manman_core_test",
     srcs = glob(["test/*.py"]),
-    main = "test/runner.py",  # Use pytest runner
-    visibility = ["//manman:__subpackages__"],  # Allow subpackages to depend on this
+    main = "test/runner.py",
     deps = [
         ":manman_core",
         requirement("pytest"),

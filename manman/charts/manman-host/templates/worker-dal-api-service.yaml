@@ -1,0 +1,18 @@
+{{- if .Values.apis.workerDal.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.apis.workerDal.name }}-{{ .Values.env.app_env }}-service
+  namespace: {{ .Values.namespace }}
+  labels:
+    component: worker-dal-api
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ .Values.apis.workerDal.name }}-{{ .Values.env.app_env }}
+  ports:
+    - protocol: TCP
+      port: {{ .Values.apis.workerDal.port }}
+      targetPort: {{ .Values.apis.workerDal.port }}
+      name: http
+{{- end }}

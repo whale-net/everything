@@ -4,10 +4,7 @@ load("@everything_pip_deps//:requirements.bzl", "requirement")
 # Host API services library
 py_library(
     name = "manman_host",
-    srcs = [
-        "__init__.py",
-        "main.py",
-    ],
+    srcs = glob(["**/*.py"], exclude=["test/**"]),
     visibility = ["//manman:__subpackages__"],
     deps = [
         "//manman/src:manman_core",
@@ -61,7 +58,7 @@ py_binary(
 py_test(
     name = "manman_host_test",
     srcs = glob(["test/*.py"]),
-    main = "test/test_main.py",  # Specify main test file
+    main = "test/test_experience_api.py",
     deps = [
         ":manman_host",
         requirement("pytest"),
