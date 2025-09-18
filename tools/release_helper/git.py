@@ -2,8 +2,9 @@
 Git operations for the release helper.
 """
 
+import re
 import subprocess
-from typing import Optional
+from typing import Dict, List, Optional, Tuple
 
 
 def format_git_tag(domain: str, app_name: str, version: str) -> str:
@@ -45,3 +46,158 @@ def get_previous_tag() -> Optional[str]:
         return result.stdout.strip()
     except subprocess.CalledProcessError:
         return None
+
+
+def get_all_tags() -> List[str]:
+    """Get all Git tags sorted by version (newest first)."""
+    try:
+        result = subprocess.run(
+            ["git", "tag", "--sort=-version:refname"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return [tag.strip() for tag in result.stdout.strip().split('\n') if tag.strip()]
+    except subprocess.CalledProcessError:
+        return []
+
+
+def get_app_tags(domain: str, app_name: str) -> List[str]:
+    """Get all tags for a specific app, sorted by version (newest first)."""
+    all_tags = get_all_tags()
+    app_prefix = f"{domain}-{app_name}."
+    app_tags = [tag for tag in all_tags if tag.startswith(app_prefix)]
+    return app_tags
+
+
+def parse_version_from_tag(tag: str, domain: str, app_name: str) -> Optional[str]:
+    """Parse version from an app tag.
+    
+    Args:
+        tag: Git tag (e.g., "demo-hello_python.v1.2.3")
+        domain: App domain (e.g., "demo")
+        app_name: App name (e.g., "hello_python")
+    
+    Returns:
+        Version string (e.g., "v1.2.3") or None if not a valid app tag
+    """
+    expected_prefix = f"{domain}-{app_name}."
+    if not tag.startswith(expected_prefix):
+        return None
+    
+    version = tag[len(expected_prefix):]
+    # Validate that it looks like a semantic version
+    if re.match(r'^v\d+\.\d+\.\d+(?:-[a-zA-Z0-9\-\.]+)?$', version):
+        return version
+    return None
+
+
+def get_latest_app_version(domain: str, app_name: str) -> Optional[str]:
+    """Get the latest version for a specific app.
+    
+    Args:
+        domain: App domain (e.g., "demo")
+        app_name: App name (e.g., "hello_python")
+    
+    Returns:
+        Latest version string (e.g., "v1.2.3") or None if no versions found
+    """
+    app_tags = get_app_tags(domain, app_name)
+    for tag in app_tags:
+        version = parse_version_from_tag(tag, domain, app_name)
+        if version:
+            return version
+    return None
+
+
+def parse_semantic_version(version: str) -> Tuple[int, int, int, Optional[str]]:
+    """Parse a semantic version string into components.
+    
+    Args:
+        version: Version string (e.g., "v1.2.3" or "v1.2.3-beta1")
+    
+    Returns:
+        Tuple of (major, minor, patch, prerelease)
+    
+    Raises:
+        ValueError: If version format is invalid
+    """
+    # Remove 'v' prefix if present
+    if version.startswith('v'):
+        version = version[1:]
+    
+    # Split on '-' to separate prerelease
+    parts = version.split('-', 1)
+    version_part = parts[0]
+    prerelease = parts[1] if len(parts) > 1 else None
+    
+    # Parse major.minor.patch
+    version_components = version_part.split('.')
+    if len(version_components) != 3:
+        raise ValueError(f"Invalid semantic version format: {version}")
+    
+    try:
+        major = int(version_components[0])
+        minor = int(version_components[1])
+        patch = int(version_components[2])
+    except ValueError:
+        raise ValueError(f"Invalid semantic version format: {version}")
+    
+    return major, minor, patch, prerelease
+
+
+def increment_minor_version(current_version: str) -> str:
+    """Increment the minor version and reset patch to 0.
+    
+    Args:
+        current_version: Current version (e.g., "v1.2.3")
+    
+    Returns:
+        New version with incremented minor (e.g., "v1.3.0")
+    """
+    major, minor, patch, prerelease = parse_semantic_version(current_version)
+    return f"v{major}.{minor + 1}.0"
+
+
+def increment_patch_version(current_version: str) -> str:
+    """Increment the patch version.
+    
+    Args:
+        current_version: Current version (e.g., "v1.2.3")
+    
+    Returns:
+        New version with incremented patch (e.g., "v1.2.4")
+    """
+    major, minor, patch, prerelease = parse_semantic_version(current_version)
+    return f"v{major}.{minor}.{patch + 1}"
+
+
+def auto_increment_version(domain: str, app_name: str, increment_type: str) -> str:
+    """Auto-increment version for an app based on the latest tag.
+    
+    Args:
+        domain: App domain (e.g., "demo")
+        app_name: App name (e.g., "hello_python")
+        increment_type: Either "minor" or "patch"
+    
+    Returns:
+        New version string
+    
+    Raises:
+        ValueError: If increment_type is invalid or no previous version found
+    """
+    if increment_type not in ["minor", "patch"]:
+        raise ValueError(f"Invalid increment type: {increment_type}. Must be 'minor' or 'patch'")
+    
+    latest_version = get_latest_app_version(domain, app_name)
+    if not latest_version:
+        # No previous version, start with v0.1.0 for minor or v0.0.1 for patch
+        if increment_type == "minor":
+            return "v0.1.0"
+        else:  # patch
+            return "v0.0.1"
+    
+    if increment_type == "minor":
+        return increment_minor_version(latest_version)
+    else:  # patch
+        return increment_patch_version(latest_version)
