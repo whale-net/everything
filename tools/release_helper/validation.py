@@ -105,6 +105,11 @@ def validate_release_version(bazel_target: str, version: str, allow_overwrite: b
         print(f"⚠️  Allowing overwrite of version '{version}' for app '{app_name}' (if it exists)", file=sys.stderr)
 
 
+def _get_app_full_name(app: Dict[str, str]) -> str:
+    """Get the full domain-appname format for an app."""
+    return f"{app['domain']}-{app['name']}"
+
+
 def validate_apps(requested_apps: List[str]) -> List[Dict[str, str]]:
     """Validate that requested apps exist and return the valid ones.
     
@@ -131,7 +136,7 @@ def validate_apps(requested_apps: List[str]) -> List[Dict[str, str]]:
         name = app['name']
         
         # Full format: domain-name
-        full_name = f"{domain}-{name}"
+        full_name = _get_app_full_name(app)
         full_name_lookup[full_name] = app
         
         # Path format: domain/name
@@ -162,7 +167,7 @@ def validate_apps(requested_apps: List[str]) -> List[Dict[str, str]]:
                 app = matching_apps[0]
             else:
                 # Multiple apps with same name - show all options
-                ambiguous_apps = [f"{a['domain']}-{a['name']}" for a in matching_apps]
+                ambiguous_apps = [_get_app_full_name(a) for a in matching_apps]
                 invalid_apps.append(f"{requested_app} (ambiguous, could be: {', '.join(ambiguous_apps)})")
                 continue
         
@@ -172,18 +177,9 @@ def validate_apps(requested_apps: List[str]) -> List[Dict[str, str]]:
             invalid_apps.append(requested_app)
 
     if invalid_apps:
-        # Show available apps in different formats for better UX
-        available_full = sorted(f"{app['domain']}-{app['name']}" for app in all_apps)
-        available_short = []
-        for name, apps in short_name_lookup.items():
-            if len(apps) == 1:
-                available_short.append(name)
-            else:
-                # For ambiguous names, show all options
-                for app in apps:
-                    available_short.append(f"{app['domain']}-{app['name']}")
-        
-        available_display = ", ".join(sorted(set(available_full)))
+        # Show available apps in full format for consistency
+        available_full = sorted(_get_app_full_name(app) for app in all_apps)
+        available_display = ", ".join(available_full)
         invalid = ", ".join(invalid_apps)
         raise ValueError(
             f"Invalid apps: {invalid}.\n"
