@@ -11,6 +11,7 @@ from typing_extensions import Annotated
 
 from tools.release_helper.changes import detect_changed_apps
 from tools.release_helper.git import get_previous_tag
+from tools.release_helper.helm import build_helm_chart, package_helm_chart, validate_helm_chart, lint_helm_chart
 from tools.release_helper.images import build_image
 from tools.release_helper.metadata import list_all_apps
 from tools.release_helper.release import find_app_bazel_target, plan_release, tag_and_push_image
@@ -292,6 +293,74 @@ def release_notes_all(
                 
     except Exception as e:
         typer.echo(f"Error generating release notes: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
+def helm_build(
+    app_name: Annotated[str, typer.Argument(help="App name")],
+):
+    """Build Helm chart for an app."""
+    try:
+        bazel_target = find_app_bazel_target(app_name)
+        chart_dir = build_helm_chart(bazel_target)
+        if chart_dir:
+            typer.echo(f"Helm chart built: {chart_dir}")
+        else:
+            typer.echo(f"Helm chart not enabled for app: {app_name}")
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
+def helm_package(
+    app_name: Annotated[str, typer.Argument(help="App name")],
+):
+    """Package Helm chart for an app."""
+    try:
+        bazel_target = find_app_bazel_target(app_name)
+        package_path = package_helm_chart(bazel_target)
+        if package_path:
+            typer.echo(f"Helm chart packaged: {package_path}")
+        else:
+            typer.echo(f"Helm chart not enabled for app: {app_name}")
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
+def helm_validate(
+    app_name: Annotated[str, typer.Argument(help="App name")],
+    lint: Annotated[bool, typer.Option("--lint", help="Also run helm lint if available")] = False,
+):
+    """Validate Helm chart for an app."""
+    try:
+        bazel_target = find_app_bazel_target(app_name)
+        chart_dir = build_helm_chart(bazel_target)
+        
+        if not chart_dir:
+            typer.echo(f"Helm chart not enabled for app: {app_name}")
+            return
+        
+        # Validate chart structure
+        if validate_helm_chart(chart_dir):
+            typer.echo(f"✓ Helm chart validation passed for {app_name}")
+            
+            # Run helm lint if requested
+            if lint:
+                if lint_helm_chart(chart_dir):
+                    typer.echo(f"✓ Helm lint passed for {app_name}")
+                else:
+                    typer.echo(f"✗ Helm lint failed for {app_name}", err=True)
+                    raise typer.Exit(1)
+        else:
+            typer.echo(f"✗ Helm chart validation failed for {app_name}", err=True)
+            raise typer.Exit(1)
+            
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
 
 

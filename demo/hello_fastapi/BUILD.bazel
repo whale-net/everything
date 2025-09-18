@@ -39,4 +39,6 @@ release_app(
     language = "python",
     domain = "demo",
     description = "FastAPI hello world application with uvicorn server",
+    helm_chart = True,  # Enable Helm chart generation
+    chart_version = "0.1.0",  # Explicit chart version
 )

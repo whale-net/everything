@@ -38,6 +38,8 @@ release_app(
     language = "python",  # or "go"
     domain = "demo",      # Required: categorizes your app
     description = "Description of what this app does",
+    helm_chart = True,    # Optional: enable Helm chart generation
+    chart_version = "0.1.0",  # Optional: explicit chart version
 )
 ```
 
@@ -50,12 +52,15 @@ release_app(
 - **`version`**: Default version (optional, defaults to "latest")
 - **`registry`**: Container registry (optional, defaults to "ghcr.io")
 - **`custom_repo_name`**: Override default naming (optional)
+- **`helm_chart`**: Enable Helm chart generation (optional, defaults to False)
+- **`chart_version`**: Helm chart version (optional, defaults to app version)
 
 #### Generated Artifacts
 The `release_app` macro automatically creates:
 1. **Release metadata** (`<app_name>_metadata`) - JSON metadata for discovery
 2. **Multi-platform images** - Separate targets for amd64 and arm64
 3. **OCI push targets** - For publishing to container registries
+4. **Helm charts** (optional) - Kubernetes deployment manifests with baked-in image versions
 
 ### Image Build System
 

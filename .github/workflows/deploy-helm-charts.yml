@@ -1,0 +1,302 @@
+name: Deploy Helm Charts to GitHub Pages
+
+on:
+  workflow_dispatch:
+    inputs:
+      charts:
+        description: 'Comma-separated list of charts to deploy (e.g., hello_python,hello_go) or "all" for all charts'
+        required: true
+        default: 'all'
+      version:
+        description: 'Chart version to deploy'
+        required: false
+  
+  # Also trigger on successful releases that include Helm charts
+  workflow_run:
+    workflows: ["Release"]
+    types:
+      - completed
+    branches: [main]
+
+jobs:
+  # Build and package Helm charts
+  build-charts:
+    name: Build Helm Charts
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success') }}
+    outputs:
+      chart-matrix: ${{ steps.discover.outputs.matrix }}
+      charts-found: ${{ steps.discover.outputs.charts-found }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'helm'
+        
+    - name: Discover Helm-enabled apps
+      id: discover
+      run: |
+        # Query for all apps with Helm charts enabled
+        echo "Discovering apps with Helm charts..."
+        
+        # Build all metadata targets to ensure they're available
+        bazel build $(bazel query "kind(app_metadata, //...)" --output=label)
+        
+        # Find apps with helm_chart_enabled = true
+        HELM_APPS=()
+        while IFS= read -r target; do
+          if [[ -n "$target" && "$target" =~ _metadata$ ]]; then
+            # Extract package path and target name
+            PACKAGE_PATH=$(echo "$target" | sed 's|^//||; s|:.*||')
+            TARGET_NAME=$(echo "$target" | sed 's|.*:||')
+            
+            # Read the metadata JSON
+            METADATA_FILE="bazel-bin/${PACKAGE_PATH}/${TARGET_NAME}_metadata.json"
+            if [[ -f "$METADATA_FILE" ]]; then
+              HELM_ENABLED=$(jq -r '.helm_chart_enabled // false' "$METADATA_FILE")
+              if [[ "$HELM_ENABLED" == "true" ]]; then
+                APP_NAME=$(jq -r '.name' "$METADATA_FILE")
+                HELM_APPS+=("$APP_NAME")
+                echo "Found Helm-enabled app: $APP_NAME"
+              fi
+            fi
+          fi
+        done <<< $(bazel query "kind(app_metadata, //...)" --output=label)
+        
+        # Filter based on input if provided
+        INPUT_CHARTS="${{ github.event.inputs.charts }}"
+        if [[ -n "$INPUT_CHARTS" && "$INPUT_CHARTS" != "all" ]]; then
+          echo "Filtering charts based on input: $INPUT_CHARTS"
+          IFS=',' read -ra REQUESTED_CHARTS <<< "$INPUT_CHARTS"
+          FILTERED_APPS=()
+          for app in "${HELM_APPS[@]}"; do
+            for requested in "${REQUESTED_CHARTS[@]}"; do
+              if [[ "$app" == "$requested" ]]; then
+                FILTERED_APPS+=("$app")
+                break
+              fi
+            done
+          done
+          HELM_APPS=("${FILTERED_APPS[@]}")
+        fi
+        
+        # Create matrix
+        if [[ ${#HELM_APPS[@]} -eq 0 ]]; then
+          echo "No Helm charts found to deploy"
+          echo "matrix={\"include\":[]}" >> $GITHUB_OUTPUT
+          echo "charts-found=false" >> $GITHUB_OUTPUT
+        else
+          echo "Charts to deploy: ${HELM_APPS[*]}"
+          
+          # Build matrix JSON
+          MATRIX_INCLUDE=""
+          for app in "${HELM_APPS[@]}"; do
+            if [[ -n "$MATRIX_INCLUDE" ]]; then
+              MATRIX_INCLUDE="$MATRIX_INCLUDE,"
+            fi
+            VERSION_ARG="${{ github.event.inputs.version }}"
+            MATRIX_INCLUDE="$MATRIX_INCLUDE{\"app\":\"$app\",\"version\":\"${VERSION_ARG:-latest}\"}"
+          done
+          
+          MATRIX_JSON="{\"include\":[$MATRIX_INCLUDE]}"
+          echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
+          echo "charts-found=true" >> $GITHUB_OUTPUT
+        fi
+
+  # Package individual charts
+  package-charts:
+    name: Package ${{ matrix.app }} Chart
+    runs-on: ubuntu-latest
+    needs: build-charts
+    if: needs.build-charts.outputs.charts-found == 'true'
+    strategy:
+      matrix: ${{ fromJson(needs.build-charts.outputs.chart-matrix) }}
+      fail-fast: false
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'helm'
+        
+    - name: Package Helm chart for ${{ matrix.app }}
+      env:
+        APP: ${{ matrix.app }}
+        VERSION: ${{ matrix.version }}
+      run: |
+        echo "Packaging Helm chart for $APP..."
+        
+        # Use the release helper to package the chart
+        bazel run //tools:release -- helm-package "$APP"
+        
+        # Find the packaged chart
+        PACKAGE_FILE=$(find bazel-bin -name "${APP}-*.tgz" | head -1)
+        if [[ -z "$PACKAGE_FILE" ]]; then
+          echo "Error: Could not find packaged chart for $APP"
+          exit 1
+        fi
+        
+        echo "Packaged chart: $PACKAGE_FILE"
+        
+        # Copy to a known location for artifact upload
+        mkdir -p charts-output
+        cp "$PACKAGE_FILE" charts-output/
+        
+    - name: Upload chart artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: helm-chart-${{ matrix.app }}
+        path: charts-output/*.tgz
+        retention-days: 30
+
+  # Deploy to GitHub Pages
+  deploy-pages:
+    name: Deploy to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: [build-charts, package-charts]
+    if: needs.build-charts.outputs.charts-found == 'true'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'helm'
+        
+    - name: Download all chart artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: helm-chart-*
+        path: downloaded-charts
+        merge-multiple: true
+        
+    - name: Setup Pages
+      uses: actions/configure-pages@v4
+      
+    - name: Build Helm repository
+      run: |
+        echo "Building Helm repository..."
+        
+        # Create repository structure
+        mkdir -p helm-repo/charts
+        
+        # Copy all downloaded charts
+        if [[ -d downloaded-charts ]]; then
+          cp downloaded-charts/*.tgz helm-repo/charts/ || echo "No charts to copy"
+        fi
+        
+        # Generate index.yaml
+        cd helm-repo
+        
+        # Create a basic index.yaml if no charts exist
+        if [[ ! -f index.yaml && $(ls charts/*.tgz 2>/dev/null | wc -l) -eq 0 ]]; then
+          cat > index.yaml << EOF
+        apiVersion: v1
+        entries: {}
+        generated: "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+        serverInfo: {}
+        EOF
+        else
+          # Use helm to generate proper index if charts exist
+          if command -v helm >/dev/null 2>&1; then
+            helm repo index . --url "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+          else
+            # Fallback: create basic index manually
+            echo "apiVersion: v1" > index.yaml
+            echo "entries:" >> index.yaml
+            echo "generated: \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"" >> index.yaml
+          fi
+        fi
+        
+        # Create a simple index.html for the repository
+        cat > index.html << EOF
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Helm Repository - Everything Monorepo</title>
+            <meta charset="utf-8">
+            <style>
+                body { font-family: Arial, sans-serif; margin: 40px; }
+                .chart { margin: 20px 0; padding: 10px; border: 1px solid #ddd; }
+                .chart-name { font-weight: bold; font-size: 1.2em; }
+                .chart-description { color: #666; margin: 5px 0; }
+            </style>
+        </head>
+        <body>
+            <h1>Helm Repository - Everything Monorepo</h1>
+            <p>This is the Helm chart repository for the Everything monorepo.</p>
+            
+            <h2>Usage</h2>
+            <pre>
+        helm repo add everything https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+        helm repo update
+        helm search repo everything/
+            </pre>
+            
+            <h2>Available Charts</h2>
+            <div id="charts">
+        $(for chart in charts/*.tgz; do
+            if [[ -f "$chart" ]]; then
+                chart_name=$(basename "$chart" .tgz | sed 's/-[0-9].*//')
+                echo "        <div class=\"chart\">"
+                echo "            <div class=\"chart-name\">$chart_name</div>"
+                echo "            <div class=\"chart-description\">Helm chart for $chart_name application</div>"
+                echo "        </div>"
+            fi
+        done)
+            </div>
+            
+            <p><em>Repository updated: $(date -u)</em></p>
+        </body>
+        </html>
+        EOF
+        
+        echo "Repository structure:"
+        find . -type f | sort
+        
+    - name: Upload Pages artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: helm-repo
+        
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
+      
+    - name: Summary
+      run: |
+        echo "🎯 **Helm Repository Deployment Complete**" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "📍 **Repository URL:** https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "📦 **Charts Deployed:**" >> $GITHUB_STEP_SUMMARY
+        for chart in helm-repo/charts/*.tgz; do
+          if [[ -f "$chart" ]]; then
+            chart_name=$(basename "$chart")
+            echo "- $chart_name" >> $GITHUB_STEP_SUMMARY
+          fi
+        done
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "🔧 **Setup Instructions:**" >> $GITHUB_STEP_SUMMARY
+        echo '```bash' >> $GITHUB_STEP_SUMMARY
+        echo "helm repo add everything https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}" >> $GITHUB_STEP_SUMMARY
+        echo "helm repo update" >> $GITHUB_STEP_SUMMARY
+        echo "helm search repo everything/" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY

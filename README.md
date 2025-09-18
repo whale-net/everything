@@ -611,6 +611,13 @@ Each released app gets published to GitHub Container Registry with multiple tags
 - `ghcr.io/OWNER/DOMAIN-APP:latest` (latest release)
 - `ghcr.io/OWNER/DOMAIN-APP:COMMIT_SHA` (commit-specific)
 
+#### 4. Helm Chart Publishing (Optional)
+Apps with Helm charts enabled get packaged and published to GitHub Pages:
+- Chart repository: `https://whale-net.github.io/everything`
+- Charts include baked-in image versions for coordination
+- Multiple charts can be released independently in the monorepo
+- See [Helm Charts Documentation](docs/HELM_CHARTS.md) for details
+
 ### 🔒 Version Validation & Protection
 
 The release system includes robust version validation and protection:

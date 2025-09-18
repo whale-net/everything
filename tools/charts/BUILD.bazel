@@ -1,0 +1,8 @@
+# Helm chart templates
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "templates",
+    srcs = glob(["templates/*.tpl"]),
+    visibility = ["//visibility:public"],
+)

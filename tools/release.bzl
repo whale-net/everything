@@ -1,6 +1,7 @@
 """Release utilities for the Everything monorepo."""
 
 load("//tools:oci.bzl", "python_oci_image_multiplatform", "go_oci_image_multiplatform")
+load("//tools:helm.bzl", "release_helm_chart")
 load("@rules_oci//oci:defs.bzl", "oci_push")
 
 def _app_metadata_impl(ctx):
@@ -17,6 +18,7 @@ def _app_metadata_impl(ctx):
         "registry": ctx.attr.registry,
         "repo_name": ctx.attr.repo_name,
         "domain": ctx.attr.domain,
+        "helm_chart_enabled": ctx.attr.helm_chart_enabled,
     }
     
     output = ctx.actions.declare_file(ctx.label.name + "_metadata.json")
@@ -39,10 +41,11 @@ app_metadata = rule(
         "registry": attr.string(default = "ghcr.io"),
         "repo_name": attr.string(mandatory = True),
         "domain": attr.string(mandatory = True),
+        "helm_chart_enabled": attr.bool(default = False),
     },
 )
 
-def release_app(name, binary_target, language, domain, description = "", version = "latest", registry = "ghcr.io", custom_repo_name = None):
+def release_app(name, binary_target, language, domain, description = "", version = "latest", registry = "ghcr.io", custom_repo_name = None, helm_chart = False, chart_version = None):
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
@@ -57,6 +60,8 @@ def release_app(name, binary_target, language, domain, description = "", version
         version: Default version (can be overridden at release time)
         registry: Container registry (defaults to ghcr.io)
         custom_repo_name: Custom repository name (defaults to name)
+        helm_chart: Whether to generate Helm chart (defaults to False)
+        chart_version: Helm chart version (defaults to app version)
     """
     if language not in ["python", "go"]:
         fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
@@ -123,7 +128,23 @@ def release_app(name, binary_target, language, domain, description = "", version
         domain = domain,
         tags = ["release-metadata"],  # No manual tag - metadata should be easily discoverable
         visibility = ["//visibility:public"],
+        helm_chart_enabled = helm_chart,
     )
+    
+    # Generate Helm chart if requested
+    if helm_chart:
+        actual_chart_version = chart_version or version
+        
+        release_helm_chart(
+            name = name + "_helm",
+            app_name = name,
+            description = description or "Helm chart for " + name,
+            chart_version = actual_chart_version,
+            app_version = version,
+            domain = domain,
+            language = language,
+            image_repo = registry + "/whale-net/" + image_name,  # Use the same registry logic
+        )
 
 def get_release_metadata_target(app_name):
     """Get the metadata target name for an app.
