@@ -152,5 +152,5 @@ jobs:
       run: |
         # Publish the specific app image to registry
         echo "Publishing $APP image to registry..."
-        bazel run //tools:release -- release "$APP" --version "latest" --commit "${{ github.sha }}" --create-git-tag
+        bazel run //tools:release -- release "$APP" --version "latest" --commit "${{ github.sha }}"
         
