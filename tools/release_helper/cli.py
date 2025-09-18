@@ -14,6 +14,7 @@ from tools.release_helper.git import get_previous_tag
 from tools.release_helper.images import build_image
 from tools.release_helper.metadata import list_all_apps
 from tools.release_helper.release import plan_release, tag_and_push_image
+from tools.release_helper.release_notes import generate_release_notes, generate_release_notes_for_all_apps
 from tools.release_helper.summary import generate_release_summary
 from tools.release_helper.validation import validate_release_version
 
@@ -152,6 +153,69 @@ def summary(
         repository_owner=repository_owner
     )
     typer.echo(summary_result)
+
+
+@app.command()
+def release_notes(
+    app_name: Annotated[str, typer.Argument(help="App name to generate release notes for")],
+    current_tag: Annotated[str, typer.Option("--current-tag", help="Current tag/version")] = "HEAD",
+    previous_tag: Annotated[Optional[str], typer.Option("--previous-tag", help="Previous tag to compare against (auto-detected if not provided)")] = None,
+    format_type: Annotated[str, typer.Option("--format", help="Output format")] = "markdown",
+):
+    """Generate release notes for a specific app."""
+    if format_type not in ["markdown", "plain", "json"]:
+        typer.echo("Error: format must be one of: markdown, plain, json", err=True)
+        raise typer.Exit(1)
+    
+    try:
+        notes = generate_release_notes(app_name, current_tag, previous_tag, format_type)
+        typer.echo(notes)
+    except Exception as e:
+        typer.echo(f"Error generating release notes: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
+def release_notes_all(
+    current_tag: Annotated[str, typer.Option("--current-tag", help="Current tag/version")] = "HEAD",
+    previous_tag: Annotated[Optional[str], typer.Option("--previous-tag", help="Previous tag to compare against (auto-detected if not provided)")] = None,
+    format_type: Annotated[str, typer.Option("--format", help="Output format")] = "markdown",
+    output_dir: Annotated[Optional[str], typer.Option("--output-dir", help="Directory to save release notes files")] = None,
+):
+    """Generate release notes for all apps."""
+    if format_type not in ["markdown", "plain", "json"]:
+        typer.echo("Error: format must be one of: markdown, plain, json", err=True)
+        raise typer.Exit(1)
+    
+    try:
+        all_notes = generate_release_notes_for_all_apps(current_tag, previous_tag, format_type)
+        
+        if output_dir:
+            import os
+            from pathlib import Path
+            
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            
+            for app_name, notes in all_notes.items():
+                ext = "md" if format_type == "markdown" else "txt" if format_type == "plain" else "json"
+                file_path = Path(output_dir) / f"{app_name}-{current_tag}.{ext}"
+                
+                with open(file_path, 'w') as f:
+                    f.write(notes)
+                    
+                typer.echo(f"Release notes for {app_name} saved to {file_path}")
+        else:
+            # Output all to stdout
+            for app_name, notes in all_notes.items():
+                typer.echo(f"{'='*60}")
+                typer.echo(f"Release Notes for {app_name}")
+                typer.echo(f"{'='*60}")
+                typer.echo(notes)
+                typer.echo()
+                
+    except Exception as e:
+        typer.echo(f"Error generating release notes: {e}", err=True)
+        raise typer.Exit(1)
 
 
 def main():
