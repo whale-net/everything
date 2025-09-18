@@ -1,0 +1,40 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
+load("@everything_pip_deps//:requirements.bzl", "requirement")
+load("//tools:release.bzl", "release_app")
+
+py_library(
+    name = "main_lib",
+    srcs = ["__init__.py", "main.py"],
+    deps = ["//libs/python"],
+    visibility = ["//demo/hello_world_test:__pkg__"],
+)
+
+py_binary(
+    name = "hello_world_test",
+    srcs = ["main.py"],
+    main = "main.py",
+    deps = [
+        ":main_lib",
+        "//libs/python",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "test_main",
+    srcs = ["test_main.py"],
+    deps = [
+        ":main_lib",
+        requirement("pytest"),
+    ],
+    size = "small",
+)
+
+# Release metadata and OCI images for this app
+release_app(
+    name = "hello_world_test",
+    binary_target = ":hello_world_test",
+    language = "python",
+    domain = "demo",
+    description = "Python hello world test application for documentation validation",
+)

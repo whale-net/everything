@@ -1,5 +1,6 @@
 # Release helper package
 load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+load("@everything_pip_deps//:requirements.bzl", "requirement")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -7,6 +8,11 @@ package(default_visibility = ["//visibility:public"])
 py_library(
     name = "release_helper_lib",
     srcs = glob(["*.py"]),
+    deps = [
+        requirement("typer"),
+        requirement("pyyaml"),
+        requirement("httpx"),
+    ],
 )
 
 # Release helper tool for managing app releases and container images

@@ -14,7 +14,7 @@ build:ci --verbose_failures
 build:ci --show_timestamps
 build:ci --announce_rc
 # Bandwidth-optimized caching for CI
-build:ci --experimental_guard_against_concurrent_changes
+build:ci --guard_against_concurrent_changes
 test:ci --cache_test_results=yes
 
 # Test configurations

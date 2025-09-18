@@ -24,17 +24,22 @@ def find_workspace_root() -> Path:
     return current
 
 
-def run_bazel(args: list[str], capture_output: bool = True) -> subprocess.CompletedProcess:
+def run_bazel(args: list[str], capture_output: bool = True, env: dict = None) -> subprocess.CompletedProcess:
     """Run a bazel command with consistent configuration."""
     workspace_root = find_workspace_root()
     cmd = ["bazel"] + args
+    
+    # Use provided environment or current environment
+    run_env = env if env is not None else os.environ.copy()
+    
     try:
         return subprocess.run(
             cmd,
             capture_output=capture_output,
             text=True,
             check=True,
-            cwd=workspace_root
+            cwd=workspace_root,
+            env=run_env
         )
     except subprocess.CalledProcessError as e:
         print(f"Bazel command failed: {' '.join(cmd)}", file=sys.stderr)

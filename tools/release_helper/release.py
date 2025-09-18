@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 
 from tools.release_helper.changes import detect_changed_apps
 from tools.release_helper.git import create_git_tag, format_git_tag, get_previous_tag, push_git_tag
-from tools.release_helper.images import build_image, format_registry_tags
+from tools.release_helper.images import build_image, format_registry_tags, push_image_with_tags
 from tools.release_helper.metadata import get_app_metadata, list_all_apps
 from tools.release_helper.validation import validate_apps, validate_release_version, validate_semantic_version
 
@@ -139,16 +139,17 @@ def tag_and_push_image(
             print(f"DRY RUN: Would create Git tag: {git_tag}")
     else:
         print("Pushing to registry...")
-        # TODO: Implement direct push from OCI image using oci_push or equivalent tooling
-        # For now, this is a placeholder - you may want to implement this using:
-        # 1. bazel run with oci_push targets (if you add them to BUILD files)
-        # 2. Direct use of crane/skopeo to push from bazel-bin OCI layout
-        # 3. Custom Bazel rule that handles the push
         
-        for tag_type, tag in tags.items():
-            print(f"TODO: Push {tag}")
+        # Collect all tags to push
+        tag_list = list(tags.values())
         
-        print(f"Successfully would push {actual_app_name} {version}")
+        # Push the image with all tags
+        try:
+            push_image_with_tags(bazel_target, tag_list)
+            print(f"Successfully pushed {actual_app_name} {version}")
+        except Exception as e:
+            print(f"Failed to push {actual_app_name} {version}: {e}", file=sys.stderr)
+            raise
 
         # Create and push Git tag if requested
         if create_git_tag_flag:
