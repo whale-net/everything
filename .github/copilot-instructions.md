@@ -107,5 +107,3 @@ Refer to `AGENT.md` sections:
 - 🚨 Important Considerations
 
 The `AGENT.md` file is your comprehensive guide - always check it for detailed procedures, troubleshooting, and architectural decisions.
-
-The `AGENT.md` file is your comprehensive guide - always check it for detailed procedures, troubleshooting, and architectural decisions.
