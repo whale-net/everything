@@ -130,8 +130,8 @@ def plan(
     format: Annotated[str, typer.Option(help="Output format")] = "json",
 ):
     """Plan a release and output CI matrix."""
-    if event_type not in ["workflow_dispatch", "tag_push"]:
-        typer.echo("Error: event-type must be one of: workflow_dispatch, tag_push", err=True)
+    if event_type not in ["workflow_dispatch", "tag_push", "pull_request", "push", "fallback"]:
+        typer.echo("Error: event-type must be one of: workflow_dispatch, tag_push, pull_request, push, fallback", err=True)
         raise typer.Exit(1)
     
     if format not in ["json", "github"]:
