@@ -5,17 +5,17 @@ load("//tools:release.bzl", "release_app")
 py_library(
     name = "main_lib",
     srcs = ["__init__.py", "main.py"],
-    visibility = ["//hello_fastapi:__pkg__"],
+    deps = ["//libs/python"],
+    visibility = ["//demo/hello_python:__pkg__"],
 )
 
 py_binary(
-    name = "hello_fastapi",
+    name = "hello_python",
     srcs = ["main.py"],
     main = "main.py",
     deps = [
         ":main_lib",
-        requirement("fastapi"),
-        requirement("uvicorn"),
+        "//libs/python",
     ],
     visibility = ["//visibility:public"],
 )
@@ -26,17 +26,15 @@ py_test(
     deps = [
         ":main_lib",
         requirement("pytest"),
-        requirement("fastapi"),
-        requirement("httpx"),
     ],
     size = "small",
 )
 
 # Release metadata and OCI images for this app
 release_app(
-    name = "hello_fastapi",
-    binary_target = ":hello_fastapi",
+    name = "hello_python",
+    binary_target = ":hello_python",
     language = "python",
     domain = "demo",
-    description = "FastAPI hello world application with uvicorn server",
+    description = "Python hello world application with pytest",
 )
