@@ -8,7 +8,7 @@ import sys
 from typing import Dict, List, Optional
 
 from tools.release_helper.changes import detect_changed_apps
-from tools.release_helper.git import create_git_tag, format_git_tag, get_previous_tag, push_git_tag
+from tools.release_helper.git import auto_increment_version, create_git_tag, format_git_tag, get_previous_tag, push_git_tag
 from tools.release_helper.images import build_image, format_registry_tags, push_image_with_tags
 from tools.release_helper.metadata import get_app_metadata, list_all_apps
 from tools.release_helper.validation import validate_apps, validate_release_version, validate_semantic_version
@@ -39,6 +39,7 @@ def plan_release(
     event_type: str,
     requested_apps: Optional[str] = None,
     version: Optional[str] = None,
+    version_mode: Optional[str] = None,
     base_commit: Optional[str] = None
 ) -> Dict:
     """Plan a release and return the matrix configuration for CI."""
@@ -53,14 +54,39 @@ def plan_release(
 
     if event_type == "workflow_dispatch":
         # Manual release
-        if not requested_apps or not version:
-            raise ValueError("Manual releases require apps and version to be specified")
+        if not requested_apps:
+            raise ValueError("Manual releases require apps to be specified")
+        
+        # Version validation based on mode
+        if version_mode == "specific":
+            if not version:
+                raise ValueError("Specific version mode requires version to be specified")
+        elif version_mode in ["increment_minor", "increment_patch"]:
+            if version:
+                raise ValueError(f"Version should not be specified when using {version_mode} mode")
+        elif not version_mode:
+            # Legacy mode - require version
+            if not version:
+                raise ValueError("Manual releases require version to be specified (or use --increment-minor/--increment-patch)")
 
         if requested_apps == "all":
             release_apps = list_all_apps()
         else:
             requested = [app.strip() for app in requested_apps.split(',')]
             release_apps = validate_apps(requested)
+            
+        # For increment modes, calculate versions for each app
+        if version_mode in ["increment_minor", "increment_patch"]:
+            increment_type = version_mode.replace("increment_", "")
+            for app in release_apps:
+                metadata = get_app_metadata(app['bazel_target'])
+                app_version = auto_increment_version(metadata['domain'], metadata['name'], increment_type)
+                app['version'] = app_version
+                print(f"Auto-incremented {metadata['domain']}/{metadata['name']} to {app_version}", file=sys.stderr)
+        else:
+            # Use provided version for all apps
+            for app in release_apps:
+                app['version'] = version
 
     elif event_type == "tag_push":
         # Automatic release based on changes
@@ -74,6 +100,10 @@ def plan_release(
                 print(f"Auto-detected previous tag: {base_commit}", file=sys.stderr)
 
         release_apps = detect_changed_apps(base_commit)
+        
+        # For tag push, use the provided version for all apps
+        for app in release_apps:
+            app['version'] = version
 
     else:
         raise ValueError(f"Unknown event type: {event_type}")
@@ -83,13 +113,20 @@ def plan_release(
         matrix = {"include": []}
     else:
         matrix = {
-            "include": [{"app": app["name"], "bazel_target": app["bazel_target"]} for app in release_apps]
+            "include": [
+                {
+                    "app": app["name"], 
+                    "bazel_target": app["bazel_target"],
+                    "version": app.get("version", version)
+                } 
+                for app in release_apps
+            ]
         }
 
     return {
         "matrix": matrix,
         "apps": [app["name"] for app in release_apps],  # Return just names for compatibility
-        "version": version,
+        "version": version,  # For legacy compatibility, may be None for increment modes
         "event_type": event_type
     }
 
