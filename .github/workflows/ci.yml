@@ -85,8 +85,9 @@ jobs:
           --base-commit="$BASE_COMMIT" \
           --format github)
         
-        # Parse output from release helper
-        echo "$PLAN_OUTPUT" | while IFS= read -r line; do
+        # Parse output from release helper and set GitHub outputs
+        # Use process substitution to avoid subshell issues with pipes
+        while IFS= read -r line; do
           if [[ "$line" == matrix=* ]]; then
             echo "${line}" >> $GITHUB_OUTPUT
           elif [[ "$line" == apps=* ]]; then
@@ -98,14 +99,14 @@ jobs:
               echo "No apps to build"
             fi
           fi
-        done
+        done <<< "$PLAN_OUTPUT"
 
   # Docker job - builds container images using the release tool
   docker:
     name: Build ${{ matrix.app }} Image
     runs-on: ubuntu-latest
     needs: plan-docker
-    if: needs.plan-docker.outputs.matrix != '' && fromJson(needs.plan-docker.outputs.matrix).include[0] != null
+    if: needs.plan-docker.outputs.apps != '' && needs.plan-docker.outputs.apps != null
     strategy:
       matrix: ${{ fromJson(needs.plan-docker.outputs.matrix) }}
       fail-fast: false
