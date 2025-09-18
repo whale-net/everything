@@ -685,26 +685,27 @@ gh workflow run release.yml \
 
 #### Method 3: Git Tags (Now Supported) ✅
 
-**Git tag-based releases are now supported!** When you push a tag, the release workflow automatically:
-- Detects the version from the tag name
-- Automatically detects which apps have changed since the previous tag
-- Builds and publishes affected apps
-- Generates release notes for each app
+**Git tag-based release notes are now supported!** When you push a tag, a separate workflow automatically:
+- Detects which apps have changed since the previous tag
+- Generates release notes for each affected app
+- Displays release notes in GitHub Actions summary
 
 **Usage:**
 ```bash
-# Create and push a tag to trigger automatic release
+# Create and push a tag to trigger automatic release notes generation
 git tag v1.2.3
 git push origin v1.2.3
 ```
 
 **Features:**
-- **Automatic App Detection**: Only releases apps that have changed since the previous tag
-- **Release Notes Generation**: Automatically generates release notes for each app
+- **Automatic App Detection**: Only generates notes for apps that have changed since the previous tag
+- **Separate Workflow**: Uses dedicated `release-notes.yml` workflow to prevent infinite loops
 - **Version Detection**: Uses the tag name as the version
 - **Change Analysis**: Uses Bazel dependency analysis to detect affected apps
 
 **Tag Format**: Use semantic versioning (e.g., `v1.2.3`, `v2.0.0-beta1`)
+
+**Note**: Tag pushes only generate release notes. Use Method 1 or 2 for actual releases.
 
 ### 📋 Release Process Details
 
@@ -826,13 +827,18 @@ gh workflow run release.yml \
 
 ### Automatic Release Notes Generation
 
-When using tag-based releases (Method 3), the system automatically generates release notes for each affected app:
+When using tag pushes (Method 3), a dedicated workflow automatically generates release notes for each affected app:
 
 ```bash
-# Create a tag to trigger release with automatic release notes
+# Create a tag to trigger automatic release notes generation
 git tag v1.2.3
 git push origin v1.2.3
 ```
+
+This triggers the `release-notes.yml` workflow that:
+- Detects which apps have changed since the previous tag
+- Generates release notes for each affected app
+- Displays results in GitHub Actions summary
 
 **Release notes include:**
 - **Commit History**: All commits since the previous tag affecting the app

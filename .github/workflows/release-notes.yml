@@ -1,0 +1,94 @@
+name: Release Notes
+
+on:
+  push:
+    tags:
+      - '*'  # Trigger on any tag push
+
+jobs:
+  # Generate release notes for tag pushes
+  generate-release-notes:
+    name: Generate Release Notes
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'release-notes'
+        
+    - name: Detect affected apps for this tag
+      id: detect-apps
+      run: |
+        VERSION="${{ github.ref_name }}"
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Detecting apps affected by tag $VERSION"
+        
+        # Use release helper to detect changed apps since previous tag
+        PLAN_OUTPUT=$(bazel run --config=ci //tools:release -- plan \
+          --event-type "tag_push" \
+          --version "$VERSION" \
+          --format github)
+        
+        # Parse output from release helper to get the matrix
+        echo "$PLAN_OUTPUT" | while IFS= read -r line; do
+          if [[ "$line" == matrix=* ]]; then
+            echo "${line}" >> $GITHUB_OUTPUT
+          elif [[ "$line" == apps=* ]]; then
+            echo "${line}" >> $GITHUB_OUTPUT
+            APPS_LIST="${line#apps=}"
+            if [[ -n "$APPS_LIST" ]]; then
+              echo "Apps affected by this tag: $APPS_LIST"
+            else
+              echo "No apps affected by this tag"
+            fi
+          fi
+        done
+        
+    - name: Generate release notes for affected apps
+      if: steps.detect-apps.outputs.matrix != '' && fromJson(steps.detect-apps.outputs.matrix).include[0] != null
+      env:
+        VERSION: ${{ steps.detect-apps.outputs.version }}
+        MATRIX: ${{ steps.detect-apps.outputs.matrix }}
+      run: |
+        echo "Generating release notes for affected apps in tag $VERSION"
+        
+        # Parse matrix to get list of apps
+        APPS=$(echo "$MATRIX" | jq -r '.include[].app' | tr '\n' ' ')
+        
+        echo "## 📝 Release Notes for Tag $VERSION" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Generate release notes for each affected app
+        for app in $APPS; do
+          echo "Generating release notes for $app..."
+          
+          RELEASE_NOTES=$(bazel run --config=ci //tools:release -- release-notes "$app" \
+            --current-tag "$VERSION" \
+            --format markdown)
+          
+          echo "### $app" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "$RELEASE_NOTES" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+        done
+        
+        echo "✅ Release notes generated for $VERSION"
+        
+    - name: No apps affected
+      if: steps.detect-apps.outputs.matrix == '' || fromJson(steps.detect-apps.outputs.matrix).include[0] == null
+      env:
+        VERSION: ${{ steps.detect-apps.outputs.version }}
+      run: |
+        echo "## 📝 Release Notes for Tag $VERSION" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "🔍 **No applications were affected by this tag**" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "This tag does not contain changes that affect any releasable applications." >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY

@@ -23,6 +23,119 @@ class ReleaseNote:
     files_changed: List[str]
 
 
+@dataclass 
+class AppReleaseData:
+    """Represents release data for a specific app."""
+    app_name: str
+    current_tag: str
+    previous_tag: str
+    released_at: str
+    commits: List[ReleaseNote]
+    
+    @property
+    def commit_count(self) -> int:
+        """Return the number of commits in this release."""
+        return len(self.commits)
+    
+    @property
+    def has_changes(self) -> bool:
+        """Return True if there are changes in this release."""
+        return len(self.commits) > 0
+    
+    @property
+    def summary(self) -> str:
+        """Return a summary of the changes."""
+        if not self.has_changes:
+            return f"No changes affecting {self.app_name} found"
+        return f"{self.commit_count} commits affecting {self.app_name}"
+
+
+class ReleaseNotesFormatter:
+    """Handles formatting of release notes in different formats."""
+    
+    @staticmethod
+    def to_markdown(data: AppReleaseData) -> str:
+        """Format release data as Markdown."""
+        lines = [
+            f"# Release Notes: {data.app_name} {data.current_tag}",
+            "",
+            f"**Released:** {data.released_at}",
+            f"**Previous Version:** {data.previous_tag}",
+            f"**Commits:** {data.commit_count}",
+            "",
+            "## Changes",
+            ""
+        ]
+        
+        if not data.has_changes:
+            lines.append(f"No changes affecting {data.app_name} found between {data.previous_tag} and {data.current_tag}.")
+        else:
+            for commit in data.commits:
+                lines.append(f"### [{commit.commit_sha}] {commit.commit_message}")
+                lines.append(f"**Author:** {commit.author}")
+                lines.append(f"**Date:** {commit.date}")
+                if commit.files_changed:
+                    lines.append(f"**Files:** {', '.join(commit.files_changed[:5])}")
+                    if len(commit.files_changed) > 5:
+                        lines.append(f"*... and {len(commit.files_changed) - 5} more files*")
+                lines.append("")
+        
+        lines.extend([
+            "---",
+            "*Generated automatically by the release helper*"
+        ])
+        
+        return "\n".join(lines)
+    
+    @staticmethod
+    def to_plain_text(data: AppReleaseData) -> str:
+        """Format release data as plain text."""
+        lines = [
+            f"Release Notes: {data.app_name} {data.current_tag}",
+            f"Released: {data.released_at}",
+            f"Previous Version: {data.previous_tag}",
+            f"Commits: {data.commit_count}",
+            "",
+            "Changes:"
+        ]
+        
+        if not data.has_changes:
+            lines.append(f"No changes affecting {data.app_name} found between {data.previous_tag} and {data.current_tag}.")
+        else:
+            for i, commit in enumerate(data.commits, 1):
+                lines.append(f"{i}. [{commit.commit_sha}] {commit.commit_message}")
+                lines.append(f"   Author: {commit.author}")
+                lines.append(f"   Date: {commit.date}")
+                lines.append("")
+            
+        return "\n".join(lines)
+    
+    @staticmethod
+    def to_json(data: AppReleaseData) -> str:
+        """Format release data as JSON."""
+        import json
+        
+        commit_data = []
+        for commit in data.commits:
+            commit_data.append({
+                "sha": commit.commit_sha,
+                "message": commit.commit_message,
+                "author": commit.author,
+                "date": commit.date,
+                "files_changed": commit.files_changed
+            })
+            
+        return json.dumps({
+            "app": data.app_name,
+            "version": data.current_tag,
+            "previous_version": data.previous_tag,
+            "released_at": data.released_at,
+            "commit_count": data.commit_count,
+            "changes": commit_data,
+            "summary": data.summary
+        }, indent=2)
+
+
 def get_commits_between_refs(start_ref: str, end_ref: str = "HEAD") -> List[ReleaseNote]:
     """Get commit information between two Git references.
     
@@ -192,134 +305,26 @@ def generate_release_notes(
     # Get all commits between tags
     all_commits = get_commits_between_refs(previous_tag, current_tag)
     
-    if not all_commits:
-        return _format_empty_release_notes(app_name, current_tag, previous_tag, format_type)
-    
     # Filter commits that affect this app
     app_commits = filter_commits_by_app(all_commits, app_name)
     
-    # Generate formatted release notes
-    return _format_release_notes(app_name, current_tag, previous_tag, app_commits, format_type)
-
-
-def _format_empty_release_notes(
-    app_name: str, 
-    current_tag: str, 
-    previous_tag: str, 
-    format_type: str
-) -> str:
-    """Format release notes when no changes are found."""
+    # Create release data object
+    release_data = AppReleaseData(
+        app_name=app_name,
+        current_tag=current_tag,
+        previous_tag=previous_tag,
+        released_at=datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC'),
+        commits=app_commits
+    )
+    
+    # Format using the appropriate formatter
+    formatter = ReleaseNotesFormatter()
     if format_type == "markdown":
-        return f"""# Release Notes: {app_name} {current_tag}
-
-**Released:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}
-**Previous Version:** {previous_tag}
-
-## Changes
-
-No changes affecting {app_name} found between {previous_tag} and {current_tag}.
-
----
-*Generated automatically by the release helper*
-"""
+        return formatter.to_markdown(release_data)
     elif format_type == "plain":
-        return f"""Release Notes: {app_name} {current_tag}
-Released: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}
-Previous Version: {previous_tag}
-
-Changes:
-No changes affecting {app_name} found between {previous_tag} and {current_tag}.
-"""
+        return formatter.to_plain_text(release_data)
     elif format_type == "json":
-        import json
-        return json.dumps({
-            "app": app_name,
-            "version": current_tag,
-            "previous_version": previous_tag,
-            "released_at": datetime.now().isoformat(),
-            "changes": [],
-            "summary": f"No changes affecting {app_name} found"
-        }, indent=2)
-    else:
-        raise ValueError(f"Unsupported format type: {format_type}")
-
-
-def _format_release_notes(
-    app_name: str,
-    current_tag: str, 
-    previous_tag: str,
-    commits: List[ReleaseNote],
-    format_type: str
-) -> str:
-    """Format release notes with commit information."""
-    if format_type == "markdown":
-        lines = [
-            f"# Release Notes: {app_name} {current_tag}",
-            "",
-            f"**Released:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}",
-            f"**Previous Version:** {previous_tag}",
-            f"**Commits:** {len(commits)}",
-            "",
-            "## Changes",
-            ""
-        ]
-        
-        for commit in commits:
-            lines.append(f"### [{commit.commit_sha}] {commit.commit_message}")
-            lines.append(f"**Author:** {commit.author}")
-            lines.append(f"**Date:** {commit.date}")
-            if commit.files_changed:
-                lines.append(f"**Files:** {', '.join(commit.files_changed[:5])}")
-                if len(commit.files_changed) > 5:
-                    lines.append(f"*... and {len(commit.files_changed) - 5} more files*")
-            lines.append("")
-        
-        lines.extend([
-            "---",
-            "*Generated automatically by the release helper*"
-        ])
-        
-        return "\n".join(lines)
-        
-    elif format_type == "plain":
-        lines = [
-            f"Release Notes: {app_name} {current_tag}",
-            f"Released: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}",
-            f"Previous Version: {previous_tag}",
-            f"Commits: {len(commits)}",
-            "",
-            "Changes:"
-        ]
-        
-        for i, commit in enumerate(commits, 1):
-            lines.append(f"{i}. [{commit.commit_sha}] {commit.commit_message}")
-            lines.append(f"   Author: {commit.author}")
-            lines.append(f"   Date: {commit.date}")
-            lines.append("")
-            
-        return "\n".join(lines)
-        
-    elif format_type == "json":
-        import json
-        commit_data = []
-        for commit in commits:
-            commit_data.append({
-                "sha": commit.commit_sha,
-                "message": commit.commit_message,
-                "author": commit.author,
-                "date": commit.date,
-                "files_changed": commit.files_changed
-            })
-            
-        return json.dumps({
-            "app": app_name,
-            "version": current_tag,
-            "previous_version": previous_tag,
-            "released_at": datetime.now().isoformat(),
-            "commit_count": len(commits),
-            "changes": commit_data,
-            "summary": f"{len(commits)} commits affecting {app_name}"
-        }, indent=2)
+        return formatter.to_json(release_data)
     else:
         raise ValueError(f"Unsupported format type: {format_type}")
 
