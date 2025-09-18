@@ -1,4 +1,5 @@
 load("@rules_python//python:defs.bzl", "py_library")
+load("//tools:release.bzl", "release_app")
 
 # Re-export all manman modules for convenience
 py_library(
@@ -13,20 +14,46 @@ py_library(
     ],
 )
 
-# Binary targets for different services (can be added as the codebase is fully migrated)
-# py_binary(
-#     name = "experience_api", 
-#     srcs = ["src/manman/host/main.py"],
-#     main = "src/manman/host/main.py",
-#     deps = [":manman"],
-# )
+# Release configurations for manman services
+release_app(
+    name = "experience_api",
+    binary_target = "//manman/src/host:experience_api",
+    language = "python",
+    domain = "manman",
+    description = "Experience API service for managing user experiences and workflows",
+)
 
-# py_binary(
-#     name = "worker",
-#     srcs = ["src/manman/worker/main.py"], 
-#     main = "src/manman/worker/main.py",
-#     deps = [":manman"],
-# )
+release_app(
+    name = "status_api", 
+    binary_target = "//manman/src/host:status_api",
+    language = "python",
+    domain = "manman",
+    description = "Status API service for monitoring and health checks",
+)
+
+release_app(
+    name = "worker_dal_api",
+    binary_target = "//manman/src/host:worker_dal_api", 
+    language = "python",
+    domain = "manman",
+    description = "Worker DAL API service for data access layer operations",
+)
+
+release_app(
+    name = "status_processor",
+    binary_target = "//manman/src/host:status_processor",
+    language = "python", 
+    domain = "manman",
+    description = "Status processor service for background status processing",
+)
+
+release_app(
+    name = "worker",
+    binary_target = "//manman/src/worker:worker",
+    language = "python",
+    domain = "manman", 
+    description = "Background worker service for processing tasks and messages",
+)
 
 filegroup(
     name = "tiltfile",

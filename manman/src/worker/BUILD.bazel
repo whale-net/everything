@@ -1,4 +1,4 @@
-load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@rules_python//python:defs.bzl", "py_library", "py_binary", "py_test")
 load("@everything_pip_deps//:requirements.bzl", "requirement")
 
 # Worker services library  
@@ -14,6 +14,15 @@ py_library(
         requirement("amqpstorm"),
         requirement("typer"),
     ],
+)
+
+# Binary target for worker service
+py_binary(
+    name = "worker",
+    srcs = ["main.py"],
+    main = "main.py",
+    deps = [":manman_worker"],
+    visibility = ["//manman:__pkg__"],
 )
 
 # Tests for worker services

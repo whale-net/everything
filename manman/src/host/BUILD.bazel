@@ -27,6 +27,7 @@ py_binary(
     main = "main.py", 
     deps = [":manman_host"],
     args = ["start-experience-api"],
+    visibility = ["//manman:__pkg__"],
 )
 
 py_binary(
@@ -35,6 +36,7 @@ py_binary(
     main = "main.py",
     deps = [":manman_host"], 
     args = ["start-status-api"],
+    visibility = ["//manman:__pkg__"],
 )
 
 py_binary(
@@ -43,6 +45,7 @@ py_binary(
     main = "main.py",
     deps = [":manman_host"],
     args = ["start-worker-dal-api"],
+    visibility = ["//manman:__pkg__"],
 )
 
 py_binary(
@@ -51,6 +54,7 @@ py_binary(
     main = "main.py",
     deps = [":manman_host"],
     args = ["start-status-processor"],
+    visibility = ["//manman:__pkg__"],
 )
 
 # Tests for host APIs
