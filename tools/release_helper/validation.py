@@ -184,7 +184,8 @@ def validate_apps(requested_apps: List[str]) -> List[Dict[str, str]]:
         raise ValueError(
             f"Invalid apps: {invalid}.\n"
             f"Available apps: {available_display}\n"
-            f"You can use formats like: domain-appname, domain/appname, or just appname (if unambiguous)"
+            f"You can use: full format (domain-appname, e.g. demo-hello_python), "
+            f"path format (domain/appname, e.g. demo/hello_python), or short format (appname, e.g. hello_python, if unambiguous)"
         )
 
     return valid_apps
