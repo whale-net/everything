@@ -7,8 +7,8 @@ from typing import Optional
 
 
 def format_git_tag(domain: str, app_name: str, version: str) -> str:
-    """Format a Git tag in the domain-app-name-version format."""
-    return f"{domain}-{app_name}-{version}"
+    """Format a Git tag in the domain-appname.version format."""
+    return f"{domain}-{app_name}.{version}"
 
 
 def create_git_tag(tag_name: str, commit_sha: Optional[str] = None, message: Optional[str] = None) -> None:
