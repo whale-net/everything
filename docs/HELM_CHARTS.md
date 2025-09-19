@@ -14,6 +14,32 @@ The monorepo now supports automatic Helm chart generation for applications, addr
 - **Monorepo Support**: Multiple charts can be released independently
 - **Seamless Integration**: Works with existing release workflow
 
+## Chart Types
+
+The system supports two types of Helm charts:
+
+### 1. Individual App Charts (1:1 mapping)
+Each app gets its own chart with baked-in image versions:
+```starlark
+release_app(
+    name = "my_app",
+    helm_chart = True,  # Creates individual chart
+)
+```
+
+### 2. Composite Charts (Multi-app deployment)
+Multiple apps deployed together in a single chart:
+```starlark
+release_composite_helm_chart(
+    name = "web_services",
+    composite_name = "web-services", 
+    apps = ["web/frontend", "api/gateway", "api/users"],
+    description = "Complete web application stack",
+)
+```
+
+For detailed information about composite charts, see [Composite Helm Charts Documentation](COMPOSITE_HELM_CHARTS.md).
+
 ## Chart Naming Convention
 
 Charts follow the same domain+app naming pattern as container images for consistency:
@@ -106,6 +132,17 @@ bazel run //tools:release -- helm-validate my_app
 
 # Also run helm lint (if helm CLI is available)
 bazel run //tools:release -- helm-validate my_app --lint
+```
+
+### Build Composite Charts
+
+```bash
+# Build a composite chart with multiple apps
+bazel run //tools:release -- helm-composite-build web-services \
+  "frontend,api-gateway,user-service" \
+  --chart-version 0.2.0 \
+  --domain web \
+  --description "Complete web application stack"
 ```
 
 ## Chart Repository

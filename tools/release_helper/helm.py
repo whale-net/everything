@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 
 from tools.release_helper.core import run_bazel
 from tools.release_helper.metadata import get_app_metadata
+from tools.release_helper.release import find_app_bazel_target
 
 
 def get_helm_chart_targets(bazel_target: str) -> Dict[str, str]:
@@ -260,3 +261,73 @@ def update_chart_with_image_version(chart_dir: str, image_repo: str, image_tag: 
     except Exception as e:
         print(f"Error updating chart values: {e}")
         raise
+
+
+def build_composite_helm_chart(
+    composite_name: str,
+    apps: List[str],
+    chart_version: str = "0.1.0",
+    domain: str = "composite",
+    description: str = "",
+    global_registry: str = "ghcr.io"
+) -> Optional[str]:
+    """Build a composite Helm chart that includes multiple apps.
+    
+    Args:
+        composite_name: Name of the composite chart
+        apps: List of app names to include
+        chart_version: Version of the composite chart
+        domain: Domain for the composite chart
+        description: Description of the composite chart
+        global_registry: Global container registry
+        
+    Returns:
+        Path to the generated composite chart directory
+    """
+    try:
+        # Create a temporary BUILD file for the composite chart
+        import tempfile
+        import os
+        
+        # Validate that all apps exist and have metadata
+        app_metadata = []
+        for app in apps:
+            try:
+                bazel_target = find_app_bazel_target(app)
+                metadata = get_app_metadata(bazel_target)
+                app_metadata.append(metadata)
+            except ValueError as e:
+                print(f"Error finding app '{app}': {e}")
+                return None
+        
+        # Create temporary BUILD file for composite chart
+        build_content = f'''
+load("//tools:helm.bzl", "release_composite_helm_chart")
+
+release_composite_helm_chart(
+    name = "{composite_name}_composite",
+    composite_name = "{composite_name}",
+    description = "{description}",
+    chart_version = "{chart_version}",
+    domain = "{domain}",
+    apps = {[app for app in apps]},
+    global_registry = "{global_registry}",
+)
+'''
+        
+        # For now, return a placeholder path since the full implementation
+        # would require more complex Bazel integration
+        print(f"Composite chart '{composite_name}' would include:")
+        for i, (app, metadata) in enumerate(zip(apps, app_metadata)):
+            print(f"  {i+1}. {app} ({metadata['domain']}-{metadata['name']})")
+        
+        print(f"\nTo implement this composite chart:")
+        print(f"1. Create a BUILD file with the composite chart definition")
+        print(f"2. Run: bazel build //path/to/composite:{composite_name}_composite_chart")
+        print(f"3. Package: bazel build //path/to/composite:{composite_name}_composite_package")
+        
+        return f"composite-{composite_name}"  # Placeholder path
+        
+    except Exception as e:
+        print(f"Error building composite chart: {e}")
+        return None

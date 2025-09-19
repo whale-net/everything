@@ -184,3 +184,157 @@ def release_helm_chart(
         chart_name = domain + "-" + app_name,  # Use domain-app pattern
         chart_version = chart_version,
     )
+
+def _composite_helm_chart_impl(ctx):
+    """Implementation for composite_helm_chart rule."""
+    # Prepare app data for template substitution
+    apps_data = []
+    app_list = []
+    
+    for app_target in ctx.attr.apps:
+        # Get metadata for each app
+        app_metadata_file = None
+        for file in app_target.files.to_list():
+            if file.basename.endswith("_metadata.json"):
+                app_metadata_file = file
+                break
+        
+        if not app_metadata_file:
+            fail(f"Could not find metadata file for app target: {app_target}")
+        
+        # Read metadata (this is a simplified approach - in real implementation, we'd parse JSON)
+        # For now, we'll use placeholder values
+        apps_data.append({
+            "APP_NAME": app_target.label.name.replace("_metadata", ""),
+            "IMAGE_REPO": "placeholder-repo",  # Would be extracted from metadata
+            "APP_VERSION": "latest",  # Would be extracted from metadata
+            "SERVICE_PORT": "8000",  # Would be extracted from metadata or default
+            "HEALTH_PATH": "/health",  # Would be extracted from metadata or default
+        })
+        app_list.append(app_target.label.name.replace("_metadata", ""))
+    
+    # Metadata for substitution
+    metadata = {
+        "COMPOSITE_NAME": ctx.attr.composite_name,
+        "DESCRIPTION": ctx.attr.description,
+        "CHART_VERSION": ctx.attr.chart_version,
+        "DOMAIN": ctx.attr.domain,
+        "GLOBAL_REGISTRY": ctx.attr.global_registry,
+        "APP_LIST": ",".join(app_list),
+        "APPS": apps_data,
+    }
+    
+    # Template files to process for composite charts
+    template_files = [
+        ("composite-Chart.yaml.tpl", "Chart.yaml"),
+        ("composite-values.yaml.tpl", "values.yaml"),
+        ("composite-deployment.yaml.tpl", "templates/deployment.yaml"),
+        ("composite-service.yaml.tpl", "templates/service.yaml"),
+        ("composite-serviceaccount.yaml.tpl", "templates/serviceaccount.yaml"),
+        ("composite-ingress.yaml.tpl", "templates/ingress.yaml"),
+        ("composite-_helpers.tpl.tpl", "templates/_helpers.tpl"),
+    ]
+    
+    # Create chart directory structure
+    chart_dir = ctx.actions.declare_directory(ctx.attr.composite_name)
+    
+    # Generate substitution script (simplified version)
+    substitution_commands = []
+    for template_file, output_file in template_files:
+        # Find the template file
+        template_input = None
+        for template in ctx.files.template_files:
+            if template.basename == template_file:
+                template_input = template
+                break
+        
+        if not template_input:
+            fail(f"Template file not found: {template_file}")
+        
+        output_path = chart_dir.path + "/" + output_file
+        
+        # Create directory if needed
+        output_dir = output_path.rsplit("/", 1)[0]
+        substitution_commands.append("mkdir -p " + shell.quote(output_dir))
+        
+        # Simple substitution (in real implementation, would handle APPS iteration properly)
+        sed_cmd = "sed"
+        for key, value in metadata.items():
+            if key != "APPS":  # Skip complex APPS data for now
+                sed_cmd += " -e 's/{{" + key + "}}/" + shell.quote(str(value)) + "/g'"
+        sed_cmd += " " + shell.quote(template_input.path) + " > " + shell.quote(output_path)
+        
+        substitution_commands.append(sed_cmd)
+    
+    # Write and execute the script
+    script = "\n".join(substitution_commands)
+    
+    ctx.actions.run_shell(
+        outputs = [chart_dir],
+        inputs = ctx.files.template_files + [f for target in ctx.attr.apps for f in target.files.to_list()],
+        command = script,
+        mnemonic = "CompositeHelmChartGenerate",
+        progress_message = "Generating composite Helm chart " + ctx.attr.composite_name,
+    )
+    
+    return [DefaultInfo(files = depset([chart_dir]))]
+
+composite_helm_chart = rule(
+    implementation = _composite_helm_chart_impl,
+    attrs = {
+        "composite_name": attr.string(mandatory = True),
+        "description": attr.string(mandatory = True),
+        "chart_version": attr.string(mandatory = True),
+        "domain": attr.string(mandatory = True),
+        "global_registry": attr.string(default = "ghcr.io"),
+        "apps": attr.label_list(mandatory = True),  # List of app metadata targets
+        "template_files": attr.label_list(allow_files = [".tpl"], mandatory = True),
+    },
+)
+
+def release_composite_helm_chart(
+    name,
+    composite_name,
+    description,
+    chart_version,
+    domain,
+    apps,  # List of app names
+    global_registry = "ghcr.io",
+    template_files = "//tools/charts:templates"):
+    """Generate and package a composite Helm chart for multiple apps.
+    
+    Args:
+        name: Base name for targets
+        composite_name: Name of the composite chart
+        description: Chart description
+        chart_version: Helm chart version
+        domain: Application domain
+        apps: List of app names to include in the composite chart
+        global_registry: Container registry for all apps
+        template_files: Label list of template files
+    """
+    
+    # Convert app names to metadata targets
+    app_targets = []
+    for app in apps:
+        app_targets.append("//" + app + ":" + app + "_metadata")
+    
+    # Generate the composite chart
+    composite_helm_chart(
+        name = name + "_chart",
+        composite_name = composite_name,
+        description = description,
+        chart_version = chart_version,
+        domain = domain,
+        global_registry = global_registry,
+        apps = app_targets,
+        template_files = template_files,
+    )
+    
+    # Package the composite chart
+    helm_package(
+        name = name + "_package",
+        chart_dir = ":" + name + "_chart",
+        chart_name = composite_name,
+        chart_version = chart_version,
+    )

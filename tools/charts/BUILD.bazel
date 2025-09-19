@@ -6,3 +6,10 @@ filegroup(
     srcs = glob(["templates/*.tpl"]),
     visibility = ["//visibility:public"],
 )
+
+# Composite chart templates (for multi-app charts)
+filegroup(
+    name = "composite_templates",
+    srcs = glob(["templates/composite-*.tpl"]),
+    visibility = ["//visibility:public"],
+)

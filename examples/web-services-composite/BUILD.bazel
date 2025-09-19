@@ -1,0 +1,25 @@
+# Web Services Composite Chart Example
+load("//tools:helm.bzl", "release_composite_helm_chart")
+
+# This creates a composite Helm chart that deploys multiple web services together
+# This reduces cross-deployment coordination by bundling related services
+release_composite_helm_chart(
+    name = "web_services_composite",
+    composite_name = "web-services",
+    description = "Composite chart for all web services - reduces cross-deployment coordination",
+    chart_version = "0.1.0",
+    domain = "web",
+    apps = [
+        "demo/hello_fastapi",  # Example: web API service
+        "demo/hello_python",   # Example: web frontend service
+        # Add more web services here as they're created
+    ],
+    global_registry = "ghcr.io",
+)
+
+# This demonstrates the pattern for grouping related apps into a single deployment
+# Benefits:
+# 1. Single deployment command for all related services
+# 2. Shared configuration (ingress, service account, etc.)
+# 3. Coordinated versioning and rollouts
+# 4. Reduced operational complexity

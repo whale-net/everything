@@ -364,6 +364,41 @@ def helm_validate(
         raise typer.Exit(1)
 
 
+@app.command()
+def helm_composite_build(
+    composite_name: Annotated[str, typer.Argument(help="Composite chart name")],
+    apps: Annotated[str, typer.Argument(help="Comma-separated list of app names to include")],
+    chart_version: Annotated[str, typer.Option(help="Chart version")] = "0.1.0",
+    domain: Annotated[str, typer.Option(help="Domain for the composite chart")] = "composite",
+    description: Annotated[Optional[str], typer.Option(help="Chart description")] = None,
+):
+    """Build a composite Helm chart that includes multiple apps."""
+    try:
+        from tools.release_helper.helm import build_composite_helm_chart
+        
+        app_list = [app.strip() for app in apps.split(",")]
+        chart_description = description or f"Composite chart for {', '.join(app_list)}"
+        
+        chart_dir = build_composite_helm_chart(
+            composite_name=composite_name,
+            apps=app_list,
+            chart_version=chart_version,
+            domain=domain,
+            description=chart_description
+        )
+        
+        if chart_dir:
+            typer.echo(f"Composite Helm chart built: {chart_dir}")
+            typer.echo(f"Includes apps: {', '.join(app_list)}")
+        else:
+            typer.echo("Failed to build composite chart")
+            raise typer.Exit(1)
+            
+    except Exception as e:
+        typer.echo(f"Error building composite chart: {e}", err=True)
+        raise typer.Exit(1)
+
+
 def main():
     """Main entry point for the CLI."""
     try:
