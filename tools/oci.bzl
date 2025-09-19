@@ -46,7 +46,7 @@ def oci_image_with_binary(
         name = name + "_app_structure",
         srcs = [binary],
         outs = [name + "_app/" + binary_name],
-        cmd = "mkdir -p $$(dirname $(OUTS)); cp $(SRCS) $(OUTS); chmod +x $(OUTS)",
+        cmd = "mkdir -p $$(dirname $@); cp $< $@; chmod +x $@",
         tags = tags,
     )
     
