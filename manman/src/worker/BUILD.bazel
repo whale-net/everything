@@ -4,12 +4,15 @@ load("@everything_pip_deps//:requirements.bzl", "requirement")
 # Worker services library  
 py_library(
     name = "manman_worker",
-    srcs = glob(["**/*.py"], exclude=["test/**"]),
+    srcs = glob(["**/*.py"], exclude=["*_test.py"]),
     visibility = ["//manman:__subpackages__"],
     deps = [
         "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
         requirement("amqpstorm"),
         requirement("typer"),
+        requirement("requests"),
+        requirement("python-jose"),
     ],
 )
 
@@ -25,8 +28,13 @@ py_binary(
 # Tests for worker services
 py_test(
     name = "manman_worker_test",
-    srcs = glob(["test/*.py"]),
-    main = "test/test_worker_heartbeat.py",
+    srcs = [
+        "server_status_test.py",
+        "subscriber_multiple_exchanges_test.py",
+        "worker_heartbeat_test.py",
+        "worker_shutdown_cascade_test.py",
+    ],
+    main = "worker_heartbeat_test.py",
     deps = [
         ":manman_worker",
         requirement("pytest"),

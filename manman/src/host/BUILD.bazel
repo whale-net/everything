@@ -4,16 +4,19 @@ load("@everything_pip_deps//:requirements.bzl", "requirement")
 # Host API services library
 py_library(
     name = "manman_host",
-    srcs = glob(["**/*.py"], exclude=["test/**"]),
+    srcs = glob(["**/*.py"], exclude=["*_test.py"]),
     visibility = ["//manman:__subpackages__"],
     deps = [
         "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
         requirement("fastapi"),
         requirement("uvicorn"),
         requirement("gunicorn"),
         requirement("typer"),
         requirement("alembic"),
         requirement("opentelemetry-instrumentation-fastapi"),
+        requirement("requests"),
+        requirement("python-jose"),
     ],
 )
 
@@ -57,13 +60,19 @@ py_binary(
 # Tests for host APIs
 py_test(
     name = "manman_host_test",
-    srcs = glob(["test/*.py"]),
-    main = "test/test_experience_api.py",
+    srcs = [
+        "experience_api_test.py",
+        "status_api_test.py", 
+        "status_processor_test.py",
+        "worker_dal_api_test.py",
+    ],
+    main = "experience_api_test.py",
     deps = [
         ":manman_host",
         requirement("pytest"),
         requirement("pytest-asyncio"),
         requirement("httpx"),  # For testing FastAPI endpoints
+        requirement("requests"),  # For repository API client
     ],
     python_version = "PY3",
 )

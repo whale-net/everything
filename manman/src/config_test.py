@@ -1,13 +1,8 @@
 """Tests for manman core configuration and models."""
 
 import pytest
-import sys
-import os
 
-# Add the parent directory to the path so we can import the modules
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-
-from config import ManManConfig
+from manman.src.config import ManManConfig
 
 
 def test_api_config_validation():

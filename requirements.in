@@ -28,6 +28,10 @@ opentelemetry-exporter-otlp
 
 # HTTP client
 httpx
+requests
+
+# JWT handling
+python-jose
 
 # Utility libraries
 pydantic

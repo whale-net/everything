@@ -32,8 +32,14 @@ py_library(
 # Tests for core library
 py_test(
     name = "manman_core_test",
-    srcs = glob(["test/*.py"], exclude=["test/test_server_status.py"]),
-    main = "test/runner.py",
+    srcs = [
+        "config_test.py",
+        "models_test.py", 
+        "simple_status_test.py",
+        "conftest.py",
+        "runner.py",
+    ],
+    main = "runner.py",
     deps = [
         ":manman_core",
         requirement("pytest"),

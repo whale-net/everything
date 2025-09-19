@@ -8,13 +8,6 @@ def test_simple():
 
 def test_imports():
     """Test that our status processor modules can be imported."""
-    import sys
-    from pathlib import Path
-
-    # Add src to path
-    project_root = Path(__file__).parent.parent
-    sys.path.insert(0, str(project_root / "src"))
-
     # Test imports
     from manman.src.models import ExternalStatusInfo, StatusType
 

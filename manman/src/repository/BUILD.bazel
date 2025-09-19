@@ -4,7 +4,7 @@ load("@everything_pip_deps//:requirements.bzl", "requirement")
 # Repository layer library
 py_library(
     name = "manman_repository",
-    srcs = glob(["**/*.py"], exclude=["test/**"]),
+    srcs = glob(["**/*.py"], exclude=["*_test.py"]),
     visibility = ["//manman:__subpackages__"],
     deps = [
         "//manman/src:manman_core",
@@ -14,14 +14,20 @@ py_library(
         requirement("httpx"),
         requirement("alembic"),
         requirement("opentelemetry-instrumentation-sqlalchemy"),
+        requirement("requests"),
+        requirement("python-jose"),
     ],
 )
 
 # Tests for repository layer
 py_test(
     name = "manman_repository_test",
-    srcs = glob(["test/*.py"]),
-    main = "test/test_database_repository.py",
+    srcs = [
+        "database_repository_test.py",
+        "validator_test.py",
+        "rabbitmq/util_test.py",
+    ],
+    main = "database_repository_test.py",
     deps = [
         ":manman_repository",
         requirement("pytest"),
