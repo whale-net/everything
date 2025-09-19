@@ -14,6 +14,30 @@
 
 ## Working Effectively 
 
+### Python Virtual Environment for Local Development
+**For local Python development and testing without Bazel dependencies:**
+
+```bash
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies from requirements.in for development
+pip install -r requirements.in
+
+# Alternative: Install from lock file for exact versions
+pip install -r requirements.lock.txt
+
+# Deactivate when done
+deactivate
+```
+
+**When to use venv vs Bazel:**
+- **Virtual Environment**: Quick local development, IDE integration, debugging Python code
+- **Bazel**: Building containers, running tests, production builds, release management
+
+**Note**: Always test final changes with Bazel before committing, as Bazel provides the authoritative build environment.
+
 ### Bootstrap and Build (Requires Internet Access)
 **CRITICAL TIMING**: Set timeouts of 60+ minutes for builds. **NEVER CANCEL** build operations.
 
@@ -334,6 +358,12 @@ bazel run //:pip_compile
 # Check requirements files
 cat requirements.in        # Source dependencies: pytest, pytest-git, fastapi, uvicorn[standard], httpx, typer
 wc -l requirements.lock.txt # 582 lines of locked dependencies
+
+# For local venv development (alternative to Bazel)
+# 1. Activate venv: source venv/bin/activate
+# 2. Install/update: pip install -r requirements.in
+# 3. Generate lock: pip freeze > requirements.lock.txt (manual sync)
+# 4. Always regenerate lock with Bazel before committing: bazel run //:pip_compile
 ```
 
 ## Primary Reference Document

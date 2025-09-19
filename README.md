@@ -8,6 +8,8 @@ This is a Bazel monorepo that supports both Python and Go development.
 - **Bazel 8.3+** with bzlmod support (specified in `.bazelversion`)
   - Install via [Bazelisk](https://github.com/bazelbuild/bazelisk) for automatic version management
   - Bazelisk will automatically download the correct Bazel version
+- **Python 3.11+** (for local development and virtual environments)
+  - Required for both Bazel builds and optional local venv development
 - **Docker** (for building and running container images)
 - **Git** (for version control and change detection)
 
@@ -85,6 +87,29 @@ TODO: Enable gazelle rules for full Go dependency management
 
 **Note:** Go dependency management is currently minimal. The gazelle rules are commented out in the root BUILD.bazel file and may need to be enabled for full Go dependency management.
 
+#### Python Virtual Environment (Local Development)
+For local Python development, testing, and IDE integration, you can optionally use a virtual environment alongside Bazel:
+
+```bash
+# Create and activate virtual environment
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install project dependencies
+pip install -r requirements.in
+
+# Or install exact locked versions
+pip install -r requirements.lock.txt
+
+# Deactivate when switching back to Bazel
+deactivate
+```
+
+**Usage Guidelines:**
+- **Use venv for**: Local development, IDE integration, debugging, quick prototyping
+- **Use Bazel for**: Final testing, builds, containers, CI/CD, releases
+- **Always test with Bazel** before committing changes to ensure compatibility
+
 ### Development Workflow
 
 #### Adding a New Python App
@@ -143,6 +168,20 @@ TODO: Enable gazelle rules for full Go dependency management
    ```
 
 4. **Reference shared libraries** from `//libs/python` (already included in the example above)
+
+5. **Optional: Set up local development environment**:
+   ```bash
+   # For easier local development and IDE support
+   source venv/bin/activate  # Activate venv if created
+   cd my_python_app
+   
+   # Run locally (if dependencies are in venv)
+   python main.py
+   
+   # Always verify with Bazel before committing
+   bazel run //my_python_app:my_python_app
+   bazel test //my_python_app:test_main
+   ```
 
 #### Adding a New Go App
 1. **Create a directory** at the top level with your app name
@@ -371,6 +410,7 @@ The repository uses several configuration files for build and dependency managem
 - Bazel uses Python version PY3 with symlink prefix `bazel-`
 - CI configuration includes bandwidth-optimized caching and test result caching
 - OCI images use Python 3.11-slim and Alpine 3.20 as base images with multi-platform support
+- **Virtual environments**: Optional for local development; Bazel manages dependencies for production builds
 
 
 ## CI/CD Pipeline
