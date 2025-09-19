@@ -187,41 +187,18 @@ def release_helm_chart(
 
 def _composite_helm_chart_impl(ctx):
     """Implementation for composite_helm_chart rule."""
-    # Prepare app data for template substitution
-    apps_data = []
-    app_list = []
+    # Simplified implementation - just create a basic composite chart structure
+    # In a full implementation, this would parse app metadata and generate
+    # per-app sections dynamically
     
-    for app_target in ctx.attr.apps:
-        # Get metadata for each app
-        app_metadata_file = None
-        for file in app_target.files.to_list():
-            if file.basename.endswith("_metadata.json"):
-                app_metadata_file = file
-                break
-        
-        if not app_metadata_file:
-            fail(f"Could not find metadata file for app target: {app_target}")
-        
-        # Read metadata (this is a simplified approach - in real implementation, we'd parse JSON)
-        # For now, we'll use placeholder values
-        apps_data.append({
-            "APP_NAME": app_target.label.name.replace("_metadata", ""),
-            "IMAGE_REPO": "placeholder-repo",  # Would be extracted from metadata
-            "APP_VERSION": "latest",  # Would be extracted from metadata
-            "SERVICE_PORT": "8000",  # Would be extracted from metadata or default
-            "HEALTH_PATH": "/health",  # Would be extracted from metadata or default
-        })
-        app_list.append(app_target.label.name.replace("_metadata", ""))
-    
-    # Metadata for substitution
+    # Basic metadata for substitution
     metadata = {
         "COMPOSITE_NAME": ctx.attr.composite_name,
         "DESCRIPTION": ctx.attr.description,
         "CHART_VERSION": ctx.attr.chart_version,
         "DOMAIN": ctx.attr.domain,
         "GLOBAL_REGISTRY": ctx.attr.global_registry,
-        "APP_LIST": ",".join(app_list),
-        "APPS": apps_data,
+        "APP_LIST": ",".join([app.label.name.replace("_metadata", "") for app in ctx.attr.apps]),
     }
     
     # Template files to process for composite charts
@@ -249,7 +226,7 @@ def _composite_helm_chart_impl(ctx):
                 break
         
         if not template_input:
-            fail(f"Template file not found: {template_file}")
+            fail("Template file not found: " + template_file)
         
         output_path = chart_dir.path + "/" + output_file
         
@@ -257,11 +234,10 @@ def _composite_helm_chart_impl(ctx):
         output_dir = output_path.rsplit("/", 1)[0]
         substitution_commands.append("mkdir -p " + shell.quote(output_dir))
         
-        # Simple substitution (in real implementation, would handle APPS iteration properly)
+        # Simple substitution
         sed_cmd = "sed"
         for key, value in metadata.items():
-            if key != "APPS":  # Skip complex APPS data for now
-                sed_cmd += " -e 's/{{" + key + "}}/" + shell.quote(str(value)) + "/g'"
+            sed_cmd += " -e 's/{{" + key + "}}/" + shell.quote(str(value)) + "/g'"
         sed_cmd += " " + shell.quote(template_input.path) + " > " + shell.quote(output_path)
         
         substitution_commands.append(sed_cmd)
@@ -300,7 +276,7 @@ def release_composite_helm_chart(
     domain,
     apps,  # List of app names
     global_registry = "ghcr.io",
-    template_files = "//tools/charts:templates"):
+    template_files = "//tools/charts:composite_templates"):
     """Generate and package a composite Helm chart for multiple apps.
     
     Args:

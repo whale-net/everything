@@ -8,56 +8,20 @@ global:
   storageClass: ""
 
 # Configuration for each application in this composite chart
+# Note: This is a simplified template - actual implementation would generate
+# per-app sections dynamically based on the apps list
 apps:
-{{#APPS}}
-  {{APP_NAME}}:
-    enabled: true
-    replicaCount: 1
-    
-    image:
-      repository: {{IMAGE_REPO}}
-      tag: "{{APP_VERSION}}"
-      pullPolicy: IfNotPresent
-    
-    service:
-      type: ClusterIP
-      port: 80
-      targetPort: {{SERVICE_PORT}}
-    
-    # App-specific configuration
-    config:
-      port: {{SERVICE_PORT}}
-      # Environment variables for this app
-      env: {}
-        # Example:
-        # LOG_LEVEL: info
-        # DEBUG: "false"
-    
-    # Health check configuration
-    healthCheck:
-      enabled: true
-      path: {{HEALTH_PATH}}
-      initialDelaySeconds: 30
-      periodSeconds: 10
-    
-    # Resources for this specific app
-    resources: {}
-      # limits:
-      #   cpu: 100m
-      #   memory: 128Mi
-      # requests:
-      #   cpu: 100m
-      #   memory: 128Mi
-    
-    # Autoscaling for this app
-    autoscaling:
-      enabled: false
-      minReplicas: 1
-      maxReplicas: 10
-      targetCPUUtilizationPercentage: 80
-
-{{/APPS}}
-
+  # App configurations will be generated based on the apps parameter
+  # Each app gets a section like:
+  # app_name:
+  #   enabled: true
+  #   image:
+  #     repository: image_repo
+  #     tag: app_version
+  #   service:
+  #     port: 80
+  #     targetPort: service_port
+  
 # Shared ingress configuration for all apps
 ingress:
   enabled: false
@@ -67,12 +31,8 @@ ingress:
     # kubernetes.io/tls-acme: "true"
   hosts:
     - host: {{COMPOSITE_NAME}}.local
-      paths:
-{{#APPS}}
-        - path: /{{APP_NAME}}
-          pathType: Prefix
-          serviceName: {{APP_NAME}}
-{{/APPS}}
+      paths: []
+        # Paths will be generated based on apps
   tls: []
 
 # Shared resources

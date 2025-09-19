@@ -14,9 +14,6 @@ keywords:
   - {{DOMAIN}}
   - composite
   - multi-app
-{{#APPS}}
-  - {{APP_NAME}}
-{{/APPS}}
 annotations:
   whale-net.io/domain: {{DOMAIN}}
   whale-net.io/type: composite
