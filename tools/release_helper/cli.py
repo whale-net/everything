@@ -17,6 +17,7 @@ from tools.release_helper.release import find_app_bazel_target, plan_release, ta
 from tools.release_helper.release_notes import generate_release_notes, generate_release_notes_for_all_apps
 from tools.release_helper.summary import generate_release_summary
 from tools.release_helper.validation import validate_release_version
+from tools.release_helper.github_release import create_app_release, create_releases_for_apps
 
 app = typer.Typer(help="Release helper for Everything monorepo")
 
@@ -292,6 +293,100 @@ def release_notes_all(
                 
     except Exception as e:
         typer.echo(f"Error generating release notes: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command("create-github-release")
+def create_github_release(
+    app_name: Annotated[str, typer.Argument(help="App name to create release for")],
+    tag_name: Annotated[str, typer.Option("--tag", help="Git tag name for the release")],
+    owner: Annotated[str, typer.Option("--owner", help="Repository owner")] = "",
+    repo: Annotated[str, typer.Option("--repo", help="Repository name")] = "",
+    commit_sha: Annotated[Optional[str], typer.Option("--commit", help="Specific commit SHA to target")] = None,
+    prerelease: Annotated[bool, typer.Option("--prerelease", help="Mark as prerelease")] = False,
+    previous_tag: Annotated[Optional[str], typer.Option("--previous-tag", help="Previous tag to compare against (auto-detected if not provided)")] = None,
+):
+    """Create a GitHub release for a specific app."""
+    try:
+        # Generate release notes
+        typer.echo(f"Generating release notes for {app_name}...")
+        release_notes = generate_release_notes(app_name, tag_name, previous_tag, "markdown")
+        
+        # Create GitHub release
+        typer.echo(f"Creating GitHub release for {app_name}...")
+        result = create_app_release(
+            app_name=app_name,
+            tag_name=tag_name,
+            release_notes=release_notes,
+            owner=owner,
+            repo=repo,
+            commit_sha=commit_sha,
+            prerelease=prerelease
+        )
+        
+        if result:
+            if "html_url" in result:
+                typer.echo(f"✅ GitHub release created: {result['html_url']}")
+            else:
+                typer.echo(f"ℹ️  {result.get('message', 'Release processed successfully')}")
+        else:
+            typer.echo("❌ Failed to create GitHub release", err=True)
+            raise typer.Exit(1)
+            
+    except Exception as e:
+        typer.echo(f"Error creating GitHub release: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command("create-combined-github-release")
+def create_combined_github_release(
+    version: Annotated[str, typer.Argument(help="Release version")],
+    owner: Annotated[str, typer.Option("--owner", help="Repository owner")] = "",
+    repo: Annotated[str, typer.Option("--repo", help="Repository name")] = "",
+    commit_sha: Annotated[Optional[str], typer.Option("--commit", help="Specific commit SHA to target")] = None,
+    prerelease: Annotated[bool, typer.Option("--prerelease", help="Mark as prerelease")] = False,
+    previous_tag: Annotated[Optional[str], typer.Option("--previous-tag", help="Previous tag to compare against (auto-detected if not provided)")] = None,
+    apps: Annotated[Optional[str], typer.Option("--apps", help="Comma-separated list of apps to include (defaults to all)")] = None,
+):
+    """Create GitHub releases for multiple apps."""
+    try:
+        # Determine which apps to include
+        if apps:
+            app_list = [app.strip() for app in apps.split(',')]
+        else:
+            # Get all apps
+            all_apps = list_all_apps()
+            app_list = [app['name'] for app in all_apps]
+        
+        # Create releases for all specified apps
+        typer.echo(f"Creating GitHub releases for {len(app_list)} apps...")
+        results = create_releases_for_apps(
+            app_list=app_list,
+            version=version,
+            owner=owner,
+            repo=repo,
+            commit_sha=commit_sha,
+            prerelease=prerelease,
+            previous_tag=previous_tag
+        )
+        
+        # Report results
+        successful_releases = [app for app, result in results.items() if result is not None]
+        failed_releases = [app for app, result in results.items() if result is None]
+        
+        if successful_releases:
+            typer.echo(f"✅ Successfully created releases for: {', '.join(successful_releases)}")
+        
+        if failed_releases:
+            typer.echo(f"❌ Failed to create releases for: {', '.join(failed_releases)}", err=True)
+            raise typer.Exit(1)
+        
+        if not successful_releases:
+            typer.echo("❌ No releases were created successfully", err=True)
+            raise typer.Exit(1)
+            
+    except Exception as e:
+        typer.echo(f"Error creating GitHub releases: {e}", err=True)
         raise typer.Exit(1)
 
 

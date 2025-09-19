@@ -859,6 +859,39 @@ bazel run //tools:release -- release-notes-all \
 - **Automatic Previous Tag Detection**: Finds the previous tag if not specified
 - **Infrastructure Change Detection**: Includes infrastructure changes that affect all apps
 
+### GitHub Release Creation
+
+The release system automatically creates GitHub releases when using the main release workflow (Method 1 or 2). You can also create releases manually:
+
+```bash
+# Create GitHub release for a specific app
+bazel run //tools:release -- create-github-release hello_python \
+  --tag demo-hello_python.v1.2.3 \
+  --owner whale-net \
+  --repo everything \
+  --commit abc1234
+
+# Create GitHub releases for multiple apps
+bazel run //tools:release -- create-combined-github-release v1.2.3 \
+  --owner whale-net \
+  --repo everything \
+  --commit abc1234 \
+  --apps hello_python,hello_go,hello_fastapi
+```
+
+**GitHub Release Features:**
+- **Automatic Release Creation**: Creates releases during the release workflow
+- **Individual App Releases**: Each app gets its own tagged release with specific release notes
+- **Multi-App Release Creation**: Create releases for multiple apps with a single command
+- **Rich Release Notes**: Generated from commit history and file changes for each app
+- **Existing Release Detection**: Skips creation if release already exists
+- **Permission Validation**: Checks GitHub token permissions before attempting creation
+
+**Requirements:**
+- `GITHUB_TOKEN` environment variable with `repo` scope
+- Write permissions to the target repository
+- Git tags must exist before creating releases
+
 ---
 
 ## 🤝 Contributing & Support
