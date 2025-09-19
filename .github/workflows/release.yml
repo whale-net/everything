@@ -230,12 +230,6 @@ jobs:
       with:
         cache-suffix: 'docker'
       
-    - name: Create GitHub releases for individual apps
-      env:
-        MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
-        VERSION: ${{ needs.plan-release.outputs.version }}
-        GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-        GITHUB_REPOSITORY_NAME: ${{ github.event.repository.name }}
     - name: Create GitHub releases for all apps
       env:
         MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
