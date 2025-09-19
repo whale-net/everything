@@ -85,6 +85,58 @@ TODO: Enable gazelle rules for full Go dependency management
 
 **Note:** Go dependency management is currently minimal. The gazelle rules are commented out in the root BUILD.bazel file and may need to be enabled for full Go dependency management.
 
+### Python Virtual Environment for Local Development
+
+For local development, you can create a Python virtual environment that includes all project dependencies from `requirements.lock.txt`. This environment provides a superset of all packages and is useful for IDE integration, debugging, and running scripts outside of Bazel.
+
+#### Creating a Virtual Environment
+
+Use the provided Bazel tool to create a virtual environment:
+
+```bash
+# Create venv in default location (.venv)
+bazel run //tools:create_venv
+
+# Create venv in custom location
+bazel run //tools:create_venv -- --venv-path ./my_dev_env
+
+# Use specific Python version
+bazel run //tools:create_venv -- --python python3.11
+```
+
+#### Activating and Using the Virtual Environment
+
+After creation, activate the environment:
+
+```bash
+# Activate the environment (Unix/Linux/macOS)
+source .venv/bin/activate
+
+# On Windows
+.venv\Scripts\activate
+
+# Verify installation
+python -c "import fastapi, pytest, uvicorn; print('Environment ready!')"
+
+# Use with your favorite IDE/editor
+# Point your IDE's Python interpreter to .venv/bin/python
+```
+
+#### Benefits of the Virtual Environment
+
+- **IDE Integration**: Point your IDE to `.venv/bin/python` for better IntelliSense and debugging
+- **Script Development**: Run Python scripts directly without Bazel for quick iteration
+- **Debugging**: Use standard Python debugging tools and techniques
+- **Package Exploration**: Explore and test packages interactively with `python -i`
+- **Development Tools**: Run development tools like `pytest`, `black`, or `mypy` directly
+
+#### Important Notes
+
+- This venv is for **local development only** - production deployments use Bazel-managed dependencies
+- The venv contains **all project dependencies** as specified in `requirements.lock.txt`
+- Recreate the venv when `requirements.lock.txt` is updated by running the tool again
+- The tool automatically clears and recreates the venv if it already exists
+
 ### Development Workflow
 
 #### Adding a New Python App

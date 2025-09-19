@@ -2,6 +2,8 @@
 
 package(default_visibility = ["//visibility:public"])
 
+load("@rules_python//python:defs.bzl", "py_binary")
+
 exports_files([
     "oci.bzl",
 ])
@@ -10,5 +12,13 @@ exports_files([
 alias(
     name = "release",
     actual = "//tools/release_helper:release_helper",
+    visibility = ["//visibility:public"],
+)
+
+# Tool to create Python virtual environment for local development
+py_binary(
+    name = "create_venv",
+    srcs = ["create_venv.py"],
+    main = "create_venv.py",
     visibility = ["//visibility:public"],
 )
