@@ -23,6 +23,17 @@ py_binary(
     main = "cli.py",
 )
 
+# Unit tests for metadata module
+py_test(
+    name = "test_metadata",
+    srcs = ["test_metadata.py"],
+    deps = [
+        ":release_helper_lib",
+        requirement("pytest"),
+    ],
+    size = "small",
+)
+
 # Unit tests for git module
 py_test(
     name = "test_git",
