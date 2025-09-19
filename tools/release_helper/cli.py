@@ -122,7 +122,7 @@ def release(
 @app.command()
 def plan(
     event_type: Annotated[str, typer.Option(help="Type of trigger event")],
-    apps: Annotated[Optional[str], typer.Option(help="Comma-separated list of apps or 'all' (for manual releases)")] = None,
+    apps: Annotated[Optional[str], typer.Option(help="Comma-separated list of apps, domain names, or 'all' (for manual releases)")] = None,
     version: Annotated[Optional[str], typer.Option(help="Release version")] = None,
     increment_minor: Annotated[bool, typer.Option("--increment-minor", help="Auto-increment minor version (resets patch to 0)")] = False,
     increment_patch: Annotated[bool, typer.Option("--increment-patch", help="Auto-increment patch version")] = False,
