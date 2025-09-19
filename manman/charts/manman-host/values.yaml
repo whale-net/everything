@@ -1,0 +1,138 @@
+# Individual images for each service with independent tagging
+images:
+  experience_api:
+    name: "ghcr.io/whale-net/everything/manman-experience-api"
+    tag: ""
+  status_api:
+    name: "ghcr.io/whale-net/everything/manman-status-api"
+    tag: ""
+  worker_dal_api:
+    name: "ghcr.io/whale-net/everything/manman-worker-dal-api"
+    tag: ""
+  status_processor:
+    name: "ghcr.io/whale-net/everything/manman-status-processor"
+    tag: ""
+  # Migration job can use experience_api image or have its own
+  migration:
+    name: "ghcr.io/whale-net/everything/manman-experience-api"
+    tag: ""
+
+namespace: manman
+
+# Configuration for which APIs to deploy
+apis:
+  # Experience API (host layer)
+  experience:
+    enabled: true
+    name: manman-experience
+    replicas: 1
+    port: 8000
+    command: "start-experience-api"
+
+  # Worker DAL API
+  workerDal:
+    enabled: true
+    name: manman-worker-dal
+    replicas: 1
+    port: 8000
+    command: "start-worker-dal-api"
+
+  # Status API (read-only HTTP endpoints)
+  status:
+    enabled: true
+    name: manman-status
+    replicas: 1
+    port: 8000
+    command: "start-status-api"
+
+# Configuration for background processors (pub/sub services)
+processors:
+  # Status Event Processor (handles status-related messages)
+  status:
+    enabled: true
+    name: manman-status-processor
+    replicas: 1
+    command: "start-status-processor"
+
+# Ingress configuration (primarily for development)
+ingress:
+  # Enable/disable ingress
+  enabled: false
+
+  # Custom ingress name (defaults to manman-ingress-{app_env} if empty)
+  name: ""
+
+  # Custom host (defaults to localhost for development if empty)
+  # Note: When TLS is enabled, hosts are specified in tls.configs
+  host: "localhost"
+
+  # Ingress class name (e.g., nginx, traefik)
+  ingressClassName: ""
+
+  # Custom annotations for ingress controller
+  annotations: {}
+    # nginx.ingress.kubernetes.io/rewrite-target: /$2
+    # nginx.ingress.kubernetes.io/use-regex: "true"
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+
+  # TLS configuration
+  tls:
+    # Enable/disable TLS
+    enabled: false
+    # TLS configurations (if empty and TLS is enabled, uses default config)
+    configs: []
+      # Example TLS configs:
+      # - secretName: manman-tls-dev
+      #   hosts:
+      #     - localhost
+      #     - dev.example.com
+      # - secretName: manman-tls-prod
+      #   hosts:
+      #     - api.example.com
+
+# Migration configuration
+migrations:
+  # Set to true to skip running migrations entirely
+  skip_migration: false
+  # Timeout for migration job in seconds (5 minutes)
+  timeout: 300
+
+# ArgoCD specific configuration
+argocd:
+  # Sync timeout for the entire application (10 minutes)
+  syncTimeout: 600
+  # Retry configuration
+  retry:
+    limit: 3
+    backoff:
+      duration: 30s
+      factor: 2
+      maxDuration: 3m
+
+env:
+  rabbitmq:
+    port: 5672
+    host: <rabbitmq_host>
+    user: <rabbitmq_user>
+    password: <rabbitmq_password>
+    enable_ssl: false
+    ssl_hostname: <rabbitmq_ssl_hostname>
+    # whether to instruct the app to create the RabbitMQ vhost via management API
+    createVhost: false
+
+  # change this to the environment you are deploying to
+  app_env: dev
+
+  # OpenTelemetry configuration
+  otel:
+    logging_enabled: true
+
+  db:
+    url: <postgresql+psycopg2://user:password@host:port/database>
+  otelCollector:
+    logs:
+      endpoint: <logs_endpoint>
+    traces:
+      endpoint: <traces_endpoint>
+    metrics:
+      endpoint: <metrics_endpoint>

@@ -1,0 +1,38 @@
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@everything_pip_deps//:requirements.bzl", "requirement")
+
+# Repository layer library
+py_library(
+    name = "manman_repository",
+    srcs = glob(["**/*.py"], exclude=["*_test.py"]),
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        "//manman/src:manman_core",
+        requirement("sqlmodel"),
+        requirement("asyncpg"),
+        requirement("amqpstorm"),
+        requirement("httpx"),
+        requirement("alembic"),
+        requirement("opentelemetry-instrumentation-sqlalchemy"),
+        requirement("requests"),
+        requirement("python-jose"),
+    ],
+)
+
+# Tests for repository layer
+py_test(
+    name = "manman_repository_test",
+    srcs = [
+        "database_repository_test.py",
+        "validator_test.py",
+        "rabbitmq/util_test.py",
+    ],
+    main = "database_repository_test.py",
+    deps = [
+        ":manman_repository",
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+        requirement("sqlalchemy"),  # For testing database components
+    ],
+    python_version = "PY3",
+)
