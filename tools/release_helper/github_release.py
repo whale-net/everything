@@ -25,6 +25,8 @@ class GitHubReleaseData:
 class GitHubReleaseClient:
     """Client for interacting with GitHub Releases API."""
     
+    DEFAULT_TIMEOUT = 30.0  # Default timeout for HTTP requests in seconds
+    
     def __init__(self, owner: str, repo: str, token: Optional[str] = None):
         """Initialize the GitHub release client.
         
@@ -42,7 +44,7 @@ class GitHubReleaseClient:
         
         self.base_url = "https://api.github.com"
         self.headers = {
-            "Authorization": f"token {self.token}",
+            "Authorization": f"Bearer {self.token}",
             "Accept": "application/vnd.github.v3+json",
             "Content-Type": "application/json"
         }
@@ -57,7 +59,7 @@ class GitHubReleaseClient:
         
         with httpx.Client() as client:
             try:
-                response = client.get(url, headers=self.headers, timeout=30.0)
+                response = client.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
                 if response.status_code == 200:
                     repo_data = response.json()
                     permissions = repo_data.get('permissions', {})
@@ -108,7 +110,7 @@ class GitHubReleaseClient:
         print(f"Creating GitHub release: {release_data.name} ({release_data.tag_name})")
         
         with httpx.Client() as client:
-            response = client.post(url, headers=self.headers, json=payload, timeout=30.0)
+            response = client.post(url, headers=self.headers, json=payload, timeout=self.DEFAULT_TIMEOUT)
             
             if response.status_code == 201:
                 release_info = response.json()
@@ -154,7 +156,7 @@ class GitHubReleaseClient:
         
         with httpx.Client() as client:
             try:
-                response = client.get(url, headers=self.headers, timeout=30.0)
+                response = client.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
                 if response.status_code == 200:
                     return response.json()
                 else:
@@ -176,7 +178,7 @@ class GitHubReleaseClient:
         
         with httpx.Client() as client:
             try:
-                response = client.get(url, headers=self.headers, params=params, timeout=30.0)
+                response = client.get(url, headers=self.headers, params=params, timeout=self.DEFAULT_TIMEOUT)
                 response.raise_for_status()
                 return response.json()
             except httpx.HTTPError as e:
