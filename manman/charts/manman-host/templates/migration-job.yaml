@@ -35,7 +35,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: manman-migrations
-          image: "{{ .Values.image.name }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: "{{ .Values.images.migration.name }}:{{ .Values.images.migration.tag | default .Chart.AppVersion }}"
           resources:
             requests:
               cpu: 100m

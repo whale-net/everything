@@ -1,6 +1,21 @@
-image:
-  name: "ghcr.io/whale-net/manman"
-  tag: ""
+# Individual images for each service with independent tagging
+images:
+  experience_api:
+    name: "ghcr.io/whale-net/everything/manman-experience-api"
+    tag: ""
+  status_api:
+    name: "ghcr.io/whale-net/everything/manman-status-api"
+    tag: ""
+  worker_dal_api:
+    name: "ghcr.io/whale-net/everything/manman-worker-dal-api"
+    tag: ""
+  status_processor:
+    name: "ghcr.io/whale-net/everything/manman-status-processor"
+    tag: ""
+  # Migration job can use experience_api image or have its own
+  migration:
+    name: "ghcr.io/whale-net/everything/manman-experience-api"
+    tag: ""
 
 namespace: manman
 

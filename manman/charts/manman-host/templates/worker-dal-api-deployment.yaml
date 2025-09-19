@@ -24,7 +24,7 @@ spec:
     spec:
       containers:
         - name: manman-worker-dal-api
-          image: "{{ .Values.image.name }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.images.worker_dal_api.name }}:{{ .Values.images.worker_dal_api.tag }}"
           resources:
             requests:
               cpu: 50m

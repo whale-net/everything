@@ -24,7 +24,7 @@ spec:
     spec:
       containers:
         - name: manman-status-processor
-          image: "{{ .Values.image.name }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.images.status_processor.name }}:{{ .Values.images.status_processor.tag }}"
           resources:
             requests:
               cpu: 50m

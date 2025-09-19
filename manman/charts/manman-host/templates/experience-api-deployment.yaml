@@ -24,7 +24,7 @@ spec:
     spec:
       containers:
         - name: manman-experience-api
-          image: "{{ .Values.image.name }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.images.experience_api.name }}:{{ .Values.images.experience_api.tag }}"
           resources:
             requests:
               cpu: 50m
