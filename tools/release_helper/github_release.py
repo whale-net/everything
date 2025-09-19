@@ -47,6 +47,39 @@ class GitHubReleaseClient:
             "Content-Type": "application/json"
         }
     
+    def validate_permissions(self) -> bool:
+        """Validate that the GitHub token has the necessary permissions.
+        
+        Returns:
+            True if token has necessary permissions, False otherwise
+        """
+        url = f"{self.base_url}/repos/{self.owner}/{self.repo}"
+        
+        with httpx.Client() as client:
+            try:
+                response = client.get(url, headers=self.headers, timeout=30.0)
+                if response.status_code == 200:
+                    repo_data = response.json()
+                    permissions = repo_data.get('permissions', {})
+                    
+                    # Check if we have write permissions (needed for creating releases)
+                    if permissions.get('push', False) or permissions.get('admin', False):
+                        return True
+                    else:
+                        print(f"❌ GitHub token does not have write permissions for {self.owner}/{self.repo}", file=sys.stderr)
+                        print("   Ensure the token has 'repo' or 'public_repo' scope", file=sys.stderr)
+                        return False
+                else:
+                    print(f"❌ Cannot access repository {self.owner}/{self.repo}. Status: {response.status_code}", file=sys.stderr)
+                    if response.status_code == 404:
+                        print("   Repository not found or token doesn't have access", file=sys.stderr)
+                    elif response.status_code == 403:
+                        print("   Access forbidden - check token permissions", file=sys.stderr)
+                    return False
+            except httpx.HTTPError as e:
+                print(f"❌ Error validating permissions: {e}", file=sys.stderr)
+                return False
+    
     def create_release(self, release_data: GitHubReleaseData) -> Dict:
         """Create a GitHub release.
         
@@ -83,16 +116,29 @@ class GitHubReleaseClient:
                 return release_info
             elif response.status_code == 422:
                 # Release might already exist
-                error_msg = response.json().get('message', 'Unknown error')
-                if 'already_exists' in error_msg.lower() or 'already exists' in error_msg.lower():
-                    print(f"ℹ️  Release {release_data.tag_name} already exists, skipping creation")
-                    return {"message": "Release already exists", "tag_name": release_data.tag_name}
-                else:
-                    print(f"❌ Failed to create release: {error_msg}", file=sys.stderr)
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get('message', 'Unknown error')
+                    if 'already_exists' in error_msg.lower() or 'already exists' in error_msg.lower():
+                        print(f"ℹ️  Release {release_data.tag_name} already exists, skipping creation")
+                        return {"message": "Release already exists", "tag_name": release_data.tag_name}
+                    else:
+                        print(f"❌ Failed to create release: {error_msg}", file=sys.stderr)
+                        if 'errors' in error_data:
+                            for error in error_data['errors']:
+                                print(f"   - {error.get('message', error)}", file=sys.stderr)
+                        response.raise_for_status()
+                except json.JSONDecodeError:
+                    print(f"❌ Failed to create release. Status: {response.status_code}", file=sys.stderr)
+                    print(f"Response: {response.text}", file=sys.stderr)
                     response.raise_for_status()
             else:
                 print(f"❌ Failed to create GitHub release. Status: {response.status_code}", file=sys.stderr)
-                print(f"Response: {response.text}", file=sys.stderr)
+                try:
+                    error_data = response.json()
+                    print(f"Error: {error_data.get('message', 'Unknown error')}", file=sys.stderr)
+                except json.JSONDecodeError:
+                    print(f"Response: {response.text}", file=sys.stderr)
                 response.raise_for_status()
     
     def get_release_by_tag(self, tag_name: str) -> Optional[Dict]:
@@ -166,6 +212,11 @@ def create_app_release(
     try:
         client = GitHubReleaseClient(owner, repo, token)
         
+        # Validate permissions first
+        if not client.validate_permissions():
+            print(f"❌ Insufficient permissions to create releases in {owner}/{repo}", file=sys.stderr)
+            return None
+        
         # Check if release already exists
         existing_release = client.get_release_by_tag(tag_name)
         if existing_release:
@@ -214,6 +265,11 @@ def create_combined_release(
     """
     try:
         client = GitHubReleaseClient(owner, repo, token)
+        
+        # Validate permissions first
+        if not client.validate_permissions():
+            print(f"❌ Insufficient permissions to create releases in {owner}/{repo}", file=sys.stderr)
+            return None
         
         tag_name = version
         

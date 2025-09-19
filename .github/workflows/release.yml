@@ -240,8 +240,11 @@ jobs:
         echo "Creating GitHub releases for individual apps..."
         
         # Parse the matrix to get the list of apps
+        FAILED_RELEASES=""
+        SUCCESSFUL_RELEASES=""
+        
         echo "$MATRIX" | jq -r '.include[] | "\(.app) \(.version // env.VERSION)"' | while read app version; do
-          echo "Creating GitHub release for $app version $version"
+          echo "Processing $app version $version"
           
           # Get app metadata to determine domain for tag format
           METADATA=$(bazel run --config=ci //tools:release -- list-apps | grep "^$app " | head -n1)
@@ -249,16 +252,33 @@ jobs:
             DOMAIN=$(echo "$METADATA" | sed 's/.*domain: \([^,]*\).*/\1/')
             TAG_NAME="${DOMAIN}-${app}.${version}"
             
+            echo "Creating GitHub release for $app with tag $TAG_NAME"
+            
             # Create individual app release
-            bazel run --config=ci //tools:release -- create-github-release "$app" \
+            if bazel run --config=ci //tools:release -- create-github-release "$app" \
               --tag "$TAG_NAME" \
               --owner "$GITHUB_REPOSITORY_OWNER" \
               --repo "$GITHUB_REPOSITORY_NAME" \
-              --commit "${{ github.sha }}" || echo "Failed to create release for $app, continuing..."
+              --commit "${{ github.sha }}"; then
+              echo "✅ Successfully created release for $app"
+              SUCCESSFUL_RELEASES="$SUCCESSFUL_RELEASES $app"
+            else
+              echo "❌ Failed to create release for $app"
+              FAILED_RELEASES="$FAILED_RELEASES $app"
+            fi
           else
             echo "Warning: Could not determine domain for $app, skipping individual release"
+            FAILED_RELEASES="$FAILED_RELEASES $app"
           fi
         done
+        
+        # Report summary
+        if [[ -n "$SUCCESSFUL_RELEASES" ]]; then
+          echo "✅ Successfully created releases for:$SUCCESSFUL_RELEASES"
+        fi
+        if [[ -n "$FAILED_RELEASES" ]]; then
+          echo "❌ Failed to create releases for:$FAILED_RELEASES"
+        fi
     
     - name: Create combined GitHub release
       env:
@@ -272,13 +292,20 @@ jobs:
         # Extract app names from matrix
         APPS=$(echo "$MATRIX" | jq -r '.include[].app' | tr '\n' ',' | sed 's/,$//')
         
-        if [[ -n "$APPS" ]]; then
+        if [[ -n "$APPS" && "$APPS" != "" ]]; then
+          echo "Creating combined release for apps: $APPS"
+          
           # Create combined release
-          bazel run --config=ci //tools:release -- create-combined-github-release "$VERSION" \
+          if bazel run --config=ci //tools:release -- create-combined-github-release "$VERSION" \
             --owner "$GITHUB_REPOSITORY_OWNER" \
             --repo "$GITHUB_REPOSITORY_NAME" \
             --commit "${{ github.sha }}" \
-            --apps "$APPS" || echo "Failed to create combined release, continuing..."
+            --apps "$APPS"; then
+            echo "✅ Successfully created combined GitHub release for version $VERSION"
+          else
+            echo "❌ Failed to create combined GitHub release for version $VERSION"
+            exit 1  # Fail the job if combined release fails
+          fi
         else
           echo "No apps found in matrix, skipping combined release"
         fi
