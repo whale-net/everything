@@ -40,10 +40,20 @@ def oci_image_with_binary(
         binary_name = binary.split(":")[-1] if ":" in binary else binary
         repo_tag = binary_name + ":latest"
     
-    # Create binary layer with propagated tags
+    # Create a directory structure with binary placed in app/
+    binary_name = binary.split(":")[-1] if ":" in binary else binary
+    native.genrule(
+        name = name + "_app_structure",
+        srcs = [binary],
+        outs = [name + "_app/" + binary_name],
+        cmd = "mkdir -p $$(dirname $(OUTS)); cp $(SRCS) $(OUTS); chmod +x $(OUTS)",
+        tags = tags,
+    )
+    
+    # Create binary layer with the app directory structure
     tar(
         name = name + "_binary_layer",
-        srcs = [binary],
+        srcs = [":" + name + "_app_structure"],
         tags = tags,
     )
     
@@ -118,9 +128,9 @@ def python_oci_image(name, binary, repo_tag = None, platform = None, tags = None
     base_image = _get_platform_base_image("python_slim", platform)
     binary_name = binary.split(":")[-1] if ":" in binary else binary
     
-    # For Python, the binary is placed by Bazel at /{binary_name} and can be executed directly
+    # For Python, the binary will be placed in /app/{binary_name} and can be executed directly
     # Bazel py_binary targets are self-contained with all dependencies included
-    entrypoint = ["/" + binary_name]
+    entrypoint = ["/app/" + binary_name]
     
     oci_image_with_binary(
         name = name,
@@ -156,9 +166,9 @@ def go_oci_image(name, binary, repo_tag = None, platform = None, tags = None, **
     else:
         platform_binary = binary.replace(":" + binary_name, ":" + binary_name + "_linux_amd64")
     
-    # The Go binary will be placed by Bazel at /{platform_binary_name}
+    # The Go binary will be placed in /app/{platform_binary_name}
     platform_binary_name = platform_binary.split(":")[-1]
-    entrypoint = ["/" + platform_binary_name]
+    entrypoint = ["/app/" + platform_binary_name]
     
     oci_image_with_binary(
         name = name,
