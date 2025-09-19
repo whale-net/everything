@@ -9,9 +9,9 @@ from manman.src.host.api.shared.injectors import rmq_conn
 from manman.src.models import InternalStatusInfo, StatusType, Worker
 from manman.src.repository.database import WorkerRepository
 from manman.src.repository.message.pub import InternalStatusInfoPubService
+from manman.src.constants import EntityRegistry
 from manman.src.repository.rabbitmq.config import (
     BindingConfig,
-    EntityRegistry,
     ExchangeRegistry,
     MessageTypeRegistry,
     RoutingKeyConfig,

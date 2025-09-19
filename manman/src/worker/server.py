@@ -11,7 +11,7 @@ from manman.src.models import (
     ServerType,
 )
 from manman.src.repository.api_client import WorkerAPIClient
-from manman.src.repository.rabbitmq.config import EntityRegistry
+from manman.src.constants import EntityRegistry
 from manman.src.util import env_list_to_dict
 from manman.src.worker.abstract_service import ManManService
 from manman.src.worker.processbuilder import ProcessBuilder, ProcessBuilderStatus

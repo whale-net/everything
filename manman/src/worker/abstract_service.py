@@ -10,9 +10,9 @@ from manman.src.repository.message.pub import (
     InternalStatusInfoPubService,
 )
 from manman.src.repository.message.sub import CommandSubService
+from manman.src.constants import EntityRegistry
 from manman.src.repository.rabbitmq.config import (
     BindingConfig,
-    EntityRegistry,
     ExchangeRegistry,
     MessageTypeRegistry,
     QueueConfig,

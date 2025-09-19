@@ -13,9 +13,9 @@ from manman.src.repository.database import (
     WorkerRepository,
 )
 from manman.src.repository.message.pub import CommandPubService
+from manman.src.constants import EntityRegistry
 from manman.src.repository.rabbitmq.config import (
     BindingConfig,
-    EntityRegistry,
     ExchangeRegistry,
     MessageTypeRegistry,
     RoutingKeyConfig,

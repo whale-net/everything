@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from manman.src.models import ExternalStatusInfo, StatusType
-from manman.src.repository.rabbitmq.config import EntityRegistry
+from manman.src.constants import EntityRegistry
 from manman.src.worker.server import Server
 
 

@@ -14,9 +14,9 @@ from manman.src.repository.message.sub import (
     ExternalStatusSubService,
     InternalStatusSubService,
 )
+from manman.src.constants import EntityRegistry
 from manman.src.repository.rabbitmq.config import (
     BindingConfig,
-    EntityRegistry,
     ExchangeRegistry,
     MessageTypeRegistry,
     QueueConfig,

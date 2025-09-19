@@ -23,7 +23,7 @@ class TopicWildcard(StrEnum):
 
 @dataclass
 class RoutingKeyConfig:
-    entity: Union[EntityRegistry, TopicWildcard]
+    entity: Union[ TopicWildcard]
     identifier: Union[str, TopicWildcard]
     type: Union[MessageTypeRegistry, TopicWildcard]
     subtype: Union[str, TopicWildcard, None] = None

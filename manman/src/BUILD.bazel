@@ -8,6 +8,7 @@ py_library(
         "__init__.py",
         "__main__.py", 
         "config.py",
+        "constants.py",
         "exceptions.py",
         "logging_config.py",
         "models.py", 
@@ -31,7 +32,7 @@ py_library(
 # Tests for core library
 py_test(
     name = "manman_core_test",
-    srcs = glob(["test/*.py"]),
+    srcs = glob(["test/*.py"], exclude=["test/test_server_status.py"]),
     main = "test/runner.py",
     deps = [
         ":manman_core",

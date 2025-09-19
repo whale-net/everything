@@ -8,9 +8,9 @@ consuming from multiple exchanges with different routing keys.
 import unittest
 from unittest.mock import Mock, call, patch
 
+from manman.src.constants import EntityRegistry
 from manman.src.repository.rabbitmq.config import (
     BindingConfig,
-    EntityRegistry,
     ExchangeRegistry,
     MessageTypeRegistry,
     QueueConfig,

@@ -14,7 +14,7 @@ import pytest
 
 from manman.src.host.status_processor import StatusEventProcessor
 from manman.src.models import ExternalStatusInfo, InternalStatusInfo, StatusType
-from manman.src.repository.rabbitmq.config import EntityRegistry
+from manman.src.constants import EntityRegistry
 
 
 class TestStatusProcessor:

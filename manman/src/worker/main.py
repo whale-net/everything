@@ -46,7 +46,7 @@ def start(
 
 @app.command()
 def dev():
-    from manman.src.repository.rabbitmq.config import EntityRegistry
+    from manman.src.constants import EntityRegistry
     from manman.src.worker.abstract_service import ManManService
 
     class DevService(ManManService):
