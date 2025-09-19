@@ -8,18 +8,61 @@ on:
         required: true
         default: 'all'
       version:
-        description: 'Release version (e.g., v1.0.0)'
-        required: true
+        description: 'Release version (e.g., v1.0.0) - leave empty when using increment options'
+        required: false
+      increment_minor:
+        description: 'Auto-increment minor version (resets patch to 0)'
+        type: boolean
+        default: false
+      increment_patch:
+        description: 'Auto-increment patch version'
+        type: boolean
+        default: false
       dry_run:
         description: 'Dry run - build but do not publish'
         type: boolean
         default: false
 
 jobs:
+  # Validate inputs and ensure mutual exclusivity
+  validate-inputs:
+    name: Validate Inputs
+    runs-on: ubuntu-latest
+    steps:
+    - name: Validate mutually exclusive version options
+      run: |
+        VERSION="${{ github.event.inputs.version }}"
+        INCREMENT_MINOR="${{ github.event.inputs.increment_minor }}"
+        INCREMENT_PATCH="${{ github.event.inputs.increment_patch }}"
+        
+        # Count how many version options are set
+        OPTION_COUNT=0
+        if [[ -n "$VERSION" ]]; then
+          OPTION_COUNT=$((OPTION_COUNT + 1))
+        fi
+        if [[ "$INCREMENT_MINOR" == "true" ]]; then
+          OPTION_COUNT=$((OPTION_COUNT + 1))
+        fi
+        if [[ "$INCREMENT_PATCH" == "true" ]]; then
+          OPTION_COUNT=$((OPTION_COUNT + 1))
+        fi
+        
+        # Ensure exactly one option is set
+        if [[ $OPTION_COUNT -eq 0 ]]; then
+          echo "Error: Must specify exactly one of: version, increment_minor, or increment_patch"
+          exit 1
+        elif [[ $OPTION_COUNT -gt 1 ]]; then
+          echo "Error: version, increment_minor, and increment_patch are mutually exclusive. Specify only one."
+          exit 1
+        fi
+        
+        echo "Input validation passed"
+
   # Detect what apps have changed and build release plan
   plan-release:
     name: Plan Release
     runs-on: ubuntu-latest
+    needs: validate-inputs
     outputs:
       release-matrix: ${{ steps.plan.outputs.matrix }}
       version: ${{ steps.plan.outputs.version }}
@@ -37,19 +80,30 @@ jobs:
     - name: Plan release using release helper tool
       id: plan
       run: |
-        # Determine version
+        # Determine version mode and build command
         VERSION="${{ github.event.inputs.version }}"
+        INCREMENT_MINOR="${{ github.event.inputs.increment_minor }}"
+        INCREMENT_PATCH="${{ github.event.inputs.increment_patch }}"
         EVENT_TYPE="workflow_dispatch"
         APPS_INPUT="${{ github.event.inputs.apps }}"
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        
+        # Build the command based on the selected option
+        CMD="bazel run --config=ci //tools:release -- plan --event-type \"$EVENT_TYPE\" --apps \"$APPS_INPUT\" --format github"
+        
+        if [[ -n "$VERSION" ]]; then
+          CMD="$CMD --version \"$VERSION\""
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        elif [[ "$INCREMENT_MINOR" == "true" ]]; then
+          CMD="$CMD --increment-minor"
+          echo "Planning minor version increment"
+        elif [[ "$INCREMENT_PATCH" == "true" ]]; then
+          CMD="$CMD --increment-patch"
+          echo "Planning patch version increment"
+        fi
         
         # Use release helper to plan the release
-        echo "Planning release with version $VERSION, event type $EVENT_TYPE"
-        PLAN_OUTPUT=$(bazel run --config=ci //tools:release -- plan \
-          --event-type "$EVENT_TYPE" \
-          --apps "$APPS_INPUT" \
-          --version "$VERSION" \
-          --format github)
+        echo "Planning release with command: $CMD"
+        PLAN_OUTPUT=$(eval $CMD)
         
         # Parse output from release helper
         echo "$PLAN_OUTPUT" | while IFS= read -r line; do
@@ -87,6 +141,12 @@ jobs:
         setup-docker: 'true'
         cache-suffix: 'docker'
         
+    # Configure Git for tagging
+    - name: Configure Git
+      run: |
+        git config --global user.name "${{ github.actor }}"
+        git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+        
     # Login unless it's a manual dispatch with dry_run=true
     # - Manual dispatch with dry_run=false: login (needed for publishing)
     # - Manual dispatch with dry_run=true: skip login (no publishing)
@@ -103,7 +163,7 @@ jobs:
     - name: Build and release app using consolidated release helper
       env:
         APP: ${{ matrix.app }}
-        VERSION: ${{ needs.plan-release.outputs.version }}
+        VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
         DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
       run: |
@@ -112,7 +172,7 @@ jobs:
         # Use our release helper tool to handle the entire release process
         if [[ "$DRY_RUN" == "true" ]]; then
           echo "DRY RUN: Building and testing release process without publishing"
-          bazel run --config=ci //tools:release -- release "$APP" --version "$VERSION" --commit "${{ github.sha }}" --dry-run
+          bazel run --config=ci //tools:release -- release "$APP" --version "$VERSION" --commit "${{ github.sha }}" --dry-run --create-git-tag
         else
           echo "Building and publishing $APP $VERSION"
           bazel run --config=ci //tools:release -- release "$APP" --version "$VERSION" --commit "${{ github.sha }}" --create-git-tag

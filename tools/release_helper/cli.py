@@ -13,11 +13,71 @@ from tools.release_helper.changes import detect_changed_apps
 from tools.release_helper.git import get_previous_tag
 from tools.release_helper.images import build_image
 from tools.release_helper.metadata import list_all_apps
-from tools.release_helper.release import plan_release, tag_and_push_image
+from tools.release_helper.release import find_app_bazel_target, plan_release, tag_and_push_image
+from tools.release_helper.release_notes import generate_release_notes, generate_release_notes_for_all_apps
 from tools.release_helper.summary import generate_release_summary
 from tools.release_helper.validation import validate_release_version
 
 app = typer.Typer(help="Release helper for Everything monorepo")
+
+
+@app.command("list-app-versions")
+def list_app_versions(
+    app_name: Annotated[Optional[str], typer.Argument(help="App name (optional - lists all apps if not specified)")] = None,
+):
+    """List versions for apps by checking git tags."""
+    from tools.release_helper.git import get_latest_app_version
+    from tools.release_helper.metadata import get_app_metadata
+    
+    if app_name:
+        # List versions for specific app
+        try:
+            bazel_target = find_app_bazel_target(app_name)
+            metadata = get_app_metadata(bazel_target)
+            latest_version = get_latest_app_version(metadata['domain'], metadata['name'])
+            if latest_version:
+                typer.echo(f"{app_name}: {latest_version}")
+            else:
+                typer.echo(f"{app_name}: no versions found")
+        except ValueError as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(1)
+    else:
+        # List versions for all apps
+        apps = list_all_apps()
+        for app_info in apps:
+            try:
+                metadata = get_app_metadata(app_info['bazel_target'])
+                latest_version = get_latest_app_version(metadata['domain'], metadata['name'])
+                if latest_version:
+                    typer.echo(f"{app_info['name']}: {latest_version}")
+                else:
+                    typer.echo(f"{app_info['name']}: no versions found")
+            except Exception as e:
+                typer.echo(f"{app_info['name']}: error - {e}")
+
+
+@app.command("increment-version")
+def increment_version_cmd(
+    app_name: Annotated[str, typer.Argument(help="App name")],
+    increment_type: Annotated[str, typer.Argument(help="Increment type: 'minor' or 'patch'")],
+):
+    """Calculate the next version for an app based on increment type."""
+    from tools.release_helper.git import auto_increment_version
+    from tools.release_helper.metadata import get_app_metadata
+    
+    if increment_type not in ["minor", "patch"]:
+        typer.echo("Error: increment_type must be 'minor' or 'patch'", err=True)
+        raise typer.Exit(1)
+    
+    try:
+        bazel_target = find_app_bazel_target(app_name)
+        metadata = get_app_metadata(bazel_target)
+        new_version = auto_increment_version(metadata['domain'], metadata['name'], increment_type)
+        typer.echo(f"{app_name}: {new_version}")
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -64,22 +124,40 @@ def plan(
     event_type: Annotated[str, typer.Option(help="Type of trigger event")],
     apps: Annotated[Optional[str], typer.Option(help="Comma-separated list of apps or 'all' (for manual releases)")] = None,
     version: Annotated[Optional[str], typer.Option(help="Release version")] = None,
+    increment_minor: Annotated[bool, typer.Option("--increment-minor", help="Auto-increment minor version (resets patch to 0)")] = False,
+    increment_patch: Annotated[bool, typer.Option("--increment-patch", help="Auto-increment patch version")] = False,
     base_commit: Annotated[Optional[str], typer.Option(help="Compare changes against this commit (compares HEAD to this commit)")] = None,
     format: Annotated[str, typer.Option(help="Output format")] = "json",
 ):
     """Plan a release and output CI matrix."""
-    if event_type not in ["workflow_dispatch", "tag_push"]:
-        typer.echo("Error: event-type must be one of: workflow_dispatch, tag_push", err=True)
+    if event_type not in ["workflow_dispatch", "tag_push", "pull_request", "push", "fallback"]:
+        typer.echo("Error: event-type must be one of: workflow_dispatch, tag_push, pull_request, push, fallback", err=True)
         raise typer.Exit(1)
     
     if format not in ["json", "github"]:
         typer.echo("Error: format must be one of: json, github", err=True)
         raise typer.Exit(1)
 
+    # Validate mutually exclusive version options
+    version_options = [version is not None, increment_minor, increment_patch]
+    if sum(version_options) > 1:
+        typer.echo("Error: version, --increment-minor, and --increment-patch are mutually exclusive", err=True)
+        raise typer.Exit(1)
+    
+    # Determine version mode
+    version_mode = None
+    if version is not None:
+        version_mode = "specific"
+    elif increment_minor:
+        version_mode = "increment_minor"
+    elif increment_patch:
+        version_mode = "increment_patch"
+
     plan_result = plan_release(
         event_type=event_type,
         requested_apps=apps,
         version=version,
+        version_mode=version_mode,
         base_commit=base_commit
     )
 
@@ -152,6 +230,69 @@ def summary(
         repository_owner=repository_owner
     )
     typer.echo(summary_result)
+
+
+@app.command()
+def release_notes(
+    app_name: Annotated[str, typer.Argument(help="App name to generate release notes for")],
+    current_tag: Annotated[str, typer.Option("--current-tag", help="Current tag/version")] = "HEAD",
+    previous_tag: Annotated[Optional[str], typer.Option("--previous-tag", help="Previous tag to compare against (auto-detected if not provided)")] = None,
+    format_type: Annotated[str, typer.Option("--format", help="Output format")] = "markdown",
+):
+    """Generate release notes for a specific app."""
+    if format_type not in ["markdown", "plain", "json"]:
+        typer.echo("Error: format must be one of: markdown, plain, json", err=True)
+        raise typer.Exit(1)
+    
+    try:
+        notes = generate_release_notes(app_name, current_tag, previous_tag, format_type)
+        typer.echo(notes)
+    except Exception as e:
+        typer.echo(f"Error generating release notes: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
+def release_notes_all(
+    current_tag: Annotated[str, typer.Option("--current-tag", help="Current tag/version")] = "HEAD",
+    previous_tag: Annotated[Optional[str], typer.Option("--previous-tag", help="Previous tag to compare against (auto-detected if not provided)")] = None,
+    format_type: Annotated[str, typer.Option("--format", help="Output format")] = "markdown",
+    output_dir: Annotated[Optional[str], typer.Option("--output-dir", help="Directory to save release notes files")] = None,
+):
+    """Generate release notes for all apps."""
+    if format_type not in ["markdown", "plain", "json"]:
+        typer.echo("Error: format must be one of: markdown, plain, json", err=True)
+        raise typer.Exit(1)
+    
+    try:
+        all_notes = generate_release_notes_for_all_apps(current_tag, previous_tag, format_type)
+        
+        if output_dir:
+            import os
+            from pathlib import Path
+            
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            
+            for app_name, notes in all_notes.items():
+                ext = "md" if format_type == "markdown" else "txt" if format_type == "plain" else "json"
+                file_path = Path(output_dir) / f"{app_name}-{current_tag}.{ext}"
+                
+                with open(file_path, 'w') as f:
+                    f.write(notes)
+                    
+                typer.echo(f"Release notes for {app_name} saved to {file_path}")
+        else:
+            # Output all to stdout
+            for app_name, notes in all_notes.items():
+                typer.echo(f"{'='*60}")
+                typer.echo(f"Release Notes for {app_name}")
+                typer.echo(f"{'='*60}")
+                typer.echo(notes)
+                typer.echo()
+                
+    except Exception as e:
+        typer.echo(f"Error generating release notes: {e}", err=True)
+        raise typer.Exit(1)
 
 
 def main():
