@@ -2,7 +2,7 @@ import datetime
 
 import pytest
 
-from manman.models import ExternalStatusInfo, StatusType
+from manman.src.models import ExternalStatusInfo, StatusType
 
 
 def test_field_validator_create():

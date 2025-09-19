@@ -12,11 +12,11 @@ from sqlalchemy import desc
 from sqlalchemy.sql.functions import current_timestamp
 from sqlmodel import Session, not_, select
 
-from manman.exceptions import (
+from manman.src.exceptions import (
     GameServerInstanceAlreadyClosedException,
     WorkerAlreadyClosedException,
 )
-from manman.models import (
+from manman.src.models import (
     ACTIVE_STATUS_TYPES,
     ExternalStatusInfo,
     GameServer,
@@ -45,7 +45,7 @@ class DatabaseRepository:
             return self._session
 
         # Import here to avoid circular import
-        from manman.util import get_sqlalchemy_session
+        from manman.src.util import get_sqlalchemy_session
 
         return get_sqlalchemy_session()
 
@@ -62,7 +62,7 @@ class DatabaseRepository:
             return session_context()
 
         # Import here to avoid circular import
-        from manman.util import get_sqlalchemy_session
+        from manman.src.util import get_sqlalchemy_session
 
         return get_sqlalchemy_session()
 

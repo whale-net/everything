@@ -5,23 +5,23 @@ from amqpstorm import Channel, Connection
 from fastapi import Depends, Header, HTTPException
 from sqlmodel import Session as SQLSession
 
-from manman.models import GameServerInstance, Worker
-from manman.repository.api_client import AccessToken
-from manman.repository.database import (
+from manman.src.models import GameServerInstance, Worker
+from manman.src.repository.api_client import AccessToken
+from manman.src.repository.database import (
     GameServerConfigRepository,
     GameServerInstanceRepository,
     WorkerRepository,
 )
-from manman.repository.message.pub import CommandPubService
-from manman.repository.rabbitmq.config import (
+from manman.src.repository.message.pub import CommandPubService
+from manman.src.repository.rabbitmq.config import (
     BindingConfig,
     EntityRegistry,
     ExchangeRegistry,
     MessageTypeRegistry,
     RoutingKeyConfig,
 )
-from manman.repository.rabbitmq.publisher import RabbitPublisher
-from manman.util import (
+from manman.src.repository.rabbitmq.publisher import RabbitPublisher
+from manman.src.util import (
     get_auth_api_client,
     get_rabbitmq_connection,
     get_sqlalchemy_session,

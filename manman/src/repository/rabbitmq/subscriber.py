@@ -12,8 +12,8 @@ from typing import List, Union
 
 from amqpstorm import Channel, Connection, Message
 
-from manman.repository.message.abstract_interface import MessageSubscriberInterface
-from manman.repository.rabbitmq.config import BindingConfig, QueueConfig
+from manman.src.repository.message.abstract_interface import MessageSubscriberInterface
+from manman.src.repository.rabbitmq.config import BindingConfig, QueueConfig
 
 logger = logging.getLogger(__name__)
 

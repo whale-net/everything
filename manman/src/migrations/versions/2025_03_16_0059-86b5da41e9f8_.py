@@ -33,7 +33,7 @@ def upgrade() -> None:
     )
     op.execute("""
     update manman.game_server_configs set env_var = '{LD_LIBRARY_PATH=./linux64:$LD_LIBRARY_PATH,SteamAppId=892970}'
-    where game_server_id in (select game_server_id from manman.game_servers where name ='valheim')
+    where game_server_id in (select game_server_id from manman.src.game_servers where name ='valheim')
     """)
 
 

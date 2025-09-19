@@ -10,7 +10,7 @@ import amqpstorm
 import sqlalchemy
 from sqlmodel import Session
 
-from manman.repository.api_client import AuthAPIClient
+from manman.src.repository.api_client import AuthAPIClient
 
 logger = logging.getLogger(__name__)
 

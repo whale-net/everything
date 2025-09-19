@@ -2,16 +2,13 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Optional, Union
 
+from manman.src.constants import EntityRegistry
+
 
 class ExchangeRegistry(StrEnum):
     # NOTE: for now, all durable topic exchanges
     INTERNAL_SERVICE_EVENT = "internal_service_events"
     EXTERNAL_SERVICE_EVENT = "external_service_events"
-
-
-class EntityRegistry(StrEnum):
-    WORKER = "worker"
-    GAME_SERVER_INSTANCE = "game_server_instance"
 
 
 class MessageTypeRegistry(StrEnum):

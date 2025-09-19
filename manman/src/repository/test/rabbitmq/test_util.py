@@ -1,4 +1,4 @@
-from manman.repository.rabbitmq.util import (
+from manman.src.repository.rabbitmq.util import (
     add_routing_key_prefix,
     add_routing_key_suffix,
 )

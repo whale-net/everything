@@ -1,8 +1,8 @@
 from fastapi import APIRouter, HTTPException
 
-from manman.exceptions import GameServerInstanceAlreadyClosedException
-from manman.models import GameServer, GameServerConfig, GameServerInstance
-from manman.repository.database import (
+from manman.src.exceptions import GameServerInstanceAlreadyClosedException
+from manman.src.models import GameServer, GameServerConfig, GameServerInstance
+from manman.src.repository.database import (
     GameServerInstanceRepository,
     GameServerRepository,
 )

@@ -5,7 +5,7 @@ import os
 import subprocess
 from typing import Optional
 
-from manman.util import log_stream
+from manman.src.util import log_stream
 
 logger = logging.getLogger(__name__)
 

@@ -6,7 +6,7 @@ import unittest
 from datetime import timedelta
 from unittest.mock import Mock, patch
 
-from manman.worker.worker_service import WorkerService
+from manman.src.worker.worker_service import WorkerService
 
 
 class TestWorkerHeartbeat(unittest.TestCase):

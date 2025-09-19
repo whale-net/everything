@@ -62,7 +62,7 @@ def setup_logging(
         root_logger.handlers.clear()
 
     # Import global service name
-    from manman.config import SERVICE_NAME
+    from manman.src.config import SERVICE_NAME
 
     # Setup OTEL logging and tracing if available and enabled
     if enable_otel and OTEL_AVAILABLE:

@@ -32,7 +32,24 @@ def generate_release_summary(
         
         apps = [item["app"] for item in matrix["include"]]
         summary.append(f"📦 **Apps:** {', '.join(apps)}")
-        summary.append(f"🏷️  **Version:** {version}")
+        
+        # Handle version display - show individual versions if they differ from the main version
+        app_versions = [item.get("version", version) for item in matrix["include"]]
+        unique_versions = list(set(app_versions))
+        
+        if len(unique_versions) == 1 and unique_versions[0] == version:
+            # All apps have the same version as the main version
+            summary.append(f"🏷️  **Version:** {version}")
+        elif len(unique_versions) == 1:
+            # All apps have the same version, but different from main version (increment mode)
+            summary.append(f"🏷️  **Version:** {unique_versions[0]}")
+        else:
+            # Multiple different versions (mixed increment mode)
+            summary.append("🏷️  **Versions:**")
+            for item in matrix["include"]:
+                app_version = item.get("version", version)
+                summary.append(f"   - {item['app']}: {app_version}")
+        
         summary.append("🛠️ **System:** Consolidated Release + OCI")
         
         if event_type == "workflow_dispatch":
@@ -52,10 +69,12 @@ def generate_release_summary(
             all_apps = list_all_apps()
             app_domains = {app['name']: app['domain'] for app in all_apps}
             
-            for app in apps:
-                domain = app_domains.get(app, 'unknown')
-                image_name = f"{domain}-{app}"
-                summary.append(f"- `ghcr.io/{repository_owner.lower()}/{image_name}:{version}`")
+            for item in matrix["include"]:
+                app_name = item["app"]
+                app_version = item.get("version", version)
+                domain = app_domains.get(app_name, 'unknown')
+                image_name = f"{domain}-{app_name}"
+                summary.append(f"- `ghcr.io/{repository_owner.lower()}/{image_name}:{app_version}`")
         
         summary.append("")
         summary.append("### 🛠️ Local Development")

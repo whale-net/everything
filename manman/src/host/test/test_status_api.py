@@ -12,8 +12,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from manman.host.api.status.api import router
-from manman.models import ExternalStatusInfo, StatusType
+from manman.src.host.api.status.api import router
+from manman.src.models import ExternalStatusInfo, StatusType
 
 
 @pytest.fixture

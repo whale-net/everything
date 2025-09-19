@@ -16,7 +16,7 @@ def test_imports():
     sys.path.insert(0, str(project_root / "src"))
 
     # Test imports
-    from manman.models import ExternalStatusInfo, StatusType
+    from manman.src.models import ExternalStatusInfo, StatusType
 
     # Basic functionality test
     status_info = ExternalStatusInfo.create(

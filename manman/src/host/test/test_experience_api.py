@@ -11,8 +11,8 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from manman.host.api.experience.api import router
-from manman.models import Command, CommandType, Worker
+from manman.src.host.api.experience.api import router
+from manman.src.models import Command, CommandType, Worker
 
 
 @pytest.fixture
@@ -35,7 +35,7 @@ def mock_worker_command_pub_service():
 @pytest.fixture
 def app_with_overrides(mock_current_worker, mock_worker_command_pub_service):
     """Create a test FastAPI app with dependency overrides."""
-    from manman.host.api.shared.injectors import (
+    from manman.src.host.api.shared.injectors import (
         current_worker,
         worker_command_pub_service,
     )
@@ -89,7 +89,7 @@ class TestWorkerShutdownNoWorker:
 
     def test_worker_shutdown_no_current_worker(self):
         """Test worker shutdown when no current worker exists."""
-        from manman.host.api.shared.injectors import (
+        from manman.src.host.api.shared.injectors import (
             current_worker,
             worker_command_pub_service,
         )

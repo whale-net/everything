@@ -13,14 +13,14 @@ import uvicorn
 from gunicorn.app.base import BaseApplication
 from typing_extensions import Annotated
 
-from manman.config import ManManConfig
-from manman.logging_config import (
+from manman.src.config import ManManConfig
+from manman.src.logging_config import (
     get_gunicorn_config,
     setup_logging,
     setup_server_logging,
 )
-from manman.repository.rabbitmq.config import ExchangeRegistry
-from manman.util import (
+from manman.src.repository.rabbitmq.config import ExchangeRegistry
+from manman.src.util import (
     create_rabbitmq_vhost,
     get_rabbitmq_ssl_options,
     get_sqlalchemy_engine,
@@ -151,7 +151,7 @@ def _init_common_services(
     )
 
     # declare rabbitmq exchanges - use persistent connection for this operation
-    from manman.util import get_rabbitmq_connection
+    from manman.src.util import get_rabbitmq_connection
 
     rmq_connection = get_rabbitmq_connection()
 
@@ -175,7 +175,7 @@ def create_experience_app():
     # Configure server-specific logging using Python objects
     setup_server_logging(ManManConfig.EXPERIENCE_API)
 
-    from manman.host.api.experience import create_app
+    from manman.src.host.api.experience import create_app
 
     return create_app()
 
@@ -188,7 +188,7 @@ def create_status_app():
     # Configure server-specific logging using Python objects
     setup_server_logging(ManManConfig.STATUS_API)
 
-    from manman.host.api.status import create_app
+    from manman.src.host.api.status import create_app
 
     return create_app()
 
@@ -201,7 +201,7 @@ def create_worker_dal_app():
     # Configure server-specific logging using Python objects
     setup_server_logging(ManManConfig.WORKER_DAL_API)
 
-    from manman.host.api.worker_dal import create_app
+    from manman.src.host.api.worker_dal import create_app
 
     return create_app()
 
@@ -461,11 +461,11 @@ def start_status_processor(
     # Start the status event processor (pub/sub only, no HTTP server other than health check)
     from fastapi import FastAPI  # Add FastAPI import
 
-    from manman.host.api.shared import (
+    from manman.src.host.api.shared import (
         add_health_check,  # Ensure this import is present or add it
     )
-    from manman.host.status_processor import StatusEventProcessor
-    from manman.util import get_rabbitmq_connection
+    from manman.src.host.status_processor import StatusEventProcessor
+    from manman.src.util import get_rabbitmq_connection
 
     # Define and run health check API in a separate thread
     health_check_app = FastAPI(title="ManMan Status Processor Health Check")

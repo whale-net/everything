@@ -10,8 +10,8 @@ from typing import Union
 
 from amqpstorm import Channel, Connection
 
-from manman.repository.message.abstract_interface import MessagePublisherInterface
-from manman.repository.rabbitmq.config import BindingConfig
+from manman.src.repository.message.abstract_interface import MessagePublisherInterface
+from manman.src.repository.rabbitmq.config import BindingConfig
 
 logger = logging.getLogger(__name__)
 

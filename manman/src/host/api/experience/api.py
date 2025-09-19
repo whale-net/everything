@@ -5,7 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from manman.host.api.shared.injectors import (
+from manman.src.host.api.shared.injectors import (
     current_game_server_instances,
     current_worker,
     game_server_config_db_repository,
@@ -13,21 +13,21 @@ from manman.host.api.shared.injectors import (
 )
 
 # TODO - make use of these
-# from manman.repository.message.pub import CommandPubService
-# from manman.repository.rabbitmq.publisher import RabbitPublisher
-from manman.host.api.shared.models import (
+# from manman.src.repository.message.pub import CommandPubService
+# from manman.src.repository.rabbitmq.publisher import RabbitPublisher
+from manman.src.host.api.shared.models import (
     CurrentInstanceResponse,  # TODO - move this
     StdinCommandRequest,
 )
-from manman.models import (
+from manman.src.models import (
     Command,
     CommandType,
     GameServerConfig,
     GameServerInstance,
     Worker,
 )
-from manman.repository.database import GameServerConfigRepository
-from manman.repository.message.pub import CommandPubService
+from manman.src.repository.database import GameServerConfigRepository
+from manman.src.repository.message.pub import CommandPubService
 
 router = APIRouter()
 

@@ -1,4 +1,4 @@
-from manman.models import GameServerConfig, GameServerInstance, ManManBase, Worker
+from manman.src.models import GameServerConfig, GameServerInstance, ManManBase, Worker
 
 
 class StdinCommandRequest(ManManBase):

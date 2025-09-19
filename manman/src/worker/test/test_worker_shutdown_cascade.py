@@ -10,7 +10,7 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from manman.worker.worker_service import WorkerService
+from manman.src.worker.worker_service import WorkerService
 
 
 class TestWorkerShutdownCascade(unittest.TestCase):

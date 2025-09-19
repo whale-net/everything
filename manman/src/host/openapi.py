@@ -10,8 +10,8 @@ import typer
 from fastapi import FastAPI
 from typing_extensions import Annotated
 
-from manman.config import ManManConfig
-from manman.logging_config import setup_logging
+from manman.src.config import ManManConfig
+from manman.src.logging_config import setup_logging
 
 app = typer.Typer()
 logger = logging.getLogger(__name__)
@@ -54,17 +54,17 @@ def main(
 
     # Build FastAPI app based on API
     if validated_api_name == ManManConfig.EXPERIENCE_API:
-        from manman.host.api.experience import create_app
+        from manman.src.host.api.experience import create_app
 
         fastapi_app = create_app()
 
     elif validated_api_name == ManManConfig.STATUS_API:
-        from manman.host.api.status import create_app
+        from manman.src.host.api.status import create_app
 
         fastapi_app = create_app()
 
     elif validated_api_name == ManManConfig.WORKER_DAL_API:
-        from manman.host.api.worker_dal import create_app
+        from manman.src.host.api.worker_dal import create_app
 
         fastapi_app = create_app()
 

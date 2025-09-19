@@ -1,5 +1,5 @@
 import datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Optional
 
 from sqlalchemy import (  # using postgres.ARRAY I guess; MetaData,; ForeignKey,
@@ -16,7 +16,7 @@ from sqlalchemy.sql.functions import current_timestamp
 # from sqlalchemy.dialects import postgresql
 from sqlmodel import Field, MetaData, Relationship, SQLModel
 
-from manman.repository.rabbitmq.config import EntityRegistry
+from manman.src.constants import EntityRegistry
 
 # SQLModel.metadata = MetaData(schema="manman")
 

@@ -6,18 +6,18 @@ from threading import Lock
 from amqpstorm import Connection
 from requests import ConnectionError
 
-from manman.models import (
+from manman.src.models import (
     Command,
     CommandType,
     GameServerConfig,
 )
 
 # from sqlalchemy.orm import Session
-from manman.repository.api_client import WorkerAPIClient
-from manman.repository.rabbitmq.config import EntityRegistry
-from manman.util import NamedThreadPool, get_auth_api_client
-from manman.worker.abstract_service import ManManService
-from manman.worker.server import Server
+from manman.src.repository.api_client import WorkerAPIClient
+from manman.src.repository.rabbitmq.config import EntityRegistry
+from manman.src.util import NamedThreadPool, get_auth_api_client
+from manman.src.worker.abstract_service import ManManService
+from manman.src.worker.server import Server
 
 logger = logging.getLogger(__name__)
 

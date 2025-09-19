@@ -12,9 +12,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from manman.host.status_processor import StatusEventProcessor
-from manman.models import ExternalStatusInfo, InternalStatusInfo, StatusType
-from manman.repository.rabbitmq.config import EntityRegistry
+from manman.src.host.status_processor import StatusEventProcessor
+from manman.src.models import ExternalStatusInfo, InternalStatusInfo, StatusType
+from manman.src.repository.rabbitmq.config import EntityRegistry
 
 
 class TestStatusProcessor:

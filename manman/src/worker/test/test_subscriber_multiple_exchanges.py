@@ -8,7 +8,7 @@ consuming from multiple exchanges with different routing keys.
 import unittest
 from unittest.mock import Mock, call, patch
 
-from manman.repository.rabbitmq.config import (
+from manman.src.repository.rabbitmq.config import (
     BindingConfig,
     EntityRegistry,
     ExchangeRegistry,
@@ -17,7 +17,7 @@ from manman.repository.rabbitmq.config import (
     RoutingKeyConfig,
     TopicWildcard,
 )
-from manman.repository.rabbitmq.subscriber import RabbitSubscriber
+from manman.src.repository.rabbitmq.subscriber import RabbitSubscriber
 
 
 class TestRabbitSubscriberMultipleExchanges(unittest.TestCase):

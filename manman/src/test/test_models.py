@@ -4,7 +4,7 @@ import pytest
 from datetime import datetime
 from unittest.mock import patch
 
-# from manman.models import Worker, GameServerInstance, StatusType
+# from manman.src.models import Worker, GameServerInstance, StatusType
 
 
 def test_worker_creation():

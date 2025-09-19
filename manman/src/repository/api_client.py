@@ -9,7 +9,7 @@ from jose import jwt
 from pydantic import BaseModel, Field
 
 # import urllib
-from manman.models import GameServer, GameServerConfig, GameServerInstance, Worker
+from manman.src.models import GameServer, GameServerConfig, GameServerInstance, Worker
 
 # TODO LIST (TBD correct layer for each feature)
 #   RETRY

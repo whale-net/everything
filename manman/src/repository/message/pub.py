@@ -1,7 +1,7 @@
 import logging
 
-from manman.models import Command, ExternalStatusInfo, InternalStatusInfo
-from manman.repository.message.abstract_interface import MessagePublisherInterface
+from manman.src.models import Command, ExternalStatusInfo, InternalStatusInfo
+from manman.src.repository.message.abstract_interface import MessagePublisherInterface
 
 logger = logging.getLogger(__name__)
 

@@ -3,19 +3,19 @@ import os
 
 from amqpstorm import Connection
 
-from manman.models import (
+from manman.src.models import (
     Command,
     CommandType,
     GameServerConfig,
     GameServerInstance,
     ServerType,
 )
-from manman.repository.api_client import WorkerAPIClient
-from manman.repository.rabbitmq.config import EntityRegistry
-from manman.util import env_list_to_dict
-from manman.worker.abstract_service import ManManService
-from manman.worker.processbuilder import ProcessBuilder, ProcessBuilderStatus
-from manman.worker.steamcmd import SteamCMD
+from manman.src.repository.api_client import WorkerAPIClient
+from manman.src.repository.rabbitmq.config import EntityRegistry
+from manman.src.util import env_list_to_dict
+from manman.src.worker.abstract_service import ManManService
+from manman.src.worker.processbuilder import ProcessBuilder, ProcessBuilderStatus
+from manman.src.worker.steamcmd import SteamCMD
 
 logger = logging.getLogger(__name__)
 

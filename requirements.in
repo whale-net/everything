@@ -2,7 +2,8 @@
 pytest
 pytest-asyncio
 
-# Core FastAPI framework and server
+
+pytest-git
 fastapi
 uvicorn[standard]
 gunicorn

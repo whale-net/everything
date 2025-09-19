@@ -10,8 +10,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from manman.models import ExternalStatusInfo, StatusType
-from manman.repository.database import DatabaseRepository
+from manman.src.models import ExternalStatusInfo, StatusType
+from manman.src.repository.database import DatabaseRepository
 
 
 class TestDatabaseRepository:

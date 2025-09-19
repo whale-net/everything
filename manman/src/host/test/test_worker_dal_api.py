@@ -12,8 +12,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from manman.host.api.worker_dal.worker import router
-from manman.models import Worker
+from manman.src.host.api.worker_dal.worker import router
+from manman.src.models import Worker
 
 
 @pytest.fixture
@@ -25,7 +25,7 @@ def mock_rmq_connection():
 @pytest.fixture
 def client(mock_rmq_connection):
     """Create a test client for the worker DAL API router."""
-    from manman.host.api.shared.injectors import rmq_conn
+    from manman.src.host.api.shared.injectors import rmq_conn
 
     app = FastAPI()
     app.include_router(router)

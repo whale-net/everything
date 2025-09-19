@@ -12,7 +12,7 @@ async def lifespan(app):
     # Startup
     yield
     # Shutdown - cleanup RabbitMQ connections
-    from manman.util import cleanup_rabbitmq_connections
+    from manman.src.util import cleanup_rabbitmq_connections
 
     cleanup_rabbitmq_connections()
 
@@ -21,7 +21,7 @@ def create_app():
     """Factory function to create the Worker DAL API FastAPI application."""
     from fastapi import FastAPI
 
-    from manman.host.api.shared import add_health_check
+    from manman.src.host.api.shared import add_health_check
 
     app = FastAPI(
         title="ManMan Worker DAL API",

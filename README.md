@@ -527,6 +527,7 @@ This monorepo uses a **shell-script-free**, Starlark and GitHub Actions-based re
 - **🔒 Version Protection**: Prevents accidental overwrites with semantic versioning validation
 - **🚀 Multiple Release Methods**: GitHub UI, CLI, or Git tags with comprehensive dry-run support
 - **📋 Release Matrix**: Automatically generates build matrices for efficient parallel releases
+- **📝 Automatic Release Notes**: Generates release notes for each app during releases with commit details
 - **🛠️ Shell-Script Free**: Pure Starlark and GitHub Actions implementation for maintainability
 
 ### 📦 How It Works
@@ -682,16 +683,28 @@ gh workflow run release.yml \
   -f dry_run=true
 ```
 
-#### Method 3: Git Tags (NOT Supported) ⚠️
+#### Method 3: GitHub CLI
 
-**Git tag-based releases are currently NOT configured in the workflow.** The release workflow only supports manual dispatch via GitHub Actions UI or CLI.
+For automated workflows and scripting:
 
-If tag-based releases were to be added, they would need:
-- Addition of `push: tags: ['v*']` trigger to `.github/workflows/release.yml`  
-- Logic to detect version from tag name
-- Automatic app change detection since last release
+```bash
+# Release specific apps
+gh workflow run release.yml \
+  -f apps=hello_python,hello_go \
+  -f version=v1.2.3 \
+  -f dry_run=false
 
-**Current limitation:** Only manual releases via `workflow_dispatch` are supported.
+# Release all apps
+gh workflow run release.yml \
+  -f apps=all \
+  -f version=v1.2.3
+
+# Dry run (test without publishing)
+gh workflow run release.yml \
+  -f apps=hello_python \
+  -f version=v1.2.3 \
+  -f dry_run=true
+```
 
 ### 📋 Release Process Details
 
@@ -808,6 +821,43 @@ gh workflow run release.yml \
   -f version=v0.0.1-test \
   -f dry_run=true
 ```
+
+## 📝 Release Notes
+
+### Automatic Release Notes Generation
+
+Release notes are automatically generated as part of the release process when using Method 1 or 2. The notes are included in the GitHub Actions summary and show:
+
+- **Commit History**: All commits since the previous tag affecting the app
+- **Author Information**: Who made each change
+- **File Changes**: Which files were modified
+- **Timestamp**: When each change was made
+
+### Manual Release Notes Generation
+
+You can also generate release notes manually using the release helper CLI:
+
+```bash
+# Generate release notes for a specific app
+bazel run //tools:release -- release-notes hello_python \
+  --current-tag v1.2.3 \
+  --previous-tag v1.2.2 \
+  --format markdown
+
+# Generate release notes for all apps
+bazel run //tools:release -- release-notes-all \
+  --current-tag v1.2.3 \
+  --format markdown \
+  --output-dir ./release-notes/
+
+# Available formats: markdown, plain, json
+```
+
+**Features:**
+- **Smart Filtering**: Only includes commits that actually affect each app
+- **Multiple Formats**: Markdown, plain text, or JSON output  
+- **Automatic Previous Tag Detection**: Finds the previous tag if not specified
+- **Infrastructure Change Detection**: Includes infrastructure changes that affect all apps
 
 ---
 

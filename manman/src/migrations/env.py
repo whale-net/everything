@@ -5,8 +5,8 @@ from alembic import context
 
 # import SQLmodel from models because it's modified
 # from sqlmodel import SQLModel
-from manman.models import ManManBase  # SQLModel
-from manman.util import get_sqlalchemy_engine, init_sql_alchemy_engine
+from manman.src.models import ManManBase  # SQLModel
+from manman.src.util import get_sqlalchemy_engine, init_sql_alchemy_engine
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

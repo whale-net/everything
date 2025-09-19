@@ -4,17 +4,17 @@ from datetime import datetime, timedelta
 
 from amqpstorm import Connection
 
-from manman.models import (
+from manman.src.models import (
     ExternalStatusInfo,
     StatusType,
 )
-from manman.repository.database import DatabaseRepository
-from manman.repository.message.pub import ExternalStatusInfoPubService
-from manman.repository.message.sub import (
+from manman.src.repository.database import DatabaseRepository
+from manman.src.repository.message.pub import ExternalStatusInfoPubService
+from manman.src.repository.message.sub import (
     ExternalStatusSubService,
     InternalStatusSubService,
 )
-from manman.repository.rabbitmq.config import (
+from manman.src.repository.rabbitmq.config import (
     BindingConfig,
     EntityRegistry,
     ExchangeRegistry,
@@ -23,10 +23,10 @@ from manman.repository.rabbitmq.config import (
     RoutingKeyConfig,
     TopicWildcard,
 )
-from manman.repository.rabbitmq.publisher import (
+from manman.src.repository.rabbitmq.publisher import (
     RabbitPublisher,
 )
-from manman.repository.rabbitmq.subscriber import (
+from manman.src.repository.rabbitmq.subscriber import (
     RabbitSubscriber,
 )
 

@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 
-from manman.models import GameServer, GameServerConfig, GameServerInstance
+from manman.src.models import GameServer, GameServerConfig, GameServerInstance
 
 
 class GameStartRequest(BaseModel):

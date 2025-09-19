@@ -5,10 +5,10 @@ import amqpstorm
 import typer
 from typing_extensions import Annotated, Optional
 
-from manman.config import ManManConfig
-from manman.logging_config import setup_logging
-from manman.util import get_rabbitmq_connection, get_rabbitmq_ssl_options, init_rabbitmq
-from manman.worker.worker_service import WorkerService
+from manman.src.config import ManManConfig
+from manman.src.logging_config import setup_logging
+from manman.src.util import get_rabbitmq_connection, get_rabbitmq_ssl_options, init_rabbitmq
+from manman.src.worker.worker_service import WorkerService
 
 app = typer.Typer()
 logger = logging.getLogger(__name__)
@@ -46,8 +46,8 @@ def start(
 
 @app.command()
 def dev():
-    from manman.repository.rabbitmq.config import EntityRegistry
-    from manman.worker.abstract_service import ManManService
+    from manman.src.repository.rabbitmq.config import EntityRegistry
+    from manman.src.worker.abstract_service import ManManService
 
     class DevService(ManManService):
         @property
@@ -120,7 +120,7 @@ def localdev_send_queue(key: int):
     chan = connection.channel()
     chan.exchange.declare(exchange="server", exchange_type="direct")
 
-    from manman.models import Command, CommandType
+    from manman.src.models import Command, CommandType
 
     shutdown_command = Command(command_type=CommandType.STOP)
     message = amqpstorm.Message.create(

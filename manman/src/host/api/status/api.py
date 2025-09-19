@@ -2,8 +2,8 @@
 
 from fastapi import APIRouter, HTTPException
 
-from manman.models import ExternalStatusInfo
-from manman.repository.database import StatusRepository
+from manman.src.models import ExternalStatusInfo
+from manman.src.repository.database import StatusRepository
 
 router = APIRouter(prefix="/status")
 

@@ -5,12 +5,12 @@ from datetime import datetime, timedelta, timezone
 
 from amqpstorm import Connection
 
-from manman.models import Command, InternalStatusInfo, StatusType
-from manman.repository.message.pub import (
+from manman.src.models import Command, InternalStatusInfo, StatusType
+from manman.src.repository.message.pub import (
     InternalStatusInfoPubService,
 )
-from manman.repository.message.sub import CommandSubService
-from manman.repository.rabbitmq.config import (
+from manman.src.repository.message.sub import CommandSubService
+from manman.src.repository.rabbitmq.config import (
     BindingConfig,
     EntityRegistry,
     ExchangeRegistry,
@@ -18,8 +18,8 @@ from manman.repository.rabbitmq.config import (
     QueueConfig,
     RoutingKeyConfig,
 )
-from manman.repository.rabbitmq.publisher import RabbitPublisher
-from manman.repository.rabbitmq.subscriber import RabbitSubscriber
+from manman.src.repository.rabbitmq.publisher import RabbitPublisher
+from manman.src.repository.rabbitmq.subscriber import RabbitSubscriber
 
 logger = logging.getLogger(__name__)
 

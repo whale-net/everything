@@ -4,19 +4,19 @@ from typing import Annotated
 from amqpstorm import Connection
 from fastapi import APIRouter, Depends, HTTPException
 
-from manman.exceptions import WorkerAlreadyClosedException
-from manman.host.api.shared.injectors import rmq_conn
-from manman.models import InternalStatusInfo, StatusType, Worker
-from manman.repository.database import WorkerRepository
-from manman.repository.message.pub import InternalStatusInfoPubService
-from manman.repository.rabbitmq.config import (
+from manman.src.exceptions import WorkerAlreadyClosedException
+from manman.src.host.api.shared.injectors import rmq_conn
+from manman.src.models import InternalStatusInfo, StatusType, Worker
+from manman.src.repository.database import WorkerRepository
+from manman.src.repository.message.pub import InternalStatusInfoPubService
+from manman.src.repository.rabbitmq.config import (
     BindingConfig,
     EntityRegistry,
     ExchangeRegistry,
     MessageTypeRegistry,
     RoutingKeyConfig,
 )
-from manman.repository.rabbitmq.publisher import RabbitPublisher
+from manman.src.repository.rabbitmq.publisher import RabbitPublisher
 
 logger = logging.getLogger(__name__)
 
