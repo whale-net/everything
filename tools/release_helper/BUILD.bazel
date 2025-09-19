@@ -33,3 +33,37 @@ py_test(
     ],
     size = "small",
 )
+
+# Unit tests for git module
+py_test(
+    name = "test_git",
+    srcs = ["test_git.py"],
+    deps = [
+        ":release_helper_lib",
+        requirement("pytest"),
+    ],
+    size = "small",
+)
+
+# Unit tests for git operations in changes module
+py_test(
+    name = "test_changes_git",
+    srcs = ["test_changes_git.py"],
+    deps = [
+        ":release_helper_lib",
+        requirement("pytest"),
+    ],
+    size = "small",
+)
+
+# Integration tests using pytest-git
+py_test(
+    name = "test_git_integration",
+    srcs = ["test_git_integration.py"],
+    deps = [
+        ":release_helper_lib",
+        requirement("pytest"),
+        requirement("pytest-git"),
+    ],
+    size = "medium",
+)
