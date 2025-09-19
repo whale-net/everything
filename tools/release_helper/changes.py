@@ -131,21 +131,71 @@ def _detect_changed_apps_file_based(changed_files: List[str]) -> List[Dict[str, 
 
 
 def _is_infrastructure_change(changed_files: List[str]) -> bool:
-    """Check if changes are in infrastructure directories that affect all apps."""
-    infra_dirs = {'tools', '.github', 'docker', 'MODULE.bazel', 'WORKSPACE', 'BUILD.bazel'}
+    """Check if changes are in infrastructure directories that affect all apps.
+    
+    Infrastructure changes are changes that could affect the build, deployment, or runtime
+    of all applications in the repository, requiring all apps to be rebuilt as a safety measure.
+    
+    This function distinguishes between:
+    - TRUE infrastructure changes (CI workflows, build tools, core configs) -> rebuild all apps
+    - Documentation/config changes that don't affect builds -> use normal dependency analysis
+    
+    Args:
+        changed_files: List of file paths that have changed
+        
+    Returns:
+        True if any change is considered infrastructure that affects all apps,
+        False if changes should use normal dependency analysis
+        
+    Infrastructure triggers:
+        - tools/: Build tools, release scripts, etc.
+        - docker/: Container configurations 
+        - .github/workflows/: CI workflow definitions
+        - .github/actions/: Reusable GitHub Actions
+        - Root Bazel files: MODULE.bazel, BUILD.bazel, WORKSPACE*, .bazelrc
+        
+    NOT infrastructure triggers (use dependency analysis instead):
+        - .github/copilot-instructions.md and other documentation
+        - libs/: Handled by Bazel dependency analysis
+        - app directories: Handled by Bazel dependency analysis
+        
+    Example:
+        # These trigger full rebuild
+        _is_infrastructure_change(['.github/workflows/ci.yml']) -> True
+        _is_infrastructure_change(['tools/release.bzl']) -> True
+        _is_infrastructure_change(['MODULE.bazel']) -> True
+        
+        # These use dependency analysis 
+        _is_infrastructure_change(['.github/copilot-instructions.md']) -> False
+        _is_infrastructure_change(['demo/hello_go/main.go']) -> False
+    """
+    # Core infrastructure directories that always affect all apps
+    infra_dirs = {'tools', 'docker'}
+    
+    # Root-level files that affect everything
+    root_infra_files = {'MODULE.bazel', 'WORKSPACE', 'BUILD.bazel', 'WORKSPACE.bazel', '.bazelrc'}
     
     for file_path in changed_files:
         if not file_path:
             continue
         
-        # Check if file is in infrastructure directories (but NOT libs - we handle libs with Bazel query)
+        # Check root-level Bazel files that affect everything
+        if file_path in root_infra_files:
+            return True
+        
+        # Check core infrastructure directories (but NOT libs - we handle libs with Bazel query)
         for infra_dir in infra_dirs:
             if file_path.startswith(infra_dir + '/') or file_path == infra_dir:
                 return True
-                
-        # Check for root-level Bazel files that affect everything
-        if file_path in {'MODULE.bazel', 'WORKSPACE', 'BUILD.bazel', 'WORKSPACE.bazel', '.bazelrc'}:
-            return True
+        
+        # Special handling for .github directory - only CI/build files should trigger full rebuild
+        if file_path.startswith('.github/'):
+            # CI workflows and actions affect all apps
+            if (file_path.startswith('.github/workflows/') or 
+                file_path.startswith('.github/actions/')):
+                return True
+            # Documentation files (like copilot-instructions.md) should not trigger full rebuild
+            # Let them be handled by normal dependency analysis
     
     return False
 
