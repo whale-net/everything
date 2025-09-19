@@ -17,7 +17,7 @@ from tools.release_helper.release import find_app_bazel_target, plan_release, ta
 from tools.release_helper.release_notes import generate_release_notes, generate_release_notes_for_all_apps
 from tools.release_helper.summary import generate_release_summary
 from tools.release_helper.validation import validate_release_version
-from tools.release_helper.github_release import create_app_release, create_combined_release
+from tools.release_helper.github_release import create_app_release, create_releases_for_apps
 
 app = typer.Typer(help="Release helper for Everything monorepo")
 
@@ -348,7 +348,7 @@ def create_combined_github_release(
     previous_tag: Annotated[Optional[str], typer.Option("--previous-tag", help="Previous tag to compare against (auto-detected if not provided)")] = None,
     apps: Annotated[Optional[str], typer.Option("--apps", help="Comma-separated list of apps to include (defaults to all)")] = None,
 ):
-    """Create a combined GitHub release for multiple apps."""
+    """Create GitHub releases for multiple apps."""
     try:
         # Determine which apps to include
         if apps:
@@ -358,44 +358,35 @@ def create_combined_github_release(
             all_apps = list_all_apps()
             app_list = [app['name'] for app in all_apps]
         
-        # Generate release notes for all specified apps
-        typer.echo(f"Generating release notes for {len(app_list)} apps...")
-        release_notes_by_app = {}
-        
-        for app_name in app_list:
-            try:
-                notes = generate_release_notes(app_name, version, previous_tag, "markdown")
-                release_notes_by_app[app_name] = notes
-            except Exception as e:
-                typer.echo(f"Warning: Failed to generate notes for {app_name}: {e}", err=True)
-                continue
-        
-        if not release_notes_by_app:
-            typer.echo("❌ No release notes generated for any apps", err=True)
-            raise typer.Exit(1)
-        
-        # Create combined GitHub release
-        typer.echo(f"Creating combined GitHub release for version {version}...")
-        result = create_combined_release(
+        # Create releases for all specified apps
+        typer.echo(f"Creating GitHub releases for {len(app_list)} apps...")
+        results = create_releases_for_apps(
+            app_list=app_list,
             version=version,
-            release_notes_by_app=release_notes_by_app,
             owner=owner,
             repo=repo,
             commit_sha=commit_sha,
-            prerelease=prerelease
+            prerelease=prerelease,
+            previous_tag=previous_tag
         )
         
-        if result:
-            if "html_url" in result:
-                typer.echo(f"✅ Combined GitHub release created: {result['html_url']}")
-            else:
-                typer.echo(f"ℹ️  {result.get('message', 'Release processed successfully')}")
-        else:
-            typer.echo("❌ Failed to create combined GitHub release", err=True)
+        # Report results
+        successful_releases = [app for app, result in results.items() if result is not None]
+        failed_releases = [app for app, result in results.items() if result is None]
+        
+        if successful_releases:
+            typer.echo(f"✅ Successfully created releases for: {', '.join(successful_releases)}")
+        
+        if failed_releases:
+            typer.echo(f"❌ Failed to create releases for: {', '.join(failed_releases)}", err=True)
+            raise typer.Exit(1)
+        
+        if not successful_releases:
+            typer.echo("❌ No releases were created successfully", err=True)
             raise typer.Exit(1)
             
     except Exception as e:
-        typer.echo(f"Error creating combined GitHub release: {e}", err=True)
+        typer.echo(f"Error creating GitHub releases: {e}", err=True)
         raise typer.Exit(1)
 
 

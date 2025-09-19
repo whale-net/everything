@@ -240,75 +240,86 @@ def create_app_release(
         return None
 
 
-def create_combined_release(
+def create_releases_for_apps(
+    app_list: List[str],
     version: str,
-    release_notes_by_app: Dict[str, str],
     owner: str,
     repo: str,
     commit_sha: Optional[str] = None,
     prerelease: bool = False,
+    previous_tag: Optional[str] = None,
     token: Optional[str] = None
-) -> Optional[Dict]:
-    """Create a combined GitHub release for multiple apps.
+) -> Dict[str, Optional[Dict]]:
+    """Create GitHub releases for multiple apps by calling create_app_release for each.
     
     Args:
+        app_list: List of app names to create releases for
         version: Release version
-        release_notes_by_app: Dictionary mapping app names to their release notes
         owner: Repository owner
         repo: Repository name
         commit_sha: Specific commit SHA to target
         prerelease: Whether this is a prerelease
+        previous_tag: Previous tag to compare against (auto-detected if not provided)
         token: GitHub token (defaults to GITHUB_TOKEN env var)
         
     Returns:
-        GitHub release data if successful, None otherwise
+        Dictionary mapping app names to their release data (None if failed)
     """
-    try:
-        client = GitHubReleaseClient(owner, repo, token)
-        
-        # Validate permissions first
-        if not client.validate_permissions():
-            print(f"❌ Insufficient permissions to create releases in {owner}/{repo}", file=sys.stderr)
-            return None
-        
-        tag_name = version
-        
-        # Check if release already exists
-        existing_release = client.get_release_by_tag(tag_name)
-        if existing_release:
-            print(f"ℹ️  Release {tag_name} already exists: {existing_release['html_url']}")
-            return existing_release
-        
-        # Combine release notes for all apps
-        combined_notes = f"# Release {version}\n\n"
-        combined_notes += f"This release includes updates for {len(release_notes_by_app)} apps:\n\n"
-        
-        for app_name, notes in release_notes_by_app.items():
-            combined_notes += f"## {app_name}\n\n"
-            # Extract just the changes section from individual app notes
-            if "## Changes" in notes:
-                changes_section = notes.split("## Changes", 1)[1]
-                # Remove the footer if present
-                if "---" in changes_section:
-                    changes_section = changes_section.split("---", 1)[0]
-                combined_notes += changes_section.strip() + "\n\n"
-            else:
-                combined_notes += f"See individual app release notes for details.\n\n"
-        
-        combined_notes += "---\n*Generated automatically by the release helper*"
-        
-        # Create release data
-        release_data = GitHubReleaseData(
-            tag_name=tag_name,
-            name=f"Everything Monorepo {version}",
-            body=combined_notes,
-            draft=False,
-            prerelease=prerelease,
-            target_commitish=commit_sha
-        )
-        
-        return client.create_release(release_data)
-        
-    except Exception as e:
-        print(f"❌ Failed to create combined GitHub release: {e}", file=sys.stderr)
-        return None
+    from tools.release_helper.metadata import get_app_metadata, list_all_apps
+    from tools.release_helper.release import find_app_bazel_target
+    from tools.release_helper.release_notes import generate_release_notes
+    
+    results = {}
+    
+    print(f"Creating GitHub releases for {len(app_list)} apps...")
+    
+    for app_name in app_list:
+        try:
+            print(f"Processing {app_name}...")
+            
+            # Find the app's metadata to determine the tag format
+            try:
+                bazel_target = find_app_bazel_target(app_name)
+                metadata = get_app_metadata(bazel_target)
+                domain = metadata['domain']
+                tag_name = f"{domain}-{app_name}.{version}"
+            except Exception as e:
+                print(f"❌ Could not determine tag format for {app_name}: {e}", file=sys.stderr)
+                results[app_name] = None
+                continue
+            
+            # Generate release notes for this app
+            try:
+                release_notes = generate_release_notes(app_name, tag_name, previous_tag, "markdown")
+            except Exception as e:
+                print(f"❌ Failed to generate release notes for {app_name}: {e}", file=sys.stderr)
+                results[app_name] = None
+                continue
+            
+            # Create the individual app release
+            result = create_app_release(
+                app_name=app_name,
+                tag_name=tag_name,
+                release_notes=release_notes,
+                owner=owner,
+                repo=repo,
+                commit_sha=commit_sha,
+                prerelease=prerelease,
+                token=token
+            )
+            
+            results[app_name] = result
+            
+        except Exception as e:
+            print(f"❌ Failed to create release for {app_name}: {e}", file=sys.stderr)
+            results[app_name] = None
+    
+    # Report summary
+    successful_count = sum(1 for result in results.values() if result is not None)
+    failed_count = len(app_list) - successful_count
+    
+    print(f"✅ Successfully created {successful_count} releases")
+    if failed_count > 0:
+        print(f"❌ Failed to create {failed_count} releases")
+    
+    return results

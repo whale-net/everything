@@ -871,7 +871,7 @@ bazel run //tools:release -- create-github-release hello_python \
   --repo everything \
   --commit abc1234
 
-# Create combined GitHub release for multiple apps
+# Create GitHub releases for multiple apps
 bazel run //tools:release -- create-combined-github-release v1.2.3 \
   --owner whale-net \
   --repo everything \
@@ -881,9 +881,9 @@ bazel run //tools:release -- create-combined-github-release v1.2.3 \
 
 **GitHub Release Features:**
 - **Automatic Release Creation**: Creates releases during the release workflow
-- **Individual App Releases**: Each app gets its own tagged release
-- **Combined Releases**: Single release containing all apps for a version
-- **Rich Release Notes**: Generated from commit history and file changes
+- **Individual App Releases**: Each app gets its own tagged release with specific release notes
+- **Multi-App Release Creation**: Create releases for multiple apps with a single command
+- **Rich Release Notes**: Generated from commit history and file changes for each app
 - **Existing Release Detection**: Skips creation if release already exists
 - **Permission Validation**: Checks GitHub token permissions before attempting creation
 
