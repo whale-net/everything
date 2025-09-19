@@ -299,6 +299,7 @@ sudo mv bazel-8.0.0-linux-x86_64 /usr/local/bin/bazel
 3. **Use existing BUILD.bazel files as templates** - structure is consistent
 4. **Validate dependencies**: Python deps go in requirements.in, Go in go.mod
 5. **Update tests**: Every app should have unit tests following existing patterns
+6. **Virtual environment usage**: Use venv for quick local testing, but always validate with Bazel before committing
 
 ### When Network/Build Issues Occur
 1. **Do not attempt build workarounds** - document the limitation instead
