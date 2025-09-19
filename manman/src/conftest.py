@@ -18,7 +18,7 @@ def create_mock_repository(repository_import_path: str) -> Generator[Mock, None,
 
     Args:
         repository_import_path: The full import path to the repository class
-                               (e.g., 'manman.host.api.status.api.StatusRepository')
+                               (e.g., 'manman.src.host.api.status.api.StatusRepository')
 
     Returns:
         A mock repository instance that can be configured for tests
@@ -40,18 +40,18 @@ def create_mock_repository(repository_import_path: str) -> Generator[Mock, None,
 @pytest.fixture
 def mock_status_repository():
     """Create a mock StatusRepository for testing status API endpoints."""
-    yield from create_mock_repository("manman.host.api.status.api.StatusRepository")
+    yield from create_mock_repository("manman.src.host.api.status.api.StatusRepository")
 
 
 @pytest.fixture
 def mock_game_repository():
     """Create a mock GameRepository for testing game API endpoints."""
-    yield from create_mock_repository("manman.host.api.game.api.GameRepository")
+    yield from create_mock_repository("manman.src.host.api.game.api.GameRepository")
 
 
 @pytest.fixture
 def mock_worker_repository():
     """Create a mock WorkerRepository for testing worker DAL API endpoints."""
     yield from create_mock_repository(
-        "manman.host.api.worker_dal.worker.WorkerRepository"
+        "manman.src.host.api.worker_dal.worker.WorkerRepository"
     )

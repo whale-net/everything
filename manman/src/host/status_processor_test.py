@@ -53,10 +53,10 @@ class TestStatusProcessor:
         """Test that the status processor can be initialized."""
         with (
             patch(
-                "manman.host.status_processor.RabbitSubscriber"
+                "manman.src.host.status_processor.RabbitSubscriber"
             ) as mock_subscriber_class,
             patch(
-                "manman.host.status_processor.RabbitPublisher"
+                "manman.src.host.status_processor.RabbitPublisher"
             ) as mock_publisher_class,
         ):
             mock_subscriber = Mock()
@@ -77,8 +77,8 @@ class TestStatusProcessor:
     def test_status_message_handling(self, mock_rabbitmq_connection):
         """Test status message handling without actual database/RabbitMQ."""
         with (
-            patch("manman.host.status_processor.RabbitSubscriber"),
-            patch("manman.host.status_processor.RabbitPublisher"),
+            patch("manman.src.host.status_processor.RabbitSubscriber"),
+            patch("manman.src.host.status_processor.RabbitPublisher"),
         ):
             processor = StatusEventProcessor(mock_rabbitmq_connection)
 
@@ -110,8 +110,8 @@ class TestStatusProcessor:
     def test_database_error_handling(self, mock_rabbitmq_connection):
         """Test that database errors are handled gracefully."""
         with (
-            patch("manman.host.status_processor.RabbitSubscriber"),
-            patch("manman.host.status_processor.RabbitPublisher"),
+            patch("manman.src.host.status_processor.RabbitSubscriber"),
+            patch("manman.src.host.status_processor.RabbitPublisher"),
         ):
             processor = StatusEventProcessor(mock_rabbitmq_connection)
 
@@ -147,8 +147,8 @@ class TestStatusProcessor:
     def test_status_info_fields_mapping(self, mock_rabbitmq_connection):
         """Test that StatusInfo database record is created with correct field mapping."""
         with (
-            patch("manman.host.status_processor.RabbitSubscriber"),
-            patch("manman.host.status_processor.RabbitPublisher"),
+            patch("manman.src.host.status_processor.RabbitSubscriber"),
+            patch("manman.src.host.status_processor.RabbitPublisher"),
         ):
             processor = StatusEventProcessor(mock_rabbitmq_connection)
 
@@ -178,8 +178,8 @@ class TestStatusProcessor:
     def test_message_processing_flow(self, mock_rabbitmq_connection):
         """Integration test for the complete message processing flow."""
         with (
-            patch("manman.host.status_processor.RabbitSubscriber"),
-            patch("manman.host.status_processor.RabbitPublisher"),
+            patch("manman.src.host.status_processor.RabbitSubscriber"),
+            patch("manman.src.host.status_processor.RabbitPublisher"),
         ):
             processor = StatusEventProcessor(mock_rabbitmq_connection)
 
@@ -222,8 +222,8 @@ class TestStatusProcessor:
     def test_processor_shutdown(self, mock_rabbitmq_connection):
         """Test that the processor shuts down cleanly."""
         with (
-            patch("manman.host.status_processor.RabbitSubscriber"),
-            patch("manman.host.status_processor.RabbitPublisher"),
+            patch("manman.src.host.status_processor.RabbitSubscriber"),
+            patch("manman.src.host.status_processor.RabbitPublisher"),
         ):
             processor = StatusEventProcessor(mock_rabbitmq_connection)
 

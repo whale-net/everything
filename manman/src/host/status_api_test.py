@@ -34,9 +34,9 @@ def mock_status_repository():
 
     Note: This could also be imported from conftest.py for even better reusability:
     # from tests.conftest import create_mock_repository
-    # yield from create_mock_repository('manman.host.api.status.api.StatusRepository')
+    # yield from create_mock_repository('manman.src.host.api.status.api.StatusRepository')
     """
-    with patch("manman.host.api.status.api.StatusRepository") as mock_repo_class:
+    with patch("manman.src.host.api.status.api.StatusRepository") as mock_repo_class:
         mock_repo = Mock()
         mock_repo_class.return_value = mock_repo
         yield mock_repo
