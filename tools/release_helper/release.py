@@ -138,6 +138,7 @@ def plan_release(
         "matrix": matrix,
         "apps": [app["name"] for app in release_apps],  # Return just names for compatibility
         "version": version,  # For legacy compatibility, may be None for increment modes
+        "versions": {app["name"]: app.get("version", version) for app in release_apps} if release_apps else {},  # Individual app versions
         "event_type": event_type
     }
 

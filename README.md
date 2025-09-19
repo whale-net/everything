@@ -527,7 +527,7 @@ This monorepo uses a **shell-script-free**, Starlark and GitHub Actions-based re
 - **🔒 Version Protection**: Prevents accidental overwrites with semantic versioning validation
 - **🚀 Multiple Release Methods**: GitHub UI, CLI, or Git tags with comprehensive dry-run support
 - **📋 Release Matrix**: Automatically generates build matrices for efficient parallel releases
-- **📝 Automatic Release Notes**: Generates release notes for each app on tag pushes with commit details
+- **📝 Automatic Release Notes**: Generates release notes for each app during releases with commit details
 - **🛠️ Shell-Script Free**: Pure Starlark and GitHub Actions implementation for maintainability
 
 ### 📦 How It Works
@@ -683,26 +683,28 @@ gh workflow run release.yml \
   -f dry_run=true
 ```
 
-#### Method 3: Git Tags (Release Notes Only) 📝
+#### Method 3: GitHub CLI
 
-**Git tag-based release notes are now supported!** When you push a tag in the correct format, a separate workflow automatically generates release notes for that specific app.
+For automated workflows and scripting:
 
-**Usage:**
 ```bash
-# Create and push a tag to trigger automatic release notes generation
-git tag demo-hello_python.v1.2.3
-git push origin demo-hello_python.v1.2.3
+# Release specific apps
+gh workflow run release.yml \
+  -f apps=hello_python,hello_go \
+  -f version=v1.2.3 \
+  -f dry_run=false
+
+# Release all apps
+gh workflow run release.yml \
+  -f apps=all \
+  -f version=v1.2.3
+
+# Dry run (test without publishing)
+gh workflow run release.yml \
+  -f apps=hello_python \
+  -f version=v1.2.3 \
+  -f dry_run=true
 ```
-
-**Features:**
-- **App Identification**: Parses app name from tag format (no change detection needed)
-- **Separate Workflow**: Uses dedicated `release-notes.yml` workflow (no releases, no infinite loops)
-- **Version Detection**: Uses the tag name format to identify app and version
-- **Change Analysis**: Uses git history to detect what changed for the changelog content
-
-**Tag Format**: `domain-app.version` (e.g., `demo-hello_python.v1.2.3`, `api-user_service.v2.0.0`)
-
-**Important**: Tag pushes only generate release notes. Use Method 1 or 2 for actual releases and publishing.
 
 ### 📋 Release Process Details
 
@@ -824,21 +826,8 @@ gh workflow run release.yml \
 
 ### Automatic Release Notes Generation
 
-When using tag pushes (Method 3), a dedicated workflow automatically generates release notes for the specific app encoded in the tag:
+Release notes are automatically generated as part of the release process when using Method 1 or 2. The notes are included in the GitHub Actions summary and show:
 
-```bash
-# Create a tag for a specific app to trigger automatic release notes generation
-git tag demo-hello_python.v1.2.3
-git push origin demo-hello_python.v1.2.3
-```
-
-This triggers the `release-notes.yml` workflow that:
-- Parses the app name and version from the tag format
-- Generates release notes by analyzing changes since the previous tag
-- Displays results in GitHub Actions summary
-- **Only generates release notes** - no builds or package uploads
-
-**Release notes include:**
 - **Commit History**: All commits since the previous tag affecting the app
 - **Author Information**: Who made each change
 - **File Changes**: Which files were modified
