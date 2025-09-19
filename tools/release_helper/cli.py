@@ -17,6 +17,7 @@ from tools.release_helper.release import find_app_bazel_target, plan_release, ta
 from tools.release_helper.release_notes import generate_release_notes, generate_release_notes_for_all_apps
 from tools.release_helper.summary import generate_release_summary
 from tools.release_helper.validation import validate_release_version
+from tools.release_helper.github_release import create_app_release, create_combined_release
 
 app = typer.Typer(help="Release helper for Everything monorepo")
 
@@ -292,6 +293,109 @@ def release_notes_all(
                 
     except Exception as e:
         typer.echo(f"Error generating release notes: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command("create-github-release")
+def create_github_release(
+    app_name: Annotated[str, typer.Argument(help="App name to create release for")],
+    tag_name: Annotated[str, typer.Option("--tag", help="Git tag name for the release")],
+    owner: Annotated[str, typer.Option("--owner", help="Repository owner")] = "",
+    repo: Annotated[str, typer.Option("--repo", help="Repository name")] = "",
+    commit_sha: Annotated[Optional[str], typer.Option("--commit", help="Specific commit SHA to target")] = None,
+    prerelease: Annotated[bool, typer.Option("--prerelease", help="Mark as prerelease")] = False,
+    previous_tag: Annotated[Optional[str], typer.Option("--previous-tag", help="Previous tag to compare against (auto-detected if not provided)")] = None,
+):
+    """Create a GitHub release for a specific app."""
+    try:
+        # Generate release notes
+        typer.echo(f"Generating release notes for {app_name}...")
+        release_notes = generate_release_notes(app_name, tag_name, previous_tag, "markdown")
+        
+        # Create GitHub release
+        typer.echo(f"Creating GitHub release for {app_name}...")
+        result = create_app_release(
+            app_name=app_name,
+            tag_name=tag_name,
+            release_notes=release_notes,
+            owner=owner,
+            repo=repo,
+            commit_sha=commit_sha,
+            prerelease=prerelease
+        )
+        
+        if result:
+            if "html_url" in result:
+                typer.echo(f"✅ GitHub release created: {result['html_url']}")
+            else:
+                typer.echo(f"ℹ️  {result.get('message', 'Release processed successfully')}")
+        else:
+            typer.echo("❌ Failed to create GitHub release", err=True)
+            raise typer.Exit(1)
+            
+    except Exception as e:
+        typer.echo(f"Error creating GitHub release: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command("create-combined-github-release")
+def create_combined_github_release(
+    version: Annotated[str, typer.Argument(help="Release version")],
+    owner: Annotated[str, typer.Option("--owner", help="Repository owner")] = "",
+    repo: Annotated[str, typer.Option("--repo", help="Repository name")] = "",
+    commit_sha: Annotated[Optional[str], typer.Option("--commit", help="Specific commit SHA to target")] = None,
+    prerelease: Annotated[bool, typer.Option("--prerelease", help="Mark as prerelease")] = False,
+    previous_tag: Annotated[Optional[str], typer.Option("--previous-tag", help="Previous tag to compare against (auto-detected if not provided)")] = None,
+    apps: Annotated[Optional[str], typer.Option("--apps", help="Comma-separated list of apps to include (defaults to all)")] = None,
+):
+    """Create a combined GitHub release for multiple apps."""
+    try:
+        # Determine which apps to include
+        if apps:
+            app_list = [app.strip() for app in apps.split(',')]
+        else:
+            # Get all apps
+            all_apps = list_all_apps()
+            app_list = [app['name'] for app in all_apps]
+        
+        # Generate release notes for all specified apps
+        typer.echo(f"Generating release notes for {len(app_list)} apps...")
+        release_notes_by_app = {}
+        
+        for app_name in app_list:
+            try:
+                notes = generate_release_notes(app_name, version, previous_tag, "markdown")
+                release_notes_by_app[app_name] = notes
+            except Exception as e:
+                typer.echo(f"Warning: Failed to generate notes for {app_name}: {e}", err=True)
+                continue
+        
+        if not release_notes_by_app:
+            typer.echo("❌ No release notes generated for any apps", err=True)
+            raise typer.Exit(1)
+        
+        # Create combined GitHub release
+        typer.echo(f"Creating combined GitHub release for version {version}...")
+        result = create_combined_release(
+            version=version,
+            release_notes_by_app=release_notes_by_app,
+            owner=owner,
+            repo=repo,
+            commit_sha=commit_sha,
+            prerelease=prerelease
+        )
+        
+        if result:
+            if "html_url" in result:
+                typer.echo(f"✅ Combined GitHub release created: {result['html_url']}")
+            else:
+                typer.echo(f"ℹ️  {result.get('message', 'Release processed successfully')}")
+        else:
+            typer.echo("❌ Failed to create combined GitHub release", err=True)
+            raise typer.Exit(1)
+            
+    except Exception as e:
+        typer.echo(f"Error creating combined GitHub release: {e}", err=True)
         raise typer.Exit(1)
 
 
