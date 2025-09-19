@@ -2,6 +2,8 @@
 
 package(default_visibility = ["//visibility:public"])
 
+load("@rules_python//python:defs.bzl", "py_binary")
+
 exports_files([
     "oci.bzl",
 ])
@@ -14,10 +16,14 @@ alias(
 )
 
 # Tool to create Python virtual environment for local development
-# Uses shell script instead of Python for simplicity
-sh_binary(
+# Simple Python wrapper around shell script for better Bazel integration
+py_binary(
     name = "create_venv",
-    srcs = ["create_venv.sh"],
-    data = ["//:requirements.lock.txt"],
+    srcs = ["create_venv_wrapper.py"],
+    main = "create_venv_wrapper.py",
+    data = [
+        "create_venv.sh",
+        "//:requirements.lock.txt",
+    ],
     visibility = ["//visibility:public"],
 )
