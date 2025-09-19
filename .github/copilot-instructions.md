@@ -219,20 +219,80 @@ bazel run //tools:release -- release app_name --version v1.2.3 --dry-run
 
 ## Common Issues and Limitations
 
+## Common Issues and Limitations
+
 ### Known Limitations
 1. **Network Dependency**: Cannot build without access to bcr.bazel.build
-2. **Bazel Version**: Requires Bazel 8.0.0+ (configured in `.bazelversion`)
+2. **Bazel Version**: Requires Bazel 8.0.0+ (configured in `.bazelversion` as 8.3.1)
 3. **Docker Required**: Container operations need Docker daemon running
+4. **First Build**: Takes significantly longer (20-40 minutes) due to dependency downloads
 
-### Build Failures
-- **"Unknown host: bcr.bazel.build"**: Network connectivity issue - builds will fail
-- **Module resolution errors**: Check MODULE.bazel dependencies and network access
-- **Cache issues**: Use `bazel clean` if you encounter stale build results
+### Troubleshooting Build Failures
+
+#### DNS/Network Issues
+**Error**: `Unknown host: bcr.bazel.build` or `Failed to fetch registry file`
+**Solution**: Network connectivity issue - builds will fail. Document as limitation.
+
+#### Bazel Version Issues  
+**Error**: `Bazel version X.X.X not found`
+**Solution**: Use manual installation:
+```bash
+wget https://github.com/bazelbuild/bazel/releases/download/8.0.0/bazel-8.0.0-linux-x86_64
+chmod +x bazel-8.0.0-linux-x86_64
+sudo mv bazel-8.0.0-linux-x86_64 /usr/local/bin/bazel
+```
+
+#### Module Resolution Errors
+**Error**: `Error computing the main repository mapping`
+**Solution**: Check MODULE.bazel dependencies and network access to BCR
+
+#### Cache Issues
+**Error**: Stale build results or "Action failed to execute"
+**Solution**: `bazel clean` - removes all cached build artifacts
+
+#### Memory/Disk Issues  
+**Error**: "No space left on device" or "Out of memory"
+**Solution**: Bazel builds can be large (1-2GB cache). Ensure sufficient disk space.
 
 ### Performance Notes
 - **Build caching**: Bazel caches aggressively - only changed targets rebuild
 - **Test caching**: Tests are cached by default (configured in `.bazelrc`)
 - **Container builds**: Use `oci_load` targets for faster local development
+- **CI Configuration**: Use `--config=ci` for optimized CI builds
+
+### Working Around Limitations
+**If builds fail due to network**:
+1. Document the limitation in your response
+2. Reference these instructions for manual validation steps
+3. Use the file structure reference sections for code navigation
+4. Rely on static analysis of BUILD.bazel files and source code
+
+## Agent Best Practices
+
+### When Making Code Changes
+1. **Always reference AGENT.md first** for architectural guidance
+2. **Follow the `release_app` pattern** for any new applications
+3. **Use existing BUILD.bazel files as templates** - structure is consistent
+4. **Validate dependencies**: Python deps go in requirements.in, Go in go.mod
+5. **Update tests**: Every app should have unit tests following existing patterns
+
+### When Network/Build Issues Occur
+1. **Do not attempt build workarounds** - document the limitation instead
+2. **Use static analysis**: Examine source files and BUILD.bazel structures  
+3. **Reference the file output sections** in these instructions for navigation
+4. **Validate changes conceptually** using the validation scenarios as a guide
+
+### Timeout and Build Guidelines for Agents
+- **NEVER CANCEL** build or test operations
+- **Set minimum timeouts**: 3600 seconds (60 minutes) for builds, 1800 seconds (30 minutes) for tests
+- **Document timing expectations**: First builds take 20-40 minutes, subsequent builds 2-5 minutes
+- **Always include timing context** when suggesting build commands
+
+### Code Quality and Consistency
+1. **Follow existing import patterns**: `from libs.python.utils import ...`
+2. **Maintain binary naming**: Binary target should match directory name
+3. **Include release metadata**: Use `release_app` macro for all new applications
+4. **Test structure**: Follow `test_main.py` / `main_test.go` naming conventions
 
 ## Common Tasks and File Outputs
 
