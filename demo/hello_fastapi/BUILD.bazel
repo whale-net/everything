@@ -39,13 +39,3 @@ release_app(
     language = "python",
     domain = "demo",
 )
-
-# Linux-specific container build with proper platform targeting
-load("//tools:oci.bzl", "python_oci_image")
-
-python_oci_image(
-    name = "hello_fastapi_linux_image",
-    binary = ":hello_fastapi",
-    repo_tag = "demo-hello_fastapi:linux",
-    tags = ["manual"],  # Manual so it doesn't interfere with release system
-)

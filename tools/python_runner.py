@@ -6,23 +6,6 @@ cross-platform compatibility for compiled extensions.
 """
 import os
 import sys
-import importlib.util
-
-def fix_cross_platform_extensions():
-    """Handle cross-platform compiled extension issues."""
-    # Common problematic compiled extensions and their pure Python fallbacks
-    extension_fixes = {
-        'pydantic_core._pydantic_core': 'pydantic_core',
-        'yaml': 'yaml',  # PyYAML sometimes has issues
-    }
-    
-    for module_name in extension_fixes.keys():
-        try:
-            __import__(module_name)
-        except (ImportError, ModuleNotFoundError) as e:
-            if "darwin" in str(e).lower() or "linux" in str(e).lower():
-                print(f"Cross-platform extension issue detected for {module_name}: {e}", file=sys.stderr)
-                # For now, just log the issue - the application will try to handle it
 
 def setup_python_path():
     """Automatically discover and add all pip dependency site-packages to PYTHONPATH."""
@@ -58,7 +41,6 @@ def setup_python_path():
 
 if __name__ == "__main__":
     setup_python_path()
-    fix_cross_platform_extensions()
     
     # Import and run the main module
     main_script = sys.argv[1] if len(sys.argv) > 1 else "/app/main.py"
