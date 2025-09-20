@@ -26,26 +26,36 @@ bazel run //tools:release -- plan --event-type tag_push --version <version>
 
 The release helper ensures consistent handling of container images, version validation, and integration with CI/CD workflows.
 
-## Performance Optimization
+## Containerized Distribution
 
-The release helper is optimized for fast builds and effective caching:
+The release helper is deployed as a containerized application using the `release_app` macro:
 
-### Caching Strategy
-- Pre-built in CI workflows to ensure it's always cached
-- Uses unified cache keys across all jobs for maximum cache hits
-- Optimized Bazel configuration with `--config=tools` for faster builds
+### Docker Image
+- **Image**: `ghcr.io/whale-net/tools-release_helper_app`
+- **Distribution**: Built and pushed automatically in CI workflows
+- **Usage**: Executed via `docker run` in CI jobs for consistent environment
 
-### Build Configuration
-To build the release tool with optimizations:
+### CI Integration
+The tool is built once per workflow and distributed as a Docker image:
 ```bash
-# Standard build
-bazel build //tools:release
+# In CI: Build and push the release tool image
+bazel run //tools/release_helper:release_helper_app_image_push
 
-# Optimized build (recommended)
-bazel build --config=tools //tools:release
-
-# Test caching performance
-./cache-optimization-test.sh
+# In CI: Use the containerized tool
+docker run --rm \
+  -v "$(pwd):/workspace" \
+  -w /workspace \
+  ghcr.io/whale-net/tools-release_helper_app:ci-$COMMIT_SHA \
+  plan --event-type pull_request --format github
 ```
 
-For detailed information about the caching optimizations, see [Release Tool Caching Documentation](../docs/release-tool-caching.md).
+### Local Development
+For local development, you can still use the tool directly:
+```bash
+# Standard build and run
+bazel run //tools:release -- list
+
+# Or build the containerized version locally
+bazel run //tools/release_helper:release_helper_app_image_load
+docker run --rm tools-release_helper_app:latest --help
+```
