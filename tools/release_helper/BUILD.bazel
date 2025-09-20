@@ -76,5 +76,4 @@ release_app(
     language = "python",
     domain = "tools",
     description = "Release management tool for monorepo applications",
-    version = "latest",
 )

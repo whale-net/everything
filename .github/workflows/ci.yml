@@ -147,17 +147,26 @@ jobs:
         APP: ${{ matrix.app }}
         RELEASE_TOOL_IMAGE: ghcr.io/whale-net/tools-release_helper_app:latest
       run: |
-        # Build Docker image for the specific app from the matrix
-        echo "Building Docker image for $APP using release tool..."
-        echo "Using release tool image: $RELEASE_TOOL_IMAGE"
+        # Build Docker image for the specific app from the matrix using Bazel directly
+        echo "Building Docker image for $APP using Bazel..."
         
-        # Mount current directory and Docker socket to enable building
-        docker run --rm \
-          -v "$(pwd):/workspace" \
-          -v "/var/run/docker.sock:/var/run/docker.sock" \
-          -w /workspace \
-          "$RELEASE_TOOL_IMAGE" \
-          build "$APP"
+        # Use the release tool in read-only mode to get the metadata and build target
+        METADATA=$(docker run --rm -v "$(pwd):/workspace" -w /workspace "$RELEASE_TOOL_IMAGE" list-apps | grep "^$APP " | head -n1)
+        if [[ -z "$METADATA" ]]; then
+          echo "Error: Could not find metadata for app $APP"
+          exit 1
+        fi
+        
+        # Extract the bazel target from metadata (format: "app_name domain: value, bazel_target: //path:target, ...")
+        BAZEL_TARGET=$(echo "$METADATA" | sed -n 's/.*bazel_target: \([^,]*\).*/\1/p')
+        if [[ -z "$BAZEL_TARGET" ]]; then
+          echo "Error: Could not extract bazel target for app $APP"
+          exit 1
+        fi
+        
+        # Build the image directly with Bazel (no Docker socket needed)
+        echo "Building image for target: $BAZEL_TARGET"
+        bazel run ${BAZEL_TARGET/_metadata/_image_load}
         
         # Show the built Docker image
         echo "Built Docker image for $APP:"
@@ -170,14 +179,16 @@ jobs:
         APP: ${{ matrix.app }}
         RELEASE_TOOL_IMAGE: ghcr.io/whale-net/tools-release_helper_app:latest
       run: |
-        # Publish the specific app image to registry
+        # Publish the specific app image to registry using Bazel directly
         echo "Publishing $APP image to registry..."
-        docker run --rm \
-          -v "$(pwd):/workspace" \
-          -v "/var/run/docker.sock:/var/run/docker.sock" \
-          -w /workspace \
-          "$RELEASE_TOOL_IMAGE" \
-          release "$APP" --version "latest" --commit "${{ github.sha }}"
+        
+        # Get the bazel target for the app
+        METADATA=$(docker run --rm -v "$(pwd):/workspace" -w /workspace "$RELEASE_TOOL_IMAGE" list-apps | grep "^$APP " | head -n1)
+        BAZEL_TARGET=$(echo "$METADATA" | sed -n 's/.*bazel_target: \([^,]*\).*/\1/p')
+        
+        # Use Bazel to push the image directly (no Docker socket needed)
+        echo "Pushing image for target: $BAZEL_TARGET"
+        bazel run ${BAZEL_TARGET/_metadata/_image_push}
         
   # Build summary - collects status of all matrix jobs for branch protection
   build-summary:
