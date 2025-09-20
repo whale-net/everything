@@ -8,15 +8,7 @@ load("@rules_pkg//:pkg.bzl", "pkg_tar")
 # - Python: python:3.11-slim (includes Python runtime and common libraries)
 # - Go: gcr.io/distroless/base-debian12 (lightweight and secure)
 
-def oci_image_with_binary(
-    name,
-    binary,
-    base_image,
-    entrypoint = None,
-    repo_tag = None,
-    extra_layers = None,
-    tags = None,
-    **kwargs):
+def oci_image_with_binary(name, binary, base_image, entrypoint = None, repo_tag = None, extra_layers = None, tags = None, binary_path = None, workdir = None, **kwargs):
     """Build an OCI image with a binary using cache-optimized layering.
     
     Uses oci_load for efficient building and loading. This approach completely 
@@ -32,6 +24,8 @@ def oci_image_with_binary(
         extra_layers: List of additional tar targets to include as separate layers
                      for better cache efficiency (e.g., dependency layers)
         tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
+        binary_path: Custom path for the binary in the container (defaults to /binary_name)
+        workdir: Working directory for the container
         **kwargs: Additional arguments passed to oci_image
     """
     if not repo_tag:
@@ -39,11 +33,18 @@ def oci_image_with_binary(
         binary_name = binary.split(":")[-1] if ":" in binary else binary
         repo_tag = binary_name + ":latest"
     
-    # Create binary layer with propagated tags - handle Python runfiles
+    # Determine binary path in container
+    if not binary_path:
+        binary_path = "/" + paths.basename(binary)
+    
+    # Set default entrypoint if not provided
+    if not entrypoint:
+        entrypoint = [binary_path]
+    
+    # Create binary layer with propagated tags
     pkg_tar(
         name = name + "_binary_layer",
-        srcs = [binary],
-        mode = "0755",  # Ensure executable permissions
+        files = {binary: binary_path.lstrip("/")},  # Remove leading slash for pkg_tar
         tags = tags,
     )
     
@@ -63,6 +64,7 @@ def oci_image_with_binary(
         base = base_image,
         entrypoint = entrypoint,
         tars = all_layers,
+        workdir = workdir,
         tags = tags,
         **kwargs
     )
@@ -77,48 +79,44 @@ def oci_image_with_binary(
     )
 
 def python_oci_image(name, binary, repo_tag = None, tags = None, **kwargs):
-    """Build an OCI image for a Python binary.
+    """Create an OCI image for a Python binary."""
     
-    This is a convenience wrapper around oci_image_with_binary with Python-specific defaults.
-    Uses gcr.io/distroless/python3-debian12 base image for compatibility and included Python runtime.
+    # Extract the package path from the binary target
+    # e.g., "//demo/hello_fastapi:hello_fastapi" -> "//demo/hello_fastapi:main.py"
+    binary_package = binary.rsplit(":", 1)[0]  # Get everything before the last ":"
+    main_py_target = binary_package + ":main.py"
     
-    Args:
-        name: Name of the image target
-        binary: The Python binary target to package
-        repo_tag: Repository tag for the image (defaults to binary_name:latest)
-        tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
-        **kwargs: Additional arguments passed to oci_image_with_binary
-    """
-    base_image = "@distroless_python"
-    # Extract just the binary name without any target notation
-    if ":" in binary:
-        binary_name = binary.split(":")[-1]
-    else:
-        binary_name = paths.basename(binary)
-    
-    # Create a custom pkg_tar for Python that includes runfiles
+    # Instead of using the compiled binary, let's include the Python sources directly
+    # This avoids cross-compilation issues and the runfiles complexity
     pkg_tar(
-        name = name + "_python_layer",
-        srcs = [binary],
-        mode = "0755",
+        name = name + "_python_sources_layer",
+        files = {
+            main_py_target: "app/main.py",
+            "//libs/python:utils.py": "app/libs/python/utils.py",
+            "//libs/python:__init__.py": "app/libs/python/__init__.py",
+            "//libs:__init__.py": "app/libs/__init__.py",
+        },
         tags = tags,
     )
     
-    # Build the OCI image with Python-specific configuration
     oci_image(
         name = name,
-        base = base_image,
-        entrypoint = ["/" + binary_name],
-        tars = [":" + name + "_python_layer"],
+        base = "@distroless_python",
+        tars = [name + "_python_sources_layer"],
+        entrypoint = ["python3", "/app/main.py"],
+        env = {
+            "PYTHONPATH": "/app",
+            "WORKDIR": "/app",
+        },
+        workdir = "/app",
         tags = tags,
-        **kwargs
     )
     
-    # Add oci_load target for efficient container runtime loading
+    # Create oci_load target for local testing
     oci_load(
         name = name + "_load",
         image = ":" + name,
-        repo_tags = [repo_tag] if repo_tag else [binary_name + ":latest"],
+        repo_tags = [repo_tag] if repo_tag else [paths.basename(binary) + ":latest"],
         tags = tags,
     )
 
@@ -143,8 +141,10 @@ def go_oci_image(name, binary, repo_tag = None, tags = None, **kwargs):
         name = name,
         binary = binary,
         base_image = base_image,
-        entrypoint = ["/" + binary_name],
+        entrypoint = ["/app/" + binary_name],
         repo_tag = repo_tag,
         tags = tags,
+        workdir = "/app",
+        binary_path = "/app/" + binary_name,
         **kwargs
     )

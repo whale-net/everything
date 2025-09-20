@@ -1,5 +1,10 @@
 load("@rules_python//python:defs.bzl", "py_library")
 
+# Export source files for container builds
+exports_files([
+    "__init__.py",
+], visibility = ["//visibility:public"])
+
 py_library(
     name = "libs",
     srcs = ["__init__.py"],
