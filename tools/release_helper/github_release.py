@@ -7,8 +7,13 @@ import os
 import sys
 from typing import Dict, Optional, List
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
+
+from tools.release_helper.metadata import get_app_metadata, list_all_apps
+from tools.release_helper.release import find_app_bazel_target
+from tools.release_helper.release_notes import generate_release_notes
 
 
 @dataclass
@@ -354,11 +359,6 @@ def create_releases_for_apps_with_notes(
     Returns:
         Dictionary mapping app names to their release data (None if failed)
     """
-    import os
-    from pathlib import Path
-    from tools.release_helper.metadata import get_app_metadata, list_all_apps
-    from tools.release_helper.release import find_app_bazel_target
-    from tools.release_helper.release_notes import generate_release_notes
     
     results = {}
     
