@@ -236,6 +236,7 @@ jobs:
         VERSION: ${{ needs.plan-release.outputs.version }}
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
         GITHUB_REPOSITORY_NAME: ${{ github.event.repository.name }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         echo "Creating GitHub releases for all apps in version $VERSION..."
         
