@@ -382,20 +382,21 @@ The repository supports optional Bazel remote caching for improved CI performanc
 - name: Setup Build Environment
   uses: ./.github/actions/setup-build-env
   with:
-    remote-cache-url: 'https://cache.example.com/bazel-cache'
-    remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-    remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+    cache-suffix: 'test'
 ```
 
 **Configuration Details:**
-- `remote-cache-url`: HTTP URL of the remote cache server (required for remote caching)
-- `remote-cache-user`: Username for basic HTTP authentication (optional)
-- `remote-cache-password`: Password for basic HTTP authentication (optional)
-- Remote cache is disabled if `remote-cache-url` is not provided
+- Remote cache is automatically enabled if `BAZEL_REMOTE_CACHE_URL` secret is configured
+- No additional action inputs required - configuration via repository secrets only
 - Automatically sets `--remote_upload_local_results=true` for cache population
 
+**Required Secrets:**
+- `BAZEL_REMOTE_CACHE_URL`: HTTP URL of the remote cache server (required for remote caching)
+- `BAZEL_REMOTE_CACHE_USER`: Username for basic HTTP authentication (optional)
+- `BAZEL_REMOTE_CACHE_PASSWORD`: Password for basic HTTP authentication (optional)
+
 **Security Notes:**
-- Credentials are passed via GitHub secrets for security
+- All configuration handled via GitHub repository secrets
 - Generated `.bazelrc.remote` file is excluded from git via `.gitignore`
 - Basic HTTP authentication is embedded in the cache URL during configuration
 

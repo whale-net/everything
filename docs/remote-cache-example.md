@@ -22,13 +22,10 @@ jobs:
       with:
         fetch-depth: 0
         
-    # Setup build environment with remote cache
+    # Setup build environment - remote cache auto-configured from secrets
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
-        remote-cache-url: 'https://cache.example.com/bazel-cache'
-        remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
         cache-suffix: 'test'
         
     - name: Run tests
@@ -40,8 +37,9 @@ jobs:
 
 Set these secrets in your GitHub repository settings:
 
-- `BAZEL_REMOTE_CACHE_USER`: Username for the remote cache HTTP authentication
-- `BAZEL_REMOTE_CACHE_PASSWORD`: Password for the remote cache HTTP authentication
+- `BAZEL_REMOTE_CACHE_URL`: HTTP URL of the remote cache server (e.g., `https://cache.example.com/bazel-cache`)
+- `BAZEL_REMOTE_CACHE_USER`: Username for the remote cache HTTP authentication (optional)
+- `BAZEL_REMOTE_CACHE_PASSWORD`: Password for the remote cache HTTP authentication (optional)
 
 ## Cache Server Requirements
 
