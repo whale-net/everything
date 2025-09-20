@@ -4,15 +4,13 @@ on:
   push:
     branches: [main]
     paths:
-      - 'tools/helm_chart_release.bzl'
-      - 'tools/templates/**'
+      - 'tools/helm/**'
       - '**/BUILD.bazel'
       - '**/*_chart_*'
   pull_request:
     branches: [main]
     paths:
-      - 'tools/helm_chart_release.bzl'
-      - 'tools/templates/**'
+      - 'tools/helm/**'
       - '**/BUILD.bazel'
       - '**/*_chart_*'
   workflow_dispatch:

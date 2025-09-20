@@ -18,35 +18,40 @@ def render_chart_yaml(template_content: str, context: dict) -> str:
     return template.safe_substitute(context)
 
 
-def render_values_yaml(template_content: str, context: dict) -> str:
+def load_sub_template(template_dir: Path, template_name: str) -> Template:
+    """Load a sub-template from the templates directory."""
+    template_path = template_dir / template_name
+    if not template_path.exists():
+        raise FileNotFoundError(f"Sub-template not found: {template_path}")
+    return Template(template_path.read_text())
+
+
+def render_values_yaml(template_content: str, context: dict, template_dir: Path) -> str:
     """Render values.yaml template with the provided context."""
-    # Build image configs section
+    
+    # Load sub-templates
+    image_config_template = load_sub_template(template_dir, "image_config.template")
+    app_config_template = load_sub_template(template_dir, "app_config.template")
+    
+    # Render image configs section
     image_configs = []
     for app_name in context.get('apps', []):
         registry = "ghcr.io"
         repo_name = f"{context['domain']}-{app_name}"
-        image_configs.append(f"""  {app_name}:
-    name: "{registry}/whale-net/{repo_name}"
-    tag: "latest"  # Will be resolved at build time
-    repository: "{registry}/whale-net/{repo_name}\"""")
+        image_config = image_config_template.safe_substitute({
+            'app_name': app_name,
+            'registry': registry,
+            'repo_name': repo_name
+        })
+        image_configs.append(image_config)
     
-    # Build app configs section
+    # Render app configs section
     app_configs = []
     for app_name in context.get('apps', []):
-        app_configs.append(f"""    {app_name}:
-      enabled: true
-      version: "latest"  # Will be resolved at build time
-      replicas: 1
-      port: 8000
-      resources:
-        requests:
-          memory: "128Mi"
-          cpu: "100m"
-        limits:
-          memory: "512Mi"
-          cpu: "500m\"""")
-    
-    # Build overrides section
+        app_config = app_config_template.safe_substitute({
+            'app_name': app_name
+        })
+        app_configs.append(app_config)
     overrides_section = ""
     overrides = context.get('overrides', {})
     if overrides:
@@ -82,6 +87,7 @@ def main():
             sys.exit(1)
         
         template_content = template_path.read_text()
+        template_dir = template_path.parent
         
         # Parse context JSON
         try:
@@ -94,7 +100,7 @@ def main():
         if args.type == 'chart':
             rendered = render_chart_yaml(template_content, context)
         elif args.type == 'values':
-            rendered = render_values_yaml(template_content, context)
+            rendered = render_values_yaml(template_content, context, template_dir)
         else:
             print(f"Error: Unknown template type: {args.type}", file=sys.stderr)
             sys.exit(1)

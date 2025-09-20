@@ -1,6 +1,2 @@
-# Backward compatibility - point to new helm module
-alias(
-    name = "helm_templates",
-    actual = "//tools/helm:helm_templates",
-    visibility = ["//visibility:public"],
-)
+# This directory has been moved to //tools/helm/templates/
+# Update your references to use //tools/helm:helm_templates instead

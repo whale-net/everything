@@ -23,6 +23,8 @@ filegroup(
     srcs = [
         "templates/Chart.yaml.template",
         "templates/values.yaml.template",
+        "templates/image_config.template",
+        "templates/app_config.template",
     ],
     visibility = ["//visibility:public"],
 )

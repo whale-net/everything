@@ -1,0 +1,4 @@
+  ${app_name}:
+    name: "${registry}/whale-net/${repo_name}"
+    tag: "latest"  # Will be resolved at build time
+    repository: "${registry}/whale-net/${repo_name}"
