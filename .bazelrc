@@ -17,6 +17,10 @@ build:ci --announce_rc
 build:ci --guard_against_concurrent_changes
 test:ci --cache_test_results=yes
 
+# Remote cache configuration (optional)
+# Uses try-import to conditionally load remote cache config if available
+try-import %workspace%/.bazelrc.remote
+
 # Test configurations
 test --test_output=errors
 test --cache_test_results=yes
