@@ -7,10 +7,12 @@ on:
     branches: [ main ]
 
 jobs:
-  # Build release tool and make it available as artifact for other jobs
+  # Build and publish release tool as Docker image for use across CI jobs
   build-release-tool:
-    name: Build Release Tool
+    name: Build and Publish Release Tool
     runs-on: ubuntu-latest
+    outputs:
+      release-tool-image: ${{ steps.build.outputs.image }}
     
     steps:
     - name: Checkout code
@@ -21,32 +23,33 @@ jobs:
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
+        setup-docker: 'true'
         cache-suffix: 'release-tool'
         
-    - name: Build release tool
-      run: |
-        echo "Building //tools:release for use across CI jobs..."
-        bazel build //tools:release
-        
-        # Copy the built binary to a known location
-        mkdir -p release-tool-artifact
-        # Find the actual built binary
-        BINARY_PATH=$(bazel run --run_under=echo //tools:release 2>/dev/null | head -1)
-        if [ -f "$BINARY_PATH" ]; then
-          cp "$BINARY_PATH" release-tool-artifact/release_helper
-          chmod +x release-tool-artifact/release_helper
-          echo "✅ Release tool built and copied to artifact directory"
-        else
-          echo "❌ Could not find built binary at $BINARY_PATH"
-          exit 1
-        fi
-        
-    - name: Upload release tool artifact
-      uses: actions/upload-artifact@v4
+    - name: Log in to GitHub Container Registry
+      uses: docker/login-action@v3
       with:
-        name: release-tool
-        path: release-tool-artifact/
-        retention-days: 1
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Build and push release tool image
+      id: build
+      run: |
+        echo "Building and pushing release tool Docker image..."
+        
+        # Build the release tool image using the release_app macro
+        bazel run //tools/release_helper:release_helper_app_image_push
+        
+        # The image will be tagged as ghcr.io/whale-net/tools-release_helper_app:latest
+        IMAGE_NAME="ghcr.io/whale-net/tools-release_helper_app:ci-${{ github.sha }}"
+        
+        # Tag with commit SHA for this specific CI run
+        docker tag ghcr.io/whale-net/tools-release_helper_app:latest "$IMAGE_NAME"
+        docker push "$IMAGE_NAME"
+        
+        echo "image=$IMAGE_NAME" >> $GITHUB_OUTPUT
+        echo "✅ Release tool image built and pushed: $IMAGE_NAME"
 
   # Test job - builds and tests in one step for better cache utilization
   test:
@@ -94,18 +97,14 @@ jobs:
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
+        setup-docker: 'true'
         cache-suffix: 'plan'
-        
-    - name: Download release tool artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: release-tool
-        path: release-tool-artifact/
         
     - name: Plan Docker builds using release tool
       id: plan
       env:
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        RELEASE_TOOL_IMAGE: ${{ needs.build-release-tool.outputs.release-tool-image }}
       run: |
         # Determine what to build based on changes
         if [ "${{ github.event_name }}" = "pull_request" ]; then
@@ -127,8 +126,14 @@ jobs:
         
         # Use release helper to plan the Docker builds
         echo "Planning Docker builds using release tool..."
-        chmod +x release-tool-artifact/release_helper
-        PLAN_OUTPUT=$(release-tool-artifact/release_helper plan \
+        echo "Using release tool image: $RELEASE_TOOL_IMAGE"
+        
+        # Mount current directory to /workspace in the container
+        PLAN_OUTPUT=$(docker run --rm \
+          -v "$(pwd):/workspace" \
+          -w /workspace \
+          "$RELEASE_TOOL_IMAGE" \
+          plan \
           --event-type "$EVENT_TYPE" \
           --base-commit="$BASE_COMMIT" \
           --format github)
@@ -153,7 +158,7 @@ jobs:
   docker:
     name: Build ${{ matrix.app }} Image
     runs-on: ubuntu-latest
-    needs: plan-docker
+    needs: [build-release-tool, plan-docker]
     if: needs.plan-docker.outputs.apps != '' && needs.plan-docker.outputs.apps != null
     strategy:
       matrix: ${{ fromJson(needs.plan-docker.outputs.matrix) }}
@@ -171,12 +176,6 @@ jobs:
         setup-docker: 'true'
         cache-suffix: 'docker'
       
-    - name: Download release tool artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: release-tool
-        path: release-tool-artifact/
-      
     # Log in to GitHub Container Registry using GITHUB_TOKEN
     - name: Log in to GitHub Container Registry
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -190,11 +189,19 @@ jobs:
       env:
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
         APP: ${{ matrix.app }}
+        RELEASE_TOOL_IMAGE: ${{ needs.build-release-tool.outputs.release-tool-image }}
       run: |
         # Build Docker image for the specific app from the matrix
         echo "Building Docker image for $APP using release tool..."
-        chmod +x release-tool-artifact/release_helper
-        release-tool-artifact/release_helper build "$APP"
+        echo "Using release tool image: $RELEASE_TOOL_IMAGE"
+        
+        # Mount current directory and Docker socket to enable building
+        docker run --rm \
+          -v "$(pwd):/workspace" \
+          -v "/var/run/docker.sock:/var/run/docker.sock" \
+          -w /workspace \
+          "$RELEASE_TOOL_IMAGE" \
+          build "$APP"
         
         # Show the built Docker image
         echo "Built Docker image for $APP:"
@@ -205,10 +212,16 @@ jobs:
       env:
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
         APP: ${{ matrix.app }}
+        RELEASE_TOOL_IMAGE: ${{ needs.build-release-tool.outputs.release-tool-image }}
       run: |
         # Publish the specific app image to registry
         echo "Publishing $APP image to registry..."
-        release-tool-artifact/release_helper release "$APP" --version "latest" --commit "${{ github.sha }}"
+        docker run --rm \
+          -v "$(pwd):/workspace" \
+          -v "/var/run/docker.sock:/var/run/docker.sock" \
+          -w /workspace \
+          "$RELEASE_TOOL_IMAGE" \
+          release "$APP" --version "latest" --commit "${{ github.sha }}"
         
   # Build summary - collects status of all matrix jobs for branch protection
   build-summary:

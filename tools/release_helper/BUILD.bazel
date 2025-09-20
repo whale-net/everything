@@ -1,6 +1,7 @@
 # Release helper package
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("@everything_pip_deps//:requirements.bzl", "requirement")
+load("//tools:release.bzl", "release_app")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -66,4 +67,14 @@ py_test(
         requirement("pytest-git"),
     ],
     size = "medium",
+)
+
+# Release the release tool itself as a containerized application
+release_app(
+    name = "release_helper_app",
+    binary_target = ":release_helper",
+    language = "python",
+    domain = "tools",
+    description = "Release management tool for monorepo applications",
+    version = "latest",
 )

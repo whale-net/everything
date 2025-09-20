@@ -58,11 +58,13 @@ jobs:
         
         echo "Input validation passed"
 
-  # Build release tool and make it available as artifact for release jobs
+  # Build and publish release tool as Docker image for use across release jobs
   build-release-tool:
-    name: Build Release Tool
+    name: Build and Publish Release Tool
     runs-on: ubuntu-latest
     needs: validate-inputs
+    outputs:
+      release-tool-image: ${{ steps.build.outputs.image }}
     
     steps:
     - name: Checkout code
@@ -73,32 +75,33 @@ jobs:
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
+        setup-docker: 'true'
         cache-suffix: 'release-tool'
         
-    - name: Build release tool
-      run: |
-        echo "Building //tools:release for use across release jobs..."
-        bazel build //tools:release
-        
-        # Copy the built binary to a known location
-        mkdir -p release-tool-artifact
-        # Find the actual built binary
-        BINARY_PATH=$(bazel run --run_under=echo //tools:release 2>/dev/null | head -1)
-        if [ -f "$BINARY_PATH" ]; then
-          cp "$BINARY_PATH" release-tool-artifact/release_helper
-          chmod +x release-tool-artifact/release_helper
-          echo "✅ Release tool built and copied to artifact directory"
-        else
-          echo "❌ Could not find built binary at $BINARY_PATH"
-          exit 1
-        fi
-        
-    - name: Upload release tool artifact
-      uses: actions/upload-artifact@v4
+    - name: Log in to GitHub Container Registry
+      uses: docker/login-action@v3
       with:
-        name: release-tool
-        path: release-tool-artifact/
-        retention-days: 1
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Build and push release tool image
+      id: build
+      run: |
+        echo "Building and pushing release tool Docker image..."
+        
+        # Build the release tool image using the release_app macro
+        bazel run //tools/release_helper:release_helper_app_image_push
+        
+        # The image will be tagged as ghcr.io/whale-net/tools-release_helper_app:latest
+        IMAGE_NAME="ghcr.io/whale-net/tools-release_helper_app:release-${{ github.sha }}"
+        
+        # Tag with commit SHA for this specific release run
+        docker tag ghcr.io/whale-net/tools-release_helper_app:latest "$IMAGE_NAME"
+        docker push "$IMAGE_NAME"
+        
+        echo "image=$IMAGE_NAME" >> $GITHUB_OUTPUT
+        echo "✅ Release tool image built and pushed: $IMAGE_NAME"
 
   # Detect what apps have changed and build release plan
   plan-release:
@@ -117,16 +120,13 @@ jobs:
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
+        setup-docker: 'true'
         cache-suffix: 'docker'
-        
-    - name: Download release tool artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: release-tool
-        path: release-tool-artifact/
         
     - name: Plan release using release helper tool
       id: plan
+      env:
+        RELEASE_TOOL_IMAGE: ${{ needs.build-release-tool.outputs.release-tool-image }}
       run: |
         # Determine version mode and build command
         VERSION="${{ github.event.inputs.version }}"
@@ -136,17 +136,17 @@ jobs:
         APPS_INPUT="${{ github.event.inputs.apps }}"
         
         # Build the command based on the selected option
-        chmod +x release-tool-artifact/release_helper
-        CMD="release-tool-artifact/release_helper plan --event-type \"$EVENT_TYPE\" --apps \"$APPS_INPUT\" --format github"
+        echo "Using release tool image: $RELEASE_TOOL_IMAGE"
+        BASE_CMD="docker run --rm -v \"$(pwd):/workspace\" -w /workspace \"$RELEASE_TOOL_IMAGE\" plan --event-type \"$EVENT_TYPE\" --apps \"$APPS_INPUT\" --format github"
         
         if [[ -n "$VERSION" ]]; then
-          CMD="$CMD --version \"$VERSION\""
+          CMD="$BASE_CMD --version \"$VERSION\""
           echo "version=$VERSION" >> $GITHUB_OUTPUT
         elif [[ "$INCREMENT_MINOR" == "true" ]]; then
-          CMD="$CMD --increment-minor"
+          CMD="$BASE_CMD --increment-minor"
           echo "Planning minor version increment"
         elif [[ "$INCREMENT_PATCH" == "true" ]]; then
-          CMD="$CMD --increment-patch"
+          CMD="$BASE_CMD --increment-patch"
           echo "Planning patch version increment"
         fi
         
@@ -173,7 +173,7 @@ jobs:
   release:
     name: Release ${{ matrix.app }}
     runs-on: ubuntu-latest
-    needs: plan-release
+    needs: [build-release-tool, plan-release]
     if: needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
     strategy:
       matrix: ${{ fromJson(needs.plan-release.outputs.release-matrix) }}
@@ -189,12 +189,6 @@ jobs:
       with:
         setup-docker: 'true'
         cache-suffix: 'docker'
-        
-    - name: Download release tool artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: release-tool
-        path: release-tool-artifact/
         
     # Configure Git for tagging
     - name: Configure Git
@@ -221,17 +215,28 @@ jobs:
         VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
         DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        RELEASE_TOOL_IMAGE: ${{ needs.build-release-tool.outputs.release-tool-image }}
       run: |
         echo "Building and releasing $APP version $VERSION using consolidated release system"
+        echo "Using release tool image: $RELEASE_TOOL_IMAGE"
         
         # Use our release helper tool to handle the entire release process
-        chmod +x release-tool-artifact/release_helper
         if [[ "$DRY_RUN" == "true" ]]; then
           echo "DRY RUN: Building and testing release process without publishing"
-          release-tool-artifact/release_helper release "$APP" --version "$VERSION" --commit "${{ github.sha }}" --dry-run --create-git-tag
+          docker run --rm \
+            -v "$(pwd):/workspace" \
+            -v "/var/run/docker.sock:/var/run/docker.sock" \
+            -w /workspace \
+            "$RELEASE_TOOL_IMAGE" \
+            release "$APP" --version "$VERSION" --commit "${{ github.sha }}" --dry-run --create-git-tag
         else
           echo "Building and publishing $APP $VERSION"
-          release-tool-artifact/release_helper release "$APP" --version "$VERSION" --commit "${{ github.sha }}" --create-git-tag
+          docker run --rm \
+            -v "$(pwd):/workspace" \
+            -v "/var/run/docker.sock:/var/run/docker.sock" \
+            -w /workspace \
+            "$RELEASE_TOOL_IMAGE" \
+            release "$APP" --version "$VERSION" --commit "${{ github.sha }}" --create-git-tag
           echo "Successfully released $APP $VERSION"
         fi
 
@@ -241,11 +246,12 @@ jobs:
         APP: ${{ matrix.app }}
         VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        RELEASE_TOOL_IMAGE: ${{ needs.build-release-tool.outputs.release-tool-image }}
       run: |
         echo "Generating release notes for $APP version $VERSION"
         
         # Get app metadata to determine domain for tag format
-        METADATA=$(release-tool-artifact/release_helper list-apps | grep "^$APP " | head -n1)
+        METADATA=$(docker run --rm -v "$(pwd):/workspace" -w /workspace "$RELEASE_TOOL_IMAGE" list-apps | grep "^$APP " | head -n1)
         if [[ -n "$METADATA" ]]; then
           DOMAIN=$(echo "$METADATA" | sed 's/.*domain: \([^,]*\).*/\1/')
           TAG_NAME="${DOMAIN}-${APP}.${VERSION}"
@@ -254,7 +260,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           
           # Generate release notes using the release helper
-          RELEASE_NOTES=$(release-tool-artifact/release_helper release-notes "$APP" \
+          RELEASE_NOTES=$(docker run --rm -v "$(pwd):/workspace" -w /workspace "$RELEASE_TOOL_IMAGE" release-notes "$APP" \
             --current-tag "$TAG_NAME" \
             --format markdown 2>/dev/null || echo "Release notes generation skipped - no previous tags found")
           
@@ -273,7 +279,7 @@ jobs:
   create-github-releases:
     name: Create GitHub Releases
     runs-on: ubuntu-latest
-    needs: [plan-release, release]
+    needs: [build-release-tool, plan-release, release]
     if: needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null && github.event.inputs.dry_run == 'false'
     steps:
     - name: Checkout code
@@ -284,13 +290,8 @@ jobs:
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
+        setup-docker: 'true'
         cache-suffix: 'docker'
-      
-    - name: Download release tool artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: release-tool
-        path: release-tool-artifact/
       
     - name: Create GitHub releases for all apps
       env:
@@ -298,8 +299,10 @@ jobs:
         VERSION: ${{ needs.plan-release.outputs.version }}
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
         GITHUB_REPOSITORY_NAME: ${{ github.event.repository.name }}
+        RELEASE_TOOL_IMAGE: ${{ needs.build-release-tool.outputs.release-tool-image }}
       run: |
         echo "Creating GitHub releases for all apps in version $VERSION..."
+        echo "Using release tool image: $RELEASE_TOOL_IMAGE"
         
         # Extract app names from matrix
         APPS=$(echo "$MATRIX" | jq -r '.include[].app' | tr '\n' ',' | sed 's/,$//')
@@ -308,8 +311,7 @@ jobs:
           echo "Creating releases for apps: $APPS"
           
           # Create releases for all apps at once
-          chmod +x release-tool-artifact/release_helper
-          if release-tool-artifact/release_helper create-combined-github-release "$VERSION" \
+          if docker run --rm -v "$(pwd):/workspace" -w /workspace "$RELEASE_TOOL_IMAGE" create-combined-github-release "$VERSION" \
             --owner "$GITHUB_REPOSITORY_OWNER" \
             --repo "$GITHUB_REPOSITORY_NAME" \
             --commit "${{ github.sha }}" \
@@ -326,7 +328,7 @@ jobs:
   release-summary:
     name: Release Summary
     runs-on: ubuntu-latest
-    needs: [plan-release, release, create-github-releases]
+    needs: [build-release-tool, plan-release, release, create-github-releases]
     if: always()
     steps:
     - name: Checkout code
@@ -335,23 +337,20 @@ jobs:
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
+        setup-docker: 'true'
         cache-suffix: 'docker'
       
-    - name: Download release tool artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: release-tool
-        path: release-tool-artifact/
-      
     - name: Generate summary using release helper
+      env:
+        RELEASE_TOOL_IMAGE: ${{ needs.build-release-tool.outputs.release-tool-image }}
       run: |
         # Use our release helper tool to generate the summary
         MATRIX='${{ needs.plan-release.outputs.release-matrix }}'
         EVENT_TYPE="workflow_dispatch"
         DRY_RUN="${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}"
         
-        chmod +x release-tool-artifact/release_helper
-        SUMMARY=$(release-tool-artifact/release_helper summary \
+        echo "Using release tool image: $RELEASE_TOOL_IMAGE"
+        SUMMARY=$(docker run --rm -v "$(pwd):/workspace" -w /workspace "$RELEASE_TOOL_IMAGE" summary \
           --matrix "$MATRIX" \
           --version "${{ needs.plan-release.outputs.version }}" \
           --event-type "$EVENT_TYPE" \
