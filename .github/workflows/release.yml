@@ -219,7 +219,7 @@ jobs:
           
           # Save release notes to a file for the GitHub release creation job
           mkdir -p /tmp/release-notes
-          echo "$RELEASE_NOTES" > "/tmp/release-notes/${APP}.md"
+          echo "$RELEASE_NOTES" > "/tmp/release-notes/${DOMAIN}-${APP}.md"
         else
           echo "Warning: Could not determine domain for $APP, skipping release notes"
         fi
@@ -229,7 +229,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: release-notes-${{ matrix.app }}
-        path: /tmp/release-notes/${{ matrix.app }}.md
+        path: /tmp/release-notes/*-${{ matrix.app }}.md
         if-no-files-found: ignore
 
   create-github-releases:

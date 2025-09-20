@@ -272,22 +272,35 @@ def release_notes_all(
         if output_dir:
             import os
             from pathlib import Path
+            from tools.release_helper.metadata import list_all_apps
             
             Path(output_dir).mkdir(parents=True, exist_ok=True)
             
+            # Get app domain information for proper file naming
+            all_apps = list_all_apps()
+            app_domain_map = {app['name']: app['domain'] for app in all_apps}
+            
             for app_name, notes in all_notes.items():
                 ext = "md" if format_type == "markdown" else "txt" if format_type == "plain" else "json"
-                file_path = Path(output_dir) / f"{app_name}-{current_tag}.{ext}"
+                domain = app_domain_map.get(app_name, "unknown")
+                file_path = Path(output_dir) / f"{domain}-{app_name}-{current_tag}.{ext}"
                 
                 with open(file_path, 'w') as f:
                     f.write(notes)
                     
-                typer.echo(f"Release notes for {app_name} saved to {file_path}")
+                typer.echo(f"Release notes for {domain}-{app_name} saved to {file_path}")
         else:
-            # Output all to stdout
+            # Output all to stdout  
+            from tools.release_helper.metadata import list_all_apps
+            
+            # Get app domain information for proper display
+            all_apps = list_all_apps()
+            app_domain_map = {app['name']: app['domain'] for app in all_apps}
+            
             for app_name, notes in all_notes.items():
+                domain = app_domain_map.get(app_name, "unknown")
                 typer.echo(f"{'='*60}")
-                typer.echo(f"Release Notes for {app_name}")
+                typer.echo(f"Release Notes for {domain}-{app_name}")
                 typer.echo(f"{'='*60}")
                 typer.echo(notes)
                 typer.echo()
