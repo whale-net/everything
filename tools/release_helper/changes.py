@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 from tools.release_helper.core import run_bazel
-from tools.release_helper.metadata import list_all_apps
+from tools.release_helper.metadata import list_all_apps, get_app_metadata
 
 
 def _get_changed_files(base_commit: str) -> List[str]:
@@ -86,10 +86,9 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
         # Now check which apps depend on any of the affected targets
         for app in all_apps:
             try:
-                # Get the app's binary target
-                metadata_target = app['bazel_target']
-                package_path = metadata_target[2:].split(':')[0]
-                app_target = f"//{package_path}:{app['name']}"
+                # Get the app's actual binary target from metadata
+                metadata = get_app_metadata(app['bazel_target'])
+                app_target = metadata['binary_target']
                 
                 # Query all dependencies of this app
                 result = run_bazel([
@@ -109,7 +108,7 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
                     else:
                         print(f"App {app['name']} not affected: no dependency on changed targets", file=sys.stderr)
                     
-            except subprocess.CalledProcessError as e:
+            except Exception as e:
                 print(f"Warning: Could not analyze dependencies for {app['name']}: {e}", file=sys.stderr)
                 # If we can't analyze this app, don't assume it's affected
                 continue
