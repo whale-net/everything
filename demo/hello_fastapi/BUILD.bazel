@@ -38,5 +38,4 @@ release_app(
     binary_target = ":hello_fastapi",
     language = "python",
     domain = "demo",
-    description = "FastAPI hello world application with uvicorn server",
 )

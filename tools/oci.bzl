@@ -78,22 +78,42 @@ def oci_image_with_binary(name, binary, base_image, entrypoint = None, repo_tag 
         tags = tags,
     )
 
-def python_oci_image(name, binary, repo_tag = None, tags = None, **kwargs):
+def python_oci_image(name, binary, repo_tag = None, tags = None, target_platform = None, **kwargs):
     """Create an OCI image for a Python binary.
     
     Creates a complete Python application container with ALL dependencies baked in as layers.
     Uses distroless Python image and properly includes runfiles.
+    
+    Args:
+        target_platform: Target platform for the container (e.g., "linux_x86_64").
+                        If specified, creates platform-specific targets.
     """
     
     # Extract package info
     binary_name = binary.split(":")[-1] if ":" in binary else binary
     binary_package = binary.rsplit(":", 1)[0] if ":" in binary else "//" + binary
     
+    # Create platform-specific binaries if target_platform is specified
+    if target_platform:
+        # Create a platform-specific version of the binary
+        native.alias(
+            name = name + "_" + target_platform + "_binary",
+            actual = binary,
+            target_compatible_with = [
+                "@platforms//os:linux" if "linux" in target_platform else "@platforms//os:macos",
+                "@platforms//cpu:x86_64" if "x86_64" in target_platform else "@platforms//cpu:arm64",
+            ],
+            tags = tags,
+        )
+        binary_target = ":" + name + "_" + target_platform + "_binary"
+    else:
+        binary_target = binary
+    
     # Create a layer with the binary and all its runfiles
     # This includes the pip dependencies in the correct structure
     pkg_tar(
         name = name + "_complete_binary",
-        srcs = [binary],
+        srcs = [binary_target],
         remap_paths = {
             binary_name: "main.py",  # Main Python script
         },
