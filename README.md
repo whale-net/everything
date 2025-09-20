@@ -448,13 +448,14 @@ release_app(
 
 ### Cache Optimization
 
-The new OCI build system uses `oci_load` targets instead of traditional tarball generation, providing:
+The new OCI build system uses `oci_load` targets and supports both direct file addition and tar-based layers, providing:
 
-- **Better cache hit rates** - No giant single-layer tarballs
-- **Faster CI builds** - Only rebuilds changed layers
+- **Better cache hit rates** - No giant single-layer tarballs by default
+- **Faster CI builds** - Only rebuilds changed layers with incremental building
 - **Efficient development workflow** - Direct integration with Docker/Podman
 - **No unused artifacts** - Eliminates the never-used tarball targets from CI
-- **Compressed layers** - All image layers are gzip-compressed by default for faster transfers and smaller storage
+- **Incremental layer building** - Files added directly to image layers for better caching
+- **Flexible approach** - Tar layers available when needed for complex scenarios
 
 ### Building Images with Bazel
 
@@ -494,30 +495,38 @@ For edge cases requiring custom OCI configuration, individual rules are availabl
 ```starlark
 load("//tools:oci.bzl", "python_oci_image", "go_oci_image", "oci_image_with_binary", "compressed_tar_layer")
 
-# Single platform image with custom configuration
+# Single platform image with direct file addition (recommended)
 oci_image_with_binary(
     name = "custom_image",
     binary = ":my_binary",
     base_image = "@python_slim",
     platform = "linux/amd64",
     repo_tag = "custom:latest",
-    compression = "gzip",  # Options: "gzip", "bzip2", "xz", or None
+    use_tars = False,  # Default: adds files directly for better incremental builds
     # ... custom OCI parameters
 )
 
-# Create compressed tar layers for dependencies
+# Legacy tar-based approach for complex scenarios
+oci_image_with_binary(
+    name = "custom_image_with_tars",
+    binary = ":my_binary",
+    base_image = "@python_slim",
+    use_tars = True,  # Use tar layers when needed for extra_layers or complex scenarios
+)
+
+# Create compressed tar layers for dependencies (when using tar approach)
 compressed_tar_layer(
     name = "deps_layer",
     srcs = ["//path/to:deps"],
-    compression = "gzip",  # All layers are compressed by default
+    compression = "gzip",  # Used only when use_tars=True
 )
 ```
 
 Available functions include:
-- `oci_image_with_binary`: Generic OCI image builder with cache optimization and compression
-- `python_oci_image_multiplatform`: Multi-platform Python images with compression
-- `go_oci_image_multiplatform`: Multi-platform Go images with compression
-- `compressed_tar_layer`: Create compressed tar layers for custom dependencies
+- `oci_image_with_binary`: Generic OCI image builder with direct file addition and incremental building support
+- `python_oci_image_multiplatform`: Multi-platform Python images with modern layer building
+- `go_oci_image_multiplatform`: Multi-platform Go images with modern layer building
+- `compressed_tar_layer`: Create compressed tar layers for complex dependency scenarios
 
 ## 🚀 Release Management
 
