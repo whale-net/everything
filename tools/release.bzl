@@ -1,6 +1,6 @@
 """Release utilities for the Everything monorepo."""
 
-load("//tools:oci.bzl", "python_oci_image_multiplatform", "go_oci_image_multiplatform")
+load("//tools:oci.bzl", "python_oci_image", "go_oci_image")
 load("@rules_oci//oci:defs.bzl", "oci_push")
 
 def _app_metadata_impl(ctx):
@@ -70,14 +70,14 @@ def release_app(name, binary_target, language, domain, description = "", version
     # Tag with "manual" so they're not built by //... (only when explicitly requested)
     # Images are expensive to build and should only be created when needed
     if language == "python":
-        python_oci_image_multiplatform(
+        python_oci_image(
             name = image_target,
             binary = binary_target,
             repo_tag = repo_tag,
             tags = ["manual", "container-image"],
         )
     elif language == "go":
-        go_oci_image_multiplatform(
+        go_oci_image(
             name = image_target,
             binary = binary_target,
             repo_tag = repo_tag,
@@ -91,20 +91,6 @@ def release_app(name, binary_target, language, domain, description = "", version
     oci_push(
         name = image_target + "_push",
         image = ":" + image_target,
-        repository = registry_repo,
-        tags = ["manual", "container-push"],
-    )
-    
-    oci_push(
-        name = image_target + "_push_amd64",
-        image = ":" + image_target + "_amd64",
-        repository = registry_repo,
-        tags = ["manual", "container-push"],
-    )
-    
-    oci_push(
-        name = image_target + "_push_arm64",
-        image = ":" + image_target + "_arm64", 
         repository = registry_repo,
         tags = ["manual", "container-push"],
     )
@@ -148,6 +134,4 @@ def get_image_targets(app_name):
     base_name = app_name + "_image"
     return {
         "base": "//" + app_name + ":" + base_name,
-        "amd64": "//" + app_name + ":" + base_name + "_amd64",
-        "arm64": "//" + app_name + ":" + base_name + "_arm64",
     }

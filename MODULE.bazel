@@ -10,36 +10,30 @@ bazel_dep(name = "rules_go", version = "0.57.0")
 bazel_dep(name = "gazelle", version = "0.39.1")
 bazel_dep(name = "rules_oci", version = "2.2.6")
 bazel_dep(name = "aspect_bazel_lib", version = "2.21.1")
+bazel_dep(name = "rules_pkg", version = "1.0.1")
+bazel_dep(name = "platforms", version = "1.0.0")
 
 # OCI/Docker setup - using proper base images for better compatibility
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 
-# Python 3.11-slim - using manifest list digest for multi-platform support
-# This digest represents the manifest list that includes both amd64 and arm64 platforms
+# Distroless Python - using manifest list digest for multi-platform support
 oci.pull(
-    name = "python_slim",
-    image = "python",
-    platforms = [
-        "linux/amd64",
-        "linux/arm64/v8", 
-    ],
-    # Using actual manifest list digest from python:3.11-slim
-    digest = "sha256:a0939570b38cddeb861b8e75d20b1c8218b21562b18f301171904b544e8cf228",
+    name = "distroless_python",
+    # Using actual manifest list digest from gcr.io/distroless/python3-debian12:latest
+    digest = "sha256:a0ded8676ed10e194cce1b8fdf9171672cda95ad1cabba4ece7b01f4db2e7471",
+    image = "gcr.io/distroless/python3-debian12",
+    platforms = ["linux/amd64"],
 )
 
-# Alpine 3.18 - using manifest list digest for multi-platform support  
-# This digest represents the manifest list that includes both amd64 and arm64 platforms
+# Distroless Base - using manifest list digest for multi-platform support
 oci.pull(
-    name = "alpine",
-    image = "alpine",
-    platforms = [
-        "linux/amd64",
-        "linux/arm64/v8",
-    ],
-    # Using actual manifest list digest from alpine:3.18
-    digest = "sha256:de0eb0b3f2a47ba1eb89389859a9bd88b28e82f5826b6969ad604979713c2d4f",
+    name = "distroless_base",
+    # Using actual manifest list digest from gcr.io/distroless/base-debian12:latest
+    digest = "sha256:fa15492938650e1a5b87e34d47dc7d99a2b4e8aefd81b931b3f3eb6bb4c1d2f6",
+    image = "gcr.io/distroless/base-debian12",
+    platforms = ["linux/amd64"],
 )
-use_repo(oci, "python_slim", "python_slim_linux_amd64", "python_slim_linux_arm64_v8", "alpine", "alpine_linux_amd64", "alpine_linux_arm64_v8")
+use_repo(oci, "distroless_base", "distroless_python")
 
 pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
 pip.parse(

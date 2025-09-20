@@ -1,11 +1,12 @@
 """Generic OCI image building rules for the monorepo."""
 
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load")
-load("@aspect_bazel_lib//lib:tar.bzl", "tar")
+load("@bazel_skylib//lib:paths.bzl", "paths")
+load("@rules_pkg//:pkg.bzl", "pkg_tar")
 
 # Using appropriate base images for maximum compatibility:
 # - Python: python:3.11-slim (includes Python runtime and common libraries)
-# - Go: alpine:3.18 (lightweight Linux with package manager for dependencies)
+# - Go: gcr.io/distroless/base-debian12 (lightweight and secure)
 
 def oci_image_with_binary(
     name,
@@ -13,7 +14,6 @@ def oci_image_with_binary(
     base_image,
     entrypoint = None,
     repo_tag = None,
-    platform = "linux/amd64",
     extra_layers = None,
     tags = None,
     **kwargs):
@@ -29,7 +29,6 @@ def oci_image_with_binary(
         base_image: Base image to use (e.g., "@distroless_static")
         entrypoint: Custom entrypoint for the container. If None, auto-detects binary location
         repo_tag: Repository tag for the image (defaults to binary_name:latest)
-        platform: Target platform (defaults to linux/amd64)
         extra_layers: List of additional tar targets to include as separate layers
                      for better cache efficiency (e.g., dependency layers)
         tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
@@ -41,9 +40,9 @@ def oci_image_with_binary(
         repo_tag = binary_name + ":latest"
     
     # Create binary layer with propagated tags
-    tar(
+    pkg_tar(
         name = name + "_binary_layer",
-        srcs = [binary],
+        files = {binary: paths.basename(binary)},
         tags = tags,
     )
     
@@ -76,192 +75,55 @@ def oci_image_with_binary(
         tags = tags,
     )
 
-def _get_platform_base_image(base_prefix, platform = None):
-    """Get the platform-specific base image name.
-    
-    Args:
-        base_prefix: Base image prefix (e.g., "python_slim", "alpine")
-        platform: Target platform (defaults to linux/amd64)
-    
-    Returns:
-        Platform-specific base image target
-    """
-    if not platform:
-        platform = "linux/amd64"
-    
-    # Convert platform to bazel target suffix
-    if platform == "linux/amd64":
-        suffix = "_linux_amd64"
-    elif platform == "linux/arm64" or platform == "linux/arm64/v8":
-        suffix = "_linux_arm64_v8"
-    else:
-        # Default to amd64 for unknown platforms
-        suffix = "_linux_amd64"
-    
-    return "@" + base_prefix + suffix
-
-def python_oci_image(name, binary, repo_tag = None, platform = None, tags = None, **kwargs):
+def python_oci_image(name, binary, repo_tag = None, tags = None, **kwargs):
     """Build an OCI image for a Python binary.
     
     This is a convenience wrapper around oci_image_with_binary with Python-specific defaults.
-    Uses python:3.11-slim base image for compatibility and included Python runtime.
-    For Python applications, we use the source files from the runfiles with the container's Python interpreter.
+    Uses gcr.io/distroless/python3-debian12 base image for compatibility and included Python runtime.
     
     Args:
         name: Name of the image target
         binary: The Python binary target to package
         repo_tag: Repository tag for the image (defaults to binary_name:latest)
-        platform: Target platform (defaults to linux/amd64)
         tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
         **kwargs: Additional arguments passed to oci_image_with_binary
     """
-    base_image = _get_platform_base_image("python_slim", platform)
-    binary_name = binary.split(":")[-1] if ":" in binary else binary
-    
-    # For Python, we use the container's Python interpreter and run the source files from runfiles
-    # The PYTHONPATH needs to include the runfiles directory
-    entrypoint = [
-        "python3",
-        "/" + binary_name + "/" + binary_name + ".runfiles/_main/" + binary_name + "/main.py"
-    ]
+    base_image = "@distroless_python"
+    binary_name = paths.basename(binary)
     
     oci_image_with_binary(
         name = name,
         binary = binary,
         base_image = base_image,
-        entrypoint = entrypoint,
+        entrypoint = ["/" + binary_name],
         repo_tag = repo_tag,
-        platform = platform,
         tags = tags,
-        env = {
-            "PYTHONPATH": "/" + binary_name + "/" + binary_name + ".runfiles/_main:/" + binary_name + "/" + binary_name + ".runfiles"
-        },
         **kwargs
     )
 
-def go_oci_image(name, binary, repo_tag = None, platform = None, tags = None, **kwargs):
+def go_oci_image(name, binary, repo_tag = None, tags = None, **kwargs):
     """Build an OCI image for a Go binary.
     
     This is a convenience wrapper around oci_image_with_binary with Go-specific defaults.
-    Uses alpine:3.18 base image for compatibility with unknown host dependencies.
+    Uses gcr.io/distroless/base-debian12 base image for maximum security.
     
     Args:
         name: Name of the image target
         binary: The Go binary target to package
         repo_tag: Repository tag for the image (defaults to binary_name:latest)
-        platform: Target platform (defaults to linux/amd64)
         tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
         **kwargs: Additional arguments passed to oci_image_with_binary
     """
-    base_image = _get_platform_base_image("alpine", platform)
+    base_image = "@distroless_base"
     
-    # For Go, try to use platform-specific binary if available
-    binary_name = binary.split(":")[-1] if ":" in binary else binary
-    if platform == "linux/arm64":
-        platform_binary = binary.replace(":" + binary_name, ":" + binary_name + "_linux_arm64")
-    else:
-        platform_binary = binary.replace(":" + binary_name, ":" + binary_name + "_linux_amd64")
-    
-    # Go binaries are typically at /<binary_name>/<binary_name>_/<binary_name>
-    entrypoint = ["/" + binary_name.replace("_linux_amd64", "").replace("_linux_arm64", "") + "/" + platform_binary.split(":")[-1] + "_/" + platform_binary.split(":")[-1]]
+    binary_name = paths.basename(binary)
     
     oci_image_with_binary(
         name = name,
-        binary = platform_binary,
+        binary = binary,
         base_image = base_image,
-        entrypoint = entrypoint,
+        entrypoint = ["/" + binary_name],
         repo_tag = repo_tag,
-        platform = platform,
-        tags = tags,
-        **kwargs
-    )
-
-def python_oci_image_multiplatform(name, binary, repo_tag = None, tags = None, **kwargs):
-    """Build OCI images for a Python binary for both amd64 and arm64 platforms.
-    
-    Creates separate image targets for different platforms:
-    - {name}_amd64: Linux amd64 image (for production)
-    - {name}_arm64: Linux arm64 image (for Mac development)
-    - {name}: Default image (amd64)
-    
-    Args:
-        name: Base name of the image targets
-        binary: The Python binary target to package
-        repo_tag: Repository tag for the image (defaults to binary_name:latest)
-        tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
-        **kwargs: Additional arguments passed to oci_image_with_binary
-    """
-    # AMD64 version (default for production)
-    python_oci_image(
-        name = name,
-        binary = binary,
-        repo_tag = repo_tag,
-        platform = "linux/amd64",
-        tags = tags,
-        **kwargs
-    )
-    
-    # AMD64 version (explicit)
-    python_oci_image(
-        name = name + "_amd64",
-        binary = binary,
-        repo_tag = repo_tag,
-        platform = "linux/amd64",
-        tags = tags,
-        **kwargs
-    )
-    
-    # ARM64 version (for Mac development)
-    python_oci_image(
-        name = name + "_arm64",
-        binary = binary,
-        repo_tag = repo_tag,
-        platform = "linux/arm64",
-        tags = tags,
-        **kwargs
-    )
-
-def go_oci_image_multiplatform(name, binary, repo_tag = None, tags = None, **kwargs):
-    """Build OCI images for a Go binary for both amd64 and arm64 platforms.
-    
-    Creates separate image targets for different platforms:
-    - {name}_amd64: Linux amd64 image (for production)
-    - {name}_arm64: Linux arm64 image (for Mac development)  
-    - {name}: Default image (amd64)
-    
-    Args:
-        name: Base name of the image targets
-        binary: The Go binary target to package
-        repo_tag: Repository tag for the image (defaults to binary_name:latest)
-        tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
-        **kwargs: Additional arguments passed to oci_image_with_binary
-    """
-    # AMD64 version (default for production)
-    go_oci_image(
-        name = name,
-        binary = binary,
-        repo_tag = repo_tag,
-        platform = "linux/amd64",
-        tags = tags,
-        **kwargs
-    )
-    
-    # AMD64 version (explicit)
-    go_oci_image(
-        name = name + "_amd64",
-        binary = binary,
-        repo_tag = repo_tag,
-        platform = "linux/amd64",
-        tags = tags,
-        **kwargs
-    )
-    
-    # ARM64 version (for Mac development)
-    go_oci_image(
-        name = name + "_arm64",
-        binary = binary,
-        repo_tag = repo_tag,
-        platform = "linux/arm64",
         tags = tags,
         **kwargs
     )
