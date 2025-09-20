@@ -1,3 +1,4 @@
+---
 name: Helm Chart Release
 
 on:
@@ -49,41 +50,43 @@ jobs:
         uses: bazel-contrib/setup-bazel@0.15.0
         with:
           bazelisk-version: '1.20.0'
-          
+
       - name: Discover helm chart targets
         id: discover
         run: |
           # Query for all helm chart targets
           echo "Discovering helm chart targets..."
-          
+
           # Get all targets that use helm_chart_release_macro
-          CHART_TARGETS=$(bazel query "kind('helm_chart_release', //...)" 2>/dev/null || echo "")
-          
+          CHART_TARGETS=$(bazel query \
+            "kind('helm_chart_release', //...)" 2>/dev/null || echo "")
+
           if [ -z "$CHART_TARGETS" ]; then
             echo "No helm chart targets found"
             echo "charts=[]" >> $GITHUB_OUTPUT
             echo "domains=[]" >> $GITHUB_OUTPUT
             exit 0
           fi
-          
+
           echo "Found chart targets: $CHART_TARGETS"
-          
+
           # Extract domains and chart info
           CHARTS_JSON="["
           DOMAINS_JSON="["
-          
+
           for target in $CHART_TARGETS; do
             # Extract domain and chart name from target
             # Target format: //domain:chart_name
             domain=$(echo $target | cut -d'/' -f3 | cut -d':' -f1)
             chart_name=$(echo $target | cut -d':' -f2)
-            
+
             # Add to charts array
             if [ "$CHARTS_JSON" != "[" ]; then
               CHARTS_JSON+=","
             fi
-            CHARTS_JSON+="{\"target\":\"$target\",\"domain\":\"$domain\",\"name\":\"$chart_name\"}"
-            
+            CHARTS_JSON+="{\"target\":\"$target\","
+            CHARTS_JSON+="\"domain\":\"$domain\",\"name\":\"$chart_name\"}"
+
             # Add to domains array (unique)
             if [[ ! "$DOMAINS_JSON" =~ "\"$domain\"" ]]; then
               if [ "$DOMAINS_JSON" != "[" ]; then
@@ -92,13 +95,13 @@ jobs:
               DOMAINS_JSON+="\"$domain\""
             fi
           done
-          
+
           CHARTS_JSON+="]"
           DOMAINS_JSON+="]"
-          
+
           echo "charts=$CHARTS_JSON" >> $GITHUB_OUTPUT
           echo "domains=$DOMAINS_JSON" >> $GITHUB_OUTPUT
-          
+
           echo "Discovered charts: $CHARTS_JSON"
           echo "Discovered domains: $DOMAINS_JSON"
 
@@ -106,7 +109,9 @@ jobs:
   build-charts:
     runs-on: ubuntu-latest
     needs: discover-charts
-    if: fromJSON(needs.discover-charts.outputs.charts)[0] != null
+    if: >-
+      needs.discover-charts.outputs.charts != '[]' &&
+      needs.discover-charts.outputs.charts != ''
     strategy:
       matrix:
         chart: ${{ fromJSON(needs.discover-charts.outputs.charts) }}
@@ -128,52 +133,57 @@ jobs:
         run: |
           chart_name="${{ matrix.chart.domain }}-${{ matrix.chart.name }}"
           echo "Validating chart: $chart_name"
-          
+
           # Check for required files
-          manifest_file="bazel-bin/${{ matrix.chart.domain }}/${chart_name}.manifest"
-          chart_yaml="bazel-bin/${{ matrix.chart.domain }}/${chart_name}/Chart.yaml"
-          values_yaml="bazel-bin/${{ matrix.chart.domain }}/${chart_name}/values.yaml"
-          
+          domain="${{ matrix.chart.domain }}"
+          manifest_file="bazel-bin/${domain}/${chart_name}.manifest"
+          chart_yaml="bazel-bin/${domain}/${chart_name}/Chart.yaml"
+          values_yaml="bazel-bin/${domain}/${chart_name}/values.yaml"
+
           if [ ! -f "$manifest_file" ]; then
             echo "Error: Missing manifest file: $manifest_file"
             exit 1
           fi
-          
+
           if [ ! -f "$chart_yaml" ]; then
             echo "Error: Missing Chart.yaml: $chart_yaml"
             exit 1
           fi
-          
+
           if [ ! -f "$values_yaml" ]; then
             echo "Error: Missing values.yaml: $values_yaml"
             exit 1
           fi
-          
+
           echo "Chart validation successful!"
           echo "Manifest contents:"
           cat "$manifest_file"
 
       - name: Package chart for release
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish_to_pages == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          github.event.inputs.publish_to_pages == 'true'
         run: |
           chart_name="${{ matrix.chart.domain }}-${{ matrix.chart.name }}"
           chart_dir="bazel-bin/${{ matrix.chart.domain }}/${chart_name}"
-          
+
           # Create a proper Helm chart package structure
           mkdir -p "charts/${chart_name}"
           cp "$chart_dir/Chart.yaml" "charts/${chart_name}/"
           cp "$chart_dir/values.yaml" "charts/${chart_name}/"
-          
+
           # Add templates if they exist
           if [ -d "$chart_dir/templates" ]; then
             cp -r "$chart_dir/templates" "charts/${chart_name}/"
           fi
-          
+
           echo "Packaged chart structure:"
           find "charts/${chart_name}" -type f
 
       - name: Upload chart artifacts
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish_to_pages == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          github.event.inputs.publish_to_pages == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: helm-chart-${{ matrix.chart.domain }}-${{ matrix.chart.name }}
@@ -184,7 +194,9 @@ jobs:
   publish-to-pages:
     runs-on: ubuntu-latest
     needs: [discover-charts, build-charts]
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish_to_pages == 'true'
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.publish_to_pages == 'true'
     permissions:
       contents: read
       pages: write
@@ -210,7 +222,7 @@ jobs:
         run: |
           echo "Consolidating charts..."
           mkdir -p helm-repo
-          
+
           # Move all charts to a single directory
           find artifacts/ -name "*.yaml" -o -name "*.yml" | while read file; do
             echo "Processing: $file"
@@ -221,10 +233,10 @@ jobs:
               cp -r "$chart_dir" "helm-repo/"
             fi
           done
-          
+
           echo "Chart directory structure:"
           find helm-repo/ -type f
-          
+
           # Package each chart
           cd helm-repo
           for chart_dir in */; do
@@ -233,13 +245,15 @@ jobs:
               helm package "$chart_dir"
             fi
           done
-          
+
           # Generate repository index
-          helm repo index . --url https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
-          
+          repo_url="https://${{ github.repository_owner }}.github.io"
+          repo_url="${repo_url}/${{ github.event.repository.name }}/"
+          helm repo index . --url "$repo_url"
+
           echo "Generated packages:"
           ls -la *.tgz || echo "No .tgz files found"
-          
+
           echo "Repository index:"
           cat index.yaml
 
@@ -265,17 +279,20 @@ jobs:
         run: |
           echo "## Helm Chart Release Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           if [ "${{ needs.discover-charts.result }}" = "success" ]; then
             echo "✅ **Chart Discovery**: Success" >> $GITHUB_STEP_SUMMARY
-            echo "- Charts found: ${{ fromJSON(needs.discover-charts.outputs.charts) | length }}" >> $GITHUB_STEP_SUMMARY
-            echo "- Domains: ${{ needs.discover-charts.outputs.domains }}" >> $GITHUB_STEP_SUMMARY
+            chart_count=$(echo '${{ needs.discover-charts.outputs.charts }}' | \
+              jq '. | length')
+            echo "- Charts found: $chart_count" >> $GITHUB_STEP_SUMMARY
+            domains="${{ needs.discover-charts.outputs.domains }}"
+            echo "- Domains: $domains" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ **Chart Discovery**: Failed" >> $GITHUB_STEP_SUMMARY
           fi
-          
+
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           if [ "${{ needs.build-charts.result }}" = "success" ]; then
             echo "✅ **Chart Build**: Success" >> $GITHUB_STEP_SUMMARY
           elif [ "${{ needs.build-charts.result }}" = "failure" ]; then
@@ -283,14 +300,17 @@ jobs:
           else
             echo "⏭️ **Chart Build**: Skipped" >> $GITHUB_STEP_SUMMARY
           fi
-          
+
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Trigger Information" >> $GITHUB_STEP_SUMMARY
           echo "- Event: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- Branch: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
-          
+
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "- Domain filter: ${{ github.event.inputs.domain }}" >> $GITHUB_STEP_SUMMARY
-            echo "- Chart version: ${{ github.event.inputs.chart_version }}" >> $GITHUB_STEP_SUMMARY
-            echo "- Publish to Pages: ${{ github.event.inputs.publish_to_pages }}" >> $GITHUB_STEP_SUMMARY
+            domain_filter="${{ github.event.inputs.domain }}"
+            chart_version="${{ github.event.inputs.chart_version }}"
+            publish_pages="${{ github.event.inputs.publish_to_pages }}"
+            echo "- Domain filter: $domain_filter" >> $GITHUB_STEP_SUMMARY
+            echo "- Chart version: $chart_version" >> $GITHUB_STEP_SUMMARY
+            echo "- Publish to Pages: $publish_pages" >> $GITHUB_STEP_SUMMARY
           fi
