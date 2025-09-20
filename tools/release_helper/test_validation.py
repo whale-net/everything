@@ -31,47 +31,18 @@ from tools.release_helper.validation import (
 )
 
 
-@pytest.fixture
-def sample_apps():
-    """Fixture providing sample app data for testing."""
-    return [
-        {
-            "name": "hello_python",
-            "domain": "demo",
-            "bazel_target": "//demo/hello_python:hello_python_metadata"
-        },
-        {
-            "name": "hello_go", 
-            "domain": "demo",
-            "bazel_target": "//demo/hello_go:hello_go_metadata"
-        },
-        {
-            "name": "hello_fastapi",
-            "domain": "demo", 
-            "bazel_target": "//demo/hello_fastapi:hello_fastapi_metadata"
-        },
-        {
-            "name": "status_service",
-            "domain": "api",
-            "bazel_target": "//api/status_service:status_service_metadata"
-        },
-        {
-            "name": "hello_python",  # Intentional name collision
-            "domain": "api",
-            "bazel_target": "//api/hello_python:hello_python_metadata"
-        }
-    ]
+
 
 
 @pytest.fixture
-def sample_metadata():
-    """Fixture providing sample metadata for testing."""
-    return {
-        "name": "hello_python",
-        "domain": "demo",
-        "registry": "ghcr.io",
-        "version": "latest"
+def sample_apps_with_collision(sample_apps):
+    """Extend sample_apps with intentional name collision for validation tests."""
+    collision_app = {
+        "name": "hello_python",  # Intentional name collision
+        "domain": "api",
+        "bazel_target": "//api/hello_python:hello_python_metadata"
     }
+    return sample_apps + [collision_app]
 
 
 @pytest.fixture
@@ -90,11 +61,7 @@ def mock_get_app_metadata(sample_metadata):
         yield mock
 
 
-@pytest.fixture
-def mock_subprocess_run():
-    """Mock subprocess.run for Docker commands."""
-    with patch('subprocess.run') as mock:
-        yield mock
+
 
 
 class TestValidateSemanticVersion:
@@ -189,33 +156,30 @@ class TestCheckVersionExistsInRegistry:
         
         assert result is False
 
-    def test_version_check_other_error(self, mock_get_app_metadata, mock_subprocess_run):
+    def test_version_check_other_error(self, mock_get_app_metadata, mock_subprocess_run, mock_print):
         """Test when other error occurs (assume exists for safety)."""
         mock_subprocess_run.return_value = Mock(
             returncode=1,
             stderr="some other error occurred"
         )
         
-        with patch('builtins.print'):  # Mock print to avoid output during test
-            result = check_version_exists_in_registry("//demo/hello_python:hello_python_metadata", "v1.0.0")
+        result = check_version_exists_in_registry("//demo/hello_python:hello_python_metadata", "v1.0.0")
         
         assert result is False  # Conservative approach
 
-    def test_docker_not_available(self, mock_get_app_metadata, mock_subprocess_run):
+    def test_docker_not_available(self, mock_get_app_metadata, mock_subprocess_run, mock_print):
         """Test when Docker is not available."""
         mock_subprocess_run.side_effect = FileNotFoundError("docker command not found")
         
-        with patch('builtins.print'):  # Mock print to avoid output during test
-            result = check_version_exists_in_registry("//demo/hello_python:hello_python_metadata", "v1.0.0")
+        result = check_version_exists_in_registry("//demo/hello_python:hello_python_metadata", "v1.0.0")
         
         assert result is False
 
-    def test_github_repository_owner_env_var(self, mock_get_app_metadata, mock_subprocess_run):
+    def test_github_repository_owner_env_var(self, mock_get_app_metadata, mock_subprocess_run, github_owner_env):
         """Test registry path with GITHUB_REPOSITORY_OWNER environment variable."""
         mock_subprocess_run.return_value = Mock(returncode=0, stderr="")
         
-        with patch.dict(os.environ, {"GITHUB_REPOSITORY_OWNER": "TestOwner"}):
-            result = check_version_exists_in_registry("//demo/hello_python:hello_python_metadata", "v1.0.0")
+        result = check_version_exists_in_registry("//demo/hello_python:hello_python_metadata", "v1.0.0")
         
         assert result is True
         mock_subprocess_run.assert_called_once_with(
@@ -251,18 +215,16 @@ class TestCheckVersionExistsInRegistry:
 class TestValidateReleaseVersion:
     """Test cases for validate_release_version function."""
 
-    def test_validate_latest_version(self, mock_get_app_metadata):
+    def test_validate_latest_version(self, mock_get_app_metadata, mock_print):
         """Test that 'latest' version is always allowed."""
-        with patch('builtins.print'):  # Mock print to avoid output during test
-            # Should not raise any exception
-            validate_release_version("//demo/hello_python:hello_python_metadata", "latest")
+        # Should not raise any exception
+        validate_release_version("//demo/hello_python:hello_python_metadata", "latest")
 
-    def test_validate_valid_semantic_version_not_exists(self, mock_get_app_metadata):
+    def test_validate_valid_semantic_version_not_exists(self, mock_get_app_metadata, mock_print):
         """Test valid semantic version that doesn't exist in registry."""
         with patch('tools.release_helper.validation.check_version_exists_in_registry', return_value=False):
-            with patch('builtins.print'):  # Mock print to avoid output during test
-                # Should not raise any exception
-                validate_release_version("//demo/hello_python:hello_python_metadata", "v1.0.0")
+            # Should not raise any exception
+            validate_release_version("//demo/hello_python:hello_python_metadata", "v1.0.0")
 
     def test_validate_invalid_semantic_version(self, mock_get_app_metadata):
         """Test invalid semantic version format."""
@@ -275,12 +237,11 @@ class TestValidateReleaseVersion:
             with pytest.raises(ValueError, match="already exists"):
                 validate_release_version("//demo/hello_python:hello_python_metadata", "v1.0.0")
 
-    def test_validate_version_exists_allow_overwrite(self, mock_get_app_metadata):
+    def test_validate_version_exists_allow_overwrite(self, mock_get_app_metadata, mock_print):
         """Test version that exists but overwrite is allowed."""
         with patch('tools.release_helper.validation.check_version_exists_in_registry', return_value=True):
-            with patch('builtins.print'):  # Mock print to avoid output during test
-                # Should not raise any exception
-                validate_release_version("//demo/hello_python:hello_python_metadata", "v1.0.0", allow_overwrite=True)
+            # Should not raise any exception
+            validate_release_version("//demo/hello_python:hello_python_metadata", "v1.0.0", allow_overwrite=True)
 
 
 class TestGetAppFullName:
@@ -317,6 +278,13 @@ class TestValidateDomain:
         """Test validating a non-existent domain."""
         with pytest.raises(ValueError, match="Domain 'nonexistent' not found"):
             validate_domain("nonexistent")
+
+    def test_validate_apps_not_found(self, mock_list_all_apps, sample_apps, mock_print):
+        """Test validating non-existent apps."""
+        requested = ["nonexistent-app"]
+        
+        with pytest.raises(ValueError, match="Invalid apps: nonexistent-app"):
+            validate_apps(requested)
 
 
 class TestIsDomainName:
@@ -365,12 +333,13 @@ class TestValidateApps:
         assert result[0]["name"] == "hello_go"
         assert result[1]["name"] == "status_service"
 
-    def test_validate_apps_short_format_ambiguous(self, mock_list_all_apps, sample_apps):
+    def test_validate_apps_short_format_ambiguous(self, sample_apps_with_collision):
         """Test validating apps using short format when ambiguous."""
-        requested = ["hello_python"]  # This name exists in both demo and api domains
-        
-        with pytest.raises(ValueError, match="ambiguous, could be"):
-            validate_apps(requested)
+        with patch('tools.release_helper.validation.list_all_apps', return_value=sample_apps_with_collision):
+            requested = ["hello_python"]  # This name exists in both demo and api domains
+            
+            with pytest.raises(ValueError, match="ambiguous, could be"):
+                validate_apps(requested)
 
     def test_validate_apps_domain_format(self, mock_list_all_apps, sample_apps):
         """Test validating using domain format (returns all apps in domain)."""

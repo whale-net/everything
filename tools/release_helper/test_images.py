@@ -18,15 +18,7 @@ from unittest.mock import Mock, patch, MagicMock
 from tools.release_helper.images import format_registry_tags, build_image, push_image_with_tags
 
 
-@pytest.fixture
-def sample_metadata():
-    """Fixture providing sample metadata for testing."""
-    return {
-        "name": "hello_python",
-        "domain": "demo",
-        "registry": "ghcr.io",
-        "version": "latest"
-    }
+
 
 
 @pytest.fixture
@@ -65,10 +57,9 @@ def mock_run_bazel():
 class TestFormatRegistryTags:
     """Test cases for format_registry_tags function."""
 
-    def test_format_registry_tags_ghcr_default(self):
+    def test_format_registry_tags_ghcr_default(self, clean_environ):
         """Test formatting registry tags for GHCR without repository owner."""
-        with patch.dict(os.environ, {}, clear=True):  # Clear GITHUB_REPOSITORY_OWNER
-            result = format_registry_tags("demo", "hello_python", "v1.0.0")
+        result = format_registry_tags("demo", "hello_python", "v1.0.0")
         
         expected = {
             "latest": "ghcr.io/demo-hello_python:latest",
@@ -76,10 +67,9 @@ class TestFormatRegistryTags:
         }
         assert result == expected
 
-    def test_format_registry_tags_ghcr_with_owner(self):
+    def test_format_registry_tags_ghcr_with_owner(self, github_owner_env):
         """Test formatting registry tags for GHCR with repository owner."""
-        with patch.dict(os.environ, {"GITHUB_REPOSITORY_OWNER": "TestOwner"}):
-            result = format_registry_tags("demo", "hello_python", "v1.0.0")
+        result = format_registry_tags("demo", "hello_python", "v1.0.0")
         
         expected = {
             "latest": "ghcr.io/testowner/demo-hello_python:latest",
@@ -87,10 +77,9 @@ class TestFormatRegistryTags:
         }
         assert result == expected
 
-    def test_format_registry_tags_ghcr_with_commit_sha(self):
+    def test_format_registry_tags_ghcr_with_commit_sha(self, github_owner_env):
         """Test formatting registry tags for GHCR with commit SHA."""
-        with patch.dict(os.environ, {"GITHUB_REPOSITORY_OWNER": "TestOwner"}):
-            result = format_registry_tags("demo", "hello_python", "v1.0.0", commit_sha="abc123")
+        result = format_registry_tags("demo", "hello_python", "v1.0.0", commit_sha="abc123")
         
         expected = {
             "latest": "ghcr.io/testowner/demo-hello_python:latest",

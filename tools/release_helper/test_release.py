@@ -19,37 +19,7 @@ import sys
 from tools.release_helper.release import find_app_bazel_target, plan_release, tag_and_push_image
 
 
-@pytest.fixture
-def sample_apps():
-    """Fixture providing sample app data for testing."""
-    return [
-        {
-            "name": "hello_python",
-            "domain": "demo",
-            "bazel_target": "//demo/hello_python:hello_python_metadata"
-        },
-        {
-            "name": "hello_go", 
-            "domain": "demo",
-            "bazel_target": "//demo/hello_go:hello_go_metadata"
-        },
-        {
-            "name": "status_service",
-            "domain": "api",
-            "bazel_target": "//api/status_service:status_service_metadata"
-        }
-    ]
 
-
-@pytest.fixture
-def sample_metadata():
-    """Fixture providing sample metadata for testing."""
-    return {
-        "name": "hello_python",
-        "domain": "demo",
-        "registry": "ghcr.io",
-        "version": "latest"
-    }
 
 
 @pytest.fixture
@@ -185,32 +155,30 @@ class TestPlanRelease:
             )
 
     @patch('tools.release_helper.release.auto_increment_version')
-    def test_plan_release_workflow_dispatch_increment_minor(self, mock_auto_increment, mock_validate_apps, mock_get_app_metadata, sample_apps):
+    def test_plan_release_workflow_dispatch_increment_minor(self, mock_auto_increment, mock_validate_apps, mock_get_app_metadata, sample_apps, mock_print):
         """Test workflow_dispatch with increment_minor mode."""
         mock_auto_increment.return_value = "v1.1.0"
         
-        with patch('builtins.print'):  # Mock print to avoid output during test
-            result = plan_release(
-                event_type="workflow_dispatch",
-                requested_apps="hello_python",
-                version_mode="increment_minor"
-            )
+        result = plan_release(
+            event_type="workflow_dispatch",
+            requested_apps="hello_python",
+            version_mode="increment_minor"
+        )
         
         assert result["version"] is None  # No global version in increment mode
         assert "v1.1.0" in result["versions"].values()
         mock_auto_increment.assert_called_with("demo", "hello_python", "minor")
 
     @patch('tools.release_helper.release.auto_increment_version')
-    def test_plan_release_workflow_dispatch_increment_patch(self, mock_auto_increment, mock_validate_apps, mock_get_app_metadata, sample_apps):
+    def test_plan_release_workflow_dispatch_increment_patch(self, mock_auto_increment, mock_validate_apps, mock_get_app_metadata, sample_apps, mock_print):
         """Test workflow_dispatch with increment_patch mode."""
         mock_auto_increment.return_value = "v1.0.1"
         
-        with patch('builtins.print'):  # Mock print to avoid output during test
-            result = plan_release(
-                event_type="workflow_dispatch",
-                requested_apps="hello_python",
-                version_mode="increment_patch"
-            )
+        result = plan_release(
+            event_type="workflow_dispatch",
+            requested_apps="hello_python",
+            version_mode="increment_patch"
+        )
         
         assert result["version"] is None  # No global version in increment mode
         assert "v1.0.1" in result["versions"].values()
@@ -236,16 +204,15 @@ class TestPlanRelease:
 
     @patch('tools.release_helper.release.validate_semantic_version')
     @patch('tools.release_helper.release.get_previous_tag')
-    def test_plan_release_tag_push(self, mock_get_previous_tag, mock_validate_semantic, mock_detect_changed_apps):
+    def test_plan_release_tag_push(self, mock_get_previous_tag, mock_validate_semantic, mock_detect_changed_apps, mock_print):
         """Test planning release for tag_push event."""
         mock_validate_semantic.return_value = True
         mock_get_previous_tag.return_value = "demo-hello_python.v0.9.0"
         
-        with patch('builtins.print'):  # Mock print to avoid output during test
-            result = plan_release(
-                event_type="tag_push",
-                version="v1.0.0"
-            )
+        result = plan_release(
+            event_type="tag_push",
+            version="v1.0.0"
+        )
         
         assert result["event_type"] == "tag_push"
         assert result["version"] == "v1.0.0"
@@ -269,29 +236,26 @@ class TestPlanRelease:
         
         mock_detect_changed_apps.assert_called_once_with("abc123")
 
-    def test_plan_release_pull_request_with_base_commit(self, mock_detect_changed_apps):
+    def test_plan_release_pull_request_with_base_commit(self, mock_detect_changed_apps, mock_print):
         """Test planning release for pull_request event."""
-        with patch('builtins.print'):  # Mock print to avoid output during test
-            result = plan_release(
-                event_type="pull_request",
-                base_commit="main"
-            )
+        result = plan_release(
+            event_type="pull_request",
+            base_commit="main"
+        )
         
         assert result["event_type"] == "pull_request"
         mock_detect_changed_apps.assert_called_once_with("main")
 
-    def test_plan_release_push_fallback_mode(self, mock_list_all_apps, sample_apps):
+    def test_plan_release_push_fallback_mode(self, mock_list_all_apps, sample_apps, mock_print):
         """Test planning release for push event in fallback mode."""
-        with patch('builtins.print'):  # Mock print to avoid output during test
-            result = plan_release(event_type="push")
+        result = plan_release(event_type="push")
         
         assert result["event_type"] == "push"
         assert len(result["matrix"]["include"]) == len(sample_apps)
 
-    def test_plan_release_fallback_event(self, mock_list_all_apps, sample_apps):
+    def test_plan_release_fallback_event(self, mock_list_all_apps, sample_apps, mock_print):
         """Test planning release for fallback event type."""
-        with patch('builtins.print'):  # Mock print to avoid output during test
-            result = plan_release(event_type="fallback")
+        result = plan_release(event_type="fallback")
         
         assert result["event_type"] == "fallback"
         assert len(result["matrix"]["include"]) == len(sample_apps)

@@ -22,88 +22,79 @@ from tools.release_helper.core import find_workspace_root, run_bazel
 class TestFindWorkspaceRoot:
     """Test cases for find_workspace_root function."""
 
-    def test_find_workspace_root_with_build_workspace_directory(self):
+    def test_find_workspace_root_with_build_workspace_directory(self, build_workspace_env):
         """Test finding workspace root using BUILD_WORKSPACE_DIRECTORY environment variable."""
-        test_path = "/workspace/build/dir"
-        
-        with patch.dict(os.environ, {"BUILD_WORKSPACE_DIRECTORY": test_path}):
-            result = find_workspace_root()
-            
-        assert result == Path(test_path)
+        result = find_workspace_root()
+        assert result == Path(build_workspace_env)
 
-    def test_find_workspace_root_with_workspace_file(self):
+    def test_find_workspace_root_with_workspace_file(self, clean_environ):
         """Test finding workspace root by locating WORKSPACE file."""
-        with patch.dict(os.environ, {}, clear=True):  # Clear BUILD_WORKSPACE_DIRECTORY
-            with patch('pathlib.Path.cwd') as mock_cwd:
-                mock_cwd.return_value = Path("/some/project/subdir")
-                
-                # Mock Path.exists to return True for WORKSPACE at parent directory
-                def mock_exists(self):
-                    return str(self).endswith("/some/project/WORKSPACE")
-                
-                with patch.object(Path, 'exists', mock_exists):
-                    result = find_workspace_root()
-                
-                assert result == Path("/some/project")
+        with patch('pathlib.Path.cwd') as mock_cwd:
+            mock_cwd.return_value = Path("/some/project/subdir")
+            
+            # Mock Path.exists to return True for WORKSPACE at parent directory
+            def mock_exists(self):
+                return str(self).endswith("/some/project/WORKSPACE")
+            
+            with patch.object(Path, 'exists', mock_exists):
+                result = find_workspace_root()
+            
+            assert result == Path("/some/project")
 
-    def test_find_workspace_root_with_module_bazel_file(self):
+    def test_find_workspace_root_with_module_bazel_file(self, clean_environ):
         """Test finding workspace root by locating MODULE.bazel file."""
-        with patch.dict(os.environ, {}, clear=True):  # Clear BUILD_WORKSPACE_DIRECTORY
-            with patch('pathlib.Path.cwd') as mock_cwd:
-                mock_cwd.return_value = Path("/some/project/subdir")
-                
-                # Mock Path.exists to return True for MODULE.bazel at parent directory
-                def mock_exists(self):
-                    return str(self).endswith("/some/project/MODULE.bazel")
-                
-                with patch.object(Path, 'exists', mock_exists):
-                    result = find_workspace_root()
-                
-                assert result == Path("/some/project")
+        with patch('pathlib.Path.cwd') as mock_cwd:
+            mock_cwd.return_value = Path("/some/project/subdir")
+            
+            # Mock Path.exists to return True for MODULE.bazel at parent directory
+            def mock_exists(self):
+                return str(self).endswith("/some/project/MODULE.bazel")
+            
+            with patch.object(Path, 'exists', mock_exists):
+                result = find_workspace_root()
+            
+            assert result == Path("/some/project")
 
-    def test_find_workspace_root_no_markers_found(self):
+    def test_find_workspace_root_no_markers_found(self, clean_environ):
         """Test finding workspace root when no markers are found (fallback to current directory)."""
-        with patch.dict(os.environ, {}, clear=True):  # Clear BUILD_WORKSPACE_DIRECTORY
-            with patch('pathlib.Path.cwd') as mock_cwd:
-                current_dir = Path("/some/random/dir")
-                mock_cwd.return_value = current_dir
-                
-                # Mock Path.exists to always return False (no workspace markers)
-                with patch.object(Path, 'exists', return_value=False):
-                    result = find_workspace_root()
-                
-                assert result == current_dir
+        with patch('pathlib.Path.cwd') as mock_cwd:
+            current_dir = Path("/some/random/dir")
+            mock_cwd.return_value = current_dir
+            
+            # Mock Path.exists to always return False (no workspace markers)
+            with patch.object(Path, 'exists', return_value=False):
+                result = find_workspace_root()
+            
+            assert result == current_dir
 
-    def test_find_workspace_root_current_directory_has_marker(self):
+    def test_find_workspace_root_current_directory_has_marker(self, clean_environ):
         """Test finding workspace root when current directory has workspace marker."""
-        with patch.dict(os.environ, {}, clear=True):  # Clear BUILD_WORKSPACE_DIRECTORY
-            with patch('pathlib.Path.cwd') as mock_cwd:
-                current_dir = Path("/workspace/root")
-                mock_cwd.return_value = current_dir
-                
-                # Mock Path.exists to return True for current directory
-                def mock_exists(self):
-                    return str(self) in ["/workspace/root/WORKSPACE", "/workspace/root/MODULE.bazel"]
-                
-                with patch.object(Path, 'exists', mock_exists):
-                    result = find_workspace_root()
-                
-                assert result == current_dir
+        with patch('pathlib.Path.cwd') as mock_cwd:
+            current_dir = Path("/workspace/root")
+            mock_cwd.return_value = current_dir
+            
+            # Mock Path.exists to return True for current directory
+            def mock_exists(self):
+                return str(self) in ["/workspace/root/WORKSPACE", "/workspace/root/MODULE.bazel"]
+            
+            with patch.object(Path, 'exists', mock_exists):
+                result = find_workspace_root()
+            
+            assert result == current_dir
 
-    def test_find_workspace_root_deep_nested_structure(self):
+    def test_find_workspace_root_deep_nested_structure(self, clean_environ):
         """Test finding workspace root from deeply nested directory structure."""
-        with patch.dict(os.environ, {}, clear=True):  # Clear BUILD_WORKSPACE_DIRECTORY
-            with patch('pathlib.Path.cwd') as mock_cwd:
-                mock_cwd.return_value = Path("/workspace/project/tools/release_helper/tests")
-                
-                # Mock Path.exists to return True only for workspace root
-                def mock_exists(self):
-                    return str(self).endswith("/workspace/project/WORKSPACE")
-                
-                with patch.object(Path, 'exists', mock_exists):
-                    result = find_workspace_root()
-                
-                assert result == Path("/workspace/project")
+        with patch('pathlib.Path.cwd') as mock_cwd:
+            mock_cwd.return_value = Path("/workspace/project/tools/release_helper/tests")
+            
+            # Mock Path.exists to return True only for workspace root
+            def mock_exists(self):
+                return str(self).endswith("/workspace/project/WORKSPACE")
+            
+            with patch.object(Path, 'exists', mock_exists):
+                result = find_workspace_root()
+            
+            assert result == Path("/workspace/project")
 
 
 class TestRunBazel:
@@ -185,8 +176,7 @@ class TestRunBazel:
 
     @patch('tools.release_helper.core.find_workspace_root')
     @patch('subprocess.run')
-    @patch('builtins.print')  # Mock print to avoid output during test
-    def test_run_bazel_command_failure(self, mock_print, mock_subprocess_run, mock_find_workspace_root):
+    def test_run_bazel_command_failure(self, mock_subprocess_run, mock_find_workspace_root, mock_print):
         """Test bazel command execution failure handling."""
         workspace_path = Path("/workspace/root")
         mock_find_workspace_root.return_value = workspace_path
@@ -213,8 +203,7 @@ class TestRunBazel:
 
     @patch('tools.release_helper.core.find_workspace_root')
     @patch('subprocess.run')
-    @patch('builtins.print')  # Mock print to avoid output during test
-    def test_run_bazel_command_failure_no_stdout_stderr(self, mock_print, mock_subprocess_run, mock_find_workspace_root):
+    def test_run_bazel_command_failure_no_stdout_stderr(self, mock_subprocess_run, mock_find_workspace_root, mock_print):
         """Test bazel command execution failure with no stdout/stderr."""
         workspace_path = Path("/workspace/root")
         mock_find_workspace_root.return_value = workspace_path

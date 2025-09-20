@@ -59,21 +59,7 @@ def sample_app_release_data(sample_release_note):
     )
 
 
-@pytest.fixture
-def sample_apps():
-    """Fixture providing sample app data for testing."""
-    return [
-        {
-            "name": "hello_python",
-            "domain": "demo",
-            "bazel_target": "//demo/hello_python:hello_python_metadata"
-        },
-        {
-            "name": "hello_go", 
-            "domain": "demo",
-            "bazel_target": "//demo/hello_go:hello_go_metadata"
-        }
-    ]
+
 
 
 class TestParseTagInfo:
@@ -405,9 +391,9 @@ class TestGetCommitsBetweenRefs:
         assert result[1].commit_sha == "def67890"
 
     @patch('subprocess.run')
-    def test_get_commits_between_refs_ref_not_found(self, mock_subprocess):
+    def test_get_commits_between_refs_ref_not_found(self, mock_subprocess_run, mock_print):
         """Test behavior when start ref doesn't exist."""
-        mock_subprocess.side_effect = [
+        mock_subprocess_run.side_effect = [
             Mock(returncode=1),  # rev-parse check fails
             Mock(  # fallback git log
                 returncode=0,
@@ -421,8 +407,7 @@ class TestGetCommitsBetweenRefs:
             )
         ]
         
-        with patch('builtins.print'):  # Mock print to avoid output during test
-            result = get_commits_between_refs("nonexistent-ref", "v1.0.0")
+        result = get_commits_between_refs("nonexistent-ref", "v1.0.0")
         
         assert len(result) == 1
         assert result[0].commit_sha == "abc12345"
@@ -440,15 +425,14 @@ class TestGetCommitsBetweenRefs:
         assert len(result) == 0
 
     @patch('subprocess.run')
-    def test_get_commits_between_refs_git_error(self, mock_subprocess):
+    def test_get_commits_between_refs_git_error(self, mock_subprocess_run, mock_print):
         """Test error handling when git command fails."""
-        mock_subprocess.side_effect = [
+        mock_subprocess_run.side_effect = [
             Mock(returncode=0),  # rev-parse check
             subprocess.CalledProcessError(1, "git log")  # git log fails
         ]
         
-        with patch('builtins.print'):  # Mock print to avoid output during test
-            result = get_commits_between_refs("v0.9.0", "v1.0.0")
+        result = get_commits_between_refs("v0.9.0", "v1.0.0")
         
         assert len(result) == 0
 
@@ -532,7 +516,7 @@ class TestFilterCommitsByApp:
         assert "jkl012" not in commit_shas  # Unrelated
 
     @patch('tools.release_helper.release_notes.list_all_apps')
-    def test_filter_commits_by_app_not_found(self, mock_list_apps, sample_apps):
+    def test_filter_commits_by_app_not_found(self, mock_list_apps, sample_apps, mock_print):
         """Test behavior when app is not found."""
         mock_list_apps.return_value = sample_apps
         
@@ -540,13 +524,12 @@ class TestFilterCommitsByApp:
             ReleaseNote("abc123", "Fix bug", "John", "2024-01-15", ["demo/hello_python/main.py"])
         ]
         
-        with patch('builtins.print'):  # Mock print to avoid output during test
-            result = filter_commits_by_app(commits, "nonexistent_app")
+        result = filter_commits_by_app(commits, "nonexistent_app")
         
         assert len(result) == 0
 
     @patch('tools.release_helper.release_notes.list_all_apps')
-    def test_filter_commits_by_app_exception_handling(self, mock_list_apps):
+    def test_filter_commits_by_app_exception_handling(self, mock_list_apps, mock_print):
         """Test exception handling in commit filtering."""
         mock_list_apps.side_effect = Exception("List apps failed")
         
@@ -554,8 +537,7 @@ class TestFilterCommitsByApp:
             ReleaseNote("abc123", "Fix bug", "John", "2024-01-15", ["demo/hello_python/main.py"])
         ]
         
-        with patch('builtins.print'):  # Mock print to avoid output during test
-            result = filter_commits_by_app(commits, "hello_python")
+        result = filter_commits_by_app(commits, "hello_python")
         
         # Should return all commits if filtering fails
         assert len(result) == 1
@@ -568,8 +550,7 @@ class TestGenerateReleaseNotes:
     @patch('tools.release_helper.release_notes.get_previous_tag')
     @patch('tools.release_helper.release_notes.get_commits_between_refs')
     @patch('tools.release_helper.release_notes.filter_commits_by_app')
-    @patch('builtins.print')
-    def test_generate_release_notes_success(self, mock_print, mock_filter, mock_get_commits, mock_get_previous_tag):
+    def test_generate_release_notes_success(self, mock_filter, mock_get_commits, mock_get_previous_tag, mock_print):
         """Test successful release notes generation."""
         # Setup mocks
         sample_commit = ReleaseNote("abc123", "Fix bug", "John", "2024-01-15", ["file.py"])
@@ -587,8 +568,7 @@ class TestGenerateReleaseNotes:
     @patch('tools.release_helper.release_notes.get_previous_tag')
     @patch('tools.release_helper.release_notes.get_commits_between_refs')
     @patch('tools.release_helper.release_notes.filter_commits_by_app')
-    @patch('builtins.print')
-    def test_generate_release_notes_no_previous_tag(self, mock_print, mock_filter, mock_get_commits, mock_get_previous_tag):
+    def test_generate_release_notes_no_previous_tag(self, mock_filter, mock_get_commits, mock_get_previous_tag, mock_print):
         """Test release notes generation when no previous tag is found."""
         # Setup mocks
         mock_get_previous_tag.return_value = None
@@ -619,7 +599,7 @@ class TestGenerateReleaseNotes:
     @patch('tools.release_helper.release_notes.get_previous_tag')
     @patch('tools.release_helper.release_notes.get_commits_between_refs')
     @patch('tools.release_helper.release_notes.filter_commits_by_app')
-    def test_generate_release_notes_different_formats(self, mock_filter, mock_get_commits, mock_get_previous_tag):
+    def test_generate_release_notes_different_formats(self, mock_filter, mock_get_commits, mock_get_previous_tag, mock_print):
         """Test release notes generation in different formats."""
         # Setup mocks
         sample_commit = ReleaseNote("abc123", "Fix bug", "John", "2024-01-15", ["file.py"])
@@ -627,19 +607,18 @@ class TestGenerateReleaseNotes:
         mock_get_commits.return_value = [sample_commit]
         mock_filter.return_value = [sample_commit]
         
-        with patch('builtins.print'):  # Mock print to avoid output during test
-            # Test markdown format
-            markdown_result = generate_release_notes("hello_python", "v1.0.0", format_type="markdown")
-            assert "## Changes" in markdown_result
-            
-            # Test plain format
-            plain_result = generate_release_notes("hello_python", "v1.0.0", format_type="plain")
-            assert "Changes:" in plain_result
-            
-            # Test JSON format
-            json_result = generate_release_notes("hello_python", "v1.0.0", format_type="json")
-            parsed = json.loads(json_result)
-            assert parsed["app"] == "hello_python"
+        # Test markdown format
+        markdown_result = generate_release_notes("hello_python", "v1.0.0", format_type="markdown")
+        assert "## Changes" in markdown_result
+        
+        # Test plain format
+        plain_result = generate_release_notes("hello_python", "v1.0.0", format_type="plain")
+        assert "Changes:" in plain_result
+        
+        # Test JSON format
+        json_result = generate_release_notes("hello_python", "v1.0.0", format_type="json")
+        parsed = json.loads(json_result)
+        assert parsed["app"] == "hello_python"
 
     def test_generate_release_notes_invalid_format(self):
         """Test error with invalid format type."""
