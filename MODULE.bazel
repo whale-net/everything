@@ -39,7 +39,17 @@ oci.pull(
         "linux/arm64/v8",
     ],
 )
-use_repo(oci, "distroless_base", "distroless_base_linux_amd64", "distroless_base_linux_arm64_v8", "distroless_python", "distroless_python_linux_amd64", "distroless_python_linux_arm64_v8")
+
+# Python base image with pip support for containers that need external dependencies
+oci.pull(
+    name = "python_base",
+    image = "python:3.11-slim",
+    platforms = [
+        "linux/amd64",
+        "linux/arm64/v8",
+    ],
+)
+use_repo(oci, "distroless_base", "distroless_base_linux_amd64", "distroless_base_linux_arm64_v8", "distroless_python", "distroless_python_linux_amd64", "distroless_python_linux_arm64_v8", "python_base", "python_base_linux_amd64", "python_base_linux_arm64_v8")
 
 pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
 pip.parse(

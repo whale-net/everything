@@ -81,52 +81,55 @@ def oci_image_with_binary(name, binary, base_image, entrypoint = None, repo_tag 
 def python_oci_image(name, binary, repo_tag = None, tags = None, **kwargs):
     """Create an OCI image for a Python binary.
     
-    Creates a self-contained Python application by including source files 
-    and dependencies, avoiding Bazel's runtime requirements.
+    Creates a complete Python application container with ALL dependencies baked in as layers.
+    Uses distroless Python image and properly includes runfiles.
     """
     
-    # Create separate layers to ensure proper directory structure
+    # Extract package info
+    binary_name = binary.split(":")[-1] if ":" in binary else binary
+    binary_package = binary.rsplit(":", 1)[0] if ":" in binary else "//" + binary
+    
+    # Create a layer with the binary and all its runfiles
+    # This includes the pip dependencies in the correct structure
     pkg_tar(
-        name = name + "_app_sources",
-        srcs = [
-            # Include the main_lib which contains main.py and __init__.py
-            binary.rsplit(":", 1)[0] + ":main_lib" if ":" in binary else ":main_lib",
-        ],
+        name = name + "_complete_binary",
+        srcs = [binary],
+        remap_paths = {
+            binary_name: "main.py",  # Main Python script
+        },
         package_dir = "app",
+        include_runfiles = True,  # This should include runfiles if supported
         tags = tags,
     )
     
+    # Create layers for our internal libraries
     pkg_tar(
-        name = name + "_lib_sources",
-        srcs = [
-            # Include the utility library with proper path structure
-            "//libs/python",
-        ],
-        package_dir = "app/libs/python", 
+        name = name + "_lib_sources", 
+        srcs = ["//libs/python"],
+        package_dir = "app/libs/python",
         tags = tags,
     )
     
-    # Also need to include the libs __init__.py
     pkg_tar(
         name = name + "_libs_init",
-        srcs = [
-            "//libs",
-        ],
-        package_dir = "app/libs",
+        srcs = ["//libs"],
+        package_dir = "app/libs", 
         tags = tags,
     )
     
+    # Use distroless Python image with all dependencies baked in
     oci_image(
         name = name,
         base = "@distroless_python",
         tars = [
-            name + "_app_sources",
-            name + "_libs_init", 
-            name + "_lib_sources",
+            name + "_complete_binary",   # Binary with all runfiles/dependencies
+            name + "_libs_init",         # Our library structure
+            name + "_lib_sources",       # Our library code
         ],
         entrypoint = ["python3", "/app/main.py"],
         env = {
-            "PYTHONPATH": "/app",
+            # Include all the site-packages directories in the Python path
+            "PYTHONPATH": "/app:/app/libs:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_fastapi/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_uvicorn/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_starlette/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_pydantic/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_pydantic_core/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_anyio/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_sniffio/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_idna/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_h11/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_httptools/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_uvloop/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_watchfiles/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_websockets/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_python_dotenv/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_click/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_typing_extensions/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_annotated_types/site-packages",
         },
         workdir = "/app",
         tags = tags,

@@ -2,6 +2,9 @@ load("@rules_uv//uv:pip.bzl", "pip_compile")
 #load("@gazelle//:def.bzl", "gazelle")
 load("@rules_python//python:defs.bzl", "py_library")
 
+# Export files needed by other packages
+exports_files(["requirements.lock.txt"])
+
 # Python dependencies
 pip_compile(
     name = "pip_compile",

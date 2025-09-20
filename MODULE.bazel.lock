@@ -502,7 +502,7 @@
     "@@rules_oci+//oci:extensions.bzl%oci": {
       "general": {
         "bzlTransitiveDigest": "MObYeJgeRukG0C/KOeHNd02huv38P3KnpPsNX1OgrI4=",
-        "usagesDigest": "n4Vc5iJEF7olHmxBgEC3r7PxWm722cUkWBHFEeBlAAE=",
+        "usagesDigest": "/NWxnG3kX8EtCEvrjJCGs4RLUox2q87NxCNQh12Q5kQ=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -590,6 +590,49 @@
                 "@@platforms//cpu:arm64": "@distroless_base_linux_arm64_v8"
               },
               "bzlmod_repository": "distroless_base",
+              "reproducible": true
+            }
+          },
+          "python_base_linux_amd64": {
+            "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_pull",
+            "attributes": {
+              "www_authenticate_challenges": {},
+              "scheme": "https",
+              "registry": "index.docker.io",
+              "repository": "library/python",
+              "identifier": "3.11-slim",
+              "platform": "linux/amd64",
+              "target_name": "python_base_linux_amd64",
+              "bazel_tags": []
+            }
+          },
+          "python_base_linux_arm64_v8": {
+            "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_pull",
+            "attributes": {
+              "www_authenticate_challenges": {},
+              "scheme": "https",
+              "registry": "index.docker.io",
+              "repository": "library/python",
+              "identifier": "3.11-slim",
+              "platform": "linux/arm64/v8",
+              "target_name": "python_base_linux_arm64_v8",
+              "bazel_tags": []
+            }
+          },
+          "python_base": {
+            "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_alias",
+            "attributes": {
+              "target_name": "python_base",
+              "www_authenticate_challenges": {},
+              "scheme": "https",
+              "registry": "index.docker.io",
+              "repository": "library/python",
+              "identifier": "3.11-slim",
+              "platforms": {
+                "@@platforms//cpu:x86_64": "@python_base_linux_amd64",
+                "@@platforms//cpu:arm64": "@python_base_linux_arm64_v8"
+              },
+              "bzlmod_repository": "python_base",
               "reproducible": true
             }
           },
@@ -714,7 +757,10 @@
             "distroless_python_linux_arm64_v8",
             "distroless_base",
             "distroless_base_linux_amd64",
-            "distroless_base_linux_arm64_v8"
+            "distroless_base_linux_arm64_v8",
+            "python_base",
+            "python_base_linux_amd64",
+            "python_base_linux_arm64_v8"
           ],
           "explicitRootModuleDirectDevDeps": [],
           "useAllRepos": "NO",
