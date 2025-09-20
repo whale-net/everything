@@ -7,6 +7,34 @@ load("@aspect_bazel_lib//lib:tar.bzl", "tar")
 # - Python: python:3.11-slim (includes Python runtime and common libraries)
 # - Go: alpine:3.18 (lightweight Linux with package manager for dependencies)
 
+def compressed_tar_layer(name, srcs, compression = "gzip", tags = None, **kwargs):
+    """Create a compressed tar layer for use with OCI images.
+    
+    This is a convenience wrapper around the tar rule that ensures compression
+    is enabled for better container image performance.
+    
+    Args:
+        name: Name of the tar target
+        srcs: Source files to include in the tar
+        compression: Compression algorithm ("gzip", "bzip2", "xz", or None)
+        tags: Tags to apply to the target
+        **kwargs: Additional arguments passed to tar
+    """
+    tar_kwargs = {
+        "name": name,
+        "srcs": srcs,
+        "tags": tags or [],
+    }
+    
+    # Add compression if specified
+    if compression:
+        tar_kwargs["compress"] = compression
+    
+    # Merge any additional kwargs
+    tar_kwargs.update(kwargs)
+    
+    tar(**tar_kwargs)
+
 def oci_image_with_binary(
     name,
     binary,
@@ -16,6 +44,7 @@ def oci_image_with_binary(
     platform = "linux/amd64",
     extra_layers = None,
     tags = None,
+    compression = "gzip",
     **kwargs):
     """Build an OCI image with a binary using cache-optimized layering.
     
@@ -33,6 +62,8 @@ def oci_image_with_binary(
         extra_layers: List of additional tar targets to include as separate layers
                      for better cache efficiency (e.g., dependency layers)
         tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
+        compression: Compression algorithm for tar layers (defaults to "gzip", 
+                    can be "gzip", "bzip2", "xz", or None for no compression)
         **kwargs: Additional arguments passed to oci_image
     """
     if not repo_tag:
@@ -40,10 +71,11 @@ def oci_image_with_binary(
         binary_name = binary.split(":")[-1] if ":" in binary else binary
         repo_tag = binary_name + ":latest"
     
-    # Create binary layer with propagated tags
-    tar(
+    # Create binary layer with propagated tags and compression
+    compressed_tar_layer(
         name = name + "_binary_layer",
         srcs = [binary],
+        compression = compression,
         tags = tags,
     )
     
@@ -51,10 +83,11 @@ def oci_image_with_binary(
     all_layers = []
     
     # Add extra layers first (dependencies, static files, etc. - less frequently changed)
+    # Note: extra_layers should already be compressed tar targets if compression is desired
     if extra_layers:
         all_layers.extend(extra_layers)
     
-    # Add binary layer last (most frequently changed)
+    # Add binary layer last (most frequently changed) - this will be compressed
     all_layers.append(":" + name + "_binary_layer")
     
     # Build the OCI image with optimized layer ordering and propagated tags
@@ -100,7 +133,7 @@ def _get_platform_base_image(base_prefix, platform = None):
     
     return "@" + base_prefix + suffix
 
-def python_oci_image(name, binary, repo_tag = None, platform = None, tags = None, **kwargs):
+def python_oci_image(name, binary, repo_tag = None, platform = None, tags = None, compression = "gzip", **kwargs):
     """Build an OCI image for a Python binary.
     
     This is a convenience wrapper around oci_image_with_binary with Python-specific defaults.
@@ -113,6 +146,7 @@ def python_oci_image(name, binary, repo_tag = None, platform = None, tags = None
         repo_tag: Repository tag for the image (defaults to binary_name:latest)
         platform: Target platform (defaults to linux/amd64)
         tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
+        compression: Compression algorithm for tar layers (defaults to "gzip")
         **kwargs: Additional arguments passed to oci_image_with_binary
     """
     base_image = _get_platform_base_image("python_slim", platform)
@@ -133,13 +167,14 @@ def python_oci_image(name, binary, repo_tag = None, platform = None, tags = None
         repo_tag = repo_tag,
         platform = platform,
         tags = tags,
+        compression = compression,
         env = {
             "PYTHONPATH": "/" + binary_name + "/" + binary_name + ".runfiles/_main:/" + binary_name + "/" + binary_name + ".runfiles"
         },
         **kwargs
     )
 
-def go_oci_image(name, binary, repo_tag = None, platform = None, tags = None, **kwargs):
+def go_oci_image(name, binary, repo_tag = None, platform = None, tags = None, compression = "gzip", **kwargs):
     """Build an OCI image for a Go binary.
     
     This is a convenience wrapper around oci_image_with_binary with Go-specific defaults.
@@ -151,6 +186,7 @@ def go_oci_image(name, binary, repo_tag = None, platform = None, tags = None, **
         repo_tag: Repository tag for the image (defaults to binary_name:latest)
         platform: Target platform (defaults to linux/amd64)
         tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
+        compression: Compression algorithm for tar layers (defaults to "gzip")
         **kwargs: Additional arguments passed to oci_image_with_binary
     """
     base_image = _get_platform_base_image("alpine", platform)
@@ -173,10 +209,11 @@ def go_oci_image(name, binary, repo_tag = None, platform = None, tags = None, **
         repo_tag = repo_tag,
         platform = platform,
         tags = tags,
+        compression = compression,
         **kwargs
     )
 
-def python_oci_image_multiplatform(name, binary, repo_tag = None, tags = None, **kwargs):
+def python_oci_image_multiplatform(name, binary, repo_tag = None, tags = None, compression = "gzip", **kwargs):
     """Build OCI images for a Python binary for both amd64 and arm64 platforms.
     
     Creates separate image targets for different platforms:
@@ -189,6 +226,7 @@ def python_oci_image_multiplatform(name, binary, repo_tag = None, tags = None, *
         binary: The Python binary target to package
         repo_tag: Repository tag for the image (defaults to binary_name:latest)
         tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
+        compression: Compression algorithm for tar layers (defaults to "gzip")
         **kwargs: Additional arguments passed to oci_image_with_binary
     """
     # AMD64 version (default for production)
@@ -198,6 +236,7 @@ def python_oci_image_multiplatform(name, binary, repo_tag = None, tags = None, *
         repo_tag = repo_tag,
         platform = "linux/amd64",
         tags = tags,
+        compression = compression,
         **kwargs
     )
     
@@ -208,6 +247,7 @@ def python_oci_image_multiplatform(name, binary, repo_tag = None, tags = None, *
         repo_tag = repo_tag,
         platform = "linux/amd64",
         tags = tags,
+        compression = compression,
         **kwargs
     )
     
@@ -218,10 +258,11 @@ def python_oci_image_multiplatform(name, binary, repo_tag = None, tags = None, *
         repo_tag = repo_tag,
         platform = "linux/arm64",
         tags = tags,
+        compression = compression,
         **kwargs
     )
 
-def go_oci_image_multiplatform(name, binary, repo_tag = None, tags = None, **kwargs):
+def go_oci_image_multiplatform(name, binary, repo_tag = None, tags = None, compression = "gzip", **kwargs):
     """Build OCI images for a Go binary for both amd64 and arm64 platforms.
     
     Creates separate image targets for different platforms:
@@ -234,6 +275,7 @@ def go_oci_image_multiplatform(name, binary, repo_tag = None, tags = None, **kwa
         binary: The Go binary target to package
         repo_tag: Repository tag for the image (defaults to binary_name:latest)
         tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
+        compression: Compression algorithm for tar layers (defaults to "gzip")
         **kwargs: Additional arguments passed to oci_image_with_binary
     """
     # AMD64 version (default for production)
@@ -243,6 +285,7 @@ def go_oci_image_multiplatform(name, binary, repo_tag = None, tags = None, **kwa
         repo_tag = repo_tag,
         platform = "linux/amd64",
         tags = tags,
+        compression = compression,
         **kwargs
     )
     
@@ -253,6 +296,7 @@ def go_oci_image_multiplatform(name, binary, repo_tag = None, tags = None, **kwa
         repo_tag = repo_tag,
         platform = "linux/amd64",
         tags = tags,
+        compression = compression,
         **kwargs
     )
     
@@ -263,5 +307,6 @@ def go_oci_image_multiplatform(name, binary, repo_tag = None, tags = None, **kwa
         repo_tag = repo_tag,
         platform = "linux/arm64",
         tags = tags,
+        compression = compression,
         **kwargs
     )

@@ -454,6 +454,7 @@ The new OCI build system uses `oci_load` targets instead of traditional tarball 
 - **Faster CI builds** - Only rebuilds changed layers
 - **Efficient development workflow** - Direct integration with Docker/Podman
 - **No unused artifacts** - Eliminates the never-used tarball targets from CI
+- **Compressed layers** - All image layers are gzip-compressed by default for faster transfers and smaller storage
 
 ### Building Images with Bazel
 
@@ -491,7 +492,7 @@ docker run --rm hello_go:latest      # ✅ Works correctly!
 For edge cases requiring custom OCI configuration, individual rules are available in `//tools:oci.bzl`:
 
 ```starlark
-load("//tools:oci.bzl", "python_oci_image", "go_oci_image", "oci_image_with_binary")
+load("//tools:oci.bzl", "python_oci_image", "go_oci_image", "oci_image_with_binary", "compressed_tar_layer")
 
 # Single platform image with custom configuration
 oci_image_with_binary(
@@ -500,14 +501,23 @@ oci_image_with_binary(
     base_image = "@python_slim",
     platform = "linux/amd64",
     repo_tag = "custom:latest",
+    compression = "gzip",  # Options: "gzip", "bzip2", "xz", or None
     # ... custom OCI parameters
+)
+
+# Create compressed tar layers for dependencies
+compressed_tar_layer(
+    name = "deps_layer",
+    srcs = ["//path/to:deps"],
+    compression = "gzip",  # All layers are compressed by default
 )
 ```
 
 Available functions include:
-- `oci_image_with_binary`: Generic OCI image builder with cache optimization
-- `python_oci_image_multiplatform`: Multi-platform Python images 
-- `go_oci_image_multiplatform`: Multi-platform Go images
+- `oci_image_with_binary`: Generic OCI image builder with cache optimization and compression
+- `python_oci_image_multiplatform`: Multi-platform Python images with compression
+- `go_oci_image_multiplatform`: Multi-platform Go images with compression
+- `compressed_tar_layer`: Create compressed tar layers for custom dependencies
 
 ## 🚀 Release Management
 
