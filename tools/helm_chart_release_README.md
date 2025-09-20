@@ -1,5 +1,7 @@
 # Helm Chart Release System
 
+> **📦 Migrated to `//tools/helm`**: The helm chart release system has been migrated to a new module at `//tools/helm` with template-based generation replacing string building. See `//tools/helm/README.md` for the new module documentation.
+
 This document provides comprehensive documentation for the Helm chart release system built on top of Bazel and integrated with the existing release_app infrastructure.
 
 ## Overview
@@ -425,10 +427,12 @@ Each chart in the `charts` dict has:
 
 ### File Locations
 
-- **Rule implementation**: `//tools:helm_chart_release.bzl`
-- **Templates**: `//tools/templates/`
+- **Rule implementation**: `//tools/helm:helm_chart_release.bzl` (moved from `//tools`)
+- **Templates**: `//tools/helm/templates/` (moved from `//tools/templates/`)
+- **Template renderer**: `//tools/helm:template_renderer` (new)
 - **CI/CD workflow**: `.github/workflows/helm-charts.yml`
 - **Documentation**: `//tools/helm_chart_release_README.md`
+- **Module documentation**: `//tools/helm/README.md` (new)
 - **Examples**: `//manman/BUILD.bazel` (see working implementation)
 
 ## Support
