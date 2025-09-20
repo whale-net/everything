@@ -63,8 +63,25 @@ class GitHubReleaseClient:
         # If running in GitHub Actions, we can trust the token has appropriate permissions
         # since the workflow explicitly shows "Contents: write" permission
         if os.getenv('GITHUB_ACTIONS'):
-            print("🔍 Running in GitHub Actions environment, trusting token permissions", file=sys.stderr)
-            return True
+            print("🔍 Running in GitHub Actions environment. Verifying token validity and logging permissions...", file=sys.stderr)
+            url = f"{self.base_url}/repos/{self.owner}/{self.repo}"
+            with httpx.Client() as client:
+                try:
+                    response = client.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+                    if response.status_code == 200:
+                        scopes = response.headers.get("X-OAuth-Scopes", "")
+                        print(f"✅ Token is valid. Available OAuth scopes: {scopes}", file=sys.stderr)
+                        return True
+                    else:
+                        print(f"❌ Token is invalid or does not have access to repository {self.owner}/{self.repo}. Status: {response.status_code}", file=sys.stderr)
+                        if response.status_code == 404:
+                            print("   Repository not found or token doesn't have access", file=sys.stderr)
+                        elif response.status_code == 403:
+                            print("   Access forbidden - check token permissions", file=sys.stderr)
+                        return False
+                except httpx.HTTPError as e:
+                    print(f"❌ Error validating token in GitHub Actions: {e}", file=sys.stderr)
+                    return False
             
         url = f"{self.base_url}/repos/{self.owner}/{self.repo}"
         
