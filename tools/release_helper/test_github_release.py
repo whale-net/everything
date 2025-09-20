@@ -9,12 +9,13 @@ import os
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 import sys
+import json
 
 # Add the parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
-    from tools.release_helper.github_release import GitHubReleaseClient
+    from tools.release_helper.github_release import GitHubReleaseClient, create_releases_for_apps_with_individual_versions
 except ImportError:
     # httpx not available in this environment, skip tests
     pytest.skip("httpx not available, skipping github_release tests", allow_module_level=True)
@@ -178,6 +179,73 @@ class TestGitHubReleaseClientPermissions:
                 client = GitHubReleaseClient("test-owner", "test-repo", "dummy-token")
                 result = client.validate_permissions()
                 assert result is False
+
+
+class TestCreateReleasesWithIndividualVersions:
+    """Test cases for create_releases_for_apps_with_individual_versions function."""
+    
+    def test_individual_versions_tag_creation(self):
+        """Test that individual versions create correct tag names."""
+        app_versions = {"hello_fastapi": "v0.0.8", "hello_python": "v1.2.3"}
+        app_list = ["hello_fastapi"]
+        
+        # Mock the required functions
+        with patch('tools.release_helper.github_release.find_app_bazel_target') as mock_find_target, \
+             patch('tools.release_helper.github_release.get_app_metadata') as mock_get_metadata, \
+             patch('tools.release_helper.github_release.generate_release_notes') as mock_gen_notes, \
+             patch('tools.release_helper.github_release.create_app_release') as mock_create_release:
+            
+            # Setup mocks
+            mock_find_target.return_value = "//demo/hello_fastapi:hello_fastapi_metadata"
+            mock_get_metadata.return_value = {"domain": "demo", "name": "hello_fastapi"}
+            mock_gen_notes.return_value = "Release notes content"
+            mock_create_release.return_value = {"id": 123, "tag_name": "demo-hello_fastapi.v0.0.8"}
+            
+            # Call the function
+            results = create_releases_for_apps_with_individual_versions(
+                app_versions=app_versions,
+                app_list=app_list,
+                owner="test-owner",
+                repo="test-repo"
+            )
+            
+            # Verify the results
+            assert "hello_fastapi" in results
+            assert results["hello_fastapi"] is not None
+            
+            # Verify the correct tag name was used
+            mock_create_release.assert_called_once()
+            call_args = mock_create_release.call_args
+            assert call_args[1]["tag_name"] == "demo-hello_fastapi.v0.0.8"
+    
+    def test_missing_version_in_app_versions(self):
+        """Test handling when an app is not in app_versions dict."""
+        app_versions = {"hello_fastapi": "v0.0.8"}
+        app_list = ["hello_fastapi", "missing_app"]
+        
+        with patch('tools.release_helper.github_release.find_app_bazel_target') as mock_find_target, \
+             patch('tools.release_helper.github_release.get_app_metadata') as mock_get_metadata, \
+             patch('tools.release_helper.github_release.generate_release_notes') as mock_gen_notes, \
+             patch('tools.release_helper.github_release.create_app_release') as mock_create_release:
+            
+            # Setup mocks for successful app
+            mock_find_target.return_value = "//demo/hello_fastapi:hello_fastapi_metadata"
+            mock_get_metadata.return_value = {"domain": "demo", "name": "hello_fastapi"}
+            mock_gen_notes.return_value = "Release notes content"
+            mock_create_release.return_value = {"id": 123}
+            
+            results = create_releases_for_apps_with_individual_versions(
+                app_versions=app_versions,
+                app_list=app_list,
+                owner="test-owner",
+                repo="test-repo"
+            )
+            
+            # Verify results
+            assert "hello_fastapi" in results
+            assert results["hello_fastapi"] is not None
+            assert "missing_app" in results
+            assert results["missing_app"] is None  # Should be None for missing version
 
 
 if __name__ == "__main__":
