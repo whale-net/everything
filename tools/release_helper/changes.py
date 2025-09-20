@@ -88,7 +88,17 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
             try:
                 # Get the app's actual binary target from metadata
                 metadata = get_app_metadata(app['bazel_target'])
-                app_target = metadata['binary_target']
+                binary_target = metadata['binary_target']
+                
+                # Resolve relative target reference to absolute
+                if binary_target.startswith(':'):
+                    # Extract package path from metadata target
+                    metadata_target = app['bazel_target']
+                    package_path = metadata_target[2:].split(':')[0]  # Remove // and split on :
+                    app_target = f"//{package_path}{binary_target}"  # Combine package + relative target
+                else:
+                    # Already absolute
+                    app_target = binary_target
                 
                 # Query all dependencies of this app
                 result = run_bazel([
