@@ -7,8 +7,13 @@ import os
 import sys
 from typing import Dict, Optional, List
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
+
+from tools.release_helper.metadata import get_app_metadata, list_all_apps
+from tools.release_helper.release import find_app_bazel_target
+from tools.release_helper.release_notes import generate_release_notes
 
 
 @dataclass
@@ -314,6 +319,103 @@ def create_releases_for_apps(
             
         except Exception as e:
             print(f"❌ Failed to create release for {app_name}: {e}", file=sys.stderr)
+            results[app_name] = None
+    
+    # Report summary
+    successful_count = sum(1 for result in results.values() if result is not None)
+    failed_count = len(app_list) - successful_count
+    
+    print(f"✅ Successfully created {successful_count} releases")
+    if failed_count > 0:
+        print(f"❌ Failed to create {failed_count} releases")
+    
+    return results
+
+
+def create_releases_for_apps_with_notes(
+    app_list: List[str],
+    version: str,
+    owner: str,
+    repo: str,
+    commit_sha: Optional[str] = None,
+    prerelease: bool = False,
+    previous_tag: Optional[str] = None,
+    token: Optional[str] = None,
+    release_notes_dir: Optional[str] = None
+) -> Dict[str, Optional[Dict]]:
+    """Create GitHub releases for multiple apps using pre-generated release notes from files.
+    
+    Args:
+        app_list: List of app names to create releases for
+        version: Release version
+        owner: Repository owner
+        repo: Repository name
+        commit_sha: Specific commit SHA to target
+        prerelease: Whether this is a prerelease
+        previous_tag: Previous tag to compare against (auto-detected if not provided)
+        token: GitHub token (defaults to GITHUB_TOKEN env var)
+        release_notes_dir: Directory containing pre-generated release notes files
+        
+    Returns:
+        Dictionary mapping app names to their release data (None if failed)
+    """
+    
+    results = {}
+    
+    print(f"Creating GitHub releases for {len(app_list)} apps using pre-generated release notes...")
+    
+    for app_name in app_list:
+        try:
+            print(f"Processing {app_name}...")
+            
+            # Find the app's metadata to determine the tag format
+            try:
+                bazel_target = find_app_bazel_target(app_name)
+                metadata = get_app_metadata(bazel_target)
+                domain = metadata['domain']
+                tag_name = f"{domain}-{app_name}.{version}"
+            except Exception as e:
+                print(f"❌ Could not determine tag format for {app_name}: {e}", file=sys.stderr)
+                results[app_name] = None
+                continue
+            
+            # Try to load pre-generated release notes first
+            release_notes = None
+            if release_notes_dir:
+                notes_file = Path(release_notes_dir) / f"{app_name}.md"
+                if notes_file.exists():
+                    try:
+                        release_notes = notes_file.read_text(encoding='utf-8')
+                        print(f"✅ Using pre-generated release notes for {app_name}")
+                    except Exception as e:
+                        print(f"⚠️  Failed to read pre-generated release notes for {app_name}: {e}", file=sys.stderr)
+            
+            # Fall back to generating release notes if not found or failed to load
+            if not release_notes:
+                try:
+                    print(f"Generating release notes for {app_name} (no pre-generated notes found)")
+                    release_notes = generate_release_notes(app_name, tag_name, previous_tag, "markdown")
+                except Exception as e:
+                    print(f"❌ Failed to generate release notes for {app_name}: {e}", file=sys.stderr)
+                    results[app_name] = None
+                    continue
+            
+            # Create the individual app release
+            result = create_app_release(
+                app_name=app_name,
+                tag_name=tag_name,
+                release_notes=release_notes,
+                owner=owner,
+                repo=repo,
+                commit_sha=commit_sha,
+                prerelease=prerelease,
+                token=token
+            )
+            
+            results[app_name] = result
+            
+        except Exception as e:
+            print(f"❌ Failed to process {app_name}: {e}", file=sys.stderr)
             results[app_name] = None
     
     # Report summary
