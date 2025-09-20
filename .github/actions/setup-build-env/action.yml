@@ -13,6 +13,10 @@ inputs:
     description: 'Suffix to add to cache keys for isolation'
     required: false
     default: ''
+  tool-optimization:
+    description: 'Enable tool-specific optimizations for faster builds'
+    required: false
+    default: 'false'
 
 outputs:
   bazel-cache-hit:
@@ -35,3 +39,12 @@ runs:
     - name: Set up Docker Buildx
       if: ${{ inputs.setup-docker == 'true' }}
       uses: docker/setup-buildx-action@v3
+
+    - name: Configure Bazel for tool optimization
+      if: ${{ inputs.tool-optimization == 'true' || contains(inputs.cache-suffix, 'tools') }}
+      shell: bash
+      run: |
+        echo "Configuring Bazel for optimized tool builds..."
+        # Export tool-specific configuration
+        echo "build --config=tools" >> ~/.bazelrc.user
+        echo "Tool optimization enabled for faster builds"

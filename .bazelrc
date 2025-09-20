@@ -21,3 +21,11 @@ test:ci --cache_test_results=yes
 test --test_output=errors
 test --cache_test_results=yes
 test:ci --test_output=errors
+
+# Tool optimization configurations
+# Fast tool builds with aggressive caching and minimal rebuilds
+build:tools --jobs=auto
+build:tools --compilation_mode=opt
+build:tools --experimental_reuse_sandbox_directories
+build:tools --experimental_inmemory_jdeps_files
+build:tools --experimental_inmemory_dotd_files
