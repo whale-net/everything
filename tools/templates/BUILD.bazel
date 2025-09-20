@@ -1,9 +1,6 @@
-filegroup(
+# Backward compatibility - point to new helm module
+alias(
     name = "helm_templates",
-    srcs = [
-        "deployment.yaml",
-        "service.yaml", 
-        "_helpers.tpl",
-    ],
+    actual = "//tools/helm:helm_templates",
     visibility = ["//visibility:public"],
 )

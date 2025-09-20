@@ -1,0 +1,49 @@
+# Helm chart release tools and templates
+
+load("@rules_python//python:defs.bzl", "py_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+# Template renderer utility
+py_binary(
+    name = "template_renderer",
+    srcs = ["template_renderer.py"],
+    main = "template_renderer.py",
+    visibility = ["//visibility:public"],
+)
+
+# Helm chart release rule (moved from //tools)
+exports_files([
+    "helm_chart_release.bzl",
+])
+
+# Template files
+filegroup(
+    name = "chart_templates",
+    srcs = [
+        "templates/Chart.yaml.template",
+        "templates/values.yaml.template",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Kubernetes manifest templates (moved from //tools/templates)
+filegroup(
+    name = "k8s_templates",
+    srcs = [
+        "templates/deployment.yaml",
+        "templates/service.yaml", 
+        "templates/_helpers.tpl",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Combined template filegroup for compatibility
+filegroup(
+    name = "helm_templates",
+    srcs = [
+        ":chart_templates",
+        ":k8s_templates",
+    ],
+    visibility = ["//visibility:public"],
+)
