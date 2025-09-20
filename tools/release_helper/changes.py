@@ -106,25 +106,30 @@ def _detect_changed_apps_file_based(changed_files: List[str]) -> List[Dict[str, 
     """Fallback file-based change detection (original implementation)."""
     all_apps = list_all_apps()
     
-    # Extract directories from changed files and map to bazel targets
-    changed_dirs = set()
-    for file_path in changed_files:
-        if file_path:
-            # Get all directory components for proper bazel path matching
-            parts = file_path.split('/')
-            for i in range(1, len(parts) + 1):
-                changed_dirs.add('/'.join(parts[:i]))
-
-    # Find apps that have changes by checking if any changed path
-    # is a prefix of the app's bazel target path
+    # Find apps that have changes by checking if any changed file
+    # is within the app's directory structure
     changed_apps = []
     for app in all_apps:
         # Extract package path from bazel target like "//path/to/app:target"
         bazel_path = app['bazel_target'][2:].split(':')[0]
         
-        # Check if any changed directory affects this app
-        if any(bazel_path.startswith(changed_dir) or changed_dir.startswith(bazel_path) 
-               for changed_dir in changed_dirs):
+        # Check if any changed file is within this app's directory
+        app_affected = False
+        for file_path in changed_files:
+            if not file_path:
+                continue
+            
+            # Check if the file is in this app's directory (or subdirectory)
+            file_dir = str(Path(file_path).parent) if Path(file_path).parent != Path('.') else ""
+            
+            # An app is affected if:
+            # 1. The changed file is directly in the app's directory
+            # 2. The changed file is in a subdirectory of the app's directory
+            if file_path.startswith(bazel_path + '/') or file_dir == bazel_path:
+                app_affected = True
+                break
+        
+        if app_affected:
             changed_apps.append(app)
 
     return changed_apps
@@ -199,14 +204,18 @@ def _is_infrastructure_change(changed_files: List[str]) -> bool:
         if file_path.startswith('docker/') or file_path == 'docker':
             return True
         
-        # Special handling for .github directory - only CI/build files should trigger full rebuild
+        # Special handling for .github directory - be more selective about what triggers rebuilds
         if file_path.startswith('.github/'):
-            # CI workflows and actions affect all apps
-            if (file_path.startswith('.github/workflows/') or 
-                file_path.startswith('.github/actions/')):
+            # CI build workflows affect all apps  
+            if file_path.startswith('.github/workflows/ci.yml'):
                 return True
-            # Documentation files (like copilot-instructions.md) should not trigger full rebuild
-            # Let them be handled by normal dependency analysis
+            # Build-related GitHub Actions affect all apps
+            if file_path.startswith('.github/actions/') and (
+                'setup-build' in file_path or 'build' in file_path.lower()
+            ):
+                return True
+            # Other workflows (like release.yml) and documentation should not trigger full rebuild
+            # They should use normal dependency analysis
     
     return False
 
@@ -251,10 +260,15 @@ def detect_changed_apps(base_commit: Optional[str] = None, use_bazel_query: bool
     else:
         changed_apps = _detect_changed_apps_file_based(changed_files)
 
-    # If no apps detected but there are changes, be conservative and build all
+    # If no apps detected but there are changes, only build all if using fallback file-based detection
     if not changed_apps and changed_files:
-        print("No specific apps detected as changed, but files were modified. Building all apps to be safe.", 
-              file=sys.stderr)
-        return all_apps
+        if use_bazel_query:
+            print("Bazel dependency analysis determined no apps are affected by the changes.", 
+                  file=sys.stderr)
+            return []
+        else:
+            print("No specific apps detected as changed using file-based detection, but files were modified. Building all apps to be safe.", 
+                  file=sys.stderr)
+            return all_apps
 
     return changed_apps
