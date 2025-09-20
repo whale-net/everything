@@ -22,7 +22,10 @@ oci.pull(
     # Using actual manifest list digest from gcr.io/distroless/python3-debian12:latest
     digest = "sha256:a0ded8676ed10e194cce1b8fdf9171672cda95ad1cabba4ece7b01f4db2e7471",
     image = "gcr.io/distroless/python3-debian12",
-    platforms = ["linux/amd64"],
+    platforms = [
+        "linux/amd64",
+        "linux/arm64/v8",
+    ],
 )
 
 # Distroless Base - using manifest list digest for multi-platform support
@@ -31,9 +34,12 @@ oci.pull(
     # Using actual manifest list digest from gcr.io/distroless/base-debian12:latest
     digest = "sha256:fa15492938650e1a5b87e34d47dc7d99a2b4e8aefd81b931b3f3eb6bb4c1d2f6",
     image = "gcr.io/distroless/base-debian12",
-    platforms = ["linux/amd64"],
+    platforms = [
+        "linux/amd64",
+        "linux/arm64/v8",
+    ],
 )
-use_repo(oci, "distroless_base", "distroless_python")
+use_repo(oci, "distroless_base", "distroless_base_linux_amd64", "distroless_base_linux_arm64_v8", "distroless_python", "distroless_python_linux_amd64", "distroless_python_linux_arm64_v8")
 
 pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
 pip.parse(

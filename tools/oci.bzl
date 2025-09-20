@@ -39,10 +39,11 @@ def oci_image_with_binary(
         binary_name = binary.split(":")[-1] if ":" in binary else binary
         repo_tag = binary_name + ":latest"
     
-    # Create binary layer with propagated tags
+    # Create binary layer with propagated tags - handle Python runfiles
     pkg_tar(
         name = name + "_binary_layer",
-        files = {binary: paths.basename(binary)},
+        srcs = [binary],
+        mode = "0755",  # Ensure executable permissions
         tags = tags,
     )
     
@@ -89,16 +90,36 @@ def python_oci_image(name, binary, repo_tag = None, tags = None, **kwargs):
         **kwargs: Additional arguments passed to oci_image_with_binary
     """
     base_image = "@distroless_python"
-    binary_name = paths.basename(binary)
+    # Extract just the binary name without any target notation
+    if ":" in binary:
+        binary_name = binary.split(":")[-1]
+    else:
+        binary_name = paths.basename(binary)
     
-    oci_image_with_binary(
+    # Create a custom pkg_tar for Python that includes runfiles
+    pkg_tar(
+        name = name + "_python_layer",
+        srcs = [binary],
+        mode = "0755",
+        tags = tags,
+    )
+    
+    # Build the OCI image with Python-specific configuration
+    oci_image(
         name = name,
-        binary = binary,
-        base_image = base_image,
+        base = base_image,
         entrypoint = ["/" + binary_name],
-        repo_tag = repo_tag,
+        tars = [":" + name + "_python_layer"],
         tags = tags,
         **kwargs
+    )
+    
+    # Add oci_load target for efficient container runtime loading
+    oci_load(
+        name = name + "_load",
+        image = ":" + name,
+        repo_tags = [repo_tag] if repo_tag else [binary_name + ":latest"],
+        tags = tags,
     )
 
 def go_oci_image(name, binary, repo_tag = None, tags = None, **kwargs):
