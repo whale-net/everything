@@ -7,8 +7,6 @@ exports_files([
 ])
 
 # Convenient alias for release helper
-# This tool is optimized for caching and pre-built in CI workflows
-# Use --config=tools for faster builds: bazel build --config=tools //tools:release
 alias(
     name = "release",
     actual = "//tools/release_helper:release_helper",

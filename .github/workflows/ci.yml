@@ -7,9 +7,9 @@ on:
     branches: [ main ]
 
 jobs:
-  # Pre-build critical tools to ensure they're cached for all subsequent jobs
-  pre-build-tools:
-    name: Pre-build Tools
+  # Build release tool and make it available as artifact for other jobs
+  build-release-tool:
+    name: Build Release Tool
     runs-on: ubuntu-latest
     
     steps:
@@ -21,24 +21,37 @@ jobs:
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
-        cache-suffix: 'tools'
+        cache-suffix: 'release-tool'
         
-    - name: Pre-build release tool for caching
+    - name: Build release tool
       run: |
-        echo "Pre-building //tools:release to ensure it's cached for all CI jobs..."
-        # Build the release tool and its dependencies with optimized configuration
-        bazel build --config=tools //tools:release
+        echo "Building //tools:release for use across CI jobs..."
+        bazel build //tools:release
         
-        # Verify the tool works
-        bazel run //tools:release -- --help
+        # Copy the built binary to a known location
+        mkdir -p release-tool-artifact
+        # Find the actual built binary
+        BINARY_PATH=$(bazel run --run_under=echo //tools:release 2>/dev/null | head -1)
+        if [ -f "$BINARY_PATH" ]; then
+          cp "$BINARY_PATH" release-tool-artifact/release_helper
+          chmod +x release-tool-artifact/release_helper
+          echo "✅ Release tool built and copied to artifact directory"
+        else
+          echo "❌ Could not find built binary at $BINARY_PATH"
+          exit 1
+        fi
         
-        echo "✅ Release tool pre-built and cached successfully"
+    - name: Upload release tool artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-tool
+        path: release-tool-artifact/
+        retention-days: 1
 
-  # Test job - builds and tests in one step for better cache utilization  
+  # Test job - builds and tests in one step for better cache utilization
   test:
     name: Test
     runs-on: ubuntu-latest
-    needs: pre-build-tools
     
     steps:
     - name: Checkout code
@@ -49,7 +62,7 @@ jobs:
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
-        cache-suffix: 'tools'
+        cache-suffix: 'test'
         
     - name: Run tests
       run: |
@@ -68,7 +81,7 @@ jobs:
   plan-docker:
     name: Plan Docker Builds
     runs-on: ubuntu-latest
-    needs: [pre-build-tools, test]
+    needs: [build-release-tool, test]
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       apps: ${{ steps.plan.outputs.apps }}
@@ -81,7 +94,13 @@ jobs:
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
-        cache-suffix: 'tools'
+        cache-suffix: 'plan'
+        
+    - name: Download release tool artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: release-tool
+        path: release-tool-artifact/
         
     - name: Plan Docker builds using release tool
       id: plan
@@ -108,7 +127,8 @@ jobs:
         
         # Use release helper to plan the Docker builds
         echo "Planning Docker builds using release tool..."
-        PLAN_OUTPUT=$(bazel run //tools:release -- plan \
+        chmod +x release-tool-artifact/release_helper
+        PLAN_OUTPUT=$(release-tool-artifact/release_helper plan \
           --event-type "$EVENT_TYPE" \
           --base-commit="$BASE_COMMIT" \
           --format github)
@@ -149,7 +169,13 @@ jobs:
       uses: ./.github/actions/setup-build-env
       with:
         setup-docker: 'true'
-        cache-suffix: 'tools'
+        cache-suffix: 'docker'
+      
+    - name: Download release tool artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: release-tool
+        path: release-tool-artifact/
       
     # Log in to GitHub Container Registry using GITHUB_TOKEN
     - name: Log in to GitHub Container Registry
@@ -167,7 +193,8 @@ jobs:
       run: |
         # Build Docker image for the specific app from the matrix
         echo "Building Docker image for $APP using release tool..."
-        bazel run //tools:release -- build "$APP"
+        chmod +x release-tool-artifact/release_helper
+        release-tool-artifact/release_helper build "$APP"
         
         # Show the built Docker image
         echo "Built Docker image for $APP:"
@@ -181,7 +208,7 @@ jobs:
       run: |
         # Publish the specific app image to registry
         echo "Publishing $APP image to registry..."
-        bazel run //tools:release -- release "$APP" --version "latest" --commit "${{ github.sha }}"
+        release-tool-artifact/release_helper release "$APP" --version "latest" --commit "${{ github.sha }}"
         
   # Build summary - collects status of all matrix jobs for branch protection
   build-summary:
@@ -196,7 +223,7 @@ jobs:
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
-        cache-suffix: 'tools'
+        cache-suffix: 'summary'
       
     - name: Collect build results and generate summary
       run: |
