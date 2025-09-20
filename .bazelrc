@@ -21,6 +21,15 @@ test:ci --cache_test_results=yes
 # Uses try-import to conditionally load remote cache config if available
 try-import %workspace%/.bazelrc.remote
 
+# Remote cache concurrency optimizations
+# Increase from defaults: remote_max_connections=100, http_max_parallel_downloads=8
+build --remote_max_connections=300
+build --http_max_parallel_downloads=24
+
+# CI-specific remote cache optimizations
+build:ci --remote_timeout=90s
+build:ci --experimental_remote_cache_compression_threshold=50
+
 # Test configurations
 test --test_output=errors
 test --cache_test_results=yes
