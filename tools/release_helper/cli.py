@@ -3,6 +3,7 @@ Command line interface for the release helper.
 """
 
 import json
+import os
 import sys
 from typing import Optional
 
@@ -17,7 +18,7 @@ from tools.release_helper.release import find_app_bazel_target, plan_release, ta
 from tools.release_helper.release_notes import generate_release_notes, generate_release_notes_for_all_apps
 from tools.release_helper.summary import generate_release_summary
 from tools.release_helper.validation import validate_release_version
-from tools.release_helper.github_release import create_app_release, create_releases_for_apps, create_releases_for_apps_with_notes
+from tools.release_helper.github_release import create_app_release, create_releases_for_apps, create_releases_for_apps_with_notes, create_releases_for_apps_with_individual_versions
 
 app = typer.Typer(help="Release helper for Everything monorepo")
 
@@ -340,7 +341,7 @@ def create_github_release(
 
 @app.command("create-combined-github-release-with-notes")
 def create_combined_github_release_with_notes(
-    version: Annotated[str, typer.Argument(help="Release version")],
+    version: Annotated[str, typer.Argument(help="Release version (can be empty if using matrix with per-app versions)")],
     owner: Annotated[str, typer.Option("--owner", help="Repository owner")] = "",
     repo: Annotated[str, typer.Option("--repo", help="Repository name")] = "",
     commit_sha: Annotated[Optional[str], typer.Option("--commit", help="Specific commit SHA to target")] = None,
@@ -351,6 +352,24 @@ def create_combined_github_release_with_notes(
 ):
     """Create GitHub releases for multiple apps using pre-generated release notes."""
     try:
+        # Check if we have a MATRIX environment variable with per-app versions
+        matrix_env = os.getenv('MATRIX')
+        app_versions = {}
+        
+        if matrix_env:
+            try:
+                matrix_data = json.loads(matrix_env)
+                for item in matrix_data.get('include', []):
+                    app_name = item.get('app')
+                    app_version = item.get('version')
+                    if app_name and app_version:
+                        app_versions[app_name] = app_version
+                        
+                if app_versions:
+                    typer.echo(f"Found per-app versions in matrix: {app_versions}")
+            except (json.JSONDecodeError, KeyError) as e:
+                typer.echo(f"Warning: Failed to parse MATRIX environment variable: {e}", err=True)
+        
         # Determine which apps to include
         if apps:
             app_list = [app.strip() for app in apps.split(',')]
@@ -361,16 +380,35 @@ def create_combined_github_release_with_notes(
         
         # Create releases for all specified apps using pre-generated notes
         typer.echo(f"Creating GitHub releases for {len(app_list)} apps using pre-generated release notes...")
-        results = create_releases_for_apps_with_notes(
-            app_list=app_list,
-            version=version,
-            owner=owner,
-            repo=repo,
-            commit_sha=commit_sha,
-            prerelease=prerelease,
-            previous_tag=previous_tag,
-            release_notes_dir=release_notes_dir
-        )
+        
+        # If we have per-app versions, create releases individually with their specific versions
+        if app_versions:
+            results = create_releases_for_apps_with_individual_versions(
+                app_versions=app_versions,
+                app_list=app_list,
+                owner=owner,
+                repo=repo,
+                commit_sha=commit_sha,
+                prerelease=prerelease,
+                previous_tag=previous_tag,
+                release_notes_dir=release_notes_dir
+            )
+        else:
+            # Fall back to using the single version for all apps
+            if not version:
+                typer.echo("❌ No version specified and no per-app versions found in matrix", err=True)
+                raise typer.Exit(1)
+                
+            results = create_releases_for_apps_with_notes(
+                app_list=app_list,
+                version=version,
+                owner=owner,
+                repo=repo,
+                commit_sha=commit_sha,
+                prerelease=prerelease,
+                previous_tag=previous_tag,
+                release_notes_dir=release_notes_dir
+            )
         
         # Report results
         successful_releases = [app for app, result in results.items() if result is not None]
