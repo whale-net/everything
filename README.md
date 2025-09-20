@@ -371,6 +371,33 @@ The repository uses several configuration files for build and dependency managem
 - Bazel uses Python version PY3 with symlink prefix `bazel-`
 - CI configuration includes bandwidth-optimized caching and test result caching
 - OCI images use Python 3.11-slim and Alpine 3.20 as base images with multi-platform support
+- **Remote cache support**: Optional HTTP-based remote caching with basic authentication
+
+### Remote Cache Configuration
+
+The repository supports optional Bazel remote caching for improved CI performance and build sharing. Remote cache is configured through the shared `setup-build-env` action:
+
+**Usage in GitHub Actions workflows:**
+```yaml
+- name: Setup Build Environment
+  uses: ./.github/actions/setup-build-env
+  with:
+    remote-cache-url: 'https://cache.example.com/bazel-cache'
+    remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+    remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+```
+
+**Configuration Details:**
+- `remote-cache-url`: HTTP URL of the remote cache server (required for remote caching)
+- `remote-cache-user`: Username for basic HTTP authentication (optional)
+- `remote-cache-password`: Password for basic HTTP authentication (optional)
+- Remote cache is disabled if `remote-cache-url` is not provided
+- Automatically sets `--remote_upload_local_results=true` for cache population
+
+**Security Notes:**
+- Credentials are passed via GitHub secrets for security
+- Generated `.bazelrc.remote` file is excluded from git via `.gitignore`
+- Basic HTTP authentication is embedded in the cache URL during configuration
 
 
 ## CI/CD Pipeline
