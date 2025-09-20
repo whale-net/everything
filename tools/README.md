@@ -25,3 +25,27 @@ bazel run //tools:release -- plan --event-type tag_push --version <version>
 ```
 
 The release helper ensures consistent handling of container images, version validation, and integration with CI/CD workflows.
+
+## Performance Optimization
+
+The release helper is optimized for fast builds and effective caching:
+
+### Caching Strategy
+- Pre-built in CI workflows to ensure it's always cached
+- Uses unified cache keys across all jobs for maximum cache hits
+- Optimized Bazel configuration with `--config=tools` for faster builds
+
+### Build Configuration
+To build the release tool with optimizations:
+```bash
+# Standard build
+bazel build //tools:release
+
+# Optimized build (recommended)
+bazel build --config=tools //tools:release
+
+# Test caching performance
+./cache-optimization-test.sh
+```
+
+For detailed information about the caching optimizations, see [Release Tool Caching Documentation](../docs/release-tool-caching.md).
