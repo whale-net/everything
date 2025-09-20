@@ -137,6 +137,14 @@ def python_oci_image(name, binary, repo_tag = None, tags = None, target_platform
         tags = tags,
     )
     
+    # Create runner script layer
+    pkg_tar(
+        name = name + "_runner",
+        files = {"//tools:python_runner.py": "python_runner.py"},
+        package_dir = "app",
+        tags = tags,
+    )
+    
     # Use distroless Python image with all dependencies baked in
     oci_image(
         name = name,
@@ -145,11 +153,13 @@ def python_oci_image(name, binary, repo_tag = None, tags = None, target_platform
             name + "_complete_binary",   # Binary with all runfiles/dependencies
             name + "_libs_init",         # Our library structure
             name + "_lib_sources",       # Our library code
+            name + "_runner",            # Python path setup script
         ],
-        entrypoint = ["python3", "/app/main.py"],
+        entrypoint = ["python3", "/app/python_runner.py", "/app/main.py"],
         env = {
-            # Include all the site-packages directories in the Python path
-            "PYTHONPATH": "/app:/app/libs:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_fastapi/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_uvicorn/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_starlette/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_pydantic/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_pydantic_core/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_anyio/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_sniffio/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_idna/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_h11/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_httptools/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_uvloop/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_watchfiles/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_websockets/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_python_dotenv/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_click/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_typing_extensions/site-packages:/app/" + binary_name + ".runfiles/rules_python++pip+everything_pip_deps_311_annotated_types/site-packages",
+            # Let Python find all runfiles automatically
+            "PYTHONPATH": "/app:/app/libs",
+            "RUNFILES_DIR": "/app/" + binary_name + ".runfiles",
         },
         workdir = "/app",
         tags = tags,

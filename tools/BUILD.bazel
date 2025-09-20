@@ -4,7 +4,14 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files([
     "oci.bzl",
+    "python_runner.py",
+    "platforms.bzl",
 ])
+
+# Platform definitions for cross-compilation
+load(":platforms.bzl", "define_platforms")
+
+define_platforms()
 
 # Convenient alias for release helper
 alias(

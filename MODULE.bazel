@@ -56,13 +56,6 @@ pip.parse(
     hub_name = "everything_pip_deps",
     python_version = "3.11",
     requirements_lock = "//:requirements.lock.txt",
-    # Support both Darwin and Linux platforms for cross-platform development
-    experimental_target_platforms = [
-        "cp311_linux_x86_64",
-        "cp311_linux_aarch64",
-        "cp311_osx_x86_64", 
-        "cp311_osx_arm64",
-    ],
 )
 use_repo(pip, "everything_pip_deps")
 
