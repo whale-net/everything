@@ -13,7 +13,7 @@ import httpx
 
 from tools.release_helper.metadata import get_app_metadata, list_all_apps
 from tools.release_helper.release import find_app_bazel_target
-from tools.release_helper.release_notes import generate_release_notes
+from tools.release_helper.release_notes import generate_release_notes, parse_tag_info
 
 
 @dataclass
@@ -281,10 +281,18 @@ def create_app_release(
             print(f"ℹ️  Release {tag_name} already exists: {existing_release['html_url']}")
             return existing_release
         
+        # Create release title using better format
+        try:
+            domain, parsed_app_name, version = parse_tag_info(tag_name)
+            release_title = f"{domain} {parsed_app_name} {version}"
+        except ValueError:
+            # Fallback to original format if tag parsing fails
+            release_title = f"{app_name} {tag_name}"
+        
         # Create release data
         release_data = GitHubReleaseData(
             tag_name=tag_name,
-            name=f"{app_name} {tag_name}",
+            name=release_title,
             body=release_notes,
             draft=False,
             prerelease=prerelease,
