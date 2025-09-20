@@ -103,8 +103,16 @@ class ReleaseNotesFormatter:
     @staticmethod
     def to_markdown(data: AppReleaseData) -> str:
         """Format release data as Markdown."""
+        # Parse the tag to extract domain, app_name, and version for the title
+        try:
+            domain, app_name, version = parse_tag_info(data.current_tag)
+            title = f"# {domain} {app_name} {version}"
+        except ValueError:
+            # Fallback to original format if tag parsing fails
+            title = f"# Release Notes: {data.app_name} {data.current_tag}"
+        
         lines = [
-            f"# Release Notes: {data.app_name} {data.current_tag}",
+            title,
             "",
             f"**Released:** {data.released_at}",
             f"**Previous Version:** {data.previous_tag}",
@@ -137,8 +145,16 @@ class ReleaseNotesFormatter:
     @staticmethod
     def to_plain_text(data: AppReleaseData) -> str:
         """Format release data as plain text."""
+        # Parse the tag to extract domain, app_name, and version for the title
+        try:
+            domain, app_name, version = parse_tag_info(data.current_tag)
+            title = f"{domain} {app_name} {version}"
+        except ValueError:
+            # Fallback to original format if tag parsing fails
+            title = f"Release Notes: {data.app_name} {data.current_tag}"
+        
         lines = [
-            f"Release Notes: {data.app_name} {data.current_tag}",
+            title,
             f"Released: {data.released_at}",
             f"Previous Version: {data.previous_tag}",
             f"Commits: {data.commit_count}",
