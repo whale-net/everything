@@ -2,11 +2,6 @@ load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("@everything_pip_deps//:requirements.bzl", "requirement")
 load("//tools:release.bzl", "release_app")
 
-# Export source files for container builds
-exports_files([
-    "main.py",
-], visibility = ["//visibility:public"])
-
 py_library(
     name = "main_lib",
     srcs = ["__init__.py", "main.py"],

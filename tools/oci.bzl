@@ -79,34 +79,54 @@ def oci_image_with_binary(name, binary, base_image, entrypoint = None, repo_tag 
     )
 
 def python_oci_image(name, binary, repo_tag = None, tags = None, **kwargs):
-    """Create an OCI image for a Python binary."""
+    """Create an OCI image for a Python binary.
     
-    # Extract the package path from the binary target
-    # e.g., "//demo/hello_fastapi:hello_fastapi" -> "//demo/hello_fastapi:main.py"
-    binary_package = binary.rsplit(":", 1)[0]  # Get everything before the last ":"
-    main_py_target = binary_package + ":main.py"
+    Creates a self-contained Python application by including source files 
+    and dependencies, avoiding Bazel's runtime requirements.
+    """
     
-    # Instead of using the compiled binary, let's include the Python sources directly
-    # This avoids cross-compilation issues and the runfiles complexity
+    # Create separate layers to ensure proper directory structure
     pkg_tar(
-        name = name + "_python_sources_layer",
-        files = {
-            main_py_target: "app/main.py",
-            "//libs/python:utils.py": "app/libs/python/utils.py",
-            "//libs/python:__init__.py": "app/libs/python/__init__.py",
-            "//libs:__init__.py": "app/libs/__init__.py",
-        },
+        name = name + "_app_sources",
+        srcs = [
+            # Include the main_lib which contains main.py and __init__.py
+            binary.rsplit(":", 1)[0] + ":main_lib" if ":" in binary else ":main_lib",
+        ],
+        package_dir = "app",
+        tags = tags,
+    )
+    
+    pkg_tar(
+        name = name + "_lib_sources",
+        srcs = [
+            # Include the utility library with proper path structure
+            "//libs/python",
+        ],
+        package_dir = "app/libs/python", 
+        tags = tags,
+    )
+    
+    # Also need to include the libs __init__.py
+    pkg_tar(
+        name = name + "_libs_init",
+        srcs = [
+            "//libs",
+        ],
+        package_dir = "app/libs",
         tags = tags,
     )
     
     oci_image(
         name = name,
         base = "@distroless_python",
-        tars = [name + "_python_sources_layer"],
+        tars = [
+            name + "_app_sources",
+            name + "_libs_init", 
+            name + "_lib_sources",
+        ],
         entrypoint = ["python3", "/app/main.py"],
         env = {
             "PYTHONPATH": "/app",
-            "WORKDIR": "/app",
         },
         workdir = "/app",
         tags = tags,
