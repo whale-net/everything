@@ -72,17 +72,12 @@ def oci_image_with_binary(
         repo_tag = binary_name + ":latest"
     
     # Create binary layer with propagated tags and compression
-    tar_kwargs = {
-        "name": name + "_binary_layer",
-        "srcs": [binary],
-        "tags": tags,
-    }
-    
-    # Add compression if specified
-    if compression:
-        tar_kwargs["compress"] = compression
-    
-    tar(**tar_kwargs)
+    compressed_tar_layer(
+        name = name + "_binary_layer",
+        srcs = [binary],
+        compression = compression,
+        tags = tags,
+    )
     
     # Assemble all layers with optimal ordering for cache efficiency
     all_layers = []
