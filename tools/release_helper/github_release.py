@@ -385,20 +385,21 @@ def create_releases_for_apps(
 
 def create_releases_for_apps_with_notes(
     app_list: List[str],
-    version: str,
-    owner: str,
-    repo: str,
+    version: Optional[str] = None,
+    owner: str = "",
+    repo: str = "",
     commit_sha: Optional[str] = None,
     prerelease: bool = False,
     previous_tag: Optional[str] = None,
     token: Optional[str] = None,
-    release_notes_dir: Optional[str] = None
+    release_notes_dir: Optional[str] = None,
+    app_versions: Optional[Dict[str, str]] = None
 ) -> Dict[str, Optional[Dict]]:
     """Create GitHub releases for multiple apps using pre-generated release notes from files.
     
     Args:
         app_list: List of app names to create releases for
-        version: Release version
+        version: Release version (used for all apps if app_versions not provided)
         owner: Repository owner
         repo: Repository name
         commit_sha: Specific commit SHA to target
@@ -406,6 +407,7 @@ def create_releases_for_apps_with_notes(
         previous_tag: Previous tag to compare against (auto-detected if not provided)
         token: GitHub token (defaults to GITHUB_TOKEN env var)
         release_notes_dir: Directory containing pre-generated release notes files
+        app_versions: Optional dictionary mapping app names to their individual versions
         
     Returns:
         Dictionary mapping app names to their release data (None if failed)
@@ -413,18 +415,36 @@ def create_releases_for_apps_with_notes(
     
     results = {}
     
-    print(f"Creating GitHub releases for {len(app_list)} apps using pre-generated release notes...")
+    # Determine if we're using individual versions or a single version
+    using_individual_versions = app_versions is not None
+    
+    if using_individual_versions:
+        print(f"Creating GitHub releases for {len(app_list)} apps with individual versions...")
+    else:
+        if not version:
+            raise ValueError("Either 'version' or 'app_versions' must be provided")
+        print(f"Creating GitHub releases for {len(app_list)} apps using pre-generated release notes...")
     
     for app_name in app_list:
         try:
             print(f"Processing {app_name}...")
+            
+            # Determine the version for this app
+            if using_individual_versions:
+                app_version = app_versions.get(app_name)
+                if not app_version:
+                    print(f"❌ No version found for {app_name} in app_versions: {app_versions}", file=sys.stderr)
+                    results[app_name] = None
+                    continue
+            else:
+                app_version = version
             
             # Find the app's metadata to determine the tag format
             try:
                 bazel_target = find_app_bazel_target(app_name)
                 metadata = get_app_metadata(bazel_target)
                 domain = metadata['domain']
-                tag_name = f"{domain}-{app_name}.{version}"
+                tag_name = f"{domain}-{app_name}.{app_version}"
             except Exception as e:
                 print(f"❌ Could not determine tag format for {app_name}: {e}", file=sys.stderr)
                 results[app_name] = None
