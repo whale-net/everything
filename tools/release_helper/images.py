@@ -70,11 +70,8 @@ def build_image(bazel_target: str, platform: Optional[str] = None) -> str:
         target = load_target
 
     print(f"Building and loading {target} (using optimized oci_load)...")
-    # Build the image first to create the OCI layout
-    image_target = target.replace("_load", "")
-    run_bazel(["build", image_target])
-    
-    # Actually load the image into Docker with the correct name
+    # Run the oci_load target directly - it will build dependencies automatically
+    # This is more efficient than building separately first
     run_bazel(["run", target])
 
     # Return the expected image name in domain-app format
