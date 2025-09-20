@@ -4,7 +4,7 @@ load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load")
 load("@aspect_bazel_lib//lib:tar.bzl", "tar")
 
 # Using appropriate base images for maximum compatibility:
-# - Python: python:3.11-slim (includes Python runtime and common libraries)
+# - Python: python:3.11-alpine (lightweight Alpine Linux with Python runtime)
 # - Go: alpine:3.18 (lightweight Linux with package manager for dependencies)
 
 def oci_image_with_binary(
@@ -80,7 +80,7 @@ def _get_platform_base_image(base_prefix, platform = None):
     """Get the platform-specific base image name.
     
     Args:
-        base_prefix: Base image prefix (e.g., "python_slim", "alpine")
+        base_prefix: Base image prefix (e.g., "python_alpine", "alpine")
         platform: Target platform (defaults to linux/amd64)
     
     Returns:
@@ -104,7 +104,7 @@ def python_oci_image(name, binary, repo_tag = None, platform = None, tags = None
     """Build an OCI image for a Python binary.
     
     This is a convenience wrapper around oci_image_with_binary with Python-specific defaults.
-    Uses python:3.11-slim base image for compatibility and included Python runtime.
+    Uses python:3.11-alpine base image for minimal size while maintaining Python runtime.
     For Python applications, we use the source files from the runfiles with the container's Python interpreter.
     
     Args:
@@ -115,7 +115,7 @@ def python_oci_image(name, binary, repo_tag = None, platform = None, tags = None
         tags: Tags to apply to all generated targets (e.g., ["manual", "release"])
         **kwargs: Additional arguments passed to oci_image_with_binary
     """
-    base_image = _get_platform_base_image("python_slim", platform)
+    base_image = _get_platform_base_image("python_alpine", platform)
     binary_name = binary.split(":")[-1] if ":" in binary else binary
     
     # For Python, we use the container's Python interpreter and run the source files from runfiles
