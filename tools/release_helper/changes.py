@@ -155,87 +155,16 @@ def _detect_changed_apps_file_based(changed_files: List[str]) -> List[Dict[str, 
 
 
 def _is_infrastructure_change(changed_files: List[str]) -> bool:
-    """Check if changes are in infrastructure directories that affect all apps.
+    """DEPRECATED: Check if changes are in infrastructure directories that affect all apps.
     
-    Infrastructure changes are changes that could affect the build, deployment, or runtime
-    of all applications in the repository, requiring all apps to be rebuilt as a safety measure.
+    This function is deprecated as we now rely entirely on Bazel dependency analysis
+    to determine which apps are affected by changes, rather than making assumptions
+    about what constitutes infrastructure.
     
-    This function distinguishes between:
-    - TRUE infrastructure changes (CI workflows, build tools, core configs) -> rebuild all apps
-    - Documentation/config changes that don't affect builds -> use normal dependency analysis
-    
-    Args:
-        changed_files: List of file paths that have changed
-        
-    Returns:
-        True if any change is considered infrastructure that affects all apps,
-        False if changes should use normal dependency analysis
-        
-    Infrastructure triggers:
-        - tools/ BUILD and macro files: tools/release.bzl, tools/oci.bzl, tools/BUILD.bazel
-        - docker/: Container configurations 
-        - .github/workflows/: CI workflow definitions
-        - .github/actions/: Reusable GitHub Actions
-        - Root Bazel files: MODULE.bazel, BUILD.bazel, WORKSPACE*, .bazelrc
-        
-    NOT infrastructure triggers (use dependency analysis instead):
-        - tools/release_helper/: CLI tools for release automation (don't affect builds)
-        - .github/copilot-instructions.md and other documentation
-        - libs/: Handled by Bazel dependency analysis
-        - app directories: Handled by Bazel dependency analysis
-        
-    Example:
-        # These trigger full rebuild
-        _is_infrastructure_change(['.github/workflows/ci.yml']) -> True
-        _is_infrastructure_change(['tools/release.bzl']) -> True
-        _is_infrastructure_change(['MODULE.bazel']) -> True
-        
-        # These use dependency analysis 
-        _is_infrastructure_change(['tools/release_helper/cli.py']) -> False
-        _is_infrastructure_change(['.github/copilot-instructions.md']) -> False
-        _is_infrastructure_change(['demo/hello_go/main.go']) -> False
+    This function is kept for backward compatibility with existing tests but always
+    returns False to ensure Bazel dependency analysis is used instead.
     """
-    # Root-level files that affect everything
-    root_infra_files = {'MODULE.bazel', 'WORKSPACE', 'BUILD.bazel', 'WORKSPACE.bazel', '.bazelrc'}
-    
-    # Build tool files in tools/ that affect all apps
-    build_tool_files = {
-        'tools/release.bzl',
-        'tools/oci.bzl', 
-        'tools/BUILD.bazel',
-        'tools/helm_chart_release.bzl',
-        'tools/version_resolver.py'
-    }
-    
-    for file_path in changed_files:
-        if not file_path:
-            continue
-        
-        # Check root-level Bazel files that affect everything
-        if file_path in root_infra_files:
-            return True
-        
-        # Check specific build tool files that affect all apps
-        if file_path in build_tool_files:
-            return True
-        
-        # Docker configurations affect all containerized apps
-        if file_path.startswith('docker/') or file_path == 'docker':
-            return True
-        
-        # Special handling for .github directory - be more selective about what triggers rebuilds
-        if file_path.startswith('.github/'):
-            # CI build workflows affect all apps  
-            if file_path.startswith('.github/workflows/ci.yml'):
-                return True
-            # Build-related GitHub Actions affect all apps
-            if file_path.startswith('.github/actions/') and (
-                'setup-build' in file_path or 'build' in file_path.lower()
-            ):
-                return True
-            # Other workflows (like release.yml) and documentation should not trigger full rebuild
-            # They should use normal dependency analysis
-    
+    # Always return False - let Bazel dependency analysis handle everything
     return False
 
 
