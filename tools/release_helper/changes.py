@@ -148,13 +148,14 @@ def _is_infrastructure_change(changed_files: List[str]) -> bool:
         False if changes should use normal dependency analysis
         
     Infrastructure triggers:
-        - tools/: Build tools, release scripts, etc.
+        - tools/ BUILD and macro files: tools/release.bzl, tools/oci.bzl, tools/BUILD.bazel
         - docker/: Container configurations 
         - .github/workflows/: CI workflow definitions
         - .github/actions/: Reusable GitHub Actions
         - Root Bazel files: MODULE.bazel, BUILD.bazel, WORKSPACE*, .bazelrc
         
     NOT infrastructure triggers (use dependency analysis instead):
+        - tools/release_helper/: CLI tools for release automation (don't affect builds)
         - .github/copilot-instructions.md and other documentation
         - libs/: Handled by Bazel dependency analysis
         - app directories: Handled by Bazel dependency analysis
@@ -166,14 +167,21 @@ def _is_infrastructure_change(changed_files: List[str]) -> bool:
         _is_infrastructure_change(['MODULE.bazel']) -> True
         
         # These use dependency analysis 
+        _is_infrastructure_change(['tools/release_helper/cli.py']) -> False
         _is_infrastructure_change(['.github/copilot-instructions.md']) -> False
         _is_infrastructure_change(['demo/hello_go/main.go']) -> False
     """
-    # Core infrastructure directories that always affect all apps
-    infra_dirs = {'tools', 'docker'}
-    
     # Root-level files that affect everything
     root_infra_files = {'MODULE.bazel', 'WORKSPACE', 'BUILD.bazel', 'WORKSPACE.bazel', '.bazelrc'}
+    
+    # Build tool files in tools/ that affect all apps
+    build_tool_files = {
+        'tools/release.bzl',
+        'tools/oci.bzl', 
+        'tools/BUILD.bazel',
+        'tools/helm_chart_release.bzl',
+        'tools/version_resolver.py'
+    }
     
     for file_path in changed_files:
         if not file_path:
@@ -183,10 +191,13 @@ def _is_infrastructure_change(changed_files: List[str]) -> bool:
         if file_path in root_infra_files:
             return True
         
-        # Check core infrastructure directories (but NOT libs - we handle libs with Bazel query)
-        for infra_dir in infra_dirs:
-            if file_path.startswith(infra_dir + '/') or file_path == infra_dir:
-                return True
+        # Check specific build tool files that affect all apps
+        if file_path in build_tool_files:
+            return True
+        
+        # Docker configurations affect all containerized apps
+        if file_path.startswith('docker/') or file_path == 'docker':
+            return True
         
         # Special handling for .github directory - only CI/build files should trigger full rebuild
         if file_path.startswith('.github/'):
