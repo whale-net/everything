@@ -3,6 +3,9 @@ bazel-*
 .bazel
 .bazelrc.remote
 
+# Optional cache configuration file (can be included if desired)
+# bazel-cache-configs.bazelrc
+
 # Python
 __pycache__/
 *.py[cod]
