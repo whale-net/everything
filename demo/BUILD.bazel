@@ -1,1 +1,18 @@
 # Demo applications namespace
+
+load("//tools:helm_chart_release.bzl", "helm_chart_release_macro")
+
+# Helm chart for demo applications
+helm_chart_release_macro(
+    domain = "demo",
+    charts = {
+        "demo_chart": {
+            "description": "Demo applications showcase chart",
+            "apps": ["hello_python", "hello_go"]
+        },
+        "hello_chart": {
+            "description": "Single hello world application",
+            "apps": ["hello_python"]
+        }
+    }
+)
