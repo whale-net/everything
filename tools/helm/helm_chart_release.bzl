@@ -1,61 +1,5 @@
 """Helm chart release system for multi-app deployments using templates."""
 
-def _render_template_impl(ctx):
-    """Helper action to render a template using the template_renderer."""
-    
-    # Prepare the context as JSON
-    context_dict = {
-        "chart_name": ctx.attr.chart_name,
-        "domain": ctx.attr.domain,
-        "chart_version": ctx.attr.chart_version,
-        "apps": ctx.attr.apps,
-        "description": ctx.attr.description,
-        "overrides": ctx.attr.overrides,
-    }
-    
-    # Convert to JSON string for passing to the renderer
-    context_json = json.encode(context_dict)
-    
-    # Run the template renderer
-    ctx.actions.run(
-        executable = ctx.executable._template_renderer,
-        arguments = [
-            "--template", ctx.file.template.path,
-            "--context", context_json,
-            "--output", ctx.outputs.output.path,
-            "--type", ctx.attr.template_type,
-        ],
-        inputs = [ctx.file.template],
-        outputs = [ctx.outputs.output],
-        tools = [ctx.executable._template_renderer],
-        mnemonic = "RenderHelmTemplate",
-    )
-
-_render_template = rule(
-    implementation = _render_template_impl,
-    attrs = {
-        "template": attr.label(
-            allow_single_file = True,
-            mandatory = True,
-        ),
-        "chart_name": attr.string(mandatory = True),
-        "domain": attr.string(mandatory = True),
-        "chart_version": attr.string(mandatory = True),
-        "apps": attr.string_list(mandatory = True),
-        "description": attr.string(mandatory = True),
-        "overrides": attr.string_dict(default = {}),
-        "template_type": attr.string(mandatory = True),
-        "_template_renderer": attr.label(
-            default = Label("//tools/helm:template_renderer"),
-            executable = True,
-            cfg = "exec",
-        ),
-    },
-    outputs = {
-        "output": "%{name}.out",
-    },
-)
-
 def helm_chart_release_impl(ctx):
     """Implementation for helm_chart_release rule using templates."""
     
@@ -73,20 +17,16 @@ def helm_chart_release_impl(ctx):
     values_yaml = ctx.actions.declare_file("{}/values.yaml".format(chart_name))
     
     # Render Chart.yaml using template
-    chart_context = json.encode({
-        "chart_name": chart_name,
-        "domain": ctx.attr.domain,
-        "chart_version": ctx.attr.chart_version,
-        "description": chart_description,
-    })
-    
     ctx.actions.run(
         executable = ctx.executable._template_renderer,
         arguments = [
             "--template", ctx.file._chart_template.path,
-            "--context", chart_context,
             "--output", chart_yaml.path,
             "--type", "chart",
+            "--chart_name", chart_name,
+            "--domain", ctx.attr.domain,
+            "--chart_version", ctx.attr.chart_version,
+            "--description", chart_description,
         ],
         inputs = [ctx.file._chart_template],
         outputs = [chart_yaml],
@@ -95,21 +35,20 @@ def helm_chart_release_impl(ctx):
     )
     
     # Render values.yaml using template
-    values_context = json.encode({
-        "domain": ctx.attr.domain,
-        "apps": ctx.attr.apps,
-        "overrides": ctx.attr.values_overrides,
-    })
+    apps_str = ",".join(ctx.attr.apps)
+    overrides_str = ",".join(["{}={}".format(k, v) for k, v in ctx.attr.values_overrides.items()])
     
     ctx.actions.run(
         executable = ctx.executable._template_renderer,
         arguments = [
             "--template", ctx.file._values_template.path,
-            "--context", values_context,
             "--output", values_yaml.path,
             "--type", "values",
+            "--domain", ctx.attr.domain,
+            "--apps", apps_str,
+            "--overrides", overrides_str,
         ],
-        inputs = [ctx.file._values_template],
+        inputs = [ctx.file._values_template] + ctx.files._sub_templates,
         outputs = [values_yaml],
         tools = [ctx.executable._template_renderer],
         mnemonic = "RenderValuesYaml",
@@ -189,6 +128,13 @@ helm_chart_release = rule(
         "_values_template": attr.label(
             default = Label("//tools/helm:templates/values.yaml.template"),
             allow_single_file = True,
+        ),
+        "_sub_templates": attr.label_list(
+            default = [
+                Label("//tools/helm:templates/image_config.template"),
+                Label("//tools/helm:templates/app_config.template"),
+            ],
+            allow_files = True,
         ),
     },
     doc = """

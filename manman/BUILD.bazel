@@ -1,6 +1,6 @@
 load("@rules_python//python:defs.bzl", "py_library")
 load("//tools:release.bzl", "release_app")
-load("//tools/helm:helm_chart_release.bzl", "helm_chart_release_macro")
+load("//tools:helm_chart_release.bzl", "helm_chart_release_macro")
 
 # Re-export all manman modules for convenience
 py_library(

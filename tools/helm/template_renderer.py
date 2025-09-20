@@ -6,7 +6,6 @@ It's designed to replace the string building logic in helm_chart_release.bzl.
 """
 
 import argparse
-import json
 import sys
 from pathlib import Path
 from string import Template
@@ -72,10 +71,19 @@ def render_values_yaml(template_content: str, context: dict, template_dir: Path)
 def main():
     parser = argparse.ArgumentParser(description='Render Helm chart templates')
     parser.add_argument('--template', required=True, help='Template file path')
-    parser.add_argument('--context', required=True, help='JSON context for template variables')
     parser.add_argument('--output', required=True, help='Output file path')
     parser.add_argument('--type', choices=['chart', 'values'], required=True,
                         help='Type of template to render')
+    
+    # Chart template arguments
+    parser.add_argument('--chart_name', help='Chart name')
+    parser.add_argument('--domain', help='Domain name')
+    parser.add_argument('--chart_version', help='Chart version')
+    parser.add_argument('--description', help='Chart description')
+    
+    # Values template arguments
+    parser.add_argument('--apps', help='Comma-separated list of apps')
+    parser.add_argument('--overrides', help='Comma-separated key=value overrides')
     
     args = parser.parse_args()
     
@@ -89,17 +97,29 @@ def main():
         template_content = template_path.read_text()
         template_dir = template_path.parent
         
-        # Parse context JSON
-        try:
-            context = json.loads(args.context)
-        except json.JSONDecodeError as e:
-            print(f"Error: Invalid JSON context: {e}", file=sys.stderr)
-            sys.exit(1)
-        
-        # Render template based on type
+        # Build context based on template type
         if args.type == 'chart':
+            context = {
+                'chart_name': args.chart_name or '',
+                'domain': args.domain or '',
+                'chart_version': args.chart_version or '1.0.0',
+                'description': args.description or '',
+            }
             rendered = render_chart_yaml(template_content, context)
         elif args.type == 'values':
+            apps = args.apps.split(',') if args.apps else []
+            overrides = {}
+            if args.overrides:
+                for item in args.overrides.split(','):
+                    if '=' in item:
+                        key, value = item.split('=', 1)
+                        overrides[key] = value
+            
+            context = {
+                'domain': args.domain or '',
+                'apps': apps,
+                'overrides': overrides,
+            }
             rendered = render_values_yaml(template_content, context, template_dir)
         else:
             print(f"Error: Unknown template type: {args.type}", file=sys.stderr)

@@ -6,14 +6,8 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files([
     "oci.bzl",
+    "helm_chart_release.bzl",
 ])
-
-# Export helm_chart_release.bzl from the helm module for backwards compatibility
-alias(
-    name = "helm_chart_release.bzl",
-    actual = "//tools/helm:helm_chart_release.bzl",
-    visibility = ["//visibility:public"],
-)
 
 # Version resolver utility for Helm charts
 py_binary(
