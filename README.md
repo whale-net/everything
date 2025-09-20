@@ -409,7 +409,6 @@ graph TD
 - **Test Cache**: Skips re-running tests when code and dependencies are unchanged  
 - **Remote Cache**: Shares cache between CI runs and developers (configured in `.bazelrc`)
 - **Dependency Cache**: Caches external dependencies like Python packages and Go modules
-- **Tool Cache Optimization**: Pre-builds critical tools like `//tools:release` to ensure they're always cached (see [Release Tool Caching](docs/release-tool-caching.md))
 
 ### CI Jobs:
 - **Build**: Compiles applications and uploads artifacts

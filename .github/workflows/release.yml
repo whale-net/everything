@@ -58,56 +58,11 @@ jobs:
         
         echo "Input validation passed"
 
-  # Build and publish release tool as Docker image for use across release jobs
-  build-release-tool:
-    name: Build and Publish Release Tool
-    runs-on: ubuntu-latest
-    needs: validate-inputs
-    outputs:
-      release-tool-image: ${{ steps.build.outputs.image }}
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        
-    - name: Setup Build Environment
-      uses: ./.github/actions/setup-build-env
-      with:
-        setup-docker: 'true'
-        cache-suffix: 'release-tool'
-        
-    - name: Log in to GitHub Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-        
-    - name: Build and push release tool image
-      id: build
-      run: |
-        echo "Building and pushing release tool Docker image..."
-        
-        # Build the release tool image using the release_app macro
-        bazel run //tools/release_helper:release_helper_app_image_push
-        
-        # The image will be tagged as ghcr.io/whale-net/tools-release_helper_app:latest
-        IMAGE_NAME="ghcr.io/whale-net/tools-release_helper_app:release-${{ github.sha }}"
-        
-        # Tag with commit SHA for this specific release run
-        docker tag ghcr.io/whale-net/tools-release_helper_app:latest "$IMAGE_NAME"
-        docker push "$IMAGE_NAME"
-        
-        echo "image=$IMAGE_NAME" >> $GITHUB_OUTPUT
-        echo "✅ Release tool image built and pushed: $IMAGE_NAME"
-
   # Detect what apps have changed and build release plan
   plan-release:
     name: Plan Release
     runs-on: ubuntu-latest
-    needs: [validate-inputs, build-release-tool]
+    needs: validate-inputs
     outputs:
       release-matrix: ${{ steps.plan.outputs.matrix }}
       version: ${{ steps.plan.outputs.version }}
@@ -126,7 +81,7 @@ jobs:
     - name: Plan release using release helper tool
       id: plan
       env:
-        RELEASE_TOOL_IMAGE: ${{ needs.build-release-tool.outputs.release-tool-image }}
+        RELEASE_TOOL_IMAGE: ghcr.io/whale-net/tools-release_helper_app:latest
       run: |
         # Determine version mode and build command
         VERSION="${{ github.event.inputs.version }}"
@@ -173,7 +128,7 @@ jobs:
   release:
     name: Release ${{ matrix.app }}
     runs-on: ubuntu-latest
-    needs: [build-release-tool, plan-release]
+    needs: plan-release
     if: needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
     strategy:
       matrix: ${{ fromJson(needs.plan-release.outputs.release-matrix) }}
@@ -215,7 +170,7 @@ jobs:
         VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
         DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-        RELEASE_TOOL_IMAGE: ${{ needs.build-release-tool.outputs.release-tool-image }}
+        RELEASE_TOOL_IMAGE: ghcr.io/whale-net/tools-release_helper_app:latest
       run: |
         echo "Building and releasing $APP version $VERSION using consolidated release system"
         echo "Using release tool image: $RELEASE_TOOL_IMAGE"
@@ -246,7 +201,7 @@ jobs:
         APP: ${{ matrix.app }}
         VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-        RELEASE_TOOL_IMAGE: ${{ needs.build-release-tool.outputs.release-tool-image }}
+        RELEASE_TOOL_IMAGE: ghcr.io/whale-net/tools-release_helper_app:latest
       run: |
         echo "Generating release notes for $APP version $VERSION"
         
@@ -279,7 +234,7 @@ jobs:
   create-github-releases:
     name: Create GitHub Releases
     runs-on: ubuntu-latest
-    needs: [build-release-tool, plan-release, release]
+    needs: [plan-release, release]
     if: needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null && github.event.inputs.dry_run == 'false'
     steps:
     - name: Checkout code
@@ -299,7 +254,7 @@ jobs:
         VERSION: ${{ needs.plan-release.outputs.version }}
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
         GITHUB_REPOSITORY_NAME: ${{ github.event.repository.name }}
-        RELEASE_TOOL_IMAGE: ${{ needs.build-release-tool.outputs.release-tool-image }}
+        RELEASE_TOOL_IMAGE: ghcr.io/whale-net/tools-release_helper_app:latest
       run: |
         echo "Creating GitHub releases for all apps in version $VERSION..."
         echo "Using release tool image: $RELEASE_TOOL_IMAGE"
@@ -328,7 +283,7 @@ jobs:
   release-summary:
     name: Release Summary
     runs-on: ubuntu-latest
-    needs: [build-release-tool, plan-release, release, create-github-releases]
+    needs: [plan-release, release, create-github-releases]
     if: always()
     steps:
     - name: Checkout code
@@ -342,7 +297,7 @@ jobs:
       
     - name: Generate summary using release helper
       env:
-        RELEASE_TOOL_IMAGE: ${{ needs.build-release-tool.outputs.release-tool-image }}
+        RELEASE_TOOL_IMAGE: ghcr.io/whale-net/tools-release_helper_app:latest
       run: |
         # Use our release helper tool to generate the summary
         MATRIX='${{ needs.plan-release.outputs.release-matrix }}'
