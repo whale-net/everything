@@ -1,18 +1,6 @@
 name: Helm Chart Release
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'tools/helm/**'
-      - '**/BUILD.bazel'
-      - '**/*_chart_*'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'tools/helm/**'
-      - '**/BUILD.bazel'
-      - '**/*_chart_*'
   workflow_dispatch:
     inputs:
       domain:
