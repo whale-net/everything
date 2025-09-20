@@ -13,6 +13,18 @@ inputs:
     description: 'Suffix to add to cache keys for isolation'
     required: false
     default: ''
+  bazel-remote-cache-url:
+    description: 'HTTP URL for Bazel remote cache from secrets'
+    required: false
+    default: ''
+  bazel-remote-cache-user:
+    description: 'Username for remote cache basic auth from secrets'
+    required: false
+    default: ''
+  bazel-remote-cache-password:
+    description: 'Password for remote cache basic auth from secrets'
+    required: false
+    default: ''
 
 outputs:
   bazel-cache-hit:
@@ -25,21 +37,21 @@ runs:
     - name: Setup Remote Cache Environment
       shell: bash
       run: |
-        # Configure remote cache if URL is provided via secrets
-        if [[ -n "$BAZEL_REMOTE_CACHE_URL" ]]; then
+        # Configure remote cache if URL is provided via inputs from secrets
+        if [[ -n "${{ inputs.bazel-remote-cache-url }}" ]]; then
           echo "Setting up Bazel remote cache..."
           
-          # Set the remote cache URL from secret
-          CACHE_URL="$BAZEL_REMOTE_CACHE_URL"
+          # Set the remote cache URL from input
+          CACHE_URL="${{ inputs.bazel-remote-cache-url }}"
           
-          # Add basic auth credentials if provided via secrets
-          if [[ -n "$BAZEL_REMOTE_CACHE_USER" && -n "$BAZEL_REMOTE_CACHE_PASSWORD" ]]; then
+          # Add basic auth credentials if provided via inputs from secrets
+          if [[ -n "${{ inputs.bazel-remote-cache-user }}" && -n "${{ inputs.bazel-remote-cache-password }}" ]]; then
             # Extract protocol and host from URL
             PROTOCOL=$(echo "$CACHE_URL" | sed -n 's#^\([^:]*\)://.*#\1#p')
             HOST_PATH=$(echo "$CACHE_URL" | sed -n 's#^[^:]*://\(.*\)#\1#p')
             
             # Construct URL with basic auth
-            CACHE_URL="${PROTOCOL}://${BAZEL_REMOTE_CACHE_USER}:${BAZEL_REMOTE_CACHE_PASSWORD}@${HOST_PATH}"
+            CACHE_URL="${PROTOCOL}://${{ inputs.bazel-remote-cache-user }}:${{ inputs.bazel-remote-cache-password }}@${HOST_PATH}"
           fi
           
           # Create .bazelrc.remote file with remote cache configuration
@@ -51,16 +63,12 @@ runs:
         build:ci --remote_upload_local_results=true
         EOF
           
-          echo "✅ Remote cache configured at: $BAZEL_REMOTE_CACHE_URL"
+          echo "✅ Remote cache configured at: ${{ inputs.bazel-remote-cache-url }}"
         else
           echo "No remote cache URL provided, using local caching only"
           # Remove any existing .bazelrc.remote file to ensure clean state
           rm -f .bazelrc.remote
         fi
-      env:
-        BAZEL_REMOTE_CACHE_URL: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        BAZEL_REMOTE_CACHE_USER: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        BAZEL_REMOTE_CACHE_PASSWORD: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
 
     - name: Setup Bazel with Multi-Layered Caching
       id: setup-bazel
