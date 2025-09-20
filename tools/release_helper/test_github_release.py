@@ -15,7 +15,7 @@ import json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
-    from tools.release_helper.github_release import GitHubReleaseClient, create_releases_for_apps_with_individual_versions
+    from tools.release_helper.github_release import GitHubReleaseClient, create_releases_for_apps_with_notes
 except ImportError:
     # httpx not available in this environment, skip tests
     pytest.skip("httpx not available, skipping github_release tests", allow_module_level=True)
@@ -201,12 +201,12 @@ class TestCreateReleasesWithIndividualVersions:
             mock_gen_notes.return_value = "Release notes content"
             mock_create_release.return_value = {"id": 123, "tag_name": "demo-hello_fastapi.v0.0.8"}
             
-            # Call the function
-            results = create_releases_for_apps_with_individual_versions(
-                app_versions=app_versions,
+            # Call the enhanced function with app_versions
+            results = create_releases_for_apps_with_notes(
                 app_list=app_list,
                 owner="test-owner",
-                repo="test-repo"
+                repo="test-repo",
+                app_versions=app_versions
             )
             
             # Verify the results
@@ -234,11 +234,11 @@ class TestCreateReleasesWithIndividualVersions:
             mock_gen_notes.return_value = "Release notes content"
             mock_create_release.return_value = {"id": 123}
             
-            results = create_releases_for_apps_with_individual_versions(
-                app_versions=app_versions,
+            results = create_releases_for_apps_with_notes(
                 app_list=app_list,
                 owner="test-owner",
-                repo="test-repo"
+                repo="test-repo",
+                app_versions=app_versions
             )
             
             # Verify results

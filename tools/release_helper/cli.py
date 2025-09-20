@@ -18,7 +18,7 @@ from tools.release_helper.release import find_app_bazel_target, plan_release, ta
 from tools.release_helper.release_notes import generate_release_notes, generate_release_notes_for_all_apps
 from tools.release_helper.summary import generate_release_summary
 from tools.release_helper.validation import validate_release_version
-from tools.release_helper.github_release import create_app_release, create_releases_for_apps, create_releases_for_apps_with_notes, create_releases_for_apps_with_individual_versions
+from tools.release_helper.github_release import create_app_release, create_releases_for_apps, create_releases_for_apps_with_notes
 
 app = typer.Typer(help="Release helper for Everything monorepo")
 
@@ -381,34 +381,23 @@ def create_combined_github_release_with_notes(
         # Create releases for all specified apps using pre-generated notes
         typer.echo(f"Creating GitHub releases for {len(app_list)} apps using pre-generated release notes...")
         
-        # If we have per-app versions, create releases individually with their specific versions
-        if app_versions:
-            results = create_releases_for_apps_with_individual_versions(
-                app_versions=app_versions,
-                app_list=app_list,
-                owner=owner,
-                repo=repo,
-                commit_sha=commit_sha,
-                prerelease=prerelease,
-                previous_tag=previous_tag,
-                release_notes_dir=release_notes_dir
-            )
-        else:
-            # Fall back to using the single version for all apps
-            if not version:
-                typer.echo("❌ No version specified and no per-app versions found in matrix", err=True)
-                raise typer.Exit(1)
-                
-            results = create_releases_for_apps_with_notes(
-                app_list=app_list,
-                version=version,
-                owner=owner,
-                repo=repo,
-                commit_sha=commit_sha,
-                prerelease=prerelease,
-                previous_tag=previous_tag,
-                release_notes_dir=release_notes_dir
-            )
+        # Validate that we have either a version or per-app versions
+        if not app_versions and not version:
+            typer.echo("❌ No version specified and no per-app versions found in matrix", err=True)
+            raise typer.Exit(1)
+        
+        # Use the enhanced function that can handle both single version and per-app versions
+        results = create_releases_for_apps_with_notes(
+            app_list=app_list,
+            version=version if not app_versions else None,
+            owner=owner,
+            repo=repo,
+            commit_sha=commit_sha,
+            prerelease=prerelease,
+            previous_tag=previous_tag,
+            release_notes_dir=release_notes_dir,
+            app_versions=app_versions if app_versions else None
+        )
         
         # Report results
         successful_releases = [app for app, result in results.items() if result is not None]
