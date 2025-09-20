@@ -29,9 +29,13 @@ def _get_changed_files(base_commit: str) -> List[str]:
 def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]:
     """Use Bazel query to find apps affected by changed files.
     
-    This approach uses Bazel's attr() queries to directly find which targets
-    reference the changed files, rather than making package-based assumptions.
-    Only apps that depend on the actually affected targets are rebuilt.
+    This approach determines which targets are affected by file changes by:
+    1. For source files: Find all targets in the package containing the file
+    2. For BUILD/bzl files: Find all targets in the package recursively
+    3. Check which apps depend on the affected targets
+    
+    This is more reliable than attr() queries which can miss files based on
+    how they're referenced in BUILD files.
     """
     if not changed_files:
         return []
@@ -40,7 +44,7 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
         all_apps = list_all_apps()
         affected_apps = []
         
-        print(f"Using Bazel attr queries to find targets affected by {len(changed_files)} changed files...", file=sys.stderr)
+        print(f"Using Bazel package-level analysis to find targets affected by {len(changed_files)} changed files...", file=sys.stderr)
         
         # Find all targets that are directly affected by the changed files
         affected_targets = set()
@@ -50,21 +54,11 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
                 continue
                 
             try:
-                # Use Bazel attr query to find targets that reference this file
-                result = run_bazel([
-                    "query", 
-                    f"attr('srcs', '{file_path}', //...)",
-                    "--output=label"
-                ])
+                # For source files, find all targets in the package containing the file
+                file_dir = str(Path(file_path).parent) if Path(file_path).parent != Path('.') else ""
                 
-                if result.stdout.strip():
-                    file_targets = result.stdout.strip().split('\n')
-                    affected_targets.update(file_targets)
-                    print(f"File {file_path} directly affects {len(file_targets)} targets", file=sys.stderr)
-                
-                # For BUILD/bzl files, all targets in the package are affected
                 if file_path.endswith(('.bzl', 'BUILD', 'BUILD.bazel')):
-                    file_dir = str(Path(file_path).parent) if Path(file_path).parent != Path('.') else ""
+                    # BUILD/bzl files affect all targets in their package recursively  
                     package_path = f"//{file_dir}" if file_dir else "//"
                     
                     result = run_bazel([
@@ -77,6 +71,33 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
                         package_targets = result.stdout.strip().split('\n')
                         affected_targets.update(package_targets)
                         print(f"Build file {file_path} affects all {len(package_targets)} targets in package {package_path}", file=sys.stderr)
+                        
+                elif file_dir:  # Source file in a package directory
+                    # Source files affect all targets in their immediate package
+                    package_path = f"//{file_dir}"
+                    
+                    result = run_bazel([
+                        "query", 
+                        f"{package_path}:*",
+                        "--output=label"
+                    ])
+                    
+                    if result.stdout.strip():
+                        package_targets = result.stdout.strip().split('\n')
+                        affected_targets.update(package_targets)
+                        print(f"Source file {file_path} affects {len(package_targets)} targets in package {package_path}", file=sys.stderr)
+                else:
+                    # File in root directory - affects root package targets
+                    result = run_bazel([
+                        "query", 
+                        "//:*",
+                        "--output=label"
+                    ])
+                    
+                    if result.stdout.strip():
+                        root_targets = result.stdout.strip().split('\n')
+                        affected_targets.update(root_targets)
+                        print(f"Root file {file_path} affects {len(root_targets)} targets in root package", file=sys.stderr)
                     
             except subprocess.CalledProcessError as e:
                 print(f"Warning: Could not query targets for file {file_path}: {e}", file=sys.stderr)
