@@ -54,34 +54,34 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
     steps:
-    - name: Validate mutually exclusive version options
-      run: |
-        CHART_VERSION="${{ github.event.inputs.chart_version }}"
-        INCREMENT_MINOR="${{ github.event.inputs.increment_minor }}"
-        INCREMENT_PATCH="${{ github.event.inputs.increment_patch }}"
-        
-        # Count how many version options are set
-        OPTION_COUNT=0
-        if [[ -n "$CHART_VERSION" ]]; then
-          OPTION_COUNT=$((OPTION_COUNT + 1))
-        fi
-        if [[ "$INCREMENT_MINOR" == "true" ]]; then
-          OPTION_COUNT=$((OPTION_COUNT + 1))
-        fi
-        if [[ "$INCREMENT_PATCH" == "true" ]]; then
-          OPTION_COUNT=$((OPTION_COUNT + 1))
-        fi
-        
-        # Ensure exactly one option is set for manual dispatch
-        if [[ $OPTION_COUNT -eq 0 ]]; then
-          echo "Error: Must specify exactly one of: chart_version, increment_minor, or increment_patch"
-          exit 1
-        elif [[ $OPTION_COUNT -gt 1 ]]; then
-          echo "Error: chart_version, increment_minor, and increment_patch are mutually exclusive. Specify only one."
-          exit 1
-        fi
-        
-        echo "Input validation passed"
+      - name: Validate mutually exclusive version options
+        run: |
+          CHART_VERSION="${{ github.event.inputs.chart_version }}"
+          INCREMENT_MINOR="${{ github.event.inputs.increment_minor }}"
+          INCREMENT_PATCH="${{ github.event.inputs.increment_patch }}"
+
+          # Count how many version options are set
+          OPTION_COUNT=0
+          if [[ -n "$CHART_VERSION" ]]; then
+            OPTION_COUNT=$((OPTION_COUNT + 1))
+          fi
+          if [[ "$INCREMENT_MINOR" == "true" ]]; then
+            OPTION_COUNT=$((OPTION_COUNT + 1))
+          fi
+          if [[ "$INCREMENT_PATCH" == "true" ]]; then
+            OPTION_COUNT=$((OPTION_COUNT + 1))
+          fi
+
+          # Ensure exactly one option is set for manual dispatch
+          if [[ $OPTION_COUNT -eq 0 ]]; then
+            echo "Error: Must specify exactly one of: chart_version, increment_minor, or increment_patch"
+            exit 1
+          elif [[ $OPTION_COUNT -gt 1 ]]; then
+            echo "Error: chart_version, increment_minor, and increment_patch are mutually exclusive. Specify only one."
+            exit 1
+          fi
+
+          echo "Input validation passed"
 
   # Discovery job to find all helm chart targets
   discover-charts:
