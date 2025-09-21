@@ -288,91 +288,6 @@ jobs:
           path: charts/
           retention-days: 30
 
-  # Create git tags for chart releases (independent of Pages publishing)
-  tag-chart-releases:
-    runs-on: ubuntu-latest
-    needs: [discover-charts, build-charts]
-    if: >-
-      github.event_name == 'workflow_dispatch' &&
-      needs.discover-charts.outputs.charts != '[]' &&
-      needs.discover-charts.outputs.charts != ''
-    strategy:
-      matrix:
-        chart: ${{ fromJSON(needs.discover-charts.outputs.charts) }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Configure Git
-        run: |
-          git config --global user.name "${{ github.actor }}"
-          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
-
-      - name: Create and push chart git tag
-        run: |
-          chart_name="${{ matrix.chart.name }}"
-          domain="${{ matrix.chart.domain }}"
-          version="${{ matrix.chart.version }}"
-          version_strategy="${{ matrix.chart.version_strategy }}"
-          
-          echo "Processing chart: $domain/$chart_name with version: $version (strategy: $version_strategy)"
-          
-          # Calculate actual version if using increment strategy
-          if [[ "$version_strategy" == "increment_minor" || "$version_strategy" == "increment_patch" ]]; then
-            echo "Calculating incremented version for $domain/$chart_name..."
-            
-            # Find latest chart tag
-            tag_pattern="${domain}-${chart_name}-chart.v*"
-            latest_tag=$(git tag -l "$tag_pattern" | sort -V | tail -1)
-            
-            if [[ -n "$latest_tag" ]]; then
-              # Extract version from tag (format: domain-chart_name-chart.vX.Y.Z)
-              current_version=$(echo "$latest_tag" | sed "s/^${domain}-${chart_name}-chart\.//")
-              echo "Found latest version: $current_version"
-              
-              # Parse semantic version
-              if [[ "$current_version" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
-                major="${BASH_REMATCH[1]}"
-                minor="${BASH_REMATCH[2]}"
-                patch="${BASH_REMATCH[3]}"
-                
-                if [[ "$version_strategy" == "increment_minor" ]]; then
-                  version="v${major}.$((minor + 1)).0"
-                else
-                  version="v${major}.${minor}.$((patch + 1))"
-                fi
-                echo "Calculated new version: $version"
-              else
-                echo "Could not parse current version: $current_version"
-                if [[ "$version_strategy" == "increment_minor" ]]; then
-                  version="v0.1.0"
-                else
-                  version="v0.0.1"
-                fi
-              fi
-            else
-              echo "No previous version found"
-              if [[ "$version_strategy" == "increment_minor" ]]; then
-                version="v0.1.0"
-              else
-                version="v0.0.1"
-              fi
-            fi
-          fi
-          
-          # Create chart tag using the same pattern as apps but with -chart suffix
-          tag_name="${domain}-${chart_name}-chart.${version}"
-          
-          echo "Creating git tag for chart: $tag_name"
-          
-          # Create and push the tag directly
-          git tag -a "$tag_name" -m "Release $domain-$chart_name chart version $version" "${{ github.sha }}"
-          git push origin "$tag_name"
-          
-          echo "✅ Created git tag: $tag_name"
-
   # Publish charts to GitHub Pages
   publish-to-pages:
     runs-on: ubuntu-latest
@@ -455,7 +370,7 @@ jobs:
   # Summary job
   summary:
     runs-on: ubuntu-latest
-    needs: [discover-charts, build-charts, tag-chart-releases]
+    needs: [discover-charts, build-charts]
     if: always()
     steps:
       - name: Print workflow summary
@@ -485,19 +400,6 @@ jobs:
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ "${{ needs.tag-chart-releases.result }}" = "success" ]; then
-              echo "✅ **Chart Tagging**: Success" >> $GITHUB_STEP_SUMMARY
-              echo "- Git tags created for chart releases" >> $GITHUB_STEP_SUMMARY
-            elif [ "${{ needs.tag-chart-releases.result }}" = "failure" ]; then
-              echo "❌ **Chart Tagging**: Failed" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "⏭️ **Chart Tagging**: Skipped" >> $GITHUB_STEP_SUMMARY
-            fi
-
-            echo "" >> $GITHUB_STEP_SUMMARY
-          fi
           echo "### Trigger Information" >> $GITHUB_STEP_SUMMARY
           echo "- Event: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- Branch: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
