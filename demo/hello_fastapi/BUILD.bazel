@@ -2,6 +2,7 @@ load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("@pip_deps_dev//:requirements.bzl", "requirement")
 load("@pip_deps_linux_amd64//:requirements.bzl", requirement_linux_amd64 = "requirement")
 load("@pip_deps_linux_arm64//:requirements.bzl", requirement_linux_arm64 = "requirement")
+load("@pip_deps_macos_arm64//:requirements.bzl", requirement_macos_arm64 = "requirement")
 load("//tools:release.bzl", "release_app")
 
 py_library(
@@ -44,6 +45,18 @@ py_binary(
         ":main_lib",
         requirement_linux_arm64("fastapi"),
         requirement_linux_arm64("uvicorn"),
+    ],
+    visibility = ["//visibility:public"],
+)
+
+py_binary(
+    name = "hello_fastapi_macos_arm64",
+    srcs = ["main.py"],
+    main = "main.py",
+    deps = [
+        ":main_lib",
+        requirement_macos_arm64("fastapi"),
+        requirement_macos_arm64("uvicorn"),
     ],
     visibility = ["//visibility:public"],
 )
