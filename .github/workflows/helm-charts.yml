@@ -98,93 +98,81 @@ jobs:
       - name: Discover and plan helm chart releases
         id: discover
         run: |
-          echo "Planning helm chart releases..."
+          echo "Discovering helm chart targets..."
 
-          # Build the command based on event type and inputs
+          # Get all targets that use helm_chart_release_macro
+          CHART_TARGETS=$(bazel query \
+            "kind('helm_chart_release', //...)" 2>/dev/null || echo "")
+
+          if [ -z "$CHART_TARGETS" ]; then
+            echo "No helm chart targets found"
+            echo "charts=[]" >> $GITHUB_OUTPUT
+            echo "domains=[]" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "Found chart targets: $CHART_TARGETS"
+
+          # Determine version to use
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            DOMAIN="${{ github.event.inputs.domain }}"
             CHART_VERSION="${{ github.event.inputs.chart_version }}"
             INCREMENT_MINOR="${{ github.event.inputs.increment_minor }}"
             INCREMENT_PATCH="${{ github.event.inputs.increment_patch }}"
             
-            CMD="bazel run //tools:release -- plan-helm-charts --event-type workflow_dispatch --domain \"$DOMAIN\" --format github"
-            
-            if [[ -n "$CHART_VERSION" ]]; then
-              CMD="$CMD --chart-version \"$CHART_VERSION\""
-            elif [[ "$INCREMENT_MINOR" == "true" ]]; then
-              CMD="$CMD --increment-minor"
+            # For increment options, we'll use a placeholder and let the tagging job handle version calculation
+            if [[ "$INCREMENT_MINOR" == "true" ]]; then
+              VERSION_STRATEGY="increment_minor"
+              CHART_VERSION="increment_minor"
             elif [[ "$INCREMENT_PATCH" == "true" ]]; then
-              CMD="$CMD --increment-patch"
+              VERSION_STRATEGY="increment_patch" 
+              CHART_VERSION="increment_patch"
+            elif [[ -n "$CHART_VERSION" ]]; then
+              VERSION_STRATEGY="specific"
+            else
+              # Fallback to default
+              CHART_VERSION="1.0.0"
+              VERSION_STRATEGY="specific"
             fi
           else
-            # For push/PR events, just discover charts without versioning
-            CHART_TARGETS=$(bazel query \
-              "kind('helm_chart_release', //...)" 2>/dev/null || echo "")
-
-            if [ -z "$CHART_TARGETS" ]; then
-              echo "No helm chart targets found"
-              echo "charts=[]" >> $GITHUB_OUTPUT
-              echo "domains=[]" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-
-            echo "Found chart targets: $CHART_TARGETS"
-
-            # Extract domains and chart info
-            CHARTS_JSON="["
-            DOMAINS_JSON="["
-
-            for target in $CHART_TARGETS; do
-              # Extract domain and chart name from target
-              # Target format: //domain:chart_name
-              domain=$(echo $target | cut -d'/' -f3 | cut -d':' -f1)
-              chart_name=$(echo $target | cut -d':' -f2)
-
-              # Add to charts array
-              if [ "$CHARTS_JSON" != "[" ]; then
-                CHARTS_JSON+=","
-              fi
-              CHARTS_JSON+="{\"target\":\"$target\","
-              CHARTS_JSON+="\"domain\":\"$domain\",\"name\":\"$chart_name\",\"version\":\"1.0.0\"}"
-
-              # Add to domains array (unique)
-              if [[ ! "$DOMAINS_JSON" =~ "\"$domain\"" ]]; then
-                if [ "$DOMAINS_JSON" != "[" ]; then
-                  DOMAINS_JSON+=","
-                fi
-                DOMAINS_JSON+="\"$domain\""
-              fi
-            done
-
-            CHARTS_JSON+="]"
-            DOMAINS_JSON+="]"
-
-            echo "charts=$CHARTS_JSON" >> $GITHUB_OUTPUT
-            echo "domains=$DOMAINS_JSON" >> $GITHUB_OUTPUT
-
-            echo "Discovered charts: $CHARTS_JSON"
-            echo "Discovered domains: $DOMAINS_JSON"
-            exit 0
+            # For push/PR events, use default version
+            CHART_VERSION="1.0.0"
+            VERSION_STRATEGY="specific"
           fi
-          
-          # Use release helper to plan the chart releases
-          echo "Planning helm chart releases with command: $CMD"
-          PLAN_OUTPUT=$(eval $CMD)
-          
-          # Parse output from release helper
-          echo "$PLAN_OUTPUT" | while IFS= read -r line; do
-            if [[ "$line" == matrix=* ]]; then
-              # Transform the matrix to the expected format for the workflow
-              MATRIX_JSON="${line#matrix=}"
-              # Extract chart info from matrix
-              CHARTS_JSON=$(echo "$MATRIX_JSON" | jq '[.include[] | {target: .bazel_target, domain: .domain, name: .chart, version: .version}]')
-              echo "charts=$CHARTS_JSON" >> $GITHUB_OUTPUT
-            elif [[ "$line" == domains=* ]]; then
-              DOMAINS_LIST="${line#domains=}"
-              DOMAINS_JSON=$(echo "[$DOMAINS_LIST]" | sed 's/ /","/g' | sed 's/\[/["/' | sed 's/\]/"]/' | sed 's/\[""\]/[]/')
-              echo "domains=$DOMAINS_JSON" >> $GITHUB_OUTPUT
+
+          # Extract domains and chart info
+          CHARTS_JSON="["
+          DOMAINS_JSON="["
+
+          for target in $CHART_TARGETS; do
+            # Extract domain and chart name from target
+            # Target format: //domain:chart_name
+            domain=$(echo $target | cut -d'/' -f3 | cut -d':' -f1)
+            chart_name=$(echo $target | cut -d':' -f2)
+
+            # Add to charts array
+            if [ "$CHARTS_JSON" != "[" ]; then
+              CHARTS_JSON+=","
+            fi
+            CHARTS_JSON+="{\"target\":\"$target\","
+            CHARTS_JSON+="\"domain\":\"$domain\",\"name\":\"$chart_name\",\"version\":\"$CHART_VERSION\",\"version_strategy\":\"$VERSION_STRATEGY\"}"
+
+            # Add to domains array (unique)
+            if [[ ! "$DOMAINS_JSON" =~ "\"$domain\"" ]]; then
+              if [ "$DOMAINS_JSON" != "[" ]; then
+                DOMAINS_JSON+=","
+              fi
+              DOMAINS_JSON+="\"$domain\""
             fi
           done
+
+          CHARTS_JSON+="]"
+          DOMAINS_JSON+="]"
+
+          echo "charts=$CHARTS_JSON" >> $GITHUB_OUTPUT
+          echo "domains=$DOMAINS_JSON" >> $GITHUB_OUTPUT
+
+          echo "Discovered charts: $CHARTS_JSON"
+          echo "Discovered domains: $DOMAINS_JSON"
 
   # Build and test charts
   build-charts:
@@ -303,11 +291,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Bazel
-        uses: bazel-contrib/setup-bazel@0.15.0
-        with:
-          bazelisk-version: '1.20.0'
-
       - name: Configure Git
         run: |
           git config --global user.name "${{ github.actor }}"
@@ -318,17 +301,61 @@ jobs:
           chart_name="${{ matrix.chart.name }}"
           domain="${{ matrix.chart.domain }}"
           version="${{ matrix.chart.version }}"
+          version_strategy="${{ matrix.chart.version_strategy }}"
+          
+          echo "Processing chart: $domain/$chart_name with version: $version (strategy: $version_strategy)"
+          
+          # Calculate actual version if using increment strategy
+          if [[ "$version_strategy" == "increment_minor" || "$version_strategy" == "increment_patch" ]]; then
+            echo "Calculating incremented version for $domain/$chart_name..."
+            
+            # Find latest chart tag
+            tag_pattern="${domain}-${chart_name}-chart.v*"
+            latest_tag=$(git tag -l "$tag_pattern" | sort -V | tail -1)
+            
+            if [[ -n "$latest_tag" ]]; then
+              # Extract version from tag (format: domain-chart_name-chart.vX.Y.Z)
+              current_version=$(echo "$latest_tag" | sed "s/^${domain}-${chart_name}-chart\.//")
+              echo "Found latest version: $current_version"
+              
+              # Parse semantic version
+              if [[ "$current_version" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+                major="${BASH_REMATCH[1]}"
+                minor="${BASH_REMATCH[2]}"
+                patch="${BASH_REMATCH[3]}"
+                
+                if [[ "$version_strategy" == "increment_minor" ]]; then
+                  version="v${major}.$((minor + 1)).0"
+                else
+                  version="v${major}.${minor}.$((patch + 1))"
+                fi
+                echo "Calculated new version: $version"
+              else
+                echo "Could not parse current version: $current_version"
+                if [[ "$version_strategy" == "increment_minor" ]]; then
+                  version="v0.1.0"
+                else
+                  version="v0.0.1"
+                fi
+              fi
+            else
+              echo "No previous version found"
+              if [[ "$version_strategy" == "increment_minor" ]]; then
+                version="v0.1.0"
+              else
+                version="v0.0.1"
+              fi
+            fi
+          fi
           
           # Create chart tag using the same pattern as apps but with -chart suffix
           tag_name="${domain}-${chart_name}-chart.${version}"
           
           echo "Creating git tag for chart: $tag_name"
           
-          # Use the release helper to create the chart tag
-          bazel run //tools:release -- release-helm-chart "$domain" "$chart_name" \
-            --version "$version" \
-            --commit "${{ github.sha }}" \
-            --create-git-tag
+          # Create and push the tag directly
+          git tag -a "$tag_name" -m "Release $domain-$chart_name chart version $version" "${{ github.sha }}"
+          git push origin "$tag_name"
           
           echo "✅ Created git tag: $tag_name"
 
