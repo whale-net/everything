@@ -521,12 +521,12 @@ docker run --rm hello_go:latest      # ✅ Works correctly!
 Python applications now use platform-specific requirements files for better compatibility:
 
 ```bash
-# Compile requirements for all platforms
-bazel run //:pip_compile_all
-
-# Or compile for specific platforms
+# Compile requirements for specific platforms
 bazel run //:pip_compile_linux_amd64  
 bazel run //:pip_compile_linux_arm64_v8
+
+# Or compile the generic requirements (for backward compatibility)
+bazel run //:pip_compile
 ```
 
 Requirements files:

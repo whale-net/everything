@@ -22,16 +22,10 @@ pip_compile(
     requirements_txt = "requirements-linux-arm64-v8.lock.txt",
 )
 
-# Convenience target to compile all platform requirements
-pip_compile(
-    name = "pip_compile_all",
-    requirements_in = "requirements.in",
-    requirements_txt = "requirements.lock.txt",
-    deps = [
-        ":pip_compile_linux_amd64",
-        ":pip_compile_linux_arm64_v8",
-    ],
-)
+# Note: To compile all platform requirements, run each target individually:
+# bazel run //:pip_compile
+# bazel run //:pip_compile_linux_amd64  
+# bazel run //:pip_compile_linux_arm64_v8
 
 # Root Python library
 py_library(
