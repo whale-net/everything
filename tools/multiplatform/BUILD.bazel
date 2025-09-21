@@ -1,0 +1,45 @@
+# Multiplatform image testing and validation tools
+
+package(default_visibility = ["//visibility:public"])
+
+# Comprehensive test for multiplatform image functionality
+py_test(
+    name = "test_multiplatform_image",
+    srcs = ["test_multiplatform_image.py"],
+    size = "large",  # These tests build containers and take time
+    timeout = "long",  # Allow enough time for container builds
+    tags = ["integration", "container", "multiplatform", "manual"],
+    # Run this test manually since it builds containers
+    local = True,  # Run locally to access bazel commands
+    env = {
+        "PYTHONPATH": "tools",
+    },
+    # Ensure we have access to the necessary build targets
+    deps = [],
+)
+
+# Integration test that runs within Bazel sandbox
+py_test(
+    name = "test_multiplatform_integration",
+    srcs = ["test_multiplatform_integration.py"],
+    size = "large",
+    timeout = "long",
+    tags = ["integration", "bazel-sandbox"],
+    # This test runs bazel commands so it needs to be local
+    local = True,
+)
+
+# Configuration validation test (safe for Bazel sandbox)
+py_test(
+    name = "test_multiplatform_configuration",
+    srcs = ["test_multiplatform_configuration.py"],
+    size = "small",
+    timeout = "short",
+    tags = ["unit", "configuration"],
+)
+
+# Shell-based smoke test (exported for manual execution)
+exports_files([
+    "smoke_test_multiplatform.sh",
+    "MULTIPLATFORM_IMPLEMENTATION_SUMMARY.md",
+])

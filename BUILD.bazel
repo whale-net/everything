@@ -7,6 +7,8 @@ exports_files([
     "requirements.lock.txt",
     "requirements.linux.amd64.lock.txt",
     "requirements.linux.arm64.lock.txt",
+    "MODULE.bazel",
+    "MODULE.bazel.lock",
 ])
 
 # Python dependencies
