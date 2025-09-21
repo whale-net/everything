@@ -1,10 +1,14 @@
 """Multi-platform OCI image building rules for the Everything monorepo.
 
 This module provides simplified, clean macros for building OCI images that support
-multiple platforms (AMD64 and ARM64) with three deployment strategies:
-1. Multi-platform manifest list (using oci_image_index for cross-platform compatibility)
+multiple platforms (AMD64 and ARM64) using oci_image_index to create manifest lists.
+Each app gets three deployment options:
+1. Multi-platform manifest list (main target - supports both AMD64 and ARM64)
 2. Platform-specific AMD64 image (for AMD64-only deployments)  
 3. Platform-specific ARM64 image (for ARM64-only deployments)
+
+The multi-platform manifest list is created using oci_image_index which references
+both platform-specific images, providing true cross-platform container support.
 """
 
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index", "oci_load", "oci_push")
@@ -30,7 +34,7 @@ def multiplatform_python_image(
     - {name}_arm64: Platform-specific ARM64 image
     
     And corresponding load targets for local testing:
-    - {name}_load: Load multi-platform manifest
+    - {name}_load: Load multi-platform manifest (defaults to AMD64 for local testing)
     - {name}_amd64_load: Load AMD64-specific image
     - {name}_arm64_load: Load ARM64-specific image
     
@@ -99,16 +103,13 @@ def multiplatform_python_image(
         **kwargs
     )
     
-    # Create multi-platform manifest list using oci_image_index with experimental Bazel platforms
-    # This is the recommended experimental approach for true multi-platform manifests
+    # Create multi-platform manifest list using oci_image_index
+    # This creates a true multi-platform manifest that references both platform images
     oci_image_index(
         name = name,
         images = [
-            ":" + name + "_amd64",  # Use one of the platform images as base
-        ],
-        platforms = [
-            "//tools:linux_x86_64",
-            "//tools:linux_arm64", 
+            ":" + name + "_amd64",
+            ":" + name + "_arm64",
         ],
         tags = tags,
         visibility = visibility,
@@ -138,9 +139,6 @@ def multiplatform_python_image(
     )
     
     # Create oci_load targets for local testing
-    # NOTE: Platform-specific targets require explicit --platforms flag:
-    #   bazel run //demo/hello_fastapi:hello_fastapi_image_amd64_load --platforms=//tools:linux_x86_64
-    #   bazel run //demo/hello_fastapi:hello_fastapi_image_arm64_load --platforms=//tools:linux_arm64
     oci_load(
         name = name + "_amd64_load",
         image = ":" + name + "_amd64",
@@ -188,9 +186,6 @@ def _build_python_platform_image(
         "PYTHON_RUNFILES": "/app/" + binary_name + ".runfiles",
         "PYTHONPATH": "/app:" + "/app/" + binary_name + ".runfiles",
     }
-    
-    # Note: Using Bazel's experimental platform system instead of manual architecture/os
-    # Platform information comes automatically from the platform transition or --platforms flag
     
     oci_image(
         name = name,
@@ -263,16 +258,13 @@ def multiplatform_go_image(
         **kwargs
     )
     
-    # Create multi-platform manifest list using oci_image_index with experimental Bazel platforms
-    # This is the recommended experimental approach for true multi-platform manifests
+    # Create multi-platform manifest list using oci_image_index
+    # This creates a true multi-platform manifest that references both platform images
     oci_image_index(
         name = name,
         images = [
-            ":" + name + "_amd64",  # Use one of the platform images as base
-        ],
-        platforms = [
-            "//tools:linux_x86_64",
-            "//tools:linux_arm64", 
+            ":" + name + "_amd64",
+            ":" + name + "_arm64",
         ],
         tags = tags,
         visibility = visibility,
@@ -302,9 +294,6 @@ def multiplatform_go_image(
     )
     
     # Create oci_load targets for local testing  
-    # NOTE: Platform-specific targets require explicit --platforms flag:
-    #   bazel run //demo/hello_go:hello_go_image_amd64_load --platforms=//tools:linux_x86_64
-    #   bazel run //demo/hello_go:hello_go_image_arm64_load --platforms=//tools:linux_arm64
     oci_load(
         name = name + "_amd64_load",
         image = ":" + name + "_amd64",
@@ -347,9 +336,6 @@ def _build_go_platform_image(
         binary_name = paths.basename(binary)
     
     # Go binaries don't need RUNFILES since they're statically linked
-    
-    # Note: Using Bazel's experimental platform system instead of manual architecture/os
-    # Platform information comes automatically from the platform transition or --platforms flag
     
     oci_image(
         name = name,

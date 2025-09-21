@@ -6,6 +6,7 @@ exports_files([
     "oci.bzl",
     "python_runner.py",
     "platforms.bzl",
+    "multiplatform_image.bzl",
 ])
 
 # Platform definitions for cross-compilation

@@ -91,19 +91,10 @@ class TestMultiplatformConfiguration(unittest.TestCase):
             with open(app_build_file, 'r') as f:
                 content = f.read()
             
-            # Check for multiplatform image usage
-            self.assertIn("multiplatform_", content, f"Multiplatform build not configured for {app}")
-    
-    def test_platform_transitions_configured(self):
-        """Test that platform transition files exist."""
-        platform_transitions = self.workspace_root / "tools" / "platform_transitions.bzl"
-        self.assertTrue(platform_transitions.exists(), "platform_transitions.bzl not found")
-        
-        with open(platform_transitions, 'r') as f:
-            content = f.read()
-        
-        # Check for transition implementation
-        self.assertIn("transition_", content, "Platform transitions not implemented")
+            # Check for multiplatform image usage via release_app macro
+            self.assertIn("release_app", content, f"Multiplatform build not configured for {app} (missing release_app)")
+            # Also verify that the release_app has the required language parameter
+            self.assertIn("language =", content, f"Multiplatform build not properly configured for {app} (missing language)")
     
     def test_experimental_features_enabled(self):
         """Test that experimental features are properly configured."""
