@@ -226,45 +226,68 @@ def _query_affected_tests_bazel(changed_files: List[str]) -> List[str]:
                     print(f"Found {len(affected_tests)} test targets that depend on changed targets", file=sys.stderr)
                     
             except subprocess.CalledProcessError as e:
-                print(f"Warning: Could not query test dependencies efficiently, falling back to individual queries: {e}", file=sys.stderr)
+                print(f"Warning: Could not query test dependencies efficiently, trying alternative rdeps approach: {e}", file=sys.stderr)
                 
-                # Fallback: query all tests first, then check each one individually
-                try:
-                    all_tests_result = run_bazel([
-                        "query",
-                        'kind(".*test", //...)',
-                        "--output=label"
-                    ])
-                    
-                    if all_tests_result.stdout.strip():
-                        all_tests = all_tests_result.stdout.strip().split('\n')
-                        print(f"Found {len(all_tests)} total test targets, checking dependencies individually", file=sys.stderr)
+                # Alternative approach: try rdeps with individual targets instead of combined expression
+                for target in affected_targets:
+                    try:
+                        # Query: find all test targets that depend on this specific target
+                        deps_query = f'kind(".*test", rdeps(//..., {target}))'
                         
-                        # For each test, check if it depends on any affected targets
-                        for test_target in all_tests:
-                            try:
-                                # Query all dependencies of this test
-                                deps_result = run_bazel([
-                                    "query", 
-                                    f"deps({test_target})",
-                                    "--output=label"
-                                ])
-                                
-                                if deps_result.stdout.strip():
-                                    test_deps = set(deps_result.stdout.strip().split('\n'))
+                        deps_result = run_bazel([
+                            "query", 
+                            deps_query,
+                            "--output=label"
+                        ])
+                        
+                        if deps_result.stdout.strip():
+                            target_tests = deps_result.stdout.strip().split('\n')
+                            affected_tests.update(target_tests)
+                            print(f"Found {len(target_tests)} test targets that depend on {target}", file=sys.stderr)
+                            
+                    except subprocess.CalledProcessError as e:
+                        print(f"Warning: Could not query test dependencies for {target}: {e}", file=sys.stderr)
+                        continue
+                
+                # Only fall back to the expensive individual test loop if rdeps completely fails
+                if not affected_tests:
+                    print("rdeps queries failed, falling back to individual test dependency analysis", file=sys.stderr)
+                    try:
+                        all_tests_result = run_bazel([
+                            "query",
+                            'kind(".*test", //...)',
+                            "--output=label"
+                        ])
+                        
+                        if all_tests_result.stdout.strip():
+                            all_tests = all_tests_result.stdout.strip().split('\n')
+                            print(f"Found {len(all_tests)} total test targets, checking dependencies individually", file=sys.stderr)
+                            
+                            # For each test, check if it depends on any affected targets
+                            for test_target in all_tests:
+                                try:
+                                    # Query all dependencies of this test
+                                    deps_result = run_bazel([
+                                        "query", 
+                                        f"deps({test_target})",
+                                        "--output=label"
+                                    ])
                                     
-                                    # Check if this test depends on any affected targets
-                                    if affected_targets.intersection(test_deps):
-                                        affected_tests.add(test_target)
-                                        overlapping_targets = affected_targets.intersection(test_deps)
-                                        print(f"Test {test_target} affected: depends on {len(overlapping_targets)} changed targets", file=sys.stderr)
+                                    if deps_result.stdout.strip():
+                                        test_deps = set(deps_result.stdout.strip().split('\n'))
                                         
-                            except subprocess.CalledProcessError as e:
-                                print(f"Warning: Could not analyze dependencies for test {test_target}: {e}", file=sys.stderr)
-                                continue
-                                
-                except subprocess.CalledProcessError as e:
-                    print(f"Error querying all test targets: {e}", file=sys.stderr)
+                                        # Check if this test depends on any affected targets
+                                        if affected_targets.intersection(test_deps):
+                                            affected_tests.add(test_target)
+                                            overlapping_targets = affected_targets.intersection(test_deps)
+                                            print(f"Test {test_target} affected: depends on {len(overlapping_targets)} changed targets", file=sys.stderr)
+                                            
+                                except subprocess.CalledProcessError as e:
+                                    print(f"Warning: Could not analyze dependencies for test {test_target}: {e}", file=sys.stderr)
+                                    continue
+                                    
+                    except subprocess.CalledProcessError as e:
+                        print(f"Error querying all test targets: {e}", file=sys.stderr)
         
         result_list = sorted(list(affected_tests))
         print(f"Total test targets affected: {len(result_list)}", file=sys.stderr)
