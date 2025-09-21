@@ -1,8 +1,6 @@
-load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
 load("@pip_deps_dev//:requirements.bzl", "requirement")
-load("@pip_deps_linux_amd64//:requirements.bzl", requirement_linux_amd64 = "requirement")
-load("@pip_deps_linux_arm64//:requirements.bzl", requirement_linux_arm64 = "requirement")
-load("@pip_deps_macos_arm64//:requirements.bzl", requirement_macos_arm64 = "requirement")
+load("//tools:python_binary.bzl", "multiplatform_py_binary")
 load("//tools:release.bzl", "release_app")
 
 py_library(
@@ -11,53 +9,13 @@ py_library(
     visibility = ["//demo/hello_fastapi:__pkg__"],
 )
 
-# Default binary for development (uses dev requirements)
-py_binary(
+# Single macro generates all platform-specific binaries
+multiplatform_py_binary(
     name = "hello_fastapi",
     srcs = ["main.py"],
     main = "main.py",
-    deps = [
-        ":main_lib",
-        requirement("fastapi"),
-        requirement("uvicorn"),
-    ],
-    visibility = ["//visibility:public"],
-)
-
-# Platform-specific binaries for container deployment
-py_binary(
-    name = "hello_fastapi_linux_amd64",
-    srcs = ["main.py"],
-    main = "main.py",
-    deps = [
-        ":main_lib",
-        requirement_linux_amd64("fastapi"),
-        requirement_linux_amd64("uvicorn"),
-    ],
-    visibility = ["//visibility:public"],
-)
-
-py_binary(
-    name = "hello_fastapi_linux_arm64",
-    srcs = ["main.py"],
-    main = "main.py",
-    deps = [
-        ":main_lib",
-        requirement_linux_arm64("fastapi"),
-        requirement_linux_arm64("uvicorn"),
-    ],
-    visibility = ["//visibility:public"],
-)
-
-py_binary(
-    name = "hello_fastapi_macos_arm64",
-    srcs = ["main.py"],
-    main = "main.py",
-    deps = [
-        ":main_lib",
-        requirement_macos_arm64("fastapi"),
-        requirement_macos_arm64("uvicorn"),
-    ],
+    deps = [":main_lib"],
+    requirements = ["fastapi", "uvicorn"],
     visibility = ["//visibility:public"],
 )
 
@@ -75,8 +33,6 @@ py_test(
 
 release_app(
     name = "hello_fastapi",
-    binary_amd64 = ":hello_fastapi_linux_amd64",
-    binary_arm64 = ":hello_fastapi_linux_arm64",
     language = "python",
     domain = "demo",
     description = "FastAPI hello world application with uvicorn",

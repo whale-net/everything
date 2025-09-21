@@ -107,7 +107,8 @@ class MultiplatformImageTester:
             app_name = target.split(":")[-1]
             domain = target.split("/")[2]
             
-            manifest_path = self.workspace_root / f"bazel-bin/{domain}/{app_name}/{app_name}/index.json"
+            # The target name is app_name_image, so we need to look in that directory
+            manifest_path = self.workspace_root / f"bazel-bin/{domain}/{app_name.replace('_image', '')}/{app_name}/index.json"
             manifest_exists = manifest_path.exists()
             
             manifest_details = "Manifest file not found"

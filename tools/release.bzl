@@ -45,13 +45,14 @@ def release_app(name, binary_target = None, binary_amd64 = None, binary_arm64 = 
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
-    ensuring consistency between the two systems.
+    ensuring consistency between the two systems. When used with multiplatform_py_binary,
+    it automatically detects platform-specific binaries.
     
     Args:
-        name: App name (should match directory name)
+        name: App name (should match directory name and multiplatform_py_binary name)
         binary_target: The py_binary or go_binary target for this app (used for both platforms if platform-specific binaries not provided)
-        binary_amd64: AMD64-specific binary target (overrides binary_target for AMD64)
-        binary_arm64: ARM64-specific binary target (overrides binary_target for ARM64)
+        binary_amd64: AMD64-specific binary target (auto-detected if using multiplatform_py_binary)
+        binary_arm64: ARM64-specific binary target (auto-detected if using multiplatform_py_binary)
         language: Programming language ("python" or "go")
         domain: Domain/category for the app (e.g., "demo", "api", "web")
         description: Optional description of the app
@@ -62,12 +63,18 @@ def release_app(name, binary_target = None, binary_amd64 = None, binary_arm64 = 
     if language not in ["python", "go"]:
         fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
     
-    # Determine which binaries to use for each platform
-    amd64_binary = binary_amd64 if binary_amd64 else binary_target
-    arm64_binary = binary_arm64 if binary_arm64 else binary_target
+    # Auto-detect platform-specific binaries for Python apps using multiplatform_py_binary
+    if language == "python" and not binary_amd64 and not binary_arm64 and not binary_target:
+        # Assume multiplatform_py_binary pattern: name, name_linux_amd64, name_linux_arm64
+        amd64_binary = ":" + name + "_linux_amd64"
+        arm64_binary = ":" + name + "_linux_arm64"
+    else:
+        # Use explicitly provided binaries or fall back to single binary_target
+        amd64_binary = binary_amd64 if binary_amd64 else binary_target
+        arm64_binary = binary_arm64 if binary_arm64 else binary_target
     
     if not amd64_binary or not arm64_binary:
-        fail("Must provide either 'binary_target' for both platforms or both 'binary_amd64' and 'binary_arm64'")
+        fail("Must provide either 'binary_target' for both platforms, both 'binary_amd64' and 'binary_arm64', or use multiplatform_py_binary with name '{}'".format(name))
     
     # Repository name for container images should use domain-app format
     image_name = domain + "-" + name
