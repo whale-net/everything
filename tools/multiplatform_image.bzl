@@ -131,6 +131,10 @@ def multiplatform_python_image(
         visibility = visibility,
     )
     
+    # Create oci_load targets for local testing
+    # NOTE: Platform-specific targets require explicit --platforms flag:
+    #   bazel run //demo/hello_fastapi:hello_fastapi_image_amd64_load --platforms=//tools:linux_x86_64
+    #   bazel run //demo/hello_fastapi:hello_fastapi_image_arm64_load --platforms=//tools:linux_arm64
     oci_load(
         name = name + "_amd64_load",
         image = ":" + name + "_amd64",
@@ -282,6 +286,10 @@ def multiplatform_go_image(
         visibility = visibility,
     )
     
+    # Create oci_load targets for local testing  
+    # NOTE: Platform-specific targets require explicit --platforms flag:
+    #   bazel run //demo/hello_go:hello_go_image_amd64_load --platforms=//tools:linux_x86_64
+    #   bazel run //demo/hello_go:hello_go_image_arm64_load --platforms=//tools:linux_arm64
     oci_load(
         name = name + "_amd64_load",
         image = ":" + name + "_amd64",

@@ -61,6 +61,7 @@ pip.parse(
     python_version = "3.11",
     requirements_lock = "//:requirements.linux.amd64.lock.txt",
     experimental_target_platforms = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
+    experimental_index_url = "https://pypi.org/simple",
 )
 
 pip.parse(
@@ -68,6 +69,7 @@ pip.parse(
     python_version = "3.11",
     requirements_lock = "//:requirements.linux.arm64.lock.txt",
     experimental_target_platforms = ["@platforms//os:linux", "@platforms//cpu:arm64"],
+    experimental_index_url = "https://pypi.org/simple",
 )
 
 pip.parse(
