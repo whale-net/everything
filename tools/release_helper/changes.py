@@ -46,61 +46,49 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
         
         print(f"Using Bazel package-level analysis to find targets affected by {len(changed_files)} changed files...", file=sys.stderr)
         
-        # Find all targets that are directly affected by the changed files
-        affected_targets = set()
+        # Build query expressions for all affected packages to reduce subprocess calls
+        package_queries = set()
         
         for file_path in changed_files:
             if not file_path:
                 continue
                 
-            try:
-                # For source files, find all targets in the package containing the file
-                file_dir = str(Path(file_path).parent) if Path(file_path).parent != Path('.') else ""
-                
-                if file_path.endswith(('.bzl', 'BUILD', 'BUILD.bazel')):
-                    # BUILD/bzl files affect all targets in their package recursively  
-                    package_path = f"//{file_dir}" if file_dir else "//"
-                    
-                    result = run_bazel([
-                        "query", 
-                        f"{package_path}/...",
-                        "--output=label"
-                    ])
-                    
-                    if result.stdout.strip():
-                        package_targets = result.stdout.strip().split('\n')
-                        affected_targets.update(package_targets)
-                        print(f"Build file {file_path} affects all {len(package_targets)} targets in package {package_path}", file=sys.stderr)
+            # For source files, find all targets in the package containing the file
+            file_dir = str(Path(file_path).parent) if Path(file_path).parent != Path('.') else ""
+            
+            if file_path.endswith(('.bzl', 'BUILD', 'BUILD.bazel')):
+                # BUILD/bzl files affect all targets in their package recursively  
+                package_path = f"//{file_dir}" if file_dir else "//"
+                package_queries.add(f"{package_path}/...")
                         
-                elif file_dir:  # Source file in a package directory
-                    # Source files affect all targets in their immediate package
-                    package_path = f"//{file_dir}"
-                    
-                    result = run_bazel([
-                        "query", 
-                        f"{package_path}:*",
-                        "--output=label"
-                    ])
-                    
-                    if result.stdout.strip():
-                        package_targets = result.stdout.strip().split('\n')
-                        affected_targets.update(package_targets)
-                        print(f"Source file {file_path} affects {len(package_targets)} targets in package {package_path}", file=sys.stderr)
-                else:
-                    # File in root directory - affects root package targets
-                    result = run_bazel([
-                        "query", 
-                        "//:*",
-                        "--output=label"
-                    ])
-                    
-                    if result.stdout.strip():
-                        root_targets = result.stdout.strip().split('\n')
-                        affected_targets.update(root_targets)
-                        print(f"Root file {file_path} affects {len(root_targets)} targets in root package", file=sys.stderr)
+            elif file_dir:  # Source file in a package directory
+                # Source files affect all targets in their immediate package
+                package_path = f"//{file_dir}"
+                package_queries.add(f"{package_path}:*")
+            else:
+                # File in root directory - affects root package targets
+                package_queries.add("//:*")
+        
+        # Consolidate all package queries into a single Bazel call
+        affected_targets = set()
+        if package_queries:
+            # Combine all queries with union operator
+            combined_query = " + ".join(package_queries)
+            
+            try:
+                result = run_bazel([
+                    "query", 
+                    combined_query,
+                    "--output=label"
+                ])
+                
+                if result.stdout.strip():
+                    package_targets = result.stdout.strip().split('\n')
+                    affected_targets.update(package_targets)
+                    print(f"Found {len(package_targets)} targets affected by changed files", file=sys.stderr)
                     
             except subprocess.CalledProcessError as e:
-                print(f"Warning: Could not query targets for file {file_path}: {e}", file=sys.stderr)
+                print(f"Warning: Could not query targets for changed files: {e}", file=sys.stderr)
         
         print(f"Total targets affected: {len(affected_targets)}", file=sys.stderr)
         
@@ -169,61 +157,49 @@ def _query_affected_tests_bazel(changed_files: List[str]) -> List[str]:
     try:
         print(f"Using Bazel package-level analysis to find test targets affected by {len(changed_files)} changed files...", file=sys.stderr)
         
-        # Find all targets that are directly affected by the changed files
-        affected_targets = set()
+        # Build query expressions for all affected packages to reduce subprocess calls
+        package_queries = set()
         
         for file_path in changed_files:
             if not file_path:
                 continue
                 
-            try:
-                # For source files, find all targets in the package containing the file
-                file_dir = str(Path(file_path).parent) if Path(file_path).parent != Path('.') else ""
-                
-                if file_path.endswith(('.bzl', 'BUILD', 'BUILD.bazel')):
-                    # BUILD/bzl files affect all targets in their package recursively  
-                    package_path = f"//{file_dir}" if file_dir else "//"
-                    
-                    result = run_bazel([
-                        "query", 
-                        f"{package_path}/...",
-                        "--output=label"
-                    ])
-                    
-                    if result.stdout.strip():
-                        package_targets = result.stdout.strip().split('\n')
-                        affected_targets.update(package_targets)
-                        print(f"Build file {file_path} affects all {len(package_targets)} targets in package {package_path}", file=sys.stderr)
+            # For source files, find all targets in the package containing the file
+            file_dir = str(Path(file_path).parent) if Path(file_path).parent != Path('.') else ""
+            
+            if file_path.endswith(('.bzl', 'BUILD', 'BUILD.bazel')):
+                # BUILD/bzl files affect all targets in their package recursively  
+                package_path = f"//{file_dir}" if file_dir else "//"
+                package_queries.add(f"{package_path}/...")
                         
-                elif file_dir:  # Source file in a package directory
-                    # Source files affect all targets in their immediate package
-                    package_path = f"//{file_dir}"
-                    
-                    result = run_bazel([
-                        "query", 
-                        f"{package_path}:*",
-                        "--output=label"
-                    ])
-                    
-                    if result.stdout.strip():
-                        package_targets = result.stdout.strip().split('\n')
-                        affected_targets.update(package_targets)
-                        print(f"Source file {file_path} affects {len(package_targets)} targets in package {package_path}", file=sys.stderr)
-                else:
-                    # File in root directory - affects root package targets
-                    result = run_bazel([
-                        "query", 
-                        "//:*",
-                        "--output=label"
-                    ])
-                    
-                    if result.stdout.strip():
-                        root_targets = result.stdout.strip().split('\n')
-                        affected_targets.update(root_targets)
-                        print(f"Root file {file_path} affects {len(root_targets)} targets in root package", file=sys.stderr)
+            elif file_dir:  # Source file in a package directory
+                # Source files affect all targets in their immediate package
+                package_path = f"//{file_dir}"
+                package_queries.add(f"{package_path}:*")
+            else:
+                # File in root directory - affects root package targets
+                package_queries.add("//:*")
+        
+        # Consolidate all package queries into a single Bazel call
+        affected_targets = set()
+        if package_queries:
+            # Combine all queries with union operator
+            combined_query = " + ".join(package_queries)
+            
+            try:
+                result = run_bazel([
+                    "query", 
+                    combined_query,
+                    "--output=label"
+                ])
+                
+                if result.stdout.strip():
+                    package_targets = result.stdout.strip().split('\n')
+                    affected_targets.update(package_targets)
+                    print(f"Found {len(package_targets)} targets affected by changed files", file=sys.stderr)
                     
             except subprocess.CalledProcessError as e:
-                print(f"Warning: Could not query targets for file {file_path}: {e}", file=sys.stderr)
+                print(f"Warning: Could not query targets for changed files: {e}", file=sys.stderr)
         
         print(f"Total targets affected: {len(affected_targets)}", file=sys.stderr)
         
@@ -231,39 +207,64 @@ def _query_affected_tests_bazel(changed_files: List[str]) -> List[str]:
         affected_tests = set()
         
         if affected_targets:
-            # Query all test targets in the repository
-            all_tests_result = run_bazel([
-                "query",
-                'kind(".*test", //...)',
-                "--output=label"
-            ])
+            # Use a single query to find tests that depend on ANY of the affected targets
+            # Convert target set to space-separated string for the query
+            targets_expr = " + ".join(affected_targets)
             
-            if all_tests_result.stdout.strip():
-                all_tests = all_tests_result.stdout.strip().split('\n')
-                print(f"Found {len(all_tests)} total test targets", file=sys.stderr)
+            try:
+                # Query: find all test targets that depend on any of the affected targets
+                deps_query = f'kind(".*test", rdeps(//..., {targets_expr}))'
                 
-                # For each test, check if it depends on any affected targets
-                for test_target in all_tests:
-                    try:
-                        # Query all dependencies of this test
-                        deps_result = run_bazel([
-                            "query", 
-                            f"deps({test_target})",
-                            "--output=label"
-                        ])
+                deps_result = run_bazel([
+                    "query", 
+                    deps_query,
+                    "--output=label"
+                ])
+                
+                if deps_result.stdout.strip():
+                    affected_tests.update(deps_result.stdout.strip().split('\n'))
+                    print(f"Found {len(affected_tests)} test targets that depend on changed targets", file=sys.stderr)
+                    
+            except subprocess.CalledProcessError as e:
+                print(f"Warning: Could not query test dependencies efficiently, falling back to individual queries: {e}", file=sys.stderr)
+                
+                # Fallback: query all tests first, then check each one individually
+                try:
+                    all_tests_result = run_bazel([
+                        "query",
+                        'kind(".*test", //...)',
+                        "--output=label"
+                    ])
+                    
+                    if all_tests_result.stdout.strip():
+                        all_tests = all_tests_result.stdout.strip().split('\n')
+                        print(f"Found {len(all_tests)} total test targets, checking dependencies individually", file=sys.stderr)
                         
-                        if deps_result.stdout.strip():
-                            test_deps = set(deps_result.stdout.strip().split('\n'))
-                            
-                            # Check if this test depends on any affected targets
-                            if affected_targets.intersection(test_deps):
-                                affected_tests.add(test_target)
-                                overlapping_targets = affected_targets.intersection(test_deps)
-                                print(f"Test {test_target} affected: depends on {len(overlapping_targets)} changed targets", file=sys.stderr)
-                            
-                    except subprocess.CalledProcessError as e:
-                        print(f"Warning: Could not analyze dependencies for test {test_target}: {e}", file=sys.stderr)
-                        continue
+                        # For each test, check if it depends on any affected targets
+                        for test_target in all_tests:
+                            try:
+                                # Query all dependencies of this test
+                                deps_result = run_bazel([
+                                    "query", 
+                                    f"deps({test_target})",
+                                    "--output=label"
+                                ])
+                                
+                                if deps_result.stdout.strip():
+                                    test_deps = set(deps_result.stdout.strip().split('\n'))
+                                    
+                                    # Check if this test depends on any affected targets
+                                    if affected_targets.intersection(test_deps):
+                                        affected_tests.add(test_target)
+                                        overlapping_targets = affected_targets.intersection(test_deps)
+                                        print(f"Test {test_target} affected: depends on {len(overlapping_targets)} changed targets", file=sys.stderr)
+                                        
+                            except subprocess.CalledProcessError as e:
+                                print(f"Warning: Could not analyze dependencies for test {test_target}: {e}", file=sys.stderr)
+                                continue
+                                
+                except subprocess.CalledProcessError as e:
+                    print(f"Error querying all test targets: {e}", file=sys.stderr)
         
         result_list = sorted(list(affected_tests))
         print(f"Total test targets affected: {len(result_list)}", file=sys.stderr)
