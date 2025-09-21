@@ -82,12 +82,42 @@ def increment_version_cmd(
         raise typer.Exit(1)
 
 
+@app.command("increment-chart-version")
+def increment_chart_version_cmd(
+    domain: Annotated[str, typer.Argument(help="Chart domain (e.g., manman, demo)")],
+    chart_name: Annotated[str, typer.Argument(help="Chart name (e.g., host_chart)")],
+    increment_type: Annotated[str, typer.Argument(help="Increment type: 'minor' or 'patch'")],
+):
+    """Calculate the next version for a helm chart based on increment type."""
+    from tools.release_helper.git import auto_increment_chart_version
+    
+    if increment_type not in ["minor", "patch"]:
+        typer.echo("Error: increment_type must be 'minor' or 'patch'", err=True)
+        raise typer.Exit(1)
+    
+    try:
+        new_version = auto_increment_chart_version(domain, chart_name, increment_type)
+        typer.echo(f"{domain}-{chart_name}: {new_version}")
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+
 @app.command()
 def list_apps():
     """List all apps with release metadata."""
     apps = list_all_apps()
     for app_info in apps:
         typer.echo(f"{app_info['name']} (domain: {app_info['domain']}, target: {app_info['bazel_target']})")
+
+
+@app.command()
+def list_charts():
+    """List all helm charts with release metadata."""
+    from tools.release_helper.metadata import list_all_helm_charts
+    charts = list_all_helm_charts()
+    for chart_info in charts:
+        typer.echo(f"{chart_info['name']} (domain: {chart_info['domain']}, target: {chart_info['bazel_target']})")
 
 
 @app.command()
@@ -171,6 +201,101 @@ def plan(
             typer.echo(f"apps={' '.join(plan_result['apps'])}")
         else:
             typer.echo("apps=")
+    else:
+        # JSON output
+        typer.echo(json.dumps(plan_result, indent=2))
+
+
+@app.command("plan-helm-charts")
+def plan_helm_charts(
+    event_type: Annotated[str, typer.Option(help="Type of trigger event")],
+    domain: Annotated[Optional[str], typer.Option(help="Domain filter (e.g., manman, demo) or 'all'")] = None,
+    chart_version: Annotated[Optional[str], typer.Option(help="Chart version")] = None,
+    increment_minor: Annotated[bool, typer.Option("--increment-minor", help="Auto-increment minor version (resets patch to 0)")] = False,
+    increment_patch: Annotated[bool, typer.Option("--increment-patch", help="Auto-increment patch version")] = False,
+    format: Annotated[str, typer.Option(help="Output format")] = "json",
+):
+    """Plan a helm chart release and output CI matrix."""
+    from tools.release_helper.metadata import list_all_helm_charts
+    from tools.release_helper.git import auto_increment_chart_version
+    
+    if event_type not in ["workflow_dispatch", "tag_push", "pull_request", "push", "fallback"]:
+        typer.echo("Error: event-type must be one of: workflow_dispatch, tag_push, pull_request, push, fallback", err=True)
+        raise typer.Exit(1)
+    
+    if format not in ["json", "github"]:
+        typer.echo("Error: format must be one of: json, github", err=True)
+        raise typer.Exit(1)
+
+    # Validate mutually exclusive version options
+    version_options = [chart_version is not None, increment_minor, increment_patch]
+    if sum(version_options) > 1:
+        typer.echo("Error: chart_version, --increment-minor, and --increment-patch are mutually exclusive", err=True)
+        raise typer.Exit(1)
+    elif sum(version_options) == 0:
+        typer.echo("Error: must specify chart_version, --increment-minor, or --increment-patch", err=True)
+        raise typer.Exit(1)
+    
+    # Get all helm charts
+    all_charts = list_all_helm_charts()
+    
+    # Filter by domain if specified
+    if domain and domain != "all":
+        filtered_charts = [chart for chart in all_charts if chart['domain'] == domain]
+    else:
+        filtered_charts = all_charts
+    
+    if not filtered_charts:
+        typer.echo(f"No helm charts found for domain: {domain}" if domain != "all" else "No helm charts found")
+        if format == "github":
+            typer.echo("matrix={\"include\":[]}")
+            typer.echo("charts=")
+        else:
+            typer.echo('{"matrix": {"include": []}, "charts": []}')
+        return
+    
+    # Determine version for each chart
+    chart_releases = []
+    for chart in filtered_charts:
+        if chart_version:
+            version = chart_version
+        elif increment_minor:
+            version = auto_increment_chart_version(chart['domain'], chart['name'], "minor")
+        elif increment_patch:
+            version = auto_increment_chart_version(chart['domain'], chart['name'], "patch")
+        
+        chart_releases.append({
+            'chart': chart['name'],
+            'domain': chart['domain'],
+            'bazel_target': chart['bazel_target'],
+            'version': version
+        })
+    
+    # Create matrix
+    matrix = {
+        "include": chart_releases
+    }
+    
+    plan_result = {
+        "matrix": matrix,
+        "charts": [chart['chart'] for chart in chart_releases],
+        "domains": list(set(chart['domain'] for chart in chart_releases)),
+        "version": chart_version,  # For legacy compatibility, may be None for increment modes
+        "event_type": event_type
+    }
+
+    if format == "github":
+        # Output GitHub Actions format
+        matrix_json = json.dumps(plan_result["matrix"])
+        typer.echo(f"matrix={matrix_json}")
+        if plan_result["charts"]:
+            typer.echo(f"charts={' '.join(plan_result['charts'])}")
+        else:
+            typer.echo("charts=")
+        if plan_result["domains"]:
+            typer.echo(f"domains={' '.join(plan_result['domains'])}")
+        else:
+            typer.echo("domains=")
     else:
         # JSON output
         typer.echo(json.dumps(plan_result, indent=2))
@@ -352,8 +477,47 @@ def create_github_release(
         raise typer.Exit(1)
 
 
-@app.command("create-combined-github-release-with-notes")
-def create_combined_github_release_with_notes(
+@app.command("release-helm-chart")
+def release_helm_chart(
+    domain: Annotated[str, typer.Argument(help="Chart domain (e.g., manman, demo)")],
+    chart_name: Annotated[str, typer.Argument(help="Chart name (e.g., host_chart)")],
+    version: Annotated[str, typer.Option(help="Chart version tag")] = "latest",
+    commit: Annotated[Optional[str], typer.Option(help="Commit SHA for additional tag")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be done without actually doing it")] = False,
+    create_git_tag: Annotated[bool, typer.Option("--create-git-tag", help="Create and push a Git tag for this chart release")] = False,
+):
+    """Build helm chart and optionally create git tag."""
+    from tools.release_helper.git import create_git_tag as git_create_tag, push_git_tag, format_git_tag
+    
+    # Build the chart
+    chart_target = f"//{domain}:{chart_name}"
+    
+    try:
+        if not dry_run:
+            # Build the chart
+            typer.echo(f"Building helm chart: {chart_target}")
+            build_image(chart_target)  # Using the existing build_image function as a placeholder
+            typer.echo(f"Chart {domain}/{chart_name} built successfully")
+        else:
+            typer.echo(f"DRY RUN: Would build chart {chart_target}")
+    
+        # Create git tag if requested
+        if create_git_tag:
+            tag_name = f"{domain}-{chart_name}-chart.{version}"
+            
+            if dry_run:
+                typer.echo(f"DRY RUN: Would create git tag: {tag_name}")
+                if commit:
+                    typer.echo(f"DRY RUN: Would tag commit: {commit}")
+            else:
+                typer.echo(f"Creating git tag: {tag_name}")
+                git_create_tag(tag_name, commit, f"Release {domain}-{chart_name} chart version {version}")
+                push_git_tag(tag_name)
+                typer.echo(f"Git tag {tag_name} created and pushed")
+    
+    except Exception as e:
+        typer.echo(f"Error releasing helm chart: {e}", err=True)
+        raise typer.Exit(1)
     version: Annotated[str, typer.Argument(help="Release version (can be empty if using matrix with per-app versions)")],
     owner: Annotated[str, typer.Option("--owner", help="Repository owner")] = "",
     repo: Annotated[str, typer.Option("--repo", help="Repository name")] = "",

@@ -23,9 +23,16 @@ on:
         required: true
         default: 'all'
       chart_version:
-        description: 'Chart version to release'
-        required: true
-        default: '1.0.0'
+        description: 'Chart version to release (leave empty when using increment options)'
+        required: false
+      increment_minor:
+        description: 'Auto-increment minor version (resets patch to 0)'
+        type: boolean
+        default: false
+      increment_patch:
+        description: 'Auto-increment patch version'
+        type: boolean
+        default: false
       publish_to_pages:
         description: 'Publish to GitHub Pages'
         required: true
@@ -36,9 +43,46 @@ env:
   BAZEL_VERSION: '8.3.1'
 
 jobs:
+  # Validate inputs and ensure mutual exclusivity
+  validate-inputs:
+    name: Validate Inputs
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+    - name: Validate mutually exclusive version options
+      run: |
+        CHART_VERSION="${{ github.event.inputs.chart_version }}"
+        INCREMENT_MINOR="${{ github.event.inputs.increment_minor }}"
+        INCREMENT_PATCH="${{ github.event.inputs.increment_patch }}"
+        
+        # Count how many version options are set
+        OPTION_COUNT=0
+        if [[ -n "$CHART_VERSION" ]]; then
+          OPTION_COUNT=$((OPTION_COUNT + 1))
+        fi
+        if [[ "$INCREMENT_MINOR" == "true" ]]; then
+          OPTION_COUNT=$((OPTION_COUNT + 1))
+        fi
+        if [[ "$INCREMENT_PATCH" == "true" ]]; then
+          OPTION_COUNT=$((OPTION_COUNT + 1))
+        fi
+        
+        # Ensure exactly one option is set for manual dispatch
+        if [[ $OPTION_COUNT -eq 0 ]]; then
+          echo "Error: Must specify exactly one of: chart_version, increment_minor, or increment_patch"
+          exit 1
+        elif [[ $OPTION_COUNT -gt 1 ]]; then
+          echo "Error: chart_version, increment_minor, and increment_patch are mutually exclusive. Specify only one."
+          exit 1
+        fi
+        
+        echo "Input validation passed"
+
   # Discovery job to find all helm chart targets
   discover-charts:
     runs-on: ubuntu-latest
+    needs: [validate-inputs]
+    if: always() && (needs.validate-inputs.result == 'success' || needs.validate-inputs.result == 'skipped')
     outputs:
       charts: ${{ steps.discover.outputs.charts }}
       domains: ${{ steps.discover.outputs.domains }}
@@ -51,59 +95,96 @@ jobs:
         with:
           bazelisk-version: '1.20.0'
 
-      - name: Discover helm chart targets
+      - name: Discover and plan helm chart releases
         id: discover
         run: |
-          # Query for all helm chart targets
-          echo "Discovering helm chart targets..."
+          echo "Planning helm chart releases..."
 
-          # Get all targets that use helm_chart_release_macro
-          CHART_TARGETS=$(bazel query \
-            "kind('helm_chart_release', //...)" 2>/dev/null || echo "")
+          # Build the command based on event type and inputs
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            DOMAIN="${{ github.event.inputs.domain }}"
+            CHART_VERSION="${{ github.event.inputs.chart_version }}"
+            INCREMENT_MINOR="${{ github.event.inputs.increment_minor }}"
+            INCREMENT_PATCH="${{ github.event.inputs.increment_patch }}"
+            
+            CMD="bazel run //tools:release -- plan-helm-charts --event-type workflow_dispatch --domain \"$DOMAIN\" --format github"
+            
+            if [[ -n "$CHART_VERSION" ]]; then
+              CMD="$CMD --chart-version \"$CHART_VERSION\""
+            elif [[ "$INCREMENT_MINOR" == "true" ]]; then
+              CMD="$CMD --increment-minor"
+            elif [[ "$INCREMENT_PATCH" == "true" ]]; then
+              CMD="$CMD --increment-patch"
+            fi
+          else
+            # For push/PR events, just discover charts without versioning
+            CHART_TARGETS=$(bazel query \
+              "kind('helm_chart_release', //...)" 2>/dev/null || echo "")
 
-          if [ -z "$CHART_TARGETS" ]; then
-            echo "No helm chart targets found"
-            echo "charts=[]" >> $GITHUB_OUTPUT
-            echo "domains=[]" >> $GITHUB_OUTPUT
+            if [ -z "$CHART_TARGETS" ]; then
+              echo "No helm chart targets found"
+              echo "charts=[]" >> $GITHUB_OUTPUT
+              echo "domains=[]" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+
+            echo "Found chart targets: $CHART_TARGETS"
+
+            # Extract domains and chart info
+            CHARTS_JSON="["
+            DOMAINS_JSON="["
+
+            for target in $CHART_TARGETS; do
+              # Extract domain and chart name from target
+              # Target format: //domain:chart_name
+              domain=$(echo $target | cut -d'/' -f3 | cut -d':' -f1)
+              chart_name=$(echo $target | cut -d':' -f2)
+
+              # Add to charts array
+              if [ "$CHARTS_JSON" != "[" ]; then
+                CHARTS_JSON+=","
+              fi
+              CHARTS_JSON+="{\"target\":\"$target\","
+              CHARTS_JSON+="\"domain\":\"$domain\",\"name\":\"$chart_name\",\"version\":\"1.0.0\"}"
+
+              # Add to domains array (unique)
+              if [[ ! "$DOMAINS_JSON" =~ "\"$domain\"" ]]; then
+                if [ "$DOMAINS_JSON" != "[" ]; then
+                  DOMAINS_JSON+=","
+                fi
+                DOMAINS_JSON+="\"$domain\""
+              fi
+            done
+
+            CHARTS_JSON+="]"
+            DOMAINS_JSON+="]"
+
+            echo "charts=$CHARTS_JSON" >> $GITHUB_OUTPUT
+            echo "domains=$DOMAINS_JSON" >> $GITHUB_OUTPUT
+
+            echo "Discovered charts: $CHARTS_JSON"
+            echo "Discovered domains: $DOMAINS_JSON"
             exit 0
           fi
-
-          echo "Found chart targets: $CHART_TARGETS"
-
-          # Extract domains and chart info
-          CHARTS_JSON="["
-          DOMAINS_JSON="["
-
-          for target in $CHART_TARGETS; do
-            # Extract domain and chart name from target
-            # Target format: //domain:chart_name
-            domain=$(echo $target | cut -d'/' -f3 | cut -d':' -f1)
-            chart_name=$(echo $target | cut -d':' -f2)
-
-            # Add to charts array
-            if [ "$CHARTS_JSON" != "[" ]; then
-              CHARTS_JSON+=","
-            fi
-            CHARTS_JSON+="{\"target\":\"$target\","
-            CHARTS_JSON+="\"domain\":\"$domain\",\"name\":\"$chart_name\"}"
-
-            # Add to domains array (unique)
-            if [[ ! "$DOMAINS_JSON" =~ "\"$domain\"" ]]; then
-              if [ "$DOMAINS_JSON" != "[" ]; then
-                DOMAINS_JSON+=","
-              fi
-              DOMAINS_JSON+="\"$domain\""
+          
+          # Use release helper to plan the chart releases
+          echo "Planning helm chart releases with command: $CMD"
+          PLAN_OUTPUT=$(eval $CMD)
+          
+          # Parse output from release helper
+          echo "$PLAN_OUTPUT" | while IFS= read -r line; do
+            if [[ "$line" == matrix=* ]]; then
+              # Transform the matrix to the expected format for the workflow
+              MATRIX_JSON="${line#matrix=}"
+              # Extract chart info from matrix
+              CHARTS_JSON=$(echo "$MATRIX_JSON" | jq '[.include[] | {target: .bazel_target, domain: .domain, name: .chart, version: .version}]')
+              echo "charts=$CHARTS_JSON" >> $GITHUB_OUTPUT
+            elif [[ "$line" == domains=* ]]; then
+              DOMAINS_LIST="${line#domains=}"
+              DOMAINS_JSON=$(echo "[$DOMAINS_LIST]" | sed 's/ /","/g' | sed 's/\[/["/' | sed 's/\]/"]/' | sed 's/\[""\]/[]/')
+              echo "domains=$DOMAINS_JSON" >> $GITHUB_OUTPUT
             fi
           done
-
-          CHARTS_JSON+="]"
-          DOMAINS_JSON+="]"
-
-          echo "charts=$CHARTS_JSON" >> $GITHUB_OUTPUT
-          echo "domains=$DOMAINS_JSON" >> $GITHUB_OUTPUT
-
-          echo "Discovered charts: $CHARTS_JSON"
-          echo "Discovered domains: $DOMAINS_JSON"
 
   # Build and test charts
   build-charts:
@@ -124,15 +205,27 @@ jobs:
         with:
           bazelisk-version: '1.20.0'
 
-      - name: Build helm chart
+      - name: Build helm chart with version
         run: |
-          echo "Building chart: ${{ matrix.chart.target }}"
+          echo "Building chart: ${{ matrix.chart.target }} with version: ${{ matrix.chart.version }}"
+          
+          # Update the chart version in the BUILD file or pass as parameter
+          # For now, we'll build the chart and then update the version in the generated Chart.yaml
           bazel build "${{ matrix.chart.target }}"
+          
+          # Check if version needs to be updated in generated Chart.yaml
+          chart_name="${{ matrix.chart.domain }}-${{ matrix.chart.name }}"
+          chart_yaml="bazel-bin/${{ matrix.chart.domain }}/${chart_name}/Chart.yaml"
+          
+          if [ -f "$chart_yaml" ] && [ "${{ matrix.chart.version }}" != "1.0.0" ]; then
+            echo "Updating chart version from 1.0.0 to ${{ matrix.chart.version }}"
+            sed -i "s/version: 1.0.0/version: ${{ matrix.chart.version }}/" "$chart_yaml"
+          fi
 
       - name: Validate chart structure
         run: |
           chart_name="${{ matrix.chart.domain }}-${{ matrix.chart.name }}"
-          echo "Validating chart: $chart_name"
+          echo "Validating chart: $chart_name with version: ${{ matrix.chart.version }}"
 
           # Check for required files
           domain="${{ matrix.chart.domain }}"
@@ -158,6 +251,9 @@ jobs:
           echo "Chart validation successful!"
           echo "Manifest contents:"
           cat "$manifest_file"
+          
+          echo "Chart.yaml contents:"
+          cat "$chart_yaml"
 
       - name: Package chart for release
         if: >-
@@ -309,8 +405,16 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             domain_filter="${{ github.event.inputs.domain }}"
             chart_version="${{ github.event.inputs.chart_version }}"
+            increment_minor="${{ github.event.inputs.increment_minor }}"
+            increment_patch="${{ github.event.inputs.increment_patch }}"
             publish_pages="${{ github.event.inputs.publish_to_pages }}"
             echo "- Domain filter: $domain_filter" >> $GITHUB_STEP_SUMMARY
-            echo "- Chart version: $chart_version" >> $GITHUB_STEP_SUMMARY
+            if [[ -n "$chart_version" ]]; then
+              echo "- Chart version: $chart_version" >> $GITHUB_STEP_SUMMARY
+            elif [[ "$increment_minor" == "true" ]]; then
+              echo "- Version strategy: Auto-increment minor" >> $GITHUB_STEP_SUMMARY
+            elif [[ "$increment_patch" == "true" ]]; then
+              echo "- Version strategy: Auto-increment patch" >> $GITHUB_STEP_SUMMARY
+            fi
             echo "- Publish to Pages: $publish_pages" >> $GITHUB_STEP_SUMMARY
           fi

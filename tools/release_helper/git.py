@@ -201,3 +201,82 @@ def auto_increment_version(domain: str, app_name: str, increment_type: str) -> s
         return increment_minor_version(latest_version)
     else:  # patch
         return increment_patch_version(latest_version)
+
+
+def get_helm_chart_tags(domain: str, chart_name: str) -> List[str]:
+    """Get all tags for a specific helm chart, sorted by version (newest first)."""
+    all_tags = get_all_tags()
+    chart_prefix = f"{domain}-{chart_name}-chart."
+    chart_tags = [tag for tag in all_tags if tag.startswith(chart_prefix)]
+    return chart_tags
+
+
+def parse_chart_version_from_tag(tag: str, domain: str, chart_name: str) -> Optional[str]:
+    """Parse version from a helm chart tag.
+    
+    Args:
+        tag: Git tag (e.g., "manman-host_chart-chart.v1.2.3")
+        domain: Chart domain (e.g., "manman")
+        chart_name: Chart name (e.g., "host_chart")
+    
+    Returns:
+        Version string (e.g., "v1.2.3") or None if not a valid chart tag
+    """
+    expected_prefix = f"{domain}-{chart_name}-chart."
+    if not tag.startswith(expected_prefix):
+        return None
+    
+    version = tag[len(expected_prefix):]
+    # Validate that it looks like a semantic version
+    if re.match(r'^v\d+\.\d+\.\d+(?:-[a-zA-Z0-9\-\.]+)?$', version):
+        return version
+    return None
+
+
+def get_latest_chart_version(domain: str, chart_name: str) -> Optional[str]:
+    """Get the latest version for a specific helm chart.
+    
+    Args:
+        domain: Chart domain (e.g., "manman")
+        chart_name: Chart name (e.g., "host_chart")
+    
+    Returns:
+        Latest version string (e.g., "v1.2.3") or None if no versions found
+    """
+    chart_tags = get_helm_chart_tags(domain, chart_name)
+    for tag in chart_tags:
+        version = parse_chart_version_from_tag(tag, domain, chart_name)
+        if version:
+            return version
+    return None
+
+
+def auto_increment_chart_version(domain: str, chart_name: str, increment_type: str) -> str:
+    """Auto-increment version for a helm chart based on the latest tag.
+    
+    Args:
+        domain: Chart domain (e.g., "manman")
+        chart_name: Chart name (e.g., "host_chart")
+        increment_type: Either "minor" or "patch"
+    
+    Returns:
+        New version string
+    
+    Raises:
+        ValueError: If increment_type is invalid or no previous version found
+    """
+    if increment_type not in ["minor", "patch"]:
+        raise ValueError(f"Invalid increment type: {increment_type}. Must be 'minor' or 'patch'")
+    
+    latest_version = get_latest_chart_version(domain, chart_name)
+    if not latest_version:
+        # No previous version, start with v0.1.0 for minor or v0.0.1 for patch
+        if increment_type == "minor":
+            return "v0.1.0"
+        else:  # patch
+            return "v0.0.1"
+    
+    if increment_type == "minor":
+        return increment_minor_version(latest_version)
+    else:  # patch
+        return increment_patch_version(latest_version)
