@@ -88,11 +88,27 @@ def release_app(name, binary_target, language, domain, description = "", version
     # These correspond to the image targets created by the multiplatform macros
     registry_repo = registry + "/whale-net/" + image_name  # Hardcode whale-net org for now
     
+    # Base push target (defaults to AMD64)
     oci_push(
         name = image_target + "_push",
         image = ":" + image_target,
         repository = registry_repo,
         tags = ["manual", "container-push"],
+    )
+    
+    # Platform-specific push targets for multi-architecture support
+    oci_push(
+        name = image_target + "_push_amd64",
+        image = ":" + image_target,
+        repository = registry_repo,
+        tags = ["manual", "container-push", "platform-amd64"],
+    )
+    
+    oci_push(
+        name = image_target + "_push_arm64", 
+        image = ":" + image_target,
+        repository = registry_repo,
+        tags = ["manual", "container-push", "platform-arm64"],
     )
     
     # Create release metadata
@@ -129,9 +145,14 @@ def get_image_targets(app_name):
         app_name: Name of the app
         
     Returns:
-        Dict with image target names
+        Dict with image target names including platform-specific push targets
     """
     base_name = app_name + "_image"
     return {
         "base": "//" + app_name + ":" + base_name,
+        "amd64": "//" + app_name + ":" + base_name,  # AMD64 uses base target
+        "arm64": "//" + app_name + ":" + base_name,  # ARM64 uses same base target with different platform flag
+        "push_base": "//" + app_name + ":" + base_name + "_push",
+        "push_amd64": "//" + app_name + ":" + base_name + "_push_amd64",
+        "push_arm64": "//" + app_name + ":" + base_name + "_push_arm64",
     }

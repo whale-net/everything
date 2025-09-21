@@ -11,7 +11,7 @@ from typing_extensions import Annotated
 
 from tools.release_helper.changes import detect_changed_apps
 from tools.release_helper.git import get_previous_tag
-from tools.release_helper.images import build_image
+from tools.release_helper.images import build_image, release_multiarch_image
 from tools.release_helper.metadata import list_all_apps
 from tools.release_helper.release import find_app_bazel_target, plan_release, tag_and_push_image
 from tools.release_helper.release_notes import generate_release_notes, generate_release_notes_for_all_apps
@@ -92,9 +92,9 @@ def list_apps():
 @app.command()
 def build(
     app_name: Annotated[str, typer.Argument(help="App name")],
-    platform: Annotated[Optional[str], typer.Option(help="Target platform")] = None,
+    platform: Annotated[Optional[str], typer.Option(help="Target platform (amd64, arm64)")] = None,
 ):
-    """Build and load container image."""
+    """Build and load container image for a specific platform."""
     # Try to find the app by name first, then use as bazel target if not found
     try:
         from tools.release_helper.release import find_app_bazel_target
@@ -105,6 +105,60 @@ def build(
     
     image_tag = build_image(bazel_target, platform)
     typer.echo(f"Image loaded as: {image_tag}")
+
+
+@app.command()
+def release_multiarch(
+    app_name: Annotated[str, typer.Argument(help="App name")],
+    version: Annotated[str, typer.Option(help="Version tag")] = "latest",
+    platforms: Annotated[Optional[str], typer.Option(help="Comma-separated list of platforms (default: amd64,arm64)")] = None,
+    registry: Annotated[str, typer.Option(help="Container registry")] = "ghcr.io",
+    commit: Annotated[Optional[str], typer.Option(help="Commit SHA for additional tag")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be pushed without actually pushing")] = False,
+):
+    """Build and release multi-architecture container images with manifest lists.
+    
+    This command:
+    1. Builds container images for multiple architectures
+    2. Pushes platform-specific tags (e.g., app:v1.0.0-amd64, app:v1.0.0-arm64)
+    3. Creates manifest lists that automatically serve the correct architecture
+    4. Pushes manifest lists (e.g., app:v1.0.0 points to both architectures)
+    """
+    if dry_run:
+        typer.echo("DRY RUN: Would perform multi-architecture release but not actually pushing")
+        return
+    
+    # Parse platforms
+    platform_list = platforms.split(",") if platforms else ["amd64", "arm64"]
+    platform_list = [p.strip() for p in platform_list]
+    
+    # Find the app
+    try:
+        from tools.release_helper.release import find_app_bazel_target
+        bazel_target = find_app_bazel_target(app_name)
+    except ValueError:
+        bazel_target = app_name
+    
+    # Perform multi-architecture release
+    typer.echo(f"Starting multi-architecture release for {app_name}")
+    typer.echo(f"Version: {version}")
+    typer.echo(f"Platforms: {', '.join(platform_list)}")
+    typer.echo(f"Registry: {registry}")
+    
+    try:
+        release_multiarch_image(
+            bazel_target=bazel_target,
+            version=version,
+            registry=registry,
+            platforms=platform_list,
+            commit_sha=commit
+        )
+        typer.echo(f"✅ Successfully released {app_name}:{version} for {len(platform_list)} platforms")
+        typer.echo(f"Users can now run: docker pull {registry}/whale-net/demo-{app_name}:{version}")
+        
+    except Exception as e:
+        typer.echo(f"❌ Failed to release multi-architecture image: {e}", err=True)
+        raise typer.Exit(1)
 
 
 @app.command()
