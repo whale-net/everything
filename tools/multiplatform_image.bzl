@@ -99,12 +99,16 @@ def multiplatform_python_image(
         **kwargs
     )
     
-    # Create multi-platform manifest list using oci_image_index
+    # Create multi-platform manifest list using oci_image_index with experimental Bazel platforms
+    # This is the recommended experimental approach for true multi-platform manifests
     oci_image_index(
         name = name,
         images = [
-            ":" + name + "_amd64",
-            ":" + name + "_arm64",
+            ":" + name + "_amd64",  # Use one of the platform images as base
+        ],
+        platforms = [
+            "//tools:linux_x86_64",
+            "//tools:linux_arm64", 
         ],
         tags = tags,
         visibility = visibility,
@@ -259,12 +263,16 @@ def multiplatform_go_image(
         **kwargs
     )
     
-    # Create multi-platform manifest list using oci_image_index
+    # Create multi-platform manifest list using oci_image_index with experimental Bazel platforms
+    # This is the recommended experimental approach for true multi-platform manifests
     oci_image_index(
         name = name,
         images = [
-            ":" + name + "_amd64",
-            ":" + name + "_arm64",
+            ":" + name + "_amd64",  # Use one of the platform images as base
+        ],
+        platforms = [
+            "//tools:linux_x86_64",
+            "//tools:linux_arm64", 
         ],
         tags = tags,
         visibility = visibility,
