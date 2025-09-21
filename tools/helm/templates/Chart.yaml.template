@@ -1,0 +1,16 @@
+apiVersion: v2
+name: ${chart_name}
+description: ${description}
+type: application
+version: ${chart_version}
+appVersion: "latest"
+keywords:
+  - ${domain}
+  - microservices
+  - multi-app
+home: https://github.com/whale-net/everything
+sources:
+  - https://github.com/whale-net/everything
+maintainers:
+  - name: whale-net
+    url: https://github.com/whale-net/everything

@@ -1,0 +1,12 @@
+    ${app_name}:
+      enabled: true
+      version: "latest"  # Will be resolved at build time
+      replicas: 1
+      port: 8000
+      resources:
+        requests:
+          memory: "128Mi"
+          cpu: "100m"
+        limits:
+          memory: "512Mi"
+          cpu: "500m"
