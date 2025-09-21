@@ -50,6 +50,8 @@ images:
     # Add common configuration
     values_content += """
 # Common configuration
+domain: "{domain}"
+
 service:
   enabled: true
   type: ClusterIP
@@ -62,7 +64,7 @@ ingress:
 
 env:
   app_env: "dev"
-"""
+""".format(domain = domain)
 
     # Add overrides as YAML comments for now
     if overrides:
@@ -112,6 +114,11 @@ def helm_chart_release_impl(ctx):
     # Create chart files
     chart_yaml = ctx.actions.declare_file("{}/Chart.yaml".format(chart_name))
     values_yaml = ctx.actions.declare_file("{}/values.yaml".format(chart_name))
+    
+    # Create template files in templates/ subdirectory
+    deployment_yaml = ctx.actions.declare_file("{}/templates/deployment.yaml".format(chart_name))
+    service_yaml = ctx.actions.declare_file("{}/templates/service.yaml".format(chart_name))
+    helpers_tpl = ctx.actions.declare_file("{}/templates/_helpers.tpl".format(chart_name))
     
     # Generate Chart.yaml content
     chart_content = _create_chart_yaml_content(
