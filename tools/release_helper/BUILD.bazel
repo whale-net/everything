@@ -67,3 +67,91 @@ py_test(
     ],
     size = "medium",
 )
+
+# Unit tests for validation module
+py_test(
+    name = "test_validation",
+    srcs = ["test_validation.py"],
+    deps = [
+        ":release_helper_lib",
+        requirement("pytest"),
+    ],
+    size = "small",
+)
+
+# Unit tests for core module  
+py_test(
+    name = "test_core",
+    srcs = ["test_core.py"],
+    deps = [
+        ":release_helper_lib",
+        requirement("pytest"),
+    ],
+    size = "small",
+)
+
+# Unit tests for images module
+py_test(
+    name = "test_images",
+    srcs = ["test_images.py"],
+    deps = [
+        ":release_helper_lib",
+        requirement("pytest"),
+    ],
+    size = "small",
+)
+
+# Unit tests for release module
+py_test(
+    name = "test_release",
+    srcs = ["test_release.py"],
+    deps = [
+        ":release_helper_lib",
+        requirement("pytest"),
+    ],
+    size = "small",
+)
+
+# Unit tests for summary module
+py_test(
+    name = "test_summary",
+    srcs = ["test_summary.py"],
+    deps = [
+        ":release_helper_lib",
+        requirement("pytest"),
+    ],
+    size = "small",
+)
+
+# Unit tests for bazel change detection
+py_test(
+    name = "test_bazel_change_detection",
+    srcs = ["test_bazel_change_detection.py"],
+    deps = [
+        ":release_helper_lib",
+        requirement("pytest"),
+    ],
+    size = "small",
+)
+
+# Unit tests for github release module
+py_test(
+    name = "test_github_release",
+    srcs = ["test_github_release.py"],
+    deps = [
+        ":release_helper_lib",
+        requirement("pytest"),
+    ],
+    size = "small",
+)
+
+# Unit tests for release notes module
+py_test(
+    name = "test_release_notes",
+    srcs = ["test_release_notes.py"],
+    deps = [
+        ":release_helper_lib",
+        requirement("pytest"),
+    ],
+    size = "small",
+)

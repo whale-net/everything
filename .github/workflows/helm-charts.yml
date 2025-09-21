@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       domain:
-        description: 'Domain to release charts for (e.g., manman, demo, or all)'
+        description: 'Domain to release charts for (e.g., demo, or all)'
         required: true
         default: 'all'
       chart_version:
@@ -38,6 +38,11 @@ on:
         required: true
         type: boolean
         default: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 
 env:
   BAZEL_VERSION: '8.3.1'
@@ -150,6 +155,10 @@ jobs:
           # Extract domains and chart info
           CHARTS_JSON="["
           DOMAINS_JSON="["
+          
+          # Check if domain filtering is requested
+          DOMAIN_FILTER="${{ github.event.inputs.domain || 'all' }}"
+          echo "Domain filter: $DOMAIN_FILTER"
 
           for target in $CHART_TARGETS; do
             # Extract domain and chart name from target
@@ -160,6 +169,13 @@ jobs:
             # Apply domain filtering
             if [[ "$DOMAIN_FILTER" != "all" && "$domain" != "$DOMAIN_FILTER" ]]; then
               echo "Skipping chart $target (domain $domain doesn't match filter $DOMAIN_FILTER)"
+              continue
+            fi
+
+            # Apply domain filter
+            if [ "$DOMAIN_FILTER" != "all" ] && [ "$domain" != "$DOMAIN_FILTER" ]; then
+              echo "Skipping chart $chart_name in domain $domain (filter: $DOMAIN_FILTER)"
+
               continue
             fi
 
@@ -249,6 +265,15 @@ jobs:
             echo "Error: Missing values.yaml: $values_yaml"
             exit 1
           fi
+          
+          # Check for templates directory
+          templates_dir="bazel-bin/${domain}/${chart_name}/templates"
+          if [ ! -d "$templates_dir" ]; then
+            echo "Warning: Missing templates directory: $templates_dir"
+          else
+            echo "Templates found:"
+            ls -la "$templates_dir"
+          fi
 
           echo "Chart validation successful!"
           echo "Manifest contents:"
@@ -320,33 +345,59 @@ jobs:
         run: |
           echo "Consolidating charts..."
           mkdir -p helm-repo
-
-          # Move all charts to a single directory
-          find artifacts/ -name "*.yaml" -o -name "*.yml" | while read file; do
-            echo "Processing: $file"
-            # Copy chart directories preserving structure
-            chart_dir=$(dirname "$file")
+          
+          # Debug: Show what artifacts were downloaded
+          echo "Downloaded artifacts structure:"
+          find artifacts/ -type f | head -20
+          
+          # Debug: Count artifacts
+          artifact_count=$(find artifacts/ -name "Chart.yaml" | wc -l)
+          echo "Found $artifact_count chart(s) to process"
+          
+          # Find all chart directories in artifacts
+          # Artifacts are structured as: artifacts/helm-chart-<domain>-<chart>/charts/<chart-name>/
+          find artifacts/ -name "Chart.yaml" | while read chart_yaml; do
+            chart_dir=$(dirname "$chart_yaml")
             chart_name=$(basename "$chart_dir")
-            if [ ! -d "helm-repo/$chart_name" ]; then
+            
+            echo "Processing chart: $chart_name from $chart_dir"
+            
+            # Copy chart directory to helm-repo
+            if [ -d "$chart_dir" ] && [ ! -d "helm-repo/$chart_name" ]; then
               cp -r "$chart_dir" "helm-repo/"
+              echo "✅ Copied chart: $chart_name"
+            else
+              echo "⚠️  Skipped chart: $chart_name (already exists or source not found)"
             fi
           done
 
-          echo "Chart directory structure:"
-          find helm-repo/ -type f
+          echo "Consolidated chart directory structure:"
+          find helm-repo/ -type f | sort
+
+          # Verify we have charts to package
+          chart_count=$(find helm-repo/ -maxdepth 1 -type d ! -path helm-repo/ | wc -l)
+          if [ "$chart_count" -eq 0 ]; then
+            echo "❌ No charts found to package"
+            exit 1
+          fi
+          
+          echo "Found $chart_count chart(s) to package"
 
           # Package each chart
           cd helm-repo
           for chart_dir in */; do
             if [ -d "$chart_dir" ] && [ -f "$chart_dir/Chart.yaml" ]; then
-              echo "Packaging chart: $chart_dir"
+              echo "📦 Packaging chart: $chart_dir"
               helm package "$chart_dir"
+              echo "✅ Packaged: $chart_dir"
             fi
           done
 
           # Generate repository index
-          repo_url="https://${{ github.repository_owner }}.github.io"
-          repo_url="${repo_url}/${{ github.event.repository.name }}/"
+          repo_name="${{ github.repository }}"
+          repo_name="${repo_name#*/}"  # Remove owner/ prefix
+          repo_url="https://${{ github.repository_owner }}.github.io/$repo_name"
+          echo "Generating index with URL: $repo_url"
           helm repo index . --url "$repo_url"
 
           echo "Generated packages:"
