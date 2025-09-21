@@ -461,18 +461,18 @@ def create_releases_for_apps_with_notes(
             # Try to load pre-generated release notes first
             release_notes = None
             if release_notes_dir:
-                notes_file = Path(release_notes_dir) / f"{app_name}.md"
+                notes_file = Path(release_notes_dir) / f"{domain}-{app_name}.md"
                 if notes_file.exists():
                     try:
                         release_notes = notes_file.read_text(encoding='utf-8')
-                        print(f"✅ Using pre-generated release notes for {app_name}")
+                        print(f"✅ Using pre-generated release notes for {domain}-{app_name}")
                     except Exception as e:
-                        print(f"⚠️  Failed to read pre-generated release notes for {app_name}: {e}", file=sys.stderr)
+                        print(f"⚠️  Failed to read pre-generated release notes for {domain}-{app_name}: {e}", file=sys.stderr)
             
             # Fall back to generating release notes if not found or failed to load
             if not release_notes:
                 try:
-                    print(f"Generating release notes for {app_name} (no pre-generated notes found)")
+                    print(f"Generating release notes for {domain}-{app_name} (no pre-generated notes found)")
                     release_notes = generate_release_notes(app_name, tag_name, previous_tag, "markdown")
                 except Exception as e:
                     print(f"❌ Failed to generate release notes for {app_name}: {e}", file=sys.stderr)

@@ -187,6 +187,7 @@ jobs:
 
     - name: Generate release notes for app
       if: ${{ github.event.inputs.dry_run == 'false' }}
+      id: release-notes
       env:
         APP: ${{ matrix.app }}
         VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
@@ -199,6 +200,9 @@ jobs:
         if [[ -n "$METADATA" ]]; then
           DOMAIN=$(echo "$METADATA" | sed 's/.*domain: \([^,]*\).*/\1/')
           TAG_NAME="${DOMAIN}-${APP}.${VERSION}"
+          
+          # Output domain for use in upload step
+          echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
           
           echo "## 📝 Release Notes for $TAG_NAME" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -219,7 +223,7 @@ jobs:
           
           # Save release notes to a file for the GitHub release creation job
           mkdir -p /tmp/release-notes
-          echo "$RELEASE_NOTES" > "/tmp/release-notes/${APP}.md"
+          echo "$RELEASE_NOTES" > "/tmp/release-notes/${DOMAIN}-${APP}.md"
         else
           echo "Warning: Could not determine domain for $APP, skipping release notes"
         fi
@@ -229,7 +233,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: release-notes-${{ matrix.app }}
-        path: /tmp/release-notes/${{ matrix.app }}.md
+        path: /tmp/release-notes/${{ steps.release-notes.outputs.domain }}-${{ matrix.app }}.md
         if-no-files-found: ignore
 
   create-github-releases:
