@@ -152,6 +152,142 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
         return _detect_changed_apps_file_based(changed_files)
 
 
+def _query_affected_tests_bazel(changed_files: List[str]) -> List[str]:
+    """Use Bazel query to find test targets affected by changed files.
+    
+    This approach determines which test targets are affected by file changes by:
+    1. For source files: Find all targets in the package containing the file
+    2. For BUILD/bzl files: Find all targets in the package recursively
+    3. Query all test targets that depend on the affected targets
+    
+    Returns:
+        List of test target labels (e.g., ["//demo/hello_python:test_main"])
+    """
+    if not changed_files:
+        return []
+    
+    try:
+        print(f"Using Bazel package-level analysis to find test targets affected by {len(changed_files)} changed files...", file=sys.stderr)
+        
+        # Find all targets that are directly affected by the changed files
+        affected_targets = set()
+        
+        for file_path in changed_files:
+            if not file_path:
+                continue
+                
+            try:
+                # For source files, find all targets in the package containing the file
+                file_dir = str(Path(file_path).parent) if Path(file_path).parent != Path('.') else ""
+                
+                if file_path.endswith(('.bzl', 'BUILD', 'BUILD.bazel')):
+                    # BUILD/bzl files affect all targets in their package recursively  
+                    package_path = f"//{file_dir}" if file_dir else "//"
+                    
+                    result = run_bazel([
+                        "query", 
+                        f"{package_path}/...",
+                        "--output=label"
+                    ])
+                    
+                    if result.stdout.strip():
+                        package_targets = result.stdout.strip().split('\n')
+                        affected_targets.update(package_targets)
+                        print(f"Build file {file_path} affects all {len(package_targets)} targets in package {package_path}", file=sys.stderr)
+                        
+                elif file_dir:  # Source file in a package directory
+                    # Source files affect all targets in their immediate package
+                    package_path = f"//{file_dir}"
+                    
+                    result = run_bazel([
+                        "query", 
+                        f"{package_path}:*",
+                        "--output=label"
+                    ])
+                    
+                    if result.stdout.strip():
+                        package_targets = result.stdout.strip().split('\n')
+                        affected_targets.update(package_targets)
+                        print(f"Source file {file_path} affects {len(package_targets)} targets in package {package_path}", file=sys.stderr)
+                else:
+                    # File in root directory - affects root package targets
+                    result = run_bazel([
+                        "query", 
+                        "//:*",
+                        "--output=label"
+                    ])
+                    
+                    if result.stdout.strip():
+                        root_targets = result.stdout.strip().split('\n')
+                        affected_targets.update(root_targets)
+                        print(f"Root file {file_path} affects {len(root_targets)} targets in root package", file=sys.stderr)
+                    
+            except subprocess.CalledProcessError as e:
+                print(f"Warning: Could not query targets for file {file_path}: {e}", file=sys.stderr)
+        
+        print(f"Total targets affected: {len(affected_targets)}", file=sys.stderr)
+        
+        # Now find all test targets that depend on any of the affected targets
+        affected_tests = set()
+        
+        if affected_targets:
+            # Query all test targets in the repository
+            all_tests_result = run_bazel([
+                "query",
+                'kind(".*test", //...)',
+                "--output=label"
+            ])
+            
+            if all_tests_result.stdout.strip():
+                all_tests = all_tests_result.stdout.strip().split('\n')
+                print(f"Found {len(all_tests)} total test targets", file=sys.stderr)
+                
+                # For each test, check if it depends on any affected targets
+                for test_target in all_tests:
+                    try:
+                        # Query all dependencies of this test
+                        deps_result = run_bazel([
+                            "query", 
+                            f"deps({test_target})",
+                            "--output=label"
+                        ])
+                        
+                        if deps_result.stdout.strip():
+                            test_deps = set(deps_result.stdout.strip().split('\n'))
+                            
+                            # Check if this test depends on any affected targets
+                            if affected_targets.intersection(test_deps):
+                                affected_tests.add(test_target)
+                                overlapping_targets = affected_targets.intersection(test_deps)
+                                print(f"Test {test_target} affected: depends on {len(overlapping_targets)} changed targets", file=sys.stderr)
+                            
+                    except subprocess.CalledProcessError as e:
+                        print(f"Warning: Could not analyze dependencies for test {test_target}: {e}", file=sys.stderr)
+                        continue
+        
+        result_list = sorted(list(affected_tests))
+        print(f"Total test targets affected: {len(result_list)}", file=sys.stderr)
+        return result_list
+        
+    except Exception as e:
+        print(f"Error in Bazel test dependency analysis: {e}", file=sys.stderr)
+        # Fall back to returning all tests
+        try:
+            all_tests_result = run_bazel([
+                "query",
+                'kind(".*test", //...)',
+                "--output=label"
+            ])
+            if all_tests_result.stdout.strip():
+                all_tests = all_tests_result.stdout.strip().split('\n')
+                print(f"Fallback: returning all {len(all_tests)} test targets", file=sys.stderr)
+                return all_tests
+        except Exception as fallback_error:
+            print(f"Error in fallback test query: {fallback_error}", file=sys.stderr)
+        
+        return []
+
+
 def _detect_changed_apps_file_based(changed_files: List[str]) -> List[Dict[str, str]]:
     """Fallback file-based change detection (original implementation)."""
     all_apps = list_all_apps()
@@ -251,3 +387,70 @@ def detect_changed_apps(base_commit: Optional[str] = None, use_bazel_query: bool
             return all_apps
 
     return changed_apps
+
+
+def detect_changed_tests(base_commit: Optional[str] = None, use_bazel_query: bool = True) -> List[str]:
+    """Detect which test targets have changed compared to a base commit.
+    
+    Args:
+        base_commit: Base commit to compare HEAD against. If None, returns all test targets.
+        use_bazel_query: Whether to use Bazel query for precise dependency analysis.
+                        If False, returns all test targets.
+    
+    Returns:
+        List of test target labels (e.g., ["//demo/hello_python:test_main"])
+    """
+    if not base_commit:
+        # No base commit specified, return all test targets
+        print("No base commit specified, considering all test targets as needing to run", file=sys.stderr)
+        try:
+            all_tests_result = run_bazel([
+                "query",
+                'kind(".*test", //...)',
+                "--output=label"
+            ])
+            if all_tests_result.stdout.strip():
+                all_tests = all_tests_result.stdout.strip().split('\n')
+                print(f"Found {len(all_tests)} total test targets", file=sys.stderr)
+                return all_tests
+        except Exception as e:
+            print(f"Error querying all test targets: {e}", file=sys.stderr)
+        return []
+
+    # Get changed files
+    changed_files = _get_changed_files(base_commit)
+    
+    if not changed_files:
+        print("No files changed, no tests need to be run", file=sys.stderr)
+        return []
+
+    print(f"Changed files: {', '.join(changed_files[:10])}" + 
+          (f" (and {len(changed_files)-10} more)" if len(changed_files) > 10 else ""), 
+          file=sys.stderr)
+
+    # Use Bazel query for precise dependency analysis
+    if use_bazel_query:
+        changed_tests = _query_affected_tests_bazel(changed_files)
+    else:
+        # Fallback: return all tests when not using Bazel query
+        print("Not using Bazel query, returning all test targets to be safe", file=sys.stderr)
+        try:
+            all_tests_result = run_bazel([
+                "query",
+                'kind(".*test", //...)',
+                "--output=label"
+            ])
+            if all_tests_result.stdout.strip():
+                all_tests = all_tests_result.stdout.strip().split('\n')
+                print(f"Fallback: returning all {len(all_tests)} test targets", file=sys.stderr)
+                return all_tests
+        except Exception as e:
+            print(f"Error in fallback test query: {e}", file=sys.stderr)
+        return []
+
+    # If no tests detected but there are changes using Bazel analysis
+    if not changed_tests and changed_files and use_bazel_query:
+        print("Bazel dependency analysis determined no tests are affected by the changes.", 
+              file=sys.stderr)
+
+    return changed_tests

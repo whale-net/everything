@@ -10,7 +10,7 @@ from typing import Optional
 import typer
 from typing_extensions import Annotated
 
-from tools.release_helper.changes import detect_changed_apps
+from tools.release_helper.changes import detect_changed_apps, detect_changed_tests
 from tools.release_helper.git import get_previous_tag
 from tools.release_helper.images import build_image
 from tools.release_helper.metadata import list_all_apps
@@ -191,6 +191,23 @@ def changes(
     changed_apps = detect_changed_apps(base_commit, use_bazel_query=use_bazel_query)
     for app_info in changed_apps:
         typer.echo(app_info['name'])  # Print just the app name for compatibility
+
+
+@app.command()
+def tests(
+    base_commit: Annotated[Optional[str], typer.Option(help="Compare changes against this commit (compares HEAD to this commit, defaults to previous tag)")] = None,
+    use_bazel_query: Annotated[bool, typer.Option("--use-bazel-query/--no-bazel-query", help="Use Bazel query for precise dependency analysis")] = True,
+):
+    """Detect test targets that need to run since a commit."""
+    base_commit = base_commit or get_previous_tag()
+    if base_commit:
+        typer.echo(f"Detecting test changes against commit: {base_commit}", err=True)
+    else:
+        typer.echo("No base commit specified and no previous tag found, considering all tests as needing to run", err=True)
+
+    changed_tests = detect_changed_tests(base_commit, use_bazel_query=use_bazel_query)
+    for test_target in changed_tests:
+        typer.echo(test_target)  # Print the test target label
 
 
 @app.command("validate-version")

@@ -28,8 +28,43 @@ jobs:
         
     - name: Run tests
       run: |
-        # Run all tests and let Bazel handle caching
-        bazel test //...
+        # Determine what to test based on changes
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          # For PRs, compare against the base branch
+          BASE_COMMIT="${{ github.event.pull_request.base.sha }}"
+          echo "PR detected: comparing against base commit $BASE_COMMIT"
+        elif [ "${{ github.event_name }}" = "push" ] && [ -n "${{ github.event.before }}" ]; then
+          # For pushes, compare against the previous commit
+          BASE_COMMIT="${{ github.event.before }}"
+          echo "Push detected: comparing against previous commit $BASE_COMMIT"
+        else
+          # Fallback: test everything
+          echo "Cannot determine base commit, running all tests"
+          BASE_COMMIT=""
+        fi
+        
+        if [ -n "$BASE_COMMIT" ]; then
+          # Use release helper to detect which tests need to run
+          echo "Detecting affected tests using Bazel dependency analysis..."
+          AFFECTED_TESTS=$(bazel run //tools:release -- tests --base-commit="$BASE_COMMIT" --use-bazel-query 2>/dev/null || echo "")
+          
+          if [ -n "$AFFECTED_TESTS" ]; then
+            echo "Running affected tests:"
+            echo "$AFFECTED_TESTS"
+            echo "$AFFECTED_TESTS" | while read -r test_target; do
+              if [ -n "$test_target" ]; then
+                echo "Running test: $test_target"
+                bazel test "$test_target"
+              fi
+            done
+          else
+            echo "No tests affected by changes - skipping test execution"
+          fi
+        else
+          # Fallback to running all tests
+          echo "Running all tests as fallback"
+          bazel test //...
+        fi
         
     - name: Upload test results
       uses: actions/upload-artifact@v4
