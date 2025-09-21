@@ -1,5 +1,6 @@
-load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
 load("@pip_deps_dev//:requirements.bzl", "requirement")
+load("//tools:python_binary.bzl", "multiplatform_py_binary")
 load("//tools:release.bzl", "release_app")
 
 # Host API services library
@@ -22,38 +23,42 @@ py_library(
 )
 
 # Binary targets for host services
-py_binary(
+multiplatform_py_binary(
     name = "experience_api",
     srcs = ["main.py"],
     main = "main.py", 
     deps = [":manman_host"],
+    requirements = ["fastapi", "uvicorn", "gunicorn", "typer", "alembic", "opentelemetry-instrumentation-fastapi", "requests", "python-jose"],
     args = ["start-experience-api"],
     visibility = ["//manman:__pkg__"],
 )
 
-py_binary(
+multiplatform_py_binary(
     name = "status_api",
     srcs = ["main.py"],
     main = "main.py",
     deps = [":manman_host"], 
+    requirements = ["fastapi", "uvicorn", "gunicorn", "typer", "alembic", "opentelemetry-instrumentation-fastapi", "requests", "python-jose"],
     args = ["start-status-api"],
     visibility = ["//manman:__pkg__"],
 )
 
-py_binary(
+multiplatform_py_binary(
     name = "worker_dal_api", 
     srcs = ["main.py"],
     main = "main.py",
     deps = [":manman_host"],
+    requirements = ["fastapi", "uvicorn", "gunicorn", "typer", "alembic", "opentelemetry-instrumentation-fastapi", "requests", "python-jose"],
     args = ["start-worker-dal-api"],
     visibility = ["//manman:__pkg__"],
 )
 
-py_binary(
+multiplatform_py_binary(
     name = "status_processor",
     srcs = ["main.py"], 
     main = "main.py",
     deps = [":manman_host"],
+    requirements = ["fastapi", "uvicorn", "gunicorn", "typer", "alembic", "opentelemetry-instrumentation-fastapi", "requests", "python-jose"],
     args = ["start-status-processor"],
     visibility = ["//manman:__pkg__"],
 )

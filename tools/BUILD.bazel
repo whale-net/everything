@@ -1,6 +1,6 @@
 # Tools and shared build rules for the monorepo
 
-load("@rules_python//python:defs.bzl", "py_binary")
+load("//tools:python_binary.bzl", "multiplatform_py_binary")
 load("//tools:release.bzl", "release_app")
 
 package(default_visibility = ["//visibility:public"])
@@ -14,14 +14,11 @@ exports_files([
 ])
 
 # Version resolver utility for Helm charts
-py_binary(
+multiplatform_py_binary(
     name = "version_resolver",
     srcs = ["version_resolver.py"],
     main = "version_resolver.py",
-    deps = [
-        # Note: PyYAML would be needed for YAML output
-        # For now, JSON output works without additional deps
-    ],
+    requirements = [],  # No external requirements
     visibility = ["//visibility:public"],
 )
 
