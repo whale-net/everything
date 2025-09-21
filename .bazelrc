@@ -27,13 +27,6 @@ test:ci --cache_test_results=yes
 # Uses try-import to conditionally load remote cache config if available
 try-import %workspace%/.bazelrc.remote
 
-# Optional remote execution configuration
-# Uncomment and configure to enable remote execution for significant performance improvements
-# Example: BuildBuddy (free tier available)
-# build --remote_executor=grpcs://remote.buildbuddy.io
-# build --remote_header=x-buildbuddy-api-key=YOUR_API_KEY
-# build --remote_instance_name=buildbuddy-io/buildbuddy/default_instance_name
-
 # Test configurations
 test --test_output=errors
 test --cache_test_results=yes
