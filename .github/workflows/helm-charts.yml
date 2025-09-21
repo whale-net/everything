@@ -112,9 +112,16 @@ jobs:
           fi
 
           echo "Found chart targets: $CHART_TARGETS"
+          
+          # Show domain filtering info for workflow_dispatch
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Domain filter: ${DOMAIN_FILTER}"
+            echo "Version strategy: ${VERSION_STRATEGY}"
+          fi
 
           # Determine version to use
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            DOMAIN_FILTER="${{ github.event.inputs.domain }}"
             CHART_VERSION="${{ github.event.inputs.chart_version }}"
             INCREMENT_MINOR="${{ github.event.inputs.increment_minor }}"
             INCREMENT_PATCH="${{ github.event.inputs.increment_patch }}"
@@ -134,7 +141,8 @@ jobs:
               VERSION_STRATEGY="specific"
             fi
           else
-            # For push/PR events, use default version
+            # For push/PR events, use default version and process all domains
+            DOMAIN_FILTER="all"
             CHART_VERSION="1.0.0"
             VERSION_STRATEGY="specific"
           fi
@@ -148,6 +156,12 @@ jobs:
             # Target format: //domain:chart_name
             domain=$(echo $target | cut -d'/' -f3 | cut -d':' -f1)
             chart_name=$(echo $target | cut -d':' -f2)
+            
+            # Apply domain filtering
+            if [[ "$DOMAIN_FILTER" != "all" && "$domain" != "$DOMAIN_FILTER" ]]; then
+              echo "Skipping chart $target (domain $domain doesn't match filter $DOMAIN_FILTER)"
+              continue
+            fi
 
             # Add to charts array
             if [ "$CHARTS_JSON" != "[" ]; then
