@@ -2,12 +2,12 @@
 
 This module provides simplified, clean macros for building OCI images that support
 multiple platforms (AMD64 and ARM64) with three deployment strategies:
-1. Multi-platform manifest list (for cross-platform compatibility)
+1. Multi-platform manifest list (using oci_image_index for cross-platform compatibility)
 2. Platform-specific AMD64 image (for AMD64-only deployments)  
 3. Platform-specific ARM64 image (for ARM64-only deployments)
 """
 
-load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load", "oci_push")
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index", "oci_load", "oci_push")
 load("@rules_pkg//:pkg.bzl", "pkg_tar")
 load("@bazel_skylib//lib:paths.bzl", "paths")
 
@@ -99,11 +99,13 @@ def multiplatform_python_image(
         **kwargs
     )
     
-    # For now, create a simple alias to one platform for the manifest list
-    # TODO: When oci_image_index is working properly, use it for multi-platform
-    native.alias(
+    # Create multi-platform manifest list using oci_image_index
+    oci_image_index(
         name = name,
-        actual = ":" + name + "_amd64",
+        images = [
+            ":" + name + "_amd64",
+            ":" + name + "_arm64",
+        ],
         tags = tags,
         visibility = visibility,
     )
@@ -125,7 +127,7 @@ def multiplatform_python_image(
     
     oci_load(
         name = name + "_load",
-        image = ":" + name,
+        image = ":" + name + "_amd64",  # Load AMD64 image by default for local testing
         repo_tags = repo_tags,
         tags = tags,
         visibility = visibility,
@@ -182,6 +184,9 @@ def _build_python_platform_image(
         "PYTHON_RUNFILES": "/app/" + binary_name + ".runfiles",
         "PYTHONPATH": "/app:" + "/app/" + binary_name + ".runfiles",
     }
+    
+    # Note: Using Bazel's experimental platform system instead of manual architecture/os
+    # Platform information comes automatically from the platform transition or --platforms flag
     
     oci_image(
         name = name,
@@ -254,11 +259,13 @@ def multiplatform_go_image(
         **kwargs
     )
     
-    # For now, create a simple alias to one platform for the manifest list
-    # TODO: When oci_image_index is working properly, use it for multi-platform
-    native.alias(
+    # Create multi-platform manifest list using oci_image_index
+    oci_image_index(
         name = name,
-        actual = ":" + name + "_amd64",
+        images = [
+            ":" + name + "_amd64",
+            ":" + name + "_arm64",
+        ],
         tags = tags,
         visibility = visibility,
     )
@@ -280,7 +287,7 @@ def multiplatform_go_image(
     
     oci_load(
         name = name + "_load",
-        image = ":" + name,
+        image = ":" + name + "_amd64",  # Load AMD64 image by default for local testing
         repo_tags = repo_tags,
         tags = tags,
         visibility = visibility,
@@ -317,7 +324,7 @@ def _build_go_platform_image(
     **kwargs):
     """Internal helper to build a platform-specific Go image."""
     
-    # Collect all layers
+    # Collect all layers in optimal order (dependencies first, app last)
     all_layers = []
     
     if extra_layers:
@@ -330,6 +337,11 @@ def _build_go_platform_image(
         binary_name = binary.split(":")[-1]
     else:
         binary_name = paths.basename(binary)
+    
+    # Go binaries don't need RUNFILES since they're statically linked
+    
+    # Note: Using Bazel's experimental platform system instead of manual architecture/os
+    # Platform information comes automatically from the platform transition or --platforms flag
     
     oci_image(
         name = name,
