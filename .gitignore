@@ -1,6 +1,7 @@
 # Bazel
 bazel-*
 .bazel
+.bazelrc.remote
 
 # Python
 __pycache__/

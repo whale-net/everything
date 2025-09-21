@@ -1,0 +1,78 @@
+load("@rules_python//python:defs.bzl", "py_library", "py_binary", "py_test")
+load("@everything_pip_deps//:requirements.bzl", "requirement")
+
+# Host API services library
+py_library(
+    name = "manman_host",
+    srcs = glob(["**/*.py"], exclude=["*_test.py"]),
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
+        requirement("fastapi"),
+        requirement("uvicorn"),
+        requirement("gunicorn"),
+        requirement("typer"),
+        requirement("alembic"),
+        requirement("opentelemetry-instrumentation-fastapi"),
+        requirement("requests"),
+        requirement("python-jose"),
+    ],
+)
+
+# Binary targets for host services
+py_binary(
+    name = "experience_api",
+    srcs = ["main.py"],
+    main = "main.py", 
+    deps = [":manman_host"],
+    args = ["start-experience-api"],
+    visibility = ["//manman:__pkg__"],
+)
+
+py_binary(
+    name = "status_api",
+    srcs = ["main.py"],
+    main = "main.py",
+    deps = [":manman_host"], 
+    args = ["start-status-api"],
+    visibility = ["//manman:__pkg__"],
+)
+
+py_binary(
+    name = "worker_dal_api", 
+    srcs = ["main.py"],
+    main = "main.py",
+    deps = [":manman_host"],
+    args = ["start-worker-dal-api"],
+    visibility = ["//manman:__pkg__"],
+)
+
+py_binary(
+    name = "status_processor",
+    srcs = ["main.py"], 
+    main = "main.py",
+    deps = [":manman_host"],
+    args = ["start-status-processor"],
+    visibility = ["//manman:__pkg__"],
+)
+
+# Tests for host APIs
+py_test(
+    name = "manman_host_test",
+    srcs = [
+        "experience_api_test.py",
+        "status_api_test.py", 
+        "status_processor_test.py",
+        "worker_dal_api_test.py",
+    ],
+    main = "experience_api_test.py",
+    deps = [
+        ":manman_host",
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+        requirement("httpx"),  # For testing FastAPI endpoints
+        requirement("requests"),  # For repository API client
+    ],
+    python_version = "PY3",
+)

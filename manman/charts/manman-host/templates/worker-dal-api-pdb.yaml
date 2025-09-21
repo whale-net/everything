@@ -1,0 +1,15 @@
+{{- if .Values.apis.workerDal.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Values.apis.workerDal.name }}-{{ .Values.env.app_env }}-pdb
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: {{ .Values.apis.workerDal.name }}-{{ .Values.env.app_env }}
+    component: worker-dal-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: {{ .Values.apis.workerDal.name }}-{{ .Values.env.app_env }}
+{{- end }}

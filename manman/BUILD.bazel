@@ -1,0 +1,77 @@
+load("@rules_python//python:defs.bzl", "py_library")
+load("//tools:release.bzl", "release_app")
+
+# Re-export all manman modules for convenience
+py_library(
+    name = "manman",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//manman/src:manman_core",
+        "//manman/src/host:manman_host",
+        "//manman/src/worker:manman_worker",
+        "//manman/src/repository:manman_repository",
+        "//manman/src/migrations:manman_migrations",
+    ],
+)
+
+# Release configurations for manman services
+release_app(
+    name = "experience_api",
+    binary_target = "//manman/src/host:experience_api",
+    language = "python",
+    domain = "manman",
+    description = "Experience API service for managing user experiences and workflows",
+)
+
+release_app(
+    name = "status_api", 
+    binary_target = "//manman/src/host:status_api",
+    language = "python",
+    domain = "manman",
+    description = "Status API service for monitoring and health checks",
+)
+
+release_app(
+    name = "worker_dal_api",
+    binary_target = "//manman/src/host:worker_dal_api", 
+    language = "python",
+    domain = "manman",
+    description = "Worker DAL API service for data access layer operations",
+)
+
+release_app(
+    name = "status_processor",
+    binary_target = "//manman/src/host:status_processor",
+    language = "python", 
+    domain = "manman",
+    description = "Status processor service for background status processing",
+)
+
+release_app(
+    name = "worker",
+    binary_target = "//manman/src/worker:worker",
+    language = "python",
+    domain = "manman", 
+    description = "Background worker service for processing tasks and messages",
+)
+
+# Note: Manual helm charts are provided in manman/charts/manman-host/
+# Those charts offer more sophisticated configuration for production deployments
+
+filegroup(
+    name = "tiltfile",
+    srcs = ["Tiltfile"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "charts", 
+    srcs = glob(["charts/**/*"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "design_docs",
+    srcs = glob(["design/**/*"]),
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,108 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Values.ingress.name | default (printf "manman-ingress-%s" .Values.env.app_env) }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: manman-{{ .Values.env.app_env }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.ingressClassName }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    {{- if .Values.ingress.tls.configs }}
+    {{- range .Values.ingress.tls.configs }}
+    - secretName: {{ .secretName }}
+      hosts:
+        {{- range .hosts }}
+        - {{ . }}
+        {{- end }}
+    {{- end }}
+    {{- else }}
+    - secretName: {{ printf "manman-tls-%s" .Values.env.app_env }}
+      hosts:
+        - {{ .Values.ingress.host | default "localhost" }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{/* Auto-generate rules based on enabled APIs */}}
+    {{- if and .Values.ingress.tls.enabled .Values.ingress.tls.configs }}
+    {{/* When TLS is enabled with configs, create rules for each host in TLS configs */}}
+    {{- $uniqueHosts := dict }}
+    {{- range .Values.ingress.tls.configs }}
+      {{- range .hosts }}
+        {{- $_ := set $uniqueHosts . true }}
+      {{- end }}
+    {{- end }}
+    {{- range $host, $_ := $uniqueHosts }}
+    - host: {{ $host }}
+      http:
+        paths:
+          {{- if $.Values.apis.experience.enabled }}
+          - path: /experience
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ printf "%s-%s-service" $.Values.apis.experience.name $.Values.env.app_env }}
+                port:
+                  number: {{ $.Values.apis.experience.port }}
+          {{- end }}
+          {{- if $.Values.apis.workerDal.enabled }}
+          - path: /workerdal
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ printf "%s-%s-service" $.Values.apis.workerDal.name $.Values.env.app_env }}
+                port:
+                  number: {{ $.Values.apis.workerDal.port }}
+          {{- end }}
+          {{- if $.Values.apis.status.enabled }}
+          - path: /status
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ printf "%s-%s-service" $.Values.apis.status.name $.Values.env.app_env }}
+                port:
+                  number: {{ $.Values.apis.status.port }}
+          {{- end }}
+    {{- end }}
+    {{- else }}
+    {{/* When TLS is disabled or no TLS configs, use the simple host field */}}
+    - host: {{ .Values.ingress.host | default "localhost" }}
+      http:
+        paths:
+          {{- if .Values.apis.experience.enabled }}
+          - path: /experience
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ printf "%s-%s-service" .Values.apis.experience.name .Values.env.app_env }}
+                port:
+                  number: {{ .Values.apis.experience.port }}
+          {{- end }}
+          {{- if .Values.apis.workerDal.enabled }}
+          - path: /workerdal
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ printf "%s-%s-service" .Values.apis.workerDal.name .Values.env.app_env }}
+                port:
+                  number: {{ .Values.apis.workerDal.port }}
+          {{- end }}
+          {{- if .Values.apis.status.enabled }}
+          - path: /status
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ printf "%s-%s-service" .Values.apis.status.name .Values.env.app_env }}
+                port:
+                  number: {{ .Values.apis.status.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}

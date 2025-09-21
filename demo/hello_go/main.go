@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	message := go_lib.FormatGreeting("world from Bazel")
+	message := go_lib.FormatGreeting("world from Bazel - testing change detection")
 	fmt.Println(message)
 	fmt.Printf("Version: %s\n", go_lib.GetVersion())
 }

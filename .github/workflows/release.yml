@@ -76,6 +76,9 @@ jobs:
       uses: ./.github/actions/setup-build-env
       with:
         cache-suffix: 'docker'
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
         
     - name: Plan release using release helper tool
       id: plan
@@ -140,6 +143,9 @@ jobs:
       with:
         setup-docker: 'true'
         cache-suffix: 'docker'
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
         
     # Configure Git for tagging
     - name: Configure Git
@@ -181,6 +187,7 @@ jobs:
 
     - name: Generate release notes for app
       if: ${{ github.event.inputs.dry_run == 'false' }}
+      id: release-notes
       env:
         APP: ${{ matrix.app }}
         VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
@@ -193,6 +200,9 @@ jobs:
         if [[ -n "$METADATA" ]]; then
           DOMAIN=$(echo "$METADATA" | sed 's/.*domain: \([^,]*\).*/\1/')
           TAG_NAME="${DOMAIN}-${APP}.${VERSION}"
+          
+          # Output domain for use in upload step
+          echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
           
           echo "## 📝 Release Notes for $TAG_NAME" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -210,14 +220,88 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           
           echo "✅ Release notes generated for $APP $VERSION"
+          
+          # Save release notes to a file for the GitHub release creation job
+          mkdir -p /tmp/release-notes
+          echo "$RELEASE_NOTES" > "/tmp/release-notes/${DOMAIN}-${APP}.md"
         else
           echo "Warning: Could not determine domain for $APP, skipping release notes"
+        fi
+    
+    - name: Upload release notes artifact
+      if: ${{ github.event.inputs.dry_run == 'false' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-notes-${{ matrix.app }}
+        path: /tmp/release-notes/${{ steps.release-notes.outputs.domain }}-${{ matrix.app }}.md
+        if-no-files-found: ignore
+
+  create-github-releases:
+    name: Create GitHub Releases
+    runs-on: ubuntu-latest
+    needs: [plan-release, release]
+    if: needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null && github.event.inputs.dry_run == 'false'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'docker'
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+    
+    - name: Download release notes artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: release-notes-*
+        path: /tmp/release-notes
+        merge-multiple: true
+      
+    - name: Create GitHub releases for all apps
+      env:
+        MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
+        VERSION: ${{ needs.plan-release.outputs.version }}
+        GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        GITHUB_REPOSITORY_NAME: ${{ github.event.repository.name }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "Creating GitHub releases for all apps in version $VERSION..."
+        
+        # Extract app names from matrix
+        APPS=$(echo "$MATRIX" | jq -r '.include[].app' | tr '\n' ',' | sed 's/,$//')
+        
+        if [[ -n "$APPS" && "$APPS" != "" ]]; then
+          echo "Creating releases for apps: $APPS"
+          
+          # List available release notes files
+          echo "Available release notes files:"
+          ls -la /tmp/release-notes/ || echo "No release notes files found"
+          
+          # Create releases for all apps at once, using pre-generated release notes
+          if bazel run --config=ci //tools:release -- create-combined-github-release-with-notes "$VERSION" \
+            --owner "$GITHUB_REPOSITORY_OWNER" \
+            --repo "$GITHUB_REPOSITORY_NAME" \
+            --commit "${{ github.sha }}" \
+            --apps "$APPS" \
+            --release-notes-dir "/tmp/release-notes"; then
+            echo "✅ Successfully created GitHub releases for version $VERSION"
+          else
+            echo "❌ Failed to create GitHub releases for version $VERSION"
+            exit 1  # Fail the job if release creation fails
+          fi
+        else
+          echo "No apps found in matrix, skipping release creation"
         fi
 
   release-summary:
     name: Release Summary
     runs-on: ubuntu-latest
-    needs: [plan-release, release]
+    needs: [plan-release, release, create-github-releases]
     if: always()
     steps:
     - name: Checkout code
@@ -227,6 +311,9 @@ jobs:
       uses: ./.github/actions/setup-build-env
       with:
         cache-suffix: 'docker'
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
       
     - name: Generate summary using release helper
       run: |
