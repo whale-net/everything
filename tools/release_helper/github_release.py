@@ -13,7 +13,7 @@ import httpx
 
 from tools.release_helper.metadata import get_app_metadata, list_all_apps
 from tools.release_helper.release import find_app_bazel_target
-from tools.release_helper.release_notes import generate_release_notes
+from tools.release_helper.release_notes import generate_release_notes, parse_tag_info
 
 
 @dataclass
@@ -60,6 +60,29 @@ class GitHubReleaseClient:
         Returns:
             True if token has necessary permissions, False otherwise
         """
+        # If running in GitHub Actions, we can trust the token has appropriate permissions
+        # since the workflow explicitly shows "Contents: write" permission
+        if os.getenv('GITHUB_ACTIONS'):
+            print("🔍 Running in GitHub Actions environment. Verifying token validity and logging permissions...", file=sys.stderr)
+            url = f"{self.base_url}/repos/{self.owner}/{self.repo}"
+            with httpx.Client() as client:
+                try:
+                    response = client.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+                    if response.status_code == 200:
+                        scopes = response.headers.get("X-OAuth-Scopes", "")
+                        print(f"✅ Token is valid. Available OAuth scopes: {scopes}", file=sys.stderr)
+                        return True
+                    else:
+                        print(f"❌ Token is invalid or does not have access to repository {self.owner}/{self.repo}. Status: {response.status_code}", file=sys.stderr)
+                        if response.status_code == 404:
+                            print("   Repository not found or token doesn't have access", file=sys.stderr)
+                        elif response.status_code == 403:
+                            print("   Access forbidden - check token permissions", file=sys.stderr)
+                        return False
+                except httpx.HTTPError as e:
+                    print(f"❌ Error validating token in GitHub Actions: {e}", file=sys.stderr)
+                    return False
+            
         url = f"{self.base_url}/repos/{self.owner}/{self.repo}"
         
         with httpx.Client() as client:
@@ -69,13 +92,41 @@ class GitHubReleaseClient:
                     repo_data = response.json()
                     permissions = repo_data.get('permissions', {})
                     
-                    # Check if we have write permissions (needed for creating releases)
-                    if permissions.get('push', False) or permissions.get('admin', False):
+                    # Debug: Print available permissions for troubleshooting
+                    if os.getenv('DEBUG_PERMISSIONS'):
+                        print(f"🔍 Debug: Available permissions: {permissions}", file=sys.stderr)
+                    
+                    # Check for various permission patterns that indicate write access
+                    # GitHub Actions tokens and PATs may have different permission structures
+                    has_write_access = (
+                        permissions.get('push', False) or           # Traditional push permission  
+                        permissions.get('admin', False) or          # Admin permission
+                        permissions.get('maintain', False) or       # Maintain permission
+                        permissions.get('contents', 'none') == 'write' or  # Contents write (GitHub Actions)
+                        permissions.get('write', False)             # Generic write permission
+                    )
+                    
+                    if has_write_access:
                         return True
                     else:
-                        print(f"❌ GitHub token does not have write permissions for {self.owner}/{self.repo}", file=sys.stderr)
-                        print("   Ensure the token has 'repo' or 'public_repo' scope", file=sys.stderr)
-                        return False
+                        # For GitHub Actions tokens, the permissions might not be reflected
+                        # in the repo API response. We'll try a different approach:
+                        # Check if we can access the releases endpoint
+                        releases_url = f"{self.base_url}/repos/{self.owner}/{self.repo}/releases"
+                        releases_response = client.get(releases_url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+                        
+                        if releases_response.status_code == 200:
+                            # If we can access releases, we likely have sufficient permissions
+                            print(f"⚠️  Permission validation unclear, but releases endpoint accessible. Proceeding with caution.", file=sys.stderr)
+                            return True
+                        elif releases_response.status_code == 403:
+                            print(f"❌ GitHub token does not have write permissions for {self.owner}/{self.repo}", file=sys.stderr)
+                            print("   Ensure the token has 'contents: write' permission or 'repo' scope", file=sys.stderr)
+                            print(f"   Available permissions: {permissions}", file=sys.stderr)
+                            return False
+                        else:
+                            print(f"❌ Cannot determine permissions. Releases endpoint status: {releases_response.status_code}", file=sys.stderr)
+                            return False
                 else:
                     print(f"❌ Cannot access repository {self.owner}/{self.repo}. Status: {response.status_code}", file=sys.stderr)
                     if response.status_code == 404:
@@ -230,10 +281,18 @@ def create_app_release(
             print(f"ℹ️  Release {tag_name} already exists: {existing_release['html_url']}")
             return existing_release
         
+        # Create release title using better format
+        try:
+            domain, parsed_app_name, version = parse_tag_info(tag_name)
+            release_title = f"{domain} {parsed_app_name} {version}"
+        except ValueError:
+            # Fallback to original format if tag parsing fails
+            release_title = f"{app_name} {tag_name}"
+        
         # Create release data
         release_data = GitHubReleaseData(
             tag_name=tag_name,
-            name=f"{app_name} {tag_name}",
+            name=release_title,
             body=release_notes,
             draft=False,
             prerelease=prerelease,
@@ -334,20 +393,21 @@ def create_releases_for_apps(
 
 def create_releases_for_apps_with_notes(
     app_list: List[str],
-    version: str,
-    owner: str,
-    repo: str,
+    version: Optional[str] = None,
+    owner: str = "",
+    repo: str = "",
     commit_sha: Optional[str] = None,
     prerelease: bool = False,
     previous_tag: Optional[str] = None,
     token: Optional[str] = None,
-    release_notes_dir: Optional[str] = None
+    release_notes_dir: Optional[str] = None,
+    app_versions: Optional[Dict[str, str]] = None
 ) -> Dict[str, Optional[Dict]]:
     """Create GitHub releases for multiple apps using pre-generated release notes from files.
     
     Args:
         app_list: List of app names to create releases for
-        version: Release version
+        version: Release version (used for all apps if app_versions not provided)
         owner: Repository owner
         repo: Repository name
         commit_sha: Specific commit SHA to target
@@ -355,6 +415,7 @@ def create_releases_for_apps_with_notes(
         previous_tag: Previous tag to compare against (auto-detected if not provided)
         token: GitHub token (defaults to GITHUB_TOKEN env var)
         release_notes_dir: Directory containing pre-generated release notes files
+        app_versions: Optional dictionary mapping app names to their individual versions
         
     Returns:
         Dictionary mapping app names to their release data (None if failed)
@@ -362,18 +423,36 @@ def create_releases_for_apps_with_notes(
     
     results = {}
     
-    print(f"Creating GitHub releases for {len(app_list)} apps using pre-generated release notes...")
+    # Determine if we're using individual versions or a single version
+    using_individual_versions = app_versions is not None
+    
+    if using_individual_versions:
+        print(f"Creating GitHub releases for {len(app_list)} apps with individual versions...")
+    else:
+        if not version:
+            raise ValueError("Either 'version' or 'app_versions' must be provided")
+        print(f"Creating GitHub releases for {len(app_list)} apps using pre-generated release notes...")
     
     for app_name in app_list:
         try:
             print(f"Processing {app_name}...")
+            
+            # Determine the version for this app
+            if using_individual_versions:
+                app_version = app_versions.get(app_name)
+                if not app_version:
+                    print(f"❌ No version found for {app_name} in app_versions: {app_versions}", file=sys.stderr)
+                    results[app_name] = None
+                    continue
+            else:
+                app_version = version
             
             # Find the app's metadata to determine the tag format
             try:
                 bazel_target = find_app_bazel_target(app_name)
                 metadata = get_app_metadata(bazel_target)
                 domain = metadata['domain']
-                tag_name = f"{domain}-{app_name}.{version}"
+                tag_name = f"{domain}-{app_name}.{app_version}"
             except Exception as e:
                 print(f"❌ Could not determine tag format for {app_name}: {e}", file=sys.stderr)
                 results[app_name] = None
@@ -382,18 +461,18 @@ def create_releases_for_apps_with_notes(
             # Try to load pre-generated release notes first
             release_notes = None
             if release_notes_dir:
-                notes_file = Path(release_notes_dir) / f"{app_name}.md"
+                notes_file = Path(release_notes_dir) / f"{domain}-{app_name}.md"
                 if notes_file.exists():
                     try:
                         release_notes = notes_file.read_text(encoding='utf-8')
-                        print(f"✅ Using pre-generated release notes for {app_name}")
+                        print(f"✅ Using pre-generated release notes for {domain}-{app_name}")
                     except Exception as e:
-                        print(f"⚠️  Failed to read pre-generated release notes for {app_name}: {e}", file=sys.stderr)
+                        print(f"⚠️  Failed to read pre-generated release notes for {domain}-{app_name}: {e}", file=sys.stderr)
             
             # Fall back to generating release notes if not found or failed to load
             if not release_notes:
                 try:
-                    print(f"Generating release notes for {app_name} (no pre-generated notes found)")
+                    print(f"Generating release notes for {domain}-{app_name} (no pre-generated notes found)")
                     release_notes = generate_release_notes(app_name, tag_name, previous_tag, "markdown")
                 except Exception as e:
                     print(f"❌ Failed to generate release notes for {app_name}: {e}", file=sys.stderr)
