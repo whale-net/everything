@@ -1,5 +1,6 @@
 load("@rules_python//python:defs.bzl", "py_library")
 load("//tools:release.bzl", "release_app")
+load("//tools:helm_chart_release.bzl", "helm_chart_release_macro")
 
 # Re-export all manman modules for convenience
 py_library(
@@ -57,6 +58,25 @@ release_app(
 
 # Note: Manual helm charts are provided in manman/charts/manman-host/
 # Those charts offer more sophisticated configuration for production deployments
+
+# Helm chart releases for manman domain
+helm_chart_release_macro(
+    domain = "manman",
+    charts = {
+        "host_chart": {
+            "description": "ManMan host services (APIs)",
+            "apps": ["experience_api", "status_api", "worker_dal_api"]
+        },
+        "worker_chart": {
+            "description": "ManMan worker services",
+            "apps": ["status_processor", "worker"]
+        },
+        "full_chart": {
+            "description": "Complete ManMan application stack",
+            "apps": ["experience_api", "status_api", "worker_dal_api", "status_processor", "worker"]
+        }
+    }
+)
 
 filegroup(
     name = "tiltfile",

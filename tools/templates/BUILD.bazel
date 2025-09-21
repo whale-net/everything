@@ -1,2 +1,13 @@
 # This directory has been moved to //tools/helm/templates/
 # Update your references to use //tools/helm:helm_templates instead
+
+# Backward compatibility for template files
+filegroup(
+    name = "helm_templates",
+    srcs = [
+        "deployment.yaml",
+        "service.yaml", 
+        "_helpers.tpl",
+    ],
+    visibility = ["//visibility:public"],
+)
