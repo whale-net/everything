@@ -6,6 +6,9 @@ bazel-*
 # Optional cache configuration file (can be included if desired)
 # bazel-cache-configs.bazelrc
 
+# Remote execution configuration (contains sensitive API keys)
+.bazelrc.remote-exec
+
 # Python
 __pycache__/
 *.py[cod]

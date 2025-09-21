@@ -4,6 +4,12 @@ build --incompatible_strict_action_env
 build --python_version=PY3
 build:fast --jobs=auto
 
+# Performance optimizations for target processing
+# Increase analysis parallelism and loading performance
+build --loading_phase_threads=auto
+build --jobs=auto
+build --experimental_parallel_aquery_output=true
+
 # CI optimizations  
 # Note: Cache paths are managed by bazel-contrib/setup-bazel action
 # and should not be overridden here to avoid conflicts
@@ -21,14 +27,12 @@ test:ci --cache_test_results=yes
 # Uses try-import to conditionally load remote cache config if available
 try-import %workspace%/.bazelrc.remote
 
-# Remote cache concurrency optimizations
-# Increase from defaults: remote_max_connections=100, http_max_parallel_downloads=8
-build --remote_max_connections=300
-build --http_max_parallel_downloads=24
-
-# CI-specific remote cache optimizations
-build:ci --remote_timeout=90s
-build:ci --experimental_remote_cache_compression_threshold=50
+# Optional remote execution configuration
+# Uncomment and configure to enable remote execution for significant performance improvements
+# Example: BuildBuddy (free tier available)
+# build --remote_executor=grpcs://remote.buildbuddy.io
+# build --remote_header=x-buildbuddy-api-key=YOUR_API_KEY
+# build --remote_instance_name=buildbuddy-io/buildbuddy/default_instance_name
 
 # Test configurations
 test --test_output=errors
