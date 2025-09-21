@@ -70,6 +70,24 @@ def release_app(name, binary_target, language, domain, description = "", version
     # Tag with "manual" so they're not built by //... (only when explicitly requested)
     # Images are expensive to build and should only be created when needed
     if language == "python":
+        # Create platform-specific Python images with platform-specific binaries
+        python_oci_image(
+            name = image_target + "_amd64",
+            binary = binary_target + "_amd64",  # Use platform-specific binary
+            repo_tag = repo_tag + "-amd64",
+            target_platform = "linux_x86_64",
+            tags = ["manual", "container-image", "platform-amd64"],
+        )
+        
+        python_oci_image(
+            name = image_target + "_arm64", 
+            binary = binary_target + "_arm64",  # Use platform-specific binary
+            repo_tag = repo_tag + "-arm64",
+            target_platform = "linux_arm64",
+            tags = ["manual", "container-image", "platform-arm64"],
+        )
+        
+        # Default image for backwards compatibility (uses dev deps)
         python_oci_image(
             name = image_target,
             binary = binary_target,

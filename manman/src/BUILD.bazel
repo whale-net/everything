@@ -1,5 +1,5 @@
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
-load("@everything_pip_deps//:requirements.bzl", "requirement")
+load("@pip_deps_dev//:requirements.bzl", "requirement")
 
 # Core manman library with configuration, models, and utilities
 py_library(

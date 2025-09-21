@@ -1,5 +1,7 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
-load("@everything_pip_deps//:requirements.bzl", "requirement")
+load("@pip_deps_dev//:requirements.bzl", "requirement")
+load("@pip_deps_linux_amd64//:requirements.bzl", requirement_amd64 = "requirement")
+load("@pip_deps_linux_arm64//:requirements.bzl", requirement_arm64 = "requirement")
 load("//tools:release.bzl", "release_app")
 
 py_library(
@@ -16,6 +18,39 @@ py_binary(
         ":main_lib",
         requirement("fastapi"),
         requirement("uvicorn"),
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Platform-specific binaries for container builds
+py_binary(
+    name = "hello_fastapi_amd64",
+    srcs = ["main.py"],
+    main = "main.py",
+    deps = [
+        ":main_lib",
+        requirement_amd64("fastapi"),
+        requirement_amd64("uvicorn"),
+    ],
+    target_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+py_binary(
+    name = "hello_fastapi_arm64",
+    srcs = ["main.py"],
+    main = "main.py",
+    deps = [
+        ":main_lib",
+        requirement_arm64("fastapi"),
+        requirement_arm64("uvicorn"),
+    ],
+    target_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:arm64",
     ],
     visibility = ["//visibility:public"],
 )
