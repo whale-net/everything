@@ -31,9 +31,15 @@ def setup_python_path():
                 if os.path.exists(dep_path):
                     python_paths.append(dep_path)
     
-    # Set PYTHONPATH
+    # Set PYTHONPATH and update sys.path directly
     new_path = ":".join(python_paths)
     os.environ["PYTHONPATH"] = new_path
+    
+    # Also update sys.path directly for immediate availability
+    import sys
+    for path in python_paths:
+        if path not in sys.path:
+            sys.path.insert(0, path)
     
     # Set runfiles environment
     if runfiles_dir:

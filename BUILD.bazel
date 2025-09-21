@@ -3,13 +3,29 @@ load("@rules_uv//uv:pip.bzl", "pip_compile")
 load("@rules_python//python:defs.bzl", "py_library")
 
 # Export files needed by other packages
-exports_files(["requirements.lock.txt"])
+exports_files([
+    "requirements.lock.txt",
+    "requirements.linux.lock.txt",
+])
 
 # Python dependencies
 pip_compile(
     name = "pip_compile",
     requirements_in = "requirements.in",
     requirements_txt = "requirements.lock.txt",
+)
+
+# Linux-specific Python dependencies
+pip_compile(
+    name = "pip_compile_linux",
+    requirements_in = "requirements.in",
+    requirements_txt = "requirements.linux.lock.txt",
+    # Use specific Linux platform target
+    python_platform = "x86_64-unknown-linux-gnu",
+    # Force binary-only installs
+    extra_args = [
+        "--only-binary=:all:",
+    ],
 )
 
 # Root Python library
