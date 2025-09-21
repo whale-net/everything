@@ -147,7 +147,7 @@ def helm_chart_release_impl(ctx):
         output = values_yaml,
         content = values_content
     )
-    
+
     # Copy template files
     template_files = []
     for template_file in ctx.files.templates:
@@ -197,7 +197,7 @@ Build success!
     )
     
     all_files = [manifest_file, chart_yaml, values_yaml] + template_files
-    
+
     return [DefaultInfo(
         files = depset(all_files),
         runfiles = ctx.runfiles(files = all_files)

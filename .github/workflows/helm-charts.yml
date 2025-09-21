@@ -92,11 +92,11 @@ jobs:
             # Target format: //domain:chart_name
             domain=$(echo $target | cut -d'/' -f3 | cut -d':' -f1)
             chart_name=$(echo $target | cut -d':' -f2)
-            
 
             # Apply domain filter
             if [ "$DOMAIN_FILTER" != "all" ] && [ "$domain" != "$DOMAIN_FILTER" ]; then
               echo "Skipping chart $chart_name in domain $domain (filter: $DOMAIN_FILTER)"
+
               continue
             fi
 
