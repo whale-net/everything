@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       domain:
-        description: 'Domain to release charts for (e.g., manman, demo, or all)'
+        description: 'Domain to release charts for (e.g., demo, or all)'
         required: true
         default: 'all'
       chart_version:
@@ -73,12 +73,22 @@ jobs:
           # Extract domains and chart info
           CHARTS_JSON="["
           DOMAINS_JSON="["
+          
+          # Check if domain filtering is requested
+          DOMAIN_FILTER="${{ github.event.inputs.domain || 'all' }}"
+          echo "Domain filter: $DOMAIN_FILTER"
 
           for target in $CHART_TARGETS; do
             # Extract domain and chart name from target
             # Target format: //domain:chart_name
             domain=$(echo $target | cut -d'/' -f3 | cut -d':' -f1)
             chart_name=$(echo $target | cut -d':' -f2)
+            
+            # Apply domain filter (skip if not matching and not "all")
+            if [ "$DOMAIN_FILTER" != "all" ] && [ "$domain" != "$DOMAIN_FILTER" ]; then
+              echo "Skipping $target (domain $domain doesn't match filter $DOMAIN_FILTER)"
+              continue
+            fi
 
             # Add to charts array
             if [ "$CHARTS_JSON" != "[" ]; then
@@ -153,6 +163,15 @@ jobs:
           if [ ! -f "$values_yaml" ]; then
             echo "Error: Missing values.yaml: $values_yaml"
             exit 1
+          fi
+          
+          # Check for templates directory
+          templates_dir="bazel-bin/${domain}/${chart_name}/templates"
+          if [ ! -d "$templates_dir" ]; then
+            echo "Warning: Missing templates directory: $templates_dir"
+          else
+            echo "Templates found:"
+            ls -la "$templates_dir"
           fi
 
           echo "Chart validation successful!"

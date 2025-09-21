@@ -47,6 +47,8 @@ images:
     # Add common configuration
     values_content += """
 # Common configuration
+domain: "{domain}"
+
 service:
   enabled: true
   type: ClusterIP
@@ -59,7 +61,7 @@ ingress:
 
 env:
   app_env: "dev"
-"""
+""".format(domain = domain)
 
     # Add overrides as YAML comments for now
     if overrides:
@@ -110,6 +112,11 @@ def helm_chart_release_impl(ctx):
     chart_yaml = ctx.actions.declare_file("{}/Chart.yaml".format(chart_name))
     values_yaml = ctx.actions.declare_file("{}/values.yaml".format(chart_name))
     
+    # Create template files in templates/ subdirectory
+    deployment_yaml = ctx.actions.declare_file("{}/templates/deployment.yaml".format(chart_name))
+    service_yaml = ctx.actions.declare_file("{}/templates/service.yaml".format(chart_name))
+    helpers_tpl = ctx.actions.declare_file("{}/templates/_helpers.tpl".format(chart_name))
+    
     # Generate Chart.yaml content
     chart_content = _create_chart_yaml_content(
         chart_name, 
@@ -137,6 +144,29 @@ def helm_chart_release_impl(ctx):
         output = values_yaml,
         content = values_content
     )
+    
+    # Copy template files from tools/templates/
+    template_files = ctx.attr.template_files
+    if template_files:
+        for template_file in template_files[DefaultInfo].files.to_list():
+            template_name = template_file.basename
+            output_template = None
+            
+            if template_name == "deployment.yaml":
+                output_template = deployment_yaml
+            elif template_name == "service.yaml":
+                output_template = service_yaml
+            elif template_name == "_helpers.tpl":
+                output_template = helpers_tpl
+            
+            if output_template:
+                ctx.actions.run_shell(
+                    inputs = [template_file],
+                    outputs = [output_template],
+                    command = "cp '{}' '{}'".format(template_file.path, output_template.path),
+                    mnemonic = "CopyHelmTemplate",
+                    progress_message = "Copying Helm template {}".format(template_name),
+                )
     
     # Create a simple manifest file
     manifest_file = ctx.actions.declare_file("{}.manifest".format(chart_name))
@@ -169,9 +199,14 @@ Build success!
         content = manifest_content
     )
     
+    # Collect all generated files
+    all_files = [manifest_file, chart_yaml, values_yaml]
+    if template_files:
+        all_files.extend([deployment_yaml, service_yaml, helpers_tpl])
+    
     return [DefaultInfo(
-        files = depset([manifest_file, chart_yaml, values_yaml]),
-        runfiles = ctx.runfiles(files = [manifest_file, chart_yaml, values_yaml])
+        files = depset(all_files),
+        runfiles = ctx.runfiles(files = all_files)
     )]
 
 helm_chart_release = rule(
@@ -199,6 +234,11 @@ helm_chart_release = rule(
         "app_metadata_deps": attr.label_list(
             allow_files = True,
             doc = "App metadata files for version resolution (auto-populated)"
+        ),
+        "template_files": attr.label(
+            default = "//tools/templates:helm_templates",
+            allow_files = True,
+            doc = "Helm template files to include in the chart"
         ),
     },
     doc = """
