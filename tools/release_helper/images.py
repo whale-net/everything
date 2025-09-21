@@ -137,8 +137,9 @@ def build_image(bazel_target: str, platform: Optional[str] = None) -> str:
     domain = metadata['domain']
     app_name = metadata['name']
 
-    # Use the existing image target with platform flags instead of trying to find platform-specific targets
-    load_target = f"//demo/{app_name}:{app_name}_image_load"
+    # Extract the app path from the bazel_target to construct the image target
+    app_path = bazel_target[2:].split(':')[0]  # Remove // and :target
+    load_target = f"//{app_path}:{app_name}_image_load"
 
     print(f"Building and loading {load_target} for platform {platform or 'default'} (using optimized oci_load)...")
     
@@ -168,8 +169,9 @@ def push_image_with_tags(bazel_target: str, tags: List[str], platform: Optional[
     metadata = get_app_metadata(bazel_target)
     app_name = metadata['name']
 
-    # Use the existing push target with platform flags
-    push_target = f"//demo/{app_name}:{app_name}_image_push"
+    # Extract the app path from the bazel_target to construct the push target
+    app_path = bazel_target[2:].split(':')[0]  # Remove // and :target
+    push_target = f"//{app_path}:{app_name}_image_push"
 
     print(f"Pushing {len(tags)} tags using {push_target} for platform {platform or 'default'}...")
     
