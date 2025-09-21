@@ -510,10 +510,29 @@ docker run --rm hello_go:latest      # ✅ Works correctly!
 ```
 
 ### Base Images & Architecture
-- **Python**: Uses `python:3.11-slim` (Python 3.11.13 on Debian 12)
+- **Python**: Uses `python:3.11-slim` (Python 3.11.13 on Debian 12) with platform-specific requirements
 - **Go**: Uses `alpine:3.20` (Alpine 3.20.3 for minimal size)
 - **Platforms**: Full support for both `linux/amd64` and `linux/arm64`
 - **Cross-compilation**: Automatically handles platform-specific builds
+- **Dependencies**: Platform-specific Python requirements ensure optimal compatibility
+
+#### Platform-Specific Requirements
+
+Python applications now use platform-specific requirements files for better compatibility:
+
+```bash
+# Compile requirements for all platforms
+bazel run //:pip_compile_all
+
+# Or compile for specific platforms
+bazel run //:pip_compile_linux_amd64  
+bazel run //:pip_compile_linux_arm64
+```
+
+Requirements files:
+- `requirements-linux-amd64.in` & `requirements-linux-amd64.lock.txt` - AMD64 platform
+- `requirements-linux-arm64.in` & `requirements-linux-arm64.lock.txt` - ARM64 platform
+- `requirements.in` & `requirements.lock.txt` - Generic (backward compatibility)
 
 ### Advanced: Manual OCI Rules
 

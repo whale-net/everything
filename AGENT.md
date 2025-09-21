@@ -15,9 +15,8 @@ This document provides comprehensive guidelines for AI agents working on the Eve
 ```
 ├── demo/                    # Example applications
 ├── libs/                    # Shared libraries (python/, go/)
-├── tools/                   # Build and release tooling
+├── tools/                   # Build and release tooling (including oci.bzl)
 ├── .github/                 # CI/CD workflows
-├── docker/                  # Base container configurations
 └── BUILD.bazel, MODULE.bazel # Bazel configuration
 ```
 

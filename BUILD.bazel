@@ -2,11 +2,35 @@ load("@rules_uv//uv:pip.bzl", "pip_compile")
 #load("@gazelle//:def.bzl", "gazelle")
 load("@rules_python//python:defs.bzl", "py_library")
 
-# Python dependencies
+# Python dependencies - generic (maintained for compatibility)
 pip_compile(
     name = "pip_compile",
     requirements_in = "requirements.in",
     requirements_txt = "requirements.lock.txt",
+)
+
+# Platform-specific Python dependencies
+pip_compile(
+    name = "pip_compile_linux_amd64",
+    requirements_in = "requirements-linux-amd64.in",
+    requirements_txt = "requirements-linux-amd64.lock.txt",
+)
+
+pip_compile(
+    name = "pip_compile_linux_arm64",
+    requirements_in = "requirements-linux-arm64.in",
+    requirements_txt = "requirements-linux-arm64.lock.txt",
+)
+
+# Convenience target to compile all platform requirements
+pip_compile(
+    name = "pip_compile_all",
+    requirements_in = "requirements.in",
+    requirements_txt = "requirements.lock.txt",
+    deps = [
+        ":pip_compile_linux_amd64",
+        ":pip_compile_linux_arm64",
+    ],
 )
 
 # Root Python library

@@ -100,6 +100,27 @@ def _get_platform_base_image(base_prefix, platform = None):
     
     return "@" + base_prefix + suffix
 
+def _get_pip_deps_hub(platform = None):
+    """Get the platform-specific pip dependencies hub name.
+    
+    Args:
+        platform: Target platform (defaults to linux/amd64)
+    
+    Returns:
+        Platform-specific pip dependencies hub name
+    """
+    if not platform:
+        platform = "linux/amd64"
+    
+    # Convert platform to pip hub name
+    if platform == "linux/amd64":
+        return "everything_pip_deps_linux_amd64"
+    elif platform == "linux/arm64" or platform == "linux/arm64/v8":
+        return "everything_pip_deps_linux_arm64"
+    else:
+        # Default to amd64 for unknown platforms
+        return "everything_pip_deps_linux_amd64"
+
 def python_oci_image(name, binary, repo_tag = None, platform = None, tags = None, **kwargs):
     """Build an OCI image for a Python binary.
     

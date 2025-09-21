@@ -43,12 +43,32 @@ oci.pull(
 use_repo(oci, "python_slim", "python_slim_linux_amd64", "python_slim_linux_arm64_v8", "alpine", "alpine_linux_amd64", "alpine_linux_arm64_v8")
 
 pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
+# Generic pip dependencies (for backward compatibility)
 pip.parse(
     hub_name = "everything_pip_deps",
     python_version = "3.11",
     requirements_lock = "//:requirements.lock.txt",
 )
-use_repo(pip, "everything_pip_deps")
+
+# Platform-specific pip dependencies
+pip.parse(
+    hub_name = "everything_pip_deps_linux_amd64",
+    python_version = "3.11",
+    requirements_lock = "//:requirements-linux-amd64.lock.txt",
+)
+
+pip.parse(
+    hub_name = "everything_pip_deps_linux_arm64",
+    python_version = "3.11", 
+    requirements_lock = "//:requirements-linux-arm64.lock.txt",
+)
+
+use_repo(
+    pip, 
+    "everything_pip_deps", 
+    "everything_pip_deps_linux_amd64", 
+    "everything_pip_deps_linux_arm64"
+)
 
 # Go setup
 go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")

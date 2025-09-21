@@ -19,7 +19,7 @@ class TestBazelBasedChangeDetection:
             ['tools/release.bzl'],
             ['MODULE.bazel'],
             ['.github/workflows/ci.yml'],
-            ['docker/Dockerfile'],
+            ['tools/oci.bzl'],  # Updated from docker/Dockerfile to tools/oci.bzl
             ['tools/release_helper/cli.py'],
             ['.github/workflows/release.yml'],
             ['demo/hello_python/main.py'],

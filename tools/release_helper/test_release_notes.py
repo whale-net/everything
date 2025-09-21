@@ -451,7 +451,7 @@ class TestFilterCommitsByApp:
         
         commits = [
             ReleaseNote("abc123", "Update CI", "John", "2024-01-15", [".github/workflows/ci.yml"]),
-            ReleaseNote("def456", "Update Docker", "Jane", "2024-01-14", ["docker/Dockerfile"]),
+            ReleaseNote("def456", "Update OCI rules", "Jane", "2024-01-14", ["tools/oci.bzl"]),  # Updated from docker/Dockerfile
             ReleaseNote("ghi789", "Update BUILD", "Bob", "2024-01-13", ["BUILD.bazel"]),
             ReleaseNote("jkl012", "Unrelated", "Alice", "2024-01-12", ["other/file.txt"])
         ]
