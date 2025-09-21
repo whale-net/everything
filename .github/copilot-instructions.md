@@ -2,6 +2,10 @@
 
 **ALWAYS reference these instructions first and fallback to search or bash commands only when you encounter unexpected information that does not match the info here.**
 
+## Desired Behaviors
+- Avoid creating markdown READMEs
+- Do not patch production environment - rely on release actions and human inputs
+
 ## Critical Dependency and Network Requirements
 
 ### Internet Access Required
