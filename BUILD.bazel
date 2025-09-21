@@ -5,9 +5,8 @@ load("@rules_python//python:defs.bzl", "py_library")
 # Export files needed by other packages
 exports_files([
     "requirements.lock.txt",
-    "requirements.linux.lock.txt",
-    "requirements.linux.arm64.lock.txt",
     "requirements.linux.amd64.lock.txt",
+    "requirements.linux.arm64.lock.txt",
 ])
 
 # Python dependencies
@@ -15,23 +14,6 @@ pip_compile(
     name = "pip_compile",
     requirements_in = "requirements.in",
     requirements_txt = "requirements.lock.txt",
-)
-
-# Linux ARM64-specific Python dependencies
-pip_compile(
-    name = "pip_compile_linux_arm64",
-    requirements_in = "requirements.in",
-    requirements_txt = "requirements.linux.arm64.lock.txt",
-    # Force ARM64 binary wheels to prevent cross-compilation issues
-    extra_args = [
-        "--only-binary=pydantic-core",
-        "--only-binary=fastapi", 
-        "--only-binary=uvicorn",
-        "--only-binary=httptools",
-        "--only-binary=uvloop",
-        "--only-binary=websockets",
-        "--python-platform=aarch64-unknown-linux-gnu",
-    ],
 )
 
 # Linux AMD64-specific Python dependencies
@@ -51,12 +33,12 @@ pip_compile(
     ],
 )
 
-# Legacy Linux requirements (for backwards compatibility)
+# Linux ARM64-specific Python dependencies
 pip_compile(
-    name = "pip_compile_linux",
+    name = "pip_compile_linux_arm64",
     requirements_in = "requirements.in",
-    requirements_txt = "requirements.linux.lock.txt",
-    # Allow binary wheels for key packages to prevent cross-compilation issues
+    requirements_txt = "requirements.linux.arm64.lock.txt",
+    # Force ARM64 binary wheels to prevent cross-compilation issues
     extra_args = [
         "--only-binary=pydantic-core",
         "--only-binary=fastapi", 
@@ -64,6 +46,7 @@ pip_compile(
         "--only-binary=httptools",
         "--only-binary=uvloop",
         "--only-binary=websockets",
+        "--python-platform=aarch64-unknown-linux-gnu",
     ],
 )
 
@@ -87,20 +70,3 @@ py_library(
 #     ],
 #     command = "update-repos",
 # )
-
-# Platform definitions
-platform(
-    name = "linux_amd64",
-    constraint_values = [
-        "@platforms//os:linux",
-        "@platforms//cpu:x86_64",
-    ],
-)
-
-platform(
-    name = "linux_arm64",
-    constraint_values = [
-        "@platforms//os:linux",
-        "@platforms//cpu:aarch64",
-    ],
-)

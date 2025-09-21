@@ -8,28 +8,6 @@ go_binary(
     visibility = ["//visibility:public"],
 )
 
-# Linux amd64 static binary for containers
-go_binary(
-    name = "hello_go_linux_amd64",
-    srcs = ["main.go"],
-    deps = ["//libs/go"],
-    visibility = ["//visibility:public"],
-    goos = "linux",
-    goarch = "amd64",
-    static = "on",
-)
-
-# Linux arm64 static binary for containers
-go_binary(
-    name = "hello_go_linux_arm64",
-    srcs = ["main.go"],
-    deps = ["//libs/go"],
-    visibility = ["//visibility:public"],
-    goos = "linux",
-    goarch = "arm64",
-    static = "on",
-)
-
 go_test(
     name = "main_test",
     srcs = ["main_test.go"],

@@ -1,7 +1,6 @@
 """Release utilities for the Everything monorepo."""
 
-load("//tools:oci.bzl", "python_oci_image", "go_oci_image")
-load("@rules_oci//oci:defs.bzl", "oci_push")
+load("//tools:multiplatform_image.bzl", "multiplatform_python_image", "multiplatform_go_image", "multiplatform_push")
 
 def _app_metadata_impl(ctx):
     """Implementation for app_metadata rule."""
@@ -42,7 +41,7 @@ app_metadata = rule(
     },
 )
 
-def release_app(name, binary_target, language, domain, description = "", version = "latest", registry = "ghcr.io", custom_repo_name = None):
+def release_app(name, binary_target = None, binary_amd64 = None, binary_arm64 = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", custom_repo_name = None):
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
@@ -50,7 +49,9 @@ def release_app(name, binary_target, language, domain, description = "", version
     
     Args:
         name: App name (should match directory name)
-        binary_target: The py_binary or go_binary target for this app
+        binary_target: The py_binary or go_binary target for this app (used for both platforms if platform-specific binaries not provided)
+        binary_amd64: AMD64-specific binary target (overrides binary_target for AMD64)
+        binary_arm64: ARM64-specific binary target (overrides binary_target for ARM64)
         language: Programming language ("python" or "go")
         domain: Domain/category for the app (e.g., "demo", "api", "web")
         description: Optional description of the app
@@ -61,79 +62,60 @@ def release_app(name, binary_target, language, domain, description = "", version
     if language not in ["python", "go"]:
         fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
     
+    # Determine which binaries to use for each platform
+    amd64_binary = binary_amd64 if binary_amd64 else binary_target
+    arm64_binary = binary_arm64 if binary_arm64 else binary_target
+    
+    if not amd64_binary or not arm64_binary:
+        fail("Must provide either 'binary_target' for both platforms or both 'binary_amd64' and 'binary_arm64'")
+    
     # Repository name for container images should use domain-app format
     image_name = domain + "-" + name
     image_target = name + "_image"
-    repo_tag = image_name + ":latest"
+    repository = registry + "/whale-net/" + image_name  # Hardcode whale-net org for now
     
-    # Create OCI images based on language
+    # Create multiplatform OCI images based on language
     # Tag with "manual" so they're not built by //... (only when explicitly requested)
-    # Images are expensive to build and should only be created when needed
     if language == "python":
-        # Create platform-specific Python images with platform-specific binaries
-        python_oci_image(
-            name = image_target + "_amd64",
-            binary = binary_target + "_amd64",  # Use platform-specific binary
-            repo_tag = repo_tag + "-amd64",
-            target_platform = "linux_x86_64",
-            tags = ["manual", "container-image", "platform-amd64"],
-        )
-        
-        python_oci_image(
-            name = image_target + "_arm64", 
-            binary = binary_target + "_arm64",  # Use platform-specific binary
-            repo_tag = repo_tag + "-arm64",
-            target_platform = "linux_arm64",
-            tags = ["manual", "container-image", "platform-arm64"],
-        )
-        
-        # Default image for backwards compatibility (uses dev deps)
-        python_oci_image(
-            name = image_target,
-            binary = binary_target,
-            repo_tag = repo_tag,
-            tags = ["manual", "container-image"],
-        )
+        if binary_amd64 and binary_arm64:
+            # Use platform-specific binaries
+            multiplatform_python_image(
+                name = image_target,
+                binary_amd64 = amd64_binary,
+                binary_arm64 = arm64_binary,
+                repository = repository,
+                tags = ["manual", "container-image"],
+            )
+        else:
+            # Use single binary for both platforms
+            multiplatform_python_image(
+                name = image_target,
+                binary = amd64_binary,  # Use either binary for both platforms
+                repository = repository,
+                tags = ["manual", "container-image"],
+            )
     elif language == "go":
-        go_oci_image(
+        multiplatform_go_image(
             name = image_target,
             binary = binary_target,
-            repo_tag = repo_tag,
+            repository = repository, 
             tags = ["manual", "container-image"],
         )
     
-    # Create oci_push targets for each platform
-    # These correspond to the image targets created by the multiplatform macros
-    registry_repo = registry + "/whale-net/" + image_name  # Hardcode whale-net org for now
-    
-    # Base push target (defaults to AMD64)
-    oci_push(
+    # Create push targets for all image variants
+    multiplatform_push(
         name = image_target + "_push",
-        image = ":" + image_target,
-        repository = registry_repo,
+        image = image_target,
+        repository = repository,
+        tag = "latest",
         tags = ["manual", "container-push"],
-    )
-    
-    # Platform-specific push targets for multi-architecture support
-    oci_push(
-        name = image_target + "_push_amd64",
-        image = ":" + image_target,
-        repository = registry_repo,
-        tags = ["manual", "container-push", "platform-amd64"],
-    )
-    
-    oci_push(
-        name = image_target + "_push_arm64", 
-        image = ":" + image_target,
-        repository = registry_repo,
-        tags = ["manual", "container-push", "platform-arm64"],
     )
     
     # Create release metadata
     app_metadata(
         name = name + "_metadata",
         app_name = name,  # Pass the actual app name
-        binary_target = binary_target,
+        binary_target = amd64_binary,  # Use the resolved AMD64 binary as primary reference
         image_target = image_target,
         description = description,
         version = version,
