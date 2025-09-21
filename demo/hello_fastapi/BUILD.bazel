@@ -68,6 +68,7 @@ py_test(
     deps = [
         ":main_lib",
         requirement("pytest"),
+        requirement("fastapi"),
         requirement("httpx"),
     ],
 )
