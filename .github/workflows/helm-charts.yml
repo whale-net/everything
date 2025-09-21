@@ -286,6 +286,52 @@ jobs:
           path: charts/
           retention-days: 30
 
+  # Create git tags for chart releases (independent of Pages publishing)
+  tag-chart-releases:
+    runs-on: ubuntu-latest
+    needs: [discover-charts, build-charts]
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      needs.discover-charts.outputs.charts != '[]' &&
+      needs.discover-charts.outputs.charts != ''
+    strategy:
+      matrix:
+        chart: ${{ fromJSON(needs.discover-charts.outputs.charts) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-version: '1.20.0'
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+
+      - name: Create and push chart git tag
+        run: |
+          chart_name="${{ matrix.chart.name }}"
+          domain="${{ matrix.chart.domain }}"
+          version="${{ matrix.chart.version }}"
+          
+          # Create chart tag using the same pattern as apps but with -chart suffix
+          tag_name="${domain}-${chart_name}-chart.${version}"
+          
+          echo "Creating git tag for chart: $tag_name"
+          
+          # Use the release helper to create the chart tag
+          bazel run //tools:release -- release-helm-chart "$domain" "$chart_name" \
+            --version "$version" \
+            --commit "${{ github.sha }}" \
+            --create-git-tag
+          
+          echo "✅ Created git tag: $tag_name"
+
   # Publish charts to GitHub Pages
   publish-to-pages:
     runs-on: ubuntu-latest
@@ -368,7 +414,7 @@ jobs:
   # Summary job
   summary:
     runs-on: ubuntu-latest
-    needs: [discover-charts, build-charts]
+    needs: [discover-charts, build-charts, tag-chart-releases]
     if: always()
     steps:
       - name: Print workflow summary
@@ -398,6 +444,19 @@ jobs:
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ "${{ needs.tag-chart-releases.result }}" = "success" ]; then
+              echo "✅ **Chart Tagging**: Success" >> $GITHUB_STEP_SUMMARY
+              echo "- Git tags created for chart releases" >> $GITHUB_STEP_SUMMARY
+            elif [ "${{ needs.tag-chart-releases.result }}" = "failure" ]; then
+              echo "❌ **Chart Tagging**: Failed" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "⏭️ **Chart Tagging**: Skipped" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "### Trigger Information" >> $GITHUB_STEP_SUMMARY
           echo "- Event: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- Branch: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY

@@ -487,7 +487,8 @@ def release_helm_chart(
     create_git_tag: Annotated[bool, typer.Option("--create-git-tag", help="Create and push a Git tag for this chart release")] = False,
 ):
     """Build helm chart and optionally create git tag."""
-    from tools.release_helper.git import create_git_tag as git_create_tag, push_git_tag, format_git_tag
+    from tools.release_helper.git import create_git_tag as git_create_tag, push_git_tag
+    from tools.release_helper.core import run_bazel
     
     # Build the chart
     chart_target = f"//{domain}:{chart_name}"
@@ -496,7 +497,7 @@ def release_helm_chart(
         if not dry_run:
             # Build the chart
             typer.echo(f"Building helm chart: {chart_target}")
-            build_image(chart_target)  # Using the existing build_image function as a placeholder
+            run_bazel(["build", chart_target])
             typer.echo(f"Chart {domain}/{chart_name} built successfully")
         else:
             typer.echo(f"DRY RUN: Would build chart {chart_target}")

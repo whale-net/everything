@@ -167,8 +167,17 @@ To manually release charts:
 2. Click "Run workflow"
 3. Set parameters:
    - **Domain**: Target domain or "all"
-   - **Chart version**: Version to release
+   - **Chart version**: Specific version to release (optional - leave empty when using increment options)
+   - **Auto-increment minor**: Check to automatically increment minor version (resets patch to 0)
+   - **Auto-increment patch**: Check to automatically increment patch version  
    - **Publish to Pages**: Enable GitHub Pages publishing
+
+**Version Options (mutually exclusive):**
+- **Specific version**: Enter exact version like "1.2.3"
+- **Auto-increment minor**: Finds latest chart version and increments minor (e.g., v1.2.3 → v1.3.0)
+- **Auto-increment patch**: Finds latest chart version and increments patch (e.g., v1.2.3 → v1.2.4)
+
+**Chart Tagging:** Git tags are automatically created for all chart releases during manual dispatch, following the pattern `{domain}-{chart_name}-chart.{version}` (e.g., `manman-host_chart-chart.v1.2.3`). This enables chart versioning without requiring GitHub Pages publishing.
 
 ## Usage Patterns
 
@@ -273,8 +282,16 @@ images:
 ### Version Management
 
 - Use semantic versioning for chart versions
+- **Auto-increment versions**: Use `increment_minor` or `increment_patch` workflow options for automatic versioning
+- **Manual versions**: Specify exact version in `chart_version` workflow input
 - Let the system auto-resolve app versions when possible
 - Use explicit versions for production releases
+
+**Version Increment Examples:**
+- Current: `v1.2.3` → Minor increment: `v1.3.0` → Patch increment: `v1.3.1`
+- No previous version → Minor increment: `v0.1.0` → Patch increment: `v0.0.1`
+
+**Git Tagging:** Chart releases automatically create Git tags in the format `{domain}-{chart_name}-chart.{version}`, enabling version tracking independent of GitHub Pages publishing.
 
 ### Template Organization
 
@@ -287,6 +304,43 @@ images:
 - Use pull requests for chart validation
 - Use manual dispatch for production releases
 - Enable GitHub Pages for public chart hosting
+
+## CLI Usage
+
+The release helper provides CLI commands for managing helm chart versions:
+
+### List Charts
+```bash
+# List all helm charts
+bazel run //tools:release -- list-charts
+```
+
+### Version Management
+```bash
+# Calculate next minor version for a chart
+bazel run //tools:release -- increment-chart-version manman host_chart minor
+
+# Calculate next patch version for a chart  
+bazel run //tools:release -- increment-chart-version manman host_chart patch
+```
+
+### Release Planning
+```bash
+# Plan chart releases with version increment
+bazel run //tools:release -- plan-helm-charts --event-type workflow_dispatch --domain manman --increment-minor
+
+# Plan with specific version
+bazel run //tools:release -- plan-helm-charts --event-type workflow_dispatch --domain all --chart-version "2.0.0"
+```
+
+### Manual Chart Release
+```bash
+# Release chart with git tag
+bazel run //tools:release -- release-helm-chart manman host_chart --version v1.2.3 --create-git-tag
+
+# Dry run
+bazel run //tools:release -- release-helm-chart manman host_chart --version v1.2.3 --dry-run
+```
 
 ## Troubleshooting
 
