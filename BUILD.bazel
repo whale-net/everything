@@ -20,11 +20,14 @@ pip_compile(
     name = "pip_compile_linux",
     requirements_in = "requirements.in",
     requirements_txt = "requirements.linux.lock.txt",
-    # Use specific Linux platform target
-    python_platform = "x86_64-unknown-linux-gnu",
-    # Force binary-only installs
+    # Allow binary wheels for key packages to prevent cross-compilation issues
     extra_args = [
-        "--only-binary=:all:",
+        "--only-binary=pydantic-core",
+        "--only-binary=fastapi", 
+        "--only-binary=uvicorn",
+        "--only-binary=httptools",
+        "--only-binary=uvloop",
+        "--only-binary=websockets",
     ],
 )
 

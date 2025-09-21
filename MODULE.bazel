@@ -24,10 +24,11 @@ oci.pull(
     image = "gcr.io/distroless/python3-debian12",
     platforms = [
         "linux/amd64",
+        "linux/arm64/v8",
     ],
 )
 
-# Distroless Base - x86_64 only for simplified deployment
+# Distroless Base - x86_64 and ARM64 for multi-platform deployment
 oci.pull(
     name = "distroless_base",
     # Using actual manifest list digest from gcr.io/distroless/base-debian12:latest
@@ -35,6 +36,7 @@ oci.pull(
     image = "gcr.io/distroless/base-debian12",
     platforms = [
         "linux/amd64",
+        "linux/arm64/v8",
     ],
 )
 
@@ -44,6 +46,7 @@ oci.pull(
     image = "python:3.11-slim",
     platforms = [
         "linux/amd64",
+        "linux/arm64/v8",
     ],
 )
 use_repo(oci, "distroless_base", "distroless_base_linux_amd64", "distroless_python", "distroless_python_linux_amd64", "python_base", "python_base_linux_amd64")
@@ -51,14 +54,12 @@ use_repo(oci, "distroless_base", "distroless_base_linux_amd64", "distroless_pyth
 pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
 pip.parse(
     hub_name = "everything_pip_deps",
-    python_version = "3.11",
-    # Platform-specific requirements for containers vs local development
+    python_version = "3.11", 
+    # Use the same Linux requirements for both x86_64 and aarch64  
     requirements_by_platform = {
-        "//:requirements.linux.lock.txt": "linux_x86_64",
-        "//:requirements.lock.txt": "osx_*",  # Default for local Mac development
+        "//:requirements.linux.lock.txt": "linux_*",           # All Linux platforms
+        "//:requirements.lock.txt": "osx_*",                   # macOS platforms  
     },
-    # Fallback for other platforms
-    requirements_lock = "//:requirements.lock.txt",
 )
 use_repo(pip, "everything_pip_deps")  # Go setup
 

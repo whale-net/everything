@@ -21,6 +21,15 @@ def define_platforms():
         ],
     )
 
+    # Linux ARM64 platform for container builds
+    native.platform(
+        name = "linux_arm64",
+        constraint_values = [
+            "@platforms//os:linux",
+            "@platforms//cpu:arm64",
+        ],
+    )
+
     # macOS ARM64 platform for local development
     native.platform(
         name = "macos_arm64",
