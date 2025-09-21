@@ -526,12 +526,12 @@ bazel run //:pip_compile_all
 
 # Or compile for specific platforms
 bazel run //:pip_compile_linux_amd64  
-bazel run //:pip_compile_linux_arm64
+bazel run //:pip_compile_linux_arm64_v8
 ```
 
 Requirements files:
 - `requirements-linux-amd64.in` & `requirements-linux-amd64.lock.txt` - AMD64 platform
-- `requirements-linux-arm64.in` & `requirements-linux-arm64.lock.txt` - ARM64 platform
+- `requirements-linux-arm64-v8.in` & `requirements-linux-arm64-v8.lock.txt` - ARM64 platform
 - `requirements.in` & `requirements.lock.txt` - Generic (backward compatibility)
 
 ### Advanced: Manual OCI Rules

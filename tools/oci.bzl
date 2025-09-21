@@ -116,7 +116,7 @@ def _get_pip_deps_hub(platform = None):
     if platform == "linux/amd64":
         return "everything_pip_deps_linux_amd64"
     elif platform == "linux/arm64" or platform == "linux/arm64/v8":
-        return "everything_pip_deps_linux_arm64"
+        return "everything_pip_deps_linux_arm64_v8"
     else:
         # Default to amd64 for unknown platforms
         return "everything_pip_deps_linux_amd64"

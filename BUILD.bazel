@@ -17,9 +17,9 @@ pip_compile(
 )
 
 pip_compile(
-    name = "pip_compile_linux_arm64",
-    requirements_in = "requirements-linux-arm64.in",
-    requirements_txt = "requirements-linux-arm64.lock.txt",
+    name = "pip_compile_linux_arm64_v8",
+    requirements_in = "requirements-linux-arm64-v8.in",
+    requirements_txt = "requirements-linux-arm64-v8.lock.txt",
 )
 
 # Convenience target to compile all platform requirements
@@ -29,7 +29,7 @@ pip_compile(
     requirements_txt = "requirements.lock.txt",
     deps = [
         ":pip_compile_linux_amd64",
-        ":pip_compile_linux_arm64",
+        ":pip_compile_linux_arm64_v8",
     ],
 )
 

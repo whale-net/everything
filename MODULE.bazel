@@ -58,16 +58,16 @@ pip.parse(
 )
 
 pip.parse(
-    hub_name = "everything_pip_deps_linux_arm64",
+    hub_name = "everything_pip_deps_linux_arm64_v8",
     python_version = "3.11", 
-    requirements_lock = "//:requirements-linux-arm64.lock.txt",
+    requirements_lock = "//:requirements-linux-arm64-v8.lock.txt",
 )
 
 use_repo(
     pip, 
     "everything_pip_deps", 
     "everything_pip_deps_linux_amd64", 
-    "everything_pip_deps_linux_arm64"
+    "everything_pip_deps_linux_arm64_v8"
 )
 
 # Go setup
