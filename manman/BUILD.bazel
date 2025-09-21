@@ -55,6 +55,9 @@ release_app(
     description = "Background worker service for processing tasks and messages",
 )
 
+# Note: Manual helm charts are provided in manman/charts/manman-host/
+# Those charts offer more sophisticated configuration for production deployments
+
 filegroup(
     name = "tiltfile",
     srcs = ["Tiltfile"],

@@ -1,15 +1,30 @@
 # Tools and shared build rules for the monorepo
 
+load("@rules_python//python:defs.bzl", "py_binary")
+load("//tools:release.bzl", "release_app")
+
 package(default_visibility = ["//visibility:public"])
 
 exports_files([
     "oci.bzl",
+    "helm_chart_release.bzl",
     "python_runner.py",
     "platforms.bzl",
     "multiplatform_image.bzl",
 ])
 
-# Platform definitions for cross-compilation
+# Version resolver utility for Helm charts
+py_binary(
+    name = "version_resolver",
+    srcs = ["version_resolver.py"],
+    main = "version_resolver.py",
+    deps = [
+        # Note: PyYAML would be needed for YAML output
+        # For now, JSON output works without additional deps
+    ],
+    visibility = ["//visibility:public"],
+)
+
 load(":platforms.bzl", "define_platforms")
 
 define_platforms()
@@ -18,5 +33,23 @@ define_platforms()
 alias(
     name = "release",
     actual = "//tools/release_helper:release_helper",
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata and OCI images for the release tool
+release_app(
+    name = "release",
+    binary_target = "//tools/release_helper:release_helper",
+    language = "python",
+    domain = "tools",
+    description = "Release helper tool for managing app releases and container images",
+)
+
+# Helm chart release documentation
+filegroup(
+    name = "helm_docs",
+    srcs = [
+        "helm_chart_release_README.md",
+    ],
     visibility = ["//visibility:public"],
 )
