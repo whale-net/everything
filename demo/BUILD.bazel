@@ -2,7 +2,9 @@
 
 load("//tools:helm_chart_release.bzl", "helm_chart_release_macro")
 
-# Helm chart for demo applications
+# Automated helm chart generation for simple deployments
+# For production deployments with complex configuration, 
+# consider manual charts like those in manman/charts/manman-host/
 helm_chart_release_macro(
     domain = "demo",
     charts = {

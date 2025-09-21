@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       domain:
-        description: 'Domain to release charts for (e.g., manman, demo, or all)'
+        description: 'Domain to release charts for (e.g., demo, or all)'
         required: true
         default: 'all'
       chart_version:
