@@ -4,12 +4,6 @@ build --incompatible_strict_action_env
 build --python_version=PY3
 build:fast --jobs=auto
 
-# Performance optimizations for target processing
-# Increase analysis parallelism and loading performance
-build --loading_phase_threads=auto
-build --jobs=auto
-build --experimental_parallel_aquery_output=true
-
 # CI optimizations  
 # Note: Cache paths are managed by bazel-contrib/setup-bazel action
 # and should not be overridden here to avoid conflicts
