@@ -1,5 +1,6 @@
-load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
-load("@everything_pip_deps//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@pip_deps_dev//:requirements.bzl", "requirement")
+load("//tools:python_binary.bzl", "multiplatform_py_binary")
 load("//tools:release.bzl", "release_app")
 
 py_library(
@@ -9,7 +10,8 @@ py_library(
     visibility = ["//demo/hello_python:__pkg__"],
 )
 
-py_binary(
+# Single macro generates all platform-specific binaries
+multiplatform_py_binary(
     name = "hello_python",
     srcs = ["main.py"],
     main = "main.py",
@@ -17,6 +19,7 @@ py_binary(
         ":main_lib",
         "//libs/python",
     ],
+    requirements = [],  # No external requirements for this simple app
     visibility = ["//visibility:public"],
 )
 
@@ -30,10 +33,9 @@ py_test(
     size = "small",
 )
 
-# Release metadata and OCI images for this app
+# Simplified release_app - auto-detects platform binaries!
 release_app(
     name = "hello_python",
-    binary_target = ":hello_python",
     language = "python",
     domain = "demo",
     description = "Python hello world application with pytest",

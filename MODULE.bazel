@@ -4,53 +4,92 @@ module(
 )
 
 bazel_dep(name = "bazel_skylib", version = "1.8.1")
-bazel_dep(name = "rules_python", version = "1.5.3")
+bazel_dep(name = "rules_python", version = "1.6.1")
 bazel_dep(name = "rules_uv", version = "0.87.0")
 bazel_dep(name = "rules_go", version = "0.57.0")
 bazel_dep(name = "gazelle", version = "0.39.1")
 bazel_dep(name = "rules_oci", version = "2.2.6")
 bazel_dep(name = "aspect_bazel_lib", version = "2.21.1")
 bazel_dep(name = "rules_helm", version = "0.6.0.bcr.1")
+bazel_dep(name = "rules_pkg", version = "1.0.1")
+bazel_dep(name = "platforms", version = "1.0.0")
 
 # OCI/Docker setup - using proper base images for better compatibility
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 
-# Python 3.11-slim - using manifest list digest for multi-platform support
-# This digest represents the manifest list that includes both amd64 and arm64 platforms
+# Distroless Python - x86_64 only for simplified deployment
 oci.pull(
-    name = "python_slim",
-    image = "python",
-    platforms = [
-        "linux/amd64",
-        "linux/arm64/v8", 
-    ],
-    # Using actual manifest list digest from python:3.11-slim
-    digest = "sha256:a0939570b38cddeb861b8e75d20b1c8218b21562b18f301171904b544e8cf228",
-)
-
-# Alpine 3.18 - using manifest list digest for multi-platform support  
-# This digest represents the manifest list that includes both amd64 and arm64 platforms
-oci.pull(
-    name = "alpine",
-    image = "alpine",
+    name = "distroless_python",
+    # Using actual manifest list digest from gcr.io/distroless/python3-debian12:latest
+    digest = "sha256:a0ded8676ed10e194cce1b8fdf9171672cda95ad1cabba4ece7b01f4db2e7471",
+    image = "gcr.io/distroless/python3-debian12",
     platforms = [
         "linux/amd64",
         "linux/arm64/v8",
     ],
-    # Using actual manifest list digest from alpine:3.18
-    digest = "sha256:de0eb0b3f2a47ba1eb89389859a9bd88b28e82f5826b6969ad604979713c2d4f",
 )
-use_repo(oci, "python_slim", "python_slim_linux_amd64", "python_slim_linux_arm64_v8", "alpine", "alpine_linux_amd64", "alpine_linux_arm64_v8")
 
-pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
-pip.parse(
-    hub_name = "everything_pip_deps",
-    python_version = "3.11",
-    requirements_lock = "//:requirements.lock.txt",
+# Distroless Base - x86_64 and ARM64 for multi-platform deployment
+oci.pull(
+    name = "distroless_base",
+    # Using actual manifest list digest from gcr.io/distroless/base-debian12:latest
+    digest = "sha256:fa15492938650e1a5b87e34d47dc7d99a2b4e8aefd81b931b3f3eb6bb4c1d2f6",
+    image = "gcr.io/distroless/base-debian12",
+    platforms = [
+        "linux/amd64",
+        "linux/arm64/v8",
+    ],
 )
-use_repo(pip, "everything_pip_deps")
+
+# Python base image with pip support for containers that need external dependencies
+oci.pull(
+    name = "python_base",
+    image = "python:3.11-slim",
+    platforms = [
+        "linux/amd64",
+        "linux/arm64/v8",
+    ],
+)
+use_repo(oci, "distroless_base", "distroless_base_linux_amd64", "distroless_python", "distroless_python_linux_amd64", "python_base", "python_base_linux_amd64")
+
+# Use rules_python with platform-specific requirements for proper compiled dependency support
+pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
+
+# Configure different pip hubs for different platforms to ensure proper isolation
+# This is critical for compiled dependencies like pydantic-core
+pip.parse(
+    hub_name = "pip_deps_linux_amd64",
+    python_version = "3.11",
+    requirements_lock = "//:requirements.linux.amd64.lock.txt",
+    experimental_target_platforms = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
+    experimental_index_url = "https://pypi.org/simple",
+)
+
+pip.parse(
+    hub_name = "pip_deps_linux_arm64", 
+    python_version = "3.11",
+    requirements_lock = "//:requirements.linux.arm64.lock.txt",
+    experimental_target_platforms = ["@platforms//os:linux", "@platforms//cpu:arm64"],
+    experimental_index_url = "https://pypi.org/simple",
+)
+
+pip.parse(
+    hub_name = "pip_deps_macos_arm64",
+    python_version = "3.11", 
+    requirements_lock = "//:requirements.lock.txt",  # Use the main requirements for macOS
+    experimental_target_platforms = ["@platforms//os:macos", "@platforms//cpu:arm64"],
+)
+
+pip.parse(
+    hub_name = "pip_deps_dev",
+    python_version = "3.11",
+    requirements_lock = "//:requirements.lock.txt", 
+)
+
+use_repo(pip, "pip_deps_linux_amd64", "pip_deps_linux_arm64", "pip_deps_macos_arm64", "pip_deps_dev")
 
 # Go setup
+
 go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
 go_sdk.download(version = "1.25.0")
 

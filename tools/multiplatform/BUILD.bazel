@@ -1,0 +1,12 @@
+# Multiplatform image testing and validation tools
+
+package(default_visibility = ["//visibility:public"])
+
+# Shell-based smoke test and test files (exported for manual execution)
+exports_files([
+    "smoke_test_multiplatform.sh",
+    "test_multiplatform_image.py",
+    "test_multiplatform_integration.py", 
+    "test_multiplatform_configuration.py",
+    "MULTIPLATFORM_IMPLEMENTATION_SUMMARY.md",
+])

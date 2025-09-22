@@ -1,5 +1,6 @@
-load("@rules_python//python:defs.bzl", "py_library", "py_binary", "py_test")
-load("@everything_pip_deps//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@pip_deps_dev//:requirements.bzl", "requirement")
+load("//tools:python_binary.bzl", "multiplatform_py_binary")
 
 # Worker services library  
 py_library(
@@ -17,11 +18,12 @@ py_library(
 )
 
 # Binary target for worker service
-py_binary(
+multiplatform_py_binary(
     name = "worker",
     srcs = ["main.py"],
     main = "main.py",
     deps = [":manman_worker"],
+    requirements = ["amqpstorm", "typer", "requests", "python-jose"],
     visibility = ["//manman:__pkg__"],
 )
 

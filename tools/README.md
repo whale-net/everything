@@ -2,6 +2,11 @@
 
 This directory contains Bazel tools and utilities for the monorepo.
 
+## Subdirectories
+
+- **`multiplatform/`** - Tests and documentation for multiplatform container functionality
+- **`release_helper/`** - Release management tools and utilities
+
 ## Release Helper
 
 The release helper (`release_helper.py`) is a comprehensive tool for managing app releases and container images.

@@ -10,7 +10,85 @@ from tools.release_helper.metadata import get_image_targets, get_app_metadata
 from tools.release_helper.core import run_bazel
 
 
-def format_registry_tags(domain: str, app_name: str, version: str, registry: str = "ghcr.io", commit_sha: Optional[str] = None) -> Dict[str, str]:
+def create_manifest_list(registry_repo: str, version: str, platforms: List[str] = None) -> None:
+    """Create a Docker manifest list for multi-architecture images.
+    
+    This creates a manifest that automatically serves the correct architecture
+    when users pull without specifying a platform.
+    
+    Args:
+        registry_repo: Base registry repository (e.g., "ghcr.io/whale-net/demo-hello_python")
+        version: Version tag to create manifest for
+        platforms: List of platforms to include (defaults to ["amd64", "arm64"])
+    """
+    if platforms is None:
+        platforms = ["amd64", "arm64"]
+    
+    # Create the manifest list name (without platform suffix)
+    manifest_name = f"{registry_repo}:{version}"
+    
+    # Build list of platform-specific images
+    platform_images = []
+    for platform in platforms:
+        platform_image = f"{registry_repo}:{version}-{platform}"
+        platform_images.append(platform_image)
+    
+    print(f"Creating manifest list {manifest_name} for platforms: {', '.join(platforms)}")
+    
+    try:
+        # Create the manifest list
+        cmd = ["docker", "manifest", "create", manifest_name] + platform_images
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        
+        # Annotate each platform image with proper architecture metadata
+        for platform in platforms:
+            platform_image = f"{registry_repo}:{version}-{platform}"
+            arch = "amd64" if platform == "amd64" else "arm64"
+            os_type = "linux"
+            
+            annotate_cmd = [
+                "docker", "manifest", "annotate", manifest_name, platform_image,
+                "--arch", arch, "--os", os_type
+            ]
+            subprocess.run(annotate_cmd, check=True, capture_output=True, text=True)
+        
+        print(f"Successfully created manifest list {manifest_name}")
+        
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to create manifest list: {e}")
+        if e.stdout:
+            print(f"STDOUT: {e.stdout}")
+        if e.stderr:
+            print(f"STDERR: {e.stderr}")
+        raise
+
+
+def push_manifest_list(registry_repo: str, version: str) -> None:
+    """Push a Docker manifest list to the registry.
+    
+    Args:
+        registry_repo: Base registry repository
+        version: Version tag to push
+    """
+    manifest_name = f"{registry_repo}:{version}"
+    
+    print(f"Pushing manifest list {manifest_name}")
+    
+    try:
+        cmd = ["docker", "manifest", "push", manifest_name]
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        print(f"Successfully pushed manifest list {manifest_name}")
+        
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to push manifest list: {e}")
+        if e.stdout:
+            print(f"STDOUT: {e.stdout}")
+        if e.stderr:
+            print(f"STDERR: {e.stderr}")
+        raise
+
+
+def format_registry_tags(domain: str, app_name: str, version: str, registry: str = "ghcr.io", commit_sha: Optional[str] = None, platform: Optional[str] = None) -> Dict[str, str]:
     """Format container registry tags for an app using domain-app:version format.
     
     Args:
@@ -19,6 +97,7 @@ def format_registry_tags(domain: str, app_name: str, version: str, registry: str
         version: Version tag (semantic version)
         registry: Registry hostname (e.g., "ghcr.io")
         commit_sha: Optional commit SHA for additional tag
+        platform: Optional platform suffix (e.g., "amd64", "arm64") for platform-specific tags
     """
     # Use domain-app:version format as specified
     image_name = f"{domain}-{app_name}"
@@ -30,13 +109,16 @@ def format_registry_tags(domain: str, app_name: str, version: str, registry: str
     else:
         base_repo = f"{registry}/{image_name}"
 
+    # Create platform-specific tags if platform is specified
+    platform_suffix = f"-{platform}" if platform else ""
+    
     tags = {
-        "latest": f"{base_repo}:latest",
-        "version": f"{base_repo}:{version}",
+        "latest": f"{base_repo}:latest{platform_suffix}",
+        "version": f"{base_repo}:{version}{platform_suffix}",
     }
 
     if commit_sha:
-        tags["commit"] = f"{base_repo}:{commit_sha}"
+        tags["commit"] = f"{base_repo}:{commit_sha}{platform_suffix}"
 
     return tags
 
@@ -50,32 +132,26 @@ def build_image(bazel_target: str, platform: Optional[str] = None) -> str:
     """
     from tools.release_helper.core import run_bazel
 
-    image_targets = get_image_targets(bazel_target)
-    
     # Get app metadata for proper naming
     metadata = get_app_metadata(bazel_target)
     domain = metadata['domain']
     app_name = metadata['name']
 
-    # Determine which image target to use (prefer oci_load targets for efficiency)
-    if platform == "amd64":
-        # Use oci_load target which is more efficient than direct image building
-        load_target = image_targets["amd64"] + "_load"
-        target = load_target
-    elif platform == "arm64":
-        load_target = image_targets["arm64"] + "_load"
-        target = load_target
-    else:
-        load_target = image_targets["base"] + "_load"
-        target = load_target
+    # Extract the app path from the bazel_target to construct the image target
+    app_path = bazel_target[2:].split(':')[0]  # Remove // and :target
+    load_target = f"//{app_path}:{app_name}_image_load"
 
-    print(f"Building and loading {target} (using optimized oci_load)...")
-    # Build the image first to create the OCI layout
-    image_target = target.replace("_load", "")
-    run_bazel(["build", image_target])
+    print(f"Building and loading {load_target} for platform {platform or 'default'} (using optimized oci_load)...")
     
-    # Actually load the image into Docker with the correct name
-    run_bazel(["run", target])
+    # Build with platform-specific flags if specified
+    build_args = ["run", load_target]
+    if platform == "arm64":
+        build_args.insert(2, "--platforms=//tools:linux_arm64")
+    elif platform == "amd64":
+        build_args.insert(2, "--platforms=//tools:linux_x86_64")
+    
+    # Run the build and load command
+    run_bazel(build_args)
 
     # Return the expected image name in domain-app format
     return f"{domain}-{app_name}:latest"
@@ -86,24 +162,19 @@ def push_image_with_tags(bazel_target: str, tags: List[str], platform: Optional[
     
     Args:
         bazel_target: Full bazel target path for the app metadata
-        tags: List of full registry tags to push (e.g., ["ghcr.io/whale-net/demo-hello_python:v0.0.6"])
+        tags: List of full registry tags to push (e.g., ["ghcr.io/whale-net/demo-hello_python:v0.0.6-amd64"])
         platform: Optional platform specification ("amd64" or "arm64", defaults to base/amd64)
     """
-    image_targets = get_image_targets(bazel_target)
-    
-    # Determine which push target to use based on platform
-    if platform == "amd64":
-        push_target = image_targets["push_amd64"]
-    elif platform == "arm64":
-        push_target = image_targets["push_arm64"]
-    else:
-        # Default to the base push target (which is AMD64)
-        push_target = image_targets["push_base"]
+    # Get app metadata for proper naming
+    metadata = get_app_metadata(bazel_target)
+    app_name = metadata['name']
 
-    print(f"Pushing {len(tags)} tags using {push_target}...")
+    # Extract the app path from the bazel_target to construct the push target
+    app_path = bazel_target[2:].split(':')[0]  # Remove // and :target
+    push_target = f"//{app_path}:{app_name}_image_push"
+
+    print(f"Pushing {len(tags)} tags using {push_target} for platform {platform or 'default'}...")
     
-    # The oci_push target is already configured with the repository via the macro
-    # We just need to add any additional tags as arguments
     # Extract the tag names from the full tags
     tag_names = [tag.split(':')[-1] for tag in tags]
     
@@ -112,13 +183,96 @@ def push_image_with_tags(bazel_target: str, tags: List[str], platform: Optional[
     # Build the bazel run command with tag arguments
     bazel_args = ["run", push_target, "--"]
     
+    # Add platform-specific build flags if needed
+    if platform == "arm64":
+        bazel_args.insert(2, "--platforms=//tools:linux_arm64")
+    elif platform == "amd64":
+        bazel_args.insert(2, "--platforms=//tools:linux_x86_64")
+    
     # Add each tag as an argument (oci_push supports multiple --tag arguments)
     for tag_name in tag_names:
         bazel_args.extend(["--tag", tag_name])
     
     try:
         run_bazel(bazel_args, capture_output=False)  # Don't capture output so we can see progress
-        print(f"Successfully pushed image with {len(tag_names)} tags")
+        print(f"Successfully pushed image with {len(tag_names)} tags for platform {platform or 'default'}")
     except subprocess.CalledProcessError as e:
         print(f"Failed to push image: {e}")
         raise
+
+
+def release_multiarch_image(bazel_target: str, version: str, registry: str = "ghcr.io", 
+                           platforms: List[str] = None, commit_sha: Optional[str] = None) -> None:
+    """Release a multi-architecture image with manifest list.
+    
+    This function orchestrates the complete multi-architecture release process:
+    1. Build and push platform-specific images
+    2. Create a manifest list that points to all platforms
+    3. Push the manifest list
+    
+    Args:
+        bazel_target: Full bazel target path for the app metadata
+        version: Version tag for the release
+        registry: Container registry (defaults to ghcr.io)
+        platforms: List of platforms to build for (defaults to ["amd64", "arm64"])
+        commit_sha: Optional commit SHA for additional tag
+    """
+    if platforms is None:
+        platforms = ["amd64", "arm64"]
+    
+    # Get app metadata
+    metadata = get_app_metadata(bazel_target)
+    domain = metadata['domain']
+    app_name = metadata['name']
+    
+    # Create registry repository name
+    image_name = f"{domain}-{app_name}"
+    if registry == "ghcr.io" and "GITHUB_REPOSITORY_OWNER" in os.environ:
+        owner = os.environ["GITHUB_REPOSITORY_OWNER"].lower()
+        registry_repo = f"{registry}/{owner}/{image_name}"
+    else:
+        registry_repo = f"{registry}/{image_name}"
+    
+    print(f"Starting multi-architecture release for {image_name}...")
+    
+    # Step 1: Build and push platform-specific images
+    for platform in platforms:
+        print(f"Building and pushing for platform: {platform}")
+        
+        # Build the image for this platform
+        build_image(bazel_target, platform=platform)
+        
+        # Create platform-specific tags
+        platform_tags = format_registry_tags(
+            domain=domain,
+            app_name=app_name, 
+            version=version,
+            registry=registry,
+            commit_sha=commit_sha,
+            platform=platform
+        )
+        
+        # Push with platform-specific tags
+        push_image_with_tags(bazel_target, list(platform_tags.values()), platform=platform)
+    
+    # Step 2: Create and push manifest lists for each tag type
+    tag_types = ["latest", "version"]
+    if commit_sha:
+        tag_types.append("commit")
+    
+    for tag_type in tag_types:
+        if tag_type == "version":
+            tag_value = version
+        elif tag_type == "latest":
+            tag_value = "latest"
+        elif tag_type == "commit":
+            tag_value = commit_sha
+        
+        # Create manifest list (without platform suffix)
+        create_manifest_list(registry_repo, tag_value, platforms)
+        
+        # Push manifest list
+        push_manifest_list(registry_repo, tag_value)
+    
+    print(f"Successfully released multi-architecture image {image_name}:{version}")
+    print(f"Users can now pull {registry_repo}:{version} and get the correct architecture automatically")
