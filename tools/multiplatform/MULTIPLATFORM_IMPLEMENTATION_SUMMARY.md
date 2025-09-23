@@ -47,7 +47,18 @@
 
 ### Critical Design Decisions
 
-#### 1. Platform-Specific Python Dependencies
+#### 1. Language-Specific Multi-Platform Patterns (ARCHITECTURAL DECISION)
+- **Go Applications**: Use ideal `oci_image_index` pattern with `platforms` parameter
+  - Rationale: Go binaries are statically linked and cross-compile cleanly
+  - Implementation: Single binary, single image, platforms-driven cross-compilation
+- **Python Applications**: Use explicit platform-specific pattern  
+  - Rationale: Python has platform-specific dependencies (wheels) and runtime requirements
+  - Implementation: Separate binaries per platform, explicit dependency resolution
+- **Decision**: Maintain pattern consistency within each language rather than forcing consistency across languages with different runtime models
+- **Evidence**: rules_oci documentation shows no Python examples using `platforms` parameter; feature marked as "highly EXPERIMENTAL"
+
+#### 2. Platform-Specific Python Dependencies
+#### 2. Platform-Specific Python Dependencies
 - **Challenge**: Python wheels need to be architecture-specific
 - **Solution**: Platform-specific requirements files:
   - `requirements.linux.amd64.lock.txt` - AMD64 Python packages
@@ -55,7 +66,8 @@
   - `requirements.lock.txt` - General requirements
 - **Implementation**: `pip_compile` targets in root `BUILD.bazel` with `--python-platform` flags
 
-#### 2. Container Build Strategy
+#### 3. Container Build Strategy
+#### 3. Container Build Strategy
 - **Architecture**: Three-tier system for maximum flexibility
   1. `{name}_amd64` - Platform-specific AMD64 image
   2. `{name}_arm64` - Platform-specific ARM64 image  
@@ -63,7 +75,7 @@
 - **Load Targets**: Corresponding `_load` variants for local testing
 - **Benefit**: Supports both single-platform and multi-platform deployments
 
-#### 3. Testing Infrastructure Architecture
+#### 4. Testing Infrastructure Architecture
 - **Comprehensive Tests** (`test_multiplatform_image.py`): Full end-to-end validation
 - **Integration Tests** (`test_multiplatform_integration.py`): Bazel sandbox tests
 - **Configuration Tests** (`test_multiplatform_configuration.py`): Fast validation
