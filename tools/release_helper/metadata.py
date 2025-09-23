@@ -67,6 +67,36 @@ def list_all_apps() -> List[Dict[str, str]]:
     return sorted(apps, key=lambda x: x['name'])
 
 
+def list_all_helm_charts() -> List[Dict[str, str]]:
+    """List all helm charts in the monorepo.
+    
+    Returns:
+        List of dicts with 'bazel_target', 'name', and 'domain' for each chart
+    """
+    # Query for all helm chart targets
+    result = run_bazel(["query", "kind(helm_chart_release, //...)", "--output=label"])
+
+    charts = []
+    for line in result.stdout.strip().split('\n'):
+        if line:
+            # Extract domain and chart name from target path
+            # Target format: //domain:chart_name
+            parts = line.split(':')
+            if len(parts) != 2:
+                continue
+                
+            domain = parts[0].replace('//', '')
+            chart_name = parts[1]
+            
+            charts.append({
+                'bazel_target': line,
+                'name': chart_name,
+                'domain': domain
+            })
+
+    return sorted(charts, key=lambda x: (x['domain'], x['name']))
+
+
 def get_image_targets(bazel_target: str) -> Dict[str, str]:
     """Get all image-related targets for an app.
     
