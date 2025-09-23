@@ -2,6 +2,56 @@
 
 This directory contains tests and documentation for the multiplatform container functionality.
 
+## Architecture Decision: Language-Specific Patterns
+
+### Why We Use Different Patterns for Go vs Python
+
+While `oci_image_index` supports two approaches for creating multi-platform images, we deliberately use different patterns for different languages based on their runtime characteristics:
+
+#### Go Applications: Ideal Pattern (With platforms parameter)
+```starlark
+go_binary(name = "app")
+tar(name = "app_layer", srcs = [":app"])
+oci_image(name = "image", tars = [":app_layer"])
+oci_image_index(
+    name = "image_multiarch",
+    images = [":image"],
+    platforms = [
+        "@rules_go//go/toolchain:linux_amd64",
+        "@rules_go//go/toolchain:linux_arm64",
+    ],
+)
+```
+**Why this works for Go**: Go binaries are statically linked and cross-compile cleanly without platform-specific runtime dependencies.
+
+#### Python Applications: Explicit Platform Pattern
+```starlark
+# Separate platform-specific binaries
+multiplatform_py_binary(name = "app")  # Creates app, app_linux_amd64, app_linux_arm64
+
+# Separate platform-specific images
+multiplatform_python_image(
+    name = "image",
+    binary_amd64 = ":app_linux_amd64",
+    binary_arm64 = ":app_linux_arm64",
+)
+# This creates separate oci_image targets and combines them with oci_image_index
+```
+**Why Python needs explicit handling**:
+1. **Platform-specific dependencies**: Python wheels are often architecture-specific (native extensions)
+2. **Runtime environment**: Python requires platform-specific interpreters and libraries
+3. **Dependency resolution**: We need separate pip requirements for each platform (`requirements.linux.amd64.lock.txt`, `requirements.linux.arm64.lock.txt`)
+
+### Implementation Decision
+
+**We maintain pattern consistency within each language rather than forcing consistency across languages with different runtime models.** This ensures:
+- ✅ Reliable platform-specific dependency resolution for Python
+- ✅ Clean, simple patterns for Go applications  
+- ✅ Production-tested approaches for both languages
+- ✅ Future maintainability as language ecosystems evolve
+
+The `platforms` parameter in `oci_image_index` is marked as "highly EXPERIMENTAL" and rules_oci documentation shows no Python examples using it, further validating our decision to use the explicit approach for Python.
+
 ## Files
 
 ### Tests (Run Manually)
