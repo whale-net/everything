@@ -1,21 +1,23 @@
-load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@rules_python//python:defs.bzl", "py_test")
 load("@pip_deps_dev//:requirements.bzl", "requirement")
-load("//tools:python_binary.bzl", "multiplatform_py_binary")
+load("//tools:python_binary.bzl", "multiplatform_py_library", "multiplatform_py_binary")
 load("//tools:release.bzl", "release_app")
 
-py_library(
+# NEW PATTERN: Use multiplatform_py_library with requirements defined once
+multiplatform_py_library(
     name = "main_lib",
     srcs = ["__init__.py", "main.py"],
+    requirements = ["fastapi", "uvicorn"],  # Requirements defined here, no duplication needed
     visibility = ["//demo/hello_fastapi:__pkg__"],
 )
 
 # Single macro generates all platform-specific binaries
+# No requirements parameter needed - inherited from main_lib!
 multiplatform_py_binary(
     name = "hello_fastapi",
     srcs = ["main.py"],
     main = "main.py",
-    deps = [":main_lib"],
-    requirements = ["fastapi", "uvicorn"],
+    deps = [":main_lib"],  # Platform-specific variants automatically selected
     visibility = ["//visibility:public"],
 )
 
@@ -24,10 +26,9 @@ py_test(
     srcs = ["test_main.py"],
     main = "test_main.py",
     deps = [
-        ":main_lib",
+        ":main_lib",  # Uses dev variant with dev requirements
         requirement("pytest"),
-        requirement("fastapi"),
-        requirement("httpx"),
+        requirement("httpx"),  # For testing FastAPI endpoints
     ],
 )
 
@@ -35,5 +36,5 @@ release_app(
     name = "hello_fastapi",
     language = "python",
     domain = "demo",
-    description = "FastAPI hello world application with uvicorn",
+    description = "FastAPI hello world application with uvicorn (using multiplatform_py_library pattern)",
 )
