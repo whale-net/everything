@@ -324,6 +324,68 @@ func TestMain(t *testing.T) {
 - Python: Create under `libs/` with appropriate `py_library` targets
 - Go: Create under `libs/` with appropriate `go_library` targets
 
+### Helm Chart Composition
+
+This monorepo provides a **composable helm chart system** that follows this pattern:
+
+```
+helm_chart = helm_chart_composed([release_apps] + [k8s_artifacts])
+```
+
+This allows you to compose multiple apps and manual Kubernetes resources into flexible deployment units.
+
+#### Example
+
+```starlark
+load("//tools:helm_composition_simple.bzl", "helm_chart_composed", "k8s_artifact")
+
+# Define manual Kubernetes artifacts
+k8s_artifact(
+    name = "migrations_job",
+    manifest = "k8s/migrations-job.yaml",
+    artifact_type = "job",
+)
+
+# Compose a chart from apps and artifacts
+helm_chart_composed(
+    name = "myapp_core",
+    description = "Core services with migrations",
+    apps = [
+        ":api_metadata",
+        ":worker_metadata"
+    ],
+    k8s_artifacts = [
+        ":migrations_job"
+    ],
+    pre_deploy_jobs = ["migrations_job"],
+    chart_values = {
+        "postgresql.enabled": "true"
+    }
+)
+
+# Separate chart for independent scaling
+helm_chart_composed(
+    name = "myapp_workers",
+    description = "Scalable worker cluster",
+    apps = [":background_worker_metadata"]
+)
+```
+
+#### Building Charts
+
+```bash
+# Build composed charts
+bazel build //myapp:myapp_core
+
+# Charts are generated in bazel-bin/
+cp -r bazel-bin/myapp/myapp_core ./helm-charts/
+
+# Deploy with helm
+helm install myapp-core ./helm-charts/myapp_core
+```
+
+This approach lets you create different deployment patterns (core services, workers, etc.) while mixing automated `release_app` targets with hand-crafted Kubernetes YAML when needed.
+
 ## 🧪 Test Utilities
 
 The repository uses Bazel's built-in testing capabilities. All tests can be run with:

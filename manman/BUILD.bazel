@@ -1,7 +1,7 @@
 load("@rules_python//python:defs.bzl", "py_library")
 load("//tools:release.bzl", "release_app")
 load("//tools:helm_chart_release.bzl", "helm_chart_release_macro")
-load("//tools:helm_composition.bzl", "helm_chart_composed", "k8s_artifact")
+load("//tools:helm_composition_simple.bzl", "helm_chart_composed", "k8s_artifact")
 
 # Re-export all manman modules for convenience
 py_library(
@@ -96,10 +96,10 @@ helm_chart_composed(
     name = "manman_core",
     description = "Core ManMan services with shared database and migrations",
     apps = [
-        ":experience_api",
-        ":status_api", 
-        ":worker_dal_api",
-        ":status_processor"
+        ":experience_api_metadata",
+        ":status_api_metadata", 
+        ":worker_dal_api_metadata",
+        ":status_processor_metadata"
     ],
     k8s_artifacts = [
         ":migrations_job",
@@ -116,7 +116,7 @@ helm_chart_composed(
 helm_chart_composed(
     name = "manman_worker_cluster", 
     description = "Scalable worker cluster - can be deployed independently",
-    apps = [":worker"],
+    apps = [":worker_metadata"],
     depends_on_charts = ["manman_core"]
 )
 
