@@ -12,7 +12,7 @@ multiplatform_py_library(
 )
 
 # Single macro generates all platform-specific binaries
-# No requirements parameter needed - inherited from main_lib!
+# No requirements parameter needed - auto-detected from multiplatform_py_library deps!
 multiplatform_py_binary(
     name = "hello_fastapi",
     srcs = ["main.py"],

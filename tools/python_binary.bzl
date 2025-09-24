@@ -132,14 +132,15 @@ def multiplatform_py_binary(
     - A main py_binary for development (uses dev requirements)
     - Platform-specific binaries for container deployment (linux_amd64, linux_arm64)
     
-    When deps include multiplatform_py_library targets, this macro automatically
-    uses their platform-specific variants for the platform-specific binaries.
+    There are two usage patterns:
+    1. Legacy pattern: Specify requirements directly in the binary
+    2. New pattern: Use multiplatform_py_library and omit requirements (auto-detected)
     
     Args:
         name: Name for the binary
         srcs: Source files for the binary
         main: Main entry point file
-        deps: Dependencies (py_library targets, including multiplatform_py_library)
+        deps: Dependencies (py_library targets)
         requirements: List of requirement names (e.g., ["fastapi", "uvicorn"])
         visibility: Visibility for all targets
         **kwargs: Additional arguments passed to py_binary
@@ -158,29 +159,31 @@ def multiplatform_py_binary(
         else:
             fail("Could not determine main file for {}, please specify main= parameter".format(name))
     
+    # Determine if we should use the new pattern (no requirements = auto-detect from libs)
+    use_auto_platform_deps = len(requirements) == 0
+    
     # Build deps lists for each platform
     dev_deps = deps[:] if deps else []
     amd64_deps = []
     arm64_deps = []
     
-    # Process dependencies - convert multiplatform libraries to platform-specific variants
+    # Process dependencies
     if deps:
         for dep in deps:
-            if dep.startswith(":"):
-                # Local dependency - check if platform-specific variants exist
+            if use_auto_platform_deps and dep.startswith(":"):
+                # New pattern: Try to use platform-specific variants from multiplatform_py_library
                 base_name = dep[1:]  # Remove the ":"
                 amd64_variant = ":" + base_name + "_linux_amd64"
                 arm64_variant = ":" + base_name + "_linux_arm64"
                 
-                # Use platform-specific variants if they exist, otherwise use the base dep
                 amd64_deps.append(amd64_variant)
                 arm64_deps.append(arm64_variant)
             else:
-                # External dependency - use as-is
+                # Legacy pattern or external dependency - use as-is for platform binaries
                 amd64_deps.append(dep)
                 arm64_deps.append(dep)
     
-    # Add platform-specific requirements
+    # Add platform-specific requirements (legacy pattern)
     for req in requirements:
         dev_deps.append(requirement(req))
         amd64_deps.append(requirement_linux_amd64(req))

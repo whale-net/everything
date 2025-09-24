@@ -58,54 +58,50 @@ This automatically generates:
 
 ## Usage
 
-### Library with Requirements
+### Recommended Pattern: multiplatform_py_library + multiplatform_py_binary
+
+Use `multiplatform_py_library` for libraries with requirements, then `multiplatform_py_binary` without requirements for automatic inheritance:
 
 ```starlark
-load("//tools:python_binary.bzl", "multiplatform_py_library")
+load("//tools:python_binary.bzl", "multiplatform_py_library", "multiplatform_py_binary")
 
+# Step 1: Define library with requirements
 multiplatform_py_library(
     name = "my_lib",
     srcs = ["lib.py", "utils.py"],
-    requirements = ["fastapi", "pydantic"],
+    requirements = ["fastapi", "pydantic"],  # Requirements defined ONCE
     visibility = ["//visibility:public"],
+)
+
+# Step 2: Define binary without requirements (auto-detected from library)
+multiplatform_py_binary(
+    name = "my_app",
+    srcs = ["main.py"],
+    deps = [":my_lib"],  # Platform variants automatically selected
+    # NO requirements parameter - inherited from library!
 )
 ```
 
-### Binary Using Library (No Requirement Duplication)
+### Legacy Pattern: multiplatform_py_binary with requirements
+
+The traditional approach with requirements in the binary (still fully supported):
 
 ```starlark
 load("//tools:python_binary.bzl", "multiplatform_py_binary")
 
-multiplatform_py_binary(
-    name = "my_app",
-    srcs = ["main.py"],
-    deps = [":my_lib"],  # Automatically uses platform-specific variants
-    # No need to repeat requirements - they come from the library!
+py_library(
+    name = "my_lib", 
+    srcs = ["lib.py"],
+    deps = ["//libs/python"],
 )
-```
 
-### Binary with Additional Requirements
-
-```starlark
 multiplatform_py_binary(
     name = "my_app",
     srcs = ["main.py"],
     deps = [":my_lib"],
-    requirements = ["uvicorn"],  # Additional requirements for the binary
+    requirements = ["fastapi", "pydantic"],  # Traditional approach
 )
 ```
-
-### Basic Binary (Legacy Usage)
-
-```starlark
-load("//tools:python_binary.bzl", "multiplatform_py_binary")
-
-multiplatform_py_binary(
-    name = "my_app",
-    srcs = ["main.py"],
-    deps = [":app_lib"],
-    requirements = ["fastapi", "pydantic"],
-)
 ```
 
 ### With Release System
@@ -146,10 +142,12 @@ release_app(
 - `name`: Binary name (required)
 - `srcs`: Source files (required)
 - `main`: Main entry point (auto-detected if not provided)
-- `deps`: Python library dependencies (platform-specific variants automatically selected)
-- `requirements`: List of pip requirement names
+- `deps`: Python library dependencies
+- `requirements`: List of pip requirement names (optional)
 - `visibility`: Target visibility
 - `**kwargs`: Additional arguments passed to `py_binary`
+
+**Automatic Pattern Detection**: When `requirements = []` (empty or omitted), the macro automatically tries to use platform-specific variants of local dependencies (e.g., `:lib` → `:lib_linux_amd64`). When requirements are specified, it uses the traditional approach.
 
 ## Benefits
 
