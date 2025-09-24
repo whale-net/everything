@@ -333,6 +333,176 @@ Create chart name and version as used by the chart label.
 with open(os.path.join(templates_dir, "_helpers.tpl"), "w") as f:
     f.write(helpers_template)
 
+# Create migration job templates if we have job artifacts
+migration_jobs = [artifact for artifact in artifacts if artifact["type"] == "job"]
+if migration_jobs:
+    migration_template = f'''{{{{/*
+Migration jobs template - Generated from k8s artifacts
+*/}}}}
+{{{{- range $artifactName, $artifactConfig := .Values.artifacts }}}}
+{{{{- if and $artifactConfig.enabled (eq $artifactConfig.type "job") }}}}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{{{ $.Release.Name }}}}-{{{{ $artifactName }}}}
+  labels:
+    app: {{{{ $artifactName }}}}
+    chart: {{{{ $.Chart.Name }}}}
+    release: {{{{ $.Release.Name }}}}
+    heritage: {{{{ $.Release.Service }}}}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  template:
+    metadata:
+      name: {{{{ $.Release.Name }}}}-{{{{ $artifactName }}}}
+      labels:
+        app: {{{{ $artifactName }}}}
+        release: {{{{ $.Release.Name }}}}
+    spec:
+      containers:
+      - name: {{{{ $artifactName }}}}
+        {{{{- if eq $artifactName "migrations_job" }}}}
+        # Use the first app's image for migrations (typically contains the migration code)
+        {{{{- $firstApp := "" }}}}
+        {{{{- range $appName, $appConfig := index $.Values $domain "apps" }}}}
+        {{{{- if not $firstApp }}}}{{{{ $firstApp = $appName }}}}{{{{- end }}}}
+        {{{{- end }}}}
+        image: "{{{{ index $.Values.images $firstApp "repository" }}}}:{{{{ index $.Values.images $firstApp "tag" }}}}"
+        command: ["python", "-m", "alembic", "upgrade", "head"]
+        {{{{- else }}}}
+        # Generic job configuration - customize based on artifact name
+        image: "{{{{ index $.Values.images (keys $.Values.images | first) "repository" }}}}:{{{{ index $.Values.images (keys $.Values.images | first) "tag" }}}}"
+        command: ["echo", "Job {{{{ $artifactName }}}} executed"]
+        {{{{- end }}}}
+        env:
+        {{{{- if eq $artifactName "migrations_job" }}}}
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: {{{{ $.Release.Name }}}}-database-secret
+              key: url
+        - name: PYTHONPATH
+          value: "/app"
+        {{{{- end }}}}
+        - name: JOB_NAME
+          value: {{{{ $artifactName }}}}
+        {{{{- if $.Values.env }}}}
+        {{{{- range $key, $value := $.Values.env }}}}
+        - name: {{{{ $key | upper }}}}
+          value: "{{{{ $value }}}}"
+        {{{{- end }}}}
+        {{{{- end }}}}
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      restartPolicy: OnFailure
+      backoffLimit: 3
+{{{{- end }}}}
+{{{{- end }}}}
+'''
+    
+    with open(os.path.join(templates_dir, "jobs.yaml"), "w") as f:
+        f.write(migration_template)
+
+# Create ConfigMap templates for configmap artifacts
+configmap_artifacts = [artifact for artifact in artifacts if artifact["type"] == "configmap"]
+if configmap_artifacts:
+    configmap_template = f'''{{{{/*
+ConfigMaps template - Generated from k8s artifacts
+*/}}}}
+{{{{- range $artifactName, $artifactConfig := .Values.artifacts }}}}
+{{{{- if and $artifactConfig.enabled (eq $artifactConfig.type "configmap") }}}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{{{ $.Release.Name }}}}-{{{{ $artifactName }}}}
+  labels:
+    app: {{{{ $artifactName }}}}
+    chart: {{{{ $.Chart.Name }}}}
+    release: {{{{ $.Release.Name }}}}
+    heritage: {{{{ $.Release.Service }}}}
+data:
+  {{{{- if eq $artifactName "config" }}}}
+  # Default configuration for the application
+  app_env: {{{{ $.Values.env.app_env | default "dev" | quote }}}}
+  log_level: "INFO"
+  database_pool_size: "10"
+  {{{{- if $.Values.env }}}}
+  {{{{- range $key, $value := $.Values.env }}}}
+  {{{{ $key }}: {{{{ $value | quote }}}}
+  {{{{- end }}}}
+  {{{{- end }}}}
+  {{{{- else }}}}
+  # Generic configmap - customize based on artifact name
+  artifact_name: {{{{ $artifactName | quote }}}}
+  chart_name: {{{{ $.Chart.Name | quote }}}}
+  release_name: {{{{ $.Release.Name | quote }}}}
+  {{{{- end }}}}
+{{{{- end }}}}
+{{{{- end }}}}
+'''
+    
+    with open(os.path.join(templates_dir, "configmaps.yaml"), "w") as f:
+        f.write(configmap_template)
+
+# Create a notes template for deployment instructions
+notes_template = f'''{{{{/*
+NOTES template - Provides post-deployment instructions
+*/}}}}
+1. Get the application URLs by running these commands:
+{{{{- if .Values.ingress.enabled }}}}
+  http://{{{{ .Values.ingress.host }}}}
+{{{{- else if contains "NodePort" .Values.service.type }}}}
+  export NODE_PORT=$(kubectl get --namespace {{{{ .Release.Namespace }}}} -o jsonpath="{{.spec.ports[0].nodePort}}" services {{{{ include "multiapp.fullname" . }}}})
+  export NODE_IP=$(kubectl get nodes --namespace {{{{ .Release.Namespace }}}} -o jsonpath="{{.items[0].status.addresses[0].address}}")
+  echo http://$NODE_IP:$NODE_PORT
+{{{{- else if contains "LoadBalancer" .Values.service.type }}}}
+     NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+           You can watch the status by running 'kubectl get --namespace {{{{ .Release.Namespace }}}} svc -w {{{{ include "multiapp.fullname" . }}}}'
+  export SERVICE_IP=$(kubectl get svc --namespace {{{{ .Release.Namespace }}}} {{{{ include "multiapp.fullname" . }}}} --template "{{"{{"}}.status.loadBalancer.ingress[0].ip{{"}}"}}")
+  echo http://$SERVICE_IP:{{{{ .Values.service.port }}}}
+{{{{- else if contains "ClusterIP" .Values.service.type }}}}
+  # Port forward to access services locally
+{{{{- $domain := .Values.domain }}}}
+{{{{- range $appName, $appConfig := index .Values $domain "apps" }}}}
+{{{{- if $appConfig.enabled }}}}
+  kubectl --namespace {{{{ $.Release.Namespace }}}} port-forward service/{{{{ $appName }}}}-service {{{{ $appConfig.port }}}}:{{{{ $appConfig.port }}}}
+  # Then access {{{{ $appName }}}} at: http://localhost:{{{{ $appConfig.port }}}}
+{{{{- end }}}}
+{{{{- end }}}}
+{{{{- end }}}}
+
+2. Application Status:
+{{{{- $domain := .Values.domain }}}}
+{{{{- range $appName, $appConfig := index .Values $domain "apps" }}}}
+{{{{- if $appConfig.enabled }}}}
+   - {{{{ $appName }}}}: {{{{ $appConfig.replicas }}}} replica(s) at {{{{ index $.Values.images $appName "repository" }}}}:{{{{ index $.Values.images $appName "tag" }}}}
+{{{{- end }}}}
+{{{{- end }}}}
+
+3. Manual Artifacts:
+{{{{- range $artifactName, $artifactConfig := .Values.artifacts }}}}
+{{{{- if $artifactConfig.enabled }}}}
+   - {{{{ $artifactName }}}} ({{{{ $artifactConfig.type }}}})
+{{{{- end }}}}
+{{{{- end }}}}
+
+4. Check deployment status:
+   kubectl get pods,services,jobs -l release={{{{ .Release.Name }}}}
+'''
+
+with open(os.path.join(templates_dir, "NOTES.txt"), "w") as f:
+    f.write(notes_template)
+
 print(f"Generated composed helm chart: {chart_name}")
 print(f"  Apps: {len(apps)} apps loaded from metadata")
 print(f"  Artifacts: {len(artifacts)} k8s artifacts")
