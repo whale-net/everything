@@ -1,5 +1,7 @@
 load("@rules_python//python:defs.bzl", "py_library")
 load("//tools:release.bzl", "release_app")
+load("//tools:helm_chart_release.bzl", "helm_chart_release_macro")
+load("//tools:helm_composition.bzl", "helm_chart_composed", "k8s_artifact")
 
 # Re-export all manman modules for convenience
 py_library(
@@ -74,4 +76,65 @@ filegroup(
     name = "design_docs",
     srcs = glob(["design/**/*"]),
     visibility = ["//visibility:public"],
+)
+
+# Manual Kubernetes artifacts
+k8s_artifact(
+    name = "migrations_job",
+    manifest = "k8s/migrations-job.yaml",
+    artifact_type = "job",
+)
+
+k8s_artifact(
+    name = "config",
+    manifest = "k8s/config.yaml", 
+    artifact_type = "configmap",
+)
+
+# Composed helm charts - demonstrating flexible deployment patterns
+helm_chart_composed(
+    name = "manman_core",
+    description = "Core ManMan services with shared database and migrations",
+    apps = [
+        ":experience_api",
+        ":status_api", 
+        ":worker_dal_api",
+        ":status_processor"
+    ],
+    k8s_artifacts = [
+        ":migrations_job",
+        ":config"
+    ],
+    pre_deploy_jobs = ["migrations_job"],
+    chart_values = {
+        "postgresql.enabled": "true",
+        "ingress.enabled": "false",
+        "migrations.image": "ghcr.io/whale-net/manman-experience_api"
+    }
+)
+
+helm_chart_composed(
+    name = "manman_worker_cluster", 
+    description = "Scalable worker cluster - can be deployed independently",
+    apps = [":worker"],
+    depends_on_charts = ["manman_core"]
+)
+
+# Legacy single chart approach (for comparison)
+helm_chart_release_macro(
+    domain = "manman",
+    charts = {
+        "manman_complete": {
+            "description": "ManMan complete application suite - all services and migrations (legacy pattern)",
+            "version": "1.0.0",
+            "apps": [
+                "manman_host", 
+                "experience_api", 
+                "status_api", 
+                "worker_dal_api", 
+                "status_processor",
+                "worker"
+            ]
+        },
+    },
 )

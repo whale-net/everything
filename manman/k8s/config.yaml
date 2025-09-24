@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: manman-config
+data:
+  app_env: "production"
+  log_level: "INFO"
+  database_pool_size: "10"
+  rabbitmq_url: "amqp://rabbitmq:5672"
