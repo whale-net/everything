@@ -1,6 +1,5 @@
 load("@rules_python//python:defs.bzl", "py_library")
 load("//tools:release.bzl", "release_app")
-load("//tools:helm_chart_release.bzl", "helm_chart_release_macro")
 load("//tools:helm_composition_simple.bzl", "helm_chart_composed", "k8s_artifact")
 
 # Re-export all manman modules for convenience
@@ -118,46 +117,3 @@ helm_chart_composed(
     deploy_order_weight = -10,  # Deploy first - core infrastructure
 )
 
-helm_chart_composed(
-    name = "manman_worker_cluster", 
-    description = "Scalable worker cluster - can be deployed independently",
-    apps = [":worker_metadata"],
-    depends_on_charts = ["manman_core@~1.0.0:file://../manman_core"],
-    deploy_order_weight = 0,  # Deploy after core services
-)
-
-# Monitoring overlay chart - demonstrates conditional dependencies
-helm_chart_composed(
-    name = "manman_monitoring",
-    description = "Optional monitoring stack for ManMan - deployed last",
-    apps = [],  # No apps, just monitoring resources
-    depends_on_charts = [
-        "manman_core@~1.0.0:file://../manman_core",  # Always depends on core
-        "manman_worker_cluster@~1.0.0:file://../manman_worker_cluster?monitoring.workers.enabled",  # Conditional on workers
-    ],
-    chart_values = {
-        "monitoring.enabled": "true",
-        "prometheus.enabled": "false",
-        "grafana.enabled": "false"
-    },
-    deploy_order_weight = 10,  # Deploy last - monitoring overlay
-)
-
-# Legacy single chart approach (for comparison)
-helm_chart_release_macro(
-    domain = "manman",
-    charts = {
-        "manman_complete": {
-            "description": "ManMan complete application suite - all services and migrations (legacy pattern)",
-            "version": "1.0.0",
-            "apps": [
-                "manman_host", 
-                "experience_api", 
-                "status_api", 
-                "worker_dal_api", 
-                "status_processor",
-                "worker"
-            ]
-        },
-    },
-)

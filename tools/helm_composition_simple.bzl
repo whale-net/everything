@@ -34,7 +34,7 @@ k8s_artifact = rule(
     },
 )
 
-def helm_chart_composed(name, description, apps = [], k8s_artifacts = [], pre_deploy_jobs = [], chart_values = {}, depends_on_charts = [], deploy_order_weight = 0):
+def helm_chart_composed(name, description, apps = [], k8s_artifacts = [], pre_deploy_jobs = [], chart_values = {}, deploy_order_weight = 0):
     """Compose a helm chart from release_apps and manual k8s artifacts.
     
     Args:
@@ -44,7 +44,6 @@ def helm_chart_composed(name, description, apps = [], k8s_artifacts = [], pre_de
         k8s_artifacts: List of k8s_artifact targets
         pre_deploy_jobs: List of job names that should run before deployment
         chart_values: Dictionary of chart-specific values
-        depends_on_charts: List of chart dependencies (supports name, name@version, name@version:repository formats)
         deploy_order_weight: Weight for deployment ordering (lower weights deploy first)
     """
     
@@ -55,7 +54,6 @@ def helm_chart_composed(name, description, apps = [], k8s_artifacts = [], pre_de
         k8s_artifacts = k8s_artifacts,
         pre_deploy_jobs = pre_deploy_jobs,
         chart_values = chart_values,
-        depends_on_charts = depends_on_charts,
         deploy_order_weight = deploy_order_weight,
     )
 
@@ -96,7 +94,6 @@ os.makedirs(output_dir, exist_ok=True)
 chart_name = \"""" + ctx.attr.name + """\"
 description = \"""" + ctx.attr.description + """\"
 domain = \"""" + (ctx.attr.name.split("_")[0] if "_" in ctx.attr.name else "default") + """\"
-depends_on_charts = """ + str(ctx.attr.depends_on_charts) + """
 deploy_order_weight = """ + str(ctx.attr.deploy_order_weight) + """
 
 # Read app metadata files
@@ -151,41 +148,7 @@ annotations:
   "composition.whale-net.io/generated-by": "helm_composition_simple.bzl"
 '''
 
-# Add dependencies if specified
-if depends_on_charts:
-    chart_yaml += 'dependencies:\\n'
-    for dependency in depends_on_charts:
-        # Parse dependency string - supports multiple formats:
-        # - name (uses default version and file path)
-        # - name@version (uses file path)  
-        # - name@version:repository (full specification)
-        # - name@version:repository?condition (conditional dependency)
-        
-        condition = None
-        if '?' in dependency:
-            dependency, condition = dependency.split('?', 1)
-            
-        dep_parts = dependency.split('@')
-        dep_name = dep_parts[0]
-        dep_version = dep_parts[1] if len(dep_parts) > 1 else "~1.0.0"
-        
-        # Check if repository is specified (name@version:repo format)
-        if ':' in dep_version:
-            repo_parts = dep_version.split(':', 1)
-            dep_version = repo_parts[0]
-            dep_repository = repo_parts[1]
-        else:
-            dep_repository = f"file://../{dep_name}"
-        
-        chart_yaml += f'''  - name: {dep_name}
-    version: "{dep_version}"
-    repository: "{dep_repository}"'''
-        
-        if condition:
-            chart_yaml += f'''
-    condition: {condition}'''
-        chart_yaml += '''
-'''
+# Simplified chart - no external dependencies needed
 
 with open(os.path.join(output_dir, "Chart.yaml"), "w") as f:
     f.write(chart_yaml)
@@ -608,7 +571,6 @@ _helm_chart_composed = rule(
         "k8s_artifacts": attr.label_list(providers = [DefaultInfo]),
         "pre_deploy_jobs": attr.string_list(default = []),
         "chart_values": attr.string_dict(default = {}),
-        "depends_on_charts": attr.string_list(default = []),
         "deploy_order_weight": attr.int(default = 0),
     },
 )

@@ -252,28 +252,3 @@ helm_chart_release = rule(
     """
 )
 
-def helm_chart_release_macro(domain, charts):
-    """Convenience macro for defining multiple charts in a domain."""
-    
-    for chart_name, chart_config in charts.items():
-        apps = chart_config["apps"]
-        description = chart_config.get("description", "")
-        version = chart_config.get("version", "1.0.0")
-        custom_values = chart_config.get("custom_values", {})
-        
-        # Generate metadata dependency labels
-        metadata_deps = []
-        for app_name in apps:
-            metadata_target = "//{domain}:{app}_metadata".format(domain = domain, app = app_name)
-            metadata_deps.append(metadata_target)
-        
-        # Call the actual rule with metadata dependencies
-        helm_chart_release(
-            name = chart_name,
-            domain = domain,
-            apps = apps,
-            description = description,
-            chart_version = version,
-            values_overrides = custom_values,
-            app_metadata_deps = metadata_deps,
-        )
