@@ -78,17 +78,21 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-# Manual Kubernetes artifacts
+# Manual Kubernetes artifacts with dependency ordering
 k8s_artifact(
     name = "migrations_job",
     manifest = "k8s/migrations-job.yaml",
     artifact_type = "job",
+    hook_weight = -10,  # Run first - highest priority for migrations
+    hook_delete_policy = "before-hook-creation",
 )
 
 k8s_artifact(
     name = "config",
     manifest = "k8s/config.yaml", 
     artifact_type = "configmap",
+    depends_on = ["migrations_job"],  # Config depends on migrations completing
+    hook_weight = -5,  # Run after migrations
 )
 
 # Composed helm charts - demonstrating flexible deployment patterns
@@ -110,14 +114,33 @@ helm_chart_composed(
         "postgresql.enabled": "true",
         "ingress.enabled": "false",
         "migrations.image": "ghcr.io/whale-net/manman-experience_api"
-    }
+    },
+    deploy_order_weight = -10,  # Deploy first - core infrastructure
 )
 
 helm_chart_composed(
     name = "manman_worker_cluster", 
     description = "Scalable worker cluster - can be deployed independently",
     apps = [":worker_metadata"],
-    depends_on_charts = ["manman_core"]
+    depends_on_charts = ["manman_core@~1.0.0:file://../manman_core"],
+    deploy_order_weight = 0,  # Deploy after core services
+)
+
+# Monitoring overlay chart - demonstrates conditional dependencies
+helm_chart_composed(
+    name = "manman_monitoring",
+    description = "Optional monitoring stack for ManMan - deployed last",
+    apps = [],  # No apps, just monitoring resources
+    depends_on_charts = [
+        "manman_core@~1.0.0:file://../manman_core",  # Always depends on core
+        "manman_worker_cluster@~1.0.0:file://../manman_worker_cluster?monitoring.workers.enabled",  # Conditional on workers
+    ],
+    chart_values = {
+        "monitoring.enabled": "true",
+        "prometheus.enabled": "false",
+        "grafana.enabled": "false"
+    },
+    deploy_order_weight = 10,  # Deploy last - monitoring overlay
 )
 
 # Legacy single chart approach (for comparison)

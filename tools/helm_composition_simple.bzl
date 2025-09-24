@@ -11,6 +11,8 @@ def _k8s_artifact_impl(ctx):
         "type": ctx.attr.artifact_type,
         "manifest_path": manifest_file.path,
         "depends_on": ctx.attr.depends_on,
+        "hook_weight": ctx.attr.hook_weight,
+        "hook_delete_policy": ctx.attr.hook_delete_policy,
     }
     
     output = ctx.actions.declare_file(ctx.label.name + "_k8s_metadata.json")
@@ -27,11 +29,24 @@ k8s_artifact = rule(
         "manifest": attr.label(allow_single_file = [".yaml", ".yml"], mandatory = True),
         "artifact_type": attr.string(mandatory = True),
         "depends_on": attr.string_list(default = []),
+        "hook_weight": attr.int(default = -5),
+        "hook_delete_policy": attr.string(default = "before-hook-creation"),
     },
 )
 
-def helm_chart_composed(name, description, apps = [], k8s_artifacts = [], pre_deploy_jobs = [], chart_values = {}, depends_on_charts = []):
-    """Compose a helm chart from release_apps and manual k8s artifacts."""
+def helm_chart_composed(name, description, apps = [], k8s_artifacts = [], pre_deploy_jobs = [], chart_values = {}, depends_on_charts = [], deploy_order_weight = 0):
+    """Compose a helm chart from release_apps and manual k8s artifacts.
+    
+    Args:
+        name: Chart name
+        description: Chart description  
+        apps: List of release_app targets
+        k8s_artifacts: List of k8s_artifact targets
+        pre_deploy_jobs: List of job names that should run before deployment
+        chart_values: Dictionary of chart-specific values
+        depends_on_charts: List of chart dependencies (supports name, name@version, name@version:repository formats)
+        deploy_order_weight: Weight for deployment ordering (lower weights deploy first)
+    """
     
     _helm_chart_composed(
         name = name,
@@ -41,6 +56,7 @@ def helm_chart_composed(name, description, apps = [], k8s_artifacts = [], pre_de
         pre_deploy_jobs = pre_deploy_jobs,
         chart_values = chart_values,
         depends_on_charts = depends_on_charts,
+        deploy_order_weight = deploy_order_weight,
     )
 
 def _helm_chart_composed_impl(ctx):
@@ -80,6 +96,8 @@ os.makedirs(output_dir, exist_ok=True)
 chart_name = \"""" + ctx.attr.name + """\"
 description = \"""" + ctx.attr.description + """\"
 domain = \"""" + (ctx.attr.name.split("_")[0] if "_" in ctx.attr.name else "default") + """\"
+depends_on_charts = """ + str(ctx.attr.depends_on_charts) + """
+deploy_order_weight = """ + str(ctx.attr.deploy_order_weight) + """
 
 # Read app metadata files
 app_metadata_files = """ + str([f.path for f in app_metadata_files]) + """
@@ -109,7 +127,7 @@ for metadata_file in k8s_metadata_files:
             except json.JSONDecodeError as e:
                 print(f"Warning: Could not parse {metadata_file}: {e}")
 
-# Create Chart.yaml
+# Create Chart.yaml with dependencies
 chart_yaml = f'''apiVersion: v2
 name: {chart_name}
 description: {description}
@@ -126,6 +144,47 @@ sources:
 maintainers:
   - name: whale-net
     url: https://github.com/whale-net/everything
+annotations:
+  # Deployment ordering metadata
+  "composition.whale-net.io/deploy-weight": "{deploy_order_weight}"
+  "composition.whale-net.io/domain": "{domain}"
+  "composition.whale-net.io/generated-by": "helm_composition_simple.bzl"
+'''
+
+# Add dependencies if specified
+if depends_on_charts:
+    chart_yaml += 'dependencies:\\n'
+    for dependency in depends_on_charts:
+        # Parse dependency string - supports multiple formats:
+        # - name (uses default version and file path)
+        # - name@version (uses file path)  
+        # - name@version:repository (full specification)
+        # - name@version:repository?condition (conditional dependency)
+        
+        condition = None
+        if '?' in dependency:
+            dependency, condition = dependency.split('?', 1)
+            
+        dep_parts = dependency.split('@')
+        dep_name = dep_parts[0]
+        dep_version = dep_parts[1] if len(dep_parts) > 1 else "~1.0.0"
+        
+        # Check if repository is specified (name@version:repo format)
+        if ':' in dep_version:
+            repo_parts = dep_version.split(':', 1)
+            dep_version = repo_parts[0]
+            dep_repository = repo_parts[1]
+        else:
+            dep_repository = f"file://../{dep_name}"
+        
+        chart_yaml += f'''  - name: {dep_name}
+    version: "{dep_version}"
+    repository: "{dep_repository}"'''
+        
+        if condition:
+            chart_yaml += f'''
+    condition: {condition}'''
+        chart_yaml += '''
 '''
 
 with open(os.path.join(output_dir, "Chart.yaml"), "w") as f:
@@ -336,8 +395,12 @@ with open(os.path.join(templates_dir, "_helpers.tpl"), "w") as f:
 # Create migration job templates if we have job artifacts
 migration_jobs = [artifact for artifact in artifacts if artifact["type"] == "job"]
 if migration_jobs:
+    # Sort jobs by hook weight for proper execution order
+    migration_jobs.sort(key=lambda x: x.get("hook_weight", -5))
+    
     migration_template = f'''{{{{/*
 Migration jobs template - Generated from k8s artifacts
+Sorted by hook weight for proper execution order
 */}}}}
 {{{{- range $artifactName, $artifactConfig := .Values.artifacts }}}}
 {{{{- if and $artifactConfig.enabled (eq $artifactConfig.type "job") }}}}
@@ -353,7 +416,15 @@ metadata:
     heritage: {{{{ $.Release.Service }}}}
   annotations:
     "helm.sh/hook": pre-install,pre-upgrade
+    {{{{- if eq $artifactName "migrations_job" }}}}
+    "helm.sh/hook-weight": "-10"
+    {{{{- else if eq $artifactName "config_setup_job" }}}}
+    "helm.sh/hook-weight": "-8"
+    {{{{- else if eq $artifactName "schema_setup_job" }}}}
+    "helm.sh/hook-weight": "-9"
+    {{{{- else }}}}
     "helm.sh/hook-weight": "-5"
+    {{{{- end }}}}
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   template:
@@ -538,5 +609,6 @@ _helm_chart_composed = rule(
         "pre_deploy_jobs": attr.string_list(default = []),
         "chart_values": attr.string_dict(default = {}),
         "depends_on_charts": attr.string_list(default = []),
+        "deploy_order_weight": attr.int(default = 0),
     },
 )
