@@ -1,0 +1,99 @@
+{{/*
+Ingress template - only created when ingress is enabled and apps are configured for exposure
+*/}}
+{{- if .Values.ingress.enabled }}
+{{- $hasExposedApps := false }}
+{{- $domain := .Values.domain }}
+{{- range $appName, $appConfig := index .Values $domain "apps" }}
+{{- if $appConfig.enabled }}
+{{- $appContext := dict "Values" $.Values "Chart" $.Chart "Release" $.Release "appName" $appName }}
+{{- if include "common.ingressEnabled" $appContext }}
+{{- $hasExposedApps = true }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if $hasExposedApps }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Values.ingress.name | default (printf "%s-ingress" (include "common.chartname" .)) }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+    component: ingress
+  {{- if .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.ingressClassName }}
+  ingressClassName: {{ .Values.ingress.ingressClassName }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    {{- if .Values.ingress.tls.configs }}
+    {{- range .Values.ingress.tls.configs }}
+    - secretName: {{ .secretName }}
+      hosts:
+        {{- range .hosts }}
+        - {{ . }}
+        {{- end }}
+    {{- end }}
+    {{- else }}
+    - secretName: {{ printf "%s-tls" (include "common.chartname" .) }}
+      hosts:
+        - {{ .Values.ingress.host | default "localhost" }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{/* Generate rules based on TLS configuration or default host */}}
+    {{- if and .Values.ingress.tls.enabled .Values.ingress.tls.configs }}
+    {{/* When TLS is enabled with configs, create rules for each host in TLS configs */}}
+    {{- $uniqueHosts := dict }}
+    {{- range .Values.ingress.tls.configs }}
+      {{- range .hosts }}
+        {{- $_ := set $uniqueHosts . true }}
+      {{- end }}
+    {{- end }}
+    {{- range $host, $_ := $uniqueHosts }}
+    - host: {{ $host }}
+      http:
+        paths:
+          {{- range $appName, $appConfig := index $.Values $domain "apps" }}
+          {{- if $appConfig.enabled }}
+          {{- $appContext := dict "Values" $.Values "Chart" $.Chart "Release" $.Release "appName" $appName }}
+          {{- if include "common.ingressEnabled" $appContext }}
+          - path: {{ include "common.ingressPath" $appContext }}
+            pathType: {{ $appConfig.ingress.pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ include "common.serviceName" $appContext }}
+                port:
+                  number: {{ $appConfig.port | default 8000 }}
+          {{- end }}
+          {{- end }}
+          {{- end }}
+    {{- end }}
+    {{- else }}
+    {{/* When TLS is disabled or no TLS configs, use the simple host field */}}
+    - host: {{ .Values.ingress.host | default "localhost" }}
+      http:
+        paths:
+          {{- range $appName, $appConfig := index .Values $domain "apps" }}
+          {{- if $appConfig.enabled }}
+          {{- $appContext := dict "Values" $.Values "Chart" $.Chart "Release" $.Release "appName" $appName }}
+          {{- if include "common.ingressEnabled" $appContext }}
+          - path: {{ include "common.ingressPath" $appContext }}
+            pathType: {{ $appConfig.ingress.pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ include "common.serviceName" $appContext }}
+                port:
+                  number: {{ $appConfig.port | default 8000 }}
+          {{- end }}
+          {{- end }}
+          {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}

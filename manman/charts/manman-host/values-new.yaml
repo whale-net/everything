@@ -1,0 +1,248 @@
+# Individual images for each service with independent tagging
+images:
+  experience_api:
+    name: "ghcr.io/whale-net/everything/manman-experience-api"
+    tag: ""
+  status_api:
+    name: "ghcr.io/whale-net/everything/manman-status-api"
+    tag: ""
+  worker_dal_api:
+    name: "ghcr.io/whale-net/everything/manman-worker-dal-api"
+    tag: ""
+  status_processor:
+    name: "ghcr.io/whale-net/everything/manman-status-processor"
+    tag: ""
+  # Migration job can use experience_api image or have its own
+  migration:
+    name: "ghcr.io/whale-net/everything/manman-experience-api"
+    tag: ""
+
+namespace: manman
+
+# Generic service configuration supporting all deployment modes
+services:
+  # Experience API (host layer) - API service
+  manman-experience:
+    enabled: true
+    type: "api"  # api | processor
+    component: "experience-api"
+    command: "start-experience-api"
+    replicas: 1
+    port: 8000
+    healthPath: "/experience/health"
+    image:
+      name: "ghcr.io/whale-net/everything/manman-experience-api"
+      tag: ""
+    # Optional: override default resources
+    # resources:
+    #   requests:
+    #     cpu: 100m
+    #     memory: 512Mi
+    #   limits:
+    #     cpu: 200m
+    #     memory: 1Gi
+    # Optional: custom probe settings
+    # livenessProbe:
+    #   initialDelaySeconds: 20
+    #   periodSeconds: 15
+    # readinessProbe:
+    #   initialDelaySeconds: 15
+    #   periodSeconds: 10
+
+  # Worker DAL API - API service  
+  manman-worker-dal:
+    enabled: true
+    type: "api"
+    component: "worker-dal-api"
+    command: "start-worker-dal-api"
+    replicas: 1
+    port: 8000
+    healthPath: "/workerdal/health"
+    image:
+      name: "ghcr.io/whale-net/everything/manman-worker-dal-api"
+      tag: ""
+
+  # Status API (read-only HTTP endpoints) - API service
+  manman-status:
+    enabled: true
+    type: "api"
+    component: "status-api"
+    command: "start-status-api"
+    replicas: 1
+    port: 8000
+    healthPath: "/status/health"
+    image:
+      name: "ghcr.io/whale-net/everything/manman-status-api"
+      tag: ""
+
+  # Status Event Processor (handles status-related messages) - Processor service (headless)
+  manman-status-processor:
+    enabled: true
+    type: "processor"
+    component: "status-processor"
+    command: "start-status-processor"
+    replicas: 1
+    # Processors can optionally expose health endpoints
+    healthPort: 8000
+    healthPath: "/health"
+    image:
+      name: "ghcr.io/whale-net/everything/manman-status-processor"
+      tag: ""
+
+# Backwards compatibility: keep old structure for reference/migration
+# DEPRECATED: Use services configuration above instead
+apis:
+  experience:
+    enabled: false  # Disabled - using services.manman-experience instead
+    name: manman-experience
+    replicas: 1
+    port: 8000
+    command: "start-experience-api"
+  workerDal:
+    enabled: false  # Disabled - using services.manman-worker-dal instead
+    name: manman-worker-dal
+    replicas: 1
+    port: 8000
+    command: "start-worker-dal-api"
+  status:
+    enabled: false  # Disabled - using services.manman-status instead
+    name: manman-status
+    replicas: 1
+    port: 8000
+    command: "start-status-api"
+
+processors:
+  status:
+    enabled: false  # Disabled - using services.manman-status-processor instead
+    name: manman-status-processor
+    replicas: 1
+    command: "start-status-processor"
+
+# Ingress configuration (primarily for development)
+ingress:
+  # Enable/disable ingress
+  enabled: false
+
+  # Custom ingress name (defaults to manman-ingress-{app_env} if empty)
+  name: ""
+
+  # Custom host (defaults to localhost for development if empty)
+  # Note: When TLS is enabled, hosts are specified in tls.configs
+  host: "localhost"
+
+  # Ingress class name (e.g., nginx, traefik)
+  ingressClassName: ""
+
+  # Custom annotations for ingress controller
+  annotations: {}
+    # nginx.ingress.kubernetes.io/rewrite-target: /$2
+    # nginx.ingress.kubernetes.io/use-regex: "true"
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+
+  # TLS configuration
+  tls:
+    # Enable/disable TLS
+    enabled: false
+    # TLS configurations (if empty and TLS is enabled, uses default config)
+    configs: []
+      # Example TLS configs:
+      # - secretName: manman-tls-dev
+      #   hosts:
+      #     - localhost
+      #     - dev.example.com
+      # - secretName: manman-tls-prod
+      #   hosts:
+      #     - api.example.com
+
+  # Service path mappings for ingress
+  # Maps service names to URL paths
+  servicePaths:
+    manman-experience: "/experience"
+    manman-worker-dal: "/workerdal"
+    manman-status: "/status"
+
+# Migration configuration
+migrations:
+  # Set to true to skip running migrations entirely
+  skip_migration: false
+  # Timeout for migration job in seconds (5 minutes)
+  timeout: 300
+
+# ArgoCD specific configuration
+argocd:
+  # Sync timeout for the entire application (10 minutes)
+  syncTimeout: 600
+  # Retry configuration
+  retry:
+    limit: 3
+    backoff:
+      duration: 30s
+      factor: 2
+      maxDuration: 3m
+
+env:
+  rabbitmq:
+    port: 5672
+    host: <rabbitmq_host>
+    user: <rabbitmq_user>
+    password: <rabbitmq_password>
+    enable_ssl: false
+    ssl_hostname: <rabbitmq_ssl_hostname>
+    # whether to instruct the app to create the RabbitMQ vhost via management API
+    createVhost: false
+
+  # change this to the environment you are deploying to
+  app_env: dev
+
+  # OpenTelemetry configuration
+  otel:
+    logging_enabled: true
+
+  db:
+    url: <postgresql+psycopg2://user:password@host:port/database>
+  otelCollector:
+    logs:
+      endpoint: <logs_endpoint>
+    traces:
+      endpoint: <traces_endpoint>
+    metrics:
+      endpoint: <metrics_endpoint>
+
+# Global defaults for all services
+global:
+  # Default resource limits (can be overridden per service)
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 100m
+      memory: 512Mi
+  
+  # Default probe settings (can be overridden per service)
+  livenessProbe:
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+# Pod Disruption Budget configuration
+podDisruptionBudget:
+  enabled: true
+  # Can be a percentage or number
+  minAvailable: 1
+  # Alternative: maxUnavailable: 0
+
+# HorizontalPodAutoscaler configuration
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80

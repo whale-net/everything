@@ -7,3 +7,18 @@ filegroup(
     ],
     visibility = ["//visibility:public"],
 )
+
+# Enhanced chart templates with optional components
+filegroup(
+    name = "helm_templates_enhanced",
+    srcs = [
+        "deployment-enhanced.yaml",
+        "service-enhanced.yaml",
+        "_helpers-enhanced.tpl",
+        "pdb.yaml",
+        "hpa.yaml", 
+        "ingress.yaml",
+        "values-enhanced-example.yaml",
+    ],
+    visibility = ["//visibility:public"],
+)

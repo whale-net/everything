@@ -1,0 +1,79 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Values.ingress.name | default (printf "manman-ingress-%s" .Values.env.app_env) }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "manman.labels" . | nindent 4 }}
+    app: manman-{{ .Values.env.app_env }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.ingressClassName }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    {{- if .Values.ingress.tls.configs }}
+    {{- range .Values.ingress.tls.configs }}
+    - secretName: {{ .secretName }}
+      hosts:
+        {{- range .hosts }}
+        - {{ . }}
+        {{- end }}
+    {{- end }}
+    {{- else }}
+    - secretName: {{ printf "manman-tls-%s" .Values.env.app_env }}
+      hosts:
+        - {{ .Values.ingress.host | default "localhost" }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{/* Auto-generate rules based on enabled API services */}}
+    {{- if and .Values.ingress.tls.enabled .Values.ingress.tls.configs }}
+    {{/* When TLS is enabled with configs, create rules for each host in TLS configs */}}
+    {{- $uniqueHosts := dict }}
+    {{- range .Values.ingress.tls.configs }}
+      {{- range .hosts }}
+        {{- $_ := set $uniqueHosts . true }}
+      {{- end }}
+    {{- end }}
+    {{- range $host, $_ := $uniqueHosts }}
+    - host: {{ $host }}
+      http:
+        paths:
+          {{- range $serviceName, $serviceConfig := $.Values.services }}
+          {{- if and $serviceConfig.enabled (eq $serviceConfig.type "api") }}
+          {{- $servicePath := index $.Values.ingress.servicePaths $serviceName | default (printf "/%s" $serviceName) }}
+          - path: {{ $servicePath }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "manman.serviceFullName" (dict "serviceName" $serviceName "suffix" "service" "Values" $.Values) }}
+                port:
+                  number: {{ $serviceConfig.port }}
+          {{- end }}
+          {{- end }}
+    {{- end }}
+    {{- else }}
+    {{/* When TLS is disabled or no TLS configs, use the simple host field */}}
+    - host: {{ .Values.ingress.host | default "localhost" }}
+      http:
+        paths:
+          {{- range $serviceName, $serviceConfig := .Values.services }}
+          {{- if and $serviceConfig.enabled (eq $serviceConfig.type "api") }}
+          {{- $servicePath := index $.Values.ingress.servicePaths $serviceName | default (printf "/%s" $serviceName) }}
+          - path: {{ $servicePath }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "manman.serviceFullName" (dict "serviceName" $serviceName "suffix" "service" "Values" $.Values) }}
+                port:
+                  number: {{ $serviceConfig.port }}
+          {{- end }}
+          {{- end }}
+    {{- end }}
+{{- end }}

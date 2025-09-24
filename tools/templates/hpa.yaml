@@ -1,0 +1,55 @@
+{{/*
+Horizontal Pod Autoscaler template - only created for apps with HPA enabled
+*/}}
+{{- $domain := .Values.domain }}
+{{- range $appName, $appConfig := index .Values $domain "apps" }}
+{{- if $appConfig.enabled }}
+{{- $appContext := dict "Values" $.Values "Chart" $.Chart "Release" $.Release "appName" $appName }}
+{{- if include "common.hpaEnabled" $appContext }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ printf "%s-hpa" (include "common.fullname" $appContext) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "common.appLabels" $appContext | nindent 4 }}
+    app-type: {{ include "common.appType" $appContext }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "common.fullname" $appContext }}
+  minReplicas: {{ $appConfig.autoscaling.minReplicas | default $.Values.global.autoscaling.minReplicas | default 1 }}
+  maxReplicas: {{ $appConfig.autoscaling.maxReplicas | default $.Values.global.autoscaling.maxReplicas | default 10 }}
+  metrics:
+    {{- if or $appConfig.autoscaling.targetCPUUtilizationPercentage $.Values.global.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $appConfig.autoscaling.targetCPUUtilizationPercentage | default $.Values.global.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if or $appConfig.autoscaling.targetMemoryUtilizationPercentage $.Values.global.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ $appConfig.autoscaling.targetMemoryUtilizationPercentage | default $.Values.global.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+    {{- if $appConfig.autoscaling.customMetrics }}
+    {{- toYaml $appConfig.autoscaling.customMetrics | nindent 4 }}
+    {{- end }}
+  {{- if or $appConfig.autoscaling.behavior $.Values.global.autoscaling.behavior }}
+  behavior:
+    {{- if $appConfig.autoscaling.behavior }}
+    {{- toYaml $appConfig.autoscaling.behavior | nindent 4 }}
+    {{- else }}
+    {{- toYaml $.Values.global.autoscaling.behavior | nindent 4 }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
