@@ -130,3 +130,12 @@ def localdev_send_queue(key: int):
     )
     message.publish(exchange="server", routing_key=str(key))
     return
+
+
+def main():
+    """Main entry point for the CLI."""
+    app()
+
+
+if __name__ == "__main__":
+    main()

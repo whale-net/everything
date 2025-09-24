@@ -1,9 +1,0 @@
-apiVersion: v2
-name: manman-host
-description: ManMan API services - Experience API and Worker DAL API
-
-type: application
-
-version: 0.1.0
-
-appVersion: "v0"

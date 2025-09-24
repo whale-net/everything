@@ -8,6 +8,7 @@ package(default_visibility = ["//visibility:public"])
 exports_files([
     "oci.bzl",
     "helm_chart_release.bzl",
+    "enhanced_helm_chart_release.bzl",
     "python_runner.py",
     "platforms.bzl",
     "multiplatform_image.bzl",

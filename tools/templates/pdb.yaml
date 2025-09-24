@@ -1,0 +1,36 @@
+{{/*
+Pod Disruption Budget template - only created for apps with PDB enabled and replicas > 1
+*/}}
+{{- $domain := .Values.domain }}
+{{- range $appName, $appConfig := index .Values $domain "apps" }}
+{{- if $appConfig.enabled }}
+{{- $appContext := dict "Values" $.Values "Chart" $.Chart "Release" $.Release "appName" $appName }}
+{{- if include "common.pdbEnabled" $appContext }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ printf "%s-pdb" (include "common.fullname" $appContext) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "common.appLabels" $appContext | nindent 4 }}
+    app-type: {{ include "common.appType" $appContext }}
+spec:
+  {{- if $appConfig.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ $appConfig.podDisruptionBudget.minAvailable }}
+  {{- else if $.Values.global.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ $.Values.global.podDisruptionBudget.minAvailable }}
+  {{- else }}
+  minAvailable: 1
+  {{- end }}
+  {{- if $appConfig.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ $appConfig.podDisruptionBudget.maxUnavailable }}
+  {{- else if $.Values.global.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ $.Values.global.podDisruptionBudget.maxUnavailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "common.selectorLabels" $appContext | nindent 6 }}
+{{- end }}
+{{- end }}
+{{- end }}

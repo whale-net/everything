@@ -1,5 +1,6 @@
 load("@rules_python//python:defs.bzl", "py_library")
 load("//tools:release.bzl", "release_app")
+load("//tools:enhanced_helm_chart_release.bzl", "enhanced_helm_chart_release_macro")
 
 # Re-export all manman modules for convenience
 py_library(
@@ -55,18 +56,92 @@ release_app(
     description = "Background worker service for processing tasks and messages",
 )
 
-# Note: Manual helm charts are provided in manman/charts/manman-host/
-# Those charts offer more sophisticated configuration for production deployments
+# Enhanced Helm Charts - replaces manual charts in manman/charts/manman-host/
+# Uses the new enhanced framework with optional components
+enhanced_helm_chart_release_macro(
+    domain = "manman",
+    charts = {
+        # Production chart with full features for host services
+        "host_chart": {
+            "description": "ManMan host services with production features",
+            "apps": [
+                "experience_api",    # API service
+                "status_api",        # API service  
+                "worker_dal_api",    # API service
+                "status_processor"   # Background processor
+            ],
+            "features": {
+                "pdb": "true",       # Pod Disruption Budgets for high availability
+                "hpa": "true",       # Horizontal Pod Autoscaling for APIs
+                "ingress": "true"    # Ingress for external API access
+            },
+            "custom_values": {
+                # Environment-specific overrides
+                "global.env.APP_ENV": "production",
+                "ingress.host": "api.manman.com",
+                "ingress.ingressClassName": "nginx",
+                "ingress.tls.enabled": "true"
+            }
+        },
+        
+        # Development chart with minimal features
+        "dev_chart": {
+            "description": "ManMan development services - lightweight configuration",
+            "apps": [
+                "experience_api",
+                "status_api"
+            ],
+            "features": {
+                "ingress": "true"    # Only ingress for local development
+            },
+            "custom_values": {
+                "global.env.APP_ENV": "dev",
+                "ingress.host": "localhost",
+                "global.resources.requests.cpu": "50m",
+                "global.resources.requests.memory": "128Mi"
+            }
+        },
+        
+        # API-only chart for API gateway deployments
+        "api_chart": {
+            "description": "ManMan API services only - no background processors",
+            "apps": [
+                "experience_api",
+                "status_api", 
+                "worker_dal_api"
+            ],
+            "features": {
+                "pdb": "true",       # High availability for APIs
+                "hpa": "true",       # Autoscaling for traffic spikes
+                "ingress": "true"    # External access
+            }
+        },
+        
+        # Processor-only chart for dedicated worker nodes
+        "processor_chart": {
+            "description": "ManMan background processors - processing workloads only",
+            "apps": [
+                "status_processor",
+                "worker"  # Include worker service
+            ],
+            "features": {
+                "pdb": "true",       # Availability for processing continuity
+                "hpa": "true"        # Scale processors based on queue depth
+            },
+            "custom_values": {
+                # Processor-optimized resources
+                "global.resources.requests.cpu": "100m",
+                "global.resources.requests.memory": "256Mi",
+                "global.resources.limits.cpu": "500m",
+                "global.resources.limits.memory": "1Gi"
+            }
+        }
+    }
+)
 
 filegroup(
     name = "tiltfile",
     srcs = ["Tiltfile"],
-    visibility = ["//visibility:public"],
-)
-
-filegroup(
-    name = "charts", 
-    srcs = glob(["charts/**/*"]),
     visibility = ["//visibility:public"],
 )
 

@@ -1,0 +1,205 @@
+# Enhanced Common Chart Framework - Example Values
+# This configuration shows all available options for the enhanced chart framework
+
+# Domain identifier (usually matches the Bazel domain)
+domain: "example"
+
+# Image configurations for each app
+images:
+  api_app:
+    name: "ghcr.io/whale-net/example-api-app"
+    tag: "latest"
+  processor_app:
+    name: "ghcr.io/whale-net/example-processor-app"
+    tag: "latest"
+  worker_app:
+    name: "ghcr.io/whale-net/example-worker-app"
+    tag: "latest"
+
+# Domain-specific application configuration
+example:
+  apps:
+    api_app:
+      enabled: true
+      type: "api"  # api | processor | job
+      command: "start-api-app"
+      replicas: 2
+      port: 8000
+      healthPath: "/health"
+      
+      # Resource configuration (optional, uses global defaults if not specified)
+      resources:
+        requests:
+          memory: "256Mi"
+          cpu: "100m"
+        limits:
+          memory: "512Mi"
+          cpu: "500m"
+      
+      # Service configuration (for API apps)
+      service:
+        type: "ClusterIP"
+        annotations:
+          service.beta.kubernetes.io/aws-load-balancer-type: nlb
+      
+      # Pod Disruption Budget (optional)
+      podDisruptionBudget:
+        enabled: true
+        minAvailable: 1
+      
+      # Horizontal Pod Autoscaler (optional)
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 10
+        targetCPUUtilizationPercentage: 70
+        targetMemoryUtilizationPercentage: 80
+      
+      # Ingress configuration (for API apps)
+      ingress:
+        enabled: true
+        path: "/api/v1"
+        pathType: "Prefix"
+      
+      # Environment variables (app-specific)
+      env:
+        API_VERSION: "v1"
+        DEBUG_MODE: "false"
+    
+    processor_app:
+      enabled: true
+      type: "processor"  # headless service
+      command: "start-processor"
+      replicas: 1
+      
+      # Optional health endpoint for processors
+      healthPort: 8000
+      healthPath: "/health"
+      
+      # Processors typically don't need PDB or HPA, but can be configured
+      podDisruptionBudget:
+        enabled: false
+      
+      autoscaling:
+        enabled: false
+    
+    worker_app:
+      enabled: false  # Can be enabled/disabled per environment
+      type: "processor"
+      command: "start-worker"
+      replicas: 3
+      
+      # Custom resource requirements for workers
+      resources:
+        requests:
+          memory: "512Mi"
+          cpu: "200m"
+        limits:
+          memory: "1Gi"
+          cpu: "1000m"
+      
+      # Worker-specific configuration
+      env:
+        WORKER_POOL_SIZE: "10"
+        BATCH_SIZE: "100"
+
+# Global configuration applied to all apps (can be overridden per app)
+global:
+  # Default resource limits
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+  
+  # Global environment variables
+  env:
+    LOG_LEVEL: "INFO"
+    ENVIRONMENT: "production"
+  
+  # Global Pod Disruption Budget settings
+  podDisruptionBudget:
+    enabled: false  # Disabled by default, enabled per app
+    minAvailable: 1
+  
+  # Global Horizontal Pod Autoscaler settings
+  autoscaling:
+    enabled: false  # Disabled by default, enabled per app
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
+  
+  # Common args applied to all apps (unless overridden)
+  commonArgs:
+    - "--log-level=info"
+    - "--metrics-enabled"
+  
+  # Global pod annotations
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+
+# Ingress configuration
+ingress:
+  enabled: true
+  name: ""  # Auto-generated if empty
+  host: "api.example.com"
+  ingressClassName: "nginx"
+  
+  # Annotations for ingress controller
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  
+  # Apps to expose (alternative to per-app ingress.enabled)
+  exposedApps:
+    - "api_app"
+  
+  # Custom paths for apps (overrides auto-generated paths)
+  appPaths:
+    api_app: "/api/v1"
+  
+  # TLS configuration
+  tls:
+    enabled: true
+    configs:
+      - secretName: "api-tls"
+        hosts:
+          - "api.example.com"
+
+# Optional: environment-specific overrides
+env:
+  # Database configuration
+  database:
+    host: "postgres.example.com"
+    port: "5432"
+    name: "example_db"
+  
+  # External service endpoints
+  redis:
+    host: "redis.example.com"
+    port: "6379"
+
+# Service account configuration
+serviceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: "arn:aws:iam::123456789:role/example-role"
+
+# ConfigMap and Secret references (optional)
+configMaps:
+  - name: "app-config"
+    data:
+      config.yaml: |
+        setting1: value1
+        setting2: value2
+
+secrets:
+  - name: "app-secrets"
+    type: "Opaque"
+    data:
+      api-key: "base64-encoded-key"

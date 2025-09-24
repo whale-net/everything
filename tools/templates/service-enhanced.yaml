@@ -1,0 +1,43 @@
+{{/*
+Enhanced service template for API applications
+Only creates services for apps marked as type "api" or those with explicit service configuration
+*/}}
+{{- $domain := .Values.domain }}
+{{- range $appName, $appConfig := index .Values $domain "apps" }}
+{{- if $appConfig.enabled }}
+{{- $appContext := dict "Values" $.Values "Chart" $.Chart "Release" $.Release "appName" $appName }}
+{{- if include "common.needsService" $appContext }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "common.serviceName" $appContext }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "common.appLabels" $appContext | nindent 4 }}
+    app-type: {{ include "common.appType" $appContext }}
+  {{- if $appConfig.service.annotations }}
+  annotations:
+    {{- toYaml $appConfig.service.annotations | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $appConfig.service.type | default "ClusterIP" }}
+  {{- if $appConfig.service.sessionAffinity }}
+  sessionAffinity: {{ $appConfig.service.sessionAffinity }}
+  {{- end }}
+  selector:
+    {{- include "common.selectorLabels" $appContext | nindent 4 }}
+  ports:
+    - protocol: TCP
+      port: {{ $appConfig.port | default 8000 }}
+      targetPort: http
+      name: http
+      {{- if and (eq ($appConfig.service.type | default "ClusterIP") "NodePort") $appConfig.service.nodePort }}
+      nodePort: {{ $appConfig.service.nodePort }}
+      {{- end }}
+    {{- if $appConfig.service.extraPorts }}
+    {{- toYaml $appConfig.service.extraPorts | nindent 4 }}
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

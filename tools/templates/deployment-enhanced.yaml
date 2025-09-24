@@ -1,0 +1,179 @@
+{{/*
+Enhanced multi-app deployment template
+Supports API services, processors, and jobs with optional components
+*/}}
+{{- $domain := .Values.domain }}
+{{- range $appName, $appConfig := index .Values $domain "apps" }}
+{{- if $appConfig.enabled }}
+{{- $appContext := dict "Values" $.Values "Chart" $.Chart "Release" $.Release "appName" $appName }}
+{{- $appType := include "common.appType" $appContext }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "common.fullname" $appContext }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "common.appLabels" $appContext | nindent 4 }}
+    app-type: {{ $appType }}
+  {{- if $appConfig.annotations }}
+  annotations:
+    {{- toYaml $appConfig.annotations | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ $appConfig.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "common.selectorLabels" $appContext | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "common.appLabels" $appContext | nindent 8 }}
+        app-type: {{ $appType }}
+      annotations:
+        {{- if $.Values.global.podAnnotations }}
+        {{- toYaml $.Values.global.podAnnotations | nindent 8 }}
+        {{- end }}
+        {{- if $appConfig.podAnnotations }}
+        {{- toYaml $appConfig.podAnnotations | nindent 8 }}
+        {{- end }}
+        # Force restart on config changes
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum | default "none" }}
+    spec:
+      {{- if or $appConfig.serviceAccount $.Values.global.serviceAccount }}
+      serviceAccountName: {{ include "common.serviceAccountName" $appContext }}
+      {{- end }}
+      {{- if $appConfig.securityContext }}
+      securityContext:
+        {{- toYaml $appConfig.securityContext | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: {{ $appName }}
+        image: {{ include "common.image" $appContext }}
+        imagePullPolicy: {{ $appConfig.imagePullPolicy | default "IfNotPresent" }}
+        {{- if $appConfig.command }}
+        command:
+        {{- if kindIs "string" $appConfig.command }}
+        - {{ $appConfig.command }}
+        {{- else }}
+        {{- toYaml $appConfig.command | nindent 8 }}
+        {{- end }}
+        {{- end }}
+        {{- if or $appConfig.args (and $appConfig.command (not $appConfig.args)) }}
+        args:
+        {{- if $appConfig.args }}
+        {{- toYaml $appConfig.args | nindent 8 }}
+        {{- else }}
+        {{- include "common.appArgs" $appContext | nindent 8 }}
+        {{- end }}
+        {{- end }}
+        {{- if or (eq $appType "api") $appConfig.port $appConfig.healthPort }}
+        ports:
+        {{- if or (eq $appType "api") $appConfig.port }}
+        - name: http
+          containerPort: {{ $appConfig.port | default 8000 }}
+          protocol: TCP
+        {{- end }}
+        {{- if and (eq $appType "processor") $appConfig.healthPort }}
+        - name: health
+          containerPort: {{ $appConfig.healthPort }}
+          protocol: TCP
+        {{- end }}
+        {{- if $appConfig.extraPorts }}
+        {{- toYaml $appConfig.extraPorts | nindent 8 }}
+        {{- end }}
+        {{- end }}
+        env:
+        {{- include "common.appEnv" $appContext | nindent 8 }}
+        {{- if eq $appType "api" }}
+        {{- if $appConfig.livenessProbe }}
+        livenessProbe:
+          {{- toYaml $appConfig.livenessProbe | nindent 10 }}
+        {{- else }}
+        livenessProbe:
+          httpGet:
+            path: {{ include "common.healthPath" $appContext }}
+            port: http
+          initialDelaySeconds: {{ $appConfig.livenessProbeDelay | default 30 }}
+          periodSeconds: {{ $appConfig.livenessProbePeriod | default 10 }}
+          timeoutSeconds: {{ $appConfig.livenessProbeTimeout | default 5 }}
+          failureThreshold: {{ $appConfig.livenessProbeFailures | default 3 }}
+        {{- end }}
+        {{- if $appConfig.readinessProbe }}
+        readinessProbe:
+          {{- toYaml $appConfig.readinessProbe | nindent 10 }}
+        {{- else }}
+        readinessProbe:
+          httpGet:
+            path: {{ include "common.healthPath" $appContext }}
+            port: http
+          initialDelaySeconds: {{ $appConfig.readinessProbeDelay | default 5 }}
+          periodSeconds: {{ $appConfig.readinessProbePeriod | default 5 }}
+          timeoutSeconds: {{ $appConfig.readinessProbeTimeout | default 5 }}
+          failureThreshold: {{ $appConfig.readinessProbeFailures | default 3 }}
+        {{- end }}
+        {{- else if and (eq $appType "processor") $appConfig.healthPort }}
+        {{- if $appConfig.livenessProbe }}
+        livenessProbe:
+          {{- toYaml $appConfig.livenessProbe | nindent 10 }}
+        {{- else }}
+        livenessProbe:
+          httpGet:
+            path: {{ include "common.healthPath" $appContext }}
+            port: health
+          initialDelaySeconds: {{ $appConfig.livenessProbeDelay | default 30 }}
+          periodSeconds: {{ $appConfig.livenessProbePeriod | default 20 }}
+          timeoutSeconds: {{ $appConfig.livenessProbeTimeout | default 5 }}
+          failureThreshold: {{ $appConfig.livenessProbeFailures | default 3 }}
+        {{- end }}
+        {{- if $appConfig.readinessProbe }}
+        readinessProbe:
+          {{- toYaml $appConfig.readinessProbe | nindent 10 }}
+        {{- else }}
+        readinessProbe:
+          httpGet:
+            path: {{ include "common.healthPath" $appContext }}
+            port: health
+          initialDelaySeconds: {{ $appConfig.readinessProbeDelay | default 10 }}
+          periodSeconds: {{ $appConfig.readinessProbePeriod | default 10 }}
+          timeoutSeconds: {{ $appConfig.readinessProbeTimeout | default 5 }}
+          failureThreshold: {{ $appConfig.readinessProbeFailures | default 3 }}
+        {{- end }}
+        {{- end }}
+        {{- if include "common.resources" $appContext }}
+        resources:
+          {{- include "common.resources" $appContext | nindent 10 }}
+        {{- end }}
+        {{- if $appConfig.volumeMounts }}
+        volumeMounts:
+        {{- toYaml $appConfig.volumeMounts | nindent 8 }}
+        {{- end }}
+        {{- if $appConfig.containerSecurityContext }}
+        securityContext:
+          {{- toYaml $appConfig.containerSecurityContext | nindent 10 }}
+        {{- end }}
+      {{- if $appConfig.extraContainers }}
+      {{- toYaml $appConfig.extraContainers | nindent 6 }}
+      {{- end }}
+      {{- if $appConfig.volumes }}
+      volumes:
+      {{- toYaml $appConfig.volumes | nindent 6 }}
+      {{- end }}
+      {{- if $appConfig.nodeSelector }}
+      nodeSelector:
+        {{- toYaml $appConfig.nodeSelector | nindent 8 }}
+      {{- end }}
+      {{- if $appConfig.tolerations }}
+      tolerations:
+        {{- toYaml $appConfig.tolerations | nindent 8 }}
+      {{- end }}
+      {{- if $appConfig.affinity }}
+      affinity:
+        {{- toYaml $appConfig.affinity | nindent 8 }}
+      {{- end }}
+      {{- if $appConfig.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml $appConfig.imagePullSecrets | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}
