@@ -1,6 +1,31 @@
 """Enhanced Helm chart release system with optional components."""
 
-load("//tools:helm_chart_release.bzl", "helm_chart_release_impl", "_create_chart_yaml_content")
+def _create_chart_yaml_content(chart_name, domain, chart_version, apps, description):
+    """Generate Chart.yaml content as a string."""
+    
+    app_list = ", ".join(apps)
+    chart_description = description or "Multi-app Helm chart for {domain} domain - includes {app_list}".format(
+        domain = domain,
+        app_list = app_list
+    )
+
+    return """apiVersion: v2
+name: {chart_name}
+description: {description}
+type: application
+version: {chart_version}
+appVersion: "1.0.0"
+home: https://github.com/whale-net/everything
+sources:
+  - https://github.com/whale-net/everything
+maintainers:
+  - name: Everything Team
+    url: https://github.com/whale-net/everything
+""".format(
+        chart_name = chart_name,
+        description = chart_description,
+        chart_version = chart_version
+    )
 
 def _create_enhanced_values_yaml_content(ctx, domain, apps, overrides, features):
     """Generate enhanced values.yaml content with optional components."""
