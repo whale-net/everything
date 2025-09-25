@@ -17,6 +17,8 @@ func RenderTemplates(templateDir, outputDir string, data *ChartData) error {
 		"deployment.yaml.tmpl": "templates/deployment.yaml",
 		"service.yaml.tmpl":    "templates/service.yaml",
 		"job.yaml.tmpl":        "templates/job.yaml",
+		"pdb.yaml.tmpl":        "templates/pdb.yaml",
+		"ingress.yaml.tmpl":    "templates/ingress.yaml",
 		"configmap.yaml.tmpl":  "templates/configmap.yaml",
 		"_helpers.tpl.tmpl":    "templates/_helpers.tpl",
 		"NOTES.txt.tmpl":       "templates/NOTES.txt",

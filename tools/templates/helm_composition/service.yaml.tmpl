@@ -1,0 +1,33 @@
+{{/*
+Service template for multi-app deployments
+Generates services for apps that expose ports
+*/}}
+{{- $domain := .Values.domain }}
+{{- range $appName, $appConfig := index .Values $domain "apps" }}
+{{- if and $appConfig.enabled $appConfig.port }}
+{{- $appContext := dict "Values" $.Values "Chart" $.Chart "Release" $.Release "appName" $appName }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "multiapp.fullname" $appContext }}
+  labels:
+    {{- include "multiapp.appLabels" $appContext | nindent 4 }}
+spec:
+  type: {{ $appConfig.service.type | default "ClusterIP" }}
+  {{- if and (eq ($appConfig.service.type | default "ClusterIP") "LoadBalancer") $appConfig.service.loadBalancerIP }}
+  loadBalancerIP: {{ $appConfig.service.loadBalancerIP }}
+  {{- end }}
+  {{- if $appConfig.service.externalIPs }}
+  externalIPs:
+    {{- toYaml $appConfig.service.externalIPs | nindent 4 }}
+  {{- end }}
+  ports:
+    - port: {{ $appConfig.service.port | default $appConfig.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "multiapp.selectorLabels" $appContext | nindent 4 }}
+{{- end }}
+{{- end }}

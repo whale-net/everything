@@ -87,15 +87,16 @@ def _helm_chart_composed_impl(ctx):
         domain = ctx.attr.name.split("_")[0] if "_" in ctx.attr.name else "default"
     
     args = [
-        ctx.files.templates[0].dirname,  # template directory
-        chart_dir.path,                  # output directory  
-        ctx.attr.name,                   # chart name
-        ctx.attr.description,            # description
-        domain,                          # domain
+        "--template-dir", ctx.files.templates[0].dirname,
+        "--output-dir", chart_dir.path,
+        "--chart-name", ctx.attr.name,
+        "--description", ctx.attr.description,
+        "--domain", domain,
     ]
     
     # Add app metadata files
-    args.extend([f.path for f in app_metadata_files])
+    for f in app_metadata_files:
+        args.extend(["--app-metadata", f.path])
     
     # Add k8s artifacts if any
     if k8s_artifact_metadata_files:
@@ -110,8 +111,7 @@ def _helm_chart_composed_impl(ctx):
     
     # Add deploy weight if set
     if ctx.attr.deploy_order_weight != 0:
-        args.append("--deploy-weight")
-        args.append(str(ctx.attr.deploy_order_weight))
+        args.extend(["--deploy-order", str(ctx.attr.deploy_order_weight)])
     
     # Run Go template renderer directly - single tool, no Python!
     template_files = ctx.files.templates

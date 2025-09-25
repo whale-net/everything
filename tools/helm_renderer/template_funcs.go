@@ -37,6 +37,15 @@ func GetTemplateFuncs() template.FuncMap {
 		"hasSuffix":  strings.HasSuffix,
 		"len":        lenFunc,
 		"hasKey":     hasKeyFunc,
+		"int":        intFunc,
+		"gt":         gtFunc,
+		"lt":         ltFunc,
+		"eq":         eqFunc,
+		"ne":         neFunc,
+		"and":        andFunc,
+		"or":         orFunc,
+		"not":        notFunc,
+		"kindIs":     kindIsFunc,
 	}
 }
 
@@ -173,5 +182,118 @@ func hasKeyFunc(obj interface{}, key string) bool {
 		return exists
 	default:
 		return false
+	}
+}
+
+// intFunc converts values to integers
+func intFunc(obj interface{}) int {
+	switch v := obj.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case string:
+		var i int
+		if _, err := fmt.Sscanf(v, "%d", &i); err == nil {
+			return i
+		}
+		return 0
+	default:
+		return 0
+	}
+}
+
+// gtFunc compares if a > b
+func gtFunc(a, b interface{}) bool {
+	return compareValues(a, b) > 0
+}
+
+// ltFunc compares if a < b
+func ltFunc(a, b interface{}) bool {
+	return compareValues(a, b) < 0
+}
+
+// eqFunc compares if a == b
+func eqFunc(a, b interface{}) bool {
+	return compareValues(a, b) == 0
+}
+
+// neFunc compares if a != b
+func neFunc(a, b interface{}) bool {
+	return compareValues(a, b) != 0
+}
+
+// andFunc performs logical AND
+func andFunc(args ...interface{}) bool {
+	for _, arg := range args {
+		if !isTruthy(arg) {
+			return false
+		}
+	}
+	return true
+}
+
+// orFunc performs logical OR
+func orFunc(args ...interface{}) bool {
+	for _, arg := range args {
+		if isTruthy(arg) {
+			return true
+		}
+	}
+	return false
+}
+
+// notFunc performs logical NOT
+func notFunc(arg interface{}) bool {
+	return !isTruthy(arg)
+}
+
+// kindIsFunc checks if object is of a specific kind
+func kindIsFunc(kind string, obj interface{}) bool {
+	switch kind {
+	case "string":
+		_, ok := obj.(string)
+		return ok
+	case "map":
+		_, ok := obj.(map[string]interface{})
+		return ok
+	case "slice":
+		_, ok := obj.([]interface{})
+		return ok
+	case "int":
+		_, ok := obj.(int)
+		return ok
+	default:
+		return false
+	}
+}
+
+// Helper function to compare values
+func compareValues(a, b interface{}) int {
+	aInt := intFunc(a)
+	bInt := intFunc(b)
+	if aInt < bInt {
+		return -1
+	} else if aInt > bInt {
+		return 1
+	}
+	return 0
+}
+
+// Helper function to check truthiness
+func isTruthy(obj interface{}) bool {
+	switch v := obj.(type) {
+	case bool:
+		return v
+	case int:
+		return v != 0
+	case string:
+		return v != ""
+	case nil:
+		return false
+	default:
+		return true
 	}
 }
