@@ -90,7 +90,6 @@ k8s_artifact(
     name = "config",
     manifest = "k8s/config.yaml", 
     artifact_type = "configmap",
-    depends_on = ["migrations_job"],  # Config depends on migrations completing
     hook_weight = -5,  # Run after migrations
 )
 
