@@ -26,5 +26,3 @@ func main() {
 
 	fmt.Printf("Successfully generated Helm chart '%s' in %s\n", args.ChartName, args.OutputDir)
 }
-
-

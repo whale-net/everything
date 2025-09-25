@@ -105,7 +105,7 @@ func loadAppMetadata(data *ChartData, metadataFiles []string) error {
 		domainApps := data.Values[data.Domain].(map[string]interface{})["apps"].(map[string]interface{})
 		domainApps[app.Name] = createAppConfig(app)
 
-		fmt.Printf("Loaded app metadata: %s (Registry: %s, RepoName: %s, Version: %s)\n", 
+		fmt.Printf("Loaded app metadata: %s (Registry: %s, RepoName: %s, Version: %s)\n",
 			app.Name, app.Registry, app.RepoName, app.Version)
 	}
 
