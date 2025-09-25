@@ -15,7 +15,19 @@ build:ci --show_timestamps
 build:ci --announce_rc
 # Bandwidth-optimized caching for CI
 build:ci --guard_against_concurrent_changes
+build:ci --experimental_remote_merkle_tree_cache
+build:ci --remote_timeout=60
+build:ci --experimental_remote_cache_compression
+# More aggressive output downloading for better cache hits
+build:ci --remote_download_outputs=minimal
+# Build metadata optimizations  
+build:ci --experimental_collect_code_coverage=false
+build:ci --nolegacy_external_runfiles
+# Memory and CPU optimizations
+build:ci --host_javabase=@bazel_tools//tools/jdk:remote_jdk11
+build:ci --javabase=@bazel_tools//tools/jdk:remote_jdk11
 test:ci --cache_test_results=yes
+test:ci --test_timeout_filters=-eternal
 
 # Remote cache configuration (optional)
 # Uses try-import to conditionally load remote cache config if available
