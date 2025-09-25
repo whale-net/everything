@@ -334,6 +334,55 @@ helm_chart = helm_chart_composed([release_apps] + [k8s_artifacts])
 
 This allows you to compose multiple apps and manual Kubernetes resources into flexible deployment units.
 
+#### Template Rendering Architecture
+
+The chart composition system uses a **modern template-based architecture** that completely eliminates string concatenation in favor of proper template rendering:
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌──────────────────┐
+│ Bazel Rule      │    │ Go Template     │    │ Helm Chart       │
+│ (Starlark)      │───▶│ Renderer        │───▶│ Output           │
+│                 │    │ (Single Binary) │    │                  │
+└─────────────────┘    └─────────────────┘    └──────────────────┘
+        │                       │                       │
+        │                       │                       │
+        ▼                       ▼                       ▼
+App Metadata Files      Template Files          Chart.yaml
+K8s Artifact Files      (.tmpl files)          values.yaml
+Chart Configuration                             templates/
+```
+
+**Architecture Evolution:**
+- **Before**: 500+ lines of string concatenation in Starlark code
+- **After**: Clean template files with Go template syntax (same engine as Helm)
+
+**Key Benefits:**
+- **Single Toolchain**: Go-only solution eliminates Python dependency
+- **Native Helm Syntax**: Templates use identical syntax to standard Helm charts
+- **Template Functions**: Full support for Helm functions (`dict`, `toYaml`, `nindent`, `include`, etc.)
+- **Helm Compatibility**: Generated charts work exactly like hand-written Helm charts
+- **Maintainable**: Template files are easy to read and modify
+- **Fast**: Direct Go binary execution with efficient template rendering
+
+**Template Structure:**
+```
+tools/templates/helm_composition/
+├── Chart.yaml.tmpl        # Chart metadata template
+├── values.yaml.tmpl       # Default values template  
+├── _helpers.tpl.tmpl      # Helper template functions
+├── deployment.yaml.tmpl   # Application deployments
+├── job.yaml.tmpl          # Migration and setup jobs
+└── NOTES.txt.tmpl         # Post-install instructions
+```
+
+**Template Context:**
+Templates receive a Helm-compatible context with:
+- `.Release` - Release information (name, namespace, service)
+- `.Chart` - Chart metadata (name, version, description)
+- `.Values` - Configurable values (domain, images, service configs)
+- `.Apps` - Application metadata array from `release_app` targets
+- `.Artifacts` - Kubernetes artifacts from `k8s_artifact` targets
+
 #### Example
 
 ```starlark

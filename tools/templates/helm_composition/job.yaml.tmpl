@@ -28,13 +28,13 @@ spec:
     spec:
       containers:
       - name: {{ .Name }}
+        # DEBUG: Values type: {{ typeOf $.Values }}
+        # DEBUG: Has experience_api? {{ hasKey $.Values.images "experience_api" }}
         {{- if eq .Name "migrations_job" }}
-        {{- $firstApp := index $.Apps 0 }}
-        image: "{{ $firstApp.Registry }}/whale-net/{{ $firstApp.RepoName }}:{{ $firstApp.Version }}"
+        image: "{{ $.Values.domain }}/test:latest"
         command: ["python", "-m", "alembic", "upgrade", "head"]
         {{- else }}
-        {{- $firstApp := index $.Apps 0 }}
-        image: "{{ $firstApp.Registry }}/whale-net/{{ $firstApp.RepoName }}:{{ $firstApp.Version }}"
+        image: "{{ $.Values.domain }}/test:latest"
         command: ["echo", "Job {{ .Name }} executed"]
         {{- end }}
         env:

@@ -79,96 +79,44 @@ def _helm_chart_composed_impl(ctx):
     
     chart_dir = ctx.actions.declare_directory(ctx.label.name)
     
-    # Create a data collection script that generates JSON for the Go renderer
-    data_script = ctx.actions.declare_file(ctx.label.name + "_collect_data.py") 
-    data_file = ctx.actions.declare_file(ctx.label.name + "_data.json")
+    # Build arguments for Go renderer - no Python needed!
+    domain = ctx.attr.name.split("_")[0] if "_" in ctx.attr.name else "default"
     
-    data_script_content = """#!/usr/bin/env python3
-import json
-import os
-import sys
-
-data_file = sys.argv[1]
-
-# Chart metadata
-chart_name = \"""" + ctx.attr.name + """\"
-description = \"""" + ctx.attr.description + """\"
-domain = \"""" + (ctx.attr.name.split("_")[0] if "_" in ctx.attr.name else "default") + """\"
-deploy_order_weight = """ + str(ctx.attr.deploy_order_weight) + """
-
-# Read app metadata files
-app_metadata_files = """ + str([f.path for f in app_metadata_files]) + """
-apps = []
-
-for metadata_file in app_metadata_files:
-    if os.path.exists(metadata_file):
-        with open(metadata_file, 'r') as f:
-            try:
-                app_data = json.load(f)
-                apps.append(app_data)
-                print(f"Loaded app metadata: {app_data['name']}")
-            except json.JSONDecodeError as e:
-                print(f"Warning: Could not parse {metadata_file}: {e}")
-
-# Read k8s artifact metadata
-k8s_metadata_files = """ + str([f.path for f in k8s_artifact_metadata_files]) + """
-artifacts = []
-
-for metadata_file in k8s_metadata_files:
-    if os.path.exists(metadata_file):
-        with open(metadata_file, 'r') as f:
-            try:
-                artifact_data = json.load(f)
-                artifacts.append(artifact_data)
-                print(f"Loaded k8s artifact: {artifact_data['name']}")
-            except json.JSONDecodeError as e:
-                print(f"Warning: Could not parse {metadata_file}: {e}")
-
-# Create chart data structure for Go renderer
-chart_data = {
-    "chart_name": chart_name,
-    "description": description,
-    "domain": domain,
-    "deploy_order_weight": deploy_order_weight,
-    "apps": apps,
-    "artifacts": artifacts,
-    "chart_values": """ + str(ctx.attr.chart_values) + """
-}
-
-# Write JSON data for Go renderer
-with open(data_file, 'w') as f:
-    json.dump(chart_data, f, indent=2)
-
-print(f"Generated chart data for: {chart_name}")
-print(f"  Apps: {len(apps)}")
-print(f"  Artifacts: {len(artifacts)}")
-"""
+    args = [
+        ctx.files.templates[0].dirname,  # template directory
+        chart_dir.path,                  # output directory  
+        ctx.attr.name,                   # chart name
+        ctx.attr.description,            # description
+        domain,                          # domain
+    ]
     
-    ctx.actions.write(
-        output = data_script,
-        content = data_script_content,
-    )
+    # Add app metadata files
+    args.extend([f.path for f in app_metadata_files])
     
-    # Run data collection script
-    ctx.actions.run(
-        executable = "python3",
-        arguments = [data_script.path, data_file.path],
-        inputs = [data_script] + app_metadata_files + k8s_artifact_metadata_files,
-        outputs = [data_file],
-    )
+    # Add k8s artifacts if any
+    if k8s_artifact_metadata_files:
+        args.append("--k8s-artifacts")
+        args.append(",".join([f.path for f in k8s_artifact_metadata_files]))
     
-    # Run Go template renderer
+    # Add chart values if any
+    if ctx.attr.chart_values:
+        args.append("--chart-values")
+        chart_value_pairs = [k + "=" + v for k, v in ctx.attr.chart_values.items()]
+        args.append(",".join(chart_value_pairs))
+    
+    # Add deploy weight if set
+    if ctx.attr.deploy_order_weight != 0:
+        args.append("--deploy-weight")
+        args.append(str(ctx.attr.deploy_order_weight))
+    
+    # Run Go template renderer directly - single tool, no Python!
     template_files = ctx.files.templates
-    renderer_inputs = [data_file] + template_files
+    all_metadata_files = app_metadata_files + k8s_artifact_metadata_files + k8s_artifact_files
     
     ctx.actions.run(
         executable = ctx.executable.renderer,
-        arguments = [
-            ctx.files.templates[0].dirname,  # template directory
-            chart_dir.path,                  # output directory
-            data_file.path,                  # data file
-        ],
-        inputs = renderer_inputs,
+        arguments = args,
+        inputs = template_files + all_metadata_files,
         outputs = [chart_dir],
     )
     
