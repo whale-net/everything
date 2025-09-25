@@ -1,0 +1,66 @@
+{{/*
+Multi-app deployment template - Generated from release_apps
+*/}}
+{{- $domain := .Values.domain }}
+{{- range $appName, $appConfig := index .Values $domain "apps" }}
+{{- if $appConfig.enabled }}
+{{- $appContext := dict "Values" $.Values "Chart" $.Chart "Release" $.Release "appName" $appName }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "multiapp.fullname" $appContext }}
+  labels:
+    app: {{ $appName }}
+    chart: {{ $.Chart.Name }}
+    release: {{ $.Release.Name }}
+    heritage: {{ $.Release.Service }}
+spec:
+  replicas: {{ $appConfig.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app: {{ $appName }}
+      release: {{ $.Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $appName }}
+        release: {{ $.Release.Name }}
+    spec:
+      containers:
+      - name: {{ $appName }}
+        image: "{{ index $.Values.images $appName "repository" }}:{{ index $.Values.images $appName "tag" }}"
+        ports:
+        - containerPort: {{ $appConfig.port | default 8000 }}
+        resources:
+          {{- toYaml $appConfig.resources | nindent 10 }}
+        env:
+        - name: APP_NAME
+          value: {{ $appName }}
+        {{- if $.Values.env }}
+        {{- range $key, $value := $.Values.env }}
+        - name: {{ $key | upper }}
+          value: "{{ $value }}"
+        {{- end }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $appName }}-service
+  labels:
+    app: {{ $appName }}
+    chart: {{ $.Chart.Name }}
+    release: {{ $.Release.Name }}
+spec:
+  type: {{ $.Values.service.type }}
+  ports:
+  - port: {{ $appConfig.port | default 8000 }}
+    targetPort: {{ $appConfig.port | default 8000 }}
+    protocol: TCP
+    name: http
+  selector:
+    app: {{ $appName }}
+    release: {{ $.Release.Name }}
+{{- end }}
+{{- end }}

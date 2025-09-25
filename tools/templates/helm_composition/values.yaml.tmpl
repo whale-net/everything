@@ -1,0 +1,64 @@
+# Generated composed helm chart values
+# This chart combines release_apps with manual k8s artifacts
+
+domain: {{ .Domain }}
+
+# Image configurations for each app (from release_app metadata)
+images:
+{{- range .Apps }}
+  {{ .Name }}:
+    name: "{{ .Registry }}/whale-net/{{ .RepoName }}"
+    tag: "{{ .Version }}"
+    repository: "{{ .Registry }}/whale-net/{{ .RepoName }}"
+{{- end }}
+
+# Application configurations (from release_app metadata)
+{{ .Domain }}:
+  apps:
+{{- range .Apps }}
+    {{ .Name }}:
+      enabled: true
+      version: "{{ .Version }}"
+      replicas: 1
+      port: 8000
+      resources:
+        requests:
+          memory: "128Mi"
+          cpu: "100m"
+        limits:
+          memory: "512Mi"
+          cpu: "500m"
+{{- end }}
+
+{{- if .Artifacts }}
+# Manual Kubernetes artifacts
+artifacts:
+{{- range .Artifacts }}
+  {{ .Name }}:
+    type: {{ .Type }}
+    enabled: true
+{{- end }}
+{{- end }}
+
+{{- if .ChartValues }}
+# Chart-specific overrides
+{{- range $key, $value := .ChartValues }}
+{{ $key }}: "{{ $value }}"
+{{- end }}
+{{- end }}
+
+# Common configuration
+domain: "{{ .Domain }}"
+
+service:
+  enabled: true
+  type: ClusterIP
+
+ingress:
+  enabled: false
+  host: "localhost"
+  tls:
+    enabled: false
+
+env:
+  app_env: "dev"
