@@ -97,6 +97,7 @@ k8s_artifact(
 helm_chart_composed(
     name = "manman_core",
     description = "Core ManMan services with shared database and migrations",
+    domain = "manman",  # Explicit domain instead of extraction
     apps = [
         ":experience_api_metadata",
         ":status_api_metadata", 

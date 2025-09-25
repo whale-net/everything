@@ -93,8 +93,8 @@ func dictFunc(values ...interface{}) map[string]interface{} {
 
 // includeFunc is a placeholder for Helm's include function
 func includeFunc(name string, data interface{}) (string, error) {
-	// This is a placeholder - in real Helm this would render another template
-	return fmt.Sprintf("{{ include \"%s\" . }}", name), nil
+	// Return a comment indicating this is a placeholder - avoids nested template syntax
+	return fmt.Sprintf("# Template include placeholder for '%s'", name), nil
 }
 
 // toYamlFunc provides simple YAML-like formatting for basic objects

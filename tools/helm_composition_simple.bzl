@@ -10,7 +10,6 @@ def _k8s_artifact_impl(ctx):
         "name": ctx.attr.name,
         "type": ctx.attr.artifact_type,
         "manifest_path": manifest_file.path,
-        "depends_on": ctx.attr.depends_on,
         "hook_weight": ctx.attr.hook_weight,
         "hook_delete_policy": ctx.attr.hook_delete_policy,
     }
@@ -28,18 +27,18 @@ k8s_artifact = rule(
     attrs = {
         "manifest": attr.label(allow_single_file = [".yaml", ".yml"], mandatory = True),
         "artifact_type": attr.string(mandatory = True),
-        "depends_on": attr.string_list(default = []),
         "hook_weight": attr.int(default = -5),
         "hook_delete_policy": attr.string(default = "before-hook-creation"),
     },
 )
 
-def helm_chart_composed(name, description, apps = [], k8s_artifacts = [], pre_deploy_jobs = [], chart_values = {}, deploy_order_weight = 0):
+def helm_chart_composed(name, description, domain = None, apps = [], k8s_artifacts = [], pre_deploy_jobs = [], chart_values = {}, deploy_order_weight = 0):
     """Compose a helm chart from release_apps and manual k8s artifacts.
     
     Args:
         name: Chart name
-        description: Chart description  
+        description: Chart description
+        domain: Explicit domain name (if not provided, extracted from chart name)
         apps: List of release_app targets
         k8s_artifacts: List of k8s_artifact targets
         pre_deploy_jobs: List of job names that should run before deployment
@@ -50,6 +49,7 @@ def helm_chart_composed(name, description, apps = [], k8s_artifacts = [], pre_de
     _helm_chart_composed(
         name = name,
         description = description,
+        domain = domain,
         apps = apps,
         k8s_artifacts = k8s_artifacts,
         pre_deploy_jobs = pre_deploy_jobs,
@@ -80,7 +80,11 @@ def _helm_chart_composed_impl(ctx):
     chart_dir = ctx.actions.declare_directory(ctx.label.name)
     
     # Build arguments for Go renderer - no Python needed!
-    domain = ctx.attr.name.split("_")[0] if "_" in ctx.attr.name else "default"
+    # Use explicit domain if provided, otherwise extract from chart name
+    if ctx.attr.domain:
+        domain = ctx.attr.domain
+    else:
+        domain = ctx.attr.name.split("_")[0] if "_" in ctx.attr.name else "default"
     
     args = [
         ctx.files.templates[0].dirname,  # template directory
@@ -126,6 +130,7 @@ _helm_chart_composed = rule(
     implementation = _helm_chart_composed_impl,
     attrs = {
         "description": attr.string(mandatory = True),
+        "domain": attr.string(),
         "apps": attr.label_list(providers = [DefaultInfo]),
         "k8s_artifacts": attr.label_list(providers = [DefaultInfo]),
         "pre_deploy_jobs": attr.string_list(default = []),
