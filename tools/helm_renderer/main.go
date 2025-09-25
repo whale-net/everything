@@ -1,6 +1,5 @@
 // Helm template renderer for Bazel-generated charts
 // Uses Go's text/template package (same engine as Helm)
-package main
 
 import (
 	"encoding/json"
