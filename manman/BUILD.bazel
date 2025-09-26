@@ -1,5 +1,6 @@
 load("@rules_python//python:defs.bzl", "py_library")
 load("//tools:release.bzl", "release_app")
+load("//tools:helm_composition_simple.bzl", "helm_chart_composed", "k8s_artifact")
 
 # Re-export all manman modules for convenience
 py_library(
@@ -74,4 +75,61 @@ filegroup(
     name = "design_docs",
     srcs = glob(["design/**/*"]),
     visibility = ["//visibility:public"],
+)
+
+# Manual Kubernetes artifacts with dependency ordering
+k8s_artifact(
+    name = "migrations_job",
+    manifest = "k8s/migrations-job.yaml",
+    artifact_type = "job",
+    hook_weight = -10,  # Run first - highest priority for migrations
+    hook_delete_policy = "before-hook-creation",
+)
+
+k8s_artifact(
+    name = "config",
+    manifest = "k8s/config.yaml", 
+    artifact_type = "configmap",
+    hook_weight = -5,  # Run after migrations
+)
+
+# Composed helm charts - demonstrating flexible deployment patterns
+# Production-ready ManMan services chart composed from release apps
+helm_chart_composed(
+    name = "manman_services",
+    description = "Production ManMan services - Experience API, Status API, Worker DAL API, and Status Processor",
+    domain = "manman",  # Explicit domain instead of extraction
+    apps = [
+        ":experience_api_metadata",
+        ":status_api_metadata", 
+        ":worker_dal_api_metadata",
+        ":status_processor_metadata",
+        ":worker_metadata"  # Include worker service as well
+    ],
+    k8s_artifacts = [
+        ":migrations_job",
+        ":config"
+    ],
+    pre_deploy_jobs = ["migrations_job"],
+    chart_values = {
+        # Production configuration
+        "ingress.enabled": "true",
+        "ingress.ingressClassName": "nginx",
+        "ingress.annotations.nginx\\.ingress\\.kubernetes\\.io/rewrite-target": "/$2",
+        "ingress.annotations.cert-manager\\.io/cluster-issuer": "letsencrypt-prod",
+        
+        # Service configuration
+        "service.type": "ClusterIP", 
+        
+        # Database
+        "postgresql.enabled": "true",
+        "migrations.image": "ghcr.io/whale-net/manman-experience_api",
+        
+        # Resource limits for production
+        "resources.requests.memory": "256Mi",
+        "resources.requests.cpu": "200m",
+        "resources.limits.memory": "1Gi",
+        "resources.limits.cpu": "1000m"
+    },
+    deploy_order_weight = -10,  # Deploy first - core infrastructure
 )

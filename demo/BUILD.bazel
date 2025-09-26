@@ -1,20 +1,7 @@
 # Demo applications namespace
-
-load("//tools:helm_chart_release.bzl", "helm_chart_release_macro")
-
-# Automated helm chart generation for simple deployments
-# For production deployments with complex configuration, 
-# consider manual charts like those in manman/charts/manman-host/
-helm_chart_release_macro(
-    domain = "demo",
-    charts = {
-        "demo_chart": {
-            "description": "Demo applications showcase chart",
-            "apps": ["hello_python", "hello_go"]
-        },
-        "hello_chart": {
-            "description": "Single hello world application",
-            "apps": ["hello_python"]
-        }
-    }
-)
+#
+# Individual release_app definitions for each demo app are in their respective
+# directories (hello_python/BUILD.bazel, hello_go/BUILD.bazel, etc.)
+#
+# For complex multi-app deployments, use helm_chart_composed from 
+# helm_composition_simple.bzl like the manman domain does.

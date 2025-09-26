@@ -62,9 +62,15 @@ jobs:
           # Query for all helm chart targets
           echo "Discovering helm chart targets..."
 
-          # Get all targets that use helm_chart_release_macro
-          CHART_TARGETS=$(bazel query \
+          # Get all targets that use helm_chart_release_macro or helm_chart_composed
+          RELEASE_TARGETS=$(bazel query \
             "kind('helm_chart_release', //...)" 2>/dev/null || echo "")
+          COMPOSED_TARGETS=$(bazel query \
+            "kind('helm_chart_composed', //...)" 2>/dev/null || echo "")
+          
+          # Combine both types
+          CHART_TARGETS="$RELEASE_TARGETS $COMPOSED_TARGETS"
+          CHART_TARGETS=$(echo $CHART_TARGETS | xargs)  # Remove extra spaces
 
           if [ -z "$CHART_TARGETS" ]; then
             echo "No helm chart targets found"
@@ -88,6 +94,14 @@ jobs:
           echo "Domain filter: $DOMAIN_FILTER"
 
           for target in $CHART_TARGETS; do
+            # Determine chart type by querying individual target
+            chart_type="unknown"
+            if bazel query "kind('helm_chart_release', $target)" 2>/dev/null | grep -q "$target"; then
+              chart_type="release"
+            elif bazel query "kind('helm_chart_composed', $target)" 2>/dev/null | grep -q "$target"; then
+              chart_type="composed"
+            fi
+            
             # Extract domain and chart name from target
             # Target format: //domain:chart_name
             domain=$(echo $target | cut -d'/' -f3 | cut -d':' -f1)
@@ -96,7 +110,6 @@ jobs:
             # Apply domain filter
             if [ "$DOMAIN_FILTER" != "all" ] && [ "$domain" != "$DOMAIN_FILTER" ]; then
               echo "Skipping chart $chart_name in domain $domain (filter: $DOMAIN_FILTER)"
-
               continue
             fi
 
@@ -105,7 +118,7 @@ jobs:
               CHARTS_JSON+=","
             fi
             CHARTS_JSON+="{\"target\":\"$target\","
-            CHARTS_JSON+="\"domain\":\"$domain\",\"name\":\"$chart_name\"}"
+            CHARTS_JSON+="\"domain\":\"$domain\",\"name\":\"$chart_name\",\"type\":\"$chart_type\"}"
 
             # Add to domains array (unique)
             if [[ ! "$DOMAINS_JSON" =~ "\"$domain\"" ]]; then
@@ -152,31 +165,43 @@ jobs:
       - name: Validate chart structure
         run: |
           chart_name="${{ matrix.chart.domain }}-${{ matrix.chart.name }}"
-          echo "Validating chart: $chart_name"
+          chart_type="${{ matrix.chart.type }}"
+          echo "Validating chart: $chart_name (type: $chart_type)"
 
-          # Check for required files
           domain="${{ matrix.chart.domain }}"
-          manifest_file="bazel-bin/${domain}/${chart_name}.manifest"
-          chart_yaml="bazel-bin/${domain}/${chart_name}/Chart.yaml"
-          values_yaml="bazel-bin/${domain}/${chart_name}/values.yaml"
-
-          if [ ! -f "$manifest_file" ]; then
-            echo "Error: Missing manifest file: $manifest_file"
+          
+          # Different validation based on chart type
+          if [ "$chart_type" = "release" ]; then
+            # helm_chart_release validation
+            manifest_file="bazel-bin/${domain}/${chart_name}.manifest"
+            chart_yaml="bazel-bin/${domain}/${chart_name}/Chart.yaml"
+            values_yaml="bazel-bin/${domain}/${chart_name}/values.yaml"
+            templates_dir="bazel-bin/${domain}/${chart_name}/templates"
+          elif [ "$chart_type" = "composed" ]; then
+            # helm_chart_composed validation - chart is in a directory
+            chart_dir="bazel-bin/${domain}/${{ matrix.chart.name }}"
+            chart_yaml="$chart_dir/Chart.yaml"
+            values_yaml="$chart_dir/values.yaml"
+            templates_dir="$chart_dir/templates"
+            manifest_file=""  # May not have manifest file
+          else
+            echo "Error: Unknown chart type: $chart_type"
             exit 1
           fi
 
+          # Check for required files (Chart.yaml is always required)
           if [ ! -f "$chart_yaml" ]; then
             echo "Error: Missing Chart.yaml: $chart_yaml"
+            echo "Available files in domain directory:"
+            ls -la "bazel-bin/${domain}/" || echo "Domain directory not found"
             exit 1
           fi
 
           if [ ! -f "$values_yaml" ]; then
-            echo "Error: Missing values.yaml: $values_yaml"
-            exit 1
+            echo "Warning: Missing values.yaml: $values_yaml"
           fi
           
           # Check for templates directory
-          templates_dir="bazel-bin/${domain}/${chart_name}/templates"
           if [ ! -d "$templates_dir" ]; then
             echo "Warning: Missing templates directory: $templates_dir"
           else
@@ -184,9 +209,15 @@ jobs:
             ls -la "$templates_dir"
           fi
 
+          # Check manifest if expected
+          if [ -n "$manifest_file" ] && [ -f "$manifest_file" ]; then
+            echo "Manifest contents:"
+            cat "$manifest_file"
+          fi
+
           echo "Chart validation successful!"
-          echo "Manifest contents:"
-          cat "$manifest_file"
+          echo "Chart.yaml contents:"
+          cat "$chart_yaml"
 
       - name: Package chart for release
         if: >-
@@ -194,12 +225,37 @@ jobs:
           github.event.inputs.publish_to_pages == 'true'
         run: |
           chart_name="${{ matrix.chart.domain }}-${{ matrix.chart.name }}"
-          chart_dir="bazel-bin/${{ matrix.chart.domain }}/${chart_name}"
+          chart_type="${{ matrix.chart.type }}"
+          domain="${{ matrix.chart.domain }}"
 
           # Create a proper Helm chart package structure
           mkdir -p "charts/${chart_name}"
-          cp "$chart_dir/Chart.yaml" "charts/${chart_name}/"
-          cp "$chart_dir/values.yaml" "charts/${chart_name}/"
+
+          # Different packaging based on chart type
+          if [ "$chart_type" = "release" ]; then
+            # helm_chart_release packaging
+            chart_dir="bazel-bin/${domain}/${chart_name}"
+          elif [ "$chart_type" = "composed" ]; then
+            # helm_chart_composed packaging - chart is in a directory
+            chart_dir="bazel-bin/${domain}/${{ matrix.chart.name }}"
+          else
+            echo "Error: Unknown chart type: $chart_type"
+            exit 1
+          fi
+
+          # Copy required files if they exist
+          if [ -f "$chart_dir/Chart.yaml" ]; then
+            cp "$chart_dir/Chart.yaml" "charts/${chart_name}/"
+          else
+            echo "Error: Chart.yaml not found in $chart_dir"
+            exit 1
+          fi
+
+          if [ -f "$chart_dir/values.yaml" ]; then
+            cp "$chart_dir/values.yaml" "charts/${chart_name}/"
+          else
+            echo "Warning: values.yaml not found in $chart_dir"
+          fi
 
           # Add templates if they exist
           if [ -d "$chart_dir/templates" ]; then

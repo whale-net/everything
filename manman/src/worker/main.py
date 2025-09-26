@@ -130,3 +130,7 @@ def localdev_send_queue(key: int):
     )
     message.publish(exchange="server", routing_key=str(key))
     return
+
+
+if __name__ == "__main__":
+    app()

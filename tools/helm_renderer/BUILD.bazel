@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_binary")
+
+# Helm template renderer - Go binary that renders Helm templates from JSON data
+go_binary(
+    name = "helm_renderer",
+    srcs = [
+        "main.go",
+        "types.go", 
+        "template_funcs.go",
+        "data_loader.go",
+        "renderer.go",
+        "args.go",
+    ],
+    visibility = ["//visibility:public"],
+)

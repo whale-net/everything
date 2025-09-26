@@ -50,7 +50,7 @@ oci.pull(
         "linux/arm64/v8",
     ],
 )
-use_repo(oci, "distroless_base", "distroless_base_linux_amd64", "distroless_python", "distroless_python_linux_amd64", "python_base", "python_base_linux_amd64")
+use_repo(oci, "distroless_base", "distroless_base_linux_amd64", "distroless_base_linux_arm64_v8", "distroless_python", "distroless_python_linux_amd64", "distroless_python_linux_arm64_v8", "python_base", "python_base_linux_amd64", "python_base_linux_arm64_v8")
 
 # Use rules_python with platform-specific requirements for proper compiled dependency support
 pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
@@ -58,35 +58,40 @@ pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
 # Configure different pip hubs for different platforms to ensure proper isolation
 # This is critical for compiled dependencies like pydantic-core
 pip.parse(
+    experimental_index_url = "https://pypi.org/simple",
+    experimental_target_platforms = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
     hub_name = "pip_deps_linux_amd64",
     python_version = "3.11",
     requirements_lock = "//:requirements.linux.amd64.lock.txt",
-    experimental_target_platforms = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
-    experimental_index_url = "https://pypi.org/simple",
 )
-
 pip.parse(
-    hub_name = "pip_deps_linux_arm64", 
+    experimental_index_url = "https://pypi.org/simple",
+    experimental_target_platforms = [
+        "@platforms//os:linux",
+        "@platforms//cpu:arm64",
+    ],
+    hub_name = "pip_deps_linux_arm64",
     python_version = "3.11",
     requirements_lock = "//:requirements.linux.arm64.lock.txt",
-    experimental_target_platforms = ["@platforms//os:linux", "@platforms//cpu:arm64"],
-    experimental_index_url = "https://pypi.org/simple",
 )
-
 pip.parse(
+    experimental_target_platforms = [
+        "@platforms//os:macos",
+        "@platforms//cpu:arm64",
+    ],
     hub_name = "pip_deps_macos_arm64",
-    python_version = "3.11", 
+    python_version = "3.11",
     requirements_lock = "//:requirements.lock.txt",  # Use the main requirements for macOS
-    experimental_target_platforms = ["@platforms//os:macos", "@platforms//cpu:arm64"],
 )
-
 pip.parse(
     hub_name = "pip_deps_dev",
     python_version = "3.11",
-    requirements_lock = "//:requirements.lock.txt", 
+    requirements_lock = "//:requirements.lock.txt",
 )
-
-use_repo(pip, "pip_deps_linux_amd64", "pip_deps_linux_arm64", "pip_deps_macos_arm64", "pip_deps_dev")
+use_repo(pip, "pip_deps_dev", "pip_deps_linux_amd64", "pip_deps_linux_arm64", "pip_deps_macos_arm64")
 
 # Go setup
 

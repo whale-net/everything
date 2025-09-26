@@ -565,3 +565,7 @@ def _create_migration(engine: sqlalchemy.Engine, message: Optional[str] = None):
     # with engine.begin() as conn:
     # config.attributes["connection"] = conn
     alembic.command.revision(config, message=message, autogenerate=True)
+
+
+if __name__ == "__main__":
+    app()

@@ -324,6 +324,117 @@ func TestMain(t *testing.T) {
 - Python: Create under `libs/` with appropriate `py_library` targets
 - Go: Create under `libs/` with appropriate `go_library` targets
 
+### Helm Chart Composition
+
+This monorepo provides a **composable helm chart system** that follows this pattern:
+
+```
+helm_chart = helm_chart_composed([release_apps] + [k8s_artifacts])
+```
+
+This allows you to compose multiple apps and manual Kubernetes resources into flexible deployment units.
+
+#### Template Rendering Architecture
+
+The chart composition system uses a **modern template-based architecture** that completely eliminates string concatenation in favor of proper template rendering:
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌──────────────────┐
+│ Bazel Rule      │    │ Go Template     │    │ Helm Chart       │
+│ (Starlark)      │───▶│ Renderer        │───▶│ Output           │
+│                 │    │ (Single Binary) │    │                  │
+└─────────────────┘    └─────────────────┘    └──────────────────┘
+        │                       │                       │
+        │                       │                       │
+        ▼                       ▼                       ▼
+App Metadata Files      Template Files          Chart.yaml
+K8s Artifact Files      (.tmpl files)          values.yaml
+Chart Configuration                             templates/
+```
+
+**Architecture Evolution:**
+- **Before**: 500+ lines of string concatenation in Starlark code
+- **After**: Clean template files with Go template syntax (same engine as Helm)
+
+**Key Benefits:**
+- **Single Toolchain**: Go-only solution eliminates Python dependency
+- **Native Helm Syntax**: Templates use identical syntax to standard Helm charts
+- **Template Functions**: Full support for Helm functions (`dict`, `toYaml`, `nindent`, `include`, etc.)
+- **Helm Compatibility**: Generated charts work exactly like hand-written Helm charts
+- **Maintainable**: Template files are easy to read and modify
+- **Fast**: Direct Go binary execution with efficient template rendering
+
+**Template Structure:**
+```
+tools/templates/helm_composition/
+├── Chart.yaml.tmpl        # Chart metadata template
+├── values.yaml.tmpl       # Default values template  
+├── _helpers.tpl.tmpl      # Helper template functions
+├── deployment.yaml.tmpl   # Application deployments
+├── job.yaml.tmpl          # Migration and setup jobs
+└── NOTES.txt.tmpl         # Post-install instructions
+```
+
+**Template Context:**
+Templates receive a Helm-compatible context with:
+- `.Release` - Release information (name, namespace, service)
+- `.Chart` - Chart metadata (name, version, description)
+- `.Values` - Configurable values (domain, images, service configs)
+- `.Apps` - Application metadata array from `release_app` targets
+- `.Artifacts` - Kubernetes artifacts from `k8s_artifact` targets
+
+#### Example
+
+```starlark
+load("//tools:helm_composition_simple.bzl", "helm_chart_composed", "k8s_artifact")
+
+# Define manual Kubernetes artifacts
+k8s_artifact(
+    name = "migrations_job",
+    manifest = "k8s/migrations-job.yaml",
+    artifact_type = "job",
+)
+
+# Compose a chart from apps and artifacts
+helm_chart_composed(
+    name = "myapp_core",
+    description = "Core services with migrations",
+    apps = [
+        ":api_metadata",
+        ":worker_metadata"
+    ],
+    k8s_artifacts = [
+        ":migrations_job"
+    ],
+    pre_deploy_jobs = ["migrations_job"],
+    chart_values = {
+        "postgresql.enabled": "true"
+    }
+)
+
+# Separate chart for independent scaling
+helm_chart_composed(
+    name = "myapp_workers",
+    description = "Scalable worker cluster",
+    apps = [":background_worker_metadata"]
+)
+```
+
+#### Building Charts
+
+```bash
+# Build composed charts
+bazel build //myapp:myapp_core
+
+# Charts are generated in bazel-bin/
+cp -r bazel-bin/myapp/myapp_core ./helm-charts/
+
+# Deploy with helm
+helm install myapp-core ./helm-charts/myapp_core
+```
+
+This approach lets you create different deployment patterns (core services, workers, etc.) while mixing automated `release_app` targets with hand-crafted Kubernetes YAML when needed.
+
 ## 🧪 Test Utilities
 
 The repository uses Bazel's built-in testing capabilities. All tests can be run with:

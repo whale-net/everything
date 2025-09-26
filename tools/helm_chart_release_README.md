@@ -1,6 +1,15 @@
 # Helm Chart Release System
 
-This document provides comprehensive documentation for the Helm chart release system built on top of Bazel and integrated with the existing release_app infrastructure.
+⚠️ **DEPRECATED**: This system has been deprecated in favor of the simpler `helm_chart_composed` pattern.
+
+For new deployments, use `helm_chart_composed` from `//tools:helm_composition_simple.bzl` 
+which provides better integration with Kubernetes jobs and eliminates cross-app dependencies.
+
+See `manman/BUILD.bazel` for examples of the current recommended pattern.
+
+---
+
+This document provides comprehensive documentation for the **deprecated** Helm chart release system built on top of Bazel and integrated with the existing release_app infrastructure.
 
 ## Overview
 
