@@ -95,6 +95,22 @@ class TestMultiplatformConfiguration(unittest.TestCase):
             self.assertIn("release_app", content, f"Multiplatform build not configured for {app} (missing release_app)")
             # Also verify that the release_app has the required language parameter
             self.assertIn("language =", content, f"Multiplatform build not properly configured for {app} (missing language)")
+
+    def test_multiplatform_py_library_macro_exists(self):
+        """Test that multiplatform_py_library macro is available."""
+        python_binary_bzl = self.workspace_root / "tools" / "python_binary.bzl"
+        self.assertTrue(python_binary_bzl.exists(), "python_binary.bzl not found")
+        
+        with open(python_binary_bzl, 'r') as f:
+            content = f.read()
+        
+        # Check for multiplatform_py_library macro
+        self.assertIn("def multiplatform_py_library(", content, "multiplatform_py_library macro not found")
+        self.assertIn("def multiplatform_py_binary(", content, "multiplatform_py_binary macro not found")
+        
+        # Check that the binary macro supports platform-specific library variants
+        self.assertIn("_linux_amd64", content, "Platform-specific library support not found")
+        self.assertIn("_linux_arm64", content, "Platform-specific library support not found")
     
     def test_experimental_features_enabled(self):
         """Test that experimental features are properly configured."""
