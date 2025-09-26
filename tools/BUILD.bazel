@@ -33,6 +33,19 @@ alias(
     visibility = ["//visibility:public"],
 )
 
+# Tool to create Python virtual environment for local development
+# Simple Python wrapper around shell script for better Bazel integration
+py_binary(
+    name = "create_venv",
+    srcs = ["create_venv_wrapper.py"],
+    main = "create_venv_wrapper.py",
+    data = [
+        "create_venv.sh",
+        "//:requirements.lock.txt",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 # Release metadata and OCI images for the release tool
 release_app(
     name = "release",
