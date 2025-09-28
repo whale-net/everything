@@ -1,0 +1,11 @@
+{{/*
+Apps deployment template - uses whale-net-library helpers
+*/}}
+{{- range $appName, $appConfig := .Values.apps }}
+{{- if $appConfig.enabled | default true }}
+{{- include "whale-net.app.deployment" (merge (dict "appName" $appName) $appConfig $) }}
+---
+{{- include "whale-net.app.service" (merge (dict "appName" $appName) $appConfig $) }}
+---
+{{- end }}
+{{- end }}

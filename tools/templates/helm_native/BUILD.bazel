@@ -1,0 +1,11 @@
+filegroup(
+    name = "helm_native_templates",
+    srcs = [
+        "Chart.yaml.tmpl",
+        "apps.yaml.tmpl",
+        "jobs.yaml.tmpl",
+        "ingress.yaml.tmpl",
+        "NOTES.txt.tmpl",
+    ],
+    visibility = ["//visibility:public"],
+)

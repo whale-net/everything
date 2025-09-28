@@ -1,0 +1,7 @@
+{{/*
+Jobs template - handles migrations and other pre-install jobs
+*/}}
+{{- range $jobConfig := .Values.jobs }}
+{{- include "whale-net.job" (merge $jobConfig $) }}
+---
+{{- end }}

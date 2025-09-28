@@ -1,0 +1,23 @@
+apiVersion: v2
+name: {{.ChartName}}
+description: {{.Description}}
+type: application
+version: {{.Version}}
+appVersion: "latest"
+keywords:
+  - {{.Domain}}
+  - microservices
+  - whale-net
+home: https://github.com/whale-net/everything
+sources:
+  - https://github.com/whale-net/everything
+maintainers:
+  - name: whale-net
+    url: https://github.com/whale-net/everything
+dependencies:
+- name: whale-net-library
+  version: "1.0.0"
+  repository: "file://../whale-net-library"
+annotations:
+  "whale-net.io/domain": "{{.Domain}}"
+  "whale-net.io/generated-by": "helm_chart_native.bzl"

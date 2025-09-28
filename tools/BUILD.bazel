@@ -22,6 +22,15 @@ multiplatform_py_binary(
     visibility = ["//visibility:public"],
 )
 
+# Values generator for helm_chart_native (replaces complex Go renderer)
+multiplatform_py_binary(
+    name = "values_generator",
+    srcs = ["values_generator.py"],
+    main = "values_generator.py",
+    requirements = [],  # No external requirements
+    visibility = ["//visibility:public"],
+)
+
 load(":platforms.bzl", "define_platforms")
 
 define_platforms()

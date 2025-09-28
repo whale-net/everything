@@ -1,0 +1,15 @@
+apiVersion: v2
+name: whale-net-library
+description: Shared library chart for whale-net applications
+type: library
+version: 1.0.0
+keywords:
+  - library
+  - microservices
+  - whale-net
+home: https://github.com/whale-net/everything
+sources:
+  - https://github.com/whale-net/everything
+maintainers:
+  - name: whale-net
+    url: https://github.com/whale-net/everything

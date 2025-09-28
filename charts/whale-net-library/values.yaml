@@ -1,0 +1,76 @@
+# Default values for whale-net-library
+# This is a library chart - these values are examples/documentation
+
+# Global settings applied to all apps
+global:
+  env: dev
+  imageRegistry: ghcr.io/whale-net
+  imagePullSecrets: []
+
+# Example app configuration structure
+# apps:
+#   api:
+#     enabled: true
+#     replicas: 1
+#     image:
+#       repository: ghcr.io/whale-net/api
+#       tag: latest
+#       pullPolicy: IfNotPresent
+#     service:
+#       enabled: true
+#       type: ClusterIP
+#       port: 8000
+#       annotations: {}
+#     healthcheck:
+#       enabled: true
+#       path: /health
+#       initialDelaySeconds: 30
+#       periodSeconds: 10
+#     resources:
+#       requests:
+#         memory: 128Mi
+#         cpu: 100m
+#       limits:
+#         memory: 512Mi
+#         cpu: 500m
+#     env:
+#       LOG_LEVEL: info
+#     envFrom: []
+#     nodeSelector: {}
+#     tolerations: []
+#     affinity: {}
+#     autoscaling:
+#       enabled: false
+#       minReplicas: 1
+#       maxReplicas: 10
+#       targetCPUUtilizationPercentage: 80
+
+# Common ingress configuration
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts: []
+    # - host: api.example.com
+    #   paths:
+    #     - path: /
+    #       pathType: Prefix
+  tls: []
+    # - secretName: api-tls
+    #   hosts:
+    #     - api.example.com
+
+# Jobs configuration (migrations, etc.)
+jobs: []
+  # - name: migrations
+  #   image:
+  #     repository: ghcr.io/whale-net/api
+  #     tag: latest
+  #   command: ["python", "migrate.py"]
+  #   hookType: pre-install,pre-upgrade
+  #   hookWeight: -10
+  #   hookDeletePolicy: before-hook-creation
+  #   ttlSecondsAfterFinished: 100
+  #   backoffLimit: 3
