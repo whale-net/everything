@@ -1,0 +1,20 @@
+{{- if and .PDBEnabled (ne .Type "job") }}
+{{- /* PodDisruptionBudget for long-running apps (not jobs) */ -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Name }}-{{ .Environment }}-pdb
+  namespace: {{ .Namespace }}
+  labels:
+    app: {{ .Name }}-{{ .Environment }}
+    component: {{ .Type }}
+spec:
+  {{- if .PDBMinAvailable }}
+  minAvailable: {{ .PDBMinAvailable }}
+  {{- else }}
+  maxUnavailable: {{ .PDBMaxUnavailable | default 1 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ .Name }}-{{ .Environment }}
+{{- end }}

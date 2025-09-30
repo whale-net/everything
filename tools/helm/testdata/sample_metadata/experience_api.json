@@ -1,0 +1,12 @@
+{
+  "name": "experience-api",
+  "version": "1.0.0",
+  "binary_target": "//demo/hello_fastapi:hello_fastapi",
+  "image_target": "hello_fastapi_image",
+  "description": "External facing API for user experiences",
+  "language": "python",
+  "registry": "ghcr.io",
+  "repo_name": "demo-experience-api",
+  "domain": "demo",
+  "app_type": "external-api"
+}

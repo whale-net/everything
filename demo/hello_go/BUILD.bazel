@@ -22,4 +22,5 @@ release_app(
     language = "go",
     domain = "demo",
     description = "Go hello world application with static binaries",
+    app_type = "worker",
 )

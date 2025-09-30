@@ -1,0 +1,88 @@
+{{- $app := . -}}
+{{- if or (eq .Type "external-api") (eq .Type "internal-api") (eq .Type "worker") }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Name }}-{{ .Environment }}
+  namespace: {{ .Namespace }}
+  labels:
+    app: {{ .Name }}-{{ .Environment }}
+    component: {{ .Type }}
+  annotations:
+    # Ensure this deploys after migrations complete
+    "argocd.argoproj.io/sync-wave": "0"
+spec:
+  replicas: {{ .Replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Name }}-{{ .Environment }}
+  template:
+    metadata:
+      namespace: {{ .Namespace }}
+      labels:
+        app: {{ .Name }}-{{ .Environment }}
+        component: {{ .Type }}
+    spec:
+      containers:
+        - name: {{ .Name }}
+          image: "{{ .Image }}:{{ .ImageTag }}"
+          resources:
+            requests:
+              cpu: {{ .Resources.RequestsCPU }}
+              memory: {{ .Resources.RequestsMemory }}
+            limits:
+              cpu: {{ .Resources.LimitsCPU }}
+              memory: {{ .Resources.LimitsMemory }}
+          {{- if or (eq .Type "external-api") (eq .Type "internal-api") }}
+          ports:
+            - containerPort: {{ .Port }}
+              name: http
+          {{- end }}
+          {{- if .Command }}
+          args:
+            {{- range .Command }}
+            - {{ . }}
+            {{- end }}
+          {{- end }}
+          {{- if and .HealthCheck (or (eq .Type "external-api") (eq .Type "internal-api")) }}
+          livenessProbe:
+            httpGet:
+              path: {{ .HealthCheck.Path }}
+              port: {{ .Port }}
+            initialDelaySeconds: {{ .HealthCheck.InitialDelaySeconds }}
+            periodSeconds: {{ .HealthCheck.PeriodSeconds }}
+            timeoutSeconds: {{ .HealthCheck.TimeoutSeconds }}
+            failureThreshold: {{ .HealthCheck.FailureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .HealthCheck.Path }}
+              port: {{ .Port }}
+            initialDelaySeconds: {{ .HealthCheck.InitialDelaySeconds }}
+            periodSeconds: {{ .HealthCheck.PeriodSeconds }}
+            timeoutSeconds: {{ .HealthCheck.TimeoutSeconds }}
+            failureThreshold: {{ .HealthCheck.FailureThreshold }}
+          {{- else if and .HealthCheck (eq .Type "worker") }}
+          {{- /* Workers may have health endpoints but on a different port */ -}}
+          livenessProbe:
+            httpGet:
+              path: {{ .HealthCheck.Path }}
+              port: {{ default 8000 .HealthCheck.Port }}
+            initialDelaySeconds: {{ .HealthCheck.InitialDelaySeconds }}
+            periodSeconds: {{ default 20 .HealthCheck.PeriodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .HealthCheck.Path }}
+              port: {{ default 8000 .HealthCheck.Port }}
+            initialDelaySeconds: {{ .HealthCheck.InitialDelaySeconds }}
+            periodSeconds: {{ .HealthCheck.PeriodSeconds }}
+            timeoutSeconds: {{ .HealthCheck.TimeoutSeconds }}
+            failureThreshold: {{ .HealthCheck.FailureThreshold }}
+          {{- end }}
+          {{- if .Env }}
+          env:
+            {{- range $key, $value := .Env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{- end }}
+{{- end }}

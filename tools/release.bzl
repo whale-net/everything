@@ -16,6 +16,7 @@ def _app_metadata_impl(ctx):
         "registry": ctx.attr.registry,
         "repo_name": ctx.attr.repo_name,
         "domain": ctx.attr.domain,
+        "app_type": ctx.attr.app_type,  # Add app_type to metadata
     }
     
     output = ctx.actions.declare_file(ctx.label.name + "_metadata.json")
@@ -38,10 +39,11 @@ app_metadata = rule(
         "registry": attr.string(default = "ghcr.io"),
         "repo_name": attr.string(mandatory = True),
         "domain": attr.string(mandatory = True),
+        "app_type": attr.string(default = ""),  # Optional, will be inferred if not provided
     },
 )
 
-def release_app(name, binary_target = None, binary_amd64 = None, binary_arm64 = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", custom_repo_name = None):
+def release_app(name, binary_target = None, binary_amd64 = None, binary_arm64 = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", custom_repo_name = None, app_type = ""):
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
@@ -59,6 +61,8 @@ def release_app(name, binary_target = None, binary_amd64 = None, binary_arm64 = 
         version: Default version (can be overridden at release time)
         registry: Container registry (defaults to ghcr.io)
         custom_repo_name: Custom repository name (defaults to name)
+        app_type: Application type for Helm chart generation (external-api, internal-api, worker, job).
+                  If empty, will be inferred from app name by the Helm composer tool.
     """
     if language not in ["python", "go"]:
         fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
@@ -130,6 +134,7 @@ def release_app(name, binary_target = None, binary_amd64 = None, binary_arm64 = 
         registry = registry,
         repo_name = image_name,  # Use domain-app format
         domain = domain,
+        app_type = app_type,  # Pass through app_type for Helm chart generation
         tags = ["release-metadata"],  # No manual tag - metadata should be easily discoverable
         visibility = ["//visibility:public"],
     )

@@ -36,4 +36,5 @@ release_app(
     language = "python",
     domain = "demo",
     description = "FastAPI hello world application with uvicorn",
+    app_type = "external-api",
 )

@@ -1,0 +1,44 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+# Go library for Helm chart composition
+go_library(
+    name = "helm_lib",
+    srcs = [
+        "types.go",
+    ],
+    importpath = "github.com/whale-net/everything/tools/helm",
+    visibility = ["//visibility:public"],
+)
+
+# Go binary for Helm chart composer (to be implemented in Milestone 2)
+# Placeholder - will be implemented with composer.go in next milestone
+# go_binary(
+#     name = "helm_composer",
+#     embed = [":helm_lib"],
+#     visibility = ["//visibility:public"],
+# )
+
+# Unit tests for type system
+go_test(
+    name = "types_test",
+    srcs = ["types_test.go"],
+    embed = [":helm_lib"],
+)
+
+# Template files used for chart composition
+filegroup(
+    name = "templates",
+    srcs = glob([
+        "templates/**/*.tmpl",
+    ]),
+    visibility = ["//visibility:public"],
+)
+
+# Test data and fixtures
+filegroup(
+    name = "testdata",
+    srcs = glob([
+        "testdata/**/*",
+    ]),
+    visibility = ["//visibility:public"],
+)

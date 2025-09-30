@@ -1,0 +1,112 @@
+{{- if .IngressEnabled }}
+{{- if eq .IngressMode "single" }}
+{{- /* Single Ingress aggregating all external-api apps */ -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .ChartName }}-ingress-{{ .Environment }}
+  namespace: {{ .Namespace }}
+  labels:
+    app: {{ .ChartName }}-{{ .Environment }}
+  {{- with .IngressAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .IngressClassName }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .IngressTLSEnabled }}
+  tls:
+    {{- if .IngressTLSConfigs }}
+    {{- range .IngressTLSConfigs }}
+    - secretName: {{ .SecretName }}
+      hosts:
+        {{- range .Hosts }}
+        - {{ . }}
+        {{- end }}
+    {{- end }}
+    {{- else }}
+    - secretName: {{ .ChartName }}-tls-{{ .Environment }}
+      hosts:
+        - {{ .IngressHost | default "localhost" }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- if and .IngressTLSEnabled .IngressTLSConfigs }}
+    {{- /* When TLS is enabled with configs, create rules for each host */ -}}
+    {{- $uniqueHosts := dict }}
+    {{- range .IngressTLSConfigs }}
+      {{- range .Hosts }}
+        {{- $_ := set $uniqueHosts . true }}
+      {{- end }}
+    {{- end }}
+    {{- range $host, $_ := $uniqueHosts }}
+    - host: {{ $host }}
+      http:
+        paths:
+          {{- range $.ExternalAPIs }}
+          - path: {{ .IngressPath }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Name }}-{{ $.Environment }}-service
+                port:
+                  number: {{ .Port }}
+          {{- end }}
+    {{- end }}
+    {{- else }}
+    {{- /* Simple single host configuration */ -}}
+    - host: {{ .IngressHost | default "localhost" }}
+      http:
+        paths:
+          {{- range .ExternalAPIs }}
+          - path: {{ .IngressPath }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Name }}-{{ .Environment }}-service
+                port:
+                  number: {{ .Port }}
+          {{- end }}
+    {{- end }}
+{{- else if eq .IngressMode "per-app" }}
+{{- /* Separate Ingress per external-api app */ -}}
+{{- range .ExternalAPIs }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Name }}-ingress-{{ $.Environment }}
+  namespace: {{ $.Namespace }}
+  labels:
+    app: {{ .Name }}-{{ $.Environment }}
+    component: external-api
+  {{- with .IngressAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .IngressClassName }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .IngressTLS }}
+  tls:
+    - secretName: {{ .Name }}-tls-{{ $.Environment }}
+      hosts:
+        - {{ .IngressHost }}
+  {{- end }}
+  rules:
+    - host: {{ .IngressHost }}
+      http:
+        paths:
+          - path: {{ .IngressPath }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Name }}-{{ $.Environment }}-service
+                port:
+                  number: {{ .Port }}
+{{- end }}
+{{- end }}
+{{- end }}

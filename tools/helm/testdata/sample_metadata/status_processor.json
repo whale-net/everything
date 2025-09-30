@@ -1,0 +1,12 @@
+{
+  "name": "status-processor",
+  "version": "1.0.0",
+  "binary_target": "//demo/hello_go:hello_go",
+  "image_target": "hello_go_image",
+  "description": "Background worker for processing status updates",
+  "language": "go",
+  "registry": "ghcr.io",
+  "repo_name": "demo-status-processor",
+  "domain": "demo",
+  "app_type": "worker"
+}
