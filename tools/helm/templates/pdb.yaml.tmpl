@@ -9,6 +9,9 @@ metadata:
   labels:
     app: {{ $appName }}-{{ $.Values.global.environment }}
     component: {{ $app.type }}
+  annotations:
+    # PDB deploys with deployments
+    "argocd.argoproj.io/sync-wave": "0"
 spec:
   {{- if $app.pdbMinAvailable }}
   minAvailable: {{ $app.pdbMinAvailable }}

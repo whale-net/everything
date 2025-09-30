@@ -1,22 +1,29 @@
 {{- if .Values.ingress.enabled -}}
+{{- range $appName, $app := .Values.apps }}
+{{- if eq $app.type "external-api" }}
+---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ .Chart.Name }}-{{ .Values.global.environment }}-ingress
-  namespace: {{ .Values.global.namespace }}
+  name: {{ $appName }}-{{ $.Values.global.environment }}-ingress
+  namespace: {{ $.Values.global.namespace }}
   labels:
-    app: {{ .Chart.Name }}-{{ .Values.global.environment }}
-  {{- with .Values.ingress.annotations }}
+    app: {{ $appName }}
+    environment: {{ $.Values.global.environment }}
+    chart: {{ $.Chart.Name }}
   annotations:
+    # Ingress deploys with services and deployments
+    "argocd.argoproj.io/sync-wave": "0"
+  {{- with $.Values.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  {{- if .Values.ingress.className }}
-  ingressClassName: {{ .Values.ingress.className }}
+  {{- if $.Values.ingress.className }}
+  ingressClassName: {{ $.Values.ingress.className }}
   {{- end }}
-  {{- if .Values.ingress.tls }}
+  {{- if $.Values.ingress.tls }}
   tls:
-    {{- range .Values.ingress.tls }}
+    {{- range $.Values.ingress.tls }}
     - secretName: {{ .secretName }}
       {{- if .hosts }}
       hosts:
@@ -27,33 +34,16 @@ spec:
     {{- end }}
   {{- end }}
   rules:
-    {{- range .Values.ingress.hosts }}
-    - host: {{ .host | quote }}
+    - host: {{ $appName }}-{{ $.Values.global.environment }}.local
       http:
         paths:
-          {{- range .paths }}
-          - path: {{ .path }}
-            {{- if .pathType }}
-            pathType: {{ .pathType }}
-            {{- end }}
+          - path: /
+            pathType: Prefix
             backend:
               service:
-                {{- if .service }}
-                name: {{ .service.name }}
-                port:
-                  {{- if .service.port.name }}
-                  name: {{ .service.port.name }}
-                  {{- else }}
-                  number: {{ .service.port.number }}
-                  {{- end }}
-                {{- else }}
-                {{- /* Default to the first app's service */ -}}
-                {{- $appName := (keys $.Values.apps | first) }}
-                {{- $app := index $.Values.apps $appName }}
                 name: {{ $appName }}-{{ $.Values.global.environment }}-service
                 port:
                   number: {{ $app.port | default 8000 }}
-                {{- end }}
-          {{- end }}
-    {{- end }}
+{{- end }}
+{{- end }}
 {{- end }}

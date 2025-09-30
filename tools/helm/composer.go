@@ -95,6 +95,8 @@ type AppConfig struct {
 }
 
 // IngressConfig represents ingress configuration in values.yaml
+
+// Each external-api app has its own ingress configuration
 type IngressConfig struct {
 	Enabled     bool               `yaml:"enabled"`
 	ClassName   string             `yaml:"className,omitempty"`
@@ -600,20 +602,6 @@ func writeValuesYAML(f *os.File, data ValuesData) error {
 	w.WriteString("className", data.Ingress.ClassName)
 	w.WriteMap("annotations", data.Ingress.Annotations)
 
-	// Write hosts as empty list with example comment
-	w.WriteEmptyList("hosts",
-		"Configure ingress hosts and paths",
-		"Example:",
-		"- host: chart.local",
-		"  paths:",
-		"    - path: /",
-		"      pathType: Prefix",
-		"      service:",
-		"        name: my-service",
-		"        port:",
-		"          number: 8000",
-	)
-
 	// Write TLS configuration
 	if len(data.Ingress.TLS) > 0 {
 		w.WriteStructList("tls", len(data.Ingress.TLS), func(i int) {
@@ -629,12 +617,13 @@ func writeValuesYAML(f *os.File, data ValuesData) error {
 		})
 	} else {
 		w.WriteEmptyList("tls",
-			"Example TLS configuration:",
-			"- secretName: chart-tls",
+			"Example TLS configuration (optional):",
+			"- secretName: tls-secret",
 			"  hosts:",
-			"    - chart.local",
+			"    - app-production.local",
 		)
 	}
+	w.EndSection()
 
 	return nil
 }
