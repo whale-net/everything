@@ -9,6 +9,17 @@ py_library(
     visibility = ["//demo/hello_fastapi:__pkg__"],
 )
 
+# Manual Kubernetes manifests
+filegroup(
+    name = "k8s_manifests",
+    srcs = [
+        "configmap.yaml",
+        "networkpolicy.yaml",
+    ],
+    tags = ["k8s_manifests"],
+    visibility = ["//visibility:public"],
+)
+
 # Single macro generates all platform-specific binaries
 multiplatform_py_binary(
     name = "hello_fastapi",

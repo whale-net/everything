@@ -14,6 +14,12 @@ def _helm_chart_impl(ctx):
             fail("Expected exactly one metadata file from target %s, got %d" % (dep.label, len(files)))
         metadata_files.append(files[0])
     
+    # Collect manual manifest files
+    manifest_files = []
+    for dep in ctx.attr.manual_manifests:
+        files = dep[DefaultInfo].files.to_list()
+        manifest_files.extend(files)
+    
     # Declare output directory (we'll create a tarball of the chart)
     chart_tarball = ctx.actions.declare_file(ctx.attr.chart_name + ".tar.gz")
     
@@ -27,6 +33,11 @@ def _helm_chart_impl(ctx):
     # Add metadata file paths
     args.add("--metadata")
     args.add_joined(metadata_files, join_with = ",")
+    
+    # Add manual manifest file paths if any
+    if manifest_files:
+        args.add("--manifests")
+        args.add_joined(manifest_files, join_with = ",")
     
     # Add chart configuration
     args.add("--chart-name", ctx.attr.chart_name)
@@ -57,7 +68,7 @@ def _helm_chart_impl(ctx):
     ctx.actions.run(
         executable = ctx.executable._helm_composer,
         arguments = [args],
-        inputs = metadata_files + template_files,
+        inputs = metadata_files + template_files + manifest_files,
         outputs = [chart_parent_dir],
         mnemonic = "GenerateHelmChart",
         progress_message = "Generating Helm chart %s" % ctx.attr.chart_name,
@@ -89,6 +100,11 @@ helm_chart = rule(
         "apps": attr.label_list(
             mandatory = True,
             doc = "List of app_metadata targets to include in the chart",
+        ),
+        "manual_manifests": attr.label_list(
+            default = [],
+            allow_files = [".yaml", ".yml"],
+            doc = "List of k8s_manifests targets or direct YAML files to include in the chart",
         ),
         "chart_name": attr.string(
             mandatory = True,
@@ -125,10 +141,23 @@ helm_chart = rule(
     ingress for external APIs. Ingress hostname and other configurations
     should be set in the values.yaml by chart consumers.
     
+    Optionally include manual Kubernetes manifests (ConfigMaps, Secrets,
+    NetworkPolicies, etc.) via manual_manifests. These will be automatically
+    processed to inject Helm templating for namespace and labels.
+    
     Example:
         helm_chart(
             name = "my_app_chart",
             apps = ["//path/to:app_metadata"],
+            chart_name = "my-app",
+            namespace = "production",
+        )
+        
+        # With manual manifests
+        helm_chart(
+            name = "my_app_chart_enhanced",
+            apps = ["//path/to:app_metadata"],
+            manual_manifests = [":k8s_manifests"],
             chart_name = "my-app",
             namespace = "production",
         )

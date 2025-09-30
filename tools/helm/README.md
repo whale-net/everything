@@ -202,6 +202,42 @@ Jobs run first, then apps deploy.
 
 ---
 
+## Manual Kubernetes Manifests
+
+Add custom Kubernetes resources (ConfigMaps, Secrets, NetworkPolicies, etc.) to your charts:
+
+```starlark
+# Define your manifests
+filegroup(
+    name = "k8s_manifests",
+    srcs = [
+        "configmap.yaml",
+        "networkpolicy.yaml",
+    ],
+    tags = ["k8s_manifests"],
+)
+
+# Include in chart
+helm_chart(
+    name = "my_chart_with_manifests",
+    apps = [":app_metadata"],
+    manual_manifests = [":k8s_manifests"],  # ← Add manifests here
+    chart_name = "my-app",
+    namespace = "production",
+)
+```
+
+**What gets templated:**
+- `namespace` → `.Values.global.namespace`
+- `environment` label → `.Values.global.environment`
+- Wrapped in `.Values.manifests.enabled` toggle
+
+**Supported resources:** ConfigMaps, Secrets, NetworkPolicies, PVCs, ServiceAccounts, RBAC, and more!
+
+**See [K8S_MANIFESTS.md](./K8S_MANIFESTS.md) for complete guide and examples.**
+
+---
+
 ## Customizing Values
 
 ### At Build Time
@@ -359,6 +395,9 @@ All examples in `demo/BUILD.bazel`:
 # Single external API
 bazel build //demo:fastapi_chart
 
+# External API with manual manifests (ConfigMap, NetworkPolicy)
+bazel build //demo:fastapi_with_manifests_chart
+
 # Single internal API  
 bazel build //demo:internal_api_chart
 
@@ -385,6 +424,7 @@ bazel build //demo:multi_app_chart
 ## Documentation
 
 - **[APP_TYPES.md](./APP_TYPES.md)** - Complete app type reference
+- **[K8S_MANIFESTS.md](./K8S_MANIFESTS.md)** - Manual Kubernetes manifests guide
 - **[TEMPLATES.md](./TEMPLATES.md)** - Template development guide
 - **[MIGRATION.md](./MIGRATION.md)** - Migration from manual charts
 - **[MILESTONE_5_COMPLETE.md](./MILESTONE_5_COMPLETE.md)** - Multi-app composition details

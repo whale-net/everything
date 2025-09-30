@@ -155,8 +155,16 @@ type ChartConfig struct {
 type Composer struct {
 	config        ChartConfig
 	apps          []AppMetadata
+	manifests     []ManifestFile
 	templateDir   string
 	templateFuncs template.FuncMap
+}
+
+// ManifestFile represents a manual Kubernetes manifest
+type ManifestFile struct {
+	Path     string
+	Content  []byte
+	Filename string
 }
 
 // NewComposer creates a new Composer instance
@@ -271,6 +279,25 @@ func (c *Composer) LoadMetadata(metadataFiles []string) error {
 		}
 
 		c.apps = append(c.apps, metadata)
+	}
+	return nil
+}
+
+// LoadManifests loads manual Kubernetes manifest files
+func (c *Composer) LoadManifests(manifestFiles []string) error {
+	for _, file := range manifestFiles {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return fmt.Errorf("failed to read manifest file %s: %w", file, err)
+		}
+
+		manifest := ManifestFile{
+			Path:     file,
+			Content:  data,
+			Filename: filepath.Base(file),
+		}
+
+		c.manifests = append(c.manifests, manifest)
 	}
 	return nil
 }
@@ -624,6 +651,12 @@ func writeValuesYAML(f *os.File, data ValuesData) error {
 		)
 	}
 	w.EndSection()
+	w.Newline()
+
+	// Write manifests section (for manual Kubernetes objects)
+	w.StartSection("manifests")
+	w.WriteBool("enabled", true)
+	w.EndSection()
 
 	return nil
 }
@@ -655,6 +688,11 @@ func (c *Composer) generateResourceTemplates(templatesDir string) error {
 		}
 	}
 
+	// Process and copy manual manifests
+	if err := c.processManualManifests(templatesDir); err != nil {
+		return fmt.Errorf("failed to process manual manifests: %w", err)
+	}
+
 	return nil
 }
 
@@ -670,6 +708,75 @@ func (c *Composer) copyTemplate(src, dst string) error {
 	}
 
 	return nil
+}
+
+// processManualManifests processes and copies manual Kubernetes manifests
+func (c *Composer) processManualManifests(templatesDir string) error {
+	for i, manifest := range c.manifests {
+		// Generate a unique filename with prefix to avoid conflicts
+		dstFilename := fmt.Sprintf("manifest-%02d-%s", i, manifest.Filename)
+		dstPath := filepath.Join(templatesDir, dstFilename)
+
+		// Process the manifest to inject Helm templating
+		processed, err := c.injectHelmTemplating(manifest.Content)
+		if err != nil {
+			return fmt.Errorf("failed to process manifest %s: %w", manifest.Filename, err)
+		}
+
+		if err := os.WriteFile(dstPath, processed, 0644); err != nil {
+			return fmt.Errorf("failed to write manifest %s: %w", manifest.Filename, err)
+		}
+	}
+	return nil
+}
+
+// injectHelmTemplating processes a Kubernetes manifest to inject Helm template directives
+func (c *Composer) injectHelmTemplating(content []byte) ([]byte, error) {
+	// Parse the YAML to understand its structure
+	contentStr := string(content)
+
+	// Add Helm template header comment
+	helmContent := "{{- if .Values.manifests.enabled | default true }}\n"
+
+	// Replace namespace references with Helm template
+	// Match: namespace: <value>
+	contentStr = strings.ReplaceAll(contentStr,
+		"namespace: default",
+		"namespace: {{ .Values.global.namespace }}")
+
+	// For any other namespace value, replace with template
+	lines := strings.Split(contentStr, "\n")
+	for i, line := range lines {
+		// Match lines like "  namespace: some-namespace"
+		if strings.Contains(line, "namespace:") && !strings.Contains(line, "{{") {
+			// Extract indentation
+			indent := len(line) - len(strings.TrimLeft(line, " \t"))
+			spaces := strings.Repeat(" ", indent)
+			lines[i] = spaces + "namespace: {{ .Values.global.namespace }}"
+		}
+
+		// Add environment label if labels section exists
+		if strings.Contains(line, "labels:") && i+1 < len(lines) {
+			// Check if next line is already indented (part of labels)
+			nextLine := lines[i+1]
+			if len(nextLine) > 0 && (nextLine[0] == ' ' || nextLine[0] == '\t') {
+				// Add environment label after the labels: line
+				indent := len(nextLine) - len(strings.TrimLeft(nextLine, " \t"))
+				spaces := strings.Repeat(" ", indent)
+				envLabel := spaces + "environment: {{ .Values.global.environment }}"
+				// Insert if not already present
+				if !strings.Contains(contentStr, "environment:") {
+					lines = append(lines[:i+1], append([]string{envLabel}, lines[i+1:]...)...)
+				}
+			}
+		}
+	}
+
+	contentStr = strings.Join(lines, "\n")
+	helmContent += contentStr
+	helmContent += "\n{{- end }}\n"
+
+	return []byte(helmContent), nil
 }
 
 // hasExternalAPIs checks if any apps are external APIs

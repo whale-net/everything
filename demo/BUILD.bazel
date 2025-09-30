@@ -23,6 +23,22 @@ helm_chart(
     visibility = ["//visibility:public"],
 )
 
+# Example: FastAPI with manual Kubernetes manifests (ConfigMap, NetworkPolicy)
+helm_chart(
+    name = "fastapi_with_manifests_chart",
+    apps = [
+        "//demo/hello_fastapi:hello_fastapi_metadata",
+    ],
+    manual_manifests = [
+        "//demo/hello_fastapi:k8s_manifests",
+    ],
+    chart_name = "hello-fastapi-enhanced",
+    namespace = "demo",
+    environment = "production",
+    chart_version = "1.0.0",
+    visibility = ["//visibility:public"],
+)
+
 # Example: Workers only (no ingress)
 helm_chart(
     name = "workers_chart",

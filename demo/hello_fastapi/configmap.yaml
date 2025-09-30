@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hello-fastapi-config
+  namespace: default
+  labels:
+    app: hello-fastapi
+data:
+  DATABASE_URL: "postgresql://localhost:5432/mydb"
+  CACHE_ENABLED: "true"
+  LOG_LEVEL: "info"
+  MAX_CONNECTIONS: "100"
