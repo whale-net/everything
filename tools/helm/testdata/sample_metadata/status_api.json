@@ -1,0 +1,12 @@
+{
+  "name": "status-api",
+  "version": "1.0.0",
+  "binary_target": "//demo/hello_python:hello_python",
+  "image_target": "hello_python_image",
+  "description": "Internal API for status checks",
+  "language": "python",
+  "registry": "ghcr.io",
+  "repo_name": "demo-status-api",
+  "domain": "demo",
+  "app_type": "internal-api"
+}

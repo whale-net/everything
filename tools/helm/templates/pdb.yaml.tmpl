@@ -1,0 +1,25 @@
+{{- range $appName, $app := .Values.apps }}
+{{- if and $app.pdbEnabled (ne $app.type "job") }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $appName }}-{{ $.Values.global.environment }}-pdb
+  namespace: {{ $.Values.global.namespace }}
+  labels:
+    app: {{ $appName }}-{{ $.Values.global.environment }}
+    component: {{ $app.type }}
+  annotations:
+    # PDB deploys with deployments
+    "argocd.argoproj.io/sync-wave": "0"
+spec:
+  {{- if $app.pdbMinAvailable }}
+  minAvailable: {{ $app.pdbMinAvailable }}
+  {{- else }}
+  maxUnavailable: {{ $app.pdbMaxUnavailable | default 1 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ $appName }}-{{ $.Values.global.environment }}
+{{- end }}
+{{- end }}

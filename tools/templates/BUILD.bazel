@@ -1,9 +1,0 @@
-filegroup(
-    name = "helm_templates",
-    srcs = [
-        "deployment.yaml",
-        "service.yaml", 
-        "_helpers.tpl",
-    ],
-    visibility = ["//visibility:public"],
-)

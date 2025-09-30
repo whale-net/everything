@@ -1,0 +1,65 @@
+# Generated Helm values for {{ .ChartName }}
+# This file contains configuration for all apps in the chart
+
+namespace: {{ .Namespace }}
+
+# Environment configuration
+env:
+  app_env: {{ .Environment }}
+
+# Application configurations
+apps:
+{{- range .Apps }}
+  {{ .Name }}:
+    enabled: true
+    type: {{ .Type }}
+    image:
+      repository: {{ .Image }}
+      tag: {{ .ImageTag }}
+    {{- if .Port }}
+    port: {{ .Port }}
+    {{- end }}
+    replicas: {{ .Replicas }}
+    {{- if .Command }}
+    command: {{ .Command }}
+    {{- end }}
+    resources:
+      requests:
+        cpu: {{ .Resources.RequestsCPU }}
+        memory: {{ .Resources.RequestsMemory }}
+      limits:
+        cpu: {{ .Resources.LimitsCPU }}
+        memory: {{ .Resources.LimitsMemory }}
+    {{- if .Env }}
+    env:
+      {{- range $key, $value := .Env }}
+      {{ $key }}: {{ $value }}
+      {{- end }}
+    {{- end }}
+    {{- if .HealthCheck }}
+    healthCheck:
+      path: {{ .HealthCheck.Path }}
+      initialDelaySeconds: {{ .HealthCheck.InitialDelaySeconds }}
+      periodSeconds: {{ .HealthCheck.PeriodSeconds }}
+      timeoutSeconds: {{ .HealthCheck.TimeoutSeconds }}
+      failureThreshold: {{ .HealthCheck.FailureThreshold }}
+    {{- end }}
+{{- end }}
+
+{{- if .HasIngress }}
+# Ingress configuration
+ingress:
+  enabled: {{ .IngressEnabled }}
+  mode: {{ .IngressMode }}  # "single" or "per-app"
+  {{- if eq .IngressMode "single" }}
+  name: {{ .ChartName }}-ingress-{{ .Environment }}
+  {{- end }}
+  className: ""
+  annotations: {}
+  {{- if .IngressHost }}
+  host: {{ .IngressHost }}
+  {{- end }}
+  tls:
+    enabled: false
+    configs: []
+{{- end }}

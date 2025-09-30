@@ -6,12 +6,11 @@ load("//tools:release.bzl", "release_app")
 py_library(
     name = "main_lib",
     srcs = ["__init__.py", "main.py"],
-    visibility = ["//demo/hello_fastapi:__pkg__"],
+    visibility = ["//demo/hello_internal_api:__pkg__"],
 )
 
-# Single macro generates all platform-specific binaries
 multiplatform_py_binary(
-    name = "hello_fastapi",
+    name = "hello_internal_api",
     srcs = ["main.py"],
     main = "main.py",
     deps = [":main_lib"],
@@ -32,9 +31,9 @@ py_test(
 )
 
 release_app(
-    name = "hello_fastapi",
+    name = "hello_internal_api",
     language = "python",
     domain = "demo",
-    description = "FastAPI hello world application with uvicorn",
-    app_type = "external-api",
+    description = "Internal FastAPI service - accessible within cluster only",
+    app_type = "internal-api",
 )

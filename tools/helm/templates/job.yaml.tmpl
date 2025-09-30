@@ -1,0 +1,62 @@
+{{- range $appName, $app := .Values.apps }}
+{{- if eq $app.type "job" }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $appName }}-{{ $.Values.global.environment }}
+  namespace: {{ $.Values.global.namespace }}
+  labels:
+    app: {{ $appName }}-{{ $.Values.global.environment }}
+    component: job
+  annotations:
+    # Jobs run before deployments in ArgoCD sync phases
+    "argocd.argoproj.io/sync-wave": "-1"
+    # Hook annotation for Helm-managed lifecycle
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ $app.jobBackoffLimit | default 3 }}
+  {{- if $app.jobTTLSecondsAfterFinished }}
+  ttlSecondsAfterFinished: {{ $app.jobTTLSecondsAfterFinished }}
+  {{- end }}
+  template:
+    metadata:
+      namespace: {{ $.Values.global.namespace }}
+      labels:
+        app: {{ $appName }}-{{ $.Values.global.environment }}
+        component: job
+    spec:
+      restartPolicy: {{ $app.jobRestartPolicy | default "OnFailure" }}
+      containers:
+        - name: {{ $appName }}
+          image: "{{ $app.image }}:{{ $app.imageTag }}"
+          resources:
+            requests:
+              cpu: {{ $app.resources.requests.cpu }}
+              memory: {{ $app.resources.requests.memory }}
+            limits:
+              cpu: {{ $app.resources.limits.cpu }}
+              memory: {{ $app.resources.limits.memory }}
+          {{- if $app.command }}
+          command:
+            {{- range $app.command }}
+            - {{ . }}
+            {{- end }}
+          {{- end }}
+          {{- if $app.args }}
+          args:
+            {{- range $app.args }}
+            - {{ . }}
+            {{- end }}
+          {{- end }}
+          {{- if $app.env }}
+          env:
+            {{- range $key, $value := $app.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{- end }}
+{{- end }}
+{{- end }}

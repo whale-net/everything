@@ -6,35 +6,39 @@ load("//tools:release.bzl", "release_app")
 py_library(
     name = "main_lib",
     srcs = ["__init__.py", "main.py"],
-    visibility = ["//demo/hello_fastapi:__pkg__"],
+    deps = [],
+    visibility = ["//demo/hello_job:__pkg__"],
 )
 
 # Single macro generates all platform-specific binaries
 multiplatform_py_binary(
-    name = "hello_fastapi",
+    name = "hello_job",
     srcs = ["main.py"],
     main = "main.py",
-    deps = [":main_lib"],
-    requirements = ["fastapi", "uvicorn"],
+    deps = [
+        ":main_lib",
+    ],
+    requirements = [],  # No external requirements for this simple app
     visibility = ["//visibility:public"],
 )
 
 py_test(
     name = "test_main",
     srcs = ["test_main.py"],
-    main = "test_main.py",
     deps = [
         ":main_lib",
         requirement("pytest"),
-        requirement("fastapi"),
-        requirement("httpx"),
     ],
+    size = "small",
 )
 
+# Simplified release_app - auto-detects platform binaries!
 release_app(
-    name = "hello_fastapi",
+    name = "hello_job",
     language = "python",
+    app_type = "job",  # Explicitly set as job
     domain = "demo",
-    description = "FastAPI hello world application with uvicorn",
-    app_type = "external-api",
+    registry = "ghcr.io",
+    version = "1.0.0",
+    description = "Migration job example - pre-install hook",
 )

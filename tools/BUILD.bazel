@@ -41,12 +41,3 @@ release_app(
     domain = "tools",
     description = "Release helper tool for managing app releases and container images",
 )
-
-# Helm chart release documentation
-filegroup(
-    name = "helm_docs",
-    srcs = [
-        "helm_chart_release_README.md",
-    ],
-    visibility = ["//visibility:public"],
-)

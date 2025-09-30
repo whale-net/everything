@@ -1,5 +1,0 @@
-filegroup(
-    name = "helm_composition_templates",
-    srcs = glob(["*.tmpl"]),
-    visibility = ["//visibility:public"],
-)

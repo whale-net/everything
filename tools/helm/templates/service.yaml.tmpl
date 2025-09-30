@@ -1,0 +1,25 @@
+{{- range $appName, $app := .Values.apps }}
+{{- if or (eq $app.type "external-api") (eq $app.type "internal-api") }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $appName }}-{{ $.Values.global.environment }}-service
+  namespace: {{ $.Values.global.namespace }}
+  labels:
+    app: {{ $appName }}-{{ $.Values.global.environment }}
+    component: {{ $app.type }}
+  annotations:
+    # Services deploy with deployments
+    "argocd.argoproj.io/sync-wave": "0"
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ $appName }}-{{ $.Values.global.environment }}
+  ports:
+    - protocol: TCP
+      port: {{ $app.port }}
+      targetPort: {{ $app.port }}
+      name: http
+{{- end }}
+{{- end }}

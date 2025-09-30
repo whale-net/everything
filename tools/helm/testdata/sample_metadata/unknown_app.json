@@ -1,0 +1,12 @@
+{
+  "name": "unknown-app",
+  "version": "1.0.0",
+  "binary_target": "//demo/hello_python:hello_python",
+  "image_target": "hello_python_image",
+  "description": "App with no explicit type, should be inferred",
+  "language": "python",
+  "registry": "ghcr.io",
+  "repo_name": "demo-unknown-app",
+  "domain": "demo",
+  "app_type": ""
+}

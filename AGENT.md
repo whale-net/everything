@@ -400,7 +400,231 @@ oci_image_with_binary(
 
 ---
 
-## 📝 Documentation Status
+## � Helm Chart Composition System
+
+### Overview
+
+The helm chart system automatically generates Kubernetes manifests from app definitions. It supports 4 app types, each generating appropriate Kubernetes resources.
+
+### App Types and Generated Resources
+
+| App Type | Deployment | Service | Ingress | PDB | Job | Use Case |
+|----------|-----------|---------|---------|-----|-----|----------|
+| `external-api` | ✅ | ✅ | ✅ | ✅ | ❌ | Public HTTP APIs |
+| `internal-api` | ✅ | ✅ | ❌ | ✅ | ❌ | Internal services |
+| `worker` | ✅ | ❌ | ❌ | ✅ | ❌ | Background processors |
+| `job` | ❌ | ❌ | ❌ | ❌ | ✅ | Migrations, setup tasks |
+
+### Defining Apps with Types
+
+Add `type` attribute to app definitions:
+
+```python
+# demo/hello_fastapi/BUILD.bazel
+load("//tools:demo_app.bzl", "demo_app")
+
+demo_app(
+    name = "hello_fastapi",
+    srcs = ["main.py"],
+    deps = [
+        "@pip//fastapi",
+        "@pip//uvicorn",
+    ],
+    port = 8000,           # Required for API types
+    type = "external-api",  # Defines what resources to generate
+)
+```
+
+**Type selection**:
+- `external-api`: Public HTTP API needing external ingress
+- `internal-api`: Internal HTTP service (no ingress)
+- `worker`: Background processor (no service/ingress)
+- `job`: Pre-install/pre-upgrade task (migrations)
+
+### Generating Helm Charts
+
+Create charts with the `helm_chart` rule:
+
+```python
+load("//tools:helm.bzl", "helm_chart")
+
+# Single app chart
+helm_chart(
+    name = "hello_fastapi_chart",
+    app = ":hello_fastapi",
+    environment = "dev",
+)
+
+# Multi-app chart
+helm_chart(
+    name = "full_stack_chart",
+    apps = [
+        ":api_server",
+        ":background_worker",
+        ":db_migration",
+    ],
+    environment = "prod",
+)
+```
+
+### Building and Validating Charts
+
+```bash
+# Build chart
+bazel build //demo/hello_fastapi:hello_fastapi_chart
+
+# Chart location
+ls -la bazel-bin/demo/hello_fastapi/hello_fastapi_chart/
+
+# Validate
+helm lint bazel-bin/demo/hello_fastapi/hello_fastapi_chart/
+
+# Preview generated YAML
+helm template test bazel-bin/demo/hello_fastapi/hello_fastapi_chart/
+```
+
+### Ingress Pattern (1:1 Mapping)
+
+Each `external-api` app gets its own dedicated Ingress resource:
+
+```yaml
+# api_server-dev-ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api_server-dev-ingress
+spec:
+  rules:
+  - host: api_server-dev.local
+    http:
+      paths:
+      - path: /
+        backend:
+          service:
+            name: api_server-dev
+            port:
+              number: 8000
+```
+
+**Key points**:
+- Simple 1:1 pattern (no complex mode selection)
+- Each external-api = dedicated Ingress
+- Host pattern: `{appName}-{environment}.local`
+- Ingress name: `{appName}-{environment}-ingress`
+
+### ArgoCD Integration
+
+Charts include sync-wave annotations for proper ordering:
+
+- **Wave `-1`**: Jobs (migrations, setup) - run first
+- **Wave `0`**: Deployments, Services, Ingress - run after jobs
+
+```yaml
+# job.yaml.tmpl
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+    helm.sh/hook: pre-install,pre-upgrade
+
+# deployment.yaml.tmpl, service.yaml.tmpl, ingress.yaml.tmpl
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+```
+
+### Customizing Helm Charts
+
+Override values at deployment time:
+
+```yaml
+# custom-values.yaml
+apps:
+  hello_fastapi:
+    replicas: 3
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "500m"
+      limits:
+        memory: "1Gi"
+        cpu: "1000m"
+    livenessProbe:
+      httpGet:
+        path: /health/live
+        port: 8000
+
+global:
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+```
+
+```bash
+helm install app-name ./chart/ --values custom-values.yaml
+```
+
+### Common Tasks
+
+#### Generate chart for single app
+```bash
+bazel build //demo/hello_python:hello_python_chart
+helm lint bazel-bin/demo/hello_python/hello_python_chart/
+```
+
+#### Generate multi-app chart
+```bash
+bazel build //demo:full_stack_chart
+helm template test bazel-bin/demo/full_stack_chart/ | grep "kind:" | sort | uniq -c
+```
+
+#### Validate before deploy
+```bash
+helm template test ./chart/ | kubectl apply --dry-run=client -f -
+```
+
+### Helm Documentation
+
+For detailed documentation, see:
+- **[tools/helm/README.md](tools/helm/README.md)** - Quick start and common patterns
+- **[tools/helm/APP_TYPES.md](tools/helm/APP_TYPES.md)** - Complete app type reference
+- **[tools/helm/TEMPLATES.md](tools/helm/TEMPLATES.md)** - Template development guide
+- **[tools/helm/MIGRATION.md](tools/helm/MIGRATION.md)** - Migration guide
+- **[tools/helm/IMPLEMENTATION_PLAN.md](tools/helm/IMPLEMENTATION_PLAN.md)** - Full implementation details
+
+### Troubleshooting Helm Charts
+
+#### Chart not found
+```bash
+# Build the chart first
+bazel build //path/to/app:app_chart
+```
+
+#### Ingress not generated
+```bash
+# Check app type
+type = "external-api"  # Must be external-api
+
+# Check ingress enabled
+global:
+  ingress:
+    enabled: true  # Must be true
+```
+
+#### Port errors
+```bash
+# API types require port
+demo_app(
+    name = "api",
+    port = 8080,  # Required for external-api and internal-api
+    type = "external-api",
+)
+```
+
+---
+
+## �📝 Documentation Status
 
 This AGENT.md provides a comprehensive framework for AI agents working with the Everything monorepo. The documentation focuses specifically on:
 
@@ -409,11 +633,15 @@ This AGENT.md provides a comprehensive framework for AI agents working with the 
 - Container image build system with `<domain>-<app>:<version>` naming
 - Multi-platform image generation (amd64/arm64)
 - Release workflow automation and change detection
+- Helm chart composition with 4 app types
+- 1:1 ingress mapping pattern
+- ArgoCD sync-wave integration
 
 **Framework Areas:**
 - Development workflows for Python and Go applications
 - Bazel build system integration
 - GitHub Actions CI/CD processes
+- Helm chart generation and customization
 - Extension points for future enhancements
 
-This framework provides the foundation for working with the Everything monorepo. Specific implementation details can be expanded as the codebase evolves, but the core principles and `release_app` system should remain stable.
+This framework provides the foundation for working with the Everything monorepo. Specific implementation details can be expanded as the codebase evolves, but the core principles, `release_app` system, and helm chart patterns should remain stable.
