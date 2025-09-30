@@ -1,0 +1,29 @@
+load("//tools:release.bzl", "release_app")
+
+py_binary(
+    name = "hello_job",
+    srcs = [
+        "__init__.py",
+        "main.py",
+    ],
+    deps = [],
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "test_main",
+    srcs = ["test_main.py"],
+    deps = [
+        ":hello_job",
+    ],
+)
+
+release_app(
+    name = "hello_job",
+    language = "python",
+    app_type = "job",  # Explicitly set as job
+    domain = "demo",
+    registry = "ghcr.io",
+    version = "1.0.0",
+    description = "Migration job example - pre-install hook",
+)

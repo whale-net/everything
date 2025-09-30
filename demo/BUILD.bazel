@@ -35,3 +35,58 @@ helm_chart(
     environment = "staging",
     chart_version = "0.2.0",
 )
+
+# Example: Internal API (has service but no ingress)
+helm_chart(
+    name = "internal_api_chart",
+    apps = [
+        "//demo/hello_internal_api:hello_internal_api_metadata",
+    ],
+    chart_name = "hello-internal-api",
+    namespace = "demo",
+    environment = "production",
+    chart_version = "1.0.0",
+    visibility = ["//visibility:public"],
+)
+
+# Example: Worker (no service or ingress, just deployment)
+helm_chart(
+    name = "worker_chart",
+    apps = [
+        "//demo/hello_worker:hello_worker_metadata",
+    ],
+    chart_name = "hello-worker",
+    namespace = "demo",
+    environment = "production",
+    chart_version = "1.0.0",
+    visibility = ["//visibility:public"],
+)
+
+# Example: Job (pre-install hook, no deployment)
+helm_chart(
+    name = "job_chart",
+    apps = [
+        "//demo/hello_job:hello_job_metadata",
+    ],
+    chart_name = "hello-job",
+    namespace = "demo",
+    environment = "production",
+    chart_version = "1.0.0",
+    visibility = ["//visibility:public"],
+)
+
+# Example: Multi-app chart with all types
+helm_chart(
+    name = "multi_app_chart",
+    apps = [
+        "//demo/hello_fastapi:hello_fastapi_metadata",
+        "//demo/hello_internal_api:hello_internal_api_metadata",
+        "//demo/hello_worker:hello_worker_metadata",
+        "//demo/hello_job:hello_job_metadata",
+    ],
+    chart_name = "demo-all-types",
+    namespace = "demo",
+    environment = "production",
+    chart_version = "1.0.0",
+    visibility = ["//visibility:public"],
+)

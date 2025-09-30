@@ -240,11 +240,11 @@ helm lint /tmp/manman_chart
 
 ---
 
-## 🎯 Milestone 3: Bazel Rule Integration ⏳
+## 🎯 Milestone 3: Bazel Rule Integration ✅
 
 **Goal**: Create Bazel rules to invoke composer declaratively
 
-**Status**: Not Started  
+**Status**: COMPLETE - All deliverables implemented and tested  
 **Estimated Duration**: 1-2 days
 
 ### Deliverables
@@ -300,20 +300,21 @@ ls -la bazel-bin/manman/manman_host_chart/
 ```
 
 ### Validation Criteria
-- [ ] `helm_chart` rule builds successfully
-- [ ] Generated charts are reproducible (hermetic builds)
-- [ ] Query patterns work for app discovery
-- [ ] Charts validate with `helm lint`
-- [ ] Chart output directory structure matches Helm conventions
-- [ ] Rebuilds only when inputs change
+- [x] `helm_chart` rule builds successfully
+- [x] Generated charts are reproducible (hermetic builds)
+- [x] Query patterns work for app discovery
+- [x] Charts validate with `helm lint`
+- [x] Chart output directory structure matches Helm conventions
+- [x] Rebuilds only when inputs change
 
 ---
 
-## 🎯 Milestone 4: App Type Templates ⏳
+## 🎯 Milestone 4: App Type Templates ✅
 
 **Goal**: Implement all app type-specific templates with variants
 
-**Status**: Not Started  
+**Status**: COMPLETE - All deliverables implemented and validated  
+**Completion Date**: September 29, 2025
 **Estimated Duration**: 2-3 days
 
 ### Deliverables
@@ -382,12 +383,26 @@ done
 ```
 
 ### Validation Criteria
-- [ ] All templates use shared deployment.yaml.tmpl with conditionals
-- [ ] Templates include all necessary Kubernetes fields
-- [ ] Helm conditionals work correctly
-- [ ] Templates match functional requirements from old chart
-- [ ] Each type lints successfully
-- [ ] No duplicated YAML content between templates
+- [x] All templates use shared deployment.yaml.tmpl with conditionals
+- [x] Templates include all necessary Kubernetes fields
+- [x] Helm conditionals work correctly
+- [x] Templates match functional requirements from old chart
+- [x] Each type lints successfully
+- [x] No duplicated YAML content between templates
+
+### Test Apps Created
+- [x] `demo/hello_fastapi` - external-api example
+- [x] `demo/hello_internal_api` - internal-api example
+- [x] `demo/hello_worker` - worker example
+- [x] `demo/hello_job` - job example
+- [x] `demo/multi_app_chart` - all types in one chart
+
+### Validation Results
+All charts built successfully and pass `helm lint`:
+- ✅ external-api: Deployment + Service + Ingress + PDB
+- ✅ internal-api: Deployment + Service + PDB (NO Ingress)
+- ✅ worker: Deployment + PDB (NO Service or Ingress)
+- ✅ job: Job ONLY (NO Deployment, Service, Ingress, or PDB)
 
 ### Notes
 - **Shared logic**: External-api and internal-api should share 90%+ of deployment config

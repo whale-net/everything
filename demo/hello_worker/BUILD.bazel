@@ -1,0 +1,29 @@
+load("//tools:release.bzl", "release_app")
+
+py_binary(
+    name = "hello_worker",
+    srcs = [
+        "__init__.py",
+        "main.py",
+    ],
+    deps = [],
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "test_main",
+    srcs = ["test_main.py"],
+    deps = [
+        ":hello_worker",
+    ],
+)
+
+release_app(
+    name = "hello_worker",
+    language = "python",
+    app_type = "worker",  # Explicitly set as worker
+    domain = "demo",
+    registry = "ghcr.io",
+    version = "1.0.0",
+    description = "Background worker example - no service exposure",
+)
