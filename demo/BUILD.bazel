@@ -1,3 +1,5 @@
+load("//tools/helm:helm.bzl", "helm_chart")
+
 # Demo applications namespace
 #
 # Individual release_app definitions for each demo app are in their respective
@@ -5,3 +7,31 @@
 #
 # For complex multi-app deployments, use helm_chart_composed from 
 # helm_composition_simple.bzl like the manman domain does.
+
+# Example Helm chart with a single external API
+# Ingress will be automatically enabled for external-api app types
+# Configure ingress host and paths in values.yaml when deploying
+helm_chart(
+    name = "fastapi_chart",
+    apps = [
+        "//demo/hello_fastapi:hello_fastapi_metadata",
+    ],
+    chart_name = "hello-fastapi",
+    namespace = "demo",
+    environment = "production",
+    chart_version = "1.0.0",
+    visibility = ["//visibility:public"],
+)
+
+# Example: Workers only (no ingress)
+helm_chart(
+    name = "workers_chart",
+    apps = [
+        "//demo/hello_python:hello_python_metadata",
+        "//demo/hello_go:hello_go_metadata",
+    ],
+    chart_name = "demo-workers",
+    namespace = "workers",
+    environment = "staging",
+    chart_version = "0.2.0",
+)

@@ -1,18 +1,22 @@
-{{- if or (eq .Type "external-api") (eq .Type "internal-api") }}
+{{- range $appName, $app := .Values.apps }}
+{{- if or (eq $app.type "external-api") (eq $app.type "internal-api") }}
+---
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .Name }}-{{ .Environment }}-service
-  namespace: {{ .Namespace }}
+  name: {{ $appName }}-{{ $.Values.global.environment }}-service
+  namespace: {{ $.Values.global.namespace }}
   labels:
-    component: {{ .Type }}
+    app: {{ $appName }}-{{ $.Values.global.environment }}
+    component: {{ $app.type }}
 spec:
   type: ClusterIP
   selector:
-    app: {{ .Name }}-{{ .Environment }}
+    app: {{ $appName }}-{{ $.Values.global.environment }}
   ports:
     - protocol: TCP
-      port: {{ .Port }}
-      targetPort: {{ .Port }}
+      port: {{ $app.port }}
+      targetPort: {{ $app.port }}
       name: http
+{{- end }}
 {{- end }}

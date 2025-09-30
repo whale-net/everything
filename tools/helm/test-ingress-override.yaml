@@ -1,0 +1,26 @@
+# Example values override showing how consumers configure ingress
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+  hosts:
+    - host: api.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          # Omit service to use the default (first app in chart)
+    - host: api-staging.example.com
+      paths:
+        - path: /v1
+          pathType: Prefix
+          service:
+            name: hello_fastapi-production-service
+            port:
+              number: 8000
+  tls:
+    - secretName: api-tls
+      hosts:
+        - api.example.com
+        - api-staging.example.com
