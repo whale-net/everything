@@ -2,7 +2,6 @@ package helm
 
 import (
 	"fmt"
-	"strings"
 )
 
 // AppType represents the type of application being deployed
@@ -83,58 +82,21 @@ func (t AppType) RequiresPDB() bool {
 	}
 }
 
-// ResolveAppType determines the app type, with explicit type taking precedence over inference.
-// If appTypeStr is provided and valid, it's used directly.
-// Otherwise, the app type is inferred from the app name.
-// Returns the resolved AppType and any validation error.
+// ResolveAppType validates and returns the app type.
+// The appTypeStr must be explicitly provided - no inference is performed.
+// Returns an error if appTypeStr is empty or invalid.
 func ResolveAppType(appName string, appTypeStr string) (AppType, error) {
-	// If explicit app type is provided, use it (with validation)
-	if appTypeStr != "" {
-		appType, err := ParseAppType(appTypeStr)
-		if err != nil {
-			return "", err
-		}
-		return appType, nil
+	// Explicit app type is required
+	if appTypeStr == "" {
+		return "", fmt.Errorf("app type is required for %s (must be one of: external-api, internal-api, worker, job)", appName)
 	}
 
-	// Otherwise, infer from app name
-	return InferAppType(appName), nil
-}
-
-// InferAppType attempts to infer the app type from the app name
-// Returns InternalAPI as default if inference fails
-// DEPRECATED: Use ResolveAppType instead to support explicit app types
-func InferAppType(appName string) AppType {
-	lowerName := strings.ToLower(appName)
-
-	// Check for job patterns first (highest priority)
-	if strings.Contains(lowerName, "migration") ||
-		strings.Contains(lowerName, "job") ||
-		strings.HasSuffix(lowerName, "-migrate") {
-		return Job
+	// Validate the provided type
+	appType, err := ParseAppType(appTypeStr)
+	if err != nil {
+		return "", err
 	}
-
-	// Check for API patterns before worker patterns
-	// This ensures "worker-api" is classified as API, not worker
-	if strings.Contains(lowerName, "api") {
-		// Experience API is typically external-facing
-		if strings.Contains(lowerName, "experience") ||
-			strings.Contains(lowerName, "external") ||
-			strings.Contains(lowerName, "public") {
-			return ExternalAPI
-		}
-		return InternalAPI
-	}
-
-	// Check for worker patterns (after API check)
-	if strings.Contains(lowerName, "worker") ||
-		strings.Contains(lowerName, "processor") ||
-		strings.Contains(lowerName, "consumer") {
-		return Worker
-	}
-
-	// Default to internal-api for unknown patterns
-	return InternalAPI
+	return appType, nil
 }
 
 // ParseAppType converts a string to AppType with validation

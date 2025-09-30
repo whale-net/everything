@@ -111,35 +111,6 @@ func TestAppType_RequiresPDB(t *testing.T) {
 	}
 }
 
-func TestInferAppType(t *testing.T) {
-	tests := []struct {
-		name     string
-		appName  string
-		expected AppType
-	}{
-		{"Migration job", "manman-migrations", Job},
-		{"Explicit job", "cleanup-job", Job},
-		{"Worker pattern", "status-processor", Worker},
-		{"Worker pattern 2", "event-worker", Worker},
-		{"Consumer pattern", "message-consumer", Worker},
-		{"Experience API", "experience-api", ExternalAPI},
-		{"External API", "external-api", ExternalAPI},
-		{"Public API", "public-api", ExternalAPI},
-		{"Internal API", "status-api", InternalAPI},
-		{"Worker DAL API", "worker-dal-api", InternalAPI},
-		{"Generic API", "api-service", InternalAPI},
-		{"Unknown pattern", "some-service", InternalAPI},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := InferAppType(tt.appName); got != tt.expected {
-				t.Errorf("InferAppType(%q) = %v, want %v", tt.appName, got, tt.expected)
-			}
-		})
-	}
-}
-
 func TestParseAppType(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -285,55 +256,55 @@ func TestResolveAppType(t *testing.T) {
 			Job,
 			false,
 		},
-		// Inference when no explicit type (empty string)
+		// Empty type string should error (no inference)
 		{
-			"Infer external-api from experience-api",
+			"No type provided for experience-api",
 			"experience-api",
 			"",
-			ExternalAPI,
-			false,
+			"",
+			true,
 		},
 		{
-			"Infer internal-api from status-api",
+			"No type provided for status-api",
 			"status-api",
 			"",
-			InternalAPI,
-			false,
+			"",
+			true,
 		},
 		{
-			"Infer internal-api from worker-dal-api",
+			"No type provided for worker-dal-api",
 			"worker-dal-api",
 			"",
-			InternalAPI,
-			false,
+			"",
+			true,
 		},
 		{
-			"Infer worker from status-processor",
+			"No type provided for status-processor",
 			"status-processor",
 			"",
-			Worker,
-			false,
+			"",
+			true,
 		},
 		{
-			"Infer worker from background-worker",
+			"No type provided for background-worker",
 			"background-worker",
 			"",
-			Worker,
-			false,
+			"",
+			true,
 		},
 		{
-			"Infer job from db-migrations",
+			"No type provided for db-migrations",
 			"db-migrations",
 			"",
-			Job,
-			false,
+			"",
+			true,
 		},
 		{
-			"Infer internal-api as default",
+			"No type provided for unknown-app",
 			"unknown-app",
 			"",
-			InternalAPI,
-			false,
+			"",
+			true,
 		},
 		// Invalid explicit types
 		{
