@@ -6,6 +6,7 @@ py_binary(
         "__init__.py",
         "main.py",
     ],
+    main = "main.py",
     deps = [],
     visibility = ["//visibility:public"],
 )
