@@ -21,8 +21,13 @@ spec:
   {{- if $.Values.ingress.className }}
   ingressClassName: {{ $.Values.ingress.className }}
   {{- end }}
-  {{- if $.Values.ingress.tls }}
+  {{- if or $.Values.ingress.tls $app.ingress.tlsSecretName }}
   tls:
+    {{- if $app.ingress.tlsSecretName }}
+    - secretName: {{ $app.ingress.tlsSecretName }}
+      hosts:
+        - {{ $app.ingress.host | default (printf "%s-%s.local" $appName $.Values.global.environment) }}
+    {{- end }}
     {{- range $.Values.ingress.tls }}
     - secretName: {{ .secretName }}
       {{- if .hosts }}
@@ -34,7 +39,7 @@ spec:
     {{- end }}
   {{- end }}
   rules:
-    - host: {{ $appName }}-{{ $.Values.global.environment }}.local
+    - host: {{ if $app.ingress }}{{ $app.ingress.host | default (printf "%s-%s.local" $appName $.Values.global.environment) }}{{ else }}{{ printf "%s-%s.local" $appName $.Values.global.environment }}{{ end }}
       http:
         paths:
           - path: /

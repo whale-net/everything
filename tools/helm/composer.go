@@ -21,9 +21,24 @@ type AppMetadata struct {
 	Domain       string            `json:"domain"`
 	Language     string            `json:"language"`
 	Port         int               `json:"port,omitempty"`
+	Replicas     int               `json:"replicas,omitempty"`
 	Labels       map[string]string `json:"labels,omitempty"`
 	Annotations  map[string]string `json:"annotations,omitempty"`
 	Dependencies []string          `json:"dependencies,omitempty"`
+	HealthCheck  *HealthCheckMeta  `json:"health_check,omitempty"`
+	Ingress      *IngressMeta      `json:"ingress,omitempty"`
+}
+
+// HealthCheckMeta represents health check configuration from metadata
+type HealthCheckMeta struct {
+	Enabled bool   `json:"enabled"`
+	Path    string `json:"path"`
+}
+
+// IngressMeta represents ingress configuration from metadata
+type IngressMeta struct {
+	Host          string `json:"host"`
+	TLSSecretName string `json:"tls_secret_name"`
 }
 
 // GetImage returns the full image name (registry/repo_name)
@@ -92,6 +107,13 @@ type AppConfig struct {
 	Command     []string             `yaml:"command,omitempty"`
 	Args        []string             `yaml:"args,omitempty"`
 	Env         map[string]string    `yaml:"env,omitempty"`
+	Ingress     *AppIngressConfig    `yaml:"ingress,omitempty"` // Per-app ingress config
+}
+
+// AppIngressConfig represents per-app ingress configuration
+type AppIngressConfig struct {
+	Host          string `yaml:"host,omitempty"`
+	TLSSecretName string `yaml:"tlsSecretName,omitempty"`
 }
 
 // IngressConfig represents ingress configuration in values.yaml
@@ -370,10 +392,13 @@ func (c *Composer) buildAppConfig(app AppMetadata) (AppConfig, error) {
 	// Get default resources for this app type
 	resources := appType.DefaultResourceConfig()
 
-	// Set default replicas based on type
-	replicas := 1
-	if appType == ExternalAPI || appType == InternalAPI {
-		replicas = 2
+	// Set replicas: use metadata if provided, otherwise default based on type
+	replicas := app.Replicas
+	if replicas == 0 {
+		replicas = 1
+		if appType == ExternalAPI || appType == InternalAPI {
+			replicas = 2
+		}
 	}
 
 	// Set default port
@@ -391,15 +416,37 @@ func (c *Composer) buildAppConfig(app AppMetadata) (AppConfig, error) {
 		Resources: resources.ToValuesFormat(),
 	}
 
-	// Add health check for APIs
+	// Add health check for APIs based on metadata or defaults
 	if appType == ExternalAPI || appType == InternalAPI {
-		config.HealthCheck = &HealthCheckConfig{
-			Path:                "/health",
-			InitialDelaySeconds: 10,
-			PeriodSeconds:       10,
-			TimeoutSeconds:      5,
-			SuccessThreshold:    1,
-			FailureThreshold:    3,
+		if app.HealthCheck != nil && app.HealthCheck.Enabled {
+			// Use health check path from metadata
+			config.HealthCheck = &HealthCheckConfig{
+				Path:                app.HealthCheck.Path,
+				InitialDelaySeconds: 10,
+				PeriodSeconds:       10,
+				TimeoutSeconds:      5,
+				SuccessThreshold:    1,
+				FailureThreshold:    3,
+			}
+		} else if app.HealthCheck == nil || (app.HealthCheck != nil && app.HealthCheck.Path == "") {
+			// Default to /health for APIs if not specified
+			config.HealthCheck = &HealthCheckConfig{
+				Path:                "/health",
+				InitialDelaySeconds: 10,
+				PeriodSeconds:       10,
+				TimeoutSeconds:      5,
+				SuccessThreshold:    1,
+				FailureThreshold:    3,
+			}
+		}
+		// If HealthCheck.Enabled is false, don't add health check (nil)
+	}
+
+	// Add per-app ingress configuration if provided
+	if app.Ingress != nil && app.Ingress.Host != "" {
+		config.Ingress = &AppIngressConfig{
+			Host:          app.Ingress.Host,
+			TLSSecretName: app.Ingress.TLSSecretName,
 		}
 	}
 
@@ -610,6 +657,14 @@ func writeValuesYAML(f *os.File, data ValuesData) error {
 			w.WriteInt("timeoutSeconds", app.HealthCheck.TimeoutSeconds)
 			w.WriteInt("successThreshold", app.HealthCheck.SuccessThreshold)
 			w.WriteInt("failureThreshold", app.HealthCheck.FailureThreshold)
+			w.EndSection()
+		}
+
+		// Per-app ingress config if present
+		if app.Ingress != nil {
+			w.StartSection("ingress")
+			w.WriteString("host", app.Ingress.Host)
+			w.WriteString("tlsSecretName", app.Ingress.TLSSecretName)
 			w.EndSection()
 		}
 
