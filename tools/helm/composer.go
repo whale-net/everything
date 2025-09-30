@@ -27,6 +27,8 @@ type AppMetadata struct {
 	Dependencies []string          `json:"dependencies,omitempty"`
 	HealthCheck  *HealthCheckMeta  `json:"health_check,omitempty"`
 	Ingress      *IngressMeta      `json:"ingress,omitempty"`
+	Command      []string          `json:"command,omitempty"`
+	Args         []string          `json:"args,omitempty"`
 }
 
 // HealthCheckMeta represents health check configuration from metadata
@@ -414,6 +416,8 @@ func (c *Composer) buildAppConfig(app AppMetadata) (AppConfig, error) {
 		Port:      port,
 		Replicas:  replicas,
 		Resources: resources.ToValuesFormat(),
+		Command:   app.Command, // Use command from metadata
+		Args:      app.Args,    // Use args from metadata
 	}
 
 	// Add health check for APIs based on metadata or defaults

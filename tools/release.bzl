@@ -35,6 +35,12 @@ def _app_metadata_impl(ctx):
             "tls_secret_name": ctx.attr.ingress_tls_secret,
         }
     
+    # Add command and args if provided
+    if ctx.attr.command:
+        metadata["command"] = ctx.attr.command
+    if ctx.attr.args:
+        metadata["args"] = ctx.attr.args
+    
     output = ctx.actions.declare_file(ctx.label.name + "_metadata.json")
     ctx.actions.write(
         output = output,
@@ -62,10 +68,12 @@ app_metadata = rule(
         "health_check_path": attr.string(default = "/health"),  # Health check endpoint path
         "ingress_host": attr.string(default = ""),  # Custom ingress host (empty = use default pattern)
         "ingress_tls_secret": attr.string(default = ""),  # TLS secret name for ingress
+        "command": attr.string_list(default = []),  # Container command override
+        "args": attr.string_list(default = []),  # Container arguments
     },
 )
 
-def release_app(name, binary_target = None, binary_amd64 = None, binary_arm64 = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = True, health_check_path = "/health", ingress_host = "", ingress_tls_secret = ""):
+def release_app(name, binary_target = None, binary_amd64 = None, binary_arm64 = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = True, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = []):
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
@@ -91,6 +99,8 @@ def release_app(name, binary_target = None, binary_amd64 = None, binary_arm64 = 
         health_check_path: Path for health check endpoint (default: /health)
         ingress_host: Custom ingress hostname (empty = use default {app}-{env}.local pattern)
         ingress_tls_secret: TLS secret name for ingress (empty = no TLS)
+        command: Override container command (default: use image ENTRYPOINT)
+        args: Container arguments (default: empty, or binary's default args)
     """
     if language not in ["python", "go"]:
         fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
@@ -169,6 +179,8 @@ def release_app(name, binary_target = None, binary_amd64 = None, binary_arm64 = 
         health_check_path = health_check_path,
         ingress_host = ingress_host,  # Ingress configuration
         ingress_tls_secret = ingress_tls_secret,
+        command = command,  # Container command override
+        args = args,  # Container arguments
         tags = ["release-metadata"],  # No manual tag - metadata should be easily discoverable
         visibility = ["//visibility:public"],
     )

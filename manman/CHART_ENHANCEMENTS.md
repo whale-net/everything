@@ -55,11 +55,6 @@ apps:
       tlsSecretName: manman-tls
 ```
 
-**Ingress Template Enhancement**:
-- Uses `$app.ingress.host` if provided
-- Uses `$app.ingress.tlsSecretName` for TLS configuration
-- Falls back to `{{ $appName }}-{{ $.Values.global.environment }}.local` if not specified
-
 ### 3. Configurable Health Checks ✅
 **Problem**: Health checks always enabled with hardcoded `/health` path.
 
@@ -80,11 +75,6 @@ release_app(
 )
 ```
 
-**Behavior**:
-- APIs default to health checks at `/health`
-- Workers and jobs have no health checks by default
-- Can be customized or disabled per app
-
 ### 4. Port Configuration ✅
 **Problem**: Port was hardcoded to 8000 for all APIs.
 
@@ -103,6 +93,49 @@ release_app(
 )
 ```
 
+### 5. Per-App Startup Commands and Arguments ✅
+**Problem**: All ManMan services use the same binary entrypoint but need different startup commands.
+
+**Solution**:
+- Added `command` and `args` parameters to `release_app` macro
+- Composer reads command/args from metadata and includes in values.yaml
+- Deployment templates use args to specify which service to start
+- Allows multiple services to share the same container image with different behavior
+
+**Usage**:
+```starlark
+release_app(
+    name = "experience_api",
+    binary_target = "//manman/src/host:experience_api",
+    app_type = "external-api",
+    args = ["start-experience-api"],  # CLI command to run
+)
+
+release_app(
+    name = "status_api",
+    binary_target = "//manman/src/host:status_api",
+    app_type = "internal-api",
+    args = ["start-status-api"],  # Different CLI command, same image
+)
+```
+
+**Generated Deployment**:
+```yaml
+spec:
+  containers:
+    - name: experience_api
+      image: "ghcr.io/manman-experience_api:latest"
+      args:
+        - start-experience-api
+```
+
+**ManMan Services**: All services use `main.py` as entrypoint with different args:
+- `experience_api`: `["start-experience-api"]`
+- `status_api`: `["start-status-api"]`
+- `worker_dal_api`: `["start-worker-dal-api"]`
+- `status_processor`: `["start-status-processor"]`
+- `migration`: `["run-migration"]`
+
 ## Current ManMan Configuration
 
 All ManMan services now have explicit configuration:
@@ -117,6 +150,7 @@ release_app(
     port = 8000,
     ingress_host = "experience.manman.local",
     ingress_tls_secret = "manman-tls",
+    args = ["start-experience-api"],
 )
 
 # Worker DAL API - External facing
@@ -128,6 +162,7 @@ release_app(
     port = 8000,
     ingress_host = "dal.manman.local",
     ingress_tls_secret = "manman-tls",
+    args = ["start-worker-dal-api"],
 )
 
 # Status API - Internal only
@@ -137,6 +172,7 @@ release_app(
     app_type = "internal-api",
     replicas = 1,
     port = 8000,
+    args = ["start-status-api"],
 )
 
 # Background processors
@@ -145,6 +181,7 @@ release_app(
     binary_target = "//manman/src/host:status_processor",
     app_type = "worker",
     replicas = 1,
+    args = ["start-status-processor"],
 )
 
 # Migration job
@@ -153,6 +190,7 @@ release_app(
     binary_target = "//manman/src/host:migration",
     app_type = "job",
     replicas = 1,
+    args = ["run-migration"],
 )
 ```
 
@@ -168,41 +206,48 @@ $ helm lint bazel-bin/manman/manman-host_chart/manman-host/
 ```
 
 Generated resources:
-- 4 Deployments (2 external APIs, 1 internal API, 1 worker)
+- 4 Deployments (2 external APIs, 1 internal API, 1 worker) - all with custom args
 - 3 Services (APIs only)
 - 2 Ingresses (external APIs only, with custom hosts)
-- 1 Job (migration)
+- 1 Job (migration) - with custom args
 - 4 PodDisruptionBudgets
 
-## Still To Do
+## Future Enhancements
 
-### Environment Variables and Secrets
-**Status**: Not yet implemented
+### Environment Variables from Secrets
+**Status**: Planned
 
-**Required**:
-- Add `env_vars` dict parameter to `release_app`
-- Support for `envFrom` with `secretRef` in deployment template
-- Allow mixing of direct env vars and secret references
-
-**Proposed Usage**:
+Add support for environment variables sourced from Kubernetes secrets:
 ```starlark
 release_app(
     name = "experience_api",
-    env_vars = {
-        "DATABASE_URL": "valueFrom:secret:manman-db:url",
-        "RABBITMQ_URL": "valueFrom:secret:manman-rabbitmq:url",
-        "LOG_LEVEL": "info",
+    env_from_secrets = {
+        "DATABASE_URL": "manman-db:url",
+        "RABBITMQ_URL": "manman-rabbitmq:url",
     },
 )
 ```
 
-### Deployment Template Enhancement
+This would generate deployment manifests with `envFrom` and `secretKeyRef` configurations.
+
+### Resource Limits/Requests Configuration
 **Status**: Planned
 
-**Required**:
-- Update `deployment.yaml.tmpl` to render env vars from values.yaml
-- Support both direct values and secret references
-- Add `envFrom` support for entire secret mounting
+Allow customizing resource requests and limits per app via `release_app`:
+```starlark
+release_app(
+    name = "experience_api",
+    resources = {
+        "requests": {"cpu": "100m", "memory": "512Mi"},
+        "limits": {"cpu": "200m", "memory": "1Gi"},
+    },
+)
+```
+
+### Horizontal Pod Autoscaling
+**Status**: Planned
+
+Add HPA support for APIs that need dynamic scaling based on load.
 
 ## Testing the Chart
 
@@ -216,7 +261,7 @@ helm template manman bazel-bin/manman/manman-host_chart/manman-host/
 
 # Check specific app config
 helm template manman bazel-bin/manman/manman-host_chart/manman-host/ \
-  --show-only templates/ingress.yaml
+  --show-only templates/deployment.yaml | grep -A 20 experience_api
 ```
 
 ### Deploy to Kubernetes
@@ -226,43 +271,24 @@ helm install manman bazel-bin/manman/manman-host_chart/manman-host/ \
   --namespace manman \
   --create-namespace
 
-# Override replicas for production
+# Override values for production
 helm install manman bazel-bin/manman/manman-host_chart/manman-host/ \
   --namespace manman \
   --set apps.experience_api.replicas=3 \
   --set apps.worker_dal_api.replicas=3
 ```
 
-### Customize with values file
-```yaml
-# custom-values.yaml
-apps:
-  experience_api:
-    replicas: 3
-    resources:
-      requests:
-        cpu: 100m
-        memory: 512Mi
-      limits:
-        cpu: 200m
-        memory: 1Gi
-    ingress:
-      host: experience.production.example.com
-      tlsSecretName: prod-tls-cert
-
-helm install manman ./chart --values custom-values.yaml
-```
-
-## Implementation Details
+## Implementation Summary
 
 ### Modified Files
-- `tools/release.bzl`: Added replicas, port, health_check_*, ingress_* parameters
+- `tools/release.bzl`: Added replicas, port, health_check_*, ingress_*, command, args parameters
 - `tools/helm/composer.go`: 
   - Added `AppIngressConfig` struct
   - Enhanced `buildAppConfig()` to read configuration from metadata
-  - Updated custom YAML writer to output per-app ingress config
+  - Updated custom YAML writer to output per-app ingress config and command/args
 - `tools/helm/templates/ingress.yaml.tmpl`: Use per-app ingress config
-- `manman/BUILD.bazel`: Added explicit configuration to all services
+- `tools/helm/templates/deployment.yaml.tmpl`: Already supports command/args from values
+- `manman/BUILD.bazel`: Added explicit configuration with args to all 5 services
 
 ### Metadata JSON Structure
 ```json
@@ -278,7 +304,8 @@ helm install manman ./chart --values custom-values.yaml
   "ingress": {
     "host": "experience.manman.local",
     "tls_secret_name": "manman-tls"
-  }
+  },
+  "args": ["start-experience-api"]
 }
 ```
 
@@ -289,11 +316,4 @@ helm install manman ./chart --values custom-values.yaml
 3. **Maintainable**: Configuration in BUILD files, version controlled with code
 4. **Scalable**: Easy to adjust replicas per environment
 5. **Secure**: Per-app ingress allows proper TLS and host configuration
-
-## Next Steps
-
-1. Implement environment variable and secrets support
-2. Add resource limits/requests configuration
-3. Consider adding HorizontalPodAutoscaler support
-4. Add ServiceMonitor for Prometheus integration
-5. Document upgrade path from manual chart to composed chart
+6. **Multi-Service**: Supports multiple services from same image with different startup args
