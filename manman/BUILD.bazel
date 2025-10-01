@@ -1,6 +1,5 @@
 load("@rules_python//python:defs.bzl", "py_library")
-load("//tools:release.bzl", "release_app")
-load("//tools/helm:helm.bzl", "helm_chart")
+load("//tools:release.bzl", "release_app", "release_helm_chart")
 
 # Re-export all manman modules for convenience
 py_library(
@@ -95,16 +94,20 @@ MANMAN_APPS = [
     ":status_api_metadata",
     ":worker_dal_api_metadata",
     ":status_processor_metadata",
+    ":worker_metadata",
     ":migration_metadata",
 ]
 
 # Helm chart composition - combines all manman services into a single chart
-helm_chart(
+# This is registered with the release system for CI/CD integration
+# Chart tags will use the format: helm-manman-host.vX.Y.Z to avoid collision with app tags
+release_helm_chart(
     name = "manman_chart",
     apps = MANMAN_APPS,
     chart_name = "manman-host",
     namespace = "manman",
     environment = "dev",
+    domain = "manman",
     chart_version = "0.2.0",
     visibility = ["//visibility:public"],
 )
