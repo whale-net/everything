@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       apps:
-        description: 'Comma-separated list of apps to release (e.g., hello_python,hello_go) or "all" for all apps'
-        required: true
-        default: 'all'
+        description: 'Comma-separated list of apps to release (e.g., hello_python,hello_go) or "all" for all apps. Leave empty to skip app release.'
+        required: false
+        default: ''
       version:
         description: 'Release version (e.g., v1.0.0) - leave empty when using increment options'
         required: false
@@ -38,6 +38,19 @@ jobs:
     name: Validate Inputs
     runs-on: ubuntu-latest
     steps:
+    - name: Validate at least one release target
+      run: |
+        APPS="${{ github.event.inputs.apps }}"
+        HELM_CHARTS="${{ github.event.inputs.helm_charts }}"
+        
+        # Ensure at least one of apps or helm_charts is specified
+        if [[ -z "$APPS" && -z "$HELM_CHARTS" ]]; then
+          echo "Error: Must specify at least one of: apps or helm_charts"
+          exit 1
+        fi
+        
+        echo "Release target validation passed"
+        
     - name: Validate mutually exclusive version options
       run: |
         VERSION="${{ github.event.inputs.version }}"
@@ -72,6 +85,7 @@ jobs:
     name: Plan Release
     runs-on: ubuntu-latest
     needs: validate-inputs
+    if: github.event.inputs.apps != ''
     outputs:
       release-matrix: ${{ steps.plan.outputs.matrix }}
       version: ${{ steps.plan.outputs.version }}
@@ -137,7 +151,7 @@ jobs:
     name: Release ${{ matrix.app }}
     runs-on: ubuntu-latest
     needs: plan-release
-    if: needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
+    if: needs.plan-release.result == 'success' && needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
     strategy:
       matrix: ${{ fromJson(needs.plan-release.outputs.release-matrix) }}
       fail-fast: false
@@ -249,7 +263,7 @@ jobs:
     name: Create GitHub Releases
     runs-on: ubuntu-latest
     needs: [plan-release, release]
-    if: needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null && github.event.inputs.dry_run == 'false'
+    if: needs.plan-release.result == 'success' && needs.release.result == 'success' && needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null && github.event.inputs.dry_run == 'false'
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -310,8 +324,8 @@ jobs:
   release-summary:
     name: Release Summary
     runs-on: ubuntu-latest
-    needs: [plan-release, release, create-github-releases, release-helm-charts]
-    if: always()
+    needs: [validate-inputs, plan-release, release, create-github-releases, release-helm-charts]
+    if: always() && needs.validate-inputs.result == 'success'
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -325,6 +339,7 @@ jobs:
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
       
     - name: Generate summary using release helper
+      if: github.event.inputs.apps != ''
       run: |
         # Use our release helper tool to generate the summary
         MATRIX='${{ needs.plan-release.outputs.release-matrix }}'
@@ -344,7 +359,17 @@ jobs:
       if: github.event.inputs.helm_charts != ''
       run: |
         HELM_CHARTS="${{ github.event.inputs.helm_charts }}"
-        VERSION="${{ needs.plan-release.outputs.version }}"
+        
+        # Determine version - use plan-release output if available, otherwise from inputs
+        if [[ "${{ needs.plan-release.result }}" == "success" && -n "${{ needs.plan-release.outputs.version }}" ]]; then
+          VERSION="${{ needs.plan-release.outputs.version }}"
+        else
+          VERSION="${{ github.event.inputs.version }}"
+          if [[ -z "$VERSION" ]]; then
+            VERSION="auto-versioned"
+          fi
+        fi
+        
         DRY_RUN="${{ github.event.inputs.dry_run }}"
         HELM_JOB_RESULT="${{ needs.release-helm-charts.result }}"
         REPO_OWNER="${{ github.repository_owner }}"
@@ -394,11 +419,13 @@ jobs:
           echo "**Status:** ❌ Failed or Cancelled" >> $GITHUB_STEP_SUMMARY
         fi
 
-  # Release helm charts after apps are released
+  # Release helm charts after apps are released (if apps were specified) or independently
   release-helm-charts:
     name: Release Helm Charts
-    needs: [plan-release, release]
-    if: github.event.inputs.helm_charts != '' && needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
+    needs: [validate-inputs, plan-release]
+    if: |
+      github.event.inputs.helm_charts != '' && 
+      (needs.plan-release.result == 'success' || needs.plan-release.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write  # Required to push to gh-pages branch
@@ -432,7 +459,23 @@ jobs:
       id: plan
       run: |
         CHARTS_INPUT="${{ github.event.inputs.helm_charts }}"
-        VERSION="${{ needs.plan-release.outputs.version }}"
+        
+        # Determine version - use plan-release output if available, otherwise compute from inputs
+        if [[ "${{ needs.plan-release.result }}" == "success" && -n "${{ needs.plan-release.outputs.version }}" ]]; then
+          VERSION="${{ needs.plan-release.outputs.version }}"
+          echo "Using version from app release plan: $VERSION"
+        else
+          # Compute version from inputs
+          VERSION="${{ github.event.inputs.version }}"
+          INCREMENT_MINOR="${{ github.event.inputs.increment_minor }}"
+          INCREMENT_PATCH="${{ github.event.inputs.increment_patch }}"
+          
+          if [[ -z "$VERSION" ]]; then
+            # Version will be determined by auto-versioning in the build-helm-chart command
+            echo "Version will be auto-computed by helm chart builder"
+            VERSION="auto"
+          fi
+        fi
         
         echo "Planning helm chart release for: $CHARTS_INPUT"
         echo "Using version: $VERSION"
@@ -461,9 +504,21 @@ jobs:
     - name: Build helm charts with versioning
       if: steps.plan.outputs.charts != ''
       env:
-        VERSION: ${{ needs.plan-release.outputs.version }}
         DRY_RUN: ${{ github.event.inputs.dry_run }}
       run: |
+        # Determine version - use plan-release output if available, otherwise compute from inputs
+        if [[ "${{ needs.plan-release.result }}" == "success" && -n "${{ needs.plan-release.outputs.version }}" ]]; then
+          VERSION="${{ needs.plan-release.outputs.version }}"
+          echo "Using version from app release plan: $VERSION"
+        else
+          # Compute version from inputs
+          VERSION="${{ github.event.inputs.version }}"
+          if [[ -z "$VERSION" ]]; then
+            echo "Using auto-versioning for helm charts"
+            VERSION="auto"
+          fi
+        fi
+        
         echo "Building helm charts with version $VERSION"
         
         # Create output directory for charts
