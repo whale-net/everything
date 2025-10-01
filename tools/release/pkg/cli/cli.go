@@ -6,9 +6,12 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/whale-net/everything/tools/release/pkg/changes"
 	"github.com/whale-net/everything/tools/release/pkg/core"
 	"github.com/whale-net/everything/tools/release/pkg/git"
+	"github.com/whale-net/everything/tools/release/pkg/images"
 	"github.com/whale-net/everything/tools/release/pkg/metadata"
+	"github.com/whale-net/everything/tools/release/pkg/release"
 	"github.com/whale-net/everything/tools/release/pkg/validation"
 )
 
@@ -27,6 +30,9 @@ func init() {
 	rootCmd.AddCommand(listAppVersionsCmd)
 	rootCmd.AddCommand(incrementVersionCmd)
 	rootCmd.AddCommand(buildCmd)
+	rootCmd.AddCommand(planCmd)
+	rootCmd.AddCommand(changesCmd)
+	rootCmd.AddCommand(releaseCmd)
 }
 
 var listAppsCmd = &cobra.Command{
@@ -186,6 +192,145 @@ var buildCmd = &cobra.Command{
 
 func init() {
 	buildCmd.Flags().String("platform", "", "Target platform (amd64, arm64)")
+}
+
+var planCmd = &cobra.Command{
+	Use:   "plan",
+	Short: "Plan a release and output CI matrix",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		eventType, _ := cmd.Flags().GetString("event-type")
+		apps, _ := cmd.Flags().GetString("apps")
+		version, _ := cmd.Flags().GetString("version")
+		incrementMinor, _ := cmd.Flags().GetBool("increment-minor")
+		incrementPatch, _ := cmd.Flags().GetBool("increment-patch")
+		baseCommit, _ := cmd.Flags().GetString("base-commit")
+		format, _ := cmd.Flags().GetString("format")
+
+		// Determine version mode
+		versionMode := ""
+		if incrementMinor {
+			versionMode = "increment_minor"
+		} else if incrementPatch {
+			versionMode = "increment_patch"
+		}
+
+		// Plan release
+		plan, err := release.PlanRelease(eventType, apps, version, versionMode, baseCommit)
+		if err != nil {
+			return fmt.Errorf("failed to plan release: %w", err)
+		}
+
+		// Format output
+		output, err := release.FormatReleasePlan(plan, format)
+		if err != nil {
+			return fmt.Errorf("failed to format plan: %w", err)
+		}
+
+		fmt.Println(output)
+		return nil
+	},
+}
+
+func init() {
+	planCmd.Flags().String("event-type", "", "Type of trigger event (required)")
+	planCmd.Flags().String("apps", "", "Comma-separated list of apps, domain names, or 'all'")
+	planCmd.Flags().String("version", "", "Release version")
+	planCmd.Flags().Bool("increment-minor", false, "Auto-increment minor version")
+	planCmd.Flags().Bool("increment-patch", false, "Auto-increment patch version")
+	planCmd.Flags().String("base-commit", "", "Compare changes against this commit")
+	planCmd.Flags().String("format", "json", "Output format (json, github)")
+	planCmd.MarkFlagRequired("event-type")
+}
+
+var changesCmd = &cobra.Command{
+	Use:   "changes",
+	Short: "Detect changed apps since a commit",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		baseCommit, _ := cmd.Flags().GetString("base-commit")
+		useBazelQuery, _ := cmd.Flags().GetBool("use-bazel-query")
+
+		changedApps, err := changes.DetectChangedApps(baseCommit, useBazelQuery)
+		if err != nil {
+			return fmt.Errorf("failed to detect changed apps: %w", err)
+		}
+
+		if len(changedApps) == 0 {
+			fmt.Println("No changed apps detected")
+			return nil
+		}
+
+		fmt.Println("Changed apps:")
+		for _, app := range changedApps {
+			fmt.Printf("  - %s (domain: %s)\n", app.Name, app.Domain)
+		}
+
+		return nil
+	},
+}
+
+func init() {
+	changesCmd.Flags().String("base-commit", "", "Compare changes against this commit")
+	changesCmd.Flags().Bool("use-bazel-query", true, "Use Bazel query for precise dependency analysis")
+}
+
+var releaseCmd = &cobra.Command{
+	Use:   "release <app-name>",
+	Short: "Build, tag, and push container image",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		appName := args[0]
+		version, _ := cmd.Flags().GetString("version")
+		commit, _ := cmd.Flags().GetString("commit")
+		dryRun, _ := cmd.Flags().GetBool("dry-run")
+		allowOverwrite, _ := cmd.Flags().GetBool("allow-overwrite")
+		createGitTag, _ := cmd.Flags().GetBool("create-git-tag")
+
+		// Find the app
+		bazelTarget, err := release.FindAppBazelTarget(appName)
+		if err != nil {
+			return err
+		}
+
+		// Get app metadata
+		appMeta, err := metadata.GetAppMetadata(bazelTarget)
+		if err != nil {
+			return fmt.Errorf("failed to get app metadata: %w", err)
+		}
+
+		// Validate version
+		if version != "" && version != "latest" {
+			if err := validation.ValidateSemanticVersion(version); err != nil {
+				return fmt.Errorf("invalid version: %w", err)
+			}
+		}
+
+		// Tag and push image
+		err = images.TagAndPushImage(appMeta, version, commit, dryRun, allowOverwrite)
+		if err != nil {
+			return fmt.Errorf("failed to release: %w", err)
+		}
+
+		// Create git tag if requested
+		if createGitTag && !dryRun {
+			gitTag := git.FormatGitTag(appMeta.Domain, appMeta.Name, version)
+			if err := git.CreateGitTag(gitTag, commit, ""); err != nil {
+				return fmt.Errorf("failed to create git tag: %w", err)
+			}
+			if err := git.PushGitTag(gitTag); err != nil {
+				return fmt.Errorf("failed to push git tag: %w", err)
+			}
+		}
+
+		return nil
+	},
+}
+
+func init() {
+	releaseCmd.Flags().String("version", "latest", "Version tag")
+	releaseCmd.Flags().String("commit", "", "Commit SHA for additional tag")
+	releaseCmd.Flags().Bool("dry-run", false, "Show what would be pushed without actually pushing")
+	releaseCmd.Flags().Bool("allow-overwrite", false, "Allow overwriting existing versions")
+	releaseCmd.Flags().Bool("create-git-tag", false, "Create and push a Git tag for this release")
 }
 
 // Validate validates a semantic version format

@@ -58,6 +58,65 @@ go_test(
     embed = [":metadata_lib"],
 )
 
+# Images package
+go_library(
+    name = "images_lib",
+    srcs = ["pkg/images/images.go"],
+    importpath = "github.com/whale-net/everything/tools/release/pkg/images",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":core_lib",
+        ":metadata_lib",
+    ],
+)
+
+go_test(
+    name = "images_test",
+    srcs = ["pkg/images/images_test.go"],
+    embed = [":images_lib"],
+    deps = [":metadata_lib"],
+)
+
+# Changes package
+go_library(
+    name = "changes_lib",
+    srcs = ["pkg/changes/changes.go"],
+    importpath = "github.com/whale-net/everything/tools/release/pkg/changes",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":core_lib",
+        ":git_lib",
+        ":metadata_lib",
+    ],
+)
+
+go_test(
+    name = "changes_test",
+    srcs = ["pkg/changes/changes_test.go"],
+    embed = [":changes_lib"],
+    deps = [":metadata_lib"],
+)
+
+# Release package
+go_library(
+    name = "release_lib",
+    srcs = ["pkg/release/release.go"],
+    importpath = "github.com/whale-net/everything/tools/release/pkg/release",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":changes_lib",
+        ":git_lib",
+        ":metadata_lib",
+        ":validation_lib",
+    ],
+)
+
+go_test(
+    name = "release_test",
+    srcs = ["pkg/release/release_test.go"],
+    embed = [":release_lib"],
+)
+
 # CLI package
 go_library(
     name = "cli_lib",
@@ -65,9 +124,12 @@ go_library(
     importpath = "github.com/whale-net/everything/tools/release/pkg/cli",
     visibility = ["//visibility:public"],
     deps = [
+        ":changes_lib",
         ":core_lib",
         ":git_lib",
+        ":images_lib",
         ":metadata_lib",
+        ":release_lib",
         ":validation_lib",
         "@com_github_spf13_cobra//:cobra",
     ],
@@ -80,3 +142,4 @@ go_binary(
     visibility = ["//visibility:public"],
     deps = [":cli_lib"],
 )
+
