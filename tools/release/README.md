@@ -24,29 +24,31 @@ tools/release/
 
 ## Commands Implemented
 
-Currently implemented commands (partial port):
-- `list` - List all apps with release metadata
-- `list-app-versions [app]` - List versions for apps by checking git tags
-- `increment-version <app> <minor|patch>` - Calculate next version
-- `build <app> [--platform=...]` - Build container image
+Currently implemented commands (7 of 20+):
+- ✅ `list` - List all apps with release metadata
+- ✅ `list-app-versions [app]` - List versions for apps by checking git tags
+- ✅ `increment-version <app> <minor|patch>` - Calculate next version
+- ✅ `build <app> [--platform=...]` - Build container image
+- ✅ `plan --event-type=...` - Plan release and output CI matrix
+- ✅ `changes [--base-commit=...]` - Detect changed apps since a commit
+- ✅ `release <app> [--version=...]` - Build, tag, and push container image
 
 ## Commands TODO
 
 The following commands from the Python version need to be ported:
-- `release` - Build, tag, and push container image
-- `plan` - Plan a release and output CI matrix
-- `changes` - Detect changed apps since a commit
 - `validate-version` - Validate a version string
 - `summary` - Generate release summary
-- `release-notes` - Generate release notes
+- `release-notes` - Generate release notes for a specific app
 - `release-notes-all` - Generate release notes for all apps
 - `create-github-release` - Create GitHub release
 - `create-combined-github-release` - Create combined GitHub release
+- `create-combined-github-release-with-notes` - Create combined release with notes
 - `list-helm-charts` - List Helm charts
 - `helm-chart-info` - Get Helm chart information
 - `resolve-chart-app-versions` - Resolve app versions for chart
 - `build-helm-chart` - Build Helm chart
 - `plan-helm-release` - Plan Helm release
+- `release-multiarch` - Build and release multi-architecture images
 
 ## Testing
 
@@ -61,6 +63,9 @@ bazel test //tools/release:core_test
 bazel test //tools/release:validation_test
 bazel test //tools/release:git_test
 bazel test //tools/release:metadata_test
+bazel test //tools/release:images_test
+bazel test //tools/release:changes_test
+bazel test //tools/release:release_test
 ```
 
 ## Usage
@@ -76,6 +81,9 @@ bazel run //tools/release:release -- list
 bazel run //tools/release:release -- list-app-versions
 bazel run //tools/release:release -- increment-version hello_python minor
 bazel run //tools/release:release -- build hello_python
+bazel run //tools/release:release -- plan --event-type=workflow_dispatch --apps=all --version=v1.0.0
+bazel run //tools/release:release -- changes --base-commit=HEAD^
+bazel run //tools/release:release -- release hello_python --version=v1.0.0 --dry-run
 ```
 
 ## Migration Status
@@ -85,19 +93,20 @@ bazel run //tools/release:release -- build hello_python
 - ✅ Metadata operations (app discovery, metadata parsing)
 - ✅ Validation (semantic versioning, version comparison)
 - ✅ Git operations (tag management, version parsing, auto-increment)
-- ✅ Basic CLI structure (cobra-based)
+- ✅ Images module (build, tag, push operations)
+- ✅ Changes module (change detection, Bazel query)
+- ✅ Release module (planning, CI matrix generation)
+- ✅ Basic CLI structure (cobra-based, 7 commands)
 
 ### In Progress
-- 🚧 Images module (build, tag, push operations)
-- 🚧 Changes module (change detection, Bazel query)
-- 🚧 Release module (planning, CI matrix generation)
 - 🚧 GitHub module (release creation, API integration)
+- 🚧 Release notes generation
+- 🚧 Full CLI command parity with Python version
 
 ### Pending
-- ⏳ Full CLI command parity with Python version
-- ⏳ Helm chart operations
-- ⏳ Release notes generation
-- ⏳ Multi-arch image support
+- ⏳ Helm chart operations (13 commands remaining)
+- ⏳ Multi-arch image support (command integration)
+- ⏳ Summary and validation commands
 
 ## Design Notes
 
