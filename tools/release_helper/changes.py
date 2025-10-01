@@ -107,14 +107,13 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
         
         # Use rdeps() to find all app_metadata targets that depend on any affected target
         # This is much faster than querying deps() for each app individually
-        # Build the query expression using set() to group affected targets
-        affected_targets_expr = " + ".join(f'"{target}"' for target in affected_targets)
+        # Build the query expression - set() takes space-separated targets
+        affected_targets_list = " ".join(affected_targets)
         
         # Query for app_metadata targets that depend on any of the affected targets
-        # We use rdeps with depth=1000000 (effectively unlimited) and filter to app_metadata kind
         result = run_bazel([
             "query",
-            f"kind(app_metadata, rdeps(//..., set({affected_targets_expr})))",
+            f"kind(app_metadata, rdeps(//..., set({affected_targets_list})))",
             "--output=label"
         ])
         
