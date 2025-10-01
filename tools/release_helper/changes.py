@@ -32,19 +32,16 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
     This approach determines which targets are affected by file changes by:
     1. For source files: Find all targets in the package containing the file
     2. For BUILD/bzl files: Find all targets in the package recursively
-    3. Check which apps depend on the affected targets
+    3. Use rdeps() to find app metadata targets that depend on the affected targets
     
-    This is more reliable than attr() queries which can miss files based on
-    how they're referenced in BUILD files.
+    This is more efficient than querying deps() for each app individually,
+    and avoids building metadata for all apps unnecessarily.
     """
     if not changed_files:
         return []
     
     try:
-        all_apps = list_all_apps()
-        affected_apps = []
-        
-        print(f"Using Bazel package-level analysis to find targets affected by {len(changed_files)} changed files...", file=sys.stderr)
+        print(f"Using Bazel reverse dependency analysis to find apps affected by {len(changed_files)} changed files...", file=sys.stderr)
         
         # Find all targets that are directly affected by the changed files
         affected_targets = set()
@@ -102,46 +99,46 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
             except subprocess.CalledProcessError as e:
                 print(f"Warning: Could not query targets for file {file_path}: {e}", file=sys.stderr)
         
+        if not affected_targets:
+            print("No targets affected by changed files", file=sys.stderr)
+            return []
+        
         print(f"Total targets affected: {len(affected_targets)}", file=sys.stderr)
         
-        # Now check which apps depend on any of the affected targets
-        for app in all_apps:
+        # Use rdeps() to find all app_metadata targets that depend on any affected target
+        # This is much faster than querying deps() for each app individually
+        # Build the query expression using set() to group affected targets
+        affected_targets_expr = " + ".join(f'"{target}"' for target in affected_targets)
+        
+        # Query for app_metadata targets that depend on any of the affected targets
+        # We use rdeps with depth=1000000 (effectively unlimited) and filter to app_metadata kind
+        result = run_bazel([
+            "query",
+            f"kind(app_metadata, rdeps(//..., set({affected_targets_expr})))",
+            "--output=label"
+        ])
+        
+        if not result.stdout.strip():
+            print("No app metadata targets depend on the affected targets", file=sys.stderr)
+            return []
+        
+        # Get the list of affected app metadata targets
+        affected_metadata_targets = [line for line in result.stdout.strip().split('\n') if line]
+        print(f"Found {len(affected_metadata_targets)} affected app(s)", file=sys.stderr)
+        
+        # Now we only need to build metadata for the affected apps
+        affected_apps = []
+        for metadata_target in affected_metadata_targets:
             try:
-                # Get the app's actual binary target from metadata
-                metadata = get_app_metadata(app['bazel_target'])
-                binary_target = metadata['binary_target']
-                
-                # Resolve relative target reference to absolute
-                if binary_target.startswith(':'):
-                    # Extract package path from metadata target
-                    metadata_target = app['bazel_target']
-                    package_path = metadata_target[2:].split(':')[0]  # Remove // and split on :
-                    app_target = f"//{package_path}{binary_target}"  # Combine package + relative target
-                else:
-                    # Already absolute
-                    app_target = binary_target
-                
-                # Query all dependencies of this app
-                result = run_bazel([
-                    "query", 
-                    f"deps({app_target})",
-                    "--output=label"
-                ])
-                
-                if result.stdout.strip():
-                    app_deps = set(result.stdout.strip().split('\n'))
-                    
-                    # Check if this app depends on any affected targets
-                    if affected_targets.intersection(app_deps):
-                        affected_apps.append(app)
-                        overlapping_targets = affected_targets.intersection(app_deps)
-                        print(f"App {app['name']} affected: depends on {len(overlapping_targets)} changed targets", file=sys.stderr)
-                    else:
-                        print(f"App {app['name']} not affected: no dependency on changed targets", file=sys.stderr)
-                    
+                metadata = get_app_metadata(metadata_target)
+                affected_apps.append({
+                    'bazel_target': metadata_target,
+                    'name': metadata['name'],
+                    'domain': metadata['domain']
+                })
+                print(f"App {metadata['name']} is affected by changes", file=sys.stderr)
             except Exception as e:
-                print(f"Warning: Could not analyze dependencies for {app['name']}: {e}", file=sys.stderr)
-                # If we can't analyze this app, don't assume it's affected
+                print(f"Warning: Could not get metadata for {metadata_target}: {e}", file=sys.stderr)
                 continue
         
         return affected_apps
