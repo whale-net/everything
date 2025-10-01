@@ -3,7 +3,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/example/everything/libs/go"
+	"github.com/whale-net/everything/libs/go"
 )
 
 func main() {

@@ -1,0 +1,82 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+# Core package
+go_library(
+    name = "core_lib",
+    srcs = ["pkg/core/core.go"],
+    importpath = "github.com/whale-net/everything/tools/release/pkg/core",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "core_test",
+    srcs = ["pkg/core/core_test.go"],
+    embed = [":core_lib"],
+)
+
+# Validation package
+go_library(
+    name = "validation_lib",
+    srcs = ["pkg/validation/validation.go"],
+    importpath = "github.com/whale-net/everything/tools/release/pkg/validation",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "validation_test",
+    srcs = ["pkg/validation/validation_test.go"],
+    embed = [":validation_lib"],
+)
+
+# Git package
+go_library(
+    name = "git_lib",
+    srcs = ["pkg/git/git.go"],
+    importpath = "github.com/whale-net/everything/tools/release/pkg/git",
+    visibility = ["//visibility:public"],
+    deps = [":validation_lib"],
+)
+
+go_test(
+    name = "git_test",
+    srcs = ["pkg/git/git_test.go"],
+    embed = [":git_lib"],
+)
+
+# Metadata package
+go_library(
+    name = "metadata_lib",
+    srcs = ["pkg/metadata/metadata.go"],
+    importpath = "github.com/whale-net/everything/tools/release/pkg/metadata",
+    visibility = ["//visibility:public"],
+    deps = [":core_lib"],
+)
+
+go_test(
+    name = "metadata_test",
+    srcs = ["pkg/metadata/metadata_test.go"],
+    embed = [":metadata_lib"],
+)
+
+# CLI package
+go_library(
+    name = "cli_lib",
+    srcs = ["pkg/cli/cli.go"],
+    importpath = "github.com/whale-net/everything/tools/release/pkg/cli",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":core_lib",
+        ":git_lib",
+        ":metadata_lib",
+        ":validation_lib",
+        "@com_github_spf13_cobra//:cobra",
+    ],
+)
+
+# Release binary
+go_binary(
+    name = "release",
+    srcs = ["cmd/release/main.go"],
+    visibility = ["//visibility:public"],
+    deps = [":cli_lib"],
+)
