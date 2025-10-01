@@ -1,6 +1,7 @@
 """Release utilities for the Everything monorepo."""
 
 load("//tools:multiplatform_image.bzl", "multiplatform_python_image", "multiplatform_go_image", "multiplatform_push")
+load("//tools/helm:helm.bzl", "helm_chart")
 
 def _app_metadata_impl(ctx):
     """Implementation for app_metadata rule."""
@@ -214,3 +215,110 @@ def get_image_targets(app_name):
         "push_amd64": "//" + app_name + ":" + base_name + "_push_amd64",
         "push_arm64": "//" + app_name + ":" + base_name + "_push_arm64",
     }
+
+def _helm_chart_metadata_impl(ctx):
+    """Implementation for helm_chart_metadata rule."""
+    # Create a JSON file with helm chart metadata
+    metadata = {
+        "name": ctx.attr.chart_name,
+        "version": ctx.attr.chart_version,
+        "namespace": ctx.attr.namespace,
+        "environment": ctx.attr.environment,
+        "domain": ctx.attr.domain,
+        "apps": ctx.attr.app_names,  # List of app names this chart includes
+        "chart_target": ctx.attr.chart_target,  # The actual helm_chart target
+    }
+    
+    output = ctx.actions.declare_file(ctx.label.name + "_chart_metadata.json")
+    ctx.actions.write(
+        output = output,
+        content = json.encode(metadata),
+    )
+    
+    return [DefaultInfo(files = depset([output]))]
+
+helm_chart_metadata = rule(
+    implementation = _helm_chart_metadata_impl,
+    attrs = {
+        "chart_name": attr.string(mandatory = True),
+        "chart_version": attr.string(mandatory = True),
+        "namespace": attr.string(mandatory = True),
+        "environment": attr.string(default = "production"),
+        "domain": attr.string(mandatory = True),
+        "app_names": attr.string_list(mandatory = True),
+        "chart_target": attr.string(mandatory = True),
+    },
+)
+
+def release_helm_chart(
+    name,
+    apps,
+    chart_name = None,
+    chart_version = "0.1.0",
+    namespace = None,
+    environment = "production",
+    domain = None,
+    manual_manifests = [],
+    **kwargs
+):
+    """Convenience macro to set up a releasable Helm chart.
+    
+    This macro wraps helm_chart and creates release metadata for CI/CD integration.
+    
+    Args:
+        name: Target name for the chart
+        apps: List of app_metadata targets to include (e.g., ["//demo/hello_python:hello_python_metadata"])
+        chart_name: Name of the Helm chart (defaults to name)
+        chart_version: Initial version of the chart (will be overridden during release)
+        namespace: Kubernetes namespace for the chart
+        environment: Target environment (development, staging, production)
+        domain: Domain/category for the chart (e.g., "demo", "api", required)
+        manual_manifests: List of k8s_manifests targets or direct YAML files
+        **kwargs: Additional arguments passed to helm_chart
+    """
+    if not domain:
+        fail("domain is required for release_helm_chart")
+    
+    if not namespace:
+        fail("namespace is required for release_helm_chart")
+    
+    actual_chart_name = chart_name or name
+    
+    # Create the helm_chart target
+    helm_chart(
+        name = name,
+        apps = apps,
+        chart_name = actual_chart_name,
+        chart_version = chart_version,
+        namespace = namespace,
+        environment = environment,
+        manual_manifests = manual_manifests,
+        **kwargs
+    )
+    
+    # Extract app names from app_metadata targets
+    # Target format: "//demo/hello_python:hello_python_metadata"
+    app_names = []
+    for app_target in apps:
+        # Extract the app name from the target
+        # Split on : to get the target name, then remove _metadata suffix
+        target_parts = app_target.split(":")
+        if len(target_parts) == 2:
+            target_name = target_parts[1]
+            if target_name.endswith("_metadata"):
+                app_name = target_name[:-9]  # Remove "_metadata"
+                app_names.append(app_name)
+    
+    # Create release metadata for the chart
+    helm_chart_metadata(
+        name = name + "_chart_metadata",
+        chart_name = actual_chart_name,
+        chart_version = chart_version,
+        namespace = namespace,
+        environment = environment,
+        domain = domain,
+        app_names = app_names,
+        chart_target = ":" + name,
+        tags = ["helm-release-metadata"],
+        visibility = ["//visibility:public"],
+    )

@@ -19,6 +19,13 @@ from tools.release_helper.release_notes import generate_release_notes, generate_
 from tools.release_helper.summary import generate_release_summary
 from tools.release_helper.validation import validate_release_version
 from tools.release_helper.github_release import create_app_release, create_releases_for_apps, create_releases_for_apps_with_notes
+from tools.release_helper.helm import (
+    list_all_helm_charts,
+    get_helm_chart_metadata,
+    find_helm_chart_bazel_target,
+    resolve_app_versions_for_chart,
+    package_helm_chart_for_release,
+)
 
 app = typer.Typer(help="Release helper for Everything monorepo")
 
@@ -538,6 +545,154 @@ def create_combined_github_release(
         raise typer.Exit(1)
 
 
+# Helm Chart Commands
+
+@app.command("list-helm-charts")
+def list_helm_charts_cmd():
+    """List all helm charts with release metadata."""
+    charts = list_all_helm_charts()
+    for chart_info in charts:
+        apps_str = ', '.join(chart_info['apps']) if chart_info['apps'] else 'none'
+        typer.echo(f"{chart_info['name']} (domain: {chart_info['domain']}, namespace: {chart_info['namespace']}, apps: {apps_str})")
+
+
+@app.command("helm-chart-info")
+def helm_chart_info(
+    chart_name: Annotated[str, typer.Argument(help="Helm chart name")],
+):
+    """Get detailed information about a helm chart."""
+    try:
+        chart_target = find_helm_chart_bazel_target(chart_name)
+        metadata = get_helm_chart_metadata(chart_target)
+        
+        typer.echo(f"Chart: {metadata['name']}")
+        typer.echo(f"Domain: {metadata['domain']}")
+        typer.echo(f"Namespace: {metadata['namespace']}")
+        typer.echo(f"Environment: {metadata['environment']}")
+        typer.echo(f"Version: {metadata['version']}")
+        typer.echo(f"Apps: {', '.join(metadata.get('apps', []))}")
+        typer.echo(f"Bazel Target: {chart_target}")
+        
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command("resolve-chart-app-versions")
+def resolve_chart_app_versions(
+    chart_name: Annotated[str, typer.Argument(help="Helm chart name")],
+    use_released: Annotated[bool, typer.Option("--use-released/--use-latest", help="Use released versions from git tags or 'latest'")] = True,
+):
+    """Resolve app versions for a helm chart."""
+    try:
+        chart_target = find_helm_chart_bazel_target(chart_name)
+        metadata = get_helm_chart_metadata(chart_target)
+        
+        app_versions = resolve_app_versions_for_chart(metadata, use_released)
+        
+        typer.echo(f"App versions for chart '{chart_name}':")
+        for app_name, version in app_versions.items():
+            typer.echo(f"  {app_name}: {version}")
+            
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command("build-helm-chart")
+def build_helm_chart_cmd(
+    chart_name: Annotated[str, typer.Argument(help="Helm chart name")],
+    chart_version: Annotated[str, typer.Option("--version", help="Chart version")] = "0.1.0",
+    output_dir: Annotated[Optional[str], typer.Option("--output-dir", help="Output directory for packaged chart")] = None,
+    use_released_versions: Annotated[bool, typer.Option("--use-released/--use-latest", help="Use released app versions or 'latest'")] = True,
+):
+    """Build and package a helm chart."""
+    try:
+        from pathlib import Path
+        
+        output_path_obj = Path(output_dir) if output_dir else None
+        
+        chart_path = package_helm_chart_for_release(
+            chart_name=chart_name,
+            chart_version=chart_version,
+            output_dir=output_path_obj,
+            use_released_app_versions=use_released_versions
+        )
+        
+        typer.echo(f"✅ Chart packaged: {chart_path}")
+        
+    except Exception as e:
+        typer.echo(f"❌ Failed to build helm chart: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command("plan-helm-release")
+def plan_helm_release(
+    charts: Annotated[Optional[str], typer.Option(help="Comma-separated list of chart names, domain names, or 'all'")] = None,
+    version: Annotated[Optional[str], typer.Option(help="Release version for charts")] = None,
+    format: Annotated[str, typer.Option(help="Output format")] = "json",
+):
+    """Plan a helm chart release and output CI matrix."""
+    if format not in ["json", "github"]:
+        typer.echo("Error: format must be one of: json, github", err=True)
+        raise typer.Exit(1)
+
+    # Get all helm charts
+    all_charts = list_all_helm_charts()
+    
+    # Filter charts based on input
+    selected_charts = []
+    if charts:
+        chart_input = charts.strip().lower()
+        if chart_input == "all":
+            selected_charts = all_charts
+        else:
+            # Parse comma-separated list
+            requested = [c.strip() for c in chart_input.split(',')]
+            
+            for req in requested:
+                # Check if it's a domain or chart name
+                matching = [c for c in all_charts if c['name'] == req or c['domain'] == req]
+                selected_charts.extend(matching)
+            
+            # Remove duplicates
+            seen = set()
+            selected_charts = [c for c in selected_charts if not (c['name'] in seen or seen.add(c['name']))]
+    else:
+        # Default to all charts
+        selected_charts = all_charts
+    
+    if not selected_charts:
+        typer.echo("No charts selected for release", err=True)
+        plan_result = {"matrix": {"include": []}, "charts": []}
+    else:
+        # Build matrix
+        matrix_include = []
+        for chart in selected_charts:
+            matrix_include.append({
+                "chart": chart['name'],
+                "domain": chart['domain'],
+                "version": version or "0.1.0",
+            })
+        
+        plan_result = {
+            "matrix": {"include": matrix_include},
+            "charts": [c['name'] for c in selected_charts]
+        }
+    
+    if format == "github":
+        # Output GitHub Actions format
+        matrix_json = json.dumps(plan_result["matrix"])
+        typer.echo(f"matrix={matrix_json}")
+        if plan_result["charts"]:
+            typer.echo(f"charts={' '.join(plan_result['charts'])}")
+        else:
+            typer.echo("charts=")
+    else:
+        # JSON output
+        typer.echo(json.dumps(plan_result, indent=2))
+
+
 def main():
     """Main entry point for the CLI."""
     try:
@@ -549,3 +704,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
