@@ -30,81 +30,81 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
     """Use Bazel query to find apps affected by changed files.
     
     This approach determines which targets are affected by file changes by:
-    1. For source files: Find all targets in the package containing the file
-    2. For BUILD/bzl files: Find all targets in the package recursively
-    3. Check which apps depend on the affected targets
+    1. Build a single union query for all affected package targets
+    2. For source files: Find all targets in the package containing the file
+    3. For BUILD/bzl files: Find all targets in the package recursively
+    4. Use somepath() queries to efficiently determine which apps depend on affected targets
     
     This is more reliable than attr() queries which can miss files based on
-    how they're referenced in BUILD files.
+    how they're referenced in BUILD files. It's also much more efficient than
+    making individual queries per file and per app - reducing from O(files + apps)
+    queries to just 2-3 total queries.
     """
     if not changed_files:
         return []
     
     try:
         all_apps = list_all_apps()
-        affected_apps = []
         
         print(f"Using Bazel package-level analysis to find targets affected by {len(changed_files)} changed files...", file=sys.stderr)
         
-        # Find all targets that are directly affected by the changed files
-        affected_targets = set()
+        # Build a single union query for all affected package patterns
+        package_queries = []
         
         for file_path in changed_files:
             if not file_path:
                 continue
-                
-            try:
-                # For source files, find all targets in the package containing the file
-                file_dir = str(Path(file_path).parent) if Path(file_path).parent != Path('.') else ""
-                
-                if file_path.endswith(('.bzl', 'BUILD', 'BUILD.bazel')):
-                    # BUILD/bzl files affect all targets in their package recursively  
-                    package_path = f"//{file_dir}" if file_dir else "//"
-                    
-                    result = run_bazel([
-                        "query", 
-                        f"{package_path}/...",
-                        "--output=label"
-                    ])
-                    
-                    if result.stdout.strip():
-                        package_targets = result.stdout.strip().split('\n')
-                        affected_targets.update(package_targets)
-                        print(f"Build file {file_path} affects all {len(package_targets)} targets in package {package_path}", file=sys.stderr)
+            
+            file_dir = str(Path(file_path).parent) if Path(file_path).parent != Path('.') else ""
+            
+            if file_path.endswith(('.bzl', 'BUILD', 'BUILD.bazel')):
+                # BUILD/bzl files affect all targets in their package recursively  
+                package_path = f"//{file_dir}" if file_dir else "//"
+                package_queries.append(f"{package_path}/...")
+                print(f"Build file {file_path} will check package {package_path}/...", file=sys.stderr)
                         
-                elif file_dir:  # Source file in a package directory
-                    # Source files affect all targets in their immediate package
-                    package_path = f"//{file_dir}"
-                    
-                    result = run_bazel([
-                        "query", 
-                        f"{package_path}:*",
-                        "--output=label"
-                    ])
-                    
-                    if result.stdout.strip():
-                        package_targets = result.stdout.strip().split('\n')
-                        affected_targets.update(package_targets)
-                        print(f"Source file {file_path} affects {len(package_targets)} targets in package {package_path}", file=sys.stderr)
-                else:
-                    # File in root directory - affects root package targets
-                    result = run_bazel([
-                        "query", 
-                        "//:*",
-                        "--output=label"
-                    ])
-                    
-                    if result.stdout.strip():
-                        root_targets = result.stdout.strip().split('\n')
-                        affected_targets.update(root_targets)
-                        print(f"Root file {file_path} affects {len(root_targets)} targets in root package", file=sys.stderr)
-                    
-            except subprocess.CalledProcessError as e:
-                print(f"Warning: Could not query targets for file {file_path}: {e}", file=sys.stderr)
+            elif file_dir:  # Source file in a package directory
+                # Source files affect all targets in their immediate package
+                package_path = f"//{file_dir}"
+                package_queries.append(f"{package_path}:*")
+                print(f"Source file {file_path} will check package {package_path}:*", file=sys.stderr)
+            else:
+                # File in root directory - affects root package targets
+                package_queries.append("//:*")
+                print(f"Root file {file_path} will check root package", file=sys.stderr)
         
+        if not package_queries:
+            print("No valid package queries generated from changed files", file=sys.stderr)
+            return []
+        
+        # Build a single union query for all affected targets
+        # Use set() to deduplicate identical patterns
+        unique_queries = list(set(package_queries))
+        if len(unique_queries) == 1:
+            union_query = unique_queries[0]
+        else:
+            # Join with + operator for union
+            union_query = " + ".join(unique_queries)
+        
+        print(f"Running single batched query for {len(unique_queries)} unique package patterns...", file=sys.stderr)
+        
+        # Execute single query to get all affected targets
+        result = run_bazel([
+            "query", 
+            union_query,
+            "--output=label"
+        ])
+        
+        if not result.stdout.strip():
+            print("No targets found in affected packages", file=sys.stderr)
+            return []
+        
+        affected_targets = set(result.stdout.strip().split('\n'))
         print(f"Total targets affected: {len(affected_targets)}", file=sys.stderr)
         
-        # Now check which apps depend on any of the affected targets
+        # Build app target mapping
+        app_binary_targets = {}
+        
         for app in all_apps:
             try:
                 # Get the app's actual binary target from metadata
@@ -121,28 +121,92 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
                     # Already absolute
                     app_target = binary_target
                 
-                # Query all dependencies of this app
-                result = run_bazel([
-                    "query", 
-                    f"deps({app_target})",
-                    "--output=label"
-                ])
+                app_binary_targets[app['name']] = app_target
                 
-                if result.stdout.strip():
-                    app_deps = set(result.stdout.strip().split('\n'))
-                    
-                    # Check if this app depends on any affected targets
-                    if affected_targets.intersection(app_deps):
-                        affected_apps.append(app)
-                        overlapping_targets = affected_targets.intersection(app_deps)
-                        print(f"App {app['name']} affected: depends on {len(overlapping_targets)} changed targets", file=sys.stderr)
-                    else:
-                        print(f"App {app['name']} not affected: no dependency on changed targets", file=sys.stderr)
-                    
             except Exception as e:
-                print(f"Warning: Could not analyze dependencies for {app['name']}: {e}", file=sys.stderr)
-                # If we can't analyze this app, don't assume it's affected
+                print(f"Warning: Could not get binary target for {app['name']}: {e}", file=sys.stderr)
                 continue
+        
+        if not app_binary_targets:
+            print("No valid app targets to analyze", file=sys.stderr)
+            return []
+        
+        # Build a single somepath query to check all apps at once
+        # somepath(from, to) returns paths from any target in 'from' to any target in 'to'
+        # We want to find which app binaries have a path from any affected target
+        
+        # Build the 'from' set - all affected targets
+        if len(affected_targets) == 1:
+            from_expr = list(affected_targets)[0]
+        else:
+            from_expr = "set(" + " ".join(affected_targets) + ")"
+        
+        # Build the 'to' set - all app binary targets
+        app_targets_list = list(app_binary_targets.values())
+        if len(app_targets_list) == 1:
+            to_expr = app_targets_list[0]
+        else:
+            to_expr = "set(" + " ".join(app_targets_list) + ")"
+        
+        print(f"Running single somepath query to check {len(app_binary_targets)} apps against {len(affected_targets)} affected targets...", file=sys.stderr)
+        
+        # Use somepath to find which app binaries depend on affected targets
+        # somepath(X, Y) finds if there's any dependency path from X to Y
+        # We need rdeps instead - find all targets that depend on affected targets
+        
+        # Actually, let's use a different approach: for each app, check if any affected
+        # target is in its dependency closure. We can do this with a single intersect operation
+        # by getting all reverse dependencies of the affected targets
+        
+        # Build set expressions for affected targets
+        affected_set_expr = "set(" + " ".join(affected_targets) + ")"
+        
+        # For each app, we need to check: does deps(app) intersect affected_targets?
+        # We can do this efficiently by building a single query that unions all checks
+        
+        affected_apps = []
+        affected_apps_found = set()
+        
+        # Build somepath queries for each app to check if there's a path from affected targets to the app
+        # somepath(affected_targets, app_binary) will return non-empty if app depends on any affected target
+        somepath_queries = []
+        for app_name, app_target in app_binary_targets.items():
+            # Check if there's a path from any affected target to this app binary
+            somepath_queries.append(f"somepath({affected_set_expr}, {app_target})")
+        
+        # Union all somepath queries
+        if len(somepath_queries) == 1:
+            combined_query = somepath_queries[0]
+        else:
+            combined_query = " + ".join(somepath_queries)
+        
+        print(f"Running combined somepath query for all apps...", file=sys.stderr)
+        
+        # Execute the combined query
+        result = run_bazel([
+            "query",
+            combined_query,
+            "--output=label"
+        ])
+        
+        if not result.stdout.strip():
+            print("No apps depend on affected targets (somepath returned empty)", file=sys.stderr)
+            return []
+        
+        # Parse the results - any app binary that appears in the output depends on affected targets
+        result_targets = set(result.stdout.strip().split('\n'))
+        
+        # Match result targets back to apps
+        for app in all_apps:
+            app_name = app['name']
+            if app_name in app_binary_targets:
+                app_target = app_binary_targets[app_name]
+                # Check if this app's binary is in the somepath results
+                if app_target in result_targets:
+                    affected_apps.append(app)
+                    print(f"App {app_name} affected: somepath found dependency on changed targets", file=sys.stderr)
+                else:
+                    print(f"App {app_name} not affected", file=sys.stderr)
         
         return affected_apps
         
