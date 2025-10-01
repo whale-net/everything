@@ -131,7 +131,7 @@ go_library(
         ":metadata_lib",
         ":release_lib",
         ":validation_lib",
-        "@com_github_spf13_cobra//:cobra",
+        "@com_github_spf13_cobra//:go_default_library",
     ],
 )
 
