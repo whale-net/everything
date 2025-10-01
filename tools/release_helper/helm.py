@@ -3,8 +3,13 @@ Helm chart utilities for the release helper.
 """
 
 import json
+import os
 import re
+import shutil
 import subprocess
+import tempfile
+import yaml
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -238,3 +243,301 @@ def package_helm_chart_for_release(
         return output_path
     
     return chart_tarball
+
+
+def package_chart_with_version(
+    chart_dir: Path,
+    chart_name: str,
+    chart_version: str,
+    output_dir: Path
+) -> Path:
+    """Package a Helm chart directory into a versioned tarball using helm package.
+    
+    Args:
+        chart_dir: Path to the chart directory
+        chart_name: Name of the chart
+        chart_version: Version to set in the chart
+        output_dir: Directory to output the packaged chart
+        
+    Returns:
+        Path to the generated .tgz file
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Update Chart.yaml with the version
+    chart_yaml_path = chart_dir / "Chart.yaml"
+    if chart_yaml_path.exists():
+        # Read, update version, and write back
+        with open(chart_yaml_path, 'r') as f:
+            chart_data = f.read()
+        
+        # Simple regex replacement for version field
+        chart_data = re.sub(
+            r'^version:\s*.*$',
+            f'version: {chart_version}',
+            chart_data,
+            flags=re.MULTILINE
+        )
+        
+        with open(chart_yaml_path, 'w') as f:
+            f.write(chart_data)
+    
+    # Use helm package command to create the tarball
+    result = subprocess.run(
+        ["helm", "package", str(chart_dir), "-d", str(output_dir)],
+        capture_output=True,
+        text=True,
+        check=False
+    )
+    
+    if result.returncode != 0:
+        raise RuntimeError(f"helm package failed: {result.stderr}")
+    
+    # Return the expected packaged file path
+    packaged_file = output_dir / f"{chart_name}-{chart_version}.tgz"
+    if not packaged_file.exists():
+        raise FileNotFoundError(f"Expected packaged chart not found: {packaged_file}")
+    
+    return packaged_file
+
+
+def generate_helm_repo_index(charts_dir: Path, base_url: str) -> Path:
+    """Generate a Helm repository index.yaml file.
+    
+    Args:
+        charts_dir: Directory containing .tgz chart files
+        base_url: Base URL where charts will be hosted (e.g., https://org.github.io/repo)
+        
+    Returns:
+        Path to the generated index.yaml
+    """
+    # Use helm repo index command
+    result = subprocess.run(
+        ["helm", "repo", "index", str(charts_dir), "--url", base_url],
+        capture_output=True,
+        text=True,
+        check=False
+    )
+    
+    if result.returncode != 0:
+        raise RuntimeError(f"helm repo index failed: {result.stderr}")
+    
+    index_path = charts_dir / "index.yaml"
+    if not index_path.exists():
+        raise FileNotFoundError(f"Expected index.yaml not found: {index_path}")
+    
+    return index_path
+
+
+def merge_helm_repo_index(new_charts_dir: Path, existing_index_path: Optional[Path], base_url: str) -> Path:
+    """Generate or update a Helm repository index, merging with existing charts.
+    
+    Args:
+        new_charts_dir: Directory containing new .tgz chart files
+        existing_index_path: Path to existing index.yaml (if any)
+        base_url: Base URL where charts will be hosted
+        
+    Returns:
+        Path to the generated/updated index.yaml
+    """
+    # If there's an existing index, copy it to the new charts directory
+    if existing_index_path and existing_index_path.exists():
+        shutil.copy(existing_index_path, new_charts_dir / "index.yaml")
+        
+        # Use helm repo index --merge to update
+        result = subprocess.run(
+            ["helm", "repo", "index", str(new_charts_dir), "--url", base_url, "--merge", str(new_charts_dir / "index.yaml")],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+    else:
+        # Generate new index
+        result = subprocess.run(
+            ["helm", "repo", "index", str(new_charts_dir), "--url", base_url],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+    
+    if result.returncode != 0:
+        raise RuntimeError(f"helm repo index failed: {result.stderr}")
+    
+    index_path = new_charts_dir / "index.yaml"
+    if not index_path.exists():
+        raise FileNotFoundError(f"Expected index.yaml not found: {index_path}")
+    
+    return index_path
+
+
+def publish_helm_repo_to_github_pages(
+    charts_dir: Path,
+    repository_owner: str,
+    repository_name: str,
+    base_url: Optional[str] = None,
+    commit_message: Optional[str] = None,
+    dry_run: bool = False
+) -> bool:
+    """Publish Helm charts to GitHub Pages by pushing to gh-pages branch.
+    
+    Args:
+        charts_dir: Directory containing .tgz chart files
+        repository_owner: GitHub repository owner
+        repository_name: GitHub repository name
+        base_url: Base URL for charts (auto-generated if not provided)
+        commit_message: Commit message for the update
+        dry_run: If True, only show what would be done
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    if not base_url:
+        base_url = f"https://{repository_owner}.github.io/{repository_name}"
+    
+    if not commit_message:
+        commit_message = f"Update Helm repository index - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    
+    workspace_root = find_workspace_root()
+    
+    # Create a temporary directory for gh-pages work
+    with tempfile.TemporaryDirectory() as tmpdir:
+        gh_pages_dir = Path(tmpdir) / "gh-pages"
+        gh_pages_dir.mkdir()
+        
+        # Clone gh-pages branch or initialize if it doesn't exist
+        repo_url = f"https://github.com/{repository_owner}/{repository_name}.git"
+        
+        print(f"Cloning gh-pages branch from {repo_url}...")
+        result = subprocess.run(
+            ["git", "clone", "--branch", "gh-pages", "--depth", "1", repo_url, str(gh_pages_dir)],
+            capture_output=True,
+            text=True,
+            cwd=workspace_root
+        )
+        
+        # If gh-pages doesn't exist, create it as an orphan branch
+        if result.returncode != 0:
+            print("gh-pages branch doesn't exist, creating orphan branch...")
+            subprocess.run(
+                ["git", "clone", "--depth", "1", repo_url, str(gh_pages_dir)],
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=workspace_root
+            )
+            subprocess.run(
+                ["git", "checkout", "--orphan", "gh-pages"],
+                check=True,
+                cwd=gh_pages_dir
+            )
+            subprocess.run(
+                ["git", "rm", "-rf", "."],
+                capture_output=True,
+                check=False,
+                cwd=gh_pages_dir
+            )
+            
+            # Create a basic README for the Helm repo
+            readme_content = f"""# Helm Chart Repository
+
+This branch contains Helm charts for {repository_name}.
+
+## Usage
+
+Add this Helm repository:
+
+```bash
+helm repo add {repository_name} {base_url}
+helm repo update
+```
+
+Search for charts:
+
+```bash
+helm search repo {repository_name}
+```
+
+Install a chart:
+
+```bash
+helm install my-release {repository_name}/<chart-name>
+```
+
+## Available Charts
+
+See the [index.yaml]({base_url}/index.yaml) for all available charts and versions.
+"""
+            (gh_pages_dir / "README.md").write_text(readme_content)
+            subprocess.run(
+                ["git", "add", "README.md"],
+                check=True,
+                cwd=gh_pages_dir
+            )
+            subprocess.run(
+                ["git", "commit", "-m", "Initialize gh-pages branch for Helm repository"],
+                check=True,
+                cwd=gh_pages_dir
+            )
+        
+        # Check if there's an existing index.yaml
+        existing_index = gh_pages_dir / "index.yaml"
+        
+        # Copy new charts to gh-pages directory
+        for chart_file in charts_dir.glob("*.tgz"):
+            dest = gh_pages_dir / chart_file.name
+            print(f"Adding chart: {chart_file.name}")
+            shutil.copy(chart_file, dest)
+        
+        # Generate or merge index.yaml
+        print("Generating Helm repository index...")
+        if existing_index.exists():
+            merge_helm_repo_index(gh_pages_dir, existing_index, base_url)
+        else:
+            generate_helm_repo_index(gh_pages_dir, base_url)
+        
+        if dry_run:
+            print("DRY RUN: Would commit and push the following changes:")
+            result = subprocess.run(
+                ["git", "status", "--short"],
+                capture_output=True,
+                text=True,
+                cwd=gh_pages_dir
+            )
+            print(result.stdout)
+            return True
+        
+        # Commit changes
+        subprocess.run(
+            ["git", "add", "."],
+            check=True,
+            cwd=gh_pages_dir
+        )
+        
+        # Check if there are changes to commit
+        result = subprocess.run(
+            ["git", "diff", "--staged", "--quiet"],
+            capture_output=True,
+            cwd=gh_pages_dir
+        )
+        
+        if result.returncode == 0:
+            print("No changes to commit")
+            return True
+        
+        subprocess.run(
+            ["git", "commit", "-m", commit_message],
+            check=True,
+            cwd=gh_pages_dir
+        )
+        
+        # Push to gh-pages
+        print(f"Pushing to gh-pages branch...")
+        subprocess.run(
+            ["git", "push", "origin", "gh-pages"],
+            check=True,
+            cwd=gh_pages_dir
+        )
+        
+        print(f"✅ Successfully published Helm repository to {base_url}")
+        return True
+
