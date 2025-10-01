@@ -21,7 +21,6 @@ build:ci --experimental_remote_cache_compression
 # More aggressive output downloading for better cache hits
 build:ci --remote_download_outputs=minimal
 # Build metadata optimizations  
-build:ci --experimental_collect_code_coverage=false
 build:ci --nolegacy_external_runfiles
 # Memory and CPU optimizations
 build:ci --host_javabase=@bazel_tools//tools/jdk:remote_jdk11
