@@ -12,6 +12,21 @@ def format_git_tag(domain: str, app_name: str, version: str) -> str:
     return f"{domain}-{app_name}.{version}"
 
 
+def format_helm_chart_tag(chart_name: str, version: str) -> str:
+    """Format a Git tag for a Helm chart in the helm-chartname.version format.
+    
+    Helm chart tags use the 'helm-' prefix to avoid collision with app tags.
+    
+    Args:
+        chart_name: Name of the Helm chart (e.g., "manman-host", "hello-fastapi")
+        version: Version string (e.g., "v1.0.0")
+    
+    Returns:
+        Formatted tag (e.g., "helm-manman-host.v1.0.0")
+    """
+    return f"helm-{chart_name}.{version}"
+
+
 def create_git_tag(tag_name: str, commit_sha: Optional[str] = None, message: Optional[str] = None) -> None:
     """Create a Git tag on the specified commit."""
     cmd = ["git", "tag"]
@@ -70,6 +85,21 @@ def get_app_tags(domain: str, app_name: str) -> List[str]:
     return app_tags
 
 
+def get_helm_chart_tags(chart_name: str) -> List[str]:
+    """Get all tags for a specific helm chart, sorted by version (newest first).
+    
+    Args:
+        chart_name: Name of the Helm chart (e.g., "manman-host", "hello-fastapi")
+    
+    Returns:
+        List of tags sorted by version (newest first)
+    """
+    all_tags = get_all_tags()
+    chart_prefix = f"helm-{chart_name}."
+    chart_tags = [tag for tag in all_tags if tag.startswith(chart_prefix)]
+    return chart_tags
+
+
 def parse_version_from_tag(tag: str, domain: str, app_name: str) -> Optional[str]:
     """Parse version from an app tag.
     
@@ -82,6 +112,27 @@ def parse_version_from_tag(tag: str, domain: str, app_name: str) -> Optional[str
         Version string (e.g., "v1.2.3") or None if not a valid app tag
     """
     expected_prefix = f"{domain}-{app_name}."
+    if not tag.startswith(expected_prefix):
+        return None
+    
+    version = tag[len(expected_prefix):]
+    # Validate that it looks like a semantic version
+    if re.match(r'^v\d+\.\d+\.\d+(?:-[a-zA-Z0-9\-\.]+)?$', version):
+        return version
+    return None
+
+
+def parse_version_from_helm_chart_tag(tag: str, chart_name: str) -> Optional[str]:
+    """Parse version from a helm chart tag.
+    
+    Args:
+        tag: Git tag (e.g., "helm-manman-host.v1.2.3")
+        chart_name: Chart name (e.g., "manman-host")
+    
+    Returns:
+        Version string (e.g., "v1.2.3") or None if not a valid chart tag
+    """
+    expected_prefix = f"helm-{chart_name}."
     if not tag.startswith(expected_prefix):
         return None
     
@@ -105,6 +156,23 @@ def get_latest_app_version(domain: str, app_name: str) -> Optional[str]:
     app_tags = get_app_tags(domain, app_name)
     for tag in app_tags:
         version = parse_version_from_tag(tag, domain, app_name)
+        if version:
+            return version
+    return None
+
+
+def get_latest_helm_chart_version(chart_name: str) -> Optional[str]:
+    """Get the latest version for a specific helm chart.
+    
+    Args:
+        chart_name: Chart name (e.g., "manman-host", "hello-fastapi")
+    
+    Returns:
+        Latest version string (e.g., "v1.2.3") or None if no versions found
+    """
+    chart_tags = get_helm_chart_tags(chart_name)
+    for tag in chart_tags:
+        version = parse_version_from_helm_chart_tag(tag, chart_name)
         if version:
             return version
     return None
@@ -190,6 +258,36 @@ def auto_increment_version(domain: str, app_name: str, increment_type: str) -> s
         raise ValueError(f"Invalid increment type: {increment_type}. Must be 'minor' or 'patch'")
     
     latest_version = get_latest_app_version(domain, app_name)
+    if not latest_version:
+        # No previous version, start with v0.1.0 for minor or v0.0.1 for patch
+        if increment_type == "minor":
+            return "v0.1.0"
+        else:  # patch
+            return "v0.0.1"
+    
+    if increment_type == "minor":
+        return increment_minor_version(latest_version)
+    else:  # patch
+        return increment_patch_version(latest_version)
+
+
+def auto_increment_helm_chart_version(chart_name: str, increment_type: str) -> str:
+    """Auto-increment version for a helm chart based on the latest tag.
+    
+    Args:
+        chart_name: Chart name (e.g., "manman-host", "hello-fastapi")
+        increment_type: Either "minor" or "patch"
+    
+    Returns:
+        New version string
+    
+    Raises:
+        ValueError: If increment_type is invalid
+    """
+    if increment_type not in ["minor", "patch"]:
+        raise ValueError(f"Invalid increment type: {increment_type}. Must be 'minor' or 'patch'")
+    
+    latest_version = get_latest_helm_chart_version(chart_name)
     if not latest_version:
         # No previous version, start with v0.1.0 for minor or v0.0.1 for patch
         if increment_type == "minor":
