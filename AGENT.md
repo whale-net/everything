@@ -261,8 +261,13 @@ bazel query "kind('app_metadata', //...)"
 #### 2. Change Detection
 Intelligent change detection ensures only modified apps are released:
 - Git diff analysis since last release tag
-- Dependency awareness (shared library changes trigger dependent apps)
+- Dependency awareness using optimized `rdeps()` queries (shared library changes trigger dependent apps)
 - Manual app selection override
+
+**Performance Optimization:**
+- Uses reverse dependency queries (`rdeps()`) for efficient analysis
+- Single query finds all affected apps instead of per-app dependency tree computation
+- Only builds metadata for affected apps, significantly faster than previous approach
 
 #### 3. Release Matrix
 GitHub Actions automatically generates build matrices:

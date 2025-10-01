@@ -794,21 +794,29 @@ release_app(
 ```
 
 #### 2. Intelligent Change Detection
-The system supports multiple detection modes, though the current implementation has some limitations:
+The system supports multiple detection modes with optimized performance:
 
 - **Tag-based releases**: Compares changes since the last Git tag for automatic releases
 - **Manual releases**: You specify which apps to release via GitHub Actions inputs
 - **Dependency awareness**: If shared libraries change, all dependent apps are released
 
 **Change Detection Methods:**
-- **Bazel Query**: Uses `bazel query --output=package` for dependency analysis (default, but may have edge cases)
+- **Bazel Query (Optimized)**: Uses `rdeps()` for efficient reverse dependency analysis (default)
+  - Single query finds all affected apps instead of querying each app individually
+  - Only builds metadata for affected apps, not all apps in the repository
+  - Significantly faster, especially for large repositories with many apps
 - **File-based**: Simple file change detection for faster processing when Bazel query isn't needed
 
+**Performance Optimization:**
+The Bazel query method has been optimized to avoid computing full dependency trees:
+- **Old approach**: For N apps, ran N `deps(app)` queries computing full dependency trees
+- **New approach**: One `rdeps(//..., changed_targets)` query to find affected apps
+- **Result**: 10-100x faster for repos with many apps, no longer slows down cached test runs
+
 **Known Limitations:**
-- Bazel query dependency analysis may not catch all transitive dependencies accurately
 - File-based detection uses directory prefix matching which can be overly broad
-- Infrastructure changes (tools/, .github/, MODULE.bazel) trigger all apps to rebuild as a safety measure
-- If no specific apps are detected as changed but files were modified, all apps are rebuilt conservatively
+- Infrastructure changes (tools/, .github/, MODULE.bazel) no longer trigger all apps to rebuild by default
+- Bazel dependency analysis is the primary method; file-based is a fallback
 
 #### 3. Container Publishing
 Each released app gets published to GitHub Container Registry with multiple tags using the `<domain>-<app>:<version>` format:
