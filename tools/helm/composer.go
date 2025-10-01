@@ -432,7 +432,7 @@ func (c *Composer) buildAppConfig(app AppMetadata) (AppConfig, error) {
 				SuccessThreshold:    1,
 				FailureThreshold:    3,
 			}
-		} else if app.HealthCheck == nil || (app.HealthCheck != nil && app.HealthCheck.Path == "") {
+		} else if app.HealthCheck == nil || app.HealthCheck.Path == "" {
 			// Default to /health for APIs if not specified
 			config.HealthCheck = &HealthCheckConfig{
 				Path:                "/health",
@@ -799,6 +799,9 @@ func (c *Composer) injectHelmTemplating(content []byte) ([]byte, error) {
 
 	// Replace namespace references with Helm template
 	// Match: namespace: <value>
+	// TODO: This string-based approach is fragile and could incorrectly match namespace
+	// references in comments or string values. Consider using a proper YAML parser
+	// (e.g., gopkg.in/yaml.v3 with node manipulation) for more reliable template injection.
 	contentStr = strings.ReplaceAll(contentStr,
 		"namespace: default",
 		"namespace: {{ .Values.global.namespace }}")

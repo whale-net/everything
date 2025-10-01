@@ -74,6 +74,14 @@ app_metadata = rule(
     },
 )
 
+# Note: This function has many parameters (16) to support flexible app configuration.
+# They are logically grouped as:
+# - Binary config: name, binary_target, binary_amd64, binary_arm64, language
+# - Release config: domain, description, version, registry, custom_repo_name
+# - Deployment config: app_type, port, replicas, command, args
+# - Health check config: health_check_enabled, health_check_path
+# - Ingress config: ingress_host, ingress_tls_secret
+# Bazel/Starlark does not support nested struct parameters, so they remain flat.
 def release_app(name, binary_target = None, binary_amd64 = None, binary_arm64 = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = True, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = []):
     """Convenience macro to set up release metadata and OCI images for an app.
     

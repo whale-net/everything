@@ -88,16 +88,20 @@ release_app(
     args = ["run-migration"],
 )
 
+# List of all manman app metadata targets for chart composition
+# Update this list when adding or removing services
+MANMAN_APPS = [
+    ":experience_api_metadata",
+    ":status_api_metadata",
+    ":worker_dal_api_metadata",
+    ":status_processor_metadata",
+    ":migration_metadata",
+]
+
 # Helm chart composition - combines all manman services into a single chart
 helm_chart(
     name = "manman_chart",
-    apps = [
-        ":experience_api_metadata",
-        ":status_api_metadata",
-        ":worker_dal_api_metadata",
-        ":status_processor_metadata",
-        ":migration_metadata",
-    ],
+    apps = MANMAN_APPS,
     chart_name = "manman-host",
     namespace = "manman",
     environment = "dev",
