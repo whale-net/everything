@@ -11,11 +11,11 @@ on:
         description: 'Release version (e.g., v1.0.0) - leave empty when using increment options'
         required: false
       increment_minor:
-        description: 'Auto-increment minor version (resets patch to 0)'
+        description: 'Auto-increment minor version (resets patch to 0) - applies to both apps and helm charts'
         type: boolean
         default: false
       increment_patch:
-        description: 'Auto-increment patch version'
+        description: 'Auto-increment patch version - applies to both apps and helm charts'
         type: boolean
         default: false
       dry_run:
@@ -463,8 +463,20 @@ jobs:
       env:
         VERSION: ${{ needs.plan-release.outputs.version }}
         DRY_RUN: ${{ github.event.inputs.dry_run }}
+        INCREMENT_MINOR: ${{ github.event.inputs.increment_minor }}
+        INCREMENT_PATCH: ${{ github.event.inputs.increment_patch }}
       run: |
         echo "Building helm charts with version $VERSION"
+        
+        # Determine bump type based on increment inputs
+        BUMP_TYPE="patch"  # Default to patch
+        if [[ "$INCREMENT_MINOR" == "true" ]]; then
+          BUMP_TYPE="minor"
+          echo "Using minor version bump for helm charts"
+        elif [[ "$INCREMENT_PATCH" == "true" ]]; then
+          BUMP_TYPE="patch"
+          echo "Using patch version bump for helm charts"
+        fi
         
         # Create output directory for charts
         mkdir -p /tmp/helm-charts
@@ -474,17 +486,17 @@ jobs:
         IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
         
         for CHART in "${CHART_ARRAY[@]}"; do
-          echo "Building chart: $CHART with auto-versioning"
+          echo "Building chart: $CHART with auto-versioning (bump: $BUMP_TYPE)"
           
           # Build the chart using release helper with auto-versioning
           # Each chart maintains its own version based on git tags (helm/<chart-name>/v*)
+          # Note: --auto-version is the default, so we don't need to pass it explicitly
           bazel run --config=ci //tools:release -- build-helm-chart "$CHART" \
             --output-dir /tmp/helm-charts \
             --use-released \
-            --auto-version \
-            --bump patch
+            --bump "$BUMP_TYPE"
           
-          echo "✅ Chart $CHART built successfully with auto-versioning"
+          echo "✅ Chart $CHART built successfully with auto-versioning (bump: $BUMP_TYPE)"
         done
         
         # List generated charts with versions
