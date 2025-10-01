@@ -21,9 +21,9 @@ spec:
   {{- if $.Values.ingress.className }}
   ingressClassName: {{ $.Values.ingress.className }}
   {{- end }}
-  {{- if or $.Values.ingress.tls $app.ingress.tlsSecretName }}
+  {{- if or $.Values.ingress.tls (and $app.ingress $app.ingress.tlsSecretName) }}
   tls:
-    {{- if $app.ingress.tlsSecretName }}
+    {{- if and $app.ingress $app.ingress.tlsSecretName }}
     - secretName: {{ $app.ingress.tlsSecretName }}
       hosts:
         - {{ $app.ingress.host | default (printf "%s-%s.local" $appName $.Values.global.environment) }}
