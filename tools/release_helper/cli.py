@@ -25,6 +25,9 @@ from tools.release_helper.helm import (
     find_helm_chart_bazel_target,
     resolve_app_versions_for_chart,
     package_helm_chart_for_release,
+    publish_helm_repo_to_github_pages,
+    generate_helm_repo_index,
+    merge_helm_repo_index,
 )
 
 app = typer.Typer(help="Release helper for Everything monorepo")
@@ -602,24 +605,45 @@ def resolve_chart_app_versions(
 @app.command("build-helm-chart")
 def build_helm_chart_cmd(
     chart_name: Annotated[str, typer.Argument(help="Helm chart name")],
-    chart_version: Annotated[str, typer.Option("--version", help="Chart version")] = "0.1.0",
+    chart_version: Annotated[Optional[str], typer.Option("--version", help="Explicit chart version (if not provided, will auto-version)")] = None,
     output_dir: Annotated[Optional[str], typer.Option("--output-dir", help="Output directory for packaged chart")] = None,
     use_released_versions: Annotated[bool, typer.Option("--use-released/--use-latest", help="Use released app versions or 'latest'")] = True,
+    auto_version: Annotated[bool, typer.Option("--auto-version", help="Automatically determine chart version from git tags")] = True,
+    bump_type: Annotated[str, typer.Option("--bump", help="Version bump type: major, minor, or patch")] = "patch",
 ):
-    """Build and package a helm chart."""
+    """Build and package a helm chart with automatic or manual versioning.
+    
+    By default, uses automatic versioning (--auto-version) which reads the current
+    chart version from git tags (helm/<chart-name>/v*) and increments it based on
+    --bump type (patch by default).
+    
+    To use manual versioning, provide --version and use --no-auto-version.
+    """
     try:
         from pathlib import Path
         
         output_path_obj = Path(output_dir) if output_dir else None
         
-        chart_path = package_helm_chart_for_release(
+        # Validate inputs
+        if not auto_version and not chart_version:
+            typer.echo("❌ Error: --version must be provided when --no-auto-version is used", err=True)
+            raise typer.Exit(1)
+        
+        if bump_type not in ["major", "minor", "patch"]:
+            typer.echo("❌ Error: --bump must be one of: major, minor, patch", err=True)
+            raise typer.Exit(1)
+        
+        chart_path, version_used = package_helm_chart_for_release(
             chart_name=chart_name,
             chart_version=chart_version,
             output_dir=output_path_obj,
-            use_released_app_versions=use_released_versions
+            use_released_app_versions=use_released_versions,
+            auto_version=auto_version,
+            bump_type=bump_type
         )
         
         typer.echo(f"✅ Chart packaged: {chart_path}")
+        typer.echo(f"📦 Version: {version_used}")
         
     except Exception as e:
         typer.echo(f"❌ Failed to build helm chart: {e}", err=True)
@@ -691,6 +715,128 @@ def plan_helm_release(
     else:
         # JSON output
         typer.echo(json.dumps(plan_result, indent=2))
+
+
+@app.command("publish-helm-repo")
+def publish_helm_repo(
+    charts_dir: Annotated[str, typer.Argument(help="Directory containing .tgz chart files")],
+    owner: Annotated[str, typer.Option("--owner", help="GitHub repository owner")] = "",
+    repo: Annotated[str, typer.Option("--repo", help="GitHub repository name")] = "",
+    base_url: Annotated[Optional[str], typer.Option("--base-url", help="Base URL for charts (auto-generated if not provided)")] = None,
+    commit_message: Annotated[Optional[str], typer.Option("--commit-message", help="Commit message for the update")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be done without pushing")] = False,
+):
+    """Publish Helm charts to GitHub Pages by pushing to gh-pages branch.
+    
+    This command will:
+    1. Clone or create the gh-pages branch
+    2. Add new chart packages (.tgz files)
+    3. Generate or update the Helm repository index.yaml
+    4. Commit and push changes to gh-pages
+    """
+    try:
+        from pathlib import Path
+        
+        charts_path = Path(charts_dir)
+        if not charts_path.exists():
+            typer.echo(f"Error: Charts directory not found: {charts_dir}", err=True)
+            raise typer.Exit(1)
+        
+        # Check if there are any .tgz files
+        chart_files = list(charts_path.glob("*.tgz"))
+        if not chart_files:
+            typer.echo(f"Error: No .tgz chart files found in {charts_dir}", err=True)
+            raise typer.Exit(1)
+        
+        typer.echo(f"Found {len(chart_files)} chart(s) to publish:")
+        for chart_file in chart_files:
+            typer.echo(f"  - {chart_file.name}")
+        
+        # Use environment variables if owner/repo not provided
+        if not owner:
+            owner = os.getenv('GITHUB_REPOSITORY_OWNER', '')
+        if not repo:
+            repo_full = os.getenv('GITHUB_REPOSITORY', '')
+            if '/' in repo_full:
+                repo = repo_full.split('/')[-1]
+        
+        if not owner or not repo:
+            typer.echo("Error: --owner and --repo are required (or set GITHUB_REPOSITORY_OWNER and GITHUB_REPOSITORY env vars)", err=True)
+            raise typer.Exit(1)
+        
+        if dry_run:
+            typer.echo(f"\nDRY RUN: Would publish to https://{owner}.github.io/{repo}")
+        else:
+            typer.echo(f"\nPublishing to https://{owner}.github.io/{repo}")
+        
+        # Publish to GitHub Pages
+        success = publish_helm_repo_to_github_pages(
+            charts_dir=charts_path,
+            repository_owner=owner,
+            repository_name=repo,
+            base_url=base_url,
+            commit_message=commit_message,
+            dry_run=dry_run
+        )
+        
+        if success:
+            typer.echo(f"\n✅ Successfully published Helm repository!")
+            if not dry_run:
+                typer.echo(f"\nUsers can now add the repository with:")
+                typer.echo(f"  helm repo add {repo} https://{owner}.github.io/{repo}")
+                typer.echo(f"  helm repo update")
+        else:
+            typer.echo("❌ Failed to publish Helm repository", err=True)
+            raise typer.Exit(1)
+            
+    except Exception as e:
+        typer.echo(f"Error publishing Helm repository: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command("generate-helm-index")
+def generate_helm_index_cmd(
+    charts_dir: Annotated[str, typer.Argument(help="Directory containing .tgz chart files")],
+    base_url: Annotated[str, typer.Option("--base-url", help="Base URL where charts will be hosted")],
+    merge_with: Annotated[Optional[str], typer.Option("--merge-with", help="Path to existing index.yaml to merge with")] = None,
+):
+    """Generate a Helm repository index.yaml file.
+    
+    This creates or updates an index.yaml file that catalogs all Helm charts in the directory.
+    If --merge-with is provided, it will merge with an existing index to preserve history.
+    """
+    try:
+        from pathlib import Path
+        
+        charts_path = Path(charts_dir)
+        if not charts_path.exists():
+            typer.echo(f"Error: Charts directory not found: {charts_dir}", err=True)
+            raise typer.Exit(1)
+        
+        # Check if there are any .tgz files
+        chart_files = list(charts_path.glob("*.tgz"))
+        if not chart_files:
+            typer.echo(f"Warning: No .tgz chart files found in {charts_dir}", err=True)
+        
+        typer.echo(f"Generating Helm repository index for {len(chart_files)} chart(s)...")
+        
+        if merge_with:
+            merge_path = Path(merge_with)
+            if not merge_path.exists():
+                typer.echo(f"Warning: Merge file not found: {merge_with}, creating new index", err=True)
+                merge_path = None
+            else:
+                typer.echo(f"Merging with existing index: {merge_with}")
+            
+            index_path = merge_helm_repo_index(charts_path, merge_path, base_url)
+        else:
+            index_path = generate_helm_repo_index(charts_path, base_url)
+        
+        typer.echo(f"✅ Generated index: {index_path}")
+        
+    except Exception as e:
+        typer.echo(f"Error generating Helm index: {e}", err=True)
+        raise typer.Exit(1)
 
 
 def main():

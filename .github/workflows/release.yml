@@ -27,6 +27,11 @@ on:
         required: false
         default: ''
 
+# Global concurrency control for Helm chart releases to prevent race conditions on gh-pages
+concurrency:
+  group: helm-repo-publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # Validate inputs and ensure mutual exclusivity
   validate-inputs:
@@ -342,6 +347,8 @@ jobs:
         VERSION="${{ needs.plan-release.outputs.version }}"
         DRY_RUN="${{ github.event.inputs.dry_run }}"
         HELM_JOB_RESULT="${{ needs.release-helm-charts.result }}"
+        REPO_OWNER="${{ github.repository_owner }}"
+        REPO_NAME="${{ github.event.repository.name }}"
         
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "---" >> $GITHUB_STEP_SUMMARY
@@ -354,11 +361,32 @@ jobs:
           echo "**Charts:** $HELM_CHARTS" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** $VERSION" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "$DRY_RUN" != "true" ]]; then
+            echo "### 📚 Helm Repository" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Charts have been published to GitHub Pages:" >> $GITHUB_STEP_SUMMARY
+            echo "- **Repository URL:** https://${REPO_OWNER}.github.io/${REPO_NAME}/charts" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Add the repository:**" >> $GITHUB_STEP_SUMMARY
+            echo '```bash' >> $GITHUB_STEP_SUMMARY
+            echo "helm repo add ${REPO_NAME} https://${REPO_OWNER}.github.io/${REPO_NAME}/charts" >> $GITHUB_STEP_SUMMARY
+            echo "helm repo update" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Install a chart:**" >> $GITHUB_STEP_SUMMARY
+            echo '```bash' >> $GITHUB_STEP_SUMMARY
+            echo "helm search repo ${REPO_NAME}" >> $GITHUB_STEP_SUMMARY
+            echo "helm install my-release ${REPO_NAME}/<chart-name>" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
           echo "📥 **Chart packages available as workflow artifacts**" >> $GITHUB_STEP_SUMMARY
           
           if [[ "$DRY_RUN" == "true" ]]; then
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "ℹ️ *Dry run mode - charts built but not published*" >> $GITHUB_STEP_SUMMARY
+            echo "ℹ️ *Dry run mode - charts built but not published to GitHub Pages*" >> $GITHUB_STEP_SUMMARY
           fi
         elif [[ "$HELM_JOB_RESULT" == "skipped" ]]; then
           echo "**Status:** ⏭️ Skipped (no charts specified)" >> $GITHUB_STEP_SUMMARY
@@ -372,6 +400,10 @@ jobs:
     needs: [plan-release, release]
     if: github.event.inputs.helm_charts != '' && needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Required to push to gh-pages branch
+      pages: write     # Required for GitHub Pages
+      id-token: write  # Required for GitHub Pages
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -385,6 +417,16 @@ jobs:
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+        
+    - name: Install Helm
+      uses: azure/setup-helm@v4
+      with:
+        version: 'latest'
+        
+    - name: Configure Git for gh-pages
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
         
     - name: Plan helm chart release
       id: plan
@@ -416,7 +458,7 @@ jobs:
           fi
         done
         
-    - name: Build helm charts
+    - name: Build helm charts with versioning
       if: steps.plan.outputs.charts != ''
       env:
         VERSION: ${{ needs.plan-release.outputs.version }}
@@ -427,31 +469,53 @@ jobs:
         # Create output directory for charts
         mkdir -p /tmp/helm-charts
         
-        # Parse chart list and build each chart
+        # Parse chart list and build each chart with proper versioning
         CHARTS="${{ steps.plan.outputs.charts }}"
         IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
         
         for CHART in "${CHART_ARRAY[@]}"; do
-          echo "Building chart: $CHART"
+          echo "Building chart: $CHART with auto-versioning"
           
-          # Build the chart using release helper with released app versions
+          # Build the chart using release helper with auto-versioning
+          # Each chart maintains its own version based on git tags (helm/<chart-name>/v*)
           bazel run --config=ci //tools:release -- build-helm-chart "$CHART" \
-            --version "$VERSION" \
             --output-dir /tmp/helm-charts \
-            --use-released
+            --use-released \
+            --auto-version \
+            --bump patch
           
-          echo "✅ Chart $CHART built successfully"
+          echo "✅ Chart $CHART built successfully with auto-versioning"
         done
         
-        # List generated charts
-        echo "Generated charts:"
+        # List generated charts with versions
+        echo "Generated versioned charts:"
         ls -lh /tmp/helm-charts/
+        
+    - name: Publish Helm charts to GitHub Pages
+      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "Publishing Helm charts to GitHub Pages..."
+        
+        # Use release helper to publish to gh-pages branch
+        bazel run --config=ci //tools:release -- publish-helm-repo \
+          /tmp/helm-charts \
+          --owner "${{ github.repository_owner }}" \
+          --repo "${{ github.event.repository.name }}" \
+          --commit-message "Release Helm charts - auto-versioned"
+        
+        echo "✅ Helm charts published to https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
+        echo ""
+        echo "📦 Users can now add the repository:"
+        echo "  helm repo add ${{ github.event.repository.name }} https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
+        echo "  helm repo update"
         
     - name: Upload helm chart artifacts
       if: steps.plan.outputs.charts != ''
       uses: actions/upload-artifact@v4
       with:
-        name: helm-charts-${{ needs.plan-release.outputs.version }}
+        name: helm-charts-auto-versioned
         path: /tmp/helm-charts/*.tgz
         if-no-files-found: error
 
