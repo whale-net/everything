@@ -605,24 +605,45 @@ def resolve_chart_app_versions(
 @app.command("build-helm-chart")
 def build_helm_chart_cmd(
     chart_name: Annotated[str, typer.Argument(help="Helm chart name")],
-    chart_version: Annotated[str, typer.Option("--version", help="Chart version")] = "0.1.0",
+    chart_version: Annotated[Optional[str], typer.Option("--version", help="Explicit chart version (if not provided, will auto-version)")] = None,
     output_dir: Annotated[Optional[str], typer.Option("--output-dir", help="Output directory for packaged chart")] = None,
     use_released_versions: Annotated[bool, typer.Option("--use-released/--use-latest", help="Use released app versions or 'latest'")] = True,
+    auto_version: Annotated[bool, typer.Option("--auto-version", help="Automatically determine chart version from git tags")] = True,
+    bump_type: Annotated[str, typer.Option("--bump", help="Version bump type: major, minor, or patch")] = "patch",
 ):
-    """Build and package a helm chart."""
+    """Build and package a helm chart with automatic or manual versioning.
+    
+    By default, uses automatic versioning (--auto-version) which reads the current
+    chart version from git tags (helm/<chart-name>/v*) and increments it based on
+    --bump type (patch by default).
+    
+    To use manual versioning, provide --version and use --no-auto-version.
+    """
     try:
         from pathlib import Path
         
         output_path_obj = Path(output_dir) if output_dir else None
         
-        chart_path = package_helm_chart_for_release(
+        # Validate inputs
+        if not auto_version and not chart_version:
+            typer.echo("❌ Error: --version must be provided when --no-auto-version is used", err=True)
+            raise typer.Exit(1)
+        
+        if bump_type not in ["major", "minor", "patch"]:
+            typer.echo("❌ Error: --bump must be one of: major, minor, patch", err=True)
+            raise typer.Exit(1)
+        
+        chart_path, version_used = package_helm_chart_for_release(
             chart_name=chart_name,
             chart_version=chart_version,
             output_dir=output_path_obj,
-            use_released_app_versions=use_released_versions
+            use_released_app_versions=use_released_versions,
+            auto_version=auto_version,
+            bump_type=bump_type
         )
         
         typer.echo(f"✅ Chart packaged: {chart_path}")
+        typer.echo(f"📦 Version: {version_used}")
         
     except Exception as e:
         typer.echo(f"❌ Failed to build helm chart: {e}", err=True)
