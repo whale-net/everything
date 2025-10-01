@@ -22,6 +22,10 @@ on:
         description: 'Dry run - build but do not publish'
         type: boolean
         default: false
+      helm_charts:
+        description: 'Helm charts to release (e.g., hello-fastapi,demo-workers) or "all" or domain name (e.g., "demo"). Leave empty to skip helm chart release.'
+        required: false
+        default: ''
 
 jobs:
   # Validate inputs and ensure mutual exclusivity
@@ -301,7 +305,7 @@ jobs:
   release-summary:
     name: Release Summary
     runs-on: ubuntu-latest
-    needs: [plan-release, release, create-github-releases]
+    needs: [plan-release, release, create-github-releases, release-helm-charts]
     if: always()
     steps:
     - name: Checkout code
@@ -330,3 +334,124 @@ jobs:
           $DRY_RUN)
         
         echo "$SUMMARY" >> $GITHUB_STEP_SUMMARY
+        
+    - name: Add helm chart summary
+      if: github.event.inputs.helm_charts != ''
+      run: |
+        HELM_CHARTS="${{ github.event.inputs.helm_charts }}"
+        VERSION="${{ needs.plan-release.outputs.version }}"
+        DRY_RUN="${{ github.event.inputs.dry_run }}"
+        HELM_JOB_RESULT="${{ needs.release-helm-charts.result }}"
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "---" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## 🎯 Helm Chart Release" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [[ "$HELM_JOB_RESULT" == "success" ]]; then
+          echo "**Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
+          echo "**Charts:** $HELM_CHARTS" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** $VERSION" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📥 **Chart packages available as workflow artifacts**" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "ℹ️ *Dry run mode - charts built but not published*" >> $GITHUB_STEP_SUMMARY
+          fi
+        elif [[ "$HELM_JOB_RESULT" == "skipped" ]]; then
+          echo "**Status:** ⏭️ Skipped (no charts specified)" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "**Status:** ❌ Failed or Cancelled" >> $GITHUB_STEP_SUMMARY
+        fi
+
+  # Release helm charts after apps are released
+  release-helm-charts:
+    name: Release Helm Charts
+    needs: [plan-release, release]
+    if: github.event.inputs.helm_charts != '' && needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'helm'
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+        
+    - name: Plan helm chart release
+      id: plan
+      run: |
+        CHARTS_INPUT="${{ github.event.inputs.helm_charts }}"
+        VERSION="${{ needs.plan-release.outputs.version }}"
+        
+        echo "Planning helm chart release for: $CHARTS_INPUT"
+        echo "Using version: $VERSION"
+        
+        # Use release helper to plan the helm chart release
+        PLAN_OUTPUT=$(bazel run --config=ci //tools:release -- plan-helm-release \
+          --charts "$CHARTS_INPUT" \
+          --version "$VERSION" \
+          --format github)
+        
+        # Parse output from release helper
+        echo "$PLAN_OUTPUT" | while IFS= read -r line; do
+          if [[ "$line" == matrix=* ]]; then
+            echo "${line}" >> $GITHUB_OUTPUT
+          elif [[ "$line" == charts=* ]]; then
+            echo "${line}" >> $GITHUB_OUTPUT
+            CHARTS_LIST="${line#charts=}"
+            if [[ -n "$CHARTS_LIST" ]]; then
+              echo "Release plan: $CHARTS_LIST"
+            else
+              echo "No charts to release"
+            fi
+          fi
+        done
+        
+    - name: Build helm charts
+      if: steps.plan.outputs.charts != ''
+      env:
+        VERSION: ${{ needs.plan-release.outputs.version }}
+        DRY_RUN: ${{ github.event.inputs.dry_run }}
+      run: |
+        echo "Building helm charts with version $VERSION"
+        
+        # Create output directory for charts
+        mkdir -p /tmp/helm-charts
+        
+        # Parse chart list and build each chart
+        CHARTS="${{ steps.plan.outputs.charts }}"
+        IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
+        
+        for CHART in "${CHART_ARRAY[@]}"; do
+          echo "Building chart: $CHART"
+          
+          # Build the chart using release helper with released app versions
+          bazel run --config=ci //tools:release -- build-helm-chart "$CHART" \
+            --version "$VERSION" \
+            --output-dir /tmp/helm-charts \
+            --use-released
+          
+          echo "✅ Chart $CHART built successfully"
+        done
+        
+        # List generated charts
+        echo "Generated charts:"
+        ls -lh /tmp/helm-charts/
+        
+    - name: Upload helm chart artifacts
+      if: steps.plan.outputs.charts != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: helm-charts-${{ needs.plan-release.outputs.version }}
+        path: /tmp/helm-charts/*.tgz
+        if-no-files-found: error
+

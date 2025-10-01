@@ -21,9 +21,26 @@ type AppMetadata struct {
 	Domain       string            `json:"domain"`
 	Language     string            `json:"language"`
 	Port         int               `json:"port,omitempty"`
+	Replicas     int               `json:"replicas,omitempty"`
 	Labels       map[string]string `json:"labels,omitempty"`
 	Annotations  map[string]string `json:"annotations,omitempty"`
 	Dependencies []string          `json:"dependencies,omitempty"`
+	HealthCheck  *HealthCheckMeta  `json:"health_check,omitempty"`
+	Ingress      *IngressMeta      `json:"ingress,omitempty"`
+	Command      []string          `json:"command,omitempty"`
+	Args         []string          `json:"args,omitempty"`
+}
+
+// HealthCheckMeta represents health check configuration from metadata
+type HealthCheckMeta struct {
+	Enabled bool   `json:"enabled"`
+	Path    string `json:"path"`
+}
+
+// IngressMeta represents ingress configuration from metadata
+type IngressMeta struct {
+	Host          string `json:"host"`
+	TLSSecretName string `json:"tls_secret_name"`
 }
 
 // GetImage returns the full image name (registry/repo_name)
@@ -92,6 +109,13 @@ type AppConfig struct {
 	Command     []string             `yaml:"command,omitempty"`
 	Args        []string             `yaml:"args,omitempty"`
 	Env         map[string]string    `yaml:"env,omitempty"`
+	Ingress     *AppIngressConfig    `yaml:"ingress,omitempty"` // Per-app ingress config
+}
+
+// AppIngressConfig represents per-app ingress configuration
+type AppIngressConfig struct {
+	Host          string `yaml:"host,omitempty"`
+	TLSSecretName string `yaml:"tlsSecretName,omitempty"`
 }
 
 // IngressConfig represents ingress configuration in values.yaml
@@ -155,8 +179,16 @@ type ChartConfig struct {
 type Composer struct {
 	config        ChartConfig
 	apps          []AppMetadata
+	manifests     []ManifestFile
 	templateDir   string
 	templateFuncs template.FuncMap
+}
+
+// ManifestFile represents a manual Kubernetes manifest
+type ManifestFile struct {
+	Path     string
+	Content  []byte
+	Filename string
 }
 
 // NewComposer creates a new Composer instance
@@ -275,6 +307,25 @@ func (c *Composer) LoadMetadata(metadataFiles []string) error {
 	return nil
 }
 
+// LoadManifests loads manual Kubernetes manifest files
+func (c *Composer) LoadManifests(manifestFiles []string) error {
+	for _, file := range manifestFiles {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return fmt.Errorf("failed to read manifest file %s: %w", file, err)
+		}
+
+		manifest := ManifestFile{
+			Path:     file,
+			Content:  data,
+			Filename: filepath.Base(file),
+		}
+
+		c.manifests = append(c.manifests, manifest)
+	}
+	return nil
+}
+
 // GenerateChart generates a complete Helm chart
 func (c *Composer) GenerateChart() error {
 	// Create output directory structure
@@ -343,10 +394,13 @@ func (c *Composer) buildAppConfig(app AppMetadata) (AppConfig, error) {
 	// Get default resources for this app type
 	resources := appType.DefaultResourceConfig()
 
-	// Set default replicas based on type
-	replicas := 1
-	if appType == ExternalAPI || appType == InternalAPI {
-		replicas = 2
+	// Set replicas: use metadata if provided, otherwise default based on type
+	replicas := app.Replicas
+	if replicas == 0 {
+		replicas = 1
+		if appType == ExternalAPI || appType == InternalAPI {
+			replicas = 2
+		}
 	}
 
 	// Set default port
@@ -362,17 +416,41 @@ func (c *Composer) buildAppConfig(app AppMetadata) (AppConfig, error) {
 		Port:      port,
 		Replicas:  replicas,
 		Resources: resources.ToValuesFormat(),
+		Command:   app.Command, // Use command from metadata
+		Args:      app.Args,    // Use args from metadata
 	}
 
-	// Add health check for APIs
+	// Add health check for APIs based on metadata or defaults
 	if appType == ExternalAPI || appType == InternalAPI {
-		config.HealthCheck = &HealthCheckConfig{
-			Path:                "/health",
-			InitialDelaySeconds: 10,
-			PeriodSeconds:       10,
-			TimeoutSeconds:      5,
-			SuccessThreshold:    1,
-			FailureThreshold:    3,
+		if app.HealthCheck != nil && app.HealthCheck.Enabled {
+			// Use health check path from metadata
+			config.HealthCheck = &HealthCheckConfig{
+				Path:                app.HealthCheck.Path,
+				InitialDelaySeconds: 10,
+				PeriodSeconds:       10,
+				TimeoutSeconds:      5,
+				SuccessThreshold:    1,
+				FailureThreshold:    3,
+			}
+		} else if app.HealthCheck == nil || app.HealthCheck.Path == "" {
+			// Default to /health for APIs if not specified
+			config.HealthCheck = &HealthCheckConfig{
+				Path:                "/health",
+				InitialDelaySeconds: 10,
+				PeriodSeconds:       10,
+				TimeoutSeconds:      5,
+				SuccessThreshold:    1,
+				FailureThreshold:    3,
+			}
+		}
+		// If HealthCheck.Enabled is false, don't add health check (nil)
+	}
+
+	// Add per-app ingress configuration if provided
+	if app.Ingress != nil && app.Ingress.Host != "" {
+		config.Ingress = &AppIngressConfig{
+			Host:          app.Ingress.Host,
+			TLSSecretName: app.Ingress.TLSSecretName,
 		}
 	}
 
@@ -586,6 +664,14 @@ func writeValuesYAML(f *os.File, data ValuesData) error {
 			w.EndSection()
 		}
 
+		// Per-app ingress config if present
+		if app.Ingress != nil {
+			w.StartSection("ingress")
+			w.WriteString("host", app.Ingress.Host)
+			w.WriteString("tlsSecretName", app.Ingress.TLSSecretName)
+			w.EndSection()
+		}
+
 		// Command, Args, Env
 		w.WriteList("command", app.Command)
 		w.WriteList("args", app.Args)
@@ -624,6 +710,12 @@ func writeValuesYAML(f *os.File, data ValuesData) error {
 		)
 	}
 	w.EndSection()
+	w.Newline()
+
+	// Write manifests section (for manual Kubernetes objects)
+	w.StartSection("manifests")
+	w.WriteBool("enabled", true)
+	w.EndSection()
 
 	return nil
 }
@@ -655,6 +747,11 @@ func (c *Composer) generateResourceTemplates(templatesDir string) error {
 		}
 	}
 
+	// Process and copy manual manifests
+	if err := c.processManualManifests(templatesDir); err != nil {
+		return fmt.Errorf("failed to process manual manifests: %w", err)
+	}
+
 	return nil
 }
 
@@ -670,6 +767,78 @@ func (c *Composer) copyTemplate(src, dst string) error {
 	}
 
 	return nil
+}
+
+// processManualManifests processes and copies manual Kubernetes manifests
+func (c *Composer) processManualManifests(templatesDir string) error {
+	for i, manifest := range c.manifests {
+		// Generate a unique filename with prefix to avoid conflicts
+		dstFilename := fmt.Sprintf("manifest-%02d-%s", i, manifest.Filename)
+		dstPath := filepath.Join(templatesDir, dstFilename)
+
+		// Process the manifest to inject Helm templating
+		processed, err := c.injectHelmTemplating(manifest.Content)
+		if err != nil {
+			return fmt.Errorf("failed to process manifest %s: %w", manifest.Filename, err)
+		}
+
+		if err := os.WriteFile(dstPath, processed, 0644); err != nil {
+			return fmt.Errorf("failed to write manifest %s: %w", manifest.Filename, err)
+		}
+	}
+	return nil
+}
+
+// injectHelmTemplating processes a Kubernetes manifest to inject Helm template directives
+func (c *Composer) injectHelmTemplating(content []byte) ([]byte, error) {
+	// Parse the YAML to understand its structure
+	contentStr := string(content)
+
+	// Add Helm template header comment
+	helmContent := "{{- if .Values.manifests.enabled | default true }}\n"
+
+	// Replace namespace references with Helm template
+	// Match: namespace: <value>
+	// TODO: This string-based approach is fragile and could incorrectly match namespace
+	// references in comments or string values. Consider using a proper YAML parser
+	// (e.g., gopkg.in/yaml.v3 with node manipulation) for more reliable template injection.
+	contentStr = strings.ReplaceAll(contentStr,
+		"namespace: default",
+		"namespace: {{ .Values.global.namespace }}")
+
+	// For any other namespace value, replace with template
+	lines := strings.Split(contentStr, "\n")
+	for i, line := range lines {
+		// Match lines like "  namespace: some-namespace"
+		if strings.Contains(line, "namespace:") && !strings.Contains(line, "{{") {
+			// Extract indentation
+			indent := len(line) - len(strings.TrimLeft(line, " \t"))
+			spaces := strings.Repeat(" ", indent)
+			lines[i] = spaces + "namespace: {{ .Values.global.namespace }}"
+		}
+
+		// Add environment label if labels section exists
+		if strings.Contains(line, "labels:") && i+1 < len(lines) {
+			// Check if next line is already indented (part of labels)
+			nextLine := lines[i+1]
+			if len(nextLine) > 0 && (nextLine[0] == ' ' || nextLine[0] == '\t') {
+				// Add environment label after the labels: line
+				indent := len(nextLine) - len(strings.TrimLeft(nextLine, " \t"))
+				spaces := strings.Repeat(" ", indent)
+				envLabel := spaces + "environment: {{ .Values.global.environment }}"
+				// Insert if not already present
+				if !strings.Contains(contentStr, "environment:") {
+					lines = append(lines[:i+1], append([]string{envLabel}, lines[i+1:]...)...)
+				}
+			}
+		}
+	}
+
+	contentStr = strings.Join(lines, "\n")
+	helmContent += contentStr
+	helmContent += "\n{{- end }}\n"
+
+	return []byte(helmContent), nil
 }
 
 // hasExternalAPIs checks if any apps are external APIs

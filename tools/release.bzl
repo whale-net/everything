@@ -1,6 +1,7 @@
 """Release utilities for the Everything monorepo."""
 
 load("//tools:multiplatform_image.bzl", "multiplatform_python_image", "multiplatform_go_image", "multiplatform_push")
+load("//tools/helm:helm.bzl", "helm_chart")
 
 def _app_metadata_impl(ctx):
     """Implementation for app_metadata rule."""
@@ -17,7 +18,29 @@ def _app_metadata_impl(ctx):
         "repo_name": ctx.attr.repo_name,
         "domain": ctx.attr.domain,
         "app_type": ctx.attr.app_type,  # Add app_type to metadata
+        "port": ctx.attr.port,  # Port the app listens on
+        "replicas": ctx.attr.replicas,  # Default replica count
     }
+    
+    # Add optional health check configuration if provided
+    if ctx.attr.health_check_enabled:
+        metadata["health_check"] = {
+            "enabled": ctx.attr.health_check_enabled,
+            "path": ctx.attr.health_check_path,
+        }
+    
+    # Add optional ingress configuration if provided
+    if ctx.attr.ingress_host:
+        metadata["ingress"] = {
+            "host": ctx.attr.ingress_host,
+            "tls_secret_name": ctx.attr.ingress_tls_secret,
+        }
+    
+    # Add command and args if provided
+    if ctx.attr.command:
+        metadata["command"] = ctx.attr.command
+    if ctx.attr.args:
+        metadata["args"] = ctx.attr.args
     
     output = ctx.actions.declare_file(ctx.label.name + "_metadata.json")
     ctx.actions.write(
@@ -40,10 +63,26 @@ app_metadata = rule(
         "repo_name": attr.string(mandatory = True),
         "domain": attr.string(mandatory = True),
         "app_type": attr.string(default = ""),  # Optional, will be inferred if not provided
+        "port": attr.int(default = 0),  # Port the app listens on (0 = not specified)
+        "replicas": attr.int(default = 0),  # Default replica count (0 = use composer default)
+        "health_check_enabled": attr.bool(default = True),  # Whether health checks are enabled
+        "health_check_path": attr.string(default = "/health"),  # Health check endpoint path
+        "ingress_host": attr.string(default = ""),  # Custom ingress host (empty = use default pattern)
+        "ingress_tls_secret": attr.string(default = ""),  # TLS secret name for ingress
+        "command": attr.string_list(default = []),  # Container command override
+        "args": attr.string_list(default = []),  # Container arguments
     },
 )
 
-def release_app(name, binary_target = None, binary_amd64 = None, binary_arm64 = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", custom_repo_name = None, app_type = ""):
+# Note: This function has many parameters (16) to support flexible app configuration.
+# They are logically grouped as:
+# - Binary config: name, binary_target, binary_amd64, binary_arm64, language
+# - Release config: domain, description, version, registry, custom_repo_name
+# - Deployment config: app_type, port, replicas, command, args
+# - Health check config: health_check_enabled, health_check_path
+# - Ingress config: ingress_host, ingress_tls_secret
+# Bazel/Starlark does not support nested struct parameters, so they remain flat.
+def release_app(name, binary_target = None, binary_amd64 = None, binary_arm64 = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = True, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = []):
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
@@ -63,6 +102,14 @@ def release_app(name, binary_target = None, binary_amd64 = None, binary_arm64 = 
         custom_repo_name: Custom repository name (defaults to name)
         app_type: Application type for Helm chart generation (external-api, internal-api, worker, job).
                   If empty, will be inferred from app name by the Helm composer tool.
+        port: Port the application listens on (required for API types, 0 = not specified)
+        replicas: Default number of replicas (0 = use composer default based on app_type)
+        health_check_enabled: Whether to enable health checks (default: True for APIs)
+        health_check_path: Path for health check endpoint (default: /health)
+        ingress_host: Custom ingress hostname (empty = use default {app}-{env}.local pattern)
+        ingress_tls_secret: TLS secret name for ingress (empty = no TLS)
+        command: Override container command (default: use image ENTRYPOINT)
+        args: Container arguments (default: empty, or binary's default args)
     """
     if language not in ["python", "go"]:
         fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
@@ -135,6 +182,14 @@ def release_app(name, binary_target = None, binary_amd64 = None, binary_arm64 = 
         repo_name = image_name,  # Use domain-app format
         domain = domain,
         app_type = app_type,  # Pass through app_type for Helm chart generation
+        port = port,  # Port configuration
+        replicas = replicas,  # Replica count
+        health_check_enabled = health_check_enabled,  # Health check configuration
+        health_check_path = health_check_path,
+        ingress_host = ingress_host,  # Ingress configuration
+        ingress_tls_secret = ingress_tls_secret,
+        command = command,  # Container command override
+        args = args,  # Container arguments
         tags = ["release-metadata"],  # No manual tag - metadata should be easily discoverable
         visibility = ["//visibility:public"],
     )
@@ -168,3 +223,110 @@ def get_image_targets(app_name):
         "push_amd64": "//" + app_name + ":" + base_name + "_push_amd64",
         "push_arm64": "//" + app_name + ":" + base_name + "_push_arm64",
     }
+
+def _helm_chart_metadata_impl(ctx):
+    """Implementation for helm_chart_metadata rule."""
+    # Create a JSON file with helm chart metadata
+    metadata = {
+        "name": ctx.attr.chart_name,
+        "version": ctx.attr.chart_version,
+        "namespace": ctx.attr.namespace,
+        "environment": ctx.attr.environment,
+        "domain": ctx.attr.domain,
+        "apps": ctx.attr.app_names,  # List of app names this chart includes
+        "chart_target": ctx.attr.chart_target,  # The actual helm_chart target
+    }
+    
+    output = ctx.actions.declare_file(ctx.label.name + "_chart_metadata.json")
+    ctx.actions.write(
+        output = output,
+        content = json.encode(metadata),
+    )
+    
+    return [DefaultInfo(files = depset([output]))]
+
+helm_chart_metadata = rule(
+    implementation = _helm_chart_metadata_impl,
+    attrs = {
+        "chart_name": attr.string(mandatory = True),
+        "chart_version": attr.string(mandatory = True),
+        "namespace": attr.string(mandatory = True),
+        "environment": attr.string(default = "production"),
+        "domain": attr.string(mandatory = True),
+        "app_names": attr.string_list(mandatory = True),
+        "chart_target": attr.string(mandatory = True),
+    },
+)
+
+def release_helm_chart(
+    name,
+    apps,
+    chart_name = None,
+    chart_version = "0.1.0",
+    namespace = None,
+    environment = "production",
+    domain = None,
+    manual_manifests = [],
+    **kwargs
+):
+    """Convenience macro to set up a releasable Helm chart.
+    
+    This macro wraps helm_chart and creates release metadata for CI/CD integration.
+    
+    Args:
+        name: Target name for the chart
+        apps: List of app_metadata targets to include (e.g., ["//demo/hello_python:hello_python_metadata"])
+        chart_name: Name of the Helm chart (defaults to name)
+        chart_version: Initial version of the chart (will be overridden during release)
+        namespace: Kubernetes namespace for the chart
+        environment: Target environment (development, staging, production)
+        domain: Domain/category for the chart (e.g., "demo", "api", required)
+        manual_manifests: List of k8s_manifests targets or direct YAML files
+        **kwargs: Additional arguments passed to helm_chart
+    """
+    if not domain:
+        fail("domain is required for release_helm_chart")
+    
+    if not namespace:
+        fail("namespace is required for release_helm_chart")
+    
+    actual_chart_name = chart_name or name
+    
+    # Create the helm_chart target
+    helm_chart(
+        name = name,
+        apps = apps,
+        chart_name = actual_chart_name,
+        chart_version = chart_version,
+        namespace = namespace,
+        environment = environment,
+        manual_manifests = manual_manifests,
+        **kwargs
+    )
+    
+    # Extract app names from app_metadata targets
+    # Target format: "//demo/hello_python:hello_python_metadata"
+    app_names = []
+    for app_target in apps:
+        # Extract the app name from the target
+        # Split on : to get the target name, then remove _metadata suffix
+        target_parts = app_target.split(":")
+        if len(target_parts) == 2:
+            target_name = target_parts[1]
+            if target_name.endswith("_metadata"):
+                app_name = target_name[:-9]  # Remove "_metadata"
+                app_names.append(app_name)
+    
+    # Create release metadata for the chart
+    helm_chart_metadata(
+        name = name + "_chart_metadata",
+        chart_name = actual_chart_name,
+        chart_version = chart_version,
+        namespace = namespace,
+        environment = environment,
+        domain = domain,
+        app_names = app_names,
+        chart_target = ":" + name,
+        tags = ["helm-release-metadata"],
+        visibility = ["//visibility:public"],
+    )

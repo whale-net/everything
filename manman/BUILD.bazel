@@ -1,5 +1,6 @@
 load("@rules_python//python:defs.bzl", "py_library")
 load("//tools:release.bzl", "release_app")
+load("//tools/helm:helm.bzl", "helm_chart")
 
 # Re-export all manman modules for convenience
 py_library(
@@ -22,6 +23,11 @@ release_app(
     domain = "manman",
     description = "Experience API service for managing user experiences and workflows",
     app_type = "external-api",
+    replicas = 1,  # Single replica for development
+    port = 8000,
+    ingress_host = "experience.manman.local",
+    ingress_tls_secret = "manman-tls",
+    args = ["start-experience-api"],
 )
 
 release_app(
@@ -31,6 +37,9 @@ release_app(
     domain = "manman",
     description = "Status API service for monitoring and health checks",
     app_type = "internal-api",
+    replicas = 1,  # Single replica for development
+    port = 8000,
+    args = ["start-status-api"],
 )
 
 release_app(
@@ -40,6 +49,11 @@ release_app(
     domain = "manman",
     description = "Worker DAL API service for data access layer operations",
     app_type = "external-api",
+    replicas = 1,  # Single replica for development
+    port = 8000,
+    ingress_host = "dal.manman.local",
+    ingress_tls_secret = "manman-tls",
+    args = ["start-worker-dal-api"],
 )
 
 release_app(
@@ -49,6 +63,8 @@ release_app(
     domain = "manman",
     description = "Status processor service for background status processing",
     app_type = "worker",
+    replicas = 1,  # Single replica for development
+    args = ["start-status-processor"],
 )
 
 release_app(
@@ -58,6 +74,39 @@ release_app(
     domain = "manman", 
     description = "Background worker service for processing tasks and messages",
     app_type = "worker",
+    replicas = 1,  # Single replica for development
+)
+
+release_app(
+    name = "migration",
+    binary_target = "//manman/src/host:migration",
+    language = "python",
+    domain = "manman",
+    description = "Database migration job for schema updates",
+    app_type = "job",
+    replicas = 1,  # Jobs always run once
+    args = ["run-migration"],
+)
+
+# List of all manman app metadata targets for chart composition
+# Update this list when adding or removing services
+MANMAN_APPS = [
+    ":experience_api_metadata",
+    ":status_api_metadata",
+    ":worker_dal_api_metadata",
+    ":status_processor_metadata",
+    ":migration_metadata",
+]
+
+# Helm chart composition - combines all manman services into a single chart
+helm_chart(
+    name = "manman_chart",
+    apps = MANMAN_APPS,
+    chart_name = "manman-host",
+    namespace = "manman",
+    environment = "dev",
+    chart_version = "0.2.0",
+    visibility = ["//visibility:public"],
 )
 
 # Note: Manual helm charts are provided in manman/charts/manman-host/

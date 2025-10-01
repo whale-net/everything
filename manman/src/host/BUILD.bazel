@@ -63,6 +63,16 @@ multiplatform_py_binary(
     visibility = ["//manman:__pkg__"],
 )
 
+multiplatform_py_binary(
+    name = "migration",
+    srcs = ["main.py"],
+    main = "main.py",
+    deps = [":manman_host"],
+    requirements = ["fastapi", "uvicorn", "gunicorn", "typer", "alembic", "opentelemetry-instrumentation-fastapi", "requests", "python-jose"],
+    args = ["run-migration"],
+    visibility = ["//manman:__pkg__"],
+)
+
 # Tests for host APIs
 py_test(
     name = "manman_host_test",

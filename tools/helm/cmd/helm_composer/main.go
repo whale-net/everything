@@ -14,6 +14,7 @@ func main() {
 	// Define CLI flags
 	var (
 		metadataFiles string
+		manifestFiles string
 		chartName     string
 		version       string
 		environment   string
@@ -23,6 +24,7 @@ func main() {
 	)
 
 	flag.StringVar(&metadataFiles, "metadata", "", "Comma-separated list of metadata JSON files")
+	flag.StringVar(&manifestFiles, "manifests", "", "Comma-separated list of manual Kubernetes manifest YAML files")
 	flag.StringVar(&chartName, "chart-name", "composed-chart", "Name of the Helm chart")
 	flag.StringVar(&version, "version", "1.0.0", "Chart version")
 	flag.StringVar(&environment, "environment", "production", "Environment name")
@@ -55,6 +57,15 @@ func main() {
 		metadataList[i] = strings.TrimSpace(metadataList[i])
 	}
 
+	// Parse manifest file list
+	var manifestList []string
+	if manifestFiles != "" {
+		manifestList = strings.Split(manifestFiles, ",")
+		for i := range manifestList {
+			manifestList[i] = strings.TrimSpace(manifestList[i])
+		}
+	}
+
 	// Create composer configuration
 	config := helm.ChartConfig{
 		ChartName:   chartName,
@@ -71,6 +82,14 @@ func main() {
 	if err := composer.LoadMetadata(metadataList); err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading metadata: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Load manifest files if provided
+	if len(manifestList) > 0 {
+		if err := composer.LoadManifests(manifestList); err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading manifests: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	// Generate chart
