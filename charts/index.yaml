@@ -1,0 +1,14 @@
+apiVersion: v1
+entries:
+  manman-host:
+  - apiVersion: v2
+    appVersion: 0.2.0
+    created: "2025-10-02T04:03:47.222378568Z"
+    description: Composed Helm chart for multiple applications
+    digest: fda85a6f46cbfc88990cb41f7d8486b0cf4cd5838736df7279202dc953b38951
+    name: manman-host
+    type: application
+    urls:
+    - https://whale-net.github.io/everything/charts/manman-host-0.2.1.tgz
+    version: 0.2.1
+generated: "2025-10-02T04:03:47.221815194Z"
