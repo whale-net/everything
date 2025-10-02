@@ -783,7 +783,7 @@ def publish_helm_repo(
             typer.echo(f"\n✅ Successfully published Helm repository!")
             if not dry_run:
                 typer.echo(f"\nUsers can now add the repository with:")
-                typer.echo(f"  helm repo add {repo} https://{owner}.github.io/{repo}")
+                typer.echo(f"  helm repo add {repo} https://{owner}.github.io/{repo}/charts")
                 typer.echo(f"  helm repo update")
         else:
             typer.echo("❌ Failed to publish Helm repository", err=True)
