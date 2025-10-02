@@ -649,10 +649,14 @@ def publish_helm_repo_to_github_pages(
         gh_pages_dir = Path(tmpdir) / "gh-pages"
         gh_pages_dir.mkdir()
         
-        # Clone gh-pages branch or initialize if it doesn't exist
-        repo_url = f"https://github.com/{repository_owner}/{repository_name}.git"
+        # Configure git remote URL with authentication token if available
+        github_token = os.getenv('GITHUB_TOKEN', '')
+        if github_token:
+            repo_url = f"https://x-access-token:{github_token}@github.com/{repository_owner}/{repository_name}.git"
+        else:
+            repo_url = f"https://github.com/{repository_owner}/{repository_name}.git"
         
-        print(f"Cloning gh-pages branch from {repo_url}...")
+        print(f"Cloning gh-pages branch from https://github.com/{repository_owner}/{repository_name}.git...")
         result = subprocess.run(
             ["git", "clone", "--branch", "gh-pages", "--depth", "1", repo_url, str(gh_pages_dir)],
             capture_output=True,
