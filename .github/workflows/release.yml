@@ -527,7 +527,7 @@ jobs:
         echo "Downloading existing Helm repository index if available..."
         mkdir -p /tmp/helm-repo
         
-        # Try to download existing index.yaml from GitHub Pages
+        # Try to download existing index.yaml from GitHub Pages /charts subdirectory
         if curl -fsSL -o /tmp/helm-repo/index.yaml \
           "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts/index.yaml"; then
           echo "✅ Downloaded existing index.yaml"
@@ -541,23 +541,27 @@ jobs:
       run: |
         echo "Generating Helm repository index..."
         
-        # Copy charts to repo directory
+        # Create charts directory structure
         mkdir -p /tmp/helm-repo/charts
+        
+        # Copy charts to charts directory
         cp /tmp/helm-charts/*.tgz /tmp/helm-repo/charts/
         
-        # Generate or merge index
+        # Copy existing index to charts directory if it exists
+        if [ -f /tmp/helm-repo/index.yaml ]; then
+          mv /tmp/helm-repo/index.yaml /tmp/helm-repo/charts/
+        fi
+        
+        # Generate or merge index in the charts directory
         BASE_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
         
-        if [ -f /tmp/helm-repo/index.yaml ]; then
+        if [ -f /tmp/helm-repo/charts/index.yaml ]; then
           echo "Merging with existing index..."
-          helm repo index /tmp/helm-repo/charts --url "$BASE_URL" --merge /tmp/helm-repo/index.yaml
+          helm repo index /tmp/helm-repo/charts --url "$BASE_URL" --merge /tmp/helm-repo/charts/index.yaml
         else
           echo "Creating new index..."
           helm repo index /tmp/helm-repo/charts --url "$BASE_URL"
         fi
-        
-        # Move the generated index to the repo root for publishing
-        mv /tmp/helm-repo/charts/index.yaml /tmp/helm-repo/
         
         echo "✅ Generated Helm repository structure:"
         tree /tmp/helm-repo/ || ls -laR /tmp/helm-repo/
