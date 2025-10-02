@@ -423,9 +423,9 @@ jobs:
     if: github.event.inputs.helm_charts != ''
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # Required to push to gh-pages branch
-      pages: write     # Required for GitHub Pages
-      id-token: write  # Required for GitHub Pages
+      contents: read      # Read repository content
+      pages: write        # Deploy to GitHub Pages
+      id-token: write     # Required for GitHub Pages OIDC
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -444,11 +444,6 @@ jobs:
       uses: azure/setup-helm@v4
       with:
         version: 'latest'
-        
-    - name: Configure Git for gh-pages
-      run: |
-        git config --global user.name "github-actions[bot]"
-        git config --global user.email "github-actions[bot]@users.noreply.github.com"
         
     - name: Plan helm chart release
       id: plan
@@ -525,23 +520,68 @@ jobs:
         echo "Generated versioned charts:"
         ls -lh /tmp/helm-charts/
         
-    - name: Publish Helm charts to GitHub Pages
+    - name: Download existing Helm repository index
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      continue-on-error: true
       run: |
-        echo "Publishing Helm charts to GitHub Pages..."
+        echo "Downloading existing Helm repository index if available..."
+        mkdir -p /tmp/helm-repo
         
-        # Use release helper to publish to gh-pages branch
-        bazel run --config=ci //tools:release -- publish-helm-repo \
-          /tmp/helm-charts \
-          --owner "${{ github.repository_owner }}" \
-          --repo "${{ github.event.repository.name }}" \
-          --commit-message "Release Helm charts - auto-versioned"
+        # Try to download existing index.yaml from GitHub Pages
+        if curl -fsSL -o /tmp/helm-repo/index.yaml \
+          "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts/index.yaml"; then
+          echo "✅ Downloaded existing index.yaml"
+          ls -lh /tmp/helm-repo/
+        else
+          echo "ℹ️ No existing index.yaml found (this is normal for first deployment)"
+        fi
         
-        echo "✅ Helm charts published to https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
+    - name: Generate Helm repository index
+      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
+      run: |
+        echo "Generating Helm repository index..."
+        
+        # Copy charts to repo directory
+        mkdir -p /tmp/helm-repo/charts
+        cp /tmp/helm-charts/*.tgz /tmp/helm-repo/charts/
+        
+        # Generate or merge index
+        BASE_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
+        
+        if [ -f /tmp/helm-repo/index.yaml ]; then
+          echo "Merging with existing index..."
+          helm repo index /tmp/helm-repo/charts --url "$BASE_URL" --merge /tmp/helm-repo/index.yaml
+        else
+          echo "Creating new index..."
+          helm repo index /tmp/helm-repo/charts --url "$BASE_URL"
+        fi
+        
+        # Move the generated index to the repo root for publishing
+        mv /tmp/helm-repo/charts/index.yaml /tmp/helm-repo/
+        
+        echo "✅ Generated Helm repository structure:"
+        tree /tmp/helm-repo/ || ls -laR /tmp/helm-repo/
+        
+    - name: Upload Pages artifact
+      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: /tmp/helm-repo
+        
+    - name: Deploy to GitHub Pages
+      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
+      id: deployment
+      uses: actions/deploy-pages@v4
+        
+    - name: Report deployment URL
+      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
+      run: |
+        echo "✅ Helm charts deployed to GitHub Pages!"
         echo ""
-        echo "📦 Users can now add the repository:"
+        echo "📦 Helm Repository URL:"
+        echo "  https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
+        echo ""
+        echo "Users can add the repository with:"
         echo "  helm repo add ${{ github.event.repository.name }} https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
         echo "  helm repo update"
         
