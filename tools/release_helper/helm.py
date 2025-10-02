@@ -585,17 +585,22 @@ def merge_helm_repo_index(new_charts_dir: Path, existing_index_path: Optional[Pa
     Returns:
         Path to the generated/updated index.yaml
     """
-    # If there's an existing index, copy it to the new charts directory
+    # If there's an existing index, copy it to a temporary location first
     if existing_index_path and existing_index_path.exists():
-        shutil.copy(existing_index_path, new_charts_dir / "index.yaml")
+        # Create a temporary file for the existing index to avoid same-file issues
+        temp_index = Path(tempfile.mkdtemp()) / "existing-index.yaml"
+        shutil.copy(existing_index_path, temp_index)
         
         # Use helm repo index --merge to update
         result = subprocess.run(
-            ["helm", "repo", "index", str(new_charts_dir), "--url", base_url, "--merge", str(new_charts_dir / "index.yaml")],
+            ["helm", "repo", "index", str(new_charts_dir), "--url", base_url, "--merge", str(temp_index)],
             capture_output=True,
             text=True,
             check=False
         )
+        
+        # Clean up temporary file
+        shutil.rmtree(temp_index.parent, ignore_errors=True)
     else:
         # Generate new index
         result = subprocess.run(
