@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       apps:
-        description: 'Comma-separated list of apps to release (e.g., hello_python,hello_go) or "all" for all apps'
-        required: true
-        default: 'all'
+        description: 'Comma-separated list of apps to release (e.g., hello_python,hello_go) or "all" for all apps. Leave empty to skip app release.'
+        required: false
+        default: ''
       version:
         description: 'Release version (e.g., v1.0.0) - leave empty when using increment options'
         required: false
@@ -38,6 +38,19 @@ jobs:
     name: Validate Inputs
     runs-on: ubuntu-latest
     steps:
+    - name: Validate release targets
+      run: |
+        APPS="${{ github.event.inputs.apps }}"
+        HELM_CHARTS="${{ github.event.inputs.helm_charts }}"
+        
+        # Ensure at least one of apps or helm_charts is specified
+        if [[ -z "$APPS" && -z "$HELM_CHARTS" ]]; then
+          echo "Error: Must specify at least one of 'apps' or 'helm_charts'"
+          exit 1
+        fi
+        
+        echo "✅ Release targets validated: apps='$APPS', helm_charts='$HELM_CHARTS'"
+    
     - name: Validate mutually exclusive version options
       run: |
         VERSION="${{ github.event.inputs.version }}"
@@ -65,7 +78,7 @@ jobs:
           exit 1
         fi
         
-        echo "Input validation passed"
+        echo "✅ Version input validation passed"
 
   # Detect what apps have changed and build release plan
   plan-release:
@@ -99,38 +112,47 @@ jobs:
         EVENT_TYPE="workflow_dispatch"
         APPS_INPUT="${{ github.event.inputs.apps }}"
         
-        # Build the command based on the selected option
-        CMD="bazel run --config=ci //tools:release -- plan --event-type \"$EVENT_TYPE\" --apps \"$APPS_INPUT\" --format github"
-        
-        if [[ -n "$VERSION" ]]; then
-          CMD="$CMD --version \"$VERSION\""
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-        elif [[ "$INCREMENT_MINOR" == "true" ]]; then
-          CMD="$CMD --increment-minor"
-          echo "Planning minor version increment"
-        elif [[ "$INCREMENT_PATCH" == "true" ]]; then
-          CMD="$CMD --increment-patch"
-          echo "Planning patch version increment"
-        fi
-        
-        # Use release helper to plan the release
-        echo "Planning release with command: $CMD"
-        PLAN_OUTPUT=$(eval $CMD)
-        
-        # Parse output from release helper
-        echo "$PLAN_OUTPUT" | while IFS= read -r line; do
-          if [[ "$line" == matrix=* ]]; then
-            echo "${line}" >> $GITHUB_OUTPUT
-          elif [[ "$line" == apps=* ]]; then
-            echo "${line}" >> $GITHUB_OUTPUT
-            APPS_LIST="${line#apps=}"
-            if [[ -n "$APPS_LIST" ]]; then
-              echo "Release plan: $APPS_LIST"
-            else
-              echo "No apps to release"
-            fi
+        # Only plan app release if apps are specified
+        if [[ -n "$APPS_INPUT" ]]; then
+          # Build the command based on the selected option
+          CMD="bazel run --config=ci //tools:release -- plan --event-type \"$EVENT_TYPE\" --apps \"$APPS_INPUT\" --format github"
+          
+          if [[ -n "$VERSION" ]]; then
+            CMD="$CMD --version \"$VERSION\""
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          elif [[ "$INCREMENT_MINOR" == "true" ]]; then
+            CMD="$CMD --increment-minor"
+            echo "Planning minor version increment"
+          elif [[ "$INCREMENT_PATCH" == "true" ]]; then
+            CMD="$CMD --increment-patch"
+            echo "Planning patch version increment"
           fi
-        done
+          
+          # Use release helper to plan the release
+          echo "Planning release with command: $CMD"
+          PLAN_OUTPUT=$(eval $CMD)
+          
+          # Parse output from release helper
+          echo "$PLAN_OUTPUT" | while IFS= read -r line; do
+            if [[ "$line" == matrix=* ]]; then
+              echo "${line}" >> $GITHUB_OUTPUT
+            elif [[ "$line" == apps=* ]]; then
+              echo "${line}" >> $GITHUB_OUTPUT
+              APPS_LIST="${line#apps=}"
+              if [[ -n "$APPS_LIST" ]]; then
+                echo "Release plan: $APPS_LIST"
+              else
+                echo "No apps to release"
+              fi
+            fi
+          done
+        else
+          echo "No apps specified, skipping app release planning"
+          # Still need to output version for helm charts
+          if [[ -n "$VERSION" ]]; then
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          fi
+        fi
 
   # Build and release selected apps
   release:
@@ -394,11 +416,11 @@ jobs:
           echo "**Status:** ❌ Failed or Cancelled" >> $GITHUB_STEP_SUMMARY
         fi
 
-  # Release helm charts after apps are released
+  # Release helm charts (can run independently of app releases)
   release-helm-charts:
     name: Release Helm Charts
-    needs: [plan-release, release]
-    if: github.event.inputs.helm_charts != '' && needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
+    needs: [plan-release]
+    if: github.event.inputs.helm_charts != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write  # Required to push to gh-pages branch

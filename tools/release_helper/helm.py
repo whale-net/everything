@@ -500,8 +500,20 @@ def package_chart_with_version(
         output_dir = Path(tempfile.mkdtemp())
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Update Chart.yaml with the version
-    chart_yaml_path = chart_dir / "Chart.yaml"
+    # Copy chart to a temporary directory to avoid permission issues with bazel-bin
+    # Bazel output directories are often read-only
+    temp_chart_dir = Path(tempfile.mkdtemp()) / chart_name
+    shutil.copytree(chart_dir, temp_chart_dir, symlinks=False, ignore_dangling_symlinks=True)
+    
+    # Make all files in the temporary directory writable
+    for root, dirs, files in os.walk(temp_chart_dir):
+        for d in dirs:
+            os.chmod(os.path.join(root, d), 0o755)
+        for f in files:
+            os.chmod(os.path.join(root, f), 0o644)
+    
+    # Update Chart.yaml with the version in the temporary copy
+    chart_yaml_path = temp_chart_dir / "Chart.yaml"
     if chart_yaml_path.exists():
         # Read, update version, and write back using yaml library
         with open(chart_yaml_path, 'r') as f:
@@ -512,13 +524,16 @@ def package_chart_with_version(
         with open(chart_yaml_path, 'w') as f:
             yaml.safe_dump(chart_data, f, default_flow_style=False, sort_keys=False)
     
-    # Use helm package command to create the tarball
+    # Use helm package command to create the tarball from the temporary copy
     result = subprocess.run(
-        ["helm", "package", str(chart_dir), "-d", str(output_dir)],
+        ["helm", "package", str(temp_chart_dir), "-d", str(output_dir)],
         capture_output=True,
         text=True,
         check=False
     )
+    
+    # Clean up temporary directory
+    shutil.rmtree(temp_chart_dir.parent, ignore_errors=True)
     
     if result.returncode != 0:
         raise RuntimeError(f"helm package failed: {result.stderr}")
