@@ -164,7 +164,7 @@ py_test(
     srcs = ["test_helm_git_optimizations.py"],
     deps = [
         ":release_helper_lib",
-        requirement("pytest"),
+        "@pypi//:pytest",
     ],
     size = "small",
 )
