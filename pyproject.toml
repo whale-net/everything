@@ -1,0 +1,53 @@
+[project]
+name = "everything"
+version = "0.0.0"
+description = "Everything monorepo"
+requires-python = ">=3.11"
+dependencies = [
+    # Testing framework
+    "pytest",
+    "pytest-asyncio",
+    "pytest-git",
+    
+    # Web framework
+    "fastapi",
+    "uvicorn[standard]",
+    "gunicorn",
+    
+    # Database and ORM
+    "sqlmodel",
+    "sqlalchemy",  # Required explicitly for tests
+    "asyncpg",
+    "alembic",
+    
+    # Message queue
+    "amqpstorm",
+    
+    # CLI framework
+    "typer",
+    
+    # YAML parsing
+    "pyyaml",
+    
+    # OpenTelemetry for observability
+    "opentelemetry-api",
+    "opentelemetry-sdk",
+    "opentelemetry-instrumentation-fastapi",
+    "opentelemetry-instrumentation-sqlalchemy",
+    "opentelemetry-exporter-otlp",
+    
+    # HTTP client
+    "httpx",
+    "requests",
+    
+    # JWT handling
+    "python-jose",
+    
+    # Utility libraries
+    "pydantic",
+    "python-dotenv",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -1,5 +1,4 @@
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
-load("@pip_deps_dev//:requirements.bzl", "requirement")
 load("//tools:python_binary.bzl", "multiplatform_py_binary")
 load("//tools:release.bzl", "release_app")
 
@@ -11,14 +10,14 @@ py_library(
     deps = [
         "//manman/src:manman_core",
         "//manman/src/repository:manman_repository",
-        requirement("fastapi"),
-        requirement("uvicorn"),
-        requirement("gunicorn"),
-        requirement("typer"),
-        requirement("alembic"),
-        requirement("opentelemetry-instrumentation-fastapi"),
-        requirement("requests"),
-        requirement("python-jose"),
+        "@pypi//:fastapi",
+        "@pypi//:uvicorn",
+        "@pypi//:gunicorn",
+        "@pypi//:typer",
+        "@pypi//:alembic",
+        "@pypi//:opentelemetry-instrumentation-fastapi",
+        "@pypi//:requests",
+        "@pypi//:python-jose",
     ],
 )
 
@@ -85,10 +84,10 @@ py_test(
     main = "experience_api_test.py",
     deps = [
         ":manman_host",
-        requirement("pytest"),
-        requirement("pytest-asyncio"),
-        requirement("httpx"),  # For testing FastAPI endpoints
-        requirement("requests"),  # For repository API client
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+        "@pypi//:httpx",  # For testing FastAPI endpoints
+        "@pypi//:requests",  # For repository API client
     ],
     python_version = "PY3",
 )

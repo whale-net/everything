@@ -5,7 +5,7 @@ module(
 
 bazel_dep(name = "bazel_skylib", version = "1.8.1")
 bazel_dep(name = "rules_python", version = "1.6.1")
-bazel_dep(name = "rules_uv", version = "0.87.0")
+bazel_dep(name = "rules_pycross", version = "0.8.0")
 bazel_dep(name = "rules_go", version = "0.57.0")
 bazel_dep(name = "gazelle", version = "0.39.1")
 bazel_dep(name = "rules_oci", version = "2.2.6")
@@ -52,46 +52,39 @@ oci.pull(
 )
 use_repo(oci, "distroless_base", "distroless_base_linux_amd64", "distroless_base_linux_arm64_v8", "distroless_python", "distroless_python_linux_amd64", "distroless_python_linux_arm64_v8", "python_base", "python_base_linux_amd64", "python_base_linux_arm64_v8")
 
-# Use rules_python with platform-specific requirements for proper compiled dependency support
-pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
+# Python setup with rules_python for interpreter registration
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    is_default = True,
+    python_version = "3.11",
+)
+use_repo(python, "python_versions")
 
-# Configure different pip hubs for different platforms to ensure proper isolation
-# This is critical for compiled dependencies like pydantic-core
-pip.parse(
-    experimental_index_url = "https://pypi.org/simple",
-    experimental_target_platforms = [
-        "@platforms//os:linux",
-        "@platforms//cpu:x86_64",
+# Pycross setup for cross-platform Python dependency management
+# Create environments for different platforms
+environments = use_extension("@rules_pycross//pycross/extensions:environments.bzl", "environments")
+environments.create_for_python_toolchains(
+    name = "everything_pycross_envs",
+    platforms = [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-apple-darwin",
     ],
-    hub_name = "pip_deps_linux_amd64",
-    python_version = "3.11",
-    requirements_lock = "//:requirements.linux.amd64.lock.txt",
 )
-pip.parse(
-    experimental_index_url = "https://pypi.org/simple",
-    experimental_target_platforms = [
-        "@platforms//os:linux",
-        "@platforms//cpu:arm64",
-    ],
-    hub_name = "pip_deps_linux_arm64",
-    python_version = "3.11",
-    requirements_lock = "//:requirements.linux.arm64.lock.txt",
+use_repo(environments, "everything_pycross_envs")
+
+# Import dependencies from uv.lock
+lock_import = use_extension("@rules_pycross//pycross/extensions:lock_import.bzl", "lock_import")
+lock_import.import_uv(
+    lock_file = "//:uv.lock",
+    project_file = "//:pyproject.toml",
+    repo = "pypi",
+    target_environments = ["@everything_pycross_envs//:environments"],
 )
-pip.parse(
-    experimental_target_platforms = [
-        "@platforms//os:macos",
-        "@platforms//cpu:arm64",
-    ],
-    hub_name = "pip_deps_macos_arm64",
-    python_version = "3.11",
-    requirements_lock = "//:requirements.lock.txt",  # Use the main requirements for macOS
-)
-pip.parse(
-    hub_name = "pip_deps_dev",
-    python_version = "3.11",
-    requirements_lock = "//:requirements.lock.txt",
-)
-use_repo(pip, "pip_deps_dev", "pip_deps_linux_amd64", "pip_deps_linux_arm64", "pip_deps_macos_arm64")
+
+# Create the package repositories
+lock_repos = use_extension("@rules_pycross//pycross/extensions:lock_repos.bzl", "lock_repos")
+use_repo(lock_repos, "pypi")
 
 # Go setup
 
