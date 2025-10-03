@@ -1,6 +1,7 @@
 load("@rules_uv//uv:pip.bzl", "pip_compile")
 #load("@gazelle//:def.bzl", "gazelle")
-load("@rules_python//python:defs.bzl", "py_library")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@pip_deps_dev//:requirements.bzl", "requirement")
 
 # Export files needed by other packages
 exports_files([
@@ -57,6 +58,18 @@ py_library(
     name = "root",
     srcs = ["__init__.py"],
     visibility = ["//visibility:public"],
+)
+
+# Smoke test for container image building
+# This validates that the image building system works by building
+# representative Python and Go images
+py_test(
+    name = "test_image_build_smoke",
+    srcs = ["test_image_build_smoke.py"],
+    deps = [],
+    size = "large",
+    timeout = "moderate",
+    tags = ["manual", "integration", "docker"],
 )
 
 # Go setup
