@@ -40,7 +40,11 @@ def _helm_chart_impl(ctx):
         args.add_joined(manifest_files, join_with = ",")
     
     # Add chart configuration
-    args.add("--chart-name", ctx.attr.chart_name)
+    # Strip "helm-" prefix from chart name for publishing
+    # Chart names are used with "helm-" prefix for internal organization and git tags,
+    # but published charts should not include this redundant prefix
+    published_chart_name = ctx.attr.chart_name.removeprefix("helm-") if ctx.attr.chart_name.startswith("helm-") else ctx.attr.chart_name
+    args.add("--chart-name", published_chart_name)
     args.add("--version", ctx.attr.chart_version)
     args.add("--environment", ctx.attr.environment)
     args.add("--namespace", ctx.attr.namespace)
@@ -71,20 +75,21 @@ def _helm_chart_impl(ctx):
         inputs = metadata_files + template_files + manifest_files,
         outputs = [chart_parent_dir],
         mnemonic = "GenerateHelmChart",
-        progress_message = "Generating Helm chart %s" % ctx.attr.chart_name,
+        progress_message = "Generating Helm chart %s" % published_chart_name,
     )
     
     # Create a tarball of the chart directory (which is inside chart_parent_dir)
+    # The composer creates a directory with the published name (without helm- prefix)
     ctx.actions.run_shell(
         command = "tar -czf {} -C {} {}".format(
             chart_tarball.path,
             chart_parent_dir.path,
-            ctx.attr.chart_name,
+            published_chart_name,
         ),
         inputs = [chart_parent_dir],
         outputs = [chart_tarball],
         mnemonic = "PackageHelmChart",
-        progress_message = "Packaging Helm chart %s" % ctx.attr.chart_name,
+        progress_message = "Packaging Helm chart %s" % published_chart_name,
     )
     
     return [

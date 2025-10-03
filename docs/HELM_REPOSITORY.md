@@ -64,7 +64,8 @@ helm upgrade my-release everything/hello-fastapi --version v1.1.0
 
 Charts use **independent versioning** - each chart maintains its own semantic version based on its changes:
 
-- Chart versions are stored as git tags: `helm/<chart-name>/v1.2.3`
+- Chart versions are stored as git tags: `<chart-name>.v1.2.3` (e.g., `demo-hello-fastapi.v1.2.3`)
+- Chart names in tags have the `helm-` prefix removed for clarity (since they're in a Helm repo)
 - Versions auto-increment based on changes (patch by default)
 - Versions are independent from app/release versions
 
@@ -76,28 +77,28 @@ Version bump types:
 #### Example Version Flow
 
 ```bash
-# First release of hello-fastapi chart
-git tag helm/hello-fastapi/v1.0.0
-git push origin helm/hello-fastapi/v1.0.0
+# First release of hello-fastapi chart (internally helm-demo-hello-fastapi)
+git tag demo-hello-fastapi.v1.0.0
+git push origin demo-hello-fastapi.v1.0.0
 
 # Make some updates, release with patch bump (auto)
-bazel run //tools:release -- build-helm-chart hello-fastapi --auto-version
+bazel run //tools:release -- build-helm-chart helm-demo-hello-fastapi --auto-version
 # Creates v1.0.1 from v1.0.0
 
 # Add new feature, use minor bump
-bazel run //tools:release -- build-helm-chart hello-fastapi --auto-version --bump minor
+bazel run //tools:release -- build-helm-chart helm-demo-hello-fastapi --auto-version --bump minor
 # Creates v1.1.0 from v1.0.1
 
 # Meanwhile, demo-workers chart has its own version
-git tag helm/demo-workers/v0.5.0
-bazel run //tools:release -- build-helm-chart demo-workers --auto-version
+git tag workers-demo-workers.v0.5.0
+bazel run //tools:release -- build-helm-chart helm-workers-demo-workers --auto-version
 # Creates v0.5.1 - independent from hello-fastapi
 ```
 
 After building, tag the new chart versions:
 ```bash
-git tag helm/hello-fastapi/v1.1.0
-git push origin helm/hello-fastapi/v1.1.0
+git tag demo-hello-fastapi.v1.1.0
+git push origin demo-hello-fastapi.v1.1.0
 ```
 
 ### Automatic Publishing

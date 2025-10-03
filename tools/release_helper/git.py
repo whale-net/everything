@@ -15,17 +15,19 @@ def format_git_tag(domain: str, app_name: str, version: str) -> str:
 def format_helm_chart_tag(chart_name: str, version: str) -> str:
     """Format a Git tag for a Helm chart in the chart-name.version format.
     
-    Chart names already include the helm- prefix and namespace (e.g., "helm-demo-hello-fastapi"),
-    so we don't add another prefix here.
+    Chart names include the helm- prefix for internal organization (e.g., "helm-demo-hello-fastapi"),
+    but we strip this prefix for the published tag since it's redundant in a Helm repository.
     
     Args:
         chart_name: Name of the Helm chart (e.g., "helm-demo-hello-fastapi", "helm-manman-manman-host")
         version: Version string (e.g., "v1.0.0")
     
     Returns:
-        Formatted tag (e.g., "helm-demo-hello-fastapi.v1.0.0")
+        Formatted tag with helm- prefix removed (e.g., "demo-hello-fastapi.v1.0.0")
     """
-    return f"{chart_name}.{version}"
+    # Strip the "helm-" prefix from chart name for publishing
+    published_name = chart_name.removeprefix("helm-") if chart_name.startswith("helm-") else chart_name
+    return f"{published_name}.{version}"
 
 
 def create_git_tag(tag_name: str, commit_sha: Optional[str] = None, message: Optional[str] = None) -> None:
@@ -89,7 +91,8 @@ def get_app_tags(domain: str, app_name: str) -> List[str]:
 def get_helm_chart_tags(chart_name: str) -> List[str]:
     """Get all tags for a specific helm chart, sorted by version (newest first).
     
-    Chart names already include the helm-namespace- prefix (e.g., "helm-demo-hello-fastapi").
+    Chart names include the helm-namespace- prefix (e.g., "helm-demo-hello-fastapi"),
+    but published tags have this prefix stripped (e.g., "demo-hello-fastapi.v1.0.0").
     
     Args:
         chart_name: Name of the Helm chart (e.g., "helm-demo-hello-fastapi", "helm-manman-manman-host")
@@ -98,7 +101,9 @@ def get_helm_chart_tags(chart_name: str) -> List[str]:
         List of tags sorted by version (newest first)
     """
     all_tags = get_all_tags()
-    chart_prefix = f"{chart_name}."
+    # Strip the "helm-" prefix from chart name for tag lookup
+    published_name = chart_name.removeprefix("helm-") if chart_name.startswith("helm-") else chart_name
+    chart_prefix = f"{published_name}."
     chart_tags = [tag for tag in all_tags if tag.startswith(chart_prefix)]
     return chart_tags
 
@@ -128,16 +133,19 @@ def parse_version_from_tag(tag: str, domain: str, app_name: str) -> Optional[str
 def parse_version_from_helm_chart_tag(tag: str, chart_name: str) -> Optional[str]:
     """Parse version from a helm chart tag.
     
-    Chart names already include the helm-namespace- prefix.
+    Chart names include the helm-namespace- prefix (e.g., "helm-demo-hello-fastapi"),
+    but published tags have this prefix stripped (e.g., "demo-hello-fastapi.v1.2.3").
     
     Args:
-        tag: Git tag (e.g., "helm-demo-hello-fastapi.v1.2.3")
+        tag: Git tag (e.g., "demo-hello-fastapi.v1.2.3")
         chart_name: Chart name (e.g., "helm-demo-hello-fastapi")
     
     Returns:
         Version string (e.g., "v1.2.3") or None if not a valid chart tag
     """
-    expected_prefix = f"{chart_name}."
+    # Strip the "helm-" prefix from chart name for tag matching
+    published_name = chart_name.removeprefix("helm-") if chart_name.startswith("helm-") else chart_name
+    expected_prefix = f"{published_name}."
     if not tag.startswith(expected_prefix):
         return None
     
