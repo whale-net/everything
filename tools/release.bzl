@@ -114,21 +114,13 @@ def release_app(name, binary_target = None, language = None, domain = None, desc
     if language not in ["python", "go"]:
         fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
     
-    # Auto-detect binary target if not provided
+    # Auto-detect binary targets if not provided
+    # Python apps use multiplatform_py_binary which creates platform-specific targets
+    # Go apps use regular go_binary (same binary for all platforms)
     if not binary_target:
         if language == "python":
-            # Python apps use multiplatform_py_binary which creates *_linux_amd64/*_linux_arm64 targets
             binary_target = ":" + name + "_linux_amd64"
         else:
-            # Go apps use regular go_binary
-            binary_target = ":" + name
-    # Auto-detect binary target if not provided
-    if not binary_target:
-        if language == "python":
-            # Python apps use multiplatform_py_binary which creates *_linux_amd64/*_linux_arm64 targets
-            binary_target = ":" + name + "_linux_amd64"
-        else:
-            # Go apps use regular go_binary
             binary_target = ":" + name
     
     # Repository name for container images should use domain-app format
@@ -136,14 +128,26 @@ def release_app(name, binary_target = None, language = None, domain = None, desc
     image_target = name + "_image"
     repository = "whale-net/" + image_name  # Repository path (without registry)
     
-    # Create multiplatform OCI image using the detected binary
-    multiplatform_image(
-        name = image_target,
-        binary = binary_target,
-        registry = registry,
-        repository = repository,
-        language = language,
-    )
+    # Create multiplatform OCI image
+    if language == "python":
+        # Python apps have platform-specific binaries with correct wheels for each architecture
+        multiplatform_image(
+            name = image_target,
+            binary_amd64 = ":" + name + "_linux_amd64",
+            binary_arm64 = ":" + name + "_linux_arm64",
+            registry = registry,
+            repository = repository,
+            language = language,
+        )
+    else:
+        # Go apps use single binary for all platforms
+        multiplatform_image(
+            name = image_target,
+            binary = binary_target,
+            registry = registry,
+            repository = repository,
+            language = language,
+        )
     
     # Create release metadata
     app_metadata(

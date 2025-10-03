@@ -111,27 +111,34 @@ def container_image(
 
 def multiplatform_image(
     name,
-    binary,
+    binary = None,
+    binary_amd64 = None,
+    binary_arm64 = None,
     base = "@ubuntu_base",
     registry = "ghcr.io",
     repository = None,
     language = None,
     **kwargs):
-    """Build multiplatform OCI images from a single binary.
+    """Build multiplatform OCI images with optional platform-specific binaries.
     
-    IMPORTANT LIMITATION - Platform-specific dependencies:
-    This function currently builds the SAME binary for both AMD64 and ARM64 images.
-    Pycross selects wheels based on the BUILD HOST platform, NOT the target platform.
+    Cross-compilation support with platform transitions:
+    - Python apps: Use binary_amd64/binary_arm64 for correct wheel selection per platform
+    - Go apps: Use single binary parameter (Go cross-compiles natively)
     
-    This means:
-    - Pure Python apps: ✅ Work perfectly on all platforms
-    - Apps with compiled deps (pydantic, numpy, pillow, etc): ⚠️  Only work on build host platform
+    Usage for Python apps with compiled dependencies:
+        multiplatform_image(
+            name = "my_app_image",
+            binary_amd64 = ":my_app_linux_amd64",
+            binary_arm64 = ":my_app_linux_arm64",
+            language = "python",
+        )
     
-    For apps with compiled dependencies, you MUST either:
-    1. Use multiplatform_py_binary (creates separate *_linux_amd64 and *_linux_arm64 binaries)
-    2. Build on the actual target platform (cross-platform builds won't work)
-    
-    TODO: Add platform transition support to fix this properly.
+    Usage for Go apps or pure Python:
+        multiplatform_image(
+            name = "my_app_image",
+            binary = ":my_app",
+            language = "go",
+        )
     
     For local development:
         bazel run //app:my_app_image_load
@@ -147,7 +154,9 @@ def multiplatform_image(
     
     Args:
         name: Base name for all generated targets
-        binary: Binary target to containerize (e.g., ":my_app")
+        binary: Binary target for both platforms (optional if binary_amd64/arm64 provided)
+        binary_amd64: AMD64-specific binary (optional, overrides binary)
+        binary_arm64: ARM64-specific binary (optional, overrides binary)
         base: Base image (defaults to ubuntu:24.04)
         registry: Container registry (defaults to ghcr.io)
         repository: Repository path (e.g., "whale-net/my-app")
@@ -155,14 +164,17 @@ def multiplatform_image(
         **kwargs: Additional arguments passed to container_image
     """
     
-    if not binary:
-        fail("Must provide binary")
+    # Use platform-specific binaries if provided, otherwise use common binary
+    amd64_binary = binary_amd64 if binary_amd64 else binary
+    arm64_binary = binary_arm64 if binary_arm64 else binary
     
-    # Build platform-specific images from the same binary
-    # The binary name determines the platform in the image tag
+    if not amd64_binary or not arm64_binary:
+        fail("Must provide either 'binary' or both 'binary_amd64' and 'binary_arm64'")
+    
+    # Build platform-specific images with appropriate binaries
     container_image(
         name = name + "_amd64",
-        binary = binary,
+        binary = amd64_binary,
         base = base,
         language = language,
         **kwargs
@@ -170,7 +182,7 @@ def multiplatform_image(
     
     container_image(
         name = name + "_arm64",
-        binary = binary,
+        binary = arm64_binary,
         base = base,
         language = language,
         **kwargs
@@ -187,7 +199,8 @@ def multiplatform_image(
     )
     
     # Local load targets - simple names without registry
-    binary_name = _get_binary_name(binary)
+    # Use the amd64 binary name for the base tag
+    binary_name = _get_binary_name(amd64_binary)
     
     # Main load target - uses AMD64 (most common dev environment)
     oci_load(
