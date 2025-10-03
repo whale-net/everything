@@ -112,16 +112,16 @@ def has_chart_changed(chart_name: str, base_commit: str = "HEAD~1") -> bool:
         bazel_target = matching_chart['bazel_target']
         package_path = bazel_target[2:].split(':')[0]  # //demo:chart -> demo
         
-        # Check if any files in the chart package have changed
+        # Check if any files in the chart package have changed using --exit-code for efficiency
         result = subprocess.run(
-            ["git", "diff", "--name-only", base_commit, "HEAD", "--", f"{package_path}/"],
+            ["git", "diff", "--name-only", "--exit-code", base_commit, "HEAD", "--", f"{package_path}/"],
             capture_output=True,
             text=True,
-            check=True
+            check=False
         )
         
-        changed_files = [f for f in result.stdout.strip().split('\n') if f.strip()]
-        return len(changed_files) > 0
+        # Exit code 0 means no changes, 1 means changes found
+        return result.returncode != 0
     except Exception as e:
         print(f"Warning: Could not detect changes for chart '{chart_name}': {e}")
         # If we can't determine, assume it changed to be safe
@@ -648,7 +648,7 @@ def publish_helm_repo_to_github_pages(
         
         print(f"Cloning gh-pages branch from https://github.com/{repository_owner}/{repository_name}.git...")
         result = subprocess.run(
-            ["git", "clone", "--branch", "gh-pages", "--depth", "1", repo_url, str(gh_pages_dir)],
+            ["git", "clone", "--branch", "gh-pages", "--single-branch", "--depth", "1", repo_url, str(gh_pages_dir)],
             capture_output=True,
             text=True,
             cwd=workspace_root
@@ -658,7 +658,7 @@ def publish_helm_repo_to_github_pages(
         if result.returncode != 0:
             print("gh-pages branch doesn't exist, creating orphan branch...")
             result2 = subprocess.run(
-                ["git", "clone", "--depth", "1", repo_url, str(gh_pages_dir)],
+                ["git", "clone", "--single-branch", "--depth", "1", repo_url, str(gh_pages_dir)],
                 capture_output=True,
                 text=True,
                 cwd=workspace_root
@@ -672,20 +672,15 @@ def publish_helm_repo_to_github_pages(
                 cwd=gh_pages_dir
             )
             
-            # Check if there are any files to remove before running git rm -rf .
+            # Remove files manually instead of using git rm for better performance
+            # git rm requires index operations which are slower than direct file removal
             files_to_remove = [f for f in os.listdir(gh_pages_dir) if f != '.git']
-            if files_to_remove:
-                try:
-                    result_rm = subprocess.run(
-                        ["git", "rm", "-rf", "."],
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                        cwd=gh_pages_dir
-                    )
-                except subprocess.CalledProcessError as e:
-                    print(f"Error removing files from orphan gh-pages branch: {e.stderr}")
-                    return False
+            for item in files_to_remove:
+                item_path = gh_pages_dir / item
+                if item_path.is_file():
+                    item_path.unlink()
+                elif item_path.is_dir():
+                    shutil.rmtree(item_path)
             
             # Create a basic README for the Helm repo
             readme_content = f"""# Helm Chart Repository
@@ -718,6 +713,7 @@ helm install my-release {repository_name}/<chart-name>
 See the [index.yaml]({base_url}/index.yaml) for all available charts and versions.
 """
             (gh_pages_dir / "README.md").write_text(readme_content)
+            # Combine git add and commit in sequence for new orphan branch
             subprocess.run(
                 ["git", "add", "README.md"],
                 check=True,
@@ -758,17 +754,17 @@ See the [index.yaml]({base_url}/index.yaml) for all available charts and version
             print(result.stdout)
             return True
         
-        # Commit changes
+        # Add all changes to staging area
         subprocess.run(
             ["git", "add", "."],
             check=True,
             cwd=gh_pages_dir
         )
         
-        # Check if there are changes to commit
+        # Check if there are changes to commit using --exit-code for efficiency
         result = subprocess.run(
-            ["git", "diff", "--staged", "--quiet"],
-            capture_output=True,
+            ["git", "diff", "--staged", "--quiet", "--exit-code"],
+            capture_output=False,  # No need to capture output
             cwd=gh_pages_dir
         )
         
@@ -776,13 +772,13 @@ See the [index.yaml]({base_url}/index.yaml) for all available charts and version
             print("No changes to commit")
             return True
         
+        # Commit and push in sequence
         subprocess.run(
             ["git", "commit", "-m", commit_message],
             check=True,
             cwd=gh_pages_dir
         )
         
-        # Push to gh-pages
         print(f"Pushing to gh-pages branch...")
         subprocess.run(
             ["git", "push", "origin", "gh-pages"],
