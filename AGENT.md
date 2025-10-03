@@ -11,7 +11,14 @@ This repository implements true cross-compilation for Python apps using Bazel pl
 **Key Points**:
 - Python apps with compiled dependencies MUST use `multiplatform_py_binary`
 - Platform transitions ensure correct wheel selection (x86_64 vs aarch64)
-- Test cross-compilation with: `bazel test //tools:test_cross_compilation --test_output=streamed`
+- Test cross-compilation with:
+  ```bash
+  # Load images first (required)
+  bazel run //demo/hello_fastapi:hello_fastapi_image_amd64_load
+  bazel run //demo/hello_fastapi:hello_fastapi_image_arm64_load
+  # Run the test
+  bazel test //tools:test_cross_compilation --test_output=streamed
+  ```
 - CI automatically verifies cross-compilation on every PR
 - If `//tools:test_cross_compilation` fails, **DO NOT MERGE**
 
