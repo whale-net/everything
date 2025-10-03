@@ -167,6 +167,32 @@ Each Helm chart maintains its own independent version using git tags. Chart vers
 **First release:**
 - If no previous tag exists, starts with `v0.0.1` (patch) or `v0.1.0` (minor)
 
+### Why Omit chart_version in BUILD Files?
+
+The `chart_version` parameter in `release_helm_chart()` should typically be omitted because:
+
+1. **Single source of truth**: Git tags are the authoritative source for released versions
+2. **Prevents staleness**: Hardcoded versions in BUILD files become outdated after each release
+3. **Development clarity**: The default `"0.0.0-dev"` clearly indicates non-release builds
+4. **CI/CD override**: The release system always overrides the BUILD file version anyway
+
+**When to specify chart_version:**
+- Testing a specific version number locally before release
+- Creating a one-off chart package outside the release system
+- Development scenarios where you need a specific version for debugging
+
+**Typical usage:**
+```starlark
+# Recommended: Omit chart_version (uses default "0.0.0-dev")
+release_helm_chart(
+    name = "my_chart",
+    chart_name = "my-app",
+    domain = "demo",
+    namespace = "demo",
+    apps = ["//demo/my_app:my_app_metadata"],
+)
+```
+
 ### App Versioning
 
 Apps use a different tagging format: `{domain}-{app}.v{version}` (e.g., `demo-hello_fastapi.v1.0.0`).
@@ -236,9 +262,15 @@ release_helm_chart(
     chart_name = "hello-fastapi",
     namespace = "demo",
     domain = "demo",  # Required for release system
-    chart_version = "1.0.0",
+    # chart_version omitted - defaults to "0.0.0-dev" for local builds
+    # Release system auto-versions from git tags (helm-hello-fastapi.v*)
 )
 ```
+
+**Important:** The `chart_version` parameter should typically be omitted:
+- **Local builds**: Uses default `"0.0.0-dev"` to indicate it's a development build
+- **CI/CD releases**: The release system automatically determines the version from git tags
+- **Manual version**: Only specify `chart_version` if you need a specific version for local testing
 
 This automatically creates:
 - The helm chart target (`:fastapi_chart`)

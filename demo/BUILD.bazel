@@ -20,7 +20,8 @@ release_helm_chart(
     namespace = "demo",
     environment = "production",
     domain = "demo",
-    chart_version = "1.0.0",
+    # chart_version omitted - uses default "0.0.0-dev" for local builds
+    # Release system auto-versions from git tags (helm-hello-fastapi.v*)
     visibility = ["//visibility:public"],
 )
 
@@ -37,7 +38,8 @@ release_helm_chart(
     namespace = "demo",
     environment = "production",
     domain = "demo",
-    chart_version = "1.0.0",
+    # chart_version omitted - uses default "0.0.0-dev" for local builds
+    # Release system auto-versions from git tags (helm-hello-fastapi-enhanced.v*)
     visibility = ["//visibility:public"],
 )
 
@@ -52,9 +54,11 @@ release_helm_chart(
     namespace = "workers",
     environment = "staging",
     domain = "demo",
-    chart_version = "0.2.0",
+    # chart_version omitted - uses default "0.0.0-dev" for local builds
+    # Release system auto-versions from git tags (helm-demo-workers.v*)
 )
 
+# Example: Internal API (has service but no ingress)
 # Example: Internal API (has service but no ingress)
 release_helm_chart(
     name = "internal_api_chart",
@@ -65,25 +69,11 @@ release_helm_chart(
     namespace = "demo",
     environment = "production",
     domain = "demo",
-    chart_version = "1.0.0",
-    visibility = ["//visibility:public"],
+    # chart_version omitted - uses default "0.0.0-dev" for local builds
+    # Release system auto-versions from git tags (helm-hello-internal-api.v*)
 )
 
-# Example: Worker (no service or ingress, just deployment)
-release_helm_chart(
-    name = "worker_chart",
-    apps = [
-        "//demo/hello_worker:hello_worker_metadata",
-    ],
-    chart_name = "hello-worker",
-    namespace = "demo",
-    environment = "production",
-    domain = "demo",
-    chart_version = "1.0.0",
-    visibility = ["//visibility:public"],
-)
-
-# Example: Job (pre-install hook, no deployment)
+# Example: Cron job
 release_helm_chart(
     name = "job_chart",
     apps = [
@@ -93,13 +83,27 @@ release_helm_chart(
     namespace = "demo",
     environment = "production",
     domain = "demo",
-    chart_version = "1.0.0",
-    visibility = ["//visibility:public"],
+    # chart_version omitted - uses default "0.0.0-dev" for local builds
+    # Release system auto-versions from git tags (helm-hello-job.v*)
 )
 
-# Example: Multi-app chart with all types
+# Example: Background worker
 release_helm_chart(
-    name = "multi_app_chart",
+    name = "worker_chart",
+    apps = [
+        "//demo/hello_worker:hello_worker_metadata",
+    ],
+    chart_name = "hello-worker",
+    namespace = "demo",
+    environment = "production",
+    domain = "demo",
+    # chart_version omitted - uses default "0.0.0-dev" for local builds
+    # Release system auto-versions from git tags (helm-hello-worker.v*)
+)
+
+# Example: All app types in one chart
+release_helm_chart(
+    name = "all_types_chart",
     apps = [
         "//demo/hello_fastapi:hello_fastapi_metadata",
         "//demo/hello_internal_api:hello_internal_api_metadata",
@@ -110,7 +114,6 @@ release_helm_chart(
     namespace = "demo",
     environment = "production",
     domain = "demo",
-    chart_version = "1.0.0",
-    visibility = ["//visibility:public"],
+    # chart_version omitted - uses default "0.0.0-dev" for local builds
+    # Release system auto-versions from git tags (helm-demo-all-types.v*)
 )
-

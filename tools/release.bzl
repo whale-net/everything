@@ -262,7 +262,7 @@ def release_helm_chart(
     name,
     apps,
     chart_name = None,
-    chart_version = "0.1.0",
+    chart_version = "0.0.0-dev",
     namespace = None,
     environment = "production",
     domain = None,
@@ -277,7 +277,9 @@ def release_helm_chart(
         name: Target name for the chart
         apps: List of app_metadata targets to include (e.g., ["//demo/hello_python:hello_python_metadata"])
         chart_name: Name of the Helm chart (defaults to name)
-        chart_version: Initial version of the chart (will be overridden during release)
+        chart_version: Version for local builds (default: "0.0.0-dev"). 
+                      This is overridden during release by auto-versioning from git tags.
+                      Only affects local/development builds.
         namespace: Kubernetes namespace for the chart
         environment: Target environment (development, staging, production)
         domain: Domain/category for the chart (e.g., "demo", "api", required)

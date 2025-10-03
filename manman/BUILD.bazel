@@ -108,7 +108,8 @@ release_helm_chart(
     namespace = "manman",
     environment = "dev",
     domain = "manman",
-    chart_version = "0.2.0",
+    # chart_version omitted - uses default "0.0.0-dev" for local builds
+    # Release system auto-versions from git tags (helm-manman-host.v*)
     visibility = ["//visibility:public"],
 )
 
