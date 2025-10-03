@@ -1,14 +1,16 @@
 """Multi-platform OCI image building rules for the Everything monorepo.
 
-This module provides simplified, clean macros for building OCI images that support
-multiple platforms (AMD64 and ARM64) using oci_image_index to create manifest lists.
-Each app gets three deployment options:
-1. Multi-platform manifest list (main target - supports both AMD64 and ARM64)
-2. Platform-specific AMD64 image (for AMD64-only deployments)  
-3. Platform-specific ARM64 image (for ARM64-only deployments)
+This module provides simplified macros for building OCI images that support
+multiple platforms (AMD64 and ARM64). Thanks to pycross, platform-specific
+Python dependencies are handled automatically during the build process.
 
-The multi-platform manifest list is created using oci_image_index which references
-both platform-specific images, providing true cross-platform container support.
+Each app gets:
+1. Multi-platform manifest list (main target - supports both AMD64 and ARM64)
+2. Individual platform images (amd64, arm64) 
+3. Load targets for local testing
+
+For Python apps: pycross automatically selects the correct wheels for each platform
+For Go apps: the Go toolchain cross-compiles binaries automatically
 """
 
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index", "oci_load", "oci_push")
@@ -26,25 +28,26 @@ def multiplatform_python_image(
     tags = None,
     visibility = None,
     **kwargs):
-    """Build multi-platform Python OCI images that actually work.
+    """Build multi-platform Python OCI images.
     
-    Creates three image targets:
+    Thanks to pycross, Python dependencies are automatically resolved for each platform
+    during the build. You can use the same binary target for both platforms, or provide
+    platform-specific binaries if needed.
+    
+    Creates:
     - {name}: Multi-platform manifest list supporting both AMD64 and ARM64
-    - {name}_amd64: Platform-specific AMD64 image  
-    - {name}_arm64: Platform-specific ARM64 image
-    
-    And corresponding load targets for local testing:
-    - {name}_load: Load multi-platform manifest (defaults to AMD64 for local testing)
-    - {name}_amd64_load: Load AMD64-specific image
-    - {name}_arm64_load: Load ARM64-specific image
+    - {name}_amd64: AMD64 image  
+    - {name}_arm64: ARM64 image
+    - {name}_load: Load target for local testing (uses AMD64)
+    - {name}_amd64_load, {name}_arm64_load: Platform-specific load targets
     
     Args:
         name: Base name for all generated targets
-        binary: Python binary target to containerize (used for both platforms if platform-specific binaries not provided)
-        binary_amd64: AMD64-specific binary target (overrides binary for AMD64)
-        binary_arm64: ARM64-specific binary target (overrides binary for ARM64)
+        binary: Python binary target (used for both platforms if platform-specific not provided)
+        binary_amd64: AMD64-specific binary (optional)
+        binary_arm64: ARM64-specific binary (optional)
         base_image: Base OCI image (defaults to @python_base)
-        repository: Container repository name (e.g., "myregistry/my-app")
+        repository: Container repository name (e.g., "ghcr.io/org/app")
         extra_layers: Additional tar layers to include
         tags: Tags to apply to all targets
         visibility: Visibility for all targets
@@ -53,20 +56,20 @@ def multiplatform_python_image(
     if not tags:
         tags = ["manual"]
     
-    # Determine which binaries to use for each platform
+    # Use platform-specific binaries if provided, otherwise use the same binary for both
     amd64_binary = binary_amd64 if binary_amd64 else binary
     arm64_binary = binary_arm64 if binary_arm64 else binary
     
     if not amd64_binary or not arm64_binary:
-        fail("Must provide either 'binary' for both platforms or both 'binary_amd64' and 'binary_arm64'")
+        fail("Must provide either 'binary' or both 'binary_amd64' and 'binary_arm64'")
     
-    # Create application layers with the platform-specific binaries AND their runfiles
-    # This is critical for Python applications to work with platform-specific dependencies
+    # Create application layers with platform-specific binaries
+    # pycross ensures the right dependencies are included for each platform
     pkg_tar(
         name = name + "_app_layer_amd64",
         srcs = [amd64_binary],
         package_dir = "/app",
-        include_runfiles = True,  # Include all Python dependencies
+        include_runfiles = True,
         tags = tags,
         visibility = visibility,
     )
@@ -75,13 +78,13 @@ def multiplatform_python_image(
         name = name + "_app_layer_arm64",
         srcs = [arm64_binary],
         package_dir = "/app",
-        include_runfiles = True,  # Include all Python dependencies
+        include_runfiles = True,
         tags = tags,
         visibility = visibility,
     )
     
-    # Build platform-specific images with their corresponding binaries
-    _build_python_platform_image(
+    # Build platform-specific images
+    _build_python_image(
         name = name + "_amd64",
         base_image = base_image,
         binary = amd64_binary,
@@ -92,7 +95,7 @@ def multiplatform_python_image(
         **kwargs
     )
     
-    _build_python_platform_image(
+    _build_python_image(
         name = name + "_arm64",
         base_image = base_image, 
         binary = arm64_binary,
@@ -103,8 +106,7 @@ def multiplatform_python_image(
         **kwargs
     )
     
-    # Create multi-platform manifest list using oci_image_index
-    # This creates a true multi-platform manifest that references both platform images
+    # Create multi-platform manifest list
     oci_image_index(
         name = name,
         images = [
@@ -116,46 +118,15 @@ def multiplatform_python_image(
     )
     
     # Create load targets for local testing
-    if repository:
-        repo_tags = [repository + ":latest"]
-        repo_tags_amd64 = [repository + ":latest-amd64"]
-        repo_tags_arm64 = [repository + ":latest-arm64"]
-    else:
-        # Get binary name for repo tags - handle target labels properly
-        if ":" in binary:
-            binary_name = binary.split(":")[-1]
-        else:
-            binary_name = paths.basename(binary)
-        repo_tags = [binary_name + ":latest"]
-        repo_tags_amd64 = [binary_name + ":latest-amd64"]
-        repo_tags_arm64 = [binary_name + ":latest-arm64"]
-    
-    oci_load(
-        name = name + "_load",
-        image = ":" + name + "_amd64",  # Load AMD64 image by default for local testing
-        repo_tags = repo_tags,
-        tags = tags,
-        visibility = visibility,
-    )
-    
-    # Create oci_load targets for local testing
-    oci_load(
-        name = name + "_amd64_load",
-        image = ":" + name + "_amd64",
-        repo_tags = repo_tags_amd64,
-        tags = tags,
-        visibility = visibility,
-    )
-    
-    oci_load(
-        name = name + "_arm64_load", 
-        image = ":" + name + "_arm64",
-        repo_tags = repo_tags_arm64,
+    _create_load_targets(
+        name = name,
+        binary = binary,
+        repository = repository,
         tags = tags,
         visibility = visibility,
     )
 
-def _build_python_platform_image(
+def _build_python_image(
     name,
     base_image,
     binary,
@@ -164,23 +135,20 @@ def _build_python_platform_image(
     tags = None,
     visibility = None,
     **kwargs):
-    """Internal helper to build a platform-specific Python image that actually works."""
+    """Internal helper to build a Python container image."""
     
-    # Collect all layers in optimal order (dependencies first, app last)
     all_layers = []
-    
     if extra_layers:
         all_layers.extend(extra_layers)
-        
     all_layers.append(app_layer)
     
-    # Get binary name for entrypoint - handle target labels properly
+    # Extract binary name for entrypoint
     if ":" in binary:
         binary_name = binary.split(":")[-1]
     else:
         binary_name = paths.basename(binary)
     
-    # Set up proper environment for Python runfiles
+    # Set up Python runfiles environment
     env = {
         "RUNFILES_DIR": "/app/" + binary_name + ".runfiles",
         "PYTHON_RUNFILES": "/app/" + binary_name + ".runfiles",
@@ -191,7 +159,7 @@ def _build_python_platform_image(
         name = name,
         base = base_image,
         tars = all_layers,
-        entrypoint = ["/app/" + binary_name],  # Use the binary directly, not python3
+        entrypoint = ["/app/" + binary_name],
         workdir = "/app",
         env = env,
         tags = tags,
@@ -210,14 +178,20 @@ def multiplatform_go_image(
     **kwargs):
     """Build multi-platform Go OCI images.
     
-    Creates the same three image targets as multiplatform_python_image but for Go binaries.
-    Go binaries are statically linked, so no platform-specific dependency resolution needed.
+    Go binaries are statically linked, so cross-compilation is handled by the Go toolchain.
+    
+    Creates:
+    - {name}: Multi-platform manifest list supporting both AMD64 and ARM64
+    - {name}_amd64: AMD64 image  
+    - {name}_arm64: ARM64 image
+    - {name}_load: Load target for local testing (uses AMD64)
+    - {name}_amd64_load, {name}_arm64_load: Platform-specific load targets
     
     Args:
         name: Base name for all generated targets
         binary: Go binary target to containerize
         base_image: Base OCI image (defaults to @distroless_base)
-        repository: Container repository name (e.g., "myregistry/my-app")
+        repository: Container repository name (e.g., "ghcr.io/org/app")
         extra_layers: Additional tar layers to include
         tags: Tags to apply to all targets
         visibility: Visibility for all targets
@@ -235,8 +209,8 @@ def multiplatform_go_image(
         visibility = visibility,
     )
     
-    # Build platform-specific images (Go is cross-compiled at build time)
-    _build_go_platform_image(
+    # Build platform-specific images
+    _build_go_image(
         name = name + "_amd64",
         base_image = base_image,
         binary = binary,
@@ -247,7 +221,7 @@ def multiplatform_go_image(
         **kwargs
     )
     
-    _build_go_platform_image(
+    _build_go_image(
         name = name + "_arm64",
         base_image = base_image,
         binary = binary,
@@ -258,8 +232,7 @@ def multiplatform_go_image(
         **kwargs
     )
     
-    # Create multi-platform manifest list using oci_image_index
-    # This creates a true multi-platform manifest that references both platform images
+    # Create multi-platform manifest list
     oci_image_index(
         name = name,
         images = [
@@ -271,46 +244,15 @@ def multiplatform_go_image(
     )
     
     # Create load targets for local testing
-    if repository:
-        repo_tags = [repository + ":latest"]
-        repo_tags_amd64 = [repository + ":latest-amd64"]
-        repo_tags_arm64 = [repository + ":latest-arm64"]
-    else:
-        # Get binary name for repo tags - handle target labels properly
-        if ":" in binary:
-            binary_name = binary.split(":")[-1]
-        else:
-            binary_name = paths.basename(binary)
-        repo_tags = [binary_name + ":latest"]
-        repo_tags_amd64 = [binary_name + ":latest-amd64"]
-        repo_tags_arm64 = [binary_name + ":latest-arm64"]
-    
-    oci_load(
-        name = name + "_load",
-        image = ":" + name + "_amd64",  # Load AMD64 image by default for local testing
-        repo_tags = repo_tags,
-        tags = tags,
-        visibility = visibility,
-    )
-    
-    # Create oci_load targets for local testing  
-    oci_load(
-        name = name + "_amd64_load",
-        image = ":" + name + "_amd64",
-        repo_tags = repo_tags_amd64,
-        tags = tags,
-        visibility = visibility,
-    )
-    
-    oci_load(
-        name = name + "_arm64_load",
-        image = ":" + name + "_arm64", 
-        repo_tags = repo_tags_arm64,
+    _create_load_targets(
+        name = name,
+        binary = binary,
+        repository = repository,
         tags = tags,
         visibility = visibility,
     )
 
-def _build_go_platform_image(
+def _build_go_image(
     name,
     base_image,
     binary,
@@ -319,23 +261,18 @@ def _build_go_platform_image(
     tags = None,
     visibility = None,
     **kwargs):
-    """Internal helper to build a platform-specific Go image."""
+    """Internal helper to build a Go container image."""
     
-    # Collect all layers in optimal order (dependencies first, app last)
     all_layers = []
-    
     if extra_layers:
         all_layers.extend(extra_layers)
-        
     all_layers.append(app_layer)
     
-    # Get binary name for entrypoint - handle target labels properly
+    # Extract binary name for entrypoint
     if ":" in binary:
         binary_name = binary.split(":")[-1]
     else:
         binary_name = paths.basename(binary)
-    
-    # Go binaries don't need RUNFILES since they're statically linked
     
     oci_image(
         name = name,
@@ -348,6 +285,51 @@ def _build_go_platform_image(
         **kwargs
     )
 
+def _create_load_targets(name, binary, repository, tags, visibility):
+    """Internal helper to create oci_load targets for local testing.
+    
+    Note: repository parameter is ignored for load targets. Load targets use
+    simple image names without registry prefixes since they're for local Docker use.
+    """
+    
+    # Extract binary name for local Docker image tags
+    # Always use simple names without registry prefix for local images
+    if ":" in binary:
+        binary_name = binary.split(":")[-1]
+    else:
+        binary_name = paths.basename(binary)
+    
+    # Use simple image names for local Docker (no registry prefix)
+    repo_tags = [binary_name + ":latest"]
+    repo_tags_amd64 = [binary_name + ":latest-amd64"]
+    repo_tags_arm64 = [binary_name + ":latest-arm64"]
+    
+    # Main load target (uses AMD64 for local testing)
+    oci_load(
+        name = name + "_load",
+        image = ":" + name + "_amd64",
+        repo_tags = repo_tags,
+        tags = tags,
+        visibility = visibility,
+    )
+    
+    # Platform-specific load targets
+    oci_load(
+        name = name + "_amd64_load",
+        image = ":" + name + "_amd64",
+        repo_tags = repo_tags_amd64,
+        tags = tags,
+        visibility = visibility,
+    )
+    
+    oci_load(
+        name = name + "_arm64_load",
+        image = ":" + name + "_arm64",
+        repo_tags = repo_tags_arm64,
+        tags = tags,
+        visibility = visibility,
+    )
+
 def multiplatform_push(
     name,
     image,
@@ -357,10 +339,10 @@ def multiplatform_push(
     visibility = None):
     """Create push targets for multi-platform images.
     
-    Creates three push targets:
+    Creates:
     - {name}: Push multi-platform manifest list
-    - {name}_amd64: Push AMD64-specific image
-    - {name}_arm64: Push ARM64-specific image
+    - {name}_amd64: Push AMD64 image with -amd64 tag suffix
+    - {name}_arm64: Push ARM64 image with -arm64 tag suffix
     
     Args:
         name: Base name for push targets

@@ -57,6 +57,34 @@ The `release_app` macro automatically creates:
 2. **Multi-platform images** - Separate targets for amd64 and arm64
 3. **OCI push targets** - For publishing to container registries
 
+### Multi-Platform Image System
+
+#### How It Works
+The repository uses an automated multi-platform build system that creates container images supporting both AMD64 and ARM64 architectures:
+
+**For Python apps:**
+- `multiplatform_py_binary` creates platform-specific binaries automatically
+- `pycross` handles platform-specific Python dependencies (wheels) transparently
+- No manual platform configuration needed - everything is automatic
+
+**For Go apps:**
+- Go toolchain handles cross-compilation automatically
+- Binaries are statically linked, so no platform-specific dependencies
+
+**Platform selection:**
+- `oci_image_index` creates a multi-platform manifest list
+- Docker/Kubernetes automatically pulls the correct platform image
+- No need to specify platforms explicitly in most cases
+
+#### Custom Platform Definitions (Optional)
+Platform definitions are available in `//tools:platforms.bzl` for advanced use cases:
+- `//tools:linux_x86_64` - Linux AMD64
+- `//tools:linux_arm64` - Linux ARM64
+- `//tools:macos_x86_64` - macOS Intel (local dev)
+- `//tools:macos_arm64` - macOS Apple Silicon (local dev)
+
+These are rarely needed - the build system handles platform selection automatically.
+
 ### Image Build System
 
 #### Container Image Naming Convention
@@ -74,12 +102,15 @@ demo-hello_python:latest
 
 #### Image Targets Generated
 For each app with `release_app`, the following targets are created:
-- `<app>_image` - Base multi-platform image
+- `<app>_image` - Multi-platform manifest list (AMD64 + ARM64)
 - `<app>_image_amd64` - AMD64-specific image
 - `<app>_image_arm64` - ARM64-specific image
-- `<app>_image_load` - Optimized target for loading into Docker
-- `<app>_image_amd64_push` - Push target for AMD64
-- `<app>_image_arm64_push` - Push target for ARM64
+- `<app>_image_load` - Load into Docker (uses AMD64 for local testing)
+- `<app>_image_amd64_load` - Load AMD64 image specifically
+- `<app>_image_arm64_load` - Load ARM64 image specifically
+- `<app>_image_push` - Push multi-platform manifest
+- `<app>_image_amd64_push` - Push AMD64 image
+- `<app>_image_arm64_push` - Push ARM64 image
 
 #### Building Images
 ```bash
