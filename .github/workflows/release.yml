@@ -390,6 +390,22 @@ jobs:
             echo "Charts have been published to GitHub Pages:" >> $GITHUB_STEP_SUMMARY
             echo "- **Repository URL:** https://${REPO_OWNER}.github.io/${REPO_NAME}/charts" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
+            
+            echo "### 🏷️ Git Tags" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Git tags have been created for version tracking:" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # List the created tags based on chart names
+            IFS=',' read -ra CHART_ARRAY <<< "$HELM_CHARTS"
+            for CHART in "${CHART_ARRAY[@]}"; do
+              CHART=$(echo "$CHART" | xargs) # trim whitespace
+              if [[ "$CHART" != "all" ]]; then
+                echo "- \`helm-${CHART}.v${VERSION}\`" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
             echo "**Add the repository:**" >> $GITHUB_STEP_SUMMARY
             echo '```bash' >> $GITHUB_STEP_SUMMARY
             echo "helm repo add ${REPO_NAME} https://${REPO_OWNER}.github.io/${REPO_NAME}/charts" >> $GITHUB_STEP_SUMMARY
@@ -519,6 +535,50 @@ jobs:
         # List generated charts with versions
         echo "Generated versioned charts:"
         ls -lh /tmp/helm-charts/
+        
+    - name: Configure Git for tagging
+      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
+      run: |
+        git config --global user.name "${{ github.actor }}"
+        git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+        
+    - name: Create and push helm chart tags
+      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
+      env:
+        VERSION: ${{ needs.plan-release.outputs.version }}
+        CHARTS: ${{ steps.plan.outputs.charts }}
+      run: |
+        echo "Creating git tags for helm chart releases..."
+        
+        # Parse chart list and create tags for each chart
+        IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
+        
+        for CHART in "${CHART_ARRAY[@]}"; do
+          # Extract the actual version from the packaged chart filename
+          CHART_FILE=$(ls /tmp/helm-charts/${CHART}-*.tgz 2>/dev/null | head -n1)
+          
+          if [[ -f "$CHART_FILE" ]]; then
+            # Extract version from filename (e.g., manman-host-0.2.1.tgz -> 0.2.1)
+            CHART_VERSION=$(basename "$CHART_FILE" | sed -E "s/${CHART}-(.+)\.tgz/\1/")
+            
+            # Format: helm-{chart-name}.v{version}
+            TAG_NAME="helm-${CHART}.v${CHART_VERSION}"
+            
+            echo "Creating tag: $TAG_NAME for chart $CHART"
+            
+            # Create annotated tag
+            git tag -a "$TAG_NAME" -m "Release helm chart $CHART version v${CHART_VERSION}" "${{ github.sha }}"
+            
+            # Push the tag
+            git push origin "$TAG_NAME"
+            
+            echo "✅ Created and pushed tag: $TAG_NAME"
+          else
+            echo "⚠️ Warning: Could not find chart file for $CHART"
+          fi
+        done
+        
+        echo "✅ All helm chart tags created and pushed"
         
     - name: Download existing Helm repository index
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'

@@ -4,13 +4,16 @@ This document describes the helm chart release system integrated into the CI/CD 
 
 ## Overview
 
-The helm chart release system is integrated into the main CI/CD release workflow. When releasing apps, you can optionally specify helm charts to release with the same version. Helm charts automatically use the app versions from the release.
+The helm chart release system is integrated into the main CI/CD release workflow. When releasing apps, you can optionally specify helm charts to release with the same version. Helm charts automatically use the app versions from the release and are tracked with git tags.
 
 **Key Features:**
 - Integrated into main `release.yml` workflow
-- Helm charts always use released app versions from git tags
+- Helm charts use automatic per-chart versioning based on git tags
+- Git tags created for each chart release (format: `helm-{chart-name}.v{version}`)
+- Auto-increment support (minor/patch) using git tag history
 - Optional - specify charts to release or leave empty to skip
-- Charts uploaded as workflow artifacts (.tgz files)
+- Charts published to GitHub Pages Helm repository
+- Chart packages also uploaded as workflow artifacts (.tgz files)
 
 ## Architecture
 
@@ -145,6 +148,34 @@ For local development and testing, you can control version resolution:
 - Uses `"latest"` for all app versions
 - Suitable for development or when apps aren't formally released
 
+## Version Management
+
+### Helm Chart Versioning
+
+Each Helm chart maintains its own independent version using git tags. Chart versions are tracked using the format: `helm-{chart-name}.v{version}`.
+
+**Examples:**
+- `helm-manman-host.v0.2.1` - manman-host chart version 0.2.1
+- `helm-hello-fastapi.v1.5.0` - hello-fastapi chart version 1.5.0
+
+**Auto-increment behavior:**
+- The release workflow automatically determines the next chart version by:
+  1. Finding the latest git tag for the chart (e.g., `helm-manman-host.v0.2.0`)
+  2. Incrementing based on the selected bump type (patch or minor)
+  3. Creating a new tag (e.g., `helm-manman-host.v0.2.1`)
+
+**First release:**
+- If no previous tag exists, starts with `v0.0.1` (patch) or `v0.1.0` (minor)
+
+### App Versioning
+
+Apps use a different tagging format: `{domain}-{app}.v{version}` (e.g., `demo-hello_fastapi.v1.0.0`).
+
+This separation allows:
+- Independent versioning of charts and apps
+- Charts can reference multiple app versions
+- Clear distinction between infrastructure (charts) and application code
+
 ## Workflow Integration
 
 ### Main Release Workflow (`.github/workflows/release.yml`)
@@ -165,9 +196,11 @@ For local development and testing, you can control version resolution:
 
 **Outputs:**
 - App container images pushed to registry
-- Git tags created for apps
+- Git tags created for apps (format: `{domain}-{app}.v{version}`)
+- Git tags created for helm charts (format: `helm-{chart-name}.v{version}`)
+- Helm charts published to GitHub Pages at `https://{owner}.github.io/{repo}/charts`
 - Helm chart tarballs uploaded as workflow artifacts
-- GitHub releases created with release notes
+- GitHub releases created with release notes for apps
 - Combined summary showing both apps and charts
 
 ## File Locations
