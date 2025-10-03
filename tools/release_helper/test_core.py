@@ -16,7 +16,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
-from tools.release_helper.core import find_workspace_root, run_bazel
+from tools.release_helper.core.bazel import find_workspace_root, run_bazel
 
 
 class TestFindWorkspaceRoot:

@@ -75,7 +75,7 @@ def increment_version_cmd(
     increment_type: Annotated[str, typer.Argument(help="Increment type: 'minor' or 'patch'")],
 ):
     """Calculate the next version for an app based on increment type."""
-    from tools.release_helper.git import auto_increment_version
+    from tools.release_helper.core.git_ops import auto_increment_version
     from tools.release_helper.metadata import get_app_metadata
     
     if increment_type not in ["minor", "patch"]:

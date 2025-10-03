@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Dict, List
 
-from tools.release_helper.core import run_bazel, find_workspace_root
+from tools.release_helper.core.bazel import run_bazel, find_workspace_root
 
 
 def get_app_metadata(bazel_target: str) -> Dict:

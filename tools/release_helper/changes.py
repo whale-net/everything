@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from tools.release_helper.core import run_bazel
+from tools.release_helper.core.bazel import run_bazel
 from tools.release_helper.metadata import list_all_apps, get_app_metadata
 
 
