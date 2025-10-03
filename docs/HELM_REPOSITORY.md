@@ -159,6 +159,44 @@ bazel run //tools:release -- generate-helm-index /tmp/charts \
   --merge-with /path/to/existing/index.yaml
 ```
 
+### Unpublishing Chart Versions
+
+To remove specific versions of a chart from the Helm repository (e.g., for security issues or broken releases):
+
+#### Using GitHub Actions (Recommended)
+
+1. Go to **Actions** → **Unpublish Helm Charts**
+2. Click **Run workflow**
+3. Enter the chart name (e.g., `hello-fastapi`)
+4. Enter versions to unpublish (e.g., `v1.0.0,v1.1.0`)
+5. Click **Run workflow**
+
+**Requirements:**
+- User must have **admin**, **maintain**, or **write** permissions on the repository
+- Chart versions will be removed from the index.yaml
+- The actual .tgz files are NOT deleted (users can't install them via Helm)
+
+#### Using CLI
+
+```bash
+# Download current index from GitHub Pages
+curl -o /tmp/index.yaml https://whale-net.github.io/everything/charts/index.yaml
+
+# Unpublish specific versions
+bazel run //tools:release -- unpublish-helm-chart /tmp/index.yaml \
+  --chart hello-fastapi \
+  --versions v1.0.0,v1.1.0
+
+# Then manually push the updated index to gh-pages branch
+```
+
+**Important Notes:**
+- Unpublishing removes versions from the index, making them invisible to `helm search`
+- Existing deployments using unpublished versions are not affected
+- Users should run `helm repo update` to see the changes
+- Consider deprecating instead of unpublishing when possible
+
+
 ## Architecture
 
 ### Workflow Integration
@@ -283,6 +321,20 @@ The system automatically merges with existing index. If issues occur:
 1. Check the `gh-pages` branch for corrupted `index.yaml`
 2. Regenerate index: `helm repo index . --url <base-url>`
 
+### Unpublished Versions Still Accessible
+
+After unpublishing chart versions:
+- Users with direct URLs to .tgz files can still download them
+- To fully remove access, you must manually delete the .tgz files from the `gh-pages` branch
+- Consider using GitHub branch protection rules to control who can modify `gh-pages`
+
+### Permission Denied During Unpublish
+
+If you get permission errors when trying to unpublish:
+1. Verify you have **admin**, **maintain**, or **write** permissions on the repository
+2. Check the workflow run logs for specific permission issues
+3. Contact a repository administrator if needed
+
 ## Testing
 
 ### Local Testing
@@ -328,6 +380,9 @@ helm search repo everything/hello-fastapi --versions
 - Don't include secrets in chart default values
 - Review chart templates for security best practices
 - Consider signing charts for production use (future enhancement)
+- **Unpublishing Access**: Only users with admin, maintain, or write permissions can unpublish chart versions
+- **Audit Trail**: All unpublish operations are logged in GitHub Actions workflow runs
+- **.tgz File Persistence**: Unpublishing removes versions from index.yaml but doesn't delete .tgz files - manual deletion required for complete removal
 
 ## Future Enhancements
 
