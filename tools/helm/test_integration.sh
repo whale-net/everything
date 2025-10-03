@@ -9,14 +9,16 @@ echo ""
 
 # In the Bazel sandbox, the chart is already built and available in runfiles
 # Find the tarball in the runfiles directory
+# Note: Chart tarballs use the internal name (helm-demo-hello-fastapi)
+# but the extracted directory uses the published name (demo-hello-fastapi)
 RUNFILES_DIR="${RUNFILES_DIR:-$0.runfiles}"
 if [ -d "${RUNFILES_DIR}/_main/demo" ]; then
     CHART_TARBALL="${RUNFILES_DIR}/_main/demo/helm-demo-hello-fastapi.tar.gz"
-    CHART_NAME="helm-demo-hello-fastapi"
+    CHART_NAME="demo-hello-fastapi"
 elif [ -d "demo" ]; then
     # Running outside Bazel
     CHART_TARBALL="bazel-bin/demo/helm-demo-hello-fastapi.tar.gz"
-    CHART_NAME="helm-demo-hello-fastapi"
+    CHART_NAME="demo-hello-fastapi"
     if [ ! -f "$CHART_TARBALL" ]; then
         echo "Building fastapi_chart..."
         bazel build //demo:fastapi_chart
@@ -59,7 +61,8 @@ if ! grep -q "apiVersion: v2" "$CHART_DIR/Chart.yaml"; then
     exit 1
 fi
 if ! grep -q "name: $CHART_NAME" "$CHART_DIR/Chart.yaml"; then
-    echo "✗ Chart.yaml has incorrect name"
+    echo "✗ Chart.yaml has incorrect name (expected: $CHART_NAME)"
+    cat "$CHART_DIR/Chart.yaml" | grep "name:"
     exit 1
 fi
 echo "✓ Chart.yaml valid"
