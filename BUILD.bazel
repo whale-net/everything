@@ -15,6 +15,22 @@ py_library(
     visibility = ["//visibility:public"],
 )
 
+# Cross-compilation verification test
+# This test is marked as "manual" so it doesn't run with `bazel test //...`
+# It requires Docker and breaks the Bazel sandbox (calls bazel build/run internally)
+# CI explicitly runs this test to ensure cross-compilation works correctly
+sh_test(
+    name = "test_cross_compilation",
+    size = "large",
+    srcs = ["test_cross_compilation.sh"],
+    tags = [
+        "manual",  # Don't run with //...
+        "requires-network",  # Needs Docker and external bazel invocations
+        "integration",  # Integration test, not unit test
+    ],
+    timeout = "long",
+)
+
 # Go setup
 # gazelle:prefix github.com/example/everything
 # gazelle(name = "gazelle")

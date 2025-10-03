@@ -2,10 +2,24 @@
 
 This document provides comprehensive guidelines for AI agents working on the Everything monorepo. It establishes a framework for understanding, maintaining, and extending the codebase while preserving its architectural principles.
 
+## ⚠️ CRITICAL: Cross-Compilation
+
+**MUST READ**: [`docs/CROSS_COMPILATION.md`](docs/CROSS_COMPILATION.md)
+
+This repository implements true cross-compilation for Python apps using Bazel platform transitions. **This is critical for ARM64 container deployments**. If cross-compilation breaks, ARM64 containers will crash at runtime with compiled dependencies (pydantic, numpy, pandas, etc.).
+
+**Key Points**:
+- Python apps with compiled dependencies MUST use `multiplatform_py_binary`
+- Platform transitions ensure correct wheel selection (x86_64 vs aarch64)
+- Test cross-compilation with: `bazel test //:test_cross_compilation --test_output=streamed`
+- CI automatically verifies cross-compilation on every PR
+- If `//:test_cross_compilation` fails, **DO NOT MERGE**
+
 ## 📋 Framework Overview
 
 ### Core Principles
 - **Bazel-First Architecture**: All build, test, and release operations use Bazel
+- **True Cross-Compilation**: Platform transitions for correct ARM64 wheel selection
 - **Monorepo Structure**: Multiple apps and shared libraries in a single repository
 - **Language Support**: Primary support for Python and Go with extensible patterns
 - **Container-Native**: All apps are containerized using OCI standards
@@ -16,8 +30,10 @@ This document provides comprehensive guidelines for AI agents working on the Eve
 ├── demo/                    # Example applications
 ├── libs/                    # Shared libraries (python/, go/)
 ├── tools/                   # Build and release tooling
+├── docs/                    # Documentation (including CROSS_COMPILATION.md)
 ├── .github/                 # CI/CD workflows
 ├── docker/                  # Base container configurations
+├── test_cross_compilation.py # CRITICAL: Cross-compilation verification
 └── BUILD.bazel, MODULE.bazel # Bazel configuration
 ```
 

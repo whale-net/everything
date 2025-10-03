@@ -169,7 +169,8 @@ bazel run //tools:release -- release $APP_NAME --version latest --commit $GITHUB
 - **`MODULE.bazel`**: External dependencies (requires internet to BCR)
 - **`tools/release.bzl`**: Release system with `release_app` macro
 - **`.bazelrc`**: Build configuration and CI optimizations
-- **`requirements.lock.txt`**: Python dependencies (regenerate with `bazel run //:pip_compile`)
+- **`uv.lock`**: Python dependencies with cross-platform wheels (regenerate with `uv lock`)
+- **`pyproject.toml`**: Python project configuration and dependency specifications
 
 ### Application Structure Pattern
 Each app follows this structure:
@@ -309,11 +310,11 @@ sudo mv bazel-8.0.0-linux-x86_64 /usr/local/bin/bazel
 BUILD.bazel           # Root build file
 MODULE.bazel          # Dependencies (requires BCR internet access)
 MODULE.bazel.lock     # Dependency lock file
-go.mod               # Go module configuration
-requirements.in      # Python dependencies source
-requirements.lock.txt # Locked Python dependencies (42KB)
-AGENT.md             # Agent instructions (primary reference)
-README.md            # Project documentation
+go.mod                # Go module configuration
+pyproject.toml        # Python project configuration
+uv.lock               # Locked Python dependencies with cross-platform wheels
+AGENT.md              # Agent instructions (primary reference)
+README.md             # Project documentation
 ```
 
 ### Build Files Structure (Reference)
@@ -333,12 +334,12 @@ README.md            # Project documentation
 
 ### Python Dependency Management
 ```bash
-# Update Python dependencies (after modifying requirements.in)
-bazel run //:pip_compile
+# Update Python dependencies (after modifying pyproject.toml)
+uv lock
 
-# Check requirements files
-cat requirements.in        # Source dependencies: pytest, pytest-git, fastapi, uvicorn[standard], httpx, typer
-wc -l requirements.lock.txt # 582 lines of locked dependencies
+# Check dependency configuration
+cat pyproject.toml     # Source dependencies: pytest, fastapi, uvicorn[standard], httpx, typer, pydantic, etc.
+ls -lh uv.lock         # Cross-platform locked dependencies with wheel hashes
 ```
 
 ## Primary Reference Document

@@ -22,6 +22,7 @@ jobs:
       uses: ./.github/actions/setup-build-env
       with:
         cache-suffix: 'test'
+        setup-docker: 'true'
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
@@ -30,6 +31,15 @@ jobs:
       run: |
         # Run all tests and let Bazel handle caching
         bazel test //...
+        
+    - name: Verify Cross-Compilation (Critical)
+      run: |
+        # CRITICAL TEST: Verify platform transitions work correctly
+        # This ensures ARM64 containers get aarch64 wheels (not x86_64)
+        # If this fails, ARM64 deployments will crash at runtime!
+        echo "::group::Cross-Compilation Verification"
+        bazel test //:test_cross_compilation --config=ci --test_output=streamed
+        echo "::endgroup::"
         
     - name: Upload test results
       uses: actions/upload-artifact@v4
