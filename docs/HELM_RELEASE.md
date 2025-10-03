@@ -152,11 +152,19 @@ For local development and testing, you can control version resolution:
 
 ### Helm Chart Versioning
 
-Each Helm chart maintains its own independent version using git tags. Chart versions are tracked using the format: `helm-{chart-name}.v{version}`.
+Each Helm chart maintains its own independent version using git tags. Chart versions are tracked using the format: `{chart-name}.v{version}`.
 
-**Examples:**
-- `helm-manman-host.v0.2.1` - manman-host chart version 0.2.1
-- `helm-hello-fastapi.v1.5.0` - hello-fastapi chart version 1.5.0
+**Chart Naming Convention:**
+Charts are automatically prefixed with `helm-{namespace}-` to make artifacts clearly identifiable:
+- Input: `chart_name = "hello-fastapi"`, `namespace = "demo"`
+- Result: Chart name = `helm-demo-hello-fastapi`
+- Tarball: `helm-demo-hello-fastapi-v0.2.1.tgz`
+- Git tag: `helm-demo-hello-fastapi.v0.2.1`
+
+**Git Tag Format Examples:**
+- `helm-demo-hello-fastapi.v1.5.0` - hello-fastapi chart in demo namespace, version 1.5.0
+- `helm-manman-manman-host.v0.2.1` - manman-host chart in manman namespace, version 0.2.1
+- `helm-workers-demo-workers.v0.1.0` - demo-workers chart in workers namespace, version 0.1.0
 
 **Auto-increment behavior:**
 - The release workflow automatically determines the next chart version by:

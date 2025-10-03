@@ -272,11 +272,14 @@ def release_helm_chart(
     """Convenience macro to set up a releasable Helm chart.
     
     This macro wraps helm_chart and creates release metadata for CI/CD integration.
+    The actual chart name will be prefixed with "helm-{namespace}-" to make artifacts
+    clearly identifiable (e.g., "helm-demo-hello-fastapi").
     
     Args:
         name: Target name for the chart
         apps: List of app_metadata targets to include (e.g., ["//demo/hello_python:hello_python_metadata"])
-        chart_name: Name of the Helm chart (defaults to name)
+        chart_name: Base name of the Helm chart (defaults to name). 
+                   Will be prefixed with "helm-{namespace}-" automatically.
         chart_version: Version for local builds (default: "0.0.0-dev"). 
                       This is overridden during release by auto-versioning from git tags.
                       Only affects local/development builds.
@@ -285,6 +288,15 @@ def release_helm_chart(
         domain: Domain/category for the chart (e.g., "demo", "api", required)
         manual_manifests: List of k8s_manifests targets or direct YAML files
         **kwargs: Additional arguments passed to helm_chart
+        
+    Example:
+        release_helm_chart(
+            name = "fastapi_chart",
+            chart_name = "hello-fastapi",  # Will become "helm-demo-hello-fastapi"
+            namespace = "demo",
+            domain = "demo",
+            apps = ["//demo/hello_fastapi:hello_fastapi_metadata"],
+        )
     """
     if not domain:
         fail("domain is required for release_helm_chart")
@@ -292,7 +304,10 @@ def release_helm_chart(
     if not namespace:
         fail("namespace is required for release_helm_chart")
     
-    actual_chart_name = chart_name or name
+    # Construct the actual chart name with helm-namespace- prefix
+    # This makes chart artifacts clearly identifiable (e.g., helm-demo-hello-fastapi)
+    base_chart_name = chart_name or name
+    actual_chart_name = "helm-{}-{}".format(namespace, base_chart_name)
     
     # Create the helm_chart target
     helm_chart(

@@ -401,7 +401,8 @@ jobs:
             for CHART in "${CHART_ARRAY[@]}"; do
               CHART=$(echo "$CHART" | xargs) # trim whitespace
               if [[ "$CHART" != "all" ]]; then
-                echo "- \`helm-${CHART}.v${VERSION}\`" >> $GITHUB_STEP_SUMMARY
+                # Chart names already include helm-namespace- prefix, just add version
+                echo "- \`${CHART}.v${VERSION}\`" >> $GITHUB_STEP_SUMMARY
               fi
             done
             echo "" >> $GITHUB_STEP_SUMMARY
@@ -558,16 +559,16 @@ jobs:
           CHART_FILE=$(ls /tmp/helm-charts/${CHART}-*.tgz 2>/dev/null | head -n1)
           
           if [[ -f "$CHART_FILE" ]]; then
-            # Extract version from filename (e.g., manman-host-0.2.1.tgz -> 0.2.1)
+            # Extract version from filename (e.g., helm-demo-hello-fastapi-v0.2.1.tgz -> v0.2.1)
             CHART_VERSION=$(basename "$CHART_FILE" | sed -E "s/${CHART}-(.+)\.tgz/\1/")
             
-            # Format: helm-{chart-name}.v{version}
-            TAG_NAME="helm-${CHART}.v${CHART_VERSION}"
+            # Format: {chart-name}.{version} (chart name already includes helm-namespace- prefix)
+            TAG_NAME="${CHART}.${CHART_VERSION}"
             
             echo "Creating tag: $TAG_NAME for chart $CHART"
             
             # Create annotated tag
-            git tag -a "$TAG_NAME" -m "Release helm chart $CHART version v${CHART_VERSION}" "${{ github.sha }}"
+            git tag -a "$TAG_NAME" -m "Release helm chart $CHART version ${CHART_VERSION}" "${{ github.sha }}"
             
             # Push the tag
             git push origin "$TAG_NAME"
