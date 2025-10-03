@@ -10,7 +10,6 @@ exports_files([
     "helm_chart_release.bzl",
     "python_runner.py",
     "platforms.bzl",
-    "multiplatform_image.bzl",
     "container_image.bzl",
 ])
 

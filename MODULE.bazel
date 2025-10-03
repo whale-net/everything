@@ -14,44 +14,11 @@ bazel_dep(name = "rules_helm", version = "0.6.0.bcr.1")
 bazel_dep(name = "rules_pkg", version = "1.0.1")
 bazel_dep(name = "platforms", version = "1.0.0")
 
-# OCI/Docker setup - using proper base images for better compatibility
+# OCI/Docker setup - Ubuntu base image for all containers
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 
-# Distroless Python - x86_64 only for simplified deployment
-oci.pull(
-    name = "distroless_python",
-    # Using actual manifest list digest from gcr.io/distroless/python3-debian12:latest
-    digest = "sha256:a0ded8676ed10e194cce1b8fdf9171672cda95ad1cabba4ece7b01f4db2e7471",
-    image = "gcr.io/distroless/python3-debian12",
-    platforms = [
-        "linux/amd64",
-        "linux/arm64/v8",
-    ],
-)
-
-# Distroless Base - x86_64 and ARM64 for multi-platform deployment
-oci.pull(
-    name = "distroless_base",
-    # Using actual manifest list digest from gcr.io/distroless/base-debian12:latest
-    digest = "sha256:fa15492938650e1a5b87e34d47dc7d99a2b4e8aefd81b931b3f3eb6bb4c1d2f6",
-    image = "gcr.io/distroless/base-debian12",
-    platforms = [
-        "linux/amd64",
-        "linux/arm64/v8",
-    ],
-)
-
-# Python base image with pip support for containers that need external dependencies
-oci.pull(
-    name = "python_base",
-    image = "python:3.11-slim",
-    platforms = [
-        "linux/amd64",
-        "linux/arm64/v8",
-    ],
-)
-
-# Ubuntu base - smaller and includes necessary runtime libs for Python
+# Ubuntu base - default base image for all containers (117MB)
+# Uses Bazel's hermetic Python toolchain, so no Python installation needed in base image
 oci.pull(
     name = "ubuntu_base",
     image = "ubuntu:24.04",
@@ -60,7 +27,7 @@ oci.pull(
         "linux/arm64/v8",
     ],
 )
-use_repo(oci, "distroless_base", "distroless_base_linux_amd64", "distroless_base_linux_arm64_v8", "distroless_python", "distroless_python_linux_amd64", "distroless_python_linux_arm64_v8", "python_base", "python_base_linux_amd64", "python_base_linux_arm64_v8", "ubuntu_base", "ubuntu_base_linux_amd64", "ubuntu_base_linux_arm64_v8")
+use_repo(oci, "ubuntu_base", "ubuntu_base_linux_amd64", "ubuntu_base_linux_arm64_v8")
 
 # Python setup with rules_python for interpreter registration
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
