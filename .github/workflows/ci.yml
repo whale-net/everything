@@ -7,10 +7,81 @@ on:
     branches: [ main ]
 
 jobs:
-  # Test job - builds and tests in one step for better cache utilization
-  test:
-    name: Test
+  # Plan test execution - determine which tests need running
+  plan-tests:
+    name: Plan Test Execution
     runs-on: ubuntu-latest
+    outputs:
+      test_targets: ${{ steps.plan.outputs.test_targets }}
+      needs_testing: ${{ steps.plan.outputs.needs_testing }}
+      test_count: ${{ steps.plan.outputs.test_count }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'plan-tests'
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+        
+    - name: Plan test execution using release tool
+      id: plan
+      run: |
+        # Determine which tests to run based on changes
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          # For PRs, compare against the base branch
+          BASE_COMMIT="${{ github.event.pull_request.base.sha }}"
+          echo "PR detected: comparing against base commit $BASE_COMMIT"
+        elif [ "${{ github.event_name }}" = "push" ] && [ -n "${{ github.event.before }}" ]; then
+          # For pushes, compare against the previous commit
+          BASE_COMMIT="${{ github.event.before }}"
+          echo "Push detected: comparing against previous commit $BASE_COMMIT"
+        else:
+          # Fallback: test all
+          echo "Cannot determine base commit, will test all tests"
+          BASE_COMMIT=""
+        fi
+        
+        # Use release tool to plan test execution with rdeps-based change detection
+        echo "Planning test execution using Bazel rdeps..."
+        if [ -n "$BASE_COMMIT" ]; then
+          PLAN_OUTPUT=$(bazel run //tools:release -- plan-tests \
+            --base-commit="$BASE_COMMIT" \
+            --format github)
+        else
+          # No base commit - output will indicate all tests need running
+          PLAN_OUTPUT=$(bazel run //tools:release -- plan-tests --format github)
+        fi
+        
+        # Parse output and set GitHub outputs
+        echo "$PLAN_OUTPUT" | while IFS= read -r line; do
+          if [[ "$line" == test_targets=* ]] || [[ "$line" == needs_testing=* ]] || [[ "$line" == test_count=* ]]; then
+            echo "$line" >> $GITHUB_OUTPUT
+          fi
+        done
+        
+        # Show what we're planning to test
+        TEST_TARGETS=$(echo "$PLAN_OUTPUT" | grep "^test_targets=" | cut -d= -f2)
+        NEEDS_TESTING=$(echo "$PLAN_OUTPUT" | grep "^needs_testing=" | cut -d= -f2)
+        TEST_COUNT=$(echo "$PLAN_OUTPUT" | grep "^test_count=" | cut -d= -f2)
+        
+        if [[ "$NEEDS_TESTING" == "true" ]]; then
+          echo "Will run $TEST_COUNT test target(s)"
+        else
+          echo "No tests need to run"
+        fi
+
+  # Test job - runs affected tests only
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    needs: plan-tests
+    if: needs.plan-tests.outputs.needs_testing == 'true'
     
     steps:
     - name: Checkout code
@@ -26,10 +97,19 @@ jobs:
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
         
-    - name: Run tests
+    - name: Run affected tests
       run: |
-        # Run all tests and let Bazel handle caching
-        bazel test //...
+        # Run only the affected tests (or all if no specific targets)
+        TEST_TARGETS="${{ needs.plan-tests.outputs.test_targets }}"
+        TEST_COUNT="${{ needs.plan-tests.outputs.test_count }}"
+        
+        if [ -z "$TEST_TARGETS" ]; then
+          echo "Running all tests..."
+          bazel test //...
+        else
+          echo "Running $TEST_COUNT affected test target(s)..."
+          bazel test $TEST_TARGETS
+        fi
         
     - name: Upload test results
       uses: actions/upload-artifact@v4
@@ -164,11 +244,11 @@ jobs:
         echo "Publishing $APP image to registry..."
         bazel run //tools:release -- release "$APP" --version "latest" --commit "${{ github.sha }}"
         
-  # Build summary - collects status of all matrix jobs for branch protection
+  # Build summary - collects status of all jobs for branch protection
   build-summary:
     name: Build Summary
     runs-on: ubuntu-latest
-    needs: [plan-docker, docker]
+    needs: [plan-tests, test, plan-docker, docker]
     if: always()
     steps:
     - name: Checkout code
@@ -187,40 +267,62 @@ jobs:
         echo "=== CI Build Summary ===" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
-        # Check if any apps were planned for building
-        PLANNED_APPS="${{ needs.plan-docker.outputs.apps }}"
-        if [[ -z "$PLANNED_APPS" || "$PLANNED_APPS" == "null" ]]; then
-          echo "✅ **No apps required building** - all changes were in non-app areas" >> $GITHUB_STEP_SUMMARY
-          echo "Build status: **PASSED** (no builds needed)" >> $GITHUB_STEP_SUMMARY
-          echo "No apps needed building - this is expected for documentation or infrastructure-only changes"
-          exit 0
-        fi
+        # Check test results
+        TEST_NEEDS="${{ needs.plan-tests.outputs.needs_testing }}"
+        TEST_COUNT="${{ needs.plan-tests.outputs.test_count }}"
+        TEST_RESULT="${{ needs.test.result }}"
         
-        echo "**Apps processed:** $PLANNED_APPS" >> $GITHUB_STEP_SUMMARY
+        echo "**Testing:**" >> $GITHUB_STEP_SUMMARY
+        if [[ "$TEST_NEEDS" == "true" ]]; then
+          echo "- Tested $TEST_COUNT affected target(s)" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: $TEST_RESULT" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- No tests needed (no test targets affected)" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: skipped" >> $GITHUB_STEP_SUMMARY
+        fi
         echo "" >> $GITHUB_STEP_SUMMARY
         
-        # Check the status of the matrix docker job
-        DOCKER_JOB_RESULT="${{ needs.docker.result }}"
-        PLAN_JOB_RESULT="${{ needs.plan-docker.result }}"
-        
-        echo "**Job Results:**" >> $GITHUB_STEP_SUMMARY
-        echo "- Planning: $PLAN_JOB_RESULT" >> $GITHUB_STEP_SUMMARY
-        echo "- Docker Builds: $DOCKER_JOB_RESULT" >> $GITHUB_STEP_SUMMARY
+        # Check if any apps were planned for building
+        PLANNED_APPS="${{ needs.plan-docker.outputs.apps }}"
+        echo "**Docker Builds:**" >> $GITHUB_STEP_SUMMARY
+        if [[ -z "$PLANNED_APPS" || "$PLANNED_APPS" == "null" ]]; then
+          echo "- No apps required building" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: skipped" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- Apps: $PLANNED_APPS" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ needs.docker.result }}" >> $GITHUB_STEP_SUMMARY
+        fi
         echo "" >> $GITHUB_STEP_SUMMARY
         
         # Determine overall status
-        if [[ "$PLAN_JOB_RESULT" == "success" && "$DOCKER_JOB_RESULT" == "success" ]]; then
-          echo "✅ **Overall Status: PASSED**" >> $GITHUB_STEP_SUMMARY
-          echo "All Docker builds completed successfully"
-          exit 0
-        elif [[ "$DOCKER_JOB_RESULT" == "skipped" ]]; then
-          echo "⚠️ **Overall Status: PASSED** (builds skipped - no changes detected)" >> $GITHUB_STEP_SUMMARY
-          echo "Docker builds were skipped - no apps needed building"
-          exit 0
-        else
-          echo "❌ **Overall Status: FAILED**" >> $GITHUB_STEP_SUMMARY
-          echo "One or more Docker builds failed"
-          echo "::error::Docker build pipeline failed"
+        PLAN_TEST_RESULT="${{ needs.plan-tests.result }}"
+        PLAN_DOCKER_RESULT="${{ needs.plan-docker.result }}"
+        
+        echo "**Overall Status:**" >> $GITHUB_STEP_SUMMARY
+        
+        # Check if planning succeeded
+        if [[ "$PLAN_TEST_RESULT" != "success" ]] || [[ "$PLAN_DOCKER_RESULT" != "success" ]]; then
+          echo "❌ **FAILED** - Planning phase failed" >> $GITHUB_STEP_SUMMARY
+          echo "::error::CI planning failed"
           exit 1
         fi
+        
+        # Check if tests succeeded (or were skipped)
+        if [[ "$TEST_NEEDS" == "true" ]] && [[ "$TEST_RESULT" != "success" ]]; then
+          echo "❌ **FAILED** - Tests failed" >> $GITHUB_STEP_SUMMARY
+          echo "::error::Tests failed"
+          exit 1
+        fi
+        
+        # Check if Docker builds succeeded (or were skipped)
+        DOCKER_RESULT="${{ needs.docker.result }}"
+        if [[ -n "$PLANNED_APPS" ]] && [[ "$PLANNED_APPS" != "null" ]] && [[ "$DOCKER_RESULT" != "success" ]] && [[ "$DOCKER_RESULT" != "skipped" ]]; then
+          echo "❌ **FAILED** - Docker builds failed" >> $GITHUB_STEP_SUMMARY
+          echo "::error::Docker builds failed"
+          exit 1
+        fi
+        
+        # All good!
+        echo "✅ **PASSED**" >> $GITHUB_STEP_SUMMARY
+        echo "All CI checks passed successfully"
         

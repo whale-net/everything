@@ -10,6 +10,7 @@ from typing import Optional
 import typer
 from typing_extensions import Annotated
 
+from tools.release_helper.change_detection import detect_affected_targets
 from tools.release_helper.changes import detect_changed_apps
 from tools.release_helper.git import get_previous_tag
 from tools.release_helper.images import build_image, release_multiarch_image
@@ -255,6 +256,83 @@ def changes(
     changed_apps = detect_changed_apps(base_commit, use_bazel_query=use_bazel_query)
     for app_info in changed_apps:
         typer.echo(app_info['name'])  # Print just the app name for compatibility
+
+
+@app.command("plan-tests")
+def plan_tests(
+    base_commit: Annotated[Optional[str], typer.Option(help="Compare changes against this commit (defaults to previous tag)")] = None,
+    format: Annotated[str, typer.Option(help="Output format: text, github, or json")] = "text",
+):
+    """Plan test execution by detecting affected test targets.
+    
+    Uses Bazel rdeps to find all test targets that transitively depend on changed files.
+    This allows for targeted testing - only running tests affected by your changes.
+    
+    Examples:
+        # Simple text output (one target per line)
+        bazel run //tools:release -- plan-tests --base-commit=origin/main
+        
+        # GitHub Actions output format
+        bazel run //tools:release -- plan-tests --base-commit=origin/main --format=github
+        
+        # JSON output
+        bazel run //tools:release -- plan-tests --base-commit=origin/main --format=json
+    """
+    if format not in ["text", "github", "json"]:
+        typer.echo("Error: format must be one of: text, github, json", err=True)
+        raise typer.Exit(1)
+    
+    # Use previous tag as default base commit
+    base_commit = base_commit or get_previous_tag()
+    
+    if base_commit:
+        typer.echo(f"Planning tests against: {base_commit}", err=True)
+    else:
+        typer.echo("No base commit specified and no previous tag found, will test all test targets", err=True)
+    
+    # Use the core change detection to find affected test targets
+    affected_tests = detect_affected_targets(
+        base_commit=base_commit,
+        target_kind="test",  # Only test targets
+        universe="//..."
+    )
+    
+    if not affected_tests:
+        typer.echo("No test targets affected by changes", err=True)
+        
+        if format == "github":
+            # Output GitHub Actions format with empty values
+            typer.echo("test_targets=")
+            typer.echo("needs_testing=false")
+        elif format == "json":
+            typer.echo(json.dumps({
+                "test_targets": [],
+                "needs_testing": False,
+                "count": 0
+            }, indent=2))
+        # For text format, just don't output anything
+        
+        return
+    
+    typer.echo(f"Found {len(affected_tests)} affected test target(s)", err=True)
+    
+    # Output based on format
+    if format == "github":
+        # GitHub Actions format
+        typer.echo(f"test_targets={' '.join(affected_tests)}")
+        typer.echo("needs_testing=true")
+        typer.echo(f"test_count={len(affected_tests)}")
+    elif format == "json":
+        # JSON format
+        typer.echo(json.dumps({
+            "test_targets": affected_tests,
+            "needs_testing": True,
+            "count": len(affected_tests)
+        }, indent=2))
+    else:
+        # Text format - one target per line (easy to consume in shell scripts)
+        for target in affected_tests:
+            typer.echo(target)
 
 
 @app.command("validate-version")

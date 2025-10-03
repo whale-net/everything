@@ -1,211 +1,28 @@
 """
 Change detection utilities for the release helper.
+
+This module provides app-specific change detection by wrapping the core
+change_detection module and filtering for app_metadata targets.
 """
 
-import subprocess
 import sys
-from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
-from tools.release_helper.core import run_bazel
+from tools.release_helper.change_detection import detect_affected_targets
 from tools.release_helper.metadata import list_all_apps, get_app_metadata
-
-
-def _get_changed_files(base_commit: str) -> List[str]:
-    """Get list of changed files compared to base commit."""
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--name-only", f"{base_commit}..HEAD"],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        return [f for f in result.stdout.strip().split('\n') if f.strip()]
-    except subprocess.CalledProcessError as e:
-        print(f"Error getting changed files against {base_commit}: {e}", file=sys.stderr)
-        return []
-
-
-def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]:
-    """Use Bazel query to find apps affected by changed files.
-    
-    This approach determines which targets are affected by file changes by:
-    1. For source files: Find all targets in the package containing the file
-    2. For BUILD/bzl files: Find all targets in the package recursively
-    3. Check which apps depend on the affected targets
-    
-    This is more reliable than attr() queries which can miss files based on
-    how they're referenced in BUILD files.
-    """
-    if not changed_files:
-        return []
-    
-    try:
-        all_apps = list_all_apps()
-        affected_apps = []
-        
-        print(f"Using Bazel package-level analysis to find targets affected by {len(changed_files)} changed files...", file=sys.stderr)
-        
-        # Find all targets that are directly affected by the changed files
-        affected_targets = set()
-        
-        for file_path in changed_files:
-            if not file_path:
-                continue
-                
-            try:
-                # For source files, find all targets in the package containing the file
-                file_dir = str(Path(file_path).parent) if Path(file_path).parent != Path('.') else ""
-                
-                if file_path.endswith(('.bzl', 'BUILD', 'BUILD.bazel')):
-                    # BUILD/bzl files affect all targets in their package recursively  
-                    package_path = f"//{file_dir}" if file_dir else "//"
-                    
-                    result = run_bazel([
-                        "query", 
-                        f"{package_path}/...",
-                        "--output=label"
-                    ])
-                    
-                    if result.stdout.strip():
-                        package_targets = result.stdout.strip().split('\n')
-                        affected_targets.update(package_targets)
-                        print(f"Build file {file_path} affects all {len(package_targets)} targets in package {package_path}", file=sys.stderr)
-                        
-                elif file_dir:  # Source file in a package directory
-                    # Source files affect all targets in their immediate package
-                    package_path = f"//{file_dir}"
-                    
-                    result = run_bazel([
-                        "query", 
-                        f"{package_path}:*",
-                        "--output=label"
-                    ])
-                    
-                    if result.stdout.strip():
-                        package_targets = result.stdout.strip().split('\n')
-                        affected_targets.update(package_targets)
-                        print(f"Source file {file_path} affects {len(package_targets)} targets in package {package_path}", file=sys.stderr)
-                else:
-                    # File in root directory - affects root package targets
-                    result = run_bazel([
-                        "query", 
-                        "//:*",
-                        "--output=label"
-                    ])
-                    
-                    if result.stdout.strip():
-                        root_targets = result.stdout.strip().split('\n')
-                        affected_targets.update(root_targets)
-                        print(f"Root file {file_path} affects {len(root_targets)} targets in root package", file=sys.stderr)
-                    
-            except subprocess.CalledProcessError as e:
-                print(f"Warning: Could not query targets for file {file_path}: {e}", file=sys.stderr)
-        
-        print(f"Total targets affected: {len(affected_targets)}", file=sys.stderr)
-        
-        # Now check which apps depend on any of the affected targets
-        for app in all_apps:
-            try:
-                # Get the app's actual binary target from metadata
-                metadata = get_app_metadata(app['bazel_target'])
-                binary_target = metadata['binary_target']
-                
-                # Resolve relative target reference to absolute
-                if binary_target.startswith(':'):
-                    # Extract package path from metadata target
-                    metadata_target = app['bazel_target']
-                    package_path = metadata_target[2:].split(':')[0]  # Remove // and split on :
-                    app_target = f"//{package_path}{binary_target}"  # Combine package + relative target
-                else:
-                    # Already absolute
-                    app_target = binary_target
-                
-                # Query all dependencies of this app
-                result = run_bazel([
-                    "query", 
-                    f"deps({app_target})",
-                    "--output=label"
-                ])
-                
-                if result.stdout.strip():
-                    app_deps = set(result.stdout.strip().split('\n'))
-                    
-                    # Check if this app depends on any affected targets
-                    if affected_targets.intersection(app_deps):
-                        affected_apps.append(app)
-                        overlapping_targets = affected_targets.intersection(app_deps)
-                        print(f"App {app['name']} affected: depends on {len(overlapping_targets)} changed targets", file=sys.stderr)
-                    else:
-                        print(f"App {app['name']} not affected: no dependency on changed targets", file=sys.stderr)
-                    
-            except Exception as e:
-                print(f"Warning: Could not analyze dependencies for {app['name']}: {e}", file=sys.stderr)
-                # If we can't analyze this app, don't assume it's affected
-                continue
-        
-        return affected_apps
-        
-    except Exception as e:
-        print(f"Error in Bazel dependency analysis: {e}", file=sys.stderr)
-        # Fall back to file-based detection
-        return _detect_changed_apps_file_based(changed_files)
-
-
-def _detect_changed_apps_file_based(changed_files: List[str]) -> List[Dict[str, str]]:
-    """Fallback file-based change detection (original implementation)."""
-    all_apps = list_all_apps()
-    
-    # Find apps that have changes by checking if any changed file
-    # is within the app's directory structure
-    changed_apps = []
-    for app in all_apps:
-        # Extract package path from bazel target like "//path/to/app:target"
-        bazel_path = app['bazel_target'][2:].split(':')[0]
-        
-        # Check if any changed file is within this app's directory
-        app_affected = False
-        for file_path in changed_files:
-            if not file_path:
-                continue
-            
-            # Check if the file is in this app's directory (or subdirectory)
-            file_dir = str(Path(file_path).parent) if Path(file_path).parent != Path('.') else ""
-            
-            # An app is affected if:
-            # 1. The changed file is directly in the app's directory
-            # 2. The changed file is in a subdirectory of the app's directory
-            if file_path.startswith(bazel_path + '/') or file_dir == bazel_path:
-                app_affected = True
-                break
-        
-        if app_affected:
-            changed_apps.append(app)
-
-    return changed_apps
-
-
-def _is_infrastructure_change(changed_files: List[str]) -> bool:
-    """DEPRECATED: Check if changes are in infrastructure directories that affect all apps.
-    
-    This function is deprecated as we now rely entirely on Bazel dependency analysis
-    to determine which apps are affected by changes, rather than making assumptions
-    about what constitutes infrastructure.
-    
-    This function is kept for backward compatibility with existing tests but always
-    returns False to ensure Bazel dependency analysis is used instead.
-    """
-    # Always return False - let Bazel dependency analysis handle everything
-    return False
 
 
 def detect_changed_apps(base_commit: Optional[str] = None, use_bazel_query: bool = True) -> List[Dict[str, str]]:
     """Detect which apps have changed compared to a base commit.
     
+    This function uses the core change_detection module with Bazel rdeps to find
+    affected apps. It queries for targets that depend on changed files and filters
+    for app_metadata targets.
+    
     Args:
         base_commit: Base commit to compare HEAD against. If None, returns all apps.
         use_bazel_query: Whether to use Bazel query for precise dependency analysis.
-                        If False, falls back to file-based detection.
+                        If False, falls back to returning all apps.
     
     Returns:
         List of app dictionaries with bazel_target, name, and domain
@@ -217,37 +34,62 @@ def detect_changed_apps(base_commit: Optional[str] = None, use_bazel_query: bool
         print("No base commit specified, considering all apps as changed", file=sys.stderr)
         return all_apps
 
-    # Get changed files
-    changed_files = _get_changed_files(base_commit)
-    
-    if not changed_files:
-        print("No files changed, no apps need to be built", file=sys.stderr)
-        return []
-
-    print(f"Changed files: {', '.join(changed_files[:10])}" + 
-          (f" (and {len(changed_files)-10} more)" if len(changed_files) > 10 else ""), 
-          file=sys.stderr)
-
-    # Check for infrastructure changes that affect all apps
-    if _is_infrastructure_change(changed_files):
-        print("Infrastructure changes detected - all apps may be affected", file=sys.stderr)
+    if not use_bazel_query:
+        # Legacy mode: return all apps when not using Bazel query
+        print("Bazel query disabled, returning all apps", file=sys.stderr)
         return all_apps
 
-    # Use Bazel query for precise dependency analysis
-    if use_bazel_query:
-        changed_apps = _query_affected_apps_bazel(changed_files)
-    else:
-        changed_apps = _detect_changed_apps_file_based(changed_files)
-
-    # If no apps detected but there are changes, only build all if using fallback file-based detection
-    if not changed_apps and changed_files:
-        if use_bazel_query:
-            print("Bazel dependency analysis determined no apps are affected by the changes.", 
-                  file=sys.stderr)
-            return []
-        else:
-            print("No specific apps detected as changed using file-based detection, but files were modified. Building all apps to be safe.", 
-                  file=sys.stderr)
-            return all_apps
-
+    # Use the core change detection to find all affected targets
+    # We don't filter by kind here because we want to find apps whose dependencies changed
+    print(f"Detecting changes against {base_commit}...", file=sys.stderr)
+    affected_targets = detect_affected_targets(base_commit=base_commit, target_kind=None, universe="//...")
+    
+    if not affected_targets:
+        print("No targets affected by changes", file=sys.stderr)
+        return []
+    
+    # Convert to set for faster lookup
+    affected_set = set(affected_targets)
+    
+    # Check which apps are affected
+    # An app is affected if:
+    # 1. Its metadata target is in the affected set, OR
+    # 2. Its binary target is in the affected set, OR
+    # 3. Any of its dependencies are in the affected set
+    changed_apps = []
+    
+    for app in all_apps:
+        metadata_target = app['bazel_target']
+        
+        # Check if the app's metadata target is affected
+        if metadata_target in affected_set:
+            changed_apps.append(app)
+            print(f"App {app['name']}: metadata target affected", file=sys.stderr)
+            continue
+        
+        # Get the app's binary target and check if it's affected
+        try:
+            metadata = get_app_metadata(metadata_target)
+            binary_target = metadata['binary_target']
+            
+            # Resolve relative target reference to absolute
+            if binary_target.startswith(':'):
+                # Extract package path from metadata target
+                package_path = metadata_target[2:].split(':')[0]  # Remove // and split on :
+                binary_target = f"//{package_path}{binary_target}"
+            
+            if binary_target in affected_set:
+                changed_apps.append(app)
+                print(f"App {app['name']}: binary target affected", file=sys.stderr)
+                continue
+            
+        except Exception as e:
+            print(f"Warning: Could not check binary target for {app['name']}: {e}", file=sys.stderr)
+            # If we can't check, be conservative and include it
+            changed_apps.append(app)
+    
+    if not changed_apps:
+        print("Bazel dependency analysis determined no apps are affected by the changes.", 
+              file=sys.stderr)
+    
     return changed_apps
