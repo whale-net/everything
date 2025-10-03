@@ -1,5 +1,4 @@
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
-load("@pip_deps_dev//:requirements.bzl", "requirement")
 
 # Core manman library with configuration, models, and utilities
 py_library(
@@ -16,16 +15,16 @@ py_library(
     ],
     visibility = ["//manman:__subpackages__"],
     deps = [
-        requirement("pydantic"),
-        requirement("sqlmodel"),
-        requirement("fastapi"),
-        requirement("alembic"),
-        requirement("asyncpg"),
-        requirement("amqpstorm"),
-        requirement("opentelemetry-api"),
-        requirement("opentelemetry-sdk"),
-        requirement("python-dotenv"),
-        requirement("typer"),
+        "@pypi//:pydantic",
+        "@pypi//:sqlmodel",
+        "@pypi//:fastapi",
+        "@pypi//:alembic",
+        "@pypi//:asyncpg",
+        "@pypi//:amqpstorm",
+        "@pypi//:opentelemetry-api",
+        "@pypi//:opentelemetry-sdk",
+        "@pypi//:python-dotenv",
+        "@pypi//:typer",
     ],
 )
 
@@ -42,8 +41,8 @@ py_test(
     main = "runner.py",
     deps = [
         ":manman_core",
-        requirement("pytest"),
-        requirement("pytest-asyncio"),
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
     ],
     python_version = "PY3",
 )

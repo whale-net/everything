@@ -4,7 +4,7 @@ This module provides a single macro that generates all necessary py_binary targe
 for multi-platform deployment while keeping the BUILD.bazel files clean and simple.
 
 The multiplatform_py_binary macro generates Linux AMD64 and ARM64 binaries for
-container deployment, plus a development binary using dev requirements.
+container deployment, plus a development binary.
 
 The multiplatform_py_binary macro works seamlessly with the release_app macro,
 which automatically detects the platform-specific binaries without requiring
@@ -27,9 +27,6 @@ Example usage:
 """
 
 load("@rules_python//python:defs.bzl", "py_binary", "py_library")
-load("@pip_deps_dev//:requirements.bzl", "requirement")
-load("@pip_deps_linux_amd64//:requirements.bzl", requirement_linux_amd64 = "requirement")
-load("@pip_deps_linux_arm64//:requirements.bzl", requirement_linux_arm64 = "requirement")
 
 def multiplatform_py_binary(
     name,
@@ -42,7 +39,7 @@ def multiplatform_py_binary(
     """Create a py_binary that works across all platforms with minimal boilerplate.
     
     This macro generates:
-    - A main py_binary for development (uses dev requirements)
+    - A main py_binary for development
     - Platform-specific binaries for container deployment (linux_amd64, linux_arm64)
     
     Args:
@@ -51,6 +48,7 @@ def multiplatform_py_binary(
         main: Main entry point file
         deps: Dependencies (py_library targets)
         requirements: List of requirement names (e.g., ["fastapi", "uvicorn"])
+                     These are converted to @pypi//package_name targets
         visibility: Visibility for all targets
         **kwargs: Additional arguments passed to py_binary
     """
@@ -68,33 +66,31 @@ def multiplatform_py_binary(
         else:
             fail("Could not determine main file for {}, please specify main= parameter".format(name))
     
-    # Build deps lists for each platform
-    dev_deps = deps[:] if deps else []
-    amd64_deps = deps[:] if deps else []
-    arm64_deps = deps[:] if deps else []
-    
-    # Add platform-specific requirements
+    # Build unified deps list
+    # pycross automatically selects the correct platform-specific wheels
+    all_deps = deps[:] if deps else []
     for req in requirements:
-        dev_deps.append(requirement(req))
-        amd64_deps.append(requirement_linux_amd64(req))
-        arm64_deps.append(requirement_linux_arm64(req))
+        # Use package name as-is (pycross preserves original package names including hyphens)
+        all_deps.append("@pypi//:{}".format(req))
     
-    # Main binary for development (uses dev requirements)
+    # Main binary for development and all platforms
+    # pycross handles platform selection automatically
     py_binary(
         name = name,
         srcs = srcs,
         main = main,
-        deps = dev_deps,
+        deps = all_deps,
         visibility = visibility,
         **kwargs
     )
     
     # Platform-specific binaries for container deployment
+    # Same deps work for all platforms thanks to pycross
     py_binary(
         name = name + "_linux_amd64",
         srcs = srcs,
         main = main,
-        deps = amd64_deps,
+        deps = all_deps,
         visibility = visibility,
         **kwargs
     )
@@ -103,7 +99,7 @@ def multiplatform_py_binary(
         name = name + "_linux_arm64",
         srcs = srcs,
         main = main,
-        deps = arm64_deps,
+        deps = all_deps,
         visibility = visibility,
         **kwargs
     )

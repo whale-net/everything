@@ -1,5 +1,4 @@
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
-load("@pip_deps_dev//:requirements.bzl", "requirement")
 load("//tools:python_binary.bzl", "multiplatform_py_binary")
 load("//tools:release.bzl", "release_app")
 
@@ -27,7 +26,7 @@ py_test(
     srcs = ["test_main.py"],
     deps = [
         ":main_lib",
-        requirement("pytest"),
+        "@pypi//:pytest",
     ],
     size = "small",
 )
