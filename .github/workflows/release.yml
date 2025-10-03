@@ -440,7 +440,7 @@ jobs:
     if: github.event.inputs.helm_charts != ''
     runs-on: ubuntu-latest
     permissions:
-      contents: read      # Read repository content
+      contents: write     # Push git tags and read repository content
       pages: write        # Deploy to GitHub Pages
       id-token: write     # Required for GitHub Pages OIDC
     steps:
