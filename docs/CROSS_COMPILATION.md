@@ -209,27 +209,32 @@ docker run --rm --entrypoint /bin/sh my_app_linux_amd64_arm64:latest \
 We have a **critical test** that verifies cross-compilation continues working:
 
 ```bash
+# Load the test images first (prerequisite)
+bazel run //demo/hello_fastapi:hello_fastapi_image_amd64_load
+bazel run //demo/hello_fastapi:hello_fastapi_image_arm64_load
+
 # Run the test through Bazel (recommended)
 bazel test //tools:test_cross_compilation --test_output=streamed
 
 # Test is marked as "manual" so it doesn't run with //...
-# This is because it breaks sandbox (calls bazel internally) and requires Docker
+# This is because it requires Docker and pre-loaded images
 ```
 
 The test (`tools/test_cross_compilation.sh`):
-1. Builds both AMD64 and ARM64 images for apps with compiled dependencies
-2. Loads both images into Docker
-3. Inspects each container to verify correct architecture-specific `.so` files
-4. **Fails loudly** if cross-compilation is broken
+1. Checks that both AMD64 and ARM64 images are loaded in Docker
+2. Inspects each container to verify correct architecture-specific `.so` files
+3. Verifies AMD64 containers have x86_64 wheels
+4. Verifies ARM64 containers have aarch64 wheels
+5. **Fails loudly** if cross-compilation is broken
 
 **Why it's manual**: The test cannot run in Bazel's sandbox because it:
-- Calls `bazel build/run` internally
+- Requires pre-loaded Docker images
 - Requires Docker daemon access
 - Tests actual container artifacts, not just build outputs
 
 ### CI Integration
 
-The test runs automatically in GitHub Actions CI on every PR and push:
+The test runs automatically in GitHub Actions CI on every PR and push. CI loads the images before running the test:
 
 ```yaml
 # .github/workflows/ci.yml

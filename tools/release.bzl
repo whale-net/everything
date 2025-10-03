@@ -118,6 +118,10 @@ def release_app(name, binary_target = None, language = None, domain = None, desc
     # Auto-detect binary targets if not provided
     # Python apps use multiplatform_py_binary which creates platform-specific targets
     # Go apps use regular go_binary (same binary for all platforms)
+    #
+    # NOTE: For Python, binary_target defaults to _linux_amd64 for metadata purposes only.
+    # The actual multiplatform build (below) explicitly uses BOTH _linux_amd64 and _linux_arm64,
+    # so both architectures are built correctly. This is just a reference target for metadata.
     if not binary_target:
         if language == "python":
             binary_target = ":" + name + "_linux_amd64"
@@ -132,6 +136,8 @@ def release_app(name, binary_target = None, language = None, domain = None, desc
     # Create multiplatform OCI image
     if language == "python":
         # Python apps have platform-specific binaries with correct wheels for each architecture
+        # CRITICAL: Both platforms are built explicitly here - platform transitions ensure
+        # each gets the correct wheels for its architecture (x86_64 vs aarch64)
         multiplatform_image(
             name = image_target,
             binary_amd64 = ":" + name + "_linux_amd64",

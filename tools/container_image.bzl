@@ -199,11 +199,15 @@ def multiplatform_image(
     # Use the amd64 binary name for the base tag
     binary_name = _get_binary_name(amd64_binary)
     
+    # Strip platform suffix from binary name for clean image tags
+    # Python binaries have _linux_amd64 suffix, remove it for cleaner local tags
+    clean_name = binary_name.replace("_linux_amd64", "").replace("_linux_arm64", "")
+    
     # Main load target - uses AMD64 (most common dev environment)
     oci_load(
         name = name + "_load",
         image = ":" + name + "_amd64",
-        repo_tags = [binary_name + ":latest"],
+        repo_tags = [clean_name + ":latest"],
         tags = ["manual"],
     )
     
@@ -211,14 +215,14 @@ def multiplatform_image(
     oci_load(
         name = name + "_amd64_load",
         image = ":" + name + "_amd64",
-        repo_tags = [binary_name + "_amd64:latest"],
+        repo_tags = [clean_name + "_amd64:latest"],
         tags = ["manual"],
     )
     
     oci_load(
         name = name + "_arm64_load",
         image = ":" + name + "_arm64",
-        repo_tags = [binary_name + "_arm64:latest"],
+        repo_tags = [clean_name + "_arm64:latest"],
         tags = ["manual"],
     )
     

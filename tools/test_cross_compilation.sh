@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Test to verify cross-compilation works correctly for Python apps with compiled dependencies.
 #
+# PREREQUISITE: Images must be loaded before running this test. Run:
+#   bazel run //demo/hello_fastapi:hello_fastapi_image_amd64_load
+#   bazel run //demo/hello_fastapi:hello_fastapi_image_arm64_load
+#
 # This test ensures that:
 # 1. ARM64 containers get aarch64 wheels (not x86_64)
 # 2. AMD64 containers get x86_64 wheels
@@ -29,15 +33,16 @@ echo "║  CRITICAL: If this test fails, cross-compilation is broken and ARM64  
 echo "║  containers will crash at runtime with apps using compiled dependencies     ║"
 echo "║  like pydantic, numpy, pandas, pillow, cryptography, etc.                   ║"
 echo "║                                                                              ║"
+echo "║  NOTE: Images must be loaded before running this test (see script header)   ║"
+echo "║                                                                              ║"
 echo "╚══════════════════════════════════════════════════════════════════════════════╝"
 echo ""
 
 # Function to test an app's multiarch images
 test_app_multiarch() {
     local app_name=$1
-    local app_path=$2
-    local test_package=$3
-    local description=$4
+    local test_package=$2
+    local description=$3
     
     echo ""
     echo "################################################################################"
@@ -49,23 +54,24 @@ test_app_multiarch() {
     echo "================================================================================"
     echo ""
     
-    # Build both AMD64 and ARM64 images
-    echo "Building AMD64 image for $app_name..."
-    bazel build "${app_path}:${app_name}_image_amd64"
+    # Verify images exist
+    echo "Checking if images are loaded..."
+    if ! docker image inspect "${app_name}_amd64:latest" >/dev/null 2>&1; then
+        echo -e "${RED}ERROR: Image ${app_name}_amd64:latest not found!${NC}"
+        echo "Please run: bazel run //demo/${app_name}:${app_name}_image_amd64_load"
+        return 1
+    fi
     
-    echo "Building ARM64 image for $app_name..."
-    bazel build "${app_path}:${app_name}_image_arm64"
+    if ! docker image inspect "${app_name}_arm64:latest" >/dev/null 2>&1; then
+        echo -e "${RED}ERROR: Image ${app_name}_arm64:latest not found!${NC}"
+        echo "Please run: bazel run //demo/${app_name}:${app_name}_image_arm64_load"
+        return 1
+    fi
     
-    # Load both images
+    echo -e "${GREEN}✓ Both images found${NC}"
     echo ""
-    echo "Loading AMD64 image..."
-    bazel run "${app_path}:${app_name}_image_load"
-    
-    echo "Loading ARM64 image..."
-    bazel run "${app_path}:${app_name}_image_arm64_load"
     
     # Check AMD64 container for x86_64 wheels
-    echo ""
     echo "================================================================================"
     echo "Checking AMD64 container..."
     echo "================================================================================"
@@ -151,7 +157,6 @@ overall_success=0
 # Test 1: FastAPI with pydantic
 if test_app_multiarch \
     "hello_fastapi" \
-    "//demo/hello_fastapi" \
     "pydantic_core" \
     "FastAPI app with pydantic (compiled dependency)"; then
     test1_result="${GREEN}✅ PASS${NC}"
@@ -161,7 +166,7 @@ else
 fi
 
 # Add more tests here:
-# if test_app_multiarch "app_name" "//path/to/app" "package_name" "Description"; then
+# if test_app_multiarch "app_name" "package_name" "Description"; then
 #     test2_result="${GREEN}✅ PASS${NC}"
 # else
 #     test2_result="${RED}❌ FAIL${NC}"
