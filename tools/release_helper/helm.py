@@ -364,11 +364,16 @@ def package_helm_chart_for_release(
     versioning (auto_version=True). When auto-versioning, each chart maintains its
     own version independently based on git tags.
     
+    When use_released_app_versions=True, this function queries git tags to find the
+    latest semver version for each app in the chart and updates the imageTag values
+    in the chart's values.yaml. This ensures published Helm charts reference specific
+    versions instead of "latest".
+    
     Args:
         chart_name: Name of the helm chart (e.g., "hello-fastapi")
         chart_version: Explicit version for the chart (if None and auto_version=True, determines automatically)
         output_dir: Optional output directory for the packaged chart
-        use_released_app_versions: Whether to resolve app versions from git tags
+        use_released_app_versions: Whether to resolve app versions from git tags (default: True)
         auto_version: If True, automatically determine version from git tags/Chart.yaml
         bump_type: Type of version bump when auto-versioning ("major", "minor", "patch")
         
@@ -379,7 +384,9 @@ def package_helm_chart_for_release(
     chart_metadata_target = find_helm_chart_bazel_target(chart_name)
     chart_metadata = get_helm_chart_metadata(chart_metadata_target)
     
-    # Resolve app versions
+    # Resolve app versions from git tags or use "latest"
+    # When use_released_app_versions=True, this queries git tags like "demo-hello_python.v1.2.3"
+    # to find the latest semver version for each app
     app_versions = resolve_app_versions_for_chart(chart_metadata, use_released_app_versions)
     
     # Get the actual chart target (without _chart_metadata suffix)
@@ -513,6 +520,8 @@ def package_chart_with_version(
             yaml.safe_dump(chart_data, f, default_flow_style=False, sort_keys=False)
     
     # Update values.yaml with resolved app versions (imageTag)
+    # This ensures published Helm charts use specific semver tags instead of "latest"
+    # when use_released_app_versions=True in package_helm_chart_for_release
     if app_versions:
         values_yaml_path = temp_chart_dir / "values.yaml"
         if values_yaml_path.exists():
