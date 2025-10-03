@@ -1,27 +1,17 @@
-# Wrapper for platform-specific requirements
-# This allows BUILD files to use requirement() without knowing which pip hub to use
-
-def _get_pip_hub():
-    """Determine which pip hub to use based on build platform"""
-    # For now, default to dev dependencies for development builds
-    # Container builds will use platform-specific dependencies via the oci.bzl system
-    return "@pip_deps_dev//:requirements.bzl"
+# Wrapper for platform-agnostic requirements using rules_pycross
+# This provides a simple interface for BUILD files to reference Python dependencies
+# pycross automatically handles platform-specific resolution
 
 def requirement(name):
-    """Get a requirement from the appropriate pip hub"""
-    # Import the requirement function from the appropriate pip hub
-    # This will be resolved at build time based on the platform
-    return "@pip_deps_dev//pypi__" + name.replace("-", "_")
-
-# Platform-specific requirement functions for explicit use
-def requirement_amd64(name):
-    """Get a requirement from the AMD64 pip hub"""
-    return "@pip_deps_linux_amd64//pypi__" + name.replace("-", "_")
-
-def requirement_arm64(name):
-    """Get a requirement from the ARM64 pip hub"""
-    return "@pip_deps_linux_arm64//pypi__" + name.replace("-", "_")
-
-def requirement_dev(name):
-    """Get a requirement from the dev pip hub"""
-    return "@pip_deps_dev//pypi__" + name.replace("-", "_")
+    """Get a requirement from the unified @pypi repository.
+    
+    pycross handles platform selection automatically based on the target platform.
+    No need for separate requirement_amd64/requirement_arm64 functions anymore.
+    
+    Args:
+        name: Package name (e.g., "fastapi", "uvicorn")
+    
+    Returns:
+        Label for the package in the @pypi repository
+    """
+    return "@pypi//" + name.replace("-", "_")

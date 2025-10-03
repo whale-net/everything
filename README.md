@@ -61,20 +61,66 @@ bazel query "kind('app_metadata', //...)"
 ### Adding Dependencies
 
 #### Python Dependencies
-1. Add package to `requirements.in`
-2. Run `bazel run //:pip_compile` to update `requirements.lock.txt`
-3. Use `requirement("package-name")` in BUILD.bazel files
 
-Example:
+The repository uses **uv** for Python dependency management with **rules_pycross** for cross-platform Bazel builds. This provides unified lock files and native Bazel integration without abstraction layers.
+
+**Steps to add a new dependency:**
+
+1. **Add to `pyproject.toml`** under the `dependencies` array:
+   ```toml
+   dependencies = [
+       # ... existing dependencies
+       "your-new-package",
+   ]
+   ```
+
+2. **Regenerate the lock file** using uv:
+   ```bash
+   uv lock --python 3.11
+   ```
+
+3. **Use directly in BUILD.bazel** with the `@pypi//` syntax:
+   ```starlark
+   py_test(
+       name = "test_main",
+       srcs = ["test_main.py"],
+       deps = [
+           "@pypi//:pytest",
+           "@pypi//:your-new-package",  # Use exact package name with hyphens
+       ],
+   )
+   ```
+
+   Or use the `multiplatform_py_binary` macro with the `requirements` parameter:
+   ```starlark
+   load("//tools:python_binary.bzl", "multiplatform_py_binary")
+   
+   multiplatform_py_binary(
+       name = "my_app",
+       srcs = ["main.py"],
+       requirements = ["fastapi", "your-new-package"],  # Hyphens preserved
+   )
+   ```
+
+**Important Notes:**
+- **Package names**: Use exact PyPI package names including hyphens (e.g., `python-jose`, not `python_jose`)
+- **Top-level colon**: Always use `@pypi//:package-name` format (colon before package name)
+- **No conversion**: Package names are used as-is - pycross preserves the original names
+- **Cross-platform**: The uv.lock file includes platform-specific wheels for Linux (amd64/arm64) and macOS (arm64)
+
+**Example - Adding FastAPI:**
 ```bash
-# Add pytest to requirements.in
-echo "pytest" >> requirements.in
+# 1. Edit pyproject.toml
+echo '    "fastapi",' >> pyproject.toml  # Add to dependencies array
 
-# Update lock file
-bazel run //:pip_compile
+# 2. Regenerate lock file
+uv lock --python 3.11
 
-# Use in BUILD.bazel
-deps = [requirement("pytest")]
+# 3. Use in BUILD.bazel
+deps = ["@pypi//:fastapi"]
+
+# Or with multiplatform_py_binary
+requirements = ["fastapi", "uvicorn"]
 ```
 
 #### Go Dependencies
@@ -100,8 +146,8 @@ TODO: Enable gazelle rules for full Go dependency management
 
 3. **Create `BUILD.bazel`** with the required targets:
    ```starlark
-   load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
-   load("@everything_pip_deps//:requirements.bzl", "requirement")
+   load("@rules_python//python:defs.bzl", "py_library", "py_test")
+   load("//tools:python_binary.bzl", "multiplatform_py_binary")
    load("//tools:release.bzl", "release_app")
 
    py_library(
@@ -111,14 +157,11 @@ TODO: Enable gazelle rules for full Go dependency management
        visibility = ["//my_python_app:__pkg__"],
    )
 
-   py_binary(
+   multiplatform_py_binary(
        name = "my_python_app",
        srcs = ["main.py"],
-       main = "main.py",
-       deps = [
-           ":main_lib",
-           "//libs/python",
-       ],
+       deps = [":main_lib"],
+       requirements = ["fastapi", "uvicorn"],  # Package names as-is
        visibility = ["//visibility:public"],
    )
 
@@ -127,7 +170,7 @@ TODO: Enable gazelle rules for full Go dependency management
        srcs = ["test_main.py"],
        deps = [
            ":main_lib",
-           requirement("pytest"),
+           "@pypi//:pytest",  # Direct reference with top-level colon
        ],
        size = "small",
    )

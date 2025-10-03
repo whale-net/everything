@@ -1,5 +1,4 @@
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
-load("@pip_deps_dev//:requirements.bzl", "requirement")
 load("//tools:python_binary.bzl", "multiplatform_py_binary")
 
 # Worker services library  
@@ -10,10 +9,10 @@ py_library(
     deps = [
         "//manman/src:manman_core",
         "//manman/src/repository:manman_repository",
-        requirement("amqpstorm"),
-        requirement("typer"),
-        requirement("requests"),
-        requirement("python-jose"),
+        "@pypi//:amqpstorm",
+        "@pypi//:typer",
+        "@pypi//:requests",
+        "@pypi//:python-jose",
     ],
 )
 
@@ -39,8 +38,8 @@ py_test(
     main = "worker_heartbeat_test.py",
     deps = [
         ":manman_worker",
-        requirement("pytest"),
-        requirement("pytest-asyncio"),
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
     ],
     python_version = "PY3",
 )
