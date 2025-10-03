@@ -104,7 +104,7 @@ MANMAN_APPS = [
 release_helm_chart(
     name = "manman_chart",
     apps = MANMAN_APPS,
-    chart_name = "manman-host",
+    chart_name = "host-services",
     namespace = "manman",
     environment = "dev",
     domain = "manman",
