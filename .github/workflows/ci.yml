@@ -22,6 +22,7 @@ jobs:
       uses: ./.github/actions/setup-build-env
       with:
         cache-suffix: 'test'
+        setup-docker: 'true'
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
@@ -30,37 +31,6 @@ jobs:
       run: |
         # Run all tests and let Bazel handle caching
         bazel test //...
-        
-    - name: Upload test results
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: test-results
-        path: bazel-testlogs/
-        retention-days: 7
-
-  # Smoke test for Docker image building
-  # Validates that the image building system works by building representative
-  # Python and Go images instead of building all changed apps
-  docker-smoke-test:
-    name: Docker Image Build Smoke Test
-    runs-on: ubuntu-latest
-    needs: test
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-      
-    - name: Setup Build Environment
-      uses: ./.github/actions/setup-build-env
-      with:
-        setup-docker: 'true'
-        cache-suffix: 'docker-smoke'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
         
     - name: Run Docker image build smoke test
       run: |
@@ -71,28 +41,50 @@ jobs:
         # Run the smoke test
         bazel test //:test_image_build_smoke --test_output=all
         
-    - name: Generate smoke test summary
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
       if: always()
+      with:
+        name: test-results
+        path: bazel-testlogs/
+        retention-days: 7
+
+  # Build summary - required for branch protection rules
+  build-summary:
+    name: Build Summary
+    runs-on: ubuntu-latest
+    needs: test
+    if: always()
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Generate CI summary
       run: |
-        echo "=== Docker Image Build Smoke Test Summary ===" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "This test validates that the container image build system works" >> $GITHUB_STEP_SUMMARY
-        echo "by building and running representative Python and Go applications." >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Apps tested:**" >> $GITHUB_STEP_SUMMARY
-        echo "- demo/hello_python (Python with uv)" >> $GITHUB_STEP_SUMMARY
-        echo "- demo/hello_go (Go with static binaries)" >> $GITHUB_STEP_SUMMARY
+        echo "=== CI Build Summary ===" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
-        if [ $? -eq 0 ]; then
-          echo "✅ **Status: PASSED**" >> $GITHUB_STEP_SUMMARY
+        TEST_JOB_RESULT="${{ needs.test.result }}"
+        
+        echo "**Job Results:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Test (including smoke test): $TEST_JOB_RESULT" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [[ "$TEST_JOB_RESULT" == "success" ]]; then
+          echo "✅ **Overall Status: PASSED**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "The image build system is working correctly." >> $GITHUB_STEP_SUMMARY
-          echo "All apps should be able to build images successfully." >> $GITHUB_STEP_SUMMARY
+          echo "All tests passed, including Docker image build smoke tests." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Smoke test validated:**" >> $GITHUB_STEP_SUMMARY
+          echo "- demo/hello_python (Python with uv)" >> $GITHUB_STEP_SUMMARY
+          echo "- demo/hello_go (Go with static binaries)" >> $GITHUB_STEP_SUMMARY
+          exit 0
         else
-          echo "❌ **Status: FAILED**" >> $GITHUB_STEP_SUMMARY
+          echo "❌ **Overall Status: FAILED**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "The smoke test failed. Review the logs above for details." >> $GITHUB_STEP_SUMMARY
-          echo "::error::Docker image build smoke test failed"
+          echo "One or more tests failed. Review the test job logs for details." >> $GITHUB_STEP_SUMMARY
+          echo "::error::CI pipeline failed"
+          exit 1
         fi
         

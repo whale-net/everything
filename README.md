@@ -580,26 +580,27 @@ The repository supports optional Bazel remote caching for improved CI performanc
 
 ## CI/CD Pipeline
 
-The repository uses GitHub Actions for continuous integration with a sequential build → test → smoke test workflow. Bazel provides excellent caching by default, caching build outputs, test results, and dependencies between builds, which significantly speeds up CI runs.
+The repository uses GitHub Actions for continuous integration with a sequential test → summary workflow. Bazel provides excellent caching by default, caching build outputs, test results, and dependencies between builds, which significantly speeds up CI runs.
 
 ```mermaid
 graph TD
     A[Push/PR] --> B[Test Job]
-    B --> C{Tests Pass?}
-    C -->|Yes| D[Docker Smoke Test]
-    C -->|No| F[Pipeline Fails]
-    B --> G[Upload Test Results]
-    D --> H{Smoke Test Pass?}
-    H -->|Yes| I[Pipeline Success]
-    H -->|No| F
-    D --> J[Validate Python & Go Images]
+    B --> C[Run Unit Tests]
+    B --> D[Run Docker Smoke Test]
+    C --> E{All Tests Pass?}
+    D --> E
+    E -->|Yes| F[Build Summary]
+    E -->|No| G[Pipeline Fails]
+    F --> H{Summary Check}
+    H -->|Pass| I[Pipeline Success]
+    H -->|Fail| G
     
     style B fill:#e1f5fe
+    style C fill:#f3e5f5
     style D fill:#fff3e0
-    style F fill:#ffebee
-    style G fill:#e8f5e8
+    style F fill:#e8f5e8
+    style G fill:#ffebee
     style I fill:#e3f2fd
-    style J fill:#e8f5e8
 ```
 
 **Bazel Caching Benefits:**
@@ -609,10 +610,10 @@ graph TD
 - **Dependency Cache**: Caches external dependencies like Python packages and Go modules
 
 ### CI Jobs:
-- **Test**: Runs all unit and integration tests
-- **Docker Smoke Test**: Validates image building by building representative Python and Go demo apps
+- **Test**: Runs all unit and integration tests, plus Docker image build smoke test
+- **Build Summary**: Aggregates test results and provides overall status (required for branch protection)
 
-The CI workflow uses a focused smoke test approach rather than building all changed apps. This validates that the image building system works correctly by testing representative applications (Python with uv, Go with static binaries). If these build successfully, we can be confident that all other apps will build correctly too. Full image builds and registry pushes happen during the release workflow.
+The test job includes a focused smoke test that validates the image building system by building representative Python and Go demo apps. This approach validates that the build system works correctly without building all apps. Full image builds and registry pushes happen during the release workflow.
 
 ## Docker Images ✅
 
