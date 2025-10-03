@@ -11,6 +11,8 @@ from tools.release_helper.git import (
     create_git_tag,
     push_git_tag,
     get_previous_tag,
+    get_all_tags,
+    clear_tags_cache,
 )
 
 
@@ -159,3 +161,131 @@ class TestGetPreviousTag:
         result = get_previous_tag()
         
         assert result == "v2.1.3"
+
+
+class TestGetAllTags:
+    """Test the get_all_tags function and caching."""
+
+    @patch('tools.release_helper.git.subprocess.run')
+    def test_get_all_tags_success(self, mock_run):
+        """Test successfully getting all tags."""
+        # Clear cache before test
+        clear_tags_cache()
+        
+        mock_result = MagicMock()
+        mock_result.stdout = "v2.0.0\nv1.5.0\nv1.0.0\n"
+        mock_run.return_value = mock_result
+        
+        result = get_all_tags()
+        
+        assert result == ["v2.0.0", "v1.5.0", "v1.0.0"]
+        mock_run.assert_called_once_with(
+            ["git", "tag", "--sort=-version:refname"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+    @patch('tools.release_helper.git.subprocess.run')
+    def test_get_all_tags_caching(self, mock_run):
+        """Test that get_all_tags caches results."""
+        # Clear cache before test
+        clear_tags_cache()
+        
+        mock_result = MagicMock()
+        mock_result.stdout = "v2.0.0\nv1.5.0\n"
+        mock_run.return_value = mock_result
+        
+        # First call
+        result1 = get_all_tags()
+        assert result1 == ["v2.0.0", "v1.5.0"]
+        
+        # Second call should use cache
+        result2 = get_all_tags()
+        assert result2 == ["v2.0.0", "v1.5.0"]
+        
+        # subprocess.run should only be called once due to caching
+        assert mock_run.call_count == 1
+
+    @patch('tools.release_helper.git.subprocess.run')
+    def test_get_all_tags_no_tags(self, mock_run):
+        """Test getting all tags when no tags exist."""
+        clear_tags_cache()
+        
+        mock_run.side_effect = subprocess.CalledProcessError(1, "git tag")
+        
+        result = get_all_tags()
+        
+        assert result == []
+
+    @patch('tools.release_helper.git.subprocess.run')
+    def test_clear_tags_cache_works(self, mock_run):
+        """Test that clearing the cache causes get_all_tags to re-fetch."""
+        clear_tags_cache()
+        
+        mock_result = MagicMock()
+        mock_result.stdout = "v1.0.0\n"
+        mock_run.return_value = mock_result
+        
+        # First call
+        result1 = get_all_tags()
+        assert result1 == ["v1.0.0"]
+        assert mock_run.call_count == 1
+        
+        # Clear cache
+        clear_tags_cache()
+        
+        # Update mock to return different tags
+        mock_result.stdout = "v2.0.0\nv1.0.0\n"
+        
+        # Call again should re-fetch
+        result2 = get_all_tags()
+        assert result2 == ["v2.0.0", "v1.0.0"]
+        assert mock_run.call_count == 2
+
+    @patch('tools.release_helper.git.subprocess.run')
+    def test_create_git_tag_clears_cache(self, mock_run):
+        """Test that create_git_tag clears the tags cache."""
+        # Clear cache and populate it
+        clear_tags_cache()
+        
+        mock_result = MagicMock()
+        mock_result.stdout = "v1.0.0\n"
+        mock_run.return_value = mock_result
+        
+        # Populate cache
+        get_all_tags()
+        tag_call_count = mock_run.call_count
+        
+        # Create a new tag (this should clear cache)
+        create_git_tag("v2.0.0")
+        
+        # Verify cache was cleared by checking that next call to get_all_tags re-fetches
+        mock_result.stdout = "v2.0.0\nv1.0.0\n"
+        result = get_all_tags()
+        
+        # Should have made additional git tag call due to cache clear
+        assert mock_run.call_count > tag_call_count + 1
+
+    @patch('tools.release_helper.git.subprocess.run')
+    def test_push_git_tag_clears_cache(self, mock_run):
+        """Test that push_git_tag clears the tags cache."""
+        # Clear cache and populate it
+        clear_tags_cache()
+        
+        mock_result = MagicMock()
+        mock_result.stdout = "v1.0.0\n"
+        mock_run.return_value = mock_result
+        
+        # Populate cache
+        get_all_tags()
+        tag_call_count = mock_run.call_count
+        
+        # Push a tag (this should clear cache)
+        push_git_tag("v1.0.0")
+        
+        # Verify cache was cleared by checking that next call to get_all_tags re-fetches
+        result = get_all_tags()
+        
+        # Should have made additional git tag call due to cache clear
+        assert mock_run.call_count > tag_call_count + 1
