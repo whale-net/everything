@@ -170,7 +170,7 @@ class TestFormatHelmChartTag:
     def test_format_helm_chart_tag_with_helm_prefix(self):
         """Test formatting helm chart tag with helm- prefix."""
         result = format_helm_chart_tag("helm-demo-hello-fastapi", "v1.0.0")
-        assert result == "demo-hello-fastapi.v1.0.0"
+        assert result == "helm-demo-hello-fastapi.v1.0.0"
 
     def test_format_helm_chart_tag_without_helm_prefix(self):
         """Test formatting helm chart tag without helm- prefix."""
@@ -180,7 +180,7 @@ class TestFormatHelmChartTag:
     def test_format_helm_chart_tag_with_multiple_hyphens(self):
         """Test formatting helm chart tag with multiple hyphens."""
         result = format_helm_chart_tag("helm-manman-host-services", "v2.1.3")
-        assert result == "manman-host-services.v2.1.3"
+        assert result == "helm-manman-host-services.v2.1.3"
 
 
 class TestGetHelmChartTags:
@@ -190,18 +190,18 @@ class TestGetHelmChartTags:
     def test_get_helm_chart_tags_with_helm_prefix(self, mock_get_all_tags):
         """Test getting helm chart tags with helm- prefix in chart name."""
         mock_get_all_tags.return_value = [
-            "demo-hello-fastapi.v1.2.0",
-            "demo-hello-fastapi.v1.1.0",
-            "demo-hello-fastapi.v1.0.0",
+            "helm-demo-hello-fastapi.v1.2.0",
+            "helm-demo-hello-fastapi.v1.1.0",
+            "helm-demo-hello-fastapi.v1.0.0",
             "api-user-service.v2.0.0",
         ]
         
         result = get_helm_chart_tags("helm-demo-hello-fastapi")
         
         assert result == [
-            "demo-hello-fastapi.v1.2.0",
-            "demo-hello-fastapi.v1.1.0",
-            "demo-hello-fastapi.v1.0.0",
+            "helm-demo-hello-fastapi.v1.2.0",
+            "helm-demo-hello-fastapi.v1.1.0",
+            "helm-demo-hello-fastapi.v1.0.0",
         ]
 
     @patch('tools.release_helper.git.get_all_tags')
@@ -223,7 +223,7 @@ class TestParseVersionFromHelmChartTag:
     def test_parse_version_from_helm_chart_tag_success(self):
         """Test successfully parsing version from helm chart tag."""
         result = parse_version_from_helm_chart_tag(
-            "demo-hello-fastapi.v1.2.3",
+            "helm-demo-hello-fastapi.v1.2.3",
             "helm-demo-hello-fastapi"
         )
         assert result == "v1.2.3"
@@ -231,7 +231,7 @@ class TestParseVersionFromHelmChartTag:
     def test_parse_version_from_helm_chart_tag_with_prerelease(self):
         """Test parsing version with prerelease suffix."""
         result = parse_version_from_helm_chart_tag(
-            "demo-hello-fastapi.v1.2.3-beta.1",
+            "helm-demo-hello-fastapi.v1.2.3-beta.1",
             "helm-demo-hello-fastapi"
         )
         assert result == "v1.2.3-beta.1"
@@ -239,7 +239,7 @@ class TestParseVersionFromHelmChartTag:
     def test_parse_version_from_helm_chart_tag_wrong_chart(self):
         """Test parsing version from wrong chart tag."""
         result = parse_version_from_helm_chart_tag(
-            "demo-hello-fastapi.v1.2.3",
+            "helm-demo-hello-fastapi.v1.2.3",
             "helm-demo-other-app"
         )
         assert result is None
@@ -247,7 +247,7 @@ class TestParseVersionFromHelmChartTag:
     def test_parse_version_from_helm_chart_tag_invalid_version(self):
         """Test parsing invalid version format."""
         result = parse_version_from_helm_chart_tag(
-            "demo-hello-fastapi.invalid",
+            "helm-demo-hello-fastapi.invalid",
             "helm-demo-hello-fastapi"
         )
         assert result is None

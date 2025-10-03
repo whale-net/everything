@@ -21,7 +21,7 @@ release_helm_chart(
     environment = "production",
     domain = "demo",
     # chart_version omitted - uses default "0.0.0-dev" for local builds
-    # Release system auto-versions from git tags (demo-hello-fastapi.v*)
+    # Release system auto-versions from git tags (helm-demo-hello-fastapi.v*)
     visibility = ["//visibility:public"],
 )
 
@@ -39,7 +39,7 @@ release_helm_chart(
     environment = "production",
     domain = "demo",
     # chart_version omitted - uses default "0.0.0-dev" for local builds
-    # Release system auto-versions from git tags (demo-hello-fastapi-enhanced.v*)
+    # Release system auto-versions from git tags (helm-demo-hello-fastapi-enhanced.v*)
     visibility = ["//visibility:public"],
 )
 
@@ -55,7 +55,7 @@ release_helm_chart(
     environment = "staging",
     domain = "demo",
     # chart_version omitted - uses default "0.0.0-dev" for local builds
-    # Release system auto-versions from git tags (workers-demo-workers.v*)
+    # Release system auto-versions from git tags (helm-workers-demo-workers.v*)
 )
 
 # Example: Internal API (has service but no ingress)
@@ -70,7 +70,7 @@ release_helm_chart(
     environment = "production",
     domain = "demo",
     # chart_version omitted - uses default "0.0.0-dev" for local builds
-    # Release system auto-versions from git tags (demo-hello-internal-api.v*)
+    # Release system auto-versions from git tags (helm-demo-hello-internal-api.v*)
 )
 
 # Example: Cron job
@@ -84,7 +84,7 @@ release_helm_chart(
     environment = "production",
     domain = "demo",
     # chart_version omitted - uses default "0.0.0-dev" for local builds
-    # Release system auto-versions from git tags (demo-hello-job.v*)
+    # Release system auto-versions from git tags (helm-demo-hello-job.v*)
 )
 
 # Example: Background worker
@@ -98,7 +98,7 @@ release_helm_chart(
     environment = "production",
     domain = "demo",
     # chart_version omitted - uses default "0.0.0-dev" for local builds
-    # Release system auto-versions from git tags (demo-hello-worker.v*)
+    # Release system auto-versions from git tags (helm-demo-hello-worker.v*)
 )
 
 # Example: All app types in one chart
@@ -115,5 +115,5 @@ release_helm_chart(
     environment = "production",
     domain = "demo",
     # chart_version omitted - uses default "0.0.0-dev" for local builds
-    # Release system auto-versions from git tags (demo-demo-all-types.v*)
+    # Release system auto-versions from git tags (helm-demo-demo-all-types.v*)
 )

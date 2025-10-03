@@ -404,10 +404,8 @@ jobs:
             for CHART in "${CHART_ARRAY[@]}"; do
               CHART=$(echo "$CHART" | xargs) # trim whitespace
               if [[ "$CHART" != "all" ]]; then
-                # Chart names internally use helm-namespace-name format,
-                # but published tags use namespace-name format (strip helm- prefix)
-                PUBLISHED_NAME="${CHART#helm-}"
-                echo "- \`${PUBLISHED_NAME}.v${VERSION}\`" >> $GITHUB_STEP_SUMMARY
+                # Tags keep the helm- prefix to avoid collisions with app tags
+                echo "- \`${CHART}.v${VERSION}\`" >> $GITHUB_STEP_SUMMARY
               fi
             done
             echo "" >> $GITHUB_STEP_SUMMARY
@@ -563,7 +561,7 @@ jobs:
         for CHART in "${CHART_ARRAY[@]}"; do
           # Strip helm- prefix from chart name for file lookup
           # Chart names internally use helm-namespace-name format,
-          # but published files use namespace-name format
+          # but published files use namespace-name format (without helm- prefix)
           PUBLISHED_NAME="${CHART#helm-}"
           
           # Extract the actual version from the packaged chart filename
@@ -573,8 +571,8 @@ jobs:
             # Extract version from filename (e.g., demo-hello-fastapi-v0.2.1.tgz -> v0.2.1)
             CHART_VERSION=$(basename "$CHART_FILE" | sed -E "s/${PUBLISHED_NAME}-(.+)\.tgz/\1/")
             
-            # Format: {published-name}.{version} (without helm- prefix for tags)
-            TAG_NAME="${PUBLISHED_NAME}.${CHART_VERSION}"
+            # Format: {chart-name}.{version} (keep helm- prefix in tags to avoid collisions)
+            TAG_NAME="${CHART}.${CHART_VERSION}"
             
             echo "Creating tag: $TAG_NAME for chart $CHART (published as $PUBLISHED_NAME)"
             
