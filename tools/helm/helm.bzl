@@ -123,10 +123,10 @@ helm_chart = rule(
             doc = "Kubernetes namespace for the chart",
         ),
         "_helm_composer": attr.label(
-            default = Label("//tools/helm:helm_composer"),
+            default = Label("//tools/release_helper:helm_composer"),
             executable = True,
             cfg = "exec",
-            doc = "The helm_composer binary",
+            doc = "The helm_composer binary (Python version)",
         ),
         "_templates": attr.label(
             default = Label("//tools/helm:templates"),

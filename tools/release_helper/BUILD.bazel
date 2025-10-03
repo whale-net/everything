@@ -9,7 +9,10 @@ package(default_visibility = ["//visibility:public"])
 # Release helper library
 py_library(
     name = "release_helper_lib",
-    srcs = glob(["*.py"], exclude = ["test_*.py"]),
+    srcs = glob(
+        ["*.py", "**/*.py"], 
+        exclude = ["test_*.py", "**/test_*.py"]
+    ),
     deps = [
         requirement("typer"),
         requirement("pyyaml"),
@@ -24,6 +27,15 @@ multiplatform_py_binary(
     deps = [":release_helper_lib"],
     main = "cli.py",
     requirements = ["typer", "pyyaml", "httpx"],
+)
+
+# Helm composer CLI tool (Python replacement for Go version)
+multiplatform_py_binary(
+    name = "helm_composer",
+    srcs = ["charts/composer.py"],
+    deps = [":release_helper_lib"],
+    main = "charts/composer.py",
+    requirements = ["pyyaml"],
 )
 
 # Unit tests for metadata module

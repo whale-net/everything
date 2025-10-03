@@ -11,15 +11,15 @@ import typer
 from typing_extensions import Annotated
 
 from tools.release_helper.changes import detect_changed_apps
-from tools.release_helper.git import get_previous_tag
-from tools.release_helper.images import build_image, release_multiarch_image
+from tools.release_helper.core.git import get_previous_tag
+from tools.release_helper.containers.images import build_image, release_multiarch_image
 from tools.release_helper.metadata import list_all_apps
-from tools.release_helper.release import find_app_bazel_target, plan_release, tag_and_push_image
-from tools.release_helper.release_notes import generate_release_notes, generate_release_notes_for_all_apps
+from tools.release_helper.containers.release import find_app_bazel_target, plan_release, tag_and_push_image
+from tools.release_helper.github.release_notes import generate_release_notes, generate_release_notes_for_all_apps
 from tools.release_helper.summary import generate_release_summary
-from tools.release_helper.validation import validate_release_version
-from tools.release_helper.github_release import create_app_release, create_releases_for_apps, create_releases_for_apps_with_notes
-from tools.release_helper.helm import (
+from tools.release_helper.core.validation import validate_release_version
+from tools.release_helper.github.github_release import create_app_release, create_releases_for_apps, create_releases_for_apps_with_notes
+from tools.release_helper.charts.helm import (
     list_all_helm_charts,
     get_helm_chart_metadata,
     find_helm_chart_bazel_target,
@@ -38,7 +38,7 @@ def list_app_versions(
     app_name: Annotated[Optional[str], typer.Argument(help="App name (optional - lists all apps if not specified)")] = None,
 ):
     """List versions for apps by checking git tags."""
-    from tools.release_helper.git import get_latest_app_version
+    from tools.release_helper.core.git import get_latest_app_version
     from tools.release_helper.metadata import get_app_metadata
     
     if app_name:
