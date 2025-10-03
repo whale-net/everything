@@ -17,14 +17,14 @@ build:ci --announce_rc
 build:ci --guard_against_concurrent_changes
 build:ci --experimental_remote_merkle_tree_cache
 build:ci --remote_timeout=60
-build:ci --experimental_remote_cache_compression
+build:ci --remote_cache_compression
 # More aggressive output downloading for better cache hits
 build:ci --remote_download_outputs=minimal
 # Build metadata optimizations  
 build:ci --nolegacy_external_runfiles
 # Memory and CPU optimizations
-build:ci --host_javabase=@bazel_tools//tools/jdk:remote_jdk11
-build:ci --javabase=@bazel_tools//tools/jdk:remote_jdk11
+build:ci --tool_java_runtime_version=remotejdk_11
+build:ci --java_runtime_version=remotejdk_11
 test:ci --cache_test_results=yes
 test:ci --test_timeout_filters=-eternal
 
