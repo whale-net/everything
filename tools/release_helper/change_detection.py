@@ -130,7 +130,7 @@ def _find_targets_for_files(changed_files: List[str]) -> Set[str]:
         path = Path(file_path)
         
         # Skip files in directories that don't have BUILD files (e.g., .github)
-        if path.parts[0] in ['.github', '.git', 'docs'] or file_path.startswith('.'):
+        if path.parts and path.parts[0] in ['.github', '.git', 'docs'] or file_path.startswith('.'):
             continue
         
         # Skip known non-source file types

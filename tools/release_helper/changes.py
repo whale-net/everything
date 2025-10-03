@@ -12,6 +12,23 @@ from tools.release_helper.change_detection import detect_affected_targets
 from tools.release_helper.metadata import list_all_apps, get_app_metadata
 
 
+def _is_infrastructure_change(changed_files: List[str]) -> bool:
+    """Deprecated: Infrastructure detection is no longer used.
+    
+    This function is kept for backwards compatibility with tests but always
+    returns False. We now rely entirely on Bazel's dependency analysis (rdeps)
+    to determine which targets are affected by changes, rather than making
+    assumptions about "infrastructure" files.
+    
+    Args:
+        changed_files: List of changed file paths (ignored)
+    
+    Returns:
+        Always returns False
+    """
+    return False
+
+
 def detect_changed_apps(base_commit: Optional[str] = None, use_bazel_query: bool = True) -> List[Dict[str, str]]:
     """Detect which apps have changed compared to a base commit.
     
