@@ -77,12 +77,12 @@ app_metadata = rule(
 # Note: This function has many parameters (16) to support flexible app configuration.
 # They are logically grouped as:
 # - Binary config: name, binary_target, language
-# - Release config: domain, description, version, registry, custom_repo_name
+# - Release config: domain, description, version, registry, organization, custom_repo_name
 # - Deployment config: app_type, port, replicas, command, args
 # - Health check config: health_check_enabled, health_check_path
 # - Ingress config: ingress_host, ingress_tls_secret
 # Bazel/Starlark does not support nested struct parameters, so they remain flat.
-def release_app(name, binary_target = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = True, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = []):
+def release_app(name, binary_target = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = True, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = []):
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
@@ -99,6 +99,7 @@ def release_app(name, binary_target = None, language = None, domain = None, desc
         description: Optional description of the app
         version: Default version (can be overridden at release time)
         registry: Container registry (defaults to ghcr.io)
+        organization: Container registry organization (defaults to whale-net)
         custom_repo_name: Custom repository name (defaults to name)
         app_type: Application type for Helm chart generation (external-api, internal-api, worker, job).
                   If empty, will be inferred from app name by the Helm composer tool.
@@ -126,7 +127,7 @@ def release_app(name, binary_target = None, language = None, domain = None, desc
     # Repository name for container images should use domain-app format
     image_name = domain + "-" + name
     image_target = name + "_image"
-    repository = "whale-net/" + image_name  # Repository path (without registry)
+    repository = organization + "/" + image_name  # Repository path (without registry)
     
     # Create multiplatform OCI image
     if language == "python":

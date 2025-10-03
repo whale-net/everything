@@ -7,20 +7,17 @@ pillow) have compiled C extensions that are platform-specific. These packages di
 "wheels" for different platforms (e.g., pydantic_core-2.33.2-cp311-manylinux_x86_64.whl
 vs pydantic_core-2.33.2-cp311-manylinux_aarch64.whl).
 
-CURRENT LIMITATION:
-Pycross selects wheels based on the BUILD HOST platform at analysis time, not the target
-platform. This means if you build on AMD64, both the AMD64 and ARM64 containers will
-get AMD64 wheels, which won't work on ARM64 hardware.
+IMPLEMENTATION:
+This repository uses platform transitions to ensure each target platform gets the correct
+wheels. When building multiplatform images:
+- Each binary target (e.g., hello_python_linux_amd64, hello_python_linux_arm64) is built
+  with exec_transition_for_inputs to force the correct target platform
+- Pycross dependencies are resolved separately for each platform
+- The resulting images contain architecture-appropriate wheels for AMD64 and ARM64
 
-WORKAROUND:
-Until we implement proper platform transitions, apps with compiled dependencies should:
-1. Build images on the actual target platform (build AMD64 on AMD64, ARM64 on ARM64), OR  
-2. Use multiplatform_py_binary to create separate binaries (keeps old behavior), OR
-3. Accept that cross-architecture images won't work (pure Python only)
-
-For apps with only pure Python dependencies, the current approach works perfectly.
-
-TODO: Implement platform transition in multiplatform_image() to fix this properly.
+This allows building both AMD64 and ARM64 containers from a single build command on any
+host platform (AMD64 or ARM64), with each container getting the correct wheels for its
+target architecture.
 """
 
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index", "oci_load", "oci_push")

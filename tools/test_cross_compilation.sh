@@ -71,7 +71,7 @@ test_app_multiarch() {
     echo "================================================================================"
     
     local amd64_so_files
-    if ! amd64_so_files=$(docker run --rm --entrypoint /bin/sh "${app_name}_linux_amd64:latest" \
+    if ! amd64_so_files=$(docker run --rm --entrypoint /bin/sh "${app_name}_amd64:latest" \
         -c "find /app -name '*${test_package}*.so' 2>/dev/null | head -5"); then
         echo -e "${YELLOW}WARNING: Failed to search for .so files in AMD64 image${NC}"
         return 1
@@ -109,7 +109,7 @@ test_app_multiarch() {
     echo "================================================================================"
     
     local arm64_so_files
-    if ! arm64_so_files=$(docker run --rm --entrypoint /bin/sh "${app_name}_linux_amd64_arm64:latest" \
+    if ! arm64_so_files=$(docker run --rm --entrypoint /bin/sh "${app_name}_arm64:latest" \
         -c "find /app -name '*${test_package}*.so' 2>/dev/null | head -5"); then
         echo -e "${YELLOW}WARNING: Failed to search for .so files in ARM64 image${NC}"
         return 1
