@@ -43,7 +43,9 @@ def _helm_chart_impl(ctx):
     # Strip "helm-" prefix from chart name for publishing
     # Chart names are used with "helm-" prefix for internal organization and git tags,
     # but published charts should not include this redundant prefix
-    published_chart_name = ctx.attr.chart_name.removeprefix("helm-") if ctx.attr.chart_name.startswith("helm-") else ctx.attr.chart_name
+    published_chart_name = ctx.attr.chart_name
+    if published_chart_name.startswith("helm-"):
+        published_chart_name = published_chart_name[5:]  # Remove "helm-" prefix
     args.add("--chart-name", published_chart_name)
     args.add("--version", ctx.attr.chart_version)
     args.add("--environment", ctx.attr.environment)
