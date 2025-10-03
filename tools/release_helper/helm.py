@@ -428,7 +428,8 @@ def package_helm_chart_for_release(
             chart_name=actual_chart_name,
             chart_version=chart_version,
             output_dir=output_dir,
-            auto_version=False  # We already determined the version
+            auto_version=False,  # We already determined the version
+            app_versions=app_versions  # Pass resolved app versions
         )
         return packaged_chart, chart_version
     else:
@@ -450,7 +451,8 @@ def package_chart_with_version(
     chart_version: Optional[str] = None,
     output_dir: Optional[Path] = None,
     bump_type: str = "patch",
-    auto_version: bool = False
+    auto_version: bool = False,
+    app_versions: Optional[Dict[str, str]] = None
 ) -> Path:
     """Package a Helm chart directory into a versioned tarball using helm package.
     
@@ -465,6 +467,7 @@ def package_chart_with_version(
         output_dir: Directory to output the packaged chart (default: create temp dir)
         bump_type: Type of version bump when auto-versioning ("major", "minor", "patch")
         auto_version: If True, automatically determine version from git tags/Chart.yaml
+        app_versions: Optional dict mapping app names to versions for updating imageTag values
         
     Returns:
         Path to the generated .tgz file
@@ -508,6 +511,23 @@ def package_chart_with_version(
         
         with open(chart_yaml_path, 'w') as f:
             yaml.safe_dump(chart_data, f, default_flow_style=False, sort_keys=False)
+    
+    # Update values.yaml with resolved app versions (imageTag)
+    if app_versions:
+        values_yaml_path = temp_chart_dir / "values.yaml"
+        if values_yaml_path.exists():
+            with open(values_yaml_path, 'r') as f:
+                values_data = yaml.safe_load(f)
+            
+            # Update imageTag for each app in the apps section
+            if 'apps' in values_data:
+                for app_name, app_version in app_versions.items():
+                    if app_name in values_data['apps']:
+                        values_data['apps'][app_name]['imageTag'] = app_version
+                        print(f"Updated {app_name} imageTag to {app_version}")
+            
+            with open(values_yaml_path, 'w') as f:
+                yaml.safe_dump(values_data, f, default_flow_style=False, sort_keys=False)
     
     # Use helm package command to create the tarball from the temporary copy
     result = subprocess.run(

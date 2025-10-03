@@ -168,3 +168,14 @@ py_test(
     ],
     size = "small",
 )
+
+# Unit tests for helm app version resolution
+py_test(
+    name = "test_helm_app_versions",
+    srcs = ["test_helm_app_versions.py"],
+    deps = [
+        ":release_helper_lib",
+        "@pypi//:pytest",
+    ],
+    size = "small",
+)
