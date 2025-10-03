@@ -11,12 +11,12 @@ echo ""
 # Find the tarball in the runfiles directory
 RUNFILES_DIR="${RUNFILES_DIR:-$0.runfiles}"
 if [ -d "${RUNFILES_DIR}/_main/demo" ]; then
-    CHART_TARBALL="${RUNFILES_DIR}/_main/demo/hello-fastapi.tar.gz"
-    CHART_NAME="hello-fastapi"
+    CHART_TARBALL="${RUNFILES_DIR}/_main/demo/helm-demo-hello-fastapi.tar.gz"
+    CHART_NAME="helm-demo-hello-fastapi"
 elif [ -d "demo" ]; then
     # Running outside Bazel
-    CHART_TARBALL="bazel-bin/demo/hello-fastapi.tar.gz"
-    CHART_NAME="hello-fastapi"
+    CHART_TARBALL="bazel-bin/demo/helm-demo-hello-fastapi.tar.gz"
+    CHART_NAME="helm-demo-hello-fastapi"
     if [ ! -f "$CHART_TARBALL" ]; then
         echo "Building fastapi_chart..."
         bazel build //demo:fastapi_chart
