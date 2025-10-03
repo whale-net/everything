@@ -50,7 +50,17 @@ oci.pull(
         "linux/arm64/v8",
     ],
 )
-use_repo(oci, "distroless_base", "distroless_base_linux_amd64", "distroless_base_linux_arm64_v8", "distroless_python", "distroless_python_linux_amd64", "distroless_python_linux_arm64_v8", "python_base", "python_base_linux_amd64", "python_base_linux_arm64_v8")
+
+# Ubuntu base - smaller and includes necessary runtime libs for Python
+oci.pull(
+    name = "ubuntu_base",
+    image = "ubuntu:24.04",
+    platforms = [
+        "linux/amd64",
+        "linux/arm64/v8",
+    ],
+)
+use_repo(oci, "distroless_base", "distroless_base_linux_amd64", "distroless_base_linux_arm64_v8", "distroless_python", "distroless_python_linux_amd64", "distroless_python_linux_arm64_v8", "python_base", "python_base_linux_amd64", "python_base_linux_arm64_v8", "ubuntu_base", "ubuntu_base_linux_amd64", "ubuntu_base_linux_arm64_v8")
 
 # Python setup with rules_python for interpreter registration
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")

@@ -530,7 +530,7 @@
     "@@rules_oci+//oci:extensions.bzl%oci": {
       "general": {
         "bzlTransitiveDigest": "MObYeJgeRukG0C/KOeHNd02huv38P3KnpPsNX1OgrI4=",
-        "usagesDigest": "/NWxnG3kX8EtCEvrjJCGs4RLUox2q87NxCNQh12Q5kQ=",
+        "usagesDigest": "Q05Cict0cQITBbN15eG8jfyTtS3cjWqjko6arHIHjB4=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -664,6 +664,49 @@
               "reproducible": true
             }
           },
+          "ubuntu_base_linux_amd64": {
+            "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_pull",
+            "attributes": {
+              "www_authenticate_challenges": {},
+              "scheme": "https",
+              "registry": "index.docker.io",
+              "repository": "library/ubuntu",
+              "identifier": "24.04",
+              "platform": "linux/amd64",
+              "target_name": "ubuntu_base_linux_amd64",
+              "bazel_tags": []
+            }
+          },
+          "ubuntu_base_linux_arm64_v8": {
+            "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_pull",
+            "attributes": {
+              "www_authenticate_challenges": {},
+              "scheme": "https",
+              "registry": "index.docker.io",
+              "repository": "library/ubuntu",
+              "identifier": "24.04",
+              "platform": "linux/arm64/v8",
+              "target_name": "ubuntu_base_linux_arm64_v8",
+              "bazel_tags": []
+            }
+          },
+          "ubuntu_base": {
+            "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_alias",
+            "attributes": {
+              "target_name": "ubuntu_base",
+              "www_authenticate_challenges": {},
+              "scheme": "https",
+              "registry": "index.docker.io",
+              "repository": "library/ubuntu",
+              "identifier": "24.04",
+              "platforms": {
+                "@@platforms//cpu:x86_64": "@ubuntu_base_linux_amd64",
+                "@@platforms//cpu:arm64": "@ubuntu_base_linux_arm64_v8"
+              },
+              "bzlmod_repository": "ubuntu_base",
+              "reproducible": true
+            }
+          },
           "oci_crane_darwin_amd64": {
             "repoRuleId": "@@rules_oci+//oci:repositories.bzl%crane_repositories",
             "attributes": {
@@ -788,7 +831,10 @@
             "distroless_base_linux_arm64_v8",
             "python_base",
             "python_base_linux_amd64",
-            "python_base_linux_arm64_v8"
+            "python_base_linux_arm64_v8",
+            "ubuntu_base",
+            "ubuntu_base_linux_amd64",
+            "ubuntu_base_linux_arm64_v8"
           ],
           "explicitRootModuleDirectDevDeps": [],
           "useAllRepos": "NO",

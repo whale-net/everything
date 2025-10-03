@@ -11,6 +11,7 @@ exports_files([
     "python_runner.py",
     "platforms.bzl",
     "multiplatform_image.bzl",
+    "container_image.bzl",
 ])
 
 # Version resolver utility for Helm charts

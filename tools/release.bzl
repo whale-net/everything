@@ -1,6 +1,6 @@
 """Release utilities for the Everything monorepo."""
 
-load("//tools:multiplatform_image.bzl", "multiplatform_python_image", "multiplatform_go_image", "multiplatform_push")
+load("//tools:container_image.bzl", "multiplatform_image")
 load("//tools/helm:helm.bzl", "helm_chart")
 
 def _app_metadata_impl(ctx):
@@ -130,43 +130,17 @@ def release_app(name, binary_target = None, binary_amd64 = None, binary_arm64 = 
     # Repository name for container images should use domain-app format
     image_name = domain + "-" + name
     image_target = name + "_image"
-    repository = registry + "/whale-net/" + image_name  # Hardcode whale-net org for now
+    repository = "whale-net/" + image_name  # Repository path (without registry)
     
-    # Create multiplatform OCI images based on language
-    # Tag with "manual" so they're not built by //... (only when explicitly requested)
-    if language == "python":
-        if binary_amd64 and binary_arm64:
-            # Use platform-specific binaries
-            multiplatform_python_image(
-                name = image_target,
-                binary_amd64 = amd64_binary,
-                binary_arm64 = arm64_binary,
-                repository = repository,
-                tags = ["manual", "container-image"],
-            )
-        else:
-            # Use single binary for both platforms
-            multiplatform_python_image(
-                name = image_target,
-                binary = amd64_binary,  # Use either binary for both platforms
-                repository = repository,
-                tags = ["manual", "container-image"],
-            )
-    elif language == "go":
-        multiplatform_go_image(
-            name = image_target,
-            binary = binary_target,
-            repository = repository, 
-            tags = ["manual", "container-image"],
-        )
-    
-    # Create push targets for all image variants
-    multiplatform_push(
-        name = image_target + "_push",
-        image = image_target,
+    # Create multiplatform OCI image using the clean container_image.bzl
+    # This handles both Python and Go, creates proper manifest lists, and supports
+    # both local development (auto-detects platform) and releases (builds all platforms)
+    multiplatform_image(
+        name = image_target,
+        binary_amd64 = amd64_binary,
+        binary_arm64 = arm64_binary,
+        registry = registry,
         repository = repository,
-        tag = "latest",
-        tags = ["manual", "container-push"],
     )
     
     # Create release metadata

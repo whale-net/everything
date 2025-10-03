@@ -22,7 +22,7 @@ def multiplatform_python_image(
     binary = None,
     binary_amd64 = None,
     binary_arm64 = None,
-    base_image = "@python_base",
+    base_image = "@ubuntu_base",
     repository = None,
     extra_layers = None,
     tags = None,
@@ -31,8 +31,16 @@ def multiplatform_python_image(
     """Build multi-platform Python OCI images.
     
     Thanks to pycross, Python dependencies are automatically resolved for each platform
-    during the build. You can use the same binary target for both platforms, or provide
-    platform-specific binaries if needed.
+    during the build. Uses ubuntu:24.04 (117MB) as the base, which is smaller than 
+    python:3.11-slim (186MB) while still providing the necessary runtime libraries.
+    
+    The Python interpreter from rules_python is bundled in the binary runfiles (~242MB),
+    which provides hermetic, reproducible builds but results in larger images:
+    - ubuntu:24.04 base: 117MB (runtime libs + shell)
+    - rules_python interpreter: ~242MB (hermetic)
+    - Python packages: varies (~75MB+ depending on deps)
+    
+    Total size: ~630-750MB depending on application dependencies
     
     Creates:
     - {name}: Multi-platform manifest list supporting both AMD64 and ARM64
@@ -46,7 +54,7 @@ def multiplatform_python_image(
         binary: Python binary target (used for both platforms if platform-specific not provided)
         binary_amd64: AMD64-specific binary (optional)
         binary_arm64: ARM64-specific binary (optional)
-        base_image: Base OCI image (defaults to @python_base)
+        base_image: Base OCI image (defaults to @ubuntu_base - ubuntu:24.04 at 117MB)
         repository: Container repository name (e.g., "ghcr.io/org/app")
         extra_layers: Additional tar layers to include
         tags: Tags to apply to all targets
