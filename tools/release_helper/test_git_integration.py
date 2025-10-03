@@ -15,7 +15,7 @@ from tools.release_helper.git import (
     create_git_tag,
     get_previous_tag,
 )
-from tools.release_helper.changes import _get_changed_files
+from tools.release_helper.git import get_changed_files_since_commit
 
 
 @contextmanager
@@ -118,7 +118,7 @@ class TestGitIntegration:
         
         # Test getting changed files
         with chdir(git_repo.workspace):
-            changed_files = _get_changed_files(base_commit)
+            changed_files = get_changed_files_since_commit(base_commit)
         
         assert "file2.go" in changed_files
         assert "subdir/file3.yaml" in changed_files

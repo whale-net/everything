@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from tools.release_helper.git import get_previous_tag
-from tools.release_helper.changes import _get_changed_files
+from tools.release_helper.git import get_changed_files_since_commit
 from tools.release_helper.metadata import get_app_metadata, list_all_apps
 
 

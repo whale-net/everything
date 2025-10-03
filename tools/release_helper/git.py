@@ -50,6 +50,28 @@ def push_git_tag(tag_name: str) -> None:
     subprocess.run(["git", "push", "origin", tag_name], check=True)
 
 
+def get_changed_files_since_commit(base_commit: str) -> List[str]:
+    """Get list of changed files compared to base commit.
+    
+    Args:
+        base_commit: Git commit/ref to compare against
+    
+    Returns:
+        List of file paths that changed between base_commit and HEAD
+    """
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", f"{base_commit}..HEAD"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return [f.strip() for f in result.stdout.strip().split('\n') if f.strip()]
+    except subprocess.CalledProcessError as e:
+        print(f"Error getting changed files against {base_commit}: {e}")
+        return []
+
+
 def get_previous_tag() -> Optional[str]:
     """Get the previous Git tag."""
     try:
