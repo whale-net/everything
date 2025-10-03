@@ -38,7 +38,7 @@ jobs:
         # This ensures ARM64 containers get aarch64 wheels (not x86_64)
         # If this fails, ARM64 deployments will crash at runtime!
         echo "::group::Cross-Compilation Verification"
-        bazel test //:test_cross_compilation --config=ci --test_output=streamed
+        bazel test //tools:test_cross_compilation --config=ci --test_output=streamed
         echo "::endgroup::"
         
     - name: Upload test results

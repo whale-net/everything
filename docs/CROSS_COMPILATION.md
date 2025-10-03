@@ -210,13 +210,13 @@ We have a **critical test** that verifies cross-compilation continues working:
 
 ```bash
 # Run the test through Bazel (recommended)
-bazel test //:test_cross_compilation --test_output=streamed
+bazel test //tools:test_cross_compilation --test_output=streamed
 
 # Test is marked as "manual" so it doesn't run with //...
 # This is because it breaks sandbox (calls bazel internally) and requires Docker
 ```
 
-The test (`test_cross_compilation.sh`):
+The test (`tools/test_cross_compilation.sh`):
 1. Builds both AMD64 and ARM64 images for apps with compiled dependencies
 2. Loads both images into Docker
 3. Inspects each container to verify correct architecture-specific `.so` files
@@ -235,7 +235,7 @@ The test runs automatically in GitHub Actions CI on every PR and push:
 # .github/workflows/ci.yml
 - name: Verify Cross-Compilation (Critical)
   run: |
-    bazel test //:test_cross_compilation --config=ci --test_output=streamed
+    bazel test //tools:test_cross_compilation --config=ci --test_output=streamed
 ```
 
 If this test fails, **DO NOT MERGE** - it means ARM64 containers will crash at runtime.
