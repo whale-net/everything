@@ -1,56 +1,12 @@
-load("@rules_uv//uv:pip.bzl", "pip_compile")
-#load("@gazelle//:def.bzl", "gazelle")
 load("@rules_python//python:defs.bzl", "py_library")
 
 # Export files needed by other packages
 exports_files([
-    "requirements.lock.txt",
-    "requirements.linux.amd64.lock.txt",
-    "requirements.linux.arm64.lock.txt",
+    "pyproject.toml",
+    "uv.lock",
     "MODULE.bazel",
     "MODULE.bazel.lock",
 ])
-
-# Python dependencies
-pip_compile(
-    name = "pip_compile",
-    requirements_in = "requirements.in",
-    requirements_txt = "requirements.lock.txt",
-)
-
-# Linux AMD64-specific Python dependencies
-pip_compile(
-    name = "pip_compile_linux_amd64",
-    requirements_in = "requirements.in",
-    requirements_txt = "requirements.linux.amd64.lock.txt",
-    # Force AMD64 binary wheels to prevent cross-compilation issues
-    extra_args = [
-        "--only-binary=pydantic-core",
-        "--only-binary=fastapi", 
-        "--only-binary=uvicorn",
-        "--only-binary=httptools",
-        "--only-binary=uvloop",
-        "--only-binary=websockets",
-        "--python-platform=x86_64-unknown-linux-gnu",
-    ],
-)
-
-# Linux ARM64-specific Python dependencies
-pip_compile(
-    name = "pip_compile_linux_arm64",
-    requirements_in = "requirements.in",
-    requirements_txt = "requirements.linux.arm64.lock.txt",
-    # Force ARM64 binary wheels to prevent cross-compilation issues
-    extra_args = [
-        "--only-binary=pydantic-core",
-        "--only-binary=fastapi", 
-        "--only-binary=uvicorn",
-        "--only-binary=httptools",
-        "--only-binary=uvloop",
-        "--only-binary=websockets",
-        "--python-platform=aarch64-unknown-linux-gnu",
-    ],
-)
 
 # Root Python library
 py_library(

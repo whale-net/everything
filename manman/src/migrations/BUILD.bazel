@@ -1,5 +1,4 @@
 load("@rules_python//python:defs.bzl", "py_library")
-load("@pip_deps_dev//:requirements.bzl", "requirement")
 
 # Alembic database migrations
 py_library(
@@ -9,7 +8,7 @@ py_library(
     visibility = ["//manman:__subpackages__"],
     deps = [
         "//manman/src:manman_core",
-        requirement("alembic"),
-        requirement("sqlmodel"),
+        "@pypi//:alembic",
+        "@pypi//:sqlmodel",
     ],
 )
