@@ -5,21 +5,36 @@ Helm chart composer - generates Helm charts from app metadata.
 import json
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import yaml
 
-from tools.release_helper.charts.types import (
-    AppConfig,
-    AppMetadata,
-    AppType,
-    HealthCheckConfig,
-    IngressConfig,
-    ManifestFile,
-    resolve_app_type,
-)
+# Handle both module and script imports
+try:
+    from tools.release_helper.charts.types import (
+        AppConfig,
+        AppMetadata,
+        AppType,
+        HealthCheckConfig,
+        IngressConfig,
+        ManifestFile,
+        resolve_app_type,
+    )
+except ModuleNotFoundError:
+    # When run as script, add parent to path
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
+    from tools.release_helper.charts.types import (
+        AppConfig,
+        AppMetadata,
+        AppType,
+        HealthCheckConfig,
+        IngressConfig,
+        ManifestFile,
+        resolve_app_type,
+    )
 
 
 class HelmComposer:

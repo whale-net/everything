@@ -170,3 +170,15 @@ py_test(
     ],
     size = "small",
 )
+
+# Unit tests for helm chart composer
+py_test(
+    name = "test_composer",
+    srcs = ["charts/test_composer.py"],
+    deps = [
+        ":release_helper_lib",
+        requirement("pytest"),
+        requirement("pyyaml"),
+    ],
+    size = "small",
+)
