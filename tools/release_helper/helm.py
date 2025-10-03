@@ -14,39 +14,21 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from tools.release_helper.core import run_bazel, find_workspace_root
-from tools.release_helper.git import get_latest_app_version
+from tools.release_helper.git import get_latest_app_version, get_latest_helm_chart_version
 
 
 def get_chart_version_from_git(chart_name: str) -> Optional[str]:
     """Get the latest version of a chart from git tags.
     
     Args:
-        chart_name: Name of the chart (e.g., "hello-fastapi")
+        chart_name: Name of the chart (e.g., "helm-manman-host-services")
         
     Returns:
         Latest version string (e.g., "v1.2.3") or None if no tags found
     """
-    try:
-        # Chart tags follow pattern: helm/<chart-name>/v1.2.3
-        tag_pattern = f"helm/{chart_name}/v*"
-        
-        result = subprocess.run(
-            ["git", "tag", "-l", tag_pattern, "--sort=-version:refname"],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        
-        tags = [t for t in result.stdout.strip().split('\n') if t]
-        if tags:
-            # Extract version from tag (helm/chart-name/v1.2.3 -> v1.2.3)
-            latest_tag = tags[0]
-            version = latest_tag.split('/')[-1]
-            return version
-        
-        return None
-    except subprocess.CalledProcessError:
-        return None
+    # Use the centralized git tag handling from git.py which uses the correct
+    # tag format: {chart-name}.{version} (e.g., "helm-manman-host-services.v0.0.1")
+    return get_latest_helm_chart_version(chart_name)
 
 
 def get_chart_version_from_file(chart_dir: Path) -> Optional[str]:

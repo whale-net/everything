@@ -93,6 +93,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        fetch-tags: true
         
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
@@ -168,6 +169,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        fetch-tags: true
         
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
@@ -277,6 +279,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        fetch-tags: true
         
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
@@ -448,6 +451,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        fetch-tags: true
         
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
