@@ -351,6 +351,22 @@ bazel run //tools:release -- build app_name
 docker run --rm domain-app:latest
 ```
 
+### CI Smoke Testing
+The repository uses a focused smoke test approach for CI validation:
+
+```bash
+# Run the image build smoke test
+bazel test //:test_image_build_smoke --test_output=all
+```
+
+This test validates that the container image build system works by building representative Python and Go applications. Instead of building all changed apps in CI (which can be slow and resource-intensive), the smoke test ensures the build system is functional by testing:
+- Python apps with uv and Bazel dependencies
+- Go apps with static binaries
+- Image tagging and metadata
+- Container execution
+
+If these representative apps build and run successfully, we can be confident that all other apps will work correctly too. Full image builds for all apps happen during the release workflow.
+
 ## 📚 Extension Points
 
 ### Adding New Languages
