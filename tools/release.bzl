@@ -76,24 +76,24 @@ app_metadata = rule(
 
 # Note: This function has many parameters (16) to support flexible app configuration.
 # They are logically grouped as:
-# - Binary config: name, binary_target, binary_amd64, binary_arm64, language
+# - Binary config: name, binary_target, language
 # - Release config: domain, description, version, registry, custom_repo_name
 # - Deployment config: app_type, port, replicas, command, args
 # - Health check config: health_check_enabled, health_check_path
 # - Ingress config: ingress_host, ingress_tls_secret
 # Bazel/Starlark does not support nested struct parameters, so they remain flat.
-def release_app(name, binary_target = None, binary_amd64 = None, binary_arm64 = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = True, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = []):
+def release_app(name, binary_target = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = True, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = []):
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
-    ensuring consistency between the two systems. When used with multiplatform_py_binary,
-    it automatically detects platform-specific binaries.
+    ensuring consistency between the two systems. Works with multiplatform_py_binary
+    which auto-generates platform-specific binaries.
     
     Args:
         name: App name (should match directory name and multiplatform_py_binary name)
-        binary_target: The py_binary or go_binary target for this app (used for both platforms if platform-specific binaries not provided)
-        binary_amd64: AMD64-specific binary target (auto-detected if using multiplatform_py_binary)
-        binary_arm64: ARM64-specific binary target (auto-detected if using multiplatform_py_binary)
+        binary_target: Optional binary target. If not provided, auto-detects:
+                       - Python: Checks for :name_linux_amd64 (from multiplatform_py_binary)
+                       - Go: Uses :name directly
         language: Programming language ("python" or "go")
         domain: Domain/category for the app (e.g., "demo", "api", "web")
         description: Optional description of the app
@@ -114,40 +114,42 @@ def release_app(name, binary_target = None, binary_amd64 = None, binary_arm64 = 
     if language not in ["python", "go"]:
         fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
     
-    # Auto-detect platform-specific binaries for Python apps using multiplatform_py_binary
-    if language == "python" and not binary_amd64 and not binary_arm64 and not binary_target:
-        # Assume multiplatform_py_binary pattern: name, name_linux_amd64, name_linux_arm64
-        amd64_binary = ":" + name + "_linux_amd64"
-        arm64_binary = ":" + name + "_linux_arm64"
-    else:
-        # Use explicitly provided binaries or fall back to single binary_target
-        amd64_binary = binary_amd64 if binary_amd64 else binary_target
-        arm64_binary = binary_arm64 if binary_arm64 else binary_target
-    
-    if not amd64_binary or not arm64_binary:
-        fail("Must provide either 'binary_target' for both platforms, both 'binary_amd64' and 'binary_arm64', or use multiplatform_py_binary with name '{}'".format(name))
+    # Auto-detect binary target if not provided
+    if not binary_target:
+        if language == "python":
+            # Python apps use multiplatform_py_binary which creates *_linux_amd64/*_linux_arm64 targets
+            binary_target = ":" + name + "_linux_amd64"
+        else:
+            # Go apps use regular go_binary
+            binary_target = ":" + name
+    # Auto-detect binary target if not provided
+    if not binary_target:
+        if language == "python":
+            # Python apps use multiplatform_py_binary which creates *_linux_amd64/*_linux_arm64 targets
+            binary_target = ":" + name + "_linux_amd64"
+        else:
+            # Go apps use regular go_binary
+            binary_target = ":" + name
     
     # Repository name for container images should use domain-app format
     image_name = domain + "-" + name
     image_target = name + "_image"
     repository = "whale-net/" + image_name  # Repository path (without registry)
     
-    # Create multiplatform OCI image using the clean container_image.bzl
-    # This handles both Python and Go, creates proper manifest lists, and supports
-    # both local development (auto-detects platform) and releases (builds all platforms)
+    # Create multiplatform OCI image using the detected binary
     multiplatform_image(
         name = image_target,
-        binary_amd64 = amd64_binary,
-        binary_arm64 = arm64_binary,
+        binary = binary_target,
         registry = registry,
         repository = repository,
+        language = language,
     )
     
     # Create release metadata
     app_metadata(
         name = name + "_metadata",
         app_name = name,  # Pass the actual app name
-        binary_target = amd64_binary,  # Use the resolved AMD64 binary as primary reference
+        binary_target = binary_target,
         image_target = image_target,
         description = description,
         version = version,

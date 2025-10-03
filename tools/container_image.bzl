@@ -1,13 +1,26 @@
 """Clean container image rules for multiplatform builds.
 
-This module provides a simple, clean interface for building container images
-that properly support multiple platforms using OCI standards.
+IMPORTANT: Platform-specific dependencies and cross-compilation
+-----------------------------------------------------------
+While Python code itself is platform-agnostic, many packages (like pydantic, numpy, 
+pillow) have compiled C extensions that are platform-specific. These packages distribute
+"wheels" for different platforms (e.g., pydantic_core-2.33.2-cp311-manylinux_x86_64.whl
+vs pydantic_core-2.33.2-cp311-manylinux_aarch64.whl).
 
-Key features:
-- Auto-detects platform for local builds (fast)
-- Supports explicit platform selection
-- Creates proper OCI manifest lists for multiplatform support
-- Works seamlessly with pycross for Python dependencies
+CURRENT LIMITATION:
+Pycross selects wheels based on the BUILD HOST platform at analysis time, not the target
+platform. This means if you build on AMD64, both the AMD64 and ARM64 containers will
+get AMD64 wheels, which won't work on ARM64 hardware.
+
+WORKAROUND:
+Until we implement proper platform transitions, apps with compiled dependencies should:
+1. Build images on the actual target platform (build AMD64 on AMD64, ARM64 on ARM64), OR  
+2. Use multiplatform_py_binary to create separate binaries (keeps old behavior), OR
+3. Accept that cross-architecture images won't work (pure Python only)
+
+For apps with only pure Python dependencies, the current approach works perfectly.
+
+TODO: Implement platform transition in multiplatform_image() to fix this properly.
 """
 
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index", "oci_load", "oci_push")
@@ -68,32 +81,19 @@ def container_image(
     # Determine entrypoint based on language
     if not entrypoint:
         if language == "python":
-            # Use hermetic Python interpreter to run the wrapper script
-            # This avoids requiring system Python in the base image
-            
-            # Determine platform for hermetic Python path
-            if "_linux_amd64" in binary_name:
-                platform = "x86_64-unknown-linux-gnu"
-            elif "_linux_arm64" in binary_name:
-                platform = "aarch64-unknown-linux-gnu"
-            else:
-                fail("Cannot determine platform from binary name: " + binary_name)
-            
-            # Path to hermetic Python interpreter in runfiles
-            hermetic_python = "/app/{binary}.runfiles/rules_python++python+python_3_11_{platform}/bin/python3".format(
-                binary = binary_name,
-                platform = platform,
-            )
-            
-            # Run the wrapper script with hermetic Python
-            entrypoint = [hermetic_python, "/app/" + binary_name]
-            
-            # Set up Python environment for runfiles
-            image_env.update({
-                "RUNFILES_DIR": "/app/" + binary_name + ".runfiles",
-                "PYTHON_RUNFILES": "/app/" + binary_name + ".runfiles",
-                "PYTHONPATH": "/app/{binary}.runfiles/_main:/app/{binary}.runfiles".format(binary = binary_name),
-            })
+            # Use a shell script to dynamically find hermetic Python in runfiles
+            # This works regardless of binary name or Python version
+            #
+            # The wrapper script expects to find its runfiles directory by its own name,
+            # so we pass the actual binary name (which matches the runfiles dir)
+            entrypoint = [
+                "/bin/sh",
+                "-c",
+                # Find hermetic python3 in any rules_python runfiles directory
+                'PYTHON=$(find /app -path "*/rules_python*/bin/python3" -type f 2>/dev/null | head -1) && exec "$PYTHON" /app/{binary}'.format(
+                    binary = binary_name,
+                ),
+            ]
         else:
             # Go binaries are self-contained executables
             entrypoint = ["/app/" + binary_name]
@@ -111,19 +111,31 @@ def container_image(
 
 def multiplatform_image(
     name,
-    binary_amd64 = None,
-    binary_arm64 = None,
+    binary,
     base = "@ubuntu_base",
     registry = "ghcr.io",
     repository = None,
+    language = None,
     **kwargs):
-    """Build multiplatform OCI images with automatic platform detection.
+    """Build multiplatform OCI images from a single binary.
     
-    This creates a proper OCI manifest list that supports both AMD64 and ARM64.
+    IMPORTANT LIMITATION - Platform-specific dependencies:
+    This function currently builds the SAME binary for both AMD64 and ARM64 images.
+    Pycross selects wheels based on the BUILD HOST platform, NOT the target platform.
+    
+    This means:
+    - Pure Python apps: ✅ Work perfectly on all platforms
+    - Apps with compiled deps (pydantic, numpy, pillow, etc): ⚠️  Only work on build host platform
+    
+    For apps with compiled dependencies, you MUST either:
+    1. Use multiplatform_py_binary (creates separate *_linux_amd64 and *_linux_arm64 binaries)
+    2. Build on the actual target platform (cross-platform builds won't work)
+    
+    TODO: Add platform transition support to fix this properly.
     
     For local development:
         bazel run //app:my_app_image_load
-        # Loads only your host architecture (fast!)
+        # Loads image tagged with clean name (fast!)
     
     For explicit platform:
         bazel run //app:my_app_image_amd64_load
@@ -135,29 +147,32 @@ def multiplatform_image(
     
     Args:
         name: Base name for all generated targets
-        binary_amd64: AMD64 binary target (e.g., ":app_linux_amd64")
-        binary_arm64: ARM64 binary target (e.g., ":app_linux_arm64")
+        binary: Binary target to containerize (e.g., ":my_app")
         base: Base image (defaults to ubuntu:24.04)
         registry: Container registry (defaults to ghcr.io)
         repository: Repository path (e.g., "whale-net/my-app")
+        language: Language of binary ("python" or "go") - passed to container_image
         **kwargs: Additional arguments passed to container_image
     """
     
-    if not binary_amd64 or not binary_arm64:
-        fail("Must provide both binary_amd64 and binary_arm64")
+    if not binary:
+        fail("Must provide binary")
     
-    # Build platform-specific images
+    # Build platform-specific images from the same binary
+    # The binary name determines the platform in the image tag
     container_image(
         name = name + "_amd64",
-        binary = binary_amd64,
+        binary = binary,
         base = base,
+        language = language,
         **kwargs
     )
     
     container_image(
         name = name + "_arm64",
-        binary = binary_arm64,
+        binary = binary,
         base = base,
+        language = language,
         **kwargs
     )
     
@@ -172,15 +187,13 @@ def multiplatform_image(
     )
     
     # Local load targets - simple names without registry
-    binary_name = _get_binary_name(binary_amd64)
-    # Remove platform suffix for clean local name
-    clean_name = binary_name.replace("_linux_amd64", "").replace("_linux_arm64", "")
+    binary_name = _get_binary_name(binary)
     
     # Main load target - uses AMD64 (most common dev environment)
     oci_load(
         name = name + "_load",
         image = ":" + name + "_amd64",
-        repo_tags = [clean_name + ":latest"],
+        repo_tags = [binary_name + ":latest"],
         tags = ["manual"],
     )
     
@@ -188,14 +201,14 @@ def multiplatform_image(
     oci_load(
         name = name + "_amd64_load",
         image = ":" + name + "_amd64",
-        repo_tags = [clean_name + "_amd64:latest"],
+        repo_tags = [binary_name + "_amd64:latest"],
         tags = ["manual"],
     )
     
     oci_load(
         name = name + "_arm64_load",
         image = ":" + name + "_arm64",
-        repo_tags = [clean_name + "_arm64:latest"],
+        repo_tags = [binary_name + "_arm64:latest"],
         tags = ["manual"],
     )
     

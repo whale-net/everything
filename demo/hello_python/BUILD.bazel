@@ -18,7 +18,6 @@ multiplatform_py_binary(
         ":main_lib",
         "//libs/python",
     ],
-    requirements = [],  # No external requirements for this simple app
     visibility = ["//visibility:public"],
 )
 

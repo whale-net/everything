@@ -18,7 +18,6 @@ multiplatform_py_binary(
     name = "version_resolver",
     srcs = ["version_resolver.py"],
     main = "version_resolver.py",
-    requirements = [],  # No external requirements
     visibility = ["//visibility:public"],
 )
 
@@ -26,17 +25,17 @@ load(":platforms.bzl", "define_platforms")
 
 define_platforms()
 
-# Convenient alias for release helper
+# Convenient alias for release helper (points to the platform-specific binary)
 alias(
     name = "release",
-    actual = "//tools/release_helper:release_helper",
+    actual = "//tools/release_helper:release_helper_linux_amd64",
     visibility = ["//visibility:public"],
 )
 
 # Release metadata and OCI images for the release tool
 release_app(
     name = "release",
-    binary_target = "//tools/release_helper:release_helper",
+    binary_target = "//tools/release_helper:release_helper_linux_amd64",
     language = "python",
     domain = "tools",
     description = "Release helper tool for managing app releases and container images",

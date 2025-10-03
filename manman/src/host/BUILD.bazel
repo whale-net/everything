@@ -27,7 +27,6 @@ multiplatform_py_binary(
     srcs = ["main.py"],
     main = "main.py", 
     deps = [":manman_host"],
-    requirements = ["fastapi", "uvicorn", "gunicorn", "typer", "alembic", "opentelemetry-instrumentation-fastapi", "requests", "python-jose"],
     args = ["start-experience-api"],
     visibility = ["//manman:__pkg__"],
 )
@@ -36,8 +35,7 @@ multiplatform_py_binary(
     name = "status_api",
     srcs = ["main.py"],
     main = "main.py",
-    deps = [":manman_host"], 
-    requirements = ["fastapi", "uvicorn", "gunicorn", "typer", "alembic", "opentelemetry-instrumentation-fastapi", "requests", "python-jose"],
+    deps = [":manman_host"],
     args = ["start-status-api"],
     visibility = ["//manman:__pkg__"],
 )
@@ -47,7 +45,6 @@ multiplatform_py_binary(
     srcs = ["main.py"],
     main = "main.py",
     deps = [":manman_host"],
-    requirements = ["fastapi", "uvicorn", "gunicorn", "typer", "alembic", "opentelemetry-instrumentation-fastapi", "requests", "python-jose"],
     args = ["start-worker-dal-api"],
     visibility = ["//manman:__pkg__"],
 )
@@ -57,7 +54,6 @@ multiplatform_py_binary(
     srcs = ["main.py"], 
     main = "main.py",
     deps = [":manman_host"],
-    requirements = ["fastapi", "uvicorn", "gunicorn", "typer", "alembic", "opentelemetry-instrumentation-fastapi", "requests", "python-jose"],
     args = ["start-status-processor"],
     visibility = ["//manman:__pkg__"],
 )
@@ -67,7 +63,6 @@ multiplatform_py_binary(
     srcs = ["main.py"],
     main = "main.py",
     deps = [":manman_host"],
-    requirements = ["fastapi", "uvicorn", "gunicorn", "typer", "alembic", "opentelemetry-instrumentation-fastapi", "requests", "python-jose"],
     args = ["run-migration"],
     visibility = ["//manman:__pkg__"],
 )

@@ -9,6 +9,7 @@ py_library(
     visibility = ["//demo/hello_world_test:__pkg__"],
 )
 
+# Single macro generates all platform-specific binaries
 multiplatform_py_binary(
     name = "hello_world_test",
     srcs = ["main.py"],
@@ -17,7 +18,6 @@ multiplatform_py_binary(
         ":main_lib",
         "//libs/python",
     ],
-    requirements = [],  # No external requirements for this app
     visibility = ["//visibility:public"],
 )
 
@@ -31,7 +31,6 @@ py_test(
     size = "small",
 )
 
-# Simplified release_app - auto-detects platform binaries!
 release_app(
     name = "hello_world_test",
     language = "python",
