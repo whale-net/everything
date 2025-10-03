@@ -28,6 +28,7 @@ from tools.release_helper.helm import (
     publish_helm_repo_to_github_pages,
     generate_helm_repo_index,
     merge_helm_repo_index,
+    unpublish_helm_chart_versions,
 )
 
 app = typer.Typer(help="Release helper for Everything monorepo")
@@ -836,6 +837,49 @@ def generate_helm_index_cmd(
         
     except Exception as e:
         typer.echo(f"Error generating Helm index: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command("unpublish-helm-chart")
+def unpublish_helm_chart_cmd(
+    index_file: Annotated[str, typer.Argument(help="Path to the index.yaml file")],
+    chart_name: Annotated[str, typer.Option("--chart", help="Name of the chart to unpublish versions from")],
+    versions: Annotated[str, typer.Option("--versions", help="Comma-separated list of versions to unpublish (e.g., 'v1.0.0,v1.1.0')")],
+):
+    """Remove specific versions of a chart from the Helm repository index.
+    
+    This command modifies the index.yaml file to remove specified versions of a chart.
+    The actual .tgz files are NOT deleted - only removed from the index.
+    
+    Example:
+        bazel run //tools:release -- unpublish-helm-chart /path/to/index.yaml \\
+            --chart hello-fastapi --versions v1.0.0,v1.1.0
+    """
+    try:
+        from pathlib import Path
+        
+        index_path = Path(index_file)
+        if not index_path.exists():
+            typer.echo(f"Error: Index file not found: {index_file}", err=True)
+            raise typer.Exit(1)
+        
+        # Parse versions
+        version_list = [v.strip() for v in versions.split(',')]
+        
+        typer.echo(f"Unpublishing versions {version_list} of chart '{chart_name}' from {index_file}")
+        
+        # Unpublish the versions
+        success = unpublish_helm_chart_versions(index_path, chart_name, version_list)
+        
+        if success:
+            typer.echo(f"\n✅ Successfully unpublished versions from '{chart_name}'")
+            typer.echo(f"Note: The .tgz files were not deleted, only removed from the index")
+        else:
+            typer.echo("❌ Failed to unpublish chart versions", err=True)
+            raise typer.Exit(1)
+            
+    except Exception as e:
+        typer.echo(f"Error unpublishing chart: {e}", err=True)
         raise typer.Exit(1)
 
 
