@@ -13,18 +13,19 @@ def format_git_tag(domain: str, app_name: str, version: str) -> str:
 
 
 def format_helm_chart_tag(chart_name: str, version: str) -> str:
-    """Format a Git tag for a Helm chart in the helm-chartname.version format.
+    """Format a Git tag for a Helm chart in the chart-name.version format.
     
-    Helm chart tags use the 'helm-' prefix to avoid collision with app tags.
+    Chart names already include the helm- prefix and namespace (e.g., "helm-demo-hello-fastapi"),
+    so we don't add another prefix here.
     
     Args:
-        chart_name: Name of the Helm chart (e.g., "manman-host", "hello-fastapi")
+        chart_name: Name of the Helm chart (e.g., "helm-demo-hello-fastapi", "helm-manman-manman-host")
         version: Version string (e.g., "v1.0.0")
     
     Returns:
-        Formatted tag (e.g., "helm-manman-host.v1.0.0")
+        Formatted tag (e.g., "helm-demo-hello-fastapi.v1.0.0")
     """
-    return f"helm-{chart_name}.{version}"
+    return f"{chart_name}.{version}"
 
 
 def create_git_tag(tag_name: str, commit_sha: Optional[str] = None, message: Optional[str] = None) -> None:
@@ -88,14 +89,16 @@ def get_app_tags(domain: str, app_name: str) -> List[str]:
 def get_helm_chart_tags(chart_name: str) -> List[str]:
     """Get all tags for a specific helm chart, sorted by version (newest first).
     
+    Chart names already include the helm-namespace- prefix (e.g., "helm-demo-hello-fastapi").
+    
     Args:
-        chart_name: Name of the Helm chart (e.g., "manman-host", "hello-fastapi")
+        chart_name: Name of the Helm chart (e.g., "helm-demo-hello-fastapi", "helm-manman-manman-host")
     
     Returns:
         List of tags sorted by version (newest first)
     """
     all_tags = get_all_tags()
-    chart_prefix = f"helm-{chart_name}."
+    chart_prefix = f"{chart_name}."
     chart_tags = [tag for tag in all_tags if tag.startswith(chart_prefix)]
     return chart_tags
 
@@ -125,14 +128,16 @@ def parse_version_from_tag(tag: str, domain: str, app_name: str) -> Optional[str
 def parse_version_from_helm_chart_tag(tag: str, chart_name: str) -> Optional[str]:
     """Parse version from a helm chart tag.
     
+    Chart names already include the helm-namespace- prefix.
+    
     Args:
-        tag: Git tag (e.g., "helm-manman-host.v1.2.3")
-        chart_name: Chart name (e.g., "manman-host")
+        tag: Git tag (e.g., "helm-demo-hello-fastapi.v1.2.3")
+        chart_name: Chart name (e.g., "helm-demo-hello-fastapi")
     
     Returns:
         Version string (e.g., "v1.2.3") or None if not a valid chart tag
     """
-    expected_prefix = f"helm-{chart_name}."
+    expected_prefix = f"{chart_name}."
     if not tag.startswith(expected_prefix):
         return None
     

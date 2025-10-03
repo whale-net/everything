@@ -156,7 +156,7 @@ def determine_chart_version(
     
     This function:
     1. Tries to get the latest version from git tags (helm/<chart-name>/v*)
-    2. Falls back to reading from Chart.yaml if provided
+    2. Falls back to reading from Chart.yaml if provided (ignores dev versions)
     3. Falls back to base_version if provided
     4. Otherwise starts at v0.1.0
     5. Increments based on bump_type
@@ -170,12 +170,15 @@ def determine_chart_version(
     Returns:
         Version string to use for the chart (e.g., "v1.2.3")
     """
-    # Try to get version from git tags
+    # Try to get version from git tags (primary source of truth)
     current_version = get_chart_version_from_git(chart_name)
     
-    # Fall back to Chart.yaml
+    # Fall back to Chart.yaml, but skip dev versions
     if not current_version and chart_dir:
-        current_version = get_chart_version_from_file(chart_dir)
+        file_version = get_chart_version_from_file(chart_dir)
+        # Only use file version if it's not a dev/development version
+        if file_version and not any(suffix in file_version for suffix in ['-dev', '-alpha', '-beta', '-rc']):
+            current_version = file_version
     
     # Fall back to base version or default
     if not current_version:

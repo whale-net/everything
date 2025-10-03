@@ -4,13 +4,16 @@ This document describes the helm chart release system integrated into the CI/CD 
 
 ## Overview
 
-The helm chart release system is integrated into the main CI/CD release workflow. When releasing apps, you can optionally specify helm charts to release with the same version. Helm charts automatically use the app versions from the release.
+The helm chart release system is integrated into the main CI/CD release workflow. When releasing apps, you can optionally specify helm charts to release with the same version. Helm charts automatically use the app versions from the release and are tracked with git tags.
 
 **Key Features:**
 - Integrated into main `release.yml` workflow
-- Helm charts always use released app versions from git tags
+- Helm charts use automatic per-chart versioning based on git tags
+- Git tags created for each chart release (format: `helm-{chart-name}.v{version}`)
+- Auto-increment support (minor/patch) using git tag history
 - Optional - specify charts to release or leave empty to skip
-- Charts uploaded as workflow artifacts (.tgz files)
+- Charts published to GitHub Pages Helm repository
+- Chart packages also uploaded as workflow artifacts (.tgz files)
 
 ## Architecture
 
@@ -145,6 +148,68 @@ For local development and testing, you can control version resolution:
 - Uses `"latest"` for all app versions
 - Suitable for development or when apps aren't formally released
 
+## Version Management
+
+### Helm Chart Versioning
+
+Each Helm chart maintains its own independent version using git tags. Chart versions are tracked using the format: `{chart-name}.v{version}`.
+
+**Chart Naming Convention:**
+Charts are automatically prefixed with `helm-{namespace}-` to make artifacts clearly identifiable:
+- Input: `chart_name = "hello-fastapi"`, `namespace = "demo"`
+- Result: Chart name = `helm-demo-hello-fastapi`
+- Tarball: `helm-demo-hello-fastapi-v0.2.1.tgz`
+- Git tag: `helm-demo-hello-fastapi.v0.2.1`
+
+**Git Tag Format Examples:**
+- `helm-demo-hello-fastapi.v1.5.0` - hello-fastapi chart in demo namespace, version 1.5.0
+- `helm-manman-manman-host.v0.2.1` - manman-host chart in manman namespace, version 0.2.1
+- `helm-workers-demo-workers.v0.1.0` - demo-workers chart in workers namespace, version 0.1.0
+
+**Auto-increment behavior:**
+- The release workflow automatically determines the next chart version by:
+  1. Finding the latest git tag for the chart (e.g., `helm-manman-host.v0.2.0`)
+  2. Incrementing based on the selected bump type (patch or minor)
+  3. Creating a new tag (e.g., `helm-manman-host.v0.2.1`)
+
+**First release:**
+- If no previous tag exists, starts with `v0.0.1` (patch) or `v0.1.0` (minor)
+
+### Why Omit chart_version in BUILD Files?
+
+The `chart_version` parameter in `release_helm_chart()` should typically be omitted because:
+
+1. **Single source of truth**: Git tags are the authoritative source for released versions
+2. **Prevents staleness**: Hardcoded versions in BUILD files become outdated after each release
+3. **Development clarity**: The default `"0.0.0-dev"` clearly indicates non-release builds
+4. **CI/CD override**: The release system always overrides the BUILD file version anyway
+
+**When to specify chart_version:**
+- Testing a specific version number locally before release
+- Creating a one-off chart package outside the release system
+- Development scenarios where you need a specific version for debugging
+
+**Typical usage:**
+```starlark
+# Recommended: Omit chart_version (uses default "0.0.0-dev")
+release_helm_chart(
+    name = "my_chart",
+    chart_name = "my-app",
+    domain = "demo",
+    namespace = "demo",
+    apps = ["//demo/my_app:my_app_metadata"],
+)
+```
+
+### App Versioning
+
+Apps use a different tagging format: `{domain}-{app}.v{version}` (e.g., `demo-hello_fastapi.v1.0.0`).
+
+This separation allows:
+- Independent versioning of charts and apps
+- Charts can reference multiple app versions
+- Clear distinction between infrastructure (charts) and application code
+
 ## Workflow Integration
 
 ### Main Release Workflow (`.github/workflows/release.yml`)
@@ -165,9 +230,11 @@ For local development and testing, you can control version resolution:
 
 **Outputs:**
 - App container images pushed to registry
-- Git tags created for apps
+- Git tags created for apps (format: `{domain}-{app}.v{version}`)
+- Git tags created for helm charts (format: `helm-{chart-name}.v{version}`)
+- Helm charts published to GitHub Pages at `https://{owner}.github.io/{repo}/charts`
 - Helm chart tarballs uploaded as workflow artifacts
-- GitHub releases created with release notes
+- GitHub releases created with release notes for apps
 - Combined summary showing both apps and charts
 
 ## File Locations
@@ -203,9 +270,15 @@ release_helm_chart(
     chart_name = "hello-fastapi",
     namespace = "demo",
     domain = "demo",  # Required for release system
-    chart_version = "1.0.0",
+    # chart_version omitted - defaults to "0.0.0-dev" for local builds
+    # Release system auto-versions from git tags (helm-hello-fastapi.v*)
 )
 ```
+
+**Important:** The `chart_version` parameter should typically be omitted:
+- **Local builds**: Uses default `"0.0.0-dev"` to indicate it's a development build
+- **CI/CD releases**: The release system automatically determines the version from git tags
+- **Manual version**: Only specify `chart_version` if you need a specific version for local testing
 
 This automatically creates:
 - The helm chart target (`:fastapi_chart`)

@@ -104,11 +104,12 @@ MANMAN_APPS = [
 release_helm_chart(
     name = "manman_chart",
     apps = MANMAN_APPS,
-    chart_name = "manman-host",
+    chart_name = "host-services",
     namespace = "manman",
     environment = "dev",
     domain = "manman",
-    chart_version = "0.2.0",
+    # chart_version omitted - uses default "0.0.0-dev" for local builds
+    # Release system auto-versions from git tags (helm-manman-host.v*)
     visibility = ["//visibility:public"],
 )
 
