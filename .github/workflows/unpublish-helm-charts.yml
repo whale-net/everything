@@ -1,0 +1,191 @@
+name: Unpublish Helm Charts
+
+on:
+  workflow_dispatch:
+    inputs:
+      chart_name:
+        description: 'Full name of the chart in the index (e.g., "hello-fastapi")'
+        required: true
+      versions:
+        description: 'Comma-separated list of versions to unpublish (e.g., "v1.0.0,v1.1.0")'
+        required: true
+
+# Concurrency control to prevent conflicts with other operations on gh-pages
+concurrency:
+  group: helm-repo-unpublish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Verify user permissions before proceeding
+  verify-permissions:
+    name: Verify User Permissions
+    runs-on: ubuntu-latest
+    outputs:
+      is-authorized: ${{ steps.check-permissions.outputs.authorized }}
+    steps:
+      - name: Check user permissions
+        id: check-permissions
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const actor = context.actor;
+            console.log(`Checking permissions for user: ${actor}`);
+            
+            try {
+              // Get user's permission level on the repository
+              const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                username: actor
+              });
+              
+              console.log(`User ${actor} has permission level: ${permission.permission}`);
+              
+              // Allow admin or write permissions
+              const allowedPermissions = ['admin', 'write', 'maintain'];
+              const isAuthorized = allowedPermissions.includes(permission.permission);
+              
+              if (isAuthorized) {
+                console.log(`✅ User ${actor} is authorized (${permission.permission})`);
+                core.setOutput('authorized', 'true');
+              } else {
+                console.log(`❌ User ${actor} is NOT authorized (${permission.permission})`);
+                core.setOutput('authorized', 'false');
+                core.setFailed(`User ${actor} does not have sufficient permissions. Required: admin, write, or maintain. Current: ${permission.permission}`);
+              }
+            } catch (error) {
+              console.error('Error checking permissions:', error);
+              core.setFailed(`Failed to check permissions: ${error.message}`);
+              core.setOutput('authorized', 'false');
+            }
+
+  # Unpublish chart versions
+  unpublish:
+    name: Unpublish Chart Versions
+    runs-on: ubuntu-latest
+    needs: verify-permissions
+    if: needs.verify-permissions.outputs.is-authorized == 'true'
+    permissions:
+      contents: write     # Push to gh-pages branch
+      pages: write        # Deploy to GitHub Pages
+      id-token: write     # Required for GitHub Pages OIDC
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-env
+        with:
+          cache-suffix: 'helm'
+          bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+          bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+          bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+          
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'latest'
+          
+      - name: Download current Helm repository index
+        id: download
+        run: |
+          echo "Downloading current Helm repository index..."
+          mkdir -p /tmp/helm-repo
+          
+          # Download index.yaml from GitHub Pages
+          if curl -fsSL -o /tmp/helm-repo/index.yaml \
+            "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts/index.yaml"; then
+            echo "✅ Downloaded existing index.yaml"
+            ls -lh /tmp/helm-repo/
+            echo "downloaded=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Failed to download index.yaml - repository may not exist yet"
+            echo "downloaded=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+      - name: Unpublish chart versions from index
+        if: steps.download.outputs.downloaded == 'true'
+        run: |
+          echo "Unpublishing versions '${{ github.event.inputs.versions }}' from chart '${{ github.event.inputs.chart_name }}'"
+          
+          # Use the release helper to unpublish versions
+          bazel run --config=ci //tools:release -- unpublish-helm-chart /tmp/helm-repo/index.yaml \
+            --chart "${{ github.event.inputs.chart_name }}" \
+            --versions "${{ github.event.inputs.versions }}"
+          
+          echo "✅ Chart versions unpublished from index"
+          
+      - name: Prepare GitHub Pages deployment
+        run: |
+          echo "Preparing updated index for deployment..."
+          
+          # Create the deployment structure
+          mkdir -p /tmp/helm-pages/charts
+          
+          # Copy the modified index to the charts directory
+          cp /tmp/helm-repo/index.yaml /tmp/helm-pages/charts/
+          
+          echo "✅ Deployment structure prepared"
+          tree /tmp/helm-pages/ || ls -laR /tmp/helm-pages/
+          
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: /tmp/helm-pages
+          
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+        
+      - name: Report results
+        run: |
+          echo "## 🗑️ Helm Chart Versions Unpublished" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Chart:** ${{ github.event.inputs.chart_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Versions removed:** ${{ github.event.inputs.versions }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ⚠️ Important Notes" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Chart versions have been removed from the Helm repository index" >> $GITHUB_STEP_SUMMARY
+          echo "- The actual .tgz files were NOT deleted from the gh-pages branch" >> $GITHUB_STEP_SUMMARY
+          echo "- Users will no longer see these versions when searching the repository" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Helm Repository" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository URL:** https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Users should run:" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "helm repo update" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "to refresh their local repository cache." >> $GITHUB_STEP_SUMMARY
+
+  # Handle authorization failure
+  unauthorized:
+    name: Unauthorized Access
+    runs-on: ubuntu-latest
+    needs: verify-permissions
+    if: needs.verify-permissions.outputs.is-authorized != 'true'
+    steps:
+      - name: Report unauthorized access
+        run: |
+          echo "## ❌ Unauthorized Access Attempt" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**User:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Action:** Attempted to unpublish Helm chart versions" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Required Permissions" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "This workflow requires one of the following permission levels:" >> $GITHUB_STEP_SUMMARY
+          echo "- **admin** - Full administrative access" >> $GITHUB_STEP_SUMMARY
+          echo "- **maintain** - Maintain the repository" >> $GITHUB_STEP_SUMMARY
+          echo "- **write** - Write access to the repository" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Please contact a repository administrator to request access." >> $GITHUB_STEP_SUMMARY
+          
+          exit 1

@@ -605,6 +605,68 @@ def merge_helm_repo_index(new_charts_dir: Path, existing_index_path: Optional[Pa
     return index_path
 
 
+def unpublish_helm_chart_versions(
+    index_path: Path,
+    chart_name: str,
+    versions: List[str]
+) -> bool:
+    """Remove specific versions of a chart from the Helm repository index.
+    
+    Args:
+        index_path: Path to the index.yaml file
+        chart_name: Name of the chart (e.g., "hello-fastapi")
+        versions: List of versions to remove (e.g., ["v1.0.0", "v1.1.0"])
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    if not index_path.exists():
+        raise FileNotFoundError(f"Index file not found: {index_path}")
+    
+    # Load the index
+    with open(index_path, 'r') as f:
+        index_data = yaml.safe_load(f)
+    
+    if not index_data or 'entries' not in index_data:
+        raise ValueError(f"Invalid index.yaml format: missing 'entries'")
+    
+    # Find the chart in the index
+    if chart_name not in index_data['entries']:
+        raise ValueError(f"Chart '{chart_name}' not found in index")
+    
+    # Get the list of chart versions
+    chart_versions = index_data['entries'][chart_name]
+    
+    # Filter out the versions to unpublish
+    original_count = len(chart_versions)
+    filtered_versions = [
+        v for v in chart_versions 
+        if v.get('version') not in versions
+    ]
+    removed_count = original_count - len(filtered_versions)
+    
+    if removed_count == 0:
+        print(f"Warning: No versions were removed. Versions specified: {versions}")
+        print(f"Available versions: {[v.get('version') for v in chart_versions]}")
+        return False
+    
+    # Update the index
+    if len(filtered_versions) == 0:
+        # Remove the entire chart entry if no versions remain
+        del index_data['entries'][chart_name]
+        print(f"Removed all versions of '{chart_name}' from index (chart entry deleted)")
+    else:
+        index_data['entries'][chart_name] = filtered_versions
+        print(f"Removed {removed_count} version(s) of '{chart_name}' from index")
+    
+    # Write the updated index back
+    with open(index_path, 'w') as f:
+        yaml.safe_dump(index_data, f, default_flow_style=False, sort_keys=False)
+    
+    print(f"✅ Successfully updated {index_path}")
+    return True
+
+
 def publish_helm_repo_to_github_pages(
     charts_dir: Path,
     repository_owner: str,
