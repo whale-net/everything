@@ -100,7 +100,7 @@ MANMAN_APPS = [
 
 # Helm chart composition - combines all manman services into a single chart
 # This is registered with the release system for CI/CD integration
-# Chart tags will use the format: helm-manman-host.vX.Y.Z to avoid collision with app tags
+# Chart tags will use the format: manman-host-services.vX.Y.Z
 release_helm_chart(
     name = "manman_chart",
     apps = MANMAN_APPS,
@@ -109,7 +109,7 @@ release_helm_chart(
     environment = "dev",
     domain = "manman",
     # chart_version omitted - uses default "0.0.0-dev" for local builds
-    # Release system auto-versions from git tags (helm-manman-host.v*)
+    # Release system auto-versions from git tags (manman-host-services.v*)
     visibility = ["//visibility:public"],
 )
 
