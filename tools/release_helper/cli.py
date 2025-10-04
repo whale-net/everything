@@ -10,7 +10,7 @@ from typing import Optional
 import typer
 from typing_extensions import Annotated
 
-from tools.release_helper.changes import detect_changed_apps
+from tools.release_helper.changes import detect_changed_apps, detect_changed_helm_charts
 from tools.release_helper.git import get_previous_tag
 from tools.release_helper.images import build_image, release_multiarch_image
 from tools.release_helper.metadata import list_all_apps
@@ -656,60 +656,108 @@ def build_helm_chart_cmd(
 def plan_helm_release(
     charts: Annotated[Optional[str], typer.Option(help="Comma-separated list of chart names, domain names, or 'all'")] = None,
     version: Annotated[Optional[str], typer.Option(help="Release version for charts")] = None,
+    base_commit: Annotated[Optional[str], typer.Option("--base-commit", help="Base commit to detect changes from (enables change detection)")] = None,
     format: Annotated[str, typer.Option(help="Output format")] = "json",
     include_demo: Annotated[bool, typer.Option("--include-demo", help="Include demo domain charts when using 'all'")] = False,
 ):
-    """Plan a helm chart release and output CI matrix."""
+    """Plan a helm chart release and output CI matrix.
+    
+    If --base-commit is provided, only charts affected by changes will be released.
+    Otherwise, releases all selected charts.
+    """
     if format not in ["json", "github"]:
         typer.echo("Error: format must be one of: json, github", err=True)
         raise typer.Exit(1)
 
-    # Get all helm charts
-    all_charts = list_all_helm_charts()
-    
-    # Filter charts based on input
-    selected_charts = []
-    if charts:
-        chart_input = charts.strip().lower()
-        if chart_input == "all":
-            selected_charts = all_charts
-            # Exclude demo domain unless explicitly included
-            if not include_demo:
-                selected_charts = [c for c in selected_charts if c['domain'] != 'demo']
-                typer.echo("Excluding demo domain charts from 'all' (use --include-demo to include)", err=True)
-        else:
-            # Parse comma-separated list
-            requested = [c.strip() for c in chart_input.split(',')]
-            
-            for req in requested:
-                # Check if it's a domain or chart name
-                matching = [c for c in all_charts if c['name'] == req or c['domain'] == req]
-                selected_charts.extend(matching)
-            
-            # Remove duplicates
-            seen = set()
-            selected_charts = [c for c in selected_charts if not (c['name'] in seen or seen.add(c['name']))]
-    else:
-        # Default to all charts
-        selected_charts = all_charts
-    
-    if not selected_charts:
-        typer.echo("No charts selected for release", err=True)
-        plan_result = {"matrix": {"include": []}, "charts": []}
-    else:
-        # Build matrix
-        matrix_include = []
-        for chart in selected_charts:
-            matrix_include.append({
-                "chart": chart['name'],
-                "domain": chart['domain'],
-                "version": version or "0.1.0",
-            })
+    # Determine which charts to release
+    if base_commit:
+        # Change detection mode
+        typer.echo(f"Detecting changed helm charts since {base_commit}", err=True)
+        changed_charts = detect_changed_helm_charts(base_commit)
         
-        plan_result = {
-            "matrix": {"include": matrix_include},
-            "charts": [c['name'] for c in selected_charts]
-        }
+        if not changed_charts:
+            typer.echo("No helm charts affected by changes", err=True)
+            plan_result = {"matrix": {"include": []}, "charts": []}
+        else:
+            # Apply filters if charts parameter is specified
+            if charts:
+                chart_input = charts.strip().lower()
+                if chart_input != "all":
+                    # Filter to only requested charts/domains
+                    requested = [c.strip() for c in chart_input.split(',')]
+                    changed_charts = [
+                        c for c in changed_charts 
+                        if c['name'] in requested or c['domain'] in requested
+                    ]
+            
+            # Apply demo filter
+            if not include_demo:
+                original_count = len(changed_charts)
+                changed_charts = [c for c in changed_charts if c['domain'] != 'demo']
+                if len(changed_charts) < original_count:
+                    typer.echo("Excluding demo domain charts (use --include-demo to include)", err=True)
+            
+            # Build matrix
+            matrix_include = []
+            for chart in changed_charts:
+                matrix_include.append({
+                    "chart": chart['name'],
+                    "domain": chart['domain'],
+                    "version": version or "0.1.0",
+                })
+            
+            plan_result = {
+                "matrix": {"include": matrix_include},
+                "charts": [c['name'] for c in changed_charts]
+            }
+    else:
+        # Static selection mode (original behavior)
+        # Get all helm charts
+        all_charts = list_all_helm_charts()
+        
+        # Filter charts based on input
+        selected_charts = []
+        if charts:
+            chart_input = charts.strip().lower()
+            if chart_input == "all":
+                selected_charts = all_charts
+                # Exclude demo domain unless explicitly included
+                if not include_demo:
+                    selected_charts = [c for c in selected_charts if c['domain'] != 'demo']
+                    typer.echo("Excluding demo domain charts from 'all' (use --include-demo to include)", err=True)
+            else:
+                # Parse comma-separated list
+                requested = [c.strip() for c in chart_input.split(',')]
+                
+                for req in requested:
+                    # Check if it's a domain or chart name
+                    matching = [c for c in all_charts if c['name'] == req or c['domain'] == req]
+                    selected_charts.extend(matching)
+                
+                # Remove duplicates
+                seen = set()
+                selected_charts = [c for c in selected_charts if not (c['name'] in seen or seen.add(c['name']))]
+        else:
+            # Default to all charts
+            selected_charts = all_charts
+        
+        if not selected_charts:
+            typer.echo("No charts selected for release", err=True)
+            plan_result = {"matrix": {"include": []}, "charts": []}
+        else:
+            # Build matrix
+            matrix_include = []
+            for chart in selected_charts:
+                matrix_include.append({
+                    "chart": chart['name'],
+                    "domain": chart['domain'],
+                    "version": version or "0.1.0",
+                })
+            
+            plan_result = {
+                "matrix": {"include": matrix_include},
+                "charts": [c['name'] for c in selected_charts]
+            }
     
     if format == "github":
         # Output GitHub Actions format
