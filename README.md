@@ -635,29 +635,29 @@ The repository uses GitHub Actions for continuous integration with a sequential 
 
 ```mermaid
 graph TD
-    A[Push/PR] --> B[Build Job]
-    B --> C{Build Success?}
-    C -->|Yes| D[Test Job]
+    A[Push/PR] --> B[Test Job]
+    B --> C{Test Success?}
+    C -->|Yes| D[Container Arch Test]
     C -->|No| F[Pipeline Fails]
-    D --> G{Test Success?}
-    G -->|Yes| H[Docker Job]
-    G -->|No| F
-    D --> I[Upload Test Results]
-    H --> J[Build Docker Images]
-    B --> K[Upload Build Artifacts]
-    H --> L{Main Branch?}
-    L -->|Yes| M[Push to Registry]
-    L -->|No| N[Save as Artifacts]
+    D --> E{Arch Test Success?}
+    E -->|Yes| G[Plan Docker]
+    E -->|No| F
+    G --> H{Main Branch?}
+    H -->|Yes| I[Docker Job]
+    H -->|No| J[Build Summary]
+    I --> K[Build & Push Images]
+    K --> J
+    J --> L[Report Status]
+    B --> M[Upload Test Results]
     
     style B fill:#e1f5fe
     style D fill:#f3e5f5
-    style H fill:#fff3e0
+    style I fill:#fff3e0
     style F fill:#ffebee
-    style I fill:#e8f5e8
-    style J fill:#e8f5e8
+    style M fill:#e8f5e8
     style K fill:#e8f5e8
-    style M fill:#e3f2fd
-    style N fill:#f1f8e9
+    style J fill:#e3f2fd
+    style L fill:#f1f8e9
 ```
 
 **Bazel Caching Benefits:**
@@ -667,9 +667,11 @@ graph TD
 - **Dependency Cache**: Caches external dependencies like Python packages and Go modules
 
 ### CI Jobs:
-- **Build**: Compiles applications and uploads artifacts
-- **Test**: Runs all tests (only if build succeeds)
-- **Docker**: Builds container images and pushes to registry (only if tests pass)
+- **Test**: Runs all unit and integration tests
+- **Container Arch Test**: Verifies cross-compilation for multi-architecture containers (critical for ARM64 support)
+- **Plan Docker**: Determines which apps need Docker images built based on changes
+- **Docker**: Builds container images and pushes to registry (only runs on main branch commits)
+- **Build Summary**: Collects and reports the status of all CI jobs
 
 ## Docker Images ✅
 
