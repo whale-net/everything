@@ -10,10 +10,10 @@ on:
         description: 'Comma-separated list of versions to unpublish (e.g., "v1.0.0,v1.1.0")'
         required: true
 
-# Concurrency control to prevent conflicts with other operations on gh-pages
-# All workflows that modify gh-pages must use the same concurrency group
+# Concurrency control to prevent conflicts with release operations
+# Uses the same group as release.yml to serialize all release-related modifications
 concurrency:
-  group: github-pages
+  group: release
   cancel-in-progress: false
 
 jobs:

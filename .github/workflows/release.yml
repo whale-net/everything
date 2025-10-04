@@ -27,10 +27,10 @@ on:
         required: false
         default: ''
 
-# Global concurrency control for GitHub Pages to prevent race conditions
-# All workflows that modify gh-pages must use the same concurrency group
+# Global concurrency control for all release operations
+# Prevents race conditions across app releases, git tags, GitHub releases, and Helm repository
 concurrency:
-  group: github-pages
+  group: release
   cancel-in-progress: false
 
 jobs:
