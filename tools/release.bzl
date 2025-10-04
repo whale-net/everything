@@ -11,7 +11,6 @@ def _app_metadata_impl(ctx):
     metadata = {
         "name": ctx.attr.app_name,  # Use explicit app_name instead of ctx.attr.name
         "version": ctx.attr.version,
-        "binary_target": str(ctx.attr.binary_target.label),  # Convert label to string
         "image_target": str(ctx.attr.image_target.label),  # Convert label to string
         "description": ctx.attr.description,
         "language": ctx.attr.language,
@@ -77,9 +76,8 @@ app_metadata = rule(
     attrs = {
         "app_name": attr.string(mandatory = True),  # Add explicit app_name attribute
         "version": attr.string(default = "latest"),
-        "binary_target": attr.label(mandatory = True),  # Binary dependency (was string)
         "binary_info": attr.label(providers = [AppInfo]),  # Optional: binary's AppInfo provider
-        "image_target": attr.label(mandatory = True),  # Image dependency (was string)
+        "image_target": attr.label(mandatory = True),  # Image dependency (transitively includes binaries)
         "description": attr.string(default = ""),
         "language": attr.string(mandatory = True),
         "registry": attr.string(default = "ghcr.io"),
@@ -182,13 +180,12 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     # Both Python and Go now create AppInfo providers
     binary_info = binary_info_label
     
-    # Create release metadata (use AMD64 binary as reference for metadata)
+    # Create release metadata
     app_metadata(
         name = name + "_metadata",
         app_name = name,  # Pass the actual app name
-        binary_target = binary_amd64,  # Reference binary for metadata
         binary_info = binary_info,  # AppInfo provider for extracting args, etc
-        image_target = image_target,
+        image_target = image_target,  # Transitively depends on all platform binaries
         description = description,
         version = version,
         language = language,

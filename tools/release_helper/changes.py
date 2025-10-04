@@ -124,8 +124,7 @@ def detect_changed_apps(base_commit: Optional[str] = None) -> List[Dict[str, str
         return []
     
     # Find app_metadata targets whose dependencies intersect with affected targets
-    # Now that binary_target and image_target are proper label dependencies,
-    # we can use Bazel's dependency graph directly
+    # The metadata depends on image_target, which transitively depends on all platform binaries
     try:
         # Build a set expression for all affected targets
         affected_set = " + ".join([f"set({t})" for t in all_affected_targets])
