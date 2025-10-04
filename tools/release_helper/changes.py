@@ -115,34 +115,43 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
         # Query packages recursively (BUILD/bzl file changes)
         for package_path in sorted(packages_to_query_recursive):
             try:
-                result = run_bazel([
-                    "query", 
-                    f"{package_path}/...",
-                    "--output=label"
-                ])
+                # Use run_bazel but suppress the detailed error output for missing packages
+                # by running bazel directly when we expect failures
+                workspace_root = find_workspace_root()
+                result = subprocess.run(
+                    ["bazel", "query", f"{package_path}/...", "--output=label"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    cwd=workspace_root
+                )
                 
                 if result.stdout.strip():
                     package_targets = result.stdout.strip().split('\n')
                     affected_targets.update(package_targets)
                     print(f"Package {package_path}: {len(package_targets)} targets affected (recursive)", file=sys.stderr)
-            except subprocess.CalledProcessError as e:
+            except subprocess.CalledProcessError:
                 # Package might have been deleted - this is expected, don't show detailed error
                 print(f"Warning: Package {package_path} not found (may have been deleted)", file=sys.stderr)
         
         # Query packages immediately (source file changes)
         for package_path in sorted(packages_to_query_immediate):
             try:
-                result = run_bazel([
-                    "query", 
-                    f"{package_path}:*",
-                    "--output=label"
-                ])
+                # Use run_bazel but suppress the detailed error output
+                workspace_root = find_workspace_root()
+                result = subprocess.run(
+                    ["bazel", "query", f"{package_path}:*", "--output=label"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    cwd=workspace_root
+                )
                 
                 if result.stdout.strip():
                     package_targets = result.stdout.strip().split('\n')
                     affected_targets.update(package_targets)
                     print(f"Package {package_path}: {len(package_targets)} targets affected", file=sys.stderr)
-            except subprocess.CalledProcessError as e:
+            except subprocess.CalledProcessError:
                 # Package query failed - show warning but don't spam stderr
                 print(f"Warning: Could not query package {package_path}", file=sys.stderr)
         
