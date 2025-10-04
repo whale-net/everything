@@ -352,6 +352,22 @@ helm install my-release ./chart --dry-run --debug
 
 ## Troubleshooting
 
+### Ingress Issues (413 Errors, etc.)
+
+**Problem**: Getting 413 Request Entity Too Large errors from nginx?
+
+**Quick Fix**:
+```yaml
+# values.yaml or --set at deploy time
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+```
+
+📖 **See [INGRESS_TROUBLESHOOTING.md](./INGRESS_TROUBLESHOOTING.md) for complete ingress configuration guide and common issues.**
+
 ### Chart Build Fails
 
 ```bash
@@ -426,6 +442,7 @@ bazel build //demo:multi_app_chart
 - **[APP_TYPES.md](./APP_TYPES.md)** - Complete app type reference
 - **[K8S_MANIFESTS.md](./K8S_MANIFESTS.md)** - Manual Kubernetes manifests guide
 - **[TEMPLATES.md](./TEMPLATES.md)** - Template development guide
+- **[INGRESS_TROUBLESHOOTING.md](./INGRESS_TROUBLESHOOTING.md)** - Ingress configuration and troubleshooting (413 errors, etc.)
 - **[MIGRATION.md](./MIGRATION.md)** - Migration from manual charts
 - **[MILESTONE_5_COMPLETE.md](./MILESTONE_5_COMPLETE.md)** - Multi-app composition details
 

@@ -202,6 +202,29 @@ spec:
 
 **Pattern**: This implements the 1:1 app:ingress mapping where each external-api gets a dedicated Ingress resource.
 
+**Common Ingress Annotations**:
+
+Configure ingress behavior through the `global.ingress.annotations` section:
+
+```yaml
+# values.yaml
+global:
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      # Increase request body size limit (fixes 413 errors)
+      nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+      # Timeout configuration
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+      nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+      # SSL configuration
+      nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+```
+
+📖 **See [INGRESS_TROUBLESHOOTING.md](./INGRESS_TROUBLESHOOTING.md) for common issues like 413 errors and detailed configuration examples.**
+
 ### 4. job.yaml.tmpl
 
 Generates Jobs for job-type apps with Helm hooks.
@@ -718,10 +741,125 @@ helm lint ./chart/
 
 ---
 
+## Troubleshooting
+
+### Ingress Issues
+
+#### 413 Request Entity Too Large
+
+**Problem**: Nginx returns 413 error when uploading files or sending large requests.
+
+**Solution**: Add `nginx.ingress.kubernetes.io/proxy-body-size` annotation:
+
+```yaml
+global:
+  ingress:
+    enabled: true
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+```
+
+📖 **See [INGRESS_TROUBLESHOOTING.md](./INGRESS_TROUBLESHOOTING.md) for detailed solutions and debugging steps.**
+
+#### Ingress Not Created
+
+**Problem**: No ingress resources are generated.
+
+**Checklist**:
+1. Is `ingress.enabled: true` in values?
+2. Is the app type `external-api`?
+3. Is the app enabled?
+
+```bash
+# Verify ingress is generated
+helm template test ./chart/ --set ingress.enabled=true | grep "kind: Ingress"
+```
+
+#### Ingress Created But Not Working
+
+**Problem**: Ingress exists but traffic doesn't reach the app.
+
+**Checklist**:
+1. Check ingress class matches controller: `kubectl get ingressclass`
+2. Verify service exists: `kubectl get svc`
+3. Check ingress status: `kubectl describe ingress <name>`
+4. View ingress controller logs: `kubectl logs -n ingress-nginx <controller-pod>`
+
+### Template Rendering Issues
+
+#### Missing Required Values
+
+**Problem**: Template fails with "nil pointer" or "undefined variable" errors.
+
+**Solution**: Check required values are set:
+
+```bash
+# See what values are used
+helm template test ./chart/ --debug
+
+# Provide missing values
+helm template test ./chart/ --set apps.myapp.port=8000
+```
+
+#### YAML Syntax Errors
+
+**Problem**: Generated YAML is invalid.
+
+**Solution**: Validate output:
+
+```bash
+# Check for syntax errors
+helm template test ./chart/ | kubectl apply --dry-run=client -f -
+
+# Use yamllint for detailed errors
+helm template test ./chart/ | yamllint -
+```
+
+#### Unexpected Resource Count
+
+**Problem**: Wrong number of resources generated.
+
+**Solution**: Check app configuration:
+
+```bash
+# Count resources by type
+helm template test ./chart/ | grep "kind:" | sort | uniq -c
+
+# Verify app is enabled
+helm template test ./chart/ | grep "name: myapp"
+```
+
+### ArgoCD Sync Issues
+
+#### Resources Deploy Out of Order
+
+**Problem**: Apps deploy before migrations complete.
+
+**Solution**: Check sync-wave annotations:
+
+```bash
+# View sync-waves
+helm template test ./chart/ | grep -B 5 "sync-wave"
+
+# Jobs should be wave -1, apps should be wave 0
+```
+
+#### Sync Fails with "Resource Already Exists"
+
+**Problem**: ArgoCD can't apply resources.
+
+**Solution**: 
+1. Ensure metadata (name, namespace, labels) is consistent
+2. Check for duplicate resources
+3. Use `--force` to recreate resources if needed
+
+---
+
 ## See Also
 
 - [README.md](README.md) - Quick start and common patterns
 - [APP_TYPES.md](APP_TYPES.md) - App type reference
+- [INGRESS_TROUBLESHOOTING.md](INGRESS_TROUBLESHOOTING.md) - Detailed ingress configuration and troubleshooting
 - [MIGRATION.md](MIGRATION.md) - Migration guide
 - [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) - Full implementation details
 - [Helm Template Documentation](https://helm.sh/docs/chart_template_guide/)

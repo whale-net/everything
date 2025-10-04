@@ -1,0 +1,74 @@
+# Example values.yaml for external-api apps with nginx ingress
+# This configuration includes common nginx ingress annotations for production use
+
+global:
+  namespace: production
+  environment: prod
+
+# Ingress configuration with nginx annotations
+ingress:
+  enabled: true
+  className: nginx
+  
+  # Common nginx ingress annotations
+  annotations:
+    # Fix 413 Request Entity Too Large errors
+    # Increase request body size limit (default is 1m)
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    
+    # Timeout configuration for long-running requests
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
+    
+    # SSL/TLS configuration
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/ssl-protocols: "TLSv1.2 TLSv1.3"
+    
+    # CORS configuration (if needed)
+    # nginx.ingress.kubernetes.io/enable-cors: "true"
+    # nginx.ingress.kubernetes.io/cors-allow-origin: "https://example.com"
+    
+    # Rate limiting (optional)
+    # nginx.ingress.kubernetes.io/limit-rps: "10"
+    
+    # cert-manager for automatic TLS certificates (if using cert-manager)
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  
+  # TLS configuration
+  tls:
+    - secretName: api-tls-cert
+      hosts:
+        - api.example.com
+
+# App-specific configuration
+apps:
+  my_api:
+    enabled: true
+    type: external-api
+    image: ghcr.io/org/my-api
+    imageTag: v1.2.3
+    port: 8000
+    replicas: 3
+    
+    # Resource limits
+    resources:
+      requests:
+        cpu: "200m"
+        memory: "256Mi"
+      limits:
+        cpu: "1000m"
+        memory: "512Mi"
+    
+    # Health check configuration
+    healthCheck:
+      path: /health
+      initialDelaySeconds: 15
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    
+    # Custom ingress host (optional)
+    ingress:
+      host: api.example.com
+      tlsSecretName: api-tls-cert
