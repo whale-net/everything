@@ -1,7 +1,6 @@
 # Tools and shared build rules for the monorepo
 
-load("//tools:python_binary.bzl", "multiplatform_py_binary")
-load("//tools:release.bzl", "release_app")
+load("@rules_python//python:defs.bzl", "py_binary")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -30,7 +29,7 @@ sh_test(
 )
 
 # Version resolver utility for Helm charts
-multiplatform_py_binary(
+py_binary(
     name = "version_resolver",
     srcs = ["version_resolver.py"],
     main = "version_resolver.py",
@@ -91,13 +90,4 @@ alias(
     name = "release",
     actual = "//tools/release_helper:release_helper",
     visibility = ["//visibility:public"],
-)
-
-# Release metadata and OCI images for the release tool
-release_app(
-    name = "release",
-    binary_name = "//tools/release_helper:release_helper",
-    language = "python",
-    domain = "tools",
-    description = "Release helper tool for managing app releases and container images",
 )
