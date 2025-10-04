@@ -50,8 +50,8 @@ def _should_ignore_file(file_path: str) -> bool:
 def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]:
     """Use Bazel query to find apps affected by changed files.
     
-    Strategy: Identify which packages have changes, query them once each,
-    then check which apps depend on those targets.
+    Strategy: For each changed file, find the Bazel targets that use it (via source files),
+    then use rdeps to find which app binaries depend on those targets.
     """
     if not changed_files:
         return []
@@ -71,8 +71,32 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
         all_apps = list_all_apps()
         workspace_root = find_workspace_root()
         
-        # Extract unique packages from changed files
-        changed_packages = set()
+        # Build set of all app binary targets for rdeps query
+        app_targets = set()
+        app_by_target = {}
+        for app in all_apps:
+            try:
+                metadata = get_app_metadata(app['bazel_target'])
+                binary_target = metadata['binary_target']
+                
+                # Resolve relative target reference to absolute
+                if binary_target.startswith(':'):
+                    metadata_target = app['bazel_target']
+                    package_path = metadata_target[2:].split(':')[0]
+                    binary_target = f"//{package_path}{binary_target}"
+                
+                app_targets.add(binary_target)
+                app_by_target[binary_target] = app
+            except Exception as e:
+                print(f"Warning: Could not get metadata for {app['name']}: {e}", file=sys.stderr)
+                continue
+        
+        if not app_targets:
+            print("No app targets found", file=sys.stderr)
+            return []
+        
+        # Group files by their package to minimize queries
+        files_by_package = {}
         for file_path in relevant_files:
             if not file_path:
                 continue
@@ -81,85 +105,55 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
             file_dir = str(Path(file_path).parent) if Path(file_path).parent != Path('.') else ""
             
             # Check if this directory has a BUILD file
+            has_build = False
             if file_dir:
                 build_file = workspace_root / file_dir / "BUILD.bazel"
                 alt_build_file = workspace_root / file_dir / "BUILD"
-                if build_file.exists() or alt_build_file.exists():
-                    changed_packages.add(f"//{file_dir}")
+                has_build = build_file.exists() or alt_build_file.exists()
+                package = f"//{file_dir}"
             else:
-                # Root directory file
-                if (workspace_root / "BUILD.bazel").exists() or (workspace_root / "BUILD").exists():
-                    changed_packages.add("//")
+                has_build = (workspace_root / "BUILD.bazel").exists() or (workspace_root / "BUILD").exists()
+                package = "//"
+            
+            if has_build:
+                if package not in files_by_package:
+                    files_by_package[package] = []
+                files_by_package[package].append(file_path)
         
-        if not changed_packages:
+        if not files_by_package:
             print("No Bazel packages affected by changes", file=sys.stderr)
             return []
         
-        print(f"Querying {len(changed_packages)} affected packages...", file=sys.stderr)
+        print(f"Analyzing {len(files_by_package)} affected packages...", file=sys.stderr)
         
-        # Query all targets in affected packages
-        affected_targets = set()
-        for package_path in sorted(changed_packages):
+        # For each package, use rdeps to find which apps depend on it
+        affected_apps = set()
+        
+        for package_path, files in sorted(files_by_package.items()):
             try:
-                # Query all targets in the package and its subpackages
+                # Use rdeps to find all app targets that depend on anything in this package
+                # This is much more precise than querying all targets in the package
+                app_targets_str = " + ".join(app_targets)
                 result = run_bazel([
                     "query",
-                    f"{package_path}/...",
+                    f"rdeps({app_targets_str}, {package_path}/...)",
                     "--output=label"
                 ])
                 
                 if result.stdout.strip():
-                    targets = result.stdout.strip().split('\n')
-                    affected_targets.update(targets)
-                    print(f"  {package_path}: {len(targets)} targets", file=sys.stderr)
-            except subprocess.CalledProcessError:
-                # Package doesn't exist or has no targets - that's fine, skip it
-                pass
-        
-        if not affected_targets:
-            print("No Bazel targets affected", file=sys.stderr)
-            return []
-        
-        print(f"Total: {len(affected_targets)} targets affected", file=sys.stderr)
-        
-        # Check which apps depend on any of the affected targets
-        affected_apps = []
-        for app in all_apps:
-            try:
-                # Get the app's actual binary target from metadata
-                metadata = get_app_metadata(app['bazel_target'])
-                binary_target = metadata['binary_target']
-                
-                # Resolve relative target reference to absolute
-                if binary_target.startswith(':'):
-                    # Extract package path from metadata target
-                    metadata_target = app['bazel_target']
-                    package_path = metadata_target[2:].split(':')[0]  # Remove // and split on :
-                    app_target = f"//{package_path}{binary_target}"  # Combine package + relative target
-                else:
-                    # Already absolute
-                    app_target = binary_target
-                
-                # Query all dependencies of this app
-                result = run_bazel([
-                    "query", 
-                    f"deps({app_target})",
-                    "--output=label"
-                ])
-                
-                if result.stdout.strip():
-                    app_deps = set(result.stdout.strip().split('\n'))
-                    
-                    # Check if this app depends on any affected targets
-                    if affected_targets.intersection(app_deps):
-                        affected_apps.append(app)
-                        print(f"  {app['name']}: depends on {len(affected_targets.intersection(app_deps))} changed targets", file=sys.stderr)
-                    
-            except Exception as e:
-                print(f"Warning: Could not analyze {app['name']}: {e}", file=sys.stderr)
+                    dependent_targets = set(result.stdout.strip().split('\n'))
+                    # Find which app binaries are in the result
+                    for target in dependent_targets:
+                        if target in app_by_target:
+                            affected_apps.add(app_by_target[target]['name'])
+                            print(f"  {app_by_target[target]['name']}: affected by changes in {package_path}", file=sys.stderr)
+            except subprocess.CalledProcessError as e:
+                # Package might not have any targets that apps depend on
+                print(f"  {package_path}: no app dependencies found", file=sys.stderr)
                 continue
         
-        return affected_apps
+        # Return the affected apps
+        return [app for app in all_apps if app['name'] in affected_apps]
         
     except Exception as e:
         print(f"Error in Bazel dependency analysis: {e}", file=sys.stderr)
