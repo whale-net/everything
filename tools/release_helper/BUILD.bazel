@@ -178,3 +178,14 @@ py_test(
     ],
     size = "small",
 )
+
+# Unit tests for exclude demo domain functionality
+py_test(
+    name = "test_exclude_demo",
+    srcs = ["test_exclude_demo.py"],
+    deps = [
+        ":release_helper_lib",
+        "@pypi//:pytest",
+    ],
+    size = "small",
+)

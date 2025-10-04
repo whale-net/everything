@@ -927,6 +927,9 @@ Version: v1.2.3
 Dry run: false
 ```
 
+> **Note: Demo Domain Exclusion**  
+> When using `all` for apps or helm charts, the `demo` domain is **excluded by default** to prevent accidental publishing of demo/example applications in production releases. To include demo domain, check the "Include demo domain" checkbox in the UI or use the `--include-demo` flag in CLI commands. Specific app names and domain selections (e.g., `demo`, `manman`) are not affected by this behavior.
+
 #### Method 2: GitHub CLI
 
 For automated workflows and scripting:

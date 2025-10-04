@@ -26,6 +26,10 @@ on:
         description: 'Helm charts to release (e.g., hello-fastapi,demo-workers) or "all" or domain name (e.g., "demo"). Leave empty to skip helm chart release.'
         required: false
         default: ''
+      include_demo:
+        description: 'Include demo domain when using "all" for apps or helm charts'
+        type: boolean
+        default: false
 
 # Global concurrency control for Helm chart releases to prevent race conditions on gh-pages
 concurrency:
@@ -112,11 +116,17 @@ jobs:
         INCREMENT_PATCH="${{ github.event.inputs.increment_patch }}"
         EVENT_TYPE="workflow_dispatch"
         APPS_INPUT="${{ github.event.inputs.apps }}"
+        INCLUDE_DEMO="${{ github.event.inputs.include_demo }}"
         
         # Only plan app release if apps are specified
         if [[ -n "$APPS_INPUT" ]]; then
           # Build the command based on the selected option
           CMD="bazel run --config=ci //tools:release -- plan --event-type \"$EVENT_TYPE\" --apps \"$APPS_INPUT\" --format github"
+          
+          # Add --include-demo flag if checkbox is selected
+          if [[ "$INCLUDE_DEMO" == "true" ]]; then
+            CMD="$CMD --include-demo"
+          fi
           
           if [[ -n "$VERSION" ]]; then
             CMD="$CMD --version \"$VERSION\""
@@ -471,15 +481,22 @@ jobs:
       run: |
         CHARTS_INPUT="${{ github.event.inputs.helm_charts }}"
         VERSION="${{ needs.plan-release.outputs.version }}"
+        INCLUDE_DEMO="${{ github.event.inputs.include_demo }}"
         
         echo "Planning helm chart release for: $CHARTS_INPUT"
         echo "Using version: $VERSION"
         
+        # Build the command with optional --include-demo flag
+        CMD="bazel run --config=ci //tools:release -- plan-helm-release --charts \"$CHARTS_INPUT\" --version \"$VERSION\" --format github"
+        
+        if [[ "$INCLUDE_DEMO" == "true" ]]; then
+          CMD="$CMD --include-demo"
+        fi
+        
+        echo "Planning with command: $CMD"
+        
         # Use release helper to plan the helm chart release
-        PLAN_OUTPUT=$(bazel run --config=ci //tools:release -- plan-helm-release \
-          --charts "$CHARTS_INPUT" \
-          --version "$VERSION" \
-          --format github)
+        PLAN_OUTPUT=$(eval $CMD)
         
         # Parse output from release helper
         echo "$PLAN_OUTPUT" | while IFS= read -r line; do
