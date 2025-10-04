@@ -243,23 +243,23 @@ def multiplatform_image(
         repo_path = registry + "/" + repository + "/" + image_name
         
         # Push manifest list (includes both platforms)
-        # The {BUILD_TAG} placeholder is substituted at runtime when you pass a tag:
-        # e.g., `bazel run :app_image_push -- v1.0.0` will push both 'latest' and 'v1.0.0' tags
+        # Tags are passed via command-line arguments (--tag) from the release helper
+        # e.g., `bazel run :app_image_push -- --tag latest --tag v1.0.0 --tag <commit_sha>`
         oci_push(
             name = name + "_push",
             image = ":" + name,
             repository = repo_path,
-            remote_tags = ["latest", "{BUILD_TAG}"],
+            remote_tags = [],  # Tags provided via --tag arguments at runtime
             tags = ["manual"],
         )
         
         # Individual platform push targets (for debugging/testing)
-        # {BUILD_TAG} is substituted with the command-line argument at runtime
+        # Tags are provided via --tag arguments at runtime
         oci_push(
             name = name + "_amd64_push",
             image = ":" + name + "_amd64",
             repository = repo_path,
-            remote_tags = ["latest-amd64", "{BUILD_TAG}-amd64"],
+            remote_tags = [],  # Tags provided via --tag arguments at runtime
             tags = ["manual"],
         )
         
@@ -267,6 +267,6 @@ def multiplatform_image(
             name = name + "_arm64_push",
             image = ":" + name + "_arm64",
             repository = repo_path,
-            remote_tags = ["latest-arm64", "{BUILD_TAG}-arm64"],
+            remote_tags = [],  # Tags provided via --tag arguments at runtime
             tags = ["manual"],
         )
