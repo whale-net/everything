@@ -87,13 +87,20 @@ def release_app(name, binary_target = None, language = None, domain = None, desc
     
     This macro consolidates the creation of OCI images and release metadata,
     ensuring consistency between the two systems. Works with multiplatform_py_binary
-    which auto-generates platform-specific binaries.
+    and multiplatform_go_binary which auto-generate platform-specific binaries.
+    
+    For multiplatform builds, use the corresponding wrapper macros:
+    - Python: multiplatform_py_binary (from //tools:python_binary.bzl)
+    - Go: multiplatform_go_binary (from //tools:go_binary.bzl)
+    
+    Both macros create {name}_linux_amd64 and {name}_linux_arm64 targets automatically,
+    enabling cross-compilation for container images.
     
     Args:
-        name: App name (should match directory name and multiplatform_py_binary name)
+        name: App name (should match directory name and multiplatform binary name)
         binary_target: Optional binary target. If not provided, auto-detects:
                        - Python: Checks for :name_linux_amd64 (from multiplatform_py_binary)
-                       - Go: Uses :name directly
+                       - Go: Checks for :name_linux_amd64 (from multiplatform_go_binary)
         language: Programming language ("python" or "go")
         domain: Domain/category for the app (e.g., "demo", "api", "web")
         description: Optional description of the app
@@ -116,17 +123,17 @@ def release_app(name, binary_target = None, language = None, domain = None, desc
         fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
     
     # Auto-detect binary targets if not provided
-    # Python apps use multiplatform_py_binary which creates platform-specific targets
-    # Go apps use regular go_binary (same binary for all platforms)
+    # Both Python and Go apps use platform-specific binaries for cross-compilation
     #
-    # NOTE: For Python, binary_target defaults to _linux_amd64 for metadata purposes only.
+    # NOTE: For both languages, binary_target defaults to _linux_amd64 for metadata purposes only.
     # The actual multiplatform build (below) explicitly uses BOTH _linux_amd64 and _linux_arm64,
     # so both architectures are built correctly. This is just a reference target for metadata.
     if not binary_target:
         if language == "python":
             binary_target = ":" + name + "_linux_amd64"
         else:
-            binary_target = ":" + name
+            # Go apps also use platform-specific binaries for cross-compilation
+            binary_target = ":" + name + "_linux_amd64"
     
     # Repository name for container images should use domain-app format
     image_name = domain + "-" + name
@@ -147,10 +154,12 @@ def release_app(name, binary_target = None, language = None, domain = None, desc
             language = language,
         )
     else:
-        # Go apps use single binary for all platforms
+        # Go apps need platform-specific binaries for cross-compilation
+        # Similar to Python, we explicitly build for both architectures
         multiplatform_image(
             name = image_target,
-            binary = binary_target,
+            binary_amd64 = ":" + name + "_linux_amd64",
+            binary_arm64 = ":" + name + "_linux_arm64",
             registry = registry,
             repository = repository,
             language = language,
