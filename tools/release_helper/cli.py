@@ -195,6 +195,7 @@ def plan(
     increment_patch: Annotated[bool, typer.Option("--increment-patch", help="Auto-increment patch version")] = False,
     base_commit: Annotated[Optional[str], typer.Option(help="Compare changes against this commit (compares HEAD to this commit)")] = None,
     format: Annotated[str, typer.Option(help="Output format")] = "json",
+    include_demo: Annotated[bool, typer.Option("--include-demo", help="Include demo domain apps when using 'all'")] = False,
 ):
     """Plan a release and output CI matrix."""
     if event_type not in ["workflow_dispatch", "tag_push", "pull_request", "push", "fallback"]:
@@ -225,7 +226,8 @@ def plan(
         requested_apps=apps,
         version=version,
         version_mode=version_mode,
-        base_commit=base_commit
+        base_commit=base_commit,
+        include_demo=include_demo
     )
 
     if format == "github":
@@ -656,6 +658,7 @@ def plan_helm_release(
     charts: Annotated[Optional[str], typer.Option(help="Comma-separated list of chart names, domain names, or 'all'")] = None,
     version: Annotated[Optional[str], typer.Option(help="Release version for charts")] = None,
     format: Annotated[str, typer.Option(help="Output format")] = "json",
+    include_demo: Annotated[bool, typer.Option("--include-demo", help="Include demo domain charts when using 'all'")] = False,
 ):
     """Plan a helm chart release and output CI matrix."""
     if format not in ["json", "github"]:
@@ -671,6 +674,10 @@ def plan_helm_release(
         chart_input = charts.strip().lower()
         if chart_input == "all":
             selected_charts = all_charts
+            # Exclude demo domain unless explicitly included
+            if not include_demo:
+                selected_charts = [c for c in selected_charts if c['domain'] != 'demo']
+                typer.echo("Excluding demo domain charts from 'all' (use --include-demo to include)", err=True)
         else:
             # Parse comma-separated list
             requested = [c.strip() for c in chart_input.split(',')]

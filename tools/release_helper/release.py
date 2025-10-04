@@ -40,7 +40,8 @@ def plan_release(
     requested_apps: Optional[str] = None,
     version: Optional[str] = None,
     version_mode: Optional[str] = None,
-    base_commit: Optional[str] = None
+    base_commit: Optional[str] = None,
+    include_demo: bool = False
 ) -> Dict:
     """Plan a release and return the matrix configuration for CI."""
 
@@ -71,6 +72,10 @@ def plan_release(
 
         if requested_apps == "all":
             release_apps = list_all_apps()
+            # Exclude demo domain unless explicitly included
+            if not include_demo:
+                release_apps = [app for app in release_apps if app['domain'] != 'demo']
+                print("Excluding demo domain apps from 'all' (use --include-demo to include)", file=sys.stderr)
         else:
             requested = [app.strip() for app in requested_apps.split(',')]
             release_apps = validate_apps(requested)
