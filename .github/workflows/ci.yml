@@ -8,6 +8,8 @@ on:
 
 jobs:
   # Test job - builds and tests in one step for better cache utilization
+  # Note: Docker setup not needed here - all unit tests use mocking
+  # Integration tests requiring Docker run in separate test-container-arch job
   test:
     name: Test
     runs-on: ubuntu-latest
