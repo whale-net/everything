@@ -21,10 +21,16 @@ oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 # Uses Bazel's hermetic Python toolchain, so no Python installation needed in base image
 oci.pull(
     name = "ubuntu_base",
+    digest = "sha256:728785b59223d755e3e5c5af178fab1be7031f3522c5ccd7a0b32b80d8248123",
     image = "ubuntu:24.04",
     platforms = [
         "linux/amd64",
+        "linux/arm/v7",
         "linux/arm64/v8",
+        "linux/ppc64le",
+        "linux/riscv64",
+        "linux/s390x",
+        "unknown/unknown",
     ],
 )
 use_repo(oci, "ubuntu_base", "ubuntu_base_linux_amd64", "ubuntu_base_linux_arm64_v8")
