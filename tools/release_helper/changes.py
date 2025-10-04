@@ -95,63 +95,62 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
             print("No app targets found", file=sys.stderr)
             return []
         
-        # Group files by their package to minimize queries
-        files_by_package = {}
+        # Find targets that contain each changed file as a source
+        print(f"Finding targets that use {len(relevant_files)} changed files...", file=sys.stderr)
+        
+        changed_targets = set()
         for file_path in relevant_files:
             if not file_path:
                 continue
             
-            # Get package path (directory containing the file)
-            file_dir = str(Path(file_path).parent) if Path(file_path).parent != Path('.') else ""
-            
-            # Check if this directory has a BUILD file
-            has_build = False
-            if file_dir:
-                build_file = workspace_root / file_dir / "BUILD.bazel"
-                alt_build_file = workspace_root / file_dir / "BUILD"
-                has_build = build_file.exists() or alt_build_file.exists()
-                package = f"//{file_dir}"
-            else:
-                has_build = (workspace_root / "BUILD.bazel").exists() or (workspace_root / "BUILD").exists()
-                package = "//"
-            
-            if has_build:
-                if package not in files_by_package:
-                    files_by_package[package] = []
-                files_by_package[package].append(file_path)
-        
-        if not files_by_package:
-            print("No Bazel packages affected by changes", file=sys.stderr)
-            return []
-        
-        print(f"Analyzing {len(files_by_package)} affected packages...", file=sys.stderr)
-        
-        # For each package, use rdeps to find which apps depend on it
-        affected_apps = set()
-        
-        for package_path, files in sorted(files_by_package.items()):
             try:
-                # Use rdeps to find all app targets that depend on anything in this package
-                # Exclude platform and config_setting targets - they're build configuration,
-                # not actual code dependencies (apps reference them for cross-compilation)
-                app_targets_str = " + ".join(app_targets)
+                # Query which targets use this specific file as a source
                 result = run_bazel([
                     "query",
-                    f"rdeps({app_targets_str}, {package_path}/...) - kind('platform|config_setting', {package_path}/...)",
+                    f"attr('srcs', '{file_path}', //...)",
                     "--output=label"
                 ])
                 
                 if result.stdout.strip():
-                    dependent_targets = set(result.stdout.strip().split('\n'))
-                    # Find which app binaries are in the result
-                    for target in dependent_targets:
-                        if target in app_by_target:
-                            affected_apps.add(app_by_target[target]['name'])
-                            print(f"  {app_by_target[target]['name']}: affected by changes in {package_path}", file=sys.stderr)
-            except subprocess.CalledProcessError as e:
-                # Package might not have any targets that apps depend on
-                print(f"  {package_path}: no app dependencies found", file=sys.stderr)
+                    targets = result.stdout.strip().split('\n')
+                    for target in targets:
+                        # Exclude platform and config_setting targets
+                        if '//:' not in target or not any(x in target for x in ['platform', 'config_setting']):
+                            changed_targets.add(target)
+                            print(f"  {file_path} -> {target}", file=sys.stderr)
+            except subprocess.CalledProcessError:
+                # File might not be in any target's srcs - that's fine
+                print(f"  {file_path}: not in any target sources", file=sys.stderr)
                 continue
+        
+        if not changed_targets:
+            print("No Bazel targets use the changed files", file=sys.stderr)
+            return []
+        
+        print(f"Analyzing {len(changed_targets)} changed targets...", file=sys.stderr)
+        
+        # Now find which apps depend on these specific changed targets
+        affected_apps = set()
+        app_targets_str = " + ".join(app_targets)
+        changed_targets_str = " + ".join(changed_targets)
+        
+        try:
+            # Use rdeps to find which apps depend on the changed targets
+            result = run_bazel([
+                "query",
+                f"rdeps({app_targets_str}, {changed_targets_str})",
+                "--output=label"
+            ])
+            
+            if result.stdout.strip():
+                dependent_targets = set(result.stdout.strip().split('\n'))
+                # Find which app binaries are in the result
+                for target in dependent_targets:
+                    if target in app_by_target:
+                        affected_apps.add(app_by_target[target]['name'])
+                        print(f"  {app_by_target[target]['name']}: affected by changed targets", file=sys.stderr)
+        except subprocess.CalledProcessError as e:
+            print(f"No app dependencies found on changed targets", file=sys.stderr)
         
         # Return the affected apps
         return [app for app in all_apps if app['name'] in affected_apps]
