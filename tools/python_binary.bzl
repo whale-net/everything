@@ -113,8 +113,16 @@ def multiplatform_py_binary(
     Uses Bazel platform transitions to build each variant for its target architecture,
     ensuring pycross selects the correct compiled wheels (pydantic, numpy, etc).
     
-    Takes the exact same parameters as py_binary, plus additional metadata parameters
-    that are exposed through AppInfo provider for the release system.
+    Creates the following targets:
+        {name}_base_amd64   - Base py_binary (macOS-compatible, depends on source files)
+        {name}_base_arm64   - Base py_binary (macOS-compatible, depends on source files)
+        {name}_linux_amd64  - Linux x86_64 binary (with platform transition for correct wheels)
+        {name}_linux_arm64  - Linux aarch64 binary (with platform transition for correct wheels)
+        {name}_info         - AppInfo provider (metadata: args, port, app_type)
+    
+    NOTE: No base name alias is created. release_app uses {name}_base_amd64 directly
+    for change detection. This is safe because all platform variants are built from
+    the same sources, so checking amd64's dependencies covers all platforms.
     
     Args:
         name: Base name for the binaries (will create {name}_linux_amd64 and {name}_linux_arm64)
@@ -185,3 +193,9 @@ def multiplatform_py_binary(
         app_type = app_type,
         visibility = visibility or ["//visibility:public"],
     )
+    
+    # NOTE: We do NOT create a base name alias (e.g., "hello_python").
+    # Instead, release_app and change detection use {name}_base_amd64 directly.
+    # This is safe because all platform binaries (_base_amd64, _base_arm64, _linux_amd64, _linux_arm64)
+    # are built from the same source files and deps, so checking one platform's dependencies
+    # is sufficient for change detection. We chose amd64 as it's the most common platform.
