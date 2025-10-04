@@ -85,46 +85,71 @@ def detect_changed_apps(base_commit: Optional[str] = None) -> List[Dict[str, str
     
     print(f"Analyzing {len(relevant_files)} changed files using Bazel query...", file=sys.stderr)
     
-    # Build file queries for changed files, batching to avoid command line length limits
-    # Bazel can handle large queries, but we batch at 50 files to be safe
-    BATCH_SIZE = 50
-    all_affected_metadata = set()
-    
-    for i in range(0, len(relevant_files), BATCH_SIZE):
-        batch = relevant_files[i:i+BATCH_SIZE]
-        file_queries = [f"attr('srcs', '{f}', //...)" for f in batch if f]
-        
-        if not file_queries:
+    # Convert git file paths to Bazel labels: libs/python/utils.py → //libs/python:utils.py
+    file_labels = []
+    for f in relevant_files:
+        parts = f.split('/')
+        if len(parts) < 2:
+            # Root level file, skip
             continue
-        
-        changed_targets_query = " + ".join(file_queries)
-        
+        package = '/'.join(parts[:-1])
+        filename = parts[-1]
+        file_labels.append(f"//{package}:{filename}")
+    
+    if not file_labels:
+        print("No file labels to analyze", file=sys.stderr)
+        return []
+    
+    # Query rdeps for each file individually - this way invalid labels are naturally ignored
+    # Collect all affected targets first
+    all_affected_targets = set()
+    
+    for label in file_labels:
         try:
-            # Single Bazel query that does everything:
-            # 1. Find all app_metadata targets
-            # 2. Get their binary targets via deps()
-            # 3. Find targets using changed files in this batch
-            # 4. Filter out platform/config_setting
-            # 5. Find which app binaries depend on the changed targets
-            # 6. Return the metadata targets for those apps
             result = run_bazel([
                 "query",
-                f"let changed_files = {changed_targets_query} in "
-                f"let changed = $changed_files - kind('platform|config_setting', $changed_files) in "
-                f"let all_metadata = kind('app_metadata', //...) in "
-                f"let all_binaries = deps($all_metadata, 1) - $all_metadata in "
-                f"let affected_binaries = rdeps($all_binaries, $changed) in "
-                f"rdeps($all_metadata, $affected_binaries, 1) - $affected_binaries",
+                f"rdeps(//..., {label})",
                 "--output=label"
             ])
-            
             if result.stdout.strip():
-                batch_affected = set(result.stdout.strip().split('\n'))
-                all_affected_metadata.update(batch_affected)
-                
+                targets = set(result.stdout.strip().split('\n'))
+                all_affected_targets.update(targets)
         except subprocess.CalledProcessError:
-            # Batch might not affect any apps
+            # File is not a valid Bazel target (e.g., .bzl files, BUILD files)
+            # This is fine - these files aren't part of the build graph
             continue
+    
+    if not all_affected_targets:
+        print("No targets affected by changed files", file=sys.stderr)
+        return []
+    
+    # Find which app binaries are affected, then find their corresponding metadata
+    # Strategy: Find all app_metadata targets, get their binary deps, see which are affected
+    try:
+        # Get all app_metadata targets
+        result = run_bazel([
+            "query",
+            "kind('app_metadata', //...)",
+            "--output=label"
+        ])
+        all_metadata_targets = set(result.stdout.strip().split('\n')) if result.stdout.strip() else set()
+        
+        # For each metadata target, check if any of its binary deps are in the affected set
+        all_affected_metadata = set()
+        for metadata_target in all_metadata_targets:
+            # Get the package and name from metadata target (e.g., //demo/hello_python:hello_python_metadata)
+            # The binaries follow pattern: //demo/hello_python:hello_python_linux_*
+            package = metadata_target.rsplit(':', 1)[0]
+            app_name = metadata_target.rsplit(':', 1)[1].replace('_metadata', '')
+            
+            # Check if any affected targets are binaries for this app
+            for target in all_affected_targets:
+                if target.startswith(f"{package}:{app_name}_linux_") or target.startswith(f"{package}:{app_name}_base_"):
+                    all_affected_metadata.add(metadata_target)
+                    break
+        
+    except subprocess.CalledProcessError:
+        all_affected_metadata = set()
     
     if not all_affected_metadata:
         print("No apps affected by changed files", file=sys.stderr)
