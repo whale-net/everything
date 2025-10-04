@@ -458,6 +458,85 @@ func TestBuildAppConfig(t *testing.T) {
 	}
 }
 
+// TestBuildAppConfig_PythonMemory tests Python-specific memory configuration
+func TestBuildAppConfig_PythonMemory(t *testing.T) {
+	config := ChartConfig{
+		ChartName: "test-chart",
+		Version:   "1.0.0",
+		OutputDir: "/tmp",
+	}
+	composer := NewComposer(config, "/templates")
+
+	tests := []struct {
+		name               string
+		metadata           AppMetadata
+		expectedMemRequest string
+		expectedMemLimit   string
+	}{
+		{
+			name: "Python External API uses reduced memory",
+			metadata: AppMetadata{
+				Name:        "python-api",
+				AppType:     "external-api",
+				Language:    "python",
+				Registry:    "ghcr.io",
+				RepoName:    "python-api",
+				Version:     "v1.0.0",
+				ImageTarget: "python_api_image",
+			},
+			expectedMemRequest: "64Mi",
+			expectedMemLimit:   "256Mi",
+		},
+		{
+			name: "Python Worker uses reduced memory",
+			metadata: AppMetadata{
+				Name:        "python-worker",
+				AppType:     "worker",
+				Language:    "python",
+				Registry:    "ghcr.io",
+				RepoName:    "python-worker",
+				Version:     "v1.0.0",
+				ImageTarget: "python_worker_image",
+			},
+			expectedMemRequest: "64Mi",
+			expectedMemLimit:   "256Mi",
+		},
+		{
+			name: "Go API uses standard memory",
+			metadata: AppMetadata{
+				Name:        "go-api",
+				AppType:     "external-api",
+				Language:    "go",
+				Registry:    "ghcr.io",
+				RepoName:    "go-api",
+				Version:     "v1.0.0",
+				ImageTarget: "go_api_image",
+			},
+			expectedMemRequest: "256Mi",
+			expectedMemLimit:   "512Mi",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			appConfig, err := composer.buildAppConfig(tt.metadata)
+			if err != nil {
+				t.Fatalf("buildAppConfig failed: %v", err)
+			}
+
+			if appConfig.Resources.Requests.Memory != tt.expectedMemRequest {
+				t.Errorf("Expected memory request %s, got %s", 
+					tt.expectedMemRequest, appConfig.Resources.Requests.Memory)
+			}
+
+			if appConfig.Resources.Limits.Memory != tt.expectedMemLimit {
+				t.Errorf("Expected memory limit %s, got %s", 
+					tt.expectedMemLimit, appConfig.Resources.Limits.Memory)
+			}
+		})
+	}
+}
+
 // TestFormatYAML_EdgeCases tests edge cases in YAML formatting
 func TestFormatYAML_EdgeCases(t *testing.T) {
 	tests := []struct {
