@@ -26,6 +26,27 @@ def _get_changed_files(base_commit: str) -> List[str]:
         return []
 
 
+def _should_ignore_file(file_path: str) -> bool:
+    """Check if a file should be ignored for build impact analysis.
+    
+    Returns True if the file doesn't affect any app binary builds.
+    Note: This filters out changes that clearly don't affect any builds.
+    """
+    # Ignore GitHub workflow files - they're CI configuration, not code
+    if file_path.startswith('.github/workflows/') or file_path.startswith('.github/actions/'):
+        return True
+    
+    # Ignore documentation files - they don't affect builds
+    if file_path.startswith('docs/') or file_path.endswith('.md'):
+        return True
+    
+    # Ignore copilot instructions - AI configuration, not code
+    if file_path.endswith('copilot-instructions.md'):
+        return True
+    
+    return False
+
+
 def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]:
     """Use Bazel query to find apps affected by changed files.
     
@@ -35,13 +56,24 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
     if not changed_files:
         return []
     
+    # Filter out files that don't affect builds
+    relevant_files = [f for f in changed_files if not _should_ignore_file(f)]
+    
+    if not relevant_files:
+        print("All changed files are non-build artifacts (workflows, docs, etc.). No apps need to be built.", file=sys.stderr)
+        return []
+    
+    if len(relevant_files) < len(changed_files):
+        filtered_count = len(changed_files) - len(relevant_files)
+        print(f"Filtered out {filtered_count} non-build files (workflows, docs, etc.)", file=sys.stderr)
+    
     try:
         all_apps = list_all_apps()
         workspace_root = find_workspace_root()
         
         # Extract unique packages from changed files
         changed_packages = set()
-        for file_path in changed_files:
+        for file_path in relevant_files:
             if not file_path:
                 continue
             
