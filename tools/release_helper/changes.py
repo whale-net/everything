@@ -86,8 +86,17 @@ def detect_changed_apps(base_commit: Optional[str] = None) -> List[Dict[str, str
     print(f"Analyzing {len(relevant_files)} changed files using Bazel query...", file=sys.stderr)
     
     # Convert git file paths to Bazel labels: libs/python/utils.py → //libs/python:utils.py
+    # Skip files that can never be valid targets (.bzl, BUILD files)
     file_labels = []
     for f in relevant_files:
+        # Skip .bzl files - they're loaded, not built
+        if f.endswith('.bzl'):
+            continue
+        
+        # Skip BUILD files - they're configuration, not targets  
+        if f.endswith(('BUILD', 'BUILD.bazel')):
+            continue
+        
         parts = f.split('/')
         if len(parts) < 2:
             # Root level file, skip
@@ -100,24 +109,55 @@ def detect_changed_apps(base_commit: Optional[str] = None) -> List[Dict[str, str
         print("No file labels to analyze", file=sys.stderr)
         return []
     
-    # Query rdeps for each file individually - this way invalid labels are naturally ignored
-    # Collect all affected targets first
-    all_affected_targets = set()
-    
-    for label in file_labels:
+    # Filter to valid labels first - validate in batch for efficiency
+    # This filters out deleted files and other invalid targets
+    valid_labels = []
+    if file_labels:
         try:
+            # Try to validate all labels at once
+            labels_expr = " + ".join([f"set({label})" for label in file_labels])
             result = run_bazel([
                 "query",
-                f"rdeps(//..., {label})",
+                labels_expr,
                 "--output=label"
             ])
             if result.stdout.strip():
-                targets = set(result.stdout.strip().split('\n'))
-                all_affected_targets.update(targets)
+                valid_labels = result.stdout.strip().split('\n')
         except subprocess.CalledProcessError:
-            # File is not a valid Bazel target (e.g., .bzl files, BUILD files)
-            # This is fine - these files aren't part of the build graph
-            continue
+            # If batch validation fails, fall back to individual validation
+            # This handles cases where some (but not all) labels are invalid
+            for label in file_labels:
+                try:
+                    result = run_bazel([
+                        "query",
+                        label,
+                        "--output=label"
+                    ])
+                    if result.stdout.strip():
+                        valid_labels.append(label)
+                except subprocess.CalledProcessError:
+                    # Label is not valid (e.g., deleted file)
+                    continue
+    
+    if not valid_labels:
+        print("No valid Bazel targets in changed files", file=sys.stderr)
+        return []
+    
+    # Query rdeps for all valid labels in a single batched query
+    # This is much more efficient than querying each file individually
+    all_affected_targets = set()
+    try:
+        labels_expr = " + ".join([f"set({label})" for label in valid_labels])
+        result = run_bazel([
+            "query",
+            f"rdeps(//..., {labels_expr})",
+            "--output=label"
+        ])
+        if result.stdout.strip():
+            all_affected_targets = set(result.stdout.strip().split('\n'))
+    except subprocess.CalledProcessError as e:
+        print(f"Error querying reverse dependencies: {e}", file=sys.stderr)
+        return []
     
     if not all_affected_targets:
         print("No targets affected by changed files", file=sys.stderr)
