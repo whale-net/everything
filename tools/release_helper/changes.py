@@ -70,13 +70,11 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
         for package_path in sorted(changed_packages):
             try:
                 # Query all targets in the package and its subpackages
-                result = subprocess.run(
-                    ["bazel", "query", f"{package_path}/...", "--output=label"],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    cwd=workspace_root
-                )
+                result = run_bazel([
+                    "query",
+                    f"{package_path}/...",
+                    "--output=label"
+                ])
                 
                 if result.stdout.strip():
                     targets = result.stdout.strip().split('\n')

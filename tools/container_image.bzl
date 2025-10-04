@@ -118,6 +118,7 @@ def multiplatform_image(
     base = "@ubuntu_base",
     registry = "ghcr.io",
     repository = None,
+    image_name = None,
     language = None,
     **kwargs):
     """Build multiplatform OCI images with optional platform-specific binaries.
@@ -131,6 +132,7 @@ def multiplatform_image(
             name = "my_app_image",
             binary_amd64 = ":my_app_linux_amd64",
             binary_arm64 = ":my_app_linux_arm64",
+            image_name = "demo-my_app",
             language = "python",
         )
     
@@ -138,12 +140,13 @@ def multiplatform_image(
         multiplatform_image(
             name = "my_app_image",
             binary = ":my_app",
+            image_name = "demo-my_app",
             language = "go",
         )
     
     For local development:
         bazel run //app:my_app_image_load
-        # Loads image tagged with clean name (fast!)
+        # Loads image tagged with domain-app name
     
     For explicit platform:
         bazel run //app:my_app_image_amd64_load
@@ -160,7 +163,8 @@ def multiplatform_image(
         binary_arm64: ARM64-specific binary (optional, overrides binary)
         base: Base image (defaults to ubuntu:24.04)
         registry: Container registry (defaults to ghcr.io)
-        repository: Repository path (e.g., "whale-net/my-app")
+        repository: Organization/namespace (e.g., "whale-net") - combined with image_name for full path
+        image_name: Image name in domain-app format (e.g., "demo-my_app") - REQUIRED for proper tagging
         language: Language of binary ("python" or "go") - passed to container_image
         **kwargs: Additional arguments passed to container_image
     """
@@ -199,19 +203,21 @@ def multiplatform_image(
         tags = ["manual"],
     )
     
-    # Local load targets - simple names without registry
-    # Use the amd64 binary name for the base tag
-    binary_name = _get_binary_name(amd64_binary)
+    # Local load targets - use image_name (domain-app format) for consistent naming
+    # CRITICAL: image_name should be provided by release_app in domain-app format
+    # This ensures domain+name identifies the app everywhere
+    if not image_name:
+        # image_name is now mandatory - it must be provided in domain-app format
+        fail("image_name parameter is required for multiplatform_image. " +
+             "Use release_app macro which automatically provides image_name in domain-app format.")
     
-    # Strip platform suffix from binary name for clean image tags
-    # Python binaries have _linux_amd64 suffix, remove it for cleaner local tags
-    clean_name = binary_name.replace("_linux_amd64", "").replace("_linux_arm64", "")
+    image_tag = image_name
     
     # Main load target - uses AMD64 (most common dev environment)
     oci_load(
         name = name + "_load",
         image = ":" + name + "_amd64",
-        repo_tags = [clean_name + ":latest"],
+        repo_tags = [image_tag + ":latest"],
         tags = ["manual"],
     )
     
@@ -219,39 +225,41 @@ def multiplatform_image(
     oci_load(
         name = name + "_amd64_load",
         image = ":" + name + "_amd64",
-        repo_tags = [clean_name + "_amd64:latest"],
+        repo_tags = [image_tag + "_amd64:latest"],
         tags = ["manual"],
     )
     
     oci_load(
         name = name + "_arm64_load",
         image = ":" + name + "_arm64",
-        repo_tags = [clean_name + "_arm64:latest"],
+        repo_tags = [image_tag + "_arm64:latest"],
         tags = ["manual"],
     )
     
     # Push targets for release
-    if repository:
-        repo_path = registry + "/" + repository
+    if repository and image_name:
+        # Construct full repository path: registry/organization/image_name
+        # e.g., "ghcr.io/whale-net/demo-hello_python"
+        repo_path = registry + "/" + repository + "/" + image_name
         
         # Push manifest list (includes both platforms)
-        # The {BUILD_TAG} placeholder is substituted at runtime when you pass a tag:
-        # e.g., `bazel run :app_image_push -- v1.0.0` will push both 'latest' and 'v1.0.0' tags
+        # Tags are passed via command-line arguments (--tag) from the release helper
+        # e.g., `bazel run :app_image_push -- --tag latest --tag v1.0.0 --tag <commit_sha>`
         oci_push(
             name = name + "_push",
             image = ":" + name,
             repository = repo_path,
-            remote_tags = ["latest", "{BUILD_TAG}"],
+            remote_tags = [],  # Tags provided via --tag arguments at runtime
             tags = ["manual"],
         )
         
         # Individual platform push targets (for debugging/testing)
-        # {BUILD_TAG} is substituted with the command-line argument at runtime
+        # Tags are provided via --tag arguments at runtime
         oci_push(
             name = name + "_amd64_push",
             image = ":" + name + "_amd64",
             repository = repo_path,
-            remote_tags = ["latest-amd64", "{BUILD_TAG}-amd64"],
+            remote_tags = [],  # Tags provided via --tag arguments at runtime
             tags = ["manual"],
         )
         
@@ -259,6 +267,6 @@ def multiplatform_image(
             name = name + "_arm64_push",
             image = ":" + name + "_arm64",
             repository = repo_path,
-            remote_tags = ["latest-arm64", "{BUILD_TAG}-arm64"],
+            remote_tags = [],  # Tags provided via --tag arguments at runtime
             tags = ["manual"],
         )
