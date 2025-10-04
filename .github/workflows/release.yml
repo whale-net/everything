@@ -31,9 +31,10 @@ on:
         type: boolean
         default: false
 
-# Global concurrency control for Helm chart releases to prevent race conditions on gh-pages
+# Global concurrency control for all release operations
+# Prevents race conditions across app releases, git tags, GitHub releases, and Helm repository
 concurrency:
-  group: helm-repo-publish-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 jobs:
