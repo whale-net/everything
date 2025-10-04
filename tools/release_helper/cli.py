@@ -246,7 +246,6 @@ def plan(
 @app.command()
 def changes(
     base_commit: Annotated[Optional[str], typer.Option(help="Compare changes against this commit (compares HEAD to this commit, defaults to previous tag)")] = None,
-    use_bazel_query: Annotated[bool, typer.Option("--use-bazel-query/--no-bazel-query", help="Use Bazel query for precise dependency analysis")] = True,
 ):
     """Detect changed apps since a commit."""
     base_commit = base_commit or get_previous_tag()
@@ -255,7 +254,7 @@ def changes(
     else:
         typer.echo("No base commit specified and no previous tag found, considering all apps as changed", err=True)
 
-    changed_apps = detect_changed_apps(base_commit, use_bazel_query=use_bazel_query)
+    changed_apps = detect_changed_apps(base_commit)
     for app_info in changed_apps:
         typer.echo(app_info['name'])  # Print just the app name for compatibility
 
