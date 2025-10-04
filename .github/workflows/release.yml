@@ -404,7 +404,7 @@ jobs:
             for CHART in "${CHART_ARRAY[@]}"; do
               CHART=$(echo "$CHART" | xargs) # trim whitespace
               if [[ "$CHART" != "all" ]]; then
-                # Chart names already include helm-namespace- prefix, just add version
+                # Tags keep the helm- prefix to avoid collisions with app tags
                 echo "- \`${CHART}.v${VERSION}\`" >> $GITHUB_STEP_SUMMARY
               fi
             done
@@ -559,17 +559,22 @@ jobs:
         IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
         
         for CHART in "${CHART_ARRAY[@]}"; do
+          # Strip helm- prefix from chart name for file lookup
+          # Chart names internally use helm-namespace-name format,
+          # but published files use namespace-name format (without helm- prefix)
+          PUBLISHED_NAME="${CHART#helm-}"
+          
           # Extract the actual version from the packaged chart filename
-          CHART_FILE=$(ls /tmp/helm-charts/${CHART}-*.tgz 2>/dev/null | head -n1)
+          CHART_FILE=$(ls /tmp/helm-charts/${PUBLISHED_NAME}-*.tgz 2>/dev/null | head -n1)
           
           if [[ -f "$CHART_FILE" ]]; then
-            # Extract version from filename (e.g., helm-demo-hello-fastapi-v0.2.1.tgz -> v0.2.1)
-            CHART_VERSION=$(basename "$CHART_FILE" | sed -E "s/${CHART}-(.+)\.tgz/\1/")
+            # Extract version from filename (e.g., demo-hello-fastapi-v0.2.1.tgz -> v0.2.1)
+            CHART_VERSION=$(basename "$CHART_FILE" | sed -E "s/${PUBLISHED_NAME}-(.+)\.tgz/\1/")
             
-            # Format: {chart-name}.{version} (chart name already includes helm-namespace- prefix)
+            # Format: {chart-name}.{version} (keep helm- prefix in tags to avoid collisions)
             TAG_NAME="${CHART}.${CHART_VERSION}"
             
-            echo "Creating tag: $TAG_NAME for chart $CHART"
+            echo "Creating tag: $TAG_NAME for chart $CHART (published as $PUBLISHED_NAME)"
             
             # Create annotated tag
             git tag -a "$TAG_NAME" -m "Release helm chart $CHART version ${CHART_VERSION}" "${{ github.sha }}"
@@ -579,7 +584,7 @@ jobs:
             
             echo "✅ Created and pushed tag: $TAG_NAME"
           else
-            echo "⚠️ Warning: Could not find chart file for $CHART"
+            echo "⚠️ Warning: Could not find chart file for $CHART (looking for ${PUBLISHED_NAME}-*.tgz)"
           fi
         done
         

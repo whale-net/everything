@@ -407,7 +407,9 @@ def package_helm_chart_for_release(
     
     # Try to find the chart directory (before it's packaged)
     # The helm_chart rule creates a directory with the chart contents
-    chart_dir = workspace_root / f"bazel-bin/{package_path}/{actual_chart_name}_chart/{actual_chart_name}"
+    # The directory name has the helm- prefix stripped for publishing
+    published_chart_name = actual_chart_name.removeprefix("helm-") if actual_chart_name.startswith("helm-") else actual_chart_name
+    chart_dir = workspace_root / f"bazel-bin/{package_path}/{actual_chart_name}_chart/{published_chart_name}"
     
     # Determine the version to use
     if auto_version and not chart_version:
@@ -445,7 +447,9 @@ def package_helm_chart_for_release(
         
         if output_dir:
             output_dir.mkdir(parents=True, exist_ok=True)
-            output_path = output_dir / f"{chart_name}-{chart_version}.tgz"
+            # Use published chart name (without helm- prefix) for the output file
+            published_chart_name = chart_name.removeprefix("helm-") if chart_name.startswith("helm-") else chart_name
+            output_path = output_dir / f"{published_chart_name}-{chart_version}.tgz"
             shutil.copy(chart_tarball, output_path)
             return output_path, chart_version
         
@@ -497,7 +501,9 @@ def package_chart_with_version(
     
     # Copy chart to a temporary directory to avoid permission issues with bazel-bin
     # Bazel output directories are often read-only
-    temp_chart_dir = Path(tempfile.mkdtemp()) / chart_name
+    # Strip "helm-" prefix from chart name for the published chart
+    published_chart_name = chart_name.removeprefix("helm-") if chart_name.startswith("helm-") else chart_name
+    temp_chart_dir = Path(tempfile.mkdtemp()) / published_chart_name
     shutil.copytree(chart_dir, temp_chart_dir, symlinks=False, ignore_dangling_symlinks=True)
     
     # Make all files in the temporary directory writable
@@ -553,7 +559,8 @@ def package_chart_with_version(
         raise RuntimeError(f"helm package failed: {result.stderr}")
     
     # Return the expected packaged file path
-    packaged_file = output_dir / f"{chart_name}-{chart_version}.tgz"
+    # helm package uses the chart name from Chart.yaml, which has the helm- prefix stripped
+    packaged_file = output_dir / f"{published_chart_name}-{chart_version}.tgz"
     if not packaged_file.exists():
         raise FileNotFoundError(f"Expected packaged chart not found: {packaged_file}")
     

@@ -16,7 +16,8 @@ def format_helm_chart_tag(chart_name: str, version: str) -> str:
     """Format a Git tag for a Helm chart in the chart-name.version format.
     
     Chart names already include the helm- prefix and namespace (e.g., "helm-demo-hello-fastapi"),
-    so we don't add another prefix here.
+    so we don't add another prefix here. The helm- prefix is kept in tags to avoid collisions
+    with app tags in the same namespace.
     
     Args:
         chart_name: Name of the Helm chart (e.g., "helm-demo-hello-fastapi", "helm-manman-manman-host")
@@ -90,6 +91,7 @@ def get_helm_chart_tags(chart_name: str) -> List[str]:
     """Get all tags for a specific helm chart, sorted by version (newest first).
     
     Chart names already include the helm-namespace- prefix (e.g., "helm-demo-hello-fastapi").
+    Tags keep this prefix to avoid collisions with app tags.
     
     Args:
         chart_name: Name of the Helm chart (e.g., "helm-demo-hello-fastapi", "helm-manman-manman-host")
@@ -129,6 +131,7 @@ def parse_version_from_helm_chart_tag(tag: str, chart_name: str) -> Optional[str
     """Parse version from a helm chart tag.
     
     Chart names already include the helm-namespace- prefix.
+    Tags keep this prefix to avoid collisions with app tags.
     
     Args:
         tag: Git tag (e.g., "helm-demo-hello-fastapi.v1.2.3")
