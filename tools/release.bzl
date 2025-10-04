@@ -89,7 +89,7 @@ app_metadata = rule(
         "app_type": attr.string(default = ""),  # Optional, will be inferred if not provided
         "port": attr.int(default = 0),  # Port the app listens on (0 = not specified)
         "replicas": attr.int(default = 0),  # Default replica count (0 = use composer default)
-        "health_check_enabled": attr.bool(default = True),  # Whether health checks are enabled
+        "health_check_enabled": attr.bool(default = False),  # Whether health checks are enabled
         "health_check_path": attr.string(default = "/health"),  # Health check endpoint path
         "ingress_host": attr.string(default = ""),  # Custom ingress host (empty = use default pattern)
         "ingress_tls_secret": attr.string(default = ""),  # TLS secret name for ingress
@@ -106,7 +106,7 @@ app_metadata = rule(
 # - Health check config: health_check_enabled, health_check_path
 # - Ingress config: ingress_host, ingress_tls_secret
 # Bazel/Starlark does not support nested struct parameters, so they remain flat.
-def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = True, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = []):
+def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = []):
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
@@ -139,7 +139,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         port: Port the application listens on (0 = not specified).
               Optional: automatically extracted from binary's AppInfo if not specified.
         replicas: Default number of replicas (0 = use composer default based on app_type)
-        health_check_enabled: Whether to enable health checks (default: True for APIs)
+        health_check_enabled: Whether to enable health checks (default: False)
         health_check_path: Path for health check endpoint (default: /health)
         ingress_host: Custom ingress hostname (empty = use default {app}-{env}.local pattern)
         ingress_tls_secret: TLS secret name for ingress (empty = no TLS)

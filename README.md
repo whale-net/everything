@@ -435,7 +435,7 @@ Chart Configuration     (.tmpl)                 values.yaml
 - **Multi-App Composition**: Combine multiple applications in one chart
 - **Flexible Ingress**: Single host or per-service ingress modes
 - **Resource Management**: Configurable CPU/memory limits
-- **Health Checks**: Automatic health check configuration for APIs
+- **Health Checks**: Optional health check configuration for APIs (disabled by default)
 - **Production-Ready**: Generates validated, deployable Helm charts
 
 #### App Types
@@ -444,8 +444,8 @@ The system recognizes four app types with different behaviors:
 
 | Type | Deployment | Service | Ingress | Health Checks |
 |------|-----------|---------|---------|---------------|
-| `external-api` | ✅ | ✅ ClusterIP | ✅ | ✅ |
-| `internal-api` | ✅ | ✅ ClusterIP | ❌ | ✅ |
+| `external-api` | ✅ | ✅ ClusterIP | ✅ | Optional (disabled by default) |
+| `internal-api` | ✅ | ✅ ClusterIP | ❌ | Optional (disabled by default) |
 | `worker` | ✅ | ❌ | ❌ | ❌ |
 | `job` | ✅ Job | ❌ | ❌ | ❌ |
 

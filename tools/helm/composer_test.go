@@ -375,7 +375,7 @@ func TestBuildAppConfig(t *testing.T) {
 			},
 			expectReplicas:  2,
 			expectPort:      8000,
-			expectHealthChk: true,
+			expectHealthChk: false,
 		},
 		{
 			name: "Worker with custom port",
@@ -405,6 +405,24 @@ func TestBuildAppConfig(t *testing.T) {
 			},
 			expectReplicas:  2,
 			expectPort:      3000,
+			expectHealthChk: false,
+		},
+		{
+			name: "External API with health check enabled",
+			metadata: AppMetadata{
+				Name:        "api-with-health",
+				AppType:     "external-api",
+				Registry:    "ghcr.io",
+				RepoName:    "demo-api-health",
+				Version:     "v1.0.0",
+				ImageTarget: "api_health_image",
+				HealthCheck: &HealthCheckMeta{
+					Enabled: true,
+					Path:    "/api/health",
+				},
+			},
+			expectReplicas:  2,
+			expectPort:      8000,
 			expectHealthChk: true,
 		},
 	}

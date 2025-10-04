@@ -56,12 +56,12 @@ apps:
 ```
 
 ### 3. Configurable Health Checks ✅
-**Problem**: Health checks always enabled with hardcoded `/health` path.
+**Problem**: Health checks were always enabled by default with hardcoded `/health` path.
 
 **Solution**:
 - Added `health_check_enabled` and `health_check_path` parameters to `release_app`
 - Composer respects health check configuration from metadata
-- Health checks can be disabled by setting `health_check_enabled = false`
+- Health checks are **disabled by default** (can be enabled by setting `health_check_enabled = true`)
 - Custom paths supported via `health_check_path` parameter
 
 **Usage**:
@@ -70,7 +70,7 @@ release_app(
     name = "status_api",
     binary_target = "//manman/src/host:status_api",
     app_type = "internal-api",
-    health_check_enabled = true,
+    health_check_enabled = true,  # Explicitly enable health checks
     health_check_path = "/api/health",
 )
 ```
