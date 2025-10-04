@@ -63,12 +63,12 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
     """Use Bazel query to find apps affected by changed files.
     
     This approach determines which targets are affected by file changes by:
-    1. For source files: Find the nearest Bazel package (directory with BUILD file)
-    2. For BUILD/bzl files: Find all targets in the package recursively
-    3. Check which apps depend on the affected targets
+    1. Group changed files by their Bazel package
+    2. For BUILD/bzl files: Query targets recursively in that package tree
+    3. For source files: Query targets in their immediate package
+    4. Check which apps depend on the affected targets
     
-    This is more reliable than attr() queries which can miss files based on
-    how they're referenced in BUILD files.
+    This is more efficient than querying each file individually.
     """
     if not changed_files:
         return []
@@ -77,61 +77,76 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
         all_apps = list_all_apps()
         affected_apps = []
         
-        print(f"Using Bazel package-level analysis to find targets affected by {len(changed_files)} changed files...", file=sys.stderr)
+        print(f"Analyzing {len(changed_files)} changed files...", file=sys.stderr)
         
-        # Find all targets that are directly affected by the changed files
-        affected_targets = set()
+        # Group files by package to avoid redundant queries
+        packages_to_query_recursive = set()  # BUILD/bzl files affect package tree
+        packages_to_query_immediate = set()  # Source files affect immediate package
+        skipped_files = []
         
         for file_path in changed_files:
             if not file_path:
                 continue
                 
-            try:
-                if file_path.endswith(('.bzl', 'BUILD', 'BUILD.bazel')):
-                    # BUILD/bzl files affect all targets in their package recursively
-                    file_dir = str(Path(file_path).parent) if Path(file_path).parent != Path('.') else ""
-                    package_path = f"//{file_dir}" if file_dir else "//"
-                    
-                    try:
-                        result = run_bazel([
-                            "query", 
-                            f"{package_path}/...",
-                            "--output=label"
-                        ])
-                        
-                        if result.stdout.strip():
-                            package_targets = result.stdout.strip().split('\n')
-                            affected_targets.update(package_targets)
-                            print(f"Build file {file_path} affects all {len(package_targets)} targets in package {package_path}", file=sys.stderr)
-                    except subprocess.CalledProcessError as e:
-                        # Package might have been deleted or doesn't exist yet
-                        print(f"Warning: Could not query package {package_path} for {file_path} (package may not exist), skipping", file=sys.stderr)
-                        continue
-                        
-                else:
-                    # Source file - find the nearest Bazel package
-                    package_path = _find_bazel_package(file_path)
-                    
-                    if package_path is None:
-                        print(f"Warning: File {file_path} is not in any Bazel package (no BUILD file found), skipping", file=sys.stderr)
-                        continue
-                    
-                    result = run_bazel([
-                        "query", 
-                        f"{package_path}:*",
-                        "--output=label"
-                    ])
-                    
-                    if result.stdout.strip():
-                        package_targets = result.stdout.strip().split('\n')
-                        affected_targets.update(package_targets)
-                        print(f"Source file {file_path} affects {len(package_targets)} targets in package {package_path}", file=sys.stderr)
-                    
-            except subprocess.CalledProcessError as e:
-                # This catches errors for source file queries
-                print(f"Warning: Could not query targets for file {file_path}, skipping", file=sys.stderr)
+            if file_path.endswith(('.bzl', 'BUILD', 'BUILD.bazel')):
+                # BUILD/bzl files affect all targets in their package recursively
+                file_dir = str(Path(file_path).parent) if Path(file_path).parent != Path('.') else ""
+                package_path = f"//{file_dir}" if file_dir else "//"
+                packages_to_query_recursive.add(package_path)
+            else:
+                # Source file - find the nearest Bazel package
+                package_path = _find_bazel_package(file_path)
+                
+                if package_path is None:
+                    skipped_files.append(file_path)
+                    continue
+                
+                # Only add to immediate query if not already in recursive query
+                # (recursive queries include immediate targets)
+                if package_path not in packages_to_query_recursive:
+                    packages_to_query_immediate.add(package_path)
         
-        print(f"Total targets affected: {len(affected_targets)}", file=sys.stderr)
+        if skipped_files:
+            print(f"Skipped {len(skipped_files)} files not in any Bazel package", file=sys.stderr)
+        
+        # Query all affected targets
+        affected_targets = set()
+        
+        # Query packages recursively (BUILD/bzl file changes)
+        for package_path in sorted(packages_to_query_recursive):
+            try:
+                result = run_bazel([
+                    "query", 
+                    f"{package_path}/...",
+                    "--output=label"
+                ])
+                
+                if result.stdout.strip():
+                    package_targets = result.stdout.strip().split('\n')
+                    affected_targets.update(package_targets)
+                    print(f"Package {package_path}: {len(package_targets)} targets affected (recursive)", file=sys.stderr)
+            except subprocess.CalledProcessError as e:
+                # Package might have been deleted - this is expected, don't show detailed error
+                print(f"Warning: Package {package_path} not found (may have been deleted)", file=sys.stderr)
+        
+        # Query packages immediately (source file changes)
+        for package_path in sorted(packages_to_query_immediate):
+            try:
+                result = run_bazel([
+                    "query", 
+                    f"{package_path}:*",
+                    "--output=label"
+                ])
+                
+                if result.stdout.strip():
+                    package_targets = result.stdout.strip().split('\n')
+                    affected_targets.update(package_targets)
+                    print(f"Package {package_path}: {len(package_targets)} targets affected", file=sys.stderr)
+            except subprocess.CalledProcessError as e:
+                # Package query failed - show warning but don't spam stderr
+                print(f"Warning: Could not query package {package_path}", file=sys.stderr)
+        
+        print(f"Total: {len(affected_targets)} unique targets affected", file=sys.stderr)
         
         # Now check which apps depend on any of the affected targets
         for app in all_apps:
