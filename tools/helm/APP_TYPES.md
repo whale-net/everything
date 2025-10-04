@@ -665,6 +665,24 @@ resources:
 
 **Note**: Adjust based on actual workload requirements.
 
+### Language-Specific Optimizations
+
+#### Python Applications
+
+Python applications automatically receive optimized memory settings to improve resource efficiency:
+
+```yaml
+resources:
+  requests:
+    memory: "64Mi"   # Reduced from default
+    cpu: "50m"       # Standard
+  limits:
+    memory: "256Mi"  # Reduced from default
+    cpu: "100m"      # Standard
+```
+
+These optimizations are automatically applied when `language = "python"` is specified in the `release_app` configuration. The CPU settings remain at standard levels while memory is optimized for typical Python application footprints.
+
 ---
 
 ## Validation

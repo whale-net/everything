@@ -392,8 +392,8 @@ func (c *Composer) buildAppConfig(app AppMetadata) (AppConfig, error) {
 		return AppConfig{}, fmt.Errorf("failed to resolve app type: %w", err)
 	}
 
-	// Get default resources for this app type
-	resources := appType.DefaultResourceConfig()
+	// Get default resources for this app type and language
+	resources := appType.DefaultResourceConfigForLanguage(app.Language)
 
 	// Set replicas: use metadata if provided, otherwise default based on type
 	replicas := app.Replicas

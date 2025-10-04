@@ -219,6 +219,45 @@ func TestAppType_DefaultResourceConfig(t *testing.T) {
 	}
 }
 
+func TestAppType_DefaultResourceConfigForLanguage(t *testing.T) {
+	tests := []struct {
+		name           string
+		appType        AppType
+		language       string
+		expectedMemReq string
+		expectedMemLim string
+	}{
+		{"Python ExternalAPI uses reduced memory", ExternalAPI, "python", "64Mi", "256Mi"},
+		{"Python InternalAPI uses reduced memory", InternalAPI, "python", "64Mi", "256Mi"},
+		{"Python Worker uses reduced memory", Worker, "python", "64Mi", "256Mi"},
+		{"Python Job uses reduced memory", Job, "python", "64Mi", "256Mi"},
+		{"Go ExternalAPI uses standard memory", ExternalAPI, "go", "256Mi", "512Mi"},
+		{"Go Worker uses standard memory", Worker, "go", "256Mi", "512Mi"},
+		{"Empty language uses standard memory", ExternalAPI, "", "256Mi", "512Mi"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.appType.DefaultResourceConfigForLanguage(tt.language)
+			if got.RequestsMemory != tt.expectedMemReq {
+				t.Errorf("DefaultResourceConfigForLanguage() RequestsMemory = %v, want %v", 
+					got.RequestsMemory, tt.expectedMemReq)
+			}
+			if got.LimitsMemory != tt.expectedMemLim {
+				t.Errorf("DefaultResourceConfigForLanguage() LimitsMemory = %v, want %v", 
+					got.LimitsMemory, tt.expectedMemLim)
+			}
+			// Verify CPU settings remain unchanged
+			if got.RequestsCPU == "" {
+				t.Errorf("DefaultResourceConfigForLanguage() RequestsCPU is empty")
+			}
+			if got.LimitsCPU == "" {
+				t.Errorf("DefaultResourceConfigForLanguage() LimitsCPU is empty")
+			}
+		})
+	}
+}
+
 func TestResolveAppType(t *testing.T) {
 	tests := []struct {
 		name        string

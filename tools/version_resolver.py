@@ -155,6 +155,9 @@ class VersionResolver:
             }
             
             # App configuration
+            # Note: Resource limits are example values only. Actual resource configuration
+            # is determined by the Helm chart composer (tools/helm/composer.go) based on
+            # app type and language. See DefaultResourceConfigForLanguage() in types.go.
             values[domain]["apps"][app_name] = {
                 "enabled": True,
                 "version": resolved_tag,

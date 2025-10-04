@@ -176,3 +176,17 @@ func (t AppType) DefaultResourceConfig() ResourceConfig {
 		}
 	}
 }
+
+// DefaultResourceConfigForLanguage returns sensible defaults based on app type and language
+func (t AppType) DefaultResourceConfigForLanguage(language string) ResourceConfig {
+	// Get base config for app type
+	config := t.DefaultResourceConfig()
+	
+	// Apply language-specific optimizations for Python
+	if language == "python" {
+		config.RequestsMemory = "64Mi"
+		config.LimitsMemory = "256Mi"
+	}
+	
+	return config
+}
