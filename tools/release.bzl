@@ -17,6 +17,7 @@ def _app_metadata_impl(ctx):
         "language": ctx.attr.language,
         "registry": ctx.attr.registry,
         "repo_name": ctx.attr.repo_name,
+        "organization": ctx.attr.organization,
         "domain": ctx.attr.domain,
     }
     
@@ -83,6 +84,7 @@ app_metadata = rule(
         "language": attr.string(mandatory = True),
         "registry": attr.string(default = "ghcr.io"),
         "repo_name": attr.string(mandatory = True),
+        "organization": attr.string(default = "whale-net"),
         "domain": attr.string(mandatory = True),
         "app_type": attr.string(default = ""),  # Optional, will be inferred if not provided
         "port": attr.int(default = 0),  # Port the app listens on (0 = not specified)
@@ -189,6 +191,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         language = language,
         registry = registry,
         repo_name = image_name,  # Use domain-app format
+        organization = organization,  # Organization for registry path
         domain = domain,
         app_type = app_type,  # Pass through app_type for Helm chart generation
         port = port,  # Port configuration

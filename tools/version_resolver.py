@@ -79,6 +79,7 @@ class VersionResolver:
                 "language": "python",
                 "registry": "ghcr.io", 
                 "repo_name": f"{domain}-{app_name}",
+                "organization": "whale-net",
                 "domain": domain,
             }
     
@@ -148,10 +149,14 @@ class VersionResolver:
             resolved_tag = self.resolve_image_tag(metadata, version_strategy)
             
             # Image configuration
+            # Build full image path: registry/organization/repo_name
+            organization = metadata.get("organization", "whale-net")
+            image_repo = f"{metadata['registry']}/{organization}/{metadata['repo_name']}"
+            
             values["images"][app_name] = {
-                "name": f"{metadata['registry']}/whale-net/{metadata['repo_name']}",
+                "name": image_repo,
                 "tag": resolved_tag,
-                "repository": f"{metadata['registry']}/whale-net/{metadata['repo_name']}"
+                "repository": image_repo
             }
             
             # App configuration

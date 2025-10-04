@@ -17,6 +17,7 @@ type AppMetadata struct {
 	Description  string            `json:"description"`
 	Registry     string            `json:"registry"`
 	RepoName     string            `json:"repo_name"`
+	Organization string            `json:"organization"`
 	ImageTarget  string            `json:"image_target"`
 	Domain       string            `json:"domain"`
 	Language     string            `json:"language"`
@@ -43,8 +44,11 @@ type IngressMeta struct {
 	TLSSecretName string `json:"tls_secret_name"`
 }
 
-// GetImage returns the full image name (registry/repo_name)
+// GetImage returns the full image name (registry/organization/repo_name)
 func (m *AppMetadata) GetImage() string {
+	if m.Registry != "" && m.Organization != "" && m.RepoName != "" {
+		return fmt.Sprintf("%s/%s/%s", m.Registry, m.Organization, m.RepoName)
+	}
 	if m.Registry != "" && m.RepoName != "" {
 		return fmt.Sprintf("%s/%s", m.Registry, m.RepoName)
 	}

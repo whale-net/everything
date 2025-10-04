@@ -54,13 +54,14 @@ func TestLoadMetadata(t *testing.T) {
 
 	// Create test metadata JSON file
 	testMetadata := AppMetadata{
-		Name:        "test-app",
-		AppType:     "worker",
-		Version:     "1.0.0",
-		Description: "Test application",
-		Registry:    "ghcr.io",
-		RepoName:    "test-app",
-		ImageTarget: "test_app_image",
+		Name:         "test-app",
+		AppType:      "worker",
+		Version:      "1.0.0",
+		Description:  "Test application",
+		Registry:     "ghcr.io",
+		RepoName:     "test-app",
+		Organization: "whale-net",
+		ImageTarget:  "test_app_image",
 	}
 
 	metadataFile := filepath.Join(tmpDir, "test-app.json")
@@ -366,12 +367,13 @@ func TestBuildAppConfig(t *testing.T) {
 		{
 			name: "External API with defaults",
 			metadata: AppMetadata{
-				Name:        "api",
-				AppType:     "external-api",
-				Registry:    "ghcr.io",
-				RepoName:    "demo-api",
-				Version:     "v1.0.0",
-				ImageTarget: "api_image",
+				Name:         "api",
+				AppType:      "external-api",
+				Registry:     "ghcr.io",
+				RepoName:     "demo-api",
+				Organization: "whale-net",
+				Version:      "v1.0.0",
+				ImageTarget:  "api_image",
 			},
 			expectReplicas:  2,
 			expectPort:      8000,
@@ -380,13 +382,14 @@ func TestBuildAppConfig(t *testing.T) {
 		{
 			name: "Worker with custom port",
 			metadata: AppMetadata{
-				Name:        "worker",
-				AppType:     "worker",
-				Registry:    "ghcr.io",
-				RepoName:    "demo-worker",
-				Version:     "v1.0.0",
-				Port:        9000,
-				ImageTarget: "worker_image",
+				Name:         "worker",
+				AppType:      "worker",
+				Registry:     "ghcr.io",
+				RepoName:     "demo-worker",
+				Organization: "whale-net",
+				Version:      "v1.0.0",
+				Port:         9000,
+				ImageTarget:  "worker_image",
 			},
 			expectReplicas:  1,
 			expectPort:      9000,
@@ -395,13 +398,14 @@ func TestBuildAppConfig(t *testing.T) {
 		{
 			name: "Internal API",
 			metadata: AppMetadata{
-				Name:        "internal",
-				AppType:     "internal-api",
-				Registry:    "ghcr.io",
-				RepoName:    "demo-internal",
-				Version:     "v1.0.0",
-				Port:        3000,
-				ImageTarget: "internal_image",
+				Name:         "internal",
+				AppType:      "internal-api",
+				Registry:     "ghcr.io",
+				RepoName:     "demo-internal",
+				Organization: "whale-net",
+				Version:      "v1.0.0",
+				Port:         3000,
+				ImageTarget:  "internal_image",
 			},
 			expectReplicas:  2,
 			expectPort:      3000,
@@ -435,6 +439,49 @@ func TestBuildAppConfig(t *testing.T) {
 
 			if config.ImageTag != tt.metadata.GetImageTag() {
 				t.Errorf("Expected imageTag %s, got %s", tt.metadata.GetImageTag(), config.ImageTag)
+			}
+		})
+	}
+}
+
+// TestGetImage tests the GetImage method with organization
+func TestGetImage(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata AppMetadata
+		expected string
+	}{
+		{
+			name: "Full path with organization",
+			metadata: AppMetadata{
+				Registry:     "ghcr.io",
+				Organization: "whale-net",
+				RepoName:     "manman-status_api",
+			},
+			expected: "ghcr.io/whale-net/manman-status_api",
+		},
+		{
+			name: "Without organization (fallback)",
+			metadata: AppMetadata{
+				Registry: "ghcr.io",
+				RepoName: "demo-app",
+			},
+			expected: "ghcr.io/demo-app",
+		},
+		{
+			name: "Only repo name (fallback)",
+			metadata: AppMetadata{
+				RepoName: "standalone-app",
+			},
+			expected: "standalone-app",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.metadata.GetImage()
+			if result != tt.expected {
+				t.Errorf("GetImage() = %s, want %s", result, tt.expected)
 			}
 		})
 	}
