@@ -1,5 +1,6 @@
 # Release helper package
-load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@rules_python//python:defs.bzl", "py_library")
+load("//tools:pytest.bzl", "py_test")
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("//tools:python_binary.bzl", "multiplatform_py_binary")
 

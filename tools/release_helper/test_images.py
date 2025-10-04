@@ -298,8 +298,3 @@ class TestPushImageWithTags:
         # The function should re-raise the exception
         with pytest.raises(Exception, match="Push failed"):
             push_image_with_tags(bazel_target, tags)
-
-
-if __name__ == "__main__":
-    # Run tests if executed directly
-    pytest.main([__file__, "-v"])

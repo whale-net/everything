@@ -615,8 +615,3 @@ class TestGenerateReleaseNotesForAllApps:
         
         # Verify format was passed through
         mock_generate.assert_called_once_with("hello_python", "v1.0.0", None, "json")
-
-
-if __name__ == "__main__":
-    # Run tests if executed directly
-    pytest.main([__file__, "-v"])

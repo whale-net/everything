@@ -459,8 +459,3 @@ class TestTagAndPushImage:
             
             # Verify validate_release_version was called with allow_overwrite=True
             mock_validate_version.assert_called_once_with("//demo/hello_python:hello_python_metadata", "v1.0.0", True)
-
-
-if __name__ == "__main__":
-    # Run tests if executed directly
-    pytest.main([__file__, "-v"])

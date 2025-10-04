@@ -246,8 +246,3 @@ class TestCreateReleasesWithIndividualVersions:
             assert results["hello_fastapi"] is not None
             assert "missing_app" in results
             assert results["missing_app"] is None  # Should be None for missing version
-
-
-if __name__ == "__main__":
-    # Run tests if executed directly
-    pytest.main([__file__, "-v"])

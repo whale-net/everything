@@ -257,10 +257,3 @@ class TestGenerateReleaseSummary:
         assert "🏷️  **Versions:**" in result
         assert "hello_python: v1.0.0" in result
         assert "hello_go: v1.2.0" in result  # Should use fallback version
-
-
-
-
-if __name__ == "__main__":
-    # Run tests if executed directly
-    pytest.main([__file__, "-v"])
