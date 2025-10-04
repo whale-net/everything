@@ -153,27 +153,74 @@ bazel run //tools:release -- plan-helm-release --base-commit=HEAD~1
 
 ### Test Plan Detection (Not Yet Implemented)
 
-The issue mentions supporting "test plan (not yet implemented, but not release_app based)". This would require:
+The issue mentions supporting "test plan (not yet implemented, but not release_app based)". When this is implemented, the optimization will automatically apply:
 
+**Requirements:**
 1. Create a `test_metadata` rule in Bazel (similar to `app_metadata`)
 2. Add `detect_changed_tests` function using same optimization pattern:
 
 ```python
 def detect_changed_tests(base_commit: Optional[str] = None) -> List[Dict[str, str]]:
-    # Get test metadata targets
+    """Detect which tests have changed compared to a base commit.
+    
+    Uses optimized rdeps query scoped to test_metadata targets.
+    """
+    all_tests = list_all_tests()  # Would need to be implemented
+    
+    if not base_commit:
+        return all_tests
+    
+    # ... (same file filtering logic) ...
+    
+    # OPTIMIZATION: Get test_metadata targets first
     test_metadata = kind('test_metadata', //...)
-    # Optimized rdeps query
-    rdeps(test_metadata, changed_files)
+    
+    # Query rdeps scoped to test metadata
+    affected_metadata = rdeps(test_metadata, changed_files)
+    
+    # Match to test list
+    return affected_tests
 ```
 
 3. Add CLI command:
 ```bash
+# Plan test execution based on changes
 bazel run //tools:release -- plan-test --base-commit=main
+
+# Output would be similar to plan-helm-release
+{
+  "matrix": {
+    "include": [
+      {"test": "integration_tests", "suite": "api"},
+      {"test": "unit_tests", "suite": "core"}
+    ]
+  },
+  "tests": ["integration_tests", "unit_tests"]
+}
 ```
+
+**Benefits:**
+- Same ~5-10x performance improvement
+- Consistent API with app and helm chart detection
+- Enables smart test execution in CI (only run tests affected by changes)
+
+**Note:** The optimization pattern is already proven and tested with apps and helm charts, so adding test plan support is straightforward once the `test_metadata` rule exists.
 
 ### Docker Plan Integration
 
 Current `plan_release` already uses `detect_changed_apps`, so Docker image building benefits from this optimization automatically.
+
+**Example CI workflow:**
+```yaml
+- name: Plan Docker release
+  run: |
+    bazel run //tools:release -- plan \
+      --event-type=pull_request \
+      --base-commit=${{ github.event.pull_request.base.sha }} \
+      --format=github
+```
+
+This will use the optimized change detection to determine which app images to build.
 
 ## References
 
