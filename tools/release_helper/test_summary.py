@@ -33,8 +33,13 @@ class TestGenerateReleaseSummary:
         assert "🔍 **Result:** No apps detected for release" in result
         assert "v1.0.0" not in result  # Version shouldn't appear when no apps
 
-    def test_generate_release_summary_single_app(self):
+    @patch('tools.release_helper.summary.list_all_apps')
+    def test_generate_release_summary_single_app(self, mock_list_apps):
         """Test generating summary for single app release."""
+        mock_list_apps.return_value = [
+            {"name": "hello_python", "domain": "demo"}
+        ]
+        
         matrix_json = json.dumps({
             "include": [
                 {
@@ -56,8 +61,14 @@ class TestGenerateReleaseSummary:
         assert "📦 **Apps:** hello_python" in result
         assert "🏷️  **Version:** v1.0.0" in result
 
-    def test_generate_release_summary_multiple_apps_same_version(self):
+    @patch('tools.release_helper.summary.list_all_apps')
+    def test_generate_release_summary_multiple_apps_same_version(self, mock_list_apps):
         """Test generating summary for multiple apps with same version."""
+        mock_list_apps.return_value = [
+            {"name": "hello_python", "domain": "demo"},
+            {"name": "hello_go", "domain": "demo"}
+        ]
+        
         matrix_json = json.dumps({
             "include": [
                 {
@@ -82,8 +93,15 @@ class TestGenerateReleaseSummary:
         assert "📦 **Apps:** hello_python, hello_go" in result
         assert "🏷️  **Version:** v1.0.0" in result
 
-    def test_generate_release_summary_multiple_apps_different_versions(self):
+    @patch('tools.release_helper.summary.list_all_apps')
+    def test_generate_release_summary_multiple_apps_different_versions(self, mock_list_apps):
         """Test generating summary for multiple apps with different versions."""
+        mock_list_apps.return_value = [
+            {"name": "hello_python", "domain": "demo"},
+            {"name": "hello_go", "domain": "demo"},
+            {"name": "status_service", "domain": "api"}
+        ]
+        
         matrix_json = json.dumps({
             "include": [
                 {
@@ -116,8 +134,14 @@ class TestGenerateReleaseSummary:
         assert "hello_go: v1.1.0" in result
         assert "status_service: v2.0.0" in result
 
-    def test_generate_release_summary_increment_mode_same_version(self):
+    @patch('tools.release_helper.summary.list_all_apps')
+    def test_generate_release_summary_increment_mode_same_version(self, mock_list_apps):
         """Test generating summary for increment mode with same version for all apps."""
+        mock_list_apps.return_value = [
+            {"name": "hello_python", "domain": "demo"},
+            {"name": "hello_go", "domain": "demo"}
+        ]
+        
         matrix_json = json.dumps({
             "include": [
                 {
@@ -189,8 +213,13 @@ class TestGenerateReleaseSummary:
         assert "✅ **Result:** Release completed" in result
         assert "📦 **Apps:** hello_python" in result
 
-    def test_generate_release_summary_with_repository_owner(self):
+    @patch('tools.release_helper.summary.list_all_apps')
+    def test_generate_release_summary_with_repository_owner(self, mock_list_apps):
         """Test generating summary with repository owner."""
+        mock_list_apps.return_value = [
+            {"name": "hello_python", "domain": "demo"}
+        ]
+        
         matrix_json = json.dumps({
             "include": [
                 {
@@ -211,8 +240,13 @@ class TestGenerateReleaseSummary:
         assert "## 🚀 Release Summary" in result
         assert "✅ **Result:** Release completed" in result
 
-    def test_generate_release_summary_latest_version(self):
+    @patch('tools.release_helper.summary.list_all_apps')
+    def test_generate_release_summary_latest_version(self, mock_list_apps):
         """Test generating summary with 'latest' version."""
+        mock_list_apps.return_value = [
+            {"name": "hello_python", "domain": "demo"}
+        ]
+        
         matrix_json = json.dumps({
             "include": [
                 {
@@ -231,8 +265,14 @@ class TestGenerateReleaseSummary:
         
         assert "🏷️  **Version:** latest" in result
 
-    def test_generate_release_summary_mixed_versions_with_fallback(self):
+    @patch('tools.release_helper.summary.list_all_apps')
+    def test_generate_release_summary_mixed_versions_with_fallback(self, mock_list_apps):
         """Test generating summary with mixed versions and fallback to main version."""
+        mock_list_apps.return_value = [
+            {"name": "hello_python", "domain": "demo"},
+            {"name": "hello_go", "domain": "demo"}
+        ]
+        
         matrix_json = json.dumps({
             "include": [
                 {
@@ -257,10 +297,3 @@ class TestGenerateReleaseSummary:
         assert "🏷️  **Versions:**" in result
         assert "hello_python: v1.0.0" in result
         assert "hello_go: v1.2.0" in result  # Should use fallback version
-
-
-
-
-if __name__ == "__main__":
-    # Run tests if executed directly
-    pytest.main([__file__, "-v"])

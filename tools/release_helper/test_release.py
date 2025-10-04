@@ -96,7 +96,7 @@ class TestPlanRelease:
 
     @patch('tools.release_helper.release.validate_semantic_version')
     def test_plan_release_workflow_dispatch_all_apps(self, mock_validate_semantic, mock_list_all_apps, sample_apps):
-        """Test planning release for workflow_dispatch with all apps."""
+        """Test planning release for workflow_dispatch with all apps (excludes demo domain by default)."""
         mock_validate_semantic.return_value = True
         
         result = plan_release(
@@ -107,8 +107,10 @@ class TestPlanRelease:
         
         assert result["event_type"] == "workflow_dispatch"
         assert result["version"] == "v1.0.0"
-        assert len(result["matrix"]["include"]) == len(sample_apps)
-        assert result["apps"] == ["hello_python", "hello_go", "status_service"]
+        # When using "all", demo domain apps are excluded by default
+        # So we should only get non-demo apps (status_service in this case)
+        assert len(result["matrix"]["include"]) == 1
+        assert result["apps"] == ["status_service"]
 
     @patch('tools.release_helper.release.validate_semantic_version')
     def test_plan_release_workflow_dispatch_specific_apps(self, mock_validate_semantic, mock_validate_apps, sample_apps):
@@ -459,8 +461,3 @@ class TestTagAndPushImage:
             
             # Verify validate_release_version was called with allow_overwrite=True
             mock_validate_version.assert_called_once_with("//demo/hello_python:hello_python_metadata", "v1.0.0", True)
-
-
-if __name__ == "__main__":
-    # Run tests if executed directly
-    pytest.main([__file__, "-v"])

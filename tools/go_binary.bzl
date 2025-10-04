@@ -95,14 +95,21 @@ def multiplatform_go_binary(
         **kwargs
     )
     
-    # Default binary for local development (uses host platform)
-    # This is useful for bazel run during development
+    # Host platform binary for local development (bazel run)
     go_binary(
-        name = name,
+        name = name + "_host",
         srcs = srcs,
         deps = deps,
-        visibility = visibility,
+        visibility = visibility or ["//visibility:public"],
         **kwargs
+    )
+    
+    # Create alias for local development (bazel run //demo/hello_go:hello_go)
+    # Points to host binary which runs on the developer's machine (macOS, Linux, etc)
+    native.alias(
+        name = name,
+        actual = ":" + name + "_host",
+        visibility = visibility,
     )
     
     # Create app_info target to expose metadata (port, app_type) to release system

@@ -10,5 +10,5 @@ func FormatGreeting(name string) string {
 
 // GetVersion returns the application version.
 func GetVersion() string {
-	return "1.0.0"
+	return "1.0.1"
 }

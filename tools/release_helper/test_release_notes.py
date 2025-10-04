@@ -414,13 +414,19 @@ class TestGetCommitsBetweenRefs:
                 returncode=0,
                 stdout="abc12345|Fix bug|John Doe\nmalformed-line\ndef67890|Add feature|Jane Doe|2024-01-14",
                 stderr=""
+            ),
+            Mock(  # File diff for def67890 (the one valid commit)
+                returncode=0,
+                stdout="src/main.py\nsrc/utils.py",
+                stderr=""
             )
         ]
         
         result = get_commits_between_refs("v0.9.0", "v1.0.0")
         
-        # Should skip malformed lines
-        assert len(result) == 0
+        # Should parse 1 valid commit (def67890), skip malformed lines
+        assert len(result) == 1
+        assert result[0].commit_sha == "def67890"
 
 
 class TestFilterCommitsByApp:
@@ -434,12 +440,12 @@ class TestFilterCommitsByApp:
         commits = [
             ReleaseNote("abc123", "Fix app bug", "John", "2024-01-15", ["demo/hello_python/main.py"]),
             ReleaseNote("def456", "Update go app", "Jane", "2024-01-14", ["demo/hello_go/main.go"]),
-            ReleaseNote("ghi789", "Update docs", "Bob", "2024-01-13", ["README.md"])
+            ReleaseNote("ghi789", "Update tooling", "Bob", "2024-01-13", ["tools/release.bzl"])
         ]
         
         result = filter_commits_by_app(commits, "hello_python")
         
-        # Should include the python app commit and the docs commit (affects all apps)
+        # Should include the python app commit and the tooling commit (affects all apps)
         assert len(result) == 2
         assert result[0].commit_sha == "abc123"
         assert result[1].commit_sha == "ghi789"
@@ -579,19 +585,23 @@ class TestGenerateReleaseNotesForAllApps:
         mock_list_apps.return_value = sample_apps
         mock_generate.side_effect = [
             "Release notes for hello_python",
-            "Release notes for hello_go"
+            "Release notes for hello_go",
+            "Release notes for hello_fastapi",
+            "Release notes for status_service"
         ]
         
         result = generate_release_notes_for_all_apps("v1.0.0", "v0.9.0")
         
-        assert len(result) == 2
+        assert len(result) == 4
         assert "hello_python" in result
         assert "hello_go" in result
+        assert "hello_fastapi" in result
+        assert "status_service" in result
         assert result["hello_python"] == "Release notes for hello_python"
         assert result["hello_go"] == "Release notes for hello_go"
         
         # Verify generate_release_notes was called for each app
-        assert mock_generate.call_count == 2
+        assert mock_generate.call_count == 4
 
     @patch('tools.release_helper.release_notes.list_all_apps')
     @patch('tools.release_helper.release_notes.generate_release_notes')
@@ -615,8 +625,3 @@ class TestGenerateReleaseNotesForAllApps:
         
         # Verify format was passed through
         mock_generate.assert_called_once_with("hello_python", "v1.0.0", None, "json")
-
-
-if __name__ == "__main__":
-    # Run tests if executed directly
-    pytest.main([__file__, "-v"])

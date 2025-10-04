@@ -376,8 +376,3 @@ class TestValidateApps:
         assert "path format" in error_msg
         assert "short format" in error_msg
         assert "domain format" in error_msg
-
-
-if __name__ == "__main__":
-    # Run tests if executed directly
-    pytest.main([__file__, "-v"])

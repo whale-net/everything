@@ -130,8 +130,6 @@ def build_image(bazel_target: str, platform: Optional[str] = None) -> str:
         bazel_target: Full bazel target path for the app metadata (e.g., "//path/to/app:app_metadata")
         platform: Optional platform specification ("amd64" or "arm64")
     """
-    from tools.release_helper.core import run_bazel
-
     # Get app metadata for proper naming
     metadata = get_app_metadata(bazel_target)
     domain = metadata['domain']
