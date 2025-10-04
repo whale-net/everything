@@ -2,6 +2,7 @@
 
 load("//tools:container_image.bzl", "multiplatform_image")
 load("//tools/helm:helm.bzl", "helm_chart")
+load("//tools:app_info.bzl", "AppInfo")
 
 def _app_metadata_impl(ctx):
     """Implementation for app_metadata rule."""
@@ -17,10 +18,30 @@ def _app_metadata_impl(ctx):
         "registry": ctx.attr.registry,
         "repo_name": ctx.attr.repo_name,
         "domain": ctx.attr.domain,
-        "app_type": ctx.attr.app_type,  # Add app_type to metadata
-        "port": ctx.attr.port,  # Port the app listens on
-        "replicas": ctx.attr.replicas,  # Default replica count
     }
+    
+    # Extract metadata from binary's AppInfo provider if available
+    port_to_use = ctx.attr.port
+    app_type_to_use = ctx.attr.app_type
+    args_to_use = ctx.attr.args
+    
+    if ctx.attr.binary_info:
+        binary_app_info = ctx.attr.binary_info[AppInfo]
+        
+        # Use values from AppInfo provider if not explicitly overridden
+        if binary_app_info.port and not port_to_use:
+            port_to_use = binary_app_info.port
+        if binary_app_info.app_type and not app_type_to_use:
+            app_type_to_use = binary_app_info.app_type
+        if binary_app_info.args and not args_to_use:
+            args_to_use = binary_app_info.args
+    
+    # Add extracted/provided values to metadata
+    if app_type_to_use:
+        metadata["app_type"] = app_type_to_use
+    if port_to_use:
+        metadata["port"] = port_to_use
+    metadata["replicas"] = ctx.attr.replicas
     
     # Add optional health check configuration if provided
     if ctx.attr.health_check_enabled:
@@ -36,11 +57,11 @@ def _app_metadata_impl(ctx):
             "tls_secret_name": ctx.attr.ingress_tls_secret,
         }
     
-    # Add command and args if provided
+    # Add command and args
     if ctx.attr.command:
         metadata["command"] = ctx.attr.command
-    if ctx.attr.args:
-        metadata["args"] = ctx.attr.args
+    if args_to_use:
+        metadata["args"] = args_to_use
     
     output = ctx.actions.declare_file(ctx.label.name + "_metadata.json")
     ctx.actions.write(
@@ -56,6 +77,7 @@ app_metadata = rule(
         "app_name": attr.string(mandatory = True),  # Add explicit app_name attribute
         "version": attr.string(default = "latest"),
         "binary_target": attr.string(mandatory = True),
+        "binary_info": attr.label(providers = [AppInfo]),  # Optional: binary's AppInfo provider
         "image_target": attr.string(mandatory = True),
         "description": attr.string(default = ""),
         "language": attr.string(mandatory = True),
@@ -70,7 +92,7 @@ app_metadata = rule(
         "ingress_host": attr.string(default = ""),  # Custom ingress host (empty = use default pattern)
         "ingress_tls_secret": attr.string(default = ""),  # TLS secret name for ingress
         "command": attr.string_list(default = []),  # Container command override
-        "args": attr.string_list(default = []),  # Container arguments
+        "args": attr.string_list(default = []),  # Container arguments (optional if binary_info provides them)
     },
 )
 
@@ -94,7 +116,8 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     - Go: multiplatform_go_binary (from //tools:go_binary.bzl)
     
     Both macros create {name}_linux_amd64 and {name}_linux_arm64 targets automatically,
-    enabling cross-compilation for container images.
+    enabling cross-compilation for container images. They also create {name}_info targets
+    that expose AppInfo providers with metadata (args, port, app_type).
     
     Args:
         name: App name (should match directory name and multiplatform binary name)
@@ -109,16 +132,17 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         registry: Container registry (defaults to ghcr.io)
         organization: Container registry organization (defaults to whale-net)
         custom_repo_name: Custom repository name (defaults to name)
-        app_type: Application type for Helm chart generation (external-api, internal-api, worker, job).
-                  If empty, will be inferred from app name by the Helm composer tool.
-        port: Port the application listens on (required for API types, 0 = not specified)
+        app_type: Application type (external-api, internal-api, worker, job).
+                  Optional: automatically extracted from binary's AppInfo if not specified.
+        port: Port the application listens on (0 = not specified).
+              Optional: automatically extracted from binary's AppInfo if not specified.
         replicas: Default number of replicas (0 = use composer default based on app_type)
         health_check_enabled: Whether to enable health checks (default: True for APIs)
         health_check_path: Path for health check endpoint (default: /health)
         ingress_host: Custom ingress hostname (empty = use default {app}-{env}.local pattern)
         ingress_tls_secret: TLS secret name for ingress (empty = no TLS)
         command: Override container command (default: use image ENTRYPOINT)
-        args: Container arguments (default: empty, or binary's default args)
+        args: Container arguments (optional: automatically extracted from binary's AppInfo if not specified)
     """
     if language not in ["python", "go"]:
         fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
@@ -133,6 +157,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     
     binary_amd64 = base_label + "_linux_amd64"
     binary_arm64 = base_label + "_linux_arm64"
+    binary_info_label = base_label + "_info"  # AppInfo provider target
     
     # Repository name for container images should use domain-app format
     image_name = domain + "-" + name
@@ -149,11 +174,15 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         language = language,
     )
     
+    # Both Python and Go now create AppInfo providers
+    binary_info = binary_info_label
+    
     # Create release metadata (use AMD64 binary as reference for metadata)
     app_metadata(
         name = name + "_metadata",
         app_name = name,  # Pass the actual app name
         binary_target = binary_amd64,  # Reference binary for metadata
+        binary_info = binary_info,  # AppInfo provider for extracting args, etc
         image_target = image_target,
         description = description,
         version = version,
@@ -169,7 +198,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         ingress_host = ingress_host,  # Ingress configuration
         ingress_tls_secret = ingress_tls_secret,
         command = command,  # Container command override
-        args = args,  # Container arguments
+        args = args,  # Container arguments (optional: overrides binary's args if provided)
         tags = ["release-metadata"],  # No manual tag - metadata should be easily discoverable
         visibility = ["//visibility:public"],
     )

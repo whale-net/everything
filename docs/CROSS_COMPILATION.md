@@ -157,12 +157,16 @@ multiplatform_py_binary(
     name = "my_app",
     srcs = ["main.py"],
     deps = [":my_app_lib"],
+    args = ["run-server"],
+    port = 8000,
+    app_type = "external-api",
 )
 
 release_app(
     name = "my_app",
     language = "python",
     domain = "api",
+    # Note: args, port, app_type automatically extracted from binary
 )
 ```
 

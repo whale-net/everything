@@ -7,6 +7,7 @@ multiplatform_go_binary(
     name = "hello_go",
     srcs = ["main.go"],
     deps = ["//libs/go"],
+    app_type = "worker",
     visibility = ["//visibility:public"],
 )
 
@@ -23,5 +24,4 @@ release_app(
     language = "go",
     domain = "demo",
     description = "Go hello world application with static binaries",
-    app_type = "worker",
 )

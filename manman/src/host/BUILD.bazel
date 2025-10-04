@@ -28,6 +28,8 @@ multiplatform_py_binary(
     main = "main.py", 
     deps = [":manman_host"],
     args = ["start-experience-api"],
+    port = 8000,
+    app_type = "external-api",
     visibility = ["//manman:__pkg__"],
 )
 
@@ -37,6 +39,8 @@ multiplatform_py_binary(
     main = "main.py",
     deps = [":manman_host"],
     args = ["start-status-api"],
+    port = 8000,
+    app_type = "internal-api",
     visibility = ["//manman:__pkg__"],
 )
 
@@ -46,6 +50,8 @@ multiplatform_py_binary(
     main = "main.py",
     deps = [":manman_host"],
     args = ["start-worker-dal-api"],
+    port = 8000,
+    app_type = "external-api",
     visibility = ["//manman:__pkg__"],
 )
 
@@ -55,6 +61,7 @@ multiplatform_py_binary(
     main = "main.py",
     deps = [":manman_host"],
     args = ["start-status-processor"],
+    app_type = "worker",
     visibility = ["//manman:__pkg__"],
 )
 
@@ -64,6 +71,7 @@ multiplatform_py_binary(
     main = "main.py",
     deps = [":manman_host"],
     args = ["run-migration"],
+    app_type = "job",
     visibility = ["//manman:__pkg__"],
 )
 

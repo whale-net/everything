@@ -162,6 +162,9 @@ TODO: Enable gazelle rules for full Go dependency management
        srcs = ["main.py"],
        deps = [":main_lib"],
        requirements = ["fastapi", "uvicorn"],  # Package names as-is
+       args = ["run-server"],  # Command to run your app
+       port = 8000,  # Port number for server apps (0 for non-server apps)
+       app_type = "external-api",  # One of: external-api, internal-api, worker, job
        visibility = ["//visibility:public"],
    )
 
@@ -182,6 +185,7 @@ TODO: Enable gazelle rules for full Go dependency management
        language = "python",
        domain = "demo",  # Required: categorizes your app (e.g., "api", "web", "demo")
        description = "Description of what this app does",
+       # Note: args, port, app_type are automatically extracted from the binary
    )
    ```
 
@@ -199,13 +203,16 @@ TODO: Enable gazelle rules for full Go dependency management
 
 3. **Create `BUILD.bazel`** with the required targets:
    ```starlark
-   load("@rules_go//go:def.bzl", "go_binary", "go_test")
+   load("@rules_go//go:def.bzl", "go_test")
+   load("//tools:go_binary.bzl", "multiplatform_go_binary")
    load("//tools:release.bzl", "release_app")
 
-   go_binary(
+   multiplatform_go_binary(
        name = "my_go_app",
        srcs = ["main.go"],
        deps = ["//libs/go"],
+       port = 8080,  # Port number for server apps (0 for non-server apps)
+       app_type = "external-api",  # One of: external-api, internal-api, worker, job
        visibility = ["//visibility:public"],
    )
 
@@ -223,6 +230,7 @@ TODO: Enable gazelle rules for full Go dependency management
        language = "go",
        domain = "demo",  # Required: categorizes your app (e.g., "api", "web", "demo")
        description = "Description of what this app does",
+       # Note: port and app_type are automatically extracted from the binary
    )
    ```
 
@@ -833,8 +841,17 @@ release_app(
     binary_target = ":hello_python",
     language = "python",
     description = "Python hello world application with pytest",
+    # Note: args, port, and app_type are automatically extracted from the
+    # multiplatform_py_binary definition via the AppInfo provider
 )
 ```
+
+The `release_app` macro automatically extracts metadata from your binary definition:
+- **`args`**: Command-line arguments from `multiplatform_py_binary` or `multiplatform_go_binary`
+- **`port`**: Port number for server applications (extracted from binary)
+- **`app_type`**: Application type (external-api, internal-api, worker, or job)
+
+This eliminates duplication - you define these values once in your binary, and they're automatically available to the release system.
 
 #### 2. Intelligent Change Detection
 The system supports multiple detection modes, though the current implementation has some limitations:

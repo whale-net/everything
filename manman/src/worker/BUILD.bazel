@@ -22,6 +22,7 @@ multiplatform_py_binary(
     srcs = ["main.py"],
     main = "main.py",
     deps = [":manman_worker"],
+    app_type = "worker",
     visibility = ["//manman:__pkg__"],
 )
 

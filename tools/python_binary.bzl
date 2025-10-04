@@ -9,12 +9,14 @@ Usage - exactly like py_binary:
         name = "my_app",
         srcs = ["main.py"],
         deps = [":app_lib", "@pypi//:fastapi", "@pypi//:uvicorn"],
+        args = ["start-server"],  # Optional: baked-in args, exposed to release_app
     )
     
     release_app(
         name = "my_app",
         language = "python",
         domain = "api",
+        # args automatically extracted from binary via AppInfo provider
     )
 
 This creates these targets:
@@ -25,11 +27,15 @@ This creates these targets:
   Internal base targets (wrapped by the transition rule):
   - my_app_base_amd64 (py_binary without transition)
   - my_app_base_arm64 (py_binary without transition)
+  
+  Metadata target (for release system):
+  - my_app_info (AppInfo provider with args, etc)
 
 The platform transitions ensure pycross selects the correct wheels for each architecture,
 enabling true cross-compilation. See docs/CROSS_COMPILATION.md for details."""
 
 load("@rules_python//python:defs.bzl", "py_binary")
+load("//tools:app_info.bzl", "AppInfo", "app_info")
 
 def _platform_transition_impl(settings, attr):
     """Transition to the target platform for the binary variant.
@@ -99,14 +105,16 @@ def multiplatform_py_binary(
     main = None,
     deps = None,
     visibility = None,
+    port = 0,
+    app_type = "",
     **kwargs):
     """Creates platform-suffixed py_binary targets with proper cross-compilation.
     
     Uses Bazel platform transitions to build each variant for its target architecture,
     ensuring pycross selects the correct compiled wheels (pydantic, numpy, etc).
     
-    Takes the exact same parameters as py_binary. Creates *_linux_amd64 and 
-    *_linux_arm64 targets that get platform-specific compiled dependencies.
+    Takes the exact same parameters as py_binary, plus additional metadata parameters
+    that are exposed through AppInfo provider for the release system.
     
     Args:
         name: Base name for the binaries (will create {name}_linux_amd64 and {name}_linux_arm64)
@@ -114,6 +122,8 @@ def multiplatform_py_binary(
         main: Main entry point (same as py_binary)
         deps: Dependencies including @pypi// packages (same as py_binary)
         visibility: Visibility (same as py_binary)
+        port: Port the application listens on (0 if no HTTP server, default: 0)
+        app_type: Application type (external-api, internal-api, worker, job, default: empty)
         **kwargs: Additional py_binary arguments (env, args, data, etc)
     """
     # Default main to name.py if not provided
@@ -162,4 +172,16 @@ def multiplatform_py_binary(
         binary = ":" + name + "_base_arm64",
         target_platform = "//tools:linux_arm64",
         visibility = visibility,
+    )
+    
+    # Create app_info target to expose metadata (args, port, app_type) to release system
+    # Extract args from kwargs if present
+    args = kwargs.get("args", [])
+    app_info(
+        name = name + "_info",
+        args = args,
+        binary_name = name,
+        port = port,
+        app_type = app_type,
+        visibility = visibility or ["//visibility:public"],
     )
