@@ -14,10 +14,7 @@ multiplatform_py_binary(
     name = "hello_worker",
     srcs = ["main.py"],
     main = "main.py",
-    deps = [
-        ":main_lib",
-    ],
-    requirements = [],  # No external requirements for this simple app
+    deps = [":main_lib"],
     visibility = ["//visibility:public"],
 )
 

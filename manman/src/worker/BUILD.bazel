@@ -22,7 +22,7 @@ multiplatform_py_binary(
     srcs = ["main.py"],
     main = "main.py",
     deps = [":manman_worker"],
-    requirements = ["amqpstorm", "typer", "requests", "python-jose"],
+    app_type = "worker",
     visibility = ["//manman:__pkg__"],
 )
 

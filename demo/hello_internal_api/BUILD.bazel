@@ -5,6 +5,10 @@ load("//tools:release.bzl", "release_app")
 py_library(
     name = "main_lib",
     srcs = ["__init__.py", "main.py"],
+    deps = [
+        "@pypi//:fastapi",
+        "@pypi//:uvicorn",
+    ],
     visibility = ["//demo/hello_internal_api:__pkg__"],
 )
 
@@ -13,7 +17,6 @@ multiplatform_py_binary(
     srcs = ["main.py"],
     main = "main.py",
     deps = [":main_lib"],
-    requirements = ["fastapi", "uvicorn"],
     visibility = ["//visibility:public"],
 )
 
@@ -24,7 +27,6 @@ py_test(
     deps = [
         ":main_lib",
         "@pypi//:pytest",
-        "@pypi//:fastapi",
         "@pypi//:httpx",
     ],
 )

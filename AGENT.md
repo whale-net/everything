@@ -2,10 +2,31 @@
 
 This document provides comprehensive guidelines for AI agents working on the Everything monorepo. It establishes a framework for understanding, maintaining, and extending the codebase while preserving its architectural principles.
 
+## ⚠️ CRITICAL: Cross-Compilation
+
+**MUST READ**: [`docs/CROSS_COMPILATION.md`](docs/CROSS_COMPILATION.md)
+
+This repository implements true cross-compilation for Python apps using Bazel platform transitions. **This is critical for ARM64 container deployments**. If cross-compilation breaks, ARM64 containers will crash at runtime with compiled dependencies (pydantic, numpy, pandas, etc.).
+
+**Key Points**:
+- Python apps with compiled dependencies MUST use `multiplatform_py_binary`
+- Platform transitions ensure correct wheel selection (x86_64 vs aarch64)
+- Test cross-compilation with:
+  ```bash
+  # Load images first (required)
+  bazel run //demo/hello_fastapi:hello_fastapi_image_amd64_load
+  bazel run //demo/hello_fastapi:hello_fastapi_image_arm64_load
+  # Run the test
+  bazel test //tools:test_cross_compilation --test_output=streamed
+  ```
+- CI automatically verifies cross-compilation on every PR
+- If `//tools:test_cross_compilation` fails, **DO NOT MERGE**
+
 ## 📋 Framework Overview
 
 ### Core Principles
 - **Bazel-First Architecture**: All build, test, and release operations use Bazel
+- **True Cross-Compilation**: Platform transitions for correct ARM64 wheel selection
 - **Monorepo Structure**: Multiple apps and shared libraries in a single repository
 - **Language Support**: Primary support for Python and Go with extensible patterns
 - **Container-Native**: All apps are containerized using OCI standards
@@ -16,8 +37,10 @@ This document provides comprehensive guidelines for AI agents working on the Eve
 ├── demo/                    # Example applications
 ├── libs/                    # Shared libraries (python/, go/)
 ├── tools/                   # Build and release tooling
+├── docs/                    # Documentation (including CROSS_COMPILATION.md)
 ├── .github/                 # CI/CD workflows
 ├── docker/                  # Base container configurations
+├── test_cross_compilation.py # CRITICAL: Cross-compilation verification
 └── BUILD.bazel, MODULE.bazel # Bazel configuration
 ```
 
@@ -57,6 +80,34 @@ The `release_app` macro automatically creates:
 2. **Multi-platform images** - Separate targets for amd64 and arm64
 3. **OCI push targets** - For publishing to container registries
 
+### Multi-Platform Image System
+
+#### How It Works
+The repository uses an automated multi-platform build system that creates container images supporting both AMD64 and ARM64 architectures:
+
+**For Python apps:**
+- `multiplatform_py_binary` creates platform-specific binaries automatically
+- `pycross` handles platform-specific Python dependencies (wheels) transparently
+- No manual platform configuration needed - everything is automatic
+
+**For Go apps:**
+- Go toolchain handles cross-compilation automatically
+- Binaries are statically linked, so no platform-specific dependencies
+
+**Platform selection:**
+- `oci_image_index` creates a multi-platform manifest list
+- Docker/Kubernetes automatically pulls the correct platform image
+- No need to specify platforms explicitly in most cases
+
+#### Custom Platform Definitions (Optional)
+Platform definitions are available in `//tools:platforms.bzl` for advanced use cases:
+- `//tools:linux_x86_64` - Linux AMD64
+- `//tools:linux_arm64` - Linux ARM64
+- `//tools:macos_x86_64` - macOS Intel (local dev)
+- `//tools:macos_arm64` - macOS Apple Silicon (local dev)
+
+These are rarely needed - the build system handles platform selection automatically.
+
 ### Image Build System
 
 #### Container Image Naming Convention
@@ -74,12 +125,15 @@ demo-hello_python:latest
 
 #### Image Targets Generated
 For each app with `release_app`, the following targets are created:
-- `<app>_image` - Base multi-platform image
+- `<app>_image` - Multi-platform manifest list (AMD64 + ARM64)
 - `<app>_image_amd64` - AMD64-specific image
 - `<app>_image_arm64` - ARM64-specific image
-- `<app>_image_load` - Optimized target for loading into Docker
-- `<app>_image_amd64_push` - Push target for AMD64
-- `<app>_image_arm64_push` - Push target for ARM64
+- `<app>_image_load` - Load into Docker (uses AMD64 for local testing)
+- `<app>_image_amd64_load` - Load AMD64 image specifically
+- `<app>_image_arm64_load` - Load ARM64 image specifically
+- `<app>_image_push` - Push multi-platform manifest
+- `<app>_image_amd64_push` - Push AMD64 image
+- `<app>_image_arm64_push` - Push ARM64 image
 
 #### Building Images
 ```bash

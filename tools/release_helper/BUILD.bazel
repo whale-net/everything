@@ -20,9 +20,8 @@ py_library(
 multiplatform_py_binary(
     name = "release_helper",
     srcs = ["cli.py"],
-    deps = [":release_helper_lib"],
     main = "cli.py",
-    requirements = ["typer", "pyyaml", "httpx"],
+    deps = [":release_helper_lib"],
 )
 
 # Unit tests for metadata module

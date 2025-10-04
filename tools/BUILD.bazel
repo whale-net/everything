@@ -10,15 +10,30 @@ exports_files([
     "helm_chart_release.bzl",
     "python_runner.py",
     "platforms.bzl",
-    "multiplatform_image.bzl",
+    "container_image.bzl",
 ])
+
+# Cross-compilation verification test
+# This test is marked as "manual" so it doesn't run with `bazel test //...`
+# It requires Docker and breaks the Bazel sandbox (calls bazel build/run internally)
+# CI explicitly runs this test to ensure cross-compilation works correctly
+sh_test(
+    name = "test_cross_compilation",
+    size = "large",
+    srcs = ["test_cross_compilation.sh"],
+    tags = [
+        "manual",  # Don't run with //...
+        "requires-network",  # Needs Docker and external bazel invocations
+        "integration",  # Integration test, not unit test
+    ],
+    timeout = "long",
+)
 
 # Version resolver utility for Helm charts
 multiplatform_py_binary(
     name = "version_resolver",
     srcs = ["version_resolver.py"],
     main = "version_resolver.py",
-    requirements = [],  # No external requirements
     visibility = ["//visibility:public"],
 )
 
@@ -26,17 +41,70 @@ load(":platforms.bzl", "define_platforms")
 
 define_platforms()
 
-# Convenient alias for release helper
+# Platform detection for release helper selection
+config_setting(
+    name = "on_macos_arm64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:arm64",
+    ],
+)
+
+config_setting(
+    name = "on_macos_x86_64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "on_linux_arm64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:arm64",
+    ],
+)
+
+# Note: Both arm64 and aarch64 configs are provided for compatibility.
+# Different Bazel configurations and toolchains may use either naming convention.
+# Both point to the same ARM64 architecture to ensure the correct binary is selected.
+config_setting(
+    name = "on_linux_aarch64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+config_setting(
+    name = "on_linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+# Convenient alias for release helper (automatically selects correct platform)
+# On macOS (darwin), use the base targets which run natively
+# On Linux, use the platform-specific Linux targets for containerization
 alias(
     name = "release",
-    actual = "//tools/release_helper:release_helper",
+    actual = select({
+        ":on_macos_arm64": "//tools/release_helper:release_helper_base_arm64",
+        ":on_macos_x86_64": "//tools/release_helper:release_helper_base_amd64",
+        ":on_linux_arm64": "//tools/release_helper:release_helper_linux_arm64",
+        ":on_linux_aarch64": "//tools/release_helper:release_helper_linux_arm64",
+        ":on_linux_x86_64": "//tools/release_helper:release_helper_linux_amd64",
+        "//conditions:default": "//tools/release_helper:release_helper_base_amd64",
+    }),
     visibility = ["//visibility:public"],
 )
 
 # Release metadata and OCI images for the release tool
 release_app(
     name = "release",
-    binary_target = "//tools/release_helper:release_helper",
+    binary_name = "//tools/release_helper:release_helper",
     language = "python",
     domain = "tools",
     description = "Release helper tool for managing app releases and container images",

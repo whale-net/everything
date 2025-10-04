@@ -1,60 +1,131 @@
-"""Clean Python binary rules that eliminate multi-platform boilerplate.
+"""Multiplatform Python binary wrapper with platform transitions.
 
-This module provides a single macro that generates all necessary py_binary targets
-for multi-platform deployment while keeping the BUILD.bazel files clean and simple.
+Creates platform-specific py_binary targets with proper cross-compilation support.
+Uses Bazel platform transitions to ensure each binary variant is built for its target
+architecture, allowing pycross to select the correct compiled wheels.
 
-The multiplatform_py_binary macro generates Linux AMD64 and ARM64 binaries for
-container deployment, plus a development binary.
-
-The multiplatform_py_binary macro works seamlessly with the release_app macro,
-which automatically detects the platform-specific binaries without requiring
-explicit binary_amd64/binary_arm64 parameters.
-
-Example usage:
+Usage - exactly like py_binary:
     multiplatform_py_binary(
         name = "my_app",
-        srcs = ["main.py"], 
-        deps = [":app_lib"],
-        requirements = ["fastapi", "uvicorn"],
+        srcs = ["main.py"],
+        deps = [":app_lib", "@pypi//:fastapi", "@pypi//:uvicorn"],
+        args = ["start-server"],  # Optional: baked-in args, exposed to release_app
     )
     
     release_app(
-        name = "my_app",  # Must match multiplatform_py_binary name
+        name = "my_app",
         language = "python",
         domain = "api",
-        description = "My FastAPI app",
+        # args automatically extracted from binary via AppInfo provider
     )
-"""
 
-load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+This creates these targets:
+  User-facing binaries (with platform transitions applied):
+  - my_app_linux_amd64 (built with --platforms=//tools:linux_x86_64)
+  - my_app_linux_arm64 (built with --platforms=//tools:linux_arm64)
+  
+  Internal base targets (wrapped by the transition rule):
+  - my_app_base_amd64 (py_binary without transition)
+  - my_app_base_arm64 (py_binary without transition)
+  
+  Metadata target (for release system):
+  - my_app_info (AppInfo provider with args, etc)
+
+The platform transitions ensure pycross selects the correct wheels for each architecture,
+enabling true cross-compilation. See docs/CROSS_COMPILATION.md for details."""
+
+load("@rules_python//python:defs.bzl", "py_binary")
+load("//tools:app_info.bzl", "AppInfo", "app_info")
+
+def _platform_transition_impl(settings, attr):
+    """Transition to the target platform for the binary variant.
+    
+    This transition changes the --platforms flag to match the target architecture,
+    which causes pycross to select the correct wheels for that platform. This is
+    critical for apps with compiled dependencies (pydantic, numpy, etc.) to ensure
+    ARM64 containers get aarch64 wheels instead of x86_64 wheels.
+    
+    For detailed technical explanation of how this enables cross-compilation,
+    see docs/CROSS_COMPILATION.md.
+    """
+    # Validate that target_platform is provided
+    if not hasattr(attr, "target_platform") or not attr.target_platform:
+        fail("target_platform must be specified for platform transition")
+    
+    return {"//command_line_option:platforms": str(attr.target_platform)}
+
+_platform_transition = transition(
+    implementation = _platform_transition_impl,
+    inputs = [],
+    outputs = ["//command_line_option:platforms"],
+)
+
+def _multiplatform_py_binary_impl(ctx):
+    """Create a wrapper that forwards to the underlying py_binary with platform transition applied."""
+    # Get the executable from the binary attribute (which has the transition applied)
+    binary_default_info = ctx.attr.binary[0][DefaultInfo]
+    
+    # Create a symlink to the actual executable
+    output_executable = ctx.actions.declare_file(ctx.label.name)
+    ctx.actions.symlink(
+        output = output_executable,
+        target_file = binary_default_info.files_to_run.executable,
+        is_executable = True,
+    )
+    
+    return [
+        DefaultInfo(
+            files = depset([output_executable]),
+            runfiles = binary_default_info.default_runfiles,
+            executable = output_executable,
+        ),
+    ]
+
+_multiplatform_py_binary_rule = rule(
+    implementation = _multiplatform_py_binary_impl,
+    attrs = {
+        "binary": attr.label(
+            cfg = _platform_transition,
+            executable = True,
+            mandatory = True,
+        ),
+        "target_platform": attr.label(
+            mandatory = True,
+        ),
+        "_allowlist_function_transition": attr.label(
+            default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
+        ),
+    },
+    executable = True,
+)
 
 def multiplatform_py_binary(
     name,
     srcs = None,
     main = None,
     deps = None,
-    requirements = None,
     visibility = None,
+    port = 0,
+    app_type = "",
     **kwargs):
-    """Create a py_binary that works across all platforms with minimal boilerplate.
+    """Creates platform-suffixed py_binary targets with proper cross-compilation.
     
-    This macro generates:
-    - A main py_binary for development
-    - Platform-specific binaries for container deployment (linux_amd64, linux_arm64)
+    Uses Bazel platform transitions to build each variant for its target architecture,
+    ensuring pycross selects the correct compiled wheels (pydantic, numpy, etc).
+    
+    Takes the exact same parameters as py_binary, plus additional metadata parameters
+    that are exposed through AppInfo provider for the release system.
     
     Args:
-        name: Name for the binary
-        srcs: Source files for the binary
-        main: Main entry point file
-        deps: Dependencies (py_library targets)
-        requirements: List of requirement names (e.g., ["fastapi", "uvicorn"])
-                     These are converted to @pypi//package_name targets
-        visibility: Visibility for all targets
-        **kwargs: Additional arguments passed to py_binary
+        name: Base name for the binaries (will create {name}_linux_amd64 and {name}_linux_arm64)
+        srcs: Source files (same as py_binary)
+        main: Main entry point (same as py_binary)
+        deps: Dependencies including @pypi// packages (same as py_binary)
+        visibility: Visibility (same as py_binary)
+        port: Port the application listens on (0 if no HTTP server, default: 0)
+        app_type: Application type (external-api, internal-api, worker, job, default: empty)
+        **kwargs: Additional py_binary arguments (env, args, data, etc)
     """
-    if not requirements:
-        requirements = []
-    
     # Default main to name.py if not provided
     if not main and srcs:
         # Find the main file from srcs
@@ -66,40 +137,51 @@ def multiplatform_py_binary(
         else:
             fail("Could not determine main file for {}, please specify main= parameter".format(name))
     
-    # Build unified deps list
-    # pycross automatically selects the correct platform-specific wheels
-    all_deps = deps[:] if deps else []
-    for req in requirements:
-        # Use package name as-is (pycross preserves original package names including hyphens)
-        all_deps.append("@pypi//:{}".format(req))
-    
-    # Main binary for development and all platforms
-    # pycross handles platform selection automatically
+    # Create base py_binary targets that will be transitioned to different platforms
+    # Base targets can be used directly on macOS for development, so they need visibility
+    # to be accessible from //tools:release alias
     py_binary(
-        name = name,
+        name = name + "_base_amd64",
         srcs = srcs,
         main = main,
-        deps = all_deps,
-        visibility = visibility,
+        deps = deps,
+        visibility = visibility or ["//tools:__pkg__"],
         **kwargs
     )
     
-    # Platform-specific binaries for container deployment
-    # Same deps work for all platforms thanks to pycross
     py_binary(
+        name = name + "_base_arm64",
+        srcs = srcs,
+        main = main,
+        deps = deps,
+        visibility = visibility or ["//tools:__pkg__"],
+        **kwargs
+    )
+    
+    # AMD64 binary with platform transition to x86_64
+    _multiplatform_py_binary_rule(
         name = name + "_linux_amd64",
-        srcs = srcs,
-        main = main,
-        deps = all_deps,
+        binary = ":" + name + "_base_amd64",
+        target_platform = "//tools:linux_x86_64",
         visibility = visibility,
-        **kwargs
     )
     
-    py_binary(
+    # ARM64 binary with platform transition to aarch64
+    _multiplatform_py_binary_rule(
         name = name + "_linux_arm64",
-        srcs = srcs,
-        main = main,
-        deps = all_deps,
+        binary = ":" + name + "_base_arm64",
+        target_platform = "//tools:linux_arm64",
         visibility = visibility,
-        **kwargs
+    )
+    
+    # Create app_info target to expose metadata (args, port, app_type) to release system
+    # Extract args from kwargs if present
+    args = kwargs.get("args", [])
+    app_info(
+        name = name + "_info",
+        args = args,
+        binary_name = name,
+        port = port,
+        app_type = app_type,
+        visibility = visibility or ["//visibility:public"],
     )
