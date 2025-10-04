@@ -7,17 +7,17 @@ pillow) have compiled C extensions that are platform-specific. These packages di
 "wheels" for different platforms (e.g., pydantic_core-2.33.2-cp311-manylinux_x86_64.whl
 vs pydantic_core-2.33.2-cp311-manylinux_aarch64.whl).
 
-IMPLEMENTATION:
-This repository uses platform transitions to ensure each target platform gets the correct
-wheels. When building multiplatform images:
+CROSS-COMPILATION SOLUTION:
+This repository uses Bazel platform transitions (via multiplatform_py_binary) to ensure
+each target platform gets the correct wheels. When building multiplatform images:
 - Each binary target (e.g., hello_python_linux_amd64, hello_python_linux_arm64) is built
-  with exec_transition_for_inputs to force the correct target platform
-- Pycross dependencies are resolved separately for each platform
+  with its target platform configuration via platform transitions
+- Pycross dependencies are resolved separately for each platform based on the active platform
 - The resulting images contain architecture-appropriate wheels for AMD64 and ARM64
 
-This allows building both AMD64 and ARM64 containers from a single build command on any
-host platform (AMD64 or ARM64), with each container getting the correct wheels for its
-target architecture.
+This enables true cross-compilation: you can build both AMD64 and ARM64 containers from a
+single build command on any host platform, with each container getting the correct wheels
+for its target architecture. See docs/CROSS_COMPILATION.md for details.
 """
 
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index", "oci_load", "oci_push")
@@ -231,6 +231,8 @@ def multiplatform_image(
         repo_path = registry + "/" + repository
         
         # Push manifest list (includes both platforms)
+        # The {BUILD_TAG} placeholder is substituted at runtime when you pass a tag:
+        # e.g., `bazel run :app_image_push -- v1.0.0` will push both 'latest' and 'v1.0.0' tags
         oci_push(
             name = name + "_push",
             image = ":" + name,
@@ -240,6 +242,7 @@ def multiplatform_image(
         )
         
         # Individual platform push targets (for debugging/testing)
+        # {BUILD_TAG} is substituted with the command-line argument at runtime
         oci_push(
             name = name + "_amd64_push",
             image = ":" + name + "_amd64",

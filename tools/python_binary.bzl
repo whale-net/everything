@@ -27,7 +27,15 @@ enabling true cross-compilation."""
 load("@rules_python//python:defs.bzl", "py_binary")
 
 def _platform_transition_impl(settings, attr):
-    """Transition to the target platform for the binary variant."""
+    """Transition to the target platform for the binary variant.
+    
+    This transition changes the --platforms flag to match the target architecture,
+    which causes pycross to select the correct wheels for that platform. This is
+    critical for apps with compiled dependencies (pydantic, numpy, etc.) to ensure
+    ARM64 containers get aarch64 wheels instead of x86_64 wheels.
+    
+    See docs/CROSS_COMPILATION.md for detailed explanation.
+    """
     return {"//command_line_option:platforms": str(attr.target_platform)}
 
 _platform_transition = transition(
