@@ -11,8 +11,9 @@ on:
         required: true
 
 # Concurrency control to prevent conflicts with other operations on gh-pages
+# All workflows that modify gh-pages must use the same concurrency group
 concurrency:
-  group: helm-repo-unpublish-${{ github.ref }}
+  group: github-pages
   cancel-in-progress: false
 
 jobs:

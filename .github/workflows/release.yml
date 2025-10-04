@@ -27,9 +27,10 @@ on:
         required: false
         default: ''
 
-# Global concurrency control for Helm chart releases to prevent race conditions on gh-pages
+# Global concurrency control for GitHub Pages to prevent race conditions
+# All workflows that modify gh-pages must use the same concurrency group
 concurrency:
-  group: helm-repo-publish-${{ github.ref }}
+  group: github-pages
   cancel-in-progress: false
 
 jobs:

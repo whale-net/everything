@@ -276,11 +276,10 @@ entries:
 ### Enable GitHub Pages
 
 1. Go to repository **Settings** → **Pages**
-2. Set **Source** to: Deploy from a branch
-3. Set **Branch** to: `gh-pages` / `/ (root)`
-4. Click **Save**
+2. Set **Source** to: **GitHub Actions**
+3. The workflows will automatically deploy to GitHub Pages when they run
 
-The `pages.yml` workflow handles deployment automatically when the `gh-pages` branch is updated.
+Note: The `release.yml` and `unpublish-helm-charts.yml` workflows handle GitHub Pages deployment directly using the `actions/deploy-pages@v4` action.
 
 ### Required Permissions
 
