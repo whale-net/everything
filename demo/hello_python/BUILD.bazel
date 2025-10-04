@@ -1,6 +1,5 @@
 load("//tools:pytest.bzl", "py_test")
-load("@rules_python//python:defs.bzl", "py_library")
-load("//tools:python_binary.bzl", "multiplatform_py_binary")
+load("@rules_python//python:defs.bzl", "py_library", "py_binary")
 load("//tools:release.bzl", "release_app")
 
 py_library(
@@ -10,8 +9,8 @@ py_library(
     visibility = ["//demo/hello_python:__pkg__"],
 )
 
-# Simplified: single binary target, no platform suffixes
-multiplatform_py_binary(
+# Standard py_binary - no wrapper needed!
+py_binary(
     name = "hello_python",
     srcs = ["main.py"],
     main = "main.py",
@@ -32,7 +31,7 @@ py_test(
     size = "small",
 )
 
-# Simplified release_app - uses single binary!
+# Release metadata and container images
 release_app(
     name = "hello_python",
     language = "python",

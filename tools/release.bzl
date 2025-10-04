@@ -2,17 +2,15 @@
 
 load("//tools:container_image.bzl", "multiplatform_image")
 load("//tools/helm:helm.bzl", "helm_chart")
-load("//tools:app_info.bzl", "AppInfo")
 
 def _app_metadata_impl(ctx):
     """Implementation for app_metadata rule."""
     # Create a JSON file with app metadata
-    # The app name should be passed explicitly, not derived from rule name
     metadata = {
-        "name": ctx.attr.app_name,  # Use explicit app_name instead of ctx.attr.name
+        "name": ctx.attr.app_name,
         "version": ctx.attr.version,
-        "binary_target": str(ctx.attr.binary_target.label),  # Direct binary reference
-        "image_target": str(ctx.attr.image_target.label),  # Image dependency (transitively includes binaries)
+        "binary_target": str(ctx.attr.binary_target.label),
+        "image_target": str(ctx.attr.image_target.label),
         "description": ctx.attr.description,
         "language": ctx.attr.language,
         "registry": ctx.attr.registry,
@@ -21,27 +19,11 @@ def _app_metadata_impl(ctx):
         "domain": ctx.attr.domain,
     }
     
-    # Extract metadata from binary's AppInfo provider if available
-    port_to_use = ctx.attr.port
-    app_type_to_use = ctx.attr.app_type
-    args_to_use = ctx.attr.args
-    
-    if ctx.attr.binary_info:
-        binary_app_info = ctx.attr.binary_info[AppInfo]
-        
-        # Use values from AppInfo provider if not explicitly overridden
-        if binary_app_info.port and not port_to_use:
-            port_to_use = binary_app_info.port
-        if binary_app_info.app_type and not app_type_to_use:
-            app_type_to_use = binary_app_info.app_type
-        if binary_app_info.args and not args_to_use:
-            args_to_use = binary_app_info.args
-    
-    # Add extracted/provided values to metadata
-    if app_type_to_use:
-        metadata["app_type"] = app_type_to_use
-    if port_to_use:
-        metadata["port"] = port_to_use
+    # Add metadata directly from attributes
+    if ctx.attr.app_type:
+        metadata["app_type"] = ctx.attr.app_type
+    if ctx.attr.port:
+        metadata["port"] = ctx.attr.port
     metadata["replicas"] = ctx.attr.replicas
     
     # Add optional health check configuration if provided
@@ -61,8 +43,8 @@ def _app_metadata_impl(ctx):
     # Add command and args
     if ctx.attr.command:
         metadata["command"] = ctx.attr.command
-    if args_to_use:
-        metadata["args"] = args_to_use
+    if ctx.attr.args:
+        metadata["args"] = ctx.attr.args
     
     output = ctx.actions.declare_file(ctx.label.name + "_metadata.json")
     ctx.actions.write(
@@ -75,26 +57,25 @@ def _app_metadata_impl(ctx):
 app_metadata = rule(
     implementation = _app_metadata_impl,
     attrs = {
-        "app_name": attr.string(mandatory = True),  # Add explicit app_name attribute
+        "app_name": attr.string(mandatory = True),
         "version": attr.string(default = "latest"),
-        "binary_info": attr.label(providers = [AppInfo]),  # Optional: binary's AppInfo provider
-        "binary_target": attr.label(mandatory = True),  # Direct binary dependency
-        "image_target": attr.label(mandatory = True),  # Image dependency (transitively includes binaries)
+        "binary_target": attr.label(mandatory = True),
+        "image_target": attr.label(mandatory = True),
         "description": attr.string(default = ""),
         "language": attr.string(mandatory = True),
         "registry": attr.string(default = "ghcr.io"),
         "organization": attr.string(default = "whale-net"),
         "repo_name": attr.string(mandatory = True),
         "domain": attr.string(mandatory = True),
-        "app_type": attr.string(default = ""),  # Optional, will be inferred if not provided
-        "port": attr.int(default = 0),  # Port the app listens on (0 = not specified)
-        "replicas": attr.int(default = 0),  # Default replica count (0 = use composer default)
-        "health_check_enabled": attr.bool(default = False),  # Whether health checks are enabled
-        "health_check_path": attr.string(default = "/health"),  # Health check endpoint path
-        "ingress_host": attr.string(default = ""),  # Custom ingress host (empty = use default pattern)
-        "ingress_tls_secret": attr.string(default = ""),  # TLS secret name for ingress
-        "command": attr.string_list(default = []),  # Container command override
-        "args": attr.string_list(default = []),  # Container arguments (optional if binary_info provides them)
+        "app_type": attr.string(default = ""),
+        "port": attr.int(default = 0),
+        "replicas": attr.int(default = 0),
+        "health_check_enabled": attr.bool(default = False),
+        "health_check_path": attr.string(default = "/health"),
+        "ingress_host": attr.string(default = ""),
+        "ingress_tls_secret": attr.string(default = ""),
+        "command": attr.string_list(default = []),
+        "args": attr.string_list(default = []),
     },
 )
 
@@ -110,8 +91,8 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
-    ensuring consistency between the two systems. Works with multiplatform_py_binary
-    and multiplatform_go_binary which create standard binaries.
+    ensuring consistency between the two systems. Works with standard py_binary
+    and go_binary targets.
     
     The binaries are built for different platforms using Bazel's --platforms flag.
     Cross-compilation is handled automatically by rules_pycross (Python) and rules_go (Go).
@@ -129,17 +110,15 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         registry: Container registry (defaults to ghcr.io)
         organization: Container registry organization (defaults to whale-net)
         custom_repo_name: Custom repository name (defaults to name)
-        app_type: Application type (external-api, internal-api, worker, job).
-                  Optional: automatically extracted from binary's AppInfo if not specified.
-        port: Port the application listens on (0 = not specified).
-              Optional: automatically extracted from binary's AppInfo if not specified.
+        app_type: Application type (external-api, internal-api, worker, job)
+        port: Port the application listens on (0 = not specified)
         replicas: Default number of replicas (0 = use composer default based on app_type)
         health_check_enabled: Whether to enable health checks (default: False)
         health_check_path: Path for health check endpoint (default: /health)
         ingress_host: Custom ingress hostname (empty = use default {app}-{env}.local pattern)
         ingress_tls_secret: TLS secret name for ingress (empty = no TLS)
         command: Override container command (default: use image ENTRYPOINT)
-        args: Container arguments (optional: automatically extracted from binary's AppInfo if not specified)
+        args: Container arguments
     """
     if language not in ["python", "go"]:
         fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
@@ -149,8 +128,6 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     base_label = binary_name if binary_name else name
     if not base_label.startswith("//") and not base_label.startswith(":"):
         base_label = ":" + base_label
-    
-    binary_info_label = base_label + "_info"  # AppInfo provider target
     
     # Image name uses domain-app format (e.g., "demo-hello_python")
     image_name = domain + "-" + name
@@ -167,8 +144,6 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         language = language,
     )
     
-    binary_info = binary_info_label
-    
     # Use the binary directly for change detection
     # All platforms are built from the same sources, so one reference is enough
     binary_target_ref = base_label
@@ -177,7 +152,6 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     app_metadata(
         name = name + "_metadata",
         app_name = name,
-        binary_info = binary_info,
         binary_target = binary_target_ref,
         image_target = image_target,
         description = description,
