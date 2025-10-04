@@ -182,16 +182,13 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     # Both Python and Go now create AppInfo providers
     binary_info = binary_info_label
     
-    # Use explicit platform-specific binary for binary_target dependency
-    # We use amd64 because:
+    # Use explicit linux_amd64 binary for binary_target dependency
+    # We use linux_amd64 because:
     # 1. All platform binaries (amd64, arm64) are built from the same sources
     # 2. Checking one platform's dependencies is sufficient for change detection
-    # 3. Avoids needing to maintain a base name alias
-    # 4. amd64 is the most common deployment target
-    if language == "python":
-        binary_target_ref = base_label + "_base_amd64"
-    else:  # go
-        binary_target_ref = base_label + "_linux_amd64"
+    # 3. linux_amd64 is the most common deployment target
+    # 4. Consistent naming between Python and Go
+    binary_target_ref = base_label + "_linux_amd64"
     
     # Create release metadata
     app_metadata(
