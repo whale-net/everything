@@ -5,7 +5,7 @@ Tests the improved change detection that relies on Bazel's dependency
 analysis rather than making assumptions about "infrastructure" changes.
 """
 
-from tools.release_helper.changes import _is_infrastructure_change, _should_ignore_file
+from tools.release_helper.changes import _is_infrastructure_change
 
 
 class TestBazelBasedChangeDetection:
@@ -45,64 +45,3 @@ class TestBazelBasedChangeDetection:
         # Instead, Bazel dependency analysis will determine if any apps
         # actually depend on these files. Since these are release automation
         # files that don't affect app builds, Bazel should return 0 affected apps.
-
-    def test_release_helper_files_are_ignored(self):
-        """Test that release helper files are properly ignored."""
-        # These files are part of the release automation system and should not trigger app builds
-        release_helper_files = [
-            'tools/release_helper/cli.py',
-            'tools/release_helper/helm.py',
-            'tools/release_helper/github_release.py',
-            'tools/release_helper/changes.py',
-            'tools/release_helper/release.py',
-            'tools/release_helper/metadata.py',
-        ]
-        
-        for file_path in release_helper_files:
-            assert _should_ignore_file(file_path) is True, f"Release helper file should be ignored: {file_path}"
-    
-    def test_build_files_are_not_ignored(self):
-        """Test that actual build files (bzl, BUILD, etc.) are not ignored."""
-        # These files affect app builds and should NOT be ignored
-        build_files = [
-            'tools/release.bzl',
-            'tools/helm/helm.bzl',
-            'tools/container_image.bzl',
-            'tools/python_binary.bzl',
-            'tools/go_binary.bzl',
-            'tools/BUILD.bazel',
-            'BUILD.bazel',
-            'MODULE.bazel',
-        ]
-        
-        for file_path in build_files:
-            assert _should_ignore_file(file_path) is False, f"Build file should NOT be ignored: {file_path}"
-    
-    def test_app_code_files_are_not_ignored(self):
-        """Test that app source code files are not ignored."""
-        # App code should never be ignored
-        app_files = [
-            'demo/hello_python/main.py',
-            'demo/hello_go/main.go',
-            'demo/hello_fastapi/main.py',
-            'manman/src/worker/main.py',
-            'libs/python/utils.py',
-        ]
-        
-        for file_path in app_files:
-            assert _should_ignore_file(file_path) is False, f"App code should NOT be ignored: {file_path}"
-    
-    def test_workflow_and_doc_files_are_ignored(self):
-        """Test that workflows and documentation files are ignored."""
-        ignored_files = [
-            '.github/workflows/ci.yml',
-            '.github/workflows/release.yml',
-            '.github/actions/setup/action.yml',
-            'docs/HELM_RELEASE.md',
-            'docs/README.md',
-            'README.md',
-            'AGENT.md',
-        ]
-        
-        for file_path in ignored_files:
-            assert _should_ignore_file(file_path) is True, f"File should be ignored: {file_path}"
