@@ -95,62 +95,45 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
             print("No app targets found", file=sys.stderr)
             return []
         
-        # Find targets that contain each changed file as a source
-        print(f"Finding targets that use {len(relevant_files)} changed files...", file=sys.stderr)
+        # Build a single Bazel query to find all targets using any of the changed files
+        # and then find which apps depend on those targets - all in one query
+        print(f"Analyzing {len(relevant_files)} changed files...", file=sys.stderr)
         
-        changed_targets = set()
-        for file_path in relevant_files:
-            if not file_path:
-                continue
-            
-            try:
-                # Query which targets use this specific file as a source
-                result = run_bazel([
-                    "query",
-                    f"attr('srcs', '{file_path}', //...)",
-                    "--output=label"
-                ])
-                
-                if result.stdout.strip():
-                    targets = result.stdout.strip().split('\n')
-                    for target in targets:
-                        # Exclude platform and config_setting targets
-                        if '//:' not in target or not any(x in target for x in ['platform', 'config_setting']):
-                            changed_targets.add(target)
-                            print(f"  {file_path} -> {target}", file=sys.stderr)
-            except subprocess.CalledProcessError:
-                # File might not be in any target's srcs - that's fine
-                print(f"  {file_path}: not in any target sources", file=sys.stderr)
-                continue
-        
-        if not changed_targets:
-            print("No Bazel targets use the changed files", file=sys.stderr)
+        # Build union query for all changed files
+        file_queries = [f"attr('srcs', '{f}', //...)" for f in relevant_files if f]
+        if not file_queries:
+            print("No valid files to query", file=sys.stderr)
             return []
         
-        print(f"Analyzing {len(changed_targets)} changed targets...", file=sys.stderr)
-        
-        # Now find which apps depend on these specific changed targets
-        affected_apps = set()
+        changed_targets_query = " + ".join(file_queries)
         app_targets_str = " + ".join(app_targets)
-        changed_targets_str = " + ".join(changed_targets)
         
         try:
-            # Use rdeps to find which apps depend on the changed targets
+            # Single query: find all targets using changed files, then find apps that depend on them
+            # Exclude platform and config_setting targets from consideration
             result = run_bazel([
                 "query",
-                f"rdeps({app_targets_str}, {changed_targets_str})",
+                f"let changed = {changed_targets_query} in "
+                f"let changed_no_config = $changed - kind('platform|config_setting', $changed) in "
+                f"let apps = {app_targets_str} in "
+                f"rdeps($apps, $changed_no_config)",
                 "--output=label"
             ])
             
             if result.stdout.strip():
                 dependent_targets = set(result.stdout.strip().split('\n'))
                 # Find which app binaries are in the result
+                affected_apps = set()
                 for target in dependent_targets:
                     if target in app_by_target:
                         affected_apps.add(app_by_target[target]['name'])
-                        print(f"  {app_by_target[target]['name']}: affected by changed targets", file=sys.stderr)
+                        print(f"  {app_by_target[target]['name']}: affected by changes", file=sys.stderr)
+            else:
+                print("No apps affected by changed files", file=sys.stderr)
+                affected_apps = set()
         except subprocess.CalledProcessError as e:
             print(f"No app dependencies found on changed targets", file=sys.stderr)
+            affected_apps = set()
         
         # Return the affected apps
         return [app for app in all_apps if app['name'] in affected_apps]
