@@ -10,7 +10,7 @@ py_library(
     visibility = ["//demo/hello_python:__pkg__"],
 )
 
-# Single macro generates all platform-specific binaries
+# Simplified: single binary target, no platform suffixes
 multiplatform_py_binary(
     name = "hello_python",
     srcs = ["main.py"],
@@ -32,7 +32,7 @@ py_test(
     size = "small",
 )
 
-# Simplified release_app - auto-detects platform binaries!
+# Simplified release_app - uses single binary!
 release_app(
     name = "hello_python",
     language = "python",

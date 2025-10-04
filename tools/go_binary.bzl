@@ -1,22 +1,7 @@
-"""Multiplatform Go binary wrapper for cross-compilation.
+"""Simplified Go binary wrapper with app metadata.
 
-Creates platform-specific go_binary targets with proper GOOS/GOARCH settings,
-enabling true cross-compilation for container images.
-
-WHEN TO USE THIS:
-  ✅ Use multiplatform_go_binary for:
-     - Applications that will be containerized (with release_app)
-     - Services that need to run on both AMD64 and ARM64
-     - Any binary that gets deployed via container images
-
-  ❌ Use standard go_binary for:
-     - Build tools (e.g., //tools/helm:helm_composer)
-     - CLI utilities that run on the host during builds
-     - Development scripts that don't need containerization
-     
-     Why? Build tools only need to run on the host platform. Creating 
-     multiple platform variants would be unnecessary overhead and could
-     cause confusion about which binary to use during builds.
+Creates a standard go_binary with optional metadata for the release system.
+Cross-compilation happens automatically when building with different --platforms flags.
 
 Usage - exactly like go_binary:
     multiplatform_go_binary(
@@ -31,17 +16,16 @@ Usage - exactly like go_binary:
         name = "my_app",
         language = "go",
         domain = "api",
-        # port and app_type automatically extracted from binary
     )
 
-This creates multiple targets:
-  - my_app (default, uses host platform for local development)
-  - my_app_linux_amd64 (cross-compiled for Linux x86_64)
-  - my_app_linux_arm64 (cross-compiled for Linux ARM64)
-  - my_app_info (AppInfo provider with metadata for release system)
+This creates:
+  - my_app: Standard go_binary (works on any platform)
+  - my_app_info: AppInfo provider with metadata (port, app_type)
 
-The platform-specific binaries are automatically used by the release system
-for building multiplatform container images."""
+Cross-compilation happens automatically when you build with --platforms flag:
+  bazel build //app:my_app --platforms=//tools:linux_x86_64
+  bazel build //app:my_app --platforms=//tools:linux_arm64
+"""
 
 load("@rules_go//go:def.bzl", "go_binary")
 load("//tools:app_info.bzl", "app_info")
@@ -54,17 +38,18 @@ def multiplatform_go_binary(
     port = 0,
     app_type = "",
     **kwargs):
-    """Creates platform-suffixed go_binary targets with proper cross-compilation.
+    """Creates a standard go_binary with optional app metadata.
     
-    Uses Go's native cross-compilation support (GOOS/GOARCH) to build binaries
-    for different platforms. Creates *_linux_amd64 and *_linux_arm64 targets
-    for container images, plus a default target for local development.
+    This is a thin wrapper around go_binary that also creates an AppInfo provider
+    for the release system. No platform-specific variants are created - instead,
+    the binary is built for different platforms using Bazel's --platforms flag.
     
-    Takes the exact same parameters as go_binary, plus additional metadata parameters
-    that are exposed through AppInfo provider for the release system.
+    Creates these targets:
+        {name}       - Standard go_binary
+        {name}_info  - AppInfo provider (metadata: port, app_type)
     
     Args:
-        name: Base name for the binaries (will create {name}, {name}_linux_amd64, {name}_linux_arm64)
+        name: Binary name
         srcs: Source files (same as go_binary)
         deps: Dependencies (same as go_binary)
         visibility: Visibility (same as go_binary)
@@ -73,31 +58,24 @@ def multiplatform_go_binary(
         **kwargs: Additional go_binary arguments (data, embedsrcs, etc)
     """
     
-    # Linux AMD64 binary for container images
+    # Create standard go_binary
     go_binary(
-        name = name + "_linux_amd64",
+        name = name,
         srcs = srcs,
         deps = deps,
-        goarch = "amd64",
-        goos = "linux",
         visibility = visibility,
         **kwargs
     )
     
-    # Linux ARM64 binary for container images
-    go_binary(
-        name = name + "_linux_arm64",
-        srcs = srcs,
-        deps = deps,
-        goarch = "arm64",
-        goos = "linux",
+    # Create app_info target to expose metadata to release system
+    app_info(
+        name = name + "_info",
+        args = [],  # Go binaries typically don't have baked-in args
+        binary_name = name,
+        port = port,
+        app_type = app_type,
         visibility = visibility,
-        **kwargs
     )
-    
-    # Host platform binary for local development (bazel run)
-    go_binary(
-        name = name + "_host",
         srcs = srcs,
         deps = deps,
         visibility = visibility or ["//visibility:public"],

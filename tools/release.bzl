@@ -149,71 +149,59 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     if language not in ["python", "go"]:
         fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
     
-    # Construct binary targets from binary_name
-    # If binary_name is not provided, default to :name (same package)
-    # If binary_name starts with // or :, use it as-is (it's a label)
-    # Otherwise, treat it as a simple name in the current package
+    # Single binary target - no platform suffixes needed
+    # Binary will be built for different platforms using --platforms flag
     base_label = binary_name if binary_name else name
     if not base_label.startswith("//") and not base_label.startswith(":"):
         base_label = ":" + base_label
     
-    binary_amd64 = base_label + "_linux_amd64"
-    binary_arm64 = base_label + "_linux_arm64"
     binary_info_label = base_label + "_info"  # AppInfo provider target
     
     # Image name uses domain-app format (e.g., "demo-hello_python")
-    # Repository is just the organization (e.g., "whale-net")
-    # Full path will be: registry/repository/image_name (e.g., "ghcr.io/whale-net/demo-hello_python")
     image_name = domain + "-" + name
     image_target = name + "_image"
     
-    # Create multiplatform OCI image using the explicitly provided or defaulted binaries
-    # CRITICAL: Pass image_name explicitly so domain+name identifies the app
+    # Create multiplatform OCI image using SINGLE binary target
+    # Bazel will build it for different platforms based on --platforms flag
     multiplatform_image(
         name = image_target,
-        binary_amd64 = binary_amd64,
-        binary_arm64 = binary_arm64,
+        binary = base_label,  # Single binary, built for different platforms
         registry = registry,
-        repository = organization,  # Just the org, not org/image
-        image_name = image_name,  # Explicit domain-app format
+        repository = organization,
+        image_name = image_name,
         language = language,
     )
     
-    # Both Python and Go now create AppInfo providers
     binary_info = binary_info_label
     
-    # Use explicit linux_amd64 binary for binary_target dependency
-    # We use linux_amd64 because:
-    # 1. All platform binaries (amd64, arm64) are built from the same sources
-    # 2. Checking one platform's dependencies is sufficient for change detection
-    # 3. linux_amd64 is the most common deployment target
-    # 4. Consistent naming between Python and Go
-    binary_target_ref = base_label + "_linux_amd64"
+    # Use the binary directly for change detection
+    # All platforms are built from the same sources, so one reference is enough
+    binary_target_ref = base_label
     
     # Create release metadata
     app_metadata(
         name = name + "_metadata",
-        app_name = name,  # Pass the actual app name
-        binary_info = binary_info,  # AppInfo provider for extracting args, etc
-        binary_target = binary_target_ref,  # Platform-agnostic binary (alias to base)
-        image_target = image_target,  # Transitively depends on all platform binaries
+        app_name = name,
+        binary_info = binary_info,
+        binary_target = binary_target_ref,
+        image_target = image_target,
         description = description,
         version = version,
         language = language,
         registry = registry,
         organization = organization,
-        repo_name = image_name,  # Use domain-app format
+        repo_name = image_name,
         domain = domain,
-        app_type = app_type,  # Pass through app_type for Helm chart generation
-        port = port,  # Port configuration
-        replicas = replicas,  # Replica count
-        health_check_enabled = health_check_enabled,  # Health check configuration
+        app_type = app_type,
+        port = port,
+        replicas = replicas,
+        health_check_enabled = health_check_enabled,
         health_check_path = health_check_path,
-        ingress_host = ingress_host,  # Ingress configuration
+        ingress_host = ingress_host,
         ingress_tls_secret = ingress_tls_secret,
-        command = command,  # Container command override
-        args = args,  # Container arguments (optional: overrides binary's args if provided)
-        tags = ["release-metadata"],  # No manual tag - metadata should be easily discoverable
+        command = command,
+        args = args,
+        tags = ["release-metadata"],
         visibility = ["//visibility:public"],
     )
 

@@ -67,16 +67,22 @@ bazel run //demo/hello_world_test:hello_world_test
 
 ### Build Container Images (After Successful Build)
 ```bash
-# Build and load images efficiently using oci_load targets
-bazel run //demo/hello_python:hello_python_image_load
-bazel run //demo/hello_go:hello_go_image_load
+# SIMPLIFIED MULTIPLATFORM SYSTEM
+# Build and load images with explicit platform flags
+
+# AMD64 images (most common dev environment)
+bazel run //demo/hello_python:hello_python_image_amd64_load --platforms=//tools:linux_x86_64
+bazel run //demo/hello_go:hello_go_image_amd64_load --platforms=//tools:linux_x86_64
+
+# ARM64 images
+bazel run //demo/hello_python:hello_python_image_arm64_load --platforms=//tools:linux_arm64
+bazel run //demo/hello_go:hello_go_image_arm64_load --platforms=//tools:linux_arm64
 
 # Test the containers (validation scenario)
-# Note: Image names are simple (e.g., hello_python_linux_amd64:latest, hello_go:latest)
-docker run --rm hello_python_linux_amd64:latest
-docker run --rm hello_go:latest
+docker run --rm demo-hello_python_amd64:latest
+docker run --rm demo-hello_go_amd64:latest
 
-# Use release tool for production workflows
+# Use release tool for production workflows (handles platforms automatically)
 bazel run //tools:release -- build hello_python
 ```
 
@@ -129,9 +135,9 @@ bazel run //tools:release -- build hello_python
 
 6. **Container Image Validation**:
    ```bash
-   # Build container and verify it runs
-   bazel run //demo/hello_python:hello_python_image_load
-   docker run --rm hello_python_linux_amd64:latest
+   # Build container with explicit platform flag
+   bazel run //demo/hello_python:hello_python_image_amd64_load --platforms=//tools:linux_x86_64
+   docker run --rm demo-hello_python_amd64:latest
    # Should output the same as the direct bazel run
    ```
 
