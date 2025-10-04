@@ -432,18 +432,8 @@ func (c *Composer) buildAppConfig(app AppMetadata) (AppConfig, error) {
 				SuccessThreshold:    1,
 				FailureThreshold:    3,
 			}
-		} else if app.HealthCheck == nil || app.HealthCheck.Path == "" {
-			// Default to /health for APIs if not specified
-			config.HealthCheck = &HealthCheckConfig{
-				Path:                "/health",
-				InitialDelaySeconds: 10,
-				PeriodSeconds:       10,
-				TimeoutSeconds:      5,
-				SuccessThreshold:    1,
-				FailureThreshold:    3,
-			}
 		}
-		// If HealthCheck.Enabled is false, don't add health check (nil)
+		// If HealthCheck is nil or Enabled is false, don't add health check (nil)
 	}
 
 	// Add per-app ingress configuration if provided
