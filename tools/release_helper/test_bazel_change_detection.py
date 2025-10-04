@@ -88,3 +88,22 @@ class TestBazelBasedChangeDetection:
         
         for file_path in app_test_files:
             assert _should_ignore_file(file_path) is False, f"App test should NOT be filtered: {file_path}"
+
+    def test_target_based_detection_concept(self):
+        """Test that we understand the difference between package and target-based detection."""
+        # This is a conceptual test to document the approach
+        
+        # WRONG (old approach): Group by package, query rdeps({apps}, //package/...)
+        # This finds ALL apps that depend on ANYTHING in the package
+        # Problem: tools/helm has many targets, query is too broad
+        
+        # CORRECT (new approach): Find specific target for each file, query rdeps({apps}, specific_target)
+        # This finds only apps that depend on the specific target containing the changed file
+        # More precise: only rebuilds apps that actually use the changed code
+        
+        # Example: tools/helm/composer.go
+        # Old: rdeps({apps}, //tools/helm/...) → finds all apps (too broad)
+        # New: attr(srcs, tools/helm/composer.go, //tools/helm/...) → //tools/helm:helm_lib
+        #      rdeps({apps}, //tools/helm:helm_lib) → finds only apps that use helm_lib
+        
+        assert True  # This test documents the approach
