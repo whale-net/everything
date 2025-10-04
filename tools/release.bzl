@@ -11,8 +11,8 @@ def _app_metadata_impl(ctx):
     metadata = {
         "name": ctx.attr.app_name,  # Use explicit app_name instead of ctx.attr.name
         "version": ctx.attr.version,
-        "binary_target": ctx.attr.binary_target,
-        "image_target": ctx.attr.image_target,
+        "binary_target": str(ctx.attr.binary_target.label),  # Convert label to string
+        "image_target": str(ctx.attr.image_target.label),  # Convert label to string
         "description": ctx.attr.description,
         "language": ctx.attr.language,
         "registry": ctx.attr.registry,
@@ -77,9 +77,9 @@ app_metadata = rule(
     attrs = {
         "app_name": attr.string(mandatory = True),  # Add explicit app_name attribute
         "version": attr.string(default = "latest"),
-        "binary_target": attr.string(mandatory = True),
+        "binary_target": attr.label(mandatory = True),  # Binary dependency (was string)
         "binary_info": attr.label(providers = [AppInfo]),  # Optional: binary's AppInfo provider
-        "image_target": attr.string(mandatory = True),
+        "image_target": attr.label(mandatory = True),  # Image dependency (was string)
         "description": attr.string(default = ""),
         "language": attr.string(mandatory = True),
         "registry": attr.string(default = "ghcr.io"),

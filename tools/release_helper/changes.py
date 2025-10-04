@@ -123,31 +123,27 @@ def detect_changed_apps(base_commit: Optional[str] = None) -> List[Dict[str, str
         print("No targets affected by changed files", file=sys.stderr)
         return []
     
-    # Find which app binaries are affected, then find their corresponding metadata
-    # Strategy: Find all app_metadata targets, get their binary deps, see which are affected
+    # Find app_metadata targets whose dependencies intersect with affected targets
+    # Now that binary_target and image_target are proper label dependencies,
+    # we can use Bazel's dependency graph directly
     try:
-        # Get all app_metadata targets
+        # Build a set expression for all affected targets
+        affected_set = " + ".join([f"set({t})" for t in all_affected_targets])
+        
         result = run_bazel([
             "query",
-            "kind('app_metadata', //...)",
+            f"let all_affected = {affected_set} in "
+            f"let all_metadata = kind('app_metadata', //...) in "
+            f"let metadata_deps = deps($all_metadata, 1) - $all_metadata in "
+            f"rdeps($all_metadata, $metadata_deps intersect $all_affected, 1) intersect $all_metadata",
             "--output=label"
         ])
-        all_metadata_targets = set(result.stdout.strip().split('\n')) if result.stdout.strip() else set()
         
-        # For each metadata target, check if any of its binary deps are in the affected set
-        all_affected_metadata = set()
-        for metadata_target in all_metadata_targets:
-            # Get the package and name from metadata target (e.g., //demo/hello_python:hello_python_metadata)
-            # The binaries follow pattern: //demo/hello_python:hello_python_linux_*
-            package = metadata_target.rsplit(':', 1)[0]
-            app_name = metadata_target.rsplit(':', 1)[1].replace('_metadata', '')
+        if result.stdout.strip():
+            all_affected_metadata = set(result.stdout.strip().split('\n'))
+        else:
+            all_affected_metadata = set()
             
-            # Check if any affected targets are binaries for this app
-            for target in all_affected_targets:
-                if target.startswith(f"{package}:{app_name}_linux_") or target.startswith(f"{package}:{app_name}_base_"):
-                    all_affected_metadata.add(metadata_target)
-                    break
-        
     except subprocess.CalledProcessError:
         all_affected_metadata = set()
     
