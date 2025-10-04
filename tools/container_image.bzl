@@ -207,13 +207,11 @@ def multiplatform_image(
     # CRITICAL: image_name should be provided by release_app in domain-app format
     # This ensures domain+name identifies the app everywhere
     if not image_name:
-        # Fallback for backwards compatibility, but this should be avoided
-        binary_name = _get_binary_name(amd64_binary)
-        clean_name = binary_name.replace("_linux_amd64", "").replace("_linux_arm64", "")
-        image_tag = clean_name
-        print("WARNING: image_name not provided to multiplatform_image, using binary name fallback")
-    else:
-        image_tag = image_name
+        # image_name is now mandatory - it must be provided in domain-app format
+        fail("image_name parameter is required for multiplatform_image. " +
+             "Use release_app macro which automatically provides image_name in domain-app format.")
+    
+    image_tag = image_name
     
     # Main load target - uses AMD64 (most common dev environment)
     oci_load(
