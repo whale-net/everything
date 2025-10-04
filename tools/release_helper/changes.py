@@ -85,49 +85,57 @@ def detect_changed_apps(base_commit: Optional[str] = None) -> List[Dict[str, str
     
     print(f"Analyzing {len(relevant_files)} changed files using Bazel query...", file=sys.stderr)
     
-    # Build file queries for changed files
-    file_queries = [f"attr('srcs', '{f}', //...)" for f in relevant_files if f]
-    if not file_queries:
-        print("No valid files to query", file=sys.stderr)
+    # Build file queries for changed files, batching to avoid command line length limits
+    # Bazel can handle large queries, but we batch at 50 files to be safe
+    BATCH_SIZE = 50
+    all_affected_metadata = set()
+    
+    for i in range(0, len(relevant_files), BATCH_SIZE):
+        batch = relevant_files[i:i+BATCH_SIZE]
+        file_queries = [f"attr('srcs', '{f}', //...)" for f in batch if f]
+        
+        if not file_queries:
+            continue
+        
+        changed_targets_query = " + ".join(file_queries)
+        
+        try:
+            # Single Bazel query that does everything:
+            # 1. Find all app_metadata targets
+            # 2. Get their binary targets via deps()
+            # 3. Find targets using changed files in this batch
+            # 4. Filter out platform/config_setting
+            # 5. Find which app binaries depend on the changed targets
+            # 6. Return the metadata targets for those apps
+            result = run_bazel([
+                "query",
+                f"let changed_files = {changed_targets_query} in "
+                f"let changed = $changed_files - kind('platform|config_setting', $changed_files) in "
+                f"let all_metadata = kind('app_metadata', //...) in "
+                f"let all_binaries = deps($all_metadata, 1) - $all_metadata in "
+                f"let affected_binaries = rdeps($all_binaries, $changed) in "
+                f"rdeps($all_metadata, $affected_binaries, 1) - $affected_binaries",
+                "--output=label"
+            ])
+            
+            if result.stdout.strip():
+                batch_affected = set(result.stdout.strip().split('\n'))
+                all_affected_metadata.update(batch_affected)
+                
+        except subprocess.CalledProcessError:
+            # Batch might not affect any apps
+            continue
+    
+    if not all_affected_metadata:
+        print("No apps affected by changed files", file=sys.stderr)
         return []
     
-    changed_targets_query = " + ".join(file_queries)
+    # Bazel returned the app_metadata targets that are affected
+    # Match to our app list
+    affected_apps = []
+    for app in all_apps:
+        if app['bazel_target'] in all_affected_metadata:
+            affected_apps.append(app)
+            print(f"  {app['name']}: affected by changes", file=sys.stderr)
     
-    try:
-        # Single Bazel query that does everything:
-        # 1. Find all app_metadata targets
-        # 2. Get their binary targets via deps()
-        # 3. Find targets using changed files
-        # 4. Filter out platform/config_setting
-        # 5. Find which app binaries depend on the changed targets
-        # 6. Return the metadata targets for those apps
-        result = run_bazel([
-            "query",
-            f"let changed_files = {changed_targets_query} in "
-            f"let changed = $changed_files - kind('platform|config_setting', $changed_files) in "
-            f"let all_metadata = kind('app_metadata', //...) in "
-            f"let all_binaries = deps($all_metadata, 1) - $all_metadata in "
-            f"let affected_binaries = rdeps($all_binaries, $changed) in "
-            f"rdeps($all_metadata, $affected_binaries, 1) - $affected_binaries",
-            "--output=label"
-        ])
-        
-        if not result.stdout.strip():
-            print("No apps affected by changed files", file=sys.stderr)
-            return []
-        
-        # Bazel returned the app_metadata targets that are affected
-        affected_metadata_targets = set(result.stdout.strip().split('\n'))
-        
-        # Match to our app list
-        affected_apps = []
-        for app in all_apps:
-            if app['bazel_target'] in affected_metadata_targets:
-                affected_apps.append(app)
-                print(f"  {app['name']}: affected by changes", file=sys.stderr)
-        
-        return affected_apps
-        
-    except subprocess.CalledProcessError as e:
-        print(f"Bazel query failed: {e}", file=sys.stderr)
-        return []
+    return affected_apps
