@@ -3,6 +3,7 @@
 - Provide short, straightforward, responses. Elaborate only when necessary.
 - Do not apologize for being wrong.
 - Do not praise the developer, you are just a tool not a conversation
+- Do not attempt to commit on the developers behalf
 
 **ALWAYS reference these instructions first and fallback to search or bash commands only when you encounter unexpected information that does not match the info here.**
 
