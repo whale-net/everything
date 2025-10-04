@@ -16,6 +16,7 @@ def _app_metadata_impl(ctx):
         "description": ctx.attr.description,
         "language": ctx.attr.language,
         "registry": ctx.attr.registry,
+        "organization": ctx.attr.organization,
         "repo_name": ctx.attr.repo_name,
         "domain": ctx.attr.domain,
     }
@@ -82,6 +83,7 @@ app_metadata = rule(
         "description": attr.string(default = ""),
         "language": attr.string(mandatory = True),
         "registry": attr.string(default = "ghcr.io"),
+        "organization": attr.string(default = "whale-net"),
         "repo_name": attr.string(mandatory = True),
         "domain": attr.string(mandatory = True),
         "app_type": attr.string(default = ""),  # Optional, will be inferred if not provided
@@ -159,18 +161,21 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     binary_arm64 = base_label + "_linux_arm64"
     binary_info_label = base_label + "_info"  # AppInfo provider target
     
-    # Repository name for container images should use domain-app format
+    # Image name uses domain-app format (e.g., "demo-hello_python")
+    # Repository is just the organization (e.g., "whale-net")
+    # Full path will be: registry/repository/image_name (e.g., "ghcr.io/whale-net/demo-hello_python")
     image_name = domain + "-" + name
     image_target = name + "_image"
-    repository = organization + "/" + image_name  # Repository path (without registry)
     
     # Create multiplatform OCI image using the explicitly provided or defaulted binaries
+    # CRITICAL: Pass image_name explicitly so domain+name identifies the app
     multiplatform_image(
         name = image_target,
         binary_amd64 = binary_amd64,
         binary_arm64 = binary_arm64,
         registry = registry,
-        repository = repository,
+        repository = organization,  # Just the org, not org/image
+        image_name = image_name,  # Explicit domain-app format
         language = language,
     )
     
@@ -188,6 +193,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         version = version,
         language = language,
         registry = registry,
+        organization = organization,
         repo_name = image_name,  # Use domain-app format
         domain = domain,
         app_type = app_type,  # Pass through app_type for Helm chart generation
