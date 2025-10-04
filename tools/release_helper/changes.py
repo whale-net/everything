@@ -86,24 +86,33 @@ def detect_changed_apps(base_commit: Optional[str] = None) -> List[Dict[str, str
     print(f"Analyzing {len(relevant_files)} changed files using Bazel query...", file=sys.stderr)
     
     # Convert git file paths to Bazel labels: libs/python/utils.py → //libs/python:utils.py
-    # Skip files that can never be valid targets (.bzl, BUILD files)
+    # For BUILD file changes, track the package paths
     file_labels = []
+    changed_packages = set()
+    
     for f in relevant_files:
         # Skip .bzl files - they're loaded, not built
         if f.endswith('.bzl'):
             continue
         
-        # Skip BUILD files - they're configuration, not targets  
+        # BUILD file changes affect the entire package
         if f.endswith(('BUILD', 'BUILD.bazel')):
+            parts = f.split('/')
+            if len(parts) > 1:
+                package = '/'.join(parts[:-1])
+                changed_packages.add(f"//{package}")
+            else:
+                changed_packages.add("//")
             continue
         
         parts = f.split('/')
         if len(parts) < 2:
-            # Root level file, skip
-            continue
-        package = '/'.join(parts[:-1])
-        filename = parts[-1]
-        file_labels.append(f"//{package}:{filename}")
+            # Root level file: emit //:filename
+            file_labels.append(f"//:{f}")
+        else:
+            package = '/'.join(parts[:-1])
+            filename = parts[-1]
+            file_labels.append(f"//{package}:{filename}")
     
     if not file_labels:
         print("No file labels to analyze", file=sys.stderr)
@@ -114,8 +123,8 @@ def detect_changed_apps(base_commit: Optional[str] = None) -> List[Dict[str, str
     valid_labels = []
     if file_labels:
         try:
-            # Try to validate all labels at once
-            labels_expr = " + ".join([f"set({label})" for label in file_labels])
+            # Try to validate all labels at once using union operator
+            labels_expr = " + ".join(file_labels)
             result = run_bazel([
                 "query",
                 labels_expr,
@@ -139,15 +148,27 @@ def detect_changed_apps(base_commit: Optional[str] = None) -> List[Dict[str, str
                     # Label is not valid (e.g., deleted file)
                     continue
     
-    if not valid_labels:
+    if not valid_labels and not changed_packages:
         print("No valid Bazel targets in changed files", file=sys.stderr)
         return []
     
-    # Query rdeps for all valid labels in a single batched query
-    # This is much more efficient than querying each file individually
+    # Query rdeps for all valid labels and changed packages
     all_affected_targets = set()
     try:
-        labels_expr = " + ".join([f"set({label})" for label in valid_labels])
+        # Build query for file labels and package changes
+        query_parts = []
+        if valid_labels:
+            query_parts.append(" + ".join(valid_labels))
+        if changed_packages:
+            # For changed packages, query all targets in those packages
+            for pkg in changed_packages:
+                query_parts.append(f"{pkg}/...")
+        
+        if not query_parts:
+            print("No query parts to analyze", file=sys.stderr)
+            return []
+        
+        labels_expr = " + ".join(query_parts)
         result = run_bazel([
             "query",
             f"rdeps(//..., {labels_expr})",
@@ -163,22 +184,29 @@ def detect_changed_apps(base_commit: Optional[str] = None) -> List[Dict[str, str
         print("No targets affected by changed files", file=sys.stderr)
         return []
     
-    # Find app_metadata targets whose binary_target dependencies intersect with affected targets
-    # Using binary_target (not image_target) because:
-    # 1. Binaries are what actually compile the source code
-    # 2. More reusable - tests depend on binaries, not images
-    # 3. Faster queries - simpler dependency graph than images
+    # Find app_metadata targets that depend on affected targets
+    # Strategy: Query which metadata targets have the affected targets in their dependency graph
     try:
-        # Build a set expression for all affected targets
-        affected_set = " + ".join([f"set({t})" for t in all_affected_targets])
-        
-        # Query: Get all metadata targets, find their binary_target deps, see which intersect with affected
+        # Get all app_metadata targets
         result = run_bazel([
             "query",
-            f"let all_affected = {affected_set} in "
-            f"let all_metadata = kind('app_metadata', //...) in "
-            f"let metadata_binary_deps = deps($all_metadata, 1) - $all_metadata in "
-            f"rdeps($all_metadata, $metadata_binary_deps intersect $all_affected, 1) intersect $all_metadata",
+            "kind('app_metadata', //...)",
+            "--output=label"
+        ])
+        all_metadata_targets = set(result.stdout.strip().split('\n')) if result.stdout.strip() else set()
+        
+        if not all_metadata_targets:
+            print("No app_metadata targets found", file=sys.stderr)
+            return []
+        
+        # For each metadata target, check if it depends on any affected targets
+        # Use rdeps in reverse: which metadata targets depend on the affected targets?
+        metadata_expr = " + ".join(all_metadata_targets)
+        affected_expr = " + ".join(all_affected_targets)
+        
+        result = run_bazel([
+            "query",
+            f"rdeps({metadata_expr}, {affected_expr})",
             "--output=label"
         ])
         

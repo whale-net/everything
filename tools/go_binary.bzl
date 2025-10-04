@@ -95,11 +95,22 @@ def multiplatform_go_binary(
         **kwargs
     )
     
-    # NOTE: We do NOT create a base name binary (e.g., "hello_go").
-    # Instead, release_app and change detection use {name}_linux_amd64 directly.
-    # This is safe because all platform binaries (_linux_amd64, _linux_arm64)
-    # are built from the same source files and deps, so checking one platform's dependencies
-    # is sufficient for change detection. We chose linux_amd64 as it's the most common platform.
+    # Host platform binary for local development (bazel run)
+    go_binary(
+        name = name + "_host",
+        srcs = srcs,
+        deps = deps,
+        visibility = visibility or ["//visibility:public"],
+        **kwargs
+    )
+    
+    # Create alias for local development (bazel run //demo/hello_go:hello_go)
+    # Points to host binary which runs on the developer's machine (macOS, Linux, etc)
+    native.alias(
+        name = name,
+        actual = ":" + name + "_host",
+        visibility = visibility,
+    )
     
     # Create app_info target to expose metadata (port, app_type) to release system
     # Note: Go binaries typically don't have args since they're compiled executables

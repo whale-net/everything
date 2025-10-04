@@ -689,7 +689,7 @@
     "@@rules_oci+//oci:extensions.bzl%oci": {
       "general": {
         "bzlTransitiveDigest": "MObYeJgeRukG0C/KOeHNd02huv38P3KnpPsNX1OgrI4=",
-        "usagesDigest": "v3JR4q8jp82pjik7C+JndizD0OeP5sVPrNrvdMJfzRk=",
+        "usagesDigest": "UCQz651P4MtdS+yOiO/0Zv6Q5XkCBSgmfscke0++Vp0=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -769,19 +769,6 @@
               "identifier": "sha256:728785b59223d755e3e5c5af178fab1be7031f3522c5ccd7a0b32b80d8248123",
               "platform": "linux/s390x",
               "target_name": "ubuntu_base_linux_s390x",
-              "bazel_tags": []
-            }
-          },
-          "ubuntu_base_unknown_unknown": {
-            "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_pull",
-            "attributes": {
-              "www_authenticate_challenges": {},
-              "scheme": "https",
-              "registry": "index.docker.io",
-              "repository": "library/ubuntu",
-              "identifier": "sha256:728785b59223d755e3e5c5af178fab1be7031f3522c5ccd7a0b32b80d8248123",
-              "platform": "unknown/unknown",
-              "target_name": "ubuntu_base_unknown_unknown",
               "bazel_tags": []
             }
           },
@@ -927,8 +914,7 @@
             "ubuntu_base_linux_arm64_v8",
             "ubuntu_base_linux_ppc64le",
             "ubuntu_base_linux_riscv64",
-            "ubuntu_base_linux_s390x",
-            "ubuntu_base_unknown_unknown"
+            "ubuntu_base_linux_s390x"
           ],
           "explicitRootModuleDirectDevDeps": [],
           "useAllRepos": "NO",

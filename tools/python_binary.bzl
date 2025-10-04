@@ -120,9 +120,9 @@ def multiplatform_py_binary(
         {name}_linux_arm64  - Linux aarch64 binary (with platform transition for correct wheels)
         {name}_info         - AppInfo provider (metadata: args, port, app_type)
     
-    NOTE: No base name alias is created. release_app uses {name}_linux_amd64 directly
-    for change detection. This is safe because all platform variants are built from
-    the same sources, so checking linux_amd64's dependencies covers all platforms.
+    Also creates an alias: {name} → {name}_base_amd64 for local development (bazel run).
+    release_app uses {name}_linux_amd64 for change detection (safe since all platforms
+    share the same sources).
     
     Args:
         name: Base name for the binaries (will create {name}_linux_amd64 and {name}_linux_arm64)
@@ -182,6 +182,14 @@ def multiplatform_py_binary(
         visibility = visibility,
     )
     
+    # Create alias for local development (bazel run //demo/hello_python:hello_python)
+    # Points to base_amd64 which works for development on macOS/Linux
+    native.alias(
+        name = name,
+        actual = ":" + name + "_base_amd64",
+        visibility = visibility,
+    )
+    
     # Create app_info target to expose metadata (args, port, app_type) to release system
     # Extract args from kwargs if present
     args = kwargs.get("args", [])
@@ -193,9 +201,3 @@ def multiplatform_py_binary(
         app_type = app_type,
         visibility = visibility or ["//visibility:public"],
     )
-    
-    # NOTE: We do NOT create a base name alias (e.g., "hello_python").
-    # Instead, release_app and change detection use {name}_linux_amd64 directly.
-    # This is safe because all platform binaries (_linux_amd64, _linux_arm64)
-    # are built from the same source files and deps, so checking one platform's dependencies
-    # is sufficient for change detection. We chose linux_amd64 as it's the most common platform.

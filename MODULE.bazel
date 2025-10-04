@@ -31,10 +31,9 @@ oci.pull(
         "linux/ppc64le",
         "linux/riscv64",
         "linux/s390x",
-        "unknown/unknown",
     ],
 )
-use_repo(oci, "ubuntu_base", "ubuntu_base_linux_amd64", "ubuntu_base_linux_arm64_v8", "ubuntu_base_linux_arm_v7", "ubuntu_base_linux_ppc64le", "ubuntu_base_linux_riscv64", "ubuntu_base_linux_s390x", "ubuntu_base_unknown_unknown")
+use_repo(oci, "ubuntu_base", "ubuntu_base_linux_amd64", "ubuntu_base_linux_arm64_v8", "ubuntu_base_linux_arm_v7", "ubuntu_base_linux_ppc64le", "ubuntu_base_linux_riscv64", "ubuntu_base_linux_s390x")
 
 # Python setup with rules_python for interpreter registration
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
