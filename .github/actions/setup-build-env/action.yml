@@ -70,15 +70,17 @@ runs:
           rm -f .bazelrc.remote
         fi
 
-    - name: Setup Bazel with Multi-Layered Caching
+    - name: Setup Bazel with Optimized Caching
       id: setup-bazel
       uses: bazel-contrib/setup-bazel@0.15.0
       with:
-        # Enable global caching for Bazel binaries and dependencies
+        # Enable bazelisk binary caching (minimal overhead)
         bazelisk-cache: true
+        # Enable repository cache for all external dependencies (single consolidated cache)
         repository-cache: true
-        # External repositories caching - cache all repos >10MB automatically
-        external-cache: true
+        # Disable external-cache to avoid many small cache requests
+        # The repository-cache already handles external dependencies efficiently
+        external-cache: false
         # Disk cache - isolated by cache suffix for better hit rates
         disk-cache: ${{ inputs.cache-suffix || 'true' }}
 
