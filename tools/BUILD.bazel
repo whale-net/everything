@@ -41,13 +41,59 @@ load(":platforms.bzl", "define_platforms")
 
 define_platforms()
 
+# Platform detection for release helper selection
+config_setting(
+    name = "on_macos_arm64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:arm64",
+    ],
+)
+
+config_setting(
+    name = "on_macos_x86_64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "on_linux_arm64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:arm64",
+    ],
+)
+
+config_setting(
+    name = "on_linux_aarch64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+config_setting(
+    name = "on_linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
 # Convenient alias for release helper (automatically selects correct platform)
+# On macOS (darwin), use the base targets which run natively
+# On Linux, use the platform-specific Linux targets for containerization
 alias(
     name = "release",
     actual = select({
-        "@platforms//cpu:aarch64": "//tools/release_helper:release_helper_linux_arm64",
-        "@platforms//cpu:arm64": "//tools/release_helper:release_helper_linux_arm64",
-        "//conditions:default": "//tools/release_helper:release_helper_linux_amd64",
+        ":on_macos_arm64": "//tools/release_helper:release_helper_base_arm64",
+        ":on_macos_x86_64": "//tools/release_helper:release_helper_base_amd64",
+        ":on_linux_arm64": "//tools/release_helper:release_helper_linux_arm64",
+        ":on_linux_aarch64": "//tools/release_helper:release_helper_linux_arm64",
+        ":on_linux_x86_64": "//tools/release_helper:release_helper_linux_amd64",
+        "//conditions:default": "//tools/release_helper:release_helper_base_amd64",
     }),
     visibility = ["//visibility:public"],
 )

@@ -119,12 +119,14 @@ def multiplatform_py_binary(
             fail("Could not determine main file for {}, please specify main= parameter".format(name))
     
     # Create base py_binary targets that will be transitioned to different platforms
+    # Base targets can be used directly on macOS for development, so they need visibility
+    # to be accessible from //tools:release alias
     py_binary(
         name = name + "_base_amd64",
         srcs = srcs,
         main = main,
         deps = deps,
-        visibility = ["//visibility:private"],
+        visibility = visibility or ["//tools:__pkg__"],
         **kwargs
     )
     
@@ -133,7 +135,7 @@ def multiplatform_py_binary(
         srcs = srcs,
         main = main,
         deps = deps,
-        visibility = ["//visibility:private"],
+        visibility = visibility or ["//tools:__pkg__"],
         **kwargs
     )
     
