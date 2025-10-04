@@ -41,10 +41,14 @@ load(":platforms.bzl", "define_platforms")
 
 define_platforms()
 
-# Convenient alias for release helper (points to the platform-specific binary)
+# Convenient alias for release helper (automatically selects correct platform)
 alias(
     name = "release",
-    actual = "//tools/release_helper:release_helper_linux_amd64",
+    actual = select({
+        "@platforms//cpu:aarch64": "//tools/release_helper:release_helper_linux_arm64",
+        "@platforms//cpu:arm64": "//tools/release_helper:release_helper_linux_arm64",
+        "//conditions:default": "//tools/release_helper:release_helper_linux_amd64",
+    }),
     visibility = ["//visibility:public"],
 )
 

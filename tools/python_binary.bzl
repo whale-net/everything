@@ -17,12 +17,13 @@ Usage - exactly like py_binary:
         domain = "api",
     )
 
-This creates two binaries:
+This creates two user-facing binaries (plus internal base targets):
   - my_app_linux_amd64 (built with --platforms=//tools:linux_x86_64)
   - my_app_linux_arm64 (built with --platforms=//tools:linux_arm64)
-
-The platform transitions ensure pycross selects the correct wheels for each architecture,
-enabling true cross-compilation."""
+  
+Internally, this also creates base py_binary targets (_base_amd64, _base_arm64) that
+are wrapped by rules with platform transitions applied. The transitions ensure pycross 
+selects the correct wheels for each architecture, enabling true cross-compilation."""
 
 load("@rules_python//python:defs.bzl", "py_binary")
 

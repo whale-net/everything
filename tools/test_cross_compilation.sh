@@ -15,6 +15,9 @@
 
 set -euo pipefail
 
+# Maximum number of .so files to check per container (limits output size)
+MAX_SO_FILES=5
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -39,6 +42,10 @@ echo "╚═══════════════════════�
 echo ""
 
 # Function to test an app's multiarch images
+# Args:
+#   app_name: Base name of the app (e.g., "hello_fastapi")
+#   test_package: Python package name with compiled extensions to check (e.g., "pydantic_core")
+#   description: Human-readable test description for output
 test_app_multiarch() {
     local app_name=$1
     local test_package=$2
@@ -78,7 +85,7 @@ test_app_multiarch() {
     
     local amd64_so_files
     if ! amd64_so_files=$(docker run --rm --entrypoint /bin/sh "${app_name}_amd64:latest" \
-        -c "find /app -name '*${test_package}*.so' 2>/dev/null | head -5"); then
+        -c "find /app -name '*${test_package}*.so' 2>/dev/null | head -${MAX_SO_FILES}"); then
         echo -e "${YELLOW}WARNING: Failed to search for .so files in AMD64 image${NC}"
         return 1
     fi
@@ -116,7 +123,7 @@ test_app_multiarch() {
     
     local arm64_so_files
     if ! arm64_so_files=$(docker run --rm --entrypoint /bin/sh "${app_name}_arm64:latest" \
-        -c "find /app -name '*${test_package}*.so' 2>/dev/null | head -5"); then
+        -c "find /app -name '*${test_package}*.so' 2>/dev/null | head -${MAX_SO_FILES}"); then
         echo -e "${YELLOW}WARNING: Failed to search for .so files in ARM64 image${NC}"
         return 1
     fi
