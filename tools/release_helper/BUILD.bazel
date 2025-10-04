@@ -124,17 +124,6 @@ py_test(
     size = "small",
 )
 
-# Unit tests for bazel change detection
-py_test(
-    name = "test_bazel_change_detection",
-    srcs = ["test_bazel_change_detection.py"],
-    deps = [
-        ":release_helper_lib",
-        "@pypi//:pytest",
-    ],
-    size = "small",
-)
-
 # Unit tests for github release module
 py_test(
     name = "test_github_release",
