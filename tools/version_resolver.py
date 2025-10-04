@@ -154,21 +154,18 @@ class VersionResolver:
                 "repository": f"{metadata['registry']}/whale-net/{metadata['repo_name']}"
             }
             
-            # Determine resource configuration based on language
-            language = metadata.get("language", "")
-            if language == "python":
-                resources = {
-                    "requests": {
-                        "memory": "64Mi",
-                        "cpu": "100m"
-                    },
-                    "limits": {
-                        "memory": "256Mi",
-                        "cpu": "500m"
-                    }
-                }
-            else:
-                resources = {
+            # App configuration
+            # Note: Resource limits are example values only. Actual resource configuration
+            # is determined by the Helm chart composer (tools/helm/composer.go) based on
+            # app type and language. See DefaultResourceConfigForLanguage() in types.go.
+            values[domain]["apps"][app_name] = {
+                "enabled": True,
+                "version": resolved_tag,
+                "description": metadata.get("description", ""),
+                "language": metadata.get("language", ""),
+                "replicas": 1,
+                "port": 8000,
+                "resources": {
                     "requests": {
                         "memory": "128Mi",
                         "cpu": "100m"
@@ -178,16 +175,6 @@ class VersionResolver:
                         "cpu": "500m"
                     }
                 }
-            
-            # App configuration
-            values[domain]["apps"][app_name] = {
-                "enabled": True,
-                "version": resolved_tag,
-                "description": metadata.get("description", ""),
-                "language": language,
-                "replicas": 1,
-                "port": 8000,
-                "resources": resources
             }
         
         # Apply user overrides
