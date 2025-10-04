@@ -364,11 +364,16 @@ def package_helm_chart_for_release(
     versioning (auto_version=True). When auto-versioning, each chart maintains its
     own version independently based on git tags.
     
+    When use_released_app_versions=True, this function queries git tags to find the
+    latest semver version for each app in the chart and updates the imageTag values
+    in the chart's values.yaml. This ensures published Helm charts reference specific
+    versions instead of "latest".
+    
     Args:
         chart_name: Name of the helm chart (e.g., "hello-fastapi")
         chart_version: Explicit version for the chart (if None and auto_version=True, determines automatically)
         output_dir: Optional output directory for the packaged chart
-        use_released_app_versions: Whether to resolve app versions from git tags
+        use_released_app_versions: Whether to resolve app versions from git tags (default: True)
         auto_version: If True, automatically determine version from git tags/Chart.yaml
         bump_type: Type of version bump when auto-versioning ("major", "minor", "patch")
         
@@ -379,7 +384,9 @@ def package_helm_chart_for_release(
     chart_metadata_target = find_helm_chart_bazel_target(chart_name)
     chart_metadata = get_helm_chart_metadata(chart_metadata_target)
     
-    # Resolve app versions
+    # Resolve app versions from git tags or use "latest"
+    # When use_released_app_versions=True, this queries git tags like "demo-hello_python.v1.2.3"
+    # to find the latest semver version for each app
     app_versions = resolve_app_versions_for_chart(chart_metadata, use_released_app_versions)
     
     # Get the actual chart target (without _chart_metadata suffix)
@@ -428,7 +435,8 @@ def package_helm_chart_for_release(
             chart_name=actual_chart_name,
             chart_version=chart_version,
             output_dir=output_dir,
-            auto_version=False  # We already determined the version
+            auto_version=False,  # We already determined the version
+            app_versions=app_versions  # Pass resolved app versions
         )
         return packaged_chart, chart_version
     else:
@@ -450,7 +458,8 @@ def package_chart_with_version(
     chart_version: Optional[str] = None,
     output_dir: Optional[Path] = None,
     bump_type: str = "patch",
-    auto_version: bool = False
+    auto_version: bool = False,
+    app_versions: Optional[Dict[str, str]] = None
 ) -> Path:
     """Package a Helm chart directory into a versioned tarball using helm package.
     
@@ -465,6 +474,7 @@ def package_chart_with_version(
         output_dir: Directory to output the packaged chart (default: create temp dir)
         bump_type: Type of version bump when auto-versioning ("major", "minor", "patch")
         auto_version: If True, automatically determine version from git tags/Chart.yaml
+        app_versions: Optional dict mapping app names to versions for updating imageTag values
         
     Returns:
         Path to the generated .tgz file
@@ -508,6 +518,25 @@ def package_chart_with_version(
         
         with open(chart_yaml_path, 'w') as f:
             yaml.safe_dump(chart_data, f, default_flow_style=False, sort_keys=False)
+    
+    # Update values.yaml with resolved app versions (imageTag)
+    # This ensures published Helm charts use specific semver tags instead of "latest"
+    # when use_released_app_versions=True in package_helm_chart_for_release
+    if app_versions:
+        values_yaml_path = temp_chart_dir / "values.yaml"
+        if values_yaml_path.exists():
+            with open(values_yaml_path, 'r') as f:
+                values_data = yaml.safe_load(f)
+            
+            # Update imageTag for each app in the apps section
+            if 'apps' in values_data:
+                for app_name, app_version in app_versions.items():
+                    if app_name in values_data['apps']:
+                        values_data['apps'][app_name]['imageTag'] = app_version
+                        print(f"Updated {app_name} imageTag to {app_version}")
+            
+            with open(values_yaml_path, 'w') as f:
+                yaml.safe_dump(values_data, f, default_flow_style=False, sort_keys=False)
     
     # Use helm package command to create the tarball from the temporary copy
     result = subprocess.run(
