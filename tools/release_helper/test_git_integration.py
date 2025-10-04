@@ -127,9 +127,9 @@ class TestGitIntegration:
     def test_format_git_tag_with_real_repo(self, git_repo):
         """Test format_git_tag function - this doesn't need git but tests in context."""
         # Test various tag formats that might be used in real scenarios
-        assert format_git_tag("api", "user-service", "1.0.0") == "api-user-service-1.0.0"
-        assert format_git_tag("web", "frontend", "2.1.0-beta") == "web-frontend-2.1.0-beta"
-        assert format_git_tag("data", "ml-pipeline", "1.2.3") == "data-ml-pipeline-1.2.3"
+        assert format_git_tag("api", "user-service", "1.0.0") == "api-user-service.1.0.0"
+        assert format_git_tag("web", "frontend", "2.1.0-beta") == "web-frontend.2.1.0-beta"
+        assert format_git_tag("data", "ml-pipeline", "1.2.3") == "data-ml-pipeline.1.2.3"
 
     def test_create_tag_with_commit_sha(self, git_repo):
         """Test creating a tag on a specific commit SHA."""

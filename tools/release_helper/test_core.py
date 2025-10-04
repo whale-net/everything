@@ -184,10 +184,10 @@ class TestRunBazel:
         # Mock subprocess.CalledProcessError
         error = subprocess.CalledProcessError(
             returncode=1, 
-            cmd=["bazel", "build", "//invalid:target"],
-            stdout="build output",
-            stderr="build error"
+            cmd=["bazel", "build", "//invalid:target"]
         )
+        error.stdout = "build output"
+        error.stderr = "build error"
         mock_subprocess_run.side_effect = error
         
         with pytest.raises(subprocess.CalledProcessError):
@@ -211,10 +211,10 @@ class TestRunBazel:
         # Mock subprocess.CalledProcessError without stdout/stderr
         error = subprocess.CalledProcessError(
             returncode=1, 
-            cmd=["bazel", "build", "//invalid:target"],
-            stdout=None,
-            stderr=None
+            cmd=["bazel", "build", "//invalid:target"]
         )
+        error.stdout = None
+        error.stderr = None
         mock_subprocess_run.side_effect = error
         
         with pytest.raises(subprocess.CalledProcessError):

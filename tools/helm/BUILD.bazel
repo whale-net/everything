@@ -59,5 +59,5 @@ sh_test(
     data = [
         "//demo:fastapi_chart",
     ],
-    tags = ["integration"],
+    tags = ["manual", "integration"],  # Requires helm binary to run
 )

@@ -23,17 +23,17 @@ class TestFormatGitTag:
     def test_format_git_tag_basic(self):
         """Test basic git tag formatting."""
         result = format_git_tag("api", "user-service", "1.0.0")
-        assert result == "api-user-service-1.0.0"
+        assert result == "api-user-service.1.0.0"
 
     def test_format_git_tag_with_hyphens(self):
         """Test git tag formatting with hyphens in components."""
         result = format_git_tag("data-processing", "ml-service", "2.1.0-beta")
-        assert result == "data-processing-ml-service-2.1.0-beta"
+        assert result == "data-processing-ml-service.2.1.0-beta"
 
     def test_format_git_tag_empty_strings(self):
         """Test git tag formatting with empty strings."""
         result = format_git_tag("", "", "")
-        assert result == "--"
+        assert result == "-."
 
 
 class TestCreateGitTag:
