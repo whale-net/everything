@@ -3,6 +3,21 @@
 Creates platform-specific go_binary targets with proper GOOS/GOARCH settings,
 enabling true cross-compilation for container images.
 
+WHEN TO USE THIS:
+  ✅ Use multiplatform_go_binary for:
+     - Applications that will be containerized (with release_app)
+     - Services that need to run on both AMD64 and ARM64
+     - Any binary that gets deployed via container images
+
+  ❌ Use standard go_binary for:
+     - Build tools (e.g., //tools/helm:helm_composer)
+     - CLI utilities that run on the host during builds
+     - Development scripts that don't need containerization
+     
+     Why? Build tools only need to run on the host platform. Creating 
+     multiple platform variants would be unnecessary overhead and could
+     cause confusion about which binary to use during builds.
+
 Usage - exactly like go_binary:
     multiplatform_go_binary(
         name = "my_app",
