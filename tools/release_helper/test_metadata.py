@@ -77,6 +77,7 @@ def sample_metadata():
         "language": "python",
         "registry": "ghcr.io",
         "repo_name": "demo-hello_fastapi",
+        "organization": "whale-net",
         "domain": "demo"
     }
 
