@@ -436,11 +436,11 @@ jobs:
           echo "**Status:** ❌ Failed or Cancelled" >> $GITHUB_STEP_SUMMARY
         fi
 
-  # Release helm charts (can run independently of app releases)
+  # Release helm charts (must run after app images are built and tagged)
   release-helm-charts:
     name: Release Helm Charts
-    needs: [plan-release]
-    if: github.event.inputs.helm_charts != ''
+    needs: [plan-release, release, create-github-releases]
+    if: github.event.inputs.helm_charts != '' && (always() && !cancelled())
     runs-on: ubuntu-latest
     permissions:
       contents: write     # Push git tags and read repository content
