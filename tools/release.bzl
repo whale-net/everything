@@ -140,6 +140,18 @@ def release_app(name, binary_target = None, language = None, domain = None, desc
     image_target = name + "_image"
     repository = organization + "/" + image_name  # Repository path (without registry)
     
+    # Derive platform-specific binary targets from binary_target
+    # If binary_target ends with _linux_amd64, derive ARM64 by replacing the suffix
+    # This handles both local targets (":name_linux_amd64") and cross-package targets ("//path:name_linux_amd64")
+    if binary_target.endswith("_linux_amd64"):
+        # Already platform-specific - derive both platforms
+        binary_amd64_target = binary_target
+        binary_arm64_target = binary_target.replace("_linux_amd64", "_linux_arm64")
+    else:
+        # Assume standard naming: append platform suffixes
+        binary_amd64_target = binary_target + "_linux_amd64"
+        binary_arm64_target = binary_target + "_linux_arm64"
+    
     # Create multiplatform OCI image
     if language == "python":
         # Python apps have platform-specific binaries with correct wheels for each architecture
@@ -147,8 +159,8 @@ def release_app(name, binary_target = None, language = None, domain = None, desc
         # each gets the correct wheels for its architecture (x86_64 vs aarch64)
         multiplatform_image(
             name = image_target,
-            binary_amd64 = ":" + name + "_linux_amd64",
-            binary_arm64 = ":" + name + "_linux_arm64",
+            binary_amd64 = binary_amd64_target,
+            binary_arm64 = binary_arm64_target,
             registry = registry,
             repository = repository,
             language = language,
@@ -158,8 +170,8 @@ def release_app(name, binary_target = None, language = None, domain = None, desc
         # Similar to Python, we explicitly build for both architectures
         multiplatform_image(
             name = image_target,
-            binary_amd64 = ":" + name + "_linux_amd64",
-            binary_arm64 = ":" + name + "_linux_arm64",
+            binary_amd64 = binary_amd64_target,
+            binary_arm64 = binary_arm64_target,
             registry = registry,
             repository = repository,
             language = language,
