@@ -44,6 +44,11 @@ def _should_ignore_file(file_path: str) -> bool:
     if file_path.endswith('copilot-instructions.md'):
         return True
     
+    # Ignore release helper tools - they're release automation, not app code
+    # These are the CLI tools used by CI/CD workflows to manage releases
+    if file_path.startswith('tools/release_helper/'):
+        return True
+    
     return False
 
 
