@@ -11,7 +11,8 @@ def _app_metadata_impl(ctx):
     metadata = {
         "name": ctx.attr.app_name,  # Use explicit app_name instead of ctx.attr.name
         "version": ctx.attr.version,
-        "image_target": str(ctx.attr.image_target.label),  # Convert label to string
+        "binary_target": str(ctx.attr.binary_target.label),  # Direct binary reference
+        "image_target": str(ctx.attr.image_target.label),  # Image dependency (transitively includes binaries)
         "description": ctx.attr.description,
         "language": ctx.attr.language,
         "registry": ctx.attr.registry,
@@ -77,6 +78,7 @@ app_metadata = rule(
         "app_name": attr.string(mandatory = True),  # Add explicit app_name attribute
         "version": attr.string(default = "latest"),
         "binary_info": attr.label(providers = [AppInfo]),  # Optional: binary's AppInfo provider
+        "binary_target": attr.label(mandatory = True),  # Direct binary dependency
         "image_target": attr.label(mandatory = True),  # Image dependency (transitively includes binaries)
         "description": attr.string(default = ""),
         "language": attr.string(mandatory = True),
@@ -180,11 +182,17 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     # Both Python and Go now create AppInfo providers
     binary_info = binary_info_label
     
+    # Use the linux_amd64 binary as the binary_target reference
+    # This provides a direct link to a specific binary platform for non-image scenarios
+    # (The image_target transitively depends on both amd64 and arm64 binaries)
+    binary_target_ref = binary_amd64
+    
     # Create release metadata
     app_metadata(
         name = name + "_metadata",
         app_name = name,  # Pass the actual app name
         binary_info = binary_info,  # AppInfo provider for extracting args, etc
+        binary_target = binary_target_ref,  # Direct binary reference for non-image scenarios
         image_target = image_target,  # Transitively depends on all platform binaries
         description = description,
         version = version,

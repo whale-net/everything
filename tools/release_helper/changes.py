@@ -163,18 +163,22 @@ def detect_changed_apps(base_commit: Optional[str] = None) -> List[Dict[str, str
         print("No targets affected by changed files", file=sys.stderr)
         return []
     
-    # Find app_metadata targets whose dependencies intersect with affected targets
-    # The metadata depends on image_target, which transitively depends on all platform binaries
+    # Find app_metadata targets whose binary_target dependencies intersect with affected targets
+    # Using binary_target (not image_target) because:
+    # 1. Binaries are what actually compile the source code
+    # 2. More reusable - tests depend on binaries, not images
+    # 3. Faster queries - simpler dependency graph than images
     try:
         # Build a set expression for all affected targets
         affected_set = " + ".join([f"set({t})" for t in all_affected_targets])
         
+        # Query: Get all metadata targets, find their binary_target deps, see which intersect with affected
         result = run_bazel([
             "query",
             f"let all_affected = {affected_set} in "
             f"let all_metadata = kind('app_metadata', //...) in "
-            f"let metadata_deps = deps($all_metadata, 1) - $all_metadata in "
-            f"rdeps($all_metadata, $metadata_deps intersect $all_affected, 1) intersect $all_metadata",
+            f"let metadata_binary_deps = deps($all_metadata, 1) - $all_metadata in "
+            f"rdeps($all_metadata, $metadata_binary_deps intersect $all_affected, 1) intersect $all_metadata",
             "--output=label"
         ])
         
