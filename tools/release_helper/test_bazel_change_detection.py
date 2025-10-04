@@ -5,7 +5,7 @@ Tests the improved change detection that relies on Bazel's dependency
 analysis rather than making assumptions about "infrastructure" changes.
 """
 
-from tools.release_helper.changes import _is_infrastructure_change
+from tools.release_helper.changes import _is_infrastructure_change, _should_ignore_file
 
 
 class TestBazelBasedChangeDetection:
@@ -45,3 +45,46 @@ class TestBazelBasedChangeDetection:
         # Instead, Bazel dependency analysis will determine if any apps
         # actually depend on these files. Since these are release automation
         # files that don't affect app builds, Bazel should return 0 affected apps.
+
+    def test_tools_test_files_are_filtered(self):
+        """Test that test files in tools/ directory are filtered out."""
+        # Test files in tools/ test the build infrastructure itself, not app code
+        # They should be filtered to avoid triggering unnecessary rebuilds
+        test_files = [
+            'tools/helm/composer_test.go',
+            'tools/helm/types_test.go',
+            'tools/release_helper/test_changes.py',
+            'tools/release_helper/test_metadata.py',
+            'tools/release_helper/test_bazel_change_detection.py',
+        ]
+        
+        for file_path in test_files:
+            assert _should_ignore_file(file_path) is True, f"Test file should be filtered: {file_path}"
+    
+    def test_tools_source_files_not_filtered(self):
+        """Test that actual source files in tools/ are NOT filtered."""
+        # Real infrastructure code should trigger Bazel analysis
+        source_files = [
+            'tools/helm/composer.go',
+            'tools/helm/types.go',
+            'tools/helm/helm.bzl',
+            'tools/release.bzl',
+            'tools/release_helper/changes.py',
+            'tools/release_helper/cli.py',
+            'tools/version_resolver.py',
+        ]
+        
+        for file_path in source_files:
+            assert _should_ignore_file(file_path) is False, f"Source file should NOT be filtered: {file_path}"
+    
+    def test_app_test_files_not_filtered(self):
+        """Test that app test files are NOT filtered."""
+        # App tests should trigger their app rebuilds
+        app_test_files = [
+            'demo/hello_python/test_main.py',
+            'demo/hello_go/main_test.go',
+            'manman/src/worker/subscriber_test.py',
+        ]
+        
+        for file_path in app_test_files:
+            assert _should_ignore_file(file_path) is False, f"App test should NOT be filtered: {file_path}"

@@ -44,6 +44,11 @@ def _should_ignore_file(file_path: str) -> bool:
     if file_path.endswith('copilot-instructions.md'):
         return True
     
+    # Ignore test files in tools/ directory - they test the build infrastructure itself, not app code
+    # Examples: tools/helm/composer_test.go, tools/release_helper/test_*.py
+    if file_path.startswith('tools/') and ('_test.go' in file_path or '/test_' in file_path):
+        return True
+    
     return False
 
 
