@@ -51,11 +51,32 @@ Navigate to: **Actions → Release → Run workflow**
 - Helm charts: *(leave empty)*
 - Result: Only app released, no helm charts
 
-**Example 3: Release all apps and all charts**
+**Example 3: Release all apps and all charts (excluding demo)**
 - Apps: `all`
 - Version: `v3.0.0`
 - Helm charts: `all`
-- Result: All apps and all charts released together
+- Include demo domain: ❌ (unchecked)
+- Result: All production apps and charts released (demo domain excluded)
+
+**Example 4: Release all apps and all charts (including demo)**
+- Apps: `all`
+- Version: `v3.0.0`
+- Helm charts: `all`
+- Include demo domain: ✅ (checked)
+- Result: All apps and all charts released together including demo domain
+
+## Demo Domain Exclusion (New Feature)
+
+When using `all` for apps or helm charts, the demo domain is now **excluded by default**. This ensures production releases don't accidentally include demo/example applications and charts.
+
+**To include demo domain:**
+- Check the "Include demo domain" checkbox in the GitHub Actions workflow
+- Or use `--include-demo` flag when calling CLI commands directly
+
+**Behavior:**
+- Specific app/chart names (e.g., `hello_python`) are not affected
+- Domain names (e.g., `demo`, `manman`) are not affected
+- Only the special `all` keyword triggers the exclusion logic
 
 ## Benefits
 
