@@ -111,21 +111,16 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     
     This macro consolidates the creation of OCI images and release metadata,
     ensuring consistency between the two systems. Works with multiplatform_py_binary
-    and multiplatform_go_binary which auto-generate platform-specific binaries.
+    and multiplatform_go_binary which create standard binaries.
     
-    For multiplatform builds, use the corresponding wrapper macros:
-    - Python: multiplatform_py_binary (from //tools:python_binary.bzl)
-    - Go: multiplatform_go_binary (from //tools:go_binary.bzl)
-    
-    Both macros create {name}_linux_amd64 and {name}_linux_arm64 targets automatically,
-    enabling cross-compilation for container images. They also create {name}_info targets
-    that expose AppInfo providers with metadata (args, port, app_type).
+    The binaries are built for different platforms using Bazel's --platforms flag.
+    Cross-compilation is handled automatically by rules_pycross (Python) and rules_go (Go).
     
     Args:
-        name: App name (should match directory name and multiplatform binary name)
-        binary_name: Target label for the binaries. Can be:
-                     - Simple name: "my_app" -> looks for :my_app_linux_amd64/arm64
-                     - Full label: "//path/to:binary" -> looks for //path/to:binary_linux_amd64/arm64
+        name: App name (should match directory name and binary name)
+        binary_name: Target label for the binary. Can be:
+                     - Simple name: "my_app" -> looks for :my_app
+                     - Full label: "//path/to:binary" -> uses that binary
                      Defaults to name if not provided.
         language: Programming language ("python" or "go")
         domain: Domain/category for the app (e.g., "demo", "api", "web")

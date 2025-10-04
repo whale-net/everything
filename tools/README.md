@@ -4,10 +4,12 @@ This directory contains Bazel tools and utilities for the monorepo.
 
 ## Binary Wrappers
 
-Binary wrappers create platform-specific targets for cross-compilation and expose application metadata through the `AppInfo` provider. This metadata (args, port, app_type) is automatically extracted by the release system, eliminating duplication between binary and deployment configuration.
+Binary wrappers create standard binaries with metadata support through the `AppInfo` provider. This metadata (args, port, app_type) is automatically extracted by the release system, eliminating duplication between binary and deployment configuration.
+
+Cross-compilation happens automatically when building with different `--platforms` flags.
 
 ### multiplatform_py_binary (`python_binary.bzl`)
-Wrapper for Python binaries that creates platform-specific targets for cross-compilation.
+Simplified wrapper for Python binaries that creates a standard `py_binary` with metadata.
 
 ```starlark
 load("//tools:python_binary.bzl", "multiplatform_py_binary")
@@ -23,10 +25,14 @@ multiplatform_py_binary(
 ```
 
 Creates these targets:
-- `my_app_linux_amd64` - Linux x86_64 binary with correct wheel selection
-- `my_app_linux_arm64` - Linux ARM64 binary with correct wheel selection
-- `my_app_base_amd64`, `my_app_base_arm64` - Base binaries (for local dev)
+- `my_app` - Standard py_binary (works on any platform)
 - `my_app_info` - AppInfo provider with metadata (used by release_app)
+
+**Cross-compilation**: Build for different platforms using `--platforms` flag:
+```bash
+bazel build //app:my_app --platforms=//tools:linux_x86_64
+bazel build //app:my_app --platforms=//tools:linux_arm64
+```
 
 **AppInfo Metadata**: The `args`, `port`, and `app_type` are automatically extracted by `release_app`, so you don't need to specify them twice. They're intrinsic to the application code:
 - `args` - How to run this binary
@@ -34,7 +40,7 @@ Creates these targets:
 - `app_type` - What kind of service this is (API, worker, job)
 
 ### multiplatform_go_binary (`go_binary.bzl`)
-Wrapper for Go binaries that creates platform-specific targets for cross-compilation.
+Simplified wrapper for Go binaries that creates a standard `go_binary` with metadata.
 
 ```starlark
 load("//tools:go_binary.bzl", "multiplatform_go_binary")
@@ -49,10 +55,14 @@ multiplatform_go_binary(
 ```
 
 Creates these targets:
-- `my_app` - Host platform binary (for local development)
-- `my_app_linux_amd64` - Cross-compiled Linux x86_64 binary
-- `my_app_linux_arm64` - Cross-compiled Linux ARM64 binary
+- `my_app` - Standard go_binary (works on any platform)
 - `my_app_info` - AppInfo provider with metadata (used by release_app)
+
+**Cross-compilation**: Build for different platforms using `--platforms` flag:
+```bash
+bazel build //app:my_app --platforms=//tools:linux_x86_64
+bazel build //app:my_app --platforms=//tools:linux_arm64
+```
 
 **Note**: Go binaries typically don't use `args` since they're compiled executables. Command-line flags are handled via the Go `flag` package.
 

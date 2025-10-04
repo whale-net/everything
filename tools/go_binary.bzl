@@ -76,27 +76,3 @@ def multiplatform_go_binary(
         app_type = app_type,
         visibility = visibility,
     )
-        srcs = srcs,
-        deps = deps,
-        visibility = visibility or ["//visibility:public"],
-        **kwargs
-    )
-    
-    # Create alias for local development (bazel run //demo/hello_go:hello_go)
-    # Points to host binary which runs on the developer's machine (macOS, Linux, etc)
-    native.alias(
-        name = name,
-        actual = ":" + name + "_host",
-        visibility = visibility,
-    )
-    
-    # Create app_info target to expose metadata (port, app_type) to release system
-    # Note: Go binaries typically don't have args since they're compiled executables
-    app_info(
-        name = name + "_info",
-        args = [],  # Go binaries don't use runtime args like Python
-        binary_name = name,
-        port = port,
-        app_type = app_type,
-        visibility = visibility or ["//visibility:public"],
-    )

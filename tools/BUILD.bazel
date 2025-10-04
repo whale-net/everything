@@ -85,19 +85,11 @@ config_setting(
     ],
 )
 
-# Convenient alias for release helper (automatically selects correct platform)
-# On macOS (darwin), use the base targets which run natively
-# On Linux, use the platform-specific Linux targets for containerization
+# Convenient alias for release helper
+# Uses the standard binary - no platform-specific targets needed
 alias(
     name = "release",
-    actual = select({
-        ":on_macos_arm64": "//tools/release_helper:release_helper_base_arm64",
-        ":on_macos_x86_64": "//tools/release_helper:release_helper_base_amd64",
-        ":on_linux_arm64": "//tools/release_helper:release_helper_linux_arm64",
-        ":on_linux_aarch64": "//tools/release_helper:release_helper_linux_arm64",
-        ":on_linux_x86_64": "//tools/release_helper:release_helper_linux_amd64",
-        "//conditions:default": "//tools/release_helper:release_helper_base_amd64",
-    }),
+    actual = "//tools/release_helper:release_helper",
     visibility = ["//visibility:public"],
 )
 
