@@ -132,11 +132,12 @@ def _query_affected_apps_bazel(changed_files: List[str]) -> List[Dict[str, str]]
         for package_path, files in sorted(files_by_package.items()):
             try:
                 # Use rdeps to find all app targets that depend on anything in this package
-                # This is much more precise than querying all targets in the package
+                # Exclude platform and config_setting targets - they're build configuration,
+                # not actual code dependencies (apps reference them for cross-compilation)
                 app_targets_str = " + ".join(app_targets)
                 result = run_bazel([
                     "query",
-                    f"rdeps({app_targets_str}, {package_path}/...)",
+                    f"rdeps({app_targets_str}, {package_path}/...) - kind('platform|config_setting', {package_path}/...)",
                     "--output=label"
                 ])
                 
