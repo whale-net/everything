@@ -51,7 +51,7 @@ alias(
 # Release metadata and OCI images for the release tool
 release_app(
     name = "release",
-    binary_target = "//tools/release_helper:release_helper_linux_amd64",
+    binary_name = "//tools/release_helper:release_helper",
     language = "python",
     domain = "tools",
     description = "Release helper tool for managing app releases and container images",

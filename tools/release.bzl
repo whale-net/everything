@@ -74,15 +74,15 @@ app_metadata = rule(
     },
 )
 
-# Note: This function has many parameters (16) to support flexible app configuration.
+# Note: This function has many parameters (18) to support flexible app configuration.
 # They are logically grouped as:
-# - Binary config: name, binary_target, language
+# - Binary config: name, binary_name, language
 # - Release config: domain, description, version, registry, organization, custom_repo_name
 # - Deployment config: app_type, port, replicas, command, args
 # - Health check config: health_check_enabled, health_check_path
 # - Ingress config: ingress_host, ingress_tls_secret
 # Bazel/Starlark does not support nested struct parameters, so they remain flat.
-def release_app(name, binary_target = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = True, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = []):
+def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = True, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = []):
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
@@ -98,9 +98,10 @@ def release_app(name, binary_target = None, language = None, domain = None, desc
     
     Args:
         name: App name (should match directory name and multiplatform binary name)
-        binary_target: Optional binary target. If not provided, auto-detects:
-                       - Python: Checks for :name_linux_amd64 (from multiplatform_py_binary)
-                       - Go: Checks for :name_linux_amd64 (from multiplatform_go_binary)
+        binary_name: Target label for the binaries. Can be:
+                     - Simple name: "my_app" -> looks for :my_app_linux_amd64/arm64
+                     - Full label: "//path/to:binary" -> looks for //path/to:binary_linux_amd64/arm64
+                     Defaults to name if not provided.
         language: Programming language ("python" or "go")
         domain: Domain/category for the app (e.g., "demo", "api", "web")
         description: Optional description of the app
@@ -122,66 +123,37 @@ def release_app(name, binary_target = None, language = None, domain = None, desc
     if language not in ["python", "go"]:
         fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
     
-    # Auto-detect binary targets if not provided
-    # Both Python and Go apps use platform-specific binaries for cross-compilation
-    #
-    # NOTE: For both languages, binary_target defaults to _linux_amd64 for metadata purposes only.
-    # The actual multiplatform build (below) explicitly uses BOTH _linux_amd64 and _linux_arm64,
-    # so both architectures are built correctly. This is just a reference target for metadata.
-    if not binary_target:
-        if language == "python":
-            binary_target = ":" + name + "_linux_amd64"
-        else:
-            # Go apps also use platform-specific binaries for cross-compilation
-            binary_target = ":" + name + "_linux_amd64"
+    # Construct binary targets from binary_name
+    # If binary_name is not provided, default to :name (same package)
+    # If binary_name starts with // or :, use it as-is (it's a label)
+    # Otherwise, treat it as a simple name in the current package
+    base_label = binary_name if binary_name else name
+    if not base_label.startswith("//") and not base_label.startswith(":"):
+        base_label = ":" + base_label
+    
+    binary_amd64 = base_label + "_linux_amd64"
+    binary_arm64 = base_label + "_linux_arm64"
     
     # Repository name for container images should use domain-app format
     image_name = domain + "-" + name
     image_target = name + "_image"
     repository = organization + "/" + image_name  # Repository path (without registry)
     
-    # Derive platform-specific binary targets from binary_target
-    # If binary_target ends with _linux_amd64, derive ARM64 by replacing the suffix
-    # This handles both local targets (":name_linux_amd64") and cross-package targets ("//path:name_linux_amd64")
-    if binary_target.endswith("_linux_amd64"):
-        # Already platform-specific - derive both platforms
-        binary_amd64_target = binary_target
-        binary_arm64_target = binary_target.replace("_linux_amd64", "_linux_arm64")
-    else:
-        # Assume standard naming: append platform suffixes
-        binary_amd64_target = binary_target + "_linux_amd64"
-        binary_arm64_target = binary_target + "_linux_arm64"
+    # Create multiplatform OCI image using the explicitly provided or defaulted binaries
+    multiplatform_image(
+        name = image_target,
+        binary_amd64 = binary_amd64,
+        binary_arm64 = binary_arm64,
+        registry = registry,
+        repository = repository,
+        language = language,
+    )
     
-    # Create multiplatform OCI image
-    if language == "python":
-        # Python apps have platform-specific binaries with correct wheels for each architecture
-        # CRITICAL: Both platforms are built explicitly here - platform transitions ensure
-        # each gets the correct wheels for its architecture (x86_64 vs aarch64)
-        multiplatform_image(
-            name = image_target,
-            binary_amd64 = binary_amd64_target,
-            binary_arm64 = binary_arm64_target,
-            registry = registry,
-            repository = repository,
-            language = language,
-        )
-    else:
-        # Go apps need platform-specific binaries for cross-compilation
-        # Similar to Python, we explicitly build for both architectures
-        multiplatform_image(
-            name = image_target,
-            binary_amd64 = binary_amd64_target,
-            binary_arm64 = binary_arm64_target,
-            registry = registry,
-            repository = repository,
-            language = language,
-        )
-    
-    # Create release metadata
+    # Create release metadata (use AMD64 binary as reference for metadata)
     app_metadata(
         name = name + "_metadata",
         app_name = name,  # Pass the actual app name
-        binary_target = binary_target,
+        binary_target = binary_amd64,  # Reference binary for metadata
         image_target = image_target,
         description = description,
         version = version,
