@@ -66,6 +66,9 @@ config_setting(
     ],
 )
 
+# Note: Both arm64 and aarch64 configs are provided for compatibility.
+# Different Bazel configurations and toolchains may use either naming convention.
+# Both point to the same ARM64 architecture to ensure the correct binary is selected.
 config_setting(
     name = "on_linux_aarch64",
     constraint_values = [

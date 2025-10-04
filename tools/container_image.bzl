@@ -83,13 +83,17 @@ def container_image(
             #
             # The wrapper script expects to find its runfiles directory by its own name,
             # so we pass the actual binary name (which matches the runfiles dir)
+            #
+            # Note: binary_name comes from Bazel labels which are validated by Bazel,
+            # but we use proper shell quoting for defense-in-depth.
             entrypoint = [
                 "/bin/sh",
                 "-c",
                 # Find hermetic python3 in any rules_python runfiles directory
-                'PYTHON=$(find /app -path "*/rules_python*/bin/python3" -type f 2>/dev/null | head -1) && exec "$PYTHON" /app/{binary}'.format(
-                    binary = binary_name,
-                ),
+                # Use $1 parameter for binary name to avoid injection risks
+                'PYTHON=$(find /app -path "*/rules_python*/bin/python3" -type f 2>/dev/null | head -1) && exec "$PYTHON" "/app/$1"',
+                "sh",  # $0 for the shell
+                binary_name,  # $1 for the binary name parameter
             ]
         else:
             # Go binaries are self-contained executables

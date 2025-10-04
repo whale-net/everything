@@ -17,13 +17,17 @@ Usage - exactly like py_binary:
         domain = "api",
     )
 
-This creates two user-facing binaries (plus internal base targets):
+This creates these targets:
+  User-facing binaries (with platform transitions applied):
   - my_app_linux_amd64 (built with --platforms=//tools:linux_x86_64)
   - my_app_linux_arm64 (built with --platforms=//tools:linux_arm64)
   
-Internally, this also creates base py_binary targets (_base_amd64, _base_arm64) that
-are wrapped by rules with platform transitions applied. The transitions ensure pycross 
-selects the correct wheels for each architecture, enabling true cross-compilation."""
+  Internal base targets (wrapped by the transition rule):
+  - my_app_base_amd64 (py_binary without transition)
+  - my_app_base_arm64 (py_binary without transition)
+
+The platform transitions ensure pycross selects the correct wheels for each architecture,
+enabling true cross-compilation. See docs/CROSS_COMPILATION.md for details."""
 
 load("@rules_python//python:defs.bzl", "py_binary")
 
@@ -35,8 +39,13 @@ def _platform_transition_impl(settings, attr):
     critical for apps with compiled dependencies (pydantic, numpy, etc.) to ensure
     ARM64 containers get aarch64 wheels instead of x86_64 wheels.
     
-    See docs/CROSS_COMPILATION.md for detailed explanation.
+    For detailed technical explanation of how this enables cross-compilation,
+    see docs/CROSS_COMPILATION.md.
     """
+    # Validate that target_platform is provided
+    if not hasattr(attr, "target_platform") or not attr.target_platform:
+        fail("target_platform must be specified for platform transition")
+    
     return {"//command_line_option:platforms": str(attr.target_platform)}
 
 _platform_transition = transition(
