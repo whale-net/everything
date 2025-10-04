@@ -157,6 +157,17 @@ py_test(
     size = "small",
 )
 
+# Unit tests for Helm git optimizations
+py_test(
+    name = "test_helm_git_optimizations",
+    srcs = ["test_helm_git_optimizations.py"],
+    deps = [
+        ":release_helper_lib",
+        "@pypi//:pytest",
+    ],
+    size = "small",
+)
+
 # Unit tests for helm unpublish functionality
 py_test(
     name = "test_helm_unpublish",

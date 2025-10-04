@@ -4,6 +4,7 @@ Git operations for the release helper.
 
 import re
 import subprocess
+from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
 
 
@@ -42,12 +43,18 @@ def create_git_tag(tag_name: str, commit_sha: Optional[str] = None, message: Opt
 
     print(f"Creating Git tag: {tag_name}")
     subprocess.run(cmd, check=True)
+    
+    # Clear the tags cache since we've created a new tag
+    clear_tags_cache()
 
 
 def push_git_tag(tag_name: str) -> None:
     """Push a Git tag to the remote repository."""
     print(f"Pushing Git tag: {tag_name}")
     subprocess.run(["git", "push", "origin", tag_name], check=True)
+    
+    # Clear the tags cache after pushing (in case remote tags differ)
+    clear_tags_cache()
 
 
 def get_previous_tag() -> Optional[str]:
@@ -64,8 +71,13 @@ def get_previous_tag() -> Optional[str]:
         return None
 
 
+@lru_cache(maxsize=1)
 def get_all_tags() -> List[str]:
-    """Get all Git tags sorted by version (newest first)."""
+    """Get all Git tags sorted by version (newest first).
+    
+    This function is cached to avoid redundant git operations when called multiple times
+    within the same process execution.
+    """
     try:
         result = subprocess.run(
             ["git", "tag", "--sort=-version:refname"],
@@ -76,6 +88,15 @@ def get_all_tags() -> List[str]:
         return [tag.strip() for tag in result.stdout.strip().split('\n') if tag.strip()]
     except subprocess.CalledProcessError:
         return []
+
+
+def clear_tags_cache() -> None:
+    """Clear the tags cache.
+    
+    Call this after creating or pushing new tags to ensure subsequent calls to
+    get_all_tags() fetch the latest tags from the repository.
+    """
+    get_all_tags.cache_clear()
 
 
 def get_app_tags(domain: str, app_name: str) -> List[str]:
