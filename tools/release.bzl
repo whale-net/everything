@@ -11,8 +11,8 @@ def _app_metadata_impl(ctx):
     metadata = {
         "name": ctx.attr.app_name,  # Use explicit app_name instead of ctx.attr.name
         "version": ctx.attr.version,
-        "binary_target": ctx.attr.binary_target,
-        "image_target": ctx.attr.image_target,
+        "binary_target": str(ctx.attr.binary_target.label),  # Direct binary reference
+        "image_target": str(ctx.attr.image_target.label),  # Image dependency (transitively includes binaries)
         "description": ctx.attr.description,
         "language": ctx.attr.language,
         "registry": ctx.attr.registry,
@@ -77,9 +77,9 @@ app_metadata = rule(
     attrs = {
         "app_name": attr.string(mandatory = True),  # Add explicit app_name attribute
         "version": attr.string(default = "latest"),
-        "binary_target": attr.string(mandatory = True),
         "binary_info": attr.label(providers = [AppInfo]),  # Optional: binary's AppInfo provider
-        "image_target": attr.string(mandatory = True),
+        "binary_target": attr.label(mandatory = True),  # Direct binary dependency
+        "image_target": attr.label(mandatory = True),  # Image dependency (transitively includes binaries)
         "description": attr.string(default = ""),
         "language": attr.string(mandatory = True),
         "registry": attr.string(default = "ghcr.io"),
@@ -182,13 +182,21 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     # Both Python and Go now create AppInfo providers
     binary_info = binary_info_label
     
-    # Create release metadata (use AMD64 binary as reference for metadata)
+    # Use explicit linux_amd64 binary for binary_target dependency
+    # We use linux_amd64 because:
+    # 1. All platform binaries (amd64, arm64) are built from the same sources
+    # 2. Checking one platform's dependencies is sufficient for change detection
+    # 3. linux_amd64 is the most common deployment target
+    # 4. Consistent naming between Python and Go
+    binary_target_ref = base_label + "_linux_amd64"
+    
+    # Create release metadata
     app_metadata(
         name = name + "_metadata",
         app_name = name,  # Pass the actual app name
-        binary_target = binary_amd64,  # Reference binary for metadata
         binary_info = binary_info,  # AppInfo provider for extracting args, etc
-        image_target = image_target,
+        binary_target = binary_target_ref,  # Platform-agnostic binary (alias to base)
+        image_target = image_target,  # Transitively depends on all platform binaries
         description = description,
         version = version,
         language = language,
