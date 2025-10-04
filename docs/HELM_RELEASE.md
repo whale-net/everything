@@ -66,19 +66,68 @@ Use the main release workflow to release apps and optionally their helm charts:
 **Via GitHub UI (Actions → Release → Run workflow):**
 
 1. **Apps**: Select apps to release (e.g., "all", "hello_python,hello_fastapi", or domain like "demo")
+   - **Note**: When using "all", demo domain apps are excluded by default
 2. **Version**: Specify version (e.g., "v1.0.0") or use increment options
 3. **Helm charts**: Specify charts to release (e.g., "all", "hello-fastapi", or domain like "demo")
    - Leave empty to skip helm chart release
    - Charts will use the app versions from this release
-4. **Dry run**: Test without publishing
+   - **Note**: When using "all", demo domain charts are excluded by default
+4. **Include demo domain**: Check this box to include demo domain when using "all" for apps or charts
+5. **Dry run**: Test without publishing
 
-**Example Workflow:**
+**Example Workflows:**
+
+**Example 1: Release production apps only (excluding demo)**
+1. Apps: `all`
+2. Version: `v2.0.0`
+3. Helm charts: `all`
+4. Include demo domain: ❌ (unchecked)
+5. Result: Releases all manman apps and charts, excludes demo domain
+
+**Example 2: Release everything including demo**
+1. Apps: `all`
+2. Version: `v2.0.0`
+3. Helm charts: `all`
+4. Include demo domain: ✅ (checked)
+5. Result: Releases all apps and charts from all domains including demo
+
+**Example 3: Release specific apps**
+**Example 3: Release specific apps**
 1. Release apps: `hello_fastapi`, `hello_internal_api` with version `v2.0.0`
 2. Also release helm charts: `hello-fastapi` (or "demo" for all demo charts)
 3. System creates git tags: `demo-hello_fastapi.v2.0.0`, `demo-hello_internal_api.v2.0.0`
 4. Pushes container images with version tags
 5. Builds helm charts that reference the v2.0.0 app images
 6. Uploads helm charts as workflow artifacts
+
+### Demo Domain Exclusion
+
+By default, when using `all` for apps or helm charts, the **demo domain is excluded** from releases. This is useful for production releases where you want to avoid publishing demo/example applications and charts.
+
+**Behavior:**
+- `--apps all` → Releases all apps **except** those in the demo domain
+- `--charts all` → Releases all charts **except** those in the demo domain
+- `--apps all --include-demo` → Releases all apps **including** demo domain
+- `--charts all --include-demo` → Releases all charts **including** demo domain
+
+**In GitHub Actions:**
+- Use the "Include demo domain" checkbox to include demo when using "all"
+- Specifying apps/charts by name (e.g., "hello_python") or domain (e.g., "demo") is not affected by this flag
+
+**Via CLI:**
+```bash
+# Exclude demo domain (default)
+bazel run //tools:release -- plan --apps all --version v1.0.0
+
+# Include demo domain
+bazel run //tools:release -- plan --apps all --version v1.0.0 --include-demo
+
+# Helm charts - exclude demo (default)
+bazel run //tools:release -- plan-helm-release --charts all --version v1.0.0
+
+# Helm charts - include demo
+bazel run //tools:release -- plan-helm-release --charts all --version v1.0.0 --include-demo
+```
 
 ### App-Only Releases
 
