@@ -7,6 +7,7 @@
   "language": "python",
   "registry": "ghcr.io",
   "repo_name": "demo-db-migrations",
+  "organization": "whale-net",
   "domain": "demo",
   "app_type": "job"
 }

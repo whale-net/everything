@@ -7,6 +7,7 @@
   "language": "go",
   "registry": "ghcr.io",
   "repo_name": "demo-status-processor",
+  "organization": "whale-net",
   "domain": "demo",
   "app_type": "worker"
 }
