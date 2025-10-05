@@ -193,9 +193,9 @@ jobs:
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
         APP: ${{ matrix.app }}
       run: |
-        # Publish the specific app image to registry
+        # Publish the specific app image to registry with multi-arch support
         echo "Publishing $APP image to registry..."
-        bazel run //tools:release -- release "$APP" --version "latest" --commit "${{ github.sha }}"
+        bazel run //tools:release -- release-multiarch "$APP" --version "latest" --commit "${{ github.sha }}"
         
   # Build summary - collects status of all matrix jobs for branch protection
   build-summary:

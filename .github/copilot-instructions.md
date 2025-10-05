@@ -208,8 +208,8 @@ bazel run //tools:release -- plan --event-type pull_request --base-commit=$BASE_
 # Docker building per app
 bazel run //tools:release -- build $APP_NAME
 
-# Release (main branch only)
-bazel run //tools:release -- release $APP_NAME --version latest --commit $GITHUB_SHA
+# Release (main branch only) - multi-arch support
+bazel run //tools:release -- release-multiarch $APP_NAME --version latest --commit $GITHUB_SHA
 ```
 
 **Helm Chart Release:**
@@ -217,11 +217,11 @@ bazel run //tools:release -- release $APP_NAME --version latest --commit $GITHUB
 # Plan helm chart release
 bazel run //tools:release -- plan-helm-release --charts all --format json
 
-# Build and package helm chart
-bazel run //tools:release -- package-helm-chart $CHART_NAME --version $VERSION --use-released
+# Build and package helm chart with auto-versioning
+bazel run //tools:release -- build-helm-chart $CHART_NAME --use-released --bump patch
 
-# Publish to GitHub Pages helm repository
-bazel run //tools:release -- publish-helm-repo --charts-dir ./packaged-charts
+# Note: GitHub Actions workflow handles publishing to GitHub Pages
+# No manual publish command needed for CI/CD
 ```
 
 ## Repository Structure and Key Locations
@@ -376,14 +376,17 @@ bazel run //tools:release -- changes
 # Build container for app
 bazel run //tools:release -- build app_name
 
-# Build helm chart
-bazel run //tools:release -- build-helm-chart chart_name
+# Build helm chart with auto-versioning
+bazel run //tools:release -- build-helm-chart chart_name --use-released --bump patch
 
-# Plan a release  
+# Plan an app release
 bazel run //tools:release -- plan --event-type workflow_dispatch --apps all --version v1.0.0
 
 # Plan helm chart release
 bazel run //tools:release -- plan-helm-release --charts all --version v1.0.0
+
+# Release app with multi-arch support
+bazel run //tools:release -- release-multiarch app_name --version v1.0.0
 
 # Dry run release
 bazel run //tools:release -- release app_name --version v1.2.3 --dry-run

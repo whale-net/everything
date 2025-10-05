@@ -302,11 +302,11 @@ bazel run //tools:release -- changes
 # Build and test locally
 bazel run //tools:release -- build app_name
 
-# Release with version
-bazel run //tools:release -- release app_name --version v1.2.3
+# Release with multi-arch support
+bazel run //tools:release -- release-multiarch app_name --version v1.2.3
 
 # Dry run
-bazel run //tools:release -- release app_name --version v1.2.3 --dry-run
+bazel run //tools:release -- release-multiarch app_name --version v1.2.3 --dry-run
 ```
 
 ### Release Process Details
