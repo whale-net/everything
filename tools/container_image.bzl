@@ -1,10 +1,25 @@
 """Simplified OCI container image rules with multiplatform support.
 
-SIMPLIFIED APPROACH:
-- Single py_binary or go_binary target (no platform-specific variants needed)
-- Build for different platforms using Bazel's --platforms flag
-- Combine platform-specific images using oci_image_index
-- Cross-compilation handled automatically by Bazel and rules_pycross
+ARCHITECTURE: Single Binary → Multiple Loads → Single Push
+================================================================
+
+1. SINGLE BINARY TARGET
+   - One py_binary or go_binary (no platform-specific variants)
+   - Cross-compilation handled by Bazel + rules_pycross
+   - Built for different platforms using --platforms flag
+
+2. MULTIPLE LOAD TARGETS (Local Testing Only)
+   - {name}_amd64_load: Load AMD64 image to local Docker
+   - {name}_arm64_load: Load ARM64 image to local Docker
+   - Separate targets needed due to oci_load rule limitations
+   - Used only for local development/testing
+   - Creates platform-specific tags (e.g., demo-app-amd64:latest)
+
+3. SINGLE PUSH TARGET (Production Release)
+   - {name}_push: Pushes OCI image index (contains BOTH platforms)
+   - Single manifest automatically serves correct architecture
+   - Users pull ONE tag that works on any platform
+   - Release system ONLY uses this target
 
 This is the idiomatic Bazel way to build multiplatform images.
 """
@@ -93,28 +108,45 @@ def multiplatform_image(
     **kwargs):
     """Build multiplatform OCI images using a single binary target.
     
-    SIMPLIFIED APPROACH - The Idiomatic Bazel Way:
-    Takes a single binary target and builds it for multiple platforms.
+    ARCHITECTURE: 1 Binary → 2 Load Targets (local) → 1 Push Target (release)
+    ===========================================================================
+    
+    Generated Targets:
+    
+    BUILD TARGETS (intermediate, not directly used):
+        {name}_amd64: Platform-specific oci_image (AMD64)
+        {name}_arm64: Platform-specific oci_image (ARM64)
+        {name}: oci_image_index combining both platforms
+    
+    LOAD TARGETS (local testing only):
+        {name}_amd64_load: Load AMD64 image to local Docker
+            → Creates: {image_name}-amd64:latest
+            → Usage: bazel run //app:my_app_image_amd64_load
+        
+        {name}_arm64_load: Load ARM64 image to local Docker
+            → Creates: {image_name}-arm64:latest
+            → Usage: bazel run //app:my_app_image_arm64_load
+    
+    PUSH TARGET (production release - SINGLE TAG):
+        {name}_push: Push OCI image index with BOTH platforms
+            → Publishes ONE tag containing both amd64 and arm64
+            → Docker automatically serves correct architecture
+            → Used by: bazel run //tools:release -- release-multiarch
+            → Result: Users pull ONE tag, works on any platform
     
     NOTE: Platform-specific images must be built with explicit --platforms flag:
         bazel build //app:my_app_image_amd64 --platforms=//tools:linux_x86_64
         bazel build //app:my_app_image_arm64 --platforms=//tools:linux_arm64
     
-    The release system handles this automatically. For local development,
-    use the load targets which are configured for the correct platforms.
+    The release system handles this automatically.
     
-    Usage (Python or Go):
+    Usage Example:
         multiplatform_image(
             name = "my_app_image",
             binary = ":my_app",  # Single binary target
             image_name = "demo-my_app",
             language = "python",  # or "go"
         )
-    
-    Local development:
-        # These are configured to build for correct platform automatically
-        bazel run //app:my_app_image_amd64_load
-        bazel run //app:my_app_image_arm64_load
     
     Args:
         name: Base name for all generated targets
@@ -163,8 +195,18 @@ def multiplatform_image(
         tags = ["manual"],
     )
     
-    # Load targets for local development with arch suffix
-    # This allows loading both architectures simultaneously for testing
+    # =======================================================================
+    # LOAD TARGETS: Local testing only (NOT used in production releases)
+    # =======================================================================
+    # Bazel doesn't support select() in oci_load attributes, so we need
+    # separate targets for each platform. These load platform-specific
+    # images to local Docker with architecture-tagged names for testing.
+    #
+    # Usage:
+    #   bazel run //app:app_image_amd64_load  # Creates app-amd64:latest
+    #   bazel run //app:app_image_arm64_load  # Creates app-arm64:latest
+    #
+    # These are NEVER used by the release system.
     oci_load(
         name = name + "_amd64_load",
         image = ":" + name + "_amd64",
@@ -179,36 +221,23 @@ def multiplatform_image(
         tags = ["manual"],
     )
     
-    # Default load target - note: user must specify --platforms flag or use the release system
-    native.alias(
-        name = name + "_load",
-        actual = ":" + name + "_amd64_load",
-        tags = ["manual"],
-    )
-    
-    # Push targets for release
+    # =======================================================================
+    # PUSH TARGET: Production releases (SINGLE TAG with both platforms)
+    # =======================================================================
+    # Pushes the OCI image index which contains BOTH amd64 and arm64 images.
+    # Docker automatically serves the correct architecture when users pull.
+    #
+    # Usage (via release tool):
+    #   bazel run //tools:release -- release-multiarch my_app --version v1.0.0
+    #
+    # Result: ONE tag published (e.g., ghcr.io/owner/app:v1.0.0)
+    #         Manifest contains both platforms, Docker auto-selects correct one
     if repository and image_name:
         repo_path = registry + "/" + repository + "/" + image_name
         
         oci_push(
             name = name + "_push",
             image = ":" + name,
-            repository = repo_path,
-            remote_tags = [],
-            tags = ["manual"],
-        )
-        
-        oci_push(
-            name = name + "_amd64_push",
-            image = ":" + name + "_amd64",
-            repository = repo_path,
-            remote_tags = [],
-            tags = ["manual"],
-        )
-        
-        oci_push(
-            name = name + "_arm64_push",
-            image = ":" + name + "_arm64",
             repository = repo_path,
             remote_tags = [],
             tags = ["manual"],
