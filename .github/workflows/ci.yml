@@ -64,13 +64,14 @@ jobs:
         
     - name: Verify Cross-Compilation (Critical)
       run: |
-        # CRITICAL TEST: Verify platform transitions work correctly
+        # CRITICAL TEST: Verify cross-platform builds work correctly
         # This ensures ARM64 containers get aarch64 wheels (not x86_64)
+        # Uses Bazel's --platforms flag for platform-specific compilation
         # If this fails, ARM64 deployments will crash at runtime!
         echo "::group::Load test images"
         # Load the images before running the test
-        bazel run //demo/hello_fastapi:hello_fastapi_image_amd64_load
-        bazel run //demo/hello_fastapi:hello_fastapi_image_arm64_load
+        bazel run //demo/hello_fastapi:hello_fastapi_image_amd64_load --platforms=//tools:linux_x86_64
+        bazel run //demo/hello_fastapi:hello_fastapi_image_arm64_load --platforms=//tools:linux_arm64
         echo "::endgroup::"
         
         echo "::group::Cross-Compilation Verification"

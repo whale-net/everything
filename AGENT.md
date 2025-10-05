@@ -4,20 +4,21 @@ This document provides comprehensive guidelines for AI agents working on the Eve
 
 ## ⚠️ CRITICAL: Cross-Compilation
 
-**MUST READ**: [`docs/CROSS_COMPILATION.md`](docs/CROSS_COMPILATION.md)
+**MUST READ**: [`docs/BUILDING_CONTAINERS.md`](docs/BUILDING_CONTAINERS.md)
 
-This repository implements true cross-compilation for Python apps using Bazel platform transitions. **This is critical for ARM64 container deployments**. If cross-compilation breaks, ARM64 containers will crash at runtime with compiled dependencies (pydantic, numpy, pandas, etc.).
+This repository implements true cross-compilation for Python apps using rules_pycross for platform-specific wheel resolution. **This is critical for ARM64 container deployments**. If cross-compilation breaks, ARM64 containers will crash at runtime with compiled dependencies (pydantic, numpy, pandas, etc.).
 
 **Key Points**:
-- Python apps with compiled dependencies MUST use `multiplatform_py_binary`
-- Platform transitions ensure correct wheel selection (x86_64 vs aarch64)
+- Python apps use standard `py_binary` with rules_pycross for cross-platform wheels
+- Use `--platforms` flag to select target architecture (//tools:linux_x86_64 or //tools:linux_arm64)
 - Test cross-compilation with:
   ```bash
   # Load images first (required)
-  bazel run //demo/hello_fastapi:hello_fastapi_image_amd64_load
-  bazel run //demo/hello_fastapi:hello_fastapi_image_arm64_load
+  bazel run //demo/hello_fastapi:hello_fastapi_image_amd64_load --platforms=//tools:linux_x86_64
+  bazel run //demo/hello_fastapi:hello_fastapi_image_arm64_load --platforms=//tools:linux_arm64
   # Run the test
   bazel test //tools:test_cross_compilation --test_output=streamed
+  ```
   ```
 - CI automatically verifies cross-compilation on every PR
 - If `//tools:test_cross_compilation` fails, **DO NOT MERGE**
@@ -86,9 +87,9 @@ The `release_app` macro automatically creates:
 The repository uses an automated multi-platform build system that creates container images supporting both AMD64 and ARM64 architectures:
 
 **For Python apps:**
-- `multiplatform_py_binary` creates platform-specific binaries automatically
-- `pycross` handles platform-specific Python dependencies (wheels) transparently
-- No manual platform configuration needed - everything is automatic
+- Standard `py_binary` with rules_pycross for cross-platform wheel resolution
+- `uv.lock` contains pre-resolved wheels for all platforms (amd64, arm64)
+- Use `--platforms` flag to select target architecture at build time
 
 **For Go apps:**
 - Go toolchain handles cross-compilation automatically
@@ -97,16 +98,16 @@ The repository uses an automated multi-platform build system that creates contai
 **Platform selection:**
 - `oci_image_index` creates a multi-platform manifest list
 - Docker/Kubernetes automatically pulls the correct platform image
-- No need to specify platforms explicitly in most cases
+- Use `--platforms=//tools:linux_x86_64` or `//tools:linux_arm64` when building
 
-#### Custom Platform Definitions (Optional)
-Platform definitions are available in `//tools:platforms.bzl` for advanced use cases:
+#### Platform Definitions
+Platform definitions are defined in `//tools:platforms.bzl`:
 - `//tools:linux_x86_64` - Linux AMD64
 - `//tools:linux_arm64` - Linux ARM64
 - `//tools:macos_x86_64` - macOS Intel (local dev)
 - `//tools:macos_arm64` - macOS Apple Silicon (local dev)
 
-These are rarely needed - the build system handles platform selection automatically.
+Use these with the `--platforms` flag to control target architecture.
 
 ### Image Build System
 

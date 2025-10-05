@@ -8,7 +8,7 @@
 # This test ensures that:
 # 1. ARM64 containers get aarch64 wheels (not x86_64)
 # 2. AMD64 containers get x86_64 wheels
-# 3. Platform transitions are working correctly
+# 3. Cross-platform wheel selection (rules_pycross) is working correctly
 #
 # This is a CRITICAL test - if this fails, cross-compilation is broken and ARM64 
 # containers will crash at runtime with compiled dependencies like pydantic, numpy, etc.
@@ -29,7 +29,7 @@ echo "╔═══════════════════════�
 echo "║                                                                              ║"
 echo "║             Python Cross-Compilation Verification Test                      ║"
 echo "║                                                                              ║"
-echo "║  This test verifies that platform transitions work correctly, ensuring      ║"
+echo "║  This test verifies that cross-platform builds work correctly, ensuring     ║"
 echo "║  ARM64 containers get aarch64 wheels and AMD64 containers get x86_64 wheels.║"
 echo "║                                                                              ║"
 echo "║  CRITICAL: If this test fails, cross-compilation is broken and ARM64        ║"
@@ -199,8 +199,8 @@ else
     echo "Cross-compilation is BROKEN - ARM64 containers will crash at runtime!"
     echo ""
     echo "To fix:"
-    echo "1. Check that multiplatform_py_binary uses platform transitions"
-    echo "2. Verify release_app passes binary_amd64 and binary_arm64 correctly"
-    echo "3. Ensure container_image.bzl uses platform-specific binaries"
+    echo "1. Verify rules_pycross is resolving wheels for both platforms (check uv.lock)"
+    echo "2. Ensure --platforms=//tools:linux_x86_64 and //tools:linux_arm64 are used"
+    echo "3. Check container_image.bzl uses platform-specific oci_image targets"
     exit 1
 fi

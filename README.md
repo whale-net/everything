@@ -91,17 +91,6 @@ The repository uses **uv** for Python dependency management with **rules_pycross
    )
    ```
 
-   Or use the `multiplatform_py_binary` macro with the `requirements` parameter:
-   ```starlark
-   load("//tools:python_binary.bzl", "multiplatform_py_binary")
-   
-   multiplatform_py_binary(
-       name = "my_app",
-       srcs = ["main.py"],
-       requirements = ["fastapi", "your-new-package"],  # Hyphens preserved
-   )
-   ```
-
 **Important Notes:**
 - **Package names**: Use exact PyPI package names including hyphens (e.g., `python-jose`, not `python_jose`)
 - **Top-level colon**: Always use `@pypi//:package-name` format (colon before package name)
@@ -118,9 +107,6 @@ uv lock --python 3.11
 
 # 3. Use in BUILD.bazel
 deps = ["@pypi//:fastapi"]
-
-# Or with multiplatform_py_binary
-requirements = ["fastapi", "uvicorn"]
 ```
 
 #### Go Dependencies
@@ -146,25 +132,26 @@ TODO: Enable gazelle rules for full Go dependency management
 
 3. **Create `BUILD.bazel`** with the required targets:
    ```starlark
-   load("@rules_python//python:defs.bzl", "py_library", "py_test")
-   load("//tools:python_binary.bzl", "multiplatform_py_binary")
+   load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
    load("//tools:release.bzl", "release_app")
 
    py_library(
        name = "main_lib",
        srcs = ["__init__.py", "main.py"],
-       deps = ["//libs/python"],
+       deps = [
+           "//libs/python",
+           "@pypi//:fastapi",
+           "@pypi//:uvicorn",
+       ],
        visibility = ["//my_python_app:__pkg__"],
    )
 
-   multiplatform_py_binary(
+   py_binary(
        name = "my_python_app",
        srcs = ["main.py"],
+       main = "main.py",
        deps = [":main_lib"],
-       requirements = ["fastapi", "uvicorn"],  # Package names as-is
-       args = ["run-server"],  # Command to run your app
-       port = 8000,  # Port number for server apps (0 for non-server apps)
-       app_type = "external-api",  # One of: external-api, internal-api, worker, job
+       args = ["run-server"],  # Command-line arguments
        visibility = ["//visibility:public"],
    )
 
@@ -203,16 +190,13 @@ TODO: Enable gazelle rules for full Go dependency management
 
 3. **Create `BUILD.bazel`** with the required targets:
    ```starlark
-   load("@rules_go//go:def.bzl", "go_test")
-   load("//tools:go_binary.bzl", "multiplatform_go_binary")
+   load("@rules_go//go:def.bzl", "go_binary", "go_test")
    load("//tools:release.bzl", "release_app")
 
-   multiplatform_go_binary(
+   go_binary(
        name = "my_go_app",
        srcs = ["main.go"],
        deps = ["//libs/go"],
-       port = 8080,  # Port number for server apps (0 for non-server apps)
-       app_type = "external-api",  # One of: external-api, internal-api, worker, job
        visibility = ["//visibility:public"],
    )
 
@@ -686,23 +670,24 @@ load("//tools:release.bzl", "release_app")
 
 # This single declaration creates:
 # - Release metadata (JSON file with app info)
-# - OCI images for multiple platforms (amd64, arm64)
+# - Multi-platform OCI images (amd64, arm64)
 # - Proper container registry configuration
 release_app(
     name = "hello_python",
-    binary_target = ":hello_python",
     language = "python",
+    domain = "demo",
     description = "Python hello world application with pytest",
+    app_type = "external-api",
+    port = 8000,
 )
 ```
 
 **Generated Targets:**
-- `hello_python_image` - Default multiplatform image
+- `hello_python_image` - Multi-platform image index
 - `hello_python_image_amd64` - AMD64-specific image
 - `hello_python_image_arm64` - ARM64-specific image
-- `hello_python_image_load` - Efficient oci_load target for Docker loading
-- `hello_python_image_amd64_load` - AMD64 oci_load target
-- `hello_python_image_arm64_load` - ARM64 oci_load target
+- `hello_python_image_amd64_load` - AMD64 oci_load target for Docker
+- `hello_python_image_arm64_load` - ARM64 oci_load target for Docker
 
 ### Cache Optimization
 
@@ -716,24 +701,22 @@ The new OCI build system uses `oci_load` targets instead of traditional tarball 
 ### Building Images with Bazel
 
 ```bash
-# Build individual platform images
-bazel build //demo/hello_python:hello_python_image_amd64
-bazel build //demo/hello_python:hello_python_image_arm64
+# Build individual platform images with explicit platform flag
+bazel build //demo/hello_python:hello_python_image_amd64 --platforms=//tools:linux_x86_64
+bazel build //demo/hello_python:hello_python_image_arm64 --platforms=//tools:linux_arm64
 
-# Build all platform variants
+# Build multi-platform image index
 bazel build //demo/hello_python:hello_python_image
 
-# Build and load into Docker efficiently using oci_load (optimized for cache)
-bazel run //demo/hello_python:hello_python_image_load
+# Build and load into Docker using oci_load
+bazel run //demo/hello_python:hello_python_image_amd64_load --platforms=//tools:linux_x86_64
 
-# Or use the release tool for production workflows
+# Or use the release tool for production workflows (handles platforms automatically)
 bazel run //tools:release -- build hello_python
 
-# Run the containers (after loading - these are local development tags)
-docker run --rm hello_python:latest  # ✅ Works correctly!
-docker run --rm hello_go:latest      # ✅ Works correctly!
-
-# Registry images use domain-app format: demo-hello_python:latest
+# Run the containers (after loading)
+docker run --rm demo-hello_python_amd64:latest
+docker run --rm demo-hello_go_amd64:latest
 ```
 
 ### Base Images & Architecture
@@ -764,8 +747,7 @@ oci_image_with_binary(
 
 Available functions include:
 - `oci_image_with_binary`: Generic OCI image builder with cache optimization
-- `python_oci_image_multiplatform`: Multi-platform Python images 
-- `go_oci_image_multiplatform`: Multi-platform Go images
+- `multiplatform_image`: Multi-platform image builder (used by release_app)
 
 ## 🚀 Release Management
 
@@ -840,20 +822,22 @@ load("//tools:release.bzl", "release_app")
 
 release_app(
     name = "hello_python",
-    binary_target = ":hello_python",
     language = "python",
+    domain = "demo",
     description = "Python hello world application with pytest",
-    # Note: args, port, and app_type are automatically extracted from the
-    # multiplatform_py_binary definition via the AppInfo provider
+    app_type = "external-api",  # One of: external-api, internal-api, worker, job
+    port = 8000,  # Port for server apps (0 for non-server apps)
+    args = ["run-server"],  # Optional command-line arguments
 )
 ```
 
-The `release_app` macro automatically extracts metadata from your binary definition:
-- **`args`**: Command-line arguments from `multiplatform_py_binary` or `multiplatform_go_binary`
-- **`port`**: Port number for server applications (extracted from binary)
+The `release_app` macro accepts metadata directly:
 - **`app_type`**: Application type (external-api, internal-api, worker, or job)
+- **`port`**: Port number for server applications (default: 0)
+- **`args`**: Optional command-line arguments (default: [])
+- **`domain`**: Domain/category for the app (e.g., "demo", "api")
 
-This eliminates duplication - you define these values once in your binary, and they're automatically available to the release system.
+Metadata is specified once in `release_app` and used for both container images and Helm chart generation.
 
 #### 2. Intelligent Change Detection
 The system supports multiple detection modes, though the current implementation has some limitations:
