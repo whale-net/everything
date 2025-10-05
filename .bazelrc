@@ -4,6 +4,14 @@ build --incompatible_strict_action_env
 build --python_version=PY3
 build:fast --jobs=auto
 
+# Remote cache configuration (optional)
+# Uses try-import to conditionally load remote cache config if available
+try-import %workspace%/.bazelrc.remote
+
+# Enable remote analysis cache when remote cache is available (experimental)
+# This can significantly speed up the analysis phase by caching analysis results
+build --experimental_remote_analysis_cache
+
 # CI optimizations  
 # Note: Cache paths are managed by bazel-contrib/setup-bazel action
 # and should not be overridden here to avoid conflicts
@@ -19,6 +27,8 @@ build:ci --remote_timeout=60
 build:ci --remote_cache_compression
 # Download all outputs from remote cache for better cache effectiveness
 build:ci --remote_download_outputs=all
+# Enable remote analysis cache to speed up analysis phase (experimental)
+build:ci --experimental_remote_analysis_cache
 # Build metadata optimizations  
 build:ci --nolegacy_external_runfiles
 # Memory and CPU optimizations
@@ -26,10 +36,6 @@ build:ci --tool_java_runtime_version=remotejdk_11
 build:ci --java_runtime_version=remotejdk_11
 test:ci --cache_test_results=yes
 test:ci --test_timeout_filters=-eternal
-
-# Remote cache configuration (optional)
-# Uses try-import to conditionally load remote cache config if available
-try-import %workspace%/.bazelrc.remote
 
 # Test configurations
 test --test_output=errors
