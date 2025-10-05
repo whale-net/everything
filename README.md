@@ -683,11 +683,10 @@ release_app(
 ```
 
 **Generated Targets:**
-- `hello_python_image` - Multi-platform image index
-- `hello_python_image_amd64` - AMD64-specific image
-- `hello_python_image_arm64` - ARM64-specific image
-- `hello_python_image_amd64_load` - AMD64 oci_load target for Docker
-- `hello_python_image_arm64_load` - ARM64 oci_load target for Docker
+- `hello_python_image` - Multi-platform OCI image index (AMD64 + ARM64)
+- `hello_python_image_base` - Base image (used by platform transitions)
+- `hello_python_image_load` - Load Linux image into Docker (requires --platforms flag)
+- `hello_python_image_push` - Push multi-platform index to registry
 
 ### Cache Optimization
 
@@ -701,22 +700,25 @@ The new OCI build system uses `oci_load` targets instead of traditional tarball 
 ### Building Images with Bazel
 
 ```bash
-# Build individual platform images with explicit platform flag
-bazel build //demo/hello_python:hello_python_image_amd64 --platforms=//tools:linux_x86_64
-bazel build //demo/hello_python:hello_python_image_arm64 --platforms=//tools:linux_arm64
-
-# Build multi-platform image index
+# Build multi-platform image index (contains both AMD64 and ARM64)
 bazel build //demo/hello_python:hello_python_image
 
-# Build and load into Docker using oci_load
-bazel run //demo/hello_python:hello_python_image_amd64_load --platforms=//tools:linux_x86_64
+# Load into Docker - CRITICAL: Must specify --platforms for Linux binaries
+# On M1/M2 Macs (ARM64):
+bazel run //demo/hello_python:hello_python_image_load --platforms=//tools:linux_arm64
 
-# Or use the release tool for production workflows (handles platforms automatically)
+# On Intel Macs/PCs (AMD64):
+bazel run //demo/hello_python:hello_python_image_load --platforms=//tools:linux_x86_64
+
+# Test the containers (after loading)
+docker run --rm demo-hello_python:latest
+docker run --rm demo-hello_go:latest
+
+# Use release tool for production workflows (handles platforms automatically)
 bazel run //tools:release -- build hello_python
 
-# Run the containers (after loading)
-docker run --rm demo-hello_python_amd64:latest
-docker run --rm demo-hello_go_amd64:latest
+# WARNING: Without --platforms flag, you may get macOS binaries instead of Linux,
+# resulting in "Exec format error" when running containers.
 ```
 
 ### Base Images & Architecture

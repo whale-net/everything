@@ -70,18 +70,22 @@ bazel run //demo/hello_world_test:hello_world_test
 ```bash
 # SIMPLIFIED MULTIPLATFORM SYSTEM
 # Build and load images with explicit platform flags
+# CRITICAL: Must specify --platforms flag to get Linux binaries (not macOS)
 
-# AMD64 images (most common dev environment)
-bazel run //demo/hello_python:hello_python_image_amd64_load --platforms=//tools:linux_x86_64
-bazel run //demo/hello_go:hello_go_image_amd64_load --platforms=//tools:linux_x86_64
+# On M1/M2 Macs (ARM64):
+bazel run //demo/hello_python:hello_python_image_load --platforms=//tools:linux_arm64
+bazel run //demo/hello_go:hello_go_image_load --platforms=//tools:linux_arm64
 
-# ARM64 images
-bazel run //demo/hello_python:hello_python_image_arm64_load --platforms=//tools:linux_arm64
-bazel run //demo/hello_go:hello_go_image_arm64_load --platforms=//tools:linux_arm64
+# On Intel Macs/PCs (AMD64):
+bazel run //demo/hello_python:hello_python_image_load --platforms=//tools:linux_x86_64
+bazel run //demo/hello_go:hello_go_image_load --platforms=//tools:linux_x86_64
 
 # Test the containers (validation scenario)
-docker run --rm demo-hello_python_amd64:latest
-docker run --rm demo-hello_go_amd64:latest
+docker run --rm demo-hello_python:latest
+docker run --rm demo-hello_go:latest
+
+# Without --platforms flag, you get macOS binaries which won't run in Docker!
+# Always use the --platforms flag matching your CPU architecture.
 
 # Use release tool for production workflows (handles platforms automatically)
 bazel run //tools:release -- build hello_python
@@ -136,10 +140,19 @@ bazel run //tools:release -- build hello_python
 
 6. **Container Image Validation**:
    ```bash
-   # Build container with explicit platform flag
-   bazel run //demo/hello_python:hello_python_image_amd64_load --platforms=//tools:linux_x86_64
-   docker run --rm demo-hello_python_amd64:latest
-   # Should output the same as the direct bazel run
+   # CRITICAL: Must use --platforms flag to get Linux binaries
+   # On M1/M2 Macs:
+   bazel run //demo/hello_python:hello_python_image_load --platforms=//tools:linux_arm64
+   docker run --rm demo-hello_python:latest
+   # Expected: Same output as direct bazel run
+   
+   # On Intel Macs/PCs:
+   bazel run //demo/hello_python:hello_python_image_load --platforms=//tools:linux_x86_64
+   docker run --rm demo-hello_python:latest
+   
+   # Common error if --platforms is omitted:
+   # "sh: exec: /app/binary: Exec format error"
+   # This means you got macOS binaries instead of Linux binaries
    ```
 
 7. **Helm Chart Validation**:
