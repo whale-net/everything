@@ -8,9 +8,8 @@ build:fast --jobs=auto
 # Uses try-import to conditionally load remote cache config if available
 try-import %workspace%/.bazelrc.remote
 
-# Enable remote analysis cache when remote cache is available (experimental)
-# This can significantly speed up the analysis phase by caching analysis results
-build --experimental_remote_analysis_cache
+# Performance: Merge analysis and execution phases to reduce overhead
+build --experimental_merged_skyframe_analysis_execution
 
 # CI optimizations  
 # Note: Cache paths are managed by bazel-contrib/setup-bazel action
@@ -27,8 +26,6 @@ build:ci --remote_timeout=60
 build:ci --remote_cache_compression
 # Download all outputs from remote cache for better cache effectiveness
 build:ci --remote_download_outputs=all
-# Enable remote analysis cache to speed up analysis phase (experimental)
-build:ci --experimental_remote_analysis_cache
 # Build metadata optimizations  
 build:ci --nolegacy_external_runfiles
 # Memory and CPU optimizations
