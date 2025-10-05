@@ -136,10 +136,6 @@ def release_multiarch(
     3. Creates manifest lists that automatically serve the correct architecture
     4. Pushes manifest lists (e.g., app:v1.0.0 points to both architectures)
     """
-    if dry_run:
-        typer.echo("DRY RUN: Would perform multi-architecture release but not actually pushing")
-        return
-    
     # Parse platforms
     platform_list = platforms.split(",") if platforms else ["amd64", "arm64"]
     platform_list = [p.strip() for p in platform_list]
@@ -147,9 +143,62 @@ def release_multiarch(
     # Find the app
     try:
         from tools.release_helper.release import find_app_bazel_target
+        from tools.release_helper.metadata import get_app_metadata
         bazel_target = find_app_bazel_target(app_name)
+        metadata = get_app_metadata(bazel_target)
+        domain = metadata["domain"]
+        actual_app_name = metadata["name"]
+        image_name = f"{domain}-{actual_app_name}"
     except ValueError:
         bazel_target = app_name
+        domain = "unknown"
+        actual_app_name = app_name
+        image_name = app_name
+    
+    if dry_run:
+        typer.echo("=" * 80)
+        typer.echo("DRY RUN: Multi-architecture release plan")
+        typer.echo("=" * 80)
+        typer.echo(f"App: {actual_app_name}")
+        typer.echo(f"Version: {version}")
+        typer.echo(f"Platforms: {', '.join(platform_list)}")
+        typer.echo(f"Registry: {registry}")
+        typer.echo("")
+        
+        # Show what will be built and pushed temporarily
+        typer.echo("Platform-specific images (temporary, for manifest creation):")
+        for platform in platform_list:
+            owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "whale-net").lower()
+            repo_path = f"{registry}/{owner}/{image_name}"
+            typer.echo(f"  Build & push: {repo_path}:{version}-{platform}")
+            typer.echo(f"               {repo_path}:latest-{platform}")
+            if commit:
+                typer.echo(f"               {repo_path}:{commit}-{platform}")
+        
+        typer.echo("")
+        typer.echo("=" * 80)
+        typer.echo("PUBLISHED TAGS (what users will see):")
+        typer.echo("=" * 80)
+        owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "whale-net").lower()
+        repo_path = f"{registry}/{owner}/{image_name}"
+        typer.echo(f"  ✅ {repo_path}:{version}")
+        typer.echo(f"     └─ Manifest list → auto-selects from: {', '.join(platform_list)}")
+        typer.echo("")
+        typer.echo(f"  ✅ {repo_path}:latest")
+        typer.echo(f"     └─ Manifest list → auto-selects from: {', '.join(platform_list)}")
+        if commit:
+            typer.echo("")
+            typer.echo(f"  ✅ {repo_path}:{commit}")
+            typer.echo(f"     └─ Manifest list → auto-selects from: {', '.join(platform_list)}")
+        
+        typer.echo("")
+        typer.echo("=" * 80)
+        typer.echo("ℹ️  Platform-specific tags are temporary and used only for manifest")
+        typer.echo("   creation. Users will only see and pull the manifest lists above.")
+        typer.echo("=" * 80)
+        typer.echo("")
+        typer.echo("DRY RUN: No images were actually built or pushed")
+        return
     
     # Perform multi-architecture release
     typer.echo(f"Starting multi-architecture release for {app_name}")
@@ -165,8 +214,9 @@ def release_multiarch(
             platforms=platform_list,
             commit_sha=commit
         )
-        typer.echo(f"✅ Successfully released {app_name}:{version} for {len(platform_list)} platforms")
-        typer.echo(f"Users can now run: docker pull {registry}/whale-net/demo-{app_name}:{version}")
+        typer.echo(f"✅ Successfully released {actual_app_name}:{version} for {len(platform_list)} platforms")
+        owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "whale-net").lower()
+        typer.echo(f"Users can now run: docker pull {registry}/{owner}/{image_name}:{version}")
         
     except Exception as e:
         typer.echo(f"❌ Failed to release multi-architecture image: {e}", err=True)

@@ -1,23 +1,12 @@
-"""Clean container image rules for multiplatform builds.
+"""Simplified OCI container image rules with multiplatform support.
 
-IMPORTANT: Platform-specific dependencies and cross-compilation
------------------------------------------------------------
-While Python code itself is platform-agnostic, many packages (like pydantic, numpy, 
-pillow) have compiled C extensions that are platform-specific. These packages distribute
-"wheels" for different platforms (e.g., pydantic_core-2.33.2-cp311-manylinux_x86_64.whl
-vs pydantic_core-2.33.2-cp311-manylinux_aarch64.whl).
+SIMPLIFIED APPROACH:
+- Single py_binary or go_binary target (no platform-specific variants needed)
+- Build for different platforms using Bazel's --platforms flag
+- Combine platform-specific images using oci_image_index
+- Cross-compilation handled automatically by Bazel and rules_pycross
 
-CROSS-COMPILATION SOLUTION:
-This repository uses Bazel platform transitions (via multiplatform_py_binary) to ensure
-each target platform gets the correct wheels. When building multiplatform images:
-- Each binary target (e.g., hello_python_linux_amd64, hello_python_linux_arm64) is built
-  with its target platform configuration via platform transitions
-- Pycross dependencies are resolved separately for each platform based on the active platform
-- The resulting images contain architecture-appropriate wheels for AMD64 and ARM64
-
-This enables true cross-compilation: you can build both AMD64 and ARM64 containers from a
-single build command on any host platform, with each container getting the correct wheels
-for its target architecture. See docs/CROSS_COMPILATION.md for details.
+This is the idiomatic Bazel way to build multiplatform images.
 """
 
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index", "oci_load", "oci_push")
@@ -40,19 +29,20 @@ def container_image(
     """Build a single-platform OCI container image.
     
     Simple, clean wrapper around oci_image that uses hermetic toolchains.
-    
-    For Python binaries, this uses the hermetic Python interpreter bundled by Bazel,
-    avoiding the need for system Python in the base image.
+    The same binary target will be built for different platforms when invoked
+    with different --platforms flags.
     
     Args:
         name: Image name
-        binary: Binary target to containerize
+        binary: Binary target to containerize (single target, built for current platform)
         base: Base image (defaults to ubuntu:24.04)
         env: Environment variables dict
-        entrypoint: Override entrypoint (auto-detected from binary if not set)
-        language: Language of the binary ("python" or "go") - auto-detected if not set
+        entrypoint: Override entrypoint (auto-detected from language)
+        language: Language of the binary ("python" or "go") - REQUIRED
         **kwargs: Additional oci_image arguments
     """
+    if not language:
+        fail("language parameter is required for container_image")
     
     # Create application layer with runfiles
     pkg_tar(
@@ -63,37 +53,19 @@ def container_image(
         tags = ["manual"],
     )
     
-    # Auto-detect language from binary name if not specified
     binary_name = _get_binary_name(binary)
-    if not language:
-        # Python binaries have platform suffixes
-        if "_linux_amd64" in binary_name or "_linux_arm64" in binary_name:
-            language = "python"
-        else:
-            language = "go"
-    
-    # Set up environment
     image_env = env or {}
     
     # Determine entrypoint based on language
     if not entrypoint:
         if language == "python":
-            # Use a shell script to dynamically find hermetic Python in runfiles
-            # This works regardless of binary name or Python version
-            #
-            # The wrapper script expects to find its runfiles directory by its own name,
-            # so we pass the actual binary name (which matches the runfiles dir)
-            #
-            # Note: binary_name comes from Bazel labels which are validated by Bazel,
-            # but we use proper shell quoting for defense-in-depth.
+            # Find hermetic Python interpreter in runfiles
             entrypoint = [
                 "/bin/sh",
                 "-c",
-                # Find hermetic python3 in any rules_python runfiles directory
-                # Use $1 parameter for binary name to avoid injection risks
                 'PYTHON=$(find /app -path "*/rules_python*/bin/python3" -type f 2>/dev/null | head -1) && exec "$PYTHON" "/app/$1"',
-                "sh",  # $0 for the shell
-                binary_name,  # $1 for the binary name parameter
+                "sh",
+                binary_name,
             ]
         else:
             # Go binaries are self-contained executables
@@ -112,74 +84,60 @@ def container_image(
 
 def multiplatform_image(
     name,
-    binary = None,
-    binary_amd64 = None,
-    binary_arm64 = None,
+    binary,
     base = "@ubuntu_base",
     registry = "ghcr.io",
     repository = None,
     image_name = None,
     language = None,
     **kwargs):
-    """Build multiplatform OCI images with optional platform-specific binaries.
+    """Build multiplatform OCI images using a single binary target.
     
-    Cross-compilation support with platform transitions:
-    - Python apps: Use binary_amd64/binary_arm64 for correct wheel selection per platform
-    - Go apps: Use single binary parameter (Go cross-compiles natively)
+    SIMPLIFIED APPROACH - The Idiomatic Bazel Way:
+    Takes a single binary target and builds it for multiple platforms.
     
-    Usage for Python apps with compiled dependencies:
+    NOTE: Platform-specific images must be built with explicit --platforms flag:
+        bazel build //app:my_app_image_amd64 --platforms=//tools:linux_x86_64
+        bazel build //app:my_app_image_arm64 --platforms=//tools:linux_arm64
+    
+    The release system handles this automatically. For local development,
+    use the load targets which are configured for the correct platforms.
+    
+    Usage (Python or Go):
         multiplatform_image(
             name = "my_app_image",
-            binary_amd64 = ":my_app_linux_amd64",
-            binary_arm64 = ":my_app_linux_arm64",
+            binary = ":my_app",  # Single binary target
             image_name = "demo-my_app",
-            language = "python",
+            language = "python",  # or "go"
         )
     
-    Usage for Go apps or pure Python:
-        multiplatform_image(
-            name = "my_app_image",
-            binary = ":my_app",
-            image_name = "demo-my_app",
-            language = "go",
-        )
-    
-    For local development:
-        bazel run //app:my_app_image_load
-        # Loads image tagged with domain-app name
-    
-    For explicit platform:
+    Local development:
+        # These are configured to build for correct platform automatically
         bazel run //app:my_app_image_amd64_load
         bazel run //app:my_app_image_arm64_load
     
-    For release (builds both + manifest):
-        bazel run //app:my_app_image_push -- v1.0.0
-        # Pushes AMD64, ARM64, and creates manifest list
-    
     Args:
         name: Base name for all generated targets
-        binary: Binary target for both platforms (optional if binary_amd64/arm64 provided)
-        binary_amd64: AMD64-specific binary (optional, overrides binary)
-        binary_arm64: ARM64-specific binary (optional, overrides binary)
+        binary: Single binary target (built for different platforms via --platforms flag)
         base: Base image (defaults to ubuntu:24.04)
         registry: Container registry (defaults to ghcr.io)
-        repository: Organization/namespace (e.g., "whale-net") - combined with image_name for full path
-        image_name: Image name in domain-app format (e.g., "demo-my_app") - REQUIRED for proper tagging
-        language: Language of binary ("python" or "go") - passed to container_image
+        repository: Organization/namespace (e.g., "whale-net")
+        image_name: Image name in domain-app format (e.g., "demo-my_app") - REQUIRED
+        language: Language of binary ("python" or "go") - REQUIRED
         **kwargs: Additional arguments passed to container_image
     """
+    if not binary:
+        fail("binary parameter is required")
+    if not language:
+        fail("language parameter is required")
+    if not image_name:
+        fail("image_name parameter is required for multiplatform_image")
     
-    # Use platform-specific binaries if provided, otherwise use common binary
-    amd64_binary = binary_amd64 if binary_amd64 else binary
-    arm64_binary = binary_arm64 if binary_arm64 else binary
-    
-    if not amd64_binary or not arm64_binary:
-        fail("Must provide either 'binary' or both 'binary_amd64' and 'binary_arm64'")
-    
-    # Build platform-specific images with appropriate binaries
+    # Build platform-specific images using the SAME binary target
+    # These must be built with explicit --platforms flag
     container_image(
         name = name + "_amd64",
-        binary = amd64_binary,
+        binary = binary,
         base = base,
         language = language,
         **kwargs
@@ -187,13 +145,15 @@ def multiplatform_image(
     
     container_image(
         name = name + "_arm64",
-        binary = arm64_binary,
+        binary = binary,
         base = base,
         language = language,
         **kwargs
     )
     
-    # Create OCI manifest list (multiplatform manifest)
+    # Create multiplatform manifest list
+    # Note: oci_image_index takes a list of images, not a dict
+    # The platform info comes from the individual oci_image targets
     oci_image_index(
         name = name,
         images = [
@@ -203,63 +163,46 @@ def multiplatform_image(
         tags = ["manual"],
     )
     
-    # Local load targets - use image_name (domain-app format) for consistent naming
-    # CRITICAL: image_name should be provided by release_app in domain-app format
-    # This ensures domain+name identifies the app everywhere
-    if not image_name:
-        # image_name is now mandatory - it must be provided in domain-app format
-        fail("image_name parameter is required for multiplatform_image. " +
-             "Use release_app macro which automatically provides image_name in domain-app format.")
-    
-    image_tag = image_name
-    
-    # Main load target - uses AMD64 (most common dev environment)
-    oci_load(
-        name = name + "_load",
-        image = ":" + name + "_amd64",
-        repo_tags = [image_tag + ":latest"],
-        tags = ["manual"],
-    )
-    
-    # Platform-specific load targets
+    # Load targets for local development with arch suffix
+    # This allows loading both architectures simultaneously for testing
     oci_load(
         name = name + "_amd64_load",
         image = ":" + name + "_amd64",
-        repo_tags = [image_tag + "_amd64:latest"],
+        repo_tags = [image_name + "-amd64:latest"],
         tags = ["manual"],
     )
     
     oci_load(
         name = name + "_arm64_load",
         image = ":" + name + "_arm64",
-        repo_tags = [image_tag + "_arm64:latest"],
+        repo_tags = [image_name + "-arm64:latest"],
+        tags = ["manual"],
+    )
+    
+    # Default load target - note: user must specify --platforms flag or use the release system
+    native.alias(
+        name = name + "_load",
+        actual = ":" + name + "_amd64_load",
         tags = ["manual"],
     )
     
     # Push targets for release
     if repository and image_name:
-        # Construct full repository path: registry/organization/image_name
-        # e.g., "ghcr.io/whale-net/demo-hello_python"
         repo_path = registry + "/" + repository + "/" + image_name
         
-        # Push manifest list (includes both platforms)
-        # Tags are passed via command-line arguments (--tag) from the release helper
-        # e.g., `bazel run :app_image_push -- --tag latest --tag v1.0.0 --tag <commit_sha>`
         oci_push(
             name = name + "_push",
             image = ":" + name,
             repository = repo_path,
-            remote_tags = [],  # Tags provided via --tag arguments at runtime
+            remote_tags = [],
             tags = ["manual"],
         )
         
-        # Individual platform push targets (for debugging/testing)
-        # Tags are provided via --tag arguments at runtime
         oci_push(
             name = name + "_amd64_push",
             image = ":" + name + "_amd64",
             repository = repo_path,
-            remote_tags = [],  # Tags provided via --tag arguments at runtime
+            remote_tags = [],
             tags = ["manual"],
         )
         
@@ -267,6 +210,6 @@ def multiplatform_image(
             name = name + "_arm64_push",
             image = ":" + name + "_arm64",
             repository = repo_path,
-            remote_tags = [],  # Tags provided via --tag arguments at runtime
+            remote_tags = [],
             tags = ["manual"],
         )

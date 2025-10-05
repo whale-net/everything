@@ -1,8 +1,7 @@
 # Release helper package
-load("@rules_python//python:defs.bzl", "py_library")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library")
 load("//tools:pytest.bzl", "py_test")
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
-load("//tools:python_binary.bzl", "multiplatform_py_binary")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -18,7 +17,7 @@ py_library(
 )
 
 # Release helper tool for managing app releases and container images
-multiplatform_py_binary(
+py_binary(
     name = "release_helper",
     srcs = ["cli.py"],
     main = "cli.py",

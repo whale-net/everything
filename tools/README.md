@@ -2,59 +2,42 @@
 
 This directory contains Bazel tools and utilities for the monorepo.
 
-## Binary Wrappers
+# Tools
 
-Binary wrappers create platform-specific targets for cross-compilation and expose application metadata through the `AppInfo` provider. This metadata (args, port, app_type) is automatically extracted by the release system, eliminating duplication between binary and deployment configuration.
+This directory contains Bazel tools and utilities for the monorepo.
 
-### multiplatform_py_binary (`python_binary.bzl`)
-Wrapper for Python binaries that creates platform-specific targets for cross-compilation.
+## Release System
+
+The release system uses standard Bazel binaries (`py_binary`, `go_binary`) with the `release_app` macro to create container images and deployment metadata.
+
+### Example Usage
 
 ```starlark
-load("//tools:python_binary.bzl", "multiplatform_py_binary")
+load("@rules_python//python:defs.bzl", "py_binary")
+load("//tools:release.bzl", "release_app")
 
-multiplatform_py_binary(
+# Standard py_binary - no wrapper needed!
+py_binary(
     name = "my_app",
     srcs = ["main.py"],
-    deps = [":app_lib", "@pypi//:fastapi"],
-    args = ["start-server"],  # Command to run (baked into binary)
-    port = 8000,              # Port app listens on (for APIs)
-    app_type = "external-api", # Type: external-api, internal-api, worker, or job
+    deps = ["@pypi//:fastapi"],
 )
-```
 
-Creates these targets:
-- `my_app_linux_amd64` - Linux x86_64 binary with correct wheel selection
-- `my_app_linux_arm64` - Linux ARM64 binary with correct wheel selection
-- `my_app_base_amd64`, `my_app_base_arm64` - Base binaries (for local dev)
-- `my_app_info` - AppInfo provider with metadata (used by release_app)
-
-**AppInfo Metadata**: The `args`, `port`, and `app_type` are automatically extracted by `release_app`, so you don't need to specify them twice. They're intrinsic to the application code:
-- `args` - How to run this binary
-- `port` - What port the application listens on (from your code like `uvicorn.run(..., port=8000)`)
-- `app_type` - What kind of service this is (API, worker, job)
-
-### multiplatform_go_binary (`go_binary.bzl`)
-Wrapper for Go binaries that creates platform-specific targets for cross-compilation.
-
-```starlark
-load("//tools:go_binary.bzl", "multiplatform_go_binary")
-
-multiplatform_go_binary(
+# Add release metadata and container image generation
+release_app(
     name = "my_app",
-    srcs = ["main.go"],
-    deps = ["//libs/go"],
-    port = 8080,               # Port app listens on (for APIs)
-    app_type = "external-api", # Type: external-api, internal-api, worker, or job
+    language = "python",
+    domain = "demo",
+    app_type = "external-api",  # external-api, internal-api, worker, or job
+    port = 8000,                # Port app listens on
 )
 ```
 
-Creates these targets:
-- `my_app` - Host platform binary (for local development)
-- `my_app_linux_amd64` - Cross-compiled Linux x86_64 binary
-- `my_app_linux_arm64` - Cross-compiled Linux ARM64 binary
-- `my_app_info` - AppInfo provider with metadata (used by release_app)
-
-**Note**: Go binaries typically don't use `args` since they're compiled executables. Command-line flags are handled via the Go `flag` package.
+**Cross-compilation**: Build for different platforms using `--platforms` flag:
+```bash
+bazel build //app:my_app --platforms=//tools:linux_x86_64
+bazel build //app:my_app --platforms=//tools:linux_arm64
+```
 
 ## Container Image Tools
 

@@ -1,7 +1,6 @@
 # Tools and shared build rules for the monorepo
 
-load("//tools:python_binary.bzl", "multiplatform_py_binary")
-load("//tools:release.bzl", "release_app")
+load("@rules_python//python:defs.bzl", "py_binary")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -25,12 +24,14 @@ sh_test(
         "manual",  # Don't run with //...
         "requires-network",  # Needs Docker and external bazel invocations
         "integration",  # Integration test, not unit test
+        "no-cache",  # Always run, never cache (images loaded externally)
+        "external",  # Depends on external Docker state
     ],
     timeout = "long",
 )
 
 # Version resolver utility for Helm charts
-multiplatform_py_binary(
+py_binary(
     name = "version_resolver",
     srcs = ["version_resolver.py"],
     main = "version_resolver.py",
@@ -85,27 +86,10 @@ config_setting(
     ],
 )
 
-# Convenient alias for release helper (automatically selects correct platform)
-# On macOS (darwin), use the base targets which run natively
-# On Linux, use the platform-specific Linux targets for containerization
+# Convenient alias for release helper
+# Uses the standard binary - no platform-specific targets needed
 alias(
     name = "release",
-    actual = select({
-        ":on_macos_arm64": "//tools/release_helper:release_helper_base_arm64",
-        ":on_macos_x86_64": "//tools/release_helper:release_helper_base_amd64",
-        ":on_linux_arm64": "//tools/release_helper:release_helper_linux_arm64",
-        ":on_linux_aarch64": "//tools/release_helper:release_helper_linux_arm64",
-        ":on_linux_x86_64": "//tools/release_helper:release_helper_linux_amd64",
-        "//conditions:default": "//tools/release_helper:release_helper_base_amd64",
-    }),
+    actual = "//tools/release_helper:release_helper",
     visibility = ["//visibility:public"],
-)
-
-# Release metadata and OCI images for the release tool
-release_app(
-    name = "release",
-    binary_name = "//tools/release_helper:release_helper",
-    language = "python",
-    domain = "tools",
-    description = "Release helper tool for managing app releases and container images",
 )

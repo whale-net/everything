@@ -1,5 +1,4 @@
-load("@rules_python//python:defs.bzl", "py_library", "py_test")
-load("//tools:python_binary.bzl", "multiplatform_py_binary")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 
 # Worker services library  
 py_library(
@@ -17,12 +16,11 @@ py_library(
 )
 
 # Binary target for worker service
-multiplatform_py_binary(
+py_binary(
     name = "worker",
     srcs = ["main.py"],
     main = "main.py",
     deps = [":manman_worker"],
-    app_type = "worker",
     visibility = ["//manman:__pkg__"],
 )
 

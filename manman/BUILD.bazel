@@ -21,6 +21,8 @@ release_app(
     language = "python",
     domain = "manman",
     description = "Experience API service for managing user experiences and workflows",
+    app_type = "external-api",
+    port = 8080,
     replicas = 1,  # Single replica for development
     ingress_host = "experience.manman.local",
     ingress_tls_secret = "manman-tls",
@@ -32,6 +34,8 @@ release_app(
     language = "python",
     domain = "manman",
     description = "Status API service for monitoring and health checks",
+    app_type = "internal-api",
+    port = 8081,
     replicas = 1,  # Single replica for development
 )
 
@@ -41,6 +45,8 @@ release_app(
     language = "python",
     domain = "manman",
     description = "Worker DAL API service for data access layer operations",
+    app_type = "external-api",
+    port = 8082,
     replicas = 1,  # Single replica for development
     ingress_host = "dal.manman.local",
     ingress_tls_secret = "manman-tls",
@@ -52,6 +58,8 @@ release_app(
     language = "python", 
     domain = "manman",
     description = "Status processor service for background status processing",
+    app_type = "internal-api",
+    port = 8083,
     replicas = 1,  # Single replica for development
 )
 
@@ -61,6 +69,7 @@ release_app(
     language = "python",
     domain = "manman", 
     description = "Background worker service for processing tasks and messages",
+    app_type = "worker",
     replicas = 1,  # Single replica for development
 )
 
@@ -70,6 +79,7 @@ release_app(
     language = "python",
     domain = "manman",
     description = "Database migration job for schema updates",
+    app_type = "job",
     replicas = 1,  # Jobs always run once
 )
 
