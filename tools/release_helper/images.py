@@ -239,6 +239,10 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
     
     # Step 1: Build platform-specific images
     # This populates Bazel's cache with correctly cross-compiled images for each platform
+    # Add action_env with unique value to bust stale cache from incorrect platform builds
+    import time
+    build_id = f"{version}_{int(time.time())}"
+    
     print(f"\n{'='*80}")
     print("Building platform-specific images...")
     print(f"{'='*80}")
@@ -247,7 +251,12 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
         platform_flag = f"//tools:linux_{platform == 'arm64' and 'arm64' or 'x86_64'}"
         
         print(f"\nBuilding {platform} image: {platform_target}")
-        build_args = ["build", platform_target, f"--platforms={platform_flag}"]
+        build_args = [
+            "build", 
+            platform_target, 
+            f"--platforms={platform_flag}",
+            f"--action_env=RELEASE_BUILD_ID={build_id}"
+        ]
         run_bazel(build_args)
         print(f"✅ Built {platform} image successfully")
     
@@ -258,7 +267,11 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
     print(f"{'='*80}")
     index_target = f"//{app_path}:{app_name}_image"
     print(f"Building index: {index_target}")
-    run_bazel(["build", index_target])
+    run_bazel([
+        "build", 
+        index_target,
+        f"--action_env=RELEASE_BUILD_ID={build_id}"
+    ])
     print(f"✅ Built OCI image index containing {len(platforms)} platform variants")
     
     # Step 3: Push the image index with all tags
