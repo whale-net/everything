@@ -155,17 +155,15 @@ def build_image(bazel_target: str, platform: Optional[str] = None) -> str:
     return f"{domain}-{app_name}:latest"
 
 
-def push_image_with_tags(bazel_target: str, tags: List[str], platform: Optional[str] = None) -> None:
+def push_image_with_tags(bazel_target: str, tags: List[str]) -> None:
     """Push a container image with multiple tags to the registry.
     
-    NOTE: We do NOT use --platforms flag here because oci_push runs executables (like jq)
-    on the host machine. When building ARM64 images, the image layers are already built
-    with the correct platform, but the push operation must use host-native tools.
+    Pushes the OCI image index which contains all platform variants (amd64, arm64).
+    The index allows Docker to automatically select the correct architecture.
     
     Args:
         bazel_target: Full bazel target path for the app metadata
-        tags: List of full registry tags to push (e.g., ["ghcr.io/whale-net/demo-hello_python:v0.0.6-amd64"])
-        platform: Optional platform specification for informational purposes only (not used in build command)
+        tags: List of full registry tags to push (e.g., ["ghcr.io/whale-net/demo-hello_python:v0.0.6"])
     """
     # Get app metadata for proper naming
     metadata = get_app_metadata(bazel_target)
@@ -174,14 +172,8 @@ def push_image_with_tags(bazel_target: str, tags: List[str], platform: Optional[
     # Extract the app path from the bazel_target to construct the push target
     app_path = bazel_target[2:].split(':')[0]  # Remove // and :target
     
-    # Determine which push target to use based on platform
-    # The images are already built with the correct platform from the load step
-    if platform == "arm64":
-        push_target = f"//{app_path}:{app_name}_image_arm64_push"
-    elif platform == "amd64":
-        push_target = f"//{app_path}:{app_name}_image_amd64_push"
-    else:
-        push_target = f"//{app_path}:{app_name}_image_push"
+    # Use the image index push target (contains both amd64 and arm64)
+    push_target = f"//{app_path}:{app_name}_image_push"
 
     print(f"Pushing {len(tags)} tags using {push_target}...")
     
@@ -200,7 +192,7 @@ def push_image_with_tags(bazel_target: str, tags: List[str], platform: Optional[
     
     try:
         run_bazel(bazel_args, capture_output=False)  # Don't capture output so we can see progress
-        print(f"Successfully pushed image with {len(tag_names)} tags for platform {platform or 'default'}")
+        print(f"Successfully pushed image with {len(tag_names)} tags")
     except subprocess.CalledProcessError as e:
         print(f"Failed to push image: {e}")
         raise
@@ -249,7 +241,7 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
     
     print(f"\nPushing OCI image index with {len(tags)} tags...")
     # Push the image index (contains both amd64 and arm64)
-    push_image_with_tags(bazel_target, list(tags.values()), platform=None)
+    push_image_with_tags(bazel_target, list(tags.values()))
     
     print(f"\n{'='*80}")
     print(f"✅ Successfully released {image_name}:{version}")

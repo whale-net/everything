@@ -1,17 +1,12 @@
 #!/usr/bin/env bash
-# Test to verify cross-compilation works correctly for Python apps with compiled dependencies.
+# Test to verify the RIGHT WHEEL is in the RIGHT PLATFORM.
+#
+# That's it. Nothing more, nothing less.
+# AMD64 image must have x86_64 wheels. ARM64 image must have aarch64 wheels.
 #
 # PREREQUISITE: Images must be loaded before running this test. Run:
-#   bazel run //demo/hello_fastapi:hello_fastapi_image_amd64_load --platforms=//tools:linux_x86_64
-#   bazel run //demo/hello_fastapi:hello_fastapi_image_arm64_load --platforms=//tools:linux_arm64
-#
-# This test ensures that:
-# 1. ARM64 containers get aarch64 wheels (not x86_64)
-# 2. AMD64 containers get x86_64 wheels
-# 3. Cross-platform wheel selection (rules_pycross) is working correctly
-#
-# METHOD: This test extracts and inspects the OCI image layers without executing
-# the containers, allowing it to work on both AMD64 and ARM64 CI hosts.
+#   bazel run //demo/hello_fastapi:hello_fastapi_image_load --platforms=//tools:linux_x86_64
+#   bazel run //demo/hello_fastapi:hello_fastapi_image_load --platforms=//tools:linux_arm64
 #
 # This is a CRITICAL test - if this fails, cross-compilation is broken and ARM64 
 # containers will crash at runtime with compiled dependencies like pydantic, numpy, etc.
@@ -30,16 +25,11 @@ NC='\033[0m' # No Color
 
 echo "╔══════════════════════════════════════════════════════════════════════════════╗"
 echo "║                                                                              ║"
-echo "║             Python Cross-Compilation Verification Test                      ║"
+echo "║             Cross-Compilation Wheel Verification                            ║"
 echo "║                                                                              ║"
-echo "║  This test verifies that cross-platform builds work correctly, ensuring     ║"
-echo "║  ARM64 containers get aarch64 wheels and AMD64 containers get x86_64 wheels.║"
+echo "║  Verify: AMD64 images have x86_64 wheels. ARM64 images have aarch64 wheels. ║"
 echo "║                                                                              ║"
-echo "║  CRITICAL: If this test fails, cross-compilation is broken and ARM64        ║"
-echo "║  containers will crash at runtime with apps using compiled dependencies     ║"
-echo "║  like pydantic, numpy, pandas, pillow, cryptography, etc.                   ║"
-echo "║                                                                              ║"
-echo "║  NOTE: Images must be loaded before running this test (see script header)   ║"
+echo "║  That's it. Nothing more, nothing less. The right wheel in the right place. ║"
 echo "║                                                                              ║"
 echo "╚══════════════════════════════════════════════════════════════════════════════╝"
 echo ""

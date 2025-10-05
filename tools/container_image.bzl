@@ -163,8 +163,10 @@ def multiplatform_image(
         tags = ["manual"],
     )
     
-    # Load targets for local development with arch suffix
-    # This allows loading both architectures simultaneously for testing
+    # Load targets - Bazel doesn't support select() in oci_load attributes,
+    # so we need separate targets that can be called with --platforms flag
+    # bazel run //app:app_image_amd64_load --platforms=//tools:linux_x86_64
+    # bazel run //app:app_image_arm64_load --platforms=//tools:linux_arm64
     oci_load(
         name = name + "_amd64_load",
         image = ":" + name + "_amd64",
@@ -179,36 +181,13 @@ def multiplatform_image(
         tags = ["manual"],
     )
     
-    # Default load target - note: user must specify --platforms flag or use the release system
-    native.alias(
-        name = name + "_load",
-        actual = ":" + name + "_amd64_load",
-        tags = ["manual"],
-    )
-    
-    # Push targets for release
+    # Push target for release (OCI image index with both platforms)
     if repository and image_name:
         repo_path = registry + "/" + repository + "/" + image_name
         
         oci_push(
             name = name + "_push",
             image = ":" + name,
-            repository = repo_path,
-            remote_tags = [],
-            tags = ["manual"],
-        )
-        
-        oci_push(
-            name = name + "_amd64_push",
-            image = ":" + name + "_amd64",
-            repository = repo_path,
-            remote_tags = [],
-            tags = ["manual"],
-        )
-        
-        oci_push(
-            name = name + "_arm64_push",
-            image = ":" + name + "_arm64",
             repository = repo_path,
             remote_tags = [],
             tags = ["manual"],
