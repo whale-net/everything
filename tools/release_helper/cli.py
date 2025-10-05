@@ -862,6 +862,129 @@ def unpublish_helm_chart_cmd(
         raise typer.Exit(1)
 
 
+@app.command("cleanup-old-tags")
+def cleanup_old_tags_cmd(
+    owner: Annotated[str, typer.Option("--owner", help="Repository owner")] = "",
+    repo: Annotated[str, typer.Option("--repo", help="Repository name")] = "",
+    min_age_days: Annotated[int, typer.Option("--min-age-days", help="Minimum age in days before pruning (default: 14)")] = 14,
+    keep_minor_versions: Annotated[int, typer.Option("--keep-minor-versions", help="Number of latest minor versions to keep (default: 2)")] = 2,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be deleted without actually deleting")] = False,
+):
+    """Clean up old Git tags on GitHub.
+    
+    This command identifies and deletes old tags based on the following rules:
+    - Keep the last N minor versions (default: 2)
+    - For each kept minor version, keep only the latest patch version
+    - Only prune tags older than min-age-days (default: 14 days)
+    
+    Examples:
+        # Dry run to see what would be deleted
+        bazel run //tools:release -- cleanup-old-tags --dry-run
+        
+        # Actually delete old tags (keeps last 2 minor versions)
+        bazel run //tools:release -- cleanup-old-tags
+        
+        # Keep last 3 minor versions and prune tags older than 30 days
+        bazel run //tools:release -- cleanup-old-tags --keep-minor-versions 3 --min-age-days 30
+    """
+    try:
+        from tools.release_helper.git import get_all_tags, identify_tags_to_prune, delete_local_tag
+        from tools.release_helper.github_release import GitHubReleaseClient
+        
+        # Use environment variables if owner/repo not provided
+        if not owner:
+            owner = os.getenv('GITHUB_REPOSITORY_OWNER', '')
+        if not repo:
+            repo_full = os.getenv('GITHUB_REPOSITORY', '')
+            if '/' in repo_full:
+                repo = repo_full.split('/')[-1]
+        
+        if not owner or not repo:
+            typer.echo("Error: --owner and --repo are required (or set GITHUB_REPOSITORY_OWNER and GITHUB_REPOSITORY env vars)", err=True)
+            raise typer.Exit(1)
+        
+        typer.echo(f"Analyzing tags in {owner}/{repo}...")
+        typer.echo(f"Rules: Keep last {keep_minor_versions} minor versions, prune tags older than {min_age_days} days")
+        typer.echo("")
+        
+        # Get all tags
+        all_tags = get_all_tags()
+        if not all_tags:
+            typer.echo("No tags found in repository")
+            return
+        
+        typer.echo(f"Found {len(all_tags)} total tags")
+        
+        # Identify tags to prune
+        tags_to_prune = identify_tags_to_prune(
+            all_tags,
+            min_age_days=min_age_days,
+            keep_latest_minor_versions=keep_minor_versions
+        )
+        
+        if not tags_to_prune:
+            typer.echo("✅ No tags identified for pruning")
+            return
+        
+        typer.echo(f"\n{'='*60}")
+        typer.echo(f"Tags identified for pruning: {len(tags_to_prune)}")
+        typer.echo(f"{'='*60}")
+        for tag in sorted(tags_to_prune):
+            typer.echo(f"  - {tag}")
+        typer.echo(f"{'='*60}\n")
+        
+        if dry_run:
+            typer.echo("DRY RUN: No tags were actually deleted")
+            typer.echo(f"Run without --dry-run to delete these {len(tags_to_prune)} tags")
+            return
+        
+        # Confirm deletion
+        typer.echo(f"⚠️  WARNING: This will delete {len(tags_to_prune)} tags from {owner}/{repo}")
+        if not typer.confirm("Are you sure you want to continue?"):
+            typer.echo("Aborted")
+            return
+        
+        # Initialize GitHub client
+        try:
+            github_client = GitHubReleaseClient(owner, repo)
+            
+            # Validate permissions
+            if not github_client.validate_permissions():
+                typer.echo("❌ Insufficient permissions to delete tags", err=True)
+                raise typer.Exit(1)
+        except ValueError as e:
+            typer.echo(f"❌ {e}", err=True)
+            raise typer.Exit(1)
+        
+        # Delete tags
+        typer.echo(f"\nDeleting {len(tags_to_prune)} tags...")
+        success_count = 0
+        failure_count = 0
+        
+        for tag in tags_to_prune:
+            # Delete from remote
+            if github_client.delete_tag(tag):
+                # Also delete locally if it exists
+                delete_local_tag(tag)
+                success_count += 1
+            else:
+                failure_count += 1
+        
+        typer.echo(f"\n{'='*60}")
+        typer.echo(f"Summary:")
+        typer.echo(f"  ✅ Successfully deleted: {success_count} tags")
+        if failure_count > 0:
+            typer.echo(f"  ❌ Failed to delete: {failure_count} tags")
+        typer.echo(f"{'='*60}")
+        
+        if failure_count > 0:
+            raise typer.Exit(1)
+            
+    except Exception as e:
+        typer.echo(f"Error cleaning up tags: {e}", err=True)
+        raise typer.Exit(1)
+
+
 def main():
     """Main entry point for the CLI."""
     try:

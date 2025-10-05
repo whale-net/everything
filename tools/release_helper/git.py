@@ -4,6 +4,7 @@ Git operations for the release helper.
 
 import re
 import subprocess
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 
@@ -307,3 +308,167 @@ def auto_increment_helm_chart_version(chart_name: str, increment_type: str) -> s
         return increment_minor_version(latest_version)
     else:  # patch
         return increment_patch_version(latest_version)
+
+
+def get_tag_creation_date(tag_name: str) -> Optional[datetime]:
+    """Get the creation date of a Git tag.
+    
+    Args:
+        tag_name: Tag name
+    
+    Returns:
+        datetime object for tag creation date, or None if tag doesn't exist
+    """
+    try:
+        # Get the date when the tag was created
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%aI", tag_name],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        date_str = result.stdout.strip()
+        if date_str:
+            return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+        return None
+    except subprocess.CalledProcessError:
+        return None
+
+
+def delete_local_tag(tag_name: str) -> bool:
+    """Delete a local Git tag.
+    
+    Args:
+        tag_name: Tag name to delete
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        print(f"Deleting local tag: {tag_name}")
+        subprocess.run(["git", "tag", "-d", tag_name], check=True, capture_output=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to delete local tag {tag_name}: {e}")
+        return False
+
+
+def identify_tags_to_prune(
+    all_tags: List[str],
+    min_age_days: int = 14,
+    keep_latest_minor_versions: int = 2
+) -> List[str]:
+    """Identify tags that should be pruned based on age and version rules.
+    
+    Rules:
+    - Keep the last N minor versions completely (all patches) (default: 2)
+    - For each older minor version, keep only the latest patch version
+    - Only consider pruning tags older than min_age_days (default: 14)
+    
+    Args:
+        all_tags: List of all tags
+        min_age_days: Minimum age in days before a tag can be pruned
+        keep_latest_minor_versions: Number of latest minor versions to keep completely
+    
+    Returns:
+        List of tags that can be safely pruned
+    """
+    # Group tags by prefix (domain-app or helm-chart)
+    tag_groups: Dict[str, List[Tuple[str, Tuple[int, int, int, Optional[str]], datetime]]] = {}
+    
+    now = datetime.now()
+    min_date = now - timedelta(days=min_age_days)
+    
+    for tag in all_tags:
+        # Parse tag to extract prefix and version
+        # Tags are in format: domain-app.vX.Y.Z or helm-chart-name.vX.Y.Z
+        # Find the pattern ".vX.Y.Z"
+        match = re.match(r'^(.+)\.(v\d+\.\d+\.\d+(?:-[a-zA-Z0-9\-\.]+)?)$', tag)
+        if not match:
+            continue
+        
+        prefix = match.group(1)
+        version_str = match.group(2)
+        
+        # Parse version
+        try:
+            if version_str.startswith('v'):
+                version_str = version_str[1:]
+            
+            # Split on '-' to separate prerelease
+            version_parts = version_str.split('-', 1)
+            version_numbers = version_parts[0]
+            prerelease = version_parts[1] if len(version_parts) > 1 else None
+            
+            # Parse major.minor.patch
+            nums = version_numbers.split('.')
+            if len(nums) != 3:
+                continue
+            
+            major = int(nums[0])
+            minor = int(nums[1])
+            patch = int(nums[2])
+            
+            # Get tag creation date
+            tag_date = get_tag_creation_date(tag)
+            if not tag_date:
+                # If we can't get the date, skip this tag (be conservative)
+                continue
+            
+            # Group by prefix
+            if prefix not in tag_groups:
+                tag_groups[prefix] = []
+            
+            tag_groups[prefix].append((tag, (major, minor, patch, prerelease), tag_date))
+            
+        except (ValueError, IndexError):
+            # Skip tags that don't follow expected format
+            continue
+    
+    # Now identify tags to prune for each group
+    tags_to_prune = []
+    
+    for prefix, tags_data in tag_groups.items():
+        # Sort by version (descending)
+        tags_data.sort(key=lambda x: x[1], reverse=True)
+        
+        # Group by major.minor version
+        minor_versions: Dict[Tuple[int, int], List[Tuple[str, Tuple[int, int, int, Optional[str]], datetime]]] = {}
+        for tag, version, tag_date in tags_data:
+            major, minor, patch, prerelease = version
+            key = (major, minor)
+            if key not in minor_versions:
+                minor_versions[key] = []
+            minor_versions[key].append((tag, version, tag_date))
+        
+        # Sort minor versions (descending)
+        sorted_minor_versions = sorted(minor_versions.keys(), reverse=True)
+        
+        # Keep the latest N minor versions completely (all patches)
+        kept_minor_versions = sorted_minor_versions[:keep_latest_minor_versions]
+        
+        # For older minor versions, keep only the latest patch version
+        older_minor_versions = sorted_minor_versions[keep_latest_minor_versions:]
+        
+        # For kept minor versions, don't prune any patches (even if old)
+        # But we could prune old patches here if we want - let me follow the requirement literally
+        # "leave the last 2 minor versions" - keep them completely
+        
+        # For older minor versions, keep only the latest patch, prune the rest if old enough
+        for minor_key in older_minor_versions:
+            versions_list = minor_versions[minor_key]
+            # Sort by patch version (descending)
+            versions_list.sort(key=lambda x: x[1][2], reverse=True)
+            
+            # Keep the first one (latest patch), mark the rest for pruning if old enough
+            for i, (tag, version, tag_date) in enumerate(versions_list):
+                if i > 0 and tag_date < min_date:
+                    # Not the latest patch and old enough
+                    tags_to_prune.append(tag)
+                elif i == 0 and tag_date < min_date:
+                    # This is the latest patch of this minor version
+                    # According to the requirement, we should keep it even if it's old
+                    # "leave...the latest patch of each"
+                    pass
+    
+    return tags_to_prune

@@ -21,6 +21,57 @@ except ImportError:
     pytest.skip("httpx not available, skipping github_release tests", allow_module_level=True)
 
 
+class TestGitHubReleaseClientDeleteTag:
+    """Test cases for GitHubReleaseClient delete_tag method."""
+    
+    def test_delete_tag_success(self):
+        """Test successfully deleting a tag."""
+        mock_response = Mock()
+        mock_response.status_code = 204  # Success status for delete
+        
+        with patch('httpx.Client') as mock_client:
+            mock_client_instance = Mock()
+            mock_client.return_value.__enter__.return_value = mock_client_instance
+            mock_client_instance.delete.return_value = mock_response
+            
+            client = GitHubReleaseClient("test-owner", "test-repo", "dummy-token")
+            result = client.delete_tag("demo-app.v1.0.0")
+            
+            assert result is True
+            mock_client_instance.delete.assert_called_once()
+    
+    def test_delete_tag_not_found(self):
+        """Test deleting a tag that doesn't exist."""
+        mock_response = Mock()
+        mock_response.status_code = 404  # Not found
+        
+        with patch('httpx.Client') as mock_client:
+            mock_client_instance = Mock()
+            mock_client.return_value.__enter__.return_value = mock_client_instance
+            mock_client_instance.delete.return_value = mock_response
+            
+            client = GitHubReleaseClient("test-owner", "test-repo", "dummy-token")
+            result = client.delete_tag("demo-app.v1.0.0")
+            
+            assert result is False
+    
+    def test_delete_tag_failure(self):
+        """Test handling delete failure."""
+        mock_response = Mock()
+        mock_response.status_code = 403  # Forbidden
+        mock_response.json.return_value = {"message": "Forbidden"}
+        
+        with patch('httpx.Client') as mock_client:
+            mock_client_instance = Mock()
+            mock_client.return_value.__enter__.return_value = mock_client_instance
+            mock_client_instance.delete.return_value = mock_response
+            
+            client = GitHubReleaseClient("test-owner", "test-repo", "dummy-token")
+            result = client.delete_tag("demo-app.v1.0.0")
+            
+            assert result is False
+
+
 class TestGitHubReleaseClientPermissions:
     """Test cases for GitHubReleaseClient permission validation."""
     
