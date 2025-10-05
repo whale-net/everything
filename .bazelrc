@@ -9,17 +9,16 @@ build:fast --jobs=auto
 # and should not be overridden here to avoid conflicts
 build:ci --noshow_progress
 build:ci --jobs=auto
-build:ci --remote_download_minimal
 build:ci --verbose_failures
 build:ci --show_timestamps
 build:ci --announce_rc
-# Bandwidth-optimized caching for CI
+# Remote caching optimizations for CI
 build:ci --guard_against_concurrent_changes
 build:ci --experimental_remote_merkle_tree_cache
 build:ci --remote_timeout=60
 build:ci --remote_cache_compression
-# More aggressive output downloading for better cache hits
-build:ci --remote_download_outputs=minimal
+# Download all outputs from remote cache for better cache effectiveness
+build:ci --remote_download_outputs=all
 # Build metadata optimizations  
 build:ci --nolegacy_external_runfiles
 # Memory and CPU optimizations
