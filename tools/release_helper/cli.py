@@ -34,68 +34,22 @@ from tools.release_helper.helm import (
 app = typer.Typer(help="Release helper for Everything monorepo")
 
 
-@app.command("list-app-versions")
-def list_app_versions(
-    app_name: Annotated[Optional[str], typer.Argument(help="App name (optional - lists all apps if not specified)")] = None,
-):
-    """List versions for apps by checking git tags."""
-    from tools.release_helper.git import get_latest_app_version
-    from tools.release_helper.metadata import get_app_metadata
-    
-    if app_name:
-        # List versions for specific app
-        try:
-            bazel_target = find_app_bazel_target(app_name)
-            metadata = get_app_metadata(bazel_target)
-            latest_version = get_latest_app_version(metadata['domain'], metadata['name'])
-            if latest_version:
-                typer.echo(f"{app_name}: {latest_version}")
-            else:
-                typer.echo(f"{app_name}: no versions found")
-        except ValueError as e:
-            typer.echo(f"Error: {e}", err=True)
-            raise typer.Exit(1)
-    else:
-        # List versions for all apps
-        apps = list_all_apps()
-        for app_info in apps:
-            try:
-                metadata = get_app_metadata(app_info['bazel_target'])
-                latest_version = get_latest_app_version(metadata['domain'], metadata['name'])
-                if latest_version:
-                    typer.echo(f"{app_info['name']}: {latest_version}")
-                else:
-                    typer.echo(f"{app_info['name']}: no versions found")
-            except Exception as e:
-                typer.echo(f"{app_info['name']}: error - {e}")
-
-
-@app.command("increment-version")
-def increment_version_cmd(
-    app_name: Annotated[str, typer.Argument(help="App name")],
-    increment_type: Annotated[str, typer.Argument(help="Increment type: 'minor' or 'patch'")],
-):
-    """Calculate the next version for an app based on increment type."""
-    from tools.release_helper.git import auto_increment_version
-    from tools.release_helper.metadata import get_app_metadata
-    
-    if increment_type not in ["minor", "patch"]:
-        typer.echo("Error: increment_type must be 'minor' or 'patch'", err=True)
-        raise typer.Exit(1)
-    
-    try:
-        bazel_target = find_app_bazel_target(app_name)
-        metadata = get_app_metadata(bazel_target)
-        new_version = auto_increment_version(metadata['domain'], metadata['name'], increment_type)
-        typer.echo(f"{app_name}: {new_version}")
-    except ValueError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
+# Removed: list-app-versions and increment-version commands
+# These were unused and superseded by internal auto-versioning in the plan command.
+# Use git tags directly or the plan command with --increment-minor/--increment-patch flags.
 
 
 @app.command()
 def list_apps():
     """List all apps with release metadata."""
+    apps = list_all_apps()
+    for app_info in apps:
+        typer.echo(f"{app_info['name']} (domain: {app_info['domain']}, target: {app_info['bazel_target']})")
+
+
+@app.command()
+def list():
+    """Alias for list-apps. List all apps with release metadata."""
     apps = list_all_apps()
     for app_info in apps:
         typer.echo(f"{app_info['name']} (domain: {app_info['domain']}, target: {app_info['bazel_target']})")
@@ -232,7 +186,16 @@ def release(
     allow_overwrite: Annotated[bool, typer.Option("--allow-overwrite", help="Allow overwriting existing versions (dangerous!)")] = False,
     create_git_tag: Annotated[bool, typer.Option("--create-git-tag", help="Create and push a Git tag for this release")] = False,
 ):
-    """Build, tag, and push container image."""
+    """⚠️ DEPRECATED: Use 'release-multiarch' instead.
+    
+    This command builds single-architecture images and is kept only for backward compatibility.
+    The CI/CD pipeline uses 'release-multiarch' which builds proper multi-platform images.
+    
+    Migration: Replace 'release' with 'release-multiarch' in your commands.
+    """
+    typer.echo("⚠️  WARNING: The 'release' command is deprecated.", err=True)
+    typer.echo("⚠️  Use 'release-multiarch' instead for multi-platform support.", err=True)
+    typer.echo("⚠️  This command will be removed in a future release.\n", err=True)
     tag_and_push_image(app_name, version, commit, dry_run, allow_overwrite, create_git_tag)
 
 
@@ -558,7 +521,16 @@ def create_combined_github_release(
     previous_tag: Annotated[Optional[str], typer.Option("--previous-tag", help="Previous tag to compare against (auto-detected if not provided)")] = None,
     apps: Annotated[Optional[str], typer.Option("--apps", help="Comma-separated list of apps to include (defaults to all)")] = None,
 ):
-    """Create GitHub releases for multiple apps."""
+    """⚠️ DEPRECATED: Use 'create-combined-github-release-with-notes' instead.
+    
+    This command generates release notes inline, which is slower and less flexible.
+    The CI/CD pipeline uses 'create-combined-github-release-with-notes' with pre-generated notes.
+    
+    Migration: Generate release notes separately, then use 'create-combined-github-release-with-notes'.
+    """
+    typer.echo("⚠️  WARNING: 'create-combined-github-release' is deprecated.", err=True)
+    typer.echo("⚠️  Use 'create-combined-github-release-with-notes' instead.", err=True)
+    typer.echo("⚠️  Continuing with inline release note generation...\n", err=True)
     try:
         # Determine which apps to include
         if apps:
@@ -633,25 +605,9 @@ def helm_chart_info(
         raise typer.Exit(1)
 
 
-@app.command("resolve-chart-app-versions")
-def resolve_chart_app_versions(
-    chart_name: Annotated[str, typer.Argument(help="Helm chart name")],
-    use_released: Annotated[bool, typer.Option("--use-released/--use-latest", help="Use released versions from git tags or 'latest'")] = True,
-):
-    """Resolve app versions for a helm chart."""
-    try:
-        chart_target = find_helm_chart_bazel_target(chart_name)
-        metadata = get_helm_chart_metadata(chart_target)
-        
-        app_versions = resolve_app_versions_for_chart(metadata, use_released)
-        
-        typer.echo(f"App versions for chart '{chart_name}':")
-        for app_name, version in app_versions.items():
-            typer.echo(f"  {app_name}: {version}")
-            
-    except ValueError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
+# Removed: resolve-chart-app-versions command
+# This functionality is now integrated into the build-helm-chart command.
+# Use build-helm-chart with --use-released or --use-latest flags instead.
 
 
 @app.command("build-helm-chart")
@@ -783,7 +739,12 @@ def publish_helm_repo(
     commit_message: Annotated[Optional[str], typer.Option("--commit-message", help="Commit message for the update")] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be done without pushing")] = False,
 ):
-    """Publish Helm charts to GitHub Pages by pushing to gh-pages branch.
+    """⚠️ DEPRECATED: GitHub Actions handles Helm repo publishing.
+    
+    The CI/CD pipeline uses GitHub Actions (deploy-pages) to publish charts.
+    This command is kept for manual/local publishing scenarios only.
+    
+    For production use, rely on the release.yml workflow's helm chart publishing.
     
     This command will:
     1. Clone or create the gh-pages branch
@@ -791,6 +752,9 @@ def publish_helm_repo(
     3. Generate or update the Helm repository index.yaml
     4. Commit and push changes to gh-pages
     """
+    typer.echo("⚠️  WARNING: 'publish-helm-repo' is deprecated for CI/CD use.", err=True)
+    typer.echo("⚠️  The GitHub Actions workflow handles publishing automatically.", err=True)
+    typer.echo("⚠️  Use this command only for manual/local publishing.\n", err=True)
     try:
         from pathlib import Path
         
@@ -851,49 +815,10 @@ def publish_helm_repo(
         raise typer.Exit(1)
 
 
-@app.command("generate-helm-index")
-def generate_helm_index_cmd(
-    charts_dir: Annotated[str, typer.Argument(help="Directory containing .tgz chart files")],
-    base_url: Annotated[str, typer.Option("--base-url", help="Base URL where charts will be hosted")],
-    merge_with: Annotated[Optional[str], typer.Option("--merge-with", help="Path to existing index.yaml to merge with")] = None,
-):
-    """Generate a Helm repository index.yaml file.
-    
-    This creates or updates an index.yaml file that catalogs all Helm charts in the directory.
-    If --merge-with is provided, it will merge with an existing index to preserve history.
-    """
-    try:
-        from pathlib import Path
-        
-        charts_path = Path(charts_dir)
-        if not charts_path.exists():
-            typer.echo(f"Error: Charts directory not found: {charts_dir}", err=True)
-            raise typer.Exit(1)
-        
-        # Check if there are any .tgz files
-        chart_files = list(charts_path.glob("*.tgz"))
-        if not chart_files:
-            typer.echo(f"Warning: No .tgz chart files found in {charts_dir}", err=True)
-        
-        typer.echo(f"Generating Helm repository index for {len(chart_files)} chart(s)...")
-        
-        if merge_with:
-            merge_path = Path(merge_with)
-            if not merge_path.exists():
-                typer.echo(f"Warning: Merge file not found: {merge_with}, creating new index", err=True)
-                merge_path = None
-            else:
-                typer.echo(f"Merging with existing index: {merge_with}")
-            
-            index_path = merge_helm_repo_index(charts_path, merge_path, base_url)
-        else:
-            index_path = generate_helm_repo_index(charts_path, base_url)
-        
-        typer.echo(f"✅ Generated index: {index_path}")
-        
-    except Exception as e:
-        typer.echo(f"Error generating Helm index: {e}", err=True)
-        raise typer.Exit(1)
+# Removed: generate-helm-index command
+# The CI/CD workflow uses native 'helm repo index' command directly.
+# This wrapper provided no additional value over the native helm command.
+# Use: helm repo index <charts-dir> --url <base-url> [--merge <existing-index>]
 
 
 @app.command("unpublish-helm-chart")
