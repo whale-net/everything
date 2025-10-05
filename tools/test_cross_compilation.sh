@@ -61,17 +61,17 @@ test_app_multiarch() {
     echo "================================================================================"
     echo ""
     
-    # Verify images exist
+    # Verify images exist (using new naming with dash separator)
     echo "Checking if images are loaded..."
-    if ! docker image inspect "${app_name}_amd64:latest" >/dev/null 2>&1; then
-        echo -e "${RED}ERROR: Image ${app_name}_amd64:latest not found!${NC}"
-        echo "Please run: bazel run //demo/${app_name}:${app_name}_image_amd64_load"
+    if ! docker image inspect "${app_name}-amd64:latest" >/dev/null 2>&1; then
+        echo -e "${RED}ERROR: Image ${app_name}-amd64:latest not found!${NC}"
+        echo "Please run: bazel run //demo/${app_name}:${app_name}_image_amd64_load --platforms=//tools:linux_x86_64"
         return 1
     fi
     
-    if ! docker image inspect "${app_name}_arm64:latest" >/dev/null 2>&1; then
-        echo -e "${RED}ERROR: Image ${app_name}_arm64:latest not found!${NC}"
-        echo "Please run: bazel run //demo/${app_name}:${app_name}_image_arm64_load"
+    if ! docker image inspect "${app_name}-arm64:latest" >/dev/null 2>&1; then
+        echo -e "${RED}ERROR: Image ${app_name}-arm64:latest not found!${NC}"
+        echo "Please run: bazel run //demo/${app_name}:${app_name}_image_arm64_load --platforms=//tools:linux_arm64"
         return 1
     fi
     
@@ -84,7 +84,7 @@ test_app_multiarch() {
     echo "================================================================================"
     
     local amd64_so_files
-    if ! amd64_so_files=$(docker run --rm --entrypoint /bin/sh "${app_name}_amd64:latest" \
+    if ! amd64_so_files=$(docker run --rm --entrypoint /bin/sh "${app_name}-amd64:latest" \
         -c "find /app -name '*${test_package}*.so' 2>/dev/null | head -${MAX_SO_FILES}"); then
         echo -e "${YELLOW}WARNING: Failed to search for .so files in AMD64 image${NC}"
         return 1
@@ -122,7 +122,7 @@ test_app_multiarch() {
     echo "================================================================================"
     
     local arm64_so_files
-    if ! arm64_so_files=$(docker run --rm --entrypoint /bin/sh "${app_name}_arm64:latest" \
+    if ! arm64_so_files=$(docker run --rm --entrypoint /bin/sh "${app_name}-arm64:latest" \
         -c "find /app -name '*${test_package}*.so' 2>/dev/null | head -${MAX_SO_FILES}"); then
         echo -e "${YELLOW}WARNING: Failed to search for .so files in ARM64 image${NC}"
         return 1
@@ -163,7 +163,7 @@ overall_success=0
 
 # Test 1: FastAPI with pydantic
 if test_app_multiarch \
-    "hello_fastapi" \
+    "demo-hello_fastapi" \
     "pydantic_core" \
     "FastAPI app with pydantic (compiled dependency)"; then
     test1_result="${GREEN}✅ PASS${NC}"
