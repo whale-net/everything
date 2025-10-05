@@ -119,15 +119,13 @@ def release_multiarch(
         typer.echo(f"Registry: {registry}")
         typer.echo("")
         
-        # Show what will be built and pushed temporarily
-        typer.echo("Platform-specific images (temporary, for manifest creation):")
+        # Show the build process
+        typer.echo("Build Process:")
+        typer.echo(f"  1. Build platform-specific images:")
         for platform in platform_list:
-            owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "whale-net").lower()
-            repo_path = f"{registry}/{owner}/{image_name}"
-            typer.echo(f"  Build & push: {repo_path}:{version}-{platform}")
-            typer.echo(f"               {repo_path}:latest-{platform}")
-            if commit:
-                typer.echo(f"               {repo_path}:{commit}-{platform}")
+            typer.echo(f"     • {actual_app_name}_image_{platform} (--platforms=//tools:linux_{platform == 'arm64' and 'arm64' or 'x86_64'})")
+        typer.echo(f"  2. Build OCI image index: {actual_app_name}_image")
+        typer.echo(f"  3. Push image index with all tags")
         
         typer.echo("")
         typer.echo("=" * 80)
@@ -136,19 +134,19 @@ def release_multiarch(
         owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "whale-net").lower()
         repo_path = f"{registry}/{owner}/{image_name}"
         typer.echo(f"  ✅ {repo_path}:{version}")
-        typer.echo(f"     └─ Manifest list → auto-selects from: {', '.join(platform_list)}")
+        typer.echo(f"     └─ OCI image index → auto-selects from: {', '.join(platform_list)}")
         typer.echo("")
         typer.echo(f"  ✅ {repo_path}:latest")
-        typer.echo(f"     └─ Manifest list → auto-selects from: {', '.join(platform_list)}")
+        typer.echo(f"     └─ OCI image index → auto-selects from: {', '.join(platform_list)}")
         if commit:
             typer.echo("")
             typer.echo(f"  ✅ {repo_path}:{commit}")
-            typer.echo(f"     └─ Manifest list → auto-selects from: {', '.join(platform_list)}")
+            typer.echo(f"     └─ OCI image index → auto-selects from: {', '.join(platform_list)}")
         
         typer.echo("")
         typer.echo("=" * 80)
-        typer.echo("ℹ️  Platform-specific tags are temporary and used only for manifest")
-        typer.echo("   creation. Users will only see and pull the manifest lists above.")
+        typer.echo("ℹ️  Only the OCI image index is published (no platform-specific tags).")
+        typer.echo("   Docker automatically serves the correct architecture when users pull.")
         typer.echo("=" * 80)
         typer.echo("")
         typer.echo("DRY RUN: No images were actually built or pushed")
