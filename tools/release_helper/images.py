@@ -237,45 +237,24 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
     print(f"Version: {version}")
     print(f"Platforms: {', '.join(platforms)}")
     
-    # Step 1: Build platform-specific images
-    # This populates Bazel's cache with correctly cross-compiled images for each platform
-    # Add action_env with unique value to bust stale cache from incorrect platform builds
-    import time
-    build_id = f"{version}_{int(time.time())}"
-    
+    # Build the OCI image index with platform transitions
+    # The oci_image_index rule with platforms parameter will automatically:
+    # 1. Build the base image for each platform via Bazel transitions
+    # 2. Create a proper OCI index manifest with platform metadata
     print(f"\n{'='*80}")
-    print("Building platform-specific images...")
-    print(f"{'='*80}")
-    for platform in platforms:
-        platform_target = f"//{app_path}:{app_name}_image_{platform}"
-        platform_flag = f"//tools:linux_{platform == 'arm64' and 'arm64' or 'x86_64'}"
-        
-        print(f"\nBuilding {platform} image: {platform_target}")
-        build_args = [
-            "build", 
-            platform_target, 
-            f"--platforms={platform_flag}",
-            f"--action_env=RELEASE_BUILD_ID={build_id}"
-        ]
-        run_bazel(build_args)
-        print(f"✅ Built {platform} image successfully")
-    
-    # Step 2: Build the OCI image index (depends on platform-specific images)
-    # The oci_image_index rule will use the platform-specific images we just built
-    print(f"\n{'='*80}")
-    print("Building OCI image index...")
+    print("Building OCI image index with platform transitions...")
     print(f"{'='*80}")
     index_target = f"//{app_path}:{app_name}_image"
     print(f"Building index: {index_target}")
     run_bazel([
         "build", 
-        index_target,
-        f"--action_env=RELEASE_BUILD_ID={build_id}"
+        index_target
     ])
     print(f"✅ Built OCI image index containing {len(platforms)} platform variants")
+
     
-    # Step 3: Push the image index with all tags
-    # The oci_push target will push the index (NOT the individual platform images)
+    # Push the image index with all tags
+    # The oci_push target will push the index with proper multi-arch manifest
     tags = format_registry_tags(
         domain=domain,
         app_name=app_name,

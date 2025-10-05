@@ -167,57 +167,45 @@ def multiplatform_image(
     
     # Build platform-specific images using the SAME binary target
     # These must be built with explicit --platforms flag
+    # Create the base image that will be transitioned to multiple platforms
     container_image(
-        name = name + "_amd64",
+        name = name + "_base",
         binary = binary,
         base = base,
         language = language,
         **kwargs
     )
     
-    container_image(
-        name = name + "_arm64",
-        binary = binary,
-        base = base,
-        language = language,
-        **kwargs
-    )
-    
-    # Create multiplatform manifest list
-    # Note: oci_image_index takes a list of images, not a dict
-    # The platform info comes from the individual oci_image targets
+    # Create multiplatform manifest list using platform transitions
+    # When platforms parameter is specified, only ONE image can be in the images attribute
+    # The transition will build that image for each platform automatically
     oci_image_index(
         name = name,
         images = [
-            ":" + name + "_amd64",
-            ":" + name + "_arm64",
+            ":" + name + "_base",
+        ],
+        platforms = [
+            "//tools:linux_x86_64",
+            "//tools:linux_arm64",
         ],
         tags = ["manual"],
     )
     
     # =======================================================================
-    # LOAD TARGETS: Local testing only (NOT used in production releases)
+    # LOAD TARGET: Local testing (loads the multiarch index)
     # =======================================================================
-    # Bazel doesn't support select() in oci_load attributes, so we need
-    # separate targets for each platform. These load platform-specific
-    # images to local Docker with architecture-tagged names for testing.
+    # Loads the OCI image index locally. Docker will automatically select
+    # the appropriate platform when running the container.
     #
     # Usage:
-    #   bazel run //app:app_image_amd64_load  # Creates app-amd64:latest
-    #   bazel run //app:app_image_arm64_load  # Creates app-arm64:latest
+    #   bazel run //app:app_image_load  # Creates app:latest (multiarch)
     #
-    # These are NEVER used by the release system.
+    # This is NEVER used by the release system.
     oci_load(
-        name = name + "_amd64_load",
-        image = ":" + name + "_amd64",
-        repo_tags = [image_name + "-amd64:latest"],
-        tags = ["manual"],
-    )
-    
-    oci_load(
-        name = name + "_arm64_load",
-        image = ":" + name + "_arm64",
-        repo_tags = [image_name + "-arm64:latest"],
+        name = name + "_load",
+        image = ":" + name,
+        repo_tags = [image_name + ":latest"],
+        format = "oci",  # Required for image indexes
         tags = ["manual"],
     )
     
