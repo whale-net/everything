@@ -24,6 +24,8 @@ sh_test(
         "manual",  # Don't run with //...
         "requires-network",  # Needs Docker and external bazel invocations
         "integration",  # Integration test, not unit test
+        "no-cache",  # Always run, never cache (images loaded externally)
+        "external",  # Depends on external Docker state
     ],
     timeout = "long",
 )
