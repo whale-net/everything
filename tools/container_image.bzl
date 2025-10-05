@@ -184,13 +184,18 @@ def multiplatform_image(
     )
     
     # Create multiplatform manifest list
-    # Note: oci_image_index takes a list of images, not a dict
-    # The platform info comes from the individual oci_image targets
+    # The platforms attribute tells oci_image_index which platform to build each image for
+    # This ensures that _amd64 is built with --platforms=//tools:linux_x86_64
+    # and _arm64 is built with --platforms=//tools:linux_arm64
     oci_image_index(
         name = name,
         images = [
             ":" + name + "_amd64",
             ":" + name + "_arm64",
+        ],
+        platforms = [
+            "//tools:linux_x86_64",
+            "//tools:linux_arm64",
         ],
         tags = ["manual"],
     )
