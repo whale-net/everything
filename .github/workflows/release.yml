@@ -219,13 +219,20 @@ jobs:
       run: |
         echo "Building and releasing $APP version $VERSION using multiarch release system"
         
+        # Build the release helper binary first (avoids nested Bazel invocations)
+        echo "Building release helper..."
+        bazel build --config=ci //tools:release
+        
+        # Execute the release helper directly (not via 'bazel run' to avoid deadlocks)
+        RELEASE_HELPER="$(bazel info bazel-bin --config=ci)/tools/release_helper/release_helper"
+        
         # Use release-multiarch to build and push platform-specific images + manifest lists
         if [[ "$DRY_RUN" == "true" ]]; then
           echo "DRY RUN: Building multiarch images without publishing"
-          bazel run --config=ci //tools:release -- release-multiarch "$APP" --version "$VERSION" --commit "${{ github.sha }}" --dry-run
+          "$RELEASE_HELPER" release-multiarch "$APP" --version "$VERSION" --commit "${{ github.sha }}" --dry-run
         else
           echo "Building and publishing multiarch images for $APP $VERSION"
-          bazel run --config=ci //tools:release -- release-multiarch "$APP" --version "$VERSION" --commit "${{ github.sha }}"
+          "$RELEASE_HELPER" release-multiarch "$APP" --version "$VERSION" --commit "${{ github.sha }}"
           echo "Successfully released multiarch $APP $VERSION"
         fi
         
@@ -557,6 +564,11 @@ jobs:
         # Create output directory for charts
         mkdir -p /tmp/helm-charts
         
+        # Build the release helper binary first (avoids nested Bazel invocations)
+        echo "Building release helper..."
+        bazel build --config=ci //tools:release
+        RELEASE_HELPER="$(bazel info bazel-bin --config=ci)/tools/release_helper/release_helper"
+        
         # Parse chart list and build each chart with proper versioning
         CHARTS="${{ steps.plan.outputs.charts }}"
         IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
@@ -567,7 +579,7 @@ jobs:
           # Build the chart using release helper with auto-versioning
           # Each chart maintains its own version based on git tags (helm/<chart-name>/v*)
           # Note: --auto-version is the default, so we don't need to pass it explicitly
-          bazel run --config=ci //tools:release -- build-helm-chart "$CHART" \
+          "$RELEASE_HELPER" build-helm-chart "$CHART" \
             --output-dir /tmp/helm-charts \
             --use-released \
             --bump "$BUMP_TYPE"

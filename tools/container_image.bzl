@@ -202,16 +202,26 @@ def multiplatform_image(
     )
     
     # =======================================================================
-    # LOAD TARGET: Local testing (native platform only)
+    # LOAD TARGET: Local testing with explicit platform
     # =======================================================================
     # NOTE: oci_load doesn't support loading image indexes directly.
-    # This loads only the base image for your native platform.
-    # To test multiarch, use the push target and pull from registry.
+    # You must specify which Linux platform to load using --platforms flag.
     #
     # Usage:
-    #   bazel run //app:app_image_load  # Loads for your current platform
+    #   # On M1/M2 Macs (load Linux ARM64 image):
+    #   bazel run //app:app_image_load --platforms=//tools:linux_arm64
     #
-    # This is NEVER used by the release system - only for local dev/testing.
+    #   # On Intel Macs/PCs (load Linux AMD64 image):
+    #   bazel run //app:app_image_load --platforms=//tools:linux_x86_64
+    #
+    # Without the --platforms flag, you may get macOS binaries which won't run in Docker.
+    # The platform flag ensures the image contains Linux binaries for Docker.
+    #
+    # Example test:
+    #   bazel run //demo/hello_fastapi:hello_fastapi_image_load --platforms=//tools:linux_arm64
+    #   docker run --rm -p 8000:8000 demo-hello_fastapi:latest
+    #   curl http://localhost:8000/
+    
     oci_load(
         name = name + "_load",
         image = ":" + name + "_base",

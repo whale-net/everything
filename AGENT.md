@@ -13,11 +13,16 @@ This repository implements true cross-compilation for Python apps using rules_py
 - Use `--platforms` flag to select target architecture (//tools:linux_x86_64 or //tools:linux_arm64)
 - Test cross-compilation with:
   ```bash
-  # Load images first (required)
-  bazel run //demo/hello_fastapi:hello_fastapi_image_amd64_load --platforms=//tools:linux_x86_64
-  bazel run //demo/hello_fastapi:hello_fastapi_image_arm64_load --platforms=//tools:linux_arm64
-  # Run the test
+  # The test has image as data dependency, just run it
   bazel test //tools:test_cross_compilation --test_output=streamed
+  
+  # To manually test images locally:
+  # On M1/M2 Macs:
+  bazel run //demo/hello_fastapi:hello_fastapi_image_load --platforms=//tools:linux_arm64
+  # On Intel:
+  bazel run //demo/hello_fastapi:hello_fastapi_image_load --platforms=//tools:linux_x86_64
+  docker run --rm -p 8000:8000 demo-hello_fastapi:latest
+  curl http://localhost:8000/
   ```
   ```
 - CI automatically verifies cross-compilation on every PR
@@ -126,29 +131,28 @@ demo-hello_python:latest
 
 #### Image Targets Generated
 For each app with `release_app`, the following targets are created:
-- `<app>_image` - Multi-platform manifest list (AMD64 + ARM64)
-- `<app>_image_amd64` - AMD64-specific image
-- `<app>_image_arm64` - ARM64-specific image
-- `<app>_image_load` - Load into Docker (uses AMD64 for local testing)
-- `<app>_image_amd64_load` - Load AMD64 image specifically
-- `<app>_image_arm64_load` - Load ARM64 image specifically
-- `<app>_image_push` - Push multi-platform manifest
-- `<app>_image_amd64_push` - Push AMD64 image
-- `<app>_image_arm64_push` - Push ARM64 image
+- `<app>_image` - Multi-platform OCI image index (contains both AMD64 + ARM64)
+- `<app>_image_base` - Base image target (used by platform transitions)
+- `<app>_image_load` - Load Linux image into Docker (REQUIRES --platforms flag)
+- `<app>_image_push` - Push multi-platform image index to registry
 
 #### Building Images
 ```bash
-# Build all platform variants
+# Build multi-platform image index (contains both architectures)
 bazel build //path/to/app:app_image
 
-# Build specific platform
-bazel build //path/to/app:app_image_amd64
+# Build and load into Docker - MUST specify platform for Linux binaries
+# On M1/M2 Macs (ARM64):
+bazel run //path/to/app:app_image_load --platforms=//tools:linux_arm64
 
-# Build and load into Docker (recommended for development)
-bazel run //path/to/app:app_image_load
+# On Intel Macs/PCs (AMD64):
+bazel run //path/to/app:app_image_load --platforms=//tools:linux_x86_64
 
-# Using release tool (production workflow)
+# Using release tool (production workflow - handles platforms automatically)
 bazel run //tools:release -- build app_name
+
+# IMPORTANT: Without --platforms flag, you may get macOS binaries
+# which will fail with "Exec format error" in Docker containers.
 ```
 
 ## 🛠️ Development Workflow
