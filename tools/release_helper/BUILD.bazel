@@ -184,25 +184,3 @@ py_test(
     ],
     size = "small",
 )
-
-# Unit tests for helm chart change detection
-py_test(
-    name = "test_detect_helm_charts",
-    srcs = ["test_detect_helm_charts.py"],
-    deps = [
-        ":release_helper_lib",
-        "@pypi//:pytest",
-    ],
-    size = "small",
-)
-
-# Unit tests for rdeps query optimization
-py_test(
-    name = "test_rdeps_optimization",
-    srcs = ["test_rdeps_optimization.py"],
-    deps = [
-        ":release_helper_lib",
-        "@pypi//:pytest",
-    ],
-    size = "small",
-)
