@@ -24,6 +24,18 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Helper function to convert OCI digest to blob path
+# Args:
+#   oci_layout: OCI layout directory path
+#   digest: Digest in format "sha256:abc123..."
+# Returns:
+#   Full path to blob file: "<oci_layout>/blobs/sha256/abc123..."
+digest_to_blob_path() {
+    local oci_layout=$1
+    local digest=$2
+    echo "$oci_layout/blobs/$(echo $digest | tr ':' '/')"
+}
+
 echo "╔══════════════════════════════════════════════════════════════════════════════╗"
 echo "║                                                                              ║"
 echo "║             Cross-Compilation Wheel Verification                            ║"
@@ -92,7 +104,7 @@ test_app_multiarch() {
     if [ "$first_manifest_media_type" == "application/vnd.oci.image.index.v1+json" ]; then
         # This is a nested index - follow it to the actual platform manifests
         echo "Found nested index, following to platform manifests..."
-        local nested_index_path="$oci_layout/blobs/$(echo $first_manifest_digest | tr ':' '/')"
+        local nested_index_path=$(digest_to_blob_path "$oci_layout" "$first_manifest_digest")
         if [ ! -f "$nested_index_path" ]; then
             echo -e "${RED}ERROR: Nested index not found at $nested_index_path${NC}"
             return 1
@@ -126,7 +138,7 @@ test_app_multiarch() {
     fi
     
     # Convert digest to blob path (sha256:abc... -> blobs/sha256/abc...)
-    local amd64_blob_path="$oci_layout/blobs/$(echo $amd64_manifest | tr ':' '/')"
+    local amd64_blob_path=$(digest_to_blob_path "$oci_layout" "$amd64_manifest")
     if [ ! -f "$amd64_blob_path" ]; then
         echo -e "${RED}ERROR: AMD64 manifest blob not found at $amd64_blob_path${NC}"
         return 1
@@ -134,7 +146,7 @@ test_app_multiarch() {
     
     # Get config digest from manifest
     local amd64_config=$(jq -r '.config.digest' "$amd64_blob_path")
-    local amd64_config_path="$oci_layout/blobs/$(echo $amd64_config | tr ':' '/')"
+    local amd64_config_path=$(digest_to_blob_path "$oci_layout" "$amd64_config")
     
     # Get layer digests
     local amd64_layers=$(jq -r '.layers[].digest' "$amd64_blob_path")
@@ -142,7 +154,7 @@ test_app_multiarch() {
     # Search for .so files in layers
     local amd64_so_files=""
     for layer_digest in $amd64_layers; do
-        local layer_path="$oci_layout/blobs/$(echo $layer_digest | tr ':' '/')"
+        local layer_path=$(digest_to_blob_path "$oci_layout" "$layer_digest")
         if [ -f "$layer_path" ]; then
             # Try to list tar contents (layers can be tar or tar.gz)
             local so_files=$(tar tzf "$layer_path" 2>/dev/null | grep -E "${test_package}.*\.so$" | head -${MAX_SO_FILES} || \
@@ -193,7 +205,7 @@ test_app_multiarch() {
     fi
     
     # Convert digest to blob path
-    local arm64_blob_path="$oci_layout/blobs/$(echo $arm64_manifest | tr ':' '/')"
+    local arm64_blob_path=$(digest_to_blob_path "$oci_layout" "$arm64_manifest")
     if [ ! -f "$arm64_blob_path" ]; then
         echo -e "${RED}ERROR: ARM64 manifest blob not found at $arm64_blob_path${NC}"
         return 1
@@ -205,7 +217,7 @@ test_app_multiarch() {
     # Search for .so files in layers
     local arm64_so_files=""
     for layer_digest in $arm64_layers; do
-        local layer_path="$oci_layout/blobs/$(echo $layer_digest | tr ':' '/')"
+        local layer_path=$(digest_to_blob_path "$oci_layout" "$layer_digest")
         if [ -f "$layer_path" ]; then
             # Try to list tar contents
             local so_files=$(tar tzf "$layer_path" 2>/dev/null | grep -E "${test_package}.*\.so$" | head -${MAX_SO_FILES} || \
