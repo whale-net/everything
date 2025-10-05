@@ -198,6 +198,7 @@ def multiplatform_image(
             "//tools:linux_arm64",
         ],
         tags = ["manual"],
+        visibility = ["//visibility:public"],  # Allow cross-compilation test to access
     )
     
     # =======================================================================

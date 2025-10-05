@@ -13,24 +13,20 @@ exports_files([
 ])
 
 # Cross-compilation verification test
-# This test is marked as "manual" so it doesn't run with `bazel test //...`
-# It requires Docker and breaks the Bazel sandbox (calls bazel build/run internally)
-# CI explicitly runs this test to ensure cross-compilation works correctly
+# Verifies that multiplatform images contain correct architecture-specific wheels
 sh_test(
     name = "test_cross_compilation",
     size = "large",
     srcs = ["test_cross_compilation.sh"],
+    data = [
+        "//demo/hello_fastapi:hello_fastapi_image",
+    ],
     tags = [
         "manual",  # Don't run with //...
-        "requires-network",  # Needs Docker and external bazel invocations
         "integration",  # Integration test, not unit test
-        "no-cache",  # Always run, never cache (images loaded externally)
-        "external",  # Depends on external Docker state
+        "no-cache",  # Always run, never cache
     ],
     timeout = "long",
-    # Bazelisk requires HOME to be set for its cache directory
-    # In CI, this will be /home/runner; locally it inherits from environment
-    env_inherit = ["HOME"],
 )
 
 # Version resolver utility for Helm charts

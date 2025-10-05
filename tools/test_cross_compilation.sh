@@ -58,32 +58,24 @@ test_app_multiarch() {
     echo "================================================================================"
     echo ""
     
-    # Determine which bazel command to use (bazelisk or bazel)
-    local BAZEL_CMD="bazel"
-    if ! command -v bazel &> /dev/null; then
-        if command -v bazelisk &> /dev/null; then
-            BAZEL_CMD="bazelisk"
-        else
-            echo -e "${RED}ERROR: Neither bazel nor bazelisk found in PATH${NC}"
-            return 1
-        fi
+    # Find the OCI layout directory in runfiles or workspace
+    local oci_layout=""
+    
+    # When running via bazel test, look in runfiles
+    if [ -n "${RUNFILES_DIR}" ]; then
+        oci_layout="${RUNFILES_DIR}/_main/demo/${app_name}/${app_name}_image"
+    # When running directly (./test_cross_compilation.sh), look in workspace
+    elif [ -d "bazel-bin/demo/${app_name}/${app_name}_image" ]; then
+        oci_layout="bazel-bin/demo/${app_name}/${app_name}_image"
     fi
     
-    # Build the OCI image index
-    echo "Building OCI image index..."
-    if ! $BAZEL_CMD build //demo/${app_name}:${app_name}_image 2>&1 | tail -5; then
-        echo -e "${RED}ERROR: Failed to build image index${NC}"
+    if [ -z "$oci_layout" ] || [ ! -d "$oci_layout" ]; then
+        echo -e "${RED}ERROR: OCI layout not found${NC}"
+        echo "Expected at: $oci_layout"
         return 1
     fi
     
-    # Find the OCI layout directory
-    local oci_layout="bazel-bin/demo/${app_name}/${app_name}_image"
-    if [ ! -d "$oci_layout" ]; then
-        echo -e "${RED}ERROR: OCI layout not found at $oci_layout${NC}"
-        return 1
-    fi
-    
-    echo -e "${GREEN}✓ Image index built${NC}"
+    echo -e "${GREEN}✓ Found OCI layout at $oci_layout${NC}"
     echo ""
     
     # Verify it's a multiarch manifest
