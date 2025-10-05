@@ -6,4 +6,4 @@ def format_greeting(name: str) -> str:
 
 def get_version() -> str:
     """Get the application version."""
-    return "1.0.1"
+    return "1.0.0"
