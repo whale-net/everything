@@ -4,9 +4,10 @@
 # That's it. Nothing more, nothing less.
 # AMD64 image must have x86_64 wheels. ARM64 image must have aarch64 wheels.
 #
-# PREREQUISITE: Images must be loaded before running this test. Run:
-#   bazel run //demo/hello_fastapi:hello_fastapi_image_load --platforms=//tools:linux_x86_64
-#   bazel run //demo/hello_fastapi:hello_fastapi_image_load --platforms=//tools:linux_arm64
+# This test builds the OCI image index directly and inspects both platform variants
+# without needing to load them into Docker (which doesn't support multiarch manifests well).
+#
+# PREREQUISITE: None - test builds the images itself
 #
 # This is a CRITICAL test - if this fails, cross-compilation is broken and ARM64 
 # containers will crash at runtime with compiled dependencies like pydantic, numpy, etc.
@@ -36,13 +37,16 @@ echo ""
 
 # Function to test an app's multiarch images
 # Args:
-#   app_name: Base name of the app (e.g., "hello_fastapi")
+#   image_name: Docker image name (e.g., "demo-hello_fastapi")
 #   test_package: Python package name with compiled extensions to check (e.g., "pydantic_core")
 #   description: Human-readable test description for output
 test_app_multiarch() {
-    local app_name=$1
+    local image_name=$1
     local test_package=$2
     local description=$3
+    
+    # Convert image name (demo-hello_fastapi) to app name (hello_fastapi)
+    local app_name=$(echo "$image_name" | sed 's/^demo-//')
     
     echo ""
     echo "################################################################################"
@@ -50,69 +54,106 @@ test_app_multiarch() {
     echo "################################################################################"
     echo ""
     echo "================================================================================"
-    echo "Testing multiarch for $app_name"
+    echo "Testing multiarch for $image_name (app: $app_name)"
     echo "================================================================================"
     echo ""
     
-    # Verify images exist (using new naming with dash separator)
-    echo "Checking if images are loaded..."
-    if ! docker image inspect "${app_name}-amd64:latest" >/dev/null 2>&1; then
-        echo -e "${RED}ERROR: Image ${app_name}-amd64:latest not found!${NC}"
-        echo "Please run: bazel run //demo/${app_name}:${app_name}_image_amd64_load --platforms=//tools:linux_x86_64"
+    # Build the OCI image index
+    echo "Building OCI image index..."
+    if ! bazel build //demo/${app_name}:${app_name}_image 2>&1 | tail -5; then
+        echo -e "${RED}ERROR: Failed to build image index${NC}"
         return 1
     fi
     
-    if ! docker image inspect "${app_name}-arm64:latest" >/dev/null 2>&1; then
-        echo -e "${RED}ERROR: Image ${app_name}-arm64:latest not found!${NC}"
-        echo "Please run: bazel run //demo/${app_name}:${app_name}_image_arm64_load --platforms=//tools:linux_arm64"
+    # Find the OCI layout directory
+    local oci_layout="bazel-bin/demo/${app_name}/${app_name}_image"
+    if [ ! -d "$oci_layout" ]; then
+        echo -e "${RED}ERROR: OCI layout not found at $oci_layout${NC}"
         return 1
     fi
     
-    echo -e "${GREEN}✓ Both images found${NC}"
+    echo -e "${GREEN}✓ Image index built${NC}"
+    echo ""
+    
+    # Verify it's a multiarch manifest
+    echo "Verifying multiarch manifest..."
+    if [ ! -f "$oci_layout/index.json" ]; then
+        echo -e "${RED}ERROR: index.json not found${NC}"
+        return 1
+    fi
+    
+    # Check if this is a nested index (index pointing to another index)
+    local first_manifest_digest=$(jq -r '.manifests[0].digest' "$oci_layout/index.json")
+    local first_manifest_media_type=$(jq -r '.manifests[0].mediaType' "$oci_layout/index.json")
+    
+    if [ "$first_manifest_media_type" == "application/vnd.oci.image.index.v1+json" ]; then
+        # This is a nested index - follow it to the actual platform manifests
+        echo "Found nested index, following to platform manifests..."
+        local nested_index_path="$oci_layout/blobs/$(echo $first_manifest_digest | tr ':' '/')"
+        if [ ! -f "$nested_index_path" ]; then
+            echo -e "${RED}ERROR: Nested index not found at $nested_index_path${NC}"
+            return 1
+        fi
+        # Use the nested index for platform checks
+        local index_file="$nested_index_path"
+    else
+        # Direct index with platform manifests
+        local index_file="$oci_layout/index.json"
+    fi
+    
+    local manifest_count=$(jq '.manifests | length' "$index_file")
+    if [ "$manifest_count" -lt 2 ]; then
+        echo -e "${RED}ERROR: Expected at least 2 manifests, found $manifest_count${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}✓ Multiarch manifest found with $manifest_count platform variants${NC}"
     echo ""
     
     # Check AMD64 container for x86_64 wheels
     echo "================================================================================"
-    echo "Checking AMD64 container..."
+    echo "Checking AMD64 variant..."
     echo "================================================================================"
     
-    # Create temporary directory for extraction
-    local temp_dir=$(mktemp -d)
-    trap "rm -rf $temp_dir" EXIT
-    
-    # Save the image to a tar file and extract to inspect contents
-    echo "Extracting image layers..."
-    if ! docker save "${app_name}-amd64:latest" -o "$temp_dir/image.tar" 2>/dev/null; then
-        echo -e "${RED}ERROR: Failed to save AMD64 image${NC}"
-        rm -rf "$temp_dir"
+    # Extract AMD64 manifest from index
+    local amd64_manifest=$(jq -r '.manifests[] | select(.platform.architecture == "amd64") | .digest' "$index_file" | head -1)
+    if [ -z "$amd64_manifest" ]; then
+        echo -e "${RED}ERROR: No AMD64 manifest found in index${NC}"
         return 1
     fi
     
-    # Extract the OCI image tar
-    cd "$temp_dir"
-    tar xf image.tar 2>/dev/null || true
-    
-    local amd64_so_files=""
-    # OCI format stores layers as blobs - search through all tar.gz blobs
-    if [ -d "blobs/sha256" ]; then
-        for blob in blobs/sha256/*; do
-            if [ -f "$blob" ]; then
-                # Try to list tar contents (blobs can be tar or tar.gz)
-                local so_files=$(tar tzf "$blob" 2>/dev/null | grep -E "${test_package}.*\.so$" | head -${MAX_SO_FILES} || \
-                                 tar tf "$blob" 2>/dev/null | grep -E "${test_package}.*\.so$" | head -${MAX_SO_FILES} || true)
-                if [ -n "$so_files" ]; then
-                    amd64_so_files="$so_files"
-                    break
-                fi
-            fi
-        done
+    # Convert digest to blob path (sha256:abc... -> blobs/sha256/abc...)
+    local amd64_blob_path="$oci_layout/blobs/$(echo $amd64_manifest | tr ':' '/')"
+    if [ ! -f "$amd64_blob_path" ]; then
+        echo -e "${RED}ERROR: AMD64 manifest blob not found at $amd64_blob_path${NC}"
+        return 1
     fi
-    cd - > /dev/null
+    
+    # Get config digest from manifest
+    local amd64_config=$(jq -r '.config.digest' "$amd64_blob_path")
+    local amd64_config_path="$oci_layout/blobs/$(echo $amd64_config | tr ':' '/')"
+    
+    # Get layer digests
+    local amd64_layers=$(jq -r '.layers[].digest' "$amd64_blob_path")
+    
+    # Search for .so files in layers
+    local amd64_so_files=""
+    for layer_digest in $amd64_layers; do
+        local layer_path="$oci_layout/blobs/$(echo $layer_digest | tr ':' '/')"
+        if [ -f "$layer_path" ]; then
+            # Try to list tar contents (layers can be tar or tar.gz)
+            local so_files=$(tar tzf "$layer_path" 2>/dev/null | grep -E "${test_package}.*\.so$" | head -${MAX_SO_FILES} || \
+                             tar tf "$layer_path" 2>/dev/null | grep -E "${test_package}.*\.so$" | head -${MAX_SO_FILES} || true)
+            if [ -n "$so_files" ]; then
+                amd64_so_files="$so_files"
+                break
+            fi
+        fi
+    done
     
     if [ -z "$amd64_so_files" ]; then
         echo -e "${YELLOW}WARNING: No .so files found for ${test_package} in AMD64 image${NC}"
         echo "This might be a pure Python app - skipping architecture check"
-        rm -rf "$temp_dir"
         return 0
     fi
     
@@ -124,58 +165,54 @@ test_app_multiarch() {
     if ! echo "$amd64_so_files" | grep -q "x86_64"; then
         echo -e "${RED}❌ FAIL: AMD64 container does NOT have x86_64 wheels!${NC}"
         echo "Found: $amd64_so_files"
-        rm -rf "$temp_dir"
         return 1
     fi
     
     if echo "$amd64_so_files" | grep -q "aarch64"; then
         echo -e "${RED}❌ FAIL: AMD64 container has aarch64 wheels (should be x86_64)!${NC}"
         echo "Found: $amd64_so_files"
-        rm -rf "$temp_dir"
         return 1
     fi
     
     echo -e "${GREEN}✅ PASS: AMD64 container has x86_64 wheels${NC}"
-    rm -rf "$temp_dir"
     
     # Check ARM64 container for aarch64 wheels
     echo ""
     echo "================================================================================"
-    echo "Checking ARM64 container..."
+    echo "Checking ARM64 variant..."
     echo "================================================================================"
     
-    # Create temporary directory for extraction
-    local temp_dir=$(mktemp -d)
-    trap "rm -rf $temp_dir" EXIT
-    
-    # Save the image to a tar file and extract to inspect contents
-    echo "Extracting image layers..."
-    if ! docker save "${app_name}-arm64:latest" -o "$temp_dir/image.tar" 2>/dev/null; then
-        echo -e "${RED}ERROR: Failed to save ARM64 image${NC}"
-        rm -rf "$temp_dir"
+    # Extract ARM64 manifest from index
+    local arm64_manifest=$(jq -r '.manifests[] | select(.platform.architecture == "arm64") | .digest' "$index_file" | head -1)
+    if [ -z "$arm64_manifest" ]; then
+        echo -e "${RED}ERROR: No ARM64 manifest found in index${NC}"
         return 1
     fi
     
-    # Extract the OCI image tar
-    cd "$temp_dir"
-    tar xf image.tar 2>/dev/null || true
-    
-    local arm64_so_files=""
-    # OCI format stores layers as blobs - search through all tar.gz blobs
-    if [ -d "blobs/sha256" ]; then
-        for blob in blobs/sha256/*; do
-            if [ -f "$blob" ]; then
-                # Try to list tar contents (blobs can be tar or tar.gz)
-                local so_files=$(tar tzf "$blob" 2>/dev/null | grep -E "${test_package}.*\.so$" | head -${MAX_SO_FILES} || \
-                                 tar tf "$blob" 2>/dev/null | grep -E "${test_package}.*\.so$" | head -${MAX_SO_FILES} || true)
-                if [ -n "$so_files" ]; then
-                    arm64_so_files="$so_files"
-                    break
-                fi
-            fi
-        done
+    # Convert digest to blob path
+    local arm64_blob_path="$oci_layout/blobs/$(echo $arm64_manifest | tr ':' '/')"
+    if [ ! -f "$arm64_blob_path" ]; then
+        echo -e "${RED}ERROR: ARM64 manifest blob not found at $arm64_blob_path${NC}"
+        return 1
     fi
-    cd - > /dev/null
+    
+    # Get layer digests
+    local arm64_layers=$(jq -r '.layers[].digest' "$arm64_blob_path")
+    
+    # Search for .so files in layers
+    local arm64_so_files=""
+    for layer_digest in $arm64_layers; do
+        local layer_path="$oci_layout/blobs/$(echo $layer_digest | tr ':' '/')"
+        if [ -f "$layer_path" ]; then
+            # Try to list tar contents
+            local so_files=$(tar tzf "$layer_path" 2>/dev/null | grep -E "${test_package}.*\.so$" | head -${MAX_SO_FILES} || \
+                             tar tf "$layer_path" 2>/dev/null | grep -E "${test_package}.*\.so$" | head -${MAX_SO_FILES} || true)
+            if [ -n "$so_files" ]; then
+                arm64_so_files="$so_files"
+                break
+            fi
+        fi
+    done
     
     if [ -z "$arm64_so_files" ]; then
         echo -e "${YELLOW}WARNING: No .so files found for ${test_package} in ARM64 image${NC}"
@@ -198,12 +235,10 @@ test_app_multiarch() {
     if echo "$arm64_so_files" | grep -q "x86_64"; then
         echo -e "${RED}❌ FAIL: ARM64 container has x86_64 wheels (should be aarch64)!${NC}"
         echo "Found: $arm64_so_files"
-        rm -rf "$temp_dir"
         return 1
     fi
     
     echo -e "${GREEN}✅ PASS: ARM64 container has aarch64 wheels${NC}"
-    rm -rf "$temp_dir"
     
     return 0
 }

@@ -192,20 +192,20 @@ def multiplatform_image(
     )
     
     # =======================================================================
-    # LOAD TARGET: Local testing (loads the multiarch index)
+    # LOAD TARGET: Local testing (native platform only)
     # =======================================================================
-    # Loads the OCI image index locally. Docker will automatically select
-    # the appropriate platform when running the container.
+    # NOTE: oci_load doesn't support loading image indexes directly.
+    # This loads only the base image for your native platform.
+    # To test multiarch, use the push target and pull from registry.
     #
     # Usage:
-    #   bazel run //app:app_image_load  # Creates app:latest (multiarch)
+    #   bazel run //app:app_image_load  # Loads for your current platform
     #
-    # This is NEVER used by the release system.
+    # This is NEVER used by the release system - only for local dev/testing.
     oci_load(
         name = name + "_load",
-        image = ":" + name,
+        image = ":" + name + "_base",
         repo_tags = [image_name + ":latest"],
-        format = "oci",  # Required for image indexes
         tags = ["manual"],
     )
     
