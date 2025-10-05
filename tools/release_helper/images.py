@@ -158,10 +158,14 @@ def build_image(bazel_target: str, platform: Optional[str] = None) -> str:
 def push_image_with_tags(bazel_target: str, tags: List[str], platform: Optional[str] = None) -> None:
     """Push a container image with multiple tags to the registry.
     
+    NOTE: We do NOT use --platforms flag here because oci_push runs executables (like jq)
+    on the host machine. When building ARM64 images, the image layers are already built
+    with the correct platform, but the push operation must use host-native tools.
+    
     Args:
         bazel_target: Full bazel target path for the app metadata
         tags: List of full registry tags to push (e.g., ["ghcr.io/whale-net/demo-hello_python:v0.0.6-amd64"])
-        platform: Optional platform specification ("amd64" or "arm64", defaults to base/amd64)
+        platform: Optional platform specification for informational purposes only (not used in build command)
     """
     # Get app metadata for proper naming
     metadata = get_app_metadata(bazel_target)
@@ -169,9 +173,17 @@ def push_image_with_tags(bazel_target: str, tags: List[str], platform: Optional[
 
     # Extract the app path from the bazel_target to construct the push target
     app_path = bazel_target[2:].split(':')[0]  # Remove // and :target
-    push_target = f"//{app_path}:{app_name}_image_push"
+    
+    # Determine which push target to use based on platform
+    # The images are already built with the correct platform from the load step
+    if platform == "arm64":
+        push_target = f"//{app_path}:{app_name}_image_arm64_push"
+    elif platform == "amd64":
+        push_target = f"//{app_path}:{app_name}_image_amd64_push"
+    else:
+        push_target = f"//{app_path}:{app_name}_image_push"
 
-    print(f"Pushing {len(tags)} tags using {push_target} for platform {platform or 'default'}...")
+    print(f"Pushing {len(tags)} tags using {push_target}...")
     
     # Extract the tag names from the full tags
     tag_names = [tag.split(':')[-1] for tag in tags]
@@ -179,13 +191,8 @@ def push_image_with_tags(bazel_target: str, tags: List[str], platform: Optional[
     print(f"Pushing with tags: {', '.join(tag_names)}")
     
     # Build the bazel run command with tag arguments
+    # DO NOT add --platforms flag - oci_push must use host architecture tools
     bazel_args = ["run", push_target, "--"]
-    
-    # Add platform-specific build flags if needed
-    if platform == "arm64":
-        bazel_args.insert(2, "--platforms=//tools:linux_arm64")
-    elif platform == "amd64":
-        bazel_args.insert(2, "--platforms=//tools:linux_x86_64")
     
     # Add each tag as an argument (oci_push supports multiple --tag arguments)
     for tag_name in tag_names:
