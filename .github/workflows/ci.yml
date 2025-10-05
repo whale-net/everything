@@ -118,11 +118,24 @@ jobs:
         fi
         
         # Use release helper to plan the Docker builds
+        # Try --nobuild first (fast when binary is cached), fallback to full build
         echo "Planning Docker builds using release tool..."
-        PLAN_OUTPUT=$(bazel run //tools:release -- plan \
+        
+        # Try running without rebuild (saves ~15s when binary is cached)
+        if bazel run --nobuild //tools:release -- plan \
           --event-type "$EVENT_TYPE" \
           --base-commit="$BASE_COMMIT" \
-          --format github)
+          --format github > /tmp/plan_output.txt 2>&1; then
+          PLAN_OUTPUT=$(cat /tmp/plan_output.txt)
+          echo "✓ Used cached binary"
+        else
+          # Binary not cached or stale, need to build
+          echo "Building release tool..."
+          PLAN_OUTPUT=$(bazel run //tools:release -- plan \
+            --event-type "$EVENT_TYPE" \
+            --base-commit="$BASE_COMMIT" \
+            --format github)
+        fi
         
         # Parse output from release helper and set GitHub outputs
         # Use process substitution to avoid subshell issues with pipes
