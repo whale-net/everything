@@ -28,6 +28,9 @@ sh_test(
         "external",  # Depends on external Docker state
     ],
     timeout = "long",
+    # Bazelisk requires HOME to be set for its cache directory
+    # In CI, this will be /home/runner; locally it inherits from environment
+    env_inherit = ["HOME"],
 )
 
 # Version resolver utility for Helm charts

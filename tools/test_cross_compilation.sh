@@ -58,9 +58,20 @@ test_app_multiarch() {
     echo "================================================================================"
     echo ""
     
+    # Determine which bazel command to use (bazelisk or bazel)
+    local BAZEL_CMD="bazel"
+    if ! command -v bazel &> /dev/null; then
+        if command -v bazelisk &> /dev/null; then
+            BAZEL_CMD="bazelisk"
+        else
+            echo -e "${RED}ERROR: Neither bazel nor bazelisk found in PATH${NC}"
+            return 1
+        fi
+    fi
+    
     # Build the OCI image index
     echo "Building OCI image index..."
-    if ! bazel build //demo/${app_name}:${app_name}_image 2>&1 | tail -5; then
+    if ! $BAZEL_CMD build //demo/${app_name}:${app_name}_image 2>&1 | tail -5; then
         echo -e "${RED}ERROR: Failed to build image index${NC}"
         return 1
     fi
