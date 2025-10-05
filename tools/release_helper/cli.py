@@ -873,8 +873,8 @@ def cleanup_old_tags_cmd(
     """Clean up old Git tags on GitHub.
     
     This command identifies and deletes old tags based on the following rules:
-    - Keep the last N minor versions (default: 2)
-    - For each kept minor version, keep only the latest patch version
+    - Keep only the latest patch of the last N minor versions (default: 2)
+    - Always keep the latest minor version in each major version
     - Only prune tags older than min-age-days (default: 14 days)
     
     Examples:

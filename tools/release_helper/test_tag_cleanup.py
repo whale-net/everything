@@ -95,25 +95,25 @@ class TestIdentifyTagsToPrune:
         tags = [
             "demo-app.v2.0.0",  # Recent, in last 2 minors (keep)
             "demo-app.v1.2.0",  # Recent, in last 2 minors (keep)
-            "demo-app.v1.1.5",  # Old, latest patch of v1.1 (keep - latest patch of each)
+            "demo-app.v1.1.5",  # Old, latest patch of v1.1 (prune - not in last 2 minors)
             "demo-app.v1.1.4",  # Old, v1.1 older patch (prune)
             "demo-app.v1.1.3",  # Old, v1.1 older patch (prune)
-            "demo-app.v1.0.2",  # Old, latest patch of v1.0 (keep - latest patch of each)
+            "demo-app.v1.0.2",  # Old, latest patch of v1.0 (prune - not in last 2 minors)
             "demo-app.v1.0.1",  # Old, v1.0 older patch (prune)
         ]
         
         result = identify_tags_to_prune(tags, min_age_days=14, keep_latest_minor_versions=2)
         
-        # Should prune old patches of older minor versions
+        # Should prune all v1.1 and v1.0 tags (not in last 2 minors)
+        assert "demo-app.v1.1.5" in result
         assert "demo-app.v1.1.4" in result
         assert "demo-app.v1.1.3" in result
+        assert "demo-app.v1.0.2" in result
         assert "demo-app.v1.0.1" in result
         
-        # Should keep these
+        # Should keep only the last 2 minors
         assert "demo-app.v2.0.0" not in result  # Recent, last 2 minors
-        assert "demo-app.v1.2.0" not in result  # Recent, last 2 minors
-        assert "demo-app.v1.1.5" not in result  # Latest patch of older minor
-        assert "demo-app.v1.0.2" not in result  # Latest patch of older minor
+        assert "demo-app.v1.2.0" not in result  # Recent, last 2 minors (also latest minor of major 1)
 
     @patch('tools.release_helper.git.get_tag_creation_date')
     def test_identify_tags_respects_age(self, mock_get_date):
@@ -153,16 +153,16 @@ class TestIdentifyTagsToPrune:
         
         result = identify_tags_to_prune(tags, min_age_days=14, keep_latest_minor_versions=2)
         
-        # Should keep last 2 minor versions for each app, plus latest patch of older minors
-        # app1: keep v1.1.0 (in last 2) and v1.0.5 (latest of v1.0), prune v1.0.4
-        # app2: keep v2.0.0 (in last 2) and v1.5.0 (in last 2), v1.4.0 is latest of v1.4 so keep
+        # Should keep last 2 minor versions for each app (latest patch only)
+        # app1: keep v1.1.0 (in last 2, also latest minor of major 1) and v1.0.5 (in last 2), prune v1.0.4
+        # app2: keep v2.0.0 (in last 2, also latest minor of major 2) and v1.5.0 (in last 2), prune v1.4.0
         assert "demo-app1.v1.0.4" in result
+        assert "demo-app2.v1.4.0" in result
         
         assert "demo-app1.v1.1.0" not in result
         assert "demo-app1.v1.0.5" not in result
         assert "demo-app2.v2.0.0" not in result
         assert "demo-app2.v1.5.0" not in result
-        assert "demo-app2.v1.4.0" not in result  # Latest patch of v1.4
 
     @patch('tools.release_helper.git.get_tag_creation_date')
     def test_identify_tags_empty_list(self, mock_get_date):
@@ -205,10 +205,39 @@ class TestIdentifyTagsToPrune:
         
         result = identify_tags_to_prune(tags, min_age_days=14, keep_latest_minor_versions=2)
         
-        # Should keep v1.2.0 and v1.1.5 (last 2 minors)
-        # Should keep v1.0.0 (latest patch of v1.0)
-        # Should prune v1.1.4 (older patch of v1.1)
+        # Should keep v1.2.0 (in last 2 minors, also latest minor of major 1) and v1.1.5 (in last 2 minors)
+        # Should prune v1.1.4 (older patch of v1.1) and v1.0.0 (not in last 2 minors)
         assert "helm-demo-app.v1.1.4" in result
+        assert "helm-demo-app.v1.0.0" in result
         assert "helm-demo-app.v1.2.0" not in result
         assert "helm-demo-app.v1.1.5" not in result
-        assert "helm-demo-app.v1.0.0" not in result
+
+    @patch('tools.release_helper.git.get_tag_creation_date')
+    def test_identify_tags_keeps_latest_minor_per_major(self, mock_get_date):
+        """Test that latest minor version in each major is always kept."""
+        now = datetime.now()
+        old_date = now - timedelta(days=30)
+        
+        mock_get_date.return_value = old_date
+        
+        tags = [
+            "demo-app.v3.0.0",  # Latest minor of major 3 (keep - in last 2)
+            "demo-app.v2.5.0",  # Latest minor of major 2 (keep - in last 2)
+            "demo-app.v2.4.0",  # Older minor of major 2 (prune)
+            "demo-app.v1.2.5",  # Latest minor of major 1 (keep - latest in major 1)
+            "demo-app.v1.2.4",  # Older patch of v1.2 (prune)
+            "demo-app.v1.1.0",  # Older minor of major 1 (prune)
+        ]
+        
+        result = identify_tags_to_prune(tags, min_age_days=14, keep_latest_minor_versions=2)
+        
+        # v3.0.0 and v2.5.0 are in the last 2 minors - keep
+        # v1.2.5 is the latest minor in major 1 - keep (even though not in last 2)
+        # Everything else should be pruned
+        assert "demo-app.v2.4.0" in result
+        assert "demo-app.v1.2.4" in result
+        assert "demo-app.v1.1.0" in result
+        
+        assert "demo-app.v3.0.0" not in result
+        assert "demo-app.v2.5.0" not in result
+        assert "demo-app.v1.2.5" not in result  # Latest minor in major 1

@@ -361,14 +361,14 @@ def identify_tags_to_prune(
     """Identify tags that should be pruned based on age and version rules.
     
     Rules:
-    - Keep the last N minor versions completely (all patches) (default: 2)
-    - For each older minor version, keep only the latest patch version
+    - Keep only the latest patch of the last N minor versions (default: 2)
+    - Always keep the latest minor version in each major version
     - Only consider pruning tags older than min_age_days (default: 14)
     
     Args:
         all_tags: List of all tags
         min_age_days: Minimum age in days before a tag can be pruned
-        keep_latest_minor_versions: Number of latest minor versions to keep completely
+        keep_latest_minor_versions: Number of latest minor versions to keep (latest patch only)
     
     Returns:
         List of tags that can be safely pruned
@@ -432,6 +432,20 @@ def identify_tags_to_prune(
         # Sort by version (descending)
         tags_data.sort(key=lambda x: x[1], reverse=True)
         
+        # Group by major version to find latest minor in each major
+        major_versions: Dict[int, List[Tuple[int, int]]] = {}
+        for tag, version, tag_date in tags_data:
+            major, minor, patch, prerelease = version
+            if major not in major_versions:
+                major_versions[major] = []
+            if (major, minor) not in major_versions[major]:
+                major_versions[major].append((major, minor))
+        
+        # Find the latest minor version in each major version
+        latest_minor_per_major = {}
+        for major, minors in major_versions.items():
+            latest_minor_per_major[major] = max(minors, key=lambda x: x[1])
+        
         # Group by major.minor version
         minor_versions: Dict[Tuple[int, int], List[Tuple[str, Tuple[int, int, int, Optional[str]], datetime]]] = {}
         for tag, version, tag_date in tags_data:
@@ -441,34 +455,32 @@ def identify_tags_to_prune(
                 minor_versions[key] = []
             minor_versions[key].append((tag, version, tag_date))
         
-        # Sort minor versions (descending)
+        # Sort minor versions (descending) to get the latest N
         sorted_minor_versions = sorted(minor_versions.keys(), reverse=True)
         
-        # Keep the latest N minor versions completely (all patches)
-        kept_minor_versions = sorted_minor_versions[:keep_latest_minor_versions]
+        # Keep the latest N minor versions (latest patch only)
+        kept_minor_versions = set(sorted_minor_versions[:keep_latest_minor_versions])
         
-        # For older minor versions, keep only the latest patch version
-        older_minor_versions = sorted_minor_versions[keep_latest_minor_versions:]
+        # Also always keep the latest minor version in each major version
+        for major, latest_minor in latest_minor_per_major.items():
+            kept_minor_versions.add(latest_minor)
         
-        # For kept minor versions, don't prune any patches (even if old)
-        # But we could prune old patches here if we want - let me follow the requirement literally
-        # "leave the last 2 minor versions" - keep them completely
-        
-        # For older minor versions, keep only the latest patch, prune the rest if old enough
-        for minor_key in older_minor_versions:
+        # Now determine what to prune
+        for minor_key in sorted_minor_versions:
             versions_list = minor_versions[minor_key]
             # Sort by patch version (descending)
             versions_list.sort(key=lambda x: x[1][2], reverse=True)
             
-            # Keep the first one (latest patch), mark the rest for pruning if old enough
-            for i, (tag, version, tag_date) in enumerate(versions_list):
-                if i > 0 and tag_date < min_date:
-                    # Not the latest patch and old enough
-                    tags_to_prune.append(tag)
-                elif i == 0 and tag_date < min_date:
-                    # This is the latest patch of this minor version
-                    # According to the requirement, we should keep it even if it's old
-                    # "leave...the latest patch of each"
-                    pass
+            if minor_key in kept_minor_versions:
+                # Keep only the latest patch of this minor version
+                for i, (tag, version, tag_date) in enumerate(versions_list):
+                    if i > 0 and tag_date < min_date:
+                        # Not the latest patch and old enough
+                        tags_to_prune.append(tag)
+            else:
+                # This minor version is not kept, prune all patches if old enough
+                for tag, version, tag_date in versions_list:
+                    if tag_date < min_date:
+                        tags_to_prune.append(tag)
     
     return tags_to_prune
