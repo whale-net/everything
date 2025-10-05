@@ -166,58 +166,56 @@ def multiplatform_image(
         fail("image_name parameter is required for multiplatform_image")
     
     # Build platform-specific images using the SAME binary target
-    # These must be built with explicit --platforms flag
+    # Platform transitions: Bazel builds the base image once per platform
     container_image(
-        name = name + "_amd64",
+        name = name + "_base",
         binary = binary,
         base = base,
         language = language,
         **kwargs
     )
     
-    container_image(
-        name = name + "_arm64",
-        binary = binary,
-        base = base,
-        language = language,
-        **kwargs
-    )
-    
-    # Create multiplatform manifest list
-    # Note: oci_image_index takes a list of images, not a dict
-    # The platform info comes from the individual oci_image targets
+    # Create multiplatform manifest list using platform transitions
+    # The platforms parameter triggers Bazel's configuration transition:
+    # - Builds _base image for each platform automatically
+    # - Creates proper OCI index with platform metadata
+    # 
+    # NOTE ON STRUCTURE: This creates a nested index (outer index -> inner index)
+    # - Outer index: Points to the inner index blob
+    # - Inner index: Contains platform-specific manifests with proper metadata
+    # - This is valid per OCI spec and supported by Docker/container registries
+    # - When pushed, Docker resolves through the nesting to get the right platform
+    #
+    # This nested structure is the expected behavior when using platform transitions
+    # and is more maintainable than manually creating platform-specific image targets.
     oci_image_index(
         name = name,
         images = [
-            ":" + name + "_amd64",
-            ":" + name + "_arm64",
+            ":" + name + "_base",
+        ],
+        platforms = [
+            "//tools:linux_x86_64",
+            "//tools:linux_arm64",
         ],
         tags = ["manual"],
+        visibility = ["//visibility:public"],  # Allow cross-compilation test to access
     )
     
     # =======================================================================
-    # LOAD TARGETS: Local testing only (NOT used in production releases)
+    # LOAD TARGET: Local testing (native platform only)
     # =======================================================================
-    # Bazel doesn't support select() in oci_load attributes, so we need
-    # separate targets for each platform. These load platform-specific
-    # images to local Docker with architecture-tagged names for testing.
+    # NOTE: oci_load doesn't support loading image indexes directly.
+    # This loads only the base image for your native platform.
+    # To test multiarch, use the push target and pull from registry.
     #
     # Usage:
-    #   bazel run //app:app_image_amd64_load  # Creates app-amd64:latest
-    #   bazel run //app:app_image_arm64_load  # Creates app-arm64:latest
+    #   bazel run //app:app_image_load  # Loads for your current platform
     #
-    # These are NEVER used by the release system.
+    # This is NEVER used by the release system - only for local dev/testing.
     oci_load(
-        name = name + "_amd64_load",
-        image = ":" + name + "_amd64",
-        repo_tags = [image_name + "-amd64:latest"],
-        tags = ["manual"],
-    )
-    
-    oci_load(
-        name = name + "_arm64_load",
-        image = ":" + name + "_arm64",
-        repo_tags = [image_name + "-arm64:latest"],
+        name = name + "_load",
+        image = ":" + name + "_base",
+        repo_tags = [image_name + ":latest"],
         tags = ["manual"],
     )
     
