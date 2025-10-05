@@ -136,10 +136,6 @@ def release_multiarch(
     3. Creates manifest lists that automatically serve the correct architecture
     4. Pushes manifest lists (e.g., app:v1.0.0 points to both architectures)
     """
-    if dry_run:
-        typer.echo("DRY RUN: Would perform multi-architecture release but not actually pushing")
-        return
-    
     # Parse platforms
     platform_list = platforms.split(",") if platforms else ["amd64", "arm64"]
     platform_list = [p.strip() for p in platform_list]
@@ -147,9 +143,52 @@ def release_multiarch(
     # Find the app
     try:
         from tools.release_helper.release import find_app_bazel_target
+        from tools.release_helper.metadata import get_app_metadata
         bazel_target = find_app_bazel_target(app_name)
+        metadata = get_app_metadata(bazel_target)
+        domain = metadata["domain"]
+        actual_app_name = metadata["name"]
+        image_name = f"{domain}-{actual_app_name}"
     except ValueError:
         bazel_target = app_name
+        domain = "unknown"
+        actual_app_name = app_name
+        image_name = app_name
+    
+    if dry_run:
+        typer.echo("=" * 80)
+        typer.echo("DRY RUN: Multi-architecture release plan")
+        typer.echo("=" * 80)
+        typer.echo(f"App: {actual_app_name}")
+        typer.echo(f"Version: {version}")
+        typer.echo(f"Platforms: {', '.join(platform_list)}")
+        typer.echo(f"Registry: {registry}")
+        typer.echo("")
+        
+        # Show what platform-specific images would be pushed
+        typer.echo("Platform-specific images that would be pushed:")
+        for platform in platform_list:
+            owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "whale-net").lower()
+            repo_path = f"{registry}/{owner}/{image_name}"
+            typer.echo(f"  - {repo_path}:{version}-{platform}")
+            typer.echo(f"  - {repo_path}:latest-{platform}")
+            if commit:
+                typer.echo(f"  - {repo_path}:{commit}-{platform}")
+        
+        typer.echo("")
+        typer.echo("Manifest lists that would be created (auto-select platform):")
+        owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "whale-net").lower()
+        repo_path = f"{registry}/{owner}/{image_name}"
+        typer.echo(f"  - {repo_path}:{version} → points to all platforms")
+        typer.echo(f"  - {repo_path}:latest → points to all platforms")
+        if commit:
+            typer.echo(f"  - {repo_path}:{commit} → points to all platforms")
+        
+        typer.echo("")
+        typer.echo("=" * 80)
+        typer.echo("DRY RUN: No images were actually built or pushed")
+        typer.echo("=" * 80)
+        return
     
     # Perform multi-architecture release
     typer.echo(f"Starting multi-architecture release for {app_name}")
@@ -165,8 +204,9 @@ def release_multiarch(
             platforms=platform_list,
             commit_sha=commit
         )
-        typer.echo(f"✅ Successfully released {app_name}:{version} for {len(platform_list)} platforms")
-        typer.echo(f"Users can now run: docker pull {registry}/whale-net/demo-{app_name}:{version}")
+        typer.echo(f"✅ Successfully released {actual_app_name}:{version} for {len(platform_list)} platforms")
+        owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "whale-net").lower()
+        typer.echo(f"Users can now run: docker pull {registry}/{owner}/{image_name}:{version}")
         
     except Exception as e:
         typer.echo(f"❌ Failed to release multi-architecture image: {e}", err=True)

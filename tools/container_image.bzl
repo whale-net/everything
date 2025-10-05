@@ -163,22 +163,19 @@ def multiplatform_image(
         tags = ["manual"],
     )
     
-    image_tag = image_name
-    
-    # NOTE: Load targets need platform context to work correctly
-    # For now, we provide basic load targets
-    # The release system will handle platform-specific builds
+    # Load targets for local development with arch suffix
+    # This allows loading both architectures simultaneously for testing
     oci_load(
         name = name + "_amd64_load",
         image = ":" + name + "_amd64",
-        repo_tags = [image_tag + "_amd64:latest"],
+        repo_tags = [image_name + "-amd64:latest"],
         tags = ["manual"],
     )
     
     oci_load(
         name = name + "_arm64_load",
         image = ":" + name + "_arm64",
-        repo_tags = [image_tag + "_arm64:latest"],
+        repo_tags = [image_name + "-arm64:latest"],
         tags = ["manual"],
     )
     
