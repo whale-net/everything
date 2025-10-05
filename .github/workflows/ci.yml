@@ -42,10 +42,10 @@ jobs:
         retention-days: 7
 
   # Container architecture test - verify cross-compilation works correctly
+  # Runs in parallel with test job for faster CI
   test-container-arch:
     name: Test Container Architecture
     runs-on: ubuntu-latest
-    needs: test
     
     steps:
     - name: Checkout code
