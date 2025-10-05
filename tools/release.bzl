@@ -197,11 +197,7 @@ def get_image_targets(app_name):
     base_name = app_name + "_image"
     return {
         "base": "//" + app_name + ":" + base_name,
-        "amd64": "//" + app_name + ":" + base_name,  # AMD64 uses base target
-        "arm64": "//" + app_name + ":" + base_name,  # ARM64 uses same base target with different platform flag
-        "push_base": "//" + app_name + ":" + base_name + "_push",
-        "push_amd64": "//" + app_name + ":" + base_name + "_push_amd64",
-        "push_arm64": "//" + app_name + ":" + base_name + "_push_arm64",
+        "push": "//" + app_name + ":" + base_name + "_push",
     }
 
 def _helm_chart_metadata_impl(ctx):
