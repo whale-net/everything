@@ -54,22 +54,21 @@ test_app_multiarch() {
     echo "================================================================================"
     echo ""
     
-    # Verify images exist (using new naming with dash separator)
+    # Verify images exist (using simplified naming)
     echo "Checking if images are loaded..."
-    if ! docker image inspect "${app_name}-amd64:latest" >/dev/null 2>&1; then
-        echo -e "${RED}ERROR: Image ${app_name}-amd64:latest not found!${NC}"
-        echo "Please run: bazel run //demo/${app_name}:${app_name}_image_amd64_load --platforms=//tools:linux_x86_64"
+    if ! docker image inspect "${app_name}:latest" >/dev/null 2>&1; then
+        echo -e "${RED}ERROR: Image ${app_name}:latest not found!${NC}"
+        echo "Please run: bazel run //demo/${app_name}:${app_name}_image_load --platforms=//tools:linux_x86_64"
+        echo "         or: bazel run //demo/${app_name}:${app_name}_image_load --platforms=//tools:linux_arm64"
         return 1
     fi
     
-    if ! docker image inspect "${app_name}-arm64:latest" >/dev/null 2>&1; then
-        echo -e "${RED}ERROR: Image ${app_name}-arm64:latest not found!${NC}"
-        echo "Please run: bazel run //demo/${app_name}:${app_name}_image_arm64_load --platforms=//tools:linux_arm64"
-        return 1
-    fi
-    
-    echo -e "${GREEN}✓ Both images found${NC}"
+    echo -e "${GREEN}✓ Image found${NC}"
     echo ""
+    
+    # Note: With the simplified multiplatform approach, we now load a single image
+    # that's built for the specified platform using --platforms flag.
+    # The test should be run twice with different platform flags to test both architectures.
     
     # Check AMD64 container for x86_64 wheels
     echo "================================================================================"

@@ -683,11 +683,9 @@ release_app(
 ```
 
 **Generated Targets:**
-- `hello_python_image` - Multi-platform image index
-- `hello_python_image_amd64` - AMD64-specific image
-- `hello_python_image_arm64` - ARM64-specific image
-- `hello_python_image_amd64_load` - AMD64 oci_load target for Docker
-- `hello_python_image_arm64_load` - ARM64 oci_load target for Docker
+- `hello_python_image` - Multi-platform image index (OCI manifest)
+- `hello_python_image_image` - Base single-platform image definition
+- `hello_python_image_load` - Load target for Docker (builds for specified platform)
 
 ### Cache Optimization
 
@@ -701,15 +699,12 @@ The new OCI build system uses `oci_load` targets instead of traditional tarball 
 ### Building Images with Bazel
 
 ```bash
-# Build individual platform images with explicit platform flag
-bazel build //demo/hello_python:hello_python_image_amd64 --platforms=//tools:linux_x86_64
-bazel build //demo/hello_python:hello_python_image_arm64 --platforms=//tools:linux_arm64
-
-# Build multi-platform image index
+# Build multi-platform image index (contains both amd64 and arm64)
 bazel build //demo/hello_python:hello_python_image
 
-# Build and load into Docker using oci_load
-bazel run //demo/hello_python:hello_python_image_amd64_load --platforms=//tools:linux_x86_64
+# Build and load into Docker using oci_load with platform flag
+bazel run //demo/hello_python:hello_python_image_load --platforms=//tools:linux_x86_64
+bazel run //demo/hello_python:hello_python_image_load --platforms=//tools:linux_arm64
 
 # Or use the release tool for production workflows (handles platforms automatically)
 bazel run //tools:release -- build hello_python
