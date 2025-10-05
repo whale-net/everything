@@ -166,8 +166,7 @@ def multiplatform_image(
         fail("image_name parameter is required for multiplatform_image")
     
     # Build platform-specific images using the SAME binary target
-    # These must be built with explicit --platforms flag
-    # Create the base image that will be transitioned to multiple platforms
+    # Platform transitions: Bazel builds the base image once per platform
     container_image(
         name = name + "_base",
         binary = binary,
@@ -177,8 +176,18 @@ def multiplatform_image(
     )
     
     # Create multiplatform manifest list using platform transitions
-    # When platforms parameter is specified, only ONE image can be in the images attribute
-    # The transition will build that image for each platform automatically
+    # The platforms parameter triggers Bazel's configuration transition:
+    # - Builds _base image for each platform automatically
+    # - Creates proper OCI index with platform metadata
+    # 
+    # NOTE ON STRUCTURE: This creates a nested index (outer index -> inner index)
+    # - Outer index: Points to the inner index blob
+    # - Inner index: Contains platform-specific manifests with proper metadata
+    # - This is valid per OCI spec and supported by Docker/container registries
+    # - When pushed, Docker resolves through the nesting to get the right platform
+    #
+    # This nested structure is the expected behavior when using platform transitions
+    # and is more maintainable than manually creating platform-specific image targets.
     oci_image_index(
         name = name,
         images = [
