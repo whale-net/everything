@@ -21,15 +21,13 @@ ARCHITECTURE: Single Binary → Multiple Loads → Single Push
    - Users pull ONE tag that works on any platform
    - Release system ONLY uses this target
 
-MULTIPLATFORM BUILD FIX (2025-10-05):
-========================================
-The oci_image_index now includes a 'platforms' attribute that explicitly tells
-Bazel which platform to use when building each image. This ensures:
-  - _amd64 images are built with --platforms=//tools:linux_x86_64
-  - _arm64 images are built with --platforms=//tools:linux_arm64
-
-Without this attribute, both images would be built for the host platform,
-resulting in a manifest that only contains one architecture.
+MULTIPLATFORM BUILD (rules_oci approach):
+==========================================
+The oci_image_index uses a single base image with a platforms attribute.
+rules_oci automatically builds that image for each specified platform:
+  - Builds {name}_image with --platforms=//tools:linux_x86_64
+  - Builds {name}_image with --platforms=//tools:linux_arm64
+  - Creates a manifest index pointing to both platform-specific builds
 
 This is the idiomatic Bazel way to build multiplatform images.
 """
@@ -175,8 +173,33 @@ def multiplatform_image(
     if not image_name:
         fail("image_name parameter is required for multiplatform_image")
     
-    # Build platform-specific images using the SAME binary target
-    # These must be built with explicit --platforms flag
+    # Build a single platform-specific image
+    # The oci_image_index will build this for multiple platforms
+    container_image(
+        name = name + "_image",
+        binary = binary,
+        base = base,
+        language = language,
+        **kwargs
+    )
+    
+    # Create multiplatform manifest list
+    # Using platforms attribute with a single image tells rules_oci to build
+    # that image for each specified platform automatically
+    oci_image_index(
+        name = name,
+        images = [
+            ":" + name + "_image",
+        ],
+        platforms = [
+            "//tools:linux_x86_64",
+            "//tools:linux_arm64",
+        ],
+        tags = ["manual"],
+    )
+    
+    # Build explicit platform-specific images for compatibility with load targets
+    # These need to exist for the _amd64_load and _arm64_load targets below
     container_image(
         name = name + "_amd64",
         binary = binary,
@@ -191,23 +214,6 @@ def multiplatform_image(
         base = base,
         language = language,
         **kwargs
-    )
-    
-    # Create multiplatform manifest list
-    # The platforms attribute tells oci_image_index which platform to build each image for
-    # This ensures that _amd64 is built with --platforms=//tools:linux_x86_64
-    # and _arm64 is built with --platforms=//tools:linux_arm64
-    oci_image_index(
-        name = name,
-        images = [
-            ":" + name + "_amd64",
-            ":" + name + "_arm64",
-        ],
-        platforms = [
-            "//tools:linux_x86_64",
-            "//tools:linux_arm64",
-        ],
-        tags = ["manual"],
     )
     
     # =======================================================================
