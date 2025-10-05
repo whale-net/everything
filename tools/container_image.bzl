@@ -21,6 +21,16 @@ ARCHITECTURE: Single Binary → Multiple Loads → Single Push
    - Users pull ONE tag that works on any platform
    - Release system ONLY uses this target
 
+MULTIPLATFORM BUILD FIX (2025-10-05):
+========================================
+The oci_image_index now includes a 'platforms' attribute that explicitly tells
+Bazel which platform to use when building each image. This ensures:
+  - _amd64 images are built with --platforms=//tools:linux_x86_64
+  - _arm64 images are built with --platforms=//tools:linux_arm64
+
+Without this attribute, both images would be built for the host platform,
+resulting in a manifest that only contains one architecture.
+
 This is the idiomatic Bazel way to build multiplatform images.
 """
 
