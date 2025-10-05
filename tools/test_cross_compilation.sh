@@ -2,13 +2,16 @@
 # Test to verify cross-compilation works correctly for Python apps with compiled dependencies.
 #
 # PREREQUISITE: Images must be loaded before running this test. Run:
-#   bazel run //demo/hello_fastapi:hello_fastapi_image_amd64_load
-#   bazel run //demo/hello_fastapi:hello_fastapi_image_arm64_load
+#   bazel run //demo/hello_fastapi:hello_fastapi_image_amd64_load --platforms=//tools:linux_x86_64
+#   bazel run //demo/hello_fastapi:hello_fastapi_image_arm64_load --platforms=//tools:linux_arm64
 #
 # This test ensures that:
 # 1. ARM64 containers get aarch64 wheels (not x86_64)
 # 2. AMD64 containers get x86_64 wheels
 # 3. Cross-platform wheel selection (rules_pycross) is working correctly
+#
+# METHOD: This test extracts and inspects the OCI image layers without executing
+# the containers, allowing it to work on both AMD64 and ARM64 CI hosts.
 #
 # This is a CRITICAL test - if this fails, cross-compilation is broken and ARM64 
 # containers will crash at runtime with compiled dependencies like pydantic, numpy, etc.
@@ -83,16 +86,43 @@ test_app_multiarch() {
     echo "Checking AMD64 container..."
     echo "================================================================================"
     
-    local amd64_so_files
-    if ! amd64_so_files=$(docker run --rm --entrypoint /bin/sh "${app_name}-amd64:latest" \
-        -c "find /app -name '*${test_package}*.so' 2>/dev/null | head -${MAX_SO_FILES}"); then
-        echo -e "${YELLOW}WARNING: Failed to search for .so files in AMD64 image${NC}"
+    # Create temporary directory for extraction
+    local temp_dir=$(mktemp -d)
+    trap "rm -rf $temp_dir" EXIT
+    
+    # Save the image to a tar file and extract to inspect contents
+    echo "Extracting image layers..."
+    if ! docker save "${app_name}-amd64:latest" -o "$temp_dir/image.tar" 2>/dev/null; then
+        echo -e "${RED}ERROR: Failed to save AMD64 image${NC}"
+        rm -rf "$temp_dir"
         return 1
     fi
+    
+    # Extract the OCI image tar
+    cd "$temp_dir"
+    tar xf image.tar 2>/dev/null || true
+    
+    local amd64_so_files=""
+    # OCI format stores layers as blobs - search through all tar.gz blobs
+    if [ -d "blobs/sha256" ]; then
+        for blob in blobs/sha256/*; do
+            if [ -f "$blob" ]; then
+                # Try to list tar contents (blobs can be tar or tar.gz)
+                local so_files=$(tar tzf "$blob" 2>/dev/null | grep -E "${test_package}.*\.so$" | head -${MAX_SO_FILES} || \
+                                 tar tf "$blob" 2>/dev/null | grep -E "${test_package}.*\.so$" | head -${MAX_SO_FILES} || true)
+                if [ -n "$so_files" ]; then
+                    amd64_so_files="$so_files"
+                    break
+                fi
+            fi
+        done
+    fi
+    cd - > /dev/null
     
     if [ -z "$amd64_so_files" ]; then
         echo -e "${YELLOW}WARNING: No .so files found for ${test_package} in AMD64 image${NC}"
         echo "This might be a pure Python app - skipping architecture check"
+        rm -rf "$temp_dir"
         return 0
     fi
     
@@ -104,16 +134,19 @@ test_app_multiarch() {
     if ! echo "$amd64_so_files" | grep -q "x86_64"; then
         echo -e "${RED}❌ FAIL: AMD64 container does NOT have x86_64 wheels!${NC}"
         echo "Found: $amd64_so_files"
+        rm -rf "$temp_dir"
         return 1
     fi
     
     if echo "$amd64_so_files" | grep -q "aarch64"; then
         echo -e "${RED}❌ FAIL: AMD64 container has aarch64 wheels (should be x86_64)!${NC}"
         echo "Found: $amd64_so_files"
+        rm -rf "$temp_dir"
         return 1
     fi
     
     echo -e "${GREEN}✅ PASS: AMD64 container has x86_64 wheels${NC}"
+    rm -rf "$temp_dir"
     
     # Check ARM64 container for aarch64 wheels
     echo ""
@@ -121,15 +154,42 @@ test_app_multiarch() {
     echo "Checking ARM64 container..."
     echo "================================================================================"
     
-    local arm64_so_files
-    if ! arm64_so_files=$(docker run --rm --entrypoint /bin/sh "${app_name}-arm64:latest" \
-        -c "find /app -name '*${test_package}*.so' 2>/dev/null | head -${MAX_SO_FILES}"); then
-        echo -e "${YELLOW}WARNING: Failed to search for .so files in ARM64 image${NC}"
+    # Create temporary directory for extraction
+    local temp_dir=$(mktemp -d)
+    trap "rm -rf $temp_dir" EXIT
+    
+    # Save the image to a tar file and extract to inspect contents
+    echo "Extracting image layers..."
+    if ! docker save "${app_name}-arm64:latest" -o "$temp_dir/image.tar" 2>/dev/null; then
+        echo -e "${RED}ERROR: Failed to save ARM64 image${NC}"
+        rm -rf "$temp_dir"
         return 1
     fi
     
+    # Extract the OCI image tar
+    cd "$temp_dir"
+    tar xf image.tar 2>/dev/null || true
+    
+    local arm64_so_files=""
+    # OCI format stores layers as blobs - search through all tar.gz blobs
+    if [ -d "blobs/sha256" ]; then
+        for blob in blobs/sha256/*; do
+            if [ -f "$blob" ]; then
+                # Try to list tar contents (blobs can be tar or tar.gz)
+                local so_files=$(tar tzf "$blob" 2>/dev/null | grep -E "${test_package}.*\.so$" | head -${MAX_SO_FILES} || \
+                                 tar tf "$blob" 2>/dev/null | grep -E "${test_package}.*\.so$" | head -${MAX_SO_FILES} || true)
+                if [ -n "$so_files" ]; then
+                    arm64_so_files="$so_files"
+                    break
+                fi
+            fi
+        done
+    fi
+    cd - > /dev/null
+    
     if [ -z "$arm64_so_files" ]; then
         echo -e "${YELLOW}WARNING: No .so files found for ${test_package} in ARM64 image${NC}"
+        rm -rf "$temp_dir"
         return 0
     fi
     
@@ -141,16 +201,19 @@ test_app_multiarch() {
     if ! echo "$arm64_so_files" | grep -q "aarch64"; then
         echo -e "${RED}❌ FAIL: ARM64 container does NOT have aarch64 wheels!${NC}"
         echo "Found: $arm64_so_files"
+        rm -rf "$temp_dir"
         return 1
     fi
     
     if echo "$arm64_so_files" | grep -q "x86_64"; then
         echo -e "${RED}❌ FAIL: ARM64 container has x86_64 wheels (should be aarch64)!${NC}"
         echo "Found: $arm64_so_files"
+        rm -rf "$temp_dir"
         return 1
     fi
     
     echo -e "${GREEN}✅ PASS: ARM64 container has aarch64 wheels${NC}"
+    rm -rf "$temp_dir"
     
     return 0
 }
