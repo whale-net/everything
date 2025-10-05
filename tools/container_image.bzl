@@ -1,22 +1,26 @@
 """Simplified OCI container image rules with multiplatform support.
 
-ARCHITECTURE: Single Binary → Multiple Loads → Single Push
-================================================================
+ARCHITECTURE: Single Binary → Platform Transitions → Single Push
+==================================================================
 
 1. SINGLE BINARY TARGET
    - One py_binary or go_binary (no platform-specific variants)
    - Cross-compilation handled by Bazel + rules_pycross
    - Built for different platforms using --platforms flag
 
-2. MULTIPLE LOAD TARGETS (Local Testing Only)
-   - {name}_amd64_load: Load AMD64 image to local Docker
-   - {name}_arm64_load: Load ARM64 image to local Docker
-   - Separate targets needed due to oci_load rule limitations
-   - Used only for local development/testing
-   - Creates platform-specific tags (e.g., demo-app-amd64:latest)
+2. OCI IMAGE INDEX with Platform Transitions
+   - Single {name} target that builds for all platforms via Bazel transitions
+   - oci_image_index automatically builds base image for each platform
+   - Creates proper OCI index manifest with platform metadata
+   - Used by oci_push to push multi-arch images
 
-3. SINGLE PUSH TARGET (Production Release)
-   - {name}_push: Pushes OCI image index (contains BOTH platforms)
+3. LOAD TARGET (Local Testing Only)
+   - {name}_load: Load image to local Docker
+   - Must specify --platforms flag (e.g., --platforms=//tools:linux_arm64)
+   - Used only for local development/testing
+
+4. PUSH TARGET (Production Release)
+   - {name}_push: Pushes OCI image index (contains ALL platforms)
    - Single manifest automatically serves correct architecture
    - Users pull ONE tag that works on any platform
    - Release system ONLY uses this target
@@ -106,39 +110,34 @@ def multiplatform_image(
     image_name = None,
     language = None,
     **kwargs):
-    """Build multiplatform OCI images using a single binary target.
+    """Build multiplatform OCI images using platform transitions.
     
-    ARCHITECTURE: 1 Binary → 2 Load Targets (local) → 1 Push Target (release)
-    ===========================================================================
+    ARCHITECTURE: 1 Binary → Platform Transitions → 1 Index → 1 Push
+    ==================================================================
     
     Generated Targets:
     
-    BUILD TARGETS (intermediate, not directly used):
-        {name}_amd64: Platform-specific oci_image (AMD64)
-        {name}_arm64: Platform-specific oci_image (ARM64)
-        {name}: oci_image_index combining both platforms
+    BUILD TARGETS:
+        {name}_base: Base oci_image (built per-platform via transitions)
+        {name}: oci_image_index with platform transitions
+            → Automatically builds {name}_base for each platform
+            → Creates proper OCI index manifest with platform metadata
     
-    LOAD TARGETS (local testing only):
-        {name}_amd64_load: Load AMD64 image to local Docker
-            → Creates: {image_name}-amd64:latest
-            → Usage: bazel run //app:my_app_image_amd64_load
+    LOAD TARGET (local testing - must specify platform):
+        {name}_load: Load image to local Docker
+            → Must use --platforms flag (e.g., --platforms=//tools:linux_arm64)
+            → Creates: {image_name}:latest
+            → Usage: bazel run //app:my_app_image_load --platforms=//tools:linux_arm64
         
-        {name}_arm64_load: Load ARM64 image to local Docker
-            → Creates: {image_name}-arm64:latest
-            → Usage: bazel run //app:my_app_image_arm64_load
-    
     PUSH TARGET (production release - SINGLE TAG):
-        {name}_push: Push OCI image index with BOTH platforms
+        {name}_push: Push OCI image index with ALL platforms
             → Publishes ONE tag containing both amd64 and arm64
             → Docker automatically serves correct architecture
-            → Used by: bazel run //tools:release -- release-multiarch
+            → Used by: bazel run //tools:release -- release my_app
             → Result: Users pull ONE tag, works on any platform
     
-    NOTE: Platform-specific images must be built with explicit --platforms flag:
-        bazel build //app:my_app_image_amd64 --platforms=//tools:linux_x86_64
-        bazel build //app:my_app_image_arm64 --platforms=//tools:linux_arm64
-    
-    The release system handles this automatically.
+    Platform transitions handle cross-compilation automatically via Bazel's
+    configuration system. No platform-specific targets needed!
     
     Usage Example:
         multiplatform_image(

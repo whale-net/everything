@@ -317,11 +317,7 @@ class TestGetImageTargets:
         
         expected_result = {
             "base": "//demo/hello_fastapi:hello_fastapi_image",
-            "amd64": "//demo/hello_fastapi:hello_fastapi_image_amd64",
-            "arm64": "//demo/hello_fastapi:hello_fastapi_image_arm64", 
-            "push_base": "//demo/hello_fastapi:hello_fastapi_image_push",
-            "push_amd64": "//demo/hello_fastapi:hello_fastapi_image_push_amd64",
-            "push_arm64": "//demo/hello_fastapi:hello_fastapi_image_push_arm64"
+            "push": "//demo/hello_fastapi:hello_fastapi_image_push",
         }
         
         assert result == expected_result
@@ -340,11 +336,7 @@ class TestGetImageTargets:
         
         expected_result = {
             "base": "//services/backend/api:api_container",
-            "amd64": "//services/backend/api:api_container_amd64",
-            "arm64": "//services/backend/api:api_container_arm64",
-            "push_base": "//services/backend/api:api_container_push", 
-            "push_amd64": "//services/backend/api:api_container_push_amd64",
-            "push_arm64": "//services/backend/api:api_container_push_arm64"
+            "push": "//services/backend/api:api_container_push",
         }
         
         assert result == expected_result
