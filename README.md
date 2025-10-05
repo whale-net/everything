@@ -856,8 +856,6 @@ The system supports multiple detection modes, though the current implementation 
 - Infrastructure changes (tools/, .github/, MODULE.bazel) trigger all apps to rebuild as a safety measure
 - If no specific apps are detected as changed but files were modified, all apps are rebuilt conservatively
 
-> **💡 Improvement Opportunity:** The current custom change detection could be replaced with [@Tinder/bazel-diff](https://github.com/Tinder/bazel-diff), a battle-tested tool that offers more accurate dependency tracking and simpler implementation. See [`docs/BAZEL_DIFF_EVALUATION.md`](docs/BAZEL_DIFF_EVALUATION.md) for a comprehensive evaluation.
-
 #### 3. Container Publishing
 Each released app gets published to GitHub Container Registry with multiple tags using the `<domain>-<app>:<version>` format:
 - `ghcr.io/OWNER/DOMAIN-APP:vX.Y.Z` (specific version)
@@ -1053,8 +1051,6 @@ gh workflow run release.yml -f apps=hello_python,hello_go -f version=v1.0.0 -f d
 ```
 
 **Note:** The change detection system may sometimes be overly conservative, rebuilding all apps when infrastructure files change or when dependency analysis fails.
-
-**Future Improvement:** See [`docs/BAZEL_DIFF_EVALUATION.md`](docs/BAZEL_DIFF_EVALUATION.md) for an evaluation of using [@Tinder/bazel-diff](https://github.com/Tinder/bazel-diff) to replace the current custom change detection system. bazel-diff offers improved accuracy and reduced complexity.
 
 #### Version Issues
 If you encounter version-related problems:
