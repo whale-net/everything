@@ -578,7 +578,7 @@ The repository uses several configuration files for build and dependency managem
 
 **Key Configuration Details:**
 - Bazel uses Python version PY3 with symlink prefix `bazel-`
-- CI configuration includes bandwidth-optimized caching and test result caching
+- CI configuration includes aggressive remote caching (downloads all outputs) and test result caching
 - OCI images use Python 3.11-slim and Alpine 3.20 as base images with multi-platform support
 - **Remote cache support**: Optional HTTP-based remote caching with basic authentication
 
