@@ -202,20 +202,27 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
                            platforms: List[str] = None, commit_sha: Optional[str] = None) -> None:
     """Release a multi-architecture image using OCI image index.
     
-    Pushes a single OCI image index containing all platform variants.
-    The oci_image_index already combines both platforms into one artifact.
+    Builds platform-specific images and pushes a single OCI image index containing
+    all platform variants. The index allows Docker to automatically select the
+    correct architecture when users pull.
     
     Args:
         bazel_target: Full bazel target path for the app metadata
         version: Version tag for the release
         registry: Container registry (defaults to ghcr.io)
-        platforms: List of platforms (unused, kept for API compat - index has both)
+        platforms: List of platforms to build (defaults to ["amd64", "arm64"])
         commit_sha: Optional commit SHA for additional tag
     """
+    if platforms is None:
+        platforms = ["amd64", "arm64"]
+    
     # Get app metadata
     metadata = get_app_metadata(bazel_target)
     domain = metadata['domain']
     app_name = metadata['name']
+    
+    # Extract the app path from the bazel_target
+    app_path = bazel_target[2:].split(':')[0]  # Remove // and :target
     
     # Create registry repository name
     image_name = f"{domain}-{app_name}"
@@ -228,8 +235,47 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
     print(f"Releasing multi-architecture image: {image_name}")
     print(f"Registry: {registry_repo}")
     print(f"Version: {version}")
+    print(f"Platforms: {', '.join(platforms)}")
     
-    # Build tags for the image index (no platform suffix)
+    # Step 1: Build platform-specific images
+    # This populates Bazel's cache with correctly cross-compiled images for each platform
+    # Add action_env with unique value to bust stale cache from incorrect platform builds
+    import time
+    build_id = f"{version}_{int(time.time())}"
+    
+    print(f"\n{'='*80}")
+    print("Building platform-specific images...")
+    print(f"{'='*80}")
+    for platform in platforms:
+        platform_target = f"//{app_path}:{app_name}_image_{platform}"
+        platform_flag = f"//tools:linux_{platform == 'arm64' and 'arm64' or 'x86_64'}"
+        
+        print(f"\nBuilding {platform} image: {platform_target}")
+        build_args = [
+            "build", 
+            platform_target, 
+            f"--platforms={platform_flag}",
+            f"--action_env=RELEASE_BUILD_ID={build_id}"
+        ]
+        run_bazel(build_args)
+        print(f"✅ Built {platform} image successfully")
+    
+    # Step 2: Build the OCI image index (depends on platform-specific images)
+    # The oci_image_index rule will use the platform-specific images we just built
+    print(f"\n{'='*80}")
+    print("Building OCI image index...")
+    print(f"{'='*80}")
+    index_target = f"//{app_path}:{app_name}_image"
+    print(f"Building index: {index_target}")
+    run_bazel([
+        "build", 
+        index_target,
+        f"--action_env=RELEASE_BUILD_ID={build_id}"
+    ])
+    print(f"✅ Built OCI image index containing {len(platforms)} platform variants")
+    
+    # Step 3: Push the image index with all tags
+    # The oci_push target will push the index (NOT the individual platform images)
     tags = format_registry_tags(
         domain=domain,
         app_name=app_name,
@@ -239,8 +285,9 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
         platform=None  # No platform suffix - this is the index
     )
     
-    print(f"\nPushing OCI image index with {len(tags)} tags...")
-    # Push the image index (contains both amd64 and arm64)
+    print(f"\n{'='*80}")
+    print(f"Pushing OCI image index with {len(tags)} tags...")
+    print(f"{'='*80}")
     push_image_with_tags(bazel_target, list(tags.values()))
     
     print(f"\n{'='*80}")
@@ -249,5 +296,5 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
     print(f"\nPublished tags:")
     for tag in tags.values():
         print(f"  - {tag}")
-    print(f"\nThe image index contains both amd64 and arm64 variants.")
-    print(f"Docker will automatically select the correct architecture.")
+    print(f"\nThe image index contains {len(platforms)} platform variants: {', '.join(platforms)}")
+    print(f"Docker will automatically select the correct architecture when users pull.")
