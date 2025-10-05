@@ -73,20 +73,16 @@ Manifest lists that would be created (auto-select platform):
 
 ## Published Image Structure (After Next Release)
 
-When you run the release workflow with these fixes, it will publish:
+When you run the release workflow with these fixes, it will publish **only manifest lists** to keep your registry clean:
 
 ```
 ghcr.io/whale-net/demo-hello_fastapi:
-├── v1.0.0              ← Manifest list (auto-selects platform)
-│   ├── v1.0.0-amd64   ← AMD64 image
-│   └── v1.0.0-arm64   ← ARM64 image
-├── latest              ← Manifest list (auto-selects platform)
-│   ├── latest-amd64   ← AMD64 image
-│   └── latest-arm64   ← ARM64 image
-└── <commit-sha>        ← Manifest list (auto-selects platform)
-    ├── <sha>-amd64    ← AMD64 image
-    └── <sha>-arm64    ← ARM64 image
+├── v1.0.0              ← Manifest list (auto-selects platform) ✅ PUBLISHED
+├── latest              ← Manifest list (auto-selects platform) ✅ PUBLISHED
+└── <commit-sha>        ← Manifest list (auto-selects platform) ✅ PUBLISHED
 ```
+
+**Platform-specific images are built and pushed temporarily for manifest creation, then cleaned up by registry garbage collection.**
 
 Users simply run:
 ```bash
@@ -94,6 +90,13 @@ docker pull ghcr.io/whale-net/demo-hello_fastapi:v1.0.0
 ```
 
 And Docker automatically pulls the correct architecture for their platform!
+
+### Why This Is Clean
+
+- **Only 3 tags per release**: `v1.0.0`, `latest`, `commit-sha`
+- **No platform-specific tag pollution**: `-amd64` and `-arm64` tags are temporary
+- **Full multiarch support**: Manifests point to both architectures
+- **Automatic platform selection**: Docker/Kubernetes handles it transparently
 
 ## Files Changed
 

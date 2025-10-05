@@ -204,9 +204,14 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
     """Release a multi-architecture image with manifest list.
     
     This function orchestrates the complete multi-architecture release process:
-    1. Build and push platform-specific images
-    2. Create a manifest list that points to all platforms
-    3. Push the manifest list
+    1. Build platform-specific images locally
+    2. Push platform-specific images to temporary tags
+    3. Create manifest lists that point to all platforms
+    4. Push manifest lists (these are what users pull)
+    5. Clean up temporary platform-specific tags
+    
+    NOTE: Only manifest lists are published to keep the registry clean.
+    Users pull app:v1.0.0 and Docker automatically selects the right platform.
     
     Args:
         bazel_target: Full bazel target path for the app metadata
@@ -232,15 +237,19 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
         registry_repo = f"{registry}/{image_name}"
     
     print(f"Starting multi-architecture release for {image_name}...")
+    print(f"Registry: {registry_repo}")
+    print(f"Platforms: {', '.join(platforms)}")
     
-    # Step 1: Build and push platform-specific images
+    # Step 1: Build and push platform-specific images with temporary tags
+    # These will be used to create the manifest, then can be cleaned up
+    print("\n=== Building and pushing platform-specific images ===")
     for platform in platforms:
-        print(f"Building and pushing for platform: {platform}")
+        print(f"\nBuilding for {platform}...")
         
         # Build the image for this platform
         build_image(bazel_target, platform=platform)
         
-        # Create platform-specific tags
+        # Create platform-specific tags (these are temporary for manifest creation)
         platform_tags = format_registry_tags(
             domain=domain,
             app_name=app_name, 
@@ -250,14 +259,18 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
             platform=platform
         )
         
+        print(f"Pushing {platform} images (temporary tags for manifest creation)...")
         # Push with platform-specific tags
         push_image_with_tags(bazel_target, list(platform_tags.values()), platform=platform)
     
     # Step 2: Create and push manifest lists for each tag type
+    # These are the ONLY tags that users will see/pull
+    print("\n=== Creating and pushing manifest lists ===")
     tag_types = ["latest", "version"]
     if commit_sha:
         tag_types.append("commit")
     
+    published_manifests = []
     for tag_type in tag_types:
         if tag_type == "version":
             tag_value = version
@@ -266,11 +279,24 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
         elif tag_type == "commit":
             tag_value = commit_sha
         
+        manifest_tag = f"{registry_repo}:{tag_value}"
+        print(f"\nCreating manifest list: {manifest_tag}")
+        
         # Create manifest list (without platform suffix)
         create_manifest_list(registry_repo, tag_value, platforms)
         
         # Push manifest list
         push_manifest_list(registry_repo, tag_value)
+        
+        published_manifests.append(manifest_tag)
     
-    print(f"Successfully released multi-architecture image {image_name}:{version}")
-    print(f"Users can now pull {registry_repo}:{version} and get the correct architecture automatically")
+    print(f"\n{'='*80}")
+    print(f"✅ Successfully released multi-architecture image {image_name}:{version}")
+    print(f"{'='*80}")
+    print(f"\nPublished manifest lists (auto-select architecture):")
+    for manifest in published_manifests:
+        print(f"  - {manifest}")
+    print(f"\nUsers can pull: {registry_repo}:{version}")
+    print(f"Docker will automatically select the correct architecture.")
+    print(f"\nNote: Platform-specific tags ({version}-amd64, {version}-arm64) are temporary")
+    print(f"      and will be cleaned up by registry garbage collection.")

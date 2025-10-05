@@ -165,29 +165,39 @@ def release_multiarch(
         typer.echo(f"Registry: {registry}")
         typer.echo("")
         
-        # Show what platform-specific images would be pushed
-        typer.echo("Platform-specific images that would be pushed:")
+        # Show what will be built and pushed temporarily
+        typer.echo("Platform-specific images (temporary, for manifest creation):")
         for platform in platform_list:
             owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "whale-net").lower()
             repo_path = f"{registry}/{owner}/{image_name}"
-            typer.echo(f"  - {repo_path}:{version}-{platform}")
-            typer.echo(f"  - {repo_path}:latest-{platform}")
+            typer.echo(f"  Build & push: {repo_path}:{version}-{platform}")
+            typer.echo(f"               {repo_path}:latest-{platform}")
             if commit:
-                typer.echo(f"  - {repo_path}:{commit}-{platform}")
+                typer.echo(f"               {repo_path}:{commit}-{platform}")
         
         typer.echo("")
-        typer.echo("Manifest lists that would be created (auto-select platform):")
+        typer.echo("=" * 80)
+        typer.echo("PUBLISHED TAGS (what users will see):")
+        typer.echo("=" * 80)
         owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "whale-net").lower()
         repo_path = f"{registry}/{owner}/{image_name}"
-        typer.echo(f"  - {repo_path}:{version} → points to all platforms")
-        typer.echo(f"  - {repo_path}:latest → points to all platforms")
+        typer.echo(f"  ✅ {repo_path}:{version}")
+        typer.echo(f"     └─ Manifest list → auto-selects from: {', '.join(platform_list)}")
+        typer.echo("")
+        typer.echo(f"  ✅ {repo_path}:latest")
+        typer.echo(f"     └─ Manifest list → auto-selects from: {', '.join(platform_list)}")
         if commit:
-            typer.echo(f"  - {repo_path}:{commit} → points to all platforms")
+            typer.echo("")
+            typer.echo(f"  ✅ {repo_path}:{commit}")
+            typer.echo(f"     └─ Manifest list → auto-selects from: {', '.join(platform_list)}")
         
         typer.echo("")
         typer.echo("=" * 80)
-        typer.echo("DRY RUN: No images were actually built or pushed")
+        typer.echo("ℹ️  Platform-specific tags are temporary and used only for manifest")
+        typer.echo("   creation. Users will only see and pull the manifest lists above.")
         typer.echo("=" * 80)
+        typer.echo("")
+        typer.echo("DRY RUN: No images were actually built or pushed")
         return
     
     # Perform multi-architecture release
