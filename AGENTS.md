@@ -91,6 +91,52 @@ release_app(
 - **`version`**: Default version (optional, defaults to "latest")
 - **`registry`**: Container registry (optional, defaults to "ghcr.io")
 - **`custom_repo_name`**: Override default naming (optional)
+- **`app_layer`**: Optional py_library with ONLY app code for efficient 2-layer caching (see Performance section)
+
+#### Performance Optimization: Efficient Layer Caching
+
+**Problem**: Without optimization, every code change rebuilds a 270MB+ tarball including all dependencies.
+
+**Solution**: Use `app_layer` parameter to enable 2-layer caching (see [docs/LAYERING_DECISION.md](docs/LAYERING_DECISION.md) for full analysis):
+
+```starlark
+py_library(
+    name = "app_lib",
+    srcs = glob(["*.py"]),  # ONLY your application code
+    deps = ["@pypi//:fastapi"],
+)
+
+py_binary(
+    name = "my_app",
+    deps = [":app_lib"],
+)
+
+release_app(
+    name = "my_app",
+    language = "python",
+    app_layer = ":app_lib",  # Enable efficient layering!
+)
+```
+
+**Benefits**:
+- **Layer 1** (dependencies): 270MB+, changes rarely → Docker cache hit
+- **Layer 2** (app code): ~10KB, changes frequently → rebuilds in ~1.4 seconds
+- Local development is **dramatically faster** (seconds vs minutes per iteration)
+- Production releases still contain everything correctly
+
+**Performance measurements**:
+- Clean build: ~5.2s
+- Incremental build: ~1.4s average (range: 1.2s - 1.8s)
+- See `tools/benchmark_layering.py` for benchmarking methodology
+
+**When to use**:
+- ✅ Local development with frequent code changes
+- ✅ Apps with py_library separating app code from dependencies
+- ❌ Go apps (already optimal - single static binary)
+- ❌ Simple apps where build time isn't a concern
+
+**Advanced pattern - Per-package layering**:
+For projects with 50+ packages and frequent dependency updates, per-package layering (one layer per pip package) may provide additional benefits. However, this adds complexity and requires custom Bazel rule development. See [docs/LAYERING_DECISION.md](docs/LAYERING_DECISION.md) for detailed analysis and decision guidance.
 
 #### Generated Artifacts
 The `release_app` macro automatically creates:

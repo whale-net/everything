@@ -103,7 +103,29 @@ def container_image(
     
     binary_name = _get_binary_name(binary)
     
-    # LAYERING DECISION: Single layer vs multi-layer
+    # LAYERING DECISION: How many layers to create?
+    # ================================================
+    # Option 1: Single layer (app_layer=None)
+    #   - Everything in one 277MB tar
+    #   - Simple but slow for local dev
+    #
+    # Option 2: Two layers (app_layer=py_library)  ← CURRENT
+    #   - Deps layer: 277MB (Python + all pip packages)
+    #   - App layer: ~10KB (just your code)
+    #   - Good balance of simplicity and performance
+    #
+    # Option 3: Per-package layers (FUTURE)
+    #   - Interpreter layer + one layer per pip package + app layer
+    #   - Maximum cache efficiency (change one package = rebuild one layer)
+    #   - Complexity: Need to dynamically discover packages from runfiles
+    #   - Trade-off: More layers = more tar creation overhead
+    #   - Docker limit: ~127 layers max
+    #
+    # Current implementation uses Option 2 as the sweet spot:
+    # - Dramatically faster than Option 1 for local dev
+    # - Simpler than Option 3 (no dynamic package discovery needed)
+    # - If you need Option 3, open an issue with your use case!
+    
     layers = []
     
     if app_layer:
