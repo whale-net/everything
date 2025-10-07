@@ -18,6 +18,7 @@ dependencies = [
     "sqlmodel",
     "sqlalchemy",  # Required explicitly for tests
     "asyncpg",
+    "psycopg2-binary",  # PostgreSQL adapter for SQLAlchemy
     "alembic",
     
     # Message queue

@@ -52,6 +52,24 @@ def container_image(
     The same binary target will be built for different platforms when invoked
     with different --platforms flags.
     
+    LAYERING STRATEGY - Optimized for Cache Efficiency:
+    ====================================================
+    Uses a SINGLE layer containing binary + all runfiles (dependencies, interpreter, etc).
+    
+    Why not split into multiple layers?
+    - Bazel's hermetic runfiles tree is tightly coupled (binary references exact paths)
+    - Splitting would require custom rules to separate app code from dependencies
+    - Breaking apart the runfiles structure defeats Bazel's hermetic guarantees
+    - The complexity and brittleness outweighs the caching benefits
+    
+    Caching still works efficiently because:
+    1. Bazel's action cache: If binary unchanged, pkg_tar is cached (no rebuild)
+    2. OCI layer digests: If tar unchanged, Docker/registries cache the layer
+    3. Most rebuilds happen during development (where layer caching helps less anyway)
+    
+    The real optimization opportunity would be at the Bazel level (e.g., rules_python
+    generating separate outputs for app vs deps), but that's outside our control here.
+    
     Args:
         name: Image name
         binary: Binary target to containerize (single target, built for current platform)
@@ -65,7 +83,9 @@ def container_image(
     if not language:
         fail("language parameter is required for container_image")
     
-    # Create application layer with runfiles
+    # Create single application layer with binary and all runfiles
+    # This is a monolithic layer but it's the most maintainable approach given
+    # Bazel's hermetic runfiles structure.
     pkg_tar(
         name = name + "_layer",
         srcs = [binary],
