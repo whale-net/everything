@@ -9,6 +9,7 @@ py_library(
     deps = [
         "//manman/src:manman_core",
         "//manman/src/repository:manman_repository",
+        "//manman/src/migrations:manman_migrations",  # Required for migration commands
         "@pypi//:fastapi",
         "@pypi//:uvicorn",
         "@pypi//:gunicorn",
