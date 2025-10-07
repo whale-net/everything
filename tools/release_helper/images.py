@@ -296,6 +296,10 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
     all platform variants. The index allows Docker to automatically select the
     correct architecture when users pull.
     
+    Optimization: If a commit-tagged image already exists in the registry, this function
+    will re-tag that existing image instead of rebuilding. This minimizes build times
+    when releasing the same commit multiple times with different version tags.
+    
     Args:
         bazel_target: Full bazel target path for the app metadata
         version: Version tag for the release
@@ -327,24 +331,7 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
     print(f"Version: {version}")
     print(f"Platforms: {', '.join(platforms)}")
     
-    # Build the OCI image index with platform transitions
-    # The oci_image_index rule with platforms parameter will automatically:
-    # 1. Build the base image for each platform via Bazel transitions
-    # 2. Create a proper OCI index manifest with platform metadata
-    print(f"\n{'='*80}")
-    print("Building OCI image index with platform transitions...")
-    print(f"{'='*80}")
-    index_target = f"//{app_path}:{app_name}_image"
-    print(f"Building index: {index_target}")
-    run_bazel([
-        "build", 
-        index_target
-    ])
-    print(f"✅ Built OCI image index containing {len(platforms)} platform variants")
-
-    
-    # Push the image index with all tags
-    # The oci_push target will push the index with proper multi-arch manifest
+    # Generate registry tags
     tags = format_registry_tags(
         domain=domain,
         app_name=app_name,
@@ -354,10 +341,72 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
         platform=None  # No platform suffix - this is the index
     )
     
-    print(f"\n{'='*80}")
-    print(f"Pushing OCI image index with {len(tags)} tags...")
-    print(f"{'='*80}")
-    push_image_with_tags(bazel_target, list(tags.values()))
+    # Check if we can optimize by re-tagging an existing commit image
+    should_rebuild = True
+    commit_tag_ref = None
+    
+    if commit_sha:
+        # Check if an image with the commit tag already exists
+        from tools.release_helper.validation import check_image_exists_in_registry
+        commit_tag_ref = tags.get("commit")
+        if commit_tag_ref and check_image_exists_in_registry(commit_tag_ref):
+            print(f"✅ Found existing image for commit {commit_sha[:7]}: {commit_tag_ref}")
+            print("Optimizing: Re-tagging existing image instead of rebuilding")
+            should_rebuild = False
+        else:
+            print(f"No existing image found for commit {commit_sha[:7]}, will build")
+    
+    if should_rebuild:
+        # Build the OCI image index with platform transitions
+        # The oci_image_index rule with platforms parameter will automatically:
+        # 1. Build the base image for each platform via Bazel transitions
+        # 2. Create a proper OCI index manifest with platform metadata
+        print(f"\n{'='*80}")
+        print("Building OCI image index with platform transitions...")
+        print(f"{'='*80}")
+        index_target = f"//{app_path}:{app_name}_image"
+        print(f"Building index: {index_target}")
+        run_bazel([
+            "build", 
+            index_target
+        ])
+        print(f"✅ Built OCI image index containing {len(platforms)} platform variants")
+
+        
+        # Push the image index with all tags
+        # The oci_push target will push the index with proper multi-arch manifest
+        print(f"\n{'='*80}")
+        print(f"Pushing OCI image index with {len(tags)} tags...")
+        print(f"{'='*80}")
+        push_image_with_tags(bazel_target, list(tags.values()))
+    else:
+        # Re-tag existing commit image with version and latest tags
+        print(f"\n{'='*80}")
+        print("Re-tagging existing image...")
+        print(f"{'='*80}")
+        
+        # Get tags to apply (exclude the commit tag since it already exists)
+        additional_tags = [tag for key, tag in tags.items() if key != "commit"]
+        
+        try:
+            tag_existing_image(commit_tag_ref, additional_tags)
+            print(f"Successfully tagged {app_name} {version} from existing commit image")
+        except Exception as e:
+            print(f"Failed to tag existing image, falling back to rebuild: {e}", file=sys.stderr)
+            print("Rebuilding image...")
+            
+            # Fall back to building and pushing
+            index_target = f"//{app_path}:{app_name}_image"
+            print(f"Building index: {index_target}")
+            run_bazel([
+                "build", 
+                index_target
+            ])
+            print(f"✅ Built OCI image index containing {len(platforms)} platform variants")
+            
+            # Push with all tags
+            push_image_with_tags(bazel_target, list(tags.values()))
+            print(f"Successfully pushed {app_name} {version} (after fallback)")
     
     print(f"\n{'='*80}")
     print(f"✅ Successfully released {image_name}:{version}")

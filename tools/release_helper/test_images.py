@@ -201,28 +201,36 @@ class TestPushImageWithTags:
         assert actual_call == expected_call
 
     def test_push_image_with_tags_amd64_platform(self, mock_get_image_targets, mock_get_app_metadata, mock_run_bazel):
-        """Test pushing image with tags for amd64 platform."""
+        """Test pushing image with tags - platform parameter no longer used.
+        
+        Note: The oci_push target automatically pushes the multi-arch image index,
+        so platform-specific flags are not needed or used.
+        """
         bazel_target = "//demo/hello_python:hello_python_metadata"
         tags = ["ghcr.io/owner/demo-hello_python:v1.0.0"]
         
-        push_image_with_tags(bazel_target, tags, platform="amd64")
+        push_image_with_tags(bazel_target, tags)
         
-        # Verify push command includes platform flag
-        expected_call = ["run", "//demo/hello_python:hello_python_image_push", "--platforms=//tools:linux_x86_64", "--", 
+        # Verify push command does NOT include platform flag (oci_push uses index)
+        expected_call = ["run", "//demo/hello_python:hello_python_image_push", "--", 
                         "--tag", "v1.0.0"]
         mock_run_bazel.assert_called_once()
         actual_call = mock_run_bazel.call_args[0][0]
         assert actual_call == expected_call
 
     def test_push_image_with_tags_arm64_platform(self, mock_get_image_targets, mock_get_app_metadata, mock_run_bazel):
-        """Test pushing image with tags for arm64 platform."""
+        """Test pushing image with tags - platform parameter no longer used.
+        
+        Note: The oci_push target automatically pushes the multi-arch image index,
+        so platform-specific flags are not needed or used.
+        """
         bazel_target = "//demo/hello_python:hello_python_metadata"
         tags = ["ghcr.io/owner/demo-hello_python:v1.0.0"]
         
-        push_image_with_tags(bazel_target, tags, platform="arm64")
+        push_image_with_tags(bazel_target, tags)
         
-        # Verify push command includes platform flag
-        expected_call = ["run", "//demo/hello_python:hello_python_image_push", "--platforms=//tools:linux_arm64", "--", 
+        # Verify push command does NOT include platform flag (oci_push uses index)
+        expected_call = ["run", "//demo/hello_python:hello_python_image_push", "--", 
                         "--tag", "v1.0.0"]
         mock_run_bazel.assert_called_once()
         actual_call = mock_run_bazel.call_args[0][0]
