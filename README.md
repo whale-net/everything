@@ -955,30 +955,12 @@ gh workflow run release.yml \
   -f apps=all \
   -f version=v1.2.3
 
-# Release all apps in a domain/namespace
-gh workflow run release.yml \
-  -f apps=demo \
-  -f version=v1.2.3
-
-# Release mix of specific apps and domains
-gh workflow run release.yml \
-  -f apps=hello_python,api \
-  -f version=v1.2.3
-
 # Dry run (test without publishing)
 gh workflow run release.yml \
   -f apps=hello_python \
   -f version=v1.2.3 \
   -f dry_run=true
 ```
-
-**App Selection Formats:**
-- Specific apps: `hello_python,hello_go`
-- All apps: `all` (excludes demo domain by default)
-- Domain/namespace: `demo` (releases all apps in the demo domain)
-- Full format: `demo-hello_python` (domain-appname)
-- Path format: `demo/hello_python` (domain/appname)
-- Mixed: `hello_python,api` (specific app + all apps in api domain)
 
 ### 📋 Release Process Details
 

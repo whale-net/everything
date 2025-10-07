@@ -127,35 +127,6 @@ class TestPlanRelease:
         assert len(result["matrix"]["include"]) == 2
         mock_validate_apps.assert_called_once_with(["hello_python", "hello_go"])
 
-    @patch('tools.release_helper.release.validate_semantic_version')
-    def test_plan_release_workflow_dispatch_domain_format(self, mock_validate_semantic, mock_validate_apps, sample_apps):
-        """Test planning release for workflow_dispatch with domain format.
-        
-        This test verifies that domain names (like "demo") can be used to release
-        all apps in that domain/namespace, similar to how helm charts work.
-        """
-        mock_validate_semantic.return_value = True
-        # Simulate validate_apps returning all apps in the demo domain
-        demo_apps = [app for app in sample_apps if app["domain"] == "demo"]
-        mock_validate_apps.return_value = demo_apps
-        
-        result = plan_release(
-            event_type="workflow_dispatch",
-            requested_apps="demo",
-            version="v1.0.0"
-        )
-        
-        assert result["event_type"] == "workflow_dispatch"
-        assert len(result["matrix"]["include"]) == len(demo_apps)
-        # Verify validate_apps was called with the domain name
-        mock_validate_apps.assert_called_once_with(["demo"])
-        # Verify all returned apps are from the demo domain
-        for item in result["matrix"]["include"]:
-            # Find the original app in sample_apps to check its domain
-            app = next((a for a in sample_apps if a["name"] == item["app"]), None)
-            assert app is not None
-            assert app["domain"] == "demo"
-
     def test_plan_release_workflow_dispatch_no_apps_specified(self):
         """Test error when workflow_dispatch has no apps specified."""
         with pytest.raises(ValueError, match="Manual releases require apps to be specified"):
