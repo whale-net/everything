@@ -533,7 +533,8 @@ def callback(
 def _get_alembic_config() -> alembic.config.Config:
     # Configure Alembic programmatically without requiring alembic.ini
     # This is necessary for containerized environments where the ini file may not exist
-    config = alembic.config.Config()
+    # Pass file_=None to indicate we're configuring programmatically
+    config = alembic.config.Config(file_=None, ini_section="alembic")
     
     # Find the migrations directory using Python's module system
     # The migrations are packaged as manman.src.migrations
