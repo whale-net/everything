@@ -79,15 +79,15 @@ app_metadata = rule(
     },
 )
 
-# Note: This function has many parameters (18) to support flexible app configuration.
+# Note: This function has many parameters to support flexible app configuration.
 # They are logically grouped as:
-# - Binary config: name, binary_name, language
+# - Binary config: name, binary_name, language, app_layer
 # - Release config: domain, description, version, registry, organization, custom_repo_name
 # - Deployment config: app_type, port, replicas, command, args
 # - Health check config: health_check_enabled, health_check_path
 # - Ingress config: ingress_host, ingress_tls_secret
 # Bazel/Starlark does not support nested struct parameters, so they remain flat.
-def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = []):
+def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], app_layer = None):
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
@@ -96,6 +96,32 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     
     The binaries are built for different platforms using Bazel's --platforms flag.
     Cross-compilation is handled automatically by rules_pycross (Python) and rules_go (Go).
+    
+    PERFORMANCE TIP: Use app_layer for faster local development
+    ============================================================
+    Provide an app_layer (py_library with ONLY your app code) to enable efficient
+    2-layer caching:
+    - Layer 1: Dependencies (large, changes rarely) - cached by Docker
+    - Layer 2: App code (small, changes frequently) - rebuilds quickly
+    
+    Without app_layer, everything is in one 270MB+ layer that rebuilds on every change.
+    
+    Example:
+        py_library(
+            name = "app_lib",
+            srcs = glob(["*.py"]),  # Just your app code
+        )
+        
+        py_binary(
+            name = "app",
+            deps = [":app_lib", "@pypi//:fastapi"],
+        )
+        
+        release_app(
+            name = "app",
+            language = "python",
+            app_layer = ":app_lib",  # Enable efficient layering!
+        )
     
     Args:
         name: App name (should match directory name and binary name)
@@ -119,6 +145,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         ingress_tls_secret: TLS secret name for ingress (empty = no TLS)
         command: Override container command (default: use image ENTRYPOINT)
         args: Container arguments
+        app_layer: Optional py_library with ONLY app code for 2-layer efficient caching
     """
     if language not in ["python", "go"]:
         fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
@@ -142,6 +169,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         repository = organization,
         image_name = image_name,
         language = language,
+        app_layer = app_layer,  # Enable efficient 2-layer caching if provided
         cmd = args if args else [],  # Pass container args if specified
     )
     

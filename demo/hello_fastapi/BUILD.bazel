@@ -41,10 +41,13 @@ py_test(
     ],
 )
 
+# Release metadata and OCI images for this app
 release_app(
     name = "hello_fastapi",
     language = "python",
     domain = "demo",
-    description = "FastAPI hello world application with uvicorn",
+    description = "FastAPI hello world application",
     app_type = "external-api",
+    port = 8000,
+    app_layer = ":main_lib",  # Enable efficient 2-layer caching for fast dev!
 )
