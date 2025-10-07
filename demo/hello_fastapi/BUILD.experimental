@@ -1,0 +1,42 @@
+"""Experimental per-package layering test for hello_fastapi."""
+
+load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+load("@everything_pip_deps//:requirements.bzl", "requirement")
+load("//tools:container_image_experimental.bzl", "container_image_per_package")
+
+# Use existing targets
+py_library(
+    name = "main_lib_experimental",
+    srcs = ["main.py"],
+    deps = [
+        requirement("fastapi"),
+        requirement("uvicorn"),
+    ],
+    visibility = ["//visibility:public"],
+)
+
+py_binary(
+    name = "hello_fastapi_experimental",
+    srcs = ["main.py"],
+    deps = [":main_lib_experimental"],
+    visibility = ["//visibility:public"],
+)
+
+# Experimental per-package image
+container_image_per_package(
+    name = "hello_fastapi_experimental_image",
+    binary = ":hello_fastapi_experimental",
+    language = "python",
+    packages = [
+        "fastapi",
+        "pydantic",
+        "pydantic-core",
+        "starlette",
+        "uvicorn",
+        "anyio",
+        "click",
+        "h11",
+    ],
+    requirement = requirement,
+    app_layer = ":main_lib_experimental",
+)

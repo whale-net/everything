@@ -99,8 +99,12 @@ def main():
         app_file,
     ))
     
-    # TODO: Add single-layer benchmark (need to create target without app_layer)
-    # TODO: Add per-package benchmark (once implemented)
+    # Benchmark experimental per-package approach
+    results.append(benchmark_scenario(
+        "Per-package (experimental)",
+        "//demo/hello_fastapi:hello_fastapi_experimental_image",
+        app_file,
+    ))
     
     # Print summary
     print("\n" + "="*60)
@@ -118,6 +122,28 @@ def main():
         print(f"  Clean build: {result['clean_build_time']:.2f}s")
         print(f"  Avg incremental: {result['avg_incremental_time']:.2f}s")
         print(f"  Incremental range: {min(result['incremental_build_times']):.2f}s - {max(result['incremental_build_times']):.2f}s")
+    
+    # Comparison
+    if len(results) == 2:
+        two_layer = results[0]
+        per_package = results[1]
+        
+        print("\n" + "="*60)
+        print("COMPARISON")
+        print("="*60)
+        
+        clean_diff = per_package['clean_build_time'] - two_layer['clean_build_time']
+        incr_diff = per_package['avg_incremental_time'] - two_layer['avg_incremental_time']
+        
+        print(f"\nClean build difference: {clean_diff:+.2f}s")
+        print(f"Incremental build difference: {incr_diff:+.2f}s")
+        
+        if abs(incr_diff) < 0.5:
+            print("\n✅ Performance is similar - choice depends on other factors")
+        elif incr_diff < 0:
+            print(f"\n🎉 Per-package is {abs(incr_diff):.2f}s faster!")
+        else:
+            print(f"\n⚠️  Per-package is {incr_diff:.2f}s slower")
 
 
 if __name__ == "__main__":

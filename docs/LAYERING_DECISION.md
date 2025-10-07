@@ -180,20 +180,18 @@ The 2-layer approach hits the sweet spot:
 - **Fast enough** for local development (1.4s incremental)
 - **Good enough** for CI/CD caching
 
-Per-package layering provides diminishing returns:
-- Only helps when dependencies change (rare in typical dev)
-- Adds 0.26s overhead to every build
-- Requires 2-3 days of development work
-- Increases system complexity significantly
+Per-package layering has been **implemented and benchmarked** (see [PER_PACKAGE_LAYERING_YOLO.md](PER_PACKAGE_LAYERING_YOLO.md)):
+- ✅ Technically works using synthetic "probe" binaries
+- ⚠️ 0.3-1s slower than 2-layer approach
+- ⚠️ Only helps when updating single top-level packages (rare)
+- ❌ Most `uv.lock` updates change multiple packages anyway
 
-**Recommendation**: Ship 2-layer as default, revisit per-package only if:
-1. We have concrete evidence of dependency churn causing problems
-2. Multiple teams report slow builds due to uv.lock changes
-3. We expand to 50+ packages where granularity matters
+**Final recommendation**: Ship 2-layer as default. Per-package available as `container_image_per_package()` for specialized scenarios but not recommended for typical use.
 
 ## References
 
 - Initial investigation: `docs/OCI_LAYERING_STRATEGY.md`
-- Implementation: `tools/container_image.bzl`
+- **Per-package implementation**: `docs/PER_PACKAGE_LAYERING_YOLO.md` ⭐
+- Implementation: `tools/container_image.bzl`, `tools/container_image_experimental.bzl`
 - Agent instructions: `AGENTS.md` (Performance Optimization section)
 - Benchmarking tools: `tools/benchmark_layering.py`, `tools/analyze_layer_overhead.py`
