@@ -90,12 +90,12 @@ release_app(
 
 # List of all manman app metadata targets for chart composition
 # Update this list when adding or removing services
+# Note: worker is excluded as it will be deployed outside the cloud
 MANMAN_APPS = [
     ":experience_api_metadata",
     ":status_api_metadata",
     ":worker_dal_api_metadata",
     ":status_processor_metadata",
-    ":worker_metadata",
     ":migration_metadata",
 ]
 
