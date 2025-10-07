@@ -79,11 +79,11 @@ def container_image(
     if not entrypoint:
         if language == "python":
             # Find hermetic Python interpreter in runfiles
+            # Pass through all arguments to the Python binary
             entrypoint = [
                 "/bin/sh",
                 "-c",
-                'PYTHON=$(find /app -path "*/rules_python*/bin/python3" -type f 2>/dev/null | head -1) && exec "$PYTHON" "/app/$1"',
-                "sh",
+                'PYTHON=$(find /app -path "*/rules_python*/bin/python3" -type f 2>/dev/null | head -1) && shift && exec "$PYTHON" "/app/$0" "$@"',
                 binary_name,
             ]
         else:
