@@ -203,10 +203,10 @@ bazel test //manman/src/host:manman_host_test
 
 ```bash
 # Build all images
-bazel build //manman:experience_api_image
-bazel build //manman:status_api_image
-bazel build //manman:worker_dal_api_image
-bazel build //manman:status_processor_image
+bazel build //manman:experience-api_image
+bazel build //manman:status-api_image
+bazel build //manman:worker-dal-api_image
+bazel build //manman:status-processor_image
 bazel build //manman:migration_image
 ```
 
@@ -214,8 +214,8 @@ bazel build //manman:migration_image
 
 ```bash
 # Load and run
-bazel run //manman:experience_api_image_load
-docker run --rm -p 8000:8000 experience_api:latest
+bazel run //manman:experience-api_image_load
+docker run --rm -p 8000:8000 experience-api:latest
 ```
 
 ---
@@ -258,7 +258,7 @@ helm uninstall manman-dev --namespace manman
 ```yaml
 # custom-values.yaml
 apps:
-  experience_api:
+  experience-api:
     replicas: 5
     resources:
       limits:
@@ -276,19 +276,19 @@ helm install manman-dev \
 
 When deployed, services are named as `{service}-{environment}`:
 
-- `experience_api-dev`
-- `status_api-dev`
-- `worker_dal_api-dev`
-- `status_processor-dev`
+- `experience-api-dev`
+- `status-api-dev`
+- `worker-dal-api-dev`
+- `status-processor-dev`
 - `migration-dev` (job)
 
 ### Service Discovery
 
 ```bash
 # From within the cluster
-http://experience_api-dev-service.manman.svc.cluster.local:8000
-http://status_api-dev-service.manman.svc.cluster.local:8000
-http://worker_dal_api-dev-service.manman.svc.cluster.local:8000
+http://experience-api-dev-service.manman.svc.cluster.local:8000
+http://status-api-dev-service.manman.svc.cluster.local:8000
+http://worker-dal-api-dev-service.manman.svc.cluster.local:8000
 ```
 
 ---
@@ -362,7 +362,7 @@ Set via Helm values or ConfigMap:
 
 ```yaml
 apps:
-  experience_api:
+  experience-api:
     env:
       - name: MANMAN_POSTGRES_URL
         value: "postgresql://..."
@@ -449,8 +449,8 @@ Scale services via Helm values:
 ```bash
 helm upgrade manman-dev \
   bazel-bin/manman/manman-host_chart/manman-host \
-  --set apps.experience_api.replicas=10 \
-  --set apps.status_processor.replicas=5
+  --set apps.experience-api.replicas=10 \
+  --set apps.status-processor.replicas=5
 ```
 
 ### Recommended Replica Counts
@@ -471,7 +471,7 @@ helm upgrade manman-dev \
 **Services won't start**
 ```bash
 # Check logs
-kubectl logs -n manman deployment/experience_api-dev
+kubectl logs -n manman deployment/experience-api-dev
 
 # Common causes:
 # - Missing environment variables
@@ -492,7 +492,7 @@ helm upgrade manman-dev bazel-bin/manman/manman-host_chart/manman-host
 **Health checks failing**
 ```bash
 # Port forward and test directly
-kubectl port-forward -n manman deployment/experience_api-dev 8000:8000
+kubectl port-forward -n manman deployment/experience-api-dev 8000:8000
 curl http://localhost:8000/health
 
 # Should return 200 OK

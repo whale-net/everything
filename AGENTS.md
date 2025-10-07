@@ -559,11 +559,11 @@ helm template test bazel-bin/demo/hello_fastapi/hello_fastapi_chart/
 Each `external-api` app gets its own dedicated Ingress resource:
 
 ```yaml
-# experience_api-dev-ingress
+# experience-api-dev-ingress
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: experience_api-dev-ingress
+  name: experience-api-dev-ingress
 spec:
   tls:
     - secretName: manman-tls-dev  # TLS secret includes environment suffix
@@ -576,7 +576,7 @@ spec:
       - path: /
         backend:
           service:
-            name: experience_api-dev-service
+            name: experience-api-dev-service
             port:
               number: 8000
 ```

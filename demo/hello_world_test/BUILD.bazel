@@ -30,7 +30,8 @@ py_test(
 )
 
 release_app(
-    name = "hello_world_test",
+    name = "hello-world-test",
+    binary_name = ":hello_world_test",
     language = "python",
     domain = "demo",
     description = "Python hello world test application for documentation validation",
