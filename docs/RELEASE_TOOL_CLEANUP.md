@@ -63,11 +63,10 @@ Removed unused imports from `cli.py`:
 ### 1. AGENT.md
 - Updated `release` references to `release-multiarch`
 
-### 2. .github/copilot-instructions.md
-- Updated CI pipeline examples to use `release-multiarch`
-- Updated helm chart commands to use `build-helm-chart` with auto-versioning
-- Removed references to deprecated `publish-helm-repo` command
-- Added note about GitHub Actions handling helm publishing
+### 2. AGENT.md
+- Updated `release` references to `release-multiarch`
+- Added behavioral guidelines from deprecated copilot-instructions.md
+- Now serves as the single source of truth for AI agents (GitHub Copilot supports AGENT.md natively)
 
 ### 3. .github/workflows/ci.yml
 - Updated to use `release-multiarch` instead of `release`
@@ -113,4 +112,9 @@ When working with the release tool:
 1. Always use `release-multiarch` for releasing apps (not `release`)
 2. Use `build-helm-chart` with `--use-released --bump patch` for helm charts
 3. Rely on GitHub Actions workflows for helm publishing (don't use manual commands)
-4. Refer to updated documentation in AGENT.md and copilot-instructions.md
+4. Refer to AGENT.md for all repository patterns and guidelines
+
+## Additional Cleanup
+
+- **Removed `.github/copilot-instructions.md`**: Consolidated with AGENT.md since GitHub Copilot now natively supports AGENT.md files
+- **Updated AGENT.md**: Added behavioral guidelines from copilot-instructions.md to create single source of truth

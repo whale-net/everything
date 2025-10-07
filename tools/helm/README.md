@@ -293,13 +293,19 @@ apps:
       path: /health
       initialDelaySeconds: 10
       periodSeconds: 10
+    ingress:
+      host: my-api.example.com
+      tlsSecretName: my-api-tls  # Will become my-api-tls-prod
 
-ingress:
+# Default settings applied to all ingresses (one ingress per external-api)
+ingressDefaults:
   enabled: true
-  className: ""
-  annotations: {}
-  tls: []
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
 ```
+
+**Note**: Each external-api app gets its own dedicated Ingress resource. TLS secret names automatically include the environment suffix (e.g., `my-api-tls-prod`).
 
 ---
 
@@ -456,6 +462,15 @@ A: Set them in deploy-time values or add to `release_app` metadata.
 
 **Q: Can multiple external-apis share one Ingress?**  
 A: No, each external-api gets its own Ingress (1:1 mapping). This allows independent hosts and TLS configs.
+
+**Q: Can I run multiple environments in the same cluster?**  
+A: Yes! All resources include the environment suffix. Deploy with different release names and environment values:
+```bash
+helm install app-dev ./chart/ --set global.environment=dev
+helm install app-staging ./chart/ --set global.environment=staging
+helm install app-prod ./chart/ --set global.environment=prod
+```
+TLS secrets, services, deployments, and ingresses will all be uniquely named per environment.
 
 **Q: Where do I set resource limits?**  
 A: Override in values.yaml or at deploy time with `--set`.

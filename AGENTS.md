@@ -2,6 +2,18 @@
 
 This document provides comprehensive guidelines for AI agents working on the Everything monorepo. It establishes a framework for understanding, maintaining, and extending the codebase while preserving its architectural principles.
 
+## Agent Behavioral Guidelines
+
+- Avoid giving commands that commit changes. The user will be responsible for committing
+- Provide short, straightforward responses. Elaborate only when necessary
+- Do not apologize for being wrong
+- Do not praise the developer. You are just a tool, not a conversation
+- If provided with a GitHub link for debugging, try and use GitHub MCP tools
+- Avoid creating unnecessary documentation. Most of the time it is deleted right away after creation
+- Avoid creating documentation for cleanups or for simple tasks. If unsure whether to create documentaiton. ask user.
+- Do not patch production environment - rely on release actions and human inputs
+- **ALWAYS reference these instructions first** and fallback to search or bash commands only when you encounter unexpected information
+
 ## ⚠️ CRITICAL: Cross-Compilation
 
 **MUST READ**: [`docs/BUILDING_CONTAINERS.md`](docs/BUILDING_CONTAINERS.md)
@@ -547,20 +559,24 @@ helm template test bazel-bin/demo/hello_fastapi/hello_fastapi_chart/
 Each `external-api` app gets its own dedicated Ingress resource:
 
 ```yaml
-# api_server-dev-ingress
+# experience_api-dev-ingress
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: api_server-dev-ingress
+  name: experience_api-dev-ingress
 spec:
+  tls:
+    - secretName: manman-tls-dev  # TLS secret includes environment suffix
+      hosts:
+        - experience.manman.local
   rules:
-  - host: api_server-dev.local
+  - host: experience.manman.local
     http:
       paths:
       - path: /
         backend:
           service:
-            name: api_server-dev
+            name: experience_api-dev-service
             port:
               number: 8000
 ```
@@ -568,8 +584,26 @@ spec:
 **Key points**:
 - Simple 1:1 pattern (no complex mode selection)
 - Each external-api = dedicated Ingress
-- Host pattern: `{appName}-{environment}.local`
-- Ingress name: `{appName}-{environment}-ingress`
+- All resources include environment suffix for multi-environment support
+- TLS secret names: `{secretName}-{environment}` (e.g., `manman-tls-dev`, `manman-tls-prod`)
+- Service names: `{appName}-{environment}-service`
+- Deployment names: `{appName}-{environment}`
+- Ingress names: `{appName}-{environment}-ingress`
+
+**Multi-Environment Support**:
+Charts can be deployed multiple times in the same cluster with different environments:
+```bash
+# Dev environment
+helm install manman-dev ./chart/ --set global.environment=dev
+
+# Staging environment in same cluster
+helm install manman-staging ./chart/ --set global.environment=staging
+
+# Production environment in same cluster
+helm install manman-prod ./chart/ --set global.environment=prod
+```
+
+Each environment gets isolated resources with unique names.
 
 ### ArgoCD Integration
 
@@ -612,12 +646,11 @@ apps:
         path: /health/live
         port: 8000
 
-global:
-  ingress:
-    enabled: true
-    className: nginx
-    annotations:
-      cert-manager.io/cluster-issuer: letsencrypt-prod
+ingressDefaults:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
 ```
 
 ```bash
@@ -666,9 +699,8 @@ bazel build //path/to/app:app_chart
 type = "external-api"  # Must be external-api
 
 # Check ingress enabled
-global:
-  ingress:
-    enabled: true  # Must be true
+ingressDefaults:
+  enabled: true  # Must be true
 ```
 
 #### Port errors

@@ -1,4 +1,4 @@
-{{- if .Values.ingress.enabled -}}
+{{- if .Values.ingressDefaults.enabled -}}
 {{- range $appName, $app := .Values.apps }}
 {{- if eq $app.type "external-api" }}
 ---
@@ -14,29 +14,18 @@ metadata:
   annotations:
     # Ingress deploys with services and deployments
     "argocd.argoproj.io/sync-wave": "0"
-  {{- with $.Values.ingress.annotations }}
+  {{- with $.Values.ingressDefaults.annotations }}
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  {{- if $.Values.ingress.className }}
-  ingressClassName: {{ $.Values.ingress.className }}
+  {{- if $.Values.ingressDefaults.className }}
+  ingressClassName: {{ $.Values.ingressDefaults.className }}
   {{- end }}
-  {{- if or $.Values.ingress.tls (and $app.ingress $app.ingress.tlsSecretName) }}
+  {{- if and $app.ingress $app.ingress.tlsSecretName }}
   tls:
-    {{- if and $app.ingress $app.ingress.tlsSecretName }}
-    - secretName: {{ $app.ingress.tlsSecretName }}
+    - secretName: {{ $app.ingress.tlsSecretName }}-{{ $.Values.global.environment }}
       hosts:
         - {{ $app.ingress.host | default (printf "%s-%s.local" $appName $.Values.global.environment) }}
-    {{- end }}
-    {{- range $.Values.ingress.tls }}
-    - secretName: {{ .secretName }}
-      {{- if .hosts }}
-      hosts:
-        {{- range .hosts }}
-        - {{ . | quote }}
-        {{- end }}
-      {{- end }}
-    {{- end }}
   {{- end }}
   rules:
     - host: {{ if $app.ingress }}{{ $app.ingress.host | default (printf "%s-%s.local" $appName $.Values.global.environment) }}{{ else }}{{ printf "%s-%s.local" $appName $.Values.global.environment }}{{ end }}
