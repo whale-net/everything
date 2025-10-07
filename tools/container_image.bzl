@@ -44,6 +44,7 @@ def container_image(
     env = None,
     entrypoint = None,
     language = None,
+    python_version = "3.11",
     **kwargs):
     """Build a single-platform OCI container image.
     
@@ -58,6 +59,7 @@ def container_image(
         env: Environment variables dict
         entrypoint: Override entrypoint (auto-detected from language)
         language: Language of the binary ("python" or "go") - REQUIRED
+        python_version: Python version for path construction (default: "3.11")
         **kwargs: Additional oci_image arguments
     """
     if not language:
@@ -78,12 +80,18 @@ def container_image(
     # Determine entrypoint based on language
     if not entrypoint:
         if language == "python":
-            # Find hermetic Python interpreter in runfiles
+            # Use select() to choose the correct Python interpreter path based on target platform
+            # The path is deterministic: /app/{binary}.runfiles/rules_python++python+python_{version}_{arch}/bin/python3
+            # We use a simple shell pattern to match either architecture
             entrypoint = [
                 "/bin/sh",
                 "-c",
-                'PYTHON=$(find /app -path "*/rules_python*/bin/python3" -type f 2>/dev/null | head -1) && exec "$PYTHON" "/app/$1"',
-                "sh",
+                # Use glob pattern to match the Python interpreter for the current architecture
+                # This is much faster than find and the path is deterministic at build time
+                'exec /app/{binary}.runfiles/rules_python++python+python_{version}_*/bin/python3 /app/$0 "$@"'.format(
+                    binary = binary_name,
+                    version = python_version.replace(".", "_"),
+                ),
                 binary_name,
             ]
         else:

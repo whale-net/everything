@@ -26,6 +26,7 @@ release_app(
     replicas = 1,  # Single replica for development
     ingress_host = "experience.manman.local",
     ingress_tls_secret = "manman-tls",
+    args = ["start-experience-api"],
 )
 
 release_app(
@@ -37,6 +38,7 @@ release_app(
     app_type = "internal-api",
     port = 8081,
     replicas = 1,  # Single replica for development
+    args = ["start-status-api"],
 )
 
 release_app(
@@ -50,6 +52,7 @@ release_app(
     replicas = 1,  # Single replica for development
     ingress_host = "dal.manman.local",
     ingress_tls_secret = "manman-tls",
+    args = ["start-worker-dal-api"],
 )
 
 release_app(
@@ -61,6 +64,7 @@ release_app(
     app_type = "internal-api",
     port = 8083,
     replicas = 1,  # Single replica for development
+    args = ["start-status-processor"],
 )
 
 release_app(
@@ -81,6 +85,7 @@ release_app(
     description = "Database migration job for schema updates",
     app_type = "job",
     replicas = 1,  # Jobs always run once
+    args = ["run-migration"],  # Pass the migration command as container args
 )
 
 # List of all manman app metadata targets for chart composition

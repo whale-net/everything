@@ -142,6 +142,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         repository = organization,
         image_name = image_name,
         language = language,
+        cmd = args if args else [],  # Pass container args if specified
     )
     
     # Use the binary directly for change detection
