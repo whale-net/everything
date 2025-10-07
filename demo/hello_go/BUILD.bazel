@@ -3,7 +3,7 @@ load("//tools:release.bzl", "release_app")
 
 # Standard go_binary - no wrapper needed!
 go_binary(
-    name = "hello_go",
+    name = "hello-go",
     srcs = ["main.go"],
     deps = ["//libs/go"],
     visibility = ["//visibility:public"],
@@ -18,7 +18,7 @@ go_test(
 
 # Release metadata and OCI images for this app
 release_app(
-    name = "hello_go",
+    name = "hello-go",
     language = "go",
     domain = "demo",
     description = "Go hello world application with static binaries",

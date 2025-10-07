@@ -23,7 +23,7 @@ filegroup(
 )
 
 py_binary(
-    name = "hello_fastapi",
+    name = "hello-fastapi",
     srcs = ["main.py"],
     main = "main.py",
     deps = [":main_lib"],
@@ -42,7 +42,7 @@ py_test(
 )
 
 release_app(
-    name = "hello_fastapi",
+    name = "hello-fastapi",
     language = "python",
     domain = "demo",
     description = "FastAPI hello world application with uvicorn",

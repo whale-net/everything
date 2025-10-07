@@ -12,7 +12,7 @@ py_library(
 )
 
 py_binary(
-    name = "hello_internal_api",
+    name = "hello-internal-api",
     srcs = ["main.py"],
     main = "main.py",
     deps = [":main_lib"],
@@ -31,7 +31,7 @@ py_test(
 )
 
 release_app(
-    name = "hello_internal_api",
+    name = "hello-internal-api",
     language = "python",
     domain = "demo",
     description = "Internal FastAPI service - accessible within cluster only",

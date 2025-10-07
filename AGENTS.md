@@ -30,10 +30,10 @@ This repository implements true cross-compilation for Python apps using rules_py
   
   # To manually test images locally:
   # On M1/M2 Macs:
-  bazel run //demo/hello_fastapi:hello_fastapi_image_load --platforms=//tools:linux_arm64
+  bazel run //demo/hello-fastapi:hello-fastapi_image_load --platforms=//tools:linux_arm64
   # On Intel:
-  bazel run //demo/hello_fastapi:hello_fastapi_image_load --platforms=//tools:linux_x86_64
-  docker run --rm -p 8000:8000 demo-hello_fastapi:latest
+  bazel run //demo/hello-fastapi:hello-fastapi_image_load --platforms=//tools:linux_x86_64
+  docker run --rm -p 8000:8000 demo-hello-fastapi:latest
   curl http://localhost:8000/
   ```
   ```
@@ -133,12 +133,12 @@ All container images follow the `<domain>-<app>:<version>` format:
 
 ```bash
 # Registry format
-ghcr.io/OWNER/demo-hello_python:v1.2.3    # Version-specific
-ghcr.io/OWNER/demo-hello_python:latest    # Latest release
-ghcr.io/OWNER/demo-hello_python:abc123def # Commit-specific
+ghcr.io/OWNER/demo-hello-python:v1.2.3    # Version-specific
+ghcr.io/OWNER/demo-hello-python:latest    # Latest release
+ghcr.io/OWNER/demo-hello-python:abc123def # Commit-specific
 
 # Local development format
-demo-hello_python:latest
+demo-hello-python:latest
 ```
 
 #### Image Targets Generated
@@ -287,7 +287,7 @@ Use the GitHub Actions "Release" workflow:
 ```bash
 # Release specific apps
 gh workflow run release.yml \
-  -f apps=hello_python,hello_go \
+  -f apps=hello-python,hello-go \
   -f version=v1.2.3 \
   -f dry_run=false
 
@@ -298,7 +298,7 @@ gh workflow run release.yml \
 
 # Dry run (test without publishing)
 gh workflow run release.yml \
-  -f apps=hello_python \
+  -f apps=hello-python \
   -f version=v1.2.3 \
   -f dry_run=true
 ```
@@ -340,12 +340,12 @@ GitHub Actions automatically generates build matrices:
 ```yaml
 matrix:
   include:
-    - app: hello_python
-      binary: hello_python
-      image: hello_python_image
-    - app: hello_go
-      binary: hello_go
-      image: hello_go_image
+    - app: hello-python
+      binary: hello-python
+      image: hello-python_image
+    - app: hello-go
+      binary: hello-go
+      image: hello-go_image
 ```
 
 #### 4. Container Publishing
@@ -491,11 +491,11 @@ The helm chart system automatically generates Kubernetes manifests from app defi
 Add `type` attribute to app definitions:
 
 ```python
-# demo/hello_fastapi/BUILD.bazel
+# demo/hello-fastapi/BUILD.bazel
 load("//tools:demo_app.bzl", "demo_app")
 
 demo_app(
-    name = "hello_fastapi",
+    name = "hello-fastapi",
     srcs = ["main.py"],
     deps = [
         "@pip//fastapi",
@@ -521,8 +521,8 @@ load("//tools:helm.bzl", "helm_chart")
 
 # Single app chart
 helm_chart(
-    name = "hello_fastapi_chart",
-    app = ":hello_fastapi",
+    name = "hello-fastapi_chart",
+    app = ":hello-fastapi",
     environment = "dev",
 )
 
@@ -542,16 +542,16 @@ helm_chart(
 
 ```bash
 # Build chart
-bazel build //demo/hello_fastapi:hello_fastapi_chart
+bazel build //demo/hello-fastapi:hello-fastapi_chart
 
 # Chart location
-ls -la bazel-bin/demo/hello_fastapi/hello_fastapi_chart/
+ls -la bazel-bin/demo/hello-fastapi/hello-fastapi_chart/
 
 # Validate
-helm lint bazel-bin/demo/hello_fastapi/hello_fastapi_chart/
+helm lint bazel-bin/demo/hello-fastapi/hello-fastapi_chart/
 
 # Preview generated YAML
-helm template test bazel-bin/demo/hello_fastapi/hello_fastapi_chart/
+helm template test bazel-bin/demo/hello-fastapi/hello-fastapi_chart/
 ```
 
 ### Ingress Pattern (1:1 Mapping)
@@ -559,11 +559,11 @@ helm template test bazel-bin/demo/hello_fastapi/hello_fastapi_chart/
 Each `external-api` app gets its own dedicated Ingress resource:
 
 ```yaml
-# experience_api-dev-ingress
+# experience-api-dev-ingress
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: experience_api-dev-ingress
+  name: experience-api-dev-ingress
 spec:
   tls:
     - secretName: manman-tls-dev  # TLS secret includes environment suffix
@@ -576,7 +576,7 @@ spec:
       - path: /
         backend:
           service:
-            name: experience_api-dev-service
+            name: experience-api-dev-service
             port:
               number: 8000
 ```
@@ -632,7 +632,7 @@ Override values at deployment time:
 ```yaml
 # custom-values.yaml
 apps:
-  hello_fastapi:
+  hello-fastapi:
     replicas: 3
     resources:
       requests:
@@ -661,8 +661,8 @@ helm install app-name ./chart/ --values custom-values.yaml
 
 #### Generate chart for single app
 ```bash
-bazel build //demo/hello_python:hello_python_chart
-helm lint bazel-bin/demo/hello_python/hello_python_chart/
+bazel build //demo/hello-python:hello-python_chart
+helm lint bazel-bin/demo/hello-python/hello-python_chart/
 ```
 
 #### Generate multi-app chart
