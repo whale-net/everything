@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       apps:
-        description: 'Comma-separated list of apps to release (e.g., hello_python,hello_go) or "all" for all apps. Leave empty to skip app release.'
+        description: 'Comma-separated list of apps to release (e.g., hello_python,hello_go) or "all" for all apps, or domain name (e.g., "demo") to release all apps in a domain. Leave empty to skip app release.'
         required: false
         default: ''
       version:

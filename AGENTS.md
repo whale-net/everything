@@ -279,9 +279,15 @@ Use the GitHub Actions "Release" workflow:
 2. Select "Release" workflow
 3. Click "Run workflow"
 4. Configure:
-   - **apps**: Comma-separated list or "all"
+   - **apps**: Comma-separated list, "all", or domain name
    - **version**: Semantic version (e.g., v1.2.3)
    - **dry_run**: Test without publishing
+
+**App Selection Formats:**
+- Specific apps: `hello_python,hello_go`
+- All apps: `all` (excludes demo domain by default)
+- Domain/namespace: `demo` (releases all apps in the demo domain)
+- Mixed: `hello_python,api` (releases hello_python and all apps in api domain)
 
 #### 2. GitHub CLI
 ```bash
@@ -294,6 +300,16 @@ gh workflow run release.yml \
 # Release all apps
 gh workflow run release.yml \
   -f apps=all \
+  -f version=v1.2.3
+
+# Release all apps in a domain/namespace
+gh workflow run release.yml \
+  -f apps=demo \
+  -f version=v1.2.3
+
+# Release mix of specific apps and domains
+gh workflow run release.yml \
+  -f apps=hello_python,api \
   -f version=v1.2.3
 
 # Dry run (test without publishing)
@@ -329,13 +345,39 @@ The system uses Bazel queries to find all apps with release metadata:
 bazel query "kind('app_metadata', //...)"
 ```
 
-#### 2. Change Detection
+#### 2. App Reference Formats
+Apps can be referenced in multiple formats for maximum flexibility:
+
+- **Full format**: `domain-appname` (e.g., `demo-hello_python`)
+- **Path format**: `domain/appname` (e.g., `demo/hello_python`)
+- **Short format**: `appname` (e.g., `hello_python`) - only if unambiguous across domains
+- **Domain/namespace format**: `domain` (e.g., `demo`) - selects ALL apps in that domain
+
+**Examples:**
+```bash
+# Release specific apps by name
+bazel run //tools:release -- plan --event-type workflow_dispatch --apps hello_python,hello_go
+
+# Release all apps in the demo domain/namespace
+bazel run //tools:release -- plan --event-type workflow_dispatch --apps demo
+
+# Release mix of specific app and domain
+bazel run //tools:release -- plan --event-type workflow_dispatch --apps hello_python,api
+
+# Release using full format
+bazel run //tools:release -- plan --event-type workflow_dispatch --apps demo-hello_python,api-status_service
+```
+
+**Domain exclusion:**
+When using `all`, the demo domain is excluded by default (use `--include-demo` to include it).
+
+#### 3. Change Detection
 Intelligent change detection ensures only modified apps are released:
 - Git diff analysis since last release tag
 - Dependency awareness (shared library changes trigger dependent apps)
 - Manual app selection override
 
-#### 3. Release Matrix
+#### 4. Release Matrix
 GitHub Actions automatically generates build matrices:
 ```yaml
 matrix:
@@ -348,7 +390,7 @@ matrix:
       image: hello_go_image
 ```
 
-#### 4. Container Publishing
+#### 5. Container Publishing
 Multi-platform images are built and pushed with multiple tags:
 - Version-specific: `ghcr.io/OWNER/domain-app:v1.2.3`
 - Latest: `ghcr.io/OWNER/domain-app:latest`
