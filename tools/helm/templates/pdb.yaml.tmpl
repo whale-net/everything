@@ -1,5 +1,5 @@
 {{- range $appName, $app := .Values.apps }}
-{{- if and $app.pdbEnabled (ne $app.type "job") }}
+{{- if and $app.enabled $app.pdbEnabled (ne $app.type "job") }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

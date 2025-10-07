@@ -1,5 +1,5 @@
 {{- range $appName, $app := .Values.apps }}
-{{- if or (eq $app.type "external-api") (eq $app.type "internal-api") }}
+{{- if and $app.enabled (or (eq $app.type "external-api") (eq $app.type "internal-api")) }}
 ---
 apiVersion: v1
 kind: Service
