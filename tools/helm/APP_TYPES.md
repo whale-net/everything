@@ -533,6 +533,36 @@ apps:
 - **Sync-wave**: `-1` (runs before applications)
 - **Purpose**: Ensures migrations complete before apps start
 
+### Disabling Jobs
+
+Jobs (like migrations) can be disabled via the `enabled` flag in values:
+
+```yaml
+apps:
+  db_migration:
+    enabled: false  # Skip running this job
+```
+
+**Common use cases**:
+- **Skip migrations in specific environments**: Disable in dev, enable in prod
+- **One-time setup**: Disable job after initial setup is complete
+- **Rollback scenarios**: Temporarily disable migrations during rollback
+- **Testing**: Disable migrations when testing other services
+
+**Example: Conditional migration deployment**
+```bash
+# Dev environment - skip migrations
+cat > values-dev.yaml <<EOF
+apps:
+  db_migration:
+    enabled: false
+EOF
+helm install myapp-dev ./chart -f values-dev.yaml
+
+# Production - run migrations
+helm install myapp-prod ./chart  # enabled: true by default
+```
+
 ### CronJob Pattern
 
 For scheduled jobs, define a CronJob separately:

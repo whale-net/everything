@@ -305,6 +305,19 @@ The migration job runs automatically before other services start:
 - **ArgoCD sync-wave**: `-1` (runs first)
 - **Command**: `host run-migration`
 
+**Disabling migrations** (when needed):
+```yaml
+# values.yaml
+apps:
+  migration:
+    enabled: false  # Skip running migrations
+```
+
+Use cases for disabling:
+- Development environments where migrations aren't needed
+- Rollback scenarios where you want to skip migrations temporarily
+- Testing deployment of services without database changes
+
 ### Manual Migration Operations
 
 ```bash
