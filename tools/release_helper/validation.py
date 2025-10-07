@@ -19,27 +19,15 @@ def validate_semantic_version(version: str) -> bool:
     return bool(re.match(pattern, version))
 
 
-def check_version_exists_in_registry(bazel_target: str, version: str) -> bool:
-    """Check if a version already exists in the container registry.
+def check_image_exists_in_registry(image_ref: str) -> bool:
+    """Check if an image exists in the container registry by its full reference.
     
     Args:
-        bazel_target: Full bazel target path for the app metadata
-        version: Version to check
+        image_ref: Full image reference (e.g., "ghcr.io/owner/repo:tag")
+        
+    Returns:
+        True if the image exists, False otherwise
     """
-    metadata = get_app_metadata(bazel_target)
-    registry = metadata["registry"]
-    domain = metadata["domain"]
-    app_name = metadata["name"]
-
-    # Build the image reference using domain-app:version format
-    image_name = f"{domain}-{app_name}"
-    
-    if registry == "ghcr.io" and "GITHUB_REPOSITORY_OWNER" in os.environ:
-        owner = os.environ["GITHUB_REPOSITORY_OWNER"].lower()
-        image_ref = f"{registry}/{owner}/{image_name}:{version}"
-    else:
-        image_ref = f"{registry}/{image_name}:{version}"
-
     try:
         # Try to pull the image manifest to check if it exists
         # Use docker manifest inspect which doesn't download the image
@@ -64,8 +52,32 @@ def check_version_exists_in_registry(bazel_target: str, version: str) -> bool:
 
     except FileNotFoundError:
         # Docker not available, skip the check
-        print("Warning: Docker not available to check for existing versions", file=sys.stderr)
+        print("Warning: Docker not available to check for existing images", file=sys.stderr)
         return False
+
+
+def check_version_exists_in_registry(bazel_target: str, version: str) -> bool:
+    """Check if a version already exists in the container registry.
+    
+    Args:
+        bazel_target: Full bazel target path for the app metadata
+        version: Version to check
+    """
+    metadata = get_app_metadata(bazel_target)
+    registry = metadata["registry"]
+    domain = metadata["domain"]
+    app_name = metadata["name"]
+
+    # Build the image reference using domain-app:version format
+    image_name = f"{domain}-{app_name}"
+    
+    if registry == "ghcr.io" and "GITHUB_REPOSITORY_OWNER" in os.environ:
+        owner = os.environ["GITHUB_REPOSITORY_OWNER"].lower()
+        image_ref = f"{registry}/{owner}/{image_name}:{version}"
+    else:
+        image_ref = f"{registry}/{image_name}:{version}"
+
+    return check_image_exists_in_registry(image_ref)
 
 
 def validate_release_version(bazel_target: str, version: str, allow_overwrite: bool = False) -> None:

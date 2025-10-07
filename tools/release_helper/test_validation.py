@@ -22,6 +22,7 @@ from unittest.mock import Mock, patch, MagicMock
 from tools.release_helper.validation import (
     validate_semantic_version,
     check_version_exists_in_registry,
+    check_image_exists_in_registry,
     validate_release_version,
     validate_apps,
     validate_domain,
@@ -92,6 +93,65 @@ class TestValidateSemanticVersion:
         
         for version in invalid_versions:
             assert not validate_semantic_version(version), f"Expected {version} to be invalid"
+
+
+class TestCheckImageExistsInRegistry:
+    """Test cases for check_image_exists_in_registry function."""
+    
+    def test_image_exists_success(self, mock_subprocess_run):
+        """Test when image exists in registry."""
+        mock_subprocess_run.return_value = Mock(returncode=0, stderr="")
+        
+        result = check_image_exists_in_registry("ghcr.io/owner/demo-hello_python:abc123")
+        
+        assert result is True
+        mock_subprocess_run.assert_called_once_with(
+            ["docker", "manifest", "inspect", "ghcr.io/owner/demo-hello_python:abc123"],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+    
+    def test_image_not_found_manifest_unknown(self, mock_subprocess_run):
+        """Test when image doesn't exist (manifest unknown)."""
+        mock_subprocess_run.return_value = Mock(
+            returncode=1, 
+            stderr="manifest unknown: manifest not found"
+        )
+        
+        result = check_image_exists_in_registry("ghcr.io/owner/demo-hello_python:abc123")
+        
+        assert result is False
+    
+    def test_image_not_found_not_found_error(self, mock_subprocess_run):
+        """Test when image doesn't exist (not found)."""
+        mock_subprocess_run.return_value = Mock(
+            returncode=1,
+            stderr="Error: not found"
+        )
+        
+        result = check_image_exists_in_registry("ghcr.io/owner/demo-hello_python:abc123")
+        
+        assert result is False
+    
+    def test_image_unauthorized(self, mock_subprocess_run):
+        """Test when access is unauthorized (treat as not found)."""
+        mock_subprocess_run.return_value = Mock(
+            returncode=1,
+            stderr="unauthorized: access denied"
+        )
+        
+        result = check_image_exists_in_registry("ghcr.io/owner/demo-hello_python:abc123")
+        
+        assert result is False
+    
+    def test_docker_not_available(self, mock_subprocess_run, mock_print):
+        """Test when Docker is not available."""
+        mock_subprocess_run.side_effect = FileNotFoundError("docker command not found")
+        
+        result = check_image_exists_in_registry("ghcr.io/owner/demo-hello_python:abc123")
+        
+        assert result is False
 
 
 class TestCheckVersionExistsInRegistry:

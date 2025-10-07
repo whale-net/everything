@@ -20,7 +20,7 @@ import os
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 
-from tools.release_helper.images import format_registry_tags, build_image, push_image_with_tags
+from tools.release_helper.images import format_registry_tags, build_image, push_image_with_tags, tag_existing_image
 
 
 
@@ -291,3 +291,87 @@ class TestPushImageWithTags:
         # The function should re-raise the exception
         with pytest.raises(Exception, match="Push failed"):
             push_image_with_tags(bazel_target, tags)
+
+
+class TestTagExistingImage:
+    """Test cases for tag_existing_image function."""
+    
+    @patch('subprocess.run')
+    def test_tag_existing_image_success(self, mock_subprocess_run):
+        """Test successfully tagging an existing image with additional tags."""
+        source_tag = "ghcr.io/owner/demo-hello_python:abc123"
+        target_tags = [
+            "ghcr.io/owner/demo-hello_python:v1.0.0",
+            "ghcr.io/owner/demo-hello_python:latest"
+        ]
+        
+        # Mock successful docker buildx imagetools command
+        mock_subprocess_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        
+        tag_existing_image(source_tag, target_tags)
+        
+        # Verify docker buildx imagetools create was called for each target tag
+        assert mock_subprocess_run.call_count == 2
+        
+        # Check first call
+        first_call = mock_subprocess_run.call_args_list[0][0][0]
+        assert first_call == ["docker", "buildx", "imagetools", "create", "--tag", target_tags[0], source_tag]
+        
+        # Check second call
+        second_call = mock_subprocess_run.call_args_list[1][0][0]
+        assert second_call == ["docker", "buildx", "imagetools", "create", "--tag", target_tags[1], source_tag]
+    
+    @patch('subprocess.run')
+    def test_tag_existing_image_failure(self, mock_subprocess_run):
+        """Test handling of failure when tagging existing image."""
+        source_tag = "ghcr.io/owner/demo-hello_python:abc123"
+        target_tags = ["ghcr.io/owner/demo-hello_python:v1.0.0"]
+        
+        # Mock failed docker buildx command
+        from subprocess import CalledProcessError
+        mock_subprocess_run.side_effect = CalledProcessError(1, "docker", stderr="error")
+        
+        # Should raise the exception
+        with pytest.raises(CalledProcessError):
+            tag_existing_image(source_tag, target_tags)
+    
+    @patch('tools.release_helper.images._tag_existing_image_fallback')
+    @patch('subprocess.run')
+    def test_tag_existing_image_fallback_on_buildx_missing(self, mock_subprocess_run, mock_fallback):
+        """Test fallback to manual tagging when docker buildx is not available."""
+        source_tag = "ghcr.io/owner/demo-hello_python:abc123"
+        target_tags = ["ghcr.io/owner/demo-hello_python:v1.0.0"]
+        
+        # Mock FileNotFoundError (docker buildx not found)
+        mock_subprocess_run.side_effect = FileNotFoundError("docker not found")
+        
+        tag_existing_image(source_tag, target_tags)
+        
+        # Verify fallback was called
+        mock_fallback.assert_called_once_with(source_tag, target_tags)
+    
+    @patch('subprocess.run')
+    def test_tag_existing_image_fallback_method(self, mock_subprocess_run):
+        """Test the fallback method for tagging existing images."""
+        from tools.release_helper.images import _tag_existing_image_fallback
+        
+        source_tag = "ghcr.io/owner/demo-hello_python:abc123"
+        target_tags = [
+            "ghcr.io/owner/demo-hello_python:v1.0.0",
+            "ghcr.io/owner/demo-hello_python:latest"
+        ]
+        
+        # Mock successful docker commands
+        mock_subprocess_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        
+        _tag_existing_image_fallback(source_tag, target_tags)
+        
+        # Verify sequence: pull, tag+push for each target
+        # 1. docker pull
+        # 2. docker tag + push for first target (2 calls)
+        # 3. docker tag + push for second target (2 calls)
+        assert mock_subprocess_run.call_count == 5
+        
+        # Check pull was called first
+        pull_call = mock_subprocess_run.call_args_list[0][0][0]
+        assert pull_call == ["docker", "pull", source_tag]

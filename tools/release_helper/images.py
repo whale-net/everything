@@ -4,6 +4,7 @@ Image building and tagging utilities for the release helper.
 
 import os
 import subprocess
+import sys
 from typing import Dict, List, Optional
 
 from tools.release_helper.metadata import get_image_targets, get_app_metadata
@@ -153,6 +154,95 @@ def build_image(bazel_target: str, platform: Optional[str] = None) -> str:
 
     # Return the expected image name in domain-app format
     return f"{domain}-{app_name}:latest"
+
+
+def tag_existing_image(source_tag: str, target_tags: List[str]) -> None:
+    """Tag an existing image with additional tags and push them.
+    
+    This is used to re-tag an existing image (e.g., a commit-tagged image)
+    with additional tags (e.g., version and latest) without rebuilding.
+    
+    Args:
+        source_tag: Full registry tag of the existing image (e.g., "ghcr.io/owner/repo:commit")
+        target_tags: List of full registry tags to apply (e.g., ["ghcr.io/owner/repo:v1.0.0", "ghcr.io/owner/repo:latest"])
+    """
+    print(f"Tagging existing image {source_tag} with {len(target_tags)} additional tags...")
+    
+    # Extract just the tag names for display
+    tag_names = [tag.split(':')[-1] for tag in target_tags]
+    print(f"Additional tags: {', '.join(tag_names)}")
+    
+    try:
+        # Use docker buildx imagetools to create new tags for the existing image
+        # This operation doesn't download or rebuild the image - it just creates new manifest references
+        for target_tag in target_tags:
+            cmd = ["docker", "buildx", "imagetools", "create", "--tag", target_tag, source_tag]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            print(f"✅ Tagged with {target_tag.split(':')[-1]}")
+        
+        print(f"Successfully tagged existing image with {len(target_tags)} tags")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to tag existing image: {e}", file=sys.stderr)
+        if e.stdout:
+            print(f"STDOUT: {e.stdout}", file=sys.stderr)
+        if e.stderr:
+            print(f"STDERR: {e.stderr}", file=sys.stderr)
+        raise
+    except FileNotFoundError:
+        # docker buildx not available
+        print("Warning: docker buildx not available, falling back to manual tagging", file=sys.stderr)
+        # Fall back to pulling, tagging and pushing (slower but works without buildx)
+        _tag_existing_image_fallback(source_tag, target_tags)
+
+
+def _tag_existing_image_fallback(source_tag: str, target_tags: List[str]) -> None:
+    """Fallback method to tag an existing image when buildx is not available.
+    
+    This method pulls the image, tags it locally, and pushes the new tags.
+    This is slower but works without docker buildx.
+    """
+    print("Using fallback method (pull, tag, push)...")
+    
+    try:
+        # Pull the source image
+        print(f"Pulling {source_tag}...")
+        subprocess.run(
+            ["docker", "pull", source_tag],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        
+        # Tag it with each target tag and push
+        for target_tag in target_tags:
+            print(f"Tagging and pushing {target_tag.split(':')[-1]}...")
+            subprocess.run(
+                ["docker", "tag", source_tag, target_tag],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            subprocess.run(
+                ["docker", "push", target_tag],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            print(f"✅ Pushed {target_tag.split(':')[-1]}")
+        
+        print(f"Successfully tagged and pushed {len(target_tags)} tags using fallback method")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to tag existing image (fallback): {e}", file=sys.stderr)
+        if e.stdout:
+            print(f"STDOUT: {e.stdout}", file=sys.stderr)
+        if e.stderr:
+            print(f"STDERR: {e.stderr}", file=sys.stderr)
+        raise
 
 
 def push_image_with_tags(bazel_target: str, tags: List[str]) -> None:

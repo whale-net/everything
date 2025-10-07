@@ -9,9 +9,9 @@ from typing import Dict, List, Optional
 
 from tools.release_helper.changes import detect_changed_apps
 from tools.release_helper.git import auto_increment_version, create_git_tag, format_git_tag, get_previous_tag, push_git_tag
-from tools.release_helper.images import build_image, format_registry_tags, push_image_with_tags
+from tools.release_helper.images import build_image, format_registry_tags, push_image_with_tags, tag_existing_image
 from tools.release_helper.metadata import get_app_metadata, list_all_apps
-from tools.release_helper.validation import validate_apps, validate_release_version, validate_semantic_version
+from tools.release_helper.validation import validate_apps, validate_release_version, validate_semantic_version, check_image_exists_in_registry
 
 
 def find_app_bazel_target(app_name: str) -> str:
@@ -158,6 +158,10 @@ def tag_and_push_image(
 ) -> None:
     """Build and push container images to registry, optionally creating Git tags.
     
+    Optimization: If a commit-tagged image already exists in the registry, this function
+    will re-tag that existing image instead of rebuilding. This minimizes build times
+    when releasing the same commit multiple times with different version tags.
+    
     Args:
         app_name: Name of the app (will be converted to bazel target)
         version: Version to release
@@ -177,33 +181,73 @@ def tag_and_push_image(
     domain = metadata["domain"]
     actual_app_name = metadata["name"]
 
-    # Build the image (but don't load into Docker)
-    build_image(bazel_target)
-
     # Generate registry tags using the new domain-app:version format
     tags = format_registry_tags(domain, actual_app_name, version, registry, commit_sha)
 
+    # Check if we can optimize by re-tagging an existing commit image
+    should_rebuild = True
+    commit_tag_ref = None
+    
+    if commit_sha:
+        # Check if an image with the commit tag already exists
+        commit_tag_ref = tags.get("commit")
+        if commit_tag_ref and check_image_exists_in_registry(commit_tag_ref):
+            print(f"✅ Found existing image for commit {commit_sha[:7]}: {commit_tag_ref}")
+            print("Optimizing: Re-tagging existing image instead of rebuilding")
+            should_rebuild = False
+        else:
+            print(f"No existing image found for commit {commit_sha[:7]}, will build")
+    
     if dry_run:
         print("DRY RUN: Would push the following images:")
         for tag in tags.values():
             print(f"  - {tag}")
+        
+        if not should_rebuild and commit_tag_ref:
+            print(f"DRY RUN: Would re-tag existing image {commit_tag_ref}")
+        else:
+            print("DRY RUN: Would build and push new image")
 
         if create_git_tag_flag:
             git_tag = format_git_tag(domain, actual_app_name, version)
             print(f"DRY RUN: Would create Git tag: {git_tag}")
     else:
-        print("Pushing to registry...")
-        
-        # Collect all tags to push
-        tag_list = list(tags.values())
-        
-        # Push the image with all tags
-        try:
-            push_image_with_tags(bazel_target, tag_list)
-            print(f"Successfully pushed {actual_app_name} {version}")
-        except Exception as e:
-            print(f"Failed to push {actual_app_name} {version}: {e}", file=sys.stderr)
-            raise
+        if should_rebuild:
+            # Build the image (but don't load into Docker)
+            print("Building new image...")
+            build_image(bazel_target)
+            
+            print("Pushing to registry...")
+            
+            # Collect all tags to push
+            tag_list = list(tags.values())
+            
+            # Push the image with all tags
+            try:
+                push_image_with_tags(bazel_target, tag_list)
+                print(f"Successfully pushed {actual_app_name} {version}")
+            except Exception as e:
+                print(f"Failed to push {actual_app_name} {version}: {e}", file=sys.stderr)
+                raise
+        else:
+            # Re-tag existing commit image with version and latest tags
+            print("Re-tagging existing image...")
+            
+            # Get tags to apply (exclude the commit tag since it already exists)
+            additional_tags = [tag for key, tag in tags.items() if key != "commit"]
+            
+            try:
+                tag_existing_image(commit_tag_ref, additional_tags)
+                print(f"Successfully tagged {actual_app_name} {version} from existing commit image")
+            except Exception as e:
+                print(f"Failed to tag existing image, falling back to rebuild: {e}", file=sys.stderr)
+                print("Rebuilding image...")
+                
+                # Fall back to building and pushing
+                build_image(bazel_target)
+                tag_list = list(tags.values())
+                push_image_with_tags(bazel_target, tag_list)
+                print(f"Successfully pushed {actual_app_name} {version} (after fallback)")
 
         # Create and push Git tag if requested
         if create_git_tag_flag:

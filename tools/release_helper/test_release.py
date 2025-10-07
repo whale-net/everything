@@ -461,3 +461,123 @@ class TestTagAndPushImage:
             
             # Verify validate_release_version was called with allow_overwrite=True
             mock_validate_version.assert_called_once_with("//demo/hello_python:hello_python_metadata", "v1.0.0", True)
+
+    @patch('tools.release_helper.release.validate_release_version')
+    @patch('tools.release_helper.release.check_image_exists_in_registry')
+    @patch('tools.release_helper.release.tag_existing_image')
+    @patch('tools.release_helper.release.format_registry_tags')
+    @patch('builtins.print')
+    def test_tag_and_push_image_reuses_existing_commit_image(self, mock_print, mock_format_tags,
+                                                             mock_tag_existing, mock_check_image_exists,
+                                                             mock_validate_version, mock_get_app_metadata):
+        """Test optimization: re-tag existing commit image instead of rebuilding."""
+        with patch('tools.release_helper.release.find_app_bazel_target', return_value="//demo/hello_python:hello_python_metadata"):
+            mock_format_tags.return_value = {
+                "latest": "ghcr.io/owner/demo-hello_python:latest",
+                "version": "ghcr.io/owner/demo-hello_python:v1.0.0",
+                "commit": "ghcr.io/owner/demo-hello_python:abc123"
+            }
+            # Simulate that commit image exists
+            mock_check_image_exists.return_value = True
+            
+            tag_and_push_image("hello_python", "v1.0.0", commit_sha="abc123")
+            
+            # Verify existing image was checked
+            mock_check_image_exists.assert_called_once_with("ghcr.io/owner/demo-hello_python:abc123")
+            
+            # Verify tag_existing_image was called with commit tag as source
+            # and version + latest as targets (excluding commit)
+            mock_tag_existing.assert_called_once()
+            source_tag = "ghcr.io/owner/demo-hello_python:abc123"
+            target_tags = [
+                "ghcr.io/owner/demo-hello_python:latest",
+                "ghcr.io/owner/demo-hello_python:v1.0.0"
+            ]
+            # Check the source tag matches
+            actual_source = mock_tag_existing.call_args[0][0]
+            assert actual_source == source_tag
+            # Check target tags (order may vary)
+            actual_targets = mock_tag_existing.call_args[0][1]
+            assert set(actual_targets) == set(target_tags)
+
+    @patch('tools.release_helper.release.validate_release_version')
+    @patch('tools.release_helper.release.check_image_exists_in_registry')
+    @patch('tools.release_helper.release.build_image')
+    @patch('tools.release_helper.release.push_image_with_tags')
+    @patch('tools.release_helper.release.format_registry_tags')
+    @patch('builtins.print')
+    def test_tag_and_push_image_builds_when_commit_image_missing(self, mock_print, mock_format_tags,
+                                                                  mock_push_image, mock_build_image,
+                                                                  mock_check_image_exists,
+                                                                  mock_validate_version, mock_get_app_metadata):
+        """Test that image is built when commit image doesn't exist."""
+        with patch('tools.release_helper.release.find_app_bazel_target', return_value="//demo/hello_python:hello_python_metadata"):
+            mock_format_tags.return_value = {
+                "latest": "ghcr.io/owner/demo-hello_python:latest",
+                "version": "ghcr.io/owner/demo-hello_python:v1.0.0",
+                "commit": "ghcr.io/owner/demo-hello_python:abc123"
+            }
+            # Simulate that commit image does NOT exist
+            mock_check_image_exists.return_value = False
+            
+            tag_and_push_image("hello_python", "v1.0.0", commit_sha="abc123")
+            
+            # Verify existing image was checked
+            mock_check_image_exists.assert_called_once_with("ghcr.io/owner/demo-hello_python:abc123")
+            
+            # Verify image was built and pushed (standard path)
+            mock_build_image.assert_called_once()
+            mock_push_image.assert_called_once()
+
+    @patch('tools.release_helper.release.validate_release_version')
+    @patch('tools.release_helper.release.check_image_exists_in_registry')
+    @patch('tools.release_helper.release.tag_existing_image')
+    @patch('tools.release_helper.release.build_image')
+    @patch('tools.release_helper.release.push_image_with_tags')
+    @patch('tools.release_helper.release.format_registry_tags')
+    @patch('builtins.print')
+    def test_tag_and_push_image_fallback_on_tagging_failure(self, mock_print, mock_format_tags,
+                                                            mock_push_image, mock_build_image,
+                                                            mock_tag_existing, mock_check_image_exists,
+                                                            mock_validate_version, mock_get_app_metadata):
+        """Test fallback to build when re-tagging existing image fails."""
+        with patch('tools.release_helper.release.find_app_bazel_target', return_value="//demo/hello_python:hello_python_metadata"):
+            mock_format_tags.return_value = {
+                "latest": "ghcr.io/owner/demo-hello_python:latest",
+                "version": "ghcr.io/owner/demo-hello_python:v1.0.0",
+                "commit": "ghcr.io/owner/demo-hello_python:abc123"
+            }
+            # Simulate that commit image exists
+            mock_check_image_exists.return_value = True
+            # But tagging fails
+            mock_tag_existing.side_effect = Exception("Tagging failed")
+            
+            tag_and_push_image("hello_python", "v1.0.0", commit_sha="abc123")
+            
+            # Verify tagging was attempted
+            mock_tag_existing.assert_called_once()
+            
+            # Verify fallback to build and push
+            mock_build_image.assert_called_once()
+            mock_push_image.assert_called_once()
+
+    @patch('tools.release_helper.release.validate_release_version')
+    @patch('tools.release_helper.release.build_image')
+    @patch('tools.release_helper.release.push_image_with_tags')
+    @patch('tools.release_helper.release.format_registry_tags')
+    @patch('builtins.print')
+    def test_tag_and_push_image_builds_when_no_commit_sha(self, mock_print, mock_format_tags,
+                                                           mock_push_image, mock_build_image,
+                                                           mock_validate_version, mock_get_app_metadata):
+        """Test that image is always built when no commit SHA is provided."""
+        with patch('tools.release_helper.release.find_app_bazel_target', return_value="//demo/hello_python:hello_python_metadata"):
+            mock_format_tags.return_value = {
+                "latest": "ghcr.io/owner/demo-hello_python:latest",
+                "version": "ghcr.io/owner/demo-hello_python:v1.0.0"
+            }
+            
+            tag_and_push_image("hello_python", "v1.0.0")
+            
+            # Verify image was built and pushed (no optimization without commit SHA)
+            mock_build_image.assert_called_once()
+            mock_push_image.assert_called_once()
