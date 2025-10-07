@@ -22,8 +22,8 @@ def mock_list_all_apps():
             {'bazel_target': '//demo/hello_python:hello_python_metadata', 'name': 'hello_python', 'domain': 'demo'},
             {'bazel_target': '//demo/hello_go:hello_go_metadata', 'name': 'hello_go', 'domain': 'demo'},
             {'bazel_target': '//demo/hello_fastapi:hello_fastapi_metadata', 'name': 'hello_fastapi', 'domain': 'demo'},
-            {'bazel_target': '//manman:experience_api_metadata', 'name': 'experience_api', 'domain': 'manman'},
-            {'bazel_target': '//manman:status_api_metadata', 'name': 'status_api', 'domain': 'manman'},
+            {'bazel_target': '//manman:experience-api_metadata', 'name': 'experience-api', 'domain': 'manman'},
+            {'bazel_target': '//manman:status-api_metadata', 'name': 'status-api', 'domain': 'manman'},
             {'bazel_target': '//manman:worker_metadata', 'name': 'worker', 'domain': 'manman'},
         ]
         yield mock
@@ -38,7 +38,7 @@ def mock_list_all_helm_charts():
             {'bazel_target': '//demo:fastapi_chart_metadata', 'name': 'helm-demo-hello-fastapi', 'domain': 'demo', 'namespace': 'demo', 'apps': ['hello_fastapi']},
             {'bazel_target': '//demo:worker_chart_metadata', 'name': 'helm-demo-hello-worker', 'domain': 'demo', 'namespace': 'demo', 'apps': ['hello_worker']},
             {'bazel_target': '//demo:all_types_chart_metadata', 'name': 'helm-demo-demo-all-types', 'domain': 'demo', 'namespace': 'demo', 'apps': ['hello_fastapi', 'hello_internal_api']},
-            {'bazel_target': '//manman:manman_chart_metadata', 'name': 'helm-manman-host-services', 'domain': 'manman', 'namespace': 'manman', 'apps': ['experience_api', 'status_api']},
+            {'bazel_target': '//manman:manman_chart_metadata', 'name': 'helm-manman-host-services', 'domain': 'manman', 'namespace': 'manman', 'apps': ['experience-api', 'status-api']},
         ]
         yield mock
 
@@ -57,8 +57,8 @@ class TestPlanReleaseExcludeDemo:
         
         # Should only include manman apps
         app_names = [app['app'] for app in result['matrix']['include']]
-        assert 'experience_api' in app_names
-        assert 'status_api' in app_names
+        assert 'experience-api' in app_names
+        assert 'status-api' in app_names
         assert 'worker' in app_names
         
         # Should not include demo apps
@@ -81,8 +81,8 @@ class TestPlanReleaseExcludeDemo:
         app_names = [app['app'] for app in result['matrix']['include']]
         
         # Manman apps
-        assert 'experience_api' in app_names
-        assert 'status_api' in app_names
+        assert 'experience-api' in app_names
+        assert 'status-api' in app_names
         assert 'worker' in app_names
         
         # Demo apps
