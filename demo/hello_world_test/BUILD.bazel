@@ -29,10 +29,13 @@ py_test(
     size = "small",
 )
 
+
 release_app(
     name = "hello_world_test",
     language = "python",
     domain = "demo",
     description = "Python hello world test application for documentation validation",
     app_type = "worker",
+    packages = ["pytest"],
+    app_layer = ":main_lib",
 )

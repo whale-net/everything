@@ -1,6 +1,5 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("//tools:release.bzl", "release_app")
-load("//tools:container_image_experimental.bzl", "container_image_per_package")
 
 py_library(
     name = "main_lib",
@@ -50,20 +49,6 @@ release_app(
     description = "FastAPI hello world application",
     app_type = "external-api",
     port = 8000,
-    app_layer = ":main_lib",  # Enable efficient 2-layer caching for fast dev!
-)
-
-# EXPERIMENTAL: Per-package layering (YOLO mode!)
-# Only top-level packages (declared in pyproject.toml) can be layered
-container_image_per_package(
-    name = "hello_fastapi_experimental_image",
-    binary = ":hello_fastapi",
-    language = "python",
-    packages = [
-        "fastapi",
-        "pydantic",
-        "uvicorn",
-        "httpx",  # Used in tests
-    ],
+    packages = ["fastapi", "pydantic", "uvicorn", "httpx"],  # Per-package layering!
     app_layer = ":main_lib",
 )
