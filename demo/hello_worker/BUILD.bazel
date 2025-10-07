@@ -28,7 +28,8 @@ py_test(
 
 # Simplified release_app - auto-detects platform binaries!
 release_app(
-    name = "hello_worker",
+    name = "hello-worker",
+    binary_name = ":hello_worker",
     language = "python",
     app_type = "worker",  # Explicitly set as worker
     domain = "demo",

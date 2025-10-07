@@ -31,7 +31,8 @@ py_test(
 )
 
 release_app(
-    name = "hello_internal_api",
+    name = "hello-internal-api",
+    binary_name = ":hello_internal_api",
     language = "python",
     domain = "demo",
     description = "Internal FastAPI service - accessible within cluster only",

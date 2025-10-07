@@ -19,9 +19,9 @@ def mock_list_all_apps():
     with patch('tools.release_helper.release.list_all_apps') as mock:
         # Mock apps from demo and manman domains
         mock.return_value = [
-            {'bazel_target': '//demo/hello_python:hello_python_metadata', 'name': 'hello_python', 'domain': 'demo'},
-            {'bazel_target': '//demo/hello_go:hello_go_metadata', 'name': 'hello_go', 'domain': 'demo'},
-            {'bazel_target': '//demo/hello_fastapi:hello_fastapi_metadata', 'name': 'hello_fastapi', 'domain': 'demo'},
+            {'bazel_target': '//demo/hello_python:hello-python_metadata', 'name': 'hello-python', 'domain': 'demo'},
+            {'bazel_target': '//demo/hello_go:hello-go_metadata', 'name': 'hello-go', 'domain': 'demo'},
+            {'bazel_target': '//demo/hello_fastapi:hello-fastapi_metadata', 'name': 'hello-fastapi', 'domain': 'demo'},
             {'bazel_target': '//manman:experience-api_metadata', 'name': 'experience-api', 'domain': 'manman'},
             {'bazel_target': '//manman:status-api_metadata', 'name': 'status-api', 'domain': 'manman'},
             {'bazel_target': '//manman:worker_metadata', 'name': 'worker', 'domain': 'manman'},
@@ -35,9 +35,9 @@ def mock_list_all_helm_charts():
     with patch('tools.release_helper.cli.list_all_helm_charts') as mock:
         # Mock charts from demo and manman domains
         mock.return_value = [
-            {'bazel_target': '//demo:fastapi_chart_metadata', 'name': 'helm-demo-hello-fastapi', 'domain': 'demo', 'namespace': 'demo', 'apps': ['hello_fastapi']},
-            {'bazel_target': '//demo:worker_chart_metadata', 'name': 'helm-demo-hello-worker', 'domain': 'demo', 'namespace': 'demo', 'apps': ['hello_worker']},
-            {'bazel_target': '//demo:all_types_chart_metadata', 'name': 'helm-demo-demo-all-types', 'domain': 'demo', 'namespace': 'demo', 'apps': ['hello_fastapi', 'hello_internal_api']},
+            {'bazel_target': '//demo:fastapi_chart_metadata', 'name': 'helm-demo-hello-fastapi', 'domain': 'demo', 'namespace': 'demo', 'apps': ['hello-fastapi']},
+            {'bazel_target': '//demo:worker_chart_metadata', 'name': 'helm-demo-hello-worker', 'domain': 'demo', 'namespace': 'demo', 'apps': ['hello-worker']},
+            {'bazel_target': '//demo:all_types_chart_metadata', 'name': 'helm-demo-demo-all-types', 'domain': 'demo', 'namespace': 'demo', 'apps': ['hello-fastapi', 'hello-internal-api']},
             {'bazel_target': '//manman:manman_chart_metadata', 'name': 'helm-manman-host-services', 'domain': 'manman', 'namespace': 'manman', 'apps': ['experience-api', 'status-api']},
         ]
         yield mock
@@ -62,9 +62,9 @@ class TestPlanReleaseExcludeDemo:
         assert 'worker' in app_names
         
         # Should not include demo apps
-        assert 'hello_python' not in app_names
-        assert 'hello_go' not in app_names
-        assert 'hello_fastapi' not in app_names
+        assert 'hello-python' not in app_names
+        assert 'hello-go' not in app_names
+        assert 'hello-fastapi' not in app_names
         
         assert len(app_names) == 3  # Only 3 manman apps
 
@@ -86,9 +86,9 @@ class TestPlanReleaseExcludeDemo:
         assert 'worker' in app_names
         
         # Demo apps
-        assert 'hello_python' in app_names
-        assert 'hello_go' in app_names
-        assert 'hello_fastapi' in app_names
+        assert 'hello-python' in app_names
+        assert 'hello-go' in app_names
+        assert 'hello-fastapi' in app_names
         
         assert len(app_names) == 6  # All 6 apps
 
@@ -97,18 +97,18 @@ class TestPlanReleaseExcludeDemo:
         with patch('tools.release_helper.release.validate_apps') as mock_validate:
             # Mock validate_apps to return demo apps
             mock_validate.return_value = [
-                {'bazel_target': '//demo/hello_python:hello_python_metadata', 'name': 'hello_python', 'domain': 'demo'},
+                {'bazel_target': '//demo/hello_python:hello-python_metadata', 'name': 'hello-python', 'domain': 'demo'},
             ]
             
             result = plan_release(
                 event_type="workflow_dispatch",
-                requested_apps="hello_python",
+                requested_apps="hello-python",
                 version="v1.0.0",
                 include_demo=False  # This should not matter for specific apps
             )
             
             app_names = [app['app'] for app in result['matrix']['include']]
-            assert 'hello_python' in app_names
+            assert 'hello-python' in app_names
             assert len(app_names) == 1
 
 

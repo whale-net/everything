@@ -33,7 +33,8 @@ py_test(
 
 # Release metadata and container images
 release_app(
-    name = "hello_python",
+    name = "hello-python",
+    binary_name = ":hello_python",
     language = "python",
     domain = "demo",
     description = "Python hello world application with pytest",

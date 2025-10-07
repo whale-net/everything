@@ -18,7 +18,8 @@ go_test(
 
 # Release metadata and OCI images for this app
 release_app(
-    name = "hello_go",
+    name = "hello-go",
+    binary_name = ":hello_go",
     language = "go",
     domain = "demo",
     description = "Go hello world application with static binaries",

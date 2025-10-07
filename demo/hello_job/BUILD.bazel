@@ -28,7 +28,8 @@ py_test(
 
 # Simplified release_app - auto-detects platform binaries!
 release_app(
-    name = "hello_job",
+    name = "hello-job",
+    binary_name = ":hello_job",
     language = "python",
     app_type = "job",  # Explicitly set as job
     domain = "demo",
