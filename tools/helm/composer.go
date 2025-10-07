@@ -119,27 +119,19 @@ type AppIngressConfig struct {
 	TLSSecretName string `yaml:"tlsSecretName,omitempty"`
 }
 
-// IngressConfig represents ingress configuration in values.yaml
-
-// Each external-api app has its own ingress configuration
-type IngressConfig struct {
-	Enabled     bool               `yaml:"enabled"`
-	ClassName   string             `yaml:"className,omitempty"`
-	Annotations map[string]string  `yaml:"annotations,omitempty"`
-	TLS         []IngressTLSConfig `yaml:"tls,omitempty"`
-}
-
-// IngressTLSConfig represents TLS configuration for ingress
-type IngressTLSConfig struct {
-	SecretName string   `yaml:"secretName"`
-	Hosts      []string `yaml:"hosts"`
+// IngressDefaultsConfig represents default ingress settings applied to all external-api ingresses
+// Each external-api app gets its own dedicated Ingress resource
+type IngressDefaultsConfig struct {
+	Enabled     bool              `yaml:"enabled"`
+	ClassName   string            `yaml:"className,omitempty"`
+	Annotations map[string]string `yaml:"annotations,omitempty"`
 }
 
 // ValuesData represents the structure of values.yaml
 type ValuesData struct {
-	Global  GlobalConfig         `yaml:"global"`
-	Apps    map[string]AppConfig `yaml:"apps"`
-	Ingress IngressConfig        `yaml:"ingress"`
+	Global          GlobalConfig            `yaml:"global"`
+	Apps            map[string]AppConfig    `yaml:"apps"`
+	IngressDefaults IngressDefaultsConfig   `yaml:"ingressDefaults"`
 }
 
 // GlobalConfig represents global configuration
@@ -456,7 +448,7 @@ func (c *Composer) generateValuesYaml(chartDir string) error {
 			Environment: c.config.Environment,
 		},
 		Apps: make(map[string]AppConfig),
-		Ingress: IngressConfig{
+		IngressDefaults: IngressDefaultsConfig{
 			Enabled: c.hasExternalAPIs(),
 		},
 	}
@@ -673,33 +665,13 @@ func writeValuesYAML(f *os.File, data ValuesData) error {
 	}
 	w.EndSection()
 
-	// Write ingress section
-	w.StartSection("ingress")
-	w.WriteBool("enabled", data.Ingress.Enabled)
-	w.WriteString("className", data.Ingress.ClassName)
-	w.WriteMap("annotations", data.Ingress.Annotations)
-
-	// Write TLS configuration
-	if len(data.Ingress.TLS) > 0 {
-		w.WriteStructList("tls", len(data.Ingress.TLS), func(i int) {
-			tls := data.Ingress.TLS[i]
-			fmt.Fprintf(w.f, " secretName: %s\n", tls.SecretName)
-			if len(tls.Hosts) > 0 {
-				prefix := strings.Repeat(" ", w.indent+1)
-				fmt.Fprintf(w.f, "%shosts:\n", prefix)
-				for _, host := range tls.Hosts {
-					fmt.Fprintf(w.f, "%s  - %s\n", prefix, host)
-				}
-			}
-		})
-	} else {
-		w.WriteEmptyList("tls",
-			"Example TLS configuration (optional):",
-			"- secretName: tls-secret",
-			"  hosts:",
-			"    - app-production.local",
-		)
-	}
+	// Write ingress defaults section
+	// Note: Each external-api app gets its own dedicated Ingress resource
+	// These are default settings applied to all ingresses
+	w.StartSection("ingressDefaults")
+	w.WriteBool("enabled", data.IngressDefaults.Enabled)
+	w.WriteString("className", data.IngressDefaults.ClassName)
+	w.WriteMap("annotations", data.IngressDefaults.Annotations)
 	w.EndSection()
 	w.Newline()
 
