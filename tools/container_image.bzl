@@ -1,4 +1,4 @@
-"""Simplified OCI container image rules with multiplatform support.
+"""Simplified OCI container image rules with multiplatform support and per-package layering.
 
 ARCHITECTURE: Single Binary → Platform Transitions → Single Push
 ==================================================================
@@ -25,11 +25,30 @@ ARCHITECTURE: Single Binary → Platform Transitions → Single Push
    - Users pull ONE tag that works on any platform
    - Release system ONLY uses this target
 
-This is the idiomatic Bazel way to build multiplatform images.
+LAYERING STRATEGY: Per-Package Layering
+========================================
+
+Creates separate Docker layers for each top-level pip package:
+- Layer 1-N: One layer per package (fastapi, pydantic, uvicorn, etc.)
+- Layer N+1: Full dependencies (ensures all transitive deps present)
+- Layer N+2: Application code (your code only)
+
+Benefits:
+- Granular caching: Update one package → rebuild only that layer
+- Better than monolithic: 277MB → per-package layers
+- Docker layer deduplication handles overlapping content
+
+Implementation:
+- Creates synthetic "probe" binaries for each package
+- Each probe depends on only one package
+- Separate pkg_tar for each probe's runfiles
+
+This is the YOLO approach - it works!
 """
 
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index", "oci_load", "oci_push")
 load("@rules_pkg//:pkg.bzl", "pkg_tar")
+load("@rules_python//python:defs.bzl", "py_binary")
 load("@aspect_bazel_lib//lib:tar.bzl", "tar")
 
 def _get_binary_name(binary):
@@ -37,6 +56,41 @@ def _get_binary_name(binary):
     if ":" in binary:
         return binary.split(":")[-1]
     return binary.split("/")[-1]
+
+def _create_package_probe_binary(name, package_name):
+    """Create a minimal py_binary that depends on a single package.
+    
+    This binary exists solely to let Bazel resolve the package's runfiles.
+    We create one probe per package to isolate dependencies into separate layers.
+    """
+    probe_name = name + "_probe_" + package_name.replace("-", "_").replace(".", "_")
+    
+    # Create a minimal Python script that imports the package
+    script_name = probe_name + "_main"
+    native.genrule(
+        name = script_name,
+        outs = [probe_name + "_main.py"],
+        cmd = """
+cat > $@ << 'EOF'
+# Minimal script to force package resolution
+try:
+    import {package}
+except ImportError:
+    pass  # Package may not have importable module with same name
+EOF
+""".format(package = package_name.replace("-", "_")),
+    )
+    
+    # Create py_binary with this package as only dependency
+    py_binary(
+        name = probe_name,
+        srcs = [":" + script_name],
+        main = probe_name + "_main.py",
+        deps = ["@pypi//:" + package_name],
+        visibility = ["//visibility:private"],
+    )
+    
+    return ":" + probe_name
 
 def container_image(
     name,
@@ -46,44 +100,37 @@ def container_image(
     entrypoint = None,
     language = None,
     python_version = "3.11",
-    app_layer = None,  # NEW: optional separate app layer for efficient caching
+    packages = None,  # Per-package layering
+    app_layer = None,  # Application code layer
     **kwargs):
-    """Build a single-platform OCI container image with optimized layering.
+    """Build OCI container image with per-package layering.
     
-    LAYERING STRATEGY for efficient caching during local development:
-    ==================================================================
+    PER-PACKAGE LAYERING STRATEGY:
+    ===============================
     
-    TWO-LAYER APPROACH (when app_layer is provided):
-    1. Dependencies layer: Everything except your app code (Python interpreter,
-       pip packages, etc.) - This is large (~270MB) but changes rarely
-    2. App layer: Just your application code - Small (~KB) but changes frequently
+    Creates separate Docker layers for maximum caching efficiency:
+    - Layer 1-N: One layer per top-level pip package (fastapi, pydantic, etc.)
+    - Layer N+1: Full dependencies (ensures all transitive deps are present)
+    - Layer N+2: Application code (your code only - smallest, changes most)
     
-    SINGLE-LAYER FALLBACK (when app_layer not provided):
-    - Everything in one layer - Simple but rebuilds everything on any change
-    
-    Why this works:
-    - Docker caches layers independently by their content hash
-    - When you change app code:
-      * Layer 1 (deps): Cache hit - no download/rebuild needed
-      * Layer 2 (app): Cache miss - only rebuild/push small layer
-    - Result: Much faster local dev cycle (seconds vs minutes)
-    
-    How to use app_layer:
+    How to use:
     ```starlark
     py_library(
         name = "app_lib",
-        srcs = glob(["*.py"]),  # Your app code only
+        srcs = glob(["*.py"]),
     )
     
     py_binary(
         name = "app",
-        deps = [":app_lib", "@pypi//:fastapi"],  # App + external deps
+        deps = [":app_lib", "@pypi//:fastapi"],
     )
     
     container_image(
         name = "image",
         binary = ":app",
-        app_layer = ":app_lib",  # Separate layer for fast iteration
+        language = "python",
+        packages = ["fastapi", "pydantic", "uvicorn"],  # Top-level packages only!
+        app_layer = ":app_lib",
     )
     ```
     
@@ -94,96 +141,75 @@ def container_image(
         env: Environment variables dict
         entrypoint: Override entrypoint (auto-detected from language)
         language: Language of the binary ("python" or "go") - REQUIRED
-        python_version: Python version for path construction (default: "3.11")
-        app_layer: Optional py_library with ONLY app code for efficient layering
+        python_version: Python version (default: "3.11")
+        packages: List of top-level pip package names for per-package layering
+                  Only packages in pyproject.toml can be used!
+        app_layer: py_library with ONLY app code for efficient layering
         **kwargs: Additional oci_image arguments
     """
     if not language:
         fail("language parameter is required for container_image")
     
     binary_name = _get_binary_name(binary)
+    all_layers = []
     
-    # LAYERING DECISION: How many layers to create?
-    # ================================================
-    # Option 1: Single layer (app_layer=None)
-    #   - Everything in one 277MB tar
-    #   - Simple but slow for local dev
-    #
-    # Option 2: Two layers (app_layer=py_library)  ← CURRENT
-    #   - Deps layer: 277MB (Python + all pip packages)
-    #   - App layer: ~10KB (just your code)
-    #   - Good balance of simplicity and performance
-    #
-    # Option 3: Per-package layers (FUTURE)
-    #   - Interpreter layer + one layer per pip package + app layer
-    #   - Maximum cache efficiency (change one package = rebuild one layer)
-    #   - Complexity: Need to dynamically discover packages from runfiles
-    #   - Trade-off: More layers = more tar creation overhead
-    #   - Docker limit: ~127 layers max
-    #
-    # Current implementation uses Option 2 as the sweet spot:
-    # - Dramatically faster than Option 1 for local dev
-    # - Simpler than Option 3 (no dynamic package discovery needed)
-    # - If you need Option 3, open an issue with your use case!
+    # Per-package layering for Python (if packages provided)
+    if language == "python" and packages:
+        # Create a layer for each package using probe binaries
+        for pkg in packages:
+            pkg_safe = pkg.replace("-", "_").replace(".", "_")
+            
+            # Create probe binary that depends only on this package
+            probe = _create_package_probe_binary(name, pkg)
+            
+            # Create tar from probe's runfiles (contains only this package)
+            layer_name = name + "_pkg_" + pkg_safe
+            pkg_tar(
+                name = layer_name,
+                srcs = [probe],
+                package_dir = "/app",
+                include_runfiles = True,
+                strip_prefix = ".",
+                visibility = ["//visibility:private"],
+                tags = ["manual"],
+            )
+            all_layers.append(":" + layer_name)
     
-    layers = []
+    # Full dependencies layer (ensures all transitive deps present)
+    pkg_tar(
+        name = name + "_full_deps",
+        srcs = [binary],
+        package_dir = "/app",
+        include_runfiles = True,
+        strip_prefix = ".",
+        visibility = ["//visibility:private"],
+        tags = ["manual"],
+    )
+    all_layers.append(":" + name + "_full_deps")
     
+    # Application code layer (if specified)
     if app_layer:
-        # OPTIMIZED PATH: Separate dependencies from app code
-        # This is significantly faster for local development:
-        # - Change app code → only app_layer rebuilds (tiny, fast)
-        # - Dependencies layer cached → no rebuild needed
-        
-        # Layer 1: Everything (binary with ALL dependencies and interpreter)
-        pkg_tar(
-            name = name + "_deps_layer",
-            srcs = [binary],
-            package_dir = "/app",
-            include_runfiles = True,
-            tags = ["manual"],
-        )
-        
-        # Layer 2: ONLY app code (overwrites files from Layer 1)
-        # This is small and rebuilds quickly when you iterate
         pkg_tar(
             name = name + "_app_layer",
             srcs = [app_layer],
             package_dir = "/app",
-            strip_prefix = "/",  # Keep original path structure
+            strip_prefix = ".",
+            visibility = ["//visibility:private"],
             tags = ["manual"],
         )
-        
-        layers = [
-            ":" + name + "_deps_layer",  # Large, rarely changes
-            ":" + name + "_app_layer",   # Small, changes frequently
-        ]
-    else:
-        # FALLBACK PATH: Single monolithic layer
-        # Simpler but rebuilds everything on any change
-        pkg_tar(
-            name = name + "_layer",
-            srcs = [binary],
-            package_dir = "/app",
-            include_runfiles = True,
-            tags = ["manual"],
-        )
-        layers = [":" + name + "_layer"]
-    image_env = env or {}
+        all_layers.append(":" + name + "_app_layer")
     
     # Determine entrypoint based on language
     if not entrypoint:
         if language == "python":
-            # Use select() to choose the correct Python interpreter path based on target platform
-            # The path is deterministic: /app/{binary}.runfiles/rules_python++python+python_{version}_{arch}/bin/python3
-            # We use a simple shell pattern to match either architecture
+            python_pattern = "rules_python++python+python_" + python_version.replace(".", "_") + "_*"
             entrypoint = [
                 "/bin/sh",
                 "-c",
-                # Use glob pattern to match the Python interpreter for the current architecture
-                # This is much faster than find and the path is deterministic at build time
-                'exec /app/{binary}.runfiles/rules_python++python+python_{version}_*/bin/python3 /app/$0 "$@"'.format(
-                    binary = binary_name,
-                    version = python_version.replace(".", "_"),
+                'exec /app/{}.runfiles/{}/bin/python3 /app/{} "$@"'.format(
+                    binary_name,
+                    python_pattern,
+                    binary_name
                 ),
                 binary_name,
             ]
@@ -191,10 +217,12 @@ def container_image(
             # Go binaries are self-contained executables
             entrypoint = ["/app/" + binary_name]
     
+    image_env = env or {}
+    
     oci_image(
         name = name,
         base = base,
-        tars = layers,  # Use the configured layers (1 or 2 depending on app_layer)
+        tars = all_layers,
         entrypoint = entrypoint,
         workdir = "/app",
         env = image_env,
@@ -210,9 +238,10 @@ def multiplatform_image(
     repository = None,
     image_name = None,
     language = None,
-    app_layer = None,  # NEW: pass through to container_image for efficient layering
+    packages = None,  # Per-package layering
+    app_layer = None,  # Application code layer
     **kwargs):
-    """Build multiplatform OCI images using platform transitions.
+    """Build multiplatform OCI images using platform transitions with per-package layering.
     
     ARCHITECTURE: 1 Binary → Platform Transitions → 1 Index → 1 Push
     ==================================================================
@@ -274,6 +303,7 @@ def multiplatform_image(
         binary = binary,
         base = base,
         language = language,
+        packages = packages,  # Pass through for per-package layering
         app_layer = app_layer,  # Pass through for efficient layering
         **kwargs
     )

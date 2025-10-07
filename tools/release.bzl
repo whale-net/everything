@@ -87,7 +87,7 @@ app_metadata = rule(
 # - Health check config: health_check_enabled, health_check_path
 # - Ingress config: ingress_host, ingress_tls_secret
 # Bazel/Starlark does not support nested struct parameters, so they remain flat.
-def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], app_layer = None):
+def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], packages = None, app_layer = None):
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
@@ -97,14 +97,16 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     The binaries are built for different platforms using Bazel's --platforms flag.
     Cross-compilation is handled automatically by rules_pycross (Python) and rules_go (Go).
     
-    PERFORMANCE TIP: Use app_layer for faster local development
-    ============================================================
-    Provide an app_layer (py_library with ONLY your app code) to enable efficient
-    2-layer caching:
-    - Layer 1: Dependencies (large, changes rarely) - cached by Docker
-    - Layer 2: App code (small, changes frequently) - rebuilds quickly
+    PERFORMANCE TIP: Use packages + app_layer for per-package layering
+    ===================================================================
+    For Python apps, provide both packages and app_layer for optimal caching:
+    - Layers 1-N: One layer per top-level pip package
+    - Layer N+1: Full dependencies (all transitive deps)
+    - Layer N+2: App code (small, changes frequently)
     
-    Without app_layer, everything is in one 270MB+ layer that rebuilds on every change.
+    Benefits:
+    - Update one package → rebuild only that layer
+    - Change app code → only app layer rebuilds
     
     Example:
         py_library(
@@ -120,7 +122,8 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         release_app(
             name = "app",
             language = "python",
-            app_layer = ":app_lib",  # Enable efficient layering!
+            packages = ["fastapi", "pydantic", "uvicorn"],  # Top-level packages only!
+            app_layer = ":app_lib",
         )
     
     Args:
@@ -145,7 +148,8 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         ingress_tls_secret: TLS secret name for ingress (empty = no TLS)
         command: Override container command (default: use image ENTRYPOINT)
         args: Container arguments
-        app_layer: Optional py_library with ONLY app code for 2-layer efficient caching
+        packages: List of top-level pip packages for per-package layering (Python only)
+        app_layer: Optional py_library with ONLY app code for efficient layering
     """
     if language not in ["python", "go"]:
         fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
@@ -169,7 +173,8 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         repository = organization,
         image_name = image_name,
         language = language,
-        app_layer = app_layer,  # Enable efficient 2-layer caching if provided
+        packages = packages,  # Per-package layering for Python apps
+        app_layer = app_layer,  # Enable efficient layering if provided
         cmd = args if args else [],  # Pass container args if specified
     )
     

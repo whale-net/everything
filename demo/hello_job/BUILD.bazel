@@ -35,4 +35,6 @@ release_app(
     registry = "ghcr.io",
     version = "1.0.0",
     description = "Migration job example - pre-install hook",
+    packages = ["pytest"],  # Only test deps
+    app_layer = ":main_lib",
 )

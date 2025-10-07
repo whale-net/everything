@@ -38,4 +38,6 @@ release_app(
     domain = "demo",
     description = "Python hello world application with pytest",
     app_type = "worker",
+    packages = ["pytest"],  # Minimal deps
+    app_layer = ":main_lib",
 )

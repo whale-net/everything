@@ -35,4 +35,6 @@ release_app(
     registry = "ghcr.io",
     version = "1.0.0",
     description = "Background worker example - no service exposure",
+    packages = ["pytest"],  # Only test deps
+    app_layer = ":main_lib",
 )
