@@ -94,12 +94,13 @@ alias(
 )
 
 # Aggregate test target for backward compatibility
+# Note: Only includes tests from the current package
+# Subdirectory tests (rabbitmq) are defined in their own BUILD.bazel files
 py_test(
     name = "manman_repository_test",
     srcs = [
         "database_repository_test.py",
         "validator_test.py",
-        "rabbitmq/util_test.py",
     ],
     main = "database_repository_test.py",
     deps = [
