@@ -62,6 +62,10 @@ bazel query "kind('app_metadata', //...)"
 
 While Bazel handles all dependencies for building and testing, you may want to set up a local Python virtual environment for IDE support, debugging, or running tools outside of Bazel.
 
+**Prerequisites:**
+- The tool uses **UV** to install dependencies from the `uv.lock` file
+- UV will be automatically installed if not present
+
 **Install a Python virtual environment:**
 
 ```bash
@@ -93,8 +97,9 @@ deactivate
 ```
 
 The venv installer will:
+- Check for UV and install it if needed
 - Create a Python virtual environment
-- Install all dependencies from `pyproject.toml`
+- Use `uv sync` to install all dependencies from `uv.lock` (ensuring exact versions match the lock file)
 - Configure the environment for local development
 
 **Note:** This is optional - Bazel manages all dependencies automatically for builds and tests. The venv is only needed for IDE integration or running Python tools directly.

@@ -2,7 +2,7 @@
 """
 Tool to install a Python virtual environment for local development.
 
-This tool creates a virtual environment and installs dependencies from pyproject.toml.
+This tool creates a virtual environment and installs dependencies using UV from uv.lock.
 It's useful for IDE support, debugging, and running Python tools outside of Bazel.
 
 Usage:
@@ -15,6 +15,7 @@ Usage:
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -30,93 +31,100 @@ def find_workspace_root():
     raise RuntimeError("Could not find workspace root (no pyproject.toml found)")
 
 
+def check_uv_available():
+    """Check if UV is available in the system."""
+    return shutil.which("uv") is not None
+
+
+def install_uv():
+    """Install UV if not available."""
+    print("UV not found. Installing UV...")
+    try:
+        # Install UV using the official installation script
+        subprocess.run(
+            ["curl", "-LsSf", "https://astral.sh/uv/install.sh", "|", "sh"],
+            shell=True,
+            check=True,
+        )
+        print("✓ UV installed")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"⚠ Failed to install UV automatically: {e}")
+        print("\nPlease install UV manually:")
+        print("  curl -LsSf https://astral.sh/uv/install.sh | sh")
+        print("  or visit: https://github.com/astral-sh/uv")
+        return False
+
+
 def install_venv(venv_dir: Path, workspace_root: Path):
-    """Create and install Python virtual environment."""
+    """Create and install Python virtual environment using UV."""
+    
+    # Check if UV is available
+    if not check_uv_available():
+        if not install_uv():
+            return False
+        # Check again after installation
+        if not check_uv_available():
+            print("✗ UV is still not available after installation", file=sys.stderr)
+            return False
     
     print(f"Creating Python virtual environment in: {venv_dir}")
     
-    # Create the venv
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "venv", str(venv_dir)],
-            check=True,
-            cwd=workspace_root,
-        )
-        print(f"✓ Virtual environment created at {venv_dir}")
-    except subprocess.CalledProcessError as e:
-        print(f"✗ Failed to create virtual environment: {e}", file=sys.stderr)
+    # Check if uv.lock exists
+    lock_file = workspace_root / "uv.lock"
+    if not lock_file.exists():
+        print(f"✗ uv.lock not found at {lock_file}", file=sys.stderr)
+        print("Please run 'uv lock' to generate the lock file first.", file=sys.stderr)
         return False
     
-    # Get the path to pip in the venv
-    if sys.platform == "win32":
-        pip_path = venv_dir / "Scripts" / "pip"
-        python_path = venv_dir / "Scripts" / "python"
-    else:
-        pip_path = venv_dir / "bin" / "pip"
-        python_path = venv_dir / "bin" / "python"
-    
-    # Upgrade pip
-    print("Upgrading pip...")
+    # Use UV to create venv and sync dependencies from lock file
+    print(f"Using UV to sync dependencies from uv.lock...")
     try:
+        # UV sync creates the venv and installs all dependencies from the lock file
+        env = os.environ.copy()
+        env["VIRTUAL_ENV"] = str(venv_dir)
+        
         subprocess.run(
-            [str(python_path), "-m", "pip", "install", "--upgrade", "pip"],
+            ["uv", "sync", "--frozen"],
             check=True,
             cwd=workspace_root,
-            timeout=60,  # 60 second timeout
+            timeout=300,  # 5 minute timeout
         )
-        print("✓ pip upgraded")
+        print(f"✓ Virtual environment created and dependencies installed at {venv_dir}")
     except subprocess.TimeoutExpired:
-        print("⚠ pip upgrade timed out, continuing with existing pip version")
+        print("⚠ UV sync timed out", file=sys.stderr)
+        print("  You may need to retry with better network connection")
+        return False
     except subprocess.CalledProcessError as e:
-        print(f"⚠ Failed to upgrade pip: {e}, continuing with existing pip version")
-    
-    # Install dependencies from pyproject.toml
-    pyproject_path = workspace_root / "pyproject.toml"
-    if pyproject_path.exists():
-        print(f"Installing dependencies from {pyproject_path}...")
+        print(f"✗ Failed to sync dependencies with UV: {e}", file=sys.stderr)
+        print("\nTrying to create venv manually and install dependencies...")
         
-        # Read dependencies from pyproject.toml
+        # Fallback: create venv manually and use uv pip sync
         try:
-            import tomllib
-        except ImportError:
-            # Python < 3.11
-            try:
-                import tomli as tomllib
-            except ImportError:
-                print("Warning: tomli/tomllib not available, attempting to install it first...")
-                subprocess.run(
-                    [str(pip_path), "install", "tomli"],
-                    check=True,
-                    cwd=workspace_root,
-                )
-                import tomli as tomllib
-        
-        with open(pyproject_path, "rb") as f:
-            pyproject = tomllib.load(f)
-        
-        dependencies = pyproject.get("project", {}).get("dependencies", [])
-        
-        if dependencies:
-            print(f"Found {len(dependencies)} dependencies to install...")
-            try:
-                subprocess.run(
-                    [str(pip_path), "install"] + dependencies,
-                    check=True,
-                    cwd=workspace_root,
-                    timeout=300,  # 5 minute timeout
-                )
-                print("✓ Dependencies installed")
-            except subprocess.TimeoutExpired:
-                print("⚠ Dependency installation timed out", file=sys.stderr)
-                print("  You may need to install dependencies manually or retry with better network connection")
-                return False
-            except subprocess.CalledProcessError as e:
-                print(f"✗ Failed to install dependencies: {e}", file=sys.stderr)
-                return False
-        else:
-            print("No dependencies found in pyproject.toml")
-    else:
-        print(f"Warning: pyproject.toml not found at {pyproject_path}", file=sys.stderr)
+            subprocess.run(
+                [sys.executable, "-m", "venv", str(venv_dir)],
+                check=True,
+                cwd=workspace_root,
+            )
+            print(f"✓ Virtual environment created at {venv_dir}")
+            
+            # Get the path to python in the venv
+            if sys.platform == "win32":
+                python_path = venv_dir / "Scripts" / "python"
+            else:
+                python_path = venv_dir / "bin" / "python"
+            
+            # Use uv pip to install from lock file
+            subprocess.run(
+                ["uv", "pip", "sync", "uv.lock", "--python", str(python_path)],
+                check=True,
+                cwd=workspace_root,
+                timeout=300,
+            )
+            print("✓ Dependencies installed from uv.lock")
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as fallback_error:
+            print(f"✗ Fallback installation also failed: {fallback_error}", file=sys.stderr)
+            return False
     
     print("\n" + "=" * 60)
     print("Virtual environment setup complete!")
@@ -164,7 +172,6 @@ def main():
             print("Aborted.")
             return 0
         print(f"Removing existing virtual environment at {venv_dir}...")
-        import shutil
         shutil.rmtree(venv_dir)
     
     # Install venv

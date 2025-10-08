@@ -3,8 +3,8 @@ Unit tests for the install_venv tool.
 
 Tests the virtual environment installation tool's functionality including:
 - Finding workspace root
-- Creating virtual environments
-- Installing dependencies from pyproject.toml
+- Creating virtual environments with UV
+- Installing dependencies from uv.lock
 """
 
 import pytest
@@ -16,7 +16,7 @@ import subprocess
 
 # Import the module we're testing
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from install_venv import find_workspace_root, install_venv
+from install_venv import find_workspace_root, install_venv, check_uv_available
 
 
 class TestFindWorkspaceRoot:
@@ -44,105 +44,121 @@ class TestFindWorkspaceRoot:
                 find_workspace_root()
 
 
+class TestCheckUvAvailable:
+    """Tests for check_uv_available function."""
+    
+    @patch('shutil.which')
+    def test_uv_available(self, mock_which):
+        """Test UV is detected when available."""
+        mock_which.return_value = "/usr/local/bin/uv"
+        assert check_uv_available() is True
+        mock_which.assert_called_once_with("uv")
+    
+    @patch('shutil.which')
+    def test_uv_not_available(self, mock_which):
+        """Test UV is not detected when unavailable."""
+        mock_which.return_value = None
+        assert check_uv_available() is False
+
+
 class TestInstallVenv:
     """Tests for install_venv function."""
     
+    @patch('install_venv.check_uv_available')
     @patch('subprocess.run')
-    def test_creates_venv_successfully(self, mock_run, tmp_path):
-        """Test successful venv creation."""
+    def test_creates_venv_successfully_with_uv(self, mock_run, mock_uv_check, tmp_path):
+        """Test successful venv creation using UV sync."""
+        mock_uv_check.return_value = True
         mock_run.return_value = Mock(returncode=0)
         
         workspace_root = tmp_path / "workspace"
         workspace_root.mkdir()
         
-        # Create minimal pyproject.toml
-        pyproject = workspace_root / "pyproject.toml"
-        pyproject.write_text("""
-[project]
-name = "test"
-dependencies = []
-""")
-        
-        venv_dir = tmp_path / "test_venv"
-        
-        # We can't actually test the full install due to it requiring tomllib
-        # and actual venv creation, so we mock subprocess.run
-        with patch('builtins.open', create=True) as mock_file:
-            mock_file.return_value.__enter__.return_value.read.return_value = b"""
-[project]
-name = "test"
-dependencies = []
-"""
-            result = install_venv(venv_dir, workspace_root)
-        
-        # Verify subprocess.run was called to create venv
-        assert any(
-            call_args[0][0][2] == "venv" 
-            for call_args in mock_run.call_args_list 
-            if len(call_args[0][0]) > 2
-        )
-    
-    @patch('subprocess.run')
-    def test_handles_venv_creation_error(self, mock_run, tmp_path):
-        """Test error handling when venv creation fails."""
-        # Make the first subprocess.run call fail
-        mock_run.side_effect = subprocess.CalledProcessError(1, "venv")
-        
-        workspace_root = tmp_path / "workspace"
-        workspace_root.mkdir()
-        
-        pyproject = workspace_root / "pyproject.toml"
-        pyproject.write_text("[project]\nname = 'test'\n")
+        # Create uv.lock
+        lock_file = workspace_root / "uv.lock"
+        lock_file.write_text("# lock file content")
         
         venv_dir = tmp_path / "test_venv"
         
         result = install_venv(venv_dir, workspace_root)
         
-        # Should return False on error
+        # Should return True on success
+        assert result is True
+        # Verify subprocess.run was called with uv sync
+        assert any(
+            "uv" in str(call_args[0][0])
+            for call_args in mock_run.call_args_list
+        )
+    
+    @patch('install_venv.check_uv_available')
+    @patch('subprocess.run')
+    def test_fails_when_no_lock_file(self, mock_run, mock_uv_check, tmp_path):
+        """Test failure when uv.lock doesn't exist."""
+        mock_uv_check.return_value = True
+        
+        workspace_root = tmp_path / "workspace"
+        workspace_root.mkdir()
+        
+        # Don't create uv.lock
+        venv_dir = tmp_path / "test_venv"
+        
+        result = install_venv(venv_dir, workspace_root)
+        
+        # Should return False when lock file is missing
         assert result is False
     
+    @patch('install_venv.check_uv_available')
+    @patch('install_venv.install_uv')
     @patch('subprocess.run')
-    def test_handles_pip_timeout(self, mock_run, tmp_path):
-        """Test handling of pip timeout during upgrade."""
-        # First call succeeds (venv creation), second times out (pip upgrade)
+    def test_installs_uv_when_not_available(self, mock_run, mock_install_uv, mock_uv_check, tmp_path):
+        """Test that UV is installed when not available."""
+        # First call returns False (UV not available), second returns True (after install)
+        mock_uv_check.side_effect = [False, True]
+        mock_install_uv.return_value = True
+        mock_run.return_value = Mock(returncode=0)
+        
+        workspace_root = tmp_path / "workspace"
+        workspace_root.mkdir()
+        
+        # Create uv.lock
+        lock_file = workspace_root / "uv.lock"
+        lock_file.write_text("# lock file content")
+        
+        venv_dir = tmp_path / "test_venv"
+        
+        result = install_venv(venv_dir, workspace_root)
+        
+        # Should install UV and succeed
+        mock_install_uv.assert_called_once()
+    
+    @patch('install_venv.check_uv_available')
+    @patch('subprocess.run')
+    def test_handles_uv_sync_error_with_fallback(self, mock_run, mock_uv_check, tmp_path):
+        """Test fallback to manual venv creation when uv sync fails."""
+        mock_uv_check.return_value = True
+        
+        # First call (uv sync) fails, subsequent calls succeed
         mock_run.side_effect = [
-            Mock(returncode=0),  # venv creation
-            subprocess.TimeoutExpired("pip", 60),  # pip upgrade timeout
+            subprocess.CalledProcessError(1, "uv sync"),  # uv sync fails
+            Mock(returncode=0),  # venv creation succeeds
+            Mock(returncode=0),  # uv pip sync succeeds
         ]
         
         workspace_root = tmp_path / "workspace"
         workspace_root.mkdir()
         
-        pyproject = workspace_root / "pyproject.toml"
-        pyproject.write_text("""
-[project]
-name = "test"
-dependencies = []
-""")
+        # Create uv.lock
+        lock_file = workspace_root / "uv.lock"
+        lock_file.write_text("# lock file content")
         
         venv_dir = tmp_path / "test_venv"
         
-        # Mock tomllib/tomli loading
-        with patch('builtins.open', create=True) as mock_file:
-            # Configure mock for binary read mode
-            mock_file.return_value.__enter__.return_value.read.return_value = b"""
-[project]
-name = "test"
-dependencies = []
-"""
-            with patch('tomllib.load') as mock_toml:
-                mock_toml.return_value = {
-                    "project": {
-                        "name": "test",
-                        "dependencies": []
-                    }
-                }
-                
-                result = install_venv(venv_dir, workspace_root)
+        result = install_venv(venv_dir, workspace_root)
         
-        # Should still return True since timeout on pip upgrade is non-fatal
-        # (it continues with existing pip version)
+        # Should fall back and succeed
         assert result is True
+        # Should have called subprocess.run multiple times (sync, venv, pip sync)
+        assert mock_run.call_count == 3
 
 
 class TestMainFunction:
