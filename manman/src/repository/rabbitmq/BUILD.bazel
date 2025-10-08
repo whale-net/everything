@@ -15,6 +15,7 @@ py_library(
 py_test(
     name = "util_test",
     srcs = ["util_test.py"],
+    visibility = ["//manman/src/repository:__pkg__"],
     deps = [
         ":manman_repository_rabbitmq",
         "//manman/src:manman_core",
