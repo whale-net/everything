@@ -1,0 +1,13 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+# Message pub/sub services library
+py_library(
+    name = "manman_repository_message",
+    srcs = glob(["**/*.py"], exclude=["*_test.py"]),
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        "//manman/src/repository/rabbitmq:manman_repository_rabbitmq",
+        "//manman/src:manman_core",
+        "@pypi//:amqpstorm",
+    ],
+)

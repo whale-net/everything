@@ -1,59 +1,36 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("//tools:release.bzl", "release_app")
 
-# Shared API utilities library - common code for all host APIs
-py_library(
+# Shared API utilities library - defined in subdirectory
+# See manman/src/host/api/BUILD.bazel
+alias(
     name = "manman_host_shared",
-    srcs = glob(["api/shared/**/*.py"], exclude=["*_test.py"]) + [
-        "api/__init__.py",
-        "api/request_models.py",
-    ],
+    actual = "//manman/src/host/api:manman_host_shared",
     visibility = ["//manman/src/host:__subpackages__"],
-    deps = [
-        "//manman/src:manman_core",
-        "//manman/src/repository:manman_repository",
-        "@pypi//:fastapi",
-        "@pypi//:python-jose",
-    ],
 )
 
-# Experience API library
-py_library(
+# Experience API library - defined in subdirectory
+# See manman/src/host/api/experience/BUILD.bazel
+alias(
     name = "manman_host_experience_api",
-    srcs = glob(["api/experience/**/*.py"], exclude=["*_test.py"]),
+    actual = "//manman/src/host/api/experience:manman_host_experience_api",
     visibility = ["//manman/src/host:__subpackages__"],
-    deps = [
-        ":manman_host_shared",
-        "//manman/src:manman_core",
-        "//manman/src/repository:manman_repository",
-        "@pypi//:fastapi",
-    ],
 )
 
-# Status API library
-py_library(
+# Status API library - defined in subdirectory
+# See manman/src/host/api/status/BUILD.bazel
+alias(
     name = "manman_host_status_api",
-    srcs = glob(["api/status/**/*.py"], exclude=["*_test.py"]),
+    actual = "//manman/src/host/api/status:manman_host_status_api",
     visibility = ["//manman/src/host:__subpackages__"],
-    deps = [
-        ":manman_host_shared",
-        "//manman/src:manman_core",
-        "//manman/src/repository:manman_repository",
-        "@pypi//:fastapi",
-    ],
 )
 
-# Worker DAL API library
-py_library(
+# Worker DAL API library - defined in subdirectory
+# See manman/src/host/api/worker_dal/BUILD.bazel
+alias(
     name = "manman_host_worker_dal_api",
-    srcs = glob(["api/worker_dal/**/*.py"], exclude=["*_test.py"]),
+    actual = "//manman/src/host/api/worker_dal:manman_host_worker_dal_api",
     visibility = ["//manman/src/host:__subpackages__"],
-    deps = [
-        ":manman_host_shared",
-        "//manman/src:manman_core",
-        "//manman/src/repository:manman_repository",
-        "@pypi//:fastapi",
-    ],
 )
 
 # Status processor library

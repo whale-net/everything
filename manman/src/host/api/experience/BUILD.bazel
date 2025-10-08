@@ -1,0 +1,14 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+# Experience API library
+py_library(
+    name = "manman_host_experience_api",
+    srcs = glob(["**/*.py"], exclude=["*_test.py"]),
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        "//manman/src/host/api:manman_host_shared",
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
+        "@pypi//:fastapi",
+    ],
+)
