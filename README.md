@@ -1,5 +1,7 @@
 # Everything Monorepo
 
+[![codecov](https://codecov.io/gh/whale-net/everything/branch/main/graph/badge.svg)](https://codecov.io/gh/whale-net/everything)
+
 This is a Bazel monorepo that supports both Python and Go development.
 
 ## Quick Start
