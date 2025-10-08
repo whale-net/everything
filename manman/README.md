@@ -150,7 +150,7 @@ The manual chart in `__manual_backup_of_old_chart/` has full production features
 
 ### Module Structure
 
-The ManMan codebase has been refactored into granular Bazel targets for better modularity and build performance. See [REFACTORING.md](./REFACTORING.md) and [TARGET_DEPENDENCIES.md](./TARGET_DEPENDENCIES.md) for details.
+The ManMan codebase has been refactored into granular Bazel targets for better modularity and build performance.
 
 **Module Overview**:
 - `//manman/src` - Core module (models, config, logging, utilities)
