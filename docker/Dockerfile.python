@@ -2,6 +2,9 @@
 # Build stage
 FROM python:3.11-slim AS builder
 
+# Install ca-certificates in builder stage
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 # Accept build arguments
 ARG BINARY_PATH
 ARG BINARY_NAME
@@ -15,6 +18,9 @@ FROM gcr.io/distroless/python3-debian12:latest
 
 # Accept runtime arguments  
 ARG BINARY_NAME
+
+# Copy CA certificates from builder stage - CRITICAL for SSL/TLS verification
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
 # Copy the binary from builder stage
 COPY --from=builder /app/${BINARY_NAME} /app/${BINARY_NAME}
