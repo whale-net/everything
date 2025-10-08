@@ -37,6 +37,14 @@ py_binary(
     visibility = ["//visibility:public"],
 )
 
+# Python virtual environment installer for local development
+py_binary(
+    name = "install_venv",
+    srcs = ["install_venv.py"],
+    main = "install_venv.py",
+    visibility = ["//visibility:public"],
+)
+
 load(":platforms.bzl", "define_platforms")
 
 define_platforms()
