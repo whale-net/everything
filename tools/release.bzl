@@ -98,7 +98,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     Cross-compilation is handled automatically by rules_pycross (Python) and rules_go (Go).
     
     Args:
-        name: App name (should match directory name and binary name)
+        name: App name (MUST use dashes, not underscores: 'my-app' not 'my_app')
         binary_name: Target label for the binary. Can be:
                      - Simple name: "my_app" -> looks for :my_app
                      - Full label: "//path/to:binary" -> uses that binary
@@ -120,6 +120,10 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         command: Override container command (default: use image ENTRYPOINT)
         args: Container arguments
     """
+    # Validate name format - must use dashes, not underscores
+    if "_" in name:
+        fail("App name '{}' contains underscores. Use dashes instead (e.g., 'my-app' not 'my_app')".format(name))
+    
     if language not in ["python", "go"]:
         fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
     
@@ -254,8 +258,8 @@ def release_helm_chart(
     
     Args:
         name: Target name for the chart
-        apps: List of app_metadata targets to include (e.g., ["//demo/hello_python:hello_python_metadata"])
-        chart_name: Base name of the Helm chart (defaults to name). 
+        apps: List of app_metadata targets to include (e.g., ["//demo/hello_python:hello-python_metadata"])
+        chart_name: Base name of the Helm chart (defaults to name, MUST use dashes not underscores). 
                    Will be prefixed with "helm-{namespace}-" automatically.
         chart_version: Version for local builds (default: "0.0.0-dev"). 
                       This is overridden during release by auto-versioning from git tags.
@@ -272,7 +276,7 @@ def release_helm_chart(
             chart_name = "hello-fastapi",  # Will become "helm-demo-hello-fastapi"
             namespace = "demo",
             domain = "demo",
-            apps = ["//demo/hello_fastapi:hello_fastapi_metadata"],
+            apps = ["//demo/hello_fastapi:hello-fastapi_metadata"],
         )
     """
     if not domain:
@@ -281,9 +285,13 @@ def release_helm_chart(
     if not namespace:
         fail("namespace is required for release_helm_chart")
     
+    # Validate chart_name format - must use dashes, not underscores
+    base_chart_name = chart_name or name
+    if "_" in base_chart_name:
+        fail("Chart name '{}' contains underscores. Use dashes instead (e.g., 'my-chart' not 'my_chart')".format(base_chart_name))
+    
     # Construct the actual chart name with helm-namespace- prefix
     # This makes chart artifacts clearly identifiable (e.g., helm-demo-hello-fastapi)
-    base_chart_name = chart_name or name
     actual_chart_name = "helm-{}-{}".format(namespace, base_chart_name)
     
     # Create the helm_chart target
