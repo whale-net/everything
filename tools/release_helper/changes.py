@@ -1,54 +1,122 @@
 """
-Change detection utilities for the release helper.
+Change detection utilities for the release helper using bazel-diff.
 """
 
+import json
+import os
 import subprocess
 import sys
-from typing import Dict, List, Optional
+import tempfile
+from pathlib import Path
+from typing import Dict, List, Optional, Set
 
 from tools.release_helper.core import run_bazel
-from tools.release_helper.metadata import list_all_apps, get_app_metadata
+from tools.release_helper.metadata import list_all_apps
 
 
-def _get_changed_files(base_commit: str) -> List[str]:
-    """Get list of changed files compared to base commit."""
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--name-only", f"{base_commit}..HEAD"],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        return [f for f in result.stdout.strip().split('\n') if f.strip()]
-    except subprocess.CalledProcessError as e:
-        print(f"Error getting changed files against {base_commit}: {e}", file=sys.stderr)
-        return []
-
-
-def _should_ignore_file(file_path: str) -> bool:
-    """Check if a file should be ignored for build impact analysis.
+def generate_hashes(output_file: str, commit: Optional[str] = None) -> None:
+    """Generate bazel-diff hashes for workspace state.
     
-    Returns True if the file doesn't affect any app binary builds.
+    Args:
+        output_file: Path to write hashes JSON
+        commit: Optional git commit to checkout before generating hashes
     """
-    # Ignore GitHub workflow files - they're CI configuration, not code
-    if file_path.startswith('.github/workflows/') or file_path.startswith('.github/actions/'):
-        return True
+    current_ref = None
     
-    # Ignore documentation files - they don't affect builds
-    if file_path.startswith('docs/') or file_path.endswith('.md'):
-        return True
+    try:
+        if commit:
+            # Store current ref
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            current_ref = result.stdout.strip()
+            
+            # Checkout target commit
+            print(f"Checking out {commit}...", file=sys.stderr)
+            subprocess.run(
+                ["git", "checkout", "-q", commit],
+                check=True
+            )
+        
+        print(f"Generating bazel-diff hashes to {output_file}...", file=sys.stderr)
+        
+        result = run_bazel([
+            "run",
+            "//tools:bazel_diff",
+            "--",
+            "-w", os.getcwd(),
+            "-b", "/dev/null",
+            "-o", output_file
+        ])
+        
+        if not os.path.exists(output_file):
+            raise RuntimeError(f"Hash generation failed: {output_file} not created")
+        
+        print(f"✓ Generated hashes: {output_file}", file=sys.stderr)
+        
+    finally:
+        # Restore original ref if we checked out a different commit
+        if current_ref and commit:
+            print(f"Restoring {current_ref}...", file=sys.stderr)
+            subprocess.run(
+                ["git", "checkout", "-q", current_ref],
+                check=True
+            )
+
+
+def get_changed_targets(
+    starting_hashes: str,
+    ending_hashes: str
+) -> Set[str]:
+    """Get changed targets between two hash files.
     
-    # Ignore copilot instructions - AI configuration, not code
-    if file_path.endswith('copilot-instructions.md'):
-        return True
+    Args:
+        starting_hashes: Path to starting hashes JSON
+        ending_hashes: Path to ending hashes JSON
     
-    return False
+    Returns:
+        Set of changed target labels
+    """
+    if not os.path.exists(starting_hashes):
+        raise FileNotFoundError(f"Starting hashes not found: {starting_hashes}")
+    if not os.path.exists(ending_hashes):
+        raise FileNotFoundError(f"Ending hashes not found: {ending_hashes}")
+    
+    print(f"Computing changed targets using bazel-diff...", file=sys.stderr)
+    
+    # Create temp file for output
+    with tempfile.NamedTemporaryFile(mode='w', suffix=".txt", delete=False) as f:
+        output_file = f.name
+    
+    try:
+        result = run_bazel([
+            "run",
+            "//tools:bazel_diff",
+            "--",
+            "-sh", starting_hashes,
+            "-fh", ending_hashes,
+            "-o", output_file
+        ])
+        
+        # Read changed targets
+        with open(output_file, 'r') as f:
+            changed_targets = {line.strip() for line in f if line.strip()}
+        
+        print(f"✓ Found {len(changed_targets)} changed targets", file=sys.stderr)
+        
+        return changed_targets
+        
+    finally:
+        # Clean up temp file
+        if os.path.exists(output_file):
+            os.unlink(output_file)
 
 
 def detect_changed_apps(base_commit: Optional[str] = None) -> List[Dict[str, str]]:
-    """Detect which apps have changed compared to a base commit.
-    
-    Uses Bazel query to find app binaries that depend on changed source files.
+    """Detect which apps have changed using bazel-diff.
     
     Args:
         base_commit: Base commit to compare HEAD against. If None, returns all apps.
@@ -62,131 +130,26 @@ def detect_changed_apps(base_commit: Optional[str] = None) -> List[Dict[str, str
         print("No base commit specified, considering all apps as changed", file=sys.stderr)
         return all_apps
 
-    changed_files = _get_changed_files(base_commit)
+    # Create temp files for hashes
+    with tempfile.NamedTemporaryFile(mode='w', suffix="-base.json", delete=False) as f:
+        base_hashes = f.name
+    with tempfile.NamedTemporaryFile(mode='w', suffix="-head.json", delete=False) as f:
+        head_hashes = f.name
     
-    if not changed_files:
-        print("No files changed, no apps need to be built", file=sys.stderr)
-        return []
-
-    print(f"Changed files: {', '.join(changed_files[:10])}" + 
-          (f" (and {len(changed_files)-10} more)" if len(changed_files) > 10 else ""), 
-          file=sys.stderr)
-
-    # Filter out non-build files
-    relevant_files = [f for f in changed_files if not _should_ignore_file(f)]
-    
-    if not relevant_files:
-        print("All changed files are non-build artifacts (workflows, docs, etc.). No apps need to be built.", file=sys.stderr)
-        return []
-    
-    if len(relevant_files) < len(changed_files):
-        filtered_count = len(changed_files) - len(relevant_files)
-        print(f"Filtered out {filtered_count} non-build files (workflows, docs, etc.)", file=sys.stderr)
-    
-    print(f"Analyzing {len(relevant_files)} changed files using Bazel query...", file=sys.stderr)
-    
-    # Convert git file paths to Bazel labels: libs/python/utils.py → //libs/python:utils.py
-    # For BUILD file changes, track the package paths
-    file_labels = []
-    changed_packages = set()
-    
-    for f in relevant_files:
-        # Skip .bzl files - they're loaded, not built
-        if f.endswith('.bzl'):
-            continue
-        
-        # BUILD file changes affect the entire package
-        if f.endswith(('BUILD', 'BUILD.bazel')):
-            parts = f.split('/')
-            if len(parts) > 1:
-                package = '/'.join(parts[:-1])
-                changed_packages.add(f"//{package}")
-            else:
-                changed_packages.add("//")
-            continue
-        
-        parts = f.split('/')
-        if len(parts) < 2:
-            # Root level file: emit //:filename
-            file_labels.append(f"//:{f}")
-        else:
-            package = '/'.join(parts[:-1])
-            filename = parts[-1]
-            file_labels.append(f"//{package}:{filename}")
-    
-    if not file_labels:
-        print("No file labels to analyze", file=sys.stderr)
-        return []
-    
-    # Filter to valid labels first - validate in batch for efficiency
-    # This filters out deleted files and other invalid targets
-    valid_labels = []
-    if file_labels:
-        try:
-            # Try to validate all labels at once using union operator
-            labels_expr = " + ".join(file_labels)
-            result = run_bazel([
-                "query",
-                labels_expr,
-                "--output=label"
-            ])
-            if result.stdout.strip():
-                valid_labels = result.stdout.strip().split('\n')
-        except subprocess.CalledProcessError:
-            # If batch validation fails, fall back to individual validation
-            # This handles cases where some (but not all) labels are invalid
-            for label in file_labels:
-                try:
-                    result = run_bazel([
-                        "query",
-                        label,
-                        "--output=label"
-                    ])
-                    if result.stdout.strip():
-                        valid_labels.append(label)
-                except subprocess.CalledProcessError:
-                    # Label is not valid (e.g., deleted file)
-                    continue
-    
-    if not valid_labels and not changed_packages:
-        print("No valid Bazel targets in changed files", file=sys.stderr)
-        return []
-    
-    # Query rdeps for all valid labels and changed packages
-    all_affected_targets = set()
     try:
-        # Build query for file labels and package changes
-        query_parts = []
-        if valid_labels:
-            query_parts.append(" + ".join(valid_labels))
-        if changed_packages:
-            # For changed packages, query all targets in those packages
-            for pkg in changed_packages:
-                query_parts.append(f"{pkg}/...")
+        # Generate hashes for base commit
+        generate_hashes(base_hashes, commit=base_commit)
         
-        if not query_parts:
-            print("No query parts to analyze", file=sys.stderr)
+        # Generate hashes for current state
+        generate_hashes(head_hashes)
+        
+        # Get changed targets
+        changed_targets = get_changed_targets(base_hashes, head_hashes)
+        
+        if not changed_targets:
+            print("No targets changed", file=sys.stderr)
             return []
         
-        labels_expr = " + ".join(query_parts)
-        result = run_bazel([
-            "query",
-            f"rdeps(//..., {labels_expr})",
-            "--output=label"
-        ])
-        if result.stdout.strip():
-            all_affected_targets = set(result.stdout.strip().split('\n'))
-    except subprocess.CalledProcessError as e:
-        print(f"Error querying reverse dependencies: {e}", file=sys.stderr)
-        return []
-    
-    if not all_affected_targets:
-        print("No targets affected by changed files", file=sys.stderr)
-        return []
-    
-    # Find app_metadata targets that depend on affected targets
-    # Strategy: Query which metadata targets have the affected targets in their dependency graph
-    try:
         # Get all app_metadata targets
         result = run_bazel([
             "query",
@@ -199,35 +162,45 @@ def detect_changed_apps(base_commit: Optional[str] = None) -> List[Dict[str, str
             print("No app_metadata targets found", file=sys.stderr)
             return []
         
-        # For each metadata target, check if it depends on any affected targets
-        # Use rdeps in reverse: which metadata targets depend on the affected targets?
-        metadata_expr = " + ".join(all_metadata_targets)
-        affected_expr = " + ".join(all_affected_targets)
+        # Find affected apps
+        affected_apps = []
         
-        result = run_bazel([
-            "query",
-            f"rdeps({metadata_expr}, {affected_expr})",
-            "--output=label"
-        ])
-        
-        if result.stdout.strip():
-            all_affected_metadata = set(result.stdout.strip().split('\n'))
-        else:
-            all_affected_metadata = set()
+        for app in all_apps:
+            metadata_target = app['bazel_target']
             
-    except subprocess.CalledProcessError:
-        all_affected_metadata = set()
-    
-    if not all_affected_metadata:
-        print("No apps affected by changed files", file=sys.stderr)
-        return []
-    
-    # Bazel returned the app_metadata targets that are affected
-    # Match to our app list
-    affected_apps = []
-    for app in all_apps:
-        if app['bazel_target'] in all_affected_metadata:
-            affected_apps.append(app)
-            print(f"  {app['name']}: affected by changes", file=sys.stderr)
-    
-    return affected_apps
+            # Check if metadata target itself changed
+            if metadata_target in changed_targets:
+                affected_apps.append(app)
+                print(f"  {app['name']}: metadata target changed", file=sys.stderr)
+                continue
+            
+            # Check if any dependency of the metadata changed
+            # Use somepath to check if metadata depends on any changed target
+            if changed_targets:
+                try:
+                    # Build a query expression (limit to 100 targets to avoid huge queries)
+                    changed_list = list(changed_targets)[:100]
+                    changed_expr = " + ".join(f'"{t}"' for t in changed_list)
+                    result = run_bazel([
+                        "query",
+                        f"somepath({metadata_target}, {changed_expr})",
+                        "--output=label"
+                    ])
+                    
+                    if result.stdout.strip():
+                        affected_apps.append(app)
+                        print(f"  {app['name']}: depends on changed targets", file=sys.stderr)
+                except subprocess.CalledProcessError:
+                    # No path found, app not affected
+                    pass
+        
+        if not affected_apps:
+            print("No apps affected by changed targets", file=sys.stderr)
+        
+        return affected_apps
+        
+    finally:
+        # Clean up temp files
+        for f in [base_hashes, head_hashes]:
+            if os.path.exists(f):
+                os.unlink(f)

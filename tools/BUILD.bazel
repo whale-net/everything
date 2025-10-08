@@ -92,3 +92,11 @@ alias(
     actual = "//tools/release_helper:release_helper",
     visibility = ["//visibility:public"],
 )
+
+# bazel-diff wrapper for change detection
+sh_binary(
+    name = "bazel_diff",
+    srcs = ["bazel_diff.sh"],
+    data = ["@bazel_diff//file"],
+    visibility = ["//visibility:public"],
+)

@@ -15,6 +15,16 @@ bazel_dep(name = "rules_helm", version = "0.6.0.bcr.1")
 bazel_dep(name = "rules_pkg", version = "1.0.1")
 bazel_dep(name = "platforms", version = "1.0.0")
 
+# bazel-diff for change detection
+http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+
+http_file(
+    name = "bazel_diff",
+    urls = ["https://github.com/Tinder/bazel-diff/releases/download/11.0.0/bazel-diff_deploy.jar"],
+    sha256 = "32af8a490b8fefeb5f67014c432a7bd459a34b09a2dffc3677160551c7c3fea2",
+    downloaded_file_path = "bazel-diff.jar",
+)
+
 # OCI/Docker setup - Ubuntu base image for all containers
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 
