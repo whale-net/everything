@@ -1,6 +1,7 @@
 #!/bin/bash
 # Convenience wrapper to install Python virtual environment for local development
 # Usage: ./tools/install_venv.sh [venv_dir]
+# Or with options: ./tools/install_venv.sh --venv-dir my_venv
 
 set -e
 
@@ -8,14 +9,17 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# Default venv directory
-VENV_DIR="${1:-.venv}"
-
-echo "Installing Python virtual environment..."
-echo "Workspace: ${WORKSPACE_ROOT}"
-echo "Venv directory: ${VENV_DIR}"
-echo
-
-# Run the Python installer script
+# Change to workspace root
 cd "${WORKSPACE_ROOT}"
-python3 "${SCRIPT_DIR}/install_venv.py" --venv-dir "${VENV_DIR}"
+
+# If first argument doesn't start with --, treat it as venv_dir for backwards compat
+if [ $# -eq 0 ]; then
+    # No arguments, use default
+    python3 "${SCRIPT_DIR}/install_venv.py"
+elif [ "${1:0:2}" == "--" ]; then
+    # Arguments start with --, pass them through
+    python3 "${SCRIPT_DIR}/install_venv.py" "$@"
+else
+    # First argument is venv directory
+    python3 "${SCRIPT_DIR}/install_venv.py" --venv-dir "$1"
+fi

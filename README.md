@@ -58,6 +58,47 @@ bazel test //demo/hello_python:test_main
 bazel query "kind('app_metadata', //...)"
 ```
 
+### Local Development Environment (Optional)
+
+While Bazel handles all dependencies for building and testing, you may want to set up a local Python virtual environment for IDE support, debugging, or running tools outside of Bazel.
+
+**Install a Python virtual environment:**
+
+```bash
+# Using Bazel (recommended)
+bazel run //tools:install_venv
+
+# Or using the shell script
+./tools/install_venv.sh
+
+# Or directly with Python
+python3 tools/install_venv.py
+
+# Specify custom venv directory
+bazel run //tools:install_venv -- --venv-dir ./my_venv
+./tools/install_venv.sh my_venv
+```
+
+**Activate the virtual environment:**
+
+```bash
+# On macOS/Linux
+source .venv/bin/activate
+
+# On Windows
+.venv\Scripts\activate
+
+# When done
+deactivate
+```
+
+The venv installer will:
+- Create a Python virtual environment
+- Install all dependencies from `pyproject.toml`
+- Configure the environment for local development
+
+**Note:** This is optional - Bazel manages all dependencies automatically for builds and tests. The venv is only needed for IDE integration or running Python tools directly.
+
 ### Adding Dependencies
 
 #### Python Dependencies

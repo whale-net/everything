@@ -45,6 +45,19 @@ py_binary(
     visibility = ["//visibility:public"],
 )
 
+load(":pytest.bzl", "py_test")
+
+# Unit tests for install_venv tool
+py_test(
+    name = "test_install_venv",
+    srcs = ["test_install_venv.py"],
+    deps = [
+        "@pypi//:pytest",
+    ],
+    data = ["install_venv.py"],
+    size = "small",
+)
+
 load(":platforms.bzl", "define_platforms")
 
 define_platforms()
