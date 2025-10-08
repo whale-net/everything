@@ -1,5 +1,15 @@
 load("//tools:release.bzl", "release_helm_chart")
 
+# Tilt configuration for demo apps
+filegroup(
+    name = "tilt_config",
+    srcs = [
+        "Tiltfile",
+        ".env.example",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 # Demo applications namespace
 #
 # Individual release_app definitions for each demo app are in their respective

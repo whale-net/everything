@@ -1,0 +1,238 @@
+"""
+Demo Apps Tiltfile
+
+Local development setup for demo applications showing different app types:
+- external-api: hello-fastapi (HTTP API with ingress)
+- internal-api: hello-internal-api (HTTP API without ingress)
+- worker: hello-worker, hello-python, hello-go (background processors)
+- job: hello-job (one-time/cron jobs)
+
+Configuration is done via environment variables (see .env.example in demo/)
+"""
+
+load('ext://namespace', 'namespace_create')
+load('ext://dotenv', 'dotenv')
+load('ext://helm_resource', 'helm_resource', 'helm_repo')
+
+# Create namespace for demo apps
+namespace = 'demo-dev'
+namespace_create(namespace)
+
+# Load environment variables from demo directory if exists
+dotenv('demo/.env', required=False)
+
+# Service control flags
+enable_fastapi = os.getenv('DEMO_ENABLE_FASTAPI', 'true').lower() == 'true'
+enable_internal_api = os.getenv('DEMO_ENABLE_INTERNAL_API', 'false').lower() == 'true'
+enable_worker = os.getenv('DEMO_ENABLE_WORKER', 'false').lower() == 'true'
+enable_job = os.getenv('DEMO_ENABLE_JOB', 'false').lower() == 'true'
+enable_hello_python = os.getenv('DEMO_ENABLE_HELLO_PYTHON', 'false').lower() == 'true'
+enable_hello_go = os.getenv('DEMO_ENABLE_HELLO_GO', 'false').lower() == 'true'
+
+# Infrastructure control flags
+enable_ingress = os.getenv('DEMO_ENABLE_INGRESS', 'true').lower() == 'true'
+
+print("\n" + "=" * 60)
+print("Demo Apps Configuration")
+print("=" * 60)
+print("Enabled apps:")
+print("  hello-fastapi (external-api):     {}".format("✓" if enable_fastapi else "✗"))
+print("  hello-internal-api (internal-api): {}".format("✓" if enable_internal_api else "✗"))
+print("  hello-worker (worker):             {}".format("✓" if enable_worker else "✗"))
+print("  hello-python (worker):             {}".format("✓" if enable_hello_python else "✗"))
+print("  hello-go (worker):                 {}".format("✓" if enable_hello_go else "✗"))
+print("  hello-job (job):                   {}".format("✓" if enable_job else "✗"))
+print("\nInfrastructure:")
+print("  Ingress controller:                {}".format("✓" if enable_ingress else "✗"))
+print("=" * 60)
+
+# Setup nginx ingress controller for local development (if enabled)
+if enable_ingress:
+    helm_repo('ingress-nginx', 'https://kubernetes.github.io/ingress-nginx')
+    helm_resource('demo-nginx-ingress', 'ingress-nginx/ingress-nginx',
+        namespace='ingress-nginx',
+        flags=['--create-namespace',
+               '--set=controller.service.type=NodePort',
+               '--set=controller.hostPort.enabled=true',
+               '--set=controller.service.nodePorts.http=30080',
+               '--set=controller.service.nodePorts.https=30443',
+               '--set=controller.admissionWebhooks.enabled=false',
+               '--set=controller.ingressClassResource.name=demo-nginx',
+               '--set=controller.ingressClass=demo-nginx']
+    )
+
+# Build images using Bazel
+# Note: These use Bazel's OCI image build with cross-compilation support
+
+if enable_fastapi:
+    # Build and load hello-fastapi image
+    local_resource(
+        'build-hello-fastapi',
+        'bazel run //demo/hello_fastapi:hello-fastapi_image_load --platforms=//tools:linux_arm64',
+        deps=['demo/hello_fastapi'],
+        labels=['build'],
+    )
+    
+    # Deploy using generated helm chart
+    k8s_yaml(
+        helm(
+            'bazel-bin/demo/fastapi_chart',
+            name='hello-fastapi',
+            namespace=namespace,
+            set=[
+                'global.environment=dev',
+                'global.namespace={}'.format(namespace),
+                'apps.hello-fastapi.image=demo-hello-fastapi',
+                'apps.hello-fastapi.imageTag=latest',
+                'ingressDefaults.enabled={}'.format(str(enable_ingress).lower()),
+                'ingressDefaults.className=demo-nginx',
+            ]
+        )
+    )
+    k8s_resource(
+        workload='hello-fastapi-dev',
+        port_forwards='8000:8000',
+        resource_deps=['build-hello-fastapi'] + (['demo-nginx-ingress'] if enable_ingress else []),
+        labels=['api'],
+    )
+
+if enable_internal_api:
+    # Build and load hello-internal-api image
+    local_resource(
+        'build-hello-internal-api',
+        'bazel run //demo/hello_internal_api:hello-internal-api_image_load --platforms=//tools:linux_arm64',
+        deps=['demo/hello_internal_api'],
+        labels=['build'],
+    )
+    
+    # Deploy using generated helm chart
+    k8s_yaml(
+        helm(
+            'bazel-bin/demo/internal_api_chart',
+            name='hello-internal-api',
+            namespace=namespace,
+            set=[
+                'global.environment=dev',
+                'global.namespace={}'.format(namespace),
+                'apps.hello-internal-api.image=demo-hello-internal-api',
+                'apps.hello-internal-api.imageTag=latest',
+            ]
+        )
+    )
+    k8s_resource(
+        workload='hello-internal-api-dev',
+        port_forwards='8080:8080',
+        resource_deps=['build-hello-internal-api'],
+        labels=['api'],
+    )
+
+if enable_worker:
+    # Build and load hello-worker image
+    local_resource(
+        'build-hello-worker',
+        'bazel run //demo/hello_worker:hello-worker_image_load --platforms=//tools:linux_arm64',
+        deps=['demo/hello_worker'],
+        labels=['build'],
+    )
+    
+    # Deploy using generated helm chart
+    k8s_yaml(
+        helm(
+            'bazel-bin/demo/worker_chart',
+            name='hello-worker',
+            namespace=namespace,
+            set=[
+                'global.environment=dev',
+                'global.namespace={}'.format(namespace),
+                'apps.hello-worker.image=demo-hello-worker',
+                'apps.hello-worker.imageTag=latest',
+            ]
+        )
+    )
+    k8s_resource(
+        workload='hello-worker-dev',
+        resource_deps=['build-hello-worker'],
+        labels=['worker'],
+    )
+
+if enable_hello_python:
+    # Build and load hello-python image
+    local_resource(
+        'build-hello-python',
+        'bazel run //demo/hello_python:hello-python_image_load --platforms=//tools:linux_arm64',
+        deps=['demo/hello_python'],
+        labels=['build'],
+    )
+    
+    # Deploy using Bazel-generated helm chart
+    k8s_yaml(
+        helm(
+            'bazel-bin/demo/workers_chart',
+            name='hello-python',
+            namespace=namespace,
+            set=[
+                'global.environment=dev',
+                'global.namespace={}'.format(namespace),
+                'apps.hello-python.image=demo-hello-python',
+                'apps.hello-python.imageTag=latest',
+            ]
+        )
+    )
+    k8s_resource(
+        workload='hello-python-dev',
+        resource_deps=['build-hello-python'],
+        labels=['worker'],
+    )
+
+if enable_hello_go:
+    # Build and load hello-go image
+    local_resource(
+        'build-hello-go',
+        'bazel run //demo/hello_go:hello-go_image_load --platforms=//tools:linux_arm64',
+        deps=['demo/hello_go'],
+        labels=['build'],
+    )
+    
+    k8s_resource(
+        workload='hello-go-dev',
+        resource_deps=['build-hello-go'],
+        labels=['worker'],
+    )
+
+if enable_job:
+    # Build and load hello-job image
+    local_resource(
+        'build-hello-job',
+        'bazel run //demo/hello_job:hello-job_image_load --platforms=//tools:linux_arm64',
+        deps=['demo/hello_job'],
+        labels=['build'],
+    )
+    
+    # Deploy using generated helm chart
+    k8s_yaml(
+        helm(
+            'bazel-bin/demo/job_chart',
+            name='hello-job',
+            namespace=namespace,
+            set=[
+                'global.environment=dev',
+                'global.namespace={}'.format(namespace),
+                'apps.hello-job.image=demo-hello-job',
+                'apps.hello-job.imageTag=latest',
+            ]
+        )
+    )
+    k8s_resource(
+        workload='hello-job-dev',
+        resource_deps=['build-hello-job'],
+        labels=['job'],
+    )
+
+print("\n✅ Demo apps configured successfully")
+if enable_ingress and enable_fastapi:
+    print("\n📡 Access points:")
+    print("  FastAPI: http://localhost:30080 (via ingress)")
+    print("  FastAPI: http://localhost:8000 (direct port-forward)")
+if enable_internal_api:
+    print("  Internal API: http://localhost:8080 (direct port-forward)")
+print("")

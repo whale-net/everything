@@ -159,3 +159,7 @@ dmypy.json
 
 # profiling data
 .prof
+
+# Tilt
+.tiltbuild/
+tilt_modules/

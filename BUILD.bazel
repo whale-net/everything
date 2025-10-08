@@ -6,7 +6,19 @@ exports_files([
     "uv.lock",
     "MODULE.bazel",
     "MODULE.bazel.lock",
+    "Tiltfile",
+    ".env.example",
 ])
+
+# Tilt configuration for local development
+filegroup(
+    name = "tilt_config",
+    srcs = [
+        "Tiltfile",
+        ".env.example",
+    ],
+    visibility = ["//visibility:public"],
+)
 
 # Go setup
 # gazelle:prefix github.com/example/everything
