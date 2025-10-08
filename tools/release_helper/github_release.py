@@ -240,6 +240,85 @@ class GitHubReleaseClient:
             except httpx.HTTPError as e:
                 print(f"❌ Failed to list releases: {e}", file=sys.stderr)
                 return []
+    
+    def verify_tag_exists(self, tag_name: str, expected_commit_sha: Optional[str] = None, max_retries: int = 3) -> bool:
+        """Verify that a git tag exists in the repository and optionally check its commit SHA.
+        
+        This method implements retry logic to handle cases where a tag was just pushed
+        and may not be immediately visible in GitHub's API.
+        
+        Args:
+            tag_name: Git tag name to verify
+            expected_commit_sha: Optional commit SHA to verify the tag points to
+            max_retries: Maximum number of retry attempts (default: 3)
+            
+        Returns:
+            True if tag exists (and points to expected commit if specified), False otherwise
+        """
+        import time
+        
+        url = f"{self.base_url}/repos/{self.owner}/{self.repo}/git/ref/tags/{tag_name}"
+        
+        for attempt in range(max_retries):
+            with httpx.Client() as client:
+                try:
+                    response = client.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+                    
+                    if response.status_code == 200:
+                        ref_data = response.json()
+                        tag_sha = ref_data.get('object', {}).get('sha')
+                        
+                        if expected_commit_sha:
+                            # The tag might point to a tag object (annotated tag) or directly to a commit
+                            # For annotated tags, we need to dereference to get the actual commit
+                            if ref_data.get('object', {}).get('type') == 'tag':
+                                # This is an annotated tag, need to get the tag object to find the commit
+                                tag_obj_url = f"{self.base_url}/repos/{self.owner}/{self.repo}/git/tags/{tag_sha}"
+                                tag_obj_response = client.get(tag_obj_url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+                                if tag_obj_response.status_code == 200:
+                                    tag_obj_data = tag_obj_response.json()
+                                    actual_commit_sha = tag_obj_data.get('object', {}).get('sha')
+                                    if actual_commit_sha and actual_commit_sha.startswith(expected_commit_sha[:7]):
+                                        print(f"✅ Verified tag {tag_name} points to commit {expected_commit_sha[:7]}")
+                                        return True
+                                    else:
+                                        print(f"⚠️  Tag {tag_name} exists but points to different commit: {actual_commit_sha[:7]} (expected {expected_commit_sha[:7]})", file=sys.stderr)
+                                        return False
+                            else:
+                                # Lightweight tag pointing directly to commit
+                                if tag_sha and tag_sha.startswith(expected_commit_sha[:7]):
+                                    print(f"✅ Verified tag {tag_name} points to commit {expected_commit_sha[:7]}")
+                                    return True
+                                else:
+                                    print(f"⚠️  Tag {tag_name} exists but points to different commit: {tag_sha[:7]} (expected {expected_commit_sha[:7]})", file=sys.stderr)
+                                    return False
+                        else:
+                            # Just check if tag exists, don't verify commit
+                            print(f"✅ Verified tag {tag_name} exists")
+                            return True
+                    
+                    elif response.status_code == 404:
+                        if attempt < max_retries - 1:
+                            print(f"⏳ Tag {tag_name} not found (attempt {attempt + 1}/{max_retries}), retrying in 2 seconds...", file=sys.stderr)
+                            time.sleep(2)
+                            continue
+                        else:
+                            print(f"❌ Tag {tag_name} not found after {max_retries} attempts", file=sys.stderr)
+                            return False
+                    else:
+                        print(f"❌ Unexpected response when checking tag {tag_name}: {response.status_code}", file=sys.stderr)
+                        return False
+                        
+                except httpx.HTTPError as e:
+                    if attempt < max_retries - 1:
+                        print(f"⚠️  Error checking tag {tag_name} (attempt {attempt + 1}/{max_retries}): {e}", file=sys.stderr)
+                        time.sleep(2)
+                        continue
+                    else:
+                        print(f"❌ Failed to verify tag {tag_name} after {max_retries} attempts: {e}", file=sys.stderr)
+                        return False
+        
+        return False
 
 
 def create_app_release(
@@ -254,13 +333,17 @@ def create_app_release(
 ) -> Optional[Dict]:
     """Create a GitHub release for a specific app.
     
+    This function creates a GitHub release and verifies that the git tag exists
+    before creating the release. This prevents GitHub from creating a new tag
+    if there's a timing issue where the tag was just pushed but isn't visible yet.
+    
     Args:
         app_name: Name of the app
-        tag_name: Git tag name for the release
+        tag_name: Git tag name for the release (should already exist in the repository)
         release_notes: Release notes content
         owner: Repository owner
         repo: Repository name
-        commit_sha: Specific commit SHA to target
+        commit_sha: Specific commit SHA to target (used for tag verification)
         prerelease: Whether this is a prerelease
         token: GitHub token (defaults to GITHUB_TOKEN env var)
         
@@ -280,6 +363,12 @@ def create_app_release(
         if existing_release:
             print(f"ℹ️  Release {tag_name} already exists: {existing_release['html_url']}")
             return existing_release
+        
+        # Verify that the git tag exists before creating the release
+        # This prevents GitHub from creating a new lightweight tag instead of using the existing annotated tag
+        if commit_sha and not client.verify_tag_exists(tag_name, commit_sha):
+            print(f"⚠️  Warning: Git tag {tag_name} not found or doesn't point to commit {commit_sha}", file=sys.stderr)
+            print(f"   GitHub will create a new tag at {commit_sha} if release is created", file=sys.stderr)
         
         # Create release title using better format
         try:
