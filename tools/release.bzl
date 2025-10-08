@@ -133,7 +133,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     if not base_label.startswith("//") and not base_label.startswith(":"):
         base_label = ":" + base_label
     
-    # Image name uses domain-app format (e.g., "demo-hello_python")
+    # Image name uses domain-app format (e.g., "demo-hello-python")
     image_name = domain + "-" + name
     image_target = name + "_image"
     
@@ -307,7 +307,7 @@ def release_helm_chart(
     )
     
     # Extract app names from app_metadata targets
-    # Target format: "//demo/hello_python:hello_python_metadata"
+    # Target format: "//demo/hello_python:hello-python_metadata"
     app_names = []
     for app_target in apps:
         # Extract the app name from the target
