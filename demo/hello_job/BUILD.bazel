@@ -1,5 +1,5 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
-load("//tools:release.bzl", "release_app")
+load("//tools:release.bzl", "release_app", "release_helm_chart")
 
 py_library(
     name = "main_lib",
@@ -35,4 +35,15 @@ release_app(
     registry = "ghcr.io",
     version = "1.0.0",
     description = "Migration job example - pre-install hook",
+)
+
+# Helm chart for hello_job (for testing job disablement)
+release_helm_chart(
+    name = "hello_job_chart",
+    apps = [":hello_job_metadata"],
+    chart_name = "hello_job",
+    namespace = "demo",
+    environment = "dev",
+    domain = "demo",
+    visibility = ["//visibility:public"],
 )

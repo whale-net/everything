@@ -277,6 +277,7 @@ global:
 
 apps:
   my_api:
+    enabled: true  # Set to false to skip rendering this app
     type: external-api
     image: ghcr.io/org/my_api
     imageTag: v1.2.3
@@ -306,6 +307,34 @@ ingressDefaults:
 ```
 
 **Note**: Each external-api app gets its own dedicated Ingress resource. TLS secret names automatically include the environment suffix (e.g., `my-api-tls-prod`).
+
+### Disabling Apps
+
+You can disable any app (including jobs like migrations) via values file:
+
+```yaml
+apps:
+  migration:
+    enabled: false  # Skip rendering this app entirely
+```
+
+This is useful for:
+- **Skipping migrations**: Disable migration jobs when you don't need them
+- **Gradual rollouts**: Deploy subset of services in a multi-app chart
+- **Environment-specific deploys**: Different apps enabled in dev vs prod
+- **Testing**: Disable problematic services without rebuilding charts
+
+**Example: Disable migration in production**
+```bash
+# Create custom values for production without migrations
+cat > prod-no-migration.yaml <<EOF
+apps:
+  migration:
+    enabled: false
+EOF
+
+helm upgrade myapp ./chart -f prod-no-migration.yaml
+```
 
 ---
 
