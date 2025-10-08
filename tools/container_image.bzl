@@ -97,6 +97,11 @@ def container_image(
     binary_name = _get_binary_name(binary)
     image_env = env or {}
     
+    # Add SSL_CERT_FILE environment variable for Python's SSL module
+    # This points to the CA certificates bundle from rules_distroless
+    if "SSL_CERT_FILE" not in image_env:
+        image_env["SSL_CERT_FILE"] = "/etc/ssl/certs/ca-certificates.crt"
+    
     # Determine entrypoint based on language
     if not entrypoint:
         if language == "python":
@@ -121,7 +126,10 @@ def container_image(
     oci_image(
         name = name,
         base = base,
-        tars = [":" + name + "_layer"],
+        tars = [
+            ":" + name + "_layer",
+            "//tools/cacerts:cacerts",  # Add CA certificates for SSL/TLS
+        ],
         entrypoint = entrypoint,
         workdir = "/app",
         env = image_env,
