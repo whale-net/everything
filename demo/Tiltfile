@@ -8,6 +8,11 @@ Local development setup for demo applications showing different app types:
 - job: hello-job (one-time/cron jobs)
 
 Configuration is done via environment variables (see .env.example in demo/)
+
+Prerequisites:
+  1. Build helm charts first: bazel build //demo/...
+  2. Configure .env file (or use demo/.env)
+  3. Run: tilt up
 """
 
 load('ext://namespace', 'namespace_create')
@@ -25,17 +30,23 @@ dotenv('demo/.env', required=False)
 enable_fastapi = os.getenv('DEMO_ENABLE_FASTAPI', 'true').lower() == 'true'
 enable_internal_api = os.getenv('DEMO_ENABLE_INTERNAL_API', 'false').lower() == 'true'
 enable_worker = os.getenv('DEMO_ENABLE_WORKER', 'false').lower() == 'true'
-enable_job = os.getenv('DEMO_ENABLE_JOB', 'false').lower() == 'true'
 enable_hello_python = os.getenv('DEMO_ENABLE_HELLO_PYTHON', 'false').lower() == 'true'
 enable_hello_go = os.getenv('DEMO_ENABLE_HELLO_GO', 'false').lower() == 'true'
+enable_job = os.getenv('DEMO_ENABLE_JOB', 'false').lower() == 'true'
 
 # Infrastructure control flags
 enable_ingress = os.getenv('DEMO_ENABLE_INGRESS', 'true').lower() == 'true'
 
+# Platform detection for Bazel builds
+# Auto-detect or allow override
+platform = os.getenv('TILT_PLATFORM', 'linux_arm64')  # default to ARM64 for M1/M2 Macs
+platform_flag = '--platforms=//tools:{}'.format(platform)
+
 print("\n" + "=" * 60)
 print("Demo Apps Configuration")
 print("=" * 60)
-print("Enabled apps:")
+print("Platform: {}".format(platform))
+print("\nEnabled apps:")
 print("  hello-fastapi (external-api):     {}".format("✓" if enable_fastapi else "✗"))
 print("  hello-internal-api (internal-api): {}".format("✓" if enable_internal_api else "✗"))
 print("  hello-worker (worker):             {}".format("✓" if enable_worker else "✗"))
@@ -68,12 +79,13 @@ if enable_fastapi:
     # Build and load hello-fastapi image
     local_resource(
         'build-hello-fastapi',
-        'bazel run //demo/hello_fastapi:hello-fastapi_image_load --platforms=//tools:linux_arm64',
+        'bazel run //demo/hello_fastapi:hello-fastapi_image_load {}'.format(platform_flag),
         deps=['demo/hello_fastapi'],
         labels=['build'],
     )
     
     # Deploy using generated helm chart
+    # Chart must be built first with: bazel build //demo:fastapi_chart
     k8s_yaml(
         helm(
             'bazel-bin/demo/fastapi_chart',
@@ -100,12 +112,13 @@ if enable_internal_api:
     # Build and load hello-internal-api image
     local_resource(
         'build-hello-internal-api',
-        'bazel run //demo/hello_internal_api:hello-internal-api_image_load --platforms=//tools:linux_arm64',
+        'bazel run //demo/hello_internal_api:hello-internal-api_image_load {}'.format(platform_flag),
         deps=['demo/hello_internal_api'],
         labels=['build'],
     )
     
     # Deploy using generated helm chart
+    # Chart must be built first with: bazel build //demo:internal_api_chart
     k8s_yaml(
         helm(
             'bazel-bin/demo/internal_api_chart',
@@ -130,12 +143,13 @@ if enable_worker:
     # Build and load hello-worker image
     local_resource(
         'build-hello-worker',
-        'bazel run //demo/hello_worker:hello-worker_image_load --platforms=//tools:linux_arm64',
+        'bazel run //demo/hello_worker:hello-worker_image_load {}'.format(platform_flag),
         deps=['demo/hello_worker'],
         labels=['build'],
     )
     
     # Deploy using generated helm chart
+    # Chart must be built first with: bazel build //demo:worker_chart
     k8s_yaml(
         helm(
             'bazel-bin/demo/worker_chart',
@@ -159,56 +173,67 @@ if enable_hello_python:
     # Build and load hello-python image
     local_resource(
         'build-hello-python',
-        'bazel run //demo/hello_python:hello-python_image_load --platforms=//tools:linux_arm64',
+        'bazel run //demo/hello_python:hello-python_image_load {}'.format(platform_flag),
         deps=['demo/hello_python'],
         labels=['build'],
     )
     
+    # Note: hello-python is part of the workers_chart with hello-go
+    # Only deploy if we're not also deploying hello-go to avoid conflicts
+    # For individual app testing, use single-app charts or manually manage
+
+if enable_hello_go:
+    # Build and load hello-go image
+    local_resource(
+        'build-hello-go',
+        'bazel run //demo/hello_go:hello-go_image_load {}'.format(platform_flag),
+        deps=['demo/hello_go'],
+        labels=['build'],
+    )
+
+# Deploy workers chart if either hello-python or hello-go is enabled
+if enable_hello_python or enable_hello_go:
     # Deploy using Bazel-generated helm chart
+    # Chart must be built first with: bazel build //demo:workers_chart
     k8s_yaml(
         helm(
             'bazel-bin/demo/workers_chart',
-            name='hello-python',
+            name='demo-workers',
             namespace=namespace,
             set=[
                 'global.environment=dev',
                 'global.namespace={}'.format(namespace),
                 'apps.hello-python.image=demo-hello-python',
                 'apps.hello-python.imageTag=latest',
+                'apps.hello-go.image=demo-hello-go',
+                'apps.hello-go.imageTag=latest',
             ]
         )
     )
-    k8s_resource(
-        workload='hello-python-dev',
-        resource_deps=['build-hello-python'],
-        labels=['worker'],
-    )
-
-if enable_hello_go:
-    # Build and load hello-go image
-    local_resource(
-        'build-hello-go',
-        'bazel run //demo/hello_go:hello-go_image_load --platforms=//tools:linux_arm64',
-        deps=['demo/hello_go'],
-        labels=['build'],
-    )
-    
-    k8s_resource(
-        workload='hello-go-dev',
-        resource_deps=['build-hello-go'],
-        labels=['worker'],
-    )
+    if enable_hello_python:
+        k8s_resource(
+            workload='hello-python-dev',
+            resource_deps=['build-hello-python'],
+            labels=['worker'],
+        )
+    if enable_hello_go:
+        k8s_resource(
+            workload='hello-go-dev',
+            resource_deps=['build-hello-go'],
+            labels=['worker'],
+        )
 
 if enable_job:
     # Build and load hello-job image
     local_resource(
         'build-hello-job',
-        'bazel run //demo/hello_job:hello-job_image_load --platforms=//tools:linux_arm64',
+        'bazel run //demo/hello_job:hello-job_image_load {}'.format(platform_flag),
         deps=['demo/hello_job'],
         labels=['build'],
     )
     
     # Deploy using generated helm chart
+    # Chart must be built first with: bazel build //demo:job_chart
     k8s_yaml(
         helm(
             'bazel-bin/demo/job_chart',
