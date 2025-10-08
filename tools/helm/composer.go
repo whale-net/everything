@@ -100,7 +100,6 @@ func (r ResourceConfig) ToValuesFormat() ValuesResourceConfig {
 
 // AppConfig represents the configuration for a single app in values.yaml
 type AppConfig struct {
-	Enabled     bool                 `yaml:"enabled"`
 	Type        string               `yaml:"type"`
 	Image       string               `yaml:"image"`
 	ImageTag    string               `yaml:"imageTag"`
@@ -404,7 +403,6 @@ func (c *Composer) buildAppConfig(app AppMetadata) (AppConfig, error) {
 	}
 
 	config := AppConfig{
-		Enabled:   true, // Default to enabled, can be overridden via values file
 		Type:      appType.String(),
 		Image:     app.GetImage(),
 		ImageTag:  app.GetImageTag(),
@@ -618,7 +616,6 @@ func writeValuesYAML(f *os.File, data ValuesData) error {
 	w.StartSection("apps")
 	for name, app := range data.Apps {
 		w.StartSection(name)
-		w.WriteBool("enabled", app.Enabled)
 		w.WriteString("type", app.Type)
 		w.WriteString("image", app.Image)
 		w.WriteString("imageTag", app.ImageTag)

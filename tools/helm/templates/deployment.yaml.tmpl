@@ -1,5 +1,5 @@
 {{- range $appName, $app := .Values.apps }}
-{{- if and $app.enabled (or (eq $app.type "external-api") (eq $app.type "internal-api") (eq $app.type "worker")) }}
+{{- if and (or (not (hasKey $app "enabled")) $app.enabled) (or (eq $app.type "external-api") (eq $app.type "internal-api") (eq $app.type "worker")) }}
 ---
 apiVersion: apps/v1
 kind: Deployment

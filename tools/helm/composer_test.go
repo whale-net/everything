@@ -599,68 +599,6 @@ func TestFormatYAML_EdgeCases(t *testing.T) {
 	}
 }
 
-// TestAppConfig_EnabledField tests that the Enabled field is set correctly
-func TestAppConfig_EnabledField(t *testing.T) {
-	config := ChartConfig{
-		ChartName: "test-chart",
-		Version:   "1.0.0",
-		OutputDir: "/tmp",
-	}
-	composer := NewComposer(config, "/templates")
-
-	tests := []struct {
-		name     string
-		metadata AppMetadata
-	}{
-		{
-			name: "Job type should have enabled=true by default",
-			metadata: AppMetadata{
-				Name:        "migration",
-				AppType:     "job",
-				Registry:    "ghcr.io",
-				RepoName:    "migration",
-				Version:     "v1.0.0",
-				ImageTarget: "migration_image",
-			},
-		},
-		{
-			name: "External API should have enabled=true by default",
-			metadata: AppMetadata{
-				Name:        "api",
-				AppType:     "external-api",
-				Registry:    "ghcr.io",
-				RepoName:    "api",
-				Version:     "v1.0.0",
-				ImageTarget: "api_image",
-			},
-		},
-		{
-			name: "Worker should have enabled=true by default",
-			metadata: AppMetadata{
-				Name:        "worker",
-				AppType:     "worker",
-				Registry:    "ghcr.io",
-				RepoName:    "worker",
-				Version:     "v1.0.0",
-				ImageTarget: "worker_image",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			appConfig, err := composer.buildAppConfig(tt.metadata)
-			if err != nil {
-				t.Fatalf("buildAppConfig failed: %v", err)
-			}
-
-			if !appConfig.Enabled {
-				t.Errorf("Expected Enabled to be true by default, got false")
-			}
-		})
-	}
-}
-
 // Helper function for substring checks
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) &&
