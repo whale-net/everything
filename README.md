@@ -611,6 +611,13 @@ Coverage is automatically collected and uploaded to Codecov on every CI run:
 **Setup Requirements:**
 - Add `CODECOV_TOKEN` to GitHub repository secrets
 - Token can be obtained from https://codecov.io after linking your repository
+- After adding `pytest-cov` and `coverage[toml]` to pyproject.toml, update the lock file:
+  ```bash
+  ./tools/update_lock.sh
+  # Or manually: uv lock --python 3.11
+  ```
+
+For detailed coverage setup instructions, see [docs/COVERAGE_SETUP.md](docs/COVERAGE_SETUP.md).
 
 ### Common Testing Issues
 - **Module import errors**: Ensure `//libs/python` is included in deps for Python tests
