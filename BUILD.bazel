@@ -10,8 +10,9 @@ exports_files([
 
 # Go setup
 # gazelle:prefix github.com/example/everything
+# Note: Gazelle rules are not currently needed as there are no external Go dependencies
+# If external Go dependencies are added in the future, these can be enabled:
 # gazelle(name = "gazelle")
-
 # gazelle(
 #     name = "gazelle-update-repos",
 #     args = [
