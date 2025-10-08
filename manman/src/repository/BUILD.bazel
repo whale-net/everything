@@ -1,24 +1,112 @@
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
 
-# Repository layer library
+# Database access layer library
 py_library(
-    name = "manman_repository",
-    srcs = glob(["**/*.py"], exclude=["*_test.py"]),
+    name = "manman_repository_database",
+    srcs = [
+        "database.py",
+        "workerdal.py",
+        "__init__.py",
+    ],
     visibility = ["//manman:__subpackages__"],
     deps = [
         "//manman/src:manman_core",
         "@pypi//:sqlmodel",
         "@pypi//:asyncpg",
-        "@pypi//:amqpstorm",
-        "@pypi//:httpx",
         "@pypi//:alembic",
         "@pypi//:opentelemetry-instrumentation-sqlalchemy",
+    ],
+)
+
+# RabbitMQ infrastructure library
+py_library(
+    name = "manman_repository_rabbitmq",
+    srcs = glob(["rabbitmq/**/*.py"], exclude=["*_test.py"]),
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        "//manman/src:manman_core",
+        "@pypi//:amqpstorm",
+    ],
+)
+
+# Message pub/sub services library
+py_library(
+    name = "manman_repository_message",
+    srcs = glob(["message/**/*.py"], exclude=["*_test.py"]),
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        ":manman_repository_rabbitmq",
+        "//manman/src:manman_core",
+        "@pypi//:amqpstorm",
+    ],
+)
+
+# API client library for external calls
+py_library(
+    name = "manman_repository_api_client",
+    srcs = ["api_client.py"],
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        "//manman/src:manman_core",
+        "@pypi//:httpx",
         "@pypi//:requests",
         "@pypi//:python-jose",
     ],
 )
 
-# Tests for repository layer
+# Aggregate repository layer library for backward compatibility
+py_library(
+    name = "manman_repository",
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        ":manman_repository_database",
+        ":manman_repository_rabbitmq",
+        ":manman_repository_message",
+        ":manman_repository_api_client",
+    ],
+)
+
+# Tests for database repository
+py_test(
+    name = "database_repository_test",
+    srcs = ["database_repository_test.py"],
+    deps = [
+        ":manman_repository_database",
+        "//manman/src:manman_core",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+        "@pypi//:sqlalchemy",  # For testing database components
+    ],
+    python_version = "PY3",
+)
+
+# Tests for validator
+py_test(
+    name = "validator_test",
+    srcs = ["validator_test.py"],
+    deps = [
+        ":manman_repository_database",
+        "//manman/src:manman_core",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+    ],
+    python_version = "PY3",
+)
+
+# Tests for RabbitMQ utilities
+py_test(
+    name = "rabbitmq_util_test",
+    srcs = ["rabbitmq/util_test.py"],
+    deps = [
+        ":manman_repository_rabbitmq",
+        "//manman/src:manman_core",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+    ],
+    python_version = "PY3",
+)
+
+# Aggregate test target for backward compatibility
 py_test(
     name = "manman_repository_test",
     srcs = [

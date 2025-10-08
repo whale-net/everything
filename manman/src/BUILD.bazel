@@ -1,35 +1,112 @@
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
 
-# Core manman library with configuration, models, and utilities
+# Data models library
 py_library(
-    name = "manman_core",
+    name = "manman_core_models",
     srcs = [
-        "__init__.py",
-        "__main__.py", 
-        "config.py",
-        "constants.py",
+        "models.py",
         "exceptions.py",
-        "logging_config.py",
-        "models.py", 
-        "util.py",
+        "constants.py",
     ],
     visibility = ["//manman:__subpackages__"],
     deps = [
         "@pypi//:pydantic",
         "@pypi//:sqlmodel",
-        "@pypi//:fastapi",
-        "@pypi//:alembic",
-        "@pypi//:asyncpg",
-        "@pypi//:psycopg2-binary",
-        "@pypi//:amqpstorm",
-        "@pypi//:opentelemetry-api",
-        "@pypi//:opentelemetry-sdk",
-        "@pypi//:python-dotenv",
-        "@pypi//:typer",
     ],
 )
 
-# Tests for core library
+# Configuration library
+py_library(
+    name = "manman_core_config",
+    srcs = ["config.py"],
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        "@pypi//:python-dotenv",
+    ],
+)
+
+# Logging configuration library
+py_library(
+    name = "manman_core_logging",
+    srcs = ["logging_config.py"],
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        ":manman_core_config",
+        "@pypi//:opentelemetry-api",
+        "@pypi//:opentelemetry-sdk",
+    ],
+)
+
+# Utility functions library
+py_library(
+    name = "manman_core_utils",
+    srcs = ["util.py"],
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        ":manman_core_config",
+        "@pypi//:amqpstorm",
+        "@pypi//:sqlmodel",
+        "@pypi//:asyncpg",
+        "@pypi//:psycopg2-binary",
+        "@pypi//:alembic",
+    ],
+)
+
+# Aggregate core manman library with configuration, models, and utilities
+py_library(
+    name = "manman_core",
+    srcs = [
+        "__init__.py",
+        "__main__.py",
+    ],
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        ":manman_core_models",
+        ":manman_core_config",
+        ":manman_core_logging",
+        ":manman_core_utils",
+        "@pypi//:typer",
+        "@pypi//:fastapi",
+    ],
+)
+
+# Tests for configuration
+py_test(
+    name = "config_test",
+    srcs = ["config_test.py"],
+    deps = [
+        ":manman_core_config",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+    ],
+    python_version = "PY3",
+)
+
+# Tests for models
+py_test(
+    name = "models_test",
+    srcs = ["models_test.py"],
+    deps = [
+        ":manman_core_models",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+    ],
+    python_version = "PY3",
+)
+
+# Tests for status functionality
+py_test(
+    name = "simple_status_test",
+    srcs = ["simple_status_test.py"],
+    deps = [
+        ":manman_core_models",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+    ],
+    python_version = "PY3",
+)
+
+# Aggregate test target for backward compatibility
 py_test(
     name = "manman_core_test",
     srcs = [
