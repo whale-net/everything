@@ -49,7 +49,7 @@ echo ""
 
 # Function to test an app's multiarch images
 # Args:
-#   image_name: Docker image name (e.g., "demo-hello_fastapi")
+#   image_name: Docker image name (e.g., "demo-hello-fastapi")
 #   test_package: Python package name with compiled extensions to check (e.g., "pydantic_core")
 #   description: Human-readable test description for output
 test_app_multiarch() {
@@ -57,7 +57,7 @@ test_app_multiarch() {
     local test_package=$2
     local description=$3
     
-    # Convert image name (demo-hello_fastapi) to app name (hello_fastapi)
+    # Convert image name (demo-hello-fastapi) to app name (hello-fastapi)
     local app_name=$(echo "$image_name" | sed 's/^demo-//')
     
     echo ""
@@ -73,12 +73,15 @@ test_app_multiarch() {
     # Find the OCI layout directory in runfiles or workspace
     local oci_layout=""
     
+    # Convert app-name to app_name for directory lookup (bazel uses underscores in paths)
+    local app_dir=$(echo "$app_name" | tr '-' '_')
+    
     # When running via bazel test, look in runfiles
     if [ -n "${RUNFILES_DIR}" ]; then
-        oci_layout="${RUNFILES_DIR}/_main/demo/${app_name}/${app_name}_image"
+        oci_layout="${RUNFILES_DIR}/_main/demo/${app_dir}/${app_name}_image"
     # When running directly (./test_cross_compilation.sh), look in workspace
-    elif [ -d "bazel-bin/demo/${app_name}/${app_name}_image" ]; then
-        oci_layout="bazel-bin/demo/${app_name}/${app_name}_image"
+    elif [ -d "bazel-bin/demo/${app_dir}/${app_name}_image" ]; then
+        oci_layout="bazel-bin/demo/${app_dir}/${app_name}_image"
     fi
     
     if [ -z "$oci_layout" ] || [ ! -d "$oci_layout" ]; then
@@ -266,7 +269,7 @@ overall_success=0
 
 # Test 1: FastAPI with pydantic
 if test_app_multiarch \
-    "demo-hello_fastapi" \
+    "demo-hello-fastapi" \
     "pydantic_core" \
     "FastAPI app with pydantic (compiled dependency)"; then
     test1_result="${GREEN}✅ PASS${NC}"
