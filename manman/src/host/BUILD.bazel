@@ -1,12 +1,88 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("//tools:release.bzl", "release_app")
 
-# Host API services library
+# Shared API utilities library - common code for all host APIs
 py_library(
-    name = "manman_host",
-    srcs = glob(["**/*.py"], exclude=["*_test.py"]),
-    visibility = ["//manman:__subpackages__"],
+    name = "manman_host_shared",
+    srcs = glob(["api/shared/**/*.py"], exclude=["*_test.py"]) + [
+        "api/__init__.py",
+        "api/request_models.py",
+    ],
+    visibility = ["//manman/src/host:__subpackages__"],
     deps = [
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
+        "@pypi//:fastapi",
+        "@pypi//:python-jose",
+    ],
+)
+
+# Experience API library
+py_library(
+    name = "manman_host_experience_api",
+    srcs = glob(["api/experience/**/*.py"], exclude=["*_test.py"]),
+    visibility = ["//manman/src/host:__subpackages__"],
+    deps = [
+        ":manman_host_shared",
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
+        "@pypi//:fastapi",
+    ],
+)
+
+# Status API library
+py_library(
+    name = "manman_host_status_api",
+    srcs = glob(["api/status/**/*.py"], exclude=["*_test.py"]),
+    visibility = ["//manman/src/host:__subpackages__"],
+    deps = [
+        ":manman_host_shared",
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
+        "@pypi//:fastapi",
+    ],
+)
+
+# Worker DAL API library
+py_library(
+    name = "manman_host_worker_dal_api",
+    srcs = glob(["api/worker_dal/**/*.py"], exclude=["*_test.py"]),
+    visibility = ["//manman/src/host:__subpackages__"],
+    deps = [
+        ":manman_host_shared",
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
+        "@pypi//:fastapi",
+    ],
+)
+
+# Status processor library
+py_library(
+    name = "manman_host_status_processor",
+    srcs = ["status_processor.py"],
+    visibility = ["//manman/src/host:__subpackages__"],
+    deps = [
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
+        "@pypi//:amqpstorm",
+    ],
+)
+
+# Main CLI library with app factories and service initialization
+py_library(
+    name = "manman_host_main",
+    srcs = [
+        "main.py",
+        "openapi.py",
+        "__init__.py",
+    ],
+    visibility = ["//manman/src/host:__subpackages__"],
+    deps = [
+        ":manman_host_shared",
+        ":manman_host_experience_api",
+        ":manman_host_status_api",
+        ":manman_host_worker_dal_api",
+        ":manman_host_status_processor",
         "//manman/src:manman_core",
         "//manman/src/repository:manman_repository",
         "//manman/src/migrations:manman_migrations",  # Required for migration commands
@@ -16,8 +92,21 @@ py_library(
         "@pypi//:typer",
         "@pypi//:alembic",
         "@pypi//:opentelemetry-instrumentation-fastapi",
-        "@pypi//:requests",
-        "@pypi//:python-jose",
+    ],
+)
+
+# Backward compatibility: aggregate library that includes all host components
+# This ensures existing code that depends on manman_host continues to work
+py_library(
+    name = "manman_host",
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        ":manman_host_main",
+        ":manman_host_shared",
+        ":manman_host_experience_api",
+        ":manman_host_status_api",
+        ":manman_host_worker_dal_api",
+        ":manman_host_status_processor",
     ],
 )
 
@@ -26,7 +115,7 @@ py_binary(
     name = "experience_api",
     srcs = ["main.py"],
     main = "main.py", 
-    deps = [":manman_host"],
+    deps = [":manman_host_main"],
     args = ["start-experience-api"],
     visibility = ["//manman:__pkg__"],
 )
@@ -35,7 +124,7 @@ py_binary(
     name = "status_api",
     srcs = ["main.py"],
     main = "main.py",
-    deps = [":manman_host"],
+    deps = [":manman_host_main"],
     args = ["start-status-api"],
     visibility = ["//manman:__pkg__"],
 )
@@ -44,7 +133,7 @@ py_binary(
     name = "worker_dal_api", 
     srcs = ["main.py"],
     main = "main.py",
-    deps = [":manman_host"],
+    deps = [":manman_host_main"],
     args = ["start-worker-dal-api"],
     visibility = ["//manman:__pkg__"],
 )
@@ -53,7 +142,7 @@ py_binary(
     name = "status_processor",
     srcs = ["main.py"], 
     main = "main.py",
-    deps = [":manman_host"],
+    deps = [":manman_host_main"],
     args = ["start-status-processor"],
     visibility = ["//manman:__pkg__"],
 )
@@ -62,12 +151,72 @@ py_binary(
     name = "migration",
     srcs = ["main.py"],
     main = "main.py",
-    deps = [":manman_host"],
+    deps = [":manman_host_main"],
     args = ["run-migration"],
     visibility = ["//manman:__pkg__"],
 )
 
 # Tests for host APIs
+py_test(
+    name = "experience_api_test",
+    srcs = ["experience_api_test.py"],
+    deps = [
+        ":manman_host_experience_api",
+        ":manman_host_shared",
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+        "@pypi//:httpx",  # For testing FastAPI endpoints
+    ],
+    python_version = "PY3",
+)
+
+py_test(
+    name = "status_api_test",
+    srcs = ["status_api_test.py"],
+    deps = [
+        ":manman_host_status_api",
+        ":manman_host_shared",
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+        "@pypi//:httpx",
+    ],
+    python_version = "PY3",
+)
+
+py_test(
+    name = "worker_dal_api_test",
+    srcs = ["worker_dal_api_test.py"],
+    deps = [
+        ":manman_host_worker_dal_api",
+        ":manman_host_shared",
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+        "@pypi//:httpx",
+        "@pypi//:requests",  # For repository API client
+    ],
+    python_version = "PY3",
+)
+
+py_test(
+    name = "status_processor_test",
+    srcs = ["status_processor_test.py"],
+    deps = [
+        ":manman_host_status_processor",
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+    ],
+    python_version = "PY3",
+)
+
+# Aggregate test target for backward compatibility
 py_test(
     name = "manman_host_test",
     srcs = [
