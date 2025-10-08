@@ -148,6 +148,19 @@ The manual chart in `__manual_backup_of_old_chart/` has full production features
 
 ## 🛠️ Development
 
+### Module Structure
+
+The ManMan codebase has been refactored into granular Bazel targets for better modularity and build performance. See [REFACTORING.md](./REFACTORING.md) and [TARGET_DEPENDENCIES.md](./TARGET_DEPENDENCIES.md) for details.
+
+**Module Overview**:
+- `//manman/src` - Core module (models, config, logging, utilities)
+- `//manman/src/repository` - Repository layer (database, RabbitMQ, messaging, API client)
+- `//manman/src/worker` - Worker services (core, server, service, main)
+- `//manman/src/host` - Host APIs (shared, experience, status, worker DAL, status processor, main)
+- `//manman/src/migrations` - Database migrations
+
+Each module is split into focused libraries plus an aggregate library for backward compatibility.
+
 ### Project Structure
 
 ```
