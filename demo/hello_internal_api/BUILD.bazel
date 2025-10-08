@@ -1,5 +1,4 @@
-load("@rules_python//python:defs.bzl", "py_library", "py_test")
-load("//tools:python_binary.bzl", "multiplatform_py_binary")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("//tools:release.bzl", "release_app")
 
 py_library(
@@ -12,8 +11,8 @@ py_library(
     visibility = ["//demo/hello_internal_api:__pkg__"],
 )
 
-multiplatform_py_binary(
-    name = "hello_internal_api",
+py_binary(
+    name = "hello-internal-api",
     srcs = ["main.py"],
     main = "main.py",
     deps = [":main_lib"],
@@ -32,7 +31,7 @@ py_test(
 )
 
 release_app(
-    name = "hello_internal_api",
+    name = "hello-internal-api",
     language = "python",
     domain = "demo",
     description = "Internal FastAPI service - accessible within cluster only",

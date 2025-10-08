@@ -2,17 +2,15 @@
 
 load("//tools:container_image.bzl", "multiplatform_image")
 load("//tools/helm:helm.bzl", "helm_chart")
-load("//tools:app_info.bzl", "AppInfo")
 
 def _app_metadata_impl(ctx):
     """Implementation for app_metadata rule."""
     # Create a JSON file with app metadata
-    # The app name should be passed explicitly, not derived from rule name
     metadata = {
-        "name": ctx.attr.app_name,  # Use explicit app_name instead of ctx.attr.name
+        "name": ctx.attr.app_name,
         "version": ctx.attr.version,
-        "binary_target": str(ctx.attr.binary_target.label),  # Direct binary reference
-        "image_target": str(ctx.attr.image_target.label),  # Image dependency (transitively includes binaries)
+        "binary_target": str(ctx.attr.binary_target.label),
+        "image_target": str(ctx.attr.image_target.label),
         "description": ctx.attr.description,
         "language": ctx.attr.language,
         "registry": ctx.attr.registry,
@@ -21,27 +19,11 @@ def _app_metadata_impl(ctx):
         "domain": ctx.attr.domain,
     }
     
-    # Extract metadata from binary's AppInfo provider if available
-    port_to_use = ctx.attr.port
-    app_type_to_use = ctx.attr.app_type
-    args_to_use = ctx.attr.args
-    
-    if ctx.attr.binary_info:
-        binary_app_info = ctx.attr.binary_info[AppInfo]
-        
-        # Use values from AppInfo provider if not explicitly overridden
-        if binary_app_info.port and not port_to_use:
-            port_to_use = binary_app_info.port
-        if binary_app_info.app_type and not app_type_to_use:
-            app_type_to_use = binary_app_info.app_type
-        if binary_app_info.args and not args_to_use:
-            args_to_use = binary_app_info.args
-    
-    # Add extracted/provided values to metadata
-    if app_type_to_use:
-        metadata["app_type"] = app_type_to_use
-    if port_to_use:
-        metadata["port"] = port_to_use
+    # Add metadata directly from attributes
+    if ctx.attr.app_type:
+        metadata["app_type"] = ctx.attr.app_type
+    if ctx.attr.port:
+        metadata["port"] = ctx.attr.port
     metadata["replicas"] = ctx.attr.replicas
     
     # Add optional health check configuration if provided
@@ -61,8 +43,8 @@ def _app_metadata_impl(ctx):
     # Add command and args
     if ctx.attr.command:
         metadata["command"] = ctx.attr.command
-    if args_to_use:
-        metadata["args"] = args_to_use
+    if ctx.attr.args:
+        metadata["args"] = ctx.attr.args
     
     output = ctx.actions.declare_file(ctx.label.name + "_metadata.json")
     ctx.actions.write(
@@ -75,26 +57,25 @@ def _app_metadata_impl(ctx):
 app_metadata = rule(
     implementation = _app_metadata_impl,
     attrs = {
-        "app_name": attr.string(mandatory = True),  # Add explicit app_name attribute
+        "app_name": attr.string(mandatory = True),
         "version": attr.string(default = "latest"),
-        "binary_info": attr.label(providers = [AppInfo]),  # Optional: binary's AppInfo provider
-        "binary_target": attr.label(mandatory = True),  # Direct binary dependency
-        "image_target": attr.label(mandatory = True),  # Image dependency (transitively includes binaries)
+        "binary_target": attr.label(mandatory = True),
+        "image_target": attr.label(mandatory = True),
         "description": attr.string(default = ""),
         "language": attr.string(mandatory = True),
         "registry": attr.string(default = "ghcr.io"),
         "organization": attr.string(default = "whale-net"),
         "repo_name": attr.string(mandatory = True),
         "domain": attr.string(mandatory = True),
-        "app_type": attr.string(default = ""),  # Optional, will be inferred if not provided
-        "port": attr.int(default = 0),  # Port the app listens on (0 = not specified)
-        "replicas": attr.int(default = 0),  # Default replica count (0 = use composer default)
-        "health_check_enabled": attr.bool(default = False),  # Whether health checks are enabled
-        "health_check_path": attr.string(default = "/health"),  # Health check endpoint path
-        "ingress_host": attr.string(default = ""),  # Custom ingress host (empty = use default pattern)
-        "ingress_tls_secret": attr.string(default = ""),  # TLS secret name for ingress
-        "command": attr.string_list(default = []),  # Container command override
-        "args": attr.string_list(default = []),  # Container arguments (optional if binary_info provides them)
+        "app_type": attr.string(default = ""),
+        "port": attr.int(default = 0),
+        "replicas": attr.int(default = 0),
+        "health_check_enabled": attr.bool(default = False),
+        "health_check_path": attr.string(default = "/health"),
+        "ingress_host": attr.string(default = ""),
+        "ingress_tls_secret": attr.string(default = ""),
+        "command": attr.string_list(default = []),
+        "args": attr.string_list(default = []),
     },
 )
 
@@ -110,22 +91,17 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
-    ensuring consistency between the two systems. Works with multiplatform_py_binary
-    and multiplatform_go_binary which auto-generate platform-specific binaries.
+    ensuring consistency between the two systems. Works with standard py_binary
+    and go_binary targets.
     
-    For multiplatform builds, use the corresponding wrapper macros:
-    - Python: multiplatform_py_binary (from //tools:python_binary.bzl)
-    - Go: multiplatform_go_binary (from //tools:go_binary.bzl)
-    
-    Both macros create {name}_linux_amd64 and {name}_linux_arm64 targets automatically,
-    enabling cross-compilation for container images. They also create {name}_info targets
-    that expose AppInfo providers with metadata (args, port, app_type).
+    The binaries are built for different platforms using Bazel's --platforms flag.
+    Cross-compilation is handled automatically by rules_pycross (Python) and rules_go (Go).
     
     Args:
-        name: App name (should match directory name and multiplatform binary name)
-        binary_name: Target label for the binaries. Can be:
-                     - Simple name: "my_app" -> looks for :my_app_linux_amd64/arm64
-                     - Full label: "//path/to:binary" -> looks for //path/to:binary_linux_amd64/arm64
+        name: App name (MUST use dashes, not underscores: 'my-app' not 'my_app')
+        binary_name: Target label for the binary. Can be:
+                     - Simple name: "my_app" -> looks for :my_app
+                     - Full label: "//path/to:binary" -> uses that binary
                      Defaults to name if not provided.
         language: Programming language ("python" or "go")
         domain: Domain/category for the app (e.g., "demo", "api", "web")
@@ -134,86 +110,72 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         registry: Container registry (defaults to ghcr.io)
         organization: Container registry organization (defaults to whale-net)
         custom_repo_name: Custom repository name (defaults to name)
-        app_type: Application type (external-api, internal-api, worker, job).
-                  Optional: automatically extracted from binary's AppInfo if not specified.
-        port: Port the application listens on (0 = not specified).
-              Optional: automatically extracted from binary's AppInfo if not specified.
+        app_type: Application type (external-api, internal-api, worker, job)
+        port: Port the application listens on (0 = not specified)
         replicas: Default number of replicas (0 = use composer default based on app_type)
         health_check_enabled: Whether to enable health checks (default: False)
         health_check_path: Path for health check endpoint (default: /health)
         ingress_host: Custom ingress hostname (empty = use default {app}-{env}.local pattern)
         ingress_tls_secret: TLS secret name for ingress (empty = no TLS)
         command: Override container command (default: use image ENTRYPOINT)
-        args: Container arguments (optional: automatically extracted from binary's AppInfo if not specified)
+        args: Container arguments
     """
+    # Validate name format - must use dashes, not underscores
+    if "_" in name:
+        fail("App name '{}' contains underscores. Use dashes instead (e.g., 'my-app' not 'my_app')".format(name))
+    
     if language not in ["python", "go"]:
         fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
     
-    # Construct binary targets from binary_name
-    # If binary_name is not provided, default to :name (same package)
-    # If binary_name starts with // or :, use it as-is (it's a label)
-    # Otherwise, treat it as a simple name in the current package
+    # Single binary target - no platform suffixes needed
+    # Binary will be built for different platforms using --platforms flag
     base_label = binary_name if binary_name else name
     if not base_label.startswith("//") and not base_label.startswith(":"):
         base_label = ":" + base_label
     
-    binary_amd64 = base_label + "_linux_amd64"
-    binary_arm64 = base_label + "_linux_arm64"
-    binary_info_label = base_label + "_info"  # AppInfo provider target
-    
-    # Image name uses domain-app format (e.g., "demo-hello_python")
-    # Repository is just the organization (e.g., "whale-net")
-    # Full path will be: registry/repository/image_name (e.g., "ghcr.io/whale-net/demo-hello_python")
+    # Image name uses domain-app format (e.g., "demo-hello-python")
     image_name = domain + "-" + name
     image_target = name + "_image"
     
-    # Create multiplatform OCI image using the explicitly provided or defaulted binaries
-    # CRITICAL: Pass image_name explicitly so domain+name identifies the app
+    # Create multiplatform OCI image using SINGLE binary target
+    # Bazel will build it for different platforms based on --platforms flag
     multiplatform_image(
         name = image_target,
-        binary_amd64 = binary_amd64,
-        binary_arm64 = binary_arm64,
+        binary = base_label,  # Single binary, built for different platforms
         registry = registry,
-        repository = organization,  # Just the org, not org/image
-        image_name = image_name,  # Explicit domain-app format
+        repository = organization,
+        image_name = image_name,
         language = language,
+        cmd = args if args else [],  # Pass container args if specified
     )
     
-    # Both Python and Go now create AppInfo providers
-    binary_info = binary_info_label
-    
-    # Use explicit linux_amd64 binary for binary_target dependency
-    # We use linux_amd64 because:
-    # 1. All platform binaries (amd64, arm64) are built from the same sources
-    # 2. Checking one platform's dependencies is sufficient for change detection
-    # 3. linux_amd64 is the most common deployment target
-    # 4. Consistent naming between Python and Go
-    binary_target_ref = base_label + "_linux_amd64"
+    # Use the binary directly for change detection
+    # All platforms are built from the same sources, so one reference is enough
+    binary_target_ref = base_label
     
     # Create release metadata
     app_metadata(
         name = name + "_metadata",
-        app_name = name,  # Pass the actual app name
-        binary_info = binary_info,  # AppInfo provider for extracting args, etc
-        binary_target = binary_target_ref,  # Platform-agnostic binary (alias to base)
-        image_target = image_target,  # Transitively depends on all platform binaries
+        app_name = name,
+        binary_target = binary_target_ref,
+        image_target = image_target,
         description = description,
         version = version,
         language = language,
         registry = registry,
         organization = organization,
-        repo_name = image_name,  # Use domain-app format
+        repo_name = image_name,
         domain = domain,
-        app_type = app_type,  # Pass through app_type for Helm chart generation
-        port = port,  # Port configuration
-        replicas = replicas,  # Replica count
-        health_check_enabled = health_check_enabled,  # Health check configuration
+        app_type = app_type,
+        port = port,
+        replicas = replicas,
+        health_check_enabled = health_check_enabled,
         health_check_path = health_check_path,
-        ingress_host = ingress_host,  # Ingress configuration
+        ingress_host = ingress_host,
         ingress_tls_secret = ingress_tls_secret,
-        command = command,  # Container command override
-        args = args,  # Container arguments (optional: overrides binary's args if provided)
-        tags = ["release-metadata"],  # No manual tag - metadata should be easily discoverable
+        command = command,
+        args = args,
+        tags = ["release-metadata"],
         visibility = ["//visibility:public"],
     )
 
@@ -240,11 +202,7 @@ def get_image_targets(app_name):
     base_name = app_name + "_image"
     return {
         "base": "//" + app_name + ":" + base_name,
-        "amd64": "//" + app_name + ":" + base_name,  # AMD64 uses base target
-        "arm64": "//" + app_name + ":" + base_name,  # ARM64 uses same base target with different platform flag
-        "push_base": "//" + app_name + ":" + base_name + "_push",
-        "push_amd64": "//" + app_name + ":" + base_name + "_push_amd64",
-        "push_arm64": "//" + app_name + ":" + base_name + "_push_arm64",
+        "push": "//" + app_name + ":" + base_name + "_push",
     }
 
 def _helm_chart_metadata_impl(ctx):
@@ -300,8 +258,8 @@ def release_helm_chart(
     
     Args:
         name: Target name for the chart
-        apps: List of app_metadata targets to include (e.g., ["//demo/hello_python:hello_python_metadata"])
-        chart_name: Base name of the Helm chart (defaults to name). 
+        apps: List of app_metadata targets to include (e.g., ["//demo/hello_python:hello-python_metadata"])
+        chart_name: Base name of the Helm chart (defaults to name, MUST use dashes not underscores). 
                    Will be prefixed with "helm-{namespace}-" automatically.
         chart_version: Version for local builds (default: "0.0.0-dev"). 
                       This is overridden during release by auto-versioning from git tags.
@@ -318,7 +276,7 @@ def release_helm_chart(
             chart_name = "hello-fastapi",  # Will become "helm-demo-hello-fastapi"
             namespace = "demo",
             domain = "demo",
-            apps = ["//demo/hello_fastapi:hello_fastapi_metadata"],
+            apps = ["//demo/hello_fastapi:hello-fastapi_metadata"],
         )
     """
     if not domain:
@@ -327,9 +285,13 @@ def release_helm_chart(
     if not namespace:
         fail("namespace is required for release_helm_chart")
     
+    # Validate chart_name format - must use dashes, not underscores
+    base_chart_name = chart_name or name
+    if "_" in base_chart_name:
+        fail("Chart name '{}' contains underscores. Use dashes instead (e.g., 'my-chart' not 'my_chart')".format(base_chart_name))
+    
     # Construct the actual chart name with helm-namespace- prefix
     # This makes chart artifacts clearly identifiable (e.g., helm-demo-hello-fastapi)
-    base_chart_name = chart_name or name
     actual_chart_name = "helm-{}-{}".format(namespace, base_chart_name)
     
     # Create the helm_chart target
@@ -345,7 +307,7 @@ def release_helm_chart(
     )
     
     # Extract app names from app_metadata targets
-    # Target format: "//demo/hello_python:hello_python_metadata"
+    # Target format: "//demo/hello_python:hello-python_metadata"
     app_names = []
     for app_target in apps:
         # Extract the app name from the target

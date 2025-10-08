@@ -14,88 +14,32 @@ from tools.release_helper.changes import detect_changed_apps
 from tools.release_helper.git import get_previous_tag
 from tools.release_helper.images import build_image, release_multiarch_image
 from tools.release_helper.metadata import list_all_apps
-from tools.release_helper.release import find_app_bazel_target, plan_release, tag_and_push_image
+from tools.release_helper.release import find_app_bazel_target, plan_release
 from tools.release_helper.release_notes import generate_release_notes, generate_release_notes_for_all_apps
 from tools.release_helper.summary import generate_release_summary
 from tools.release_helper.validation import validate_release_version
-from tools.release_helper.github_release import create_app_release, create_releases_for_apps, create_releases_for_apps_with_notes
+from tools.release_helper.github_release import create_app_release, create_releases_for_apps_with_notes
 from tools.release_helper.helm import (
     list_all_helm_charts,
-    get_helm_chart_metadata,
     find_helm_chart_bazel_target,
-    resolve_app_versions_for_chart,
     package_helm_chart_for_release,
-    publish_helm_repo_to_github_pages,
-    generate_helm_repo_index,
-    merge_helm_repo_index,
     unpublish_helm_chart_versions,
 )
 
 app = typer.Typer(help="Release helper for Everything monorepo")
 
 
-@app.command("list-app-versions")
-def list_app_versions(
-    app_name: Annotated[Optional[str], typer.Argument(help="App name (optional - lists all apps if not specified)")] = None,
-):
-    """List versions for apps by checking git tags."""
-    from tools.release_helper.git import get_latest_app_version
-    from tools.release_helper.metadata import get_app_metadata
-    
-    if app_name:
-        # List versions for specific app
-        try:
-            bazel_target = find_app_bazel_target(app_name)
-            metadata = get_app_metadata(bazel_target)
-            latest_version = get_latest_app_version(metadata['domain'], metadata['name'])
-            if latest_version:
-                typer.echo(f"{app_name}: {latest_version}")
-            else:
-                typer.echo(f"{app_name}: no versions found")
-        except ValueError as e:
-            typer.echo(f"Error: {e}", err=True)
-            raise typer.Exit(1)
-    else:
-        # List versions for all apps
-        apps = list_all_apps()
-        for app_info in apps:
-            try:
-                metadata = get_app_metadata(app_info['bazel_target'])
-                latest_version = get_latest_app_version(metadata['domain'], metadata['name'])
-                if latest_version:
-                    typer.echo(f"{app_info['name']}: {latest_version}")
-                else:
-                    typer.echo(f"{app_info['name']}: no versions found")
-            except Exception as e:
-                typer.echo(f"{app_info['name']}: error - {e}")
-
-
-@app.command("increment-version")
-def increment_version_cmd(
-    app_name: Annotated[str, typer.Argument(help="App name")],
-    increment_type: Annotated[str, typer.Argument(help="Increment type: 'minor' or 'patch'")],
-):
-    """Calculate the next version for an app based on increment type."""
-    from tools.release_helper.git import auto_increment_version
-    from tools.release_helper.metadata import get_app_metadata
-    
-    if increment_type not in ["minor", "patch"]:
-        typer.echo("Error: increment_type must be 'minor' or 'patch'", err=True)
-        raise typer.Exit(1)
-    
-    try:
-        bazel_target = find_app_bazel_target(app_name)
-        metadata = get_app_metadata(bazel_target)
-        new_version = auto_increment_version(metadata['domain'], metadata['name'], increment_type)
-        typer.echo(f"{app_name}: {new_version}")
-    except ValueError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
-
-
 @app.command()
 def list_apps():
     """List all apps with release metadata."""
+    apps = list_all_apps()
+    for app_info in apps:
+        typer.echo(f"{app_info['name']} (domain: {app_info['domain']}, target: {app_info['bazel_target']})")
+
+
+@app.command()
+def list():
+    """Alias for list-apps. List all apps with release metadata."""
     apps = list_all_apps()
     for app_info in apps:
         typer.echo(f"{app_info['name']} (domain: {app_info['domain']}, target: {app_info['bazel_target']})")
@@ -136,10 +80,6 @@ def release_multiarch(
     3. Creates manifest lists that automatically serve the correct architecture
     4. Pushes manifest lists (e.g., app:v1.0.0 points to both architectures)
     """
-    if dry_run:
-        typer.echo("DRY RUN: Would perform multi-architecture release but not actually pushing")
-        return
-    
     # Parse platforms
     platform_list = platforms.split(",") if platforms else ["amd64", "arm64"]
     platform_list = [p.strip() for p in platform_list]
@@ -147,9 +87,60 @@ def release_multiarch(
     # Find the app
     try:
         from tools.release_helper.release import find_app_bazel_target
+        from tools.release_helper.metadata import get_app_metadata
         bazel_target = find_app_bazel_target(app_name)
+        metadata = get_app_metadata(bazel_target)
+        domain = metadata["domain"]
+        actual_app_name = metadata["name"]
+        image_name = f"{domain}-{actual_app_name}"
     except ValueError:
         bazel_target = app_name
+        domain = "unknown"
+        actual_app_name = app_name
+        image_name = app_name
+    
+    if dry_run:
+        typer.echo("=" * 80)
+        typer.echo("DRY RUN: Multi-architecture release plan")
+        typer.echo("=" * 80)
+        typer.echo(f"App: {actual_app_name}")
+        typer.echo(f"Version: {version}")
+        typer.echo(f"Platforms: {', '.join(platform_list)}")
+        typer.echo(f"Registry: {registry}")
+        typer.echo("")
+        
+        # Show the build process
+        typer.echo("Build Process:")
+        typer.echo(f"  1. Build platform-specific images:")
+        for platform in platform_list:
+            typer.echo(f"     • {actual_app_name}_image_{platform} (--platforms=//tools:linux_{platform == 'arm64' and 'arm64' or 'x86_64'})")
+        typer.echo(f"  2. Build OCI image index: {actual_app_name}_image")
+        typer.echo(f"  3. Push image index with all tags")
+        
+        typer.echo("")
+        typer.echo("=" * 80)
+        typer.echo("PUBLISHED TAGS (what users will see):")
+        typer.echo("=" * 80)
+        owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "whale-net").lower()
+        repo_path = f"{registry}/{owner}/{image_name}"
+        typer.echo(f"  ✅ {repo_path}:{version}")
+        typer.echo(f"     └─ OCI image index → auto-selects from: {', '.join(platform_list)}")
+        typer.echo("")
+        typer.echo(f"  ✅ {repo_path}:latest")
+        typer.echo(f"     └─ OCI image index → auto-selects from: {', '.join(platform_list)}")
+        if commit:
+            typer.echo("")
+            typer.echo(f"  ✅ {repo_path}:{commit}")
+            typer.echo(f"     └─ OCI image index → auto-selects from: {', '.join(platform_list)}")
+        
+        typer.echo("")
+        typer.echo("=" * 80)
+        typer.echo("ℹ️  Only the OCI image index is published (no platform-specific tags).")
+        typer.echo("   Docker automatically serves the correct architecture when users pull.")
+        typer.echo("=" * 80)
+        typer.echo("")
+        typer.echo("DRY RUN: No images were actually built or pushed")
+        return
     
     # Perform multi-architecture release
     typer.echo(f"Starting multi-architecture release for {app_name}")
@@ -165,25 +156,13 @@ def release_multiarch(
             platforms=platform_list,
             commit_sha=commit
         )
-        typer.echo(f"✅ Successfully released {app_name}:{version} for {len(platform_list)} platforms")
-        typer.echo(f"Users can now run: docker pull {registry}/whale-net/demo-{app_name}:{version}")
+        typer.echo(f"✅ Successfully released {actual_app_name}:{version} for {len(platform_list)} platforms")
+        owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "whale-net").lower()
+        typer.echo(f"Users can now run: docker pull {registry}/{owner}/{image_name}:{version}")
         
     except Exception as e:
         typer.echo(f"❌ Failed to release multi-architecture image: {e}", err=True)
         raise typer.Exit(1)
-
-
-@app.command()
-def release(
-    app_name: Annotated[str, typer.Argument(help="App name")],
-    version: Annotated[str, typer.Option(help="Version tag")] = "latest",
-    commit: Annotated[Optional[str], typer.Option(help="Commit SHA for additional tag")] = None,
-    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be pushed without actually pushing")] = False,
-    allow_overwrite: Annotated[bool, typer.Option("--allow-overwrite", help="Allow overwriting existing versions (dangerous!)")] = False,
-    create_git_tag: Annotated[bool, typer.Option("--create-git-tag", help="Create and push a Git tag for this release")] = False,
-):
-    """Build, tag, and push container image."""
-    tag_and_push_image(app_name, version, commit, dry_run, allow_overwrite, create_git_tag)
 
 
 @app.command()
@@ -257,24 +236,6 @@ def changes(
     changed_apps = detect_changed_apps(base_commit)
     for app_info in changed_apps:
         typer.echo(app_info['name'])  # Print just the app name for compatibility
-
-
-@app.command("validate-version")
-def validate_version_cmd(
-    app_name: Annotated[str, typer.Argument(help="App name")],
-    version: Annotated[str, typer.Argument(help="Version to validate")],
-    allow_overwrite: Annotated[bool, typer.Option("--allow-overwrite", help="Allow overwriting existing versions")] = False,
-):
-    """Validate version format and availability."""
-    try:
-        # Try to find the app by name first
-        from tools.release_helper.release import find_app_bazel_target
-        bazel_target = find_app_bazel_target(app_name)
-        validate_release_version(bazel_target, version, allow_overwrite)
-        typer.echo(f"✓ Version '{version}' is valid for app '{app_name}'")
-    except ValueError as e:
-        typer.echo(f"Version validation failed: {e}", err=True)
-        raise typer.Exit(1)
 
 
 @app.command()
@@ -498,58 +459,6 @@ def create_combined_github_release_with_notes(
         raise typer.Exit(1)
 
 
-@app.command("create-combined-github-release")
-def create_combined_github_release(
-    version: Annotated[str, typer.Argument(help="Release version")],
-    owner: Annotated[str, typer.Option("--owner", help="Repository owner")] = "",
-    repo: Annotated[str, typer.Option("--repo", help="Repository name")] = "",
-    commit_sha: Annotated[Optional[str], typer.Option("--commit", help="Specific commit SHA to target")] = None,
-    prerelease: Annotated[bool, typer.Option("--prerelease", help="Mark as prerelease")] = False,
-    previous_tag: Annotated[Optional[str], typer.Option("--previous-tag", help="Previous tag to compare against (auto-detected if not provided)")] = None,
-    apps: Annotated[Optional[str], typer.Option("--apps", help="Comma-separated list of apps to include (defaults to all)")] = None,
-):
-    """Create GitHub releases for multiple apps."""
-    try:
-        # Determine which apps to include
-        if apps:
-            app_list = [app.strip() for app in apps.split(',')]
-        else:
-            # Get all apps
-            all_apps = list_all_apps()
-            app_list = [app['name'] for app in all_apps]
-        
-        # Create releases for all specified apps
-        typer.echo(f"Creating GitHub releases for {len(app_list)} apps...")
-        results = create_releases_for_apps(
-            app_list=app_list,
-            version=version,
-            owner=owner,
-            repo=repo,
-            commit_sha=commit_sha,
-            prerelease=prerelease,
-            previous_tag=previous_tag
-        )
-        
-        # Report results
-        successful_releases = [app for app, result in results.items() if result is not None]
-        failed_releases = [app for app, result in results.items() if result is None]
-        
-        if successful_releases:
-            typer.echo(f"✅ Successfully created releases for: {', '.join(successful_releases)}")
-        
-        if failed_releases:
-            typer.echo(f"❌ Failed to create releases for: {', '.join(failed_releases)}", err=True)
-            raise typer.Exit(1)
-        
-        if not successful_releases:
-            typer.echo("❌ No releases were created successfully", err=True)
-            raise typer.Exit(1)
-            
-    except Exception as e:
-        typer.echo(f"Error creating GitHub releases: {e}", err=True)
-        raise typer.Exit(1)
-
-
 # Helm Chart Commands
 
 @app.command("list-helm-charts")
@@ -559,49 +468,6 @@ def list_helm_charts_cmd():
     for chart_info in charts:
         apps_str = ', '.join(chart_info['apps']) if chart_info['apps'] else 'none'
         typer.echo(f"{chart_info['name']} (domain: {chart_info['domain']}, namespace: {chart_info['namespace']}, apps: {apps_str})")
-
-
-@app.command("helm-chart-info")
-def helm_chart_info(
-    chart_name: Annotated[str, typer.Argument(help="Helm chart name")],
-):
-    """Get detailed information about a helm chart."""
-    try:
-        chart_target = find_helm_chart_bazel_target(chart_name)
-        metadata = get_helm_chart_metadata(chart_target)
-        
-        typer.echo(f"Chart: {metadata['name']}")
-        typer.echo(f"Domain: {metadata['domain']}")
-        typer.echo(f"Namespace: {metadata['namespace']}")
-        typer.echo(f"Environment: {metadata['environment']}")
-        typer.echo(f"Version: {metadata['version']}")
-        typer.echo(f"Apps: {', '.join(metadata.get('apps', []))}")
-        typer.echo(f"Bazel Target: {chart_target}")
-        
-    except ValueError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
-
-
-@app.command("resolve-chart-app-versions")
-def resolve_chart_app_versions(
-    chart_name: Annotated[str, typer.Argument(help="Helm chart name")],
-    use_released: Annotated[bool, typer.Option("--use-released/--use-latest", help="Use released versions from git tags or 'latest'")] = True,
-):
-    """Resolve app versions for a helm chart."""
-    try:
-        chart_target = find_helm_chart_bazel_target(chart_name)
-        metadata = get_helm_chart_metadata(chart_target)
-        
-        app_versions = resolve_app_versions_for_chart(metadata, use_released)
-        
-        typer.echo(f"App versions for chart '{chart_name}':")
-        for app_name, version in app_versions.items():
-            typer.echo(f"  {app_name}: {version}")
-            
-    except ValueError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
 
 
 @app.command("build-helm-chart")
@@ -722,128 +588,6 @@ def plan_helm_release(
     else:
         # JSON output
         typer.echo(json.dumps(plan_result, indent=2))
-
-
-@app.command("publish-helm-repo")
-def publish_helm_repo(
-    charts_dir: Annotated[str, typer.Argument(help="Directory containing .tgz chart files")],
-    owner: Annotated[str, typer.Option("--owner", help="GitHub repository owner")] = "",
-    repo: Annotated[str, typer.Option("--repo", help="GitHub repository name")] = "",
-    base_url: Annotated[Optional[str], typer.Option("--base-url", help="Base URL for charts (auto-generated if not provided)")] = None,
-    commit_message: Annotated[Optional[str], typer.Option("--commit-message", help="Commit message for the update")] = None,
-    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be done without pushing")] = False,
-):
-    """Publish Helm charts to GitHub Pages by pushing to gh-pages branch.
-    
-    This command will:
-    1. Clone or create the gh-pages branch
-    2. Add new chart packages (.tgz files)
-    3. Generate or update the Helm repository index.yaml
-    4. Commit and push changes to gh-pages
-    """
-    try:
-        from pathlib import Path
-        
-        charts_path = Path(charts_dir)
-        if not charts_path.exists():
-            typer.echo(f"Error: Charts directory not found: {charts_dir}", err=True)
-            raise typer.Exit(1)
-        
-        # Check if there are any .tgz files
-        chart_files = list(charts_path.glob("*.tgz"))
-        if not chart_files:
-            typer.echo(f"Error: No .tgz chart files found in {charts_dir}", err=True)
-            raise typer.Exit(1)
-        
-        typer.echo(f"Found {len(chart_files)} chart(s) to publish:")
-        for chart_file in chart_files:
-            typer.echo(f"  - {chart_file.name}")
-        
-        # Use environment variables if owner/repo not provided
-        if not owner:
-            owner = os.getenv('GITHUB_REPOSITORY_OWNER', '')
-        if not repo:
-            repo_full = os.getenv('GITHUB_REPOSITORY', '')
-            if '/' in repo_full:
-                repo = repo_full.split('/')[-1]
-        
-        if not owner or not repo:
-            typer.echo("Error: --owner and --repo are required (or set GITHUB_REPOSITORY_OWNER and GITHUB_REPOSITORY env vars)", err=True)
-            raise typer.Exit(1)
-        
-        if dry_run:
-            typer.echo(f"\nDRY RUN: Would publish to https://{owner}.github.io/{repo}")
-        else:
-            typer.echo(f"\nPublishing to https://{owner}.github.io/{repo}")
-        
-        # Publish to GitHub Pages
-        success = publish_helm_repo_to_github_pages(
-            charts_dir=charts_path,
-            repository_owner=owner,
-            repository_name=repo,
-            base_url=base_url,
-            commit_message=commit_message,
-            dry_run=dry_run
-        )
-        
-        if success:
-            typer.echo(f"\n✅ Successfully published Helm repository!")
-            if not dry_run:
-                typer.echo(f"\nUsers can now add the repository with:")
-                typer.echo(f"  helm repo add {repo} https://{owner}.github.io/{repo}/charts")
-                typer.echo(f"  helm repo update")
-        else:
-            typer.echo("❌ Failed to publish Helm repository", err=True)
-            raise typer.Exit(1)
-            
-    except Exception as e:
-        typer.echo(f"Error publishing Helm repository: {e}", err=True)
-        raise typer.Exit(1)
-
-
-@app.command("generate-helm-index")
-def generate_helm_index_cmd(
-    charts_dir: Annotated[str, typer.Argument(help="Directory containing .tgz chart files")],
-    base_url: Annotated[str, typer.Option("--base-url", help="Base URL where charts will be hosted")],
-    merge_with: Annotated[Optional[str], typer.Option("--merge-with", help="Path to existing index.yaml to merge with")] = None,
-):
-    """Generate a Helm repository index.yaml file.
-    
-    This creates or updates an index.yaml file that catalogs all Helm charts in the directory.
-    If --merge-with is provided, it will merge with an existing index to preserve history.
-    """
-    try:
-        from pathlib import Path
-        
-        charts_path = Path(charts_dir)
-        if not charts_path.exists():
-            typer.echo(f"Error: Charts directory not found: {charts_dir}", err=True)
-            raise typer.Exit(1)
-        
-        # Check if there are any .tgz files
-        chart_files = list(charts_path.glob("*.tgz"))
-        if not chart_files:
-            typer.echo(f"Warning: No .tgz chart files found in {charts_dir}", err=True)
-        
-        typer.echo(f"Generating Helm repository index for {len(chart_files)} chart(s)...")
-        
-        if merge_with:
-            merge_path = Path(merge_with)
-            if not merge_path.exists():
-                typer.echo(f"Warning: Merge file not found: {merge_with}, creating new index", err=True)
-                merge_path = None
-            else:
-                typer.echo(f"Merging with existing index: {merge_with}")
-            
-            index_path = merge_helm_repo_index(charts_path, merge_path, base_url)
-        else:
-            index_path = generate_helm_repo_index(charts_path, base_url)
-        
-        typer.echo(f"✅ Generated index: {index_path}")
-        
-    except Exception as e:
-        typer.echo(f"Error generating Helm index: {e}", err=True)
-        raise typer.Exit(1)
 
 
 @app.command("unpublish-helm-chart")

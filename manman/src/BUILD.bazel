@@ -20,6 +20,7 @@ py_library(
         "@pypi//:fastapi",
         "@pypi//:alembic",
         "@pypi//:asyncpg",
+        "@pypi//:psycopg2-binary",
         "@pypi//:amqpstorm",
         "@pypi//:opentelemetry-api",
         "@pypi//:opentelemetry-sdk",

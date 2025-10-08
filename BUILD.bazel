@@ -8,17 +8,11 @@ exports_files([
     "MODULE.bazel.lock",
 ])
 
-# Root Python library
-py_library(
-    name = "root",
-    srcs = ["__init__.py"],
-    visibility = ["//visibility:public"],
-)
-
 # Go setup
 # gazelle:prefix github.com/example/everything
+# Note: Gazelle rules are not currently needed as there are no external Go dependencies
+# If external Go dependencies are added in the future, these can be enabled:
 # gazelle(name = "gazelle")
-
 # gazelle(
 #     name = "gazelle-update-repos",
 #     args = [

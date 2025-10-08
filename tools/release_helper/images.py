@@ -155,13 +155,15 @@ def build_image(bazel_target: str, platform: Optional[str] = None) -> str:
     return f"{domain}-{app_name}:latest"
 
 
-def push_image_with_tags(bazel_target: str, tags: List[str], platform: Optional[str] = None) -> None:
+def push_image_with_tags(bazel_target: str, tags: List[str]) -> None:
     """Push a container image with multiple tags to the registry.
+    
+    Pushes the OCI image index which contains all platform variants (amd64, arm64).
+    The index allows Docker to automatically select the correct architecture.
     
     Args:
         bazel_target: Full bazel target path for the app metadata
-        tags: List of full registry tags to push (e.g., ["ghcr.io/whale-net/demo-hello_python:v0.0.6-amd64"])
-        platform: Optional platform specification ("amd64" or "arm64", defaults to base/amd64)
+        tags: List of full registry tags to push (e.g., ["ghcr.io/whale-net/demo-hello_python:v0.0.6"])
     """
     # Get app metadata for proper naming
     metadata = get_app_metadata(bazel_target)
@@ -169,9 +171,11 @@ def push_image_with_tags(bazel_target: str, tags: List[str], platform: Optional[
 
     # Extract the app path from the bazel_target to construct the push target
     app_path = bazel_target[2:].split(':')[0]  # Remove // and :target
+    
+    # Use the image index push target (contains both amd64 and arm64)
     push_target = f"//{app_path}:{app_name}_image_push"
 
-    print(f"Pushing {len(tags)} tags using {push_target} for platform {platform or 'default'}...")
+    print(f"Pushing {len(tags)} tags using {push_target}...")
     
     # Extract the tag names from the full tags
     tag_names = [tag.split(':')[-1] for tag in tags]
@@ -179,13 +183,8 @@ def push_image_with_tags(bazel_target: str, tags: List[str], platform: Optional[
     print(f"Pushing with tags: {', '.join(tag_names)}")
     
     # Build the bazel run command with tag arguments
+    # DO NOT add --platforms flag - oci_push must use host architecture tools
     bazel_args = ["run", push_target, "--"]
-    
-    # Add platform-specific build flags if needed
-    if platform == "arm64":
-        bazel_args.insert(2, "--platforms=//tools:linux_arm64")
-    elif platform == "amd64":
-        bazel_args.insert(2, "--platforms=//tools:linux_x86_64")
     
     # Add each tag as an argument (oci_push supports multiple --tag arguments)
     for tag_name in tag_names:
@@ -193,7 +192,7 @@ def push_image_with_tags(bazel_target: str, tags: List[str], platform: Optional[
     
     try:
         run_bazel(bazel_args, capture_output=False)  # Don't capture output so we can see progress
-        print(f"Successfully pushed image with {len(tag_names)} tags for platform {platform or 'default'}")
+        print(f"Successfully pushed image with {len(tag_names)} tags")
     except subprocess.CalledProcessError as e:
         print(f"Failed to push image: {e}")
         raise
@@ -201,18 +200,17 @@ def push_image_with_tags(bazel_target: str, tags: List[str], platform: Optional[
 
 def release_multiarch_image(bazel_target: str, version: str, registry: str = "ghcr.io", 
                            platforms: List[str] = None, commit_sha: Optional[str] = None) -> None:
-    """Release a multi-architecture image with manifest list.
+    """Release a multi-architecture image using OCI image index.
     
-    This function orchestrates the complete multi-architecture release process:
-    1. Build and push platform-specific images
-    2. Create a manifest list that points to all platforms
-    3. Push the manifest list
+    Builds platform-specific images and pushes a single OCI image index containing
+    all platform variants. The index allows Docker to automatically select the
+    correct architecture when users pull.
     
     Args:
         bazel_target: Full bazel target path for the app metadata
         version: Version tag for the release
         registry: Container registry (defaults to ghcr.io)
-        platforms: List of platforms to build for (defaults to ["amd64", "arm64"])
+        platforms: List of platforms to build (defaults to ["amd64", "arm64"])
         commit_sha: Optional commit SHA for additional tag
     """
     if platforms is None:
@@ -223,6 +221,9 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
     domain = metadata['domain']
     app_name = metadata['name']
     
+    # Extract the app path from the bazel_target
+    app_path = bazel_target[2:].split(':')[0]  # Remove // and :target
+    
     # Create registry repository name
     image_name = f"{domain}-{app_name}"
     if registry == "ghcr.io" and "GITHUB_REPOSITORY_OWNER" in os.environ:
@@ -231,46 +232,48 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
     else:
         registry_repo = f"{registry}/{image_name}"
     
-    print(f"Starting multi-architecture release for {image_name}...")
+    print(f"Releasing multi-architecture image: {image_name}")
+    print(f"Registry: {registry_repo}")
+    print(f"Version: {version}")
+    print(f"Platforms: {', '.join(platforms)}")
     
-    # Step 1: Build and push platform-specific images
-    for platform in platforms:
-        print(f"Building and pushing for platform: {platform}")
-        
-        # Build the image for this platform
-        build_image(bazel_target, platform=platform)
-        
-        # Create platform-specific tags
-        platform_tags = format_registry_tags(
-            domain=domain,
-            app_name=app_name, 
-            version=version,
-            registry=registry,
-            commit_sha=commit_sha,
-            platform=platform
-        )
-        
-        # Push with platform-specific tags
-        push_image_with_tags(bazel_target, list(platform_tags.values()), platform=platform)
+    # Build the OCI image index with platform transitions
+    # The oci_image_index rule with platforms parameter will automatically:
+    # 1. Build the base image for each platform via Bazel transitions
+    # 2. Create a proper OCI index manifest with platform metadata
+    print(f"\n{'='*80}")
+    print("Building OCI image index with platform transitions...")
+    print(f"{'='*80}")
+    index_target = f"//{app_path}:{app_name}_image"
+    print(f"Building index: {index_target}")
+    run_bazel([
+        "build", 
+        index_target
+    ])
+    print(f"✅ Built OCI image index containing {len(platforms)} platform variants")
+
     
-    # Step 2: Create and push manifest lists for each tag type
-    tag_types = ["latest", "version"]
-    if commit_sha:
-        tag_types.append("commit")
+    # Push the image index with all tags
+    # The oci_push target will push the index with proper multi-arch manifest
+    tags = format_registry_tags(
+        domain=domain,
+        app_name=app_name,
+        version=version,
+        registry=registry,
+        commit_sha=commit_sha,
+        platform=None  # No platform suffix - this is the index
+    )
     
-    for tag_type in tag_types:
-        if tag_type == "version":
-            tag_value = version
-        elif tag_type == "latest":
-            tag_value = "latest"
-        elif tag_type == "commit":
-            tag_value = commit_sha
-        
-        # Create manifest list (without platform suffix)
-        create_manifest_list(registry_repo, tag_value, platforms)
-        
-        # Push manifest list
-        push_manifest_list(registry_repo, tag_value)
+    print(f"\n{'='*80}")
+    print(f"Pushing OCI image index with {len(tags)} tags...")
+    print(f"{'='*80}")
+    push_image_with_tags(bazel_target, list(tags.values()))
     
-    print(f"Successfully released multi-architecture image {image_name}:{version}")
-    print(f"Users can now pull {registry_repo}:{version} and get the correct architecture automatically")
+    print(f"\n{'='*80}")
+    print(f"✅ Successfully released {image_name}:{version}")
+    print(f"{'='*80}")
+    print(f"\nPublished tags:")
+    for tag in tags.values():
+        print(f"  - {tag}")
+    print(f"\nThe image index contains {len(platforms)} platform variants: {', '.join(platforms)}")
+    print(f"Docker will automatically select the correct architecture when users pull.")

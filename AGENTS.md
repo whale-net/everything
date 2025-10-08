@@ -2,22 +2,40 @@
 
 This document provides comprehensive guidelines for AI agents working on the Everything monorepo. It establishes a framework for understanding, maintaining, and extending the codebase while preserving its architectural principles.
 
+## Agent Behavioral Guidelines
+
+- Avoid giving commands that commit changes. The user will be responsible for committing
+- Provide short, straightforward responses. Elaborate only when necessary
+- Do not apologize for being wrong
+- Do not praise the developer. You are just a tool, not a conversation
+- If provided with a GitHub link for debugging, try and use GitHub MCP tools
+- Avoid creating unnecessary documentation. Most of the time it is deleted right away after creation
+- Avoid creating documentation for cleanups or for simple tasks. If unsure whether to create documentaiton. ask user.
+- Do not patch production environment - rely on release actions and human inputs
+- **ALWAYS reference these instructions first** and fallback to search or bash commands only when you encounter unexpected information
+
 ## ⚠️ CRITICAL: Cross-Compilation
 
-**MUST READ**: [`docs/CROSS_COMPILATION.md`](docs/CROSS_COMPILATION.md)
+**MUST READ**: [`docs/BUILDING_CONTAINERS.md`](docs/BUILDING_CONTAINERS.md)
 
-This repository implements true cross-compilation for Python apps using Bazel platform transitions. **This is critical for ARM64 container deployments**. If cross-compilation breaks, ARM64 containers will crash at runtime with compiled dependencies (pydantic, numpy, pandas, etc.).
+This repository implements true cross-compilation for Python apps using rules_pycross for platform-specific wheel resolution. **This is critical for ARM64 container deployments**. If cross-compilation breaks, ARM64 containers will crash at runtime with compiled dependencies (pydantic, numpy, pandas, etc.).
 
 **Key Points**:
-- Python apps with compiled dependencies MUST use `multiplatform_py_binary`
-- Platform transitions ensure correct wheel selection (x86_64 vs aarch64)
+- Python apps use standard `py_binary` with rules_pycross for cross-platform wheels
+- Use `--platforms` flag to select target architecture (//tools:linux_x86_64 or //tools:linux_arm64)
 - Test cross-compilation with:
   ```bash
-  # Load images first (required)
-  bazel run //demo/hello_fastapi:hello_fastapi_image_amd64_load
-  bazel run //demo/hello_fastapi:hello_fastapi_image_arm64_load
-  # Run the test
+  # The test has image as data dependency, just run it
   bazel test //tools:test_cross_compilation --test_output=streamed
+  
+  # To manually test images locally:
+  # On M1/M2 Macs:
+  bazel run //demo/hello-fastapi:hello-fastapi_image_load --platforms=//tools:linux_arm64
+  # On Intel:
+  bazel run //demo/hello-fastapi:hello-fastapi_image_load --platforms=//tools:linux_x86_64
+  docker run --rm -p 8000:8000 demo-hello-fastapi:latest
+  curl http://localhost:8000/
+  ```
   ```
 - CI automatically verifies cross-compilation on every PR
 - If `//tools:test_cross_compilation` fails, **DO NOT MERGE**
@@ -86,9 +104,9 @@ The `release_app` macro automatically creates:
 The repository uses an automated multi-platform build system that creates container images supporting both AMD64 and ARM64 architectures:
 
 **For Python apps:**
-- `multiplatform_py_binary` creates platform-specific binaries automatically
-- `pycross` handles platform-specific Python dependencies (wheels) transparently
-- No manual platform configuration needed - everything is automatic
+- Standard `py_binary` with rules_pycross for cross-platform wheel resolution
+- `uv.lock` contains pre-resolved wheels for all platforms (amd64, arm64)
+- Use `--platforms` flag to select target architecture at build time
 
 **For Go apps:**
 - Go toolchain handles cross-compilation automatically
@@ -97,16 +115,16 @@ The repository uses an automated multi-platform build system that creates contai
 **Platform selection:**
 - `oci_image_index` creates a multi-platform manifest list
 - Docker/Kubernetes automatically pulls the correct platform image
-- No need to specify platforms explicitly in most cases
+- Use `--platforms=//tools:linux_x86_64` or `//tools:linux_arm64` when building
 
-#### Custom Platform Definitions (Optional)
-Platform definitions are available in `//tools:platforms.bzl` for advanced use cases:
+#### Platform Definitions
+Platform definitions are defined in `//tools:platforms.bzl`:
 - `//tools:linux_x86_64` - Linux AMD64
 - `//tools:linux_arm64` - Linux ARM64
 - `//tools:macos_x86_64` - macOS Intel (local dev)
 - `//tools:macos_arm64` - macOS Apple Silicon (local dev)
 
-These are rarely needed - the build system handles platform selection automatically.
+Use these with the `--platforms` flag to control target architecture.
 
 ### Image Build System
 
@@ -115,39 +133,38 @@ All container images follow the `<domain>-<app>:<version>` format:
 
 ```bash
 # Registry format
-ghcr.io/OWNER/demo-hello_python:v1.2.3    # Version-specific
-ghcr.io/OWNER/demo-hello_python:latest    # Latest release
-ghcr.io/OWNER/demo-hello_python:abc123def # Commit-specific
+ghcr.io/OWNER/demo-hello-python:v1.2.3    # Version-specific
+ghcr.io/OWNER/demo-hello-python:latest    # Latest release
+ghcr.io/OWNER/demo-hello-python:abc123def # Commit-specific
 
 # Local development format
-demo-hello_python:latest
+demo-hello-python:latest
 ```
 
 #### Image Targets Generated
 For each app with `release_app`, the following targets are created:
-- `<app>_image` - Multi-platform manifest list (AMD64 + ARM64)
-- `<app>_image_amd64` - AMD64-specific image
-- `<app>_image_arm64` - ARM64-specific image
-- `<app>_image_load` - Load into Docker (uses AMD64 for local testing)
-- `<app>_image_amd64_load` - Load AMD64 image specifically
-- `<app>_image_arm64_load` - Load ARM64 image specifically
-- `<app>_image_push` - Push multi-platform manifest
-- `<app>_image_amd64_push` - Push AMD64 image
-- `<app>_image_arm64_push` - Push ARM64 image
+- `<app>_image` - Multi-platform OCI image index (contains both AMD64 + ARM64)
+- `<app>_image_base` - Base image target (used by platform transitions)
+- `<app>_image_load` - Load Linux image into Docker (REQUIRES --platforms flag)
+- `<app>_image_push` - Push multi-platform image index to registry
 
 #### Building Images
 ```bash
-# Build all platform variants
+# Build multi-platform image index (contains both architectures)
 bazel build //path/to/app:app_image
 
-# Build specific platform
-bazel build //path/to/app:app_image_amd64
+# Build and load into Docker - MUST specify platform for Linux binaries
+# On M1/M2 Macs (ARM64):
+bazel run //path/to/app:app_image_load --platforms=//tools:linux_arm64
 
-# Build and load into Docker (recommended for development)
-bazel run //path/to/app:app_image_load
+# On Intel Macs/PCs (AMD64):
+bazel run //path/to/app:app_image_load --platforms=//tools:linux_x86_64
 
-# Using release tool (production workflow)
+# Using release tool (production workflow - handles platforms automatically)
 bazel run //tools:release -- build app_name
+
+# IMPORTANT: Without --platforms flag, you may get macOS binaries
+# which will fail with "Exec format error" in Docker containers.
 ```
 
 ## 🛠️ Development Workflow
@@ -270,7 +287,7 @@ Use the GitHub Actions "Release" workflow:
 ```bash
 # Release specific apps
 gh workflow run release.yml \
-  -f apps=hello_python,hello_go \
+  -f apps=hello-python,hello-go \
   -f version=v1.2.3 \
   -f dry_run=false
 
@@ -281,7 +298,7 @@ gh workflow run release.yml \
 
 # Dry run (test without publishing)
 gh workflow run release.yml \
-  -f apps=hello_python \
+  -f apps=hello-python \
   -f version=v1.2.3 \
   -f dry_run=true
 ```
@@ -297,11 +314,11 @@ bazel run //tools:release -- changes
 # Build and test locally
 bazel run //tools:release -- build app_name
 
-# Release with version
-bazel run //tools:release -- release app_name --version v1.2.3
+# Release with multi-arch support
+bazel run //tools:release -- release-multiarch app_name --version v1.2.3
 
 # Dry run
-bazel run //tools:release -- release app_name --version v1.2.3 --dry-run
+bazel run //tools:release -- release-multiarch app_name --version v1.2.3 --dry-run
 ```
 
 ### Release Process Details
@@ -323,12 +340,12 @@ GitHub Actions automatically generates build matrices:
 ```yaml
 matrix:
   include:
-    - app: hello_python
-      binary: hello_python
-      image: hello_python_image
-    - app: hello_go
-      binary: hello_go
-      image: hello_go_image
+    - app: hello-python
+      binary: hello-python
+      image: hello-python_image
+    - app: hello-go
+      binary: hello-go
+      image: hello-go_image
 ```
 
 #### 4. Container Publishing
@@ -474,11 +491,11 @@ The helm chart system automatically generates Kubernetes manifests from app defi
 Add `type` attribute to app definitions:
 
 ```python
-# demo/hello_fastapi/BUILD.bazel
+# demo/hello-fastapi/BUILD.bazel
 load("//tools:demo_app.bzl", "demo_app")
 
 demo_app(
-    name = "hello_fastapi",
+    name = "hello-fastapi",
     srcs = ["main.py"],
     deps = [
         "@pip//fastapi",
@@ -504,8 +521,8 @@ load("//tools:helm.bzl", "helm_chart")
 
 # Single app chart
 helm_chart(
-    name = "hello_fastapi_chart",
-    app = ":hello_fastapi",
+    name = "hello-fastapi_chart",
+    app = ":hello-fastapi",
     environment = "dev",
 )
 
@@ -525,16 +542,16 @@ helm_chart(
 
 ```bash
 # Build chart
-bazel build //demo/hello_fastapi:hello_fastapi_chart
+bazel build //demo/hello-fastapi:hello-fastapi_chart
 
 # Chart location
-ls -la bazel-bin/demo/hello_fastapi/hello_fastapi_chart/
+ls -la bazel-bin/demo/hello-fastapi/hello-fastapi_chart/
 
 # Validate
-helm lint bazel-bin/demo/hello_fastapi/hello_fastapi_chart/
+helm lint bazel-bin/demo/hello-fastapi/hello-fastapi_chart/
 
 # Preview generated YAML
-helm template test bazel-bin/demo/hello_fastapi/hello_fastapi_chart/
+helm template test bazel-bin/demo/hello-fastapi/hello-fastapi_chart/
 ```
 
 ### Ingress Pattern (1:1 Mapping)
@@ -542,20 +559,24 @@ helm template test bazel-bin/demo/hello_fastapi/hello_fastapi_chart/
 Each `external-api` app gets its own dedicated Ingress resource:
 
 ```yaml
-# api_server-dev-ingress
+# experience-api-dev-ingress
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: api_server-dev-ingress
+  name: experience-api-dev-ingress
 spec:
+  tls:
+    - secretName: manman-tls-dev  # TLS secret includes environment suffix
+      hosts:
+        - experience.manman.local
   rules:
-  - host: api_server-dev.local
+  - host: experience.manman.local
     http:
       paths:
       - path: /
         backend:
           service:
-            name: api_server-dev
+            name: experience-api-dev-service
             port:
               number: 8000
 ```
@@ -563,8 +584,26 @@ spec:
 **Key points**:
 - Simple 1:1 pattern (no complex mode selection)
 - Each external-api = dedicated Ingress
-- Host pattern: `{appName}-{environment}.local`
-- Ingress name: `{appName}-{environment}-ingress`
+- All resources include environment suffix for multi-environment support
+- TLS secret names: `{secretName}-{environment}` (e.g., `manman-tls-dev`, `manman-tls-prod`)
+- Service names: `{appName}-{environment}-service`
+- Deployment names: `{appName}-{environment}`
+- Ingress names: `{appName}-{environment}-ingress`
+
+**Multi-Environment Support**:
+Charts can be deployed multiple times in the same cluster with different environments:
+```bash
+# Dev environment
+helm install manman-dev ./chart/ --set global.environment=dev
+
+# Staging environment in same cluster
+helm install manman-staging ./chart/ --set global.environment=staging
+
+# Production environment in same cluster
+helm install manman-prod ./chart/ --set global.environment=prod
+```
+
+Each environment gets isolated resources with unique names.
 
 ### ArgoCD Integration
 
@@ -593,7 +632,7 @@ Override values at deployment time:
 ```yaml
 # custom-values.yaml
 apps:
-  hello_fastapi:
+  hello-fastapi:
     replicas: 3
     resources:
       requests:
@@ -607,12 +646,11 @@ apps:
         path: /health/live
         port: 8000
 
-global:
-  ingress:
-    enabled: true
-    className: nginx
-    annotations:
-      cert-manager.io/cluster-issuer: letsencrypt-prod
+ingressDefaults:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
 ```
 
 ```bash
@@ -623,8 +661,8 @@ helm install app-name ./chart/ --values custom-values.yaml
 
 #### Generate chart for single app
 ```bash
-bazel build //demo/hello_python:hello_python_chart
-helm lint bazel-bin/demo/hello_python/hello_python_chart/
+bazel build //demo/hello-python:hello-python_chart
+helm lint bazel-bin/demo/hello-python/hello-python_chart/
 ```
 
 #### Generate multi-app chart
@@ -661,9 +699,8 @@ bazel build //path/to/app:app_chart
 type = "external-api"  # Must be external-api
 
 # Check ingress enabled
-global:
-  ingress:
-    enabled: true  # Must be true
+ingressDefaults:
+  enabled: true  # Must be true
 ```
 
 #### Port errors

@@ -1,5 +1,4 @@
-load("@rules_python//python:defs.bzl", "py_library", "py_test")
-load("//tools:python_binary.bzl", "multiplatform_py_binary")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("//tools:release.bzl", "release_app")
 
 py_library(
@@ -23,9 +22,8 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-# Single macro generates all platform-specific binaries
-multiplatform_py_binary(
-    name = "hello_fastapi",
+py_binary(
+    name = "hello-fastapi",
     srcs = ["main.py"],
     main = "main.py",
     deps = [":main_lib"],
@@ -44,7 +42,7 @@ py_test(
 )
 
 release_app(
-    name = "hello_fastapi",
+    name = "hello-fastapi",
     language = "python",
     domain = "demo",
     description = "FastAPI hello world application with uvicorn",

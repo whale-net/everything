@@ -1,5 +1,4 @@
-load("@rules_python//python:defs.bzl", "py_library", "py_test")
-load("//tools:python_binary.bzl", "multiplatform_py_binary")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("//tools:release.bzl", "release_app")
 
 py_library(
@@ -9,9 +8,8 @@ py_library(
     visibility = ["//demo/hello_world_test:__pkg__"],
 )
 
-# Single macro generates all platform-specific binaries
-multiplatform_py_binary(
-    name = "hello_world_test",
+py_binary(
+    name = "hello-world-test",
     srcs = ["main.py"],
     main = "main.py",
     deps = [
@@ -32,7 +30,7 @@ py_test(
 )
 
 release_app(
-    name = "hello_world_test",
+    name = "hello-world-test",
     language = "python",
     domain = "demo",
     description = "Python hello world test application for documentation validation",

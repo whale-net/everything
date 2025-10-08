@@ -245,4 +245,120 @@ class TestCreateReleasesWithIndividualVersions:
             assert "hello_fastapi" in results
             assert results["hello_fastapi"] is not None
             assert "missing_app" in results
+
+
+class TestGitHubReleaseClientTagVerification:
+    """Test cases for GitHubReleaseClient tag verification."""
+    
+    def test_verify_tag_exists_success(self):
+        """Test successful tag verification."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "ref": "refs/tags/demo-hello_python.v1.0.0",
+            "object": {
+                "sha": "abc123def456",
+                "type": "commit"
+            }
+        }
+        
+        with patch('httpx.Client') as mock_client:
+            mock_client.return_value.__enter__.return_value.get.return_value = mock_response
+            
+            client = GitHubReleaseClient("test-owner", "test-repo", "dummy-token")
+            result = client.verify_tag_exists("demo-hello_python.v1.0.0")
+            
+            assert result is True
+    
+    def test_verify_tag_exists_with_commit_sha(self):
+        """Test tag verification with commit SHA match."""
+        # First response for the tag ref
+        mock_ref_response = Mock()
+        mock_ref_response.status_code = 200
+        mock_ref_response.json.return_value = {
+            "ref": "refs/tags/demo-hello_python.v1.0.0",
+            "object": {
+                "sha": "tag_object_sha",
+                "type": "tag"  # Annotated tag
+            }
+        }
+        
+        # Second response for the tag object
+        mock_tag_response = Mock()
+        mock_tag_response.status_code = 200
+        mock_tag_response.json.return_value = {
+            "object": {
+                "sha": "abc123def456789",
+                "type": "commit"
+            }
+        }
+        
+        with patch('httpx.Client') as mock_client:
+            mock_get = mock_client.return_value.__enter__.return_value.get
+            mock_get.side_effect = [mock_ref_response, mock_tag_response]
+            
+            client = GitHubReleaseClient("test-owner", "test-repo", "dummy-token")
+            result = client.verify_tag_exists("demo-hello_python.v1.0.0", "abc123def456789")
+            
+            assert result is True
+    
+    def test_verify_tag_exists_commit_mismatch(self):
+        """Test tag verification with commit SHA mismatch."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "ref": "refs/tags/demo-hello_python.v1.0.0",
+            "object": {
+                "sha": "xyz789",
+                "type": "commit"
+            }
+        }
+        
+        with patch('httpx.Client') as mock_client:
+            mock_client.return_value.__enter__.return_value.get.return_value = mock_response
+            
+            client = GitHubReleaseClient("test-owner", "test-repo", "dummy-token")
+            result = client.verify_tag_exists("demo-hello_python.v1.0.0", "abc123")
+            
+            assert result is False
+    
+    def test_verify_tag_exists_not_found_with_retry(self):
+        """Test tag verification when tag doesn't exist after retries."""
+        mock_response = Mock()
+        mock_response.status_code = 404
+        
+        with patch('httpx.Client') as mock_client, \
+             patch('time.sleep'):  # Mock sleep to speed up test
+            mock_client.return_value.__enter__.return_value.get.return_value = mock_response
+            
+            client = GitHubReleaseClient("test-owner", "test-repo", "dummy-token")
+            result = client.verify_tag_exists("demo-hello_python.v1.0.0", max_retries=2)
+            
+            assert result is False
+    
+    def test_verify_tag_exists_retry_then_success(self):
+        """Test tag verification that succeeds after retries."""
+        # First call returns 404, second call succeeds
+        mock_404 = Mock()
+        mock_404.status_code = 404
+        
+        mock_200 = Mock()
+        mock_200.status_code = 200
+        mock_200.json.return_value = {
+            "ref": "refs/tags/demo-hello_python.v1.0.0",
+            "object": {
+                "sha": "abc123def456",
+                "type": "commit"
+            }
+        }
+        
+        with patch('httpx.Client') as mock_client, \
+             patch('time.sleep'):  # Mock sleep to speed up test
+            mock_get = mock_client.return_value.__enter__.return_value.get
+            mock_get.side_effect = [mock_404, mock_200]
+            
+            client = GitHubReleaseClient("test-owner", "test-repo", "dummy-token")
+            result = client.verify_tag_exists("demo-hello_python.v1.0.0", max_retries=3)
+            
+            assert result is True
             assert results["missing_app"] is None  # Should be None for missing version

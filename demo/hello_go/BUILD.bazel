@@ -1,13 +1,11 @@
-load("@rules_go//go:def.bzl", "go_test")
-load("//tools:go_binary.bzl", "multiplatform_go_binary")
+load("@rules_go//go:def.bzl", "go_binary", "go_test")
 load("//tools:release.bzl", "release_app")
 
-# Single macro generates all platform-specific binaries
-multiplatform_go_binary(
-    name = "hello_go",
+# Standard go_binary - no wrapper needed!
+go_binary(
+    name = "hello-go",
     srcs = ["main.go"],
     deps = ["//libs/go"],
-    app_type = "worker",
     visibility = ["//visibility:public"],
 )
 
@@ -20,8 +18,9 @@ go_test(
 
 # Release metadata and OCI images for this app
 release_app(
-    name = "hello_go",
+    name = "hello-go",
     language = "go",
     domain = "demo",
     description = "Go hello world application with static binaries",
+    app_type = "worker",
 )

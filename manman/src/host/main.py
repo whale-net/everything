@@ -531,8 +531,25 @@ def callback(
 # TODO context manager to reduce duplication
 # TODO - figure out what I meant with the previous TODO
 def _get_alembic_config() -> alembic.config.Config:
-    alembic_path = "./alembic.ini"
-    config = alembic.config.Config(alembic_path)
+    # Configure Alembic programmatically without requiring alembic.ini
+    # This is necessary for containerized environments where the ini file may not exist
+    # Pass file_=None to indicate we're configuring programmatically
+    config = alembic.config.Config(file_=None, ini_section="alembic")
+    
+    # Find the migrations directory using Python's module system
+    # The migrations are packaged as manman.src.migrations
+    import manman.src.migrations
+    migrations_dir = os.path.dirname(manman.src.migrations.__file__)
+    
+    # Set the script location - this is required by Alembic
+    config.set_main_option("script_location", migrations_dir)
+    
+    # Set the database URL from environment (used by migrations in offline mode)
+    # In online mode, env.py gets the URL from environment directly
+    db_url = os.environ.get("MANMAN_POSTGRES_URL", "")
+    if db_url:
+        config.set_main_option("sqlalchemy.url", db_url)
+    
     return config
 
 

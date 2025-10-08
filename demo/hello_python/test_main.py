@@ -1,4 +1,4 @@
-"""Tests for the hello_python application."""
+"""Tests for the hello-python application."""
 
 import pytest
 from demo.hello_python.main import get_message

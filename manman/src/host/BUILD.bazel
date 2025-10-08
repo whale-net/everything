@@ -1,5 +1,4 @@
-load("@rules_python//python:defs.bzl", "py_library", "py_test")
-load("//tools:python_binary.bzl", "multiplatform_py_binary")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("//tools:release.bzl", "release_app")
 
 # Host API services library
@@ -10,6 +9,7 @@ py_library(
     deps = [
         "//manman/src:manman_core",
         "//manman/src/repository:manman_repository",
+        "//manman/src/migrations:manman_migrations",  # Required for migration commands
         "@pypi//:fastapi",
         "@pypi//:uvicorn",
         "@pypi//:gunicorn",
@@ -22,56 +22,48 @@ py_library(
 )
 
 # Binary targets for host services
-multiplatform_py_binary(
+py_binary(
     name = "experience_api",
     srcs = ["main.py"],
     main = "main.py", 
     deps = [":manman_host"],
     args = ["start-experience-api"],
-    port = 8000,
-    app_type = "external-api",
     visibility = ["//manman:__pkg__"],
 )
 
-multiplatform_py_binary(
+py_binary(
     name = "status_api",
     srcs = ["main.py"],
     main = "main.py",
     deps = [":manman_host"],
     args = ["start-status-api"],
-    port = 8000,
-    app_type = "internal-api",
     visibility = ["//manman:__pkg__"],
 )
 
-multiplatform_py_binary(
+py_binary(
     name = "worker_dal_api", 
     srcs = ["main.py"],
     main = "main.py",
     deps = [":manman_host"],
     args = ["start-worker-dal-api"],
-    port = 8000,
-    app_type = "external-api",
     visibility = ["//manman:__pkg__"],
 )
 
-multiplatform_py_binary(
+py_binary(
     name = "status_processor",
     srcs = ["main.py"], 
     main = "main.py",
     deps = [":manman_host"],
     args = ["start-status-processor"],
-    app_type = "worker",
     visibility = ["//manman:__pkg__"],
 )
 
-multiplatform_py_binary(
+py_binary(
     name = "migration",
     srcs = ["main.py"],
     main = "main.py",
     deps = [":manman_host"],
     args = ["run-migration"],
-    app_type = "job",
     visibility = ["//manman:__pkg__"],
 )
 

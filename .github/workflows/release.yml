@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       apps:
-        description: 'Comma-separated list of apps to release (e.g., hello_python,hello_go) or "all" for all apps. Leave empty to skip app release.'
+        description: 'Comma-separated list of apps to release (e.g., hello_python,hello_go) or "all" for all apps, or domain name (e.g., "demo") to release all apps in a domain. Leave empty to skip app release.'
         required: false
         default: ''
       version:
@@ -210,23 +210,50 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
         
-    - name: Build and release app using consolidated release helper
+    - name: Build and release app using multiarch release
       env:
         APP: ${{ matrix.app }}
         VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
         DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
       run: |
-        echo "Building and releasing $APP version $VERSION using consolidated release system"
+        echo "Building and releasing $APP version $VERSION using multiarch release system"
         
-        # Use our release helper tool to handle the entire release process
+        # Build the release helper binary first (avoids nested Bazel invocations)
+        echo "Building release helper..."
+        bazel build --config=ci //tools:release
+        
+        # Execute the release helper directly (not via 'bazel run' to avoid deadlocks)
+        RELEASE_HELPER="$(bazel info bazel-bin --config=ci)/tools/release_helper/release_helper"
+        
+        # Use release-multiarch to build and push platform-specific images + manifest lists
         if [[ "$DRY_RUN" == "true" ]]; then
-          echo "DRY RUN: Building and testing release process without publishing"
-          bazel run --config=ci //tools:release -- release "$APP" --version "$VERSION" --commit "${{ github.sha }}" --dry-run --create-git-tag
+          echo "DRY RUN: Building multiarch images without publishing"
+          "$RELEASE_HELPER" release-multiarch "$APP" --version "$VERSION" --commit "${{ github.sha }}" --dry-run
         else
-          echo "Building and publishing $APP $VERSION"
-          bazel run --config=ci //tools:release -- release "$APP" --version "$VERSION" --commit "${{ github.sha }}" --create-git-tag
-          echo "Successfully released $APP $VERSION"
+          echo "Building and publishing multiarch images for $APP $VERSION"
+          "$RELEASE_HELPER" release-multiarch "$APP" --version "$VERSION" --commit "${{ github.sha }}"
+          echo "Successfully released multiarch $APP $VERSION"
+        fi
+        
+    - name: Create git tag for release
+      if: ${{ github.event.inputs.dry_run == 'false' }}
+      env:
+        APP: ${{ matrix.app }}
+        VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
+      run: |
+        # Get app metadata to determine domain for tag format
+        METADATA=$(bazel run --config=ci //tools:release -- list-apps | grep "^$APP " | head -n1)
+        if [[ -n "$METADATA" ]]; then
+          DOMAIN=$(echo "$METADATA" | sed 's/.*domain: \([^,]*\).*/\1/')
+          TAG_NAME="${DOMAIN}-${APP}.${VERSION}"
+          
+          echo "Creating git tag: $TAG_NAME"
+          git tag -a "$TAG_NAME" -m "Release $APP version $VERSION" "${{ github.sha }}"
+          git push origin "$TAG_NAME"
+          echo "✅ Created and pushed git tag: $TAG_NAME"
+        else
+          echo "Warning: Could not determine domain for $APP, skipping git tag"
         fi
 
     - name: Generate release notes for app
@@ -537,6 +564,11 @@ jobs:
         # Create output directory for charts
         mkdir -p /tmp/helm-charts
         
+        # Build the release helper binary first (avoids nested Bazel invocations)
+        echo "Building release helper..."
+        bazel build --config=ci //tools:release
+        RELEASE_HELPER="$(bazel info bazel-bin --config=ci)/tools/release_helper/release_helper"
+        
         # Parse chart list and build each chart with proper versioning
         CHARTS="${{ steps.plan.outputs.charts }}"
         IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
@@ -547,7 +579,7 @@ jobs:
           # Build the chart using release helper with auto-versioning
           # Each chart maintains its own version based on git tags (helm/<chart-name>/v*)
           # Note: --auto-version is the default, so we don't need to pass it explicitly
-          bazel run --config=ci //tools:release -- build-helm-chart "$CHART" \
+          "$RELEASE_HELPER" build-helm-chart "$CHART" \
             --output-dir /tmp/helm-charts \
             --use-released \
             --bump "$BUMP_TYPE"

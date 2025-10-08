@@ -25,9 +25,9 @@ bazel version
 
 ```bash
 # Run applications
-bazel run //demo/hello_python:hello_python
-bazel run //demo/hello_go:hello_go
-bazel run //demo/hello_fastapi:hello_fastapi
+bazel run //demo/hello_python:hello-python
+bazel run //demo/hello_go:hello-go
+bazel run //demo/hello_fastapi:hello-fastapi
 bazel run //demo/hello_world_test:hello_world_test
 
 # Build all targets
@@ -49,7 +49,7 @@ After installation, verify everything works:
 bazel version
 
 # Test build system
-bazel build //demo/hello_python:hello_python
+bazel build //demo/hello_python:hello-python
 
 # Run a quick test
 bazel test //demo/hello_python:test_main
@@ -91,17 +91,6 @@ The repository uses **uv** for Python dependency management with **rules_pycross
    )
    ```
 
-   Or use the `multiplatform_py_binary` macro with the `requirements` parameter:
-   ```starlark
-   load("//tools:python_binary.bzl", "multiplatform_py_binary")
-   
-   multiplatform_py_binary(
-       name = "my_app",
-       srcs = ["main.py"],
-       requirements = ["fastapi", "your-new-package"],  # Hyphens preserved
-   )
-   ```
-
 **Important Notes:**
 - **Package names**: Use exact PyPI package names including hyphens (e.g., `python-jose`, not `python_jose`)
 - **Top-level colon**: Always use `@pypi//:package-name` format (colon before package name)
@@ -118,18 +107,18 @@ uv lock --python 3.11
 
 # 3. Use in BUILD.bazel
 deps = ["@pypi//:fastapi"]
-
-# Or with multiplatform_py_binary
-requirements = ["fastapi", "uvicorn"]
 ```
 
 #### Go Dependencies
-TODO: Enable gazelle rules for full Go dependency management
-1. Add dependency to `go.mod`
-2. Run `bazel run //:gazelle-update-repos` to update Bazel dependencies (currently commented out)
+
+This repository currently uses only Go standard library packages and internal packages. No external Go dependencies are needed.
+
+**If you need to add external Go dependencies in the future:**
+1. Add `go.mod` file with the dependency
+2. Enable and run gazelle rules (currently commented out in BUILD.bazel)
 3. Import normally in Go code
 
-**Note:** Go dependency management is currently minimal. The gazelle rules are commented out in the root BUILD.bazel file and may need to be enabled for full Go dependency management.
+**Current state:** All Go code uses standard library (`fmt`, `os`, `encoding/json`, etc.) and internal packages (`github.com/example/everything/libs/go`).
 
 ### Development Workflow
 
@@ -146,25 +135,26 @@ TODO: Enable gazelle rules for full Go dependency management
 
 3. **Create `BUILD.bazel`** with the required targets:
    ```starlark
-   load("@rules_python//python:defs.bzl", "py_library", "py_test")
-   load("//tools:python_binary.bzl", "multiplatform_py_binary")
+   load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
    load("//tools:release.bzl", "release_app")
 
    py_library(
        name = "main_lib",
        srcs = ["__init__.py", "main.py"],
-       deps = ["//libs/python"],
+       deps = [
+           "//libs/python",
+           "@pypi//:fastapi",
+           "@pypi//:uvicorn",
+       ],
        visibility = ["//my_python_app:__pkg__"],
    )
 
-   multiplatform_py_binary(
+   py_binary(
        name = "my_python_app",
        srcs = ["main.py"],
+       main = "main.py",
        deps = [":main_lib"],
-       requirements = ["fastapi", "uvicorn"],  # Package names as-is
-       args = ["run-server"],  # Command to run your app
-       port = 8000,  # Port number for server apps (0 for non-server apps)
-       app_type = "external-api",  # One of: external-api, internal-api, worker, job
+       args = ["run-server"],  # Command-line arguments
        visibility = ["//visibility:public"],
    )
 
@@ -203,16 +193,13 @@ TODO: Enable gazelle rules for full Go dependency management
 
 3. **Create `BUILD.bazel`** with the required targets:
    ```starlark
-   load("@rules_go//go:def.bzl", "go_test")
-   load("//tools:go_binary.bzl", "multiplatform_go_binary")
+   load("@rules_go//go:def.bzl", "go_binary", "go_test")
    load("//tools:release.bzl", "release_app")
 
-   multiplatform_go_binary(
+   go_binary(
        name = "my_go_app",
        srcs = ["main.go"],
        deps = ["//libs/go"],
-       port = 8080,  # Port number for server apps (0 for non-server apps)
-       app_type = "external-api",  # One of: external-api, internal-api, worker, job
        visibility = ["//visibility:public"],
    )
 
@@ -588,13 +575,12 @@ The repository uses several configuration files for build and dependency managem
 
 - **`.bazelrc`**: Contains common Bazel configuration including CI optimizations, test settings, and build flags
 - **`MODULE.bazel`**: Defines external dependencies using Bazel's bzlmod system, including rules for Python, Go, and OCI containers
-- **`go.mod`**: Go module configuration for Go dependencies (currently minimal: `module github.com/whale-net/everything, go 1.25`)
-- **`requirements.in`**: Python dependencies specification (includes: pytest, fastapi, uvicorn[standard], httpx)
-- **`requirements.lock.txt`**: Locked Python dependency versions generated by `bazel run //:pip_compile`
+- **`pyproject.toml`**: Python dependencies specification managed by uv
+- **`uv.lock`**: Locked Python dependency versions with platform-specific wheels
 
 **Key Configuration Details:**
 - Bazel uses Python version PY3 with symlink prefix `bazel-`
-- CI configuration includes bandwidth-optimized caching and test result caching
+- CI configuration includes aggressive remote caching (downloads all outputs) and test result caching
 - OCI images use Python 3.11-slim and Alpine 3.20 as base images with multi-platform support
 - **Remote cache support**: Optional HTTP-based remote caching with basic authentication
 
@@ -686,23 +672,23 @@ load("//tools:release.bzl", "release_app")
 
 # This single declaration creates:
 # - Release metadata (JSON file with app info)
-# - OCI images for multiple platforms (amd64, arm64)
+# - Multi-platform OCI images (amd64, arm64)
 # - Proper container registry configuration
 release_app(
-    name = "hello_python",
-    binary_target = ":hello_python",
+    name = "hello-python",
     language = "python",
+    domain = "demo",
     description = "Python hello world application with pytest",
+    app_type = "external-api",
+    port = 8000,
 )
 ```
 
 **Generated Targets:**
-- `hello_python_image` - Default multiplatform image
-- `hello_python_image_amd64` - AMD64-specific image
-- `hello_python_image_arm64` - ARM64-specific image
-- `hello_python_image_load` - Efficient oci_load target for Docker loading
-- `hello_python_image_amd64_load` - AMD64 oci_load target
-- `hello_python_image_arm64_load` - ARM64 oci_load target
+- `hello-python_image` - Multi-platform OCI image index (AMD64 + ARM64)
+- `hello-python_image_base` - Base image (used by platform transitions)
+- `hello-python_image_load` - Load Linux image into Docker (requires --platforms flag)
+- `hello-python_image_push` - Push multi-platform index to registry
 
 ### Cache Optimization
 
@@ -716,24 +702,25 @@ The new OCI build system uses `oci_load` targets instead of traditional tarball 
 ### Building Images with Bazel
 
 ```bash
-# Build individual platform images
-bazel build //demo/hello_python:hello_python_image_amd64
-bazel build //demo/hello_python:hello_python_image_arm64
+# Build multi-platform image index (contains both AMD64 and ARM64)
+bazel build //demo/hello_python:hello-python_image
 
-# Build all platform variants
-bazel build //demo/hello_python:hello_python_image
+# Load into Docker - CRITICAL: Must specify --platforms for Linux binaries
+# On M1/M2 Macs (ARM64):
+bazel run //demo/hello_python:hello-python_image_load --platforms=//tools:linux_arm64
 
-# Build and load into Docker efficiently using oci_load (optimized for cache)
-bazel run //demo/hello_python:hello_python_image_load
+# On Intel Macs/PCs (AMD64):
+bazel run //demo/hello_python:hello-python_image_load --platforms=//tools:linux_x86_64
 
-# Or use the release tool for production workflows
-bazel run //tools:release -- build hello_python
+# Test the containers (after loading)
+docker run --rm demo-hello-python:latest
+docker run --rm demo-hello-go:latest
 
-# Run the containers (after loading - these are local development tags)
-docker run --rm hello_python:latest  # ✅ Works correctly!
-docker run --rm hello_go:latest      # ✅ Works correctly!
+# Use release tool for production workflows (handles platforms automatically)
+bazel run //tools:release -- build hello-python
 
-# Registry images use domain-app format: demo-hello_python:latest
+# WARNING: Without --platforms flag, you may get macOS binaries instead of Linux,
+# resulting in "Exec format error" when running containers.
 ```
 
 ### Base Images & Architecture
@@ -764,8 +751,7 @@ oci_image_with_binary(
 
 Available functions include:
 - `oci_image_with_binary`: Generic OCI image builder with cache optimization
-- `python_oci_image_multiplatform`: Multi-platform Python images 
-- `go_oci_image_multiplatform`: Multi-platform Go images
+- `multiplatform_image`: Multi-platform image builder (used by release_app)
 
 ## 🚀 Release Management
 
@@ -839,21 +825,23 @@ Each app declares its release metadata using the `release_app` macro:
 load("//tools:release.bzl", "release_app")
 
 release_app(
-    name = "hello_python",
-    binary_target = ":hello_python",
+    name = "hello-python",
     language = "python",
+    domain = "demo",
     description = "Python hello world application with pytest",
-    # Note: args, port, and app_type are automatically extracted from the
-    # multiplatform_py_binary definition via the AppInfo provider
+    app_type = "external-api",  # One of: external-api, internal-api, worker, job
+    port = 8000,  # Port for server apps (0 for non-server apps)
+    args = ["run-server"],  # Optional command-line arguments
 )
 ```
 
-The `release_app` macro automatically extracts metadata from your binary definition:
-- **`args`**: Command-line arguments from `multiplatform_py_binary` or `multiplatform_go_binary`
-- **`port`**: Port number for server applications (extracted from binary)
+The `release_app` macro accepts metadata directly:
 - **`app_type`**: Application type (external-api, internal-api, worker, or job)
+- **`port`**: Port number for server applications (default: 0)
+- **`args`**: Optional command-line arguments (default: [])
+- **`domain`**: Domain/category for the app (e.g., "demo", "api")
 
-This eliminates duplication - you define these values once in your binary, and they're automatically available to the release system.
+Metadata is specified once in `release_app` and used for both container images and Helm chart generation.
 
 #### 2. Intelligent Change Detection
 The system supports multiple detection modes, though the current implementation has some limitations:
@@ -897,13 +885,13 @@ Versions must follow the `v{major}.{minor}.{patch}` format, with the special exc
 #### Version Validation Commands
 ```bash
 # Validate version format and availability
-bazel run //tools:release -- validate-version hello_python v1.2.3
+bazel run //tools:release -- validate-version hello-python v1.2.3
 
 # Allow overwriting existing versions (dangerous!)
-bazel run //tools:release -- validate-version hello_python v1.2.3 --allow-overwrite
+bazel run //tools:release -- validate-version hello-python v1.2.3 --allow-overwrite
 
 # Validation happens automatically during plan and release
-bazel run //tools:release -- plan --event-type workflow_dispatch --apps hello_python --version v1.2.3
+bazel run //tools:release -- plan --event-type workflow_dispatch --apps hello-python --version v1.2.3
 ```
 
 ### 🔧 Release Methods
@@ -916,13 +904,13 @@ This is the **preferred method** as it provides full control and prevents mistak
 2. Click **Actions** → **Release** workflow
 3. Click **Run workflow**
 4. Fill in the parameters:
-   - **Apps**: Comma-separated list (e.g., `hello_python,hello_go`) or `all`
+   - **Apps**: Comma-separated list (e.g., `hello-python,hello-go`) or `all`
    - **Version**: Release version (e.g., `v1.2.3`)
    - **Dry run**: Check this to test without publishing
 
 **Example Release:**
 ```
-Apps: hello_python,hello_go
+Apps: hello-python,hello-go
 Version: v1.2.3
 Dry run: false
 ```
@@ -937,7 +925,7 @@ For automated workflows and scripting:
 ```bash
 # Release specific apps
 gh workflow run release.yml \
-  -f apps=hello_python,hello_go \
+  -f apps=hello-python,hello-go \
   -f version=v1.2.3 \
   -f dry_run=false
 
@@ -948,7 +936,7 @@ gh workflow run release.yml \
 
 # Dry run (test without publishing)
 gh workflow run release.yml \
-  -f apps=hello_python \
+  -f apps=hello-python \
   -f version=v1.2.3 \
   -f dry_run=true
 ```
@@ -960,7 +948,7 @@ For automated workflows and scripting:
 ```bash
 # Release specific apps
 gh workflow run release.yml \
-  -f apps=hello_python,hello_go \
+  -f apps=hello-python,hello-go \
   -f version=v1.2.3 \
   -f dry_run=false
 
@@ -971,7 +959,7 @@ gh workflow run release.yml \
 
 # Dry run (test without publishing)
 gh workflow run release.yml \
-  -f apps=hello_python \
+  -f apps=hello-python \
   -f version=v1.2.3 \
   -f dry_run=true
 ```
@@ -982,28 +970,28 @@ gh workflow run release.yml \
 The release workflow automatically creates a build matrix based on changed apps:
 
 ```yaml
-# Example matrix for hello_python and hello_go
+# Example matrix for hello-python and hello-go
 matrix:
   include:
-    - app: hello_python
-      binary: hello_python
-      image: hello_python_image
-    - app: hello_go  
-      binary: hello_go
-      image: hello_go_image
+    - app: hello-python
+      binary: hello-python
+      image: hello-python_image
+    - app: hello-go  
+      binary: hello-go
+      image: hello-go_image
 ```
 
 #### Container Image Tags
 Each released app gets tagged with the `<domain>-<app>:<version>` format:
 ```bash
 # Version-specific
-ghcr.io/OWNER/demo-hello_python:v1.2.3
+ghcr.io/OWNER/demo-hello-python:v1.2.3
 
 # Latest
-ghcr.io/OWNER/demo-hello_python:latest
+ghcr.io/OWNER/demo-hello-python:latest
 
 # Commit-specific (for debugging)
-ghcr.io/OWNER/demo-hello_python:abc123def
+ghcr.io/OWNER/demo-hello-python:abc123def
 ```
 
 
@@ -1047,10 +1035,10 @@ bazel query "//your_app:your_app"
 #### Test Release Locally
 ```bash
 # Build and test the release targets using the release tool
-bazel run //tools:release -- build hello_python
+bazel run //tools:release -- build hello-python
 
 # Verify the image works (local development tag)
-docker run --rm demo-hello_python:latest
+docker run --rm demo-hello-python:latest
 ```
 
 #### Change Detection Issues
@@ -1063,7 +1051,7 @@ bazel run //tools:release -- changes --base-commit HEAD~1
 bazel run //tools:release -- changes --base-commit HEAD~1 --no-bazel-query
 
 # Force release specific apps manually
-gh workflow run release.yml -f apps=hello_python,hello_go -f version=v1.0.0 -f dry_run=true
+gh workflow run release.yml -f apps=hello-python,hello-go -f version=v1.0.0 -f dry_run=true
 ```
 
 **Note:** The change detection system may sometimes be overly conservative, rebuilding all apps when infrastructure files change or when dependency analysis fails.
@@ -1072,7 +1060,7 @@ gh workflow run release.yml -f apps=hello_python,hello_go -f version=v1.0.0 -f d
 If you encounter version-related problems:
 ```bash
 # Validate version format before releasing
-bazel run //tools:release -- validate-version hello_python v1.2.3
+bazel run //tools:release -- validate-version hello-python v1.2.3
 
 # If you get "version already exists" errors:
 # 1. Check what versions exist in the registry
@@ -1080,7 +1068,7 @@ bazel run //tools:release -- validate-version hello_python v1.2.3
 # 3. Or use --allow-overwrite flag (dangerous!)
 
 # For emergency overwrites only:
-bazel run //tools:release -- release hello_python --version v1.2.3 --allow-overwrite --dry-run
+bazel run //tools:release -- release hello-python --version v1.2.3 --allow-overwrite --dry-run
 ```
 
 #### Dry Run Releases
@@ -1109,7 +1097,7 @@ You can also generate release notes manually using the release helper CLI:
 
 ```bash
 # Generate release notes for a specific app
-bazel run //tools:release -- release-notes hello_python \
+bazel run //tools:release -- release-notes hello-python \
   --current-tag v1.2.3 \
   --previous-tag v1.2.2 \
   --format markdown
@@ -1135,8 +1123,8 @@ The release system automatically creates GitHub releases when using the main rel
 
 ```bash
 # Create GitHub release for a specific app
-bazel run //tools:release -- create-github-release hello_python \
-  --tag demo-hello_python.v1.2.3 \
+bazel run //tools:release -- create-github-release hello-python \
+  --tag demo-hello-python.v1.2.3 \
   --owner whale-net \
   --repo everything \
   --commit abc1234
@@ -1146,7 +1134,7 @@ bazel run //tools:release -- create-combined-github-release v1.2.3 \
   --owner whale-net \
   --repo everything \
   --commit abc1234 \
-  --apps hello_python,hello_go,hello_fastapi
+  --apps hello-python,hello-go,hello-fastapi
 ```
 
 **GitHub Release Features:**
