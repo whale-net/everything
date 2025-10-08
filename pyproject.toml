@@ -8,6 +8,8 @@ dependencies = [
     "pytest",
     "pytest-asyncio",
     "pytest-git",
+    "pytest-cov",
+    "coverage[toml]",
     
     # Web framework
     "fastapi",

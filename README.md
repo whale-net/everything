@@ -564,6 +564,54 @@ bazel test //demo/...
 
 **No additional test utilities are currently provided** - each app manages its own testing using standard language tooling.
 
+### Test Coverage
+
+The repository includes comprehensive test coverage support with Codecov integration.
+
+#### Collecting Coverage Locally
+
+```bash
+# Run tests with coverage instrumentation
+bazel coverage //...
+
+# Or use the helper script
+./tools/collect_coverage.sh
+
+# Coverage report will be at: coverage_output/coverage.lcov
+```
+
+#### Coverage Configuration
+
+Coverage is configured in `.bazelrc`:
+- **`--combined_report=lcov`**: Generates LCOV format coverage reports
+- **`--instrumentation_filter`**: Controls which code is instrumented (excludes external dependencies)
+- **`--instrument_test_targets`**: Includes test code in coverage
+
+#### CI/CD Integration
+
+Coverage is automatically collected and uploaded to Codecov on every CI run:
+1. Tests run with coverage instrumentation
+2. Coverage data is collected in LCOV format
+3. Reports are uploaded to Codecov via GitHub Actions
+4. Coverage reports are available in the Codecov dashboard
+
+#### Viewing Coverage Reports
+
+**Local HTML reports:**
+```bash
+# Generate HTML coverage report (requires genhtml)
+./tools/collect_coverage.sh
+# Open coverage_output/html/index.html in your browser
+```
+
+**Codecov Dashboard:**
+- View coverage on pull requests via Codecov bot comments
+- Access full reports at https://codecov.io/gh/whale-net/everything
+
+**Setup Requirements:**
+- Add `CODECOV_TOKEN` to GitHub repository secrets
+- Token can be obtained from https://codecov.io after linking your repository
+
 ### Common Testing Issues
 - **Module import errors**: Ensure `//libs/python` is included in deps for Python tests
 - **Cache issues**: Use `bazel clean` if you encounter stale test results

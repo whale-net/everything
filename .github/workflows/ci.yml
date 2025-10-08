@@ -33,6 +33,41 @@ jobs:
         # Run all tests and let Bazel handle caching
         bazel test //...
         
+    - name: Collect coverage
+      if: success() || failure()
+      run: |
+        # Run tests with coverage instrumentation
+        echo "Collecting test coverage..."
+        bazel coverage --combined_report=lcov \
+          --instrumentation_filter="^//(?!external|bazel-out)" \
+          --instrument_test_targets \
+          //... || {
+          echo "Warning: Some tests failed, but continuing with coverage"
+        }
+        
+        # Find and copy coverage report
+        COVERAGE_FILE="$(bazel info output_path)/_coverage/_coverage_report.dat"
+        if [ -f "$COVERAGE_FILE" ]; then
+          mkdir -p coverage_output
+          cp "$COVERAGE_FILE" coverage_output/coverage.lcov
+          echo "Coverage report saved to coverage_output/coverage.lcov"
+        else
+          echo "Warning: Coverage report not found, checking alternative locations..."
+          find "$(bazel info output_path)" -name "*.dat" -o -name "*.lcov" || true
+        fi
+    
+    - name: Upload coverage to Codecov
+      if: success() || failure()
+      uses: codecov/codecov-action@v4
+      with:
+        files: ./coverage_output/coverage.lcov
+        flags: unittests
+        name: bazel-coverage
+        fail_ci_if_error: false
+        verbose: true
+      env:
+        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        
     - name: Upload test results
       uses: actions/upload-artifact@v4
       if: always()
