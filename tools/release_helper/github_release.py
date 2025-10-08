@@ -240,6 +240,41 @@ class GitHubReleaseClient:
             except httpx.HTTPError as e:
                 print(f"❌ Failed to list releases: {e}", file=sys.stderr)
                 return []
+    
+    def delete_tag(self, tag_name: str) -> bool:
+        """Delete a Git tag from the remote repository.
+        
+        Args:
+            tag_name: Tag name to delete
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        url = f"{self.base_url}/repos/{self.owner}/{self.repo}/git/refs/tags/{tag_name}"
+        
+        print(f"Deleting remote tag: {tag_name}")
+        
+        with httpx.Client() as client:
+            try:
+                response = client.delete(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+                
+                if response.status_code == 204:
+                    print(f"✅ Successfully deleted remote tag: {tag_name}")
+                    return True
+                elif response.status_code == 404:
+                    print(f"ℹ️  Tag {tag_name} does not exist on remote")
+                    return False
+                else:
+                    print(f"❌ Failed to delete tag {tag_name}. Status: {response.status_code}", file=sys.stderr)
+                    try:
+                        error_data = response.json()
+                        print(f"Error: {error_data.get('message', 'Unknown error')}", file=sys.stderr)
+                    except json.JSONDecodeError:
+                        print(f"Response: {response.text}", file=sys.stderr)
+                    return False
+            except httpx.HTTPError as e:
+                print(f"❌ Error deleting tag {tag_name}: {e}", file=sys.stderr)
+                return False
 
 
 def create_app_release(
