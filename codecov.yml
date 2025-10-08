@@ -25,5 +25,4 @@ ignore:
   - "bazel-*"
   - "**/*_test.py"
   - "**/*_test.go"
-  - "demo/**"  # Demo apps are examples, not production code
   - "tools/release_helper/**"  # Release tooling

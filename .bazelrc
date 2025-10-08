@@ -42,7 +42,7 @@ test:ci --test_output=errors
 # Coverage configurations
 # Instrument Python code for coverage
 coverage --combined_report=lcov
-coverage --instrumentation_filter="^//(?!external|bazel-out|demo|manman)"
+coverage --instrumentation_filter="^//(?!external|bazel-out)"
 coverage --instrument_test_targets
 # Set coverage output location
 coverage --coverage_report_generator=@bazel_tools//tools/test:coverage_report_generator
