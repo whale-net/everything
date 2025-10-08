@@ -245,8 +245,8 @@ def multiplatform_image(
     # The platform flag ensures the image contains Linux binaries for Docker.
     #
     # Example test:
-    #   bazel run //demo/hello_fastapi:hello_fastapi_image_load --platforms=//tools:linux_arm64
-    #   docker run --rm -p 8000:8000 demo-hello_fastapi:latest
+    #   bazel run //demo/hello_fastapi:hello-fastapi_image_load --platforms=//tools:linux_arm64
+    #   docker run --rm -p 8000:8000 demo-hello-fastapi:latest
     #   curl http://localhost:8000/
     
     oci_load(

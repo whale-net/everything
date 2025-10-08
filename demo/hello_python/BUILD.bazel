@@ -11,7 +11,7 @@ py_library(
 
 # Standard py_binary - no wrapper needed!
 py_binary(
-    name = "hello_python",
+    name = "hello-python",
     srcs = ["main.py"],
     main = "main.py",
     deps = [
@@ -33,7 +33,7 @@ py_test(
 
 # Release metadata and container images
 release_app(
-    name = "hello_python",
+    name = "hello-python",
     language = "python",
     domain = "demo",
     description = "Python hello world application with pytest",

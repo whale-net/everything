@@ -19,7 +19,7 @@ sh_test(
     size = "large",
     srcs = ["test_cross_compilation.sh"],
     data = [
-        "//demo/hello_fastapi:hello_fastapi_image",
+        "//demo/hello_fastapi:hello-fastapi_image",
     ],
     tags = [
         "manual",  # Don't run with //...

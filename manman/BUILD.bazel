@@ -16,7 +16,7 @@ py_library(
 
 # Release configurations for manman services
 release_app(
-    name = "experience_api",
+    name = "experience-api",
     binary_name = "//manman/src/host:experience_api",
     language = "python",
     domain = "manman",
@@ -30,7 +30,7 @@ release_app(
 )
 
 release_app(
-    name = "status_api", 
+    name = "status-api", 
     binary_name = "//manman/src/host:status_api",
     language = "python",
     domain = "manman",
@@ -42,7 +42,7 @@ release_app(
 )
 
 release_app(
-    name = "worker_dal_api",
+    name = "worker-dal-api",
     binary_name = "//manman/src/host:worker_dal_api", 
     language = "python",
     domain = "manman",
@@ -56,7 +56,7 @@ release_app(
 )
 
 release_app(
-    name = "status_processor",
+    name = "status-processor",
     binary_name = "//manman/src/host:status_processor",
     language = "python", 
     domain = "manman",
@@ -92,10 +92,10 @@ release_app(
 # Update this list when adding or removing services
 # Note: worker is excluded as it will be deployed outside the cloud
 MANMAN_APPS = [
-    ":experience_api_metadata",
-    ":status_api_metadata",
-    ":worker_dal_api_metadata",
-    ":status_processor_metadata",
+    ":experience-api_metadata",
+    ":status-api_metadata",
+    ":worker-dal-api_metadata",
+    ":status-processor_metadata",
     ":migration_metadata",
 ]
 

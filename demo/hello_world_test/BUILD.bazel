@@ -9,7 +9,7 @@ py_library(
 )
 
 py_binary(
-    name = "hello_world_test",
+    name = "hello-world-test",
     srcs = ["main.py"],
     main = "main.py",
     deps = [
@@ -30,7 +30,7 @@ py_test(
 )
 
 release_app(
-    name = "hello_world_test",
+    name = "hello-world-test",
     language = "python",
     domain = "demo",
     description = "Python hello world test application for documentation validation",

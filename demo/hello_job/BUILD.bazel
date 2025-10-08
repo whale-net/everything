@@ -9,7 +9,7 @@ py_library(
 )
 
 py_binary(
-    name = "hello_job",
+    name = "hello-job",
     srcs = ["main.py"],
     main = "main.py",
     deps = [":main_lib"],
@@ -28,7 +28,7 @@ py_test(
 
 # Simplified release_app - auto-detects platform binaries!
 release_app(
-    name = "hello_job",
+    name = "hello-job",
     language = "python",
     app_type = "job",  # Explicitly set as job
     domain = "demo",
