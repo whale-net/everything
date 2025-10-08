@@ -1,0 +1,12 @@
+"""CA certificates extraction for SSL/TLS support in containers."""
+
+load("@rules_distroless//distroless:defs.bzl", "cacerts")
+
+# Extract CA certificates from Debian's ca-certificates package
+# This creates /etc/ssl/certs/ca-certificates.crt
+# The package is architecture-independent (Architecture: all), so works for both amd64 and arm64
+cacerts(
+    name = "cacerts",
+    package = "@ca_certificates_deb//:data.tar.xz",
+    visibility = ["//visibility:public"],
+)

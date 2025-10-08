@@ -9,6 +9,7 @@ bazel_dep(name = "rules_pycross", version = "0.8.0")
 bazel_dep(name = "rules_go", version = "0.57.0")
 bazel_dep(name = "gazelle", version = "0.39.1")
 bazel_dep(name = "rules_oci", version = "2.2.6")
+bazel_dep(name = "rules_distroless", version = "0.5.1")
 bazel_dep(name = "aspect_bazel_lib", version = "2.21.1")
 bazel_dep(name = "aspect_rules_py", version = "1.6.4-rc1")
 bazel_dep(name = "rules_helm", version = "0.6.0.bcr.1")
@@ -34,6 +35,15 @@ oci.pull(
     ],
 )
 use_repo(oci, "ubuntu_base", "ubuntu_base_linux_amd64", "ubuntu_base_linux_arm64_v8", "ubuntu_base_linux_arm_v7", "ubuntu_base_linux_ppc64le", "ubuntu_base_linux_riscv64", "ubuntu_base_linux_s390x")
+
+# CA certificates from Debian (architecture-independent, works for all platforms)
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+http_archive(
+    name = "ca_certificates_deb",
+    build_file_content = 'exports_files(["data.tar.xz"])',
+    sha256 = "b2d488ad4d8d8adb3ba319fc9cb2cf9909fc42cb82ad239a26c570a2e749c389",
+    urls = ["https://snapshot.debian.org/archive/debian/20231106T210201Z/pool/main/c/ca-certificates/ca-certificates_20210119_all.deb"],
+)
 
 # Python setup with rules_python for interpreter registration
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")

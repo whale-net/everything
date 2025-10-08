@@ -57,7 +57,6 @@ This repository implements true cross-compilation for Python apps using rules_py
 ├── tools/                   # Build and release tooling
 ├── docs/                    # Documentation (including CROSS_COMPILATION.md)
 ├── .github/                 # CI/CD workflows
-├── docker/                  # Base container configurations
 ├── test_cross_compilation.py # CRITICAL: Cross-compilation verification
 └── BUILD.bazel, MODULE.bazel # Bazel configuration
 ```
