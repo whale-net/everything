@@ -3,7 +3,7 @@
 FROM python:3.11-slim AS builder
 
 # Install ca-certificates in builder stage
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Accept build arguments
 ARG BINARY_PATH
