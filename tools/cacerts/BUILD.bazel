@@ -1,12 +1,33 @@
 """CA certificates extraction for SSL/TLS support in containers."""
 
-load("@rules_distroless//distroless:defs.bzl", "cacerts")
-
-# Extract CA certificates from Debian's ca-certificates package
-# This creates /etc/ssl/certs/ca-certificates.crt
-# The package is architecture-independent (Architecture: all), so works for both amd64 and arm64
-cacerts(
+# Extract CA certificates from the .deb package and create a tar layer
+# The .deb file contains data.tar.xz which has /usr/share/ca-certificates/
+# We need to extract and process it into /etc/ssl/certs/ca-certificates.crt
+genrule(
     name = "cacerts",
-    package = "@ca_certificates_deb//:data.tar.xz",
+    srcs = ["@ca_certificates_deb//file"],
+    outs = ["cacerts.tar.gz"],
+    cmd = """
+        set -e
+        TMPDIR=$$(mktemp -d)
+        
+        # Extract data.tar.xz from the .deb file
+        ar x $(location @ca_certificates_deb//file) data.tar.xz
+        
+        # Extract the certificates
+        tar -xJf data.tar.xz -C $$TMPDIR
+        
+        # Create output directory structure
+        mkdir -p $$TMPDIR/etc/ssl/certs
+        
+        # Concatenate all Mozilla certificates into single file
+        cat $$TMPDIR/usr/share/ca-certificates/mozilla/*.crt > $$TMPDIR/etc/ssl/certs/ca-certificates.crt
+        
+        # Create tar.gz of just the certificate file
+        tar czf $@ -C $$TMPDIR etc/ssl/certs/ca-certificates.crt
+        
+        # Cleanup
+        rm -rf $$TMPDIR data.tar.xz
+    """,
     visibility = ["//visibility:public"],
 )
