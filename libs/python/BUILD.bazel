@@ -1,10 +1,21 @@
-load("@rules_python//python:defs.bzl", "py_library")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
 
 py_library(
     name = "python",
     srcs = [
         "__init__.py",
         "utils.py",
+        "logging.py",
     ],
     visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "logging_test",
+    srcs = ["logging_test.py"],
+    deps = [
+        ":python",
+        "@pypi//:pytest",
+    ],
+    size = "small",
 )
