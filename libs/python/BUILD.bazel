@@ -5,14 +5,14 @@ py_library(
     srcs = [
         "__init__.py",
         "utils.py",
-        "logging.py",
+        "log_setup.py",
     ],
     visibility = ["//visibility:public"],
 )
 
 py_test(
-    name = "logging_test",
-    srcs = ["logging_test.py"],
+    name = "log_setup_test",
+    srcs = ["log_setup_test.py"],
     deps = [
         ":python",
         "@pypi//:pytest",

@@ -7,8 +7,8 @@ from io import StringIO
 
 import pytest
 
-# Import the logging module
-from libs.python import logging as unified_logging
+# Import the log_setup module
+from libs.python import log_setup as unified_logging
 
 
 def test_setup_logging_basic():
