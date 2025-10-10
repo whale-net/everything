@@ -32,16 +32,13 @@ jobs:
       run: |
         # Run all tests and let Bazel handle caching
         bazel test //...
-        
+    
     - name: Collect coverage
       if: success() || failure()
       run: |
         # Run tests with coverage instrumentation
         echo "Collecting test coverage..."
-        bazel coverage --combined_report=lcov \
-          --instrumentation_filter="^//(?!external|bazel-out)" \
-          --instrument_test_targets \
-          //... || {
+        bazel coverage //... || {
           echo "Warning: Some tests failed, but continuing with coverage"
         }
         

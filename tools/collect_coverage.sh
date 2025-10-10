@@ -17,10 +17,7 @@ mkdir -p "$OUTPUT_DIR"
 # Run tests with coverage
 # For Python tests, Bazel generates coverage.dat files
 echo "Running tests with coverage instrumentation..."
-bazel coverage --combined_report=lcov \
-    --instrumentation_filter="^//(?!external|bazel-out)" \
-    --instrument_test_targets \
-    //... || {
+bazel coverage //... || {
     echo "Warning: Some tests may have failed, but continuing with coverage collection"
 }
 
