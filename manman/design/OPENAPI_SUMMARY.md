@@ -43,7 +43,20 @@ npm install @openapitools/openapi-generator-cli -g
 pip install build
 ```
 
-### 2. Generate Clients
+### 2. Generate OpenAPI Specs (via Bazel)
+
+```bash
+# Generate all API specs as build artifacts
+bazel build //libs/python/openapi_gen:all_api_specs
+
+# View generated specs
+ls bazel-bin/libs/python/openapi_gen/*.json
+
+# Or generate individual specs
+bazel run //libs/python/openapi_gen:openapi_gen -- experience-api
+```
+
+### 3. Generate Clients
 
 ```bash
 # Option A: Simple (with duplicated models)
@@ -114,7 +127,7 @@ manman/src/host/api/
 
 manman/src/models.py     ✅ Shared Pydantic models
 
-manman/src/host/openapi.py  ✅ OpenAPI spec generator
+libs/python/openapi_gen/ ✅ OpenAPI spec generator (Bazel target)
 ```
 
 ### What Was Added
@@ -125,6 +138,10 @@ clients/
 ├── experience-api-client/  🆕 Generated client
 ├── status-api-client/      🆕 Generated client
 └── worker-dal-api-client/  🆕 Generated client (replaces api_client.py)
+
+libs/python/openapi_gen/    🆕 OpenAPI generation library
+├── openapi_gen.py          🆕 Core generation logic
+└── BUILD.bazel             🆕 Bazel targets for spec generation
 ```
 
 ### Data Flow

@@ -86,3 +86,46 @@ py_test(
     ],
     python_version = "PY3",
 )
+
+# OpenAPI Spec Generation
+# Generate OpenAPI specifications for each API using the openapi_gen tool
+genrule(
+    name = "experience_api_spec",
+    outs = ["experience-api.json"],
+    cmd = """
+        $(location //libs/python/openapi_gen:openapi_gen) experience-api --output-dir $(@D)
+    """,
+    tools = ["//libs/python/openapi_gen:openapi_gen"],
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "status_api_spec",
+    outs = ["status-api.json"],
+    cmd = """
+        $(location //libs/python/openapi_gen:openapi_gen) status-api --output-dir $(@D)
+    """,
+    tools = ["//libs/python/openapi_gen:openapi_gen"],
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "worker_dal_api_spec",
+    outs = ["worker-dal-api.json"],
+    cmd = """
+        $(location //libs/python/openapi_gen:openapi_gen) worker-dal-api --output-dir $(@D)
+    """,
+    tools = ["//libs/python/openapi_gen:openapi_gen"],
+    visibility = ["//visibility:public"],
+)
+
+# Generate all API specs at once
+filegroup(
+    name = "all_api_specs",
+    srcs = [
+        ":experience_api_spec",
+        ":status_api_spec",
+        ":worker_dal_api_spec",
+    ],
+    visibility = ["//visibility:public"],
+)

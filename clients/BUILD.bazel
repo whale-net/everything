@@ -8,7 +8,16 @@ py_binary(
     deps = [
         "//manman/src:manman_core",
         "//manman/src/host:manman_host",
+        "//libs/python/openapi_gen:openapi_gen_lib",
     ],
+    visibility = ["//visibility:public"],
+)
+
+# Convenience target to generate OpenAPI specs
+# Points to the targets defined alongside the API implementations
+alias(
+    name = "generate_specs",
+    actual = "//manman/src/host:all_api_specs",
     visibility = ["//visibility:public"],
 )
 

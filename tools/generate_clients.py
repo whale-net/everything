@@ -27,6 +27,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from manman.src.config import ManManConfig
+from libs.python.openapi_gen.openapi_gen import generate_openapi_spec
 
 
 Strategy = Literal["duplicate", "shared"]
@@ -45,36 +46,38 @@ def check_openapi_generator_installed() -> bool:
         return False
 
 
-def generate_openapi_spec(api_name: str) -> Path:
+def generate_openapi_spec_file(api_name: str) -> Path:
     """
     Generate OpenAPI spec for a ManMan API.
     
-    Uses the existing openapi.py CLI to generate specs.
+    Uses the openapi_gen library to generate specs.
     """
     print(f"📝 Generating OpenAPI spec for {api_name}...")
     
-    # Run the OpenAPI generation module
-    # This doesn't require environment setup
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "manman.src.host.openapi",
-            api_name,
-        ],
-        cwd=PROJECT_ROOT,
-        capture_output=True,
-        text=True,
-    )
-    
-    if result.returncode != 0:
-        print(f"❌ Failed to generate spec: {result.stderr}")
+    # Validate API name
+    try:
+        ManManConfig.validate_api_name(api_name)
+    except ValueError as e:
+        print(f"❌ Invalid API name: {e}")
         sys.exit(1)
     
-    spec_path = PROJECT_ROOT / "openapi-specs" / f"{api_name}.json"
-    if not spec_path.exists():
-        print(f"❌ Spec file not found: {spec_path}")
+    # Build FastAPI app based on API
+    if api_name == ManManConfig.EXPERIENCE_API:
+        from manman.src.host.api.experience import create_app
+        fastapi_app = create_app()
+    elif api_name == ManManConfig.STATUS_API:
+        from manman.src.host.api.status import create_app
+        fastapi_app = create_app()
+    elif api_name == ManManConfig.WORKER_DAL_API:
+        from manman.src.host.api.worker_dal import create_app
+        fastapi_app = create_app()
+    else:
+        print(f"❌ Unknown API name: {api_name}")
         sys.exit(1)
+    
+    # Generate spec using the library function
+    output_dir = PROJECT_ROOT / "openapi-specs"
+    spec_path = generate_openapi_spec(fastapi_app, api_name, output_dir)
     
     print(f"✅ Spec generated: {spec_path}")
     return spec_path
@@ -322,7 +325,7 @@ def main():
         print(f"{'=' * 70}")
         
         # Step 1: Generate OpenAPI spec
-        spec_path = generate_openapi_spec(api_name)
+        spec_path = generate_openapi_spec_file(api_name)
         
         # Step 2: Generate client
         client_dir = generate_client(api_name, spec_path, args.strategy)

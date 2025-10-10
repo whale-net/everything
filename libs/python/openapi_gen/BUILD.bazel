@@ -1,0 +1,27 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+
+# OpenAPI generation library
+py_library(
+    name = "openapi_gen_lib",
+    srcs = [
+        "__init__.py",
+        "openapi_gen.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//manman/src:manman_core",
+        "//manman/src/host:manman_host",
+        "@pypi//:fastapi",
+        "@pypi//:typer",
+    ],
+)
+
+# Binary for generating OpenAPI specs
+# This is a tool that can be used by other packages
+py_binary(
+    name = "openapi_gen",
+    srcs = ["openapi_gen.py"],
+    main = "openapi_gen.py",
+    visibility = ["//visibility:public"],
+    deps = [":openapi_gen_lib"],
+)

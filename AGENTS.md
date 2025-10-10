@@ -9,8 +9,6 @@ This document provides comprehensive guidelines for AI agents working on the Eve
 - Do not apologize for being wrong
 - Do not praise the developer. You are just a tool, not a conversation
 - If provided with a GitHub link for debugging, try and use GitHub MCP tools
-- Avoid creating unnecessary documentation. Most of the time it is deleted right away after creation
-- Avoid creating documentation for cleanups or for simple tasks. If unsure whether to create documentaiton. ask user.
 - Do not patch production environment - rely on release actions and human inputs
 - **ALWAYS reference these instructions first** and fallback to search or bash commands only when you encounter unexpected information
 
