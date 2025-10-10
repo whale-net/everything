@@ -1,17 +1,73 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 
-# Worker services library  
+# Core worker abstractions and utilities
 py_library(
-    name = "manman_worker",
-    srcs = glob(["**/*.py"], exclude=["*_test.py"]),
+    name = "manman_worker_core",
+    srcs = [
+        "abstract_service.py",
+        "processbuilder.py",
+        "steamcmd.py",
+        "__init__.py",
+    ],
     visibility = ["//manman:__subpackages__"],
     deps = [
         "//manman/src:manman_core",
         "//manman/src/repository:manman_repository",
-        "@pypi//:amqpstorm",
-        "@pypi//:typer",
         "@pypi//:requests",
         "@pypi//:python-jose",
+    ],
+)
+
+# Server management functionality
+py_library(
+    name = "manman_worker_server",
+    srcs = ["server.py"],
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        ":manman_worker_core",
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
+    ],
+)
+
+# Worker service implementation
+py_library(
+    name = "manman_worker_service",
+    srcs = ["worker_service.py"],
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        ":manman_worker_core",
+        ":manman_worker_server",
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
+        "@pypi//:amqpstorm",
+    ],
+)
+
+# Main entry point library
+py_library(
+    name = "manman_worker_main",
+    srcs = ["main.py"],
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        ":manman_worker_service",
+        ":manman_worker_core",
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
+        "@pypi//:typer",
+        "@pypi//:amqpstorm",
+    ],
+)
+
+# Aggregate worker services library for backward compatibility
+py_library(
+    name = "manman_worker",
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        ":manman_worker_main",
+        ":manman_worker_service",
+        ":manman_worker_server",
+        ":manman_worker_core",
     ],
 )
 
@@ -20,11 +76,46 @@ py_binary(
     name = "worker",
     srcs = ["main.py"],
     main = "main.py",
-    deps = [":manman_worker"],
+    deps = [":manman_worker_main"],
     visibility = ["//manman:__pkg__"],
 )
 
-# Tests for worker services
+# Tests for server management
+py_test(
+    name = "server_status_test",
+    srcs = ["server_status_test.py"],
+    deps = [
+        ":manman_worker_server",
+        ":manman_worker_core",
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+    ],
+    python_version = "PY3",
+)
+
+# Tests for worker service
+py_test(
+    name = "worker_service_test",
+    srcs = [
+        "subscriber_multiple_exchanges_test.py",
+        "worker_heartbeat_test.py",
+        "worker_shutdown_cascade_test.py",
+    ],
+    main = "worker_heartbeat_test.py",
+    deps = [
+        ":manman_worker_service",
+        ":manman_worker_core",
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+    ],
+    python_version = "PY3",
+)
+
+# Aggregate test target for backward compatibility
 py_test(
     name = "manman_worker_test",
     srcs = [

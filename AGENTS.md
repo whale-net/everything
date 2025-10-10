@@ -181,6 +181,21 @@ touch new_app/test_main.py  # or main_test.go
 ```
 
 #### 2. Create BUILD.bazel File
+
+**BUILD File Organization Principle:**
+- **Colocate `py_library` with `__init__.py` only for standalone packages**: Define library targets in subdirectory BUILD files only when creating truly independent Bazel packages that will not be imported from parent packages
+- **Keep libraries in parent BUILD for importable submodules**: When Python code imports from subdirectories (e.g., `from mymodule.submodule import foo`), define the library in the parent BUILD file using `glob()` to include subdirectory sources
+- **Example structure:**
+  ```
+  mymodule/
+  ├── BUILD.bazel           # Contains py_library with glob(["submodule/**/*.py"])
+  ├── __init__.py
+  └── submodule/
+      ├── __init__.py       # No BUILD file - imported from parent
+      └── module.py
+  ```
+- **When to use subdirectory BUILD files**: Only for truly separate Bazel packages that are not imported as Python submodules (e.g., separate services, standalone tools)
+
 For Python apps:
 ```starlark
 load("@rules_python//python:defs.bzl", "py_binary", "py_test")
@@ -368,6 +383,7 @@ When modifying code:
 2. **Update BUILD.bazel files** - Add new dependencies and targets as needed
 3. **Maintain release compatibility** - Don't break existing `release_app` configurations
 4. **Follow naming conventions** - Keep directory names and target names consistent
+5. **Colocate BUILD files with __init__.py** - Define `py_library` targets in the same directory as the `__init__.py` file they represent, not in parent directories. Use `alias()` in parent BUILD files to reference subdirectory targets when needed for backward compatibility.
 
 ### Release Management
 When working with releases:
