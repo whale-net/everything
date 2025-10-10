@@ -22,7 +22,7 @@ release_app(
     domain = "manman",
     description = "Experience API service for managing user experiences and workflows",
     app_type = "external-api",
-    port = 8080,
+    port = 8000,
     replicas = 1,  # Single replica for development
     ingress_host = "experience.manman.local",
     ingress_tls_secret = "manman-tls",
@@ -36,7 +36,7 @@ release_app(
     domain = "manman",
     description = "Status API service for monitoring and health checks",
     app_type = "internal-api",
-    port = 8081,
+    port = 8000,
     replicas = 1,  # Single replica for development
     args = ["start-status-api"],
 )
@@ -48,7 +48,7 @@ release_app(
     domain = "manman",
     description = "Worker DAL API service for data access layer operations",
     app_type = "external-api",
-    port = 8082,
+    port = 8000,
     replicas = 1,  # Single replica for development
     ingress_host = "dal.manman.local",
     ingress_tls_secret = "manman-tls",
@@ -62,7 +62,7 @@ release_app(
     domain = "manman",
     description = "Status processor service for background status processing",
     app_type = "internal-api",
-    port = 8083,
+    port = 8000,
     replicas = 1,  # Single replica for development
     args = ["start-status-processor"],
 )
