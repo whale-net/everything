@@ -1,0 +1,51 @@
+load("@rules_python//python:defs.bzl", "py_binary")
+
+# Client generation script
+py_binary(
+    name = "generate_clients",
+    srcs = ["//tools:generate_clients.py"],
+    main = "//tools:generate_clients.py",
+    deps = [
+        "//manman/src:manman_core",
+        "//manman/src/host:manman_host",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# TODO: Add genrule for automatic client generation
+# This would automatically regenerate clients when APIs change
+# Example structure (needs refinement):
+# genrule(
+#     name = "auto_generate_clients",
+#     srcs = [
+#         "//manman/src/host/api:experience",
+#         "//manman/src/host/api:status",
+#         "//manman/src/host/api:worker_dal",
+#         "//manman/src:models",
+#     ],
+#     outs = [
+#         "experience-api-client/setup.py",
+#         "status-api-client/setup.py",
+#         "worker-dal-api-client/setup.py",
+#     ],
+#     cmd = """
+#         $(location :generate_clients) --strategy=shared
+#         # Copy outputs to bazel-bin location
+#         cp -r clients/* $(RULEDIR)/
+#     """,
+#     tools = [":generate_clients"],
+# )
+
+# Placeholder for future client library targets
+# Once generated, we can add them as py_library targets
+# Example:
+# py_library(
+#     name = "experience_api_client",
+#     srcs = glob(["experience-api-client/manman_experience_client/**/*.py"]),
+#     visibility = ["//visibility:public"],
+#     deps = [
+#         "//manman/src:manman_core",  # For shared models
+#         "@pypi//:urllib3",
+#         "@pypi//:python-dateutil",
+#     ],
+# )
