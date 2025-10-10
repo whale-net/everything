@@ -184,17 +184,18 @@ touch new_app/test_main.py  # or main_test.go
 #### 2. Create BUILD.bazel File
 
 **BUILD File Organization Principle:**
-- **Colocate `py_library` with `__init__.py`**: Define library targets in the same directory as the `__init__.py` file they represent
-- **Use `alias()` for references**: Parent BUILD files should use `alias()` to reference subdirectory targets for backward compatibility
+- **Colocate `py_library` with `__init__.py` only for standalone packages**: Define library targets in subdirectory BUILD files only when creating truly independent Bazel packages that will not be imported from parent packages
+- **Keep libraries in parent BUILD for importable submodules**: When Python code imports from subdirectories (e.g., `from mymodule.submodule import foo`), define the library in the parent BUILD file using `glob()` to include subdirectory sources
 - **Example structure:**
   ```
   mymodule/
-  ├── BUILD.bazel           # Contains alias() to subdirectory targets
+  ├── BUILD.bazel           # Contains py_library with glob(["submodule/**/*.py"])
   ├── __init__.py
   └── submodule/
-      ├── BUILD.bazel       # Contains py_library for submodule
-      └── __init__.py
+      ├── __init__.py       # No BUILD file - imported from parent
+      └── module.py
   ```
+- **When to use subdirectory BUILD files**: Only for truly separate Bazel packages that are not imported as Python submodules (e.g., separate services, standalone tools)
 
 For Python apps:
 ```starlark

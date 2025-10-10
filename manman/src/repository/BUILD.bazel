@@ -18,20 +18,27 @@ py_library(
     ],
 )
 
-# RabbitMQ infrastructure library - defined in subdirectory
-# See manman/src/repository/rabbitmq/BUILD.bazel
-alias(
+# RabbitMQ infrastructure library
+py_library(
     name = "manman_repository_rabbitmq",
-    actual = "//manman/src/repository/rabbitmq:manman_repository_rabbitmq",
+    srcs = glob(["rabbitmq/**/*.py"]),
     visibility = ["//manman:__subpackages__"],
+    deps = [
+        "//manman/src:manman_core",
+        "@pypi//:amqpstorm",
+    ],
 )
 
-# Message pub/sub services library - defined in subdirectory
-# See manman/src/repository/message/BUILD.bazel
-alias(
+# Message pub/sub services library
+py_library(
     name = "manman_repository_message",
-    actual = "//manman/src/repository/message:manman_repository_message",
+    srcs = glob(["message/**/*.py"]),
     visibility = ["//manman:__subpackages__"],
+    deps = [
+        ":manman_repository_rabbitmq",
+        "//manman/src:manman_core",
+        "@pypi//:amqpstorm",
+    ],
 )
 
 # API client library for external calls
@@ -86,16 +93,20 @@ py_test(
     python_version = "PY3",
 )
 
-# Tests for RabbitMQ utilities - defined in subdirectory
-# See manman/src/repository/rabbitmq/BUILD.bazel
-alias(
+# Tests for RabbitMQ utilities
+py_test(
     name = "rabbitmq_util_test",
-    actual = "//manman/src/repository/rabbitmq:util_test",
+    srcs = ["rabbitmq/util_test.py"],
+    deps = [
+        ":manman_repository_rabbitmq",
+        "//manman/src:manman_core",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+    ],
+    python_version = "PY3",
 )
 
 # Aggregate test target for backward compatibility
-# Note: Only includes tests from the current package
-# Subdirectory tests (rabbitmq) are defined in their own BUILD.bazel files
 py_test(
     name = "manman_repository_test",
     srcs = [
