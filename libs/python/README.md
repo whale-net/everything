@@ -40,7 +40,11 @@ setup_logging(
 
 **Example:**
 ```bash
+# Basic example
 python3 log_setup_example.py
+
+# Integration example (with metadata from env vars)
+python3 integration_example.py
 ```
 
 ### utils.py
