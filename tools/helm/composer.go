@@ -413,12 +413,13 @@ func (c *Composer) buildAppConfig(app AppMetadata) (AppConfig, error) {
 		Args:      app.Args,    // Use args from metadata
 	}
 
-	// Add health check for APIs based on metadata or defaults
-	if appType == ExternalAPI || appType == InternalAPI {
+	// Add health check for APIs and Workers based on metadata or defaults
+	if appType == ExternalAPI || appType == InternalAPI || appType == Worker {
 		if app.HealthCheck != nil && app.HealthCheck.Enabled {
 			// Use health check path from metadata
 			config.HealthCheck = &HealthCheckConfig{
 				Path:                app.HealthCheck.Path,
+				Port:                port, // Use the app's port for health checks
 				InitialDelaySeconds: 10,
 				PeriodSeconds:       10,
 				TimeoutSeconds:      5,

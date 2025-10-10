@@ -425,6 +425,25 @@ func TestBuildAppConfig(t *testing.T) {
 			expectPort:      8000,
 			expectHealthChk: true,
 		},
+		{
+			name: "Worker with health check and custom port",
+			metadata: AppMetadata{
+				Name:        "worker-with-health",
+				AppType:     "worker",
+				Registry:    "ghcr.io",
+				RepoName:    "demo-worker-health",
+				Version:     "v1.0.0",
+				Port:        9090,
+				ImageTarget: "worker_health_image",
+				HealthCheck: &HealthCheckMeta{
+					Enabled: true,
+					Path:    "/health",
+				},
+			},
+			expectReplicas:  1,
+			expectPort:      9090,
+			expectHealthChk: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -445,6 +464,11 @@ func TestBuildAppConfig(t *testing.T) {
 			hasHealthCheck := config.HealthCheck != nil
 			if hasHealthCheck != tt.expectHealthChk {
 				t.Errorf("Expected health check: %v, got: %v", tt.expectHealthChk, hasHealthCheck)
+			}
+
+			// Verify that health check port is set correctly
+			if hasHealthCheck && config.HealthCheck.Port != tt.expectPort {
+				t.Errorf("Expected health check port %d, got %d", tt.expectPort, config.HealthCheck.Port)
 			}
 
 			if config.Image != tt.metadata.GetImage() {
