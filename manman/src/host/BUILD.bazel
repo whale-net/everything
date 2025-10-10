@@ -5,7 +5,10 @@ load("//tools:release.bzl", "release_app")
 py_library(
     name = "manman_host",
     srcs = glob(["**/*.py"], exclude=["*_test.py"]),
-    visibility = ["//manman:__subpackages__"],
+    visibility = [
+        "//manman:__subpackages__",
+        "//libs/python/openapi_gen:__pkg__",
+    ],
     deps = [
         "//manman/src:manman_core",
         "//manman/src/repository:manman_repository",

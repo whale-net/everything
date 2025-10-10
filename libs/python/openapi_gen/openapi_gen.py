@@ -48,7 +48,7 @@ def generate_openapi_spec(
     return spec_file
 
 
-@app.callback(invoke_without_command=True)
+@app.command()
 def main(
     api_name: Annotated[
         str,
