@@ -14,6 +14,7 @@ bazel_dep(name = "aspect_rules_py", version = "1.6.4-rc1")
 bazel_dep(name = "rules_helm", version = "0.6.0.bcr.1")
 bazel_dep(name = "rules_pkg", version = "1.0.1")
 bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "rules_java", version = "8.6.3")
 
 # OCI/Docker setup - Ubuntu base image for all containers
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
@@ -41,6 +42,14 @@ http_file(
     name = "ca_certificates_deb",
     sha256 = "b2d488ad4d8d8adb3ba319fc9cb2cf9909fc42cb82ad239a26c570a2e749c389",
     urls = ["https://snapshot.debian.org/archive/debian/20231106T210201Z/pool/main/c/ca-certificates/ca-certificates_20210119_all.deb"],
+)
+
+# OpenAPI Generator CLI for client code generation
+http_file(
+    name = "openapi_generator_cli",
+    sha256 = "615e014705af34861e789e0b2a11075d3c80db134f881e937265479a4a83996e",
+    urls = ["https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/7.10.0/openapi-generator-cli-7.10.0.jar"],
+    downloaded_file_path = "openapi-generator-cli.jar",
 )
 
 # Python setup with rules_python for interpreter registration
