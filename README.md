@@ -42,6 +42,27 @@ bazel test //demo/hello_fastapi:test_main
 bazel test //demo/hello_world_test:test_main
 ```
 
+### Local Development with Tilt
+
+For Kubernetes-based local development with hot reload:
+
+```bash
+# Install Tilt
+brew install tilt-dev/tap/tilt
+
+# Setup environment
+cp .env.example .env
+# Edit .env to enable desired services
+
+# Build helm charts
+bazel build //demo/...
+
+# Start development environment
+tilt up
+```
+
+See [docs/TILT_DEVELOPMENT.md](docs/TILT_DEVELOPMENT.md) for complete Tilt documentation.
+
 ### Verify Setup
 After installation, verify everything works:
 ```bash
