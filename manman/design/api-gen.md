@@ -2,22 +2,26 @@ This guide outlines the steps for a coding agent to implement a robust, Python-s
 
 > **📚 IMPLEMENTATION COMPLETE!**
 >
-> This design has been fully implemented for the ManMan monorepo. See the comprehensive documentation:
+> This design has been fully implemented for the ManMan monorepo using Bazel.
 >
-> ### 🚀 Start Here
-> - **[OPENAPI_SUMMARY.md](./OPENAPI_SUMMARY.md)** - **← START HERE** - Overview & quick start
-> - **[api-gen-quickstart.md](./api-gen-quickstart.md)** - Quick reference & commands
+> ### 🚀 Current Implementation
+> - **OpenAPI clients** are generated using `//tools:openapi_client.bzl` Bazel rule
+> - **No external tools needed** - Everything runs through Bazel build system
+> - **Test the clients**: `bazel test //clients:test_experience_api_client`
 >
-> ### 📖 Implementation Guides  
-> - **[api-gen-implementation.md](./api-gen-implementation.md)** - Complete implementation details
-> - **[api-gen-comparison.md](./api-gen-comparison.md)** - Before/after examples
-> - **[../../clients/README.md](../../clients/README.md)** - Daily usage documentation
+> ### 📖 Key Files  
+> - **[tools/openapi_client.bzl](../../tools/openapi_client.bzl)** - Client generation rule
+> - **[clients/BUILD.bazel](../../clients/BUILD.bazel)** - Client target definitions
+> - **[OPENAPI_CLIENT_IMPLEMENTATION_SUMMARY.md](../../OPENAPI_CLIENT_IMPLEMENTATION_SUMMARY.md)** - Implementation details
 >
 > ### ⚡ Quick Start
 > ```bash
-> npm install @openapitools/openapi-generator-cli -g
-> python tools/generate_clients.py --strategy=shared --build-wheel
-> pip install clients/worker-dal-api-client/dist/*.whl
+> # Build all clients
+> bazel build //clients:manman_experience_api
+> bazel build //clients:manman_status_api
+> 
+> # Test clients
+> bazel test //clients:test_experience_api_client
 > ```
 
 -----

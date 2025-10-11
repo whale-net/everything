@@ -198,35 +198,3 @@ def test_validation_error_models():
     assert len(http_error.detail) == 1
     assert http_error.detail[0].msg == "Field required"
 
-
-if __name__ == "__main__":
-    # Run tests manually for quick verification
-    print("Running manual tests...")
-    test_imports()
-    print("✅ Imports successful")
-    
-    test_create_worker_model()
-    print("✅ Worker model works")
-    
-    test_create_game_server_instance()
-    print("✅ GameServerInstance model works")
-    
-    test_create_game_server_config()
-    print("✅ GameServerConfig model works")
-    
-    test_create_stdin_command_request()
-    print("✅ StdinCommandRequest model works")
-    
-    test_create_current_instance_response()
-    print("✅ CurrentInstanceResponse model works")
-    
-    test_api_client_configuration()
-    print("✅ API client configuration works")
-    
-    test_model_serialization()
-    print("✅ Model serialization works")
-    
-    test_validation_error_models()
-    print("✅ Validation error models work")
-    
-    print("\n🎉 All tests passed!")

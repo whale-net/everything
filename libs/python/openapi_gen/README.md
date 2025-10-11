@@ -29,9 +29,6 @@ bazel build //manman/src/host:all_api_specs
 
 # View generated specs
 ls bazel-bin/manman/src/host/*.json
-
-# Or via convenience alias
-bazel build //clients:generate_specs
 ```
 
 Generate individual API specs:
@@ -91,16 +88,7 @@ spec_path = generate_openapi_spec(
 print(f"Spec saved to: {spec_path}")
 ```
 
-## 🔧 Integration with Client Generation
-
-The client generation script uses this library:
-
-```bash
-# Generate clients (automatically generates specs first)
-python tools/generate_clients.py --strategy=shared
-```
-
-## 📝 Available APIs
+##  Available APIs
 
 The following ManMan APIs can be generated:
 
@@ -125,7 +113,6 @@ The following ManMan APIs can be generated:
 | `//manman/src/host:status_api_spec` | `genrule` | Generate status API spec |
 | `//manman/src/host:worker_dal_api_spec` | `genrule` | Generate worker DAL API spec |
 | `//manman/src/host:all_api_specs` | `filegroup` | Generate all API specs |
-| `//clients:generate_specs` | `alias` | Convenience alias to all_api_specs |
 
 ### Example: Use Generated Specs in Another Rule
 
