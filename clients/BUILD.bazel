@@ -78,6 +78,15 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+py_test(
+    name = "test_experience_api_client",
+    srcs = ["test_experience_api_client.py"],
+    deps = [
+        ":manman_experience_api",
+        "@pypi//:pydantic",
+    ],
+)
+
 # ==============================================================================
 # Legacy/Old Client Generation (to be removed)
 # ==============================================================================

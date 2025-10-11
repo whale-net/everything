@@ -51,10 +51,18 @@ def openapi_client(name, spec, namespace, app, package_name = None, model_files 
             fi
             
             # Fix imports to use absolute external.* paths
+            # Pattern 1: from package_name.module import ...
             find "$$TMPDIR/{package_name}" -name "*.py" -type f -exec sed -i \
                 's|from {package_name}\\.|from external.{namespace}.{app}.|g' {{}} +
+            # Pattern 2: import package_name.module
             find "$$TMPDIR/{package_name}" -name "*.py" -type f -exec sed -i \
                 's|import {package_name}\\.|import external.{namespace}.{app}.|g' {{}} +
+            # Pattern 3: from package_name import module (no dot after package name)
+            find "$$TMPDIR/{package_name}" -name "*.py" -type f -exec sed -i \
+                's|from {package_name} import|from external.{namespace}.{app} import|g' {{}} +
+            # Pattern 4: import package_name (standalone, no dot)
+            find "$$TMPDIR/{package_name}" -name "*.py" -type f -exec sed -i \
+                's|^import {package_name}$$|import external.{namespace}.{app}|g' {{}} +
             
             # Create tar archive - tar from temp dir but output to absolute path
             tar -cf "$@" -C "$$TMPDIR" {package_name}/
@@ -124,6 +132,8 @@ def openapi_client(name, spec, namespace, app, package_name = None, model_files 
         imports = ["."],  # Make external/ importable
         deps = [
             "@pypi//:pydantic",  # For model validation
+            "@pypi//:python-dateutil",  # Required by generated ApiClient
+            "@pypi//:urllib3",  # HTTP transport dependency
         ],
         visibility = visibility or ["//visibility:public"],
     )
