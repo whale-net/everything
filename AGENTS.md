@@ -197,7 +197,7 @@ py_test(
     srcs = ["test_main.py"],
     deps = [
         ":new_app_lib",
-        requirement("pytest"),
+        "@pypi//pytest",
     ],
     size = "small",
 )
@@ -256,7 +256,7 @@ Reference shared Python code from `//libs/python`:
 ```starlark
 deps = [
     "//libs/python",
-    requirement("package_name"),
+    "@pypi//package_name",
 ]
 ```
 

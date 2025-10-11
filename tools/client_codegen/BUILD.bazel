@@ -1,63 +1,17 @@
-load("@rules_python//python:defs.bzl", "py_binary")
+load("@rules_python//python:defs.bzl", "py_test")
 load("//tools:openapi_client.bzl", "openapi_client")
 
 # ==============================================================================
-# OpenAPI Client Generation
+# OpenAPI Client Generation - Examples
 # ==============================================================================
+# This directory contains example/demo OpenAPI clients.
+# Production ManMan API clients are defined in //manman/src/host:BUILD.bazel
+# alongside their OpenAPI spec definitions.
+#
 # Clients are generated in external/{namespace}/{app}/ structure
 # Import pattern: from external.{namespace}.{app} import ...
 
-# ManMan API Clients
-openapi_client(
-    name = "manman_experience_api",
-    spec = "//manman/src/host:experience_api_spec",
-    namespace = "manman",
-    app = "experience_api",
-    model_files = [
-        "current_instance_response",
-        "game_server_config",
-        "game_server_instance",
-        "http_validation_error",
-        "stdin_command_request",
-        "validation_error",
-        "validation_error_loc_inner",
-        "worker",
-    ],
-)
-
-openapi_client(
-    name = "manman_status_api",
-    spec = "//manman/src/host:status_api_spec",
-    namespace = "manman",
-    app = "status_api",
-    model_files = [
-        "external_status_info",
-        "http_validation_error",
-        "status_type",
-        "validation_error",
-        "validation_error_loc_inner",
-    ],
-)
-
-openapi_client(
-    name = "manman_worker_dal_api",
-    spec = "//manman/src/host:worker_dal_api_spec",
-    namespace = "manman",
-    app = "worker_dal_api",
-    model_files = [
-        "game_server",
-        "game_server_config",
-        "game_server_instance_input",
-        "game_server_instance_output",
-        "http_validation_error",
-        "server_type",
-        "validation_error",
-        "validation_error_loc_inner",
-        "worker",
-    ],
-)
-
-# Demo API Clients
+# Demo API Client (example)
 openapi_client(
     name = "demo_hello_fastapi",
     spec = "//demo/hello_fastapi:hello-fastapi_openapi_spec",
@@ -66,23 +20,15 @@ openapi_client(
     # No model files - demo API has no data models
 )
 
-# Convenience target to build all clients
-filegroup(
-    name = "all_clients",
-    srcs = [
-        ":manman_experience_api",
-        ":manman_status_api",
-        ":manman_worker_dal_api",
-        ":demo_hello_fastapi",
-    ],
-    visibility = ["//visibility:public"],
-)
+# ==============================================================================
+# Tests
+# ==============================================================================
 
 py_test(
     name = "test_experience_api_client",
     srcs = ["test_experience_api_client.py"],
     deps = [
-        ":manman_experience_api",
+        "//manman/src/host:experience_api_client",
         "@pypi//:pydantic",
     ],
 )

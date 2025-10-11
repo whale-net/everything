@@ -1,10 +1,29 @@
 # OpenAPI Client Generation
 
-This directory contains automatically generated Python clients for all FastAPI services in the monorepo.
+# OpenAPI Client Generation
+
+This directory contains examples and tests for OpenAPI client generation.
+
+**Production ManMan API clients** are defined in `//manman/src/host:BUILD.bazel` alongside their OpenAPI spec definitions for better organization and colocation.
 
 ## Overview
 
-Clients are generated from OpenAPI specifications and organized in the `external/{namespace}/{app}/` structure:
+OpenAPI clients are Python libraries automatically generated from OpenAPI specifications. They provide type-safe, well-documented interfaces for consuming APIs.
+
+### Client Organization
+
+- **ManMan API clients**: Defined in `//manman/src/host:BUILD.bazel`
+  - `//manman/src/host:experience_api_client`
+  - `//manman/src/host:status_api_client`
+  - `//manman/src/host:worker_dal_api_client`
+  - `//manman/src/host:all_api_clients` (convenience target)
+
+- **Demo/Example clients**: Defined in this directory
+  - `//tools/client_codegen:demo_hello_fastapi`
+
+### Import Pattern
+
+Generated clients use the `external/{namespace}/{app}/` structure:
 
 ```
 external/
@@ -52,7 +71,7 @@ py_binary(
     name = "my_service",
     srcs = ["main.py"],
     deps = [
-        "//tools/client_codegen:manman_status_api",  # Add the client dependency
+        "//manman/src/host:status_api_client",  # Use ManMan API clients
         # ... other deps
     ],
 )
@@ -60,18 +79,22 @@ py_binary(
 
 ## Building Clients
 
-### Build All Clients
+### Build ManMan API Clients
 
 ```bash
-bazel build //tools/client_codegen:all_clients --java_runtime_version=remotejdk_17
+# Build individual clients
+bazel build //manman/src/host:experience_api_client
+bazel build //manman/src/host:status_api_client
+bazel build //manman/src/host:worker_dal_api_client
+
+# Build all ManMan clients
+bazel build //manman/src/host:all_api_clients
 ```
 
-### Build Individual Client
+### Build Demo Client
 
 ```bash
-bazel build //tools/client_codegen:manman_experience_api --java_runtime_version=remotejdk_17
-bazel build //tools/client_codegen:manman_status_api --java_runtime_version=remotejdk_17
-bazel build //tools/client_codegen:demo_hello_fastapi --java_runtime_version=remotejdk_17
+bazel build //tools/client_codegen:demo_hello_fastapi
 ```
 
 ### Set Java Runtime as Default
@@ -96,21 +119,37 @@ Each client contains:
 
 When you create a new FastAPI app with `release_app()`, the OpenAPI spec is automatically generated. To add a client:
 
-1. **Add client target** in `//tools/client_codegen/BUILD.bazel`:
+1. **For ManMan APIs**: Add client target in `//manman/src/host/BUILD.bazel`:
 
 ```starlark
 openapi_client(
-    name = "my_new_api",
-    spec = "//path/to/your:app_openapi_spec",
-    namespace = "myapp",      # Group related APIs
-    app = "my_new_api",       # Specific API name
+    name = "my_new_api_client",
+    spec = ":my_new_api_spec",
+    namespace = "manman",
+    app = "my_new_api",
+    visibility = ["//visibility:public"],
 )
 ```
 
-2. **Build the client**:
+2. **For demo/other APIs**: Add client target in `//tools/client_codegen/BUILD.bazel`:
+
+```starlark
+openapi_client(
+    name = "my_demo_api",
+    spec = "//path/to/your:app_openapi_spec",
+    namespace = "demo",
+    app = "my_demo_api",
+)
+```
+
+3. **Build the client**:
 
 ```bash
-bazel build //tools/client_codegen:my_new_api --java_runtime_version=remotejdk_17
+# ManMan APIs
+bazel build //manman/src/host:my_new_api_client
+
+# Demo APIs
+bazel build //tools/client_codegen:my_demo_api
 ```
 
 3. **Import and use**:
@@ -183,9 +222,9 @@ The client generation approach handles circular dependencies correctly:
 
 - Service A can depend on Service B's **client** (not B's implementation)
 - Service B can depend on Service A's **client** (not A's implementation)
-- Clients are generated in `//tools/client_codegen/` as separate artifacts from service implementations
+- Clients are generated separately from service implementations
 
-See archived [CLIENT_GENERATION.md](../docs/archive/CLIENT_GENERATION.md) for detailed explanation.
+See archived [CLIENT_GENERATION.md](../../docs/archive/CLIENT_GENERATION.md) for detailed explanation.
 
 ## Implementation Details
 
@@ -198,10 +237,13 @@ See archived [CLIENT_GENERATION.md](../docs/archive/CLIENT_GENERATION.md) for de
 
 ### "No module named 'external'"
 
-Make sure `bazel-bin/tools/client_codegen` is in your Python path:
+Make sure the generated client's bazel-bin directory is in your Python path:
 
 ```python
 import sys
+# For ManMan clients
+sys.path.insert(0, 'bazel-bin/manman/src/host')
+# For demo clients
 sys.path.insert(0, 'bazel-bin/tools/client_codegen')
 ```
 
@@ -225,7 +267,10 @@ Rebuild the OpenAPI spec and client:
 
 ```bash
 bazel clean
-bazel build //tools/client_codegen:your_client --java_runtime_version=remotejdk_17
+# ManMan clients
+bazel build //manman/src/host:your_client
+# Demo clients
+bazel build //tools/client_codegen:your_client
 ```
 
 ### Import errors in generated code

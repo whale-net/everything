@@ -1,5 +1,6 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("//tools:release.bzl", "release_app")
+load("//tools:openapi_client.bzl", "openapi_client")
 
 # Host API services library
 py_library(
@@ -129,6 +130,76 @@ filegroup(
         ":experience_api_spec",
         ":status_api_spec",
         ":worker_dal_api_spec",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# ==============================================================================
+# OpenAPI Client Generation
+# ==============================================================================
+# Generate Python clients for ManMan APIs
+# Clients are generated in external/manman/{api}/ structure
+# Import pattern: from external.manman.{api} import ...
+
+openapi_client(
+    name = "experience_api_client",
+    spec = ":experience_api_spec",
+    namespace = "manman",
+    app = "experience_api",
+    model_files = [
+        "current_instance_response",
+        "game_server_config",
+        "game_server_instance",
+        "http_validation_error",
+        "stdin_command_request",
+        "validation_error",
+        "validation_error_loc_inner",
+        "worker",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+openapi_client(
+    name = "status_api_client",
+    spec = ":status_api_spec",
+    namespace = "manman",
+    app = "status_api",
+    model_files = [
+        "external_status_info",
+        "http_validation_error",
+        "status_type",
+        "validation_error",
+        "validation_error_loc_inner",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+openapi_client(
+    name = "worker_dal_api_client",
+    spec = ":worker_dal_api_spec",
+    namespace = "manman",
+    app = "worker_dal_api",
+    model_files = [
+        "game_server",
+        "game_server_config",
+        "game_server_instance_input",
+        "game_server_instance_output",
+        "http_validation_error",
+        "server_type",
+        "validation_error",
+        "validation_error_loc_inner",
+        "worker",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Convenience target to build all ManMan API clients
+filegroup(
+    name = "all_api_clients",
+    srcs = [
+        ":experience_api_client",
+        ":status_api_client",
+        ":worker_dal_api_client",
     ],
     visibility = ["//visibility:public"],
 )
