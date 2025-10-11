@@ -146,16 +146,6 @@ openapi_client(
     spec = ":experience_api_spec",
     namespace = "manman",
     app = "experience_api",
-    model_files = [
-        "current_instance_response",
-        "game_server_config",
-        "game_server_instance",
-        "http_validation_error",
-        "stdin_command_request",
-        "validation_error",
-        "validation_error_loc_inner",
-        "worker",
-    ],
     visibility = ["//visibility:public"],
 )
 
@@ -164,13 +154,6 @@ openapi_client(
     spec = ":status_api_spec",
     namespace = "manman",
     app = "status_api",
-    model_files = [
-        "external_status_info",
-        "http_validation_error",
-        "status_type",
-        "validation_error",
-        "validation_error_loc_inner",
-    ],
     visibility = ["//visibility:public"],
 )
 
@@ -179,17 +162,6 @@ openapi_client(
     spec = ":worker_dal_api_spec",
     namespace = "manman",
     app = "worker_dal_api",
-    model_files = [
-        "game_server",
-        "game_server_config",
-        "game_server_instance_input",
-        "game_server_instance_output",
-        "http_validation_error",
-        "server_type",
-        "validation_error",
-        "validation_error_loc_inner",
-        "worker",
-    ],
     visibility = ["//visibility:public"],
 )
 

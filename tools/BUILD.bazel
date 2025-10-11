@@ -92,3 +92,10 @@ alias(
     actual = "//tools/release_helper:release_helper",
     visibility = ["//visibility:public"],
 )
+
+# Wrapper script for OpenAPI generation
+sh_binary(
+    name = "openapi_gen_wrapper",
+    srcs = ["openapi_gen_wrapper.sh"],
+    visibility = ["//visibility:public"],
+)
