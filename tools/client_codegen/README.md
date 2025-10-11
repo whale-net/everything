@@ -52,7 +52,7 @@ py_binary(
     name = "my_service",
     srcs = ["main.py"],
     deps = [
-        "//clients:manman_status_api",  # Add the client dependency
+        "//tools/client_codegen:manman_status_api",  # Add the client dependency
         # ... other deps
     ],
 )
@@ -63,15 +63,15 @@ py_binary(
 ### Build All Clients
 
 ```bash
-bazel build //clients:all_clients --java_runtime_version=remotejdk_17
+bazel build //tools/client_codegen:all_clients --java_runtime_version=remotejdk_17
 ```
 
 ### Build Individual Client
 
 ```bash
-bazel build //clients:manman_experience_api --java_runtime_version=remotejdk_17
-bazel build //clients:manman_status_api --java_runtime_version=remotejdk_17
-bazel build //clients:demo_hello_fastapi --java_runtime_version=remotejdk_17
+bazel build //tools/client_codegen:manman_experience_api --java_runtime_version=remotejdk_17
+bazel build //tools/client_codegen:manman_status_api --java_runtime_version=remotejdk_17
+bazel build //tools/client_codegen:demo_hello_fastapi --java_runtime_version=remotejdk_17
 ```
 
 ### Set Java Runtime as Default
@@ -96,7 +96,7 @@ Each client contains:
 
 When you create a new FastAPI app with `release_app()`, the OpenAPI spec is automatically generated. To add a client:
 
-1. **Add client target** in `//clients/BUILD.bazel`:
+1. **Add client target** in `//tools/client_codegen/BUILD.bazel`:
 
 ```starlark
 openapi_client(
@@ -110,7 +110,7 @@ openapi_client(
 2. **Build the client**:
 
 ```bash
-bazel build //clients:my_new_api --java_runtime_version=remotejdk_17
+bazel build //tools/client_codegen:my_new_api --java_runtime_version=remotejdk_17
 ```
 
 3. **Import and use**:
@@ -183,9 +183,9 @@ The client generation approach handles circular dependencies correctly:
 
 - Service A can depend on Service B's **client** (not B's implementation)
 - Service B can depend on Service A's **client** (not A's implementation)
-- Clients are generated in `//clients/` as separate artifacts from service implementations
+- Clients are generated in `//tools/client_codegen/` as separate artifacts from service implementations
 
-See [CLIENT_GENERATION.md](../tools/CLIENT_GENERATION.md) for detailed explanation.
+See archived [CLIENT_GENERATION.md](../docs/archive/CLIENT_GENERATION.md) for detailed explanation.
 
 ## Implementation Details
 
@@ -198,11 +198,11 @@ See [CLIENT_GENERATION.md](../tools/CLIENT_GENERATION.md) for detailed explanati
 
 ### "No module named 'external'"
 
-Make sure `bazel-bin/clients` is in your Python path:
+Make sure `bazel-bin/tools/client_codegen` is in your Python path:
 
 ```python
 import sys
-sys.path.insert(0, 'bazel-bin/clients')
+sys.path.insert(0, 'bazel-bin/tools/client_codegen')
 ```
 
 Or add it to `PYTHONPATH`:
@@ -225,7 +225,7 @@ Rebuild the OpenAPI spec and client:
 
 ```bash
 bazel clean
-bazel build //clients:your_client --java_runtime_version=remotejdk_17
+bazel build //tools/client_codegen:your_client --java_runtime_version=remotejdk_17
 ```
 
 ### Import errors in generated code
@@ -234,6 +234,6 @@ The build process automatically fixes imports from package-relative to absolute 
 
 ## References
 
-- [CLIENT_GENERATION.md](../tools/CLIENT_GENERATION.md) - Full implementation plan
+- [CLIENT_GENERATION.md](../docs/archive/CLIENT_GENERATION.md) - Archived implementation plan
 - [OpenAPI Generator Python Docs](https://openapi-generator.tech/docs/generators/python)
 - [rules_java Documentation](https://github.com/bazelbuild/rules_java)

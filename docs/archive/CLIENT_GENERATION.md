@@ -1,5 +1,11 @@
 # OpenAPI Client Generation Implementation Plan
 
+> **⚠️ ARCHIVED DOCUMENT**
+> 
+> This is a planning document that describes the original implementation approach.
+> The system has been implemented and clients are now located at `//tools/client_codegen/`.
+> For current usage, see [tools/client_codegen/README.md](../../tools/client_codegen/README.md).
+
 ## Overview
 
 This document outlines the implementation plan for automatic OpenAPI client generation using the `external/` directory pattern. Clients will be generated in a clean namespace structure: `from external.{namespace}.{app}` where the client library name itself makes it clear it's a client.

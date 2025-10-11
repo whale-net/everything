@@ -7,21 +7,21 @@ This guide outlines the steps for a coding agent to implement a robust, Python-s
 > ### 🚀 Current Implementation
 > - **OpenAPI clients** are generated using `//tools:openapi_client.bzl` Bazel rule
 > - **No external tools needed** - Everything runs through Bazel build system
-> - **Test the clients**: `bazel test //clients:test_experience_api_client`
+> - **Test the clients**: `bazel test //tools/client_codegen:test_experience_api_client`
 >
 > ### 📖 Key Files  
 > - **[tools/openapi_client.bzl](../../tools/openapi_client.bzl)** - Client generation rule
-> - **[clients/BUILD.bazel](../../clients/BUILD.bazel)** - Client target definitions
+> - **[tools/client_codegen/BUILD.bazel](../../tools/client_codegen/BUILD.bazel)** - Client target definitions
 > - **[OPENAPI_CLIENT_IMPLEMENTATION_SUMMARY.md](../../OPENAPI_CLIENT_IMPLEMENTATION_SUMMARY.md)** - Implementation details
 >
 > ### ⚡ Quick Start
 > ```bash
 > # Build all clients
-> bazel build //clients:manman_experience_api
-> bazel build //clients:manman_status_api
+> bazel build //tools/client_codegen:manman_experience_api
+> bazel build //tools/client_codegen:manman_status_api
 > 
 > # Test clients
-> bazel test //clients:test_experience_api_client
+> bazel test //tools/client_codegen:test_experience_api_client
 > ```
 
 -----

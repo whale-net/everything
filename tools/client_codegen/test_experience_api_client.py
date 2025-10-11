@@ -8,12 +8,12 @@ from pathlib import Path
 
 
 def _ensure_generated_client_on_path() -> None:
-    """Add bazel-bin/clients to sys.path when running outside Bazel."""
+    """Add bazel-bin/tools/client_codegen to sys.path when running outside Bazel."""
 
     # When running under Bazel, the generated package is already on the path via
-    # runfiles. For ad-hoc execution (e.g. python clients/test_experience_api_client.py)
+    # runfiles. For ad-hoc execution (e.g. python tools/client_codegen/test_experience_api_client.py)
     # we need to point Python at the bazel-bin outputs.
-    candidate = Path(__file__).resolve().parents[1] / "bazel-bin" / "clients"
+    candidate = Path(__file__).resolve().parents[2] / "bazel-bin" / "tools" / "client_codegen"
     if candidate.exists() and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
