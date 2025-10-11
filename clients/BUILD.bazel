@@ -13,6 +13,16 @@ openapi_client(
     spec = "//manman/src/host:experience_api_spec",
     namespace = "manman",
     app = "experience_api",
+    model_files = [
+        "current_instance_response",
+        "game_server_config",
+        "game_server_instance",
+        "http_validation_error",
+        "stdin_command_request",
+        "validation_error",
+        "validation_error_loc_inner",
+        "worker",
+    ],
 )
 
 openapi_client(
@@ -20,6 +30,13 @@ openapi_client(
     spec = "//manman/src/host:status_api_spec",
     namespace = "manman",
     app = "status_api",
+    model_files = [
+        "external_status_info",
+        "http_validation_error",
+        "status_type",
+        "validation_error",
+        "validation_error_loc_inner",
+    ],
 )
 
 openapi_client(
@@ -27,6 +44,17 @@ openapi_client(
     spec = "//manman/src/host:worker_dal_api_spec",
     namespace = "manman",
     app = "worker_dal_api",
+    model_files = [
+        "game_server",
+        "game_server_config",
+        "game_server_instance_input",
+        "game_server_instance_output",
+        "http_validation_error",
+        "server_type",
+        "validation_error",
+        "validation_error_loc_inner",
+        "worker",
+    ],
 )
 
 # Demo API Clients
@@ -35,6 +63,7 @@ openapi_client(
     spec = "//demo/hello_fastapi:hello-fastapi_openapi_spec",
     namespace = "demo",
     app = "hello_fastapi",
+    # No model files - demo API has no data models
 )
 
 # Convenience target to build all clients
