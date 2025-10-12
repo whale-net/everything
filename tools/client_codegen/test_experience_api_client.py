@@ -71,6 +71,7 @@ def test_create_game_server_instance():
         worker_id=123,
         last_heartbeat="2025-10-10T10:30:00Z",
         end_date=None,
+        created_date="2025-10-10T10:00:00Z",
     )
     
     assert instance.game_server_instance_id == 456
@@ -78,6 +79,7 @@ def test_create_game_server_instance():
     assert instance.worker_id == 123
     assert instance.last_heartbeat is not None
     assert instance.end_date is None
+    assert instance.created_date is not None
 
 
 def test_create_game_server_config():
@@ -126,6 +128,7 @@ def test_create_current_instance_response():
         worker_id=123,
         last_heartbeat="2025-10-10T10:30:00Z",
         end_date=None,
+        created_date="2025-10-10T10:00:00Z",
     )
     
     config = GameServerConfig(
@@ -167,15 +170,36 @@ def test_model_serialization():
         last_heartbeat="2025-10-10T10:30:00Z",
     )
     
+    instance = GameServerInstance(
+        game_server_instance_id=456,
+        game_server_config_id=789,
+        worker_id=123,
+        last_heartbeat="2025-10-10T10:30:00Z",
+        end_date=None,
+        created_date="2025-10-10T10:00:00Z",
+    )
+    
     # Convert to dict
     worker_dict = worker.model_dump()
+    instance_dict = instance.model_dump()
+    
     assert isinstance(worker_dict, dict)
+    assert isinstance(instance_dict, dict)
     assert worker_dict["worker_id"] == 123
+    assert instance_dict["game_server_instance_id"] == 456
+    
+    # Both should include created_date
+    assert "created_date" in worker_dict
+    assert "created_date" in instance_dict
     
     # Convert to JSON
     worker_json = worker.model_dump_json()
+    instance_json = instance.model_dump_json()
+    
     assert isinstance(worker_json, str)
+    assert isinstance(instance_json, str)
     assert "123" in worker_json
+    assert "456" in instance_json
 
 
 def test_validation_error_models():
