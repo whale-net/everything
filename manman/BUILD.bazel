@@ -1,6 +1,6 @@
 load("@rules_python//python:defs.bzl", "py_library")
-load("//tools:release.bzl", "release_app", "release_helm_chart")
-load("//tools:openapi_client.bzl", "openapi_client")
+load("//tools/bazel:release.bzl", "release_app", "release_helm_chart")
+load("//tools/openapi:openapi_client.bzl", "openapi_client")
 
 # Re-export all manman modules for convenience
 py_library(

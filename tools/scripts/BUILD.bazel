@@ -1,0 +1,35 @@
+# Utility scripts for the monorepo
+
+load("@rules_python//python:defs.bzl", "py_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "python_runner.py",
+    "test_cross_compilation.sh",
+])
+
+# Cross-compilation verification test
+# Verifies that multiplatform images contain correct architecture-specific wheels
+sh_test(
+    name = "test_cross_compilation",
+    size = "large",
+    srcs = ["test_cross_compilation.sh"],
+    data = [
+        "//demo/hello_fastapi:hello-fastapi_image",
+    ],
+    tags = [
+        "manual",  # Don't run with //...
+        "integration",  # Integration test, not unit test
+        "no-cache",  # Always run, never cache
+    ],
+    timeout = "long",
+)
+
+# Version resolver utility for Helm charts
+py_binary(
+    name = "version_resolver",
+    srcs = ["version_resolver.py"],
+    main = "version_resolver.py",
+    visibility = ["//visibility:public"],
+)

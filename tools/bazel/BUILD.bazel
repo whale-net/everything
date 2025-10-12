@@ -1,0 +1,10 @@
+# Bazel rules and macros for the monorepo
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "container_image.bzl",
+    "platforms.bzl",
+    "pytest.bzl",
+    "release.bzl",
+])

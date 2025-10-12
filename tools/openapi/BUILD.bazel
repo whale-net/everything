@@ -1,0 +1,17 @@
+# OpenAPI generation tools and rules
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "openapi.bzl",
+    "openapi_client.bzl",
+    "openapi_client_rule.bzl",
+    "openapi_gen_wrapper.sh",
+])
+
+# Wrapper script for OpenAPI generation
+sh_binary(
+    name = "openapi_gen_wrapper",
+    srcs = ["openapi_gen_wrapper.sh"],
+    visibility = ["//visibility:public"],
+)

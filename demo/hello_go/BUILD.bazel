@@ -1,5 +1,5 @@
 load("@rules_go//go:def.bzl", "go_binary", "go_test")
-load("//tools:release.bzl", "release_app")
+load("//tools/bazel:release.bzl", "release_app")
 
 # Standard go_binary - no wrapper needed!
 go_binary(
