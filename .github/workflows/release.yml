@@ -93,6 +93,7 @@ jobs:
     outputs:
       release-matrix: ${{ steps.plan.outputs.matrix }}
       version: ${{ steps.plan.outputs.version }}
+      apps: ${{ steps.plan.outputs.apps }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -165,6 +166,117 @@ jobs:
             echo "version=$VERSION" >> $GITHUB_OUTPUT
           fi
         fi
+
+  # Plan which apps need OpenAPI spec builds
+  plan-openapi-builds:
+    name: Plan OpenAPI Builds
+    runs-on: ubuntu-latest
+    needs: plan-release
+    if: needs.plan-release.outputs.apps != ''
+    outputs:
+      openapi-matrix: ${{ steps.plan-openapi.outputs.matrix }}
+      has-specs: ${{ steps.plan-openapi.outputs.has-specs }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'docker'
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+        
+    - name: Plan OpenAPI spec builds
+      id: plan-openapi
+      env:
+        APPS: ${{ needs.plan-release.outputs.apps }}
+      run: |
+        echo "Planning OpenAPI spec builds for apps: $APPS"
+        
+        # Use release helper to identify apps with OpenAPI specs
+        PLAN_OUTPUT=$(bazel run --config=ci //tools:release -- plan-openapi-builds --apps "$APPS" --format github)
+        
+        # Parse output
+        echo "$PLAN_OUTPUT" | while IFS= read -r line; do
+          if [[ "$line" == matrix=* ]]; then
+            echo "${line}" >> $GITHUB_OUTPUT
+            MATRIX_VALUE="${line#matrix=}"
+            # Check if matrix is empty
+            if [[ "$MATRIX_VALUE" == "{}" ]]; then
+              echo "has-specs=false" >> $GITHUB_OUTPUT
+            else
+              echo "has-specs=true" >> $GITHUB_OUTPUT
+            fi
+          fi
+        done
+        
+        # If no matrix was set, mark as no specs
+        if ! grep -q "matrix=" <<< "$PLAN_OUTPUT"; then
+          echo "matrix={}" >> $GITHUB_OUTPUT
+          echo "has-specs=false" >> $GITHUB_OUTPUT
+        fi
+
+  # Build OpenAPI specs for FastAPI apps (only apps that have specs)
+  build-openapi-specs:
+    name: Build OpenAPI Spec for ${{ matrix.app }}
+    runs-on: ubuntu-latest
+    needs: [plan-release, plan-openapi-builds]
+    if: needs.plan-openapi-builds.outputs.has-specs == 'true' && github.event.inputs.dry_run == 'false'
+    strategy:
+      matrix: ${{ fromJson(needs.plan-openapi-builds.outputs.openapi-matrix) }}
+      fail-fast: false
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'docker'
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+    
+    - name: Build OpenAPI spec
+      env:
+        APP: ${{ matrix.app }}
+        DOMAIN: ${{ matrix.domain }}
+        OPENAPI_TARGET: ${{ matrix.openapi_target }}
+      run: |
+        echo "Building OpenAPI spec for $APP..."
+        echo "Target: $OPENAPI_TARGET"
+        
+        # Build the OpenAPI spec
+        if bazel build --config=ci "$OPENAPI_TARGET"; then
+          # Find the generated spec file - it's named {target_name}.json
+          SPEC_FILE=$(bazel info bazel-bin --config=ci)/${OPENAPI_TARGET#//}.json
+          SPEC_FILE=$(echo "$SPEC_FILE" | sed 's#:#/#')
+          
+          if [[ -f "$SPEC_FILE" ]]; then
+            # Create output directory
+            mkdir -p /tmp/openapi-specs
+            
+            # Copy spec with a descriptive name
+            cp "$SPEC_FILE" "/tmp/openapi-specs/${DOMAIN}-${APP}-openapi.json"
+            
+            echo "✅ OpenAPI spec saved to: /tmp/openapi-specs/${DOMAIN}-${APP}-openapi.json"
+          else
+            echo "⚠️ OpenAPI spec file not found at expected location: $SPEC_FILE"
+            exit 1
+          fi
+        else
+          echo "❌ Failed to build OpenAPI spec for $APP"
+          exit 1
+        fi
+    
+    - name: Upload OpenAPI spec artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: openapi-spec-${{ matrix.app }}
+        path: /tmp/openapi-specs/${{ matrix.domain }}-${{ matrix.app }}-openapi.json
+        if-no-files-found: error
 
   # Build and release selected apps
   release:
@@ -307,80 +419,11 @@ jobs:
         path: /tmp/release-notes/${{ steps.release-notes.outputs.domain }}-${{ matrix.app }}.md
         if-no-files-found: ignore
 
-    - name: Build OpenAPI spec for FastAPI apps
-      if: ${{ github.event.inputs.dry_run == 'false' }}
-      id: openapi-spec
-      env:
-        APP: ${{ matrix.app }}
-        VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
-      run: |
-        echo "Checking if $APP has OpenAPI spec target..."
-        
-        # Build release helper to query metadata
-        bazel build --config=ci //tools:release
-        RELEASE_HELPER="$(bazel info bazel-bin --config=ci)/tools/release_helper/release_helper"
-        
-        # Get app metadata including OpenAPI spec target if available
-        METADATA_JSON=$("$RELEASE_HELPER" list-apps --format json | jq -r ".[] | select(.name == \"$APP\")")
-        
-        if [[ -z "$METADATA_JSON" ]]; then
-          echo "Could not find metadata for $APP"
-          echo "has_spec=false" >> $GITHUB_OUTPUT
-          exit 0
-        fi
-        
-        # Extract domain and check for OpenAPI spec target
-        DOMAIN=$(echo "$METADATA_JSON" | jq -r '.domain')
-        OPENAPI_TARGET=$(echo "$METADATA_JSON" | jq -r '.openapi_spec_target // empty')
-        
-        # Set domain output for use in upload step
-        echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
-        
-        if [[ -n "$OPENAPI_TARGET" && "$OPENAPI_TARGET" != "null" ]]; then
-          echo "✅ Found OpenAPI spec target: $OPENAPI_TARGET"
-          echo "Building OpenAPI spec..."
-          
-          # Build the OpenAPI spec
-          if bazel build --config=ci "$OPENAPI_TARGET"; then
-            # Find the generated spec file - it's named {target_name}.json
-            SPEC_FILE=$(bazel info bazel-bin --config=ci)/${OPENAPI_TARGET#//}.json
-            SPEC_FILE=$(echo "$SPEC_FILE" | sed 's#:#/#')
-            
-            if [[ -f "$SPEC_FILE" ]]; then
-              # Create output directory
-              mkdir -p /tmp/openapi-specs
-              
-              # Copy spec with a descriptive name
-              cp "$SPEC_FILE" "/tmp/openapi-specs/${DOMAIN}-${APP}-openapi.json"
-              
-              echo "✅ OpenAPI spec saved to: /tmp/openapi-specs/${DOMAIN}-${APP}-openapi.json"
-              echo "has_spec=true" >> $GITHUB_OUTPUT
-            else
-              echo "⚠️ OpenAPI spec file not found at expected location: $SPEC_FILE"
-              echo "has_spec=false" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "⚠️ Failed to build OpenAPI spec for $APP"
-            echo "has_spec=false" >> $GITHUB_OUTPUT
-          fi
-        else
-          echo "ℹ️  No OpenAPI spec target found for $APP (not a FastAPI app)"
-          echo "has_spec=false" >> $GITHUB_OUTPUT
-        fi
-    
-    - name: Upload OpenAPI spec artifact
-      if: ${{ github.event.inputs.dry_run == 'false' && steps.openapi-spec.outputs.has_spec == 'true' }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: openapi-spec-${{ matrix.app }}
-        path: /tmp/openapi-specs/${{ steps.openapi-spec.outputs.domain }}-${{ matrix.app }}-openapi.json
-        if-no-files-found: ignore
-
   create-github-releases:
     name: Create GitHub Releases
     runs-on: ubuntu-latest
-    needs: [plan-release, release]
-    if: needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null && github.event.inputs.dry_run == 'false'
+    needs: [plan-release, release, build-openapi-specs]
+    if: always() && !cancelled() && needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null && github.event.inputs.dry_run == 'false' && needs.release.result == 'success'
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
