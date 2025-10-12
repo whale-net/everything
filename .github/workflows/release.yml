@@ -250,12 +250,24 @@ jobs:
         
         # Build the OpenAPI spec
         if bazel build --config=ci "$OPENAPI_TARGET"; then
-          # Find the generated spec file - it's named {target_name}.json
+          # Find the generated spec file - it's now named {domain}-{app}_openapi_spec.json
           # Remove @@// or // prefix from target (Bazel 8.x uses @@ prefix for main repo)
           TARGET_PATH="${OPENAPI_TARGET#@@//}"
           TARGET_PATH="${TARGET_PATH#//}"
-          SPEC_FILE=$(bazel info bazel-bin --config=ci)/${TARGET_PATH}.json
-          SPEC_FILE=$(echo "$SPEC_FILE" | sed 's#:#/#')
+          
+          # The target name includes _openapi_spec suffix, and now the file includes domain prefix
+          # Format: bazel-bin/{path}/{domain}-{app}_openapi_spec.json
+          BAZEL_BIN=$(bazel info bazel-bin --config=ci)
+          TARGET_DIR=$(echo "$TARGET_PATH" | sed 's#:#/#' | sed 's#/[^/]*$##')
+          
+          # Try the new naming format with domain prefix first
+          SPEC_FILE="${BAZEL_BIN}/${TARGET_DIR}/${DOMAIN}-${APP}_openapi_spec.json"
+          
+          # Fallback to old format if the new format doesn't exist (for backward compatibility)
+          if [[ ! -f "$SPEC_FILE" ]]; then
+            SPEC_FILE="${BAZEL_BIN}/${TARGET_PATH}.json"
+            SPEC_FILE=$(echo "$SPEC_FILE" | sed 's#:#/#')
+          fi
           
           if [[ -f "$SPEC_FILE" ]]; then
             # Create output directory
