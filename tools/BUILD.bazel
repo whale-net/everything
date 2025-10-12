@@ -61,11 +61,12 @@ alias(
 
 # Test suite for cross-compilation (now in scripts/)
 # Use test_suite instead of alias so 'bazel test' works correctly
+# Note: No 'manual' tag on test_suite - the underlying test has it, which prevents //...
+# but allows tag-based filtering to work (e.g., --test_tag_filters=image-integration)
 test_suite(
     name = "test_cross_compilation",
     tests = ["//tools/scripts:test_cross_compilation"],
     tags = [
-        "manual",  # Don't run with //...
         "integration",  # Integration test, not unit test
         "image-integration",  # Image integration test for container architecture verification
     ],
