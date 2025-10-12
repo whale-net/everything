@@ -1,50 +1,5 @@
 """Bazel rule implementation for OpenAPI client generation with automatic model discovery."""
 
-def _discover_models_impl(ctx):
-    """Extract model names from OpenAPI spec."""
-    spec = ctx.file.spec
-    output = ctx.outputs.out
-    
-    ctx.actions.run_shell(
-        inputs = [spec],
-        outputs = [output],
-        command = """
-            python3 - "$1" > "$2" <<'PYTHON_SCRIPT'
-import sys
-import json
-import re
-
-spec_file = sys.argv[1]
-with open(spec_file, 'r') as f:
-    spec = json.load(f)
-
-# Extract all schema names from components/schemas
-models = []
-if 'components' in spec and 'schemas' in spec['components']:
-    for schema_name in spec['components']['schemas'].keys():
-        # Convert to snake_case filename (OpenAPI Generator pattern)
-        s1 = re.sub('(.)([A-Z][a-z]+)', r'\\1_\\2', schema_name)
-        snake_case = re.sub('([a-z0-9])([A-Z])', r'\\1_\\2', s1).lower()
-        models.append(snake_case)
-
-# Output one model per line
-for model in sorted(models):
-    print(model)
-PYTHON_SCRIPT
-        """,
-        arguments = [spec.path, output.path],
-    )
-    
-    return [DefaultInfo(files = depset([output]))]
-
-discover_models = rule(
-    implementation = _discover_models_impl,
-    attrs = {
-        "spec": attr.label(allow_single_file = [".json"], mandatory = True),
-        "out": attr.output(mandatory = True),
-    },
-)
-
 def _openapi_client_impl(ctx):
     """Generate OpenAPI client with automatic model discovery."""
     spec = ctx.file.spec
@@ -80,42 +35,12 @@ def _openapi_client_impl(ctx):
         progress_message = "Generating OpenAPI client for {}".format(app),
     )
     
-    # Step 2: Discover models from spec
-    models_file = ctx.actions.declare_file("{}_models.txt".format(app))
-    
-    ctx.actions.run_shell(
-        inputs = [spec],
-        outputs = [models_file],
-        command = """
-            python3 - "$1" > "$2" <<'PYTHON_SCRIPT'
-import sys
-import json
-import re
-
-spec_file = sys.argv[1]
-with open(spec_file, 'r') as f:
-    spec = json.load(f)
-
-models = []
-if 'components' in spec and 'schemas' in spec['components']:
-    for schema_name in spec['components']['schemas'].keys():
-        s1 = re.sub('(.)([A-Z][a-z]+)', r'\\1_\\2', schema_name)
-        snake_case = re.sub('([a-z0-9])([A-Z])', r'\\1_\\2', s1).lower()
-        models.append(snake_case)
-
-for model in sorted(models):
-    print(model)
-PYTHON_SCRIPT
-        """,
-        arguments = [spec.path, models_file.path],
-    )
-    
-    # Step 3: Extract tar and discover actual files
+    # Step 2: Extract tar and discover actual files
     # Declare a directory output - this is the key!
     output_tree = ctx.actions.declare_directory(output_dir)
     
     ctx.actions.run_shell(
-        inputs = [tar_file, models_file],
+        inputs = [tar_file],
         outputs = [output_tree],
         command = """
             set -e
