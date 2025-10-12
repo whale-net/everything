@@ -166,6 +166,19 @@ bazel run //tools:release -- build app_name
 
 ## 🛠️ Development Workflow
 
+### Environment Setup
+
+Before working with the repository, set up a Python virtual environment using uv:
+
+```bash
+# Create a virtual environment
+uv venv
+
+# Activate the virtual environment
+source .venv/bin/activate  # On Linux/macOS
+# On Windows: .venv\Scripts\activate
+```
+
 ### Adding New Applications
 
 #### 1. Create Application Structure
