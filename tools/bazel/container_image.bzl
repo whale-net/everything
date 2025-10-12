@@ -26,6 +26,17 @@ ARCHITECTURE: Single Binary → Platform Transitions → Single Push
    - Release system ONLY uses this target
 
 This is the idiomatic Bazel way to build multiplatform images.
+
+LAYERING STRATEGY:
+==================
+For better Docker layer caching, images are built with multiple layers:
+1. Base image (Ubuntu + system packages)
+2. CA certificates layer
+3. External pip dependencies layer (changes when requirements change)
+4. Internal shared libraries layer (changes when shared code changes)
+5. Application code layer (changes most frequently)
+
+This layering minimizes rebuild time by caching dependencies that change less frequently.
 """
 
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index", "oci_load", "oci_push")
@@ -45,8 +56,9 @@ def container_image(
     entrypoint = None,
     language = None,
     python_version = "3.13",
+    dep_layers = None,
     **kwargs):
-    """Build a single-platform OCI container image.
+    """Build a single-platform OCI container image with optimized layering.
     
     Simple, clean wrapper around oci_image that uses hermetic toolchains.
     The same binary target will be built for different platforms when invoked
@@ -54,21 +66,29 @@ def container_image(
     
     LAYERING STRATEGY - Optimized for Cache Efficiency:
     ====================================================
-    Uses a SINGLE layer containing binary + all runfiles (dependencies, interpreter, etc).
+    Creates MULTIPLE tar layers for better Docker caching.
     
-    Why not split into multiple layers?
-    - Bazel's hermetic runfiles tree is tightly coupled (binary references exact paths)
-    - Splitting would require custom rules to separate app code from dependencies
-    - Breaking apart the runfiles structure defeats Bazel's hermetic guarantees
-    - The complexity and brittleness outweighs the caching benefits
+    By default, creates a single application layer containing the binary and all runfiles.
     
-    Caching still works efficiently because:
-    1. Bazel's action cache: If binary unchanged, pkg_tar is cached (no rebuild)
-    2. OCI layer digests: If tar unchanged, Docker/registries cache the layer
-    3. Most rebuilds happen during development (where layer caching helps less anyway)
+    For advanced multi-layer caching, use the 'dep_layers' parameter to specify dependency 
+    groups that should be packaged into separate layers:
     
-    The real optimization opportunity would be at the Bazel level (e.g., rules_python
-    generating separate outputs for app vs deps), but that's outside our control here.
+        dep_layers = [
+            {
+                "name": "pip_deps",
+                "targets": ["@pypi//fastapi", "@pypi//uvicorn"],
+            },
+            {
+                "name": "internal_libs",
+                "targets": ["//libs/python"],
+            },
+        ]
+    
+    Each layer group will be packaged into a separate tar layer. Layers are added in the
+    order specified (earlier layers = less frequently changed = better caching).
+    
+    The binary itself is always packaged in the final layer with include_runfiles=True,
+    ensuring all dependencies are available even if not explicitly listed in dep_layers.
     
     Args:
         name: Image name
@@ -78,21 +98,41 @@ def container_image(
         entrypoint: Override entrypoint (auto-detected from language)
         language: Language of the binary ("python" or "go") - REQUIRED
         python_version: Python version for path construction (default: "3.13")
+        dep_layers: Optional list of dicts with "name" and "targets" keys for multi-layer optimization
         **kwargs: Additional oci_image arguments
     """
     if not language:
         fail("language parameter is required for container_image")
     
-    # Create single application layer with binary and all runfiles
-    # This is a monolithic layer but it's the most maintainable approach given
-    # Bazel's hermetic runfiles structure.
+    layer_tars = []
+    
+    # If explicit dependency layers are provided, create separate pkg_tar for each
+    if dep_layers:
+        for i, layer in enumerate(dep_layers):
+            layer_name = layer.get("name", "layer_" + str(i))
+            layer_targets = layer.get("targets", [])
+            
+            if layer_targets:
+                pkg_tar(
+                    name = name + "_deplayer_" + str(i) + "_" + layer_name,
+                    deps = layer_targets,
+                    package_dir = "/app",
+                    include_runfiles = True,
+                    tags = ["manual"],
+                )
+                layer_tars.append(":" + name + "_deplayer_" + str(i) + "_" + layer_name)
+    
+    # Create final application layer with binary and all its runfiles
+    # This ensures everything is available even if not explicitly listed in dep_layers
+    # Duplicate files will be de-duplicated by Docker's layer system
     pkg_tar(
-        name = name + "_layer",
+        name = name + "_app_layer",
         srcs = [binary],
         package_dir = "/app",
         include_runfiles = True,
         tags = ["manual"],
     )
+    layer_tars.append(":" + name + "_app_layer")
     
     binary_name = _get_binary_name(binary)
     image_env = env or {}
@@ -123,13 +163,16 @@ def container_image(
             # Go binaries are self-contained executables
             entrypoint = ["/app/" + binary_name]
     
+    # Compose image with layers in order:
+    # 1. CA certs (rarely changes)
+    # 2. Explicit dependency layers (if specified, in the order provided)
+    # 3. Application layer (changes most frequently)
+    all_tars = ["//tools/cacerts:cacerts"] + layer_tars
+    
     oci_image(
         name = name,
         base = base,
-        tars = [
-            ":" + name + "_layer",
-            "//tools/cacerts:cacerts",  # Add CA certificates for SSL/TLS
-        ],
+        tars = all_tars,
         entrypoint = entrypoint,
         workdir = "/app",
         env = image_env,
@@ -145,8 +188,9 @@ def multiplatform_image(
     repository = None,
     image_name = None,
     language = None,
+    dep_layers = None,
     **kwargs):
-    """Build multiplatform OCI images using platform transitions.
+    """Build multiplatform OCI images using platform transitions with optimized layering.
     
     ARCHITECTURE: 1 Binary → Platform Transitions → 1 Index → 1 Push
     ==================================================================
@@ -175,12 +219,22 @@ def multiplatform_image(
     Platform transitions handle cross-compilation automatically via Bazel's
     configuration system. No platform-specific targets needed!
     
-    Usage Example:
+    LAYERING for Better Caching:
+    =============================
+    Use the 'dep_layers' parameter to create separate Docker layers for different
+    dependency groups. This improves caching by putting stable dependencies
+    (like pip packages) in lower layers and frequently-changing app code in upper layers.
+    
+    Example:
         multiplatform_image(
             name = "my_app_image",
-            binary = ":my_app",  # Single binary target
+            binary = ":my_app",
             image_name = "demo-my_app",
-            language = "python",  # or "go"
+            language = "python",
+            dep_layers = [
+                {"name": "pip_deps", "targets": ["@pypi//fastapi", "@pypi//uvicorn"]},
+                {"name": "internal_libs", "targets": ["//libs/python"]},
+            ],
         )
     
     Args:
@@ -191,6 +245,7 @@ def multiplatform_image(
         repository: Organization/namespace (e.g., "whale-net")
         image_name: Image name in domain-app format (e.g., "demo-my_app") - REQUIRED
         language: Language of binary ("python" or "go") - REQUIRED
+        dep_layers: Optional list of dicts for multi-layer caching (see container_image docs)
         **kwargs: Additional arguments passed to container_image
     """
     if not binary:
@@ -207,6 +262,7 @@ def multiplatform_image(
         binary = binary,
         base = base,
         language = language,
+        dep_layers = dep_layers,
         **kwargs
     )
     

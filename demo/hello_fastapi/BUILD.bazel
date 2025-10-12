@@ -1,13 +1,21 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("//tools/bazel:release.bzl", "release_app")
 
+# Layer 1: External pip dependencies (changes when requirements.txt changes)
 py_library(
-    name = "main_lib",
-    srcs = ["__init__.py", "main.py"],
+    name = "pip_deps_layer",
     deps = [
         "@pypi//:fastapi",
         "@pypi//:uvicorn",
     ],
+    visibility = ["//visibility:private"],
+)
+
+# Layer 2: Application library code
+py_library(
+    name = "main_lib",
+    srcs = ["__init__.py", "main.py"],
+    deps = [":pip_deps_layer"],
     visibility = ["//demo/hello_fastapi:__pkg__"],
 )
 
@@ -22,6 +30,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# Binary target that uses the layered dependencies
 py_binary(
     name = "hello-fastapi",
     srcs = ["main.py"],
@@ -41,11 +50,20 @@ py_test(
     ],
 )
 
+# Release with explicit layer configuration for optimal Docker caching
 release_app(
     name = "hello-fastapi",
     language = "python",
     domain = "demo",
-    description = "FastAPI hello world application with uvicorn",
+    description = "FastAPI hello world application with uvicorn (multi-layer optimized)",
     app_type = "external-api",
     fastapi_app = "demo.hello_fastapi.main:app",
+    # Define explicit layers for better Docker caching
+    # Layers are added in order: pip_deps (rarely changes) → app code (changes frequently)
+    dep_layers = [
+        {
+            "name": "pip_deps",
+            "targets": [":pip_deps_layer"],
+        },
+    ],
 )

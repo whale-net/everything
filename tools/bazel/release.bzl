@@ -85,7 +85,7 @@ app_metadata = rule(
     },
 )
 
-# Note: This function has many parameters (19) to support flexible app configuration.
+# Note: This function has many parameters (20) to support flexible app configuration.
 # They are logically grouped as:
 # - Binary config: name, binary_name, language
 # - Release config: domain, description, version, registry, organization, custom_repo_name
@@ -93,8 +93,9 @@ app_metadata = rule(
 # - Health check config: health_check_enabled, health_check_path
 # - Ingress config: ingress_host, ingress_tls_secret
 # - OpenAPI config: fastapi_app
+# - Layering config: dep_layers
 # Bazel/Starlark does not support nested struct parameters, so they remain flat.
-def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], fastapi_app = None):
+def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], fastapi_app = None, dep_layers = None):
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
@@ -128,6 +129,9 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         args: Container arguments
         fastapi_app: For FastAPI apps, specify the module path and variable name (e.g., "main:app")
                      to auto-generate OpenAPI specs. Creates a {name}_openapi_spec target.
+        dep_layers: Optional list of dicts for multi-layer Docker caching optimization.
+                    Each dict should have "name" and "targets" keys.
+                    Example: [{"name": "pip_deps", "targets": [":pip_deps_layer"]}]
     """
     # Validate name format - must use dashes, not underscores
     if "_" in name:
@@ -156,6 +160,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         image_name = image_name,
         language = language,
         cmd = args if args else [],  # Pass container args if specified
+        dep_layers = dep_layers,  # Pass through layer configuration
     )
     
     # Use the binary directly for change detection
