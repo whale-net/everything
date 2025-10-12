@@ -10,6 +10,14 @@ This is a Bazel monorepo that supports both Python and Go development.
   - Bazelisk will automatically download the correct Bazel version
 - **Docker** (for building and running container images)
 - **Git** (for version control and change detection)
+- **Python Virtual Environment** (recommended for development)
+  ```bash
+  # Create a virtual environment using uv
+  uv venv
+  # Activate the virtual environment
+  source .venv/bin/activate  # On Linux/macOS
+  # On Windows: .venv\Scripts\activate
+  ```
 
 ### Installation
 ```bash
