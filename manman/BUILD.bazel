@@ -79,6 +79,7 @@ release_app(
     description = "Background worker service for processing tasks and messages",
     app_type = "worker",
     replicas = 1,  # Single replica for development
+    args = ["start"],
 )
 
 release_app(
