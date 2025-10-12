@@ -1,6 +1,5 @@
 # OpenAPI Client Generation
 
-# OpenAPI Client Generation
 
 This directory contains examples and tests for OpenAPI client generation.
 
