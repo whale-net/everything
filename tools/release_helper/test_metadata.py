@@ -77,7 +77,8 @@ def sample_metadata():
         "language": "python",
         "registry": "ghcr.io",
         "repo_name": "demo-hello_fastapi",
-        "domain": "demo"
+        "domain": "demo",
+        "openapi_spec_target": "//demo/hello_fastapi:hello-fastapi_openapi_spec"
     }
 
 
@@ -164,9 +165,9 @@ class TestListAllApps:
         
         # Mock metadata for each app
         metadata_responses = [
-            {"name": "hello_fastapi", "domain": "demo"},
-            {"name": "hello_python", "domain": "demo"}, 
-            {"name": "api", "domain": "services"}
+            {"name": "hello_fastapi", "domain": "demo", "language": "python"},
+            {"name": "hello_python", "domain": "demo", "language": "python"}, 
+            {"name": "api", "domain": "services", "language": "go"}
         ]
         
         # Mock the bazel query result
@@ -192,22 +193,25 @@ class TestListAllApps:
         for i, call in enumerate(mock_get_app_metadata.call_args_list):
             assert call[0][0] == expected_calls[i]
         
-        # Verify result structure and sorting
+        # Verify result structure and sorting - now includes full metadata
         expected_result = [
             {
                 'bazel_target': "//services/api:api_metadata",
                 'name': "api",
-                'domain': "services"
+                'domain': "services",
+                'language': "go"
             },
             {
                 'bazel_target': "//demo/hello_fastapi:hello_fastapi_metadata", 
                 'name': "hello_fastapi",
-                'domain': "demo"
+                'domain': "demo",
+                'language': "python"
             },
             {
                 'bazel_target': "//demo/hello_python:hello_python_metadata",
                 'name': "hello_python", 
-                'domain': "demo"
+                'domain': "demo",
+                'language': "python"
             }
         ]
         assert result == expected_result
@@ -229,7 +233,7 @@ class TestListAllApps:
         # Mock metadata - one successful, one failing
         def metadata_side_effect(target):
             if "hello_fastapi" in target:
-                return {"name": "hello_fastapi", "domain": "demo"}
+                return {"name": "hello_fastapi", "domain": "demo", "language": "python"}
             else:
                 raise FileNotFoundError("Metadata file not found")
         
@@ -238,11 +242,12 @@ class TestListAllApps:
         
         result = list_all_apps()
         
-        # Should only return the successful app
+        # Should only return the successful app with full metadata
         expected_result = [{
             'bazel_target': "//demo/hello_fastapi:hello_fastapi_metadata",
             'name': "hello_fastapi", 
-            'domain': "demo"
+            'domain': "demo",
+            'language': "python"
         }]
         assert result == expected_result
         
@@ -258,7 +263,7 @@ class TestListAllApps:
 //demo/other:some_target"""
         
         mock_run_bazel.return_value = Mock(stdout=bazel_query_output)
-        mock_get_app_metadata.return_value = {"name": "hello_fastapi", "domain": "demo"}
+        mock_get_app_metadata.return_value = {"name": "hello_fastapi", "domain": "demo", "language": "python"}
         
         result = list_all_apps()
         
@@ -276,8 +281,8 @@ class TestListAllApps:
         
         mock_run_bazel.return_value = Mock(stdout=bazel_query_output)
         mock_get_app_metadata.side_effect = [
-            {"name": "hello_fastapi", "domain": "demo"},
-            {"name": "hello_python", "domain": "demo"}
+            {"name": "hello_fastapi", "domain": "demo", "language": "python"},
+            {"name": "hello_python", "domain": "demo", "language": "python"}
         ]
         
         result = list_all_apps()
@@ -293,7 +298,7 @@ class TestListAllApps:
 //demo/other:regular_target"""
         
         mock_run_bazel.return_value = Mock(stdout=bazel_query_output)
-        mock_get_app_metadata.return_value = {"name": "hello_fastapi", "domain": "demo"}
+        mock_get_app_metadata.return_value = {"name": "hello_fastapi", "domain": "demo", "language": "python"}
         
         result = list_all_apps()
         

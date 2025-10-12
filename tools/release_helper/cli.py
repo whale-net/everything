@@ -30,19 +30,31 @@ app = typer.Typer(help="Release helper for Everything monorepo")
 
 
 @app.command()
-def list_apps():
+def list_apps(
+    format: Annotated[Optional[str], typer.Option(help="Output format (text or json)")] = "text",
+):
     """List all apps with release metadata."""
     apps = list_all_apps()
-    for app_info in apps:
-        typer.echo(f"{app_info['name']} (domain: {app_info['domain']}, target: {app_info['bazel_target']})")
+    if format == "json":
+        import json
+        typer.echo(json.dumps(apps, indent=2))
+    else:
+        for app_info in apps:
+            typer.echo(f"{app_info['name']} (domain: {app_info['domain']}, target: {app_info['bazel_target']})")
 
 
 @app.command()
-def list():
+def list(
+    format: Annotated[Optional[str], typer.Option(help="Output format (text or json)")] = "text",
+):
     """Alias for list-apps. List all apps with release metadata."""
     apps = list_all_apps()
-    for app_info in apps:
-        typer.echo(f"{app_info['name']} (domain: {app_info['domain']}, target: {app_info['bazel_target']})")
+    if format == "json":
+        import json
+        typer.echo(json.dumps(apps, indent=2))
+    else:
+        for app_info in apps:
+            typer.echo(f"{app_info['name']} (domain: {app_info['domain']}, target: {app_info['bazel_target']})")
 
 
 @app.command()
@@ -223,6 +235,58 @@ def plan(
 
 
 @app.command()
+def plan_openapi_builds(
+    apps: Annotated[str, typer.Option(help="Comma-separated list of apps to check for OpenAPI specs")],
+    format: Annotated[str, typer.Option(help="Output format (json or github)")] = "github",
+):
+    """Plan OpenAPI spec builds for apps that have fastapi_app configured.
+    
+    This command filters the input apps to only those that have OpenAPI spec targets,
+    avoiding wasteful builds for apps without OpenAPI specs.
+    """
+    if format not in ["json", "github"]:
+        typer.echo("Error: format must be one of: json, github", err=True)
+        raise typer.Exit(1)
+    
+    # Parse app list
+    app_list = [app.strip() for app in apps.split(',') if app.strip()]
+    
+    # Get all apps with metadata
+    all_apps = list_all_apps()
+    
+    # Filter to apps with OpenAPI spec targets
+    apps_with_specs = []
+    for app_name in app_list:
+        # Find the app in all_apps
+        app_metadata = next((app for app in all_apps if app['name'] == app_name), None)
+        if app_metadata and app_metadata.get('openapi_spec_target'):
+            apps_with_specs.append({
+                'app': app_name,
+                'domain': app_metadata['domain'],
+                'openapi_target': app_metadata['openapi_spec_target']
+            })
+    
+    if format == "github":
+        # Output GitHub Actions format
+        if apps_with_specs:
+            matrix = {'include': apps_with_specs}
+            matrix_json = json.dumps(matrix)
+            typer.echo(f"matrix={matrix_json}")
+            typer.echo(f"apps={' '.join([app['app'] for app in apps_with_specs])}")
+        else:
+            # Empty matrix
+            typer.echo("matrix={}")
+            typer.echo("apps=")
+    else:
+        # JSON output
+        result = {
+            'apps_with_specs': apps_with_specs,
+            'count': len(apps_with_specs)
+        }
+        typer.echo(json.dumps(result, indent=2))
+
+
+@app.command()
 def changes(
     base_commit: Annotated[Optional[str], typer.Option(help="Compare changes against this commit (compares HEAD to this commit, defaults to previous tag)")] = None,
 ):
@@ -389,6 +453,7 @@ def create_combined_github_release_with_notes(
     previous_tag: Annotated[Optional[str], typer.Option("--previous-tag", help="Previous tag to compare against (auto-detected if not provided)")] = None,
     apps: Annotated[Optional[str], typer.Option("--apps", help="Comma-separated list of apps to include (defaults to all)")] = None,
     release_notes_dir: Annotated[Optional[str], typer.Option("--release-notes-dir", help="Directory containing pre-generated release notes files")] = None,
+    openapi_specs_dir: Annotated[Optional[str], typer.Option("--openapi-specs-dir", help="Directory containing OpenAPI spec files to upload as release assets")] = None,
 ):
     """Create GitHub releases for multiple apps using pre-generated release notes."""
     try:
@@ -436,7 +501,8 @@ def create_combined_github_release_with_notes(
             prerelease=prerelease,
             previous_tag=previous_tag,
             release_notes_dir=release_notes_dir,
-            app_versions=app_versions if app_versions else None
+            app_versions=app_versions if app_versions else None,
+            openapi_specs_dir=openapi_specs_dir,
         )
         
         # Report results
