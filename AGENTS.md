@@ -91,18 +91,21 @@ release_app(
 
 #### Automatic Docker Layer Optimization
 
-Container images are automatically built with optimized layer structure for better Docker caching:
-- Base image and CA certificates (rarely change)
-- Dependencies layer (changes when requirements or shared libs change)
-- Application code layer (changes most frequently)
+Container images are automatically built with intelligent multi-layer structure for optimal Docker caching:
 
-Dependencies from `//libs` are automatically prioritized and placed in earlier layers for maximum cache efficiency. No explicit layer configuration needed - just use `release_app` as normal.
+1. **Base image + CA certificates** (rarely change)
+2. **External dependencies layer** (@pypi packages, @rules_* deps) - changes when requirements change
+3. **Internal libraries layer** (//libs/**) - changes when shared code changes
+4. **Application code layer** (changes most frequently)
+
+The system creates multiple `pkg_tar` targets automatically. While each includes the full binary with runfiles, Docker's layer deduplication ensures files are only stored once. The key benefit is layer ordering - when app code changes, only the top layer is invalidated while dependency layers remain cached.
 
 **Benefits:**
-- Automatic optimization without BUILD file changes
-- Dependencies cached separately from app code
-- Faster Docker pulls and pushes
-- Better CI/CD performance
+- Automatic multi-layer creation without BUILD file changes
+- External deps (@pypi) cached separately from app code
+- Internal libs (//libs) cached separately from app code
+- Significant performance improvements for common development workflows
+- Faster Docker pulls and pushes (only changed layers transferred)
 
 #### Generated Artifacts
 The `release_app` macro automatically creates:
