@@ -1,0 +1,119 @@
+load("//tools/bazel:release.bzl", "release_app")
+
+package(default_visibility = ["//visibility:public"])
+
+alias(
+    name = "fcm_lib",
+    actual = "//friendly_computing_machine/src:fcm_lib",
+)
+
+alias(
+    name = "fcm_cli",
+    actual = "//friendly_computing_machine/src:fcm_cli",
+)
+
+filegroup(
+    name = "docs",
+    srcs = glob(["docs/**/*"], allow_empty = True),
+)
+
+filegroup(
+    name = "tests",
+    srcs = glob(["tests/**/*"], allow_empty = True),
+)
+
+filegroup(
+    name = "alembic_ini",
+    srcs = ["alembic.ini"],
+)
+
+release_app(
+    name = "fcm-bot",
+    binary_name = "//friendly_computing_machine/src:fcm_cli",
+    language = "python",
+    domain = "friendly-computing-machine",
+    description = "Slack Socket Mode bot for Friendly Computing Machine",
+    app_type = "worker",
+    port = 7654,
+    replicas = 1,
+    health_check_enabled = True,
+    health_check_path = "/",
+    args = [
+        "bot",
+        "--log-otlp",
+        "run-slack-socket-app",
+        "--skip-migration-check",
+    ],
+)
+
+release_app(
+    name = "fcm-taskpool",
+    binary_name = "//friendly_computing_machine/src:fcm_cli",
+    language = "python",
+    domain = "friendly-computing-machine",
+    description = "Background task pool for Friendly Computing Machine",
+    app_type = "worker",
+    port = 7654,
+    replicas = 1,
+    health_check_enabled = True,
+    health_check_path = "/",
+    args = [
+        "bot",
+        "--log-otlp",
+        "run-taskpool",
+        "--skip-migration-check",
+    ],
+)
+
+release_app(
+    name = "fcm-subscribe",
+    binary_name = "//friendly_computing_machine/src:fcm_cli",
+    language = "python",
+    domain = "friendly-computing-machine",
+    description = "RabbitMQ subscriber for ManMan status notifications",
+    app_type = "worker",
+    port = 7654,
+    replicas = 1,
+    health_check_enabled = True,
+    health_check_path = "/",
+    args = [
+        "subscribe",
+        "--log-otlp",
+        "run",
+        "--skip-migration-check",
+    ],
+)
+
+release_app(
+    name = "fcm-worker",
+    binary_name = "//friendly_computing_machine/src:fcm_cli",
+    language = "python",
+    domain = "friendly-computing-machine",
+    description = "Temporal worker for Friendly Computing Machine",
+    app_type = "worker",
+    port = 7654,
+    replicas = 1,
+    health_check_enabled = True,
+    health_check_path = "/",
+    args = [
+        "workflow",
+        "--log-otlp",
+        "run",
+        "--skip-migration-check",
+    ],
+)
+
+release_app(
+    name = "fcm-migration",
+    binary_name = "//friendly_computing_machine/src:fcm_cli",
+    language = "python",
+    domain = "friendly-computing-machine",
+    description = "Database migration job for Friendly Computing Machine",
+    app_type = "job",
+    replicas = 1,
+    args = [
+        "migration",
+        "--log-otlp",
+        "run",
+    ],
+)
