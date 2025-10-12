@@ -625,33 +625,38 @@ The repository supports optional Bazel remote caching for improved CI performanc
 
 ## CI/CD Pipeline
 
-The repository uses GitHub Actions for continuous integration with a sequential build → test workflow. Bazel provides excellent caching by default, caching build outputs, test results, and dependencies between builds, which significantly speeds up CI runs.
+The repository uses GitHub Actions for continuous integration with parallel build and test jobs. Bazel provides excellent caching by default, caching build outputs, test results, and dependencies between builds, which significantly speeds up CI runs.
 
 ```mermaid
 graph TD
-    A[Push/PR] --> B[Test Job]
-    B --> C{Test Success?}
-    C -->|Yes| D[Container Arch Test]
-    C -->|No| F[Pipeline Fails]
-    D --> E{Arch Test Success?}
-    E -->|Yes| G[Plan Docker]
-    E -->|No| F
-    G --> H{Main Branch?}
-    H -->|Yes| I[Docker Job]
-    H -->|No| J[Build Summary]
-    I --> K[Build & Push Images]
-    K --> J
-    J --> L[Report Status]
-    B --> M[Upload Test Results]
+    A[Push/PR] --> B[Build Job]
+    A --> C[Test Job]
+    C --> D{Test Success?}
+    D -->|Yes| E[Container Arch Test]
+    D -->|No| F[Pipeline Fails]
+    B --> G{Build Success?}
+    G -->|Yes| H[Plan Docker]
+    G -->|No| F
+    E --> I{Arch Test Success?}
+    I -->|Yes| H
+    I -->|No| F
+    H --> J{Main Branch?}
+    J -->|Yes| K[Docker Job]
+    J -->|No| L[Build Summary]
+    K --> M[Build & Push Images]
+    M --> L
+    L --> N[Report Status]
+    C --> O[Upload Test Results]
     
     style B fill:#e1f5fe
-    style D fill:#f3e5f5
-    style I fill:#fff3e0
+    style C fill:#e1f5fe
+    style E fill:#f3e5f5
+    style K fill:#fff3e0
     style F fill:#ffebee
+    style O fill:#e8f5e8
     style M fill:#e8f5e8
-    style K fill:#e8f5e8
-    style J fill:#e3f2fd
-    style L fill:#f1f8e9
+    style L fill:#e3f2fd
+    style N fill:#f1f8e9
 ```
 
 **Bazel Caching Benefits:**
@@ -661,6 +666,7 @@ graph TD
 - **Dependency Cache**: Caches external dependencies like Python packages and Go modules
 
 ### CI Jobs:
+- **Build**: Builds all targets to verify compilation (runs in parallel with Test)
 - **Test**: Runs all unit and integration tests
 - **Container Arch Test**: Verifies cross-compilation for multi-architecture containers (critical for ARM64 support)
 - **Plan Docker**: Determines which apps need Docker images built based on changes
