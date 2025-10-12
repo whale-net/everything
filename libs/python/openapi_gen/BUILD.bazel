@@ -1,0 +1,22 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+
+# Generic OpenAPI generation library (no ManMan dependencies)
+py_library(
+    name = "openapi_gen_generic_lib",
+    srcs = ["openapi_gen_generic.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@pypi//:fastapi",
+        "@pypi//:typer",
+    ],
+)
+
+# Generic CLI binary for OpenAPI generation
+py_binary(
+    name = "openapi_gen_generic",
+    srcs = ["openapi_gen_generic.py"],
+    main = "openapi_gen_generic.py",
+    visibility = ["//visibility:public"],
+    deps = [":openapi_gen_generic_lib"],
+)
+

@@ -13,7 +13,10 @@ py_library(
         "models.py", 
         "util.py",
     ],
-    visibility = ["//manman:__subpackages__"],
+    visibility = [
+        "//manman:__subpackages__",
+        "//libs/python/openapi_gen:__pkg__",
+    ],
     deps = [
         "@pypi//:pydantic",
         "@pypi//:sqlmodel",

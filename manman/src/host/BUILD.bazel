@@ -1,11 +1,13 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
-load("//tools:release.bzl", "release_app")
 
 # Host API services library
 py_library(
     name = "manman_host",
     srcs = glob(["**/*.py"], exclude=["*_test.py"]),
-    visibility = ["//manman:__subpackages__"],
+    visibility = [
+        "//manman:__subpackages__",
+        "//libs/python/openapi_gen:__pkg__",
+    ],
     deps = [
         "//manman/src:manman_core",
         "//manman/src/repository:manman_repository",
@@ -86,3 +88,5 @@ py_test(
     ],
     python_version = "PY3",
 )
+
+# Note: Release app definitions, OpenAPI specs, and API clients are in //manman:BUILD.bazel
