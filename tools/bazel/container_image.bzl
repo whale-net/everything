@@ -44,7 +44,7 @@ def container_image(
     env = None,
     entrypoint = None,
     language = None,
-    python_version = "3.11",
+    python_version = "3.13",
     **kwargs):
     """Build a single-platform OCI container image.
     
@@ -77,7 +77,7 @@ def container_image(
         env: Environment variables dict
         entrypoint: Override entrypoint (auto-detected from language)
         language: Language of the binary ("python" or "go") - REQUIRED
-        python_version: Python version for path construction (default: "3.11")
+        python_version: Python version for path construction (default: "3.13")
         **kwargs: Additional oci_image arguments
     """
     if not language:

@@ -32,6 +32,8 @@ jobs:
       run: |
         # Run all tests and let Bazel handle caching
         bazel test //...
+        # Shutdown Bazel server to prevent hanging
+        bazel shutdown
         
     - name: Upload test results
       uses: actions/upload-artifact@v4

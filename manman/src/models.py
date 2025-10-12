@@ -62,7 +62,7 @@ class GameServerInstance(ManManBase, table=True):
 
     game_server_config: "GameServerConfig" = Relationship()
 
-    created_date: datetime.datetime = Field(default=current_timestamp(), exclude=True)
+    created_date: datetime.datetime = Field(default=current_timestamp())
     end_date: Optional[datetime.datetime] = Field(nullable=True)
 
     # should not be nullable, but for now it is
