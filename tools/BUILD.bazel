@@ -59,10 +59,11 @@ alias(
     visibility = ["//visibility:public"],
 )
 
-# Alias for cross-compilation test (now in scripts/)
-alias(
+# Test suite for cross-compilation (now in scripts/)
+# Use test_suite instead of alias so 'bazel test' works correctly
+test_suite(
     name = "test_cross_compilation",
-    actual = "//tools/scripts:test_cross_compilation",
+    tests = ["//tools/scripts:test_cross_compilation"],
     visibility = ["//visibility:public"],
 )
 
