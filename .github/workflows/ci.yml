@@ -99,6 +99,8 @@ jobs:
         echo "::group::Cross-Compilation Verification"
         bazel test //tools/scripts:test_cross_compilation --config=ci --test_output=streamed
         echo "::endgroup::"
+        # Shutdown Bazel server to prevent hanging
+        bazel shutdown
 
   # Plan Docker builds - determine which apps need building
   plan-docker:
@@ -167,6 +169,9 @@ jobs:
             fi
           fi
         done <<< "$PLAN_OUTPUT"
+        
+        # Shutdown Bazel server to prevent hanging
+        bazel shutdown
 
   # Docker job - builds container images using the release tool (main branch only)
   docker:
@@ -224,6 +229,8 @@ jobs:
         # Publish the specific app image to registry with multi-arch support
         echo "Publishing $APP image to registry..."
         bazel run //tools:release -- release-multiarch "$APP" --version "latest" --commit "${{ github.sha }}"
+        # Shutdown Bazel server to prevent hanging
+        bazel shutdown
         
   # Build summary - collects status of all matrix jobs for branch protection
   build-summary:
