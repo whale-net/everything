@@ -1,6 +1,6 @@
-load("//tools:pytest.bzl", "py_test")
+load("//tools/bazel:pytest.bzl", "py_test")
 load("@rules_python//python:defs.bzl", "py_library", "py_binary")
-load("//tools:release.bzl", "release_app")
+load("//tools/bazel:release.bzl", "release_app")
 
 py_library(
     name = "main_lib",

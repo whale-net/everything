@@ -1,92 +1,122 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 
-# Host API services library
+# Export files for subdirectories
+exports_files([
+    "main.py",
+    "experience_api_test.py",
+    "status_api_test.py",
+    "worker_dal_api_test.py",
+])
+
+# Host main entry point and CLI
 py_library(
-    name = "manman_host",
-    srcs = glob(["**/*.py"], exclude=["*_test.py"]),
-    visibility = [
-        "//manman:__subpackages__",
-        "//libs/python/openapi_gen:__pkg__",
+    name = "host_main",
+    srcs = [
+        "__init__.py",
+        "main.py",
+        "openapi.py",
     ],
+    visibility = ["//manman/src/host:__subpackages__"],
     deps = [
         "//manman/src:manman_core",
         "//manman/src/repository:manman_repository",
-        "//manman/src/migrations:manman_migrations",  # Required for migration commands
-        "@pypi//:fastapi",
+        "//manman/src/migrations:manman_migrations",
+        "//manman/src/host/api:api_shared",
+        "//manman/src/host/api/experience:experience_api_lib",
+        "//manman/src/host/api/status:status_api_lib",
+        "//manman/src/host/api/worker_dal:worker_dal_api_lib",
+        ":status_processor_lib",
+        "@pypi//:typer",
         "@pypi//:uvicorn",
         "@pypi//:gunicorn",
-        "@pypi//:typer",
         "@pypi//:alembic",
-        "@pypi//:opentelemetry-instrumentation-fastapi",
+        "@pypi//:fastapi",
+    ],
+)
+
+# Status processor library
+py_library(
+    name = "status_processor_lib",
+    srcs = [
+        "status_processor.py",
+    ],
+    visibility = ["//manman/src/host:__subpackages__"],
+    deps = [
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
         "@pypi//:requests",
         "@pypi//:python-jose",
     ],
 )
 
-# Binary targets for host services
-py_binary(
-    name = "experience_api",
-    srcs = ["main.py"],
-    main = "main.py", 
-    deps = [":manman_host"],
-    args = ["start-experience-api"],
-    visibility = ["//manman:__pkg__"],
-)
-
-py_binary(
-    name = "status_api",
-    srcs = ["main.py"],
-    main = "main.py",
-    deps = [":manman_host"],
-    args = ["start-status-api"],
-    visibility = ["//manman:__pkg__"],
-)
-
-py_binary(
-    name = "worker_dal_api", 
-    srcs = ["main.py"],
-    main = "main.py",
-    deps = [":manman_host"],
-    args = ["start-worker-dal-api"],
-    visibility = ["//manman:__pkg__"],
-)
-
+# Status processor binary
 py_binary(
     name = "status_processor",
-    srcs = ["main.py"], 
+    srcs = ["main.py"],
     main = "main.py",
-    deps = [":manman_host"],
+    deps = [":host_main"],
     args = ["start-status-processor"],
     visibility = ["//manman:__pkg__"],
 )
 
+# Status processor test
+py_test(
+    name = "status_processor_test",
+    srcs = ["status_processor_test.py"],
+    main = "status_processor_test.py",
+    deps = [
+        ":status_processor_lib",
+        ":host_main",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+    ],
+    size = "small",
+)
+
+# Migration binary
 py_binary(
     name = "migration",
     srcs = ["main.py"],
     main = "main.py",
-    deps = [":manman_host"],
+    deps = [":host_main"],
     args = ["run-migration"],
     visibility = ["//manman:__pkg__"],
 )
 
-# Tests for host APIs
-py_test(
-    name = "manman_host_test",
-    srcs = [
-        "experience_api_test.py",
-        "status_api_test.py", 
-        "status_processor_test.py",
-        "worker_dal_api_test.py",
+# Legacy compatibility: Combined library for all host services
+py_library(
+    name = "manman_host",
+    visibility = [
+        "//manman:__subpackages__",
+        "//libs/python/openapi_gen:__pkg__",
     ],
-    main = "experience_api_test.py",
     deps = [
-        ":manman_host",
-        "@pypi//:pytest",
-        "@pypi//:pytest-asyncio",
-        "@pypi//:httpx",  # For testing FastAPI endpoints
-        "@pypi//:requests",  # For repository API client
+        ":host_main",
+        ":status_processor_lib",
+        "//manman/src/host/api:api_shared",
+        "//manman/src/host/api/experience:experience_api_lib",
+        "//manman/src/host/api/status:status_api_lib",
+        "//manman/src/host/api/worker_dal:worker_dal_api_lib",
     ],
-    python_version = "PY3",
+)
+
+# Aliases for binary targets (for backward compatibility)
+alias(
+    name = "experience_api",
+    actual = "//manman/src/host/api/experience:experience_api",
+    visibility = ["//manman:__pkg__"],
+)
+
+alias(
+    name = "status_api",
+    actual = "//manman/src/host/api/status:status_api",
+    visibility = ["//manman:__pkg__"],
+)
+
+alias(
+    name = "worker_dal_api",
+    actual = "//manman/src/host/api/worker_dal:worker_dal_api",
+    visibility = ["//manman:__pkg__"],
 )
 
 # Note: Release app definitions, OpenAPI specs, and API clients are in //manman:BUILD.bazel

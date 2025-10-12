@@ -1,0 +1,53 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
+
+# Worker DAL API library
+py_library(
+    name = "worker_dal_api_lib",
+    srcs = [
+        "__init__.py",
+        "server.py",
+        "worker.py",
+    ],
+    visibility = ["//manman/src/host:__pkg__"],
+    deps = [
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
+        "//manman/src/host/api:api_shared",
+        "@pypi//:fastapi",
+        "@pypi//:uvicorn",
+        "@pypi//:pydantic",
+        "@pypi//:opentelemetry-instrumentation-fastapi",
+    ],
+)
+
+# Worker DAL API binary
+py_binary(
+    name = "worker_dal_api",
+    srcs = ["//manman/src/host:main.py"],
+    main = "//manman/src/host:main.py",
+    deps = [
+        ":worker_dal_api_lib",
+        "//manman/src/host:host_main",
+    ],
+    args = ["start-worker-dal-api"],
+    visibility = [
+        "//manman:__pkg__",
+        "//manman/src/host:__pkg__",
+    ],
+)
+
+# Worker DAL API tests
+py_test(
+    name = "worker_dal_api_test",
+    srcs = ["//manman/src/host:worker_dal_api_test.py"],
+    main = "//manman/src/host:worker_dal_api_test.py",
+    deps = [
+        ":worker_dal_api_lib",
+        "//manman/src/host:host_main",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+        "@pypi//:httpx",
+        "@pypi//:requests",
+    ],
+    size = "small",
+)

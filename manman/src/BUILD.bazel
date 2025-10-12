@@ -12,6 +12,8 @@ py_library(
         "logging_config.py",
         "models.py", 
         "util.py",
+        "runner.py",
+        "conftest.py",
     ],
     visibility = [
         "//manman:__subpackages__",
@@ -29,15 +31,47 @@ py_library(
         "@pypi//:opentelemetry-sdk",
         "@pypi//:python-dotenv",
         "@pypi//:typer",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
     ],
 )
 
-# Tests for core library
+# Individual test targets for better granularity
 py_test(
-    name = "manman_core_test",
+    name = "config_test",
     srcs = [
         "config_test.py",
-        "models_test.py", 
+        "conftest.py",
+        "runner.py",
+    ],
+    main = "runner.py",
+    deps = [
+        ":manman_core",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+    ],
+    size = "small",
+)
+
+py_test(
+    name = "models_test",
+    srcs = [
+        "models_test.py",
+        "conftest.py",
+        "runner.py",
+    ],
+    main = "runner.py",
+    deps = [
+        ":manman_core",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+    ],
+    size = "small",
+)
+
+py_test(
+    name = "simple_status_test",
+    srcs = [
         "simple_status_test.py",
         "conftest.py",
         "runner.py",
@@ -48,5 +82,5 @@ py_test(
         "@pypi//:pytest",
         "@pypi//:pytest-asyncio",
     ],
-    python_version = "PY3",
+    size = "small",
 )

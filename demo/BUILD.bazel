@@ -1,4 +1,4 @@
-load("//tools:release.bzl", "release_helm_chart")
+load("//tools/bazel:release.bzl", "release_helm_chart")
 
 # Demo applications namespace
 #

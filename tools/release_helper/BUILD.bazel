@@ -1,6 +1,6 @@
 # Release helper package
 load("@rules_python//python:defs.bzl", "py_binary", "py_library")
-load("//tools:pytest.bzl", "py_test")
+load("//tools/bazel:pytest.bzl", "py_test")
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 
 package(default_visibility = ["//visibility:public"])

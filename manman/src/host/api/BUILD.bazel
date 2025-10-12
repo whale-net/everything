@@ -1,0 +1,22 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+# Shared API utilities and models
+py_library(
+    name = "api_shared",
+    srcs = [
+        "__init__.py",
+        "request_models.py",
+        "shared/__init__.py",
+        "shared/health.py",
+        "shared/injectors.py",
+        "shared/models.py",
+    ],
+    visibility = ["//manman/src/host:__subpackages__"],
+    deps = [
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
+        "@pypi//:fastapi",
+        "@pypi//:pydantic",
+        "@pypi//:requests",
+    ],
+)

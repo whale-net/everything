@@ -1,8 +1,8 @@
 """Release utilities for the Everything monorepo."""
 
-load("//tools:container_image.bzl", "multiplatform_image")
+load("//tools/bazel:container_image.bzl", "multiplatform_image")
 load("//tools/helm:helm.bzl", "helm_chart")
-load("//tools:openapi.bzl", "openapi_spec")
+load("//tools/openapi:openapi.bzl", "openapi_spec")
 
 def _app_metadata_impl(ctx):
     """Implementation for app_metadata rule."""

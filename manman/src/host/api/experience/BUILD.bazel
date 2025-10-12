@@ -1,0 +1,51 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
+
+# Experience API library
+py_library(
+    name = "experience_api_lib",
+    srcs = [
+        "__init__.py",
+        "api.py",
+    ],
+    visibility = ["//manman/src/host:__pkg__"],
+    deps = [
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
+        "//manman/src/host/api:api_shared",
+        "@pypi//:fastapi",
+        "@pypi//:uvicorn",
+        "@pypi//:pydantic",
+        "@pypi//:opentelemetry-instrumentation-fastapi",
+    ],
+)
+
+# Experience API binary
+py_binary(
+    name = "experience_api",
+    srcs = ["//manman/src/host:main.py"],
+    main = "//manman/src/host:main.py",
+    deps = [
+        ":experience_api_lib",
+        "//manman/src/host:host_main",
+    ],
+    args = ["start-experience-api"],
+    visibility = [
+        "//manman:__pkg__",
+        "//manman/src/host:__pkg__",
+    ],
+)
+
+# Experience API tests
+py_test(
+    name = "experience_api_test",
+    srcs = ["//manman/src/host:experience_api_test.py"],
+    main = "//manman/src/host:experience_api_test.py",
+    deps = [
+        ":experience_api_lib",
+        "//manman/src/host:host_main",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+        "@pypi//:httpx",
+    ],
+    size = "small",
+)
