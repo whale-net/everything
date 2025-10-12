@@ -2,8 +2,8 @@
 
 from datetime import datetime
 
-from manman.external.manman.status_api.models.external_status_info import ExternalStatusInfo
-from manman.external.manman.status_api.models.status_type import StatusType
+from external.manman.status_api.models.external_status_info import ExternalStatusInfo
+from external.manman.status_api.models.status_type import StatusType
 from friendly_computing_machine.src.friendly_computing_machine.bot.slack_models import (
     create_worker_status_blocks,
     render_blocks_to_text,

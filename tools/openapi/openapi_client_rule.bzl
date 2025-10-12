@@ -1,44 +1,5 @@
 """Bazel rule implementation for OpenAPI client generation with automatic model discovery."""
 
-def _symlink_tree_impl(ctx):
-    """Create a symlink tree that remaps generated code to external/{namespace}/{app}."""
-    generated = ctx.attr.generated
-    namespace = ctx.attr.namespace
-    app = ctx.attr.app
-    
-    # The generated code DefaultInfo includes the directory tree
-    files = generated[DefaultInfo].files.to_list()
-    if not files:
-        fail("No files generated")
-    
-    output_tree = files[0]  # The directory tree
-    
-    # Add the parent directory of the generated code to Python imports path
-    # This makes "external.{namespace}.{app}" importable even though files are at
-    # "{package}/external/{namespace}/{app}"
-    return [
-        DefaultInfo(
-            files = depset([output_tree]),
-            runfiles = ctx.runfiles(files = [output_tree]),
-        ),
-        PyInfo(
-            transitive_sources = depset([output_tree]),
-            # Add the directory containing "external" to the import path
-            # This allows "from external.{namespace}.{app} import ..." to work
-            imports = depset(direct = ["."]),
-        ),
-    ]
-
-_symlink_tree = rule(
-    implementation = _symlink_tree_impl,
-    attrs = {
-        "generated": attr.label(mandatory = True),
-        "namespace": attr.string(mandatory = True),
-        "app": attr.string(mandatory = True),
-    },
-    provides = [DefaultInfo, PyInfo],
-)
-
 def _openapi_client_impl(ctx):
     """Generate OpenAPI client with automatic model discovery."""
     spec = ctx.file.spec
@@ -46,8 +7,11 @@ def _openapi_client_impl(ctx):
     namespace = ctx.attr.namespace
     app = ctx.attr.app
     
-    # Output directory structure
-    output_dir = "external/{}/{}".format(namespace, app)
+    # Output directory - just the app name since we're defining in //external/{namespace}
+    # Files will be at: bazel-bin/external/{namespace}/{app}
+    # Which becomes: _main/external/{namespace}/{app} in runfiles
+    # Allowing imports: from external.{namespace}.{app} import ...
+    output_dir = app
     
     # Step 1: Generate tar
     tar_file = ctx.actions.declare_file("{}.tar".format(app))
@@ -92,15 +56,7 @@ def _openapi_client_impl(ctx):
                 ls -la "$1"
                 exit 1
             fi
-            
-            # Fix imports in generated code to match actual file location
-            # Replace "from external.{namespace}." with "from manman.external.{namespace}."
-            # Also replace "import external.{namespace}." with "import manman.external.{namespace}."
-            find "$1" -name "*.py" -type f -exec sed -i \
-                -e 's|from external\\.{namespace}\\.|from manman.external.{namespace}.|g' \
-                -e 's|import external\\.{namespace}|import manman.external.{namespace}|g' \
-                {{}} \\;
-        """.format(namespace=namespace),
+        """,
         arguments = [output_tree.path, tar_file.path],
     )
     
@@ -142,21 +98,21 @@ openapi_client_rule = rule(
 def openapi_client(name, spec, namespace, app, package_name = None, visibility = None):
     """Generate OpenAPI client with automatic model discovery.
     
-    This creates proper symlinks so the generated code appears at external/{namespace}/{app}
-    in the runfiles tree, matching the import path: from external.{namespace}.{app} import ...
+    Should be defined in //external/{namespace}/ to ensure generated code appears at
+    the correct import path: from external.{namespace}.{app} import ...
     
     Args:
         name: Target name
         spec: OpenAPI spec file
         namespace: Namespace (e.g., "manman")
         app: App name (e.g., "experience_api")
-        package_name: Optional package name
+        package_name: Optional package name for the generated package
         visibility: Target visibility
     """
     if not package_name:
         package_name = "{}-{}".format(namespace, app.replace("_", "-"))
     
-    # Generate the client code
+    # Generate the client code directly
     gen_name = name + "_generated"
     
     openapi_client_rule(
@@ -168,25 +124,15 @@ def openapi_client(name, spec, namespace, app, package_name = None, visibility =
         visibility = ["//visibility:private"],
     )
     
-    # Create symlink tree that remaps to external/{namespace}/{app}
-    symlink_name = name + "_symlinked"
-    
-    _symlink_tree(
-        name = symlink_name,
-        generated = ":" + gen_name,
-        namespace = namespace,
-        app = app,
-        visibility = ["//visibility:private"],
-    )
-    
     # Wrap in py_library to add runtime deps
     native.py_library(
         name = name,
         deps = [
-            ":" + symlink_name,
+            ":" + gen_name,
             "@pypi//:pydantic",
             "@pypi//:python-dateutil",
             "@pypi//:urllib3",
         ],
+        data = [":" + gen_name],  # Ensure generated code is in runfiles
         visibility = visibility or ["//visibility:public"],
     )

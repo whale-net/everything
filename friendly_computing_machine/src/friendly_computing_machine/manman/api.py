@@ -1,27 +1,27 @@
 # if these ever need to be broken up, we can move it into the class for tighter scope
 from typing import Generic, Type, TypeVar
 
-from manman.external.manman.experience_api.api.default_api import (
+from external.manman.experience_api.api.default_api import (
     DefaultApi as ManManExperienceDefaultApi,
 )
-from manman.external.manman.experience_api.api_client import (
+from external.manman.experience_api.api_client import (
     ApiClient as ManManExperienceApiClient,
 )
-from manman.external.manman.experience_api.configuration import (
+from external.manman.experience_api.configuration import (
     Configuration as ManManExperienceConfiguration,
 )
-from manman.external.manman.status_api.api.default_api import DefaultApi as StatusDefaultApi
-from manman.external.manman.status_api.api_client import ApiClient as StatusApiClient
-from manman.external.manman.status_api.configuration import (
+from external.manman.status_api.api.default_api import DefaultApi as StatusDefaultApi
+from external.manman.status_api.api_client import ApiClient as StatusApiClient
+from external.manman.status_api.configuration import (
     Configuration as StatusConfiguration,
 )
-from manman.external.manman.worker_dal_api.api.default_api import (
+from external.manman.worker_dal_api.api.default_api import (
     DefaultApi as WorkerDalDefaultApi,
 )
-from manman.external.manman.worker_dal_api.api_client import (
+from external.manman.worker_dal_api.api_client import (
     ApiClient as WorkerDalApiClient,
 )
-from manman.external.manman.worker_dal_api.configuration import (
+from external.manman.worker_dal_api.configuration import (
     Configuration as WorkerDalConfiguration,
 )
 

@@ -1,0 +1,5 @@
+# Ignore everything in external/ except BUILD.bazel files
+*
+!BUILD.bazel
+!.gitignore
+!*/

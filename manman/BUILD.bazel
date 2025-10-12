@@ -117,42 +117,6 @@ alias(
     visibility = ["//visibility:public"],
 )
 
-# Generate Python clients for ManMan APIs
-openapi_client(
-    name = "experience_api_client",
-    spec = ":experience_api_spec",
-    namespace = "manman",
-    app = "experience_api",
-    visibility = ["//visibility:public"],
-)
-
-openapi_client(
-    name = "status_api_client",
-    spec = ":status_api_spec",
-    namespace = "manman",
-    app = "status_api",
-    visibility = ["//visibility:public"],
-)
-
-openapi_client(
-    name = "worker_dal_api_client",
-    spec = ":worker_dal_api_spec",
-    namespace = "manman",
-    app = "worker_dal_api",
-    visibility = ["//visibility:public"],
-)
-
-# Convenience target to build all ManMan API clients
-filegroup(
-    name = "all_api_clients",
-    srcs = [
-        ":experience_api_client",
-        ":status_api_client",
-        ":worker_dal_api_client",
-    ],
-    visibility = ["//visibility:public"],
-)
-
 # ==============================================================================
 # Helm Chart Composition
 # ==============================================================================

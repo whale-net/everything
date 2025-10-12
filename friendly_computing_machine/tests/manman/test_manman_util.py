@@ -1,4 +1,4 @@
-from manman.external.manman.status_api.models import StatusType
+from external.manman.status_api.models import StatusType
 from friendly_computing_machine.src.friendly_computing_machine.bot.slack_enum import (
     Emoji,
 )
