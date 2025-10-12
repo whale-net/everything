@@ -1,11 +1,12 @@
 # Generated OpenAPI clients for manman namespace
 # Clients defined here are importable as: from external.manman.{app} import ...
 
-load("//tools/openapi:openapi_client.bzl", "openapi_client")
+load("//tools/openapi:openapi_client_rule.bzl", "openapi_client")
 
 package(default_visibility = ["//visibility:public"])
 
 # ManMan API Clients
+
 openapi_client(
     name = "experience_api",
     spec = "//manman:experience_api_spec",

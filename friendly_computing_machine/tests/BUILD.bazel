@@ -61,24 +61,3 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
     size = "small",
 )
-
-# Convenience target to run all tests
-py_test(
-    name = "all_tests",
-    srcs = [
-        "conftest.py",
-        "test_blocks.py",
-        "test_db.py",
-        "test_db_util.py",
-        "test_manman_subscribe.py",
-        "test_scheduled_abstract_task.py",
-        "test_temporal_workflow_fix.py",
-        "test_util.py",
-        "test_weirdge.py",
-        "bot/test_slack_models.py",
-        "manman/test_manman_util.py",
-    ],
-    deps = ["//friendly_computing_machine/src:fcm_lib"],
-    size = "small",
-    visibility = ["//visibility:public"],
-)

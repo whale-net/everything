@@ -60,12 +60,19 @@ def _openapi_client_impl(ctx):
         arguments = [output_tree.path, tar_file.path],
     )
     
+    # Since we're in //external/manman/, output_dir is just the app name
+    # The tree will be at bazel-bin/external/manman/{app}
+    # In runfiles it needs to be at _main/external/manman/{app}
+    # But root_symlinks are relative to _main/, so we need external/manman/{app} -> the tree
+    runfiles_path = "external/{}/{}".format(namespace, app)
+    
     return [
         DefaultInfo(
             files = depset([output_tree]),
-            runfiles = ctx.runfiles(root_symlinks = {
-                output_dir: output_tree,
-            }),
+            runfiles = ctx.runfiles(
+                files = [output_tree],
+                root_symlinks = {runfiles_path: output_tree},
+            ),
         ),
         PyInfo(
             transitive_sources = depset([output_tree]),
@@ -112,8 +119,8 @@ def openapi_client(name, spec, namespace, app, package_name = None, visibility =
     if not package_name:
         package_name = "{}-{}".format(namespace, app.replace("_", "-"))
     
-    # Generate the client code directly
-    gen_name = name + "_generated"
+    # Generate the client code
+    gen_name = name + "_gen"
     
     openapi_client_rule(
         name = gen_name,
@@ -127,12 +134,11 @@ def openapi_client(name, spec, namespace, app, package_name = None, visibility =
     # Wrap in py_library to add runtime deps
     native.py_library(
         name = name,
+        data = [":" + gen_name],
         deps = [
-            ":" + gen_name,
             "@pypi//:pydantic",
             "@pypi//:python-dateutil",
             "@pypi//:urllib3",
         ],
-        data = [":" + gen_name],  # Ensure generated code is in runfiles
         visibility = visibility or ["//visibility:public"],
     )
