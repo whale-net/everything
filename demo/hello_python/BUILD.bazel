@@ -2,18 +2,10 @@ load("//tools/bazel:pytest.bzl", "py_test")
 load("@rules_python//python:defs.bzl", "py_library", "py_binary")
 load("//tools/bazel:release.bzl", "release_app")
 
-# Layer 1: Internal shared libraries (changes when shared code changes)
-py_library(
-    name = "internal_libs_layer",
-    deps = ["//libs/python"],
-    visibility = ["//visibility:private"],
-)
-
-# Application library
 py_library(
     name = "main_lib",
     srcs = ["__init__.py", "main.py"],
-    deps = [":internal_libs_layer"],
+    deps = ["//libs/python"],
     visibility = ["//demo/hello_python:__pkg__"],
 )
 
@@ -22,7 +14,10 @@ py_binary(
     name = "hello-python",
     srcs = ["main.py"],
     main = "main.py",
-    deps = [":main_lib"],
+    deps = [
+        ":main_lib",
+        "//libs/python",
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -36,18 +31,11 @@ py_test(
     size = "small",
 )
 
-# Release metadata and container images with multi-layer optimization
+# Release metadata and container images
 release_app(
     name = "hello-python",
     language = "python",
     domain = "demo",
-    description = "Python hello world application with pytest (multi-layer optimized)",
+    description = "Python hello world application with pytest",
     app_type = "worker",
-    # Explicit layer configuration for better Docker caching
-    dep_layers = [
-        {
-            "name": "internal_libs",
-            "targets": [":internal_libs_layer"],
-        },
-    ],
 )

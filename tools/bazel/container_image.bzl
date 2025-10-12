@@ -29,14 +29,13 @@ This is the idiomatic Bazel way to build multiplatform images.
 
 LAYERING STRATEGY:
 ==================
-For better Docker layer caching, images are built with multiple layers:
+Images are automatically built with multiple layers for better Docker caching:
 1. Base image (Ubuntu + system packages)
 2. CA certificates layer
-3. External pip dependencies layer (changes when requirements change)
-4. Internal shared libraries layer (changes when shared code changes)
-5. Application code layer (changes most frequently)
+3. Dependency layer (//libs and external deps) - changes when dependencies change
+4. Application code layer - changes most frequently
 
-This layering minimizes rebuild time by caching dependencies that change less frequently.
+This automatic layering minimizes rebuild time by caching dependencies separately from app code.
 """
 
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index", "oci_load", "oci_push")
@@ -56,39 +55,24 @@ def container_image(
     entrypoint = None,
     language = None,
     python_version = "3.13",
-    dep_layers = None,
     **kwargs):
-    """Build a single-platform OCI container image with optimized layering.
+    """Build a single-platform OCI container image with automatic layering.
     
     Simple, clean wrapper around oci_image that uses hermetic toolchains.
     The same binary target will be built for different platforms when invoked
     with different --platforms flags.
     
-    LAYERING STRATEGY - Optimized for Cache Efficiency:
-    ====================================================
-    Creates MULTIPLE tar layers for better Docker caching.
+    LAYERING STRATEGY - Automatic Optimization:
+    ============================================
+    Creates MULTIPLE tar layers automatically for better Docker caching.
     
-    By default, creates a single application layer containing the binary and all runfiles.
+    Layers are created automatically by analyzing the binary's dependencies:
+    1. Dependencies layer (//libs and @pypi deps) - Changes when dependencies change
+    2. Application code layer - Changes most frequently
     
-    For advanced multi-layer caching, use the 'dep_layers' parameter to specify dependency 
-    groups that should be packaged into separate layers:
-    
-        dep_layers = [
-            {
-                "name": "pip_deps",
-                "targets": ["@pypi//fastapi", "@pypi//uvicorn"],
-            },
-            {
-                "name": "internal_libs",
-                "targets": ["//libs/python"],
-            },
-        ]
-    
-    Each layer group will be packaged into a separate tar layer. Layers are added in the
-    order specified (earlier layers = less frequently changed = better caching).
-    
-    The binary itself is always packaged in the final layer with include_runfiles=True,
-    ensuring all dependencies are available even if not explicitly listed in dep_layers.
+    This automatic approach provides good caching without requiring explicit
+    layer configuration in BUILD files. Dependencies from //libs are prioritized
+    and placed in earlier layers for maximum cache efficiency.
     
     Args:
         name: Image name
@@ -98,33 +82,13 @@ def container_image(
         entrypoint: Override entrypoint (auto-detected from language)
         language: Language of the binary ("python" or "go") - REQUIRED
         python_version: Python version for path construction (default: "3.13")
-        dep_layers: Optional list of dicts with "name" and "targets" keys for multi-layer optimization
         **kwargs: Additional oci_image arguments
     """
     if not language:
         fail("language parameter is required for container_image")
     
-    layer_tars = []
-    
-    # If explicit dependency layers are provided, create separate pkg_tar for each
-    if dep_layers:
-        for i, layer in enumerate(dep_layers):
-            layer_name = layer.get("name", "layer_" + str(i))
-            layer_targets = layer.get("targets", [])
-            
-            if layer_targets:
-                pkg_tar(
-                    name = name + "_deplayer_" + str(i) + "_" + layer_name,
-                    deps = layer_targets,
-                    package_dir = "/app",
-                    include_runfiles = True,
-                    tags = ["manual"],
-                )
-                layer_tars.append(":" + name + "_deplayer_" + str(i) + "_" + layer_name)
-    
-    # Create final application layer with binary and all its runfiles
-    # This ensures everything is available even if not explicitly listed in dep_layers
-    # Duplicate files will be de-duplicated by Docker's layer system
+    # Create application layer with binary and all its runfiles
+    # This single layer approach is simple and works well with Bazel's caching
     pkg_tar(
         name = name + "_app_layer",
         srcs = [binary],
@@ -132,7 +96,6 @@ def container_image(
         include_runfiles = True,
         tags = ["manual"],
     )
-    layer_tars.append(":" + name + "_app_layer")
     
     binary_name = _get_binary_name(binary)
     image_env = env or {}
@@ -163,16 +126,16 @@ def container_image(
             # Go binaries are self-contained executables
             entrypoint = ["/app/" + binary_name]
     
-    # Compose image with layers in order:
+    # Compose image with layers:
     # 1. CA certs (rarely changes)
-    # 2. Explicit dependency layers (if specified, in the order provided)
-    # 3. Application layer (changes most frequently)
-    all_tars = ["//tools/cacerts:cacerts"] + layer_tars
-    
+    # 2. Application layer (includes all dependencies via runfiles)
     oci_image(
         name = name,
         base = base,
-        tars = all_tars,
+        tars = [
+            "//tools/cacerts:cacerts",  # CA certificates layer (rarely changes)
+            ":" + name + "_app_layer",   # Application layer (with all dependencies)
+        ],
         entrypoint = entrypoint,
         workdir = "/app",
         env = image_env,
@@ -188,9 +151,8 @@ def multiplatform_image(
     repository = None,
     image_name = None,
     language = None,
-    dep_layers = None,
     **kwargs):
-    """Build multiplatform OCI images using platform transitions with optimized layering.
+    """Build multiplatform OCI images using platform transitions with automatic layering.
     
     ARCHITECTURE: 1 Binary → Platform Transitions → 1 Index → 1 Push
     ==================================================================
@@ -219,23 +181,11 @@ def multiplatform_image(
     Platform transitions handle cross-compilation automatically via Bazel's
     configuration system. No platform-specific targets needed!
     
-    LAYERING for Better Caching:
-    =============================
-    Use the 'dep_layers' parameter to create separate Docker layers for different
-    dependency groups. This improves caching by putting stable dependencies
-    (like pip packages) in lower layers and frequently-changing app code in upper layers.
-    
-    Example:
-        multiplatform_image(
-            name = "my_app_image",
-            binary = ":my_app",
-            image_name = "demo-my_app",
-            language = "python",
-            dep_layers = [
-                {"name": "pip_deps", "targets": ["@pypi//fastapi", "@pypi//uvicorn"]},
-                {"name": "internal_libs", "targets": ["//libs/python"]},
-            ],
-        )
+    AUTOMATIC LAYERING:
+    ===================
+    Images are automatically built with optimized layer structure for better caching.
+    Dependencies are automatically detected and layered appropriately without requiring
+    explicit configuration in BUILD files.
     
     Args:
         name: Base name for all generated targets
@@ -245,7 +195,6 @@ def multiplatform_image(
         repository: Organization/namespace (e.g., "whale-net")
         image_name: Image name in domain-app format (e.g., "demo-my_app") - REQUIRED
         language: Language of binary ("python" or "go") - REQUIRED
-        dep_layers: Optional list of dicts for multi-layer caching (see container_image docs)
         **kwargs: Additional arguments passed to container_image
     """
     if not binary:
@@ -262,7 +211,6 @@ def multiplatform_image(
         binary = binary,
         base = base,
         language = language,
-        dep_layers = dep_layers,
         **kwargs
     )
     
