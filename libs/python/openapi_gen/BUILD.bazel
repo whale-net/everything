@@ -1,27 +1,5 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library")
 
-# OpenAPI generation library for ManMan-specific APIs
-py_library(
-    name = "openapi_gen_lib",
-    srcs = ["openapi_gen.py"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//manman/src:manman_core",
-        "//manman/src/host:manman_host",
-        "@pypi//:fastapi",
-        "@pypi//:typer",
-    ],
-)
-
-# CLI binary for ManMan-specific OpenAPI generation
-py_binary(
-    name = "openapi_gen",
-    srcs = ["openapi_gen.py"],
-    main = "openapi_gen.py",
-    visibility = ["//visibility:public"],
-    deps = [":openapi_gen_lib"],
-)
-
 # Generic OpenAPI generation library (no ManMan dependencies)
 py_library(
     name = "openapi_gen_generic_lib",
@@ -41,3 +19,4 @@ py_binary(
     visibility = ["//visibility:public"],
     deps = [":openapi_gen_generic_lib"],
 )
+

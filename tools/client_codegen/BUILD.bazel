@@ -5,7 +5,7 @@ load("//tools:openapi_client.bzl", "openapi_client")
 # OpenAPI Client Generation - Examples
 # ==============================================================================
 # This directory contains example/demo OpenAPI clients.
-# Production ManMan API clients are defined in //manman/src/host:BUILD.bazel
+# Production ManMan API clients are defined in //manman:BUILD.bazel
 # alongside their OpenAPI spec definitions.
 #
 # Clients are generated in external/{namespace}/{app}/ structure
@@ -28,7 +28,7 @@ py_test(
     name = "test_experience_api_client",
     srcs = ["test_experience_api_client.py"],
     deps = [
-        "//manman/src/host:experience_api_client",
+        "//manman:experience_api_client",
         "@pypi//:pydantic",
     ],
 )

@@ -1,6 +1,4 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
-load("//tools:release.bzl", "release_app")
-load("//tools:openapi_client.bzl", "openapi_client")
 
 # Host API services library
 py_library(
@@ -91,87 +89,4 @@ py_test(
     python_version = "PY3",
 )
 
-# OpenAPI Spec Generation
-# Generate OpenAPI specifications for each API using the openapi_gen tool
-genrule(
-    name = "experience_api_spec",
-    outs = ["experience-api.json"],
-    cmd = """
-        $(location //libs/python/openapi_gen:openapi_gen) experience-api --output-dir $(@D)
-    """,
-    tools = ["//libs/python/openapi_gen:openapi_gen"],
-    visibility = ["//visibility:public"],
-)
-
-genrule(
-    name = "status_api_spec",
-    outs = ["status-api.json"],
-    cmd = """
-        $(location //libs/python/openapi_gen:openapi_gen) status-api --output-dir $(@D)
-    """,
-    tools = ["//libs/python/openapi_gen:openapi_gen"],
-    visibility = ["//visibility:public"],
-)
-
-genrule(
-    name = "worker_dal_api_spec",
-    outs = ["worker-dal-api.json"],
-    cmd = """
-        $(location //libs/python/openapi_gen:openapi_gen) worker-dal-api --output-dir $(@D)
-    """,
-    tools = ["//libs/python/openapi_gen:openapi_gen"],
-    visibility = ["//visibility:public"],
-)
-
-# Generate all API specs at once
-filegroup(
-    name = "all_api_specs",
-    srcs = [
-        ":experience_api_spec",
-        ":status_api_spec",
-        ":worker_dal_api_spec",
-    ],
-    visibility = ["//visibility:public"],
-)
-
-# ==============================================================================
-# OpenAPI Client Generation
-# ==============================================================================
-# Generate Python clients for ManMan APIs
-# Clients are generated in external/manman/{api}/ structure
-# Import pattern: from external.manman.{api} import ...
-
-openapi_client(
-    name = "experience_api_client",
-    spec = ":experience_api_spec",
-    namespace = "manman",
-    app = "experience_api",
-    visibility = ["//visibility:public"],
-)
-
-openapi_client(
-    name = "status_api_client",
-    spec = ":status_api_spec",
-    namespace = "manman",
-    app = "status_api",
-    visibility = ["//visibility:public"],
-)
-
-openapi_client(
-    name = "worker_dal_api_client",
-    spec = ":worker_dal_api_spec",
-    namespace = "manman",
-    app = "worker_dal_api",
-    visibility = ["//visibility:public"],
-)
-
-# Convenience target to build all ManMan API clients
-filegroup(
-    name = "all_api_clients",
-    srcs = [
-        ":experience_api_client",
-        ":status_api_client",
-        ":worker_dal_api_client",
-    ],
-    visibility = ["//visibility:public"],
-)
+# Note: Release app definitions, OpenAPI specs, and API clients are in //manman:BUILD.bazel

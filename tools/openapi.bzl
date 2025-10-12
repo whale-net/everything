@@ -34,8 +34,14 @@ def main():
         # Import the module
         module = importlib.import_module("{module_path}")
         
-        # Get the FastAPI app
-        app = getattr(module, "{app_variable}")
+        # Get the FastAPI app or factory function
+        app_or_factory = getattr(module, "{app_variable}")
+        
+        # If it's callable (factory function), call it to get the app
+        if callable(app_or_factory):
+            app = app_or_factory()
+        else:
+            app = app_or_factory
         
         # Generate OpenAPI spec
         spec = app.openapi()
