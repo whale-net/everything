@@ -58,7 +58,7 @@ def main():
         print(json.dumps(spec, indent=2))
         
     except Exception as e:
-        print(f"Error generating OpenAPI spec: {{e}}", file=sys.stderr)
+        print(f"Error generating OpenAPI spec: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc(file=sys.stderr)
         sys.exit(1)
