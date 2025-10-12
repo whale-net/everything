@@ -1,4 +1,4 @@
-load("//tools/bazel:release.bzl", "release_app")
+load("//tools/bazel:release.bzl", "release_app", "release_helm_chart")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -36,8 +36,7 @@ release_app(
     app_type = "worker",
     port = 7654,
     replicas = 1,
-    health_check_enabled = True,
-    health_check_path = "/",
+    health_check_enabled = False,
     args = [
         "bot",
         "--log-otlp",
@@ -55,8 +54,7 @@ release_app(
     app_type = "worker",
     port = 7654,
     replicas = 1,
-    health_check_enabled = True,
-    health_check_path = "/",
+    health_check_enabled = False,
     args = [
         "bot",
         "--log-otlp",
@@ -74,8 +72,7 @@ release_app(
     app_type = "worker",
     port = 7654,
     replicas = 1,
-    health_check_enabled = True,
-    health_check_path = "/",
+    health_check_enabled = False,
     args = [
         "subscribe",
         "--log-otlp",
@@ -93,8 +90,7 @@ release_app(
     app_type = "worker",
     port = 7654,
     replicas = 1,
-    health_check_enabled = True,
-    health_check_path = "/",
+    health_check_enabled = False,
     args = [
         "workflow",
         "--log-otlp",
@@ -116,4 +112,29 @@ release_app(
         "--log-otlp",
         "run",
     ],
+)
+
+# ==============================================================================
+# Helm Chart Composition
+# ==============================================================================
+
+# List of all FCM app metadata targets for chart composition
+FCM_APPS = [
+    ":fcm-bot_metadata",
+    ":fcm-taskpool_metadata",
+    ":fcm-subscribe_metadata",
+    ":fcm-worker_metadata",
+    ":fcm-migration_metadata",
+]
+
+# Helm chart composition - combines all FCM services into a single chart
+# This is registered with the release system for CI/CD integration
+release_helm_chart(
+    name = "fcm_chart",
+    apps = FCM_APPS,
+    chart_name = "fcm-services",
+    namespace = "fcm",
+    environment = "dev",
+    domain = "friendly-computing-machine",
+    visibility = ["//visibility:public"],
 )

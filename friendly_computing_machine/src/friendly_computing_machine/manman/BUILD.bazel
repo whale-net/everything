@@ -1,0 +1,14 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+package(default_visibility = ["//friendly_computing_machine:__subpackages__"])
+
+py_library(
+    name = "manman",
+    srcs = glob(["**/*.py"]),
+    visibility = ["//visibility:public"],
+    deps = [
+        "//manman:experience_api_client",
+        "//manman:status_api_client",
+        "//manman:worker_dal_api_client",
+    ],
+)

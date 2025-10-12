@@ -1,57 +1,38 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library")
 package(default_visibility = ["//friendly_computing_machine:__pkg__"])
 
+# ==============================================================================
+# Combined library (aggregates all modules)
+# ==============================================================================
+
 py_library(
     name = "fcm_lib",
-    srcs = glob(
-        [
-            "friendly_computing_machine/**/*.py",
-            "migrations/**/*.py",
-        ],
-        exclude = [
-            "**/__pycache__/**",
-            "**/*.pyc",
-        ],
-    ),
     visibility = [
         "//friendly_computing_machine:__pkg__",
         "//friendly_computing_machine/tests:__pkg__",
     ],
-    data = glob(
-        [
-            "migrations/**/*.mako",
-            "migrations/**/*.ini",
-            "migrations/**/*.txt",
-            "migrations/**/README",
-        ],
-        allow_empty = True,
-    ),
     deps = [
-        "@pypi//:alembic",
-        "@pypi//:amqpstorm",
-        "@pypi//:google-generativeai",
-        "@pypi//:opentelemetry-api",
-        "@pypi//:opentelemetry-exporter-otlp",
-        "@pypi//:opentelemetry-sdk",
-        "@pypi//:psycopg2-binary",
-        "@pypi//:python-dateutil",
-        "@pypi//:requests",
-        "@pypi//:slack-bolt",
-        "@pypi//:slack-sdk",
-        "@pypi//:sqlalchemy",
-        "@pypi//:sqlmodel",
-        "@pypi//:temporalio",
-        "@pypi//:typer",
-        "//manman:experience_api_client",
-        "//manman:status_api_client",
-        "//manman:worker_dal_api_client",
+        "//friendly_computing_machine/src/friendly_computing_machine:util",
+        "//friendly_computing_machine/src/friendly_computing_machine/models",
+        "//friendly_computing_machine/src/friendly_computing_machine/db",
+        "//friendly_computing_machine/src/friendly_computing_machine/manman",
+        "//friendly_computing_machine/src/friendly_computing_machine/rabbitmq",
+        "//friendly_computing_machine/src/friendly_computing_machine/temporal",
+        "//friendly_computing_machine/src/friendly_computing_machine/gemini",
+        "//friendly_computing_machine/src/friendly_computing_machine/bot",
+        "//friendly_computing_machine/src/friendly_computing_machine/cli",
+        "//friendly_computing_machine/src/migrations",
     ],
 )
 
+# ==============================================================================
+# Binary
+# ==============================================================================
+
 py_binary(
     name = "fcm_cli",
-    srcs = ["friendly_computing_machine/__main__.py"],
-    main = "friendly_computing_machine/__main__.py",
+    srcs = ["//friendly_computing_machine/src/friendly_computing_machine:main"],
+    main = "__main__.py",
     deps = [":fcm_lib"],
     data = ["//friendly_computing_machine:alembic_ini"],
     visibility = ["//visibility:public"],
