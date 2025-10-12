@@ -69,7 +69,7 @@ jobs:
         # Uses oci_image_index with platform transitions for true multiarch images
         # If this fails, ARM64 deployments will crash at runtime!
         echo "::group::Cross-Compilation Verification"
-        bazel test //tools:test_cross_compilation --config=ci --test_output=streamed
+        bazel test --test_tag_filters=image-integration //... --config=ci --test_output=streamed
         echo "::endgroup::"
 
   # Plan Docker builds - determine which apps need building
