@@ -2,6 +2,67 @@ load("//tools/bazel:pytest.bzl", "py_test")
 
 package(default_visibility = ["//friendly_computing_machine:__pkg__"])
 
+# Bot tests
+py_test(
+    name = "test_bot",
+    srcs = [
+        "conftest.py",
+        "bot/test_slack_models.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+    size = "small",
+)
+
+# Database tests
+py_test(
+    name = "test_db",
+    srcs = [
+        "conftest.py",
+        "test_db.py",
+        "test_db_util.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+    size = "small",
+)
+
+# ManMan integration tests
+py_test(
+    name = "test_manman",
+    srcs = [
+        "conftest.py",
+        "test_manman_subscribe.py",
+        "manman/test_manman_util.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+    size = "small",
+)
+
+# Temporal workflow tests
+py_test(
+    name = "test_temporal",
+    srcs = [
+        "conftest.py",
+        "test_scheduled_abstract_task.py",
+        "test_temporal_workflow_fix.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+    size = "small",
+)
+
+# Utility tests
+py_test(
+    name = "test_utils",
+    srcs = [
+        "conftest.py",
+        "test_blocks.py",
+        "test_util.py",
+        "test_weirdge.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+    size = "small",
+)
+
+# Convenience target to run all tests
 py_test(
     name = "all_tests",
     srcs = [
@@ -17,9 +78,7 @@ py_test(
         "bot/test_slack_models.py",
         "manman/test_manman_util.py",
     ],
-    deps = [
-        "//friendly_computing_machine/src:fcm_lib",
-    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
     size = "small",
     visibility = ["//visibility:public"],
 )
