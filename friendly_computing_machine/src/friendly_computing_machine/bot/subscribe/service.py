@@ -7,9 +7,9 @@ from typing import Optional
 
 from amqpstorm import Channel, Connection
 
-from external.manman.status_api.api.default_api import DefaultApi as ManManStatusAPI
-from external.manman.status_api.models.external_status_info import ExternalStatusInfo
-from external.manman.status_api.models.status_type import StatusType
+from manman.external.manman.status_api.api.default_api import DefaultApi as ManManStatusAPI
+from manman.external.manman.status_api.models.external_status_info import ExternalStatusInfo
+from manman.external.manman.status_api.models.status_type import StatusType
 from friendly_computing_machine.src.friendly_computing_machine.bot.app import (
     SlackWebClientFCM,
 )
