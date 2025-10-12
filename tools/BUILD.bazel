@@ -64,6 +64,11 @@ alias(
 test_suite(
     name = "test_cross_compilation",
     tests = ["//tools/scripts:test_cross_compilation"],
+    tags = [
+        "manual",  # Don't run with //...
+        "integration",  # Integration test, not unit test
+        "image-integration",  # Image integration test for container architecture verification
+    ],
     visibility = ["//visibility:public"],
 )
 
