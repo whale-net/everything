@@ -1,0 +1,17 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+# Message abstraction interfaces
+py_library(
+    name = "message",
+    srcs = [
+        "__init__.py",
+        "abstract_interface.py",
+        "pub.py",
+        "sub.py",
+    ],
+    visibility = ["//manman/src/repository:__subpackages__"],
+    deps = [
+        "//manman/src:manman_core",
+        "@pypi//:pydantic",
+    ],
+)

@@ -1,43 +1,9 @@
 # Tools and shared build rules for the monorepo
 
-load("@rules_python//python:defs.bzl", "py_binary")
-
 package(default_visibility = ["//visibility:public"])
 
-exports_files([
-    "oci.bzl",
-    "helm_chart_release.bzl",
-    "python_runner.py",
-    "platforms.bzl",
-    "container_image.bzl",
-])
-
-# Cross-compilation verification test
-# Verifies that multiplatform images contain correct architecture-specific wheels
-sh_test(
-    name = "test_cross_compilation",
-    size = "large",
-    srcs = ["test_cross_compilation.sh"],
-    data = [
-        "//demo/hello_fastapi:hello-fastapi_image",
-    ],
-    tags = [
-        "manual",  # Don't run with //...
-        "integration",  # Integration test, not unit test
-        "no-cache",  # Always run, never cache
-    ],
-    timeout = "long",
-)
-
-# Version resolver utility for Helm charts
-py_binary(
-    name = "version_resolver",
-    srcs = ["version_resolver.py"],
-    main = "version_resolver.py",
-    visibility = ["//visibility:public"],
-)
-
-load(":platforms.bzl", "define_platforms")
+# Load platform definitions
+load("//tools/bazel:platforms.bzl", "define_platforms")
 
 define_platforms()
 
@@ -90,5 +56,27 @@ config_setting(
 alias(
     name = "release",
     actual = "//tools/release_helper:release_helper",
+    visibility = ["//visibility:public"],
+)
+
+# Test suite for cross-compilation (now in scripts/)
+# Use test_suite instead of alias so 'bazel test' works correctly
+test_suite(
+    name = "test_cross_compilation",
+    tests = ["//tools/scripts:test_cross_compilation"],
+    visibility = ["//visibility:public"],
+)
+
+# Alias for version resolver (now in scripts/)
+alias(
+    name = "version_resolver",
+    actual = "//tools/scripts:version_resolver",
+    visibility = ["//visibility:public"],
+)
+
+# Alias for openapi_gen_wrapper (now in openapi/)
+alias(
+    name = "openapi_gen_wrapper",
+    actual = "//tools/openapi:openapi_gen_wrapper",
     visibility = ["//visibility:public"],
 )

@@ -28,8 +28,8 @@ class TestWorkerShutdownCascade(unittest.TestCase):
         self.mock_wapi.close_other_workers.return_value = None
         self.mock_wapi.worker_shutdown.return_value = None
 
-    @patch("manman.worker.worker_service.get_auth_api_client")
-    @patch("manman.worker.worker_service.WorkerAPIClient")
+    @patch("manman.src.worker.worker_service.get_auth_api_client")
+    @patch("manman.src.worker.worker_service.WorkerAPIClient")
     def test_shutdown_with_no_servers(self, mock_api_client_class, mock_auth_client):
         """Test worker shutdown when no dependent servers exist."""
         mock_api_client_class.return_value = self.mock_wapi
@@ -51,8 +51,8 @@ class TestWorkerShutdownCascade(unittest.TestCase):
             self.mock_worker_instance
         )
 
-    @patch("manman.worker.worker_service.get_auth_api_client")
-    @patch("manman.worker.worker_service.WorkerAPIClient")
+    @patch("manman.src.worker.worker_service.get_auth_api_client")
+    @patch("manman.src.worker.worker_service.WorkerAPIClient")
     def test_shutdown_cascade_to_dependent_servers(
         self, mock_api_client_class, mock_auth_client
     ):
@@ -104,8 +104,8 @@ class TestWorkerShutdownCascade(unittest.TestCase):
             self.mock_worker_instance
         )
 
-    @patch("manman.worker.worker_service.get_auth_api_client")
-    @patch("manman.worker.worker_service.WorkerAPIClient")
+    @patch("manman.src.worker.worker_service.get_auth_api_client")
+    @patch("manman.src.worker.worker_service.WorkerAPIClient")
     def test_shutdown_waits_for_server_completion(
         self, mock_api_client_class, mock_auth_client
     ):
@@ -159,8 +159,8 @@ class TestWorkerShutdownCascade(unittest.TestCase):
             self.mock_worker_instance
         )
 
-    @patch("manman.worker.worker_service.get_auth_api_client")
-    @patch("manman.worker.worker_service.WorkerAPIClient")
+    @patch("manman.src.worker.worker_service.get_auth_api_client")
+    @patch("manman.src.worker.worker_service.WorkerAPIClient")
     def test_shutdown_handles_already_shutdown_servers(
         self, mock_api_client_class, mock_auth_client
     ):

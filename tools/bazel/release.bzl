@@ -1,7 +1,8 @@
 """Release utilities for the Everything monorepo."""
 
-load("//tools:container_image.bzl", "multiplatform_image")
+load("//tools/bazel:container_image.bzl", "multiplatform_image")
 load("//tools/helm:helm.bzl", "helm_chart")
+load("//tools/openapi:openapi.bzl", "openapi_spec")
 
 def _app_metadata_impl(ctx):
     """Implementation for app_metadata rule."""
@@ -79,15 +80,16 @@ app_metadata = rule(
     },
 )
 
-# Note: This function has many parameters (18) to support flexible app configuration.
+# Note: This function has many parameters (19) to support flexible app configuration.
 # They are logically grouped as:
 # - Binary config: name, binary_name, language
 # - Release config: domain, description, version, registry, organization, custom_repo_name
 # - Deployment config: app_type, port, replicas, command, args
 # - Health check config: health_check_enabled, health_check_path
 # - Ingress config: ingress_host, ingress_tls_secret
+# - OpenAPI config: fastapi_app
 # Bazel/Starlark does not support nested struct parameters, so they remain flat.
-def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = []):
+def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], fastapi_app = None):
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
@@ -119,6 +121,8 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         ingress_tls_secret: TLS secret name for ingress (empty = no TLS)
         command: Override container command (default: use image ENTRYPOINT)
         args: Container arguments
+        fastapi_app: For FastAPI apps, specify the module path and variable name (e.g., "main:app")
+                     to auto-generate OpenAPI specs. Creates a {name}_openapi_spec target.
     """
     # Validate name format - must use dashes, not underscores
     if "_" in name:
@@ -178,6 +182,32 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         tags = ["release-metadata"],
         visibility = ["//visibility:public"],
     )
+    
+    # Auto-generate OpenAPI spec for FastAPI apps
+    if fastapi_app and language == "python":
+        # Parse module:variable syntax
+        if ":" in fastapi_app:
+            module_path, app_var = fastapi_app.split(":", 1)
+        else:
+            module_path = fastapi_app
+            app_var = "app"
+        
+        # For OpenAPI generation, we need a library target, not a binary
+        # Try to find a corresponding _lib target, or use the binary if that's all we have
+        lib_target = base_label
+        if not lib_target.endswith("_lib"):
+            # Check if there's a {name}_lib or main_lib target we should use instead
+            # For now, just use the binary target - it will work but might be less efficient
+            pass
+        
+        # Use the openapi_spec rule to generate spec with proper dependencies
+        openapi_spec(
+            name = name + "_openapi_spec",
+            app_target = lib_target,
+            module_path = module_path,
+            app_variable = app_var,
+            visibility = ["//visibility:public"],
+        )
 
 def get_release_metadata_target(app_name):
     """Get the metadata target name for an app.

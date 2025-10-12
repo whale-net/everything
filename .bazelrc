@@ -38,3 +38,5 @@ test:ci --test_timeout_filters=-eternal
 test --test_output=errors
 test --cache_test_results=yes
 test:ci --test_output=errors
+# OpenAPI Client Generation Java Runtime
+build --java_runtime_version=remotejdk_17

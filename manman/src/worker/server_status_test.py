@@ -48,9 +48,9 @@ class TestServerStatusPublishing:
             "game_server": mock_game_server,
         }
 
-    @patch("manman.worker.server.ManManService._ManManService__build_status_publisher")
-    @patch("manman.worker.server.ManManService._ManManService__build_command_consumer")
-    @patch("manman.worker.server.ProcessBuilder")
+    @patch("manman.src.worker.server.ManManService._ManManService__build_status_publisher")
+    @patch("manman.src.worker.server.ManManService._ManManService__build_command_consumer")
+    @patch("manman.src.worker.server.ProcessBuilder")
     def test_server_initialization_publishes_created_status(
         self, mock_pb, mock_cmd_consumer, mock_status_pub_builder, mock_dependencies
     ):
@@ -82,11 +82,11 @@ class TestServerStatusPublishing:
         assert published_status.status_type == StatusType.CREATED
         assert published_status.identifier == "123"  # game_server_instance_id as string
 
-    @patch("manman.worker.server.ManManService._ManManService__build_status_publisher")
-    @patch("manman.worker.server.ManManService._ManManService__build_command_consumer")
-    @patch("manman.worker.server.ProcessBuilder")
-    @patch("manman.worker.server.SteamCMD")
-    @patch("manman.worker.server.env_list_to_dict")
+    @patch("manman.src.worker.server.ManManService._ManManService__build_status_publisher")
+    @patch("manman.src.worker.server.ManManService._ManManService__build_command_consumer")
+    @patch("manman.src.worker.server.ProcessBuilder")
+    @patch("manman.src.worker.server.SteamCMD")
+    @patch("manman.src.worker.server.env_list_to_dict")
     def test_server_run_publishes_lifecycle_statuses(
         self,
         mock_env_dict,
@@ -132,9 +132,9 @@ class TestServerStatusPublishing:
         assert published_status.status_type == StatusType.CREATED
         assert published_status.identifier == "123"  # game_server_instance_id as string
 
-    @patch("manman.worker.server.ManManService._ManManService__build_status_publisher")
-    @patch("manman.worker.server.ManManService._ManManService__build_command_consumer")
-    @patch("manman.worker.server.ProcessBuilder")
+    @patch("manman.src.worker.server.ManManService._ManManService__build_status_publisher")
+    @patch("manman.src.worker.server.ManManService._ManManService__build_command_consumer")
+    @patch("manman.src.worker.server.ProcessBuilder")
     def test_server_shutdown_publishes_complete_status(
         self, mock_pb, mock_cmd_consumer, mock_status_pub_builder, mock_dependencies
     ):

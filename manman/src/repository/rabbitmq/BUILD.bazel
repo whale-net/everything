@@ -1,0 +1,33 @@
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+
+# RabbitMQ implementation library
+py_library(
+    name = "rabbitmq",
+    srcs = [
+        "__init__.py",
+        "config.py",
+        "publisher.py",
+        "subscriber.py",
+        "util.py",
+    ],
+    visibility = ["//manman/src/repository:__subpackages__"],
+    deps = [
+        "//manman/src:manman_core",
+        "//manman/src/repository/message",
+        "@pypi//:amqpstorm",
+        "@pypi//:pydantic",
+    ],
+)
+
+# RabbitMQ utility tests
+py_test(
+    name = "rabbitmq_util_test",
+    srcs = ["util_test.py"],
+    main = "util_test.py",
+    deps = [
+        ":rabbitmq",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+    ],
+    size = "small",
+)

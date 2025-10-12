@@ -43,6 +43,8 @@ dependencies = [
     
     # JWT handling
     "python-jose",
+    "python-dateutil",
+    "urllib3",
     
     # Utility libraries
     "pydantic",

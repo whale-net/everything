@@ -1,5 +1,5 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
-load("//tools:release.bzl", "release_app")
+load("//tools/bazel:release.bzl", "release_app")
 
 py_library(
     name = "main_lib",
@@ -47,4 +47,5 @@ release_app(
     domain = "demo",
     description = "FastAPI hello world application with uvicorn",
     app_type = "external-api",
+    fastapi_app = "demo.hello_fastapi.main:app",
 )
