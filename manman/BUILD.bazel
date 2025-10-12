@@ -18,7 +18,7 @@ py_library(
 # Release configurations for manman services
 release_app(
     name = "experience-api",
-    binary_name = "//manman/src/host:experience_api",
+    binary_name = "//manman/src/host/api/experience:experience_api",
     language = "python",
     domain = "manman",
     description = "Experience API service for managing user experiences and workflows",
@@ -33,7 +33,7 @@ release_app(
 
 release_app(
     name = "status-api", 
-    binary_name = "//manman/src/host:status_api",
+    binary_name = "//manman/src/host/api/status:status_api",
     language = "python",
     domain = "manman",
     description = "Status API service for monitoring and health checks",
@@ -46,7 +46,7 @@ release_app(
 
 release_app(
     name = "worker-dal-api",
-    binary_name = "//manman/src/host:worker_dal_api", 
+    binary_name = "//manman/src/host/api/worker_dal:worker_dal_api", 
     language = "python",
     domain = "manman",
     description = "Worker DAL API service for data access layer operations",

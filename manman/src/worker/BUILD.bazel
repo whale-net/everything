@@ -24,20 +24,51 @@ py_binary(
     visibility = ["//manman:__pkg__"],
 )
 
-# Tests for worker services
+# Individual test targets for better granularity
 py_test(
-    name = "manman_worker_test",
-    srcs = [
-        "server_status_test.py",
-        "subscriber_multiple_exchanges_test.py",
-        "worker_heartbeat_test.py",
-        "worker_shutdown_cascade_test.py",
+    name = "server_status_test",
+    srcs = ["server_status_test.py"],
+    main = "server_status_test.py",
+    deps = [
+        ":manman_worker",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
     ],
+    size = "small",
+)
+
+py_test(
+    name = "subscriber_multiple_exchanges_test",
+    srcs = ["subscriber_multiple_exchanges_test.py"],
+    main = "subscriber_multiple_exchanges_test.py",
+    deps = [
+        ":manman_worker",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+    ],
+    size = "small",
+)
+
+py_test(
+    name = "worker_heartbeat_test",
+    srcs = ["worker_heartbeat_test.py"],
     main = "worker_heartbeat_test.py",
     deps = [
         ":manman_worker",
         "@pypi//:pytest",
         "@pypi//:pytest-asyncio",
     ],
-    python_version = "PY3",
+    size = "small",
+)
+
+py_test(
+    name = "worker_shutdown_cascade_test",
+    srcs = ["worker_shutdown_cascade_test.py"],
+    main = "worker_shutdown_cascade_test.py",
+    deps = [
+        ":manman_worker",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+    ],
+    size = "small",
 )

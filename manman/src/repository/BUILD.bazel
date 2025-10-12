@@ -1,15 +1,21 @@
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
 
-# Repository layer library
+# Repository core layer (database and API client)
 py_library(
-    name = "manman_repository",
-    srcs = glob(["**/*.py"], exclude=["*_test.py"]),
-    visibility = ["//manman:__subpackages__"],
+    name = "repository_core",
+    srcs = [
+        "__init__.py",
+        "api_client.py",
+        "database.py",
+        "workerdal.py",
+    ],
+    visibility = ["//manman/src/repository:__subpackages__"],
     deps = [
         "//manman/src:manman_core",
+        "//manman/src/repository/message",
+        "//manman/src/repository/rabbitmq",
         "@pypi//:sqlmodel",
         "@pypi//:asyncpg",
-        "@pypi//:amqpstorm",
         "@pypi//:httpx",
         "@pypi//:alembic",
         "@pypi//:opentelemetry-instrumentation-sqlalchemy",
@@ -18,20 +24,40 @@ py_library(
     ],
 )
 
-# Tests for repository layer
-py_test(
-    name = "manman_repository_test",
-    srcs = [
-        "database_repository_test.py",
-        "validator_test.py",
-        "rabbitmq/util_test.py",
+# Combined repository library (for backward compatibility)
+py_library(
+    name = "manman_repository",
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        ":repository_core",
+        "//manman/src/repository/message",
+        "//manman/src/repository/rabbitmq",
     ],
+)
+
+# Database repository tests
+py_test(
+    name = "database_repository_test",
+    srcs = ["database_repository_test.py"],
     main = "database_repository_test.py",
     deps = [
-        ":manman_repository",
+        ":repository_core",
         "@pypi//:pytest",
         "@pypi//:pytest-asyncio",
-        "@pypi//:sqlalchemy",  # For testing database components
+        "@pypi//:sqlalchemy",
     ],
-    python_version = "PY3",
+    size = "small",
+)
+
+# Validator tests
+py_test(
+    name = "validator_test",
+    srcs = ["validator_test.py"],
+    main = "validator_test.py",
+    deps = [
+        ":repository_core",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+    ],
+    size = "small",
 )
