@@ -361,4 +361,131 @@ class TestGitHubReleaseClientTagVerification:
             result = client.verify_tag_exists("demo-hello_python.v1.0.0", max_retries=3)
             
             assert result is True
-            assert results["missing_app"] is None  # Should be None for missing version
+
+
+class TestOpenAPISpecValidation:
+    """Test cases for OpenAPI spec validation during release creation."""
+    
+    def test_release_fails_when_expected_openapi_spec_missing(self):
+        """Test that release fails when an app expects OpenAPI spec but it's missing."""
+        app_list = ["hello-fastapi"]
+        
+        # Create a temp directory for specs (but don't put the spec file there)
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Mock the required functions
+            with patch('tools.release_helper.github_release.find_app_bazel_target') as mock_find_target, \
+                 patch('tools.release_helper.github_release.get_app_metadata') as mock_get_metadata, \
+                 patch('tools.release_helper.github_release.generate_release_notes') as mock_gen_notes, \
+                 patch('tools.release_helper.github_release.create_app_release') as mock_create_release:
+                
+                # Setup mocks
+                mock_find_target.return_value = "//demo/hello-fastapi:hello-fastapi_metadata"
+                # App has openapi_spec_target, indicating it should have an OpenAPI spec
+                mock_get_metadata.return_value = {
+                    "domain": "demo",
+                    "name": "hello-fastapi",
+                    "openapi_spec_target": "//demo/hello-fastapi:hello-fastapi_openapi_spec"
+                }
+                mock_gen_notes.return_value = "Release notes content"
+                mock_create_release.return_value = {"id": 123, "tag_name": "demo-hello-fastapi.v1.0.0"}
+                
+                # Call the function with openapi_specs_dir pointing to empty directory
+                results = create_releases_for_apps_with_notes(
+                    app_list=app_list,
+                    version="v1.0.0",
+                    owner="test-owner",
+                    repo="test-repo",
+                    openapi_specs_dir=tmpdir
+                )
+                
+                # Verify the release failed because OpenAPI spec was expected but missing
+                assert "hello-fastapi" in results
+                assert results["hello-fastapi"] is None  # Should be None indicating failure
+    
+    def test_release_succeeds_when_expected_openapi_spec_present(self):
+        """Test that release succeeds when expected OpenAPI spec is present."""
+        app_list = ["hello-fastapi"]
+        
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create the expected OpenAPI spec file
+            spec_file = Path(tmpdir) / "demo-hello-fastapi-openapi.json"
+            spec_file.write_text('{"openapi": "3.0.0"}')
+            
+            # Mock the required functions
+            with patch('tools.release_helper.github_release.find_app_bazel_target') as mock_find_target, \
+                 patch('tools.release_helper.github_release.get_app_metadata') as mock_get_metadata, \
+                 patch('tools.release_helper.github_release.generate_release_notes') as mock_gen_notes, \
+                 patch('tools.release_helper.github_release.create_app_release') as mock_create_release, \
+                 patch('tools.release_helper.github_release.GitHubReleaseClient') as mock_client_class:
+                
+                # Setup mocks
+                mock_find_target.return_value = "//demo/hello-fastapi:hello-fastapi_metadata"
+                mock_get_metadata.return_value = {
+                    "domain": "demo",
+                    "name": "hello-fastapi",
+                    "openapi_spec_target": "//demo/hello-fastapi:hello-fastapi_openapi_spec"
+                }
+                mock_gen_notes.return_value = "Release notes content"
+                mock_create_release.return_value = {"id": 123, "tag_name": "demo-hello-fastapi.v1.0.0"}
+                
+                # Mock the client for asset upload
+                mock_client = Mock()
+                mock_client.upload_release_asset = Mock()
+                mock_client_class.return_value = mock_client
+                
+                # Call the function
+                results = create_releases_for_apps_with_notes(
+                    app_list=app_list,
+                    version="v1.0.0",
+                    owner="test-owner",
+                    repo="test-repo",
+                    token="dummy-token",
+                    openapi_specs_dir=tmpdir
+                )
+                
+                # Verify the release succeeded
+                assert "hello-fastapi" in results
+                assert results["hello-fastapi"] is not None
+                assert results["hello-fastapi"]["id"] == 123
+                
+                # Verify asset upload was attempted
+                mock_client.upload_release_asset.assert_called_once()
+    
+    def test_release_succeeds_when_no_openapi_spec_expected_or_present(self):
+        """Test that release succeeds when app doesn't expect OpenAPI spec."""
+        app_list = ["hello-python"]
+        
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Mock the required functions
+            with patch('tools.release_helper.github_release.find_app_bazel_target') as mock_find_target, \
+                 patch('tools.release_helper.github_release.get_app_metadata') as mock_get_metadata, \
+                 patch('tools.release_helper.github_release.generate_release_notes') as mock_gen_notes, \
+                 patch('tools.release_helper.github_release.create_app_release') as mock_create_release:
+                
+                # Setup mocks - note: no openapi_spec_target in metadata
+                mock_find_target.return_value = "//demo/hello-python:hello-python_metadata"
+                mock_get_metadata.return_value = {
+                    "domain": "demo",
+                    "name": "hello-python"
+                    # No openapi_spec_target
+                }
+                mock_gen_notes.return_value = "Release notes content"
+                mock_create_release.return_value = {"id": 456, "tag_name": "demo-hello-python.v1.0.0"}
+                
+                # Call the function
+                results = create_releases_for_apps_with_notes(
+                    app_list=app_list,
+                    version="v1.0.0",
+                    owner="test-owner",
+                    repo="test-repo",
+                    openapi_specs_dir=tmpdir
+                )
+                
+                # Verify the release succeeded
+                assert "hello-python" in results
+                assert results["hello-python"] is not None
+                assert results["hello-python"]["id"] == 456
