@@ -3,8 +3,8 @@ from textwrap import dedent
 
 import google.generativeai as genai
 
-from friendly_computing_machine.db.dal import get_genai_texts_by_slack_channel
-from friendly_computing_machine.util import deprecated
+from friendly_computing_machine.src.friendly_computing_machine.db.dal import get_genai_texts_by_slack_channel
+from friendly_computing_machine.src.friendly_computing_machine.util import deprecated
 
 logger = logging.getLogger(__name__)
 

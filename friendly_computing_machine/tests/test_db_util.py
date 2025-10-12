@@ -6,7 +6,7 @@ from sqlmodel import Field, SQLModel
 
 # Assuming db_util is in src/friendly_computing_machine/db/util.py
 # Import only what's actually in util.py and used by these tests
-from friendly_computing_machine.db.util import (
+from friendly_computing_machine.src.friendly_computing_machine.db.util import (
     db_update,
 )
 

@@ -3,11 +3,11 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from typing import Optional
 
-from friendly_computing_machine.db.dal import (
+from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     get_last_successful_task_instance,
     upsert_task,
 )
-from friendly_computing_machine.models.task import (
+from friendly_computing_machine.src.friendly_computing_machine.models.task import (
     Task,
     TaskCreate,
     TaskInstanceCreate,

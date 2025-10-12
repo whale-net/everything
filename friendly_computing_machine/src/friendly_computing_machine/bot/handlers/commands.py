@@ -4,21 +4,21 @@ import logging
 from opentelemetry import trace
 from slack_bolt import Ack, Say
 
-from friendly_computing_machine.bot.app import app
-from friendly_computing_machine.bot.modal_builder import build_server_select_modal
-from friendly_computing_machine.bot.slack_client import SlackWebClientFCM
-from friendly_computing_machine.db.dal import (
+from friendly_computing_machine.src.friendly_computing_machine.bot.app import app
+from friendly_computing_machine.src.friendly_computing_machine.bot.modal_builder import build_server_select_modal
+from friendly_computing_machine.src.friendly_computing_machine.bot.slack_client import SlackWebClientFCM
+from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     insert_genai_text,
     insert_slack_command,
     update_genai_text_response,
 )
-from friendly_computing_machine.models.genai import GenAITextCreate
-from friendly_computing_machine.models.slack import SlackCommandCreate
-from friendly_computing_machine.temporal.slack.workflow import (
+from friendly_computing_machine.src.friendly_computing_machine.models.genai import GenAITextCreate
+from friendly_computing_machine.src.friendly_computing_machine.models.slack import SlackCommandCreate
+from friendly_computing_machine.src.friendly_computing_machine.temporal.slack.workflow import (
     SlackContextGeminiWorkflow,
     SlackContextGeminiWorkflowParams,
 )
-from friendly_computing_machine.temporal.util import (
+from friendly_computing_machine.src.friendly_computing_machine.temporal.util import (
     execute_workflow,
     get_temporal_queue_name,
 )

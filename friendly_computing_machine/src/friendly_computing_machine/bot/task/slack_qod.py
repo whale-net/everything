@@ -1,8 +1,8 @@
 from datetime import timedelta
 
-from friendly_computing_machine.bot.task.abstracttask import AbstractTask
-from friendly_computing_machine.db.jobsql import delete_slack_message_duplicates
-from friendly_computing_machine.models.task import TaskInstanceStatus
+from friendly_computing_machine.src.friendly_computing_machine.bot.task.abstracttask import AbstractTask
+from friendly_computing_machine.src.friendly_computing_machine.db.jobsql import delete_slack_message_duplicates
+from friendly_computing_machine.src.friendly_computing_machine.models.task import TaskInstanceStatus
 
 
 class SlackMessageDuplicateCleanup(AbstractTask):

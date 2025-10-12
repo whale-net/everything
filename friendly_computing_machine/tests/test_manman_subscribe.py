@@ -5,7 +5,9 @@ Basic tests for the ManMan Subscribe Service
 from unittest import mock
 from unittest.mock import Mock
 
-from friendly_computing_machine.bot.subscribe.service import ManManSubscribeService
+from friendly_computing_machine.src.friendly_computing_machine.bot.subscribe.service import (
+    ManManSubscribeService,
+)
 
 
 def test_service_initialization():
@@ -17,7 +19,7 @@ def test_service_initialization():
     app_env = "test"
 
     with mock.patch(
-        "friendly_computing_machine.bot.subscribe.service.get_slack_special_channel_type_from_name",
+        "friendly_computing_machine.src.friendly_computing_machine.bot.subscribe.service.get_slack_special_channel_type_from_name",
         return_value=None,
     ):
         service = ManManSubscribeService(

@@ -4,8 +4,10 @@ from typing import Any, Dict, Optional
 
 from sqlmodel import Field, Relationship
 
-from friendly_computing_machine.models.base import Base
-from friendly_computing_machine.util import ts_to_datetime
+from friendly_computing_machine.src.friendly_computing_machine.models.base import Base
+from friendly_computing_machine.src.friendly_computing_machine.util import (
+    ts_to_datetime,
+)
 
 
 # -----

@@ -4,11 +4,22 @@ from typing import List, Optional, Union
 
 from slack_sdk.models.blocks import Block
 
-from friendly_computing_machine.bot.app import get_slack_web_client
-from friendly_computing_machine.bot.slack_models import render_blocks_to_text
-from friendly_computing_machine.db.dal import insert_message
-from friendly_computing_machine.models.slack import SlackMessage, SlackMessageCreate
-from friendly_computing_machine.util import ts_to_datetime
+from friendly_computing_machine.src.friendly_computing_machine.bot.app import (
+    get_slack_web_client,
+)
+from friendly_computing_machine.src.friendly_computing_machine.bot.slack_models import (
+    render_blocks_to_text,
+)
+from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
+    insert_message,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
+    SlackMessage,
+    SlackMessageCreate,
+)
+from friendly_computing_machine.src.friendly_computing_machine.util import (
+    ts_to_datetime,
+)
 
 logger = logging.getLogger(__name__)
 

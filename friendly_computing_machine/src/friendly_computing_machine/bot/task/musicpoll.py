@@ -3,25 +3,25 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Optional
 
-from friendly_computing_machine.bot.app import (
+from friendly_computing_machine.src.friendly_computing_machine.bot.app import (
     get_bot_config,
     get_slack_web_client,
 )
-from friendly_computing_machine.bot.slack_client import SlackWebClientFCM
-from friendly_computing_machine.bot.task.abstracttask import (
+from friendly_computing_machine.src.friendly_computing_machine.bot.slack_client import SlackWebClientFCM
+from friendly_computing_machine.src.friendly_computing_machine.bot.task.abstracttask import (
     AbstractTask,
     OneOffTask,
     ScheduledAbstractTask,
 )
-from friendly_computing_machine.bot.util import slack_send_message
-from friendly_computing_machine.db.dal import (
+from friendly_computing_machine.src.friendly_computing_machine.bot.util import slack_send_message
+from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     find_poll_instance_messages,
     get_unprocessed_music_poll_instances,
     insert_music_poll_instance,
     insert_music_poll_responses,
     upsert_message,
 )
-from friendly_computing_machine.db.jobsql import (
+from friendly_computing_machine.src.friendly_computing_machine.db.jobsql import (
     backfill_init_music_poll_instances,
     backfill_init_music_polls,
     backfill_music_poll_instance_next_id,
@@ -30,12 +30,12 @@ from friendly_computing_machine.db.jobsql import (
     backfill_slack_messages_slack_user_id,
     delete_slack_message_duplicates,
 )
-from friendly_computing_machine.models.music_poll import (
+from friendly_computing_machine.src.friendly_computing_machine.models.music_poll import (
     MusicPollInstance,
     MusicPollResponseCreate,
 )
-from friendly_computing_machine.models.slack import SlackMessageCreate
-from friendly_computing_machine.models.task import TaskInstanceStatus
+from friendly_computing_machine.src.friendly_computing_machine.models.slack import SlackMessageCreate
+from friendly_computing_machine.src.friendly_computing_machine.models.task import TaskInstanceStatus
 
 logger = logging.getLogger(__name__)
 

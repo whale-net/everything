@@ -3,7 +3,7 @@ import datetime
 from sqlalchemy import Column, DateTime, func
 from sqlmodel import Field
 
-from friendly_computing_machine.models.base import Base
+from friendly_computing_machine.src.friendly_computing_machine.models.base import Base
 
 
 class MusicPollBase(Base):

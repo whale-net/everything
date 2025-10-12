@@ -5,7 +5,7 @@ from temporalio import activity, workflow
 # Import activity implementation safely
 # TODO - this is probably not needed
 with workflow.unsafe.imports_passed_through():
-    from friendly_computing_machine.temporal.ai.activity import generate_gemini_response
+    from friendly_computing_machine.src.friendly_computing_machine.temporal.ai.activity import generate_gemini_response
 
 
 @activity.defn

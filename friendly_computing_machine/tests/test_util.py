@@ -1,6 +1,9 @@
 import datetime
 
-from friendly_computing_machine.util import datetime_to_ts, ts_to_datetime
+from friendly_computing_machine.src.friendly_computing_machine.util import (
+    datetime_to_ts,
+    ts_to_datetime,
+)
 
 
 def test_ts_to_datetime():

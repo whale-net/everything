@@ -13,6 +13,10 @@ py_library(
             "**/*.pyc",
         ],
     ),
+    visibility = [
+        "//friendly_computing_machine:__pkg__",
+        "//friendly_computing_machine/tests:__pkg__",
+    ],
     data = glob(
         [
             "migrations/**/*.mako",

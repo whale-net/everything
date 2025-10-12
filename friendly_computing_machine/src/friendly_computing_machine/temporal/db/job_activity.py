@@ -2,12 +2,12 @@ import logging
 
 from temporalio import activity
 
-from friendly_computing_machine.db.dal import (
+from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     select_distinct_slack_team_slack_id_from_slack_message,
     upsert_slack_teams,
     upsert_slack_users,
 )
-from friendly_computing_machine.db.jobsql import (
+from friendly_computing_machine.src.friendly_computing_machine.db.jobsql import (
     backfill_genai_text_slack_channel_id,
     backfill_genai_text_slack_user_id,
     backfill_slack_messages_slack_channel_id,
@@ -15,7 +15,7 @@ from friendly_computing_machine.db.jobsql import (
     backfill_slack_messages_slack_user_id,
     delete_slack_message_duplicates,
 )
-from friendly_computing_machine.models.slack import SlackTeamCreate, SlackUserCreate
+from friendly_computing_machine.src.friendly_computing_machine.models.slack import SlackTeamCreate, SlackUserCreate
 
 logger = logging.getLogger(__name__)
 

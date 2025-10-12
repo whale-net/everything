@@ -4,13 +4,19 @@ from dataclasses import dataclass
 
 from temporalio import activity
 
-from friendly_computing_machine.bot.app import get_slack_web_client
-from friendly_computing_machine.db.dal import (
+from friendly_computing_machine.src.friendly_computing_machine.bot.app import (
+    get_slack_web_client,
+)
+from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     get_genai_texts_by_slack_channel,
     get_user_teams_from_messages,
 )
-from friendly_computing_machine.models.genai import GenAIText
-from friendly_computing_machine.models.slack import SlackUserCreate
+from friendly_computing_machine.src.friendly_computing_machine.models.genai import (
+    GenAIText,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
+    SlackUserCreate,
+)
 
 logger = logging.getLogger(__name__)
 

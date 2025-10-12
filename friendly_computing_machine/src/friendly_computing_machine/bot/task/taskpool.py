@@ -2,15 +2,15 @@ import logging
 import time
 from datetime import timedelta
 
-from friendly_computing_machine.bot.task.abstracttask import AbstractTask, OneOffTask
-from friendly_computing_machine.bot.task.musicpoll import (
+from friendly_computing_machine.src.friendly_computing_machine.bot.task.abstracttask import AbstractTask, OneOffTask
+from friendly_computing_machine.src.friendly_computing_machine.bot.task.musicpoll import (
     MusicPollArchiveMessages,
     MusicPollInit,
     MusicPollPostPoll,
     MusicPollProcessPoll,
 )
-from friendly_computing_machine.db.dal import insert_task_instances
-from friendly_computing_machine.models.task import TaskInstanceStatus
+from friendly_computing_machine.src.friendly_computing_machine.db.dal import insert_task_instances
+from friendly_computing_machine.src.friendly_computing_machine.models.task import TaskInstanceStatus
 
 logger = logging.getLogger(__name__)
 

@@ -2,7 +2,7 @@
 
 import inspect
 
-from friendly_computing_machine.temporal.slack.activity import (
+from friendly_computing_machine.src.friendly_computing_machine.temporal.slack.activity import (
     FixSlackTaggingParams,
     fix_slack_tagging_activity,
 )

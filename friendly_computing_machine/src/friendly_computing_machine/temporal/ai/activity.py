@@ -4,7 +4,7 @@ from textwrap import dedent
 import google.generativeai as genai
 from temporalio import activity
 
-from friendly_computing_machine.models.genai import GenAIText
+from friendly_computing_machine.src.friendly_computing_machine.models.genai import GenAIText
 
 
 async def gen_text(prompt: str) -> str:

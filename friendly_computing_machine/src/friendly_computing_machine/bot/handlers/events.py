@@ -2,9 +2,9 @@ import logging
 
 from opentelemetry import trace
 
-from friendly_computing_machine.bot.app import app, get_bot_config
-from friendly_computing_machine.db.dal import upsert_message
-from friendly_computing_machine.models.slack import SlackMessageCreate
+from friendly_computing_machine.src.friendly_computing_machine.bot.app import app, get_bot_config
+from friendly_computing_machine.src.friendly_computing_machine.db.dal import upsert_message
+from friendly_computing_machine.src.friendly_computing_machine.models.slack import SlackMessageCreate
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)

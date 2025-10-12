@@ -2,7 +2,9 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from friendly_computing_machine.bot.task.abstracttask import ScheduledAbstractTask
+from friendly_computing_machine.src.friendly_computing_machine.bot.task.abstracttask import (
+    ScheduledAbstractTask,
+)
 
 
 def test_no_run():

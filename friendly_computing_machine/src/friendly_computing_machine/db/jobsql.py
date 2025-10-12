@@ -3,9 +3,9 @@ from typing import Optional
 
 from sqlmodel import Session, column, null, select, text, update
 
-from friendly_computing_machine.db.util import SessionManager
-from friendly_computing_machine.models.genai import GenAIText
-from friendly_computing_machine.models.slack import (
+from friendly_computing_machine.src.friendly_computing_machine.db.util import SessionManager
+from friendly_computing_machine.src.friendly_computing_machine.models.genai import GenAIText
+from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
     SlackChannel,
     SlackMessage,
     SlackTeam,

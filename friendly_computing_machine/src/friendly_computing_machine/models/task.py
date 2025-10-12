@@ -4,7 +4,7 @@ from datetime import datetime
 from sqlalchemy import func
 from sqlmodel import Field, Index
 
-from friendly_computing_machine.models.base import Base
+from friendly_computing_machine.src.friendly_computing_machine.models.base import Base
 
 
 # -----

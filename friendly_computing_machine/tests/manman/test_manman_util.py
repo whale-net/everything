@@ -1,6 +1,10 @@
-from external.manman_status_api.models import StatusType
-from friendly_computing_machine.bot.slack_enum import Emoji
-from friendly_computing_machine.manman.util import get_emoji_from_status_type
+from external.manman.status_api.models import StatusType
+from friendly_computing_machine.src.friendly_computing_machine.bot.slack_enum import (
+    Emoji,
+)
+from friendly_computing_machine.src.friendly_computing_machine.manman.util import (
+    get_emoji_from_status_type,
+)
 
 
 def test_get_emoji_from_status():

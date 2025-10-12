@@ -13,7 +13,7 @@ from temporalio.client import (
     ScheduleUpdateInput,
 )
 
-from friendly_computing_machine.temporal.util import get_temporal_queue_name
+from friendly_computing_machine.src.friendly_computing_machine.temporal.util import get_temporal_queue_name
 
 logger = logging.getLogger(__name__)
 
