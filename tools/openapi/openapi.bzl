@@ -1,6 +1,6 @@
 """Bazel rules for generating OpenAPI specifications from FastAPI apps."""
 
-def openapi_spec(name, app_target, module_path, app_variable="app", **kwargs):
+def openapi_spec(name, app_target, module_path, app_variable="app", domain=None, **kwargs):
     """
     Generate an OpenAPI specification from a FastAPI application.
     
@@ -11,6 +11,7 @@ def openapi_spec(name, app_target, module_path, app_variable="app", **kwargs):
         app_target: Label of the py_library or py_binary containing the FastAPI app
         module_path: Python module path to import (e.g., "demo.hello_fastapi.main")
         app_variable: Name of the FastAPI variable in the module (default: "app")
+        domain: Optional domain prefix for the output filename (e.g., "demo", "manman")
         **kwargs: Additional arguments passed to py_binary
     
     Example:
@@ -19,6 +20,7 @@ def openapi_spec(name, app_target, module_path, app_variable="app", **kwargs):
             app_target = ":my_api_lib",
             module_path = "mypackage.api.main",
             app_variable = "app",
+            domain = "demo",
         )
     """
     
@@ -87,9 +89,16 @@ if __name__ == "__main__":
     )
     
     # Run the generator and capture output
+    # Include domain in output filename to prevent conflicts between apps with same name in different domains
+    output_filename = name + ".json"
+    if domain:
+        # Extract app name from target name (remove _openapi_spec suffix if present)
+        app_name = name.replace("_openapi_spec", "")
+        output_filename = domain + "-" + app_name + "_openapi_spec.json"
+    
     native.genrule(
         name = name,
-        outs = [name + ".json"],
+        outs = [output_filename],
         cmd = "$(location :" + generator_name + ") > $@",
         tools = [":" + generator_name],
         visibility = kwargs.get("visibility", ["//visibility:public"]),

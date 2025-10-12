@@ -187,6 +187,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
             app_target = lib_target,
             module_path = module_path,
             app_variable = app_var,
+            domain = domain,
             visibility = ["//visibility:public"],
         )
         openapi_spec_target_ref = ":" + openapi_spec_target_name
