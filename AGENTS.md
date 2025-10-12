@@ -23,8 +23,8 @@ This repository implements true cross-compilation for Python apps using rules_py
 - Use `--platforms` flag to select target architecture (//tools:linux_x86_64 or //tools:linux_arm64)
 - Test cross-compilation with:
   ```bash
-  # The test has image as data dependency, just run it
-  bazel test //tools:test_cross_compilation --test_output=streamed
+  # The test has image as data dependency, just run it with the image-integration tag
+  bazel test --test_tag_filters=image-integration //... --test_output=streamed
   
   # To manually test images locally:
   # On M1/M2 Macs:
@@ -36,7 +36,7 @@ This repository implements true cross-compilation for Python apps using rules_py
   ```
   ```
 - CI automatically verifies cross-compilation on every PR
-- If `//tools:test_cross_compilation` fails, **DO NOT MERGE**
+- If image-integration tests fail, **DO NOT MERGE**
 
 ## 📋 Framework Overview
 
@@ -55,7 +55,7 @@ This repository implements true cross-compilation for Python apps using rules_py
 ├── tools/                   # Build and release tooling
 ├── docs/                    # Documentation (including CROSS_COMPILATION.md)
 ├── .github/                 # CI/CD workflows
-├── test_cross_compilation.py # CRITICAL: Cross-compilation verification
+├── tools/scripts/test_cross_compilation.sh # CRITICAL: Cross-compilation verification
 └── BUILD.bazel, MODULE.bazel # Bazel configuration
 ```
 

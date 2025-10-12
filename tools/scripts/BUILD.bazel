@@ -21,6 +21,7 @@ sh_test(
     tags = [
         "manual",  # Don't run with //...
         "integration",  # Integration test, not unit test
+        "image-integration",  # Image integration test for container architecture verification
         "no-cache",  # Always run, never cache
     ],
     timeout = "long",
