@@ -28,6 +28,7 @@ def openapi_spec(name, app_target, module_path, app_variable="app", **kwargs):
 import json
 import sys
 import importlib
+import inspect
 
 def main():
     try:
@@ -37,10 +38,17 @@ def main():
         # Get the FastAPI app or factory function
         app_or_factory = getattr(module, "{app_variable}")
         
-        # If it's callable (factory function), call it to get the app
-        if callable(app_or_factory):
+        # Check if it's a factory function (not a FastAPI instance)
+        # FastAPI instances are callable (ASGI apps), so we need to check the type
+        from fastapi import FastAPI
+        if isinstance(app_or_factory, FastAPI):
+            # It's already a FastAPI instance
+            app = app_or_factory
+        elif callable(app_or_factory) and inspect.isfunction(app_or_factory):
+            # It's a factory function, call it to get the app
             app = app_or_factory()
         else:
+            # Assume it's an app instance
             app = app_or_factory
         
         # Generate OpenAPI spec
