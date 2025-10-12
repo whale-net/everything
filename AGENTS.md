@@ -88,6 +88,48 @@ release_app(
 - **`version`**: Default version (optional, defaults to "latest")
 - **`registry`**: Container registry (optional, defaults to "ghcr.io")
 - **`custom_repo_name`**: Override default naming (optional)
+- **`dep_layers`**: Optional list of dependency layer configurations for optimized Docker caching (see below)
+
+#### Multi-Layer Docker Caching (NEW)
+
+The `release_app` macro supports explicit dependency layers for optimized Docker caching:
+
+```starlark
+# Create dependency layer py_library targets
+py_library(
+    name = "pip_deps_layer",
+    deps = ["@pypi//fastapi", "@pypi//uvicorn"],
+)
+
+py_library(
+    name = "internal_libs_layer",
+    deps = ["//libs/python"],
+)
+
+# Configure release_app with layers
+release_app(
+    name = "my-app",
+    language = "python",
+    domain = "demo",
+    description = "App with optimized layer caching",
+    dep_layers = [
+        {"name": "pip_deps", "targets": [":pip_deps_layer"]},
+        {"name": "internal_libs", "targets": [":internal_libs_layer"]},
+    ],
+)
+```
+
+**Benefits:**
+- Pip dependencies cached separately from app code
+- Only app layer rebuilt when code changes
+- Faster Docker pulls and pushes
+- Better CI/CD performance
+
+**Documentation:** See [`docs/LAYERED_CONTAINER_IMAGES.md`](docs/LAYERED_CONTAINER_IMAGES.md) for complete guide.
+
+**Examples:**
+- `demo/hello_fastapi/BUILD.bazel` - FastAPI app with pip deps layer
+- `demo/hello_python/BUILD.bazel` - Python app with internal libs layer
 
 #### Generated Artifacts
 The `release_app` macro automatically creates:
