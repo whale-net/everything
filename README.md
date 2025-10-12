@@ -589,7 +589,7 @@ The repository uses several configuration files for build and dependency managem
 **Key Configuration Details:**
 - Bazel uses Python version PY3 with symlink prefix `bazel-`
 - CI configuration includes aggressive remote caching (downloads all outputs) and test result caching
-- OCI images use Python 3.13-slim and Alpine 3.20 as base images with multi-platform support
+- OCI images use distroless/base-debian12 (~25MB) as base image with multi-platform support
 - **Remote cache support**: Optional HTTP-based remote caching with basic authentication
 
 ### Remote Cache Configuration
@@ -732,8 +732,11 @@ bazel run //tools:release -- build hello-python
 ```
 
 ### Base Images & Architecture
-- **Python**: Uses `python:3.13-slim` (Python 3.13.13 on Debian 12)
-- **Go**: Uses `alpine:3.20` (Alpine 3.20.3 for minimal size)
+- **Python**: Uses `gcr.io/distroless/base-debian12` (~25MB, optimized from 117MB Ubuntu)
+  - Includes glibc, SSL/TLS certificates, and busybox shell
+  - Minimal attack surface with no package manager
+  - Bazel provides hermetic Python 3.13 toolchain
+- **Go**: Uses distroless base (minimal size with glibc)
 - **Platforms**: Full support for both `linux/amd64` and `linux/arm64`
 - **Cross-compilation**: Automatically handles platform-specific builds
 

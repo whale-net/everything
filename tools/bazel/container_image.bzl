@@ -40,7 +40,7 @@ def _get_binary_name(binary):
 def container_image(
     name,
     binary,
-    base = "@ubuntu_base",
+    base = "@distroless_base",
     env = None,
     entrypoint = None,
     language = None,
@@ -73,7 +73,7 @@ def container_image(
     Args:
         name: Image name
         binary: Binary target to containerize (single target, built for current platform)
-        base: Base image (defaults to ubuntu:24.04)
+        base: Base image (defaults to distroless/base-debian12 ~25MB)
         env: Environment variables dict
         entrypoint: Override entrypoint (auto-detected from language)
         language: Language of the binary ("python" or "go") - REQUIRED
@@ -140,7 +140,7 @@ def container_image(
 def multiplatform_image(
     name,
     binary,
-    base = "@ubuntu_base",
+    base = "@distroless_base",
     registry = "ghcr.io",
     repository = None,
     image_name = None,
@@ -186,7 +186,7 @@ def multiplatform_image(
     Args:
         name: Base name for all generated targets
         binary: Single binary target (built for different platforms via --platforms flag)
-        base: Base image (defaults to ubuntu:24.04)
+        base: Base image (defaults to distroless/base-debian12 ~25MB)
         registry: Container registry (defaults to ghcr.io)
         repository: Organization/namespace (e.g., "whale-net")
         image_name: Image name in domain-app format (e.g., "demo-my_app") - REQUIRED

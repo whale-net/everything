@@ -16,25 +16,26 @@ bazel_dep(name = "rules_pkg", version = "1.0.1")
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "rules_java", version = "8.6.3")
 
-# OCI/Docker setup - Ubuntu base image for all containers
+# OCI/Docker setup - Distroless base image for all containers
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 
-# Ubuntu base - default base image for all containers (117MB)
+# Distroless base-debian12 - default base image for all containers (~25MB, down from 117MB)
+# This image includes:
+# - glibc and essential runtime libraries
+# - SSL/TLS certificates (ca-certificates)
+# - Busybox shell (/bin/sh) for entrypoint scripts
+# - No package manager, minimal attack surface
 # Uses Bazel's hermetic Python toolchain, so no Python installation needed in base image
 oci.pull(
-    name = "ubuntu_base",
-    digest = "sha256:728785b59223d755e3e5c5af178fab1be7031f3522c5ccd7a0b32b80d8248123",
-    image = "ubuntu:24.04",
+    name = "distroless_base",
+    digest = "sha256:786007f631d22e8a1a5084c636fa3d8f0a851e441a52ab28d8d6c89d99f8d0d7",
+    image = "gcr.io/distroless/base-debian12",
     platforms = [
         "linux/amd64",
-        "linux/arm/v7",
-        "linux/arm64/v8",
-        "linux/ppc64le",
-        "linux/riscv64",
-        "linux/s390x",
+        "linux/arm64",
     ],
 )
-use_repo(oci, "ubuntu_base", "ubuntu_base_linux_amd64", "ubuntu_base_linux_arm64_v8", "ubuntu_base_linux_arm_v7", "ubuntu_base_linux_ppc64le", "ubuntu_base_linux_riscv64", "ubuntu_base_linux_s390x")
+use_repo(oci, "distroless_base")
 
 # CA certificates from Debian (architecture-independent .deb file)
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
