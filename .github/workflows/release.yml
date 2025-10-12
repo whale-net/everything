@@ -426,7 +426,7 @@ jobs:
     name: Create GitHub Releases
     runs-on: ubuntu-latest
     needs: [plan-release, release, build-openapi-specs]
-    if: always() && !cancelled() && needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null && github.event.inputs.dry_run == 'false' && needs.release.result == 'success'
+    if: always() && !cancelled() && needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null && github.event.inputs.dry_run == 'false' && needs.release.result == 'success' && (needs.build-openapi-specs.result == 'success' || needs.build-openapi-specs.result == 'skipped')
     steps:
     - name: Checkout code
       uses: actions/checkout@v4

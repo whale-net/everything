@@ -364,6 +364,16 @@ Multi-platform images are built and pushed with multiple tags:
 - Latest: `ghcr.io/OWNER/domain-app:latest`
 - Commit-specific: `ghcr.io/OWNER/domain-app:abc123def`
 
+#### 5. OpenAPI Spec Validation
+For FastAPI apps with `fastapi_app` configured in `release_app`:
+- OpenAPI specs are automatically built in a separate job (`build-openapi-specs`)
+- If an app has `openapi_spec_target` in its metadata, the spec **must** be successfully built
+- GitHub release creation will **fail** if:
+  - The app expects an OpenAPI spec (has `openapi_spec_target` in metadata)
+  - But the spec file is not found in the artifacts directory
+- This ensures that OpenAPI spec build failures are treated as release-blocking issues
+- Apps without `fastapi_app` configured are not affected and release normally
+
 ## 🔍 Agent Guidelines
 
 ### Code Analysis

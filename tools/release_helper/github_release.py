@@ -641,6 +641,10 @@ def create_releases_for_apps_with_notes(
             # Upload OpenAPI spec if available and release was created successfully
             if result and openapi_specs_dir and result.get('id'):
                 openapi_spec_file = Path(openapi_specs_dir) / f"{domain}-{app_name}-openapi.json"
+                
+                # Check if this app should have an OpenAPI spec (has openapi_spec_target in metadata)
+                app_expects_openapi = metadata.get('openapi_spec_target') is not None
+                
                 if openapi_spec_file.exists():
                     try:
                         print(f"Uploading OpenAPI spec for {app_name}...")
@@ -656,7 +660,14 @@ def create_releases_for_apps_with_notes(
                         print(f"⚠️  Failed to upload OpenAPI spec for {app_name}: {e}", file=sys.stderr)
                         # Don't fail the release if asset upload fails
                 else:
-                    print(f"ℹ️  No OpenAPI spec found for {app_name} at {openapi_spec_file}")
+                    if app_expects_openapi:
+                        # This app has fastapi_app configured, so OpenAPI spec was expected
+                        print(f"❌ OpenAPI spec was expected but not found for {app_name} at {openapi_spec_file}", file=sys.stderr)
+                        print(f"   App has openapi_spec_target configured: {metadata.get('openapi_spec_target')}", file=sys.stderr)
+                        print(f"   This indicates the OpenAPI spec build failed or was not run", file=sys.stderr)
+                        results[app_name] = None  # Mark release as failed
+                    else:
+                        print(f"ℹ️  No OpenAPI spec found for {app_name} (none expected)")
             
         except Exception as e:
             print(f"❌ Failed to process {app_name}: {e}", file=sys.stderr)
