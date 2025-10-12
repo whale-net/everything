@@ -2,10 +2,19 @@ import logging
 
 from slack_bolt import Ack
 
-from friendly_computing_machine.bot.app import SlackWebClientFCM, app
-from friendly_computing_machine.bot.modal_schemas import ServerActionModal
-from friendly_computing_machine.bot.slack_payloads import ViewSubmissionPayload
-from friendly_computing_machine.manman.api import OldManManAPI
+from friendly_computing_machine.src.friendly_computing_machine.bot.app import (
+    SlackWebClientFCM,
+    app,
+)
+from friendly_computing_machine.src.friendly_computing_machine.bot.modal_schemas import (
+    ServerActionModal,
+)
+from friendly_computing_machine.src.friendly_computing_machine.bot.slack_payloads import (
+    ViewSubmissionPayload,
+)
+from friendly_computing_machine.src.friendly_computing_machine.manman.api import (
+    ManManExperienceAPI,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +31,9 @@ def handle_server_select_submission(ack: Ack, body, client: SlackWebClientFCM, l
 
         server_config_id = int(payload.selected_server)
         logger.info(f"Server selected: {server_config_id}")
-        manman = OldManManAPI.get_api()
+        manman = ManManExperienceAPI.get_api()
         # TODO - add endpoint for just config info by id
-        configs = manman.get_game_servers_host_gameserver_get()
+        configs = manman.get_game_servers_gameserver_get()
         config = next(
             (
                 config

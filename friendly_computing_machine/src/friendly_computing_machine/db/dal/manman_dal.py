@@ -6,8 +6,11 @@ from typing import Optional
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, select
 
-from friendly_computing_machine.db.util import SessionManager, db_update
-from friendly_computing_machine.models.manman import (
+from friendly_computing_machine.src.friendly_computing_machine.db.util import (
+    SessionManager,
+    db_update,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.manman import (
     ManManStatusUpdate,
     ManManStatusUpdateCreate,
 )

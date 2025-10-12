@@ -5,8 +5,10 @@ from typing import Optional
 
 from sqlmodel import Session, and_, select
 
-from friendly_computing_machine.db.util import SessionManager
-from friendly_computing_machine.models.task import (
+from friendly_computing_machine.src.friendly_computing_machine.db.util import (
+    SessionManager,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.task import (
     Task,
     TaskCreate,
     TaskInstance,

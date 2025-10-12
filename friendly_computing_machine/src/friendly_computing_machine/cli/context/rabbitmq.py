@@ -4,7 +4,9 @@ from typing import Annotated, Optional
 
 import typer
 
-from friendly_computing_machine.rabbitmq.util import init_rabbitmq
+from friendly_computing_machine.src.friendly_computing_machine.rabbitmq.util import (
+    init_rabbitmq,
+)
 
 T_rabbitmq_host = Annotated[str, typer.Option(..., envvar="FCM_RABBITMQ_HOST")]
 T_rabbitmq_port = Annotated[

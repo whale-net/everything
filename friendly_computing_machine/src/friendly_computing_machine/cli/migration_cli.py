@@ -3,10 +3,17 @@ from typing import Optional
 
 import typer
 
-from friendly_computing_machine.cli.context.db import FILENAME as DB_FILENAME
-from friendly_computing_machine.cli.context.db import T_database_url, setup_db
-from friendly_computing_machine.cli.context.log import setup_logging
-from friendly_computing_machine.db.util import (
+from friendly_computing_machine.src.friendly_computing_machine.cli.context.db import (
+    FILENAME as DB_FILENAME,
+)
+from friendly_computing_machine.src.friendly_computing_machine.cli.context.db import (
+    T_database_url,
+    setup_db,
+)
+from friendly_computing_machine.src.friendly_computing_machine.cli.context.log import (
+    setup_logging,
+)
+from friendly_computing_machine.src.friendly_computing_machine.db.util import (
     create_migration,
     run_downgrade,
     run_migration,
@@ -17,7 +24,7 @@ from friendly_computing_machine.db.util import (
 # import friendly_computing_machine.models.user
 # import friendly_computing_machine.models.post
 # Add your model imports here:
-from friendly_computing_machine.models import (  # noqa: F401
+from friendly_computing_machine.src.friendly_computing_machine.models import (  # noqa: F401
     base,
     genai,
     manman,

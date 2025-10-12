@@ -1,9 +1,15 @@
 import logging
 
-from friendly_computing_machine.bot.app import get_slack_web_client
-from friendly_computing_machine.bot.subscribe.service import ManManSubscribeService
-from friendly_computing_machine.manman.api import ManManStatusAPI
-from friendly_computing_machine.rabbitmq.util import (
+from friendly_computing_machine.src.friendly_computing_machine.bot.app import (
+    get_slack_web_client,
+)
+from friendly_computing_machine.src.friendly_computing_machine.bot.subscribe.service import (
+    ManManSubscribeService,
+)
+from friendly_computing_machine.src.friendly_computing_machine.manman.api import (
+    ManManStatusAPI,
+)
+from friendly_computing_machine.src.friendly_computing_machine.rabbitmq.util import (
     get_rabbitmq_connection,
 )
 

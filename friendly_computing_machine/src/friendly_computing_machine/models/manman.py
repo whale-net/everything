@@ -2,8 +2,8 @@ import datetime
 
 from sqlmodel import Field, Index, UniqueConstraint
 
-from external.manman_status_api.models.external_status_info import ExternalStatusInfo
-from friendly_computing_machine.models.base import Base
+from external.manman.status_api.models.external_status_info import ExternalStatusInfo
+from friendly_computing_machine.src.friendly_computing_machine.models.base import Base
 
 
 class ManManStatusUpdateBase(Base):

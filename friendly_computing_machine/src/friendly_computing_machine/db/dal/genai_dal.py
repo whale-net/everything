@@ -6,8 +6,13 @@ from typing import Optional
 
 from sqlmodel import Session, select
 
-from friendly_computing_machine.db.util import SessionManager
-from friendly_computing_machine.models.genai import GenAIText, GenAITextCreate
+from friendly_computing_machine.src.friendly_computing_machine.db.util import (
+    SessionManager,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.genai import (
+    GenAIText,
+    GenAITextCreate,
+)
 
 logger = logging.getLogger(__name__)
 

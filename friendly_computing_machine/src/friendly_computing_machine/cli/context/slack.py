@@ -4,7 +4,9 @@ from typing import Annotated
 
 import typer
 
-from friendly_computing_machine.bot.app import init_web_client
+from friendly_computing_machine.src.friendly_computing_machine.bot.app import (
+    init_web_client,
+)
 
 # Slack App Token - for Socket Mode (real-time events)
 T_slack_app_token = Annotated[str, typer.Option(..., envvar="SLACK_APP_TOKEN")]

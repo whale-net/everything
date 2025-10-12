@@ -3,12 +3,20 @@ import re
 
 from slack_bolt import Ack
 
-from external.manman_experience_api.models import StdinCommandRequest
-from friendly_computing_machine.bot.app import app
-from friendly_computing_machine.bot.slack_client import SlackWebClientFCM
-from friendly_computing_machine.bot.slack_enum import SlackActionRegistry
-from friendly_computing_machine.bot.slack_payloads import ActionPayload
-from friendly_computing_machine.manman.api import ManManExperienceAPI, OldManManAPI
+from external.manman.experience_api.models import StdinCommandRequest
+from friendly_computing_machine.src.friendly_computing_machine.bot.app import app
+from friendly_computing_machine.src.friendly_computing_machine.bot.slack_client import (
+    SlackWebClientFCM,
+)
+from friendly_computing_machine.src.friendly_computing_machine.bot.slack_enum import (
+    SlackActionRegistry,
+)
+from friendly_computing_machine.src.friendly_computing_machine.bot.slack_payloads import (
+    ActionPayload,
+)
+from friendly_computing_machine.src.friendly_computing_machine.manman.api import (
+    ManManExperienceAPI,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +28,9 @@ def handle_start_server(ack: Ack, body, client: SlackWebClientFCM, logger):
     logger.info("Start server clicked")
     # Use the ManManAPI class to get the client
     try:
-        mapi = OldManManAPI.get_api()
+        mapi = ManManExperienceAPI.get_api()
         game_server_config_id = int(payload.action_body)
-        mapi.start_game_server_host_gameserver_id_start_post(game_server_config_id)
+        mapi.start_game_server_gameserver_id_start_post(game_server_config_id)
         logger.info("started %s", game_server_config_id)
     except ValueError as e:
         logger.error(f"Failed to get ManMan API client: {e}")
@@ -39,9 +47,9 @@ def handle_stop_server(ack: Ack, body, client: SlackWebClientFCM, logger):
     payload = ActionPayload.from_dict(body)
     logger.info("Stop server clicked")
     try:
-        mapi = OldManManAPI.get_api()
+        mapi = ManManExperienceAPI.get_api()
         game_server_config_id = int(payload.action_body)
-        mapi.stop_game_server_host_gameserver_id_stop_post(game_server_config_id)
+        mapi.stop_game_server_gameserver_id_stop_post(game_server_config_id)
     except Exception as e:
         logger.exception(f"Failed to get ManMan API client: {e}")
         # Optionally inform the user about the configuration issue

@@ -5,9 +5,15 @@ from typing import Optional
 
 from sqlmodel import Session, and_, or_, select
 
-from friendly_computing_machine.db.util import SessionManager, db_update
-from friendly_computing_machine.models.music_poll import MusicPoll, MusicPollInstance
-from friendly_computing_machine.models.slack import (
+from friendly_computing_machine.src.friendly_computing_machine.db.util import (
+    SessionManager,
+    db_update,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.music_poll import (
+    MusicPoll,
+    MusicPollInstance,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
     SlackChannel,
     SlackCommand,
     SlackCommandCreate,

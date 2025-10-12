@@ -1,23 +1,29 @@
 # if these ever need to be broken up, we can move it into the class for tighter scope
 from typing import Generic, Type, TypeVar
 
-from external.manman_experience_api.api.default_api import (
+from external.manman.experience_api.api.default_api import (
     DefaultApi as ManManExperienceDefaultApi,
 )
-from external.manman_experience_api.api_client import (
+from external.manman.experience_api.api_client import (
     ApiClient as ManManExperienceApiClient,
 )
-from external.manman_experience_api.configuration import (
+from external.manman.experience_api.configuration import (
     Configuration as ManManExperienceConfiguration,
 )
-from external.manman_status_api.api.default_api import DefaultApi as StatusDefaultApi
-from external.manman_status_api.api_client import ApiClient as StatusApiClient
-from external.manman_status_api.configuration import (
+from external.manman.status_api.api.default_api import DefaultApi as StatusDefaultApi
+from external.manman.status_api.api_client import ApiClient as StatusApiClient
+from external.manman.status_api.configuration import (
     Configuration as StatusConfiguration,
 )
-from external.old_manman_api.api.default_api import DefaultApi as OldDefaultApi
-from external.old_manman_api.api_client import ApiClient as OldApiClient
-from external.old_manman_api.configuration import Configuration as OldConfiguration
+from external.manman.worker_dal_api.api.default_api import (
+    DefaultApi as WorkerDalDefaultApi,
+)
+from external.manman.worker_dal_api.api_client import (
+    ApiClient as WorkerDalApiClient,
+)
+from external.manman.worker_dal_api.configuration import (
+    Configuration as WorkerDalConfiguration,
+)
 
 T_Configuration = TypeVar("T_Configuration")
 T_Client = TypeVar("T_Client")
@@ -58,12 +64,6 @@ class BaseManManAPI(Generic[T_Configuration, T_Client, T_API]):
         return cls._api_type(api_client=cls._get_client())
 
 
-class OldManManAPI(BaseManManAPI[OldConfiguration, OldApiClient, OldDefaultApi]):
-    _configuration_type = OldConfiguration
-    _api_client_type = OldApiClient
-    _api_type = OldDefaultApi
-
-
 class ManManStatusAPI(
     BaseManManAPI[StatusConfiguration, StatusApiClient, StatusDefaultApi]
 ):
@@ -82,3 +82,11 @@ class ManManExperienceAPI(
     _configuration_type = ManManExperienceConfiguration
     _api_client_type = ManManExperienceApiClient
     _api_type = ManManExperienceDefaultApi
+
+
+class ManManWorkerDalAPI(
+    BaseManManAPI[WorkerDalConfiguration, WorkerDalApiClient, WorkerDalDefaultApi]
+):
+    _configuration_type = WorkerDalConfiguration
+    _api_client_type = WorkerDalApiClient
+    _api_type = WorkerDalDefaultApi

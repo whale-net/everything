@@ -2,7 +2,9 @@
 
 from alembic import context
 
-from friendly_computing_machine.models.slack import Base
+from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
+    Base,
+)
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

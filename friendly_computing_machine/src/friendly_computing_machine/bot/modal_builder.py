@@ -1,11 +1,15 @@
 from slack_sdk.models.blocks import Option
 
-from friendly_computing_machine.bot.modal_schemas import ServerSelectModal
-from friendly_computing_machine.manman.api import OldManManAPI
+from friendly_computing_machine.src.friendly_computing_machine.bot.modal_schemas import (
+    ServerSelectModal,
+)
+from friendly_computing_machine.src.friendly_computing_machine.manman.api import (
+    ManManExperienceAPI,
+)
 
 
 def build_server_select_modal() -> ServerSelectModal:
-    manman = OldManManAPI.get_api()
+    manman = ManManExperienceAPI.get_api()
     # active_server_response = (
     #     manman.get_active_game_server_instances_host_gameserver_instances_active_get()
     # )
@@ -14,7 +18,7 @@ def build_server_select_modal() -> ServerSelectModal:
     # )
     # configs: list[GameServerConfig] = active_server_response.configs
     # config_map = {config.game_server_config_id: config for config in configs}
-    configs = manman.get_game_servers_host_gameserver_get()
+    configs = manman.get_game_servers_gameserver_get()
 
     if len(configs) == 0:
         options = [

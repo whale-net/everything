@@ -5,14 +5,20 @@ from threading import Lock
 
 from slack_bolt import App
 
-from friendly_computing_machine.bot.slack_client import SlackWebClientFCM
-from friendly_computing_machine.db.dal import (
+from friendly_computing_machine.src.friendly_computing_machine.bot.slack_client import (
+    SlackWebClientFCM,
+)
+from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     get_bot_slack_user_slack_ids,
     get_music_polls,
     get_slack_channel,
 )
-from friendly_computing_machine.models.music_poll import MusicPoll
-from friendly_computing_machine.models.slack import SlackChannel
+from friendly_computing_machine.src.friendly_computing_machine.models.music_poll import (
+    MusicPoll,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
+    SlackChannel,
+)
 
 __GLOBALS = {}
 

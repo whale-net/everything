@@ -38,6 +38,9 @@ py_library(
         "@pypi//:sqlmodel",
         "@pypi//:temporalio",
         "@pypi//:typer",
+        "//manman:experience_api_client",
+        "//manman:status_api_client",
+        "//manman:worker_dal_api_client",
     ],
 )
 

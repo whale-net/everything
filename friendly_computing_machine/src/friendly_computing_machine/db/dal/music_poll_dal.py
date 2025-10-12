@@ -6,8 +6,11 @@ from typing import Optional
 
 from sqlmodel import Session, and_, exists, not_, null, select
 
-from friendly_computing_machine.db.util import SessionManager, db_update
-from friendly_computing_machine.models.music_poll import (
+from friendly_computing_machine.src.friendly_computing_machine.db.util import (
+    SessionManager,
+    db_update,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.music_poll import (
     MusicPoll,
     MusicPollCreate,
     MusicPollInstance,

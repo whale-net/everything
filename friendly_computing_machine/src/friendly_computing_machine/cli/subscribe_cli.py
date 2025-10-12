@@ -2,18 +2,31 @@ import logging
 
 import typer
 
-from friendly_computing_machine.bot.subscribe.main import run_manman_subscribe
-from friendly_computing_machine.cli.context.app_env import FILENAME as APP_ENV_FILENAME
-from friendly_computing_machine.cli.context.app_env import T_app_env, setup_app_env
-from friendly_computing_machine.cli.context.db import FILENAME as DB_FILENAME
-from friendly_computing_machine.cli.context.db import T_database_url, setup_db
-from friendly_computing_machine.cli.context.log import setup_logging
-from friendly_computing_machine.cli.context.manman_host import (
+from friendly_computing_machine.src.friendly_computing_machine.bot.subscribe.main import (
+    run_manman_subscribe,
+)
+from friendly_computing_machine.src.friendly_computing_machine.cli.context.app_env import (
+    FILENAME as APP_ENV_FILENAME,
+)
+from friendly_computing_machine.src.friendly_computing_machine.cli.context.app_env import (
+    T_app_env,
+    setup_app_env,
+)
+from friendly_computing_machine.src.friendly_computing_machine.cli.context.db import (
+    FILENAME as DB_FILENAME,
+)
+from friendly_computing_machine.src.friendly_computing_machine.cli.context.db import (
+    T_database_url,
+    setup_db,
+)
+from friendly_computing_machine.src.friendly_computing_machine.cli.context.log import (
+    setup_logging,
+)
+from friendly_computing_machine.src.friendly_computing_machine.cli.context.manman_host import (
     T_manman_host_url,
     setup_manman_status_api,
-    setup_old_manman_api,
 )
-from friendly_computing_machine.cli.context.rabbitmq import (
+from friendly_computing_machine.src.friendly_computing_machine.cli.context.rabbitmq import (
     T_rabbitmq_enable_ssl,
     T_rabbitmq_host,
     T_rabbitmq_password,
@@ -23,12 +36,16 @@ from friendly_computing_machine.cli.context.rabbitmq import (
     T_rabbitmq_vhost,
     setup_rabbitmq,
 )
-from friendly_computing_machine.cli.context.slack import (
+from friendly_computing_machine.src.friendly_computing_machine.cli.context.slack import (
     T_slack_bot_token,
     setup_slack_web_client_only,
 )
-from friendly_computing_machine.db.util import should_run_migration
-from friendly_computing_machine.health import run_health_server
+from friendly_computing_machine.src.friendly_computing_machine.db.util import (
+    should_run_migration,
+)
+from friendly_computing_machine.src.friendly_computing_machine.health import (
+    run_health_server,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +79,6 @@ def callback(
     setup_logging(ctx, log_otlp=log_otlp)
     setup_app_env(ctx, app_env)
     setup_slack_web_client_only(ctx, slack_bot_token)
-    setup_old_manman_api(ctx, manman_host_url)
     setup_manman_status_api(ctx, manman_host_url)
     setup_rabbitmq(
         ctx,

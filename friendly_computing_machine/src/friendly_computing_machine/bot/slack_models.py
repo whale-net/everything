@@ -21,14 +21,19 @@ from slack_sdk.models.blocks import (
     VideoBlock,
 )
 
-from external.manman_status_api.models.external_status_info import ExternalStatusInfo
-from external.manman_status_api.models.status_type import StatusType
-from friendly_computing_machine.bot.slack_enum import Emoji, SlackActionRegistry
-from friendly_computing_machine.manman.util import (
+from external.manman.status_api.models.external_status_info import ExternalStatusInfo
+from external.manman.status_api.models.status_type import StatusType
+from friendly_computing_machine.src.friendly_computing_machine.bot.slack_enum import (
+    Emoji,
+    SlackActionRegistry,
+)
+from friendly_computing_machine.src.friendly_computing_machine.manman.util import (
     ACTIVE_STATUSES,
     get_emoji_from_status_type,
 )
-from friendly_computing_machine.models.slack import SlackSpecialChannelType
+from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
+    SlackSpecialChannelType,
+)
 
 logger = logging.getLogger(__name__)
 

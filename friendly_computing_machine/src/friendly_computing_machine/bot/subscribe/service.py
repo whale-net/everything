@@ -7,13 +7,19 @@ from typing import Optional
 
 from amqpstorm import Channel, Connection
 
-from external.manman_status_api.api.default_api import DefaultApi as ManManStatusAPI
-from external.manman_status_api.models.external_status_info import ExternalStatusInfo
-from external.manman_status_api.models.status_type import StatusType
-from friendly_computing_machine.bot.app import SlackWebClientFCM
-from friendly_computing_machine.bot.slack_models import create_manman_status_blocks
-from friendly_computing_machine.bot.util import slack_send_message
-from friendly_computing_machine.db.dal import (
+from external.manman.status_api.api.default_api import DefaultApi as ManManStatusAPI
+from external.manman.status_api.models.external_status_info import ExternalStatusInfo
+from external.manman.status_api.models.status_type import StatusType
+from friendly_computing_machine.src.friendly_computing_machine.bot.app import (
+    SlackWebClientFCM,
+)
+from friendly_computing_machine.src.friendly_computing_machine.bot.slack_models import (
+    create_manman_status_blocks,
+)
+from friendly_computing_machine.src.friendly_computing_machine.bot.util import (
+    slack_send_message,
+)
+from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     # get_manman_status_update_from_create,  # DEAD CODE - unused import
     get_slack_message_from_id,  # TODO - be less lazy with this
     get_slack_special_channel_type_from_name,
@@ -21,15 +27,19 @@ from friendly_computing_machine.db.dal import (
     # insert_manman_status_update,  # DEAD CODE - unused import, using upsert instead
     update_manman_status_update,
 )
-from friendly_computing_machine.db.dal.manman_dal import upsert_manman_status_update
-from friendly_computing_machine.models.manman import (
+from friendly_computing_machine.src.friendly_computing_machine.db.dal.manman_dal import (
+    upsert_manman_status_update,
+)
+from friendly_computing_machine.src.friendly_computing_machine.models.manman import (
     ManManStatusUpdate,
     ManManStatusUpdateCreate,
 )
-from friendly_computing_machine.models.slack import (
+from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
     SlackMessage,
 )
-from friendly_computing_machine.util import datetime_to_ts
+from friendly_computing_machine.src.friendly_computing_machine.util import (
+    datetime_to_ts,
+)
 
 logger = logging.getLogger(__name__)
 
