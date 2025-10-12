@@ -30,19 +30,31 @@ app = typer.Typer(help="Release helper for Everything monorepo")
 
 
 @app.command()
-def list_apps():
+def list_apps(
+    format: Annotated[Optional[str], typer.Option(help="Output format (text or json)")] = "text",
+):
     """List all apps with release metadata."""
     apps = list_all_apps()
-    for app_info in apps:
-        typer.echo(f"{app_info['name']} (domain: {app_info['domain']}, target: {app_info['bazel_target']})")
+    if format == "json":
+        import json
+        typer.echo(json.dumps(apps, indent=2))
+    else:
+        for app_info in apps:
+            typer.echo(f"{app_info['name']} (domain: {app_info['domain']}, target: {app_info['bazel_target']})")
 
 
 @app.command()
-def list():
+def list(
+    format: Annotated[Optional[str], typer.Option(help="Output format (text or json)")] = "text",
+):
     """Alias for list-apps. List all apps with release metadata."""
     apps = list_all_apps()
-    for app_info in apps:
-        typer.echo(f"{app_info['name']} (domain: {app_info['domain']}, target: {app_info['bazel_target']})")
+    if format == "json":
+        import json
+        typer.echo(json.dumps(apps, indent=2))
+    else:
+        for app_info in apps:
+            typer.echo(f"{app_info['name']} (domain: {app_info['domain']}, target: {app_info['bazel_target']})")
 
 
 @app.command()

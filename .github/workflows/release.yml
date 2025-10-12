@@ -316,34 +316,34 @@ jobs:
       run: |
         echo "Checking if $APP has OpenAPI spec target..."
         
-        # Get app metadata to check for OpenAPI spec
-        METADATA=$(bazel run --config=ci //tools:release -- list-apps | grep "^$APP " | head -n1)
-        if [[ -n "$METADATA" ]]; then
-          DOMAIN=$(echo "$METADATA" | sed 's/.*domain: \([^,]*\).*/\1/')
+        # Build release helper to query metadata
+        bazel build --config=ci //tools:release
+        RELEASE_HELPER="$(bazel info bazel-bin --config=ci)/tools/release_helper/release_helper"
+        
+        # Get app metadata including OpenAPI spec target if available
+        METADATA_JSON=$("$RELEASE_HELPER" list-apps --format json | jq -r ".[] | select(.name == \"$APP\")")
+        
+        if [[ -z "$METADATA_JSON" ]]; then
+          echo "Could not find metadata for $APP"
+          echo "has_spec=false" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+        
+        # Extract domain and check for OpenAPI spec target
+        DOMAIN=$(echo "$METADATA_JSON" | jq -r '.domain')
+        OPENAPI_TARGET=$(echo "$METADATA_JSON" | jq -r '.openapi_spec_target // empty')
+        
+        # Set domain output for use in upload step
+        echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
+        
+        if [[ -n "$OPENAPI_TARGET" && "$OPENAPI_TARGET" != "null" ]]; then
+          echo "✅ Found OpenAPI spec target: $OPENAPI_TARGET"
+          echo "Building OpenAPI spec..."
           
-          # Try to find the app's Bazel target
-          APP_TARGET=$(bazel query "attr('name', '${APP}', kind('py_binary', //...))" 2>/dev/null | head -n1 || echo "")
-          
-          if [[ -z "$APP_TARGET" ]]; then
-            echo "Could not find Bazel target for $APP, skipping OpenAPI spec generation"
-            exit 0
-          fi
-          
-          # Extract package path from target (e.g., //demo/hello_fastapi:hello-fastapi -> //demo/hello_fastapi)
-          PACKAGE_PATH=$(echo "$APP_TARGET" | sed 's#:[^:]*$##')
-          
-          # Check if OpenAPI spec target exists
-          OPENAPI_TARGET="${PACKAGE_PATH}:${APP}_openapi_spec"
-          
-          if bazel query "$OPENAPI_TARGET" &>/dev/null; then
-            echo "✅ Found OpenAPI spec target: $OPENAPI_TARGET"
-            echo "Building OpenAPI spec..."
-            
-            # Build the OpenAPI spec
-            bazel build --config=ci "$OPENAPI_TARGET"
-            
-            # Find the generated spec file
-            SPEC_FILE=$(bazel info bazel-bin --config=ci)/${OPENAPI_TARGET#//}/openapi_spec.json
+          # Build the OpenAPI spec
+          if bazel build --config=ci "$OPENAPI_TARGET"; then
+            # Find the generated spec file - it's named {target_name}.json
+            SPEC_FILE=$(bazel info bazel-bin --config=ci)/${OPENAPI_TARGET#//}.json
             SPEC_FILE=$(echo "$SPEC_FILE" | sed 's#:#/#')
             
             if [[ -f "$SPEC_FILE" ]]; then
@@ -360,11 +360,11 @@ jobs:
               echo "has_spec=false" >> $GITHUB_OUTPUT
             fi
           else
-            echo "ℹ️  No OpenAPI spec target found for $APP (not a FastAPI app)"
+            echo "⚠️ Failed to build OpenAPI spec for $APP"
             echo "has_spec=false" >> $GITHUB_OUTPUT
           fi
         else
-          echo "Warning: Could not determine domain for $APP"
+          echo "ℹ️  No OpenAPI spec target found for $APP (not a FastAPI app)"
           echo "has_spec=false" >> $GITHUB_OUTPUT
         fi
     
@@ -373,7 +373,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: openapi-spec-${{ matrix.app }}
-        path: /tmp/openapi-specs/${{ steps.release-notes.outputs.domain }}-${{ matrix.app }}-openapi.json
+        path: /tmp/openapi-specs/${{ steps.openapi-spec.outputs.domain }}-${{ matrix.app }}-openapi.json
         if-no-files-found: ignore
 
   create-github-releases:

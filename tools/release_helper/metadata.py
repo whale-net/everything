@@ -44,7 +44,7 @@ def list_all_apps() -> List[Dict[str, str]]:
     """List all apps in the monorepo that have release metadata.
     
     Returns:
-        List of dicts with 'bazel_target', 'name', and 'domain' for each app
+        List of dicts with full metadata for each app
     """
     # Query for all metadata targets
     result = run_bazel(["query", "kind(app_metadata, //...)", "--output=label"])
@@ -52,14 +52,12 @@ def list_all_apps() -> List[Dict[str, str]]:
     apps = []
     for line in result.stdout.strip().split('\n'):
         if line and '_metadata' in line:
-            # Get metadata to extract app name and domain
+            # Get metadata to extract app info
             try:
                 metadata = get_app_metadata(line)
-                apps.append({
-                    'bazel_target': line,
-                    'name': metadata['name'],
-                    'domain': metadata['domain']
-                })
+                # Add the bazel_target to the metadata
+                metadata['bazel_target'] = line
+                apps.append(metadata)
             except Exception as e:
                 print(f"Warning: Could not get metadata for {line}: {e}")
                 continue
