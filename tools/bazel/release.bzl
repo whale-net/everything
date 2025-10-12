@@ -47,6 +47,10 @@ def _app_metadata_impl(ctx):
     if ctx.attr.args:
         metadata["args"] = ctx.attr.args
     
+    # Add OpenAPI spec target if provided
+    if ctx.attr.openapi_spec_target:
+        metadata["openapi_spec_target"] = str(ctx.attr.openapi_spec_target.label)
+    
     output = ctx.actions.declare_file(ctx.label.name + "_metadata.json")
     ctx.actions.write(
         output = output,
@@ -77,6 +81,7 @@ app_metadata = rule(
         "ingress_tls_secret": attr.string(default = ""),
         "command": attr.string_list(default = []),
         "args": attr.string_list(default = []),
+        "openapi_spec_target": attr.label(default = None),
     },
 )
 
@@ -157,6 +162,35 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     # All platforms are built from the same sources, so one reference is enough
     binary_target_ref = base_label
     
+    # Auto-generate OpenAPI spec for FastAPI apps (before metadata creation)
+    openapi_spec_target_ref = None
+    if fastapi_app and language == "python":
+        # Parse module:variable syntax
+        if ":" in fastapi_app:
+            module_path, app_var = fastapi_app.split(":", 1)
+        else:
+            module_path = fastapi_app
+            app_var = "app"
+        
+        # For OpenAPI generation, we need a library target, not a binary
+        # Try to find a corresponding _lib target, or use the binary if that's all we have
+        lib_target = base_label
+        if not lib_target.endswith("_lib"):
+            # Check if there's a {name}_lib or main_lib target we should use instead
+            # For now, just use the binary target - it will work but might be less efficient
+            pass
+        
+        # Use the openapi_spec rule to generate spec with proper dependencies
+        openapi_spec_target_name = name + "_openapi_spec"
+        openapi_spec(
+            name = openapi_spec_target_name,
+            app_target = lib_target,
+            module_path = module_path,
+            app_variable = app_var,
+            visibility = ["//visibility:public"],
+        )
+        openapi_spec_target_ref = ":" + openapi_spec_target_name
+    
     # Create release metadata
     app_metadata(
         name = name + "_metadata",
@@ -179,35 +213,10 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         ingress_tls_secret = ingress_tls_secret,
         command = command,
         args = args,
+        openapi_spec_target = openapi_spec_target_ref,
         tags = ["release-metadata"],
         visibility = ["//visibility:public"],
     )
-    
-    # Auto-generate OpenAPI spec for FastAPI apps
-    if fastapi_app and language == "python":
-        # Parse module:variable syntax
-        if ":" in fastapi_app:
-            module_path, app_var = fastapi_app.split(":", 1)
-        else:
-            module_path = fastapi_app
-            app_var = "app"
-        
-        # For OpenAPI generation, we need a library target, not a binary
-        # Try to find a corresponding _lib target, or use the binary if that's all we have
-        lib_target = base_label
-        if not lib_target.endswith("_lib"):
-            # Check if there's a {name}_lib or main_lib target we should use instead
-            # For now, just use the binary target - it will work but might be less efficient
-            pass
-        
-        # Use the openapi_spec rule to generate spec with proper dependencies
-        openapi_spec(
-            name = name + "_openapi_spec",
-            app_target = lib_target,
-            module_path = module_path,
-            app_variable = app_var,
-            visibility = ["//visibility:public"],
-        )
 
 def get_release_metadata_target(app_name):
     """Get the metadata target name for an app.

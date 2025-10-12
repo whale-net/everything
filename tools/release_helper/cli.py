@@ -389,6 +389,7 @@ def create_combined_github_release_with_notes(
     previous_tag: Annotated[Optional[str], typer.Option("--previous-tag", help="Previous tag to compare against (auto-detected if not provided)")] = None,
     apps: Annotated[Optional[str], typer.Option("--apps", help="Comma-separated list of apps to include (defaults to all)")] = None,
     release_notes_dir: Annotated[Optional[str], typer.Option("--release-notes-dir", help="Directory containing pre-generated release notes files")] = None,
+    openapi_specs_dir: Annotated[Optional[str], typer.Option("--openapi-specs-dir", help="Directory containing OpenAPI spec files to upload as release assets")] = None,
 ):
     """Create GitHub releases for multiple apps using pre-generated release notes."""
     try:
@@ -436,7 +437,8 @@ def create_combined_github_release_with_notes(
             prerelease=prerelease,
             previous_tag=previous_tag,
             release_notes_dir=release_notes_dir,
-            app_versions=app_versions if app_versions else None
+            app_versions=app_versions if app_versions else None,
+            openapi_specs_dir=openapi_specs_dir,
         )
         
         # Report results

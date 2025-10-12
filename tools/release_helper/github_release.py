@@ -199,6 +199,60 @@ class GitHubReleaseClient:
                     print(f"Response: {response.text}", file=sys.stderr)
                 response.raise_for_status()
     
+    def upload_release_asset(self, release_id: int, file_path: str, asset_name: str, content_type: str = "application/json") -> Optional[Dict]:
+        """Upload an asset to a GitHub release.
+        
+        Args:
+            release_id: ID of the release
+            file_path: Path to the file to upload
+            asset_name: Name for the asset
+            content_type: MIME type of the asset
+            
+        Returns:
+            Asset data if successful, None otherwise
+        """
+        # GitHub requires a different host for upload
+        upload_url = f"https://uploads.github.com/repos/{self.owner}/{self.repo}/releases/{release_id}/assets"
+        
+        try:
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
+            
+            upload_headers = {
+                "Authorization": f"Bearer {self.token}",
+                "Accept": "application/vnd.github.v3+json",
+                "Content-Type": content_type,
+            }
+            
+            params = {"name": asset_name}
+            
+            print(f"Uploading asset {asset_name} to release {release_id}...")
+            
+            with httpx.Client(timeout=60.0) as client:  # Longer timeout for file upload
+                response = client.post(
+                    upload_url,
+                    headers=upload_headers,
+                    params=params,
+                    content=file_content
+                )
+                
+                if response.status_code == 201:
+                    asset_info = response.json()
+                    print(f"✅ Successfully uploaded asset: {asset_info['name']}")
+                    return asset_info
+                else:
+                    print(f"⚠️  Failed to upload asset {asset_name}. Status: {response.status_code}", file=sys.stderr)
+                    try:
+                        error_data = response.json()
+                        print(f"Error: {error_data.get('message', 'Unknown error')}", file=sys.stderr)
+                    except json.JSONDecodeError:
+                        print(f"Response: {response.text}", file=sys.stderr)
+                    return None
+                    
+        except Exception as e:
+            print(f"❌ Failed to upload asset {asset_name}: {e}", file=sys.stderr)
+            return None
+    
     def get_release_by_tag(self, tag_name: str) -> Optional[Dict]:
         """Get a release by tag name.
         
@@ -490,7 +544,8 @@ def create_releases_for_apps_with_notes(
     previous_tag: Optional[str] = None,
     token: Optional[str] = None,
     release_notes_dir: Optional[str] = None,
-    app_versions: Optional[Dict[str, str]] = None
+    app_versions: Optional[Dict[str, str]] = None,
+    openapi_specs_dir: Optional[str] = None
 ) -> Dict[str, Optional[Dict]]:
     """Create GitHub releases for multiple apps using pre-generated release notes from files.
     
@@ -505,6 +560,7 @@ def create_releases_for_apps_with_notes(
         token: GitHub token (defaults to GITHUB_TOKEN env var)
         release_notes_dir: Directory containing pre-generated release notes files
         app_versions: Optional dictionary mapping app names to their individual versions
+        openapi_specs_dir: Directory containing OpenAPI spec files to upload as release assets
         
     Returns:
         Dictionary mapping app names to their release data (None if failed)
@@ -581,6 +637,26 @@ def create_releases_for_apps_with_notes(
             )
             
             results[app_name] = result
+            
+            # Upload OpenAPI spec if available and release was created successfully
+            if result and openapi_specs_dir and result.get('id'):
+                openapi_spec_file = Path(openapi_specs_dir) / f"{domain}-{app_name}-openapi.json"
+                if openapi_spec_file.exists():
+                    try:
+                        print(f"Uploading OpenAPI spec for {app_name}...")
+                        client = GitHubReleaseClient(owner, repo, token)
+                        asset_name = f"{domain}-{app_name}-openapi.json"
+                        client.upload_release_asset(
+                            release_id=result['id'],
+                            file_path=str(openapi_spec_file),
+                            asset_name=asset_name,
+                            content_type="application/json"
+                        )
+                    except Exception as e:
+                        print(f"⚠️  Failed to upload OpenAPI spec for {app_name}: {e}", file=sys.stderr)
+                        # Don't fail the release if asset upload fails
+                else:
+                    print(f"ℹ️  No OpenAPI spec found for {app_name} at {openapi_spec_file}")
             
         except Exception as e:
             print(f"❌ Failed to process {app_name}: {e}", file=sys.stderr)

@@ -307,6 +307,75 @@ jobs:
         path: /tmp/release-notes/${{ steps.release-notes.outputs.domain }}-${{ matrix.app }}.md
         if-no-files-found: ignore
 
+    - name: Build OpenAPI spec for FastAPI apps
+      if: ${{ github.event.inputs.dry_run == 'false' }}
+      id: openapi-spec
+      env:
+        APP: ${{ matrix.app }}
+        VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
+      run: |
+        echo "Checking if $APP has OpenAPI spec target..."
+        
+        # Get app metadata to check for OpenAPI spec
+        METADATA=$(bazel run --config=ci //tools:release -- list-apps | grep "^$APP " | head -n1)
+        if [[ -n "$METADATA" ]]; then
+          DOMAIN=$(echo "$METADATA" | sed 's/.*domain: \([^,]*\).*/\1/')
+          
+          # Try to find the app's Bazel target
+          APP_TARGET=$(bazel query "attr('name', '${APP}', kind('py_binary', //...))" 2>/dev/null | head -n1 || echo "")
+          
+          if [[ -z "$APP_TARGET" ]]; then
+            echo "Could not find Bazel target for $APP, skipping OpenAPI spec generation"
+            exit 0
+          fi
+          
+          # Extract package path from target (e.g., //demo/hello_fastapi:hello-fastapi -> //demo/hello_fastapi)
+          PACKAGE_PATH=$(echo "$APP_TARGET" | sed 's#:[^:]*$##')
+          
+          # Check if OpenAPI spec target exists
+          OPENAPI_TARGET="${PACKAGE_PATH}:${APP}_openapi_spec"
+          
+          if bazel query "$OPENAPI_TARGET" &>/dev/null; then
+            echo "✅ Found OpenAPI spec target: $OPENAPI_TARGET"
+            echo "Building OpenAPI spec..."
+            
+            # Build the OpenAPI spec
+            bazel build --config=ci "$OPENAPI_TARGET"
+            
+            # Find the generated spec file
+            SPEC_FILE=$(bazel info bazel-bin --config=ci)/${OPENAPI_TARGET#//}/openapi_spec.json
+            SPEC_FILE=$(echo "$SPEC_FILE" | sed 's#:#/#')
+            
+            if [[ -f "$SPEC_FILE" ]]; then
+              # Create output directory
+              mkdir -p /tmp/openapi-specs
+              
+              # Copy spec with a descriptive name
+              cp "$SPEC_FILE" "/tmp/openapi-specs/${DOMAIN}-${APP}-openapi.json"
+              
+              echo "✅ OpenAPI spec saved to: /tmp/openapi-specs/${DOMAIN}-${APP}-openapi.json"
+              echo "has_spec=true" >> $GITHUB_OUTPUT
+            else
+              echo "⚠️ OpenAPI spec file not found at expected location: $SPEC_FILE"
+              echo "has_spec=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "ℹ️  No OpenAPI spec target found for $APP (not a FastAPI app)"
+            echo "has_spec=false" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "Warning: Could not determine domain for $APP"
+          echo "has_spec=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Upload OpenAPI spec artifact
+      if: ${{ github.event.inputs.dry_run == 'false' && steps.openapi-spec.outputs.has_spec == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: openapi-spec-${{ matrix.app }}
+        path: /tmp/openapi-specs/${{ steps.release-notes.outputs.domain }}-${{ matrix.app }}-openapi.json
+        if-no-files-found: ignore
+
   create-github-releases:
     name: Create GitHub Releases
     runs-on: ubuntu-latest
@@ -333,6 +402,14 @@ jobs:
         pattern: release-notes-*
         path: /tmp/release-notes
         merge-multiple: true
+    
+    - name: Download OpenAPI spec artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: openapi-spec-*
+        path: /tmp/openapi-specs
+        merge-multiple: true
+      continue-on-error: true
       
     - name: Create GitHub releases for all apps
       env:
@@ -354,13 +431,18 @@ jobs:
           echo "Available release notes files:"
           ls -la /tmp/release-notes/ || echo "No release notes files found"
           
+          # List available OpenAPI spec files
+          echo "Available OpenAPI spec files:"
+          ls -la /tmp/openapi-specs/ || echo "No OpenAPI spec files found"
+          
           # Create releases for all apps at once, using pre-generated release notes
           if bazel run --config=ci //tools:release -- create-combined-github-release-with-notes "$VERSION" \
             --owner "$GITHUB_REPOSITORY_OWNER" \
             --repo "$GITHUB_REPOSITORY_NAME" \
             --commit "${{ github.sha }}" \
             --apps "$APPS" \
-            --release-notes-dir "/tmp/release-notes"; then
+            --release-notes-dir "/tmp/release-notes" \
+            --openapi-specs-dir "/tmp/openapi-specs"; then
             echo "✅ Successfully created GitHub releases for version $VERSION"
           else
             echo "❌ Failed to create GitHub releases for version $VERSION"
