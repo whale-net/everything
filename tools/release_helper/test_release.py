@@ -63,43 +63,42 @@ def mock_detect_changed_apps():
 class TestFindAppBazelTarget:
     """Test cases for find_app_bazel_target function."""
 
-    def test_find_app_bazel_target_success(self, mock_list_all_apps, sample_apps):
+    def test_find_app_bazel_target_success(self, sample_apps):
         """Test successfully finding a bazel target for an existing app."""
-        result = find_app_bazel_target("hello_python")
-        
-        assert result == "//demo/hello_python:hello_python_metadata"
-        mock_list_all_apps.assert_called_once()
+        with patch('tools.release_helper.validation.list_all_apps', return_value=sample_apps):
+            result = find_app_bazel_target("hello_python")
+            
+            assert result == "//demo/hello_python:hello_python_metadata"
 
-    def test_find_app_bazel_target_not_found(self, mock_list_all_apps, sample_apps):
+    def test_find_app_bazel_target_not_found(self, sample_apps):
         """Test error when app is not found."""
-        with pytest.raises(ValueError, match="App 'nonexistent' not found"):
-            find_app_bazel_target("nonexistent")
-        
-        mock_list_all_apps.assert_called_once()
+        with patch('tools.release_helper.validation.list_all_apps', return_value=sample_apps):
+            with pytest.raises(ValueError, match="Invalid apps: nonexistent"):
+                find_app_bazel_target("nonexistent")
 
-    def test_find_app_bazel_target_empty_apps_list(self, mock_list_all_apps):
+    def test_find_app_bazel_target_empty_apps_list(self):
         """Test error when no apps are available."""
-        mock_list_all_apps.return_value = []
-        
-        with pytest.raises(ValueError, match="App 'hello_python' not found. Available apps:"):
-            find_app_bazel_target("hello_python")
+        with patch('tools.release_helper.validation.list_all_apps', return_value=[]):
+            with pytest.raises(ValueError, match="Invalid apps: hello_python"):
+                find_app_bazel_target("hello_python")
 
-    def test_find_app_bazel_target_multiple_apps(self, mock_list_all_apps, sample_apps):
+    def test_find_app_bazel_target_multiple_apps(self, sample_apps):
         """Test finding target among multiple apps."""
-        result = find_app_bazel_target("status_service")
-        
-        assert result == "//api/status_service:status_service_metadata"
+        with patch('tools.release_helper.validation.list_all_apps', return_value=sample_apps):
+            result = find_app_bazel_target("status_service")
+            
+            assert result == "//api/status_service:status_service_metadata"
 
     def test_find_app_bazel_target_ambiguous_name(self, sample_apps_with_collision):
         """Test that ambiguous app names raise an error."""
-        with patch('tools.release_helper.release.list_all_apps', return_value=sample_apps_with_collision):
+        with patch('tools.release_helper.validation.list_all_apps', return_value=sample_apps_with_collision):
             # hello_python exists in both demo and api domains
             with pytest.raises(ValueError, match="ambiguous"):
                 find_app_bazel_target("hello_python")
 
     def test_find_app_bazel_target_full_format(self, sample_apps_with_collision):
         """Test finding app by full domain-app format."""
-        with patch('tools.release_helper.release.list_all_apps', return_value=sample_apps_with_collision):
+        with patch('tools.release_helper.validation.list_all_apps', return_value=sample_apps_with_collision):
             # Use full format to disambiguate
             result = find_app_bazel_target("demo-hello_python")
             assert result == "//demo/hello_python:hello_python_metadata"
@@ -109,7 +108,7 @@ class TestFindAppBazelTarget:
 
     def test_find_app_bazel_target_path_format(self, sample_apps_with_collision):
         """Test finding app by path format (domain/name)."""
-        with patch('tools.release_helper.release.list_all_apps', return_value=sample_apps_with_collision):
+        with patch('tools.release_helper.validation.list_all_apps', return_value=sample_apps_with_collision):
             # Use path format to disambiguate
             result = find_app_bazel_target("demo/hello_python")
             assert result == "//demo/hello_python:hello_python_metadata"
