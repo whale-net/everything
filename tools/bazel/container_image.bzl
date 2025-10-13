@@ -83,23 +83,15 @@ def container_image(
     The same binary target will be built for different platforms when invoked
     with different --platforms flags.
     
-    LAYERING STRATEGY - Optimized for Cache Efficiency:
-    ====================================================
-    Uses a SINGLE layer containing binary + all runfiles (dependencies, interpreter, etc).
-    
-    Why not split into multiple layers?
-    - Bazel's hermetic runfiles tree is tightly coupled (binary references exact paths)
-    - Splitting would require custom rules to separate app code from dependencies
-    - Breaking apart the runfiles structure defeats Bazel's hermetic guarantees
-    - The complexity and brittleness outweighs the caching benefits
-    
-    Caching still works efficiently because:
-    1. Bazel's action cache: If binary unchanged, pkg_tar is cached (no rebuild)
-    2. OCI layer digests: If tar unchanged, Docker/registries cache the layer
-    3. Most rebuilds happen during development (where layer caching helps less anyway)
-    
-    The real optimization opportunity would be at the Bazel level (e.g., rules_python
-    generating separate outputs for app vs deps), but that's outside our control here.
+    LAYERING STRATEGY - Runtime First, App Last:
+    ===========================================
+    Python builds emit distinct tar layers for:
+        1. CA certificates (shared across images)
+        2. Python runtime + third-party wheels (slow-changing, heavy)
+        3. Application code and repo-owned libs (fast-changing)
+
+    Go (and other languages) keep a single application layer because binaries are
+    already self-contained.
     
     Args:
         name: Image name
@@ -114,10 +106,8 @@ def container_image(
     if not language:
         fail("language parameter is required for container_image")
     
-    # Create single application layer with binary and all runfiles
-    # This is a monolithic layer but it's the most maintainable approach given
-    # Bazel's hermetic runfiles structure.
-    # NOTE: TreeArtifacts via root_symlinks require MANIFEST file to resolve
+    # Create base tar with binary and all runfiles. Downstream steps decide how
+    # to fan that content out into reusable layers.
     pkg_tar(
         name = name + "_layer_unstripped",
         srcs = [binary],
@@ -129,37 +119,57 @@ def container_image(
         tags = ["manual"],
     )
     
-    # For Python, strip debug symbols and remove duplicates to reduce image size
+    binary_name = _get_binary_name(binary)
+    binary_path = _get_binary_path(binary)
+
+    image_tars = ["//tools/cacerts:cacerts"]
+
     if language == "python":
+        runfiles_dir = binary_name + ".runfiles"
+        python_version_pattern = python_version.replace(".", "_")
+
         native.genrule(
-            name = name + "_layer",
+            name = name + "_split_layers",
             srcs = [":" + name + "_layer_unstripped"],
-            outs = [name + "_layer.tar"],
-            tools = ["//tools/scripts:strip_python.sh"],
+            outs = [
+                name + "_deps_layer.tar",
+                name + "_app_layer.tar",
+            ],
+            tools = [
+                "//tools/scripts:split_python_layers.sh",
+                "//tools/scripts:strip_python.sh",
+            ],
             cmd = """
-                # Extract the tar
-                mkdir -p layer_tmp
-                tar -xf $(location :{name}_layer_unstripped) -C layer_tmp
-                
-                # Strip Python binaries and libraries
-                $(location //tools/scripts:strip_python.sh) layer_tmp/app || true
-                
-                # Repack into tar
-                tar -cf $@ -C layer_tmp .
-                """.format(name = name),
+                $(location //tools/scripts:split_python_layers.sh) \
+                    $(location :{name}_layer_unstripped) \
+                    $(location :{deps_out}) \
+                    $(location :{app_out}) \
+                    "{runfiles_dir}" \
+                    "{python_version_pattern}" \
+                    $(location //tools/scripts:strip_python.sh)
+                """.format(
+                name = name,
+                deps_out = name + "_deps_layer.tar",
+                app_out = name + "_app_layer.tar",
+                runfiles_dir = runfiles_dir,
+                python_version_pattern = python_version_pattern,
+            ),
             tags = ["manual"],
         )
+
+        image_tars.extend([
+            ":" + name + "_deps_layer.tar",
+            ":" + name + "_app_layer.tar",
+        ])
     else:
-        # For non-Python languages, use the layer as-is
         native.alias(
             name = name + "_layer",
             actual = ":" + name + "_layer_unstripped",
             tags = ["manual"],
         )
 
-    
-    binary_name = _get_binary_name(binary)
-    binary_path = _get_binary_path(binary)
+        image_tars.append(":" + name + "_layer")
+
     image_env = env or {}
     
     # Add SSL_CERT_FILE environment variable for Python's SSL module
@@ -191,10 +201,7 @@ def container_image(
     oci_image(
         name = name,
         base = base,
-        tars = [
-            ":" + name + "_layer",
-            "//tools/cacerts:cacerts",  # Add CA certificates for SSL/TLS
-        ],
+        tars = image_tars,
         entrypoint = entrypoint,
         workdir = "/app",
         env = image_env,

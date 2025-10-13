@@ -10,6 +10,7 @@ exports_files([
     "sync_generated_clients.sh",
     "test_container_images.sh",
     "strip_python.sh",
+    "split_python_layers.sh",
 ])
 
 # Cross-compilation verification test
