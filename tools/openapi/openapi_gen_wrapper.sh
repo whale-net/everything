@@ -10,15 +10,18 @@ if [ "$1" = "auto" ]; then
     # Try to find Java from system first
     if command -v java &> /dev/null; then
         JAVA_RUNTIME="java"
+        shift  # Skip the Bazel Java arg since we're using system Java
     elif [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/java" ]; then
         JAVA_RUNTIME="$JAVA_HOME/bin/java"
+        shift  # Skip the Bazel Java arg since we're using JAVA_HOME
     elif [ -x /usr/bin/java ]; then
         JAVA_RUNTIME="/usr/bin/java"
+        shift  # Skip the Bazel Java arg since we're using system Java
     else
         # Fallback: next arg should be Bazel-provided Java path
         # This allows: openapi_gen_wrapper.sh auto $(JAVA) ...
         JAVA_RUNTIME="$1"
-        shift
+        shift  # Consume the Bazel Java arg
     fi
 else
     JAVA_RUNTIME="$1"
