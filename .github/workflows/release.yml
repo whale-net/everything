@@ -191,12 +191,12 @@ jobs:
     - name: Plan OpenAPI spec builds
       id: plan-openapi
       env:
-        APPS: ${{ needs.plan-release.outputs.apps }}
+        RELEASE_MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
       run: |
-        echo "Planning OpenAPI spec builds for apps: $APPS"
+        echo "Planning OpenAPI spec builds from release matrix"
         
-        # Use release helper to identify apps with OpenAPI specs
-        PLAN_OUTPUT=$(bazel run --config=ci //tools:release -- plan-openapi-builds --apps "$APPS" --format github)
+        # Use release helper to filter the release matrix for apps with OpenAPI specs
+        PLAN_OUTPUT=$(bazel run --config=ci //tools:release -- plan-openapi-builds --matrix "$RELEASE_MATRIX" --format github)
         
         # Parse output
         echo "$PLAN_OUTPUT" | while IFS= read -r line; do

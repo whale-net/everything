@@ -236,35 +236,47 @@ def plan(
 
 @app.command()
 def plan_openapi_builds(
-    apps: Annotated[str, typer.Option(help="Comma-separated list of apps to check for OpenAPI specs")],
+    matrix: Annotated[str, typer.Option(help="Release matrix JSON to filter for OpenAPI specs")],
     format: Annotated[str, typer.Option(help="Output format (json or github)")] = "github",
 ):
     """Plan OpenAPI spec builds for apps that have fastapi_app configured.
     
-    This command filters the input apps to only those that have OpenAPI spec targets,
-    avoiding wasteful builds for apps without OpenAPI specs.
+    This command filters the input release matrix to only include apps with OpenAPI spec targets,
+    preserving all fields (like version) from the original matrix while avoiding wasteful builds
+    for apps without OpenAPI specs.
     """
     if format not in ["json", "github"]:
         typer.echo("Error: format must be one of: json, github", err=True)
         raise typer.Exit(1)
     
-    # Parse app list
-    app_list = [app.strip() for app in apps.split(',') if app.strip()]
+    # Parse the release matrix JSON
+    try:
+        matrix_data = json.loads(matrix)
+    except json.JSONDecodeError as e:
+        typer.echo(f"Error: Invalid JSON in matrix parameter: {e}", err=True)
+        raise typer.Exit(1)
     
-    # Get all apps with metadata
+    # Get all apps with metadata to check for OpenAPI spec targets
     all_apps = list_all_apps()
     
-    # Filter to apps with OpenAPI spec targets
+    # Create a lookup map for faster access
+    apps_metadata_map = {app['name']: app for app in all_apps}
+    
+    # Filter the matrix to only include apps with OpenAPI spec targets
     apps_with_specs = []
-    for app_name in app_list:
-        # Find the app in all_apps
-        app_metadata = next((app for app in all_apps if app['name'] == app_name), None)
+    for item in matrix_data.get('include', []):
+        app_name = item.get('app')
+        if not app_name:
+            continue
+        
+        app_metadata = apps_metadata_map.get(app_name)
         if app_metadata and app_metadata.get('openapi_spec_target'):
-            apps_with_specs.append({
-                'app': app_name,
-                'domain': app_metadata['domain'],
-                'openapi_target': app_metadata['openapi_spec_target']
-            })
+            # Preserve all fields from the original matrix item
+            filtered_item = item.copy()
+            # Add OpenAPI-specific fields
+            filtered_item['domain'] = app_metadata['domain']
+            filtered_item['openapi_target'] = app_metadata['openapi_spec_target']
+            apps_with_specs.append(filtered_item)
     
     if format == "github":
         # Output GitHub Actions format
