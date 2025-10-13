@@ -37,15 +37,11 @@ def run_bazel(args: list[str], capture_output: bool = True, env: dict = None, ti
         CompletedProcess from subprocess.run
         
     Note:
-        Uses --noblock_for_lock to prevent deadlocks when release_helper
-        is invoked from within a Bazel build (e.g., via `bazel run`).
-        This prevents waiting indefinitely for Bazel server locks.
+        Uses a reasonable timeout to prevent indefinite hangs during long builds.
+        The default 10-minute timeout is suitable for most container image builds.
     """
     workspace_root = find_workspace_root()
-    
-    # Add --noblock_for_lock before the command to prevent lock waiting
-    # This is critical when release_helper is invoked from Bazel itself
-    cmd = ["bazel", "--noblock_for_lock"] + args
+    cmd = ["bazel"] + args
     
     # Use provided environment or current environment
     run_env = env if env is not None else os.environ.copy()

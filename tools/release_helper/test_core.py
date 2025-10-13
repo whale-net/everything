@@ -113,9 +113,9 @@ class TestRunBazel:
         
         result = run_bazel(["build", "//demo:hello_python"])
         
-        # Verify subprocess.run was called correctly with --noblock_for_lock and timeout
+        # Verify subprocess.run was called correctly with timeout
         mock_subprocess_run.assert_called_once_with(
-            ["bazel", "--noblock_for_lock", "build", "//demo:hello_python"],
+            ["bazel", "build", "//demo:hello_python"],
             capture_output=True,
             text=True,
             check=True,
@@ -141,7 +141,7 @@ class TestRunBazel:
         
         # Verify subprocess.run was called with custom environment and timeout
         mock_subprocess_run.assert_called_once_with(
-            ["bazel", "--noblock_for_lock", "test", "//tools:test"],
+            ["bazel", "test", "//tools:test"],
             capture_output=True,
             text=True,
             check=True,
@@ -166,7 +166,7 @@ class TestRunBazel:
         
         # Verify subprocess.run was called with capture_output=False and timeout
         mock_subprocess_run.assert_called_once_with(
-            ["bazel", "--noblock_for_lock", "run", "//demo:hello_python"],
+            ["bazel", "run", "//demo:hello_python"],
             capture_output=False,
             text=True,
             check=True,
@@ -238,9 +238,9 @@ class TestRunBazel:
         
         result = run_bazel([])
         
-        # Verify subprocess.run was called with "bazel --noblock_for_lock" command
+        # Verify subprocess.run was called with just "bazel" command
         mock_subprocess_run.assert_called_once_with(
-            ["bazel", "--noblock_for_lock"],
+            ["bazel"],
             capture_output=True,
             text=True,
             check=True,
@@ -270,8 +270,8 @@ class TestRunBazel:
         ]
         result = run_bazel(complex_args)
         
-        # Verify subprocess.run was called with --noblock_for_lock and all arguments
-        expected_cmd = ["bazel", "--noblock_for_lock"] + complex_args
+        # Verify subprocess.run was called with all arguments
+        expected_cmd = ["bazel"] + complex_args
         mock_subprocess_run.assert_called_once_with(
             expected_cmd,
             capture_output=True,
@@ -298,7 +298,7 @@ class TestRunBazel:
         
         # Verify subprocess.run was called with custom timeout
         mock_subprocess_run.assert_called_once_with(
-            ["bazel", "--noblock_for_lock", "build", "//demo:hello_python"],
+            ["bazel", "build", "//demo:hello_python"],
             capture_output=True,
             text=True,
             check=True,
@@ -318,7 +318,7 @@ class TestRunBazel:
         
         # Mock subprocess.TimeoutExpired
         error = subprocess.TimeoutExpired(
-            cmd=["bazel", "--noblock_for_lock", "build", "//slow:target"],
+            cmd=["bazel", "build", "//slow:target"],
             timeout=10
         )
         mock_subprocess_run.side_effect = error
