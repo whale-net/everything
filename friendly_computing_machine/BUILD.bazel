@@ -28,7 +28,7 @@ filegroup(
 )
 
 release_app(
-    name = "fcm-bot",
+    name = "bot",
     binary_name = "//friendly_computing_machine/src:fcm_cli",
     language = "python",
     domain = "friendly-computing-machine",
@@ -46,7 +46,7 @@ release_app(
 )
 
 release_app(
-    name = "fcm-taskpool",
+    name = "taskpool",
     binary_name = "//friendly_computing_machine/src:fcm_cli",
     language = "python",
     domain = "friendly-computing-machine",
@@ -64,7 +64,7 @@ release_app(
 )
 
 release_app(
-    name = "fcm-subscribe",
+    name = "subscribe",
     binary_name = "//friendly_computing_machine/src:fcm_cli",
     language = "python",
     domain = "friendly-computing-machine",
@@ -82,7 +82,7 @@ release_app(
 )
 
 release_app(
-    name = "fcm-worker",
+    name = "worker",
     binary_name = "//friendly_computing_machine/src:fcm_cli",
     language = "python",
     domain = "friendly-computing-machine",
@@ -100,7 +100,7 @@ release_app(
 )
 
 release_app(
-    name = "fcm-migration",
+    name = "migration",
     binary_name = "//friendly_computing_machine/src:fcm_cli",
     language = "python",
     domain = "friendly-computing-machine",
@@ -120,11 +120,11 @@ release_app(
 
 # List of all FCM app metadata targets for chart composition
 FCM_APPS = [
-    ":fcm-bot_metadata",
-    ":fcm-taskpool_metadata",
-    ":fcm-subscribe_metadata",
-    ":fcm-worker_metadata",
-    ":fcm-migration_metadata",
+    ":bot_metadata",
+    ":taskpool_metadata",
+    ":subscribe_metadata",
+    ":worker_metadata",
+    ":migration_metadata",
 ]
 
 # Helm chart composition - combines all FCM services into a single chart

@@ -8,6 +8,7 @@ exports_files([
     "python_runner.py",
     "test_cross_compilation.sh",
     "sync_generated_clients.sh",
+    "test_container_images.sh",
 ])
 
 # Cross-compilation verification test

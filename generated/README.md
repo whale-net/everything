@@ -28,7 +28,7 @@ For local development with IDE autocomplete, sync the generated files:
 ./tools/scripts/sync_generated_clients.sh
 ```
 
-Then your IDE will find the imports at `generated/manman/`.
+Then your IDE will find the imports at `generated/`.
 
 
 ## Importing Clients

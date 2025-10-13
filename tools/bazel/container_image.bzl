@@ -41,18 +41,27 @@ def _get_binary_path(binary):
     """Extract full binary path from label (including package path)."""
     # For //friendly_computing_machine/src:fcm_cli -> returns src/fcm_cli
     # For //demo/hello:hello -> returns hello
+    # For //manman/src/worker:worker -> returns src/worker/worker
     # For :hello -> returns hello (relative label)
     if ":" in binary:
         binary_name = binary.split(":")[-1]
         if "//" in binary:
             package_path = binary.split("//")[1].split(":")[0]
-            # Remove leading package if binary name is same as last package segment
             parts = package_path.split("/")
-            if parts and parts[-1] == binary_name:
-                # //demo/hello:hello -> hello (not hello/hello)
+            
+            # Only simplify if the package path is a single segment matching the binary name
+            # //demo/hello:hello -> hello (not hello/hello)
+            # But //manman/src/worker:worker -> src/worker/worker (has parent path)
+            if len(parts) == 1 and parts[0] == binary_name:
                 return binary_name
+            
+            # For multi-segment paths, include everything after the first segment
             # //friendly_computing_machine/src:fcm_cli -> src/fcm_cli
-            return package_path.split("/", 1)[-1] + "/" + binary_name if "/" in package_path else binary_name
+            # //manman/src/worker:worker -> src/worker/worker
+            if "/" in package_path:
+                return package_path.split("/", 1)[-1] + "/" + binary_name
+            else:
+                return binary_name
         else:
             # :hello -> hello (relative label in current package)
             return binary_name
