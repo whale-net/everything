@@ -240,6 +240,7 @@ jobs:
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
     
     - name: Build OpenAPI spec
+      continue-on-error: true
       env:
         APP: ${{ matrix.app }}
         DOMAIN: ${{ matrix.domain }}
@@ -279,10 +280,11 @@ jobs:
             echo "✅ OpenAPI spec saved to: /tmp/openapi-specs/${DOMAIN}-${APP}-openapi.json"
           else
             echo "⚠️ OpenAPI spec file not found at expected location: $SPEC_FILE"
-            echo "⚠️ Warning: OpenAPI spec build succeeded but file not found - will add warning to release notes"
+            exit 1
           fi
         else
-          echo "⚠️ Failed to build OpenAPI spec for $APP - will add warning to release notes"
+          echo "❌ Failed to build OpenAPI spec for $APP"
+          exit 1
         fi
     
     - name: Upload OpenAPI spec artifact
