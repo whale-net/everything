@@ -70,8 +70,8 @@ echo ""
 
 # Validate values.yaml structure
 echo "Validating values.yaml..."
-if ! grep -q "hello_fastapi:" "$CHART_DIR/values.yaml"; then
-    echo "✗ values.yaml missing hello_fastapi app"
+if ! grep -q "demo-hello-fastapi:" "$CHART_DIR/values.yaml"; then
+    echo "✗ values.yaml missing demo-hello-fastapi app (expected domain-app format)"
     exit 1
 fi
 echo "✓ values.yaml valid"

@@ -459,7 +459,9 @@ func (c *Composer) generateValuesYaml(chartDir string) error {
 		if err != nil {
 			return fmt.Errorf("failed to build config for %s: %w", app.Name, err)
 		}
-		valuesData.Apps[app.Name] = config
+		// Use domain-app format as the key (e.g., "demo-hello-job" instead of just "hello-job")
+		appKey := fmt.Sprintf("%s-%s", app.Domain, app.Name)
+		valuesData.Apps[appKey] = config
 	}
 
 	outputFile := filepath.Join(chartDir, "values.yaml")
