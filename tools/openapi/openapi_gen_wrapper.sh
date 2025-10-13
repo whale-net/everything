@@ -17,13 +17,8 @@ if [ "$1" = "auto" ]; then
     else
         # Fallback: next arg should be Bazel-provided Java path
         # This allows: openapi_gen_wrapper.sh auto $(JAVA) ...
-        if [ $# -ge 1 ] && [ -x "$1" ]; then
-            JAVA_RUNTIME="$1"
-            shift
-        else
-            echo "Error: Java not found. Please install Java, set JAVA_HOME, or provide Java path" >&2
-            exit 1
-        fi
+        JAVA_RUNTIME="$1"
+        shift
     fi
 else
     JAVA_RUNTIME="$1"
