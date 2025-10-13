@@ -136,7 +136,7 @@ class TestPlanRelease:
         # When using "all", demo domain apps are excluded by default
         # So we should only get non-demo apps (status_service in this case)
         assert len(result["matrix"]["include"]) == 1
-        assert result["apps"] == ["status_service"]
+        assert result["apps"] == ["api-status_service"]
 
     @patch('tools.release_helper.release.validate_semantic_version')
     def test_plan_release_workflow_dispatch_specific_apps(self, mock_validate_semantic, mock_validate_apps, sample_apps):
@@ -157,6 +157,26 @@ class TestPlanRelease:
         """Test error when workflow_dispatch has no apps specified."""
         with pytest.raises(ValueError, match="Manual releases require apps to be specified"):
             plan_release(event_type="workflow_dispatch")
+
+    @patch('tools.release_helper.release.validate_semantic_version')
+    def test_plan_release_apps_output_format(self, mock_validate_semantic, mock_validate_apps, sample_apps):
+        """Test that apps output uses full domain-name format to avoid ambiguity."""
+        mock_validate_semantic.return_value = True
+        # Configure mock to return hello_python (demo) and status_service (api)
+        mock_validate_apps.return_value = [sample_apps[0], sample_apps[3]]  # hello_python and status_service
+        
+        result = plan_release(
+            event_type="workflow_dispatch",
+            requested_apps="hello_python,status_service",
+            version="v1.0.0"
+        )
+        
+        # Verify apps field returns full domain-name format
+        assert "demo-hello_python" in result["apps"]
+        assert "api-status_service" in result["apps"]
+        # Should not contain short names
+        assert "hello_python" not in result["apps"]
+        assert "status_service" not in result["apps"]
 
     @patch('tools.release_helper.release.validate_semantic_version')
     def test_plan_release_workflow_dispatch_specific_version_mode(self, mock_validate_semantic, mock_list_all_apps, sample_apps):
