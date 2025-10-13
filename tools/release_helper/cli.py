@@ -457,9 +457,10 @@ def create_combined_github_release_with_notes(
 ):
     """Create GitHub releases for multiple apps using pre-generated release notes."""
     try:
-        # Check if we have a MATRIX environment variable with per-app versions
+        # Check if we have a MATRIX environment variable with per-app versions and domains
         matrix_env = os.getenv('MATRIX')
         app_versions = {}
+        app_domains = {}
         
         if matrix_env:
             try:
@@ -467,11 +468,17 @@ def create_combined_github_release_with_notes(
                 for item in matrix_data.get('include', []):
                     app_name = item.get('app')
                     app_version = item.get('version')
-                    if app_name and app_version:
-                        app_versions[app_name] = app_version
+                    app_domain = item.get('domain')
+                    if app_name:
+                        if app_version:
+                            app_versions[app_name] = app_version
+                        if app_domain:
+                            app_domains[app_name] = app_domain
                         
                 if app_versions:
                     typer.echo(f"Found per-app versions in matrix: {app_versions}")
+                if app_domains:
+                    typer.echo(f"Found per-app domains in matrix: {app_domains}")
             except (json.JSONDecodeError, KeyError) as e:
                 typer.echo(f"Warning: Failed to parse MATRIX environment variable: {e}", err=True)
         
@@ -503,6 +510,7 @@ def create_combined_github_release_with_notes(
             release_notes_dir=release_notes_dir,
             app_versions=app_versions if app_versions else None,
             openapi_specs_dir=openapi_specs_dir,
+            app_domains=app_domains if app_domains else None,
         )
         
         # Report results

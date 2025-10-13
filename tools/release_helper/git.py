@@ -29,9 +29,49 @@ def format_helm_chart_tag(chart_name: str, version: str) -> str:
     return f"{chart_name}.{version}"
 
 
-def create_git_tag(tag_name: str, commit_sha: Optional[str] = None, message: Optional[str] = None) -> None:
-    """Create a Git tag on the specified commit."""
+def check_tag_exists(tag_name: str) -> bool:
+    """Check if a Git tag exists.
+    
+    Args:
+        tag_name: Tag name to check
+        
+    Returns:
+        True if tag exists, False otherwise
+    """
+    try:
+        result = subprocess.run(
+            ["git", "tag", "-l", tag_name],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return bool(result.stdout.strip())
+    except subprocess.CalledProcessError:
+        return False
+
+
+def create_git_tag(tag_name: str, commit_sha: Optional[str] = None, message: Optional[str] = None, force: bool = False) -> None:
+    """Create a Git tag on the specified commit.
+    
+    Args:
+        tag_name: Name of the tag to create
+        commit_sha: Optional commit SHA to tag (defaults to HEAD)
+        message: Optional annotation message for annotated tags
+        force: If True, overwrite existing tag. If False and tag exists, skip creation.
+    """
+    # Check if tag already exists
+    if check_tag_exists(tag_name):
+        if force:
+            print(f"Tag {tag_name} already exists, forcing overwrite...")
+        else:
+            print(f"Tag {tag_name} already exists, skipping creation")
+            return
+    
     cmd = ["git", "tag"]
+    
+    # Add force flag if requested
+    if force:
+        cmd.append("-f")
 
     if message:
         cmd.extend(["-a", tag_name, "-m", message])
@@ -45,10 +85,20 @@ def create_git_tag(tag_name: str, commit_sha: Optional[str] = None, message: Opt
     subprocess.run(cmd, check=True)
 
 
-def push_git_tag(tag_name: str) -> None:
-    """Push a Git tag to the remote repository."""
-    print(f"Pushing Git tag: {tag_name}")
-    subprocess.run(["git", "push", "origin", tag_name], check=True)
+def push_git_tag(tag_name: str, force: bool = False) -> None:
+    """Push a Git tag to the remote repository.
+    
+    Args:
+        tag_name: Name of the tag to push
+        force: If True, force push the tag (overwrites remote tag)
+    """
+    cmd = ["git", "push"]
+    if force:
+        cmd.append("--force")
+    cmd.extend(["origin", tag_name])
+    
+    print(f"Pushing Git tag: {tag_name}" + (" (force)" if force else ""))
+    subprocess.run(cmd, check=True)
 
 
 def get_previous_tag() -> Optional[str]:

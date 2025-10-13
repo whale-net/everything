@@ -545,7 +545,8 @@ def create_releases_for_apps_with_notes(
     token: Optional[str] = None,
     release_notes_dir: Optional[str] = None,
     app_versions: Optional[Dict[str, str]] = None,
-    openapi_specs_dir: Optional[str] = None
+    openapi_specs_dir: Optional[str] = None,
+    app_domains: Optional[Dict[str, str]] = None
 ) -> Dict[str, Optional[Dict]]:
     """Create GitHub releases for multiple apps using pre-generated release notes from files.
     
@@ -561,6 +562,7 @@ def create_releases_for_apps_with_notes(
         release_notes_dir: Directory containing pre-generated release notes files
         app_versions: Optional dictionary mapping app names to their individual versions
         openapi_specs_dir: Directory containing OpenAPI spec files to upload as release assets
+        app_domains: Optional dictionary mapping app names to their domains
         
     Returns:
         Dictionary mapping app names to their release data (None if failed)
@@ -594,9 +596,18 @@ def create_releases_for_apps_with_notes(
             
             # Find the app's metadata to determine the tag format
             try:
-                bazel_target = find_app_bazel_target(app_name)
-                metadata = get_app_metadata(bazel_target)
-                domain = metadata['domain']
+                # Use domain from app_domains if provided (avoids ambiguity for apps with same name)
+                if app_domains and app_name in app_domains:
+                    domain = app_domains[app_name]
+                    # Still need metadata for other information
+                    bazel_target = find_app_bazel_target(app_name)
+                    metadata = get_app_metadata(bazel_target)
+                else:
+                    # Fall back to looking up by name (may be ambiguous)
+                    bazel_target = find_app_bazel_target(app_name)
+                    metadata = get_app_metadata(bazel_target)
+                    domain = metadata['domain']
+                    
                 tag_name = f"{domain}-{app_name}.{app_version}"
             except Exception as e:
                 print(f"❌ Could not determine tag format for {app_name}: {e}", file=sys.stderr)

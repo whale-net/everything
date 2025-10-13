@@ -132,6 +132,7 @@ def plan_release(
             "include": [
                 {
                     "app": app["name"], 
+                    "domain": app["domain"],
                     "bazel_target": app["bazel_target"],
                     "version": app.get("version", version)
                 } 
