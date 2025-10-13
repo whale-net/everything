@@ -320,9 +320,13 @@ def filter_commits_by_app(commits: List[ReleaseNote], app_name: str) -> List[Rel
                 
         return app_commits
         
+    except ValueError as e:
+        # validate_apps raises ValueError when app not found or ambiguous
+        print(f"Error: App {app_name} not found or ambiguous: {e}", file=sys.stderr)
+        return []  # Return empty list when app not found
     except Exception as e:
         print(f"Error filtering commits for app {app_name}: {e}", file=sys.stderr)
-        return commits  # Return all commits if filtering fails
+        return commits  # Return all commits if filtering fails for other reasons
 
 
 def generate_release_notes(
