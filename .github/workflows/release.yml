@@ -290,7 +290,7 @@ jobs:
     - name: Upload OpenAPI spec artifact
       uses: actions/upload-artifact@v4
       with:
-        name: openapi-spec-${{ matrix.app }}
+        name: openapi-spec-${{ matrix.domain }}-${{ matrix.app }}
         path: /tmp/openapi-specs/${{ matrix.domain }}-${{ matrix.app }}-openapi.json
         if-no-files-found: warn
 
@@ -431,7 +431,7 @@ jobs:
       if: ${{ github.event.inputs.dry_run == 'false' }}
       uses: actions/upload-artifact@v4
       with:
-        name: release-notes-${{ matrix.app }}
+        name: release-notes-${{ matrix.domain }}-${{ matrix.app }}
         path: /tmp/release-notes/${{ steps.release-notes.outputs.domain }}-${{ matrix.app }}.md
         if-no-files-found: ignore
 
@@ -480,8 +480,8 @@ jobs:
       run: |
         echo "Creating GitHub releases for all apps in version $VERSION..."
         
-        # Extract app names from matrix
-        APPS=$(echo "$MATRIX" | jq -r '.include[].app' | tr '\n' ',' | sed 's/,$//')
+        # Extract app names from matrix in full domain-app format to avoid ambiguity
+        APPS=$(echo "$MATRIX" | jq -r '.include[] | "\(.domain)-\(.app)"' | tr '\n' ',' | sed 's/,$//')
         
         if [[ -n "$APPS" && "$APPS" != "" ]]; then
           echo "Creating releases for apps: $APPS"
