@@ -279,6 +279,52 @@ Reference shared Go code from `//libs/go`:
 deps = ["//libs/go"]
 ```
 
+### Working with Generated Code
+
+#### OpenAPI Client Generation
+
+The repository uses Bazel rules to generate OpenAPI clients from specs. Clients are generated on-demand during builds.
+
+**For Bazel Builds (Production)**:
+```starlark
+# In BUILD.bazel
+py_binary(
+    name = "my_app",
+    deps = [
+        "//generated/namespace:client_name",
+    ],
+)
+```
+
+**For Local Development (IDE Support)**:
+
+To get IDE autocomplete and type hints for generated clients:
+
+```bash
+# Sync generated clients to local directory
+./tools/scripts/sync_generated_clients.sh
+```
+
+This script:
+- Discovers all `openapi_client` targets using `bazel query`
+- Builds them with Bazel
+- Copies to local `generated/` directories for IDE support
+
+**Example imports**:
+```python
+from generated.namespace.client_name import DefaultApi
+from generated.namespace.client_name.models import SomeModel
+```
+
+**Discovery**:
+```bash
+# Find all OpenAPI client targets
+bazel query 'kind("openapi_client_rule", //generated/...)'
+
+# Build specific namespace
+bazel build //generated/namespace:all
+```
+
 ## 🔄 Release Management
 
 ### Release Methods
