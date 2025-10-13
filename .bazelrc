@@ -40,3 +40,9 @@ test --cache_test_results=yes
 test:ci --test_output=errors
 # OpenAPI Client Generation Java Runtime
 build --java_runtime_version=remotejdk_17
+
+# Exec platform configuration for cross-compilation
+# Ensure build tools (like Java for OpenAPI generation) always use host architecture
+# even when building for different target platforms (ARM64, AMD64)
+# Set host_platform explicitly to prevent platform transitions from affecting exec tools
+build --host_platform=@platforms//host
