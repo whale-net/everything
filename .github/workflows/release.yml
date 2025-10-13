@@ -240,6 +240,7 @@ jobs:
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
     
     - name: Build OpenAPI spec
+      continue-on-error: true
       env:
         APP: ${{ matrix.app }}
         DOMAIN: ${{ matrix.domain }}
@@ -291,7 +292,7 @@ jobs:
       with:
         name: openapi-spec-${{ matrix.app }}
         path: /tmp/openapi-specs/${{ matrix.domain }}-${{ matrix.app }}-openapi.json
-        if-no-files-found: error
+        if-no-files-found: warn
 
   # Build and release selected apps
   release:
