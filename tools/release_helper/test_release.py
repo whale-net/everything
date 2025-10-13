@@ -136,7 +136,7 @@ class TestPlanRelease:
         # When using "all", demo domain apps are excluded by default
         # So we should only get non-demo apps (status_service in this case)
         assert len(result["matrix"]["include"]) == 1
-        assert result["apps"] == ["status_service"]
+        assert result["apps"] == ["api-status_service"]
 
     @patch('tools.release_helper.release.validate_semantic_version')
     def test_plan_release_workflow_dispatch_specific_apps(self, mock_validate_semantic, mock_validate_apps, sample_apps):
