@@ -20,6 +20,16 @@ fi
 
 echo "Optimizing Python installation in $PYTHON_DIR"
 
+# Check if strip is available
+if ! command -v strip &> /dev/null; then
+    echo "Warning: 'strip' command not found. Skipping debug symbol stripping."
+    echo "Install binutils to enable debug symbol stripping for further size reduction."
+    STRIP_AVAILABLE=false
+else
+    echo "Found 'strip' command. Will strip debug symbols."
+    STRIP_AVAILABLE=true
+fi
+
 # Find the Python runfiles directory - look for any .runfiles directory
 RUNFILES_DIRS=$(find "$PYTHON_DIR" -type d -name "*.runfiles" 2>/dev/null || true)
 
@@ -44,13 +54,13 @@ for RUNFILES_DIR in $RUNFILES_DIRS; do
         echo "  Found Python installation: $PYTHON_INSTALL"
         
         # Strip debug symbols from binaries
-        if [ -d "$PYTHON_INSTALL/bin" ]; then
+        if [ "$STRIP_AVAILABLE" = true ] && [ -d "$PYTHON_INSTALL/bin" ]; then
             echo "  Stripping binaries in $PYTHON_INSTALL/bin..."
             find "$PYTHON_INSTALL/bin" -type f -executable -exec strip --strip-debug {} \; 2>/dev/null || true
         fi
         
         # Strip debug symbols from shared libraries
-        if [ -d "$PYTHON_INSTALL/lib" ]; then
+        if [ "$STRIP_AVAILABLE" = true ] && [ -d "$PYTHON_INSTALL/lib" ]; then
             echo "  Stripping shared libraries in $PYTHON_INSTALL/lib..."
             find "$PYTHON_INSTALL/lib" -type f -name "*.so*" -exec strip --strip-debug {} \; 2>/dev/null || true
         fi
