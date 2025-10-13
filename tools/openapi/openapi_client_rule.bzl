@@ -101,12 +101,15 @@ def openapi_client(name, spec, namespace, app, package_name = None, visibility =
         srcs = [spec],
         outs = ["{}.tar".format(app)],
         tools = [
-            "//tools/openapi:run_openapi_gen",
+            "//tools:openapi_gen_wrapper",
             "@openapi_generator_cli//file",
         ],
+        toolchains = ["@bazel_tools//tools/jdk:current_java_runtime"],
         cmd = """
-            # Use host Java via run_openapi_gen (avoids toolchain platform issues)
-            $(location //tools/openapi:run_openapi_gen) \\
+            # Use wrapper with "auto" to find system Java, fallback to Bazel Java
+            $(location //tools:openapi_gen_wrapper) \\
+                auto \\
+                $(JAVA) \\
                 $(location @openapi_generator_cli//file) \\
                 $(location {spec}) \\
                 $@ \\
@@ -120,8 +123,7 @@ def openapi_client(name, spec, namespace, app, package_name = None, visibility =
             app = app,
         ),
         visibility = ["//visibility:private"],
-        tags = ["openapi", "local"],  # local = no sandboxing
-        local = True,  # Disable sandboxing to access host Java
+        tags = ["openapi"],
     )
     
     # Step 2: Create PyInfo provider (target configuration)

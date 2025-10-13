@@ -18,9 +18,7 @@ sh_binary(
 )
 
 # Runner that uses host Java (for genrules in exec configuration)
-sh_binary(
-    name = "run_openapi_gen",
-    srcs = ["run_openapi_gen.sh"],
-    data = [":openapi_gen_wrapper"],
-    visibility = ["//visibility:public"],
-)
+exports_files([
+    "config_template.yaml",
+    "openapi_gen_wrapper.sh",
+])
