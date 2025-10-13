@@ -15,6 +15,7 @@ bazel_dep(name = "rules_helm", version = "0.6.0.bcr.1")
 bazel_dep(name = "rules_pkg", version = "1.0.1")
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "rules_java", version = "8.12.0")
+bazel_dep(name = "rules_scala", version = "7.1.2")
 
 # OCI/Docker setup - Ubuntu base image for all containers
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
@@ -90,3 +91,16 @@ use_repo(lock_repos, "pypi")
 
 go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
 go_sdk.download(version = "1.25.0")
+
+# Scala setup
+scala_config = use_extension("@rules_scala//scala:extensions.bzl", "scala_config")
+scala_config.toolchain_repos(
+    scala_version = "2.13.16",
+)
+
+scala_deps = use_extension("@rules_scala//scala/extensions:deps.bzl", "scala_deps")
+scala_deps.scala()
+use_repo(
+    scala_deps,
+    "rules_scala_toolchains",
+)

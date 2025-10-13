@@ -107,7 +107,7 @@ def container_image(
         base: Base image (defaults to ubuntu:24.04)
         env: Environment variables dict
         entrypoint: Override entrypoint (auto-detected from language)
-        language: Language of the binary ("python" or "go") - REQUIRED
+        language: Language of the binary ("python", "go", or "scala") - REQUIRED
         python_version: Python version for path construction (default: "3.13")
         **kwargs: Additional oci_image arguments
     """
@@ -184,6 +184,10 @@ def container_image(
                 ),
                 binary_path,
             ]
+        elif language == "scala":
+            # Scala binaries are wrapper scripts that use the bundled JVM
+            # The scala_binary rule creates a self-contained executable with embedded classpath
+            entrypoint = ["/app/" + binary_path]
         else:
             # Go binaries are self-contained executables
             entrypoint = ["/app/" + binary_path]
@@ -245,7 +249,7 @@ def multiplatform_image(
             name = "my_app_image",
             binary = ":my_app",  # Single binary target
             image_name = "demo-my_app",
-            language = "python",  # or "go"
+            language = "python",  # or "go" or "scala"
         )
     
     Args:
@@ -255,7 +259,7 @@ def multiplatform_image(
         registry: Container registry (defaults to ghcr.io)
         repository: Organization/namespace (e.g., "whale-net")
         image_name: Image name in domain-app format (e.g., "demo-my_app") - REQUIRED
-        language: Language of binary ("python" or "go") - REQUIRED
+        language: Language of binary ("python", "go", or "scala") - REQUIRED
         **kwargs: Additional arguments passed to container_image
     """
     if not binary:

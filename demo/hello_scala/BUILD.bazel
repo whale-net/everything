@@ -1,0 +1,39 @@
+load("@rules_scala//scala:scala.bzl", "scala_binary", "scala_library", "scala_test")
+load("//tools/bazel:release.bzl", "release_app")
+
+# Library target for the main code
+scala_library(
+    name = "main_lib",
+    srcs = ["Main.scala"],
+    deps = ["//libs/scala"],
+    visibility = ["//demo/hello_scala:__pkg__"],
+)
+
+# Binary target - standard scala_binary, no wrapper needed!
+scala_binary(
+    name = "hello-scala",
+    srcs = ["Main.scala"],
+    main_class = "hello.scala.Main",
+    deps = ["//libs/scala"],
+    visibility = ["//visibility:public"],
+)
+
+# Test target
+scala_test(
+    name = "main_test",
+    srcs = ["MainTest.scala"],
+    deps = [
+        ":main_lib",
+        "//libs/scala",
+    ],
+    size = "small",
+)
+
+# Release metadata and container images
+release_app(
+    name = "hello-scala",
+    language = "scala",
+    domain = "demo",
+    description = "Scala hello world application with ScalaTest",
+    app_type = "worker",
+)

@@ -110,7 +110,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
                      - Simple name: "my_app" -> looks for :my_app
                      - Full label: "//path/to:binary" -> uses that binary
                      Defaults to name if not provided.
-        language: Programming language ("python" or "go")
+        language: Programming language ("python", "go", or "scala")
         domain: Domain/category for the app (e.g., "demo", "api", "web")
         description: Optional description of the app
         version: Default version (can be overridden at release time)
@@ -133,8 +133,8 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     if "_" in name:
         fail("App name '{}' contains underscores. Use dashes instead (e.g., 'my-app' not 'my_app')".format(name))
     
-    if language not in ["python", "go"]:
-        fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
+    if language not in ["python", "go", "scala"]:
+        fail("Unsupported language: {}. Must be 'python', 'go', or 'scala'".format(language))
     
     # Single binary target - no platform suffixes needed
     # Binary will be built for different platforms using --platforms flag
