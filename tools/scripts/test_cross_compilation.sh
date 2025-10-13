@@ -278,11 +278,22 @@ else
     overall_success=1
 fi
 
+# Test 2: OpenAPI client consumer
+if test_app_multiarch \
+    "demo-hello-openapi-consumer" \
+    "pydantic_core" \
+    "OpenAPI client consumer with generated code"; then
+    test2_result="${GREEN}✅ PASS${NC}"
+else
+    test2_result="${RED}❌ FAIL${NC}"
+    overall_success=1
+fi
+
 # Add more tests here:
 # if test_app_multiarch "app_name" "package_name" "Description"; then
-#     test2_result="${GREEN}✅ PASS${NC}"
+#     test3_result="${GREEN}✅ PASS${NC}"
 # else
-#     test2_result="${RED}❌ FAIL${NC}"
+#     test3_result="${RED}❌ FAIL${NC}"
 #     overall_success=1
 # fi
 
@@ -291,8 +302,9 @@ echo ""
 echo "================================================================================"
 echo "TEST SUMMARY"
 echo "================================================================================"
-echo -e "hello_fastapi: $test1_result"
-# echo -e "other_app: $test2_result"
+echo -e "hello_fastapi:            $test1_result"
+echo -e "hello_openapi_consumer:   $test2_result"
+# echo -e "other_app:                $test3_result"
 echo "================================================================================"
 echo ""
 

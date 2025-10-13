@@ -70,6 +70,7 @@ openapi_client_provider_rule = rule(
             default = [
                 "//generated:init",
                 "//generated/manman:namespace_init",
+                "//generated/demo:namespace_init",
             ],
         ),
     },
