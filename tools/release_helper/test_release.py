@@ -159,6 +159,24 @@ class TestPlanRelease:
             plan_release(event_type="workflow_dispatch")
 
     @patch('tools.release_helper.release.validate_semantic_version')
+    def test_plan_release_apps_output_format(self, mock_validate_semantic, mock_validate_apps, sample_apps):
+        """Test that apps output uses full domain-name format to avoid ambiguity."""
+        mock_validate_semantic.return_value = True
+        
+        result = plan_release(
+            event_type="workflow_dispatch",
+            requested_apps="hello_python,status_service",
+            version="v1.0.0"
+        )
+        
+        # Verify apps field returns full domain-name format
+        assert "demo-hello_python" in result["apps"]
+        assert "api-status_service" in result["apps"]
+        # Should not contain short names
+        assert "hello_python" not in result["apps"]
+        assert "status_service" not in result["apps"]
+
+    @patch('tools.release_helper.release.validate_semantic_version')
     def test_plan_release_workflow_dispatch_specific_version_mode(self, mock_validate_semantic, mock_list_all_apps, sample_apps):
         """Test workflow_dispatch with specific version mode."""
         mock_validate_semantic.return_value = True
