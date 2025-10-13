@@ -279,11 +279,10 @@ jobs:
             echo "✅ OpenAPI spec saved to: /tmp/openapi-specs/${DOMAIN}-${APP}-openapi.json"
           else
             echo "⚠️ OpenAPI spec file not found at expected location: $SPEC_FILE"
-            exit 1
+            echo "⚠️ Warning: OpenAPI spec build succeeded but file not found - will add warning to release notes"
           fi
         else
-          echo "❌ Failed to build OpenAPI spec for $APP"
-          exit 1
+          echo "⚠️ Failed to build OpenAPI spec for $APP - will add warning to release notes"
         fi
     
     - name: Upload OpenAPI spec artifact
@@ -291,7 +290,7 @@ jobs:
       with:
         name: openapi-spec-${{ matrix.app }}
         path: /tmp/openapi-specs/${{ matrix.domain }}-${{ matrix.app }}-openapi.json
-        if-no-files-found: error
+        if-no-files-found: warn
 
   # Build and release selected apps
   release:

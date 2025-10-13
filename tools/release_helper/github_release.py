@@ -624,11 +624,34 @@ def create_releases_for_apps_with_notes(
                     results[app_name] = None
                     continue
             
+            # Check for OpenAPI spec before creating release to add warning if needed
+            openapi_spec_missing_warning = ""
+            if openapi_specs_dir:
+                openapi_spec_file = Path(openapi_specs_dir) / f"{domain}-{app_name}-openapi.json"
+                app_expects_openapi = metadata.get('openapi_spec_target') is not None
+                
+                if app_expects_openapi and not openapi_spec_file.exists():
+                    # Add warning to release notes
+                    openapi_spec_missing_warning = (
+                        "\n\n---\n\n"
+                        "⚠️ **Warning: OpenAPI Specification Missing**\n\n"
+                        f"This app is configured to generate an OpenAPI specification (target: `{metadata.get('openapi_spec_target')}`), "
+                        "but the spec file was not found in the build artifacts. "
+                        "This may indicate that the OpenAPI spec build failed or was not run. "
+                        "Please check the build logs for more details.\n"
+                    )
+                    print(f"⚠️  OpenAPI spec was expected but not found for {app_name} at {openapi_spec_file}", file=sys.stderr)
+                    print(f"   App has openapi_spec_target configured: {metadata.get('openapi_spec_target')}", file=sys.stderr)
+                    print(f"   Warning will be added to release notes", file=sys.stderr)
+            
+            # Append warning to release notes if spec is missing
+            final_release_notes = release_notes + openapi_spec_missing_warning
+            
             # Create the individual app release
             result = create_app_release(
                 app_name=app_name,
                 tag_name=tag_name,
-                release_notes=release_notes,
+                release_notes=final_release_notes,
                 owner=owner,
                 repo=repo,
                 commit_sha=commit_sha,
@@ -641,9 +664,6 @@ def create_releases_for_apps_with_notes(
             # Upload OpenAPI spec if available and release was created successfully
             if result and openapi_specs_dir and result.get('id'):
                 openapi_spec_file = Path(openapi_specs_dir) / f"{domain}-{app_name}-openapi.json"
-                
-                # Check if this app should have an OpenAPI spec (has openapi_spec_target in metadata)
-                app_expects_openapi = metadata.get('openapi_spec_target') is not None
                 
                 if openapi_spec_file.exists():
                     try:
@@ -660,13 +680,8 @@ def create_releases_for_apps_with_notes(
                         print(f"⚠️  Failed to upload OpenAPI spec for {app_name}: {e}", file=sys.stderr)
                         # Don't fail the release if asset upload fails
                 else:
-                    if app_expects_openapi:
-                        # This app has fastapi_app configured, so OpenAPI spec was expected
-                        print(f"❌ OpenAPI spec was expected but not found for {app_name} at {openapi_spec_file}", file=sys.stderr)
-                        print(f"   App has openapi_spec_target configured: {metadata.get('openapi_spec_target')}", file=sys.stderr)
-                        print(f"   This indicates the OpenAPI spec build failed or was not run", file=sys.stderr)
-                        results[app_name] = None  # Mark release as failed
-                    else:
+                    # Only log info if spec is not expected
+                    if not metadata.get('openapi_spec_target'):
                         print(f"ℹ️  No OpenAPI spec found for {app_name} (none expected)")
             
         except Exception as e:

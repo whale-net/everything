@@ -366,8 +366,8 @@ class TestGitHubReleaseClientTagVerification:
 class TestOpenAPISpecValidation:
     """Test cases for OpenAPI spec validation during release creation."""
     
-    def test_release_fails_when_expected_openapi_spec_missing(self):
-        """Test that release fails when an app expects OpenAPI spec but it's missing."""
+    def test_release_succeeds_with_warning_when_expected_openapi_spec_missing(self):
+        """Test that release succeeds with warning when an app expects OpenAPI spec but it's missing."""
         app_list = ["hello-fastapi"]
         
         # Create a temp directory for specs (but don't put the spec file there)
@@ -399,9 +399,20 @@ class TestOpenAPISpecValidation:
                     openapi_specs_dir=tmpdir
                 )
                 
-                # Verify the release failed because OpenAPI spec was expected but missing
+                # Verify the release succeeded even though spec was missing
                 assert "hello-fastapi" in results
-                assert results["hello-fastapi"] is None  # Should be None indicating failure
+                assert results["hello-fastapi"] is not None
+                assert results["hello-fastapi"]["id"] == 123
+                
+                # Verify that create_app_release was called with warning in release notes
+                assert mock_create_release.call_count == 1
+                call_kwargs = mock_create_release.call_args[1]
+                release_notes = call_kwargs['release_notes']
+                
+                # Check that warning was added to release notes
+                assert "⚠️ **Warning: OpenAPI Specification Missing**" in release_notes
+                assert "//demo/hello-fastapi:hello-fastapi_openapi_spec" in release_notes
+                assert "Release notes content" in release_notes  # Original notes should still be there
     
     def test_release_succeeds_when_expected_openapi_spec_present(self):
         """Test that release succeeds when expected OpenAPI spec is present."""
