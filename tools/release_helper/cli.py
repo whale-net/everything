@@ -236,7 +236,7 @@ def plan(
 
 @app.command()
 def plan_openapi_builds(
-    apps: Annotated[str, typer.Option(help="Comma-separated list of apps to check for OpenAPI specs")],
+    apps: Annotated[str, typer.Option(help="Space-separated list of apps to check for OpenAPI specs")],
     format: Annotated[str, typer.Option(help="Output format (json or github)")] = "github",
 ):
     """Plan OpenAPI spec builds for apps that have fastapi_app configured.
@@ -248,8 +248,8 @@ def plan_openapi_builds(
         typer.echo("Error: format must be one of: json, github", err=True)
         raise typer.Exit(1)
     
-    # Parse app list
-    app_list = [app.strip() for app in apps.split(',') if app.strip()]
+    # Parse app list (space-separated to match output format from plan command)
+    app_list = [app.strip() for app in apps.split() if app.strip()]
     
     # Get all apps with metadata
     all_apps = list_all_apps()
