@@ -19,6 +19,24 @@ def validate_semantic_version(version: str) -> bool:
     return bool(re.match(pattern, version))
 
 
+def is_prerelease_version(version: str) -> bool:
+    """Check if a version is a prerelease (contains prerelease suffix).
+    
+    Args:
+        version: Version string (e.g., "v1.0.0-rc1", "v1.0.0-beta", "v1.0.0")
+    
+    Returns:
+        True if version contains a prerelease suffix, False otherwise
+    """
+    if not validate_semantic_version(version):
+        return False
+    
+    # Check if version contains a prerelease suffix after the patch version
+    # Pattern: v{major}.{minor}.{patch}-{prerelease}
+    pattern = r'^v\d+\.\d+\.\d+-[a-zA-Z0-9\-\.]+$'
+    return bool(re.match(pattern, version))
+
+
 def check_version_exists_in_registry(bazel_target: str, version: str) -> bool:
     """Check if a version already exists in the container registry.
     

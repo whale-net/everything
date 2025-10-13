@@ -11,7 +11,7 @@ from tools.release_helper.changes import detect_changed_apps
 from tools.release_helper.git import auto_increment_version, create_git_tag, format_git_tag, get_previous_tag, push_git_tag
 from tools.release_helper.images import build_image, format_registry_tags, push_image_with_tags
 from tools.release_helper.metadata import get_app_metadata, list_all_apps
-from tools.release_helper.validation import validate_apps, validate_release_version, validate_semantic_version
+from tools.release_helper.validation import validate_apps, validate_release_version, validate_semantic_version, is_prerelease_version
 
 
 def find_app_bazel_target(app_name: str) -> str:
@@ -145,7 +145,8 @@ def plan_release(
                     "app": app["name"], 
                     "domain": app["domain"],
                     "bazel_target": app["bazel_target"],
-                    "version": app.get("version", version)
+                    "version": app.get("version", version),
+                    "prerelease": is_prerelease_version(app.get("version", version)) if app.get("version", version) else False
                 } 
                 for app in release_apps
             ]
@@ -156,6 +157,7 @@ def plan_release(
         "apps": [app["name"] for app in release_apps],  # Return just names for compatibility
         "version": version,  # For legacy compatibility, may be None for increment modes
         "versions": {app["name"]: app.get("version", version) for app in release_apps} if release_apps else {},  # Individual app versions
+        "prerelease": is_prerelease_version(version) if version else False,  # Global prerelease flag
         "event_type": event_type
     }
 

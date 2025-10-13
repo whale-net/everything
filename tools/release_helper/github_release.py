@@ -14,6 +14,7 @@ import httpx
 from tools.release_helper.metadata import get_app_metadata, list_all_apps
 from tools.release_helper.release import find_app_bazel_target
 from tools.release_helper.release_notes import generate_release_notes, parse_tag_info
+from tools.release_helper.validation import is_prerelease_version
 
 
 @dataclass
@@ -505,6 +506,9 @@ def create_releases_for_apps(
                 results[app_name] = None
                 continue
             
+            # Auto-detect prerelease from version if not explicitly set
+            is_prerelease = prerelease or is_prerelease_version(version)
+            
             # Create the individual app release
             result = create_app_release(
                 app_name=app_name,
@@ -513,7 +517,7 @@ def create_releases_for_apps(
                 owner=owner,
                 repo=repo,
                 commit_sha=commit_sha,
-                prerelease=prerelease,
+                prerelease=is_prerelease,
                 token=token
             )
             
@@ -659,6 +663,10 @@ def create_releases_for_apps_with_notes(
             # Append warning to release notes if spec is missing
             final_release_notes = release_notes + openapi_spec_missing_warning
             
+            # Auto-detect prerelease from version if not explicitly set
+            # If prerelease is explicitly False, check the version
+            is_prerelease = prerelease or is_prerelease_version(app_version)
+            
             # Create the individual app release
             result = create_app_release(
                 app_name=app_name,
@@ -667,7 +675,7 @@ def create_releases_for_apps_with_notes(
                 owner=owner,
                 repo=repo,
                 commit_sha=commit_sha,
-                prerelease=prerelease,
+                prerelease=is_prerelease,
                 token=token
             )
             

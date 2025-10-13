@@ -74,7 +74,10 @@ class TestValidateSemanticVersion:
             "v0.1.0", 
             "v10.20.30",
             "v1.0.0-alpha",
-            "v1.0.0-beta1"
+            "v1.0.0-beta1",
+            "v1.0.0-rc1",
+            "v1.0.0-rc2",
+            "v2.1.0-beta.1",
         ]
         
         for version in valid_versions:
@@ -92,6 +95,55 @@ class TestValidateSemanticVersion:
         
         for version in invalid_versions:
             assert not validate_semantic_version(version), f"Expected {version} to be invalid"
+
+
+class TestIsPrereleaseVersion:
+    """Test cases for is_prerelease_version function."""
+
+    def test_prerelease_versions(self):
+        """Test that prerelease versions are correctly identified."""
+        from tools.release_helper.validation import is_prerelease_version
+        
+        prerelease_versions = [
+            "v1.0.0-alpha",
+            "v1.0.0-beta",
+            "v1.0.0-beta1",
+            "v1.0.0-rc1",
+            "v1.0.0-rc2",
+            "v2.1.3-alpha.1",
+            "v1.2.3-beta.2",
+        ]
+        
+        for version in prerelease_versions:
+            assert is_prerelease_version(version), f"Expected {version} to be identified as prerelease"
+
+    def test_stable_versions(self):
+        """Test that stable versions are not identified as prereleases."""
+        from tools.release_helper.validation import is_prerelease_version
+        
+        stable_versions = [
+            "v1.0.0",
+            "v0.1.0",
+            "v10.20.30",
+            "v2.1.3",
+        ]
+        
+        for version in stable_versions:
+            assert not is_prerelease_version(version), f"Expected {version} to NOT be identified as prerelease"
+
+    def test_invalid_versions(self):
+        """Test that invalid versions return False."""
+        from tools.release_helper.validation import is_prerelease_version
+        
+        invalid_versions = [
+            "1.0.0",
+            "v1.0",
+            "latest",
+            "",
+        ]
+        
+        for version in invalid_versions:
+            assert not is_prerelease_version(version), f"Expected {version} to return False (invalid)"
 
 
 class TestCheckVersionExistsInRegistry:
