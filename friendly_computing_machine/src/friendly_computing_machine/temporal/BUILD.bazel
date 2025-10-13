@@ -1,0 +1,15 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+package(default_visibility = ["//friendly_computing_machine:__subpackages__"])
+
+py_library(
+    name = "temporal",
+    srcs = glob(["**/*.py"]),
+    visibility = ["//visibility:public"],
+    deps = [
+        "//friendly_computing_machine/src/friendly_computing_machine/models",
+        "//friendly_computing_machine/src/friendly_computing_machine/db",
+        "@pypi//:temporalio",
+        "@pypi//:google-generativeai",
+    ],
+)

@@ -1,0 +1,6 @@
+# Ignore everything in generated/ except BUILD.bazel files
+*
+!BUILD.bazel
+!.gitignore
+!README.md
+!/*/

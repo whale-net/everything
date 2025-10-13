@@ -37,6 +37,37 @@ def _get_binary_name(binary):
         return binary.split(":")[-1]
     return binary.split("/")[-1]
 
+def _get_binary_path(binary):
+    """Extract full binary path from label (including package path)."""
+    # For //friendly_computing_machine/src:fcm_cli -> returns src/fcm_cli
+    # For //demo/hello:hello -> returns hello
+    # For //manman/src/worker:worker -> returns src/worker/worker
+    # For :hello -> returns hello (relative label)
+    if ":" in binary:
+        binary_name = binary.split(":")[-1]
+        if "//" in binary:
+            package_path = binary.split("//")[1].split(":")[0]
+            parts = package_path.split("/")
+            
+            # Only simplify if the package path is a single segment matching the binary name
+            # //demo/hello:hello -> hello (not hello/hello)
+            # But //manman/src/worker:worker -> src/worker/worker (has parent path)
+            if len(parts) == 1 and parts[0] == binary_name:
+                return binary_name
+            
+            # For multi-segment paths, include everything after the first segment
+            # //friendly_computing_machine/src:fcm_cli -> src/fcm_cli
+            # //manman/src/worker:worker -> src/worker/worker
+            if "/" in package_path:
+                return package_path.split("/", 1)[-1] + "/" + binary_name
+            else:
+                return binary_name
+        else:
+            # :hello -> hello (relative label in current package)
+            return binary_name
+    # //demo/hello -> hello
+    return binary.split("/")[-1]
+
 def container_image(
     name,
     binary,
@@ -86,15 +117,20 @@ def container_image(
     # Create single application layer with binary and all runfiles
     # This is a monolithic layer but it's the most maintainable approach given
     # Bazel's hermetic runfiles structure.
+    # NOTE: TreeArtifacts via root_symlinks require MANIFEST file to resolve
     pkg_tar(
         name = name + "_layer",
         srcs = [binary],
         package_dir = "/app",
         include_runfiles = True,
+        # Include MANIFEST file explicitly for root_symlinks resolution
+        # This is needed for TreeArtifact-based generated code like OpenAPI clients
+        strip_prefix = ".",
         tags = ["manual"],
     )
     
     binary_name = _get_binary_name(binary)
+    binary_path = _get_binary_path(binary)
     image_env = env or {}
     
     # Add SSL_CERT_FILE environment variable for Python's SSL module
@@ -113,15 +149,15 @@ def container_image(
                 "-c",
                 # Use glob pattern to match the Python interpreter for the current architecture
                 # This is much faster than find and the path is deterministic at build time
-                'exec /app/{binary}.runfiles/rules_python++python+python_{version}_*/bin/python3 /app/$0 "$@"'.format(
-                    binary = binary_name,
+                'exec /app/{binary_path}.runfiles/rules_python++python+python_{version}_*/bin/python3 /app/$0 "$@"'.format(
+                    binary_path = binary_path,
                     version = python_version.replace(".", "_"),
                 ),
-                binary_name,
+                binary_path,
             ]
         else:
             # Go binaries are self-contained executables
-            entrypoint = ["/app/" + binary_name]
+            entrypoint = ["/app/" + binary_path]
     
     oci_image(
         name = name,

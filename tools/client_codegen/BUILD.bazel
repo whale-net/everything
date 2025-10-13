@@ -28,8 +28,7 @@ py_test(
     name = "test_experience_api_client",
     srcs = ["test_experience_api_client.py"],
     deps = [
-        "//manman:experience_api_client",
-        "@pypi//:pydantic",
+        "//generated/manman:experience_api",
     ],
 )
 

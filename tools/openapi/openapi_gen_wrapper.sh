@@ -24,12 +24,12 @@ PKG_UNDERSCORE=$(echo "$PACKAGE_NAME" | tr '-' '_')
     --package-name "$PKG_UNDERSCORE" \
     --additional-properties=packageName=$PKG_UNDERSCORE,generateSourceCodeOnly=true,library=urllib3
 
-# Fix imports - replace package references with external.namespace.app
+# Fix imports - replace package references with generated.namespace.app
 find "$TMPDIR/$PKG_UNDERSCORE" -name "*.py" -type f -exec sed -i \
-    -e "s|from $PKG_UNDERSCORE\\.|from external.$NAMESPACE.$APP_NAME.|g" \
-    -e "s|import $PKG_UNDERSCORE\\.|import external.$NAMESPACE.$APP_NAME.|g" \
-    -e "s|from $PKG_UNDERSCORE import|from external.$NAMESPACE.$APP_NAME import|g" \
-    -e "s|^import $PKG_UNDERSCORE\$|import external.$NAMESPACE.$APP_NAME|g" \
+    -e "s|from $PKG_UNDERSCORE\\.|from generated.$NAMESPACE.$APP_NAME.|g" \
+    -e "s|import $PKG_UNDERSCORE\\.|import generated.$NAMESPACE.$APP_NAME.|g" \
+    -e "s|from $PKG_UNDERSCORE import|from generated.$NAMESPACE.$APP_NAME import|g" \
+    -e "s|^import $PKG_UNDERSCORE\$|import generated.$NAMESPACE.$APP_NAME|g" \
     {} +
 
 # Create tar

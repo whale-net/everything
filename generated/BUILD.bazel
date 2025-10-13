@@ -1,0 +1,9 @@
+# Top-level package initialization for generated code
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "init",
+    outs = ["__init__.py"],
+    cmd = "touch $@",
+)

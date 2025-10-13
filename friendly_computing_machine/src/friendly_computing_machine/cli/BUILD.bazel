@@ -1,0 +1,22 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+package(default_visibility = ["//friendly_computing_machine:__subpackages__"])
+
+py_library(
+    name = "cli",
+    srcs = glob(["**/*.py"]),
+    visibility = ["//visibility:public"],
+    deps = [
+        "//friendly_computing_machine/src/friendly_computing_machine/models",
+        "//friendly_computing_machine/src/friendly_computing_machine/db",
+        "//friendly_computing_machine/src/friendly_computing_machine:util",
+        "//friendly_computing_machine/src/friendly_computing_machine/bot",
+        "//friendly_computing_machine/src/friendly_computing_machine/rabbitmq",
+        "//friendly_computing_machine/src/friendly_computing_machine/temporal",
+        "//friendly_computing_machine/src/migrations",
+        "@pypi//:typer",
+        "@pypi//:opentelemetry-api",
+        "@pypi//:opentelemetry-sdk",
+        "@pypi//:opentelemetry-exporter-otlp",
+    ],
+)

@@ -1,0 +1,140 @@
+load("//tools/bazel:release.bzl", "release_app", "release_helm_chart")
+
+package(default_visibility = ["//visibility:public"])
+
+alias(
+    name = "fcm_lib",
+    actual = "//friendly_computing_machine/src:fcm_lib",
+)
+
+alias(
+    name = "fcm_cli",
+    actual = "//friendly_computing_machine/src:fcm_cli",
+)
+
+filegroup(
+    name = "docs",
+    srcs = glob(["docs/**/*"], allow_empty = True),
+)
+
+filegroup(
+    name = "tests",
+    srcs = glob(["tests/**/*"], allow_empty = True),
+)
+
+filegroup(
+    name = "alembic_ini",
+    srcs = ["alembic.ini"],
+)
+
+release_app(
+    name = "bot",
+    binary_name = "//friendly_computing_machine/src:fcm_cli",
+    language = "python",
+    domain = "friendly-computing-machine",
+    description = "Slack Socket Mode bot for Friendly Computing Machine",
+    app_type = "worker",
+    port = 7654,
+    replicas = 1,
+    health_check_enabled = False,
+    args = [
+        "bot",
+        "--log-otlp",
+        "run-slack-socket-app",
+        "--skip-migration-check",
+    ],
+)
+
+release_app(
+    name = "taskpool",
+    binary_name = "//friendly_computing_machine/src:fcm_cli",
+    language = "python",
+    domain = "friendly-computing-machine",
+    description = "Background task pool for Friendly Computing Machine",
+    app_type = "worker",
+    port = 7654,
+    replicas = 1,
+    health_check_enabled = False,
+    args = [
+        "bot",
+        "--log-otlp",
+        "run-taskpool",
+        "--skip-migration-check",
+    ],
+)
+
+release_app(
+    name = "subscribe",
+    binary_name = "//friendly_computing_machine/src:fcm_cli",
+    language = "python",
+    domain = "friendly-computing-machine",
+    description = "RabbitMQ subscriber for ManMan status notifications",
+    app_type = "worker",
+    port = 7654,
+    replicas = 1,
+    health_check_enabled = False,
+    args = [
+        "subscribe",
+        "--log-otlp",
+        "run",
+        "--skip-migration-check",
+    ],
+)
+
+release_app(
+    name = "worker",
+    binary_name = "//friendly_computing_machine/src:fcm_cli",
+    language = "python",
+    domain = "friendly-computing-machine",
+    description = "Temporal worker for Friendly Computing Machine",
+    app_type = "worker",
+    port = 7654,
+    replicas = 1,
+    health_check_enabled = False,
+    args = [
+        "workflow",
+        "--log-otlp",
+        "run",
+        "--skip-migration-check",
+    ],
+)
+
+release_app(
+    name = "migration",
+    binary_name = "//friendly_computing_machine/src:fcm_cli",
+    language = "python",
+    domain = "friendly-computing-machine",
+    description = "Database migration job for Friendly Computing Machine",
+    app_type = "job",
+    replicas = 1,
+    args = [
+        "migration",
+        "--log-otlp",
+        "run",
+    ],
+)
+
+# ==============================================================================
+# Helm Chart Composition
+# ==============================================================================
+
+# List of all FCM app metadata targets for chart composition
+FCM_APPS = [
+    ":bot_metadata",
+    ":taskpool_metadata",
+    ":subscribe_metadata",
+    ":worker_metadata",
+    ":migration_metadata",
+]
+
+# Helm chart composition - combines all FCM services into a single chart
+# This is registered with the release system for CI/CD integration
+release_helm_chart(
+    name = "fcm_chart",
+    apps = FCM_APPS,
+    chart_name = "fcm-services",
+    namespace = "fcm",
+    environment = "dev",
+    domain = "friendly-computing-machine",
+    visibility = ["//visibility:public"],
+)

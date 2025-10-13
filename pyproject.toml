@@ -24,6 +24,13 @@ dependencies = [
     # Message queue
     "amqpstorm",
     
+    # Slack platform
+    "slack-bolt",
+    "slack-sdk",
+
+    # Temporal workflows
+    "temporalio[opentelemetry]",
+
     # CLI framework
     "typer",
     
@@ -37,6 +44,9 @@ dependencies = [
     "opentelemetry-instrumentation-sqlalchemy",
     "opentelemetry-exporter-otlp",
     
+    # Generative AI
+    "google-generativeai",
+
     # HTTP client
     "httpx",
     "requests",
