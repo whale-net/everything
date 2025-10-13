@@ -618,8 +618,8 @@ jobs:
   # Release helm charts (must run after app images are built and tagged)
   release-helm-charts:
     name: Release Helm Charts
-    needs: [plan-release, release, create-github-releases]
-    if: github.event.inputs.helm_charts != '' && (always() && !cancelled())
+    needs: [plan-release, release]
+    if: github.event.inputs.helm_charts != '' && (always() && !cancelled()) && (needs.release.result == 'success' || needs.release.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write     # Push git tags and read repository content
