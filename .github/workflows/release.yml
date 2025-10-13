@@ -794,10 +794,18 @@ jobs:
         mkdir -p /tmp/helm-repo
         
         # Try to download existing index.yaml from GitHub Pages /charts subdirectory
+        # Add cache-busting headers to avoid getting stale content
         if curl -fsSL -o /tmp/helm-repo/index.yaml \
-          "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts/index.yaml"; then
+          -H "Cache-Control: no-cache, no-store, must-revalidate" \
+          -H "Pragma: no-cache" \
+          -H "Expires: 0" \
+          "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts/index.yaml?nocache=$(date +%s)"; then
           echo "✅ Downloaded existing index.yaml"
           ls -lh /tmp/helm-repo/
+          # Verify the downloaded file is valid YAML
+          if command -v yq &> /dev/null; then
+            yq eval '.entries' /tmp/helm-repo/index.yaml > /dev/null 2>&1 || echo "⚠️ Warning: Downloaded index.yaml may be invalid"
+          fi
         else
           echo "ℹ️ No existing index.yaml found (this is normal for first deployment)"
         fi
@@ -813,22 +821,36 @@ jobs:
         # Copy charts to charts directory
         cp /tmp/helm-charts/*.tgz /tmp/helm-repo/charts/
         
+        # List what we're about to index
+        echo "Charts to be indexed:"
+        ls -lh /tmp/helm-charts/*.tgz
+        
         # Copy existing index to charts directory if it exists
         if [ -f /tmp/helm-repo/index.yaml ]; then
+          echo "📥 Found existing index.yaml, preparing to merge..."
           mv /tmp/helm-repo/index.yaml /tmp/helm-repo/charts/
+          echo "Existing index contents:"
+          cat /tmp/helm-repo/charts/index.yaml | head -20
         fi
         
         # Generate or merge index in the charts directory
         BASE_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
         
         if [ -f /tmp/helm-repo/charts/index.yaml ]; then
-          echo "Merging with existing index..."
+          echo "🔄 Merging with existing index..."
           helm repo index /tmp/helm-repo/charts --url "$BASE_URL" --merge /tmp/helm-repo/charts/index.yaml
+          echo "✅ Index merged successfully"
         else
-          echo "Creating new index..."
+          echo "📝 Creating new index..."
           helm repo index /tmp/helm-repo/charts --url "$BASE_URL"
+          echo "✅ New index created"
         fi
         
+        # Show the resulting index
+        echo ""
+        echo "📋 Final index.yaml contents:"
+        cat /tmp/helm-repo/charts/index.yaml
+        echo ""
         echo "✅ Generated Helm repository structure:"
         tree /tmp/helm-repo/ || ls -laR /tmp/helm-repo/
         
