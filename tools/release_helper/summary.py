@@ -4,6 +4,7 @@ Summary generation utilities for the release helper.
 
 import json
 from tools.release_helper.metadata import list_all_apps
+from tools.release_helper.validation import is_prerelease_version
 
 
 def generate_release_summary(
@@ -37,18 +38,24 @@ def generate_release_summary(
         app_versions = [item.get("version", version) for item in matrix["include"]]
         unique_versions = list(set(app_versions))
         
+        # Check if any version is a prerelease
+        has_prerelease = any(is_prerelease_version(v) for v in app_versions if v)
+        
         if len(unique_versions) == 1 and unique_versions[0] == version:
             # All apps have the same version as the main version
-            summary.append(f"🏷️  **Version:** {version}")
+            prerelease_indicator = " 🧪 (prerelease)" if has_prerelease else ""
+            summary.append(f"🏷️  **Version:** {version}{prerelease_indicator}")
         elif len(unique_versions) == 1:
             # All apps have the same version, but different from main version (increment mode)
-            summary.append(f"🏷️  **Version:** {unique_versions[0]}")
+            prerelease_indicator = " 🧪 (prerelease)" if has_prerelease else ""
+            summary.append(f"🏷️  **Version:** {unique_versions[0]}{prerelease_indicator}")
         else:
             # Multiple different versions (mixed increment mode)
             summary.append("🏷️  **Versions:**")
             for item in matrix["include"]:
                 app_version = item.get("version", version)
-                summary.append(f"   - {item['app']}: {app_version}")
+                prerelease_indicator = " 🧪" if is_prerelease_version(app_version) else ""
+                summary.append(f"   - {item['app']}: {app_version}{prerelease_indicator}")
         
         summary.append("🛠️ **System:** Consolidated Release + OCI")
         

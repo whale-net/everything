@@ -889,6 +889,25 @@ Versions must follow the `v{major}.{minor}.{patch}` format, with the special exc
 - ✅ Valid: `v1.0.0`, `v2.1.3`, `v1.0.0-beta1`, `v3.2.1-rc2`, `latest`
 - ❌ Invalid: `1.0.0`, `v1.0`, `v1`, `release-1.0.0`
 
+#### Release Candidate Support
+The release system automatically detects and handles release candidates and prereleases:
+
+**Prerelease Detection:**
+- Versions with suffixes like `-rc1`, `-rc2`, `-beta`, `-alpha` are automatically detected as prereleases
+- GitHub releases are automatically marked as "prerelease" for these versions
+- Prerelease indicator (🧪) is shown in release summaries
+
+**Examples:**
+- `v1.0.0-rc1` → Marked as prerelease in GitHub
+- `v2.1.0-beta` → Marked as prerelease in GitHub
+- `v1.0.0-alpha.1` → Marked as prerelease in GitHub
+- `v1.0.0` → Normal stable release
+
+**Benefits:**
+- Prevents users from accidentally using unstable versions
+- Clearly distinguishes test/preview releases from production releases
+- Follows semantic versioning best practices
+
 #### Version Overwrite Protection
 - **Automatic checks**: Before releasing, the system checks if the version already exists
 - **Registry validation**: Uses Docker manifest inspection to verify version availability
