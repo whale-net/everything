@@ -1,47 +1,15 @@
 """Bazel rule implementation for OpenAPI client generation with automatic model discovery."""
 
-def _openapi_client_impl(ctx):
-    """Generate OpenAPI client with automatic model discovery."""
-    spec = ctx.file.spec
-    package_name = ctx.attr.package_name
-    namespace = ctx.attr.namespace
+load("@bazel_skylib//lib:shell.bzl", "shell")
+
+def _openapi_client_provider_impl(ctx):
+    """Provide PyInfo for generated OpenAPI client (target configuration)."""
+    # Get the generated tar from the genrule
+    tar_file = ctx.file.tar
     app = ctx.attr.app
     
-    # Output directory structure must match import path
-    # For imports: from generated.{namespace}.{app} import ...
-    # This rule should be called from //generated/{namespace}/BUILD.bazel
-    # Output to just {app}, the package path provides the namespace part
-    # Result: bazel-bin/generated/{namespace}/{app}
-    #         runfiles/_main/generated/{namespace}/{app}
-    output_dir = app
-    
-    # Step 1: Generate tar
-    tar_file = ctx.actions.declare_file("{}.tar".format(app))
-    
-    # Get Java runtime from toolchain
-    java_toolchain_info = ctx.toolchains["@bazel_tools//tools/jdk:runtime_toolchain_type"].java_runtime
-    java_executable = java_toolchain_info.java_home + "/bin/java"
-    
-    # Use wrapper script
-    ctx.actions.run(
-        executable = ctx.executable._wrapper_script,
-        arguments = [
-            java_executable,
-            ctx.file._openapi_generator.path,
-            spec.path,
-            tar_file.path,
-            package_name,
-            namespace,
-            app,
-        ],
-        inputs = depset([spec, ctx.file._openapi_generator] + java_toolchain_info.files.to_list()),
-        outputs = [tar_file],
-        mnemonic = "OpenAPIGenerate",
-        progress_message = "Generating OpenAPI client for {}".format(app),
-    )
-    
-    # Step 2: Extract tar to proper directory structure
-    output_tree = ctx.actions.declare_directory(output_dir)
+    # Extract tar to proper directory structure
+    output_tree = ctx.actions.declare_directory(app)
     
     ctx.actions.run_shell(
         inputs = [tar_file],
@@ -61,17 +29,6 @@ def _openapi_client_impl(ctx):
         """,
         arguments = [output_tree.path, tar_file.path],
     )
-    
-    # Now files are at bazel-bin/generated/{namespace}/generated/{namespace}/{app}
-    # In runfiles: bazel-bin/generated/manman -> runfiles/manman/
-    # So files end up at: runfiles/manman/generated/{namespace}/{app}
-    # To import "from generated.{namespace}.{app}", Python needs runfiles/manman/ in sys.path
-    # We add the repository name (manman) as an import path
-    #
-    # For the package structure to work, we also need:
-    # - generated/__init__.py  
-    # - generated/{namespace}/__init__.py
-    # These are created as separate genrule targets in the BUILD file
     
     # Collect init files from _package_inits attribute
     init_files = []
@@ -103,32 +60,19 @@ def _openapi_client_impl(ctx):
         ),
     ]
 
-openapi_client_rule = rule(
-    implementation = _openapi_client_impl,
+openapi_client_provider_rule = rule(
+    implementation = _openapi_client_provider_impl,
     attrs = {
-        "spec": attr.label(allow_single_file = [".json"], mandatory = True),
-        "namespace": attr.string(mandatory = True),
+        "tar": attr.label(allow_single_file = [".tar"], mandatory = True),
         "app": attr.string(mandatory = True),
-        "package_name": attr.string(mandatory = True),
-        "deps": attr.label_list(providers = [PyInfo]),  # Runtime deps like pydantic
+        "deps": attr.label_list(providers = [PyInfo]),
         "_package_inits": attr.label_list(
             default = [
                 "//generated:init",
                 "//generated/manman:namespace_init",
             ],
         ),
-        "_openapi_generator": attr.label(
-            default = "@openapi_generator_cli//file",
-            allow_single_file = True,
-            cfg = "exec",
-        ),
-        "_wrapper_script": attr.label(
-            default = "//tools:openapi_gen_wrapper",
-            executable = True,
-            cfg = "exec",
-        ),
     },
-    toolchains = ["@bazel_tools//tools/jdk:runtime_toolchain_type"],
     provides = [DefaultInfo, PyInfo],
 )
 
@@ -149,14 +93,42 @@ def openapi_client(name, spec, namespace, app, package_name = None, visibility =
     if not package_name:
         package_name = "{}-{}".format(namespace, app.replace("_", "-"))
     
-    # Generate the client code with runtime deps included
-    # This creates a TreeArtifact which works locally with MANIFEST
-    openapi_client_rule(
+    # Step 1: Generate client code using genrule (exec configuration)
+    # This ensures Java runs on the execution platform, not the target platform
+    tar_name = name + "_tar_gen"
+    native.genrule(
+        name = tar_name,
+        srcs = [spec],
+        outs = ["{}.tar".format(app)],
+        tools = [
+            "//tools/openapi:run_openapi_gen",
+            "@openapi_generator_cli//file",
+        ],
+        cmd = """
+            # Use host Java via run_openapi_gen (avoids toolchain platform issues)
+            $(location //tools/openapi:run_openapi_gen) \\
+                $(location @openapi_generator_cli//file) \\
+                $(location {spec}) \\
+                $@ \\
+                {package_name} \\
+                {namespace} \\
+                {app}
+        """.format(
+            spec = spec,
+            package_name = package_name.replace("-", "_"),
+            namespace = namespace,
+            app = app,
+        ),
+        visibility = ["//visibility:private"],
+        tags = ["openapi", "local"],  # local = no sandboxing
+        local = True,  # Disable sandboxing to access host Java
+    )
+    
+    # Step 2: Create PyInfo provider (target configuration)
+    openapi_client_provider_rule(
         name = name,
-        spec = spec,
-        namespace = namespace,
+        tar = ":" + tar_name,
         app = app,
-        package_name = package_name,
         deps = [
             "@pypi//:pydantic",
             "@pypi//:python-dateutil",

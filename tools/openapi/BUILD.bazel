@@ -7,11 +7,20 @@ exports_files([
     "openapi_client.bzl",
     "openapi_client_rule.bzl",
     "openapi_gen_wrapper.sh",
+    "run_openapi_gen.sh",
 ])
 
-# Wrapper script for OpenAPI generation
+# Wrapper script for OpenAPI generation  
 sh_binary(
     name = "openapi_gen_wrapper",
     srcs = ["openapi_gen_wrapper.sh"],
+    visibility = ["//visibility:public"],
+)
+
+# Runner that uses host Java (for genrules in exec configuration)
+sh_binary(
+    name = "run_openapi_gen",
+    srcs = ["run_openapi_gen.sh"],
+    data = [":openapi_gen_wrapper"],
     visibility = ["//visibility:public"],
 )
