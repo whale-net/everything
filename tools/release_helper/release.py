@@ -153,9 +153,9 @@ def plan_release(
 
     return {
         "matrix": matrix,
-        "apps": [app["name"] for app in release_apps],  # Return just names for compatibility
+        "apps": [f"{app['domain']}-{app['name']}" for app in release_apps],  # Return full domain-name format to avoid ambiguity
         "version": version,  # For legacy compatibility, may be None for increment modes
-        "versions": {app["name"]: app.get("version", version) for app in release_apps} if release_apps else {},  # Individual app versions
+        "versions": {f"{app['domain']}-{app['name']}": app.get("version", version) for app in release_apps} if release_apps else {},  # Individual app versions with domain-app keys
         "event_type": event_type
     }
 

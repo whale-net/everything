@@ -220,7 +220,7 @@ jobs:
 
   # Build OpenAPI specs for FastAPI apps (only apps that have specs)
   build-openapi-specs:
-    name: Build OpenAPI Spec for ${{ matrix.app }}
+    name: Build OpenAPI Spec for ${{ matrix.domain }}-${{ matrix.app }}
     runs-on: ubuntu-latest
     needs: [plan-release, plan-openapi-builds]
     if: needs.plan-openapi-builds.outputs.has-specs == 'true' && github.event.inputs.dry_run == 'false'
@@ -290,13 +290,13 @@ jobs:
     - name: Upload OpenAPI spec artifact
       uses: actions/upload-artifact@v4
       with:
-        name: openapi-spec-${{ matrix.app }}
+        name: openapi-spec-${{ matrix.domain }}-${{ matrix.app }}
         path: /tmp/openapi-specs/${{ matrix.domain }}-${{ matrix.app }}-openapi.json
         if-no-files-found: warn
 
   # Build and release selected apps
   release:
-    name: Release ${{ matrix.app }}
+    name: Release ${{ matrix.domain }}-${{ matrix.app }}
     runs-on: ubuntu-latest
     needs: plan-release
     if: needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
@@ -382,7 +382,7 @@ jobs:
           echo "ℹ️  Tag $TAG_NAME already exists, skipping creation"
         else
           echo "Creating git tag: $TAG_NAME"
-          git tag -a "$TAG_NAME" -m "Release $APP version $VERSION" "${{ github.sha }}"
+          git tag -a "$TAG_NAME" -m "Release ${DOMAIN}-${APP} version $VERSION" "${{ github.sha }}"
           git push origin "$TAG_NAME"
           echo "✅ Created and pushed git tag: $TAG_NAME"
         fi
@@ -431,7 +431,7 @@ jobs:
       if: ${{ github.event.inputs.dry_run == 'false' }}
       uses: actions/upload-artifact@v4
       with:
-        name: release-notes-${{ matrix.app }}
+        name: release-notes-${{ matrix.domain }}-${{ matrix.app }}
         path: /tmp/release-notes/${{ steps.release-notes.outputs.domain }}-${{ matrix.app }}.md
         if-no-files-found: ignore
 
