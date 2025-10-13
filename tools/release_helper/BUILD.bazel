@@ -183,3 +183,15 @@ py_test(
     ],
     size = "small",
 )
+
+# Unit tests for CLI commands
+py_test(
+    name = "test_cli",
+    srcs = ["test_cli.py"],
+    deps = [
+        ":release_helper_lib",
+        "@pypi//:pytest",
+        "@pypi//:typer",
+    ],
+    size = "small",
+)
