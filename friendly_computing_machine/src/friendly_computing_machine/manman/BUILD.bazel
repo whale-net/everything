@@ -4,11 +4,11 @@ package(default_visibility = ["//friendly_computing_machine:__subpackages__"])
 
 py_library(
     name = "manman",
-    srcs = glob(["**/*.py"]),
+    srcs = glob(["*.py"]),
     visibility = ["//visibility:public"],
     deps = [
-        "//external/manman:experience_api",
-        "//external/manman:status_api",
-        "//external/manman:worker_dal_api",
+        "//generated/manman:experience_api",
+        "//generated/manman:status_api",
+        "//generated/manman:worker_dal_api",
     ],
 )

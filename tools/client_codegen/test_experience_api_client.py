@@ -21,9 +21,9 @@ def _ensure_generated_client_on_path() -> None:
 _ensure_generated_client_on_path()
 
 
-from external.manman.experience_api import ApiClient, Configuration  # type: ignore[import-not-found]
-from external.manman.experience_api.api import DefaultApi  # type: ignore[import-not-found]
-from external.manman.experience_api.models import (  # type: ignore[import-not-found]
+from generated.manman.experience_api import ApiClient, Configuration  # type: ignore[import-not-found]
+from generated.manman.experience_api.api import DefaultApi  # type: ignore[import-not-found]
+from generated.manman.experience_api.models import (  # type: ignore[import-not-found]
     CurrentInstanceResponse,
     GameServerConfig,
     GameServerInstance,

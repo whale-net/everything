@@ -1,24 +1,17 @@
 # Generated OpenAPI clients for manman namespace
-# Clients defined here are importable as: from external.manman.{app} import ...
+# Clients defined here are importable as: from generated.manman.{app} import ...
 
 load("//tools/openapi:openapi_client_rule.bzl", "openapi_client")
 
 package(default_visibility = ["//visibility:public"])
 
-# Package Structure __init__.py Files
-# ====================================
-# These make "from external.manman.{app}" work as proper Python packages.
-# Both files are created here since //external/ is reserved for Bazel external repositories.
-
-genrule(
-    name = "external_init",
-    outs = ["external/__init__.py"],
-    cmd = "touch $@",
-)
+# Package Structure __init__.py File
+# ===================================
+# This makes "from generated.manman.{app}" work as proper Python packages.
 
 genrule(
     name = "namespace_init",
-    outs = ["external/manman/__init__.py"],
+    outs = ["__init__.py"],
     cmd = "touch $@",
 )
 
