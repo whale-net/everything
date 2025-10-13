@@ -135,9 +135,22 @@ To release only apps without helm charts:
 - Leave the `Helm charts` input empty or don't specify any charts
 - Workflow will skip the helm chart release job
 
-### Helm-Only Releases (Advanced)
+### Helm-Only Releases
 
-For releasing only helm charts without apps, use the CLI directly:
+To release only helm charts without apps:
+- Leave the `Apps` input empty
+- Specify charts in the `Helm charts` input
+- Workflow will skip the app release jobs and only build/publish helm charts
+
+**Example:**
+- Apps: *(leave empty)*
+- Version: `v1.5.0` or use increment options
+- Helm charts: `demo` or `hello-fastapi` or `all`
+- Result: Helm charts built and published without releasing any apps
+
+**Alternative: CLI for local testing**
+
+For local helm chart building (without publishing to GitHub Pages):
 
 ```bash
 # Build and package charts using latest released app versions
