@@ -420,6 +420,106 @@ For FastAPI apps with `fastapi_app` configured in `release_app`:
 - This ensures that OpenAPI spec build failures are treated as release-blocking issues
 - Apps without `fastapi_app` configured are not affected and release normally
 
+## 🔁 CI and Manual Workflows
+
+The repository includes three main workflows for building and publishing container images:
+
+### 1. CI Workflow (Automatic)
+
+**File**: `.github/workflows/ci.yml`
+
+**Triggers**: Automatically on pull requests and pushes to main
+
+**Behavior**:
+- Builds all targets to verify compilation
+- Runs all tests including cross-compilation verification
+- On main branch pushes: builds and publishes images for changed apps only
+- Uses intelligent change detection to minimize unnecessary builds
+- Published tags: `latest` and commit-specific (e.g., `abc123def`)
+
+**Use case**: Continuous validation and automatic deployment of changes
+
+### 2. Release Workflow (Manual, Versioned)
+
+**File**: `.github/workflows/release.yml`
+
+**Triggers**: Manual (workflow_dispatch)
+
+**Behavior**:
+- Allows selection of specific apps, domains, or "all"
+- Creates semantic version tags (e.g., `v1.2.3`)
+- Creates git tags for apps (format: `{domain}-{app}.v{version}`)
+- Creates GitHub releases with release notes
+- Builds and publishes multi-platform images
+- Optionally builds and publishes Helm charts
+
+**Use case**: Official versioned releases with semantic versioning
+
+**Documentation**: See [HELM_RELEASE.md](docs/HELM_RELEASE.md) for details
+
+### 3. Manual Rebuild Workflow (Manual, Latest Only)
+
+**File**: `.github/workflows/manual-rebuild.yml`
+
+**Triggers**: Manual (workflow_dispatch)
+
+**Behavior**:
+- Allows manual triggering of build/test/image pipeline
+- Supports same app selection patterns as release workflow (all, domain, CSV)
+- Optional test skipping for faster rebuilds
+- **Idempotent publishing**: Only publishes if running on latest main commit
+- Published tags: `latest` and commit-specific
+- No git tags or GitHub releases created
+
+**Use case**: 
+- When CI fails to refresh latest build
+- Manual rebuild without code changes
+- Testing build pipeline for specific apps
+
+**Key Feature - Latest Commit Check**:
+```yaml
+# Only publishes if:
+# 1. publish: true
+# 2. On main branch
+# 3. Running on latest main commit (not stale)
+```
+
+This prevents accidentally publishing stale images from old commits.
+
+**Documentation**: See [MANUAL_REBUILD.md](docs/MANUAL_REBUILD.md) for detailed usage
+
+### Workflow Comparison
+
+| Feature | CI | Release | Manual Rebuild |
+|---------|-----|---------|----------------|
+| **Trigger** | Auto (PR/Push) | Manual | Manual |
+| **App Selection** | Changed apps | User-specified | User-specified |
+| **Versioning** | `latest` tag | Semantic (v1.2.3) | `latest` tag |
+| **Git Tags** | No | Yes | No |
+| **GitHub Releases** | No | Yes | No |
+| **Helm Charts** | No | Optional | No |
+| **Latest Commit Check** | N/A | No | Yes (for publish) |
+| **Use Case** | Validation | Versioned releases | Manual refresh |
+
+### When to Use Each Workflow
+
+**Use CI Workflow when**:
+- Making normal code changes
+- Want automatic validation and deployment
+- Let the system detect what needs rebuilding
+
+**Use Release Workflow when**:
+- Creating an official versioned release
+- Need semantic versioning (v1.2.3)
+- Want GitHub releases and release notes
+- Releasing Helm charts
+
+**Use Manual Rebuild when**:
+- CI didn't refresh an image after merge
+- Need to rebuild without code changes
+- Want to manually test build pipeline
+- Only want to update `latest` tag
+
 ## 🔍 Agent Guidelines
 
 ### Code Analysis
