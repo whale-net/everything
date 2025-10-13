@@ -191,7 +191,7 @@ For local development and testing, you can control version resolution:
 **Use Released Versions (`--use-released`)**
 - Queries git for latest tags matching `{domain}-{app_name}.v*`
 - Example: For `hello_fastapi` in `demo` domain, finds `demo-hello_fastapi.v1.2.3`
-- Falls back to "latest" if no tags found
+- **Raises an error** if no tags found (ensures versioned charts always use semver tags)
 
 **Use Latest (`--use-latest`)**
 - Uses `"latest"` for all app versions
