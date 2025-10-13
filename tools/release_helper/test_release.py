@@ -196,6 +196,80 @@ class TestPlanRelease:
                 version_mode="increment_minor"
             )
 
+    @patch('tools.release_helper.release.get_previous_tag')
+    def test_plan_release_workflow_dispatch_main_commit_mode(self, mock_get_previous_tag, mock_list_all_apps, mock_detect_changed_apps, mock_print, sample_apps):
+        """Test workflow_dispatch with main_commit mode."""
+        mock_get_previous_tag.return_value = "demo-hello_python.v0.9.0"
+        
+        # mock_detect_changed_apps already returns hello_python
+        # Set up list_all_apps to return all apps
+        mock_list_all_apps.return_value = sample_apps
+        
+        result = plan_release(
+            event_type="workflow_dispatch",
+            requested_apps="all",
+            version="latest",
+            version_mode="main_commit",
+            include_demo=True  # Include demo domain so hello_python isn't filtered out
+        )
+        
+        # Main commit mode should filter apps based on changes
+        assert result["version"] == "latest"
+        # Only hello_python should be in the result (from mock_detect_changed_apps)
+        assert len(result["matrix"]["include"]) == 1
+        assert result["apps"] == ["hello_python"]
+        # All apps should have version="latest"
+        assert all(app["version"] == "latest" for app in result["matrix"]["include"])
+        mock_detect_changed_apps.assert_called_once()
+
+    @patch('tools.release_helper.release.get_previous_tag')
+    def test_plan_release_workflow_dispatch_main_commit_mode_with_base_commit(self, mock_get_previous_tag, mock_list_all_apps, mock_detect_changed_apps, mock_print, sample_apps):
+        """Test workflow_dispatch with main_commit mode and explicit base commit."""
+        # With explicit base_commit, get_previous_tag should not be called
+        
+        result = plan_release(
+            event_type="workflow_dispatch",
+            requested_apps="all",
+            version="latest",
+            version_mode="main_commit",
+            base_commit="abc123"
+        )
+        
+        # Should use explicit base_commit
+        mock_detect_changed_apps.assert_called_once_with("abc123")
+        mock_get_previous_tag.assert_not_called()
+        assert result["version"] == "latest"
+        assert all(app["version"] == "latest" for app in result["matrix"]["include"])
+
+    def test_plan_release_main_commit_mode_wrong_version(self):
+        """Test error when main_commit mode has version other than 'latest'."""
+        with pytest.raises(ValueError, match="Main commit mode requires version to be 'latest'"):
+            plan_release(
+                event_type="workflow_dispatch",
+                requested_apps="all",
+                version="v1.0.0",
+                version_mode="main_commit"
+            )
+
+    @patch('tools.release_helper.release.get_previous_tag')
+    def test_plan_release_workflow_dispatch_main_commit_mode_specific_apps(self, mock_get_previous_tag, mock_validate_apps, mock_detect_changed_apps, mock_print, sample_apps):
+        """Test workflow_dispatch with main_commit mode and specific apps."""
+        mock_get_previous_tag.return_value = "v0.9.0"
+        # mock_validate_apps returns first two apps
+        # mock_detect_changed_apps returns hello_python
+        
+        result = plan_release(
+            event_type="workflow_dispatch",
+            requested_apps="hello_python,hello_go",
+            version="latest",
+            version_mode="main_commit"
+        )
+        
+        # Should filter requested apps to only changed apps
+        assert len(result["matrix"]["include"]) == 1
+        assert result["apps"] == ["hello_python"]
+        mock_detect_changed_apps.assert_called_once()
+
     def test_plan_release_workflow_dispatch_legacy_no_version(self):
         """Test error when legacy workflow_dispatch has no version."""
         with pytest.raises(ValueError, match="Manual releases require version to be specified"):
