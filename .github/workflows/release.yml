@@ -376,10 +376,15 @@ jobs:
           DOMAIN=$(echo "$METADATA" | sed 's/.*domain: \([^,]*\).*/\1/')
           TAG_NAME="${DOMAIN}-${APP}.${VERSION}"
           
-          echo "Creating git tag: $TAG_NAME"
-          git tag -a "$TAG_NAME" -m "Release $APP version $VERSION" "${{ github.sha }}"
-          git push origin "$TAG_NAME"
-          echo "✅ Created and pushed git tag: $TAG_NAME"
+          # Check if tag already exists
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "ℹ️  Tag $TAG_NAME already exists, skipping creation"
+          else
+            echo "Creating git tag: $TAG_NAME"
+            git tag -a "$TAG_NAME" -m "Release $APP version $VERSION" "${{ github.sha }}"
+            git push origin "$TAG_NAME"
+            echo "✅ Created and pushed git tag: $TAG_NAME"
+          fi
         else
           echo "Warning: Could not determine domain for $APP, skipping git tag"
         fi
@@ -767,13 +772,18 @@ jobs:
             
             echo "Creating tag: $TAG_NAME for chart $CHART (published as $PUBLISHED_NAME)"
             
-            # Create annotated tag
-            git tag -a "$TAG_NAME" -m "Release helm chart $CHART version ${CHART_VERSION}" "${{ github.sha }}"
-            
-            # Push the tag
-            git push origin "$TAG_NAME"
-            
-            echo "✅ Created and pushed tag: $TAG_NAME"
+            # Check if tag already exists
+            if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+              echo "ℹ️  Tag $TAG_NAME already exists, skipping creation"
+            else
+              # Create annotated tag
+              git tag -a "$TAG_NAME" -m "Release helm chart $CHART version ${CHART_VERSION}" "${{ github.sha }}"
+              
+              # Push the tag
+              git push origin "$TAG_NAME"
+              
+              echo "✅ Created and pushed tag: $TAG_NAME"
+            fi
           else
             echo "⚠️ Warning: Could not find chart file for $CHART (looking for ${PUBLISHED_NAME}-*.tgz)"
           fi
