@@ -90,6 +90,33 @@ class TestFindAppBazelTarget:
         
         assert result == "//api/status_service:status_service_metadata"
 
+    def test_find_app_bazel_target_ambiguous_name(self, sample_apps_with_collision):
+        """Test that ambiguous app names raise an error."""
+        with patch('tools.release_helper.release.list_all_apps', return_value=sample_apps_with_collision):
+            # hello_python exists in both demo and api domains
+            with pytest.raises(ValueError, match="ambiguous"):
+                find_app_bazel_target("hello_python")
+
+    def test_find_app_bazel_target_full_format(self, sample_apps_with_collision):
+        """Test finding app by full domain-app format."""
+        with patch('tools.release_helper.release.list_all_apps', return_value=sample_apps_with_collision):
+            # Use full format to disambiguate
+            result = find_app_bazel_target("demo-hello_python")
+            assert result == "//demo/hello_python:hello_python_metadata"
+            
+            result = find_app_bazel_target("api-hello_python")
+            assert result == "//api/hello_python:hello_python_metadata"
+
+    def test_find_app_bazel_target_path_format(self, sample_apps_with_collision):
+        """Test finding app by path format (domain/name)."""
+        with patch('tools.release_helper.release.list_all_apps', return_value=sample_apps_with_collision):
+            # Use path format to disambiguate
+            result = find_app_bazel_target("demo/hello_python")
+            assert result == "//demo/hello_python:hello_python_metadata"
+            
+            result = find_app_bazel_target("api/hello_python")
+            assert result == "//api/hello_python:hello_python_metadata"
+
 
 class TestPlanRelease:
     """Test cases for plan_release function."""

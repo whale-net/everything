@@ -341,11 +341,14 @@ jobs:
     - name: Build and release app using multiarch release
       env:
         APP: ${{ matrix.app }}
+        DOMAIN: ${{ matrix.domain }}
         VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
         DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
       run: |
-        echo "Building and releasing $APP version $VERSION using multiarch release system"
+        # Use full domain-app format to avoid ambiguity
+        FULL_APP_NAME="${DOMAIN}-${APP}"
+        echo "Building and releasing $FULL_APP_NAME version $VERSION using multiarch release system"
         
         # Build the release helper binary first (avoids nested Bazel invocations)
         echo "Building release helper..."
@@ -354,14 +357,14 @@ jobs:
         # Execute the release helper directly (not via 'bazel run' to avoid deadlocks)
         RELEASE_HELPER="$(bazel info bazel-bin --config=ci)/tools/release_helper/release_helper"
         
-        # Use release-multiarch to build and push platform-specific images + manifest lists
+        # Use release-multiarch with full domain-app name to ensure correct artifact is released
         if [[ "$DRY_RUN" == "true" ]]; then
           echo "DRY RUN: Building multiarch images without publishing"
-          "$RELEASE_HELPER" release-multiarch "$APP" --version "$VERSION" --commit "${{ github.sha }}" --dry-run
+          "$RELEASE_HELPER" release-multiarch "$FULL_APP_NAME" --version "$VERSION" --commit "${{ github.sha }}" --dry-run
         else
-          echo "Building and publishing multiarch images for $APP $VERSION"
-          "$RELEASE_HELPER" release-multiarch "$APP" --version "$VERSION" --commit "${{ github.sha }}"
-          echo "Successfully released multiarch $APP $VERSION"
+          echo "Building and publishing multiarch images for $FULL_APP_NAME $VERSION"
+          "$RELEASE_HELPER" release-multiarch "$FULL_APP_NAME" --version "$VERSION" --commit "${{ github.sha }}"
+          echo "Successfully released multiarch $FULL_APP_NAME $VERSION"
         fi
         
     - name: Create git tag for release
@@ -389,43 +392,40 @@ jobs:
       id: release-notes
       env:
         APP: ${{ matrix.app }}
+        DOMAIN: ${{ matrix.domain }}
         VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
       run: |
-        echo "Generating release notes for $APP version $VERSION"
+        # Use full domain-app format to avoid ambiguity
+        FULL_APP_NAME="${DOMAIN}-${APP}"
+        echo "Generating release notes for $FULL_APP_NAME version $VERSION"
         
-        # Get app metadata to determine domain for tag format
-        METADATA=$(bazel run --config=ci //tools:release -- list-apps | grep "^$APP " | head -n1)
-        if [[ -n "$METADATA" ]]; then
-          DOMAIN=$(echo "$METADATA" | sed 's/.*domain: \([^,]*\).*/\1/')
-          TAG_NAME="${DOMAIN}-${APP}.${VERSION}"
-          
-          # Output domain for use in upload step
-          echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
-          
-          echo "## 📝 Release Notes for $TAG_NAME" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Generate release notes using the release helper
-          RELEASE_NOTES=$(bazel run --config=ci //tools:release -- release-notes "$APP" \
-            --current-tag "$TAG_NAME" \
-            --format markdown 2>/dev/null || echo "Release notes generation skipped - no previous tags found")
-          
-          echo "Release notes generated for $APP:"
-          echo "$RELEASE_NOTES"
-          
-          # Add to GitHub step summary
-          echo "$RELEASE_NOTES" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "✅ Release notes generated for $APP $VERSION"
-          
-          # Save release notes to a file for the GitHub release creation job
-          mkdir -p /tmp/release-notes
-          echo "$RELEASE_NOTES" > "/tmp/release-notes/${DOMAIN}-${APP}.md"
-        else
-          echo "Warning: Could not determine domain for $APP, skipping release notes"
-        fi
+        # Tag format uses domain-appname.version
+        TAG_NAME="${DOMAIN}-${APP}.${VERSION}"
+        
+        # Output domain for use in upload step
+        echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
+        
+        echo "## 📝 Release Notes for $TAG_NAME" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Generate release notes using the release helper with full app name
+        RELEASE_NOTES=$(bazel run --config=ci //tools:release -- release-notes "$FULL_APP_NAME" \
+          --current-tag "$TAG_NAME" \
+          --format markdown 2>/dev/null || echo "Release notes generation skipped - no previous tags found")
+        
+        echo "Release notes generated for $FULL_APP_NAME:"
+        echo "$RELEASE_NOTES"
+        
+        # Add to GitHub step summary
+        echo "$RELEASE_NOTES" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        echo "✅ Release notes generated for $FULL_APP_NAME $VERSION"
+        
+        # Save release notes to a file for the GitHub release creation job
+        mkdir -p /tmp/release-notes
+        echo "$RELEASE_NOTES" > "/tmp/release-notes/${DOMAIN}-${APP}.md"
     
     - name: Upload release notes artifact
       if: ${{ github.event.inputs.dry_run == 'false' }}
