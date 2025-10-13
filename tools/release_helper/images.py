@@ -199,7 +199,8 @@ def push_image_with_tags(bazel_target: str, tags: List[str]) -> None:
 
 
 def release_multiarch_image(bazel_target: str, version: str, registry: str = "ghcr.io", 
-                           platforms: List[str] = None, commit_sha: Optional[str] = None) -> None:
+                           platforms: List[str] = None, commit_sha: Optional[str] = None, 
+                           skip_build: bool = False) -> None:
     """Release a multi-architecture image using OCI image index.
     
     Builds platform-specific images and pushes a single OCI image index containing
@@ -212,6 +213,7 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
         registry: Container registry (defaults to ghcr.io)
         platforms: List of platforms to build (defaults to ["amd64", "arm64"])
         commit_sha: Optional commit SHA for additional tag
+        skip_build: Whether to skip building images (for CI pipeline testing)
     """
     if platforms is None:
         platforms = ["amd64", "arm64"]
@@ -241,16 +243,21 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
     # The oci_image_index rule with platforms parameter will automatically:
     # 1. Build the base image for each platform via Bazel transitions
     # 2. Create a proper OCI index manifest with platform metadata
-    print(f"\n{'='*80}")
-    print("Building OCI image index with platform transitions...")
-    print(f"{'='*80}")
-    index_target = f"//{app_path}:{app_name}_image"
-    print(f"Building index: {index_target}")
-    run_bazel([
-        "build", 
-        index_target
-    ])
-    print(f"✅ Built OCI image index containing {len(platforms)} platform variants")
+    if not skip_build:
+        print(f"\n{'='*80}")
+        print("Building OCI image index with platform transitions...")
+        print(f"{'='*80}")
+        index_target = f"//{app_path}:{app_name}_image"
+        print(f"Building index: {index_target}")
+        run_bazel([
+            "build", 
+            index_target
+        ])
+        print(f"✅ Built OCI image index containing {len(platforms)} platform variants")
+    else:
+        print(f"\n{'='*80}")
+        print(f"SKIP BUILD: Skipping OCI image index build for {image_name}")
+        print(f"{'='*80}")
 
     
     # Push the image index with all tags
@@ -264,10 +271,17 @@ def release_multiarch_image(bazel_target: str, version: str, registry: str = "gh
         platform=None  # No platform suffix - this is the index
     )
     
-    print(f"\n{'='*80}")
-    print(f"Pushing OCI image index with {len(tags)} tags...")
-    print(f"{'='*80}")
-    push_image_with_tags(bazel_target, list(tags.values()))
+    if not skip_build:
+        print(f"\n{'='*80}")
+        print(f"Pushing OCI image index with {len(tags)} tags...")
+        print(f"{'='*80}")
+        push_image_with_tags(bazel_target, list(tags.values()))
+    else:
+        print(f"\n{'='*80}")
+        print(f"SKIP BUILD: Would push OCI image index with {len(tags)} tags")
+        print(f"{'='*80}")
+        for tag in tags.values():
+            print(f"  - {tag}")
     
     print(f"\n{'='*80}")
     print(f"✅ Successfully released {image_name}:{version}")

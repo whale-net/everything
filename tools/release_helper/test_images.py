@@ -291,3 +291,89 @@ class TestPushImageWithTags:
         # The function should re-raise the exception
         with pytest.raises(Exception, match="Push failed"):
             push_image_with_tags(bazel_target, tags)
+
+
+class TestReleaseMultiarchImage:
+    """Test cases for release_multiarch_image function."""
+
+    @patch('tools.release_helper.images.run_bazel')
+    @patch('tools.release_helper.images.get_app_metadata')
+    @patch('tools.release_helper.images.push_image_with_tags')
+    @patch('builtins.print')
+    def test_release_multiarch_image_normal_flow(self, mock_print, mock_push, mock_get_metadata, mock_run_bazel):
+        """Test normal multi-arch image release with building."""
+        from tools.release_helper.images import release_multiarch_image
+        
+        mock_get_metadata.return_value = {
+            'domain': 'demo',
+            'name': 'hello_python',
+            'registry': 'ghcr.io'
+        }
+        
+        bazel_target = "//demo/hello_python:hello_python_metadata"
+        release_multiarch_image(bazel_target, "v1.0.0", skip_build=False)
+        
+        # Verify build was called
+        build_calls = [call for call in mock_run_bazel.call_args_list 
+                      if call[0][0][0] == "build"]
+        assert len(build_calls) == 1
+        
+        # Verify push was called
+        mock_push.assert_called_once()
+
+    @patch('tools.release_helper.images.run_bazel')
+    @patch('tools.release_helper.images.get_app_metadata')
+    @patch('tools.release_helper.images.push_image_with_tags')
+    @patch('builtins.print')
+    def test_release_multiarch_image_skip_build(self, mock_print, mock_push, mock_get_metadata, mock_run_bazel):
+        """Test multi-arch image release with skip_build flag."""
+        from tools.release_helper.images import release_multiarch_image
+        
+        mock_get_metadata.return_value = {
+            'domain': 'demo',
+            'name': 'hello_python',
+            'registry': 'ghcr.io'
+        }
+        
+        bazel_target = "//demo/hello_python:hello_python_metadata"
+        release_multiarch_image(bazel_target, "v1.0.0", skip_build=True)
+        
+        # Verify build was NOT called
+        build_calls = [call for call in mock_run_bazel.call_args_list 
+                      if call[0][0][0] == "build"]
+        assert len(build_calls) == 0
+        
+        # Verify push was NOT called
+        mock_push.assert_not_called()
+        
+        # Verify skip build message was printed
+        print_calls = [call[0][0] for call in mock_print.call_args_list]
+        assert any("SKIP BUILD" in str(call) for call in print_calls)
+
+    @patch('tools.release_helper.images.run_bazel')
+    @patch('tools.release_helper.images.get_app_metadata')
+    @patch('tools.release_helper.images.push_image_with_tags')
+    @patch('builtins.print')
+    def test_release_multiarch_image_skip_build_shows_tags(self, mock_print, mock_push, mock_get_metadata, mock_run_bazel):
+        """Test that skip_build mode displays what would be pushed."""
+        from tools.release_helper.images import release_multiarch_image
+        
+        mock_get_metadata.return_value = {
+            'domain': 'demo',
+            'name': 'hello_python',
+            'registry': 'ghcr.io'
+        }
+        
+        bazel_target = "//demo/hello_python:hello_python_metadata"
+        release_multiarch_image(bazel_target, "v1.0.0", commit_sha="abc123", skip_build=True)
+        
+        # Verify skip build output contains expected information
+        print_calls = [call[0][0] for call in mock_print.call_args_list]
+        output = "\n".join(str(call) for call in print_calls)
+        
+        # Should show what would be pushed
+        assert "Would push" in output or "SKIP BUILD" in output
+        
+        # Should mention the tags
+        assert "v1.0.0" in output or "latest" in output
+            push_image_with_tags(bazel_target, tags)

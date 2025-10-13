@@ -166,7 +166,8 @@ def tag_and_push_image(
     commit_sha: Optional[str] = None,
     dry_run: bool = False,
     allow_overwrite: bool = False,
-    create_git_tag_flag: bool = False
+    create_git_tag_flag: bool = False,
+    skip_build: bool = False
 ) -> None:
     """Build and push container images to registry, optionally creating Git tags.
     
@@ -174,9 +175,10 @@ def tag_and_push_image(
         app_name: Name of the app (will be converted to bazel target)
         version: Version to release
         commit_sha: Optional commit SHA for tagging
-        dry_run: Whether to perform a dry run
+        dry_run: Whether to perform a dry run (builds but doesn't push)
         allow_overwrite: Whether to allow overwriting existing versions
         create_git_tag_flag: Whether to create a git tag
+        skip_build: Whether to skip building images (for CI pipeline testing)
     """
     # Find the bazel target for this app
     bazel_target = find_app_bazel_target(app_name)
@@ -189,13 +191,16 @@ def tag_and_push_image(
     domain = metadata["domain"]
     actual_app_name = metadata["name"]
 
-    # Build the image (but don't load into Docker)
-    build_image(bazel_target)
+    # Build the image (but don't load into Docker) unless skip_build is True
+    if not skip_build:
+        build_image(bazel_target)
+    else:
+        print(f"SKIP BUILD: Skipping image build for {actual_app_name} (pipeline testing mode)")
 
     # Generate registry tags using the new domain-app:version format
     tags = format_registry_tags(domain, actual_app_name, version, registry, commit_sha)
 
-    if dry_run:
+    if dry_run or skip_build:
         print("DRY RUN: Would push the following images:")
         for tag in tags.values():
             print(f"  - {tag}")

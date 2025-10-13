@@ -377,6 +377,52 @@ class TestTagAndPushImage:
     @patch('tools.release_helper.release.validate_release_version')
     @patch('tools.release_helper.release.build_image')
     @patch('tools.release_helper.release.format_registry_tags')
+    @patch('builtins.print')
+    def test_tag_and_push_image_skip_build(self, mock_print, mock_format_tags, mock_build_image,
+                                          mock_validate_version, mock_get_app_metadata):
+        """Test skip_build mode - should skip building images entirely."""
+        with patch('tools.release_helper.release.find_app_bazel_target', return_value="//demo/hello_python:hello_python_metadata"):
+            mock_format_tags.return_value = {
+                "latest": "ghcr.io/demo-hello_python:latest",
+                "version": "ghcr.io/demo-hello_python:v1.0.0"
+            }
+            
+            tag_and_push_image("hello_python", "v1.0.0", skip_build=True)
+            
+            # Verify build was NOT called
+            mock_build_image.assert_not_called()
+            
+            # Verify skip build messages were printed
+            print_calls = [call[0][0] for call in mock_print.call_args_list]
+            assert any("SKIP BUILD" in call for call in print_calls)
+            assert any("DRY RUN: Would push" in call for call in print_calls)
+
+    @patch('tools.release_helper.release.validate_release_version')
+    @patch('tools.release_helper.release.build_image')
+    @patch('tools.release_helper.release.format_registry_tags')
+    @patch('builtins.print')
+    def test_tag_and_push_image_skip_build_with_dry_run(self, mock_print, mock_format_tags, 
+                                                        mock_build_image, mock_validate_version, 
+                                                        mock_get_app_metadata):
+        """Test skip_build works with dry_run flag (skip_build takes precedence)."""
+        with patch('tools.release_helper.release.find_app_bazel_target', return_value="//demo/hello_python:hello_python_metadata"):
+            mock_format_tags.return_value = {
+                "latest": "ghcr.io/demo-hello_python:latest",
+                "version": "ghcr.io/demo-hello_python:v1.0.0"
+            }
+            
+            tag_and_push_image("hello_python", "v1.0.0", dry_run=True, skip_build=True)
+            
+            # Verify build was NOT called even with dry_run=True
+            mock_build_image.assert_not_called()
+            
+            # Verify skip build messages were printed
+            print_calls = [call[0][0] for call in mock_print.call_args_list]
+            assert any("SKIP BUILD" in call for call in print_calls)
+
+    @patch('tools.release_helper.release.validate_release_version')
+    @patch('tools.release_helper.release.build_image')
+    @patch('tools.release_helper.release.format_registry_tags')
     @patch('tools.release_helper.release.format_git_tag')
     @patch('builtins.print')
     def test_tag_and_push_image_dry_run_with_git_tag(self, mock_print, mock_format_git_tag, 

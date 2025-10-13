@@ -22,6 +22,10 @@ on:
         description: 'Dry run - build but do not publish'
         type: boolean
         default: false
+      skip_build:
+        description: 'Skip build - test CI pipeline logic without building images (for testing)'
+        type: boolean
+        default: false
       helm_charts:
         description: 'Helm charts to release (e.g., hello-fastapi,demo-workers) or "all" or domain name (e.g., "demo"). Leave empty to skip helm chart release.'
         required: false
@@ -344,6 +348,7 @@ jobs:
         DOMAIN: ${{ matrix.domain }}
         VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
         DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        SKIP_BUILD: ${{ github.event.inputs.skip_build || 'false' }}
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
       run: |
         # Use full domain-app format to avoid ambiguity
@@ -357,18 +362,27 @@ jobs:
         # Execute the release helper directly (not via 'bazel run' to avoid deadlocks)
         RELEASE_HELPER="$(bazel info bazel-bin --config=ci)/tools/release_helper/release_helper"
         
-        # Use release-multiarch with full domain-app name to ensure correct artifact is released
+        # Build flags based on inputs
+        RELEASE_FLAGS=""
         if [[ "$DRY_RUN" == "true" ]]; then
+          RELEASE_FLAGS="$RELEASE_FLAGS --dry-run"
           echo "DRY RUN: Building multiarch images without publishing"
-          "$RELEASE_HELPER" release-multiarch "$FULL_APP_NAME" --version "$VERSION" --commit "${{ github.sha }}" --dry-run
-        else
-          echo "Building and publishing multiarch images for $FULL_APP_NAME $VERSION"
-          "$RELEASE_HELPER" release-multiarch "$FULL_APP_NAME" --version "$VERSION" --commit "${{ github.sha }}"
+        fi
+        if [[ "$SKIP_BUILD" == "true" ]]; then
+          RELEASE_FLAGS="$RELEASE_FLAGS --skip-build"
+          echo "SKIP BUILD: Testing CI pipeline without building images"
+        fi
+        
+        # Use release-multiarch with full domain-app name to ensure correct artifact is released
+        echo "Executing: $RELEASE_HELPER release-multiarch $FULL_APP_NAME --version $VERSION --commit ${{ github.sha }} $RELEASE_FLAGS"
+        "$RELEASE_HELPER" release-multiarch "$FULL_APP_NAME" --version "$VERSION" --commit "${{ github.sha }}" $RELEASE_FLAGS
+        
+        if [[ "$SKIP_BUILD" != "true" && "$DRY_RUN" != "true" ]]; then
           echo "Successfully released multiarch $FULL_APP_NAME $VERSION"
         fi
         
     - name: Create git tag for release
-      if: ${{ github.event.inputs.dry_run == 'false' }}
+      if: ${{ github.event.inputs.dry_run == 'false' && github.event.inputs.skip_build == 'false' }}
       env:
         APP: ${{ matrix.app }}
         DOMAIN: ${{ matrix.domain }}
@@ -388,7 +402,7 @@ jobs:
         fi
 
     - name: Generate release notes for app
-      if: ${{ github.event.inputs.dry_run == 'false' }}
+      if: ${{ github.event.inputs.dry_run == 'false' && github.event.inputs.skip_build == 'false' }}
       id: release-notes
       env:
         APP: ${{ matrix.app }}
@@ -428,7 +442,7 @@ jobs:
         echo "$RELEASE_NOTES" > "/tmp/release-notes/${DOMAIN}-${APP}.md"
     
     - name: Upload release notes artifact
-      if: ${{ github.event.inputs.dry_run == 'false' }}
+      if: ${{ github.event.inputs.dry_run == 'false' && github.event.inputs.skip_build == 'false' }}
       uses: actions/upload-artifact@v4
       with:
         name: release-notes-${{ matrix.app }}
@@ -439,7 +453,7 @@ jobs:
     name: Create GitHub Releases
     runs-on: ubuntu-latest
     needs: [plan-release, release, build-openapi-specs]
-    if: always() && !cancelled() && needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null && github.event.inputs.dry_run == 'false' && needs.release.result == 'success' && (needs.build-openapi-specs.result == 'success' || needs.build-openapi-specs.result == 'skipped')
+    if: always() && !cancelled() && needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null && github.event.inputs.dry_run == 'false' && github.event.inputs.skip_build == 'false' && needs.release.result == 'success' && (needs.build-openapi-specs.result == 'success' || needs.build-openapi-specs.result == 'skipped')
     steps:
     - name: Checkout code
       uses: actions/checkout@v4

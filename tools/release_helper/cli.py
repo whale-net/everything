@@ -83,6 +83,7 @@ def release_multiarch(
     registry: Annotated[str, typer.Option(help="Container registry")] = "ghcr.io",
     commit: Annotated[Optional[str], typer.Option(help="Commit SHA for additional tag")] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be pushed without actually pushing")] = False,
+    skip_build: Annotated[bool, typer.Option("--skip-build", help="Skip building images (for CI pipeline testing)")] = False,
 ):
     """Build and release multi-architecture container images with manifest lists.
     
@@ -91,6 +92,8 @@ def release_multiarch(
     2. Pushes platform-specific tags (e.g., app:v1.0.0-amd64, app:v1.0.0-arm64)
     3. Creates manifest lists that automatically serve the correct architecture
     4. Pushes manifest lists (e.g., app:v1.0.0 points to both architectures)
+    
+    Use --skip-build to test CI pipeline logic without building images.
     """
     # Parse platforms
     platform_list = platforms.split(",") if platforms else ["amd64", "arm64"]
@@ -159,6 +162,8 @@ def release_multiarch(
     typer.echo(f"Version: {version}")
     typer.echo(f"Platforms: {', '.join(platform_list)}")
     typer.echo(f"Registry: {registry}")
+    if skip_build:
+        typer.echo(f"⚠️  SKIP BUILD MODE: Pipeline testing - no actual builds will occur")
     
     try:
         release_multiarch_image(
@@ -166,7 +171,8 @@ def release_multiarch(
             version=version,
             registry=registry,
             platforms=platform_list,
-            commit_sha=commit
+            commit_sha=commit,
+            skip_build=skip_build
         )
         typer.echo(f"✅ Successfully released {actual_app_name}:{version} for {len(platform_list)} platforms")
         owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "whale-net").lower()
