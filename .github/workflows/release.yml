@@ -51,22 +51,22 @@ jobs:
       run: |
         APPS="${{ github.event.inputs.apps }}"
         HELM_CHARTS="${{ github.event.inputs.helm_charts }}"
-        
+
         # Ensure at least one of apps or helm_charts is specified
         if [[ -z "$APPS" && -z "$HELM_CHARTS" ]]; then
           echo "Error: Must specify at least one of 'apps' or 'helm_charts'"
           exit 1
         fi
-        
+
         echo "✅ Release targets validated: apps='$APPS', helm_charts='$HELM_CHARTS'"
-    
+
     - name: Validate mutually exclusive version options
       run: |
         VERSION="${{ github.event.inputs.version }}"
         INCREMENT_MINOR="${{ github.event.inputs.increment_minor }}"
         INCREMENT_PATCH="${{ github.event.inputs.increment_patch }}"
         MAIN_COMMIT="${{ github.event.inputs.main_commit }}"
-        
+
         # Count how many version options are set
         OPTION_COUNT=0
         if [[ -n "$VERSION" ]]; then
@@ -81,7 +81,7 @@ jobs:
         if [[ "$MAIN_COMMIT" == "true" ]]; then
           OPTION_COUNT=$((OPTION_COUNT + 1))
         fi
-        
+
         # Ensure exactly one option is set
         if [[ $OPTION_COUNT -eq 0 ]]; then
           echo "Error: Must specify exactly one of: version, increment_minor, increment_patch, or main_commit"
@@ -90,14 +90,14 @@ jobs:
           echo "Error: version, increment_minor, increment_patch, and main_commit are mutually exclusive. Specify only one."
           exit 1
         fi
-        
+
         # Validate helm charts with main_commit
         HELM_CHARTS="${{ github.event.inputs.helm_charts }}"
         if [[ "$MAIN_COMMIT" == "true" && -n "$HELM_CHARTS" ]]; then
           echo "Error: helm_charts cannot be specified when using main_commit mode"
           exit 1
         fi
-        
+
         echo "✅ Version input validation passed"
 
   # Detect what apps have changed and build release plan
@@ -115,7 +115,7 @@ jobs:
       with:
         fetch-depth: 0
         fetch-tags: true
-        
+
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
@@ -123,7 +123,7 @@ jobs:
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-        
+
     - name: Plan release using release helper tool
       id: plan
       run: |
@@ -135,17 +135,17 @@ jobs:
         EVENT_TYPE="workflow_dispatch"
         APPS_INPUT="${{ github.event.inputs.apps }}"
         INCLUDE_DEMO="${{ github.event.inputs.include_demo }}"
-        
+
         # Only plan app release if apps are specified
         if [[ -n "$APPS_INPUT" ]]; then
           # Build the command based on the selected option
           CMD="bazel run --config=ci //tools:release -- plan --event-type \"$EVENT_TYPE\" --apps \"$APPS_INPUT\" --format github"
-          
+
           # Add --include-demo flag if checkbox is selected
           if [[ "$INCLUDE_DEMO" == "true" ]]; then
             CMD="$CMD --include-demo"
           fi
-          
+
           if [[ -n "$VERSION" ]]; then
             CMD="$CMD --version \"$VERSION\""
             echo "version=$VERSION" >> $GITHUB_OUTPUT
@@ -160,11 +160,11 @@ jobs:
             echo "version=latest" >> $GITHUB_OUTPUT
             echo "Planning main commit release (latest tag only)"
           fi
-          
+
           # Use release helper to plan the release
           echo "Planning release with command: $CMD"
           PLAN_OUTPUT=$(eval $CMD)
-          
+
           # Parse output from release helper
           echo "$PLAN_OUTPUT" | while IFS= read -r line; do
             if [[ "$line" == matrix=* ]]; then
@@ -199,7 +199,7 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
+
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
@@ -207,17 +207,17 @@ jobs:
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-        
+
     - name: Plan OpenAPI spec builds
       id: plan-openapi
       env:
         APPS: ${{ needs.plan-release.outputs.apps }}
       run: |
         echo "Planning OpenAPI spec builds for apps: $APPS"
-        
+
         # Use release helper to identify apps with OpenAPI specs
         PLAN_OUTPUT=$(bazel run --config=ci //tools:release -- plan-openapi-builds --apps "$APPS" --format github)
-        
+
         # Parse output
         echo "$PLAN_OUTPUT" | while IFS= read -r line; do
           if [[ "$line" == matrix=* ]]; then
@@ -231,7 +231,7 @@ jobs:
             fi
           fi
         done
-        
+
         # If no matrix was set, mark as no specs
         if ! grep -q "matrix=" <<< "$PLAN_OUTPUT"; then
           echo "matrix={}" >> $GITHUB_OUTPUT
@@ -250,7 +250,7 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
+
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
@@ -258,7 +258,7 @@ jobs:
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-    
+
     - name: Build OpenAPI spec
       continue-on-error: true
       env:
@@ -268,35 +268,35 @@ jobs:
       run: |
         echo "Building OpenAPI spec for $APP..."
         echo "Target: $OPENAPI_TARGET"
-        
+
         # Build the OpenAPI spec
         if bazel build --config=ci "$OPENAPI_TARGET"; then
           # Find the generated spec file - it's now named {domain}-{app}_openapi_spec.json
           # Remove @@// or // prefix from target (Bazel 8.x uses @@ prefix for main repo)
           TARGET_PATH="${OPENAPI_TARGET#@@//}"
           TARGET_PATH="${TARGET_PATH#//}"
-          
+
           # The target name includes _openapi_spec suffix, and now the file includes domain prefix
           # Format: bazel-bin/{path}/{domain}-{app}_openapi_spec.json
           BAZEL_BIN=$(bazel info bazel-bin --config=ci)
           TARGET_DIR=$(echo "$TARGET_PATH" | sed 's#:#/#' | sed 's#/[^/]*$##')
-          
+
           # Try the new naming format with domain prefix first
           SPEC_FILE="${BAZEL_BIN}/${TARGET_DIR}/${DOMAIN}-${APP}_openapi_spec.json"
-          
+
           # Fallback to old format if the new format doesn't exist (for backward compatibility)
           if [[ ! -f "$SPEC_FILE" ]]; then
             SPEC_FILE="${BAZEL_BIN}/${TARGET_PATH}.json"
             SPEC_FILE=$(echo "$SPEC_FILE" | sed 's#:#/#')
           fi
-          
+
           if [[ -f "$SPEC_FILE" ]]; then
             # Create output directory
             mkdir -p /tmp/openapi-specs
-            
+
             # Copy spec with a descriptive name
             cp "$SPEC_FILE" "/tmp/openapi-specs/${DOMAIN}-${APP}-openapi.json"
-            
+
             echo "✅ OpenAPI spec saved to: /tmp/openapi-specs/${DOMAIN}-${APP}-openapi.json"
           else
             echo "⚠️ OpenAPI spec file not found at expected location: $SPEC_FILE"
@@ -306,7 +306,7 @@ jobs:
           echo "❌ Failed to build OpenAPI spec for $APP"
           exit 1
         fi
-    
+
     - name: Upload OpenAPI spec artifact
       uses: actions/upload-artifact@v4
       with:
@@ -329,7 +329,7 @@ jobs:
       with:
         fetch-depth: 0
         fetch-tags: true
-        
+
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
@@ -338,13 +338,13 @@ jobs:
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-        
+
     # Configure Git for tagging
     - name: Configure Git
       run: |
         git config --global user.name "${{ github.actor }}"
         git config --global user.email "${{ github.actor }}@users.noreply.github.com"
-        
+
     # Login unless it's a manual dispatch with dry_run=true
     # - Manual dispatch with dry_run=false: login (needed for publishing)
     # - Manual dispatch with dry_run=true: skip login (no publishing)
@@ -357,43 +357,46 @@ jobs:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
-        
+
     - name: Build and release app using multiarch release
       env:
         APP: ${{ matrix.app }}
+        DOMAIN: ${{ matrix.domain }}
         VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
         DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         MAIN_COMMIT: ${{ github.event.inputs.main_commit || 'false' }}
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
       run: |
-        echo "Building and releasing $APP version $VERSION using multiarch release system"
-        
+        # Use full domain-app format to avoid ambiguity
+        FULL_APP_NAME="${DOMAIN}-${APP}"
+        echo "Building and releasing $FULL_APP_NAME version $VERSION using multiarch release system"
+
         # Build the release helper binary first (avoids nested Bazel invocations)
         echo "Building release helper..."
         bazel build --config=ci //tools:release
-        
+
         # Execute the release helper directly (not via 'bazel run' to avoid deadlocks)
         RELEASE_HELPER="$(bazel info bazel-bin --config=ci)/tools/release_helper/release_helper"
-        
-        # Use release-multiarch to build and push platform-specific images + manifest lists
+
+        # Use release-multiarch with full domain-app name to ensure correct artifact is released
         # For main_commit mode, we don't add commit SHA to avoid GHCR storage bloat
         if [[ "$DRY_RUN" == "true" ]]; then
           echo "DRY RUN: Building multiarch images without publishing"
           if [[ "$MAIN_COMMIT" == "true" ]]; then
-            "$RELEASE_HELPER" release-multiarch "$APP" --version "$VERSION" --dry-run
+            "$RELEASE_HELPER" release-multiarch "$FULL_APP_NAME" --version "$VERSION" --dry-run
           else
-            "$RELEASE_HELPER" release-multiarch "$APP" --version "$VERSION" --commit "${{ github.sha }}" --dry-run
+            "$RELEASE_HELPER" release-multiarch "$FULL_APP_NAME" --version "$VERSION" --commit "${{ github.sha }}" --dry-run
           fi
         else
-          echo "Building and publishing multiarch images for $APP $VERSION"
+          echo "Building and publishing multiarch images for $FULL_APP_NAME $VERSION"
           if [[ "$MAIN_COMMIT" == "true" ]]; then
-            "$RELEASE_HELPER" release-multiarch "$APP" --version "$VERSION"
+            "$RELEASE_HELPER" release-multiarch "$FULL_APP_NAME" --version "$VERSION"
           else
-            "$RELEASE_HELPER" release-multiarch "$APP" --version "$VERSION" --commit "${{ github.sha }}"
+            "$RELEASE_HELPER" release-multiarch "$FULL_APP_NAME" --version "$VERSION" --commit "${{ github.sha }}"
           fi
-          echo "Successfully released multiarch $APP $VERSION"
+          echo "Successfully released multiarch $FULL_APP_NAME $VERSION"
         fi
-        
+
     - name: Create git tag for release
       if: ${{ github.event.inputs.dry_run == 'false' && github.event.inputs.main_commit == 'false' }}
       env:
@@ -403,7 +406,7 @@ jobs:
       run: |
         # Use domain from matrix (avoids ambiguity when apps share names across domains)
         TAG_NAME="${DOMAIN}-${APP}.${VERSION}"
-        
+
         # Check if tag already exists
         if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
           echo "ℹ️  Tag $TAG_NAME already exists, skipping creation"
@@ -419,44 +422,41 @@ jobs:
       id: release-notes
       env:
         APP: ${{ matrix.app }}
+        DOMAIN: ${{ matrix.domain }}
         VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
       run: |
-        echo "Generating release notes for $APP version $VERSION"
-        
-        # Get app metadata to determine domain for tag format
-        METADATA=$(bazel run --config=ci //tools:release -- list-apps | grep "^$APP " | head -n1)
-        if [[ -n "$METADATA" ]]; then
-          DOMAIN=$(echo "$METADATA" | sed 's/.*domain: \([^,]*\).*/\1/')
-          TAG_NAME="${DOMAIN}-${APP}.${VERSION}"
-          
-          # Output domain for use in upload step
-          echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
-          
-          echo "## 📝 Release Notes for $TAG_NAME" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Generate release notes using the release helper
-          RELEASE_NOTES=$(bazel run --config=ci //tools:release -- release-notes "$APP" \
-            --current-tag "$TAG_NAME" \
-            --format markdown 2>/dev/null || echo "Release notes generation skipped - no previous tags found")
-          
-          echo "Release notes generated for $APP:"
-          echo "$RELEASE_NOTES"
-          
-          # Add to GitHub step summary
-          echo "$RELEASE_NOTES" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "✅ Release notes generated for $APP $VERSION"
-          
-          # Save release notes to a file for the GitHub release creation job
-          mkdir -p /tmp/release-notes
-          echo "$RELEASE_NOTES" > "/tmp/release-notes/${DOMAIN}-${APP}.md"
-        else
-          echo "Warning: Could not determine domain for $APP, skipping release notes"
-        fi
-    
+        # Use full domain-app format to avoid ambiguity
+        FULL_APP_NAME="${DOMAIN}-${APP}"
+        echo "Generating release notes for $FULL_APP_NAME version $VERSION"
+
+        # Tag format uses domain-appname.version
+        TAG_NAME="${DOMAIN}-${APP}.${VERSION}"
+
+        # Output domain for use in upload step
+        echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
+
+        echo "## 📝 Release Notes for $TAG_NAME" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        # Generate release notes using the release helper with full app name
+        RELEASE_NOTES=$(bazel run --config=ci //tools:release -- release-notes "$FULL_APP_NAME" \
+          --current-tag "$TAG_NAME" \
+          --format markdown 2>/dev/null || echo "Release notes generation skipped - no previous tags found")
+
+        echo "Release notes generated for $FULL_APP_NAME:"
+        echo "$RELEASE_NOTES"
+
+        # Add to GitHub step summary
+        echo "$RELEASE_NOTES" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        echo "✅ Release notes generated for $FULL_APP_NAME $VERSION"
+
+        # Save release notes to a file for the GitHub release creation job
+        mkdir -p /tmp/release-notes
+        echo "$RELEASE_NOTES" > "/tmp/release-notes/${DOMAIN}-${APP}.md"
+
     - name: Upload release notes artifact
       if: ${{ github.event.inputs.dry_run == 'false' && github.event.inputs.main_commit == 'false' }}
       uses: actions/upload-artifact@v4
@@ -476,7 +476,7 @@ jobs:
       with:
         fetch-depth: 0
         fetch-tags: true
-        
+
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
@@ -484,14 +484,14 @@ jobs:
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-    
+
     - name: Download release notes artifacts
       uses: actions/download-artifact@v4
       with:
         pattern: release-notes-*
         path: /tmp/release-notes
         merge-multiple: true
-    
+
     - name: Download OpenAPI spec artifacts
       uses: actions/download-artifact@v4
       with:
@@ -499,7 +499,7 @@ jobs:
         path: /tmp/openapi-specs
         merge-multiple: true
       continue-on-error: true
-      
+
     - name: Create GitHub releases for all apps
       env:
         MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
@@ -509,21 +509,21 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         echo "Creating GitHub releases for all apps in version $VERSION..."
-        
+
         # Extract app names from matrix
         APPS=$(echo "$MATRIX" | jq -r '.include[].app' | tr '\n' ',' | sed 's/,$//')
-        
+
         if [[ -n "$APPS" && "$APPS" != "" ]]; then
           echo "Creating releases for apps: $APPS"
-          
+
           # List available release notes files
           echo "Available release notes files:"
           ls -la /tmp/release-notes/ || echo "No release notes files found"
-          
+
           # List available OpenAPI spec files
           echo "Available OpenAPI spec files:"
           ls -la /tmp/openapi-specs/ || echo "No OpenAPI spec files found"
-          
+
           # Create releases for all apps at once, using pre-generated release notes
           if bazel run --config=ci //tools:release -- create-combined-github-release-with-notes "$VERSION" \
             --owner "$GITHUB_REPOSITORY_OWNER" \
@@ -549,7 +549,7 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
+
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
@@ -557,23 +557,23 @@ jobs:
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-      
+
     - name: Generate summary using release helper
       run: |
         # Use our release helper tool to generate the summary
         MATRIX='${{ needs.plan-release.outputs.release-matrix }}'
         EVENT_TYPE="workflow_dispatch"
         DRY_RUN="${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}"
-        
+
         SUMMARY=$(bazel run //tools:release -- summary \
           --matrix "$MATRIX" \
           --version "${{ needs.plan-release.outputs.version }}" \
           --event-type "$EVENT_TYPE" \
           --repository-owner "${{ github.repository_owner }}" \
           $DRY_RUN)
-        
+
         echo "$SUMMARY" >> $GITHUB_STEP_SUMMARY
-        
+
     - name: Add helm chart summary
       if: github.event.inputs.helm_charts != ''
       run: |
@@ -583,31 +583,31 @@ jobs:
         HELM_JOB_RESULT="${{ needs.release-helm-charts.result }}"
         REPO_OWNER="${{ github.repository_owner }}"
         REPO_NAME="${{ github.event.repository.name }}"
-        
+
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "---" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "## 🎯 Helm Chart Release" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        
+
         if [[ "$HELM_JOB_RESULT" == "success" ]]; then
           echo "**Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
           echo "**Charts:** $HELM_CHARTS" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** $VERSION" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           if [[ "$DRY_RUN" != "true" ]]; then
             echo "### 📚 Helm Repository" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "Charts have been published to GitHub Pages:" >> $GITHUB_STEP_SUMMARY
             echo "- **Repository URL:** https://${REPO_OWNER}.github.io/${REPO_NAME}/charts" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            
+
             echo "### 🏷️ Git Tags" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "Git tags have been created for version tracking:" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            
+
             # List the created tags based on chart names
             IFS=',' read -ra CHART_ARRAY <<< "$HELM_CHARTS"
             for CHART in "${CHART_ARRAY[@]}"; do
@@ -618,7 +618,7 @@ jobs:
               fi
             done
             echo "" >> $GITHUB_STEP_SUMMARY
-            
+
             echo "**Add the repository:**" >> $GITHUB_STEP_SUMMARY
             echo '```bash' >> $GITHUB_STEP_SUMMARY
             echo "helm repo add ${REPO_NAME} https://${REPO_OWNER}.github.io/${REPO_NAME}/charts" >> $GITHUB_STEP_SUMMARY
@@ -632,9 +632,9 @@ jobs:
             echo '```' >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
           fi
-          
+
           echo "📥 **Chart packages available as workflow artifacts**" >> $GITHUB_STEP_SUMMARY
-          
+
           if [[ "$DRY_RUN" == "true" ]]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "ℹ️ *Dry run mode - charts built but not published to GitHub Pages*" >> $GITHUB_STEP_SUMMARY
@@ -661,7 +661,7 @@ jobs:
       with:
         fetch-depth: 0
         fetch-tags: true
-        
+
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
@@ -669,34 +669,34 @@ jobs:
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-        
+
     - name: Install Helm
       uses: azure/setup-helm@v4
       with:
         version: 'latest'
-        
+
     - name: Plan helm chart release
       id: plan
       run: |
         CHARTS_INPUT="${{ github.event.inputs.helm_charts }}"
         VERSION="${{ needs.plan-release.outputs.version }}"
         INCLUDE_DEMO="${{ github.event.inputs.include_demo }}"
-        
+
         echo "Planning helm chart release for: $CHARTS_INPUT"
         echo "Using version: $VERSION"
-        
+
         # Build the command with optional --include-demo flag
         CMD="bazel run --config=ci //tools:release -- plan-helm-release --charts \"$CHARTS_INPUT\" --version \"$VERSION\" --format github"
-        
+
         if [[ "$INCLUDE_DEMO" == "true" ]]; then
           CMD="$CMD --include-demo"
         fi
-        
+
         echo "Planning with command: $CMD"
-        
+
         # Use release helper to plan the helm chart release
         PLAN_OUTPUT=$(eval $CMD)
-        
+
         # Parse output from release helper
         echo "$PLAN_OUTPUT" | while IFS= read -r line; do
           if [[ "$line" == matrix=* ]]; then
@@ -711,7 +711,7 @@ jobs:
             fi
           fi
         done
-        
+
     - name: Build helm charts with versioning
       if: steps.plan.outputs.charts != ''
       env:
@@ -721,7 +721,7 @@ jobs:
         INCREMENT_PATCH: ${{ github.event.inputs.increment_patch }}
       run: |
         echo "Building helm charts with version $VERSION"
-        
+
         # Determine bump type based on increment inputs
         BUMP_TYPE="patch"  # Default to patch
         if [[ "$INCREMENT_MINOR" == "true" ]]; then
@@ -731,22 +731,22 @@ jobs:
           BUMP_TYPE="patch"
           echo "Using patch version bump for helm charts"
         fi
-        
+
         # Create output directory for charts
         mkdir -p /tmp/helm-charts
-        
+
         # Build the release helper binary first (avoids nested Bazel invocations)
         echo "Building release helper..."
         bazel build --config=ci //tools:release
         RELEASE_HELPER="$(bazel info bazel-bin --config=ci)/tools/release_helper/release_helper"
-        
+
         # Parse chart list and build each chart with proper versioning
         CHARTS="${{ steps.plan.outputs.charts }}"
         IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
-        
+
         for CHART in "${CHART_ARRAY[@]}"; do
           echo "Building chart: $CHART with auto-versioning (bump: $BUMP_TYPE)"
-          
+
           # Build the chart using release helper with auto-versioning
           # Each chart maintains its own version based on git tags (helm/<chart-name>/v*)
           # Note: --auto-version is the default, so we don't need to pass it explicitly
@@ -754,20 +754,20 @@ jobs:
             --output-dir /tmp/helm-charts \
             --use-released \
             --bump "$BUMP_TYPE"
-          
+
           echo "✅ Chart $CHART built successfully with auto-versioning (bump: $BUMP_TYPE)"
         done
-        
+
         # List generated charts with versions
         echo "Generated versioned charts:"
         ls -lh /tmp/helm-charts/
-        
+
     - name: Configure Git for tagging
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
       run: |
         git config --global user.name "${{ github.actor }}"
         git config --global user.email "${{ github.actor }}@users.noreply.github.com"
-        
+
     - name: Create and push helm chart tags
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
       env:
@@ -775,54 +775,54 @@ jobs:
         CHARTS: ${{ steps.plan.outputs.charts }}
       run: |
         echo "Creating git tags for helm chart releases..."
-        
+
         # Parse chart list and create tags for each chart
         IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
-        
+
         for CHART in "${CHART_ARRAY[@]}"; do
           # Strip helm- prefix from chart name for file lookup
           # Chart names internally use helm-namespace-name format,
           # but published files use namespace-name format (without helm- prefix)
           PUBLISHED_NAME="${CHART#helm-}"
-          
+
           # Extract the actual version from the packaged chart filename
           CHART_FILE=$(ls /tmp/helm-charts/${PUBLISHED_NAME}-*.tgz 2>/dev/null | head -n1)
-          
+
           if [[ -f "$CHART_FILE" ]]; then
             # Extract version from filename (e.g., demo-hello-fastapi-v0.2.1.tgz -> v0.2.1)
             CHART_VERSION=$(basename "$CHART_FILE" | sed -E "s/${PUBLISHED_NAME}-(.+)\.tgz/\1/")
-            
+
             # Format: {chart-name}.{version} (keep helm- prefix in tags to avoid collisions)
             TAG_NAME="${CHART}.${CHART_VERSION}"
-            
+
             echo "Creating tag: $TAG_NAME for chart $CHART (published as $PUBLISHED_NAME)"
-            
+
             # Check if tag already exists
             if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
               echo "ℹ️  Tag $TAG_NAME already exists, skipping creation"
             else
               # Create annotated tag
               git tag -a "$TAG_NAME" -m "Release helm chart $CHART version ${CHART_VERSION}" "${{ github.sha }}"
-              
+
               # Push the tag
               git push origin "$TAG_NAME"
-              
+
               echo "✅ Created and pushed tag: $TAG_NAME"
             fi
           else
             echo "⚠️ Warning: Could not find chart file for $CHART (looking for ${PUBLISHED_NAME}-*.tgz)"
           fi
         done
-        
+
         echo "✅ All helm chart tags created and pushed"
-        
+
     - name: Download existing Helm repository index
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
       continue-on-error: true
       run: |
         echo "Downloading existing Helm repository index if available..."
         mkdir -p /tmp/helm-repo
-        
+
         # Try to download existing index.yaml from GitHub Pages /charts subdirectory
         if curl -fsSL -o /tmp/helm-repo/index.yaml \
           "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts/index.yaml"; then
@@ -831,26 +831,26 @@ jobs:
         else
           echo "ℹ️ No existing index.yaml found (this is normal for first deployment)"
         fi
-        
+
     - name: Generate Helm repository index
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
       run: |
         echo "Generating Helm repository index..."
-        
+
         # Create charts directory structure
         mkdir -p /tmp/helm-repo/charts
-        
+
         # Copy charts to charts directory
         cp /tmp/helm-charts/*.tgz /tmp/helm-repo/charts/
-        
+
         # Copy existing index to charts directory if it exists
         if [ -f /tmp/helm-repo/index.yaml ]; then
           mv /tmp/helm-repo/index.yaml /tmp/helm-repo/charts/
         fi
-        
+
         # Generate or merge index in the charts directory
         BASE_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
-        
+
         if [ -f /tmp/helm-repo/charts/index.yaml ]; then
           echo "Merging with existing index..."
           helm repo index /tmp/helm-repo/charts --url "$BASE_URL" --merge /tmp/helm-repo/charts/index.yaml
@@ -858,21 +858,21 @@ jobs:
           echo "Creating new index..."
           helm repo index /tmp/helm-repo/charts --url "$BASE_URL"
         fi
-        
+
         echo "✅ Generated Helm repository structure:"
         tree /tmp/helm-repo/ || ls -laR /tmp/helm-repo/
-        
+
     - name: Upload Pages artifact
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
       uses: actions/upload-pages-artifact@v3
       with:
         path: /tmp/helm-repo
-        
+
     - name: Deploy to GitHub Pages
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
       id: deployment
       uses: actions/deploy-pages@v4
-        
+
     - name: Report deployment URL
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
       run: |
@@ -884,7 +884,7 @@ jobs:
         echo "Users can add the repository with:"
         echo "  helm repo add ${{ github.event.repository.name }} https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
         echo "  helm repo update"
-        
+
     - name: Upload helm chart artifacts
       if: steps.plan.outputs.charts != ''
       uses: actions/upload-artifact@v4

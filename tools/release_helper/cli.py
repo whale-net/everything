@@ -255,17 +255,21 @@ def plan_openapi_builds(
     # Parse app list
     app_list = [app.strip() for app in apps.split(',') if app.strip()]
     
-    # Get all apps with metadata
-    all_apps = list_all_apps()
-    
     # Filter to apps with OpenAPI spec targets
+    # Use validate_apps to handle all naming formats and detect ambiguity
+    from tools.release_helper.validation import validate_apps
+    
+    try:
+        validated_apps = validate_apps(app_list)
+    except ValueError as e:
+        typer.echo(f"Error validating apps: {e}", err=True)
+        raise typer.Exit(1)
+    
     apps_with_specs = []
-    for app_name in app_list:
-        # Find the app in all_apps
-        app_metadata = next((app for app in all_apps if app['name'] == app_name), None)
-        if app_metadata and app_metadata.get('openapi_spec_target'):
+    for app_metadata in validated_apps:
+        if app_metadata.get('openapi_spec_target'):
             apps_with_specs.append({
-                'app': app_name,
+                'app': app_metadata['name'],
                 'domain': app_metadata['domain'],
                 'openapi_target': app_metadata['openapi_spec_target']
             })

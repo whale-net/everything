@@ -432,73 +432,67 @@ class TestGetCommitsBetweenRefs:
 class TestFilterCommitsByApp:
     """Test cases for filter_commits_by_app function."""
 
-    @patch('tools.release_helper.release_notes.list_all_apps')
-    def test_filter_commits_by_app_success(self, mock_list_apps, sample_apps):
+    def test_filter_commits_by_app_success(self, sample_apps):
         """Test successful commit filtering for an app."""
-        mock_list_apps.return_value = sample_apps
-        
-        commits = [
-            ReleaseNote("abc123", "Fix app bug", "John", "2024-01-15", ["demo/hello_python/main.py"]),
-            ReleaseNote("def456", "Update go app", "Jane", "2024-01-14", ["demo/hello_go/main.go"]),
-            ReleaseNote("ghi789", "Update tooling", "Bob", "2024-01-13", ["tools/release.bzl"])
-        ]
-        
-        result = filter_commits_by_app(commits, "hello_python")
-        
-        # Should include the python app commit and the tooling commit (affects all apps)
-        assert len(result) == 2
-        assert result[0].commit_sha == "abc123"
-        assert result[1].commit_sha == "ghi789"
+        with patch('tools.release_helper.validation.list_all_apps', return_value=sample_apps):
+            commits = [
+                ReleaseNote("abc123", "Fix app bug", "John", "2024-01-15", ["demo/hello_python/main.py"]),
+                ReleaseNote("def456", "Update go app", "Jane", "2024-01-14", ["demo/hello_go/main.go"]),
+                ReleaseNote("ghi789", "Update tooling", "Bob", "2024-01-13", ["tools/release.bzl"])
+            ]
+            
+            result = filter_commits_by_app(commits, "hello_python")
+            
+            # Should include the python app commit and the tooling commit (affects all apps)
+            assert len(result) == 2
+            assert result[0].commit_sha == "abc123"
+            assert result[1].commit_sha == "ghi789"
 
-    @patch('tools.release_helper.release_notes.list_all_apps')
-    def test_filter_commits_by_app_infrastructure_changes(self, mock_list_apps, sample_apps):
+    def test_filter_commits_by_app_infrastructure_changes(self, sample_apps):
         """Test filtering includes infrastructure changes."""
-        mock_list_apps.return_value = sample_apps
-        
-        commits = [
-            ReleaseNote("abc123", "Update CI", "John", "2024-01-15", [".github/workflows/ci.yml"]),
-            ReleaseNote("def456", "Update Docker", "Jane", "2024-01-14", ["docker/Dockerfile"]),
-            ReleaseNote("ghi789", "Update BUILD", "Bob", "2024-01-13", ["BUILD.bazel"]),
-            ReleaseNote("jkl012", "Unrelated", "Alice", "2024-01-12", ["other/file.txt"])
-        ]
-        
-        result = filter_commits_by_app(commits, "hello_python")
-        
-        # Should include infrastructure changes but not unrelated files
-        assert len(result) == 3
-        commit_shas = [c.commit_sha for c in result]
-        assert "abc123" in commit_shas  # CI change
-        assert "def456" in commit_shas  # Docker change
-        assert "ghi789" in commit_shas  # BUILD change
-        assert "jkl012" not in commit_shas  # Unrelated
+        with patch('tools.release_helper.validation.list_all_apps', return_value=sample_apps):
+            commits = [
+                ReleaseNote("abc123", "Update CI", "John", "2024-01-15", [".github/workflows/ci.yml"]),
+                ReleaseNote("def456", "Update Docker", "Jane", "2024-01-14", ["docker/Dockerfile"]),
+                ReleaseNote("ghi789", "Update BUILD", "Bob", "2024-01-13", ["BUILD.bazel"]),
+                ReleaseNote("jkl012", "Unrelated", "Alice", "2024-01-12", ["other/file.txt"])
+            ]
+            
+            result = filter_commits_by_app(commits, "hello_python")
+            
+            # Should include infrastructure changes but not unrelated files
+            assert len(result) == 3
+            commit_shas = [c.commit_sha for c in result]
+            assert "abc123" in commit_shas  # CI change
+            assert "def456" in commit_shas  # Docker change
+            assert "ghi789" in commit_shas  # BUILD change
+            assert "jkl012" not in commit_shas  # Unrelated
 
-    @patch('tools.release_helper.release_notes.list_all_apps')
-    def test_filter_commits_by_app_not_found(self, mock_list_apps, sample_apps, mock_print):
+    def test_filter_commits_by_app_not_found(self, sample_apps, mock_print):
         """Test behavior when app is not found."""
-        mock_list_apps.return_value = sample_apps
-        
-        commits = [
-            ReleaseNote("abc123", "Fix bug", "John", "2024-01-15", ["demo/hello_python/main.py"])
-        ]
-        
-        result = filter_commits_by_app(commits, "nonexistent_app")
-        
-        assert len(result) == 0
+        with patch('tools.release_helper.validation.list_all_apps', return_value=sample_apps):
+            commits = [
+                ReleaseNote("abc123", "Fix bug", "John", "2024-01-15", ["demo/hello_python/main.py"])
+            ]
+            
+            # validate_apps will raise ValueError for nonexistent app
+            result = filter_commits_by_app(commits, "nonexistent_app")
+            
+            # Should return empty list when app not found
+            assert len(result) == 0
 
-    @patch('tools.release_helper.release_notes.list_all_apps')
-    def test_filter_commits_by_app_exception_handling(self, mock_list_apps, mock_print):
+    def test_filter_commits_by_app_exception_handling(self, mock_print):
         """Test exception handling in commit filtering."""
-        mock_list_apps.side_effect = Exception("List apps failed")
-        
-        commits = [
-            ReleaseNote("abc123", "Fix bug", "John", "2024-01-15", ["demo/hello_python/main.py"])
-        ]
-        
-        result = filter_commits_by_app(commits, "hello_python")
-        
-        # Should return all commits if filtering fails
-        assert len(result) == 1
-        assert result[0].commit_sha == "abc123"
+        with patch('tools.release_helper.validation.list_all_apps', side_effect=Exception("List apps failed")):
+            commits = [
+                ReleaseNote("abc123", "Fix bug", "John", "2024-01-15", ["demo/hello_python/main.py"])
+            ]
+            
+            result = filter_commits_by_app(commits, "hello_python")
+            
+            # Should return all commits if filtering fails
+            assert len(result) == 1
+            assert result[0].commit_sha == "abc123"
 
 
 class TestGenerateReleaseNotes:
@@ -593,15 +587,22 @@ class TestGenerateReleaseNotesForAllApps:
         result = generate_release_notes_for_all_apps("v1.0.0", "v0.9.0")
         
         assert len(result) == 4
-        assert "hello_python" in result
-        assert "hello_go" in result
-        assert "hello_fastapi" in result
-        assert "status_service" in result
-        assert result["hello_python"] == "Release notes for hello_python"
-        assert result["hello_go"] == "Release notes for hello_go"
+        # Now expects full domain-app format as keys
+        assert "demo-hello_python" in result
+        assert "demo-hello_go" in result
+        assert "demo-hello_fastapi" in result
+        assert "api-status_service" in result
+        assert result["demo-hello_python"] == "Release notes for hello_python"
+        assert result["demo-hello_go"] == "Release notes for hello_go"
         
-        # Verify generate_release_notes was called for each app
+        # Verify generate_release_notes was called for each app with full names
         assert mock_generate.call_count == 4
+        # Check that full domain-app names were used
+        calls = mock_generate.call_args_list
+        assert calls[0][0][0] == "demo-hello_python"
+        assert calls[1][0][0] == "demo-hello_go"
+        assert calls[2][0][0] == "demo-hello_fastapi"
+        assert calls[3][0][0] == "api-status_service"
 
     @patch('tools.release_helper.release_notes.list_all_apps')
     @patch('tools.release_helper.release_notes.generate_release_notes')
@@ -623,5 +624,5 @@ class TestGenerateReleaseNotesForAllApps:
         
         result = generate_release_notes_for_all_apps("v1.0.0", format_type="json")
         
-        # Verify format was passed through
-        mock_generate.assert_called_once_with("hello_python", "v1.0.0", None, "json")
+        # Verify format was passed through and full domain-app name was used
+        mock_generate.assert_called_once_with("demo-hello_python", "v1.0.0", None, "json")
