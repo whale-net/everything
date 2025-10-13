@@ -24,13 +24,35 @@ def find_workspace_root() -> Path:
     return current
 
 
-def run_bazel(args: list[str], capture_output: bool = True, env: dict = None) -> subprocess.CompletedProcess:
-    """Run a bazel command with consistent configuration."""
+def run_bazel(args: list[str], capture_output: bool = True, env: dict = None, timeout: int = None) -> subprocess.CompletedProcess:
+    """Run a bazel command with consistent configuration.
+    
+    Args:
+        args: Bazel command arguments (e.g., ["build", "//target"])
+        capture_output: Whether to capture stdout/stderr
+        env: Optional environment variables
+        timeout: Optional timeout in seconds (default: 600 for long builds)
+    
+    Returns:
+        CompletedProcess from subprocess.run
+        
+    Note:
+        Uses --noblock_for_lock to prevent deadlocks when release_helper
+        is invoked from within a Bazel build (e.g., via `bazel run`).
+        This prevents waiting indefinitely for Bazel server locks.
+    """
     workspace_root = find_workspace_root()
-    cmd = ["bazel"] + args
+    
+    # Add --noblock_for_lock before the command to prevent lock waiting
+    # This is critical when release_helper is invoked from Bazel itself
+    cmd = ["bazel", "--noblock_for_lock"] + args
     
     # Use provided environment or current environment
     run_env = env if env is not None else os.environ.copy()
+    
+    # Default timeout of 10 minutes for long image builds
+    if timeout is None:
+        timeout = 600
     
     try:
         return subprocess.run(
@@ -39,8 +61,13 @@ def run_bazel(args: list[str], capture_output: bool = True, env: dict = None) ->
             text=True,
             check=True,
             cwd=workspace_root,
-            env=run_env
+            env=run_env,
+            timeout=timeout
         )
+    except subprocess.TimeoutExpired as e:
+        print(f"Bazel command timed out after {timeout}s: {' '.join(cmd)}", file=sys.stderr)
+        print(f"Working directory: {workspace_root}", file=sys.stderr)
+        raise
     except subprocess.CalledProcessError as e:
         print(f"Bazel command failed: {' '.join(cmd)}", file=sys.stderr)
         print(f"Working directory: {workspace_root}", file=sys.stderr)
