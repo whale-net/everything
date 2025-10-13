@@ -269,6 +269,9 @@ def resolve_app_versions_for_chart(chart_metadata: Dict, use_released_versions: 
         
     Returns:
         Dict mapping app name to version (e.g., {"hello_fastapi": "v1.0.0"})
+        
+    Raises:
+        ValueError: If use_released_versions=True and no released version is found for an app
     """
     app_versions = {}
     
@@ -290,12 +293,23 @@ def resolve_app_versions_for_chart(chart_metadata: Dict, use_released_versions: 
                 if latest_version:
                     app_versions[app_name] = latest_version
                 else:
-                    # Fallback to "latest" if no version found
-                    print(f"Warning: No released version found for {app_name}, using 'latest'")
-                    app_versions[app_name] = "latest"
+                    # Error: no released version found when building versioned helm chart
+                    raise ValueError(
+                        f"No released version found for app '{app_name}' in domain '{app_domain}'. "
+                        f"When releasing a versioned helm chart with --use-released, all apps must have "
+                        f"a released semver tag (format: {app_domain}-{app_name}.vX.Y.Z). "
+                        f"Please release the app first before including it in a versioned helm chart."
+                    )
+            except ValueError:
+                # Re-raise ValueError (our custom error above)
+                raise
             except Exception as e:
-                print(f"Warning: Could not resolve version for {app_name}: {e}, using 'latest'")
-                app_versions[app_name] = "latest"
+                # Wrap other exceptions with context
+                raise ValueError(
+                    f"Could not resolve version for app '{app_name}': {e}. "
+                    f"When releasing a versioned helm chart with --use-released, all apps must have "
+                    f"a released semver tag."
+                ) from e
         else:
             # Use "latest" for all apps
             app_versions[app_name] = "latest"
