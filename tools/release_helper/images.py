@@ -184,7 +184,8 @@ def push_image_with_tags(bazel_target: str, tags: List[str]) -> None:
     
     # Build the bazel run command with tag arguments
     # DO NOT add --platforms flag - oci_push must use host architecture tools
-    bazel_args = ["run", push_target, "--"]
+    # Add --noremote_accept_cached to ensure push always executes even on re-runs
+    bazel_args = ["run", "--noremote_accept_cached", push_target, "--"]
     
     # Add each tag as an argument (oci_push supports multiple --tag arguments)
     for tag_name in tag_names:

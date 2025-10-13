@@ -194,36 +194,8 @@ class TestPushImageWithTags:
         push_image_with_tags(bazel_target, tags)
         
         # Verify single push command with all tags
-        expected_call = ["run", "//demo/hello_python:hello_python_image_push", "--", 
+        expected_call = ["run", "--noremote_accept_cached", "//demo/hello_python:hello_python_image_push", "--", 
                         "--tag", "latest", "--tag", "v1.0.0"]
-        mock_run_bazel.assert_called_once()
-        actual_call = mock_run_bazel.call_args[0][0]
-        assert actual_call == expected_call
-
-    def test_push_image_with_tags_amd64_platform(self, mock_get_image_targets, mock_get_app_metadata, mock_run_bazel):
-        """Test pushing image with tags for amd64 platform."""
-        bazel_target = "//demo/hello_python:hello_python_metadata"
-        tags = ["ghcr.io/owner/demo-hello_python:v1.0.0"]
-        
-        push_image_with_tags(bazel_target, tags, platform="amd64")
-        
-        # Verify push command includes platform flag
-        expected_call = ["run", "//demo/hello_python:hello_python_image_push", "--platforms=//tools:linux_x86_64", "--", 
-                        "--tag", "v1.0.0"]
-        mock_run_bazel.assert_called_once()
-        actual_call = mock_run_bazel.call_args[0][0]
-        assert actual_call == expected_call
-
-    def test_push_image_with_tags_arm64_platform(self, mock_get_image_targets, mock_get_app_metadata, mock_run_bazel):
-        """Test pushing image with tags for arm64 platform."""
-        bazel_target = "//demo/hello_python:hello_python_metadata"
-        tags = ["ghcr.io/owner/demo-hello_python:v1.0.0"]
-        
-        push_image_with_tags(bazel_target, tags, platform="arm64")
-        
-        # Verify push command includes platform flag
-        expected_call = ["run", "//demo/hello_python:hello_python_image_push", "--platforms=//tools:linux_arm64", "--", 
-                        "--tag", "v1.0.0"]
         mock_run_bazel.assert_called_once()
         actual_call = mock_run_bazel.call_args[0][0]
         assert actual_call == expected_call
@@ -236,7 +208,7 @@ class TestPushImageWithTags:
         push_image_with_tags(bazel_target, tags)
         
         # Even with empty tags, bazel command is called (just with no --tag args)
-        expected_call = ["run", "//demo/hello_python:hello_python_image_push", "--"]
+        expected_call = ["run", "--noremote_accept_cached", "//demo/hello_python:hello_python_image_push", "--"]
         mock_run_bazel.assert_called_once()
         actual_call = mock_run_bazel.call_args[0][0]
         assert actual_call == expected_call
@@ -249,7 +221,7 @@ class TestPushImageWithTags:
         push_image_with_tags(bazel_target, tags)
         
         # Verify single push command with one tag
-        expected_call = ["run", "//demo/hello_python:hello_python_image_push", "--", 
+        expected_call = ["run", "--noremote_accept_cached", "//demo/hello_python:hello_python_image_push", "--", 
                         "--tag", "latest"]
         mock_run_bazel.assert_called_once()
         actual_call = mock_run_bazel.call_args[0][0]
@@ -272,7 +244,8 @@ class TestPushImageWithTags:
         
         # Check that push target is correct
         assert actual_call[0] == "run"
-        assert actual_call[1] == "//demo/hello_python:hello_python_image_push"
+        assert actual_call[1] == "--noremote_accept_cached"
+        assert actual_call[2] == "//demo/hello_python:hello_python_image_push"
         
         # Check that all three tags are included
         assert "--tag" in actual_call
