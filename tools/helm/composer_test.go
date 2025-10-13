@@ -604,3 +604,103 @@ func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) &&
 		(s[:len(substr)] == substr || contains(s[1:], substr)))
 }
+package helm
+
+import (
+"encoding/json"
+"os"
+"path/filepath"
+"strings"
+"testing"
+)
+
+// TestGenerateValuesYaml_DomainAppFormat tests that apps in values.yaml use domain-app format
+func TestGenerateValuesYaml_DomainAppFormat(t *testing.T) {
+tmpDir, err := os.MkdirTemp("", "composer-domain-test")
+if err != nil {
+t.Fatalf("Failed to create temp dir: %v", err)
+}
+defer os.RemoveAll(tmpDir)
+
+// Create test metadata for an app with domain and name
+testMetadata := AppMetadata{
+Name:        "hello-job",
+Domain:      "demo",
+AppType:     "job",
+Version:     "1.0.0",
+Description: "Test job",
+Registry:    "ghcr.io",
+RepoName:    "demo-hello-job",
+ImageTarget: "hello-job_image",
+Language:    "python",
+}
+
+metadataFile := filepath.Join(tmpDir, "hello-job.json")
+data, err := json.Marshal(testMetadata)
+if err != nil {
+t.Fatalf("Failed to marshal metadata: %v", err)
+}
+
+if err := os.WriteFile(metadataFile, data, 0644); err != nil {
+t.Fatalf("Failed to write metadata file: %v", err)
+}
+
+// Create composer and load metadata
+config := ChartConfig{
+ChartName:   "test-chart",
+Version:     "1.0.0",
+Environment: "production",
+Namespace:   "default",
+OutputDir:   tmpDir,
+}
+composer := NewComposer(config, "/templates")
+
+err = composer.LoadMetadata([]string{metadataFile})
+if err != nil {
+t.Fatalf("LoadMetadata failed: %v", err)
+}
+
+// Generate values.yaml
+chartDir := filepath.Join(tmpDir, "chart")
+if err := os.MkdirAll(chartDir, 0755); err != nil {
+t.Fatalf("Failed to create chart dir: %v", err)
+}
+
+err = composer.generateValuesYaml(chartDir)
+if err != nil {
+t.Fatalf("generateValuesYaml failed: %v", err)
+}
+
+// Read and verify values.yaml content
+valuesFile := filepath.Join(chartDir, "values.yaml")
+content, err := os.ReadFile(valuesFile)
+if err != nil {
+t.Fatalf("Failed to read values.yaml: %v", err)
+}
+
+valuesContent := string(content)
+
+// Verify the app is keyed with domain-app format (demo-hello-job)
+expectedKey := "demo-hello-job:"
+if !strings.Contains(valuesContent, expectedKey) {
+t.Errorf("Expected to find '%s' in values.yaml, but it was not present", expectedKey)
+t.Logf("values.yaml content:\n%s", valuesContent)
+}
+
+// Verify the old format (just app name) is NOT present
+oldKey := "hello-job:"
+lines := strings.Split(valuesContent, "\n")
+for _, line := range lines {
+trimmed := strings.TrimSpace(line)
+// Check if line starts with "hello-job:" (the old format)
+// But ignore lines that contain "demo-hello-job:" (the correct format)
+if strings.HasPrefix(trimmed, oldKey) && !strings.Contains(line, expectedKey) {
+// Found a line that starts with just "hello-job:" without the domain prefix
+// Check if this is actually a key (has colon and is at the right indentation)
+if strings.HasPrefix(trimmed, oldKey) && !strings.HasPrefix(line, " ") {
+t.Errorf("Found old format key '%s' in values.yaml. All apps should use domain-app format.", oldKey)
+t.Logf("Problematic line: %s", line)
+}
+}
+}
+}
