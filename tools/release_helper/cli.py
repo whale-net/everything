@@ -184,6 +184,7 @@ def plan(
     version: Annotated[Optional[str], typer.Option(help="Release version")] = None,
     increment_minor: Annotated[bool, typer.Option("--increment-minor", help="Auto-increment minor version (resets patch to 0)")] = False,
     increment_patch: Annotated[bool, typer.Option("--increment-patch", help="Auto-increment patch version")] = False,
+    main_commit: Annotated[bool, typer.Option("--main-commit", help="Publish latest main build with 'latest' tag (uses filter logic)")] = False,
     base_commit: Annotated[Optional[str], typer.Option(help="Compare changes against this commit (compares HEAD to this commit)")] = None,
     format: Annotated[str, typer.Option(help="Output format")] = "json",
     include_demo: Annotated[bool, typer.Option("--include-demo", help="Include demo domain apps when using 'all'")] = False,
@@ -198,9 +199,9 @@ def plan(
         raise typer.Exit(1)
 
     # Validate mutually exclusive version options
-    version_options = [version is not None, increment_minor, increment_patch]
+    version_options = [version is not None, increment_minor, increment_patch, main_commit]
     if sum(version_options) > 1:
-        typer.echo("Error: version, --increment-minor, and --increment-patch are mutually exclusive", err=True)
+        typer.echo("Error: version, --increment-minor, --increment-patch, and --main-commit are mutually exclusive", err=True)
         raise typer.Exit(1)
     
     # Determine version mode
@@ -211,6 +212,9 @@ def plan(
         version_mode = "increment_minor"
     elif increment_patch:
         version_mode = "increment_patch"
+    elif main_commit:
+        version_mode = "main_commit"
+        version = "latest"  # Set version to latest for main_commit mode
 
     plan_result = plan_release(
         event_type=event_type,

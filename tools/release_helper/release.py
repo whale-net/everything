@@ -65,10 +65,14 @@ def plan_release(
         elif version_mode in ["increment_minor", "increment_patch"]:
             if version:
                 raise ValueError(f"Version should not be specified when using {version_mode} mode")
+        elif version_mode == "main_commit":
+            # Main commit mode uses filter logic like CI builds
+            if version != "latest":
+                raise ValueError("Main commit mode requires version to be 'latest'")
         elif not version_mode:
             # Legacy mode - require version
             if not version:
-                raise ValueError("Manual releases require version to be specified (or use --increment-minor/--increment-patch)")
+                raise ValueError("Manual releases require version to be specified (or use --increment-minor/--increment-patch/--main-commit)")
 
         if requested_apps == "all":
             release_apps = list_all_apps()
@@ -88,6 +92,25 @@ def plan_release(
                 app_version = auto_increment_version(metadata['domain'], metadata['name'], increment_type)
                 app['version'] = app_version
                 print(f"Auto-incremented {metadata['domain']}/{metadata['name']} to {app_version}", file=sys.stderr)
+        elif version_mode == "main_commit":
+            # Main commit mode: use filter logic to determine which apps changed
+            # Auto-detect previous tag if no base commit provided
+            if base_commit is None:
+                base_commit = get_previous_tag()
+                if base_commit:
+                    print(f"Auto-detected previous tag: {base_commit}", file=sys.stderr)
+            
+            # Filter apps based on changes (only include changed apps from the requested apps)
+            if base_commit:
+                print(f"Main commit mode: filtering apps based on changes since {base_commit}", file=sys.stderr)
+                all_changed_apps = detect_changed_apps(base_commit)
+                changed_names = {app['name'] for app in all_changed_apps}
+                release_apps = [app for app in release_apps if app['name'] in changed_names]
+                print(f"Filtered to {len(release_apps)} changed apps", file=sys.stderr)
+            
+            # Use "latest" version for all apps in main commit mode
+            for app in release_apps:
+                app['version'] = "latest"
         else:
             # Use provided version for all apps
             for app in release_apps:

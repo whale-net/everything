@@ -227,8 +227,9 @@ jobs:
         APP: ${{ matrix.app }}
       run: |
         # Publish the specific app image to registry with multi-arch support
+        # Only publishes 'latest' tag (no commit hash tags to reduce GHCR storage costs)
         echo "Publishing $APP image to registry..."
-        bazel run //tools:release -- release-multiarch "$APP" --version "latest" --commit "${{ github.sha }}"
+        bazel run //tools:release -- release-multiarch "$APP" --version "latest"
         # Shutdown Bazel server to prevent hanging
         bazel shutdown
         
