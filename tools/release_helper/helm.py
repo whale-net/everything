@@ -275,6 +275,9 @@ def resolve_app_versions_for_chart(chart_metadata: Dict, use_released_versions: 
     """
     app_versions = {}
     
+    chart_domain = chart_metadata.get('domain')
+    chart_name = chart_metadata.get('name', '<unknown-chart>')
+
     for app_name in chart_metadata.get('apps', []):
         if use_released_versions:
             # Get domain from the chart to construct proper tag
@@ -282,22 +285,52 @@ def resolve_app_versions_for_chart(chart_metadata: Dict, use_released_versions: 
             try:
                 from tools.release_helper.release import find_app_bazel_target
                 from tools.release_helper.metadata import get_app_metadata
-                
-                app_target = find_app_bazel_target(app_name)
+
+                # Try resolving the app using multiple naming formats to avoid ambiguity.
+                # Prefer domain-qualified forms that match the release helper CLI guidance.
+                candidate_names: List[str] = []
+                if chart_domain:
+                    domain_hyphen = f"{chart_domain}-{app_name}"
+                    domain_path = f"{chart_domain}/{app_name}"
+                    for candidate in (domain_hyphen, domain_path):
+                        if candidate not in candidate_names:
+                            candidate_names.append(candidate)
+                if app_name not in candidate_names:
+                    candidate_names.append(app_name)
+
+                app_target = None
+                last_error: Optional[Exception] = None
+                for candidate in candidate_names:
+                    try:
+                        app_target = find_app_bazel_target(candidate)
+                        break
+                    except ValueError as err:
+                        last_error = err
+
+                if app_target is None:
+                    # Surface the most recent validation error for clarity
+                    if last_error is not None:
+                        raise last_error
+                    raise ValueError(
+                        f"Could not resolve app '{app_name}' for chart '{chart_name}'. "
+                        f"Tried candidates: {', '.join(candidate_names)}."
+                    )
+
                 app_metadata = get_app_metadata(app_target)
                 app_domain = app_metadata['domain']
-                
+                actual_app_name = app_metadata['name']
+
                 # Get latest version from git tags
-                latest_version = get_latest_app_version(app_domain, app_name)
-                
+                latest_version = get_latest_app_version(app_domain, actual_app_name)
+
                 if latest_version:
                     app_versions[app_name] = latest_version
                 else:
                     # Error: no released version found when building versioned helm chart
                     raise ValueError(
-                        f"No released version found for app '{app_name}' in domain '{app_domain}'. "
+                        f"No released version found for app '{actual_app_name}' in domain '{app_domain}'. "
                         f"When releasing a versioned helm chart with --use-released, all apps must have "
-                        f"a released semver tag (format: {app_domain}-{app_name}.vX.Y.Z). "
+                        f"a released semver tag (format: {app_domain}-{actual_app_name}.vX.Y.Z). "
                         f"Please release the app first before including it in a versioned helm chart."
                     )
             except ValueError:
