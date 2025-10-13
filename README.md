@@ -948,6 +948,14 @@ Version: v1.2.3
 Dry run: false
 ```
 
+**Example Release Candidate:**
+```
+Apps: hello-python
+Version: v1.0.0-rc1
+Dry run: false
+```
+✨ **Automatic Prerelease Detection**: Versions with suffixes like `-rc1`, `-beta`, or `-alpha` are automatically marked as prereleases in GitHub, and will show a 🧪 indicator in the release summary.
+
 > **Note: Demo Domain Exclusion**  
 > When using `all` for apps or helm charts, the `demo` domain is **excluded by default** to prevent accidental publishing of demo/example applications in production releases. To include demo domain, check the "Include demo domain" checkbox in the UI or use the `--include-demo` flag in CLI commands. Specific app names and domain selections (e.g., `demo`, `manman`) are not affected by this behavior.
 
@@ -966,6 +974,12 @@ gh workflow run release.yml \
 gh workflow run release.yml \
   -f apps=all \
   -f version=v1.2.3
+
+# Release candidate (automatically marked as prerelease)
+gh workflow run release.yml \
+  -f apps=hello-python \
+  -f version=v1.0.0-rc1 \
+  -f dry_run=false
 
 # Dry run (test without publishing)
 gh workflow run release.yml \
