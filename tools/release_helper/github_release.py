@@ -599,8 +599,9 @@ def create_releases_for_apps_with_notes(
                 # Use domain from app_domains if provided (avoids ambiguity for apps with same name)
                 if app_domains and app_name in app_domains:
                     domain = app_domains[app_name]
-                    # Still need metadata for other information
-                    bazel_target = find_app_bazel_target(app_name)
+                    # Use full domain-app format to avoid ambiguity
+                    full_app_name = f"{domain}-{app_name}"
+                    bazel_target = find_app_bazel_target(full_app_name)
                     metadata = get_app_metadata(bazel_target)
                 else:
                     # Fall back to looking up by name (may be ambiguous)

@@ -281,24 +281,21 @@ def filter_commits_by_app(commits: List[ReleaseNote], app_name: str) -> List[Rel
     
     Args:
         commits: List of all commits
-        app_name: Name of the app to filter for
+        app_name: Name of the app to filter for (supports domain-app format)
         
     Returns:
         List of commits that affect the specified app
     """
     try:
-        # Get app metadata to determine its path
-        all_apps = list_all_apps()
+        # Use validate_apps to handle all naming formats and detect ambiguity
+        from tools.release_helper.validation import validate_apps
         
-        app_info = None
-        for app in all_apps:
-            if app['name'] == app_name:
-                app_info = app
-                break
-        
-        if not app_info:
+        validated_apps = validate_apps([app_name])
+        if not validated_apps:
             print(f"Warning: App {app_name} not found in metadata", file=sys.stderr)
             return []
+        
+        app_info = validated_apps[0]
         
         # Extract package path from bazel target
         bazel_target = app_info['bazel_target']
@@ -323,9 +320,13 @@ def filter_commits_by_app(commits: List[ReleaseNote], app_name: str) -> List[Rel
                 
         return app_commits
         
+    except ValueError as e:
+        # validate_apps raises ValueError when app not found or ambiguous
+        print(f"Error: App {app_name} not found or ambiguous: {e}", file=sys.stderr)
+        return []  # Return empty list when app not found
     except Exception as e:
         print(f"Error filtering commits for app {app_name}: {e}", file=sys.stderr)
-        return commits  # Return all commits if filtering fails
+        return commits  # Return all commits if filtering fails for other reasons
 
 
 def generate_release_notes(
@@ -400,8 +401,13 @@ def generate_release_notes_for_all_apps(
     release_notes = {}
     
     for app in all_apps:
+        # Use full domain-app format to avoid ambiguity
+        domain = app['domain']
         app_name = app['name']
-        notes = generate_release_notes(app_name, current_tag, previous_tag, format_type)
-        release_notes[app_name] = notes
+        full_app_name = f"{domain}-{app_name}"
+        
+        notes = generate_release_notes(full_app_name, current_tag, previous_tag, format_type)
+        # Use full name as key to avoid collisions in the dictionary
+        release_notes[full_app_name] = notes
         
     return release_notes

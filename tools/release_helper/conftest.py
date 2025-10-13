@@ -80,6 +80,17 @@ def sample_apps():
 
 
 @pytest.fixture
+def sample_apps_with_collision(sample_apps):
+    """Extend sample_apps with intentional name collision for validation tests."""
+    collision_app = {
+        "name": "hello_python",  # Intentional name collision with demo/hello_python
+        "domain": "api",
+        "bazel_target": "//api/hello_python:hello_python_metadata"
+    }
+    return sample_apps + [collision_app]
+
+
+@pytest.fixture
 def sample_metadata():
     """Common sample metadata used across multiple test files."""
     return {
