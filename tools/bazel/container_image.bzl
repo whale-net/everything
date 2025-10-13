@@ -119,7 +119,7 @@ def container_image(
     # Bazel's hermetic runfiles structure.
     # NOTE: TreeArtifacts via root_symlinks require MANIFEST file to resolve
     pkg_tar(
-        name = name + "_layer",
+        name = name + "_layer_unstripped",
         srcs = [binary],
         package_dir = "/app",
         include_runfiles = True,
@@ -128,6 +128,35 @@ def container_image(
         strip_prefix = ".",
         tags = ["manual"],
     )
+    
+    # For Python, strip debug symbols and remove duplicates to reduce image size
+    if language == "python":
+        native.genrule(
+            name = name + "_layer",
+            srcs = [":" + name + "_layer_unstripped"],
+            outs = [name + "_layer.tar"],
+            tools = ["//tools/scripts:strip_python.sh"],
+            cmd = """
+                # Extract the tar
+                mkdir -p layer_tmp
+                tar -xf $(location :{name}_layer_unstripped) -C layer_tmp
+                
+                # Strip Python binaries and libraries
+                $(location //tools/scripts:strip_python.sh) layer_tmp/app || true
+                
+                # Repack into tar
+                tar -cf $@ -C layer_tmp .
+                """.format(name = name),
+            tags = ["manual"],
+        )
+    else:
+        # For non-Python languages, use the layer as-is
+        native.alias(
+            name = name + "_layer",
+            actual = ":" + name + "_layer_unstripped",
+            tags = ["manual"],
+        )
+
     
     binary_name = _get_binary_name(binary)
     binary_path = _get_binary_path(binary)
