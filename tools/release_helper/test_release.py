@@ -162,6 +162,8 @@ class TestPlanRelease:
     def test_plan_release_apps_output_format(self, mock_validate_semantic, mock_validate_apps, sample_apps):
         """Test that apps output uses full domain-name format to avoid ambiguity."""
         mock_validate_semantic.return_value = True
+        # Configure mock to return hello_python (demo) and status_service (api)
+        mock_validate_apps.return_value = [sample_apps[0], sample_apps[3]]  # hello_python and status_service
         
         result = plan_release(
             event_type="workflow_dispatch",
