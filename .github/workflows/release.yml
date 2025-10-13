@@ -368,25 +368,20 @@ jobs:
       if: ${{ github.event.inputs.dry_run == 'false' }}
       env:
         APP: ${{ matrix.app }}
+        DOMAIN: ${{ matrix.domain }}
         VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
       run: |
-        # Get app metadata to determine domain for tag format
-        METADATA=$(bazel run --config=ci //tools:release -- list-apps | grep "^$APP " | head -n1)
-        if [[ -n "$METADATA" ]]; then
-          DOMAIN=$(echo "$METADATA" | sed 's/.*domain: \([^,]*\).*/\1/')
-          TAG_NAME="${DOMAIN}-${APP}.${VERSION}"
-          
-          # Check if tag already exists
-          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
-            echo "ℹ️  Tag $TAG_NAME already exists, skipping creation"
-          else
-            echo "Creating git tag: $TAG_NAME"
-            git tag -a "$TAG_NAME" -m "Release $APP version $VERSION" "${{ github.sha }}"
-            git push origin "$TAG_NAME"
-            echo "✅ Created and pushed git tag: $TAG_NAME"
-          fi
+        # Use domain from matrix (avoids ambiguity when apps share names across domains)
+        TAG_NAME="${DOMAIN}-${APP}.${VERSION}"
+        
+        # Check if tag already exists
+        if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+          echo "ℹ️  Tag $TAG_NAME already exists, skipping creation"
         else
-          echo "Warning: Could not determine domain for $APP, skipping git tag"
+          echo "Creating git tag: $TAG_NAME"
+          git tag -a "$TAG_NAME" -m "Release $APP version $VERSION" "${{ github.sha }}"
+          git push origin "$TAG_NAME"
+          echo "✅ Created and pushed git tag: $TAG_NAME"
         fi
 
     - name: Generate release notes for app
