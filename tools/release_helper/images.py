@@ -161,6 +161,10 @@ def push_image_with_tags(bazel_target: str, tags: List[str]) -> None:
     Pushes the OCI image index which contains all platform variants (amd64, arm64).
     The index allows Docker to automatically select the correct architecture.
     
+    This function uses --noremote_accept_cached to ensure that the push operation
+    always executes, even when workflow runs are re-executed. This prevents Bazel's
+    remote caching from skipping the push when it thinks the image hasn't changed.
+    
     Args:
         bazel_target: Full bazel target path for the app metadata
         tags: List of full registry tags to push (e.g., ["ghcr.io/whale-net/demo-hello_python:v0.0.6"])

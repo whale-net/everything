@@ -54,8 +54,8 @@ def mock_get_image_targets(sample_image_targets):
 
 @pytest.fixture
 def mock_run_bazel():
-    """Mock run_bazel function at core level (where it's imported from)."""
-    with patch('tools.release_helper.core.run_bazel') as mock:
+    """Mock run_bazel function where it's used (in images module)."""
+    with patch('tools.release_helper.images.run_bazel') as mock:
         yield mock
 
 
