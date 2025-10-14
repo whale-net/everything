@@ -276,7 +276,7 @@ def plan_openapi_builds(
             matrix = {'include': apps_with_specs}
             matrix_json = json.dumps(matrix)
             typer.echo(f"matrix={matrix_json}")
-            typer.echo(f"apps={' '.join([app['app'] for app in apps_with_specs])}")
+            typer.echo(f"apps={' '.join([f\"{app['domain']}-{app['app']}\" for app in apps_with_specs])}")
         else:
             # Empty matrix
             typer.echo("matrix={}")
