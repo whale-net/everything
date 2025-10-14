@@ -278,6 +278,54 @@ class TestCreateReleasesWithIndividualVersions:
             assert "hello_fastapi" in results
             assert results["hello_fastapi"] is not None
             assert "missing_app" in results
+    
+    def test_full_domain_app_format_in_app_list_and_versions(self):
+        """Test that the function works when app_list and app_versions both use full domain-app format.
+        
+        This is the scenario that occurs when the workflow passes apps in full domain-app format
+        and the MATRIX environment variable is parsed to use full names as keys.
+        """
+        # Simulate what the workflow and CLI do:
+        # - app_list contains full domain-app names (from workflow: echo "$MATRIX" | jq -r '.include[] | "\(.domain)-\(.app)"')
+        # - app_versions keys are also full domain-app names (from CLI parsing MATRIX)
+        app_versions = {"friendly-computing-machine-migration": "v0.0.9"}
+        app_list = ["friendly-computing-machine-migration"]
+        
+        # Mock the required functions
+        with patch('tools.release_helper.github_release.find_app_bazel_target') as mock_find_target, \
+             patch('tools.release_helper.github_release.get_app_metadata') as mock_get_metadata, \
+             patch('tools.release_helper.github_release.generate_release_notes') as mock_gen_notes, \
+             patch('tools.release_helper.github_release.create_app_release') as mock_create_release:
+            
+            # Setup mocks - find_app_bazel_target should accept full domain-app format
+            mock_find_target.return_value = "//friendly_computing_machine:migration_metadata"
+            mock_get_metadata.return_value = {"domain": "friendly-computing-machine", "name": "migration"}
+            mock_gen_notes.return_value = "Release notes content"
+            mock_create_release.return_value = {"id": 789, "tag_name": "friendly-computing-machine-migration.v0.0.9"}
+            
+            # Call the function
+            results = create_releases_for_apps_with_notes(
+                app_list=app_list,
+                owner="test-owner",
+                repo="test-repo",
+                app_versions=app_versions
+            )
+            
+            # Verify that the version was found and release was created
+            assert "friendly-computing-machine-migration" in results
+            assert results["friendly-computing-machine-migration"] is not None
+            
+            # Verify that create_app_release was called with domain-app format
+            mock_create_release.assert_called_once()
+            call_kwargs = mock_create_release.call_args[1]
+            
+            # The app_name parameter should be in domain-app format
+            assert call_kwargs["app_name"] == "friendly-computing-machine-migration", \
+                f"Expected app_name to be 'friendly-computing-machine-migration' but got '{call_kwargs['app_name']}'"
+            
+            # Verify that the tag_name uses the canonical format from metadata
+            assert call_kwargs["tag_name"] == "friendly-computing-machine-migration.v0.0.9", \
+                f"Expected tag_name to be 'friendly-computing-machine-migration.v0.0.9' but got '{call_kwargs['tag_name']}'"
 
 
 class TestCreateReleasesForApps:

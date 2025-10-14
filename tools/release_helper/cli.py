@@ -473,11 +473,13 @@ def create_combined_github_release_with_notes(
                     app_name = item.get('app')
                     app_version = item.get('version')
                     app_domain = item.get('domain')
-                    if app_name:
+                    if app_name and app_domain:
+                        # Use full domain-app format as key to match the app_list format
+                        full_app_name = f"{app_domain}-{app_name}"
                         if app_version:
-                            app_versions[app_name] = app_version
-                        if app_domain:
-                            app_domains[app_name] = app_domain
+                            app_versions[full_app_name] = app_version
+                        # Store domain for lookup (using full name as key)
+                        app_domains[full_app_name] = app_domain
                         
                 if app_versions:
                     typer.echo(f"Found per-app versions in matrix: {app_versions}")
