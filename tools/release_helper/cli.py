@@ -553,8 +553,8 @@ def build_helm_chart_cmd(
     chart_name: Annotated[str, typer.Argument(help="Helm chart name")],
     chart_version: Annotated[Optional[str], typer.Option("--version", help="Explicit chart version (if not provided, will auto-version)")] = None,
     output_dir: Annotated[Optional[str], typer.Option("--output-dir", help="Output directory for packaged chart")] = None,
-    use_released_versions: Annotated[bool, typer.Option("--use-released/--use-latest", help="Use released app versions or 'latest'")] = True,
-    auto_version: Annotated[bool, typer.Option("--auto-version", help="Automatically determine chart version from git tags")] = True,
+    use_released_versions: Annotated[bool, typer.Option("--use-released/--no-use-released", help="Use released app versions from git tags (default) or 'latest' tag")] = True,
+    auto_version: Annotated[bool, typer.Option("--auto-version/--no-auto-version", help="Automatically determine chart version from git tags")] = True,
     bump_type: Annotated[str, typer.Option("--bump", help="Version bump type: major, minor, or patch")] = "patch",
 ):
     """Build and package a helm chart with automatic or manual versioning.

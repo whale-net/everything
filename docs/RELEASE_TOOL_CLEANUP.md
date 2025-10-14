@@ -110,7 +110,7 @@ Removed unused imports from `cli.py`:
 
 When working with the release tool:
 1. Always use `release-multiarch` for releasing apps (not `release`)
-2. Use `build-helm-chart` with `--use-released --bump patch` for helm charts
+2. Use `build-helm-chart` for helm charts (uses released versions by default, or `--no-use-released` for latest tags)
 3. Rely on GitHub Actions workflows for helm publishing (don't use manual commands)
 4. Refer to AGENT.md for all repository patterns and guidelines
 
