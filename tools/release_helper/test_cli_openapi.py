@@ -12,9 +12,6 @@ from typer.testing import CliRunner
 from tools.release_helper.cli import app
 
 
-runner = CliRunner()
-
-
 @pytest.fixture
 def mock_validated_apps_with_openapi():
     """Mock validated apps with OpenAPI spec targets."""
@@ -51,6 +48,7 @@ class TestPlanOpenAPIBuilds:
         """Test that plan_openapi_builds outputs apps in domain-app format."""
         mock_validate_apps.return_value = mock_validated_apps_with_openapi
         
+        runner = CliRunner()
         result = runner.invoke(app, ['plan-openapi-builds', '--apps', 'hello-fastapi,experience-api', '--format', 'github'])
         
         assert result.exit_code == 0
@@ -68,6 +66,7 @@ class TestPlanOpenAPIBuilds:
         """Test that apps without OpenAPI specs are filtered out."""
         mock_validate_apps.return_value = mock_validated_apps_without_openapi
         
+        runner = CliRunner()
         result = runner.invoke(app, ['plan-openapi-builds', '--apps', 'hello-python', '--format', 'github'])
         
         assert result.exit_code == 0
@@ -98,6 +97,7 @@ class TestPlanOpenAPIBuilds:
         ]
         mock_validate_apps.return_value = mixed_apps
         
+        runner = CliRunner()
         result = runner.invoke(app, ['plan-openapi-builds', '--apps', 'hello-fastapi,hello-python', '--format', 'github'])
         
         assert result.exit_code == 0
@@ -113,6 +113,7 @@ class TestPlanOpenAPIBuilds:
         """Test that the matrix output includes domain field."""
         mock_validate_apps.return_value = mock_validated_apps_with_openapi
         
+        runner = CliRunner()
         result = runner.invoke(app, ['plan-openapi-builds', '--apps', 'hello-fastapi,experience-api', '--format', 'github'])
         
         assert result.exit_code == 0
