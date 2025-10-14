@@ -34,8 +34,20 @@ def setup_db(
         url=database_url, echo=echo, pool_pre_ping=True, pool_recycle=60
     )
     init_engine(engine=engine)
+    
+    # Set up alembic config with script_location
+    # The migrations are packaged as friendly_computing_machine.src.migrations
+    import friendly_computing_machine.src.migrations
+    migrations_dir = os.path.dirname(friendly_computing_machine.src.migrations.__file__)
+    
+    alembic_cfg = alembic.config.Config("./alembic.ini")
+    alembic_cfg.set_main_option("script_location", migrations_dir)
+    
+    # Set the database URL from environment (used by migrations in offline mode)
+    alembic_cfg.set_main_option("sqlalchemy.url", database_url)
+    
     ctx.obj[FILENAME] = DBContext(
         engine=engine,
-        alembic_config=alembic.config.Config("./alembic.ini"),
+        alembic_config=alembic_cfg,
     )
     logger.debug("db setup complete")
