@@ -568,9 +568,6 @@ def build_helm_chart_cmd(
     try:
         from pathlib import Path
         
-        # DEBUG: Print the actual value of use_released_versions
-        typer.echo(f"🔍 DEBUG: use_released_versions={use_released_versions}", err=True)
-        
         output_path_obj = Path(output_dir) if output_dir else None
         
         # Validate inputs

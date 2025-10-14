@@ -116,8 +116,23 @@ def get_previous_tag() -> Optional[str]:
 
 
 def get_all_tags() -> List[str]:
-    """Get all Git tags sorted by version (newest first)."""
+    """Get all Git tags sorted by version (newest first).
+    
+    Fetches tags from remote to ensure we have the latest tags available,
+    which is critical for helm-only releases that need to find app versions.
+    """
     try:
+        # First, fetch all tags from remote to ensure we have the latest
+        # This is especially important in CI/CD environments where the repo
+        # might be shallow cloned or not have all tags locally
+        subprocess.run(
+            ["git", "fetch", "--tags", "--force"],
+            capture_output=True,
+            text=True,
+            check=False  # Don't fail if fetch has issues, we'll try to use local tags
+        )
+        
+        # Now get all local tags (which should include newly fetched ones)
         result = subprocess.run(
             ["git", "tag", "--sort=-version:refname"],
             capture_output=True,
@@ -132,10 +147,8 @@ def get_all_tags() -> List[str]:
 def get_app_tags(domain: str, app_name: str) -> List[str]:
     """Get all tags for a specific app, sorted by version (newest first)."""
     all_tags = get_all_tags()
-    print(f"🔍 DEBUG get_app_tags: Found {len(all_tags)} total tags in repo")
     app_prefix = f"{domain}-{app_name}."
     app_tags = [tag for tag in all_tags if tag.startswith(app_prefix)]
-    print(f"🔍 DEBUG get_app_tags: Looking for tags with prefix '{app_prefix}', found {len(app_tags)} matches: {app_tags[:5] if app_tags else []}")
     return app_tags
 
 
