@@ -268,7 +268,8 @@ def resolve_app_versions_for_chart(chart_metadata: Dict, use_released_versions: 
         use_released_versions: If True, use latest git tags. If False, use "latest"
         
     Returns:
-        Dict mapping app name to version (e.g., {"hello_fastapi": "v1.0.0"})
+        Dict mapping full app key (domain-app) to version (e.g., {"manman-experience-api": "v1.0.0"})
+        Keys match the format used in values.yaml apps section.
         
     Raises:
         ValueError: If use_released_versions=True and no released version is found for an app
@@ -324,7 +325,10 @@ def resolve_app_versions_for_chart(chart_metadata: Dict, use_released_versions: 
                 latest_version = get_latest_app_version(app_domain, actual_app_name)
 
                 if latest_version:
-                    app_versions[app_name] = latest_version
+                    # Use the full domain-app key format that matches values.yaml
+                    # e.g., "manman-experience-api" instead of just "experience-api"
+                    full_app_key = f"{app_domain}-{actual_app_name}"
+                    app_versions[full_app_key] = latest_version
                 else:
                     # Error: no released version found when building versioned helm chart
                     raise ValueError(
@@ -345,7 +349,13 @@ def resolve_app_versions_for_chart(chart_metadata: Dict, use_released_versions: 
                 ) from e
         else:
             # Use "latest" for all apps
-            app_versions[app_name] = "latest"
+            # For "latest" mode, we still need to use the full domain-app key to match values.yaml structure
+            # Try to determine the domain from chart_domain if available, otherwise use app_name as-is
+            if chart_domain:
+                full_app_key = f"{chart_domain}-{app_name}" if not app_name.startswith(f"{chart_domain}-") else app_name
+            else:
+                full_app_key = app_name
+            app_versions[full_app_key] = "latest"
     
     return app_versions
 
