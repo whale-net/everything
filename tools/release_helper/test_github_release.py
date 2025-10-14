@@ -218,6 +218,39 @@ class TestCreateReleasesWithIndividualVersions:
             call_args = mock_create_release.call_args
             assert call_args[1]["tag_name"] == "demo-hello_fastapi.v0.0.8"
     
+    def test_domain_app_format_passed_to_create_app_release(self):
+        """Test that create_app_release receives app_name in domain-app format."""
+        app_versions = {"hello_fastapi": "v0.0.8"}
+        app_list = ["hello_fastapi"]
+        
+        # Mock the required functions
+        with patch('tools.release_helper.github_release.find_app_bazel_target') as mock_find_target, \
+             patch('tools.release_helper.github_release.get_app_metadata') as mock_get_metadata, \
+             patch('tools.release_helper.github_release.generate_release_notes') as mock_gen_notes, \
+             patch('tools.release_helper.github_release.create_app_release') as mock_create_release:
+            
+            # Setup mocks
+            mock_find_target.return_value = "//demo/hello_fastapi:hello_fastapi_metadata"
+            mock_get_metadata.return_value = {"domain": "demo", "name": "hello_fastapi"}
+            mock_gen_notes.return_value = "Release notes content"
+            mock_create_release.return_value = {"id": 123, "tag_name": "demo-hello_fastapi.v0.0.8"}
+            
+            # Call the function
+            results = create_releases_for_apps_with_notes(
+                app_list=app_list,
+                owner="test-owner",
+                repo="test-repo",
+                app_versions=app_versions
+            )
+            
+            # Verify that create_app_release was called with domain-app format
+            mock_create_release.assert_called_once()
+            call_kwargs = mock_create_release.call_args[1]
+            
+            # The app_name parameter should be in domain-app format
+            assert call_kwargs["app_name"] == "demo-hello_fastapi", \
+                f"Expected app_name to be 'demo-hello_fastapi' but got '{call_kwargs['app_name']}'"
+    
     def test_missing_version_in_app_versions(self):
         """Test handling when an app is not in app_versions dict."""
         app_versions = {"hello_fastapi": "v0.0.8"}
@@ -245,6 +278,45 @@ class TestCreateReleasesWithIndividualVersions:
             assert "hello_fastapi" in results
             assert results["hello_fastapi"] is not None
             assert "missing_app" in results
+
+
+class TestCreateReleasesForApps:
+    """Test cases for create_releases_for_apps function."""
+    
+    def test_domain_app_format_passed_to_create_app_release(self):
+        """Test that create_app_release receives app_name in domain-app format for create_releases_for_apps."""
+        from tools.release_helper.github_release import create_releases_for_apps
+        
+        app_list = ["hello_python"]
+        version = "v1.0.0"
+        
+        # Mock the required functions
+        with patch('tools.release_helper.github_release.find_app_bazel_target') as mock_find_target, \
+             patch('tools.release_helper.github_release.get_app_metadata') as mock_get_metadata, \
+             patch('tools.release_helper.github_release.generate_release_notes') as mock_gen_notes, \
+             patch('tools.release_helper.github_release.create_app_release') as mock_create_release:
+            
+            # Setup mocks
+            mock_find_target.return_value = "//demo/hello_python:hello_python_metadata"
+            mock_get_metadata.return_value = {"domain": "demo", "name": "hello_python"}
+            mock_gen_notes.return_value = "Release notes content"
+            mock_create_release.return_value = {"id": 456, "tag_name": "demo-hello_python.v1.0.0"}
+            
+            # Call the function
+            results = create_releases_for_apps(
+                app_list=app_list,
+                version=version,
+                owner="test-owner",
+                repo="test-repo"
+            )
+            
+            # Verify that create_app_release was called with domain-app format
+            mock_create_release.assert_called_once()
+            call_kwargs = mock_create_release.call_args[1]
+            
+            # The app_name parameter should be in domain-app format
+            assert call_kwargs["app_name"] == "demo-hello_python", \
+                f"Expected app_name to be 'demo-hello_python' but got '{call_kwargs['app_name']}'"
 
 
 class TestGitHubReleaseClientTagVerification:
