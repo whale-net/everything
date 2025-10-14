@@ -48,6 +48,10 @@ def setup_db(
     # Set the script location - this is required by Alembic
     alembic_cfg.set_main_option("script_location", migrations_dir)
     
+    # Set the file template for migration filenames
+    # Format: YYYY_MM_DD_HHMM-{revision_id}_{slug}
+    alembic_cfg.set_main_option("file_template", "%%(year)d_%%(month).2d_%%(day).2d_%%(hour).2d%%(minute).2d-%%(rev)s_%%(slug)s")
+    
     # Set the database URL from environment (used by migrations in offline mode)
     # In online mode, env.py gets the URL from environment directly
     alembic_cfg.set_main_option("sqlalchemy.url", database_url)
