@@ -277,6 +277,10 @@ def resolve_app_versions_for_chart(chart_metadata: Dict, use_released_versions: 
     
     chart_domain = chart_metadata.get('domain')
     chart_name = chart_metadata.get('name', '<unknown-chart>')
+    
+    # DEBUG: Print the parameter value and what we're about to do
+    print(f"🔍 DEBUG resolve_app_versions_for_chart: use_released_versions={use_released_versions}")
+    print(f"🔍 DEBUG: chart_name={chart_name}, apps={chart_metadata.get('apps', [])}")
 
     for app_name in chart_metadata.get('apps', []):
         if use_released_versions:

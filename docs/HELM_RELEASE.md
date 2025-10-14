@@ -47,6 +47,8 @@ The helm chart release system is integrated into the main CI/CD release workflow
 
 4. **CLI commands** (`tools/release_helper/cli.py`)
    - `list-helm-charts` - List all charts with metadata
+   - `helm-chart-info <chart>` - Get detailed info about a chart
+   - `resolve-chart-app-versions <chart>` - Show resolved app versions
    - `build-helm-chart <chart>` - Build and package a chart
    - `plan-helm-release` - Plan a helm chart release (outputs CI matrix)
 
@@ -138,22 +140,11 @@ To release only apps without helm charts:
 For releasing only helm charts without apps, use the CLI directly:
 
 ```bash
-# Build and package charts using latest released app versions (default behavior)
-bazel run //tools:release -- build-helm-chart hello-fastapi \
-  --version v1.5.0 \
-  --output-dir /tmp/charts
-
-# Or explicitly use --use-released (same as default)
+# Build and package charts using latest released app versions
 bazel run //tools:release -- build-helm-chart hello-fastapi \
   --version v1.5.0 \
   --output-dir /tmp/charts \
   --use-released
-
-# Use "latest" tag for app images (not recommended for production)
-bazel run //tools:release -- build-helm-chart hello-fastapi \
-  --version v1.5.0 \
-  --output-dir /tmp/charts \
-  --no-use-released
 ```
 
 ### Local Testing
@@ -162,16 +153,17 @@ bazel run //tools:release -- build-helm-chart hello-fastapi \
 # List all helm charts
 bazel run //tools:release -- list-helm-charts
 
-# Build a chart locally with released app versions (default)
-bazel run //tools:release -- build-helm-chart hello-fastapi \
-  --version v1.0.0 \
-  --output-dir /tmp/charts
+# Get chart info
+bazel run //tools:release -- helm-chart-info hello-fastapi
 
-# Build a chart with "latest" tags (for local development)
+# Check resolved app versions for a chart
+bazel run //tools:release -- resolve-chart-app-versions hello-fastapi --use-released
+
+# Build a chart locally
 bazel run //tools:release -- build-helm-chart hello-fastapi \
   --version v1.0.0 \
   --output-dir /tmp/charts \
-  --no-use-released
+  --use-released
 
 # Plan a helm release
 bazel run //tools:release -- plan-helm-release \
@@ -196,16 +188,14 @@ When you release apps with version `v1.0.0`:
 
 For local development and testing, you can control version resolution:
 
-**Use Released Versions (default behavior)**
+**Use Released Versions (`--use-released`)**
 - Queries git for latest tags matching `{domain}-{app_name}.v*`
 - Example: For `hello_fastapi` in `demo` domain, finds `demo-hello_fastapi.v1.2.3`
 - **Raises an error** if no tags found (ensures versioned charts always use semver tags)
-- Flags: `--use-released` (explicit) or no flag (default)
 
-**Use Latest Tags (for local development)**
+**Use Latest (`--use-latest`)**
 - Uses `"latest"` for all app versions
 - Suitable for development or when apps aren't formally released
-- Flag: `--no-use-released`
 
 ## Version Management
 
@@ -370,6 +360,10 @@ $ bazel run //tools:release -- list-helm-charts
 demo-all-types (domain: demo, namespace: demo, apps: hello_fastapi, hello_internal_api, hello_worker, hello_job)
 demo-workers (domain: demo, namespace: workers, apps: hello_python, hello_go)
 hello-fastapi (domain: demo, namespace: demo, apps: hello_fastapi)
+
+$ bazel run //tools:release -- resolve-chart-app-versions hello-fastapi --use-released
+App versions for chart 'hello-fastapi':
+  hello_fastapi: v0.0.11
 
 $ bazel run //tools:release -- build-helm-chart hello-fastapi --version v1.0.0 --output-dir /tmp/charts
 Packaging chart 'hello-fastapi' version v1.0.0
