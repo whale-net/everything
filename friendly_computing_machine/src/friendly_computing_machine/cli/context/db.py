@@ -8,7 +8,12 @@ import typer
 from sqlalchemy import Engine
 from sqlmodel import create_engine
 
-import friendly_computing_machine.src.migrations
+try:
+    from importlib.resources import files
+except ImportError:
+    # Python < 3.9 fallback
+    from importlib_resources import files
+
 from friendly_computing_machine.src.friendly_computing_machine.db.util import (
     init_engine,
 )
@@ -41,9 +46,18 @@ def setup_db(
     # Pass file_=None to indicate we're configuring programmatically
     alembic_cfg = alembic.config.Config(file_=None, ini_section="alembic")
     
-    # Find the migrations directory using Python's module system
-    # The migrations are packaged as friendly_computing_machine.src.migrations
-    migrations_dir = os.path.dirname(friendly_computing_machine.src.migrations.__file__)
+    # Find the migrations directory using importlib.resources
+    # This works correctly with Bazel runfiles and namespace packages
+    try:
+        migrations_package = files("friendly_computing_machine.src.migrations")
+        # Convert to string path - works with both Path-like and Traversable objects
+        migrations_dir = str(migrations_package)
+    except (TypeError, AttributeError, ModuleNotFoundError) as e:
+        logger.error(f"Failed to locate migrations directory: {e}")
+        raise RuntimeError(
+            "Could not locate migrations directory. "
+            "Ensure friendly_computing_machine.src.migrations is properly packaged."
+        ) from e
     
     # Set the script location - this is required by Alembic
     alembic_cfg.set_main_option("script_location", migrations_dir)
