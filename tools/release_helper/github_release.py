@@ -392,7 +392,7 @@ def create_app_release(
     if there's a timing issue where the tag was just pushed but isn't visible yet.
     
     Args:
-        app_name: Name of the app
+        app_name: Name of the app in domain-app format (e.g., "demo-hello-python")
         tag_name: Git tag name for the release (should already exist in the repository)
         release_notes: Release notes content
         owner: Repository owner
@@ -507,9 +507,10 @@ def create_releases_for_apps(
                 results[app_name] = None
                 continue
             
-            # Create the individual app release
+            # Create the individual app release (use full domain-app format for consistency)
+            full_app_name = f"{domain}-{canonical_app_name}"
             result = create_app_release(
-                app_name=canonical_app_name,
+                app_name=full_app_name,
                 tag_name=tag_name,
                 release_notes=release_notes,
                 owner=owner,
@@ -663,9 +664,10 @@ def create_releases_for_apps_with_notes(
             # Append warning to release notes if spec is missing
             final_release_notes = release_notes + openapi_spec_missing_warning
             
-            # Create the individual app release
+            # Create the individual app release (use full domain-app format for consistency)
+            full_app_name = f"{domain}-{canonical_app_name}"
             result = create_app_release(
-                app_name=canonical_app_name,
+                app_name=full_app_name,
                 tag_name=tag_name,
                 release_notes=final_release_notes,
                 owner=owner,
