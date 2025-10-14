@@ -132,8 +132,10 @@ def get_all_tags() -> List[str]:
 def get_app_tags(domain: str, app_name: str) -> List[str]:
     """Get all tags for a specific app, sorted by version (newest first)."""
     all_tags = get_all_tags()
+    print(f"🔍 DEBUG get_app_tags: Found {len(all_tags)} total tags in repo")
     app_prefix = f"{domain}-{app_name}."
     app_tags = [tag for tag in all_tags if tag.startswith(app_prefix)]
+    print(f"🔍 DEBUG get_app_tags: Looking for tags with prefix '{app_prefix}', found {len(app_tags)} matches: {app_tags[:5] if app_tags else []}")
     return app_tags
 
 

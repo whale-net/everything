@@ -283,7 +283,9 @@ def resolve_app_versions_for_chart(chart_metadata: Dict, use_released_versions: 
     print(f"🔍 DEBUG: chart_name={chart_name}, apps={chart_metadata.get('apps', [])}")
 
     for app_name in chart_metadata.get('apps', []):
+        print(f"🔍 DEBUG: Processing app '{app_name}'")
         if use_released_versions:
+            print(f"🔍 DEBUG: use_released_versions=True, will query git tags")
             # Get domain from the chart to construct proper tag
             # We need to query the app's metadata to get its domain
             try:
@@ -324,13 +326,18 @@ def resolve_app_versions_for_chart(chart_metadata: Dict, use_released_versions: 
                 app_domain = app_metadata['domain']
                 actual_app_name = app_metadata['name']
 
+                print(f"🔍 DEBUG: Resolved app '{app_name}' -> domain='{app_domain}', actual_name='{actual_app_name}'")
+                
                 # Get latest version from git tags
                 latest_version = get_latest_app_version(app_domain, actual_app_name)
+                print(f"🔍 DEBUG: get_latest_app_version('{app_domain}', '{actual_app_name}') returned: {latest_version}")
 
                 if latest_version:
                     app_versions[app_name] = latest_version
+                    print(f"🔍 DEBUG: Using version {latest_version} for app '{app_name}'")
                 else:
                     # Error: no released version found when building versioned helm chart
+                    print(f"🔍 DEBUG: No version found for app '{actual_app_name}', raising error")
                     raise ValueError(
                         f"No released version found for app '{actual_app_name}' in domain '{app_domain}'. "
                         f"When releasing a versioned helm chart with --use-released, all apps must have "
@@ -349,8 +356,10 @@ def resolve_app_versions_for_chart(chart_metadata: Dict, use_released_versions: 
                 ) from e
         else:
             # Use "latest" for all apps
+            print(f"🔍 DEBUG: use_released_versions=False, using 'latest' for app '{app_name}'")
             app_versions[app_name] = "latest"
     
+    print(f"🔍 DEBUG: Final app_versions result: {app_versions}")
     return app_versions
 
 
