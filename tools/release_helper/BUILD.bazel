@@ -183,3 +183,14 @@ py_test(
     ],
     size = "small",
 )
+
+# Unit tests for CLI OpenAPI builds command
+py_test(
+    name = "test_cli_openapi",
+    srcs = ["test_cli_openapi.py"],
+    deps = [
+        ":release_helper_lib",
+        "@pypi//:pytest",
+    ],
+    size = "small",
+)
