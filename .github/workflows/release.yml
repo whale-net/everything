@@ -719,7 +719,8 @@ jobs:
           
           # Build the chart using release helper with auto-versioning
           # Each chart maintains its own version based on git tags (helm/<chart-name>/v*)
-          # Note: --auto-version is the default, so we don't need to pass it explicitly
+          # --use-released is the default and queries git tags for latest app versions
+          # (could be omitted, but kept for explicitness)
           "$RELEASE_HELPER" build-helm-chart "$CHART" \
             --output-dir /tmp/helm-charts \
             --use-released \
