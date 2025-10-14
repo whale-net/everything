@@ -49,12 +49,24 @@ PKG_UNDERSCORE=$(echo "$PACKAGE_NAME" | tr '-' '_')
     --additional-properties=packageName=$PKG_UNDERSCORE,generateSourceCodeOnly=true,library=urllib3
 
 # Fix imports - replace package references with generated.namespace.app
-find "$TMPDIR/$PKG_UNDERSCORE" -name "*.py" -type f -exec sed -i \
-    -e "s|from $PKG_UNDERSCORE\\.|from generated.$NAMESPACE.$APP_NAME.|g" \
-    -e "s|import $PKG_UNDERSCORE\\.|import generated.$NAMESPACE.$APP_NAME.|g" \
-    -e "s|from $PKG_UNDERSCORE import|from generated.$NAMESPACE.$APP_NAME import|g" \
-    -e "s|^import $PKG_UNDERSCORE\$|import generated.$NAMESPACE.$APP_NAME|g" \
-    {} +
+# Use sed -i '' for macOS compatibility (empty string for no backup), -i for Linux
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS
+    find "$TMPDIR/$PKG_UNDERSCORE" -name "*.py" -type f -exec sed -i '' \
+        -e "s|from $PKG_UNDERSCORE\\.|from generated.$NAMESPACE.$APP_NAME.|g" \
+        -e "s|import $PKG_UNDERSCORE\\.|import generated.$NAMESPACE.$APP_NAME.|g" \
+        -e "s|from $PKG_UNDERSCORE import|from generated.$NAMESPACE.$APP_NAME import|g" \
+        -e "s|^import $PKG_UNDERSCORE\$|import generated.$NAMESPACE.$APP_NAME|g" \
+        {} +
+else
+    # Linux
+    find "$TMPDIR/$PKG_UNDERSCORE" -name "*.py" -type f -exec sed -i \
+        -e "s|from $PKG_UNDERSCORE\\.|from generated.$NAMESPACE.$APP_NAME.|g" \
+        -e "s|import $PKG_UNDERSCORE\\.|import generated.$NAMESPACE.$APP_NAME.|g" \
+        -e "s|from $PKG_UNDERSCORE import|from generated.$NAMESPACE.$APP_NAME import|g" \
+        -e "s|^import $PKG_UNDERSCORE\$|import generated.$NAMESPACE.$APP_NAME|g" \
+        {} +
+fi
 
 # Create tar
 tar -cf "$OUTPUT_TAR" -C "$TMPDIR" "$PKG_UNDERSCORE/"
