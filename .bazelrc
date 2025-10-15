@@ -29,17 +29,11 @@ build:ci --remote_download_outputs=all
 # Build metadata optimizations  
 build:ci --nolegacy_external_runfiles
 # Memory and CPU optimizations
-build:ci --tool_java_runtime_version=remotejdk_11
-build:ci --java_runtime_version=remotejdk_11
 test:ci --cache_test_results=yes
 test:ci --test_timeout_filters=-eternal
 
 # Test configurations
 test --test_output=errors
-test --cache_test_results=yes
-test:ci --test_output=errors
-# OpenAPI Client Generation Java Runtime
-build --java_runtime_version=remotejdk_17
 
 # Exec platform configuration for cross-compilation
 # Ensure build tools (like Java for OpenAPI generation) always use host architecture

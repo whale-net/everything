@@ -96,13 +96,6 @@ bazel build //manman/src/host:all_api_clients
 bazel build //tools/client_codegen:demo_hello_fastapi
 ```
 
-### Set Java Runtime as Default
-
-Add to your `.bazelrc`:
-```
-build --java_runtime_version=remotejdk_17
-```
-
 ## Generated Client Structure
 
 Each client contains:
