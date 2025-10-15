@@ -17,22 +17,33 @@ from tools.release_helper.validation import validate_apps, validate_release_vers
 def find_app_bazel_target(app_name: str) -> str:
     """Find the bazel target for an app by name.
     
+    Supports multiple naming formats:
+    - Full format: domain-appname (e.g., "demo-hello_python") - RECOMMENDED
+    - Path format: domain/appname (e.g., "demo/hello_python")
+    - Short format: appname (e.g., "hello_python") - only if unambiguous
+    
     Args:
-        app_name: Name of the app to find
+        app_name: Name of the app to find (supports multiple formats)
         
     Returns:
         Full bazel target path for the app's metadata
         
     Raises:
-        ValueError: If app not found
+        ValueError: If app not found or name is ambiguous
     """
-    all_apps = list_all_apps()
-    for app in all_apps:
-        if app['name'] == app_name:
-            return app['bazel_target']
-    
-    available = ", ".join(app['name'] for app in all_apps)
-    raise ValueError(f"App '{app_name}' not found. Available apps: {available}")
+    # Use validate_apps which already handles all naming formats and ambiguity
+    try:
+        validated_apps = validate_apps([app_name])
+        if len(validated_apps) == 1:
+            return validated_apps[0]['bazel_target']
+        elif len(validated_apps) > 1:
+            # This shouldn't happen as validate_apps handles ambiguity, but be safe
+            raise ValueError(f"Multiple apps matched '{app_name}': {[app['name'] for app in validated_apps]}")
+        else:
+            raise ValueError(f"App '{app_name}' not found")
+    except ValueError as e:
+        # Re-raise with original error message from validate_apps
+        raise ValueError(str(e))
 
 
 def plan_release(
@@ -132,6 +143,7 @@ def plan_release(
             "include": [
                 {
                     "app": app["name"], 
+                    "domain": app["domain"],
                     "bazel_target": app["bazel_target"],
                     "version": app.get("version", version)
                 } 
@@ -141,9 +153,9 @@ def plan_release(
 
     return {
         "matrix": matrix,
-        "apps": [app["name"] for app in release_apps],  # Return just names for compatibility
+        "apps": [f"{app['domain']}-{app['name']}" for app in release_apps],  # Return full domain-name format to avoid ambiguity
         "version": version,  # For legacy compatibility, may be None for increment modes
-        "versions": {app["name"]: app.get("version", version) for app in release_apps} if release_apps else {},  # Individual app versions
+        "versions": {f"{app['domain']}-{app['name']}": app.get("version", version) for app in release_apps} if release_apps else {},  # Individual app versions with domain-app keys
         "event_type": event_type
     }
 

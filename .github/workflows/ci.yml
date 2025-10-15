@@ -175,7 +175,7 @@ jobs:
 
   # Docker job - builds container images using the release tool (main branch only)
   docker:
-    name: Build ${{ matrix.app }} Image
+    name: Build ${{ matrix.domain }}-${{ matrix.app }} Image
     runs-on: ubuntu-latest
     needs: plan-docker
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.plan-docker.outputs.apps && needs.plan-docker.outputs.apps != 'null'
@@ -207,28 +207,32 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
         
-    - name: Build Docker image for ${{ matrix.app }}
+    - name: Build Docker image for ${{ matrix.domain }}-${{ matrix.app }}
       env:
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
         APP: ${{ matrix.app }}
+        DOMAIN: ${{ matrix.domain }}
       run: |
-        # Build Docker image for the specific app from the matrix
-        echo "Building Docker image for $APP using release tool..."
-        bazel run //tools:release -- build "$APP"
+        # Use full domain-app format to avoid ambiguity
+        FULL_APP_NAME="${DOMAIN}-${APP}"
+        echo "Building Docker image for $FULL_APP_NAME using release tool..."
+        bazel run //tools:release -- build "$FULL_APP_NAME"
         
         # Show the built Docker image
-        echo "Built Docker image for $APP:"
-        docker images | grep -E "(REPOSITORY|$APP)" || docker images | head -5
+        echo "Built Docker image for $FULL_APP_NAME:"
+        docker images | grep -E "(REPOSITORY|$FULL_APP_NAME)" || docker images | head -5
         
     - name: Push image to registry (main branch only)
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       env:
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
         APP: ${{ matrix.app }}
+        DOMAIN: ${{ matrix.domain }}
       run: |
-        # Publish the specific app image to registry with multi-arch support
-        echo "Publishing $APP image to registry..."
-        bazel run //tools:release -- release-multiarch "$APP" --version "latest" --commit "${{ github.sha }}"
+        # Use full domain-app format to avoid ambiguity
+        FULL_APP_NAME="${DOMAIN}-${APP}"
+        echo "Publishing $FULL_APP_NAME image to registry..."
+        bazel run //tools:release -- release-multiarch "$FULL_APP_NAME" --version "latest" --commit "${{ github.sha }}"
         # Shutdown Bazel server to prevent hanging
         bazel shutdown
         

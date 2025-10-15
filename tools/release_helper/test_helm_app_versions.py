@@ -19,8 +19,8 @@ class TestResolveAppVersionsForChart:
     """Test cases for resolving app versions in Helm charts."""
     
     @patch('tools.release_helper.helm.get_latest_app_version')
-    @patch('tools.release_helper.helm.get_app_metadata')
-    @patch('tools.release_helper.helm.find_app_bazel_target')
+    @patch('tools.release_helper.metadata.get_app_metadata')
+    @patch('tools.release_helper.release.find_app_bazel_target')
     def test_resolve_versions_with_released_versions(self, mock_find_target, mock_get_metadata, mock_get_version):
         """Test resolving app versions using git tags."""
         # Setup mocks
@@ -43,8 +43,8 @@ class TestResolveAppVersionsForChart:
         mock_get_version.assert_called_once_with('demo', 'hello_python')
     
     @patch('tools.release_helper.helm.get_latest_app_version')
-    @patch('tools.release_helper.helm.get_app_metadata')
-    @patch('tools.release_helper.helm.find_app_bazel_target')
+    @patch('tools.release_helper.metadata.get_app_metadata')
+    @patch('tools.release_helper.release.find_app_bazel_target')
     def test_resolve_versions_without_released_versions(self, mock_find_target, mock_get_metadata, mock_get_version):
         """Test that latest is used when use_released_versions=False."""
         chart_metadata = {
@@ -59,10 +59,10 @@ class TestResolveAppVersionsForChart:
         mock_get_version.assert_not_called()
     
     @patch('tools.release_helper.helm.get_latest_app_version')
-    @patch('tools.release_helper.helm.get_app_metadata')
-    @patch('tools.release_helper.helm.find_app_bazel_target')
-    def test_resolve_versions_fallback_to_latest_when_no_tag(self, mock_find_target, mock_get_metadata, mock_get_version):
-        """Test fallback to latest when no git tag is found."""
+    @patch('tools.release_helper.metadata.get_app_metadata')
+    @patch('tools.release_helper.release.find_app_bazel_target')
+    def test_resolve_versions_raises_error_when_no_tag(self, mock_find_target, mock_get_metadata, mock_get_version):
+        """Test that error is raised when no git tag is found with use_released_versions=True."""
         # Setup mocks
         mock_find_target.return_value = "//demo/hello_python:hello_python_metadata"
         mock_get_metadata.return_value = {
@@ -76,10 +76,33 @@ class TestResolveAppVersionsForChart:
             'apps': ['hello_python'],
         }
         
-        # Test with use_released_versions=True but no version found
-        result = resolve_app_versions_for_chart(chart_metadata, use_released_versions=True)
+        # Test with use_released_versions=True but no version found - should raise error
+        with pytest.raises(ValueError) as exc_info:
+            resolve_app_versions_for_chart(chart_metadata, use_released_versions=True)
         
-        assert result == {'hello_python': 'latest'}
+        assert "No released version found for app 'hello_python'" in str(exc_info.value)
+        assert "demo-hello_python.vX.Y.Z" in str(exc_info.value)
+
+    @patch('tools.release_helper.helm.get_latest_app_version')
+    @patch('tools.release_helper.metadata.get_app_metadata')
+    @patch('tools.release_helper.release.find_app_bazel_target')
+    def test_resolve_versions_raises_error_on_exception(self, mock_find_target, mock_get_metadata, mock_get_version):
+        """Test that error is raised when an exception occurs during version resolution."""
+        # Setup mocks to raise an exception
+        mock_find_target.return_value = "//demo/hello_python:hello_python_metadata"
+        mock_get_metadata.side_effect = RuntimeError("Failed to get metadata")
+        
+        chart_metadata = {
+            'name': 'helm-demo-test-chart',
+            'apps': ['hello_python'],
+        }
+        
+        # Test with use_released_versions=True and exception during resolution
+        with pytest.raises(ValueError) as exc_info:
+            resolve_app_versions_for_chart(chart_metadata, use_released_versions=True)
+        
+        assert "Could not resolve version for app 'hello_python'" in str(exc_info.value)
+        assert "Failed to get metadata" in str(exc_info.value)
 
 
 class TestPackageChartWithAppVersions:
