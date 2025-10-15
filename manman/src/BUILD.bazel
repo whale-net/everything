@@ -84,3 +84,19 @@ py_test(
     ],
     size = "small",
 )
+
+py_test(
+    name = "logging_config_test",
+    srcs = [
+        "logging_config_test.py",
+        "conftest.py",
+        "runner.py",
+    ],
+    main = "runner.py",
+    deps = [
+        ":manman_core",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+    ],
+    size = "small",
+)
