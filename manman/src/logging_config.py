@@ -306,7 +306,7 @@ def get_gunicorn_config(
         "worker_class": worker_class,
         "worker_connections": 1000,
         # Increased max_requests to prevent frequent worker restarts
-        # Workers will restart after 10000-12000 requests for memory leak protection
+        # Workers will restart after 8000-12000 requests for memory leak protection
         "max_requests": 10000,
         "max_requests_jitter": 2000,
         "preload_app": preload_app,
