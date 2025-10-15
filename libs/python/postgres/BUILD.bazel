@@ -1,0 +1,25 @@
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+
+py_library(
+    name = "postgres",
+    srcs = [
+        "__init__.py",
+        "repository.py",
+    ],
+    deps = [
+        "@pypi//:sqlmodel",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "repository_test",
+    srcs = ["repository_test.py"],
+    main = "repository_test.py",
+    deps = [
+        ":postgres",
+        "@pypi//:pytest",
+        "@pypi//:sqlmodel",
+    ],
+    size = "small",
+)
