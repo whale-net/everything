@@ -34,6 +34,7 @@ test:ci --test_timeout_filters=-eternal
 
 # Test configurations
 test --test_output=errors
+test --cache_test_results=yes
 
 # Exec platform configuration for cross-compilation
 # Ensure build tools (like Java for OpenAPI generation) always use host architecture
