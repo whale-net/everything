@@ -133,7 +133,7 @@ class TestConcreteRepository:
         mock_engine = Mock()
         mock_session = Mock()
         
-        with patch('libs.python.postgres.repository_test.Session', return_value=mock_session):
+        with patch('sqlmodel.Session', return_value=mock_session):
             repo = ConcreteRepository(mock_engine)
             result = repo.get_items()
             

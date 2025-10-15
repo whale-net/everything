@@ -127,7 +127,7 @@ class TestDatabaseRepository:
         # The repository should store the provided session
         assert repository._session == mock_session
 
-    @patch("manman.util.get_sqlalchemy_session")
+    @patch("manman.src.util.get_sqlalchemy_session")
     def test_session_is_closed_after_use(self, mock_get_session, repository):
         """Test that sessions are properly closed after use to prevent connection leaks."""
         mock_session = Mock()
