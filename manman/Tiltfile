@@ -18,6 +18,7 @@ dotenv()
 # Print configuration
 print("🐳 ManMan - Local Development Environment")
 print("📦 Namespace:", namespace)
+print("🔧 Using local Bazel-built images")
 
 # ===========================
 # Configuration from ENV
@@ -204,42 +205,49 @@ helm_set_args = [
     'global.domain=manman',
     'global.namespace={}'.format(namespace),
     # Override image names for each app (Tilt builds these)
-    'apps.experience-api.image.name=manman-experience-api',
-    'apps.experience-api.image.tag=latest',
-    'apps.worker-dal-api.image.name=manman-worker-dal-api',
-    'apps.worker-dal-api.image.tag=latest',
-    'apps.status-api.image.name=manman-status-api',
-    'apps.status-api.image.tag=latest',
-    'apps.status-processor.image.name=manman-status-processor',
-    'apps.status-processor.image.tag=latest',
+    'apps.manman-experience-api.image=manman-experience-api',
+    'apps.manman-experience-api.imageTag=latest',
+    'apps.manman-worker-dal-api.image=manman-worker-dal-api',
+    'apps.manman-worker-dal-api.imageTag=latest',
+    'apps.manman-status-api.image=manman-status-api',
+    'apps.manman-status-api.imageTag=latest',
+    'apps.manman-status-processor.image=manman-status-processor',
+    'apps.manman-status-processor.imageTag=latest',
     # Database configuration
-    'apps.experience-api.env.MANMAN_POSTGRES_URL={}'.format(db_url),
-    'apps.worker-dal-api.env.MANMAN_POSTGRES_URL={}'.format(db_url),
-    'apps.status-api.env.MANMAN_POSTGRES_URL={}'.format(db_url),
-    'apps.status-processor.env.MANMAN_POSTGRES_URL={}'.format(db_url),
+    'apps.manman-experience-api.env.MANMAN_POSTGRES_URL={}'.format(db_url),
+    'apps.manman-worker-dal-api.env.MANMAN_POSTGRES_URL={}'.format(db_url),
+    'apps.manman-status-api.env.MANMAN_POSTGRES_URL={}'.format(db_url),
+    'apps.manman-status-processor.env.MANMAN_POSTGRES_URL={}'.format(db_url),
     # RabbitMQ configuration
-    'apps.experience-api.env.MANMAN_RABBITMQ_HOST={}'.format(rabbitmq_host),
-    'apps.experience-api.env.MANMAN_RABBITMQ_PORT={}'.format(rabbitmq_port),
-    'apps.experience-api.env.MANMAN_RABBITMQ_USER={}'.format(rabbitmq_user),
-    'apps.experience-api.env.MANMAN_RABBITMQ_PASSWORD={}'.format(rabbitmq_password),
-    'apps.worker-dal-api.env.MANMAN_RABBITMQ_HOST={}'.format(rabbitmq_host),
-    'apps.worker-dal-api.env.MANMAN_RABBITMQ_PORT={}'.format(rabbitmq_port),
-    'apps.worker-dal-api.env.MANMAN_RABBITMQ_USER={}'.format(rabbitmq_user),
-    'apps.worker-dal-api.env.MANMAN_RABBITMQ_PASSWORD={}'.format(rabbitmq_password),
-    'apps.status-processor.env.MANMAN_RABBITMQ_HOST={}'.format(rabbitmq_host),
-    'apps.status-processor.env.MANMAN_RABBITMQ_PORT={}'.format(rabbitmq_port),
-    'apps.status-processor.env.MANMAN_RABBITMQ_USER={}'.format(rabbitmq_user),
-    'apps.status-processor.env.MANMAN_RABBITMQ_PASSWORD={}'.format(rabbitmq_password),
+    'apps.manman-experience-api.env.MANMAN_RABBITMQ_HOST={}'.format(rabbitmq_host),
+    'apps.manman-experience-api.env.MANMAN_RABBITMQ_PORT={}'.format(rabbitmq_port),
+    'apps.manman-experience-api.env.MANMAN_RABBITMQ_USER={}'.format(rabbitmq_user),
+    'apps.manman-experience-api.env.MANMAN_RABBITMQ_PASSWORD={}'.format(rabbitmq_password),
+    'apps.manman-worker-dal-api.env.MANMAN_RABBITMQ_HOST={}'.format(rabbitmq_host),
+    'apps.manman-worker-dal-api.env.MANMAN_RABBITMQ_PORT={}'.format(rabbitmq_port),
+    'apps.manman-worker-dal-api.env.MANMAN_RABBITMQ_USER={}'.format(rabbitmq_user),
+    'apps.manman-worker-dal-api.env.MANMAN_RABBITMQ_PASSWORD={}'.format(rabbitmq_password),
+    'apps.manman-status-processor.env.MANMAN_RABBITMQ_HOST={}'.format(rabbitmq_host),
+    'apps.manman-status-processor.env.MANMAN_RABBITMQ_PORT={}'.format(rabbitmq_port),
+    'apps.manman-status-processor.env.MANMAN_RABBITMQ_USER={}'.format(rabbitmq_user),
+    'apps.manman-status-processor.env.MANMAN_RABBITMQ_PASSWORD={}'.format(rabbitmq_password),
 ]
 
-k8s_yaml(
-    helm(
-        chart_path,
-        name='manman-host',
-        namespace=namespace,
-        set=helm_set_args
-    )
-)
+# Build the helm set arguments as a single string for local() command
+helm_set_string = ' '.join(['--set {}'.format(arg) for arg in helm_set_args])
+
+print("🔨 Generating Kubernetes manifests with local images...")
+print("   Chart path:", chart_path)
+print("   Namespace:", namespace)
+
+# Generate YAML using local() to force re-evaluation
+yaml_content = local('helm template manman-host {} --namespace {} {}'.format(
+    chart_path,
+    namespace,
+    helm_set_string
+))
+
+k8s_yaml(yaml_content)
 
 # ===========================
 # Access Information
