@@ -12,6 +12,7 @@ from sqlalchemy import desc
 from sqlalchemy.sql.functions import current_timestamp
 from sqlmodel import Session, not_, select
 
+from libs.python.postgres import DatabaseRepository as BaseRepository
 from manman.src.exceptions import (
     GameServerInstanceAlreadyClosedException,
     WorkerAlreadyClosedException,
@@ -27,7 +28,7 @@ from manman.src.models import (
 )
 
 
-class DatabaseRepository:
+class DatabaseRepository(BaseRepository):
     """Repository class for database operations related to status and worker management."""
 
     def __init__(self, session: Optional[Session] = None):
@@ -37,29 +38,18 @@ class DatabaseRepository:
         Args:
             session: Optional SQLAlchemy session. If not provided, a new session will be created for each operation.
         """
-        self._session = session
+        # Get session factory from util module
+        from manman.src.util import get_sqlalchemy_session
+        
+        super().__init__(
+            session=session,
+            session_factory=get_sqlalchemy_session if session is None else None,
+        )
 
     def _get_session(self) -> Session:
         """Get a database session. If none provided, create a new one."""
         if self._session is not None:
             return self._session
-
-        # Import here to avoid circular import
-        from manman.src.util import get_sqlalchemy_session
-
-        return get_sqlalchemy_session()
-
-    def _get_session_context(self):
-        """Get a session context manager."""
-        if self._session is not None:
-            # If we have a persistent session, create a context manager that yields it
-            from contextlib import contextmanager
-
-            @contextmanager
-            def session_context():
-                yield self._session
-
-            return session_context()
 
         # Import here to avoid circular import
         from manman.src.util import get_sqlalchemy_session
