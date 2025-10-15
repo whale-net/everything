@@ -145,7 +145,8 @@ def plan_release(
                     "app": app["name"], 
                     "domain": app["domain"],
                     "bazel_target": app["bazel_target"],
-                    "version": app.get("version", version)
+                    "version": app.get("version", version),
+                    "domain": app["domain"]
                 } 
                 for app in release_apps
             ]

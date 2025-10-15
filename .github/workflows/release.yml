@@ -520,22 +520,26 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Setup Build Environment
-      uses: ./.github/actions/setup-build-env
+    - name: Setup Python
+      uses: actions/setup-python@v5
       with:
-        cache-suffix: 'docker'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+        python-version: '3.12'
+        
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install typer pyyaml httpx
       
     - name: Generate summary using release helper
+      env:
+        PYTHONPATH: ${{ github.workspace }}
       run: |
         # Use our release helper tool to generate the summary
         MATRIX='${{ needs.plan-release.outputs.release-matrix }}'
         EVENT_TYPE="workflow_dispatch"
         DRY_RUN="${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}"
         
-        SUMMARY=$(bazel run //tools:release -- summary \
+        SUMMARY=$(python tools/release_helper/cli.py summary \
           --matrix "$MATRIX" \
           --version "${{ needs.plan-release.outputs.version }}" \
           --event-type "$EVENT_TYPE" \
