@@ -62,9 +62,18 @@ class DatabaseRepository:
             return session_context()
 
         # Import here to avoid circular import
+        from contextlib import contextmanager
         from manman.src.util import get_sqlalchemy_session
 
-        return get_sqlalchemy_session()
+        @contextmanager
+        def session_context():
+            session = get_sqlalchemy_session()
+            try:
+                yield session
+            finally:
+                session.close()
+
+        return session_context()
 
     @staticmethod
     def get_worker_current_status_subquery():
