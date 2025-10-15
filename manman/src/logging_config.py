@@ -304,7 +304,8 @@ def get_gunicorn_config(
         "bind": f"0.0.0.0:{port}",
         "workers": workers,
         "worker_class": worker_class,
-        "worker_connections": 1000,
+        # Increased worker_connections to handle concurrent heartbeat requests
+        "worker_connections": 5000,
         "max_requests": 1000,
         "max_requests_jitter": 100,
         "preload_app": preload_app,
