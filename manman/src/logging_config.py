@@ -305,13 +305,10 @@ def get_gunicorn_config(
         "workers": workers,
         "worker_class": worker_class,
         "worker_connections": 1000,
-        # Increased max_requests to prevent frequent worker restarts
-        # Workers will restart after 8000-12000 requests for memory leak protection
-        "max_requests": 10000,
-        "max_requests_jitter": 2000,
+        "max_requests": 1000,
+        "max_requests_jitter": 100,
         "preload_app": preload_app,
-        # Increased keepalive for better connection reuse
-        "keepalive": 5,
+        "keepalive": 2,
         "timeout": 30,
         "graceful_timeout": 30,
         # Logging format and output - simplified for OTEL
