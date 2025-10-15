@@ -1,0 +1,144 @@
+# Friendly Computing Machine (FCM) Tiltfile
+# Local development environment for FCM
+#
+# This Tiltfile is self-contained and manages all dependencies needed for FCM development.
+# 
+# Usage: cd friendly_computing_machine && tilt up
+
+load('ext://namespace', 'namespace_create')
+load('ext://dotenv', 'dotenv')
+load('ext://helm_resource', 'helm_resource', 'helm_repo')
+
+# Configuration
+namespace = 'fcm-dev'
+namespace_create(namespace)
+
+# Load environment variables
+dotenv()
+
+print("🐳 Friendly Computing Machine - Local Development Environment")
+print("📦 Namespace:", namespace)
+
+# ===========================
+# Configuration
+# ===========================
+
+app_env = os.environ.get('APP_ENV', 'dev')
+build_postgres_env = os.environ.get('FCM_BUILD_POSTGRES_ENV', 'default')
+
+# Feature flags
+enable_bot = os.environ.get('FCM_ENABLE_BOT', 'true').lower() == 'true'
+enable_api = os.environ.get('FCM_ENABLE_API', 'true').lower() == 'true'
+
+print("App Environment:", app_env)
+print("Features - Bot:", enable_bot, "API:", enable_api)
+
+# Detect platform
+arch = str(local('uname -m')).strip()
+platform = 'linux/arm64' if arch == 'arm64' else 'linux/amd64'
+bazel_platform = '//tools:linux_arm64' if platform == 'linux/arm64' else '//tools:linux_x86_64'
+
+print("🏗️  Building for platform:", platform, "(detected:", arch, ")")
+print("🎯 Bazel platform:", bazel_platform)
+
+# ===========================
+# Infrastructure Setup
+# ===========================
+
+# Setup dev-util helm repository
+helm_repo('dev-util', 'https://whale-net.github.io/dev-util')
+
+# PostgreSQL Database
+helm_resource('postgres-dev', 'dev-util/postgres-dev',
+    resource_deps=['dev-util'],
+    flags=[
+        '--set=postgresDB=fcm',
+        '--set=namespace={}'.format(namespace)
+    ]
+)
+k8s_resource(workload='postgres-dev', port_forwards='5433:5432')  # Note: Different port to avoid conflict with ManMan
+
+# ===========================
+# Database Configuration
+# ===========================
+
+db_url_default = 'postgresql+psycopg2://postgres:password@postgres-dev.{}.svc.cluster.local:5432/fcm'.format(namespace)
+db_url = db_url_default
+
+if build_postgres_env == 'custom':
+    db_url = os.environ.get('FCM_POSTGRES_URL', db_url_default)
+
+# ===========================
+# Application Images
+# ===========================
+
+# TODO: Replace with Bazel builds once FCM has release_app() macros
+# 
+# Example Bazel builds (uncomment when ready):
+#
+# if enable_bot:
+#     custom_build(
+#         'fcm-bot',
+#         'bazel run //friendly_computing_machine:bot_image_load --platforms={}'.format(bazel_platform),
+#         ['./src'],
+#         skips_local_docker=False,
+#         disable_push=True,
+#     )
+#
+# if enable_api:
+#     custom_build(
+#         'fcm-api',
+#         'bazel run //friendly_computing_machine:api_image_load --platforms={}'.format(bazel_platform),
+#         ['./src'],
+#         skips_local_docker=False,
+#         disable_push=True,
+#     )
+
+# For now, use Docker build if Dockerfile exists
+# TODO: Migrate to Bazel-based builds
+print("⚠️  FCM using Docker builds - migrate to Bazel for production")
+docker_build(
+    'fcm',
+    context='.',
+    dockerfile='./Dockerfile',
+    only=['./src', './pyproject.toml', './uv.lock'],
+    ignore=['.git', '**/__pycache__', '*.pyc', '.pytest_cache']
+)
+
+# ===========================
+# Kubernetes Deployment
+# ===========================
+
+# TODO: Create Helm chart for FCM
+# For now, you can use k8s_yaml with raw manifests or create a helm chart
+#
+# Example with Helm chart (create one at ./charts/fcm):
+# k8s_yaml(
+#     helm(
+#         './charts/fcm',
+#         name='fcm',
+#         namespace=namespace,
+#         set=[
+#             'image.name=fcm',
+#             'image.tag=dev',
+#             'env.db.url={}'.format(db_url),
+#             'namespace={}'.format(namespace),
+#         ]
+#     )
+# )
+
+print("\n" + "="*60)
+print("🚀 FCM Development Environment Configuration")
+print("="*60)
+print("\n🔧 Infrastructure:")
+print("   PostgreSQL: localhost:5433 (user: postgres, pass: password)")
+print("\n📝 Next Steps:")
+print("   1. Create Helm chart at friendly_computing_machine/charts/fcm")
+print("   2. Add release_app() macros to friendly_computing_machine/BUILD.bazel")
+print("   3. Replace Docker builds with Bazel builds in this Tiltfile")
+print("\n💡 Tips:")
+print("   - Set FCM_BUILD_POSTGRES_ENV=custom to use external postgres")
+print("   - Set FCM_POSTGRES_URL for custom database URL")
+print("   - Disable features with FCM_ENABLE_BOT=false")
+print("   - Run 'tilt down' to stop all services")
+print("\n" + "="*60 + "\n")

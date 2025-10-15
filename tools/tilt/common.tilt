@@ -1,0 +1,305 @@
+# Common Tilt utilities for Everything monorepo
+# 
+# This file provides shared functions and utilities that can be loaded
+# by domain-specific Tiltfiles.
+#
+# Usage in a domain Tiltfile:
+#   load('../../tools/tilt/common.tilt', 'bazel_build_image', 'setup_dev_util')
+
+# ===========================
+# Bazel Image Building
+# ===========================
+
+def bazel_build_image(app_name, context_path, bazel_target, platform='linux/arm64'):
+    """
+    Build a container image using Bazel and load it into Docker.
+    
+    This function uses Bazel's cross-compilation support to build images
+    for the correct architecture.
+    
+    Args:
+        app_name: Name of the app for the image tag
+        context_path: Context path for Tilt to watch for changes
+        bazel_target: Bazel target for the image (e.g., //path/to/app:app_image_load)
+        platform: Target platform (linux/arm64 or linux/amd64)
+        
+    Example:
+        bazel_build_image(
+            'my-api',
+            './src',
+            '//my-domain:my_api_image_load',
+            platform=detect_platform()
+        )
+    """
+    # Map platform to Bazel platform
+    platform_map = {
+        'linux/arm64': '//tools:linux_arm64',
+        'linux/amd64': '//tools:linux_x86_64',
+    }
+    bazel_platform = platform_map.get(platform, '//tools:linux_arm64')
+    
+    # Custom build command that uses Bazel
+    custom_build(
+        app_name,
+        'bazel run {} --platforms={}'.format(bazel_target, bazel_platform),
+        [context_path],
+        skips_local_docker=False,
+        disable_push=True,
+    )
+
+def detect_platform():
+    """
+    Auto-detect the platform based on host architecture.
+    
+    Returns:
+        'linux/arm64' for ARM Macs, 'linux/amd64' for Intel
+    """
+    arch = str(local('uname -m')).strip()
+    return 'linux/arm64' if arch == 'arm64' else 'linux/amd64'
+
+def get_bazel_platform(platform='auto'):
+    """
+    Get the Bazel platform string for a given platform.
+    
+    Args:
+        platform: 'auto', 'linux/arm64', or 'linux/amd64'
+        
+    Returns:
+        Bazel platform string (e.g., '//tools:linux_arm64')
+    """
+    if platform == 'auto':
+        platform = detect_platform()
+    
+    platform_map = {
+        'linux/arm64': '//tools:linux_arm64',
+        'linux/amd64': '//tools:linux_x86_64',
+    }
+    return platform_map.get(platform, '//tools:linux_arm64')
+
+# ===========================
+# Infrastructure Setup
+# ===========================
+
+def setup_dev_util(namespace):
+    """
+    Setup the dev-util helm repository.
+    
+    This repository contains shared development services like postgres,
+    rabbitmq, and otelcollector.
+    
+    Args:
+        namespace: Kubernetes namespace to use
+        
+    Example:
+        setup_dev_util('my-domain-dev')
+    """
+    load('ext://helm_resource', 'helm_resource', 'helm_repo')
+    helm_repo('dev-util', 'https://whale-net.github.io/dev-util')
+
+def setup_postgres(namespace, db_name='default', resource_name='postgres-dev', port_forward=True):
+    """
+    Setup PostgreSQL using dev-util helm chart.
+    
+    Args:
+        namespace: Kubernetes namespace
+        db_name: Database name to create
+        resource_name: K8s resource name
+        port_forward: Whether to forward port 5432
+        
+    Returns:
+        Default connection URL
+        
+    Example:
+        db_url = setup_postgres('my-domain-dev', db_name='myapp')
+    """
+    load('ext://helm_resource', 'helm_resource', 'helm_repo')
+    
+    helm_resource(resource_name, 'dev-util/postgres-dev',
+        resource_deps=['dev-util'],
+        flags=[
+            '--set=postgresDB={}'.format(db_name),
+            '--set=namespace={}'.format(namespace)
+        ]
+    )
+    
+    if port_forward:
+        k8s_resource(workload=resource_name, port_forwards='5432:5432')
+    
+    return 'postgresql+psycopg2://postgres:password@{}.{}.svc.cluster.local:5432/{}'.format(
+        resource_name, namespace, db_name
+    )
+
+def setup_rabbitmq(namespace, resource_name='rabbitmq-dev', port_forward=True):
+    """
+    Setup RabbitMQ using dev-util helm chart.
+    
+    Args:
+        namespace: Kubernetes namespace
+        resource_name: K8s resource name
+        port_forward: Whether to forward ports 5672 and 15672
+        
+    Returns:
+        Dict with connection configuration
+        
+    Example:
+        rmq = setup_rabbitmq('my-domain-dev')
+        print(rmq['host'])
+    """
+    load('ext://helm_resource', 'helm_resource', 'helm_repo')
+    
+    helm_resource(resource_name, 'dev-util/rabbitmq-dev',
+        resource_deps=['dev-util'],
+        flags=['--set=namespace={}'.format(namespace)]
+    )
+    
+    if port_forward:
+        k8s_resource(workload=resource_name, port_forwards='5672:5672')
+        k8s_resource(workload=resource_name, port_forwards='15672:15672')
+    
+    return {
+        'host': '{}.{}.svc.cluster.local'.format(resource_name, namespace),
+        'port': '5672',
+        'user': 'rabbit',
+        'password': 'password',
+    }
+
+def setup_otelcollector(namespace, resource_name='otelcollector-dev'):
+    """
+    Setup OpenTelemetry Collector using dev-util helm chart.
+    
+    Args:
+        namespace: Kubernetes namespace
+        resource_name: K8s resource name
+        
+    Returns:
+        OTLP endpoint URL
+        
+    Example:
+        otlp_endpoint = setup_otelcollector('my-domain-dev')
+    """
+    load('ext://helm_resource', 'helm_resource', 'helm_repo')
+    
+    helm_resource(resource_name, 'dev-util/otelcollector-dev',
+        resource_deps=['dev-util'],
+        flags=['--set=namespace={}'.format(namespace)]
+    )
+    
+    return 'http://otel-collector.{}.svc.cluster.local:4317'.format(namespace)
+
+def setup_nginx_ingress(ingress_class='nginx', http_port=30080, https_port=30443):
+    """
+    Setup Nginx Ingress Controller for local development.
+    
+    Args:
+        ingress_class: Ingress class name
+        http_port: NodePort for HTTP (default: 30080)
+        https_port: NodePort for HTTPS (default: 30443)
+        
+    Example:
+        setup_nginx_ingress(ingress_class='my-domain-nginx')
+    """
+    load('ext://helm_resource', 'helm_resource', 'helm_repo')
+    
+    helm_repo('ingress-nginx', 'https://kubernetes.github.io/ingress-nginx')
+    helm_resource('{}-ingress'.format(ingress_class), 'ingress-nginx/ingress-nginx',
+        namespace='ingress-nginx',
+        flags=[
+            '--create-namespace',
+            '--set=controller.service.type=NodePort',
+            '--set=controller.hostPort.enabled=true',
+            '--set=controller.service.nodePorts.http={}'.format(http_port),
+            '--set=controller.service.nodePorts.https={}'.format(https_port),
+            '--set=controller.admissionWebhooks.enabled=false',
+            '--set=controller.ingressClassResource.name={}'.format(ingress_class),
+            '--set=controller.ingressClass={}'.format(ingress_class)
+        ]
+    )
+
+# ===========================
+# Configuration Helpers
+# ===========================
+
+def get_env_bool(key, default='false'):
+    """
+    Get a boolean environment variable.
+    
+    Args:
+        key: Environment variable name
+        default: Default value if not set
+        
+    Returns:
+        Boolean value
+        
+    Example:
+        if get_env_bool('ENABLE_FEATURE'):
+            print("Feature enabled")
+    """
+    return os.environ.get(key, default).lower() == 'true'
+
+def get_custom_or_default(custom_env_key, custom_value_key, default_value):
+    """
+    Get a custom value if custom mode is enabled, otherwise use default.
+    
+    This pattern is useful for allowing external infrastructure in development.
+    
+    Args:
+        custom_env_key: Environment variable to check for custom mode (e.g., 'BUILD_POSTGRES_ENV')
+        custom_value_key: Environment variable with custom value (e.g., 'POSTGRES_URL')
+        default_value: Default value to use
+        
+    Returns:
+        Custom value if custom mode, otherwise default
+        
+    Example:
+        db_url = get_custom_or_default(
+            'BUILD_POSTGRES_ENV',
+            'POSTGRES_URL',
+            'postgresql://localhost:5432/mydb'
+        )
+    """
+    if os.environ.get(custom_env_key, 'default') == 'custom':
+        return os.environ.get(custom_value_key, default_value)
+    return default_value
+
+# ===========================
+# Output Helpers
+# ===========================
+
+def print_service_info(title, services):
+    """
+    Print formatted service information.
+    
+    Args:
+        title: Section title
+        services: Dict of service_name -> url
+        
+    Example:
+        print_service_info("APIs", {
+            "Experience API": "http://localhost:8000/api",
+            "Admin API": "http://localhost:8001/admin"
+        })
+    """
+    print("\n" + "="*60)
+    print(title)
+    print("="*60)
+    for name, url in services.items():
+        print("  {}: {}".format(name, url))
+
+def print_startup_banner(domain_name, namespace, platform):
+    """
+    Print a startup banner with configuration info.
+    
+    Args:
+        domain_name: Name of the domain
+        namespace: Kubernetes namespace
+        platform: Target platform
+        
+    Example:
+        print_startup_banner("ManMan", "manman-dev", "linux/arm64")
+    """
+    print("\n" + "="*60)
+    print("🐳 {} Development Environment".format(domain_name))
+    print("="*60)
+    print("📦 Namespace: {}".format(namespace))
+    print("🏗️  Platform:  {}".format(platform))
+    print("="*60 + "\n")
