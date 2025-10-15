@@ -1,0 +1,365 @@
+name: Manual Rebuild
+
+on:
+  workflow_dispatch:
+    inputs:
+      apps:
+        description: 'Apps to rebuild (e.g., "all", "demo", "hello_python,hello_go"). Use "all" for all apps, domain name (e.g., "demo") for all apps in domain, or comma-separated list of app names.'
+        required: true
+        default: 'all'
+      include_demo:
+        description: 'Include demo domain when using "all"'
+        type: boolean
+        default: false
+      skip_tests:
+        description: 'Skip running tests (faster, but less safe)'
+        type: boolean
+        default: false
+      publish:
+        description: 'Publish images to registry (only works on latest main commit)'
+        type: boolean
+        default: false
+
+jobs:
+  # Validate that we're on main branch and optionally check if on latest commit
+  validate:
+    name: Validate Branch and Commit
+    runs-on: ubuntu-latest
+    outputs:
+      is_latest_main: ${{ steps.check.outputs.is_latest_main }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Check branch and commit status
+      id: check
+      run: |
+        CURRENT_BRANCH="${{ github.ref_name }}"
+        CURRENT_SHA="${{ github.sha }}"
+        
+        echo "Current branch: $CURRENT_BRANCH"
+        echo "Current SHA: $CURRENT_SHA"
+        
+        # Check if we're on main branch
+        if [[ "$CURRENT_BRANCH" != "main" ]]; then
+          echo "❌ Error: Manual rebuild can only be run on main branch"
+          echo "Current branch: $CURRENT_BRANCH"
+          exit 1
+        fi
+        
+        # Fetch latest main to compare
+        git fetch origin main
+        LATEST_MAIN_SHA=$(git rev-parse origin/main)
+        
+        echo "Latest main SHA: $LATEST_MAIN_SHA"
+        
+        if [[ "$CURRENT_SHA" == "$LATEST_MAIN_SHA" ]]; then
+          echo "✅ Running on latest main commit"
+          echo "is_latest_main=true" >> $GITHUB_OUTPUT
+        else
+          echo "⚠️  Warning: Not running on latest main commit"
+          echo "Current SHA: $CURRENT_SHA"
+          echo "Latest SHA:  $LATEST_MAIN_SHA"
+          echo "is_latest_main=false" >> $GITHUB_OUTPUT
+          
+          if [[ "${{ github.event.inputs.publish }}" == "true" ]]; then
+            echo "❌ Error: Cannot publish when not on latest main commit"
+            echo "Please run workflow on the latest main commit for publishing"
+            exit 1
+          fi
+        fi
+
+  # Build job - builds all targets to verify compilation
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: validate
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'manual-build'
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+        
+    - name: Build all targets
+      run: |
+        echo "Building all targets to verify compilation..."
+        bazel build //...
+        bazel shutdown
+
+  # Test job - runs all tests
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event.inputs.skip_tests == 'false'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'manual-test'
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+        
+    - name: Run tests
+      run: |
+        echo "Running all tests..."
+        bazel test //...
+        bazel shutdown
+        
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results-manual
+        path: bazel-testlogs/
+        retention-days: 7
+
+  # Container architecture test - verify cross-compilation works correctly
+  test-container-arch:
+    name: Test Container Architecture
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event.inputs.skip_tests == 'false'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'manual-container-arch'
+        setup-docker: 'true'
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+        
+    - name: Verify Cross-Compilation (Critical)
+      run: |
+        echo "::group::Cross-Compilation Verification"
+        bazel test //tools/scripts:test_cross_compilation --config=ci --test_output=streamed
+        echo "::endgroup::"
+        bazel shutdown
+
+  # Plan which apps to rebuild
+  plan-rebuild:
+    name: Plan Rebuild
+    runs-on: ubuntu-latest
+    needs: [build, test, test-container-arch]
+    if: always() && !cancelled() && needs.build.result == 'success' && (needs.test.result == 'success' || needs.test.result == 'skipped') && (needs.test-container-arch.result == 'success' || needs.test-container-arch.result == 'skipped')
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      apps: ${{ steps.plan.outputs.apps }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'manual-plan'
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+        
+    - name: Plan rebuild using release tool
+      id: plan
+      env:
+        GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+      run: |
+        APPS_INPUT="${{ github.event.inputs.apps }}"
+        INCLUDE_DEMO="${{ github.event.inputs.include_demo }}"
+        
+        echo "Planning rebuild for apps: $APPS_INPUT"
+        
+        # Build the command
+        CMD="bazel run //tools:release -- plan --event-type workflow_dispatch --apps \"$APPS_INPUT\" --version latest --format github"
+        
+        # Add --include-demo flag if checkbox is selected
+        if [[ "$INCLUDE_DEMO" == "true" ]]; then
+          CMD="$CMD --include-demo"
+        fi
+        
+        # Use release helper to plan the rebuild
+        echo "Planning with command: $CMD"
+        PLAN_OUTPUT=$(eval $CMD)
+        
+        # Parse output from release helper
+        echo "$PLAN_OUTPUT" | while IFS= read -r line; do
+          if [[ "$line" == matrix=* ]]; then
+            echo "${line}" >> $GITHUB_OUTPUT
+          elif [[ "$line" == apps=* ]]; then
+            echo "${line}" >> $GITHUB_OUTPUT
+            APPS_LIST="${line#apps=}"
+            if [[ -n "$APPS_LIST" ]]; then
+              echo "Rebuild plan: $APPS_LIST"
+            else
+              echo "No apps to rebuild"
+            fi
+          fi
+        done
+        
+        bazel shutdown
+
+  # Rebuild and optionally publish images
+  rebuild:
+    name: Rebuild ${{ matrix.app }}
+    runs-on: ubuntu-latest
+    needs: [validate, plan-rebuild]
+    if: needs.plan-rebuild.outputs.matrix != '' && fromJson(needs.plan-rebuild.outputs.matrix).include[0] != null
+    strategy:
+      matrix: ${{ fromJson(needs.plan-rebuild.outputs.matrix) }}
+      fail-fast: false
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+      
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        setup-docker: 'true'
+        cache-suffix: 'manual-rebuild'
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+        
+    - name: Build Docker image for ${{ matrix.app }}
+      env:
+        GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        APP: ${{ matrix.app }}
+      run: |
+        echo "Building Docker image for $APP using release tool..."
+        bazel run //tools:release -- build "$APP"
+        
+        echo "Built Docker image for $APP:"
+        docker images | grep -E "(REPOSITORY|$APP)" || docker images | head -5
+    
+    - name: Log in to GitHub Container Registry
+      if: github.event.inputs.publish == 'true'
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Publish image to registry
+      if: github.event.inputs.publish == 'true' && needs.validate.outputs.is_latest_main == 'true'
+      env:
+        GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        APP: ${{ matrix.app }}
+      run: |
+        echo "Publishing $APP image to registry..."
+        echo "This will update the 'latest' and commit-specific tags"
+        
+        # Publish with multi-arch support using latest tag and commit SHA
+        bazel run //tools:release -- release-multiarch "$APP" --version "latest" --commit "${{ github.sha }}"
+        
+        echo "✅ Successfully published $APP:latest"
+        bazel shutdown
+
+  # Summary job
+  rebuild-summary:
+    name: Rebuild Summary
+    runs-on: ubuntu-latest
+    needs: [validate, build, test, test-container-arch, plan-rebuild, rebuild]
+    if: always()
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Generate summary
+      run: |
+        echo "# 🔄 Manual Rebuild Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Validation status
+        VALIDATE_RESULT="${{ needs.validate.result }}"
+        IS_LATEST_MAIN="${{ needs.validate.outputs.is_latest_main }}"
+        echo "**Branch Validation:** $VALIDATE_RESULT" >> $GITHUB_STEP_SUMMARY
+        if [[ "$IS_LATEST_MAIN" == "true" ]]; then
+          echo "**Latest Main Commit:** ✅ Yes" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "**Latest Main Commit:** ⚠️ No" >> $GITHUB_STEP_SUMMARY
+        fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Build/Test status
+        BUILD_RESULT="${{ needs.build.result }}"
+        TEST_RESULT="${{ needs.test.result }}"
+        CONTAINER_ARCH_RESULT="${{ needs.test-container-arch.result }}"
+        
+        echo "## Build & Test Status" >> $GITHUB_STEP_SUMMARY
+        echo "- **Build:** $BUILD_RESULT" >> $GITHUB_STEP_SUMMARY
+        echo "- **Tests:** $TEST_RESULT" >> $GITHUB_STEP_SUMMARY
+        echo "- **Container Architecture:** $CONTAINER_ARCH_RESULT" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Apps rebuilt
+        APPS="${{ needs.plan-rebuild.outputs.apps }}"
+        REBUILD_RESULT="${{ needs.rebuild.result }}"
+        
+        echo "## Rebuild Status" >> $GITHUB_STEP_SUMMARY
+        if [[ -n "$APPS" && "$APPS" != "null" ]]; then
+          echo "**Apps Rebuilt:** $APPS" >> $GITHUB_STEP_SUMMARY
+          echo "**Rebuild Result:** $REBUILD_RESULT" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "**Apps Rebuilt:** None" >> $GITHUB_STEP_SUMMARY
+        fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Publish status
+        PUBLISH_REQUESTED="${{ github.event.inputs.publish }}"
+        echo "## Publish Status" >> $GITHUB_STEP_SUMMARY
+        if [[ "$PUBLISH_REQUESTED" == "true" ]]; then
+          if [[ "$IS_LATEST_MAIN" == "true" ]]; then
+            if [[ "$REBUILD_RESULT" == "success" ]]; then
+              echo "✅ **Images published to registry**" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ **Publishing failed** (rebuild unsuccessful)" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "⚠️ **Publishing skipped** (not on latest main commit)" >> $GITHUB_STEP_SUMMARY
+          fi
+        else
+          echo "**Publishing:** Not requested (dry run)" >> $GITHUB_STEP_SUMMARY
+        fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Overall status
+        if [[ "$BUILD_RESULT" != "success" ]] || [[ "$CONTAINER_ARCH_RESULT" != "success" && "$CONTAINER_ARCH_RESULT" != "skipped" ]]; then
+          echo "❌ **Overall Status: FAILED**" >> $GITHUB_STEP_SUMMARY
+          exit 1
+        elif [[ "$TEST_RESULT" == "failure" ]]; then
+          echo "❌ **Overall Status: FAILED** (tests failed)" >> $GITHUB_STEP_SUMMARY
+          exit 1
+        elif [[ "$REBUILD_RESULT" == "failure" ]]; then
+          echo "❌ **Overall Status: FAILED** (rebuild failed)" >> $GITHUB_STEP_SUMMARY
+          exit 1
+        else
+          echo "✅ **Overall Status: SUCCESS**" >> $GITHUB_STEP_SUMMARY
+        fi
