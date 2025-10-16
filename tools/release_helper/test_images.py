@@ -86,6 +86,18 @@ class TestFormatRegistryTags:
         # Test that commit tag is added when provided
         assert "commit" in result
         assert "abc123" in result["commit"]
+    
+    def test_format_registry_tags_without_commit_sha(self, github_owner_env):
+        """Test formatting registry tags without commit SHA (for main branch pushes)."""
+        result = format_registry_tags("demo", "hello_python", "latest")
+        
+        # Test that only latest and version tags are created (no commit tag)
+        assert "latest" in result
+        assert "version" in result
+        assert "commit" not in result
+        
+        # Test that version tag matches the provided version
+        assert "latest" in result["version"]
 
     def test_format_registry_tags_custom_registry(self):
         """Test formatting registry tags for custom registry (safety guard)."""
