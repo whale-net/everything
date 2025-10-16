@@ -56,23 +56,41 @@ Each domain manages its own complete development environment:
 
 Shared Starlark functions that domains can import:
 
-- `bazel_build_image()`: Build images using Bazel with cross-compilation
-- `setup_postgres()`: PostgreSQL from dev-util
-- `setup_rabbitmq()`: RabbitMQ from dev-util
+**Infrastructure Setup:**
+- `setup_dev_util()`: Add dev-util Helm repository
+- `setup_postgres()`: PostgreSQL database - returns dict with `url`, `host`, `port`, `user`, `password`, `database`, `service_info`
+- `setup_rabbitmq()`: RabbitMQ message queue - returns dict with `host`, `port`, `user`, `password`, `service_info`, `mgmt_service_info`
 - `setup_otelcollector()`: OpenTelemetry Collector
 - `setup_nginx_ingress()`: Nginx Ingress Controller
-- Configuration helpers and output formatting
+
+**Image Building:**
+- `build_images_from_apps()`: Build multiple images with Bazel, automatically handles cross-compilation
+
+**Configuration:**
+- `build_apps_config()`: Build app configuration with environment variables
+- `deploy_helm_chart()`: Deploy Helm chart using helm template + k8s_yaml
+
+**Utilities:**
+- `detect_platform()`: Auto-detect platform (linux/arm64 or linux/amd64)
+- `get_bazel_platform()`: Map platform to Bazel platform target
+- `get_watch_paths()`: Get watch paths for a domain
+- `get_env_bool()`: Get boolean environment variable
+- `get_custom_or_default()`: Get custom value or default from environment
+- `print_startup_banner()`: Print formatted startup banner
+- `print_service_info()`: Print service information
+- `print_access_info()`: Print access URLs for apps
+- `print_footer_info()`: Print useful commands and tips
 
 ## Bazel Integration
 
 ### How It Works
 
-Tilt uses Bazel to build container images:
+Tilt uses Bazel to build container images with automatic cross-compilation:
 
 1. **Discovery**: Tilt watches source files for changes
 2. **Build**: Runs `bazel run //path:app_image_load --platforms=//tools:linux_arm64`
-3. **Load**: Bazel loads the image into Docker
-4. **Deploy**: Tilt deploys to Kubernetes
+3. **Tag**: Tags the image with Tilt's expected reference
+4. **Deploy**: Tilt updates Kubernetes resources with the new image
 
 ### Cross-Compilation
 
@@ -81,21 +99,33 @@ Tilt uses Bazel to build container images:
 - **M1/M2 Macs**: Use `--platforms=//tools:linux_arm64`
 - **Intel Macs/PCs**: Use `--platforms=//tools:linux_x86_64`
 
-The `bazel_build_image()` function handles this automatically.
+The `build_images_from_apps()` function handles this automatically using `detect_platform()`.
 
 ### Example
 
 ```starlark
-load('../tools/tilt/common.tilt', 'bazel_build_image', 'detect_platform')
+load('../tools/tilt/common.tilt', 
+     'build_images_from_apps', 'detect_platform', 'get_watch_paths')
 
 platform = detect_platform()
+watch_paths = get_watch_paths('manman')
 
-bazel_build_image(
-    'my-api',                           # Image name
-    './src',                            # Watch path
-    '//my-domain:my_api_image_load',   # Bazel target
-    platform=platform
-)
+# Define apps
+APPS = {
+    'experience-api': {
+        'enabled_env': 'ENABLE_EXPERIENCE_API',
+        'bazel_target': '//manman:experience-api_image_load',
+        'image_name': 'manman-experience-api',
+    },
+    'worker-dal-api': {
+        'enabled_env': 'ENABLE_WORKER_DAL_API',
+        'bazel_target': '//manman:worker-dal-api_image_load',
+        'image_name': 'manman-worker-dal-api',
+    },
+}
+
+# Build all enabled images
+build_images_from_apps(APPS, watch_paths, platform)
 ```
 
 ## Infrastructure
@@ -113,12 +143,15 @@ We use the [`whale-net/dev-util`](https://github.com/whale-net/dev-util) Helm re
 ```starlark
 load('../tools/tilt/common.tilt', 'setup_postgres', 'setup_rabbitmq')
 
-# Setup PostgreSQL
-db_url = setup_postgres('my-domain-dev', db_name='myapp')
+# Setup PostgreSQL - returns dict with connection info
+db_info = setup_postgres('my-domain-dev', db_name='myapp')
+db_url = db_info['url']  # Full connection string
+print("Database at:", db_info['service_info'])
 
-# Setup RabbitMQ
-rmq = setup_rabbitmq('my-domain-dev')
-print("RabbitMQ at:", rmq['host'])
+# Setup RabbitMQ - returns dict with connection info
+rmq_info = setup_rabbitmq('my-domain-dev')
+print("RabbitMQ at:", rmq_info['service_info'])
+print("Management UI:", rmq_info['mgmt_service_info'])
 ```
 
 ## Helper Scripts
@@ -149,47 +182,121 @@ Here's a template for creating a new domain Tiltfile:
 # My Domain Tiltfile
 load('ext://namespace', 'namespace_create')
 load('ext://dotenv', 'dotenv')
-load('../tools/tilt/common.tilt', 'bazel_build_image', 'detect_platform', 
-     'setup_postgres', 'setup_rabbitmq', 'setup_dev_util', 'print_startup_banner')
+load('../tools/tilt/common.tilt', 
+     'build_images_from_apps', 'detect_platform', 'get_bazel_platform', 'get_watch_paths',
+     'setup_dev_util', 'setup_postgres', 'setup_rabbitmq', 'setup_nginx_ingress',
+     'build_apps_config', 'deploy_helm_chart', 'get_custom_or_default',
+     'print_startup_banner', 'print_access_info', 'print_footer_info')
 
+# ===========================
 # Configuration
-namespace = 'mydomain-dev'
+# ===========================
+
+namespace = 'mydomain-local-dev'
 namespace_create(namespace)
 dotenv()
 
 platform = detect_platform()
+bazel_platform = get_bazel_platform(platform)
+
 print_startup_banner("My Domain", namespace, platform)
 
-# Setup dev-util repository
+# ===========================
+# Infrastructure Setup
+# ===========================
+
 setup_dev_util(namespace)
 
-# Infrastructure
-db_url = setup_postgres(namespace, db_name='mydomain')
-rmq = setup_rabbitmq(namespace)
+# Nginx Ingress Controller (if needed)
+setup_nginx_ingress(ingress_class='mydomain-nginx', http_port=30080, https_port=30443)
 
-# Build images
-bazel_build_image(
-    'mydomain-api',
-    './src',
-    '//mydomain:api_image_load',
-    platform=platform
+# PostgreSQL Database
+db_info = setup_postgres(namespace, db_name='mydomain')
+db_url = get_custom_or_default('BUILD_POSTGRES_ENV', 'POSTGRES_URL', db_info['url'])
+
+# RabbitMQ Message Queue (if needed)
+rmq_info = setup_rabbitmq(namespace)
+rabbitmq_host = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_HOST', rmq_info['host'])
+rabbitmq_port = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_PORT', rmq_info['port'])
+
+print("📊 Infrastructure configured:")
+print("  Postgres:  {}".format("custom" if os.environ.get('BUILD_POSTGRES_ENV') == 'custom' else "local"))
+print("  RabbitMQ:  {}".format("custom" if os.environ.get('BUILD_RABBITMQ_ENV') == 'custom' else "local"))
+
+# ===========================
+# Application Configuration
+# ===========================
+
+# Get watch paths
+watch_paths = get_watch_paths('mydomain')
+
+# Define apps
+APPS = {
+    'my-api': {
+        'enabled_env': 'ENABLE_MY_API',
+        'bazel_target': '//mydomain:my-api_image_load',
+        'image_name': 'mydomain-my-api',
+    },
+    'my-worker': {
+        'enabled_env': 'ENABLE_MY_WORKER',
+        'bazel_target': '//mydomain:my-worker_image_load',
+        'image_name': 'mydomain-my-worker',
+    },
+}
+
+# ===========================
+# Bazel Image Building
+# ===========================
+
+build_images_from_apps(APPS, watch_paths, platform)
+
+# ===========================
+# Helm Deployment
+# ===========================
+
+# Build apps configuration with infrastructure settings
+apps_config = build_apps_config(
+    APPS,
+    'mydomain',
+    env_vars={
+        'POSTGRES_URL': db_url,
+        'RABBITMQ_HOST': rabbitmq_host,
+        'RABBITMQ_PORT': rabbitmq_port,
+    }
 )
 
-# Deploy Helm chart
-k8s_yaml(
-    helm(
-        './charts/mydomain',
-        name='mydomain',
-        namespace=namespace,
-        set=[
-            'image.name=mydomain-api',
-            'image.tag=dev',
-            'env.db.url={}'.format(db_url),
-        ]
-    )
+# Customize app-specific helm config (if needed)
+apps_config['my-api']['helm_config']['ingress.tlsEnabled'] = 'false'
+
+# Deploy the helm chart
+deploy_helm_chart(
+    'mydomain',
+    namespace,
+    '//mydomain:mydomain_chart',
+    'mydomain-host-services',
+    apps_config,
+    global_config={
+        'ingressDefaults.enabled': 'true',
+        'ingressDefaults.className': 'mydomain-nginx',
+    }
 )
 
-print("\n🚀 My Domain ready at http://localhost:30080")
+# ===========================
+# Access Information
+# ===========================
+
+print_access_info(
+    'mydomain',
+    APPS,
+    ingress_port=30080,
+    additional_services={
+        'PostgreSQL': db_info['service_info'],
+        'RabbitMQ': rmq_info['service_info'],
+        'RabbitMQ Management': rmq_info['mgmt_service_info'],
+    }
+)
+
+print_footer_info('mydomain')
 ```
 
 ## Environment Variables
@@ -296,11 +403,15 @@ Each domain Tiltfile should:
 Instead of duplicating code:
 ```starlark
 # ✅ Good - use common utilities
-load('../tools/tilt/common.tilt', 'setup_postgres')
-db_url = setup_postgres(namespace, 'mydb')
+load('../tools/tilt/common.tilt', 'setup_postgres', 'build_images_from_apps')
+
+db_info = setup_postgres(namespace, 'mydb')
+build_images_from_apps(APPS, watch_paths, platform)
 
 # ❌ Bad - duplicate infrastructure setup
 helm_resource('postgres-dev', 'dev-util/postgres-dev', ...)
+custom_build('app1', 'bazel run ...', ...)
+custom_build('app2', 'bazel run ...', ...)
 ```
 
 ### 3. Environment-Aware Configuration
@@ -308,10 +419,15 @@ helm_resource('postgres-dev', 'dev-util/postgres-dev', ...)
 Support both local dev and external infrastructure:
 ```starlark
 # Allow using external database
+db_info = setup_postgres(namespace, 'mydb')
+db_url = get_custom_or_default('BUILD_POSTGRES_ENV', 'POSTGRES_URL', db_info['url'])
+
+# Or manually:
 if os.getenv('BUILD_POSTGRES_ENV') == 'custom':
     db_url = os.getenv('POSTGRES_URL')
 else:
-    db_url = setup_postgres(namespace, 'mydb')
+    db_info = setup_postgres(namespace, 'mydb')
+    db_url = db_info['url']
 ```
 
 ### 4. Clear Output
@@ -329,14 +445,18 @@ print("\n💡 Run 'tilt down' to stop all services")
 If you have a `docker-compose.yml`:
 
 1. **Infrastructure**: Move to dev-util helm charts
-   - `postgres` → `setup_postgres()`
-   - `rabbitmq` → `setup_rabbitmq()`
+   - `postgres` → `setup_postgres()` returns dict with connection info
+   - `rabbitmq` → `setup_rabbitmq()` returns dict with connection info
 
 2. **App images**: Convert to Bazel builds
-   - `docker-compose build` → `bazel_build_image()`
+   - `docker-compose build` → Define apps dict and use `build_images_from_apps()`
 
-3. **Service deployment**: Use Helm charts
-   - `docker-compose up` → `helm()` + `k8s_yaml()`
+3. **Service deployment**: Use Helm charts with Tilt
+   - `docker-compose up` → `deploy_helm_chart()` with `build_apps_config()`
+
+4. **Configuration**: Use environment variables
+   - Use `build_apps_config()` to pass env vars to all apps
+   - Support custom infrastructure with `get_custom_or_default()`
 
 ## Resources
 
