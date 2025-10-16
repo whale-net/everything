@@ -14,6 +14,7 @@ except ImportError:
     # Python < 3.9 fallback
     from importlib_resources import files
 
+from libs.python.alembic import create_alembic_config
 from friendly_computing_machine.src.friendly_computing_machine.db.util import (
     init_engine,
 )
@@ -34,56 +35,27 @@ def setup_db(
     database_url: T_database_url,
     echo: bool = False,
 ):
+    """Setup database connection and alembic configuration.
+    
+    Uses consolidated alembic library for configuration.
+    """
     logger.debug("db setup starting")
-    # init_engine(database_url)
+    
+    # Create and initialize engine
     engine = create_engine(
         url=database_url, echo=echo, pool_pre_ping=True, pool_recycle=60
     )
     init_engine(engine=engine)
     
-    # Configure Alembic programmatically without requiring alembic.ini
-    # This is necessary for containerized environments where the ini file may not exist
-    # Pass file_=None to indicate we're configuring programmatically
-    alembic_cfg = alembic.config.Config(file_=None, ini_section="alembic")
+    # Get migrations directory
+    migrations_dir = str(files("friendly_computing_machine.src.migrations"))
     
-    # Find the migrations directory using importlib.resources
-    # This works correctly with Bazel runfiles and namespace packages
-    try:
-        migrations_package = files("friendly_computing_machine.src.migrations")
-        
-        # Handle different types of resource paths
-        # MultiplexedPath (most common): access _paths[0]
-        # Other Traversable types: convert to string
-        if hasattr(migrations_package, '_paths') and migrations_package._paths:
-            migrations_dir = str(migrations_package._paths[0])
-        else:
-            migrations_dir = str(migrations_package)
-            
-        # Verify the directory exists and has env.py
-        if not os.path.exists(os.path.join(migrations_dir, "env.py")):
-            raise FileNotFoundError(
-                f"env.py not found in migrations directory: {migrations_dir}"
-            )
-            
-    except (TypeError, AttributeError, ModuleNotFoundError) as e:
-        logger.error(f"Failed to locate migrations directory: {e}")
-        raise RuntimeError(
-            "Could not locate migrations directory. "
-            "Ensure friendly_computing_machine.src.migrations is properly packaged."
-        ) from e
-    
-    logger.debug(f"Using migrations directory: {migrations_dir}")
-    
-    # Set the script location - this is required by Alembic
-    alembic_cfg.set_main_option("script_location", migrations_dir)
-    
-    # Set the file template for migration filenames
-    # Format: YYYY_MM_DD_HHMM-{revision_id}_{slug}
-    alembic_cfg.set_main_option("file_template", "%%(year)d_%%(month).2d_%%(day).2d_%%(hour).2d%%(minute).2d-%%(rev)s_%%(slug)s")
-    
-    # Set the database URL from environment (used by migrations in offline mode)
-    # In online mode, env.py gets the URL from environment directly
-    alembic_cfg.set_main_option("sqlalchemy.url", database_url)
+    # Create alembic config using consolidated library
+    alembic_cfg = create_alembic_config(
+        migrations_dir=migrations_dir,
+        database_url=database_url,
+        version_table_schema="public",
+    )
     
     ctx.obj[FILENAME] = DBContext(
         engine=engine,

@@ -1,29 +1,15 @@
+"""Migration CLI for friendly_computing_machine using consolidated library."""
+
 import logging
-from typing import Optional
 
 import typer
 
-from friendly_computing_machine.src.friendly_computing_machine.cli.context.db import (
-    FILENAME as DB_FILENAME,
-)
-from friendly_computing_machine.src.friendly_computing_machine.cli.context.db import (
-    T_database_url,
-    setup_db,
-)
+from libs.python.alembic.cli import create_migration_app
 from friendly_computing_machine.src.friendly_computing_machine.cli.context.log import (
     setup_logging,
 )
-from friendly_computing_machine.src.friendly_computing_machine.db.util import (
-    create_migration,
-    run_downgrade,
-    run_migration,
-)
 
 # Import all models to ensure they are registered with SQLAlchemy
-# For example, if you have models in friendly_computing_machine.models.user and friendly_computing_machine.models.post
-# import friendly_computing_machine.models.user
-# import friendly_computing_machine.models.post
-# Add your model imports here:
 from friendly_computing_machine.src.friendly_computing_machine.models import (  # noqa: F401
     base,
     genai,
@@ -32,48 +18,25 @@ from friendly_computing_machine.src.friendly_computing_machine.models import (  
     slack,
     task,
 )
+from friendly_computing_machine.src.friendly_computing_machine.models.slack import Base
 
 logger = logging.getLogger(__name__)
 
-migration_app = typer.Typer(
-    context_settings={"obj": {}},
+# Create migration CLI using consolidated library
+migration_app = create_migration_app(
+    migrations_package="friendly_computing_machine.src.migrations",
+    target_metadata=Base.metadata,
+    database_url_envvar="DATABASE_URL",
+    version_table_schema="public",
 )
 
 
-@migration_app.callback()
+# Add callback for logging setup
+@migration_app.callback(invoke_without_command=True)
 def callback(
     ctx: typer.Context,
-    database_url: T_database_url,
-    log_otlp: bool = False,
+    log_otlp: bool = typer.Option(False, help="Enable OpenTelemetry logging"),
 ):
-    logger.debug("CLI callback starting")
+    """Migration commands for friendly_computing_machine database."""
+    # Setup logging for all migration commands
     setup_logging(ctx, log_otlp=log_otlp)
-    setup_db(ctx, database_url)
-    logger.debug("CLI callback complete")
-
-
-@migration_app.command("run")
-def cli_migration_run(
-    ctx: typer.Context,
-):
-    logger.info("running migration")
-    run_migration(ctx.obj[DB_FILENAME].engine, ctx.obj[DB_FILENAME].alembic_config)
-    logger.info("migration complete")
-
-
-@migration_app.command("create")
-def cli_migration_create(ctx: typer.Context, message: Optional[str] = None):
-    logger.info("creating migration")
-    create_migration(
-        ctx.obj[DB_FILENAME].engine, ctx.obj[DB_FILENAME].alembic_config, message
-    )
-    logger.info("migration created")
-
-
-@migration_app.command("downgrade")
-def cli_migration_downgrade(ctx: typer.Context, revision: str):
-    logger.info("downgrading migration")
-    run_downgrade(
-        ctx.obj[DB_FILENAME].engine, ctx.obj[DB_FILENAME].alembic_config, revision
-    )
-    logger.info("migration downgraded")

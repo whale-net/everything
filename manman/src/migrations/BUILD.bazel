@@ -7,6 +7,7 @@ py_library(
     data = glob(["**/*.mako", "**/README"]),
     visibility = ["//manman:__subpackages__"],
     deps = [
+        "//libs/python/alembic",
         "//manman/src:manman_core",
         "@pypi//:alembic",
         "@pypi//:sqlmodel",

@@ -18,6 +18,7 @@ py_library(
     ],
     visibility = ["//manman/src/host:__subpackages__"],
     deps = [
+        "//libs/python/alembic",
         "//manman/src:manman_core",
         "//manman/src/repository:manman_repository",
         "//manman/src/migrations:manman_migrations",
