@@ -1,0 +1,28 @@
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+
+py_library(
+    name = "rmq",
+    srcs = [
+        "__init__.py",
+        "config.py",
+        "connection.py",
+        "interface.py",
+        "publisher.py",
+        "subscriber.py",
+        "util.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@pypi//:amqpstorm",
+    ],
+)
+
+py_test(
+    name = "util_test",
+    srcs = ["util_test.py"],
+    deps = [
+        ":rmq",
+        "@pypi//:pytest",
+    ],
+    size = "small",
+)

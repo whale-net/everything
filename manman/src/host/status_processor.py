@@ -15,19 +15,15 @@ from manman.src.repository.message.sub import (
     InternalStatusSubService,
 )
 from manman.src.constants import EntityRegistry
-from manman.src.repository.rabbitmq.config import (
+from libs.python.rmq import (
     BindingConfig,
     ExchangeRegistry,
     MessageTypeRegistry,
     QueueConfig,
+    RabbitPublisher,
+    RabbitSubscriber,
     RoutingKeyConfig,
     TopicWildcard,
-)
-from manman.src.repository.rabbitmq.publisher import (
-    RabbitPublisher,
-)
-from manman.src.repository.rabbitmq.subscriber import (
-    RabbitSubscriber,
 )
 
 logger = logging.getLogger(__name__)

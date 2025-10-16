@@ -20,6 +20,7 @@ py_library(
         "//libs/python/openapi_gen:__pkg__",
     ],
     deps = [
+        "//libs/python/rmq",
         "@pypi//:pydantic",
         "@pypi//:sqlmodel",
         "@pypi//:fastapi",

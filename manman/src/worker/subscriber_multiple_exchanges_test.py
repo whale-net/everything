@@ -9,15 +9,15 @@ import unittest
 from unittest.mock import Mock, call, patch
 
 from manman.src.constants import EntityRegistry
-from manman.src.repository.rabbitmq.config import (
+from libs.python.rmq import (
     BindingConfig,
     ExchangeRegistry,
     MessageTypeRegistry,
     QueueConfig,
+    RabbitSubscriber,
     RoutingKeyConfig,
     TopicWildcard,
 )
-from manman.src.repository.rabbitmq.subscriber import RabbitSubscriber
 
 
 class TestRabbitSubscriberMultipleExchanges(unittest.TestCase):
