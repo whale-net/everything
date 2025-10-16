@@ -1,0 +1,50 @@
+# Example Dockerfile for deploying FastAPI application with api_deployment configuration
+#
+# This demonstrates how to build a Docker image that uses the api_deployment
+# module for production deployment.
+#
+# Build:
+#   docker build -f demo/hello_fastapi/Dockerfile.example -t hello-fastapi:latest .
+#
+# Run (development mode):
+#   docker run -p 8000:8000 hello-fastapi:latest
+#
+# Run (production mode):
+#   docker run -p 8000:8000 hello-fastapi:latest --production
+#
+# Run (production with custom workers):
+#   docker run -p 8000:8000 hello-fastapi:latest --production --workers 4
+
+FROM python:3.13-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies (if needed)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy application code
+COPY . /app
+
+# Install Python dependencies
+# In a real scenario, you would copy requirements.txt first for better layer caching
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn[standard] \
+    gunicorn
+
+# Expose the application port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+
+# Set Python path to include the app directory
+ENV PYTHONPATH=/app
+
+# Run the application with deployment configuration
+# Default to production mode for container deployments
+ENTRYPOINT ["python", "demo/hello_fastapi/main_with_deployment.py"]
+CMD ["--production"]
