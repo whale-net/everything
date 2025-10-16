@@ -65,9 +65,11 @@ Choose the right type for your application:
 | Type | Gets | Use For |
 |------|------|---------|
 | **external-api** | Deployment + Service + Ingress | Public APIs, web services accessible from outside cluster |
-| **internal-api** | Deployment + Service | Internal services, cluster-only APIs |
+| **internal-api** | Deployment + Service (+ optional Ingress*) | Internal services, cluster-only APIs |
 | **worker** | Deployment | Background workers, queue processors |
 | **job** | Job (with hooks) | Migrations, batch tasks, one-time operations |
+
+*Internal APIs can optionally expose Ingress by setting `exposeIngress: true` for debugging.
 
 **See [APP_TYPES.md](./APP_TYPES.md) for complete reference.**
 
