@@ -237,6 +237,16 @@ def cli_migration_run(ctx: typer.Context):
 **New `migration_cli.py`** (30 lines, simpler):
 ```python
 from libs.python.alembic.cli import create_migration_app
+
+# Import all models to ensure they are registered with SQLAlchemy
+from friendly_computing_machine.src.friendly_computing_machine.models import (  # noqa: F401
+    base,
+    genai,
+    manman,
+    music_poll,
+    slack,
+    task,
+)
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import Base
 
 migration_app = create_migration_app(
