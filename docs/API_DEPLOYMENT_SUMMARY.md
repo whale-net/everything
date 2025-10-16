@@ -101,7 +101,7 @@ Successfully implemented a production-ready deployment configuration module for 
 
 ### Validation
 
-1. **`tools/scripts/validate_api_deployment.py`** (92 lines)
+1. **`tools/scripts/validate_api_deployment.py`** (111 lines)
    - Validation script for the module
    - Tests all import styles
    - Verifies configuration and CLI functionality
@@ -225,12 +225,12 @@ args: ["--production", "--workers", "2"]
 
 ## Usage Statistics
 
-- **Total Lines of Code**: ~2,500 lines
+- **Total Lines of Code**: ~2,310 lines
 - **Core Module**: ~700 lines
 - **Tests**: ~260 lines
-- **Documentation**: ~1,000 lines
-- **Examples**: ~260 lines
-- **Validation**: ~90 lines
+- **Documentation**: ~1,270 lines
+- **Examples**: ~265 lines
+- **Validation**: ~111 lines
 
 ## Files Created/Modified
 

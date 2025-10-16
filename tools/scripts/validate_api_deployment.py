@@ -8,10 +8,12 @@ and can be used to configure API deployments.
 
 import sys
 import os
+from pathlib import Path
 
 # Add the repository root to Python path
-repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, repo_root)
+# This script is in tools/scripts/, so go up two levels
+repo_root = Path(__file__).parent.parent.parent.resolve()
+sys.path.insert(0, str(repo_root))
 
 def test_config_module():
     """Test the config module can be imported and used."""
