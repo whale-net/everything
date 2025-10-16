@@ -11,6 +11,7 @@ from tools.release_helper.git import (
     format_helm_chart_tag,
     get_helm_chart_tags,
     parse_version_from_helm_chart_tag,
+    check_tag_exists,
     create_git_tag,
     push_git_tag,
     get_previous_tag,
@@ -36,13 +37,56 @@ class TestFormatGitTag:
         assert result == "-."
 
 
+class TestCheckTagExists:
+    """Test the check_tag_exists function."""
+
+    @patch('tools.release_helper.git.subprocess.run')
+    def test_check_tag_exists_true(self, mock_run):
+        """Test when tag exists."""
+        mock_result = MagicMock()
+        mock_result.stdout = "v1.0.0\n"
+        mock_run.return_value = mock_result
+        
+        result = check_tag_exists("v1.0.0")
+        
+        assert result is True
+        mock_run.assert_called_once_with(
+            ["git", "tag", "-l", "v1.0.0"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+    @patch('tools.release_helper.git.subprocess.run')
+    def test_check_tag_exists_false(self, mock_run):
+        """Test when tag doesn't exist."""
+        mock_result = MagicMock()
+        mock_result.stdout = ""
+        mock_run.return_value = mock_result
+        
+        result = check_tag_exists("v1.0.0")
+        
+        assert result is False
+
+    @patch('tools.release_helper.git.subprocess.run')
+    def test_check_tag_exists_subprocess_error(self, mock_run):
+        """Test handling subprocess error when checking tag."""
+        mock_run.side_effect = subprocess.CalledProcessError(1, "git tag")
+        
+        result = check_tag_exists("v1.0.0")
+        
+        assert result is False
+
+
 class TestCreateGitTag:
     """Test the create_git_tag function."""
 
+    @patch('tools.release_helper.git.check_tag_exists')
     @patch('tools.release_helper.git.subprocess.run')
     @patch('builtins.print')
-    def test_create_git_tag_simple(self, mock_print, mock_run):
+    def test_create_git_tag_simple(self, mock_print, mock_run, mock_check):
         """Test creating a simple git tag."""
+        mock_check.return_value = False
         mock_run.return_value = None
         
         create_git_tag("v1.0.0")
@@ -50,10 +94,12 @@ class TestCreateGitTag:
         mock_print.assert_called_once_with("Creating Git tag: v1.0.0")
         mock_run.assert_called_once_with(["git", "tag", "v1.0.0"], check=True)
 
+    @patch('tools.release_helper.git.check_tag_exists')
     @patch('tools.release_helper.git.subprocess.run')
     @patch('builtins.print')
-    def test_create_git_tag_with_message(self, mock_print, mock_run):
+    def test_create_git_tag_with_message(self, mock_print, mock_run, mock_check):
         """Test creating a git tag with a message."""
+        mock_check.return_value = False
         mock_run.return_value = None
         
         create_git_tag("v1.0.0", message="Release version 1.0.0")
@@ -64,10 +110,12 @@ class TestCreateGitTag:
             check=True
         )
 
+    @patch('tools.release_helper.git.check_tag_exists')
     @patch('tools.release_helper.git.subprocess.run')
     @patch('builtins.print')
-    def test_create_git_tag_with_commit_sha(self, mock_print, mock_run):
+    def test_create_git_tag_with_commit_sha(self, mock_print, mock_run, mock_check):
         """Test creating a git tag on a specific commit."""
+        mock_check.return_value = False
         mock_run.return_value = None
         
         create_git_tag("v1.0.0", commit_sha="abc123")
@@ -75,10 +123,12 @@ class TestCreateGitTag:
         mock_print.assert_called_once_with("Creating Git tag: v1.0.0")
         mock_run.assert_called_once_with(["git", "tag", "v1.0.0", "abc123"], check=True)
 
+    @patch('tools.release_helper.git.check_tag_exists')
     @patch('tools.release_helper.git.subprocess.run')
     @patch('builtins.print')
-    def test_create_git_tag_with_message_and_commit(self, mock_print, mock_run):
+    def test_create_git_tag_with_message_and_commit(self, mock_print, mock_run, mock_check):
         """Test creating a git tag with both message and commit SHA."""
+        mock_check.return_value = False
         mock_run.return_value = None
         
         create_git_tag("v1.0.0", commit_sha="abc123", message="Release version 1.0.0")
@@ -89,14 +139,61 @@ class TestCreateGitTag:
             check=True
         )
 
+    @patch('tools.release_helper.git.check_tag_exists')
     @patch('tools.release_helper.git.subprocess.run')
     @patch('builtins.print')
-    def test_create_git_tag_subprocess_error(self, mock_print, mock_run):
+    def test_create_git_tag_subprocess_error(self, mock_print, mock_run, mock_check):
         """Test handling subprocess error when creating git tag."""
+        mock_check.return_value = False
         mock_run.side_effect = subprocess.CalledProcessError(1, "git tag")
         
         with pytest.raises(subprocess.CalledProcessError):
             create_git_tag("v1.0.0")
+
+    @patch('tools.release_helper.git.check_tag_exists')
+    @patch('tools.release_helper.git.subprocess.run')
+    @patch('builtins.print')
+    def test_create_git_tag_already_exists_skip(self, mock_print, mock_run, mock_check):
+        """Test skipping creation when tag already exists and force=False."""
+        mock_check.return_value = True
+        
+        create_git_tag("v1.0.0")
+        
+        mock_print.assert_called_once_with("Tag v1.0.0 already exists, skipping creation")
+        mock_run.assert_not_called()
+
+    @patch('tools.release_helper.git.check_tag_exists')
+    @patch('tools.release_helper.git.subprocess.run')
+    @patch('builtins.print')
+    def test_create_git_tag_already_exists_force(self, mock_print, mock_run, mock_check):
+        """Test forcing tag creation when tag already exists and force=True."""
+        mock_check.return_value = True
+        mock_run.return_value = None
+        
+        create_git_tag("v1.0.0", force=True)
+        
+        # Should print both messages
+        assert mock_print.call_count == 2
+        mock_print.assert_any_call("Tag v1.0.0 already exists, forcing overwrite...")
+        mock_print.assert_any_call("Creating Git tag: v1.0.0")
+        # Should include -f flag
+        mock_run.assert_called_once_with(["git", "tag", "-f", "v1.0.0"], check=True)
+
+    @patch('tools.release_helper.git.check_tag_exists')
+    @patch('tools.release_helper.git.subprocess.run')
+    @patch('builtins.print')
+    def test_create_git_tag_force_with_message(self, mock_print, mock_run, mock_check):
+        """Test forcing tag creation with message."""
+        mock_check.return_value = True
+        mock_run.return_value = None
+        
+        create_git_tag("v1.0.0", message="Release 1.0.0", force=True)
+        
+        # Should include -f flag with annotated tag
+        mock_run.assert_called_once_with(
+            ["git", "tag", "-f", "-a", "v1.0.0", "-m", "Release 1.0.0"],
+            check=True
+        )
 
 
 class TestPushGitTag:

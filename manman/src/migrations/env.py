@@ -69,7 +69,7 @@ def run_migrations_online() -> None:
     # )
 
     # TODO - type checking at some point would probably save a headache
-    connection_string = os.environ.get("MANMAN_POSTGRES_URL")
+    connection_string = os.environ.get("POSTGRES_URL")
 
     init_sql_alchemy_engine(connection_string)
     connectable = get_sqlalchemy_engine()

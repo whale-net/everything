@@ -1,153 +1,145 @@
-load('ext://namespace', 'namespace_create')
-# appending '-dev' just in case this is ever ran from prod cluster
-namespace = 'manman-dev'
-namespace_create(namespace)
+# ManMan Tiltfile
+# Local development environment for the ManMan application
 
+load('ext://namespace', 'namespace_create')
 load('ext://dotenv', 'dotenv')
-# load env vars from .env
+load('../tools/tilt/common.tilt', 
+     'build_images_from_apps', 'detect_platform', 'get_bazel_platform', 'get_watch_paths',
+     'setup_dev_util', 'setup_postgres', 'setup_rabbitmq', 'setup_otelcollector',
+     'setup_nginx_ingress', 'build_apps_config', 'deploy_helm_chart',
+     'get_env_bool', 'get_custom_or_default',
+     'print_startup_banner', 'print_service_info', 'print_access_info', 'print_footer_info')
+
+# ===========================
+# Configuration
+# ===========================
+
+namespace = 'manman-local-dev'
+namespace_create(namespace)
 dotenv()
 
-# build_env = os.getenv('MANMAN_BUILD_ENV', 'default') # Old general build env
-# print("Build environment:", build_env) # Old print
-app_env = os.getenv('APP_ENV', 'dev')
+platform = detect_platform()
+bazel_platform = get_bazel_platform(platform)
 
-# New specific build environment variables
-build_postgres_env = os.getenv('MANMAN_BUILD_POSTGRES_ENV', 'default')
-build_rabbitmq_env = os.getenv('MANMAN_BUILD_RABBITMQ_ENV', 'default')
-print("Postgres Build Environment:", build_postgres_env)
-print("RabbitMQ Build Environment:", build_rabbitmq_env)
+print_startup_banner("ManMan", namespace, platform)
 
+# ===========================
+# Infrastructure Setup
+# ===========================
 
-# load the dev-util helm chart museum
-load('ext://helm_resource', 'helm_resource', 'helm_repo')
-helm_repo('dev-util', 'https://whale-net.github.io/dev-util')
+setup_dev_util(namespace)
 
-# setup nginx ingress controller for local development
-helm_repo('ingress-nginx', 'https://kubernetes.github.io/ingress-nginx')
-helm_resource('manman-nginx-ingress', 'ingress-nginx/ingress-nginx',
-    namespace='ingress-nginx',
-    flags=['--create-namespace',
-           '--set=controller.service.type=NodePort',
-           '--set=controller.hostPort.enabled=true',
-           '--set=controller.service.nodePorts.http=30080',
-           '--set=controller.service.nodePorts.https=30443',
-           '--set=controller.admissionWebhooks.enabled=false',
-           '--set=controller.ingressClassResource.name=manman-nginx',
-           '--set=controller.ingressClass=manman-nginx']
-)
+# Nginx Ingress Controller
+setup_nginx_ingress(ingress_class='manman-nginx', http_port=30080, https_port=30443)
 
-# setup postgres
-helm_resource('postgres-dev', 'dev-util/postgres-dev', resource_deps=['dev-util'],
-    flags=['--set=postgresDB=manman', '--set=namespace={}'.format(namespace)]
-)
-k8s_resource(workload='postgres-dev', port_forwards='5432:5432')
+# PostgreSQL Database
+db_info = setup_postgres(namespace, db_name='manman')
+db_url = get_custom_or_default('BUILD_POSTGRES_ENV', 'POSTGRES_URL', db_info['url'])
 
-# setup rabbitmq
-helm_resource('rabbitmq-dev', 'dev-util/rabbitmq-dev', resource_deps=['dev-util'],
-    flags=['--set=namespace={}'.format(namespace)]
-)
-k8s_resource(workload='rabbitmq-dev', port_forwards='5672:5672')
-k8s_resource(workload='rabbitmq-dev', port_forwards='15672:15672')
+# RabbitMQ Message Queue
+rmq_info = setup_rabbitmq(namespace)
+rabbitmq_host = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_HOST', rmq_info['host'])
+rabbitmq_port = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_PORT', rmq_info['port'])
+rabbitmq_user = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_USER', rmq_info['user'])
+rabbitmq_password = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_PASSWORD', rmq_info['password'])
 
+# OpenTelemetry Collector
+setup_otelcollector(namespace)
 
-# setup otel collector
-helm_resource('otelcollector-dev', 'dev-util/otelcollector-dev', resource_deps=['dev-util'],
-    flags=['--set=namespace={}'.format(namespace)]
-)
-# no need to publicly expose otel collector
-#k8s_resource(workload='otelcollector-dev', port_forwards='4317:4317')
+print("📊 Infrastructure configured:")
+print("  Postgres:  {}".format("custom" if os.environ.get('BUILD_POSTGRES_ENV') == 'custom' else "local"))
+print("  RabbitMQ:  {}".format("custom" if os.environ.get('BUILD_RABBITMQ_ENV') == 'custom' else "local"))
 
-# create manman app
-docker_build(
+# ===========================
+# Application Configuration
+# ===========================
+
+# Get watch paths for all manman apps
+watch_paths = get_watch_paths('manman')
+
+# Define all ManMan apps with their metadata
+# This structure mirrors the release_app() definitions in BUILD.bazel
+APPS = {
+    'experience-api': {
+        'enabled_env': 'ENABLE_EXPERIENCE_API',
+        'bazel_target': '//manman:experience-api_image_load',
+        'image_name': 'manman-experience-api',
+    },
+    'worker-dal-api': {
+        'enabled_env': 'ENABLE_WORKER_DAL_API',
+        'bazel_target': '//manman:worker-dal-api_image_load',
+        'image_name': 'manman-worker-dal-api',
+    },
+    'status-api': {
+        'enabled_env': 'ENABLE_STATUS_API',
+        'bazel_target': '//manman:status-api_image_load',
+        'image_name': 'manman-status-api',
+    },
+    'status-processor': {
+        'enabled_env': 'ENABLE_STATUS_PROCESSOR',
+        'bazel_target': '//manman:status-processor_image_load',
+        'image_name': 'manman-status-processor',
+    },
+    'migration': {
+        'enabled_env': 'ENABLE_MIGRATION',
+        'bazel_target': '//manman:migration_image_load',
+        'image_name': 'manman-migration',
+    },
+}
+
+# ===========================
+# Bazel Image Building
+# ===========================
+
+build_images_from_apps(APPS, watch_paths, platform)
+
+# ===========================
+# Helm Deployment
+# ===========================
+
+# Build apps configuration with infrastructure settings
+apps_config = build_apps_config(
+    APPS,
     'manman',
-    context='.',
-    build_args={"COMPILE_CORES": "2"},
-    ignore=['.git', 'data', 'dist', '.venv', 'manman.log', 'manman.warnings.log', 'build', 'bin']
-)
-db_url_default = 'postgresql+psycopg2://postgres:password@postgres-dev.manman-dev.svc.cluster.local:5432/manman'
-db_url = db_url_default
-if build_postgres_env == 'custom': # Updated condition
-    db_url = os.getenv('MANMAN_POSTGRES_URL') or db_url_default
-
-# Control which APIs to deploy in dev (can be overridden with env vars)
-enable_experience_api = os.getenv('MANMAN_ENABLE_EXPERIENCE_API', 'true').lower() == 'true'
-enable_worker_dal_api = os.getenv('MANMAN_ENABLE_WORKER_DAL_API', 'true').lower() == 'true'
-enable_status_api = os.getenv('MANMAN_ENABLE_STATUS_API', 'true').lower() == 'true'
-
-# Control OTEL logging (enabled by default for development)
-enable_otel_logging = os.getenv('MANMAN_ENABLE_OTEL_LOGGING', 'true').lower() == 'true'
-
-# RabbitMQ connection parameters
-rabbitmq_host_default = 'rabbitmq-dev.manman-dev.svc.cluster.local'
-rabbitmq_port_default = '5672'
-rabbitmq_user_default = 'rabbit'
-rabbitmq_password_default = 'password'
-
-# Initialize with defaults
-rabbitmq_host = rabbitmq_host_default
-rabbitmq_port = rabbitmq_port_default
-rabbitmq_user = rabbitmq_user_default
-rabbitmq_password = rabbitmq_password_default
-
-if build_rabbitmq_env == 'custom': # Updated condition
-    rabbitmq_host = os.getenv('MANMAN_RABBITMQ_HOST') or rabbitmq_host_default
-    rabbitmq_port = os.getenv('MANMAN_RABBITMQ_PORT') or rabbitmq_port_default
-    rabbitmq_user = os.getenv('MANMAN_RABBITMQ_USER') or rabbitmq_user_default
-    rabbitmq_password = os.getenv('MANMAN_RABBITMQ_PASSWORD') or rabbitmq_password_default
-# Removed the 'else' block that explicitly set defaults, as they are now initialized before the if block.
-
-# Build the helm set arguments
-helm_set_args = [
-    'image.name=manman',
-    'image.tag=dev',
-    'env.db.url={}'.format(db_url),
-    'env.rabbitmq.createVhost=true',
-    'env.rabbitmq.host={}'.format(rabbitmq_host),
-    'env.rabbitmq.port={}'.format(rabbitmq_port),
-    'env.rabbitmq.user={}'.format(rabbitmq_user),
-    'env.rabbitmq.password={}'.format(rabbitmq_password),
-    #'env.rabbitmq.enable_ssl=true',
-    'env.otelCollector.logs.endpoint=http://otel-collector.{}.svc.cluster.local:4317'.format(namespace),
-    'env.otelCollector.traces.endpoint=http://otel-collector.{}.svc.cluster.local:4317'.format(namespace),
-    'env.otel.logging_enabled={}'.format(str(enable_otel_logging).lower()),
-    'namespace={}'.format(namespace),
-    # for local dev, require manual migration and protect against bad models being used
-    'migrations.skip_migration=true',
-    # Control which APIs to deploy
-    'apis.experience.enabled={}'.format(str(enable_experience_api).lower()),
-    'apis.workerDal.enabled={}'.format(str(enable_worker_dal_api).lower()),
-    'apis.status.enabled={}'.format(str(enable_status_api).lower()),
-    # Enable ingress for local development with auto-generated rules
-    'ingress.enabled=true',
-    'ingress.ingressClassName=manman-nginx',
-]
-
-k8s_yaml(
-    helm(
-        'charts/manman-host',
-        name='manman-host',
-        namespace=namespace,
-        set=helm_set_args
-    )
+    env_vars={
+        'POSTGRES_URL': db_url,
+        'RABBITMQ_HOST': rabbitmq_host,
+        'RABBITMQ_PORT': rabbitmq_port,
+        'RABBITMQ_USER': rabbitmq_user,
+        'RABBITMQ_PASSWORD': rabbitmq_password,
+    }
 )
 
-# Note: Ingress controller is available on NodePort 30080
-# APIs are auto-routed by Helm chart ingress template:
-#   Experience API: http://localhost:30080/experience/
-#   Worker DAL API: http://localhost:30080/workerdal/
-#   Status API: http://localhost:30080/status/
+# Disable TLS for ingress-exposed apps in local development
+apps_config['experience-api']['helm_config']['ingress.tlsEnabled'] = 'false'
+apps_config['worker-dal-api']['helm_config']['ingress.tlsEnabled'] = 'false'
 
-print("APIs will be available at (auto-generated by Helm chart):")
-if enable_experience_api:
-    print("  Experience API: http://localhost:30080/experience/")
-if enable_worker_dal_api:
-    print("  Worker DAL API: http://localhost:30080/workerdal/")
-if enable_status_api:
-    print("  Status API: http://localhost:30080/status/")
+# Deploy the helm chart
+deploy_helm_chart(
+    'manman',
+    namespace,
+    '//manman:manman_chart',
+    'manman-host-services',
+    apps_config,
+    global_config={
+        'ingressDefaults.enabled': 'true',
+        'ingressDefaults.className': 'manman-nginx',
+    }
+)
 
-# this should be a docker compose becauset hat is how I will actually deploy it
-#local_resource(
-#    name='manman-worker',
-#    cmd='docker run -d --name manman_worker manman:dev',
-#    resource_deps=['manman']
-#)
+# ===========================
+# Access Information
+# ===========================
+
+print_access_info(
+    'manman',
+    APPS,
+    ingress_port=30080,
+    additional_services={
+        'PostgreSQL': db_info['service_info'],
+        'RabbitMQ': rmq_info['service_info'],
+        'RabbitMQ Management': rmq_info['mgmt_service_info'],
+    }
+)
+
+print_footer_info('manman')

@@ -218,6 +218,39 @@ class TestCreateReleasesWithIndividualVersions:
             call_args = mock_create_release.call_args
             assert call_args[1]["tag_name"] == "demo-hello_fastapi.v0.0.8"
     
+    def test_domain_app_format_passed_to_create_app_release(self):
+        """Test that create_app_release receives app_name in domain-app format."""
+        app_versions = {"hello_fastapi": "v0.0.8"}
+        app_list = ["hello_fastapi"]
+        
+        # Mock the required functions
+        with patch('tools.release_helper.github_release.find_app_bazel_target') as mock_find_target, \
+             patch('tools.release_helper.github_release.get_app_metadata') as mock_get_metadata, \
+             patch('tools.release_helper.github_release.generate_release_notes') as mock_gen_notes, \
+             patch('tools.release_helper.github_release.create_app_release') as mock_create_release:
+            
+            # Setup mocks
+            mock_find_target.return_value = "//demo/hello_fastapi:hello_fastapi_metadata"
+            mock_get_metadata.return_value = {"domain": "demo", "name": "hello_fastapi"}
+            mock_gen_notes.return_value = "Release notes content"
+            mock_create_release.return_value = {"id": 123, "tag_name": "demo-hello_fastapi.v0.0.8"}
+            
+            # Call the function
+            results = create_releases_for_apps_with_notes(
+                app_list=app_list,
+                owner="test-owner",
+                repo="test-repo",
+                app_versions=app_versions
+            )
+            
+            # Verify that create_app_release was called with domain-app format
+            mock_create_release.assert_called_once()
+            call_kwargs = mock_create_release.call_args[1]
+            
+            # The app_name parameter should be in domain-app format
+            assert call_kwargs["app_name"] == "demo-hello_fastapi", \
+                f"Expected app_name to be 'demo-hello_fastapi' but got '{call_kwargs['app_name']}'"
+    
     def test_missing_version_in_app_versions(self):
         """Test handling when an app is not in app_versions dict."""
         app_versions = {"hello_fastapi": "v0.0.8"}
@@ -245,6 +278,93 @@ class TestCreateReleasesWithIndividualVersions:
             assert "hello_fastapi" in results
             assert results["hello_fastapi"] is not None
             assert "missing_app" in results
+    
+    def test_full_domain_app_format_in_app_list_and_versions(self):
+        """Test that the function works when app_list and app_versions both use full domain-app format.
+        
+        This is the scenario that occurs when the workflow passes apps in full domain-app format
+        and the MATRIX environment variable is parsed to use full names as keys.
+        """
+        # Simulate what the workflow and CLI do:
+        # - app_list contains full domain-app names (from workflow: echo "$MATRIX" | jq -r '.include[] | "\(.domain)-\(.app)"')
+        # - app_versions keys are also full domain-app names (from CLI parsing MATRIX)
+        app_versions = {"friendly-computing-machine-migration": "v0.0.9"}
+        app_list = ["friendly-computing-machine-migration"]
+        
+        # Mock the required functions
+        with patch('tools.release_helper.github_release.find_app_bazel_target') as mock_find_target, \
+             patch('tools.release_helper.github_release.get_app_metadata') as mock_get_metadata, \
+             patch('tools.release_helper.github_release.generate_release_notes') as mock_gen_notes, \
+             patch('tools.release_helper.github_release.create_app_release') as mock_create_release:
+            
+            # Setup mocks - find_app_bazel_target should accept full domain-app format
+            mock_find_target.return_value = "//friendly_computing_machine:migration_metadata"
+            mock_get_metadata.return_value = {"domain": "friendly-computing-machine", "name": "migration"}
+            mock_gen_notes.return_value = "Release notes content"
+            mock_create_release.return_value = {"id": 789, "tag_name": "friendly-computing-machine-migration.v0.0.9"}
+            
+            # Call the function
+            results = create_releases_for_apps_with_notes(
+                app_list=app_list,
+                owner="test-owner",
+                repo="test-repo",
+                app_versions=app_versions
+            )
+            
+            # Verify that the version was found and release was created
+            assert "friendly-computing-machine-migration" in results
+            assert results["friendly-computing-machine-migration"] is not None
+            
+            # Verify that create_app_release was called with domain-app format
+            mock_create_release.assert_called_once()
+            call_kwargs = mock_create_release.call_args[1]
+            
+            # The app_name parameter should be in domain-app format
+            assert call_kwargs["app_name"] == "friendly-computing-machine-migration", \
+                f"Expected app_name to be 'friendly-computing-machine-migration' but got '{call_kwargs['app_name']}'"
+            
+            # Verify that the tag_name uses the canonical format from metadata
+            assert call_kwargs["tag_name"] == "friendly-computing-machine-migration.v0.0.9", \
+                f"Expected tag_name to be 'friendly-computing-machine-migration.v0.0.9' but got '{call_kwargs['tag_name']}'"
+
+
+class TestCreateReleasesForApps:
+    """Test cases for create_releases_for_apps function."""
+    
+    def test_domain_app_format_passed_to_create_app_release(self):
+        """Test that create_app_release receives app_name in domain-app format for create_releases_for_apps."""
+        from tools.release_helper.github_release import create_releases_for_apps
+        
+        app_list = ["hello_python"]
+        version = "v1.0.0"
+        
+        # Mock the required functions
+        with patch('tools.release_helper.github_release.find_app_bazel_target') as mock_find_target, \
+             patch('tools.release_helper.github_release.get_app_metadata') as mock_get_metadata, \
+             patch('tools.release_helper.github_release.generate_release_notes') as mock_gen_notes, \
+             patch('tools.release_helper.github_release.create_app_release') as mock_create_release:
+            
+            # Setup mocks
+            mock_find_target.return_value = "//demo/hello_python:hello_python_metadata"
+            mock_get_metadata.return_value = {"domain": "demo", "name": "hello_python"}
+            mock_gen_notes.return_value = "Release notes content"
+            mock_create_release.return_value = {"id": 456, "tag_name": "demo-hello_python.v1.0.0"}
+            
+            # Call the function
+            results = create_releases_for_apps(
+                app_list=app_list,
+                version=version,
+                owner="test-owner",
+                repo="test-repo"
+            )
+            
+            # Verify that create_app_release was called with domain-app format
+            mock_create_release.assert_called_once()
+            call_kwargs = mock_create_release.call_args[1]
+            
+            # The app_name parameter should be in domain-app format
+            assert call_kwargs["app_name"] == "demo-hello_python", \
+                f"Expected app_name to be 'demo-hello_python' but got '{call_kwargs['app_name']}'"
 
 
 class TestGitHubReleaseClientTagVerification:
@@ -366,8 +486,8 @@ class TestGitHubReleaseClientTagVerification:
 class TestOpenAPISpecValidation:
     """Test cases for OpenAPI spec validation during release creation."""
     
-    def test_release_fails_when_expected_openapi_spec_missing(self):
-        """Test that release fails when an app expects OpenAPI spec but it's missing."""
+    def test_release_succeeds_with_warning_when_expected_openapi_spec_missing(self):
+        """Test that release succeeds with warning when an app expects OpenAPI spec but it's missing."""
         app_list = ["hello-fastapi"]
         
         # Create a temp directory for specs (but don't put the spec file there)
@@ -399,9 +519,20 @@ class TestOpenAPISpecValidation:
                     openapi_specs_dir=tmpdir
                 )
                 
-                # Verify the release failed because OpenAPI spec was expected but missing
+                # Verify the release succeeded even though spec was missing
                 assert "hello-fastapi" in results
-                assert results["hello-fastapi"] is None  # Should be None indicating failure
+                assert results["hello-fastapi"] is not None
+                assert results["hello-fastapi"]["id"] == 123
+                
+                # Verify that create_app_release was called with warning in release notes
+                assert mock_create_release.call_count == 1
+                call_kwargs = mock_create_release.call_args[1]
+                release_notes = call_kwargs['release_notes']
+                
+                # Check that warning was added to release notes
+                assert "⚠️ **Warning: OpenAPI Specification Missing**" in release_notes
+                assert "//demo/hello-fastapi:hello-fastapi_openapi_spec" in release_notes
+                assert "Release notes content" in release_notes  # Original notes should still be there
     
     def test_release_succeeds_when_expected_openapi_spec_present(self):
         """Test that release succeeds when expected OpenAPI spec is present."""

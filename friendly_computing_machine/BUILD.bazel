@@ -22,11 +22,6 @@ filegroup(
     srcs = glob(["tests/**/*"], allow_empty = True),
 )
 
-filegroup(
-    name = "alembic_ini",
-    srcs = ["alembic.ini"],
-)
-
 release_app(
     name = "bot",
     binary_name = "//friendly_computing_machine/src:fcm_cli",

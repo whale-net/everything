@@ -107,7 +107,7 @@ def get_rabbitmq_ssl_options(hostname: str) -> dict:
     if hostname is None or len(hostname) == 0:
         raise RuntimeError(
             "SSL is enabled but no hostname provided. "
-            "Please set MANMAN_RABBITMQ_SSL_HOSTNAME"
+            "Please set RABBITMQ_SSL_HOSTNAME"
         )
     ssl_options = {
         #'context': ssl.create_default_context(cafile='ca_certificate.pem'),

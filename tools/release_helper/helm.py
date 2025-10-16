@@ -268,10 +268,17 @@ def resolve_app_versions_for_chart(chart_metadata: Dict, use_released_versions: 
         use_released_versions: If True, use latest git tags. If False, use "latest"
         
     Returns:
-        Dict mapping app name to version (e.g., {"hello_fastapi": "v1.0.0"})
+        Dict mapping full app key (domain-app) to version (e.g., {"manman-experience-api": "v1.0.0"})
+        Keys match the format used in values.yaml apps section.
+        
+    Raises:
+        ValueError: If use_released_versions=True and no released version is found for an app
     """
     app_versions = {}
     
+    chart_domain = chart_metadata.get('domain')
+    chart_name = chart_metadata.get('name', '<unknown-chart>')
+
     for app_name in chart_metadata.get('apps', []):
         if use_released_versions:
             # Get domain from the chart to construct proper tag
@@ -279,26 +286,76 @@ def resolve_app_versions_for_chart(chart_metadata: Dict, use_released_versions: 
             try:
                 from tools.release_helper.release import find_app_bazel_target
                 from tools.release_helper.metadata import get_app_metadata
-                
-                app_target = find_app_bazel_target(app_name)
+
+                # Try resolving the app using multiple naming formats to avoid ambiguity.
+                # Prefer domain-qualified forms that match the release helper CLI guidance.
+                candidate_names: List[str] = []
+                if chart_domain:
+                    domain_hyphen = f"{chart_domain}-{app_name}"
+                    domain_path = f"{chart_domain}/{app_name}"
+                    for candidate in (domain_hyphen, domain_path):
+                        if candidate not in candidate_names:
+                            candidate_names.append(candidate)
+                if app_name not in candidate_names:
+                    candidate_names.append(app_name)
+
+                app_target = None
+                last_error: Optional[Exception] = None
+                for candidate in candidate_names:
+                    try:
+                        app_target = find_app_bazel_target(candidate)
+                        break
+                    except ValueError as err:
+                        last_error = err
+
+                if app_target is None:
+                    # Surface the most recent validation error for clarity
+                    if last_error is not None:
+                        raise last_error
+                    raise ValueError(
+                        f"Could not resolve app '{app_name}' for chart '{chart_name}'. "
+                        f"Tried candidates: {', '.join(candidate_names)}."
+                    )
+
                 app_metadata = get_app_metadata(app_target)
                 app_domain = app_metadata['domain']
-                
+                actual_app_name = app_metadata['name']
+
                 # Get latest version from git tags
-                latest_version = get_latest_app_version(app_domain, app_name)
-                
+                latest_version = get_latest_app_version(app_domain, actual_app_name)
+
                 if latest_version:
-                    app_versions[app_name] = latest_version
+                    # Use the full domain-app key format that matches values.yaml
+                    # e.g., "manman-experience-api" instead of just "experience-api"
+                    full_app_key = f"{app_domain}-{actual_app_name}"
+                    app_versions[full_app_key] = latest_version
                 else:
-                    # Fallback to "latest" if no version found
-                    print(f"Warning: No released version found for {app_name}, using 'latest'")
-                    app_versions[app_name] = "latest"
+                    # Error: no released version found when building versioned helm chart
+                    raise ValueError(
+                        f"No released version found for app '{actual_app_name}' in domain '{app_domain}'. "
+                        f"When releasing a versioned helm chart with --use-released, all apps must have "
+                        f"a released semver tag (format: {app_domain}-{actual_app_name}.vX.Y.Z). "
+                        f"Please release the app first before including it in a versioned helm chart."
+                    )
+            except ValueError:
+                # Re-raise ValueError (our custom error above)
+                raise
             except Exception as e:
-                print(f"Warning: Could not resolve version for {app_name}: {e}, using 'latest'")
-                app_versions[app_name] = "latest"
+                # Wrap other exceptions with context
+                raise ValueError(
+                    f"Could not resolve version for app '{app_name}': {e}. "
+                    f"When releasing a versioned helm chart with --use-released, all apps must have "
+                    f"a released semver tag."
+                ) from e
         else:
             # Use "latest" for all apps
-            app_versions[app_name] = "latest"
+            # For "latest" mode, we still need to use the full domain-app key to match values.yaml structure
+            # Try to determine the domain from chart_domain if available, otherwise use app_name as-is
+            if chart_domain:
+                full_app_key = f"{chart_domain}-{app_name}" if not app_name.startswith(f"{chart_domain}-") else app_name
+            else:
+                full_app_key = app_name
+            app_versions[full_app_key] = "latest"
     
     return app_versions
 

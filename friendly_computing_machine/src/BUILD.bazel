@@ -34,6 +34,5 @@ py_binary(
     srcs = ["//friendly_computing_machine/src/friendly_computing_machine:main"],
     main = "__main__.py",
     deps = [":fcm_lib"],
-    data = ["//friendly_computing_machine:alembic_ini"],
     visibility = ["//visibility:public"],
 )

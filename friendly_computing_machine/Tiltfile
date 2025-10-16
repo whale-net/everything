@@ -1,0 +1,120 @@
+# Friendly Computing Machine (FCM) Tiltfile
+# Local development environment for FCM
+
+load('ext://namespace', 'namespace_create')
+load('ext://dotenv', 'dotenv')
+load('../tools/tilt/common.tilt', 
+     'build_images_from_apps', 'detect_platform', 'get_bazel_platform', 'get_watch_paths',
+     'setup_dev_util', 'setup_postgres',
+     'build_apps_config', 'deploy_helm_chart',
+     'get_env_bool', 'get_custom_or_default',
+     'print_startup_banner', 'print_service_info', 'print_access_info', 'print_footer_info')
+
+# ===========================
+# Configuration
+# ===========================
+
+namespace = 'fcm-local-dev'
+namespace_create(namespace)
+dotenv()
+
+platform = detect_platform()
+bazel_platform = get_bazel_platform(platform)
+
+print_startup_banner("Friendly Computing Machine", namespace, platform)
+
+# ===========================
+# Infrastructure Setup
+# ===========================
+
+setup_dev_util(namespace)
+
+# PostgreSQL Database
+db_info = setup_postgres(namespace, db_name='fcm')
+db_url = get_custom_or_default('FCM_BUILD_POSTGRES_ENV', 'FCM_POSTGRES_URL', db_info['url'])
+
+# Use custom port to avoid conflict with ManMan
+k8s_resource(workload='postgres-dev', port_forwards='5433:5432')
+
+print("📊 Infrastructure configured:")
+print("  Postgres:  {}".format("custom" if os.environ.get('FCM_BUILD_POSTGRES_ENV') == 'custom' else "local"))
+
+# ===========================
+# Application Configuration
+# ===========================
+
+# Get watch paths for all FCM apps
+watch_paths = get_watch_paths('friendly_computing_machine')
+
+# Define all FCM apps with their metadata
+# This structure mirrors the release_app() definitions in BUILD.bazel
+APPS = {
+    'bot': {
+        'enabled_env': 'FCM_ENABLE_BOT',
+        'bazel_target': '//friendly_computing_machine:bot_image_load',
+        'image_name': 'friendly-computing-machine-bot',
+    },
+    'taskpool': {
+        'enabled_env': 'FCM_ENABLE_TASKPOOL',
+        'bazel_target': '//friendly_computing_machine:taskpool_image_load',
+        'image_name': 'friendly-computing-machine-taskpool',
+    },
+    'subscribe': {
+        'enabled_env': 'FCM_ENABLE_SUBSCRIBE',
+        'bazel_target': '//friendly_computing_machine:subscribe_image_load',
+        'image_name': 'friendly-computing-machine-subscribe',
+    },
+    'worker': {
+        'enabled_env': 'FCM_ENABLE_WORKER',
+        'bazel_target': '//friendly_computing_machine:worker_image_load',
+        'image_name': 'friendly-computing-machine-worker',
+    },
+    'migration': {
+        'enabled_env': 'FCM_ENABLE_MIGRATION',
+        'bazel_target': '//friendly_computing_machine:migration_image_load',
+        'image_name': 'friendly-computing-machine-migration',
+    },
+}
+
+# ===========================
+# Bazel Image Building
+# ===========================
+
+build_images_from_apps(APPS, watch_paths, platform)
+
+# ===========================
+# Helm Deployment
+# ===========================
+
+# Build apps configuration with infrastructure settings
+apps_config = build_apps_config(
+    APPS,
+    'friendly-computing-machine',
+    env_vars={
+        'POSTGRES_URL': db_url,
+    }
+)
+
+# Deploy the helm chart
+deploy_helm_chart(
+    'fcm',
+    namespace,
+    '//friendly_computing_machine:fcm_chart',
+    'fcm-fcm-services',
+    apps_config,
+    global_config={}
+)
+
+# ===========================
+# Access Information
+# ===========================
+
+print_access_info(
+    'fcm',
+    APPS,
+    additional_services={
+        'PostgreSQL': db_info['service_info'],
+    }
+)
+
+print_footer_info('fcm')

@@ -392,7 +392,7 @@ def create_app_release(
     if there's a timing issue where the tag was just pushed but isn't visible yet.
     
     Args:
-        app_name: Name of the app
+        app_name: Name of the app in domain-app format (e.g., "demo-hello-python")
         tag_name: Git tag name for the release (should already exist in the repository)
         release_notes: Release notes content
         owner: Repository owner
@@ -490,8 +490,10 @@ def create_releases_for_apps(
             try:
                 bazel_target = find_app_bazel_target(app_name)
                 metadata = get_app_metadata(bazel_target)
+                # Always use canonical names from metadata for consistency
                 domain = metadata['domain']
-                tag_name = f"{domain}-{app_name}.{version}"
+                canonical_app_name = metadata['name']
+                tag_name = f"{domain}-{canonical_app_name}.{version}"
             except Exception as e:
                 print(f"❌ Could not determine tag format for {app_name}: {e}", file=sys.stderr)
                 results[app_name] = None
@@ -499,15 +501,17 @@ def create_releases_for_apps(
             
             # Generate release notes for this app
             try:
-                release_notes = generate_release_notes(app_name, tag_name, previous_tag, "markdown")
+                # Use full domain-app format for consistency
+                full_app_name = f"{domain}-{canonical_app_name}"
+                release_notes = generate_release_notes(full_app_name, tag_name, previous_tag, "markdown")
             except Exception as e:
-                print(f"❌ Failed to generate release notes for {app_name}: {e}", file=sys.stderr)
+                print(f"❌ Failed to generate release notes for {full_app_name}: {e}", file=sys.stderr)
                 results[app_name] = None
                 continue
             
-            # Create the individual app release
+            # Create the individual app release (use full domain-app format for consistency)
             result = create_app_release(
-                app_name=app_name,
+                app_name=full_app_name,
                 tag_name=tag_name,
                 release_notes=release_notes,
                 owner=owner,
@@ -545,7 +549,8 @@ def create_releases_for_apps_with_notes(
     token: Optional[str] = None,
     release_notes_dir: Optional[str] = None,
     app_versions: Optional[Dict[str, str]] = None,
-    openapi_specs_dir: Optional[str] = None
+    openapi_specs_dir: Optional[str] = None,
+    app_domains: Optional[Dict[str, str]] = None
 ) -> Dict[str, Optional[Dict]]:
     """Create GitHub releases for multiple apps using pre-generated release notes from files.
     
@@ -561,6 +566,7 @@ def create_releases_for_apps_with_notes(
         release_notes_dir: Directory containing pre-generated release notes files
         app_versions: Optional dictionary mapping app names to their individual versions
         openapi_specs_dir: Directory containing OpenAPI spec files to upload as release assets
+        app_domains: Optional dictionary mapping app names to their domains
         
     Returns:
         Dictionary mapping app names to their release data (None if failed)
@@ -594,10 +600,16 @@ def create_releases_for_apps_with_notes(
             
             # Find the app's metadata to determine the tag format
             try:
+                # app_name is already in the format we need (either full domain-app or short name)
+                # find_app_bazel_target handles all naming formats
                 bazel_target = find_app_bazel_target(app_name)
                 metadata = get_app_metadata(bazel_target)
+                    
+                # Always use canonical names from metadata for consistency
                 domain = metadata['domain']
-                tag_name = f"{domain}-{app_name}.{app_version}"
+                canonical_app_name = metadata['name']
+                full_app_name = f"{domain}-{canonical_app_name}"
+                tag_name = f"{domain}-{canonical_app_name}.{app_version}"
             except Exception as e:
                 print(f"❌ Could not determine tag format for {app_name}: {e}", file=sys.stderr)
                 results[app_name] = None
@@ -606,29 +618,52 @@ def create_releases_for_apps_with_notes(
             # Try to load pre-generated release notes first
             release_notes = None
             if release_notes_dir:
-                notes_file = Path(release_notes_dir) / f"{domain}-{app_name}.md"
+                notes_file = Path(release_notes_dir) / f"{full_app_name}.md"
                 if notes_file.exists():
                     try:
                         release_notes = notes_file.read_text(encoding='utf-8')
-                        print(f"✅ Using pre-generated release notes for {domain}-{app_name}")
+                        print(f"✅ Using pre-generated release notes for {full_app_name}")
                     except Exception as e:
-                        print(f"⚠️  Failed to read pre-generated release notes for {domain}-{app_name}: {e}", file=sys.stderr)
+                        print(f"⚠️  Failed to read pre-generated release notes for {full_app_name}: {e}", file=sys.stderr)
             
             # Fall back to generating release notes if not found or failed to load
             if not release_notes:
                 try:
-                    print(f"Generating release notes for {domain}-{app_name} (no pre-generated notes found)")
-                    release_notes = generate_release_notes(app_name, tag_name, previous_tag, "markdown")
+                    print(f"Generating release notes for {full_app_name} (no pre-generated notes found)")
+                    release_notes = generate_release_notes(full_app_name, tag_name, previous_tag, "markdown")
                 except Exception as e:
-                    print(f"❌ Failed to generate release notes for {app_name}: {e}", file=sys.stderr)
+                    print(f"❌ Failed to generate release notes for {full_app_name}: {e}", file=sys.stderr)
                     results[app_name] = None
                     continue
             
-            # Create the individual app release
+            # Check for OpenAPI spec before creating release to add warning if needed
+            openapi_spec_missing_warning = ""
+            if openapi_specs_dir:
+                openapi_spec_file = Path(openapi_specs_dir) / f"{full_app_name}-openapi.json"
+                app_expects_openapi = metadata.get('openapi_spec_target') is not None
+                
+                if app_expects_openapi and not openapi_spec_file.exists():
+                    # Add warning to release notes
+                    openapi_spec_missing_warning = (
+                        "\n\n---\n\n"
+                        "⚠️ **Warning: OpenAPI Specification Missing**\n\n"
+                        f"This app is configured to generate an OpenAPI specification (target: `{metadata.get('openapi_spec_target')}`), "
+                        "but the spec file was not found in the build artifacts. "
+                        "This may indicate that the OpenAPI spec build failed or was not run. "
+                        "Please check the build logs for more details.\n"
+                    )
+                    print(f"⚠️  OpenAPI spec was expected but not found for {full_app_name} at {openapi_spec_file}", file=sys.stderr)
+                    print(f"   App has openapi_spec_target configured: {metadata.get('openapi_spec_target')}", file=sys.stderr)
+                    print(f"   Warning will be added to release notes", file=sys.stderr)
+            
+            # Append warning to release notes if spec is missing
+            final_release_notes = release_notes + openapi_spec_missing_warning
+            
+            # Create the individual app release (use full domain-app format for consistency)
             result = create_app_release(
-                app_name=app_name,
+                app_name=full_app_name,
                 tag_name=tag_name,
-                release_notes=release_notes,
+                release_notes=final_release_notes,
                 owner=owner,
                 repo=repo,
                 commit_sha=commit_sha,
@@ -640,16 +675,13 @@ def create_releases_for_apps_with_notes(
             
             # Upload OpenAPI spec if available and release was created successfully
             if result and openapi_specs_dir and result.get('id'):
-                openapi_spec_file = Path(openapi_specs_dir) / f"{domain}-{app_name}-openapi.json"
-                
-                # Check if this app should have an OpenAPI spec (has openapi_spec_target in metadata)
-                app_expects_openapi = metadata.get('openapi_spec_target') is not None
+                openapi_spec_file = Path(openapi_specs_dir) / f"{full_app_name}-openapi.json"
                 
                 if openapi_spec_file.exists():
                     try:
-                        print(f"Uploading OpenAPI spec for {app_name}...")
+                        print(f"Uploading OpenAPI spec for {full_app_name}...")
                         client = GitHubReleaseClient(owner, repo, token)
-                        asset_name = f"{domain}-{app_name}-openapi.json"
+                        asset_name = f"{full_app_name}-openapi.json"
                         client.upload_release_asset(
                             release_id=result['id'],
                             file_path=str(openapi_spec_file),
@@ -657,17 +689,12 @@ def create_releases_for_apps_with_notes(
                             content_type="application/json"
                         )
                     except Exception as e:
-                        print(f"⚠️  Failed to upload OpenAPI spec for {app_name}: {e}", file=sys.stderr)
+                        print(f"⚠️  Failed to upload OpenAPI spec for {full_app_name}: {e}", file=sys.stderr)
                         # Don't fail the release if asset upload fails
                 else:
-                    if app_expects_openapi:
-                        # This app has fastapi_app configured, so OpenAPI spec was expected
-                        print(f"❌ OpenAPI spec was expected but not found for {app_name} at {openapi_spec_file}", file=sys.stderr)
-                        print(f"   App has openapi_spec_target configured: {metadata.get('openapi_spec_target')}", file=sys.stderr)
-                        print(f"   This indicates the OpenAPI spec build failed or was not run", file=sys.stderr)
-                        results[app_name] = None  # Mark release as failed
-                    else:
-                        print(f"ℹ️  No OpenAPI spec found for {app_name} (none expected)")
+                    # Only log info if spec is not expected
+                    if not metadata.get('openapi_spec_target'):
+                        print(f"ℹ️  No OpenAPI spec found for {full_app_name} (none expected)")
             
         except Exception as e:
             print(f"❌ Failed to process {app_name}: {e}", file=sys.stderr)

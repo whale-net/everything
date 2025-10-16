@@ -18,20 +18,19 @@ bazel build //manman:manman_chart
 
 ### Deploy with Helm
 
-⚠️ **Important**: The auto-generated chart has limitations for production use.  
-See [CHART_LIMITATIONS.md](./CHART_LIMITATIONS.md) for details.
-
 ```bash
-# Development deployment (with custom values)
+# Build the chart first
+bazel build //manman:manman_chart
+
+# Development deployment
 helm install manman-dev \
-  bazel-bin/manman/manman-host_chart/manman-host \
-  -f manman/values-dev.yaml \
+  bazel-bin/manman/host-services_chart/host-services \
   --namespace manman \
   --create-namespace
 
-# Or use the manual chart (recommended for production)
+# With custom values
 helm install manman-dev \
-  manman/__manual_backup_of_old_chart/charts/manman-host \
+  bazel-bin/manman/host-services_chart/host-services \
   -f custom-values.yaml \
   --namespace manman
 ```
@@ -94,55 +93,9 @@ ManMan consists of 5 microservices:
 
 ---
 
-## ⚠️ Helm Chart Status
-
-### Auto-Generated Chart (Current)
-
-The composed Helm chart (`//manman:manman_chart`) is auto-generated from Bazel but has limitations:
-
-**What Works:**
-- ✅ All 5 services deployed correctly
-- ✅ Migration job runs first (pre-install hook)
-- ✅ Services and Ingresses created
-- ✅ Basic health checks
-- ✅ Resource limits
-
-**What's Missing:**
-- ❌ Per-app ingress configuration (host, TLS, annotations)
-- ❌ Kubernetes Secret references (`valueFrom.secretKeyRef`)
-- ❌ ConfigMap references (`envFrom`)
-- ❌ Configurable replicas at build time (hardcoded to 1 or 2)
-- ❌ Optional health checks
-- ❌ Custom health check paths
-
-**Workarounds:**
-- Use `values-dev.yaml` for development (plain-text env vars)
-- Use manual chart for production
-- See [CHART_LIMITATIONS.md](./CHART_LIMITATIONS.md) for details
-
-### Manual Chart (Production Ready)
-
-The manual chart in `__manual_backup_of_old_chart/` has full production features:
-- ✅ Environment variable configuration
-- ✅ Secret references
-- ✅ Custom health check paths
-- ✅ Configurable replicas
-- ✅ Ingress customization
-
-**Recommendation:** Use manual chart for production until auto-generated chart is enhanced.
-
----
-
 ## 📚 Documentation
 
-- **[CHART_LIMITATIONS.md](./CHART_LIMITATIONS.md)** - ⚠️ **READ THIS** - Critical limitations of auto-generated chart
-- **[CHART_MIGRATION.md](./CHART_MIGRATION.md)** - Complete migration guide from manual to composed chart
-- **[CHART_QUICKSTART.md](./CHART_QUICKSTART.md)** - Quick reference for daily operations
-- **[CHART_COMPARISON.md](./CHART_COMPARISON.md)** - Side-by-side comparison of charts
 - **[design/](./design/)** - Architecture and design documents
-- **[values-dev.yaml](./values-dev.yaml)** - Development deployment values (with env vars)
-- **[values-production.yaml](./values-production.yaml)** - Production deployment example
-- **[k8s-secrets-example.yaml](./k8s-secrets-example.yaml)** - Kubernetes Secrets template
 
 ---
 
@@ -161,8 +114,7 @@ manman/
 │   ├── repository/        # Data access layer
 │   ├── migrations/        # Alembic database migrations
 │   └── BUILD.bazel        # Build targets
-├── __manual_backup_of_old_chart/  # Legacy manual Helm chart (backup)
-└── docs/                   # Documentation
+└── design/                 # Design documents
 ```
 
 ### Running Services Locally
@@ -233,7 +185,7 @@ The manman services are deployed using a **composed Helm chart** that bundles al
 bazel build //manman:manman_chart
 
 # Chart generated at:
-bazel-bin/manman/manman-host_chart/manman-host/
+bazel-bin/manman/host-services_chart/host-services/
 ```
 
 #### Deploy
@@ -241,13 +193,13 @@ bazel-bin/manman/manman-host_chart/manman-host/
 ```bash
 # Install
 helm install manman-dev \
-  bazel-bin/manman/manman-host_chart/manman-host \
+  bazel-bin/manman/host-services_chart/host-services \
   --namespace manman \
   --create-namespace
 
 # Upgrade
 helm upgrade manman-dev \
-  bazel-bin/manman/manman-host_chart/manman-host
+  bazel-bin/manman/host-services_chart/host-services
 
 # Uninstall
 helm uninstall manman-dev --namespace manman
@@ -268,7 +220,7 @@ apps:
 
 ```bash
 helm install manman-dev \
-  bazel-bin/manman/manman-host_chart/manman-host \
+  bazel-bin/manman/host-services_chart/host-services \
   -f custom-values.yaml
 ```
 
@@ -448,7 +400,7 @@ Scale services via Helm values:
 
 ```bash
 helm upgrade manman-dev \
-  bazel-bin/manman/manman-host_chart/manman-host \
+  bazel-bin/manman/host-services_chart/host-services \
   --set apps.experience_api.replicas=10 \
   --set apps.status_processor.replicas=5
 ```
@@ -486,7 +438,7 @@ kubectl logs -n manman job/migration-dev
 
 # Delete and retry
 kubectl delete job -n manman migration-dev
-helm upgrade manman-dev bazel-bin/manman/manman-host_chart/manman-host
+helm upgrade manman-dev bazel-bin/manman/host-services_chart/host-services
 ```
 
 **Health checks failing**
@@ -497,8 +449,6 @@ curl http://localhost:8000/health
 
 # Should return 200 OK
 ```
-
-See [CHART_QUICKSTART.md](./CHART_QUICKSTART.md) for more troubleshooting steps.
 
 ---
 
@@ -516,7 +466,7 @@ See [CHART_QUICKSTART.md](./CHART_QUICKSTART.md) for more troubleshooting steps.
 - name: Deploy to dev
   run: |
     helm upgrade --install manman-dev \
-      bazel-bin/manman/manman-host_chart/manman-host \
+      bazel-bin/manman/host-services_chart/host-services \
       --namespace manman \
       --create-namespace \
       --wait
@@ -531,7 +481,7 @@ metadata:
   name: manman
 spec:
   source:
-    path: bazel-bin/manman/manman-host_chart/manman-host
+    path: bazel-bin/manman/host-services_chart/host-services
   destination:
     namespace: manman
   syncPolicy:
@@ -554,7 +504,7 @@ See repository root for license information.
 2. Make changes
 3. Run tests: `bazel test //manman/...`
 4. Build chart: `bazel build //manman:manman_chart`
-5. Validate: `helm lint bazel-bin/manman/manman-host_chart/manman-host`
+5. Validate: `helm lint bazel-bin/manman/host-services_chart/host-services`
 6. Submit PR
 
 ---
@@ -563,7 +513,5 @@ See repository root for license information.
 
 For questions or issues:
 
-1. Check [CHART_QUICKSTART.md](./CHART_QUICKSTART.md) for quick answers
-2. Review [CHART_MIGRATION.md](./CHART_MIGRATION.md) for detailed info
-3. Consult [design/](./design/) documents for architecture details
-4. Check Bazel build logs: `bazel build //manman:manman_chart --verbose_failures`
+1. Consult [design/](./design/) documents for architecture details
+2. Check Bazel build logs: `bazel build //manman:manman_chart --verbose_failures`
