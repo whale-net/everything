@@ -216,6 +216,12 @@ helm_set_args = [
     'global.environment=dev',
     'global.domain=manman',
     'global.namespace={}'.format(namespace),
+    # Ingress configuration
+    'ingressDefaults.enabled=true',
+    'ingressDefaults.className=manman-nginx',
+    # Disable TLS for local development
+    'apps.manman-experience-api.ingress.tlsEnabled=false',
+    'apps.manman-worker-dal-api.ingress.tlsEnabled=false',
     # Override image names for each app (Tilt builds these)
     'apps.manman-experience-api.image=manman-experience-api',
     'apps.manman-experience-api.imageTag=latest',
