@@ -20,12 +20,13 @@ from manman.src.repository.rabbitmq.util import (
 )
 
 # Lazy imports for classes that require amqpstorm
+# Import directly from libs.python.rmq to avoid circular imports
 def __getattr__(name):
     if name == "RabbitPublisher":
-        from manman.src.repository.rabbitmq.publisher import RabbitPublisher
+        from libs.python.rmq.publisher import RabbitPublisher
         return RabbitPublisher
     elif name == "RabbitSubscriber":
-        from manman.src.repository.rabbitmq.subscriber import RabbitSubscriber
+        from libs.python.rmq.subscriber import RabbitSubscriber
         return RabbitSubscriber
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
