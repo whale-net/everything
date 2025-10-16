@@ -4,7 +4,7 @@
 load('ext://namespace', 'namespace_create')
 load('ext://dotenv', 'dotenv')
 load('../tools/tilt/common.tilt', 
-     'bazel_build_image', 'detect_platform', 'get_bazel_platform',
+     'bazel_build_image', 'detect_platform', 'get_bazel_platform', 'get_watch_paths',
      'setup_dev_util', 'setup_postgres', 'setup_rabbitmq', 'setup_otelcollector',
      'setup_nginx_ingress', 'get_env_bool', 'get_custom_or_default',
      'print_startup_banner', 'print_service_info')
@@ -53,6 +53,9 @@ print("  RabbitMQ:  {}".format("custom" if os.environ.get('BUILD_RABBITMQ_ENV') 
 # Application Configuration
 # ===========================
 
+# Get watch paths for all manman apps
+watch_paths = get_watch_paths('manman')
+
 # Define all ManMan apps with their metadata
 # This structure mirrors the release_app() definitions in BUILD.bazel
 APPS = {
@@ -60,31 +63,26 @@ APPS = {
         'enabled_env': 'ENABLE_EXPERIENCE_API',
         'bazel_target': '//manman:experience-api_image_load',
         'image_name': 'manman-experience-api',
-        'watch_path': './src',
     },
     'worker-dal-api': {
         'enabled_env': 'ENABLE_WORKER_DAL_API',
         'bazel_target': '//manman:worker-dal-api_image_load',
         'image_name': 'manman-worker-dal-api',
-        'watch_path': './src',
     },
     'status-api': {
         'enabled_env': 'ENABLE_STATUS_API',
         'bazel_target': '//manman:status-api_image_load',
         'image_name': 'manman-status-api',
-        'watch_path': './src',
     },
     'status-processor': {
         'enabled_env': 'ENABLE_STATUS_PROCESSOR',
         'bazel_target': '//manman:status-processor_image_load',
         'image_name': 'manman-status-processor',
-        'watch_path': './src',
     },
     'migration': {
         'enabled_env': 'ENABLE_MIGRATION',
         'bazel_target': '//manman:migration_image_load',
         'image_name': 'manman-migration',
-        'watch_path': './src',
     },
 }
 
@@ -98,7 +96,7 @@ for app_name, config in APPS.items():
         print("  ✓ {}".format(config['image_name']))
         bazel_build_image(
             config['image_name'],
-            config['watch_path'],
+            watch_paths,
             config['bazel_target'],
             platform=platform
         )

@@ -13,7 +13,7 @@ load('ext://helm_resource', 'helm_resource', 'helm_repo')
 # Bazel Image Building
 # ===========================
 
-def bazel_build_image(app_name, context_path, bazel_target, platform='linux/arm64'):
+def bazel_build_image(app_name, watch_paths, bazel_target, platform='linux/arm64'):
     """
     Build a container image using Bazel and load it into Docker.
     
@@ -22,14 +22,14 @@ def bazel_build_image(app_name, context_path, bazel_target, platform='linux/arm6
     
     Args:
         app_name: Name of the app for the image tag
-        context_path: Context path for Tilt to watch for changes
+        watch_paths: Paths to watch for changes (can be string or list)
         bazel_target: Bazel target for the image (e.g., //path/to/app:app_image_load)
         platform: Target platform (linux/arm64 or linux/amd64)
         
     Example:
         bazel_build_image(
             'my-api',
-            './src',
+            ['./src', './libs/python'],
             '//my-domain:my_api_image_load',
             platform=detect_platform()
         )
@@ -41,6 +41,10 @@ def bazel_build_image(app_name, context_path, bazel_target, platform='linux/arm6
     }
     bazel_platform = platform_map.get(platform, '//tools:linux_arm64')
     
+    # Ensure watch_paths is a list
+    if type(watch_paths) == 'string':
+        watch_paths = [watch_paths]
+    
     # Custom build command that uses Bazel and tags for Tilt
     # Tilt sets $EXPECTED_REF which is the full image:tag that it expects
     custom_build(
@@ -48,7 +52,7 @@ def bazel_build_image(app_name, context_path, bazel_target, platform='linux/arm6
         'bazel run {} --platforms={} && docker tag {}:latest $EXPECTED_REF'.format(
             bazel_target, bazel_platform, app_name
         ),
-        [context_path],
+        watch_paths,
         skips_local_docker=False,
         disable_push=True,
     )
@@ -81,6 +85,29 @@ def get_bazel_platform(platform='auto'):
         'linux/amd64': '//tools:linux_x86_64',
     }
     return platform_map.get(platform, '//tools:linux_arm64')
+
+def get_watch_paths(domain):
+    """
+    Get watch paths for a domain.
+    
+    Simple approach: Watch entire domain directory and shared libraries.
+    Favors false positives (rebuilds) over false negatives (missed changes).
+    
+    Args:
+        domain: Domain name (e.g., 'manman', 'friendly_computing_machine')
+        
+    Returns:
+        List of paths to watch
+        
+    Example:
+        watch_paths = get_watch_paths('manman')
+        # Returns: ['./manman', './libs/python', './libs/go']
+    """
+    return [
+        './{}'.format(domain),
+        './libs/python',
+        './libs/go',
+    ]
 
 # ===========================
 # Infrastructure Setup
