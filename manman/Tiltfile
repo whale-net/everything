@@ -25,8 +25,8 @@ print("🔧 Using local Bazel-built images")
 # ===========================
 
 app_env = os.environ.get('APP_ENV', 'dev')
-build_postgres_env = os.environ.get('MANMAN_BUILD_POSTGRES_ENV', 'default')
-build_rabbitmq_env = os.environ.get('MANMAN_BUILD_RABBITMQ_ENV', 'default')
+build_postgres_env = os.environ.get('BUILD_POSTGRES_ENV', 'default')
+build_rabbitmq_env = os.environ.get('BUILD_RABBITMQ_ENV', 'default')
 
 print("App Environment:", app_env)
 print("Postgres Build Environment:", build_postgres_env)
@@ -87,7 +87,7 @@ db_url_default = 'postgresql+psycopg2://postgres:password@postgres-dev.{}.svc.cl
 db_url = db_url_default
 
 if build_postgres_env == 'custom':
-    db_url = os.environ.get('MANMAN_POSTGRES_URL', db_url_default)
+    db_url = os.environ.get('POSTGRES_URL', db_url_default)
 
 # ===========================
 # RabbitMQ Configuration
@@ -105,21 +105,21 @@ rabbitmq_user = rabbitmq_user_default
 rabbitmq_password = rabbitmq_password_default
 
 if build_rabbitmq_env == 'custom':
-    rabbitmq_host = os.environ.get('MANMAN_RABBITMQ_HOST', rabbitmq_host_default)
-    rabbitmq_port = os.environ.get('MANMAN_RABBITMQ_PORT', rabbitmq_port_default)
-    rabbitmq_user = os.environ.get('MANMAN_RABBITMQ_USER', rabbitmq_user_default)
-    rabbitmq_password = os.environ.get('MANMAN_RABBITMQ_PASSWORD', rabbitmq_password_default)
+    rabbitmq_host = os.environ.get('RABBITMQ_HOST', rabbitmq_host_default)
+    rabbitmq_port = os.environ.get('RABBITMQ_PORT', rabbitmq_port_default)
+    rabbitmq_user = os.environ.get('RABBITMQ_USER', rabbitmq_user_default)
+    rabbitmq_password = os.environ.get('RABBITMQ_PASSWORD', rabbitmq_password_default)
 
 # ===========================
 # Feature Flags
 # ===========================
 
-enable_experience_api = os.environ.get('MANMAN_ENABLE_EXPERIENCE_API', 'true').lower() == 'true'
-enable_worker_dal_api = os.environ.get('MANMAN_ENABLE_WORKER_DAL_API', 'true').lower() == 'true'
-enable_status_api = os.environ.get('MANMAN_ENABLE_STATUS_API', 'true').lower() == 'true'
-enable_status_processor = os.environ.get('MANMAN_ENABLE_STATUS_PROCESSOR', 'true').lower() == 'true'
-enable_migration = os.environ.get('MANMAN_ENABLE_MIGRATION', 'true').lower() == 'true'
-enable_otel_logging = os.environ.get('MANMAN_ENABLE_OTEL_LOGGING', 'true').lower() == 'true'
+enable_experience_api = os.environ.get('ENABLE_EXPERIENCE_API', 'true').lower() == 'true'
+enable_worker_dal_api = os.environ.get('ENABLE_WORKER_DAL_API', 'true').lower() == 'true'
+enable_status_api = os.environ.get('ENABLE_STATUS_API', 'true').lower() == 'true'
+enable_status_processor = os.environ.get('ENABLE_STATUS_PROCESSOR', 'true').lower() == 'true'
+enable_migration = os.environ.get('ENABLE_MIGRATION', 'true').lower() == 'true'
+enable_otel_logging = os.environ.get('ENABLE_OTEL_LOGGING', 'true').lower() == 'true'
 
 print("Feature flags:")
 print("  Experience API:", enable_experience_api)
@@ -234,28 +234,28 @@ helm_set_args = [
     'apps.manman-migration.image=manman-migration',
     'apps.manman-migration.imageTag=latest',
     # Database configuration
-    'apps.manman-experience-api.env.MANMAN_POSTGRES_URL={}'.format(db_url),
-    'apps.manman-worker-dal-api.env.MANMAN_POSTGRES_URL={}'.format(db_url),
-    'apps.manman-status-api.env.MANMAN_POSTGRES_URL={}'.format(db_url),
-    'apps.manman-status-processor.env.MANMAN_POSTGRES_URL={}'.format(db_url),
-    'apps.manman-migration.env.MANMAN_POSTGRES_URL={}'.format(db_url),
+    'apps.manman-experience-api.env.POSTGRES_URL={}'.format(db_url),
+    'apps.manman-worker-dal-api.env.POSTGRES_URL={}'.format(db_url),
+    'apps.manman-status-api.env.POSTGRES_URL={}'.format(db_url),
+    'apps.manman-status-processor.env.POSTGRES_URL={}'.format(db_url),
+    'apps.manman-migration.env.POSTGRES_URL={}'.format(db_url),
     # RabbitMQ configuration
-    'apps.manman-experience-api.env.MANMAN_RABBITMQ_HOST={}'.format(rabbitmq_host),
-    'apps.manman-experience-api.env.MANMAN_RABBITMQ_PORT={}'.format(rabbitmq_port),
-    'apps.manman-experience-api.env.MANMAN_RABBITMQ_USER={}'.format(rabbitmq_user),
-    'apps.manman-experience-api.env.MANMAN_RABBITMQ_PASSWORD={}'.format(rabbitmq_password),
-    'apps.manman-worker-dal-api.env.MANMAN_RABBITMQ_HOST={}'.format(rabbitmq_host),
-    'apps.manman-worker-dal-api.env.MANMAN_RABBITMQ_PORT={}'.format(rabbitmq_port),
-    'apps.manman-worker-dal-api.env.MANMAN_RABBITMQ_USER={}'.format(rabbitmq_user),
-    'apps.manman-worker-dal-api.env.MANMAN_RABBITMQ_PASSWORD={}'.format(rabbitmq_password),
-    'apps.manman-status-api.env.MANMAN_RABBITMQ_HOST={}'.format(rabbitmq_host),
-    'apps.manman-status-api.env.MANMAN_RABBITMQ_PORT={}'.format(rabbitmq_port),
-    'apps.manman-status-api.env.MANMAN_RABBITMQ_USER={}'.format(rabbitmq_user),
-    'apps.manman-status-api.env.MANMAN_RABBITMQ_PASSWORD={}'.format(rabbitmq_password),
-    'apps.manman-status-processor.env.MANMAN_RABBITMQ_HOST={}'.format(rabbitmq_host),
-    'apps.manman-status-processor.env.MANMAN_RABBITMQ_PORT={}'.format(rabbitmq_port),
-    'apps.manman-status-processor.env.MANMAN_RABBITMQ_USER={}'.format(rabbitmq_user),
-    'apps.manman-status-processor.env.MANMAN_RABBITMQ_PASSWORD={}'.format(rabbitmq_password),
+    'apps.manman-experience-api.env.RABBITMQ_HOST={}'.format(rabbitmq_host),
+    'apps.manman-experience-api.env.RABBITMQ_PORT={}'.format(rabbitmq_port),
+    'apps.manman-experience-api.env.RABBITMQ_USER={}'.format(rabbitmq_user),
+    'apps.manman-experience-api.env.RABBITMQ_PASSWORD={}'.format(rabbitmq_password),
+    'apps.manman-worker-dal-api.env.RABBITMQ_HOST={}'.format(rabbitmq_host),
+    'apps.manman-worker-dal-api.env.RABBITMQ_PORT={}'.format(rabbitmq_port),
+    'apps.manman-worker-dal-api.env.RABBITMQ_USER={}'.format(rabbitmq_user),
+    'apps.manman-worker-dal-api.env.RABBITMQ_PASSWORD={}'.format(rabbitmq_password),
+    'apps.manman-status-api.env.RABBITMQ_HOST={}'.format(rabbitmq_host),
+    'apps.manman-status-api.env.RABBITMQ_PORT={}'.format(rabbitmq_port),
+    'apps.manman-status-api.env.RABBITMQ_USER={}'.format(rabbitmq_user),
+    'apps.manman-status-api.env.RABBITMQ_PASSWORD={}'.format(rabbitmq_password),
+    'apps.manman-status-processor.env.RABBITMQ_HOST={}'.format(rabbitmq_host),
+    'apps.manman-status-processor.env.RABBITMQ_PORT={}'.format(rabbitmq_port),
+    'apps.manman-status-processor.env.RABBITMQ_USER={}'.format(rabbitmq_user),
+    'apps.manman-status-processor.env.RABBITMQ_PASSWORD={}'.format(rabbitmq_password),
 ]
 
 # Build the helm set arguments as a single string for local() command
@@ -302,9 +302,9 @@ print("   Create migration:   uv run --directory manman host create-migration")
 print("   Open RabbitMQ UI:   open http://localhost:15672")
 
 print("\n💡 Tips:")
-print("   - Set MANMAN_BUILD_POSTGRES_ENV=custom to use external postgres")
-print("   - Set MANMAN_BUILD_RABBITMQ_ENV=custom to use external rabbitmq")
-print("   - Disable services with MANMAN_ENABLE_<SERVICE>=false")
+print("   - Set BUILD_POSTGRES_ENV=custom to use external postgres")
+print("   - Set BUILD_RABBITMQ_ENV=custom to use external rabbitmq")
+print("   - Disable services with ENABLE_<SERVICE>=false")
 print("   - Run 'tilt down' to stop all services")
 
 print("\n" + "="*60 + "\n")
