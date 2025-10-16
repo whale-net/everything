@@ -80,13 +80,17 @@ All container images follow the `<domain>-<app>:<version>` format:
 
 ```bash
 # Registry format
-ghcr.io/OWNER/demo-hello-python:v1.2.3    # Version-specific
-ghcr.io/OWNER/demo-hello-python:latest    # Latest release
-ghcr.io/OWNER/demo-hello-python:abc123def # Commit-specific
+ghcr.io/OWNER/demo-hello-python:v1.2.3    # Version-specific (release workflow)
+ghcr.io/OWNER/demo-hello-python:latest    # Latest from main branch
+ghcr.io/OWNER/demo-hello-python:abc123def # Commit-specific (release workflow)
 
 # Local development format
 demo-hello-python:latest
 ```
+
+**Tagging Strategy:**
+- **Main branch pushes**: Only update the `:latest` tag
+- **Release workflow**: Creates version-specific (`:v1.2.3`) and commit-specific (`:abc123def`) tags in addition to `:latest`
 
 ## Advanced: Manual OCI Rules
 
