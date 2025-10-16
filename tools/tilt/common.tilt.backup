@@ -10,54 +10,6 @@
 load('ext://helm_resource', 'helm_resource', 'helm_repo')
 
 # ===========================
-# Helper Functions
-# ===========================
-
-def _flatten_dict(d, prefix=''):
-    """
-    Flatten a nested dictionary into dot-notation keys.
-    
-    Internal helper used by helm deployment functions.
-    
-    Args:
-        d: Dictionary to flatten
-        prefix: Current key prefix
-        
-    Returns:
-        List of '--set=key=value' strings
-    """
-    result = []
-    for key, value in d.items():
-        full_key = '{}.{}'.format(prefix, key) if prefix else key
-        if type(value) == 'dict':
-            result.extend(_flatten_dict(value, full_key))
-        else:
-            result.append('--set={}={}'.format(full_key, value))
-    return result
-
-def _merge_nested_dict(target, key, value):
-    """
-    Merge a value into a nested dictionary using dot notation.
-    
-    Internal helper for building helm values.
-    
-    Args:
-        target: Target dictionary
-        key: Key (may contain dots for nesting)
-        value: Value to set
-    """
-    if '.' in key:
-        parts = key.split('.')
-        current = target
-        for part in parts[:-1]:
-            if part not in current:
-                current[part] = {}
-            current = current[part]
-        current[parts[-1]] = value
-    else:
-        target[key] = value
-
-# ===========================
 # Bazel Image Building
 # ===========================
 
@@ -80,34 +32,15 @@ def build_images_from_apps(apps_dict, watch_paths, platform='linux/arm64'):
     Example:
         build_images_from_apps(APPS, watch_paths, platform)
     """
-    # Map platform to Bazel platform
-    platform_map = {
-        'linux/arm64': '//tools:linux_arm64',
-        'linux/amd64': '//tools:linux_x86_64',
-    }
-    bazel_platform = platform_map.get(platform, '//tools:linux_arm64')
-    
-    # Ensure watch_paths is a list
-    if type(watch_paths) == 'string':
-        watch_paths = [watch_paths]
-    
     print("\n🏗️  Building images:")
     for app_name, config in apps_dict.items():
-        enabled_env = config.get('enabled_env', '')
-        if not enabled_env or get_env_bool(enabled_env, default='true'):
+        if get_env_bool(config.get('enabled_env', ''), default='true'):
             print("  ✓ {}".format(config['image_name']))
-            
-            # Custom build command that uses Bazel to build and load image
-            # Bazel loads as image_name:latest, then we tag it with Tilt's expected ref
-            # $EXPECTED_REF is set by Tilt to the tag it expects
-            custom_build(
+            bazel_build_image(
                 config['image_name'],
-                'bazel run {} --platforms={} && docker tag {}:latest $EXPECTED_REF'.format(
-                    config['bazel_target'], bazel_platform, config['image_name']
-                ),
-                deps=watch_paths,
-                skips_local_docker=False,
-                disable_push=True,
+                watch_paths,
+                config['bazel_target'],
+                platform=platform
             )
         else:
             print("  ✗ {} (disabled)".format(config['image_name']))
@@ -238,20 +171,10 @@ def setup_postgres(namespace, db_name='default', resource_name='postgres-dev', p
         port_forward: Whether to forward port 5432
         
     Returns:
-        Dict with connection info:
-        {
-            'url': 'postgresql+psycopg2://...',
-            'host': 'postgres-dev.namespace.svc.cluster.local',
-            'port': '5432',
-            'user': 'postgres',
-            'password': 'password',
-            'database': 'dbname',
-            'service_info': 'localhost:5432 (user: postgres, pass: password)',
-        }
+        Default connection URL
         
     Example:
-        db_info = setup_postgres('my-domain-dev', db_name='myapp')
-        db_url = db_info['url']
+        db_url = setup_postgres('my-domain-dev', db_name='myapp')
     """
     helm_resource(resource_name, 'dev-util/postgres-dev',
         resource_deps=['dev-util'],
@@ -264,17 +187,9 @@ def setup_postgres(namespace, db_name='default', resource_name='postgres-dev', p
     if port_forward:
         k8s_resource(workload=resource_name, port_forwards='5432:5432')
     
-    host = '{}.{}.svc.cluster.local'.format(resource_name, namespace)
-    
-    return {
-        'url': 'postgresql+psycopg2://postgres:password@{}:5432/{}'.format(host, db_name),
-        'host': host,
-        'port': '5432',
-        'user': 'postgres',
-        'password': 'password',
-        'database': db_name,
-        'service_info': 'localhost:5432 (user: postgres, pass: password)',
-    }
+    return 'postgresql+psycopg2://postgres:password@{}.{}.svc.cluster.local:5432/{}'.format(
+        resource_name, namespace, db_name
+    )
 
 def setup_rabbitmq(namespace, resource_name='rabbitmq-dev', port_forward=True):
     """
@@ -286,19 +201,11 @@ def setup_rabbitmq(namespace, resource_name='rabbitmq-dev', port_forward=True):
         port_forward: Whether to forward ports 5672 and 15672
         
     Returns:
-        Dict with connection info:
-        {
-            'host': 'rabbitmq-dev.namespace.svc.cluster.local',
-            'port': '5672',
-            'user': 'rabbit',
-            'password': 'password',
-            'service_info': 'localhost:5672 (user: rabbit, pass: password)',
-            'mgmt_service_info': 'http://localhost:15672',
-        }
+        Dict with connection configuration
         
     Example:
-        rmq_info = setup_rabbitmq('my-domain-dev')
-        rmq_host = rmq_info['host']
+        rmq = setup_rabbitmq('my-domain-dev')
+        print(rmq['host'])
     """
     
     helm_resource(resource_name, 'dev-util/rabbitmq-dev',
@@ -315,8 +222,6 @@ def setup_rabbitmq(namespace, resource_name='rabbitmq-dev', port_forward=True):
         'port': '5672',
         'user': 'rabbit',
         'password': 'password',
-        'service_info': 'localhost:5672 (user: rabbit, pass: password)',
-        'mgmt_service_info': 'http://localhost:15672',
     }
 
 def setup_otelcollector(namespace, resource_name='otelcollector-dev'):
@@ -373,30 +278,30 @@ def setup_nginx_ingress(ingress_class='nginx', http_port=30080, https_port=30443
 # Helm Deployment
 # ===========================
 
-def build_apps_config(apps_dict, domain, env_vars={}):
+def build_apps_config_with_infra(apps_dict, domain, db_url, rabbitmq_config=None, exclude_rabbitmq_for=[]):
     """
-    Build apps configuration for Helm deployment.
+    Build apps configuration for Helm deployment with infrastructure settings.
     
-    Converts APPS dict to the format expected by deploy_helm_chart().
-    All apps receive the same environment variables.
+    This is a helper to reduce boilerplate when building apps_config for deploy_helm_chart().
+    It automatically sets up common infrastructure environment variables.
     
     Args:
         apps_dict: Dict of app configurations (same structure as APPS)
         domain: Domain name for generating helm keys
-        env_vars: Dict of environment variables to set for all apps
+        db_url: PostgreSQL connection URL
+        rabbitmq_config: Dict with rabbitmq connection info (host, port, user, password)
+        exclude_rabbitmq_for: List of app names to exclude RabbitMQ config from
         
     Returns:
         Dict suitable for passing to deploy_helm_chart() as apps_config
         
     Example:
-        apps_config = build_apps_config(
+        apps_config = build_apps_config_with_infra(
             APPS,
             'manman',
-            env_vars={
-                'POSTGRES_URL': db_url,
-                'RABBITMQ_HOST': rmq_host,
-                'RABBITMQ_PORT': '5672',
-            }
+            db_url,
+            rabbitmq_config={'host': rmq_host, 'port': '5672', 'user': 'rabbit', 'password': 'password'},
+            exclude_rabbitmq_for=['migration']
         )
         # Then customize as needed:
         apps_config['my-api']['helm_config']['ingress.tlsEnabled'] = 'false'
@@ -406,25 +311,37 @@ def build_apps_config(apps_dict, domain, env_vars={}):
     for app_name, config in apps_dict.items():
         app_key = '{}-{}'.format(domain, app_name)
         
+        # Build environment variables
+        env_vars = {'POSTGRES_URL': db_url}
+        
+        # Add RabbitMQ config if provided and not excluded
+        if rabbitmq_config and app_name not in exclude_rabbitmq_for:
+            env_vars.update({
+                'RABBITMQ_HOST': rabbitmq_config['host'],
+                'RABBITMQ_PORT': rabbitmq_config['port'],
+                'RABBITMQ_USER': rabbitmq_config['user'],
+                'RABBITMQ_PASSWORD': rabbitmq_config['password'],
+            })
+        
         apps_config[app_name] = {
             'enabled_env': config.get('enabled_env', ''),
             'image_name': config['image_name'],
             'helm_key': app_key,
-            'env': dict(env_vars),  # Copy to avoid mutation
+            'env': env_vars,
             'helm_config': {},
         }
     
     return apps_config
 
-def deploy_helm_chart(domain, namespace, chart_bazel_target, chart_name, apps_config, global_config={}):
+def deploy_helm_chart(domain, namespace, chart_bazel_target, chart_name, apps_config, global_config={}, use_helm_resource=False):
     """
-    Deploy a Bazel-generated Helm chart using helm_resource().
+    Deploy a Bazel-generated Helm chart with standardized configuration.
     
-    This function handles:
+    This function handles the common pattern of:
     1. Building a Helm chart with Bazel
     2. Setting global configuration
     3. Configuring per-app settings (images, environment variables)
-    4. Deploying via helm_resource()
+    4. Rendering and deploying the chart
     
     Args:
         domain: Domain name (e.g., 'manman', 'friendly_computing_machine')
@@ -450,9 +367,11 @@ def deploy_helm_chart(domain, namespace, chart_bazel_target, chart_name, apps_co
                 'ingressDefaults.className': 'nginx',
                 'someOtherGlobal': 'value',
             }
+        use_helm_resource: If True, use helm_resource() instead of helm template + k8s_yaml()
+                           Requires chart to be available without Bazel build
     
     Returns:
-        None (deploys to k8s via helm_resource)
+        None (deploys to k8s)
         
     Example:
         deploy_helm_chart(
@@ -461,36 +380,49 @@ def deploy_helm_chart(domain, namespace, chart_bazel_target, chart_name, apps_co
             '//manman:manman_chart',
             'manman-host-services',
             apps_config={...},
-            global_config={...}
+            global_config={...},
+            use_helm_resource=False  # Use helm template (default)
         )
     """
     # Build the Helm chart using Bazel
     local('bazel build {}'.format(chart_bazel_target))
     
     # Extract chart path from Bazel target
+    # Bazel target format: //domain:some_chart
+    # Output directory format: bazel-bin/domain/helm-{chart_name}_chart/{chart_name}
+    # where chart_name comes from the parameter
     domain_path = chart_bazel_target.replace('//', '').split(':')[0]
-    relative_chart_path = 'bazel-bin/{}/helm-{}_chart/{}'.format(
+    
+    chart_path = '../bazel-bin/{}/helm-{}_chart/{}'.format(
         domain_path,
         chart_name,
         chart_name
     )
     
-    # Bazel runs from repo root, so use bazel info to get the correct path
-    workspace_root = str(local('bazel info workspace', quiet=True)).strip()
-    chart_path = '{}/{}'.format(workspace_root, relative_chart_path)
-    
     # Build helm values dict
-    helm_values = {
-        'global': {
-            'environment': 'dev',
-            'domain': domain,
-            'namespace': namespace,
-        }
+    helm_values = {}
+    
+    # Add global configuration
+    helm_values['global'] = {
+        'environment': 'dev',
+        'domain': domain,
+        'namespace': namespace,
     }
     
-    # Add user-provided global config
+    # Add user-provided global config (merge with global dict or add to root)
     for key, value in global_config.items():
-        _merge_nested_dict(helm_values, key, value)
+        if '.' in key:
+            # Nested key like 'ingressDefaults.enabled'
+            parts = key.split('.')
+            current = helm_values
+            for part in parts[:-1]:
+                if part not in current:
+                    current[part] = {}
+                current = current[part]
+            current[parts[-1]] = value
+        else:
+            # Top-level key
+            helm_values[key] = value
     
     # Configure each app
     helm_values['apps'] = {}
@@ -500,17 +432,14 @@ def deploy_helm_chart(domain, namespace, chart_bazel_target, chart_name, apps_co
         if enabled_env and not get_env_bool(enabled_env, default='true'):
             continue
         
-        # Determine helm key
+        # Determine helm key (usually domain-app-name)
         app_key = config.get('helm_key', '{}-{}'.format(domain, app_name))
         image_name = config.get('image_name', app_key)
         
         # Build app config
-        # When using image_keys with a single element list, Tilt injects full image:tag
-        # The helm template will still try to append :{{ imageTag }}, so we need special handling
-        # For now, we'll include both image and imageTag in the injection
         app_helm_config = {
             'image': image_name,
-            'imageTag': 'latest',  # Will be overridden by Tilt
+            'imageTag': 'latest',
         }
         
         # Environment variables
@@ -518,10 +447,20 @@ def deploy_helm_chart(domain, namespace, chart_bazel_target, chart_name, apps_co
         if env_vars:
             app_helm_config['env'] = env_vars
         
-        # Additional helm configuration
+        # Additional helm configuration (merge nested dicts)
         helm_config = config.get('helm_config', {})
         for helm_key, helm_value in helm_config.items():
-            _merge_nested_dict(app_helm_config, helm_key, helm_value)
+            if '.' in helm_key:
+                # Nested key like 'ingress.tlsEnabled'
+                parts = helm_key.split('.')
+                current = app_helm_config
+                for part in parts[:-1]:
+                    if part not in current:
+                        current[part] = {}
+                    current = current[part]
+                current[parts[-1]] = helm_value
+            else:
+                app_helm_config[helm_key] = helm_value
         
         helm_values['apps'][app_key] = app_helm_config
     
@@ -529,57 +468,52 @@ def deploy_helm_chart(domain, namespace, chart_bazel_target, chart_name, apps_co
     print("   Chart:     {}".format(chart_path))
     print("   Namespace: {}".format(namespace))
     
-    # Collect image dependencies for resource ordering
-    image_deps = []
-    for app_name, config in apps_config.items():
-        enabled_env = config.get('enabled_env')
-        if enabled_env and not get_env_bool(enabled_env, default='true'):
-            continue
-        image_name = config.get('image_name')
-        if image_name:
-            image_deps.append(image_name)
-    
-    print("\n🔨 Deploying with Helm...")
-    print("   Chart:     {}".format(chart_path))
-    print("   Namespace: {}".format(namespace))
-    
-    # Use helm template to render the chart, then apply with k8s_yaml
-    # This is simpler and Tilt can discover images automatically
-    helm_set_args = _flatten_dict(helm_values)
-    # _flatten_dict already includes '--set=' prefix, just join them
-    helm_set_flags = ' '.join(helm_set_args)
-    
-    # Debug: print first few set args  
-    print("   Set args:  {} (showing first 100 chars)".format(helm_set_flags[:100]))
-    
-    # Render helm template
-    helm_cmd = 'helm template {} {} --namespace {} {}'.format(
-        domain,
-        chart_path,
-        namespace,
-        helm_set_flags
-    )
-    print("   Running helm template...")
-    yaml = local(helm_cmd)
-    print("   ✓ Helm template rendered")
-    
-    # Deploy the rendered YAML
-    k8s_yaml(yaml)
-    
-    # Group k8s resources by image name for better UX
-    for app_name, config in apps_config.items():
-        enabled_env = config.get('enabled_env')
-        if enabled_env and not get_env_bool(enabled_env, default='true'):
-            continue
+    if use_helm_resource:
+        # Use Tilt's helm_resource (requires chart to be extractable without Bazel)
+        # Convert values dict to --set arguments for now
+        # TODO: Write values to temp file and use --values
+        helm_set_args = []
+        def flatten_dict(d, prefix=''):
+            for key, value in d.items():
+                full_key = '{}.{}'.format(prefix, key) if prefix else key
+                if type(value) == 'dict':
+                    flatten_dict(value, full_key)
+                else:
+                    helm_set_args.append('--set={}={}'.format(full_key, value))
         
-        image_name = config.get('image_name')
-        if image_name:
-            # K8s resources have -dev suffix, group them with the image build
-            k8s_resource(
-                workload='{}-dev'.format(image_name),
-                new_name=image_name,
-                resource_deps=[],
-            )
+        flatten_dict(helm_values)
+        
+        helm_resource(
+            '{}-helm'.format(domain),
+            chart_path,
+            namespace=namespace,
+            flags=helm_set_args,
+        )
+    else:
+        # Use helm template + k8s_yaml (works with Bazel-built charts)
+        # Convert values dict to --set arguments
+        helm_set_args = []
+        
+        def flatten_dict(d, prefix=''):
+            for key, value in d.items():
+                full_key = '{}.{}'.format(prefix, key) if prefix else key
+                if type(value) == 'dict':
+                    flatten_dict(value, full_key)
+                else:
+                    helm_set_args.append('--set {}={}'.format(full_key, value))
+        
+        flatten_dict(helm_values)
+        helm_set_string = ' '.join(helm_set_args)
+        
+        # Generate YAML using local() to force re-evaluation
+        yaml_content = local('helm template {}-host {} --namespace {} {}'.format(
+            domain,
+            chart_path,
+            namespace,
+            helm_set_string
+        ))
+        
+        k8s_yaml(yaml_content)
 
 # ===========================
 # Configuration Helpers
@@ -723,19 +657,21 @@ def print_access_info(domain_name, apps_dict, ingress_port=30080, additional_ser
     if services:
         print_service_info("📡 Access Information", services)
 
-def print_footer_info(domain_name):
+def print_footer_info(domain_name, has_migrations=False):
     """
     Print footer with useful commands and tips.
     
     Args:
         domain_name: Name of the domain
+        has_migrations: Whether the domain has database migrations
     
     Example:
-        print_footer_info('manman')
+        print_footer_info('manman', has_migrations=True)
     """
-    print("\n📝 Useful Commands:")
-    print("   View logs:          tilt logs <resource-name>")
-    print("   Restart resource:   tilt trigger <resource-name>")
+    if has_migrations:
+        print("\n📝 Useful Commands:")
+        print("   View logs:          tilt logs <resource-name>")
+        print("   Restart resource:   tilt trigger <resource-name>")
     
     print("\n💡 Configuration Tips:")
     print("   - Use .env file for environment variables")

@@ -4,10 +4,11 @@
 load('ext://namespace', 'namespace_create')
 load('ext://dotenv', 'dotenv')
 load('../tools/tilt/common.tilt', 
-     'bazel_build_image', 'detect_platform', 'get_bazel_platform', 'get_watch_paths',
+     'build_images_from_apps', 'detect_platform', 'get_bazel_platform', 'get_watch_paths',
      'setup_dev_util', 'setup_postgres', 'setup_rabbitmq', 'setup_otelcollector',
-     'setup_nginx_ingress', 'deploy_helm_chart', 'get_env_bool', 'get_custom_or_default',
-     'print_startup_banner', 'print_service_info')
+     'setup_nginx_ingress', 'build_apps_config', 'deploy_helm_chart',
+     'get_env_bool', 'get_custom_or_default',
+     'print_startup_banner', 'print_service_info', 'print_access_info', 'print_footer_info')
 
 # ===========================
 # Configuration
@@ -32,15 +33,15 @@ setup_dev_util(namespace)
 setup_nginx_ingress(ingress_class='manman-nginx', http_port=30080, https_port=30443)
 
 # PostgreSQL Database
-db_url_default = setup_postgres(namespace, db_name='manman')
-db_url = get_custom_or_default('BUILD_POSTGRES_ENV', 'POSTGRES_URL', db_url_default)
+db_info = setup_postgres(namespace, db_name='manman')
+db_url = get_custom_or_default('BUILD_POSTGRES_ENV', 'POSTGRES_URL', db_info['url'])
 
 # RabbitMQ Message Queue
-rmq_default = setup_rabbitmq(namespace)
-rabbitmq_host = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_HOST', rmq_default['host'])
-rabbitmq_port = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_PORT', rmq_default['port'])
-rabbitmq_user = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_USER', rmq_default['user'])
-rabbitmq_password = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_PASSWORD', rmq_default['password'])
+rmq_info = setup_rabbitmq(namespace)
+rabbitmq_host = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_HOST', rmq_info['host'])
+rabbitmq_port = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_PORT', rmq_info['port'])
+rabbitmq_user = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_USER', rmq_info['user'])
+rabbitmq_password = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_PASSWORD', rmq_info['password'])
 
 # OpenTelemetry Collector
 setup_otelcollector(namespace)
@@ -90,50 +91,24 @@ APPS = {
 # Bazel Image Building
 # ===========================
 
-print("\n🏗️  Building images:")
-for app_name, config in APPS.items():
-    if get_env_bool(config['enabled_env'], default='true'):
-        print("  ✓ {}".format(config['image_name']))
-        bazel_build_image(
-            config['image_name'],
-            watch_paths,
-            config['bazel_target'],
-            platform=platform
-        )
-    else:
-        print("  ✗ {} (disabled)".format(config['image_name']))
+build_images_from_apps(APPS, watch_paths, platform)
 
 # ===========================
 # Helm Deployment
 # ===========================
 
-# Build apps configuration for helm deployment
-apps_config = {}
-
-for app_name, config in APPS.items():
-    app_key = 'manman-{}'.format(app_name)
-    
-    # Build environment variables
-    env_vars = {
-        'POSTGRES_URL': db_url,
+# Build apps configuration with infrastructure settings
+apps_config = build_apps_config(
+    APPS,
+    'manman',
+    env_vars={
+        'DATABASE_URL': db_url,
+        'RABBITMQ_HOST': rabbitmq_host,
+        'RABBITMQ_PORT': rabbitmq_port,
+        'RABBITMQ_USER': rabbitmq_user,
+        'RABBITMQ_PASSWORD': rabbitmq_password,
     }
-    
-    # Add RabbitMQ config for non-migration apps
-    if app_name != 'migration':
-        env_vars.update({
-            'RABBITMQ_HOST': rabbitmq_host,
-            'RABBITMQ_PORT': rabbitmq_port,
-            'RABBITMQ_USER': rabbitmq_user,
-            'RABBITMQ_PASSWORD': rabbitmq_password,
-        })
-    
-    apps_config[app_name] = {
-        'enabled_env': config['enabled_env'],
-        'image_name': config['image_name'],
-        'helm_key': app_key,
-        'env': env_vars,
-        'helm_config': {},
-    }
+)
 
 # Disable TLS for ingress-exposed apps in local development
 apps_config['experience-api']['helm_config']['ingress.tlsEnabled'] = 'false'
@@ -156,31 +131,15 @@ deploy_helm_chart(
 # Access Information
 # ===========================
 
-services = {}
+print_access_info(
+    'manman',
+    APPS,
+    ingress_port=30080,
+    additional_services={
+        'PostgreSQL': db_info['service_info'],
+        'RabbitMQ': rmq_info['service_info'],
+        'RabbitMQ Management': rmq_info['mgmt_service_info'],
+    }
+)
 
-# API endpoints (accessible via ingress)
-if get_env_bool('ENABLE_EXPERIENCE_API', default='true'):
-    services['Experience API (via curl)'] = 'curl -H "Host: experience.manman.local" http://localhost:30080/docs'
-
-if get_env_bool('ENABLE_WORKER_DAL_API', default='true'):
-    services['Worker DAL API (via curl)'] = 'curl -H "Host: dal.manman.local" http://localhost:30080/docs'
-
-# Infrastructure
-services['PostgreSQL'] = 'localhost:5432 (user: postgres, pass: password)'
-services['RabbitMQ'] = 'localhost:5672 (user: rabbit, pass: password)'
-services['RabbitMQ Management'] = 'http://localhost:15672'
-
-print_service_info("📡 Access Information", services)
-
-print("\n📝 Useful Commands:")
-print("   Run migrations:     uv run --directory manman host run-migration")
-print("   Create migration:   uv run --directory manman host create-migration")
-
-print("\n💡 Configuration Tips:")
-print("   - Use .env file for environment variables")
-print("   - Set BUILD_POSTGRES_ENV=custom for external postgres")
-print("   - Set BUILD_RABBITMQ_ENV=custom for external rabbitmq")
-print("   - Set ENABLE_<SERVICE>=false to disable services")
-print("   - Run 'tilt down' to stop all services")
-
-print("\n" + "="*60 + "\n")
+print_footer_info('manman')
