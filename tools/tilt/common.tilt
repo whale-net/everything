@@ -6,6 +6,9 @@
 # Usage in a domain Tiltfile:
 #   load('../../tools/tilt/common.tilt', 'bazel_build_image', 'setup_dev_util')
 
+# Load extensions at module level (required by Starlark)
+load('ext://helm_resource', 'helm_resource', 'helm_repo')
+
 # ===========================
 # Bazel Image Building
 # ===========================
@@ -38,10 +41,13 @@ def bazel_build_image(app_name, context_path, bazel_target, platform='linux/arm6
     }
     bazel_platform = platform_map.get(platform, '//tools:linux_arm64')
     
-    # Custom build command that uses Bazel
+    # Custom build command that uses Bazel and tags for Tilt
+    # Tilt sets $EXPECTED_REF which is the full image:tag that it expects
     custom_build(
         app_name,
-        'bazel run {} --platforms={}'.format(bazel_target, bazel_platform),
+        'bazel run {} --platforms={} && docker tag {}:latest $EXPECTED_REF'.format(
+            bazel_target, bazel_platform, app_name
+        ),
         [context_path],
         skips_local_docker=False,
         disable_push=True,
@@ -93,7 +99,6 @@ def setup_dev_util(namespace):
     Example:
         setup_dev_util('my-domain-dev')
     """
-    load('ext://helm_resource', 'helm_resource', 'helm_repo')
     helm_repo('dev-util', 'https://whale-net.github.io/dev-util')
 
 def setup_postgres(namespace, db_name='default', resource_name='postgres-dev', port_forward=True):
@@ -112,8 +117,6 @@ def setup_postgres(namespace, db_name='default', resource_name='postgres-dev', p
     Example:
         db_url = setup_postgres('my-domain-dev', db_name='myapp')
     """
-    load('ext://helm_resource', 'helm_resource', 'helm_repo')
-    
     helm_resource(resource_name, 'dev-util/postgres-dev',
         resource_deps=['dev-util'],
         flags=[
@@ -145,7 +148,6 @@ def setup_rabbitmq(namespace, resource_name='rabbitmq-dev', port_forward=True):
         rmq = setup_rabbitmq('my-domain-dev')
         print(rmq['host'])
     """
-    load('ext://helm_resource', 'helm_resource', 'helm_repo')
     
     helm_resource(resource_name, 'dev-util/rabbitmq-dev',
         resource_deps=['dev-util'],
@@ -177,7 +179,6 @@ def setup_otelcollector(namespace, resource_name='otelcollector-dev'):
     Example:
         otlp_endpoint = setup_otelcollector('my-domain-dev')
     """
-    load('ext://helm_resource', 'helm_resource', 'helm_repo')
     
     helm_resource(resource_name, 'dev-util/otelcollector-dev',
         resource_deps=['dev-util'],
@@ -198,7 +199,6 @@ def setup_nginx_ingress(ingress_class='nginx', http_port=30080, https_port=30443
     Example:
         setup_nginx_ingress(ingress_class='my-domain-nginx')
     """
-    load('ext://helm_resource', 'helm_resource', 'helm_repo')
     
     helm_repo('ingress-nginx', 'https://kubernetes.github.io/ingress-nginx')
     helm_resource('{}-ingress'.format(ingress_class), 'ingress-nginx/ingress-nginx',
