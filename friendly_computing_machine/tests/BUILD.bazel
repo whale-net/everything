@@ -61,3 +61,14 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
     size = "small",
 )
+
+# Dependency injection tests
+py_test(
+    name = "test_deps",
+    srcs = [
+        "conftest.py",
+        "test_deps.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+    size = "small",
+)
