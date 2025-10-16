@@ -13,9 +13,13 @@ This directory contains the CLI modules for FCM, including bot management, datab
 All CLI modules follow a consistent pattern:
 
 ```python
+from typing import Annotated
+
 import typer
+
 from friendly_computing_machine.cli.deps import Depends, inject_dependencies
 from friendly_computing_machine.cli.injectable import get_db_context
+from friendly_computing_machine.cli.context.db import DBContext
 
 app = typer.Typer(context_settings={"obj": {}})
 
@@ -130,10 +134,13 @@ from friendly_computing_machine.cli.injectable import (
 
 ```python
 from typing import Annotated
+
 import typer
+
 from friendly_computing_machine.cli.deps import Depends, inject_dependencies
 from friendly_computing_machine.cli.injectable import get_db_context
 from friendly_computing_machine.cli.context.db import DBContext
+from friendly_computing_machine.db.util import run_migration
 
 app = typer.Typer(context_settings={"obj": {}})
 
@@ -167,7 +174,22 @@ def complex_command(
 ### Example 3: Custom Dependency
 
 ```python
+from typing import Annotated
+
+import typer
+
 from friendly_computing_machine.cli.deps import injectable, Depends
+from friendly_computing_machine.cli.injectable import get_db_context
+from friendly_computing_machine.cli.context.db import DBContext
+
+# Example custom service class
+class MyService:
+    def __init__(self, engine, api_key: str):
+        self.engine = engine
+        self.api_key = api_key
+    
+    def do_something(self):
+        print("Service doing something...")
 
 @injectable
 def get_my_service(
@@ -289,16 +311,26 @@ This ensures each dependency type has a unique cache entry.
 
 1. **Use type hints**: Always annotate return types for better IDE support
    ```python
+   from typing import Annotated
+   import typer
+   
    @injectable
-   def get_service(ctx: typer.Context) -> MyService:  # ← Include return type
+   def get_service(ctx: typer.Context) -> object:  # ← Include return type
+       if "service" not in ctx.obj:
+           ctx.obj["service"] = SomeService()
+       return ctx.obj["service"]
    ```
 
 2. **Cache expensive operations**: Store results in `ctx.obj`
    ```python
+   from typing import Annotated
+   import typer
+   
    @injectable
    def get_expensive(ctx: typer.Context) -> object:
        if "expensive" not in ctx.obj:
-           ctx.obj["expensive"] = ExpensiveObject()
+           # Expensive initialization only happens once
+           ctx.obj["expensive"] = create_expensive_object()
        return ctx.obj["expensive"]
    ```
 

@@ -213,7 +213,7 @@ def cli_run_taskpool(
     db_ctx: Annotated[DBContext, Depends(get_db_context)],
     slack: Annotated[dict, Depends(get_slack_tokens)],
     temporal: Annotated[TemporalConfig, Depends(get_temporal_config)],
-    manman: Annotated[type, Depends(get_manman_experience_api)],
+    manman_api: Annotated[ManManExperienceAPI, Depends(get_manman_experience_api)],
     skip_migration_check: bool = False,
 ):
     """Dependencies automatically injected."""
