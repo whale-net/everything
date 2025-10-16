@@ -7,13 +7,15 @@ This example demonstrates how to expose an internal-api app via Ingress for debu
 By default, `internal-api` apps do NOT generate an Ingress resource. They are only accessible within the cluster via the Service.
 
 ```yaml
-# values.yaml (default)
+# values.yaml (default behavior)
 apps:
   my-internal-api:
     type: internal-api
     port: 8080
-    exposeIngress: false  # Default value
+    exposeIngress: false  # This field is included for internal-api apps
 ```
+
+**Note**: The `exposeIngress` field only appears in values.yaml for `internal-api` app types. For `external-api`, `worker`, and `job` types, this field is not included.
 
 This generates:
 - ✅ Deployment
@@ -64,9 +66,10 @@ When `exposeIngress: true`:
 - ✅ Ingress (newly generated)
 
 The Ingress will use the same pattern as external-api apps:
-- Host: `{appName}-{environment}.local` (or custom from `ingress.host`)
-- Path: `/` (Prefix)
-- Service: `{appName}-{environment}-service`
+- **Default host**: `{appName}-{environment}.local` (e.g., `my-internal-api-dev.local`)
+- **Custom host**: Set via `ingress.host` configuration (see examples above)
+- **Path**: `/` (Prefix)
+- **Service**: `{appName}-{environment}-service`
 
 ## Use Cases
 
@@ -88,12 +91,20 @@ When exposing internal APIs:
 ## Example: Temporary Debug Access
 
 ```bash
-# Enable debug access
+# Enable debug access with default host pattern
 helm upgrade my-app ./chart/ \
   --set apps.my-internal-api.exposeIngress=true
 
-# Test the API
-curl https://my-internal-api-dev.example.com/health
+# Test the API using the default host pattern
+curl http://my-internal-api-dev.local/health
+
+# Or configure a custom host
+helm upgrade my-app ./chart/ \
+  --set apps.my-internal-api.exposeIngress=true \
+  --set apps.my-internal-api.ingress.host=debug.example.com
+
+# Test with custom host
+curl https://debug.example.com/health
 
 # Disable debug access
 helm upgrade my-app ./chart/ \
