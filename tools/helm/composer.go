@@ -100,17 +100,18 @@ func (r ResourceConfig) ToValuesFormat() ValuesResourceConfig {
 
 // AppConfig represents the configuration for a single app in values.yaml
 type AppConfig struct {
-	Type        string               `yaml:"type"`
-	Image       string               `yaml:"image"`
-	ImageTag    string               `yaml:"imageTag"`
-	Port        int                  `yaml:"port,omitempty"`
-	Replicas    int                  `yaml:"replicas"`
-	Resources   ValuesResourceConfig `yaml:"resources"`
-	HealthCheck *HealthCheckConfig   `yaml:"healthCheck,omitempty"`
-	Command     []string             `yaml:"command,omitempty"`
-	Args        []string             `yaml:"args,omitempty"`
-	Env         map[string]string    `yaml:"env,omitempty"`
-	Ingress     *AppIngressConfig    `yaml:"ingress,omitempty"` // Per-app ingress config
+	Type         string               `yaml:"type"`
+	Image        string               `yaml:"image"`
+	ImageTag     string               `yaml:"imageTag"`
+	Port         int                  `yaml:"port,omitempty"`
+	Replicas     int                  `yaml:"replicas"`
+	Resources    ValuesResourceConfig `yaml:"resources"`
+	HealthCheck  *HealthCheckConfig   `yaml:"healthCheck,omitempty"`
+	Command      []string             `yaml:"command,omitempty"`
+	Args         []string             `yaml:"args,omitempty"`
+	Env          map[string]string    `yaml:"env,omitempty"`
+	ExposeIngress bool                 `yaml:"exposeIngress,omitempty"` // For internal-api: expose via ingress for debugging
+	Ingress      *AppIngressConfig    `yaml:"ingress,omitempty"`       // Per-app ingress config
 }
 
 // AppIngressConfig represents per-app ingress configuration
@@ -403,14 +404,15 @@ func (c *Composer) buildAppConfig(app AppMetadata) (AppConfig, error) {
 	}
 
 	config := AppConfig{
-		Type:      appType.String(),
-		Image:     app.GetImage(),
-		ImageTag:  app.GetImageTag(),
-		Port:      port,
-		Replicas:  replicas,
-		Resources: resources.ToValuesFormat(),
-		Command:   app.Command, // Use command from metadata
-		Args:      app.Args,    // Use args from metadata
+		Type:          appType.String(),
+		Image:         app.GetImage(),
+		ImageTag:      app.GetImageTag(),
+		Port:          port,
+		Replicas:      replicas,
+		Resources:     resources.ToValuesFormat(),
+		Command:       app.Command, // Use command from metadata
+		Args:          app.Args,    // Use args from metadata
+		ExposeIngress: false,       // Default to false for internal-api (can be overridden in values.yaml)
 	}
 
 	// Add health check for APIs based on metadata or defaults
@@ -647,6 +649,11 @@ func writeValuesYAML(f *os.File, data ValuesData) error {
 			w.WriteInt("successThreshold", app.HealthCheck.SuccessThreshold)
 			w.WriteInt("failureThreshold", app.HealthCheck.FailureThreshold)
 			w.EndSection()
+		}
+
+		// For internal-api apps, include exposeIngress field (defaults to false)
+		if app.Type == "internal-api" {
+			w.WriteBool("exposeIngress", app.ExposeIngress)
 		}
 
 		// Per-app ingress config if present
