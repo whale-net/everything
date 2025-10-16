@@ -544,6 +544,16 @@ For comprehensive documentation including:
 
 See: **[tools/helm/README.md](tools/helm/README.md)**
 
+**API Deployment Configuration:**
+
+For production-ready API deployment with gunicorn/uvicorn:
+- Default deployment configuration
+- Command-line interface for development and production modes
+- Container and Kubernetes deployment examples
+- Best practices and troubleshooting
+
+See: **[docs/API_DEPLOYMENT.md](docs/API_DEPLOYMENT.md)**
+
 ## 🧪 Test Utilities
 
 The repository uses Bazel's built-in testing capabilities. All tests can be run with:
