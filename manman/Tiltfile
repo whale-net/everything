@@ -102,7 +102,7 @@ apps_config = build_apps_config(
     APPS,
     'manman',
     env_vars={
-        'DATABASE_URL': db_url,
+        'POSTGRES_URL': db_url,
         'RABBITMQ_HOST': rabbitmq_host,
         'RABBITMQ_PORT': rabbitmq_port,
         'RABBITMQ_USER': rabbitmq_user,
