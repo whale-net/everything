@@ -121,21 +121,21 @@ def upgrade() -> None:
     op.execute("""
     insert into manman.game_server_configs (game_server_id, is_default, name, executable, args)
     SELECT game_server_id, true, 'testcs2', 'game/bin/linuxsteamrt64/cs2', ARRAY['-dedicated', '-port', '27015', '+map', 'de_ancient']
-    from manman.src.game_servers
+    from manman.game_servers
     where name = 'cs2'
     """)
 
     # op.execute("""
     # insert into manman.game_server_configs (game_server_id, is_default, name, executable, args)
     # SELECT game_server_id, true, 'testottd', 'openttd', ARRAY['-D']
-    # from manman.src.game_servers
+    # from manman.game_servers
     # where name = 'openttd'
     # """)
 
     op.execute("""
     insert into manman.game_server_configs (game_server_id, is_default, name, executable, args)
     SELECT game_server_id, true, 'testvalheim', 'valheim', ARRAY['-name', 'manmantest', '-port', '2456', '-world', 'Dedicated', '-password', 'fish123', '-crossplay']
-    from manman.src.game_servers
+    from manman.game_servers
     where name = 'valheim'
     """)
 
