@@ -273,6 +273,41 @@ deps = [
 ]
 ```
 
+**Consolidated Alembic Library** (`//libs/python/alembic`):
+The repository provides a consolidated library for database migrations using Alembic. This library eliminates code duplication and provides a consistent migration experience across projects.
+
+Key features:
+- Programmatic Alembic configuration (no alembic.ini needed)
+- Reusable env.py module with schema filtering support
+- High-level migration utilities (run, create, check, downgrade)
+- Unified CLI framework using Typer
+
+Usage in your migrations/env.py:
+```python
+from alembic import context
+from libs.python.alembic.env import run_migrations
+from myapp.models import Base
+
+run_migrations(
+    context=context,
+    target_metadata=Base.metadata,
+    include_schemas=True,
+)
+```
+
+For CLI integration:
+```python
+from libs.python.alembic.cli import create_migration_app
+from myapp.models import Base
+
+migration_app = create_migration_app(
+    migrations_package="myapp.migrations",
+    target_metadata=Base.metadata,
+)
+```
+
+See [`docs/ALEMBIC_CONSOLIDATION.md`](docs/ALEMBIC_CONSOLIDATION.md) for complete documentation and migration guide.
+
 #### Go Libraries
 Reference shared Go code from `//libs/go`:
 ```starlark
