@@ -243,6 +243,146 @@ def setup_nginx_ingress(ingress_class='nginx', http_port=30080, https_port=30443
     )
 
 # ===========================
+# Helm Deployment
+# ===========================
+
+def deploy_helm_chart(domain, namespace, chart_bazel_target, chart_name, apps_config, global_config={}):
+    """
+    Deploy a Bazel-generated Helm chart with standardized configuration.
+    
+    This function handles the common pattern of:
+    1. Building a Helm chart with Bazel
+    2. Setting global configuration
+    3. Configuring per-app settings (images, environment variables)
+    4. Rendering and deploying the chart
+    
+    Args:
+        domain: Domain name (e.g., 'manman', 'friendly_computing_machine')
+        namespace: Kubernetes namespace
+        chart_bazel_target: Bazel target for the chart (e.g., '//manman:manman_chart')
+        chart_name: Name of the generated chart (e.g., 'manman-host-services')
+        apps_config: Dict of app configurations with structure:
+            {
+                'app-name': {
+                    'enabled_env': 'ENABLE_APP_NAME',  # Optional, defaults to True
+                    'image_name': 'domain-app-name',
+                    'env': {  # Environment variables to set
+                        'VAR_NAME': 'value',
+                    },
+                    'helm_config': {  # Additional helm config
+                        'ingress.tlsEnabled': 'false',
+                    }
+                }
+            }
+        global_config: Dict of global helm values to set
+            {
+                'ingressDefaults.enabled': 'true',
+                'ingressDefaults.className': 'nginx',
+                'someOtherGlobal': 'value',
+            }
+    
+    Returns:
+        None (deploys to k8s via k8s_yaml)
+        
+    Example:
+        deploy_helm_chart(
+            'manman',
+            'manman-local-dev',
+            '//manman:manman_chart',
+            'manman-host-services',
+            apps_config={
+                'experience-api': {
+                    'image_name': 'manman-experience-api',
+                    'env': {
+                        'POSTGRES_URL': db_url,
+                        'RABBITMQ_HOST': rmq_host,
+                    },
+                    'helm_config': {
+                        'ingress.tlsEnabled': 'false',
+                    }
+                }
+            },
+            global_config={
+                'ingressDefaults.enabled': 'true',
+                'ingressDefaults.className': 'manman-nginx',
+            }
+        )
+    """
+    # Build the Helm chart using Bazel
+    local('bazel build {}'.format(chart_bazel_target))
+    
+    # Extract chart path from Bazel target
+    # Bazel target format: //domain:some_chart
+    # Output directory format: bazel-bin/domain/helm-{chart_name}_chart/{chart_name}
+    # where chart_name comes from the parameter
+    domain_path = chart_bazel_target.replace('//', '').split(':')[0]
+    bazel_target_name = chart_bazel_target.split(':')[-1]
+    
+    chart_path = '../bazel-bin/{}/helm-{}_chart/{}'.format(
+        domain_path,
+        chart_name,
+        chart_name
+    )
+    
+    # Build helm set arguments
+    helm_set_args = []
+    
+    # Add global configuration
+    helm_set_args.extend([
+        'global.environment=dev',
+        'global.domain={}'.format(domain),
+        'global.namespace={}'.format(namespace),
+    ])
+    
+    # Add user-provided global config
+    for key, value in global_config.items():
+        helm_set_args.append('{}={}'.format(key, value))
+    
+    # Configure each app
+    for app_name, config in apps_config.items():
+        # Check if app is enabled
+        enabled_env = config.get('enabled_env')
+        if enabled_env and not get_env_bool(enabled_env, default='true'):
+            continue
+        
+        # Determine helm key (usually domain-app-name)
+        app_key = config.get('helm_key', '{}-{}'.format(domain, app_name))
+        image_name = config.get('image_name', app_key)
+        
+        # Image configuration
+        helm_set_args.extend([
+            'apps.{}.image={}'.format(app_key, image_name),
+            'apps.{}.imageTag=latest'.format(app_key),
+        ])
+        
+        # Environment variables
+        env_vars = config.get('env', {})
+        for env_key, env_value in env_vars.items():
+            helm_set_args.append('apps.{}.env.{}={}'.format(app_key, env_key, env_value))
+        
+        # Additional helm configuration
+        helm_config = config.get('helm_config', {})
+        for helm_key, helm_value in helm_config.items():
+            helm_set_args.append('apps.{}.{}={}'.format(app_key, helm_key, helm_value))
+    
+    # Build the helm set arguments as a single string
+    helm_set_string = ' '.join(['--set {}'.format(arg) for arg in helm_set_args])
+    
+    print("\n🔨 Deploying with Helm...")
+    print("   Chart:     {}".format(chart_path))
+    print("   Namespace: {}".format(namespace))
+    
+    # Generate YAML using local() to force re-evaluation
+    yaml_content = local('helm template {}-host {} --namespace {} {}'.format(
+        domain,
+        chart_path,
+        namespace,
+        helm_set_string
+    ))
+    
+    k8s_yaml(yaml_content)
+
+# ===========================
 # Configuration Helpers
 # ===========================
 

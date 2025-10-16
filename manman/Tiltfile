@@ -6,7 +6,7 @@ load('ext://dotenv', 'dotenv')
 load('../tools/tilt/common.tilt', 
      'bazel_build_image', 'detect_platform', 'get_bazel_platform', 'get_watch_paths',
      'setup_dev_util', 'setup_postgres', 'setup_rabbitmq', 'setup_otelcollector',
-     'setup_nginx_ingress', 'get_env_bool', 'get_custom_or_default',
+     'setup_nginx_ingress', 'deploy_helm_chart', 'get_env_bool', 'get_custom_or_default',
      'print_startup_banner', 'print_service_info')
 
 # ===========================
@@ -107,59 +107,50 @@ for app_name, config in APPS.items():
 # Helm Deployment
 # ===========================
 
-# Build the Helm chart using Bazel
-local('bazel build //manman:manman_chart')
+# Build apps configuration for helm deployment
+apps_config = {}
 
-chart_path = '../bazel-bin/manman/helm-manman-host-services_chart/manman-host-services'
-
-# Build helm set arguments
-helm_set_args = [
-    'global.environment=dev',
-    'global.domain=manman',
-    'global.namespace={}'.format(namespace),
-    # Ingress configuration
-    'ingressDefaults.enabled=true',
-    'ingressDefaults.className=manman-nginx',
-]
-
-# Configure images and environment for enabled apps
 for app_name, config in APPS.items():
-    if get_env_bool(config['enabled_env'], default='true'):
-        app_key = 'manman-{}'.format(app_name)
-        helm_set_args.extend([
-            # Image configuration
-            'apps.{}.image={}'.format(app_key, config['image_name']),
-            'apps.{}.imageTag=latest'.format(app_key),
-            # Database configuration
-            'apps.{}.env.POSTGRES_URL={}'.format(app_key, db_url),
-            # RabbitMQ configuration (skip for migration job)
-            'apps.{}.env.RABBITMQ_HOST={}'.format(app_key, rabbitmq_host),
-            'apps.{}.env.RABBITMQ_PORT={}'.format(app_key, rabbitmq_port),
-            'apps.{}.env.RABBITMQ_USER={}'.format(app_key, rabbitmq_user),
-            'apps.{}.env.RABBITMQ_PASSWORD={}'.format(app_key, rabbitmq_password),
-        ])
+    app_key = 'manman-{}'.format(app_name)
+    
+    # Build environment variables
+    env_vars = {
+        'POSTGRES_URL': db_url,
+    }
+    
+    # Add RabbitMQ config for non-migration apps
+    if app_name != 'migration':
+        env_vars.update({
+            'RABBITMQ_HOST': rabbitmq_host,
+            'RABBITMQ_PORT': rabbitmq_port,
+            'RABBITMQ_USER': rabbitmq_user,
+            'RABBITMQ_PASSWORD': rabbitmq_password,
+        })
+    
+    apps_config[app_name] = {
+        'enabled_env': config['enabled_env'],
+        'image_name': config['image_name'],
+        'helm_key': app_key,
+        'env': env_vars,
+        'helm_config': {},
+    }
 
-# Disable TLS for local development (only for external-api apps)
-helm_set_args.extend([
-    'apps.manman-experience-api.ingress.tlsEnabled=false',
-    'apps.manman-worker-dal-api.ingress.tlsEnabled=false',
-])
+# Disable TLS for ingress-exposed apps in local development
+apps_config['experience-api']['helm_config']['ingress.tlsEnabled'] = 'false'
+apps_config['worker-dal-api']['helm_config']['ingress.tlsEnabled'] = 'false'
 
-# Build the helm set arguments as a single string
-helm_set_string = ' '.join(['--set {}'.format(arg) for arg in helm_set_args])
-
-print("\n🔨 Deploying with Helm...")
-print("   Chart:     {}".format(chart_path))
-print("   Namespace: {}".format(namespace))
-
-# Generate YAML using local() to force re-evaluation
-yaml_content = local('helm template manman-host {} --namespace {} {}'.format(
-    chart_path,
+# Deploy the helm chart
+deploy_helm_chart(
+    'manman',
     namespace,
-    helm_set_string
-))
-
-k8s_yaml(yaml_content)
+    '//manman:manman_chart',
+    'manman-host-services',
+    apps_config,
+    global_config={
+        'ingressDefaults.enabled': 'true',
+        'ingressDefaults.className': 'manman-nginx',
+    }
+)
 
 # ===========================
 # Access Information
