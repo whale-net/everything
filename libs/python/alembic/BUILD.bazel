@@ -1,0 +1,18 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+py_library(
+    name = "alembic",
+    srcs = [
+        "__init__.py",
+        "cli.py",
+        "config.py",
+        "env.py",
+        "migration.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@pypi//:alembic",
+        "@pypi//:sqlalchemy",
+        "@pypi//:typer",
+    ],
+)
