@@ -1,6 +1,6 @@
-"""Tests for ManMan RabbitMQ utility functions (re-exported from libs.python.rmq)."""
+"""Tests for RabbitMQ utility functions."""
 
-from manman.src.repository.rabbitmq.util import (
+from libs.python.rmq.util import (
     add_routing_key_prefix,
     add_routing_key_suffix,
 )
