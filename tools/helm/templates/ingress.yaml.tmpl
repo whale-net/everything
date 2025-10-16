@@ -21,7 +21,7 @@ spec:
   {{- if $.Values.ingressDefaults.className }}
   ingressClassName: {{ $.Values.ingressDefaults.className }}
   {{- end }}
-  {{- if and $app.ingress $app.ingress.tlsSecretName }}
+  {{- if and $app.ingress $app.ingress.tlsEnabled (ne $app.ingress.tlsEnabled false) $app.ingress.tlsSecretName }}
   tls:
     - secretName: {{ $app.ingress.tlsSecretName }}-{{ $.Values.global.environment }}
       hosts:
