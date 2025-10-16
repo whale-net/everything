@@ -696,3 +696,148 @@ func TestGenerateValuesYaml_DomainAppFormat(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildAppConfig_InternalAPIExposeIngress tests that exposeIngress defaults to false for internal-api
+func TestBuildAppConfig_InternalAPIExposeIngress(t *testing.T) {
+	config := ChartConfig{
+		ChartName: "test-chart",
+		Version:   "1.0.0",
+		OutputDir: "/tmp",
+	}
+	composer := NewComposer(config, "/templates")
+
+	tests := []struct {
+		name               string
+		appType            string
+		expectExposeIngress bool
+	}{
+		{
+			name:               "Internal API defaults to exposeIngress false",
+			appType:            "internal-api",
+			expectExposeIngress: false,
+		},
+		{
+			name:               "External API has exposeIngress false",
+			appType:            "external-api",
+			expectExposeIngress: false,
+		},
+		{
+			name:               "Worker has exposeIngress false",
+			appType:            "worker",
+			expectExposeIngress: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			metadata := AppMetadata{
+				Name:        "test-app",
+				AppType:     tt.appType,
+				Registry:    "ghcr.io",
+				RepoName:    "test-app",
+				Version:     "v1.0.0",
+				Port:        8000,
+				ImageTarget: "test_app_image",
+			}
+
+			config, err := composer.buildAppConfig(metadata)
+			if err != nil {
+				t.Fatalf("buildAppConfig failed: %v", err)
+			}
+
+			if config.ExposeIngress != tt.expectExposeIngress {
+				t.Errorf("Expected ExposeIngress=%v, got %v", tt.expectExposeIngress, config.ExposeIngress)
+			}
+		})
+	}
+}
+
+// TestWriteValuesYAML_InternalAPIExposeIngress tests that internal-api includes exposeIngress in values.yaml
+func TestWriteValuesYAML_InternalAPIExposeIngress(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "values-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	valuesFile := filepath.Join(tmpDir, "values.yaml")
+	f, err := os.Create(valuesFile)
+	if err != nil {
+		t.Fatalf("Failed to create values file: %v", err)
+	}
+	defer f.Close()
+
+	// Create test data with internal-api app
+	data := ValuesData{
+		Global: GlobalConfig{
+			Namespace:   "test-ns",
+			Environment: "dev",
+		},
+		Apps: map[string]AppConfig{
+			"test-internal-api": {
+				Type:          "internal-api",
+				Image:         "test-internal-api",
+				ImageTag:      "latest",
+				Port:          8080,
+				Replicas:      2,
+				ExposeIngress: false,
+				Resources: ValuesResourceConfig{
+					Requests: ResourceValues{CPU: "50m", Memory: "64Mi"},
+					Limits:   ResourceValues{CPU: "100m", Memory: "256Mi"},
+				},
+			},
+			"test-external-api": {
+				Type:     "external-api",
+				Image:    "test-external-api",
+				ImageTag: "latest",
+				Port:     8080,
+				Replicas: 2,
+				Resources: ValuesResourceConfig{
+					Requests: ResourceValues{CPU: "50m", Memory: "64Mi"},
+					Limits:   ResourceValues{CPU: "100m", Memory: "256Mi"},
+				},
+			},
+		},
+		IngressDefaults: IngressDefaultsConfig{
+			Enabled: true,
+		},
+	}
+
+	if err := writeValuesYAML(f, data); err != nil {
+		t.Fatalf("Failed to write values: %v", err)
+	}
+	f.Close()
+
+	// Read and verify
+	content, err := os.ReadFile(valuesFile)
+	if err != nil {
+		t.Fatalf("Failed to read values file: %v", err)
+	}
+
+	valuesContent := string(content)
+
+	// Verify internal-api has exposeIngress field
+	if !contains(valuesContent, "test-internal-api:") {
+		t.Error("Expected test-internal-api in values.yaml")
+	}
+	if !contains(valuesContent, "exposeIngress: false") {
+		t.Error("Expected 'exposeIngress: false' for internal-api in values.yaml")
+	}
+
+	// Verify external-api does NOT have exposeIngress field (should not appear for external-api)
+	lines := strings.Split(valuesContent, "\n")
+	inExternalAPISection := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "test-external-api:") {
+			inExternalAPISection = true
+		}
+		if inExternalAPISection && strings.HasPrefix(trimmed, "test-") {
+			// Moved to next section
+			inExternalAPISection = false
+		}
+		if inExternalAPISection && strings.Contains(line, "exposeIngress:") {
+			t.Error("exposeIngress should not appear for external-api apps")
+		}
+	}
+}
