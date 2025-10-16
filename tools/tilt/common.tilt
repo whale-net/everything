@@ -1,0 +1,748 @@
+# Common Tilt utilities for Everything monorepo
+# 
+# This file provides shared functions and utilities that can be loaded
+# by domain-specific Tiltfiles.
+#
+# Usage in a domain Tiltfile:
+#   load('../../tools/tilt/common.tilt', 'bazel_build_image', 'setup_dev_util')
+
+# Load extensions at module level (required by Starlark)
+load('ext://helm_resource', 'helm_resource', 'helm_repo')
+
+# ===========================
+# Helper Functions
+# ===========================
+
+def _flatten_dict(d, prefix=''):
+    """
+    Flatten a nested dictionary into dot-notation keys.
+    
+    Internal helper used by helm deployment functions.
+    
+    Args:
+        d: Dictionary to flatten
+        prefix: Current key prefix
+        
+    Returns:
+        List of '--set=key=value' strings
+    """
+    result = []
+    for key, value in d.items():
+        full_key = '{}.{}'.format(prefix, key) if prefix else key
+        if type(value) == 'dict':
+            result.extend(_flatten_dict(value, full_key))
+        else:
+            result.append('--set={}={}'.format(full_key, value))
+    return result
+
+def _merge_nested_dict(target, key, value):
+    """
+    Merge a value into a nested dictionary using dot notation.
+    
+    Internal helper for building helm values.
+    
+    Args:
+        target: Target dictionary
+        key: Key (may contain dots for nesting)
+        value: Value to set
+    """
+    if '.' in key:
+        parts = key.split('.')
+        current = target
+        for part in parts[:-1]:
+            if part not in current:
+                current[part] = {}
+            current = current[part]
+        current[parts[-1]] = value
+    else:
+        target[key] = value
+
+# ===========================
+# Bazel Image Building
+# ===========================
+
+def build_images_from_apps(apps_dict, watch_paths, platform='linux/arm64'):
+    """
+    Build container images for all enabled apps using Bazel.
+    
+    Args:
+        apps_dict: Dict of app configurations with structure:
+            {
+                'app-name': {
+                    'enabled_env': 'ENABLE_APP_NAME',  # Optional
+                    'bazel_target': '//path:target_image_load',
+                    'image_name': 'domain-app-name',
+                }
+            }
+        watch_paths: Paths to watch for changes (string or list)
+        platform: Target platform (linux/arm64 or linux/amd64)
+        
+    Example:
+        build_images_from_apps(APPS, watch_paths, platform)
+    """
+    # Map platform to Bazel platform
+    platform_map = {
+        'linux/arm64': '//tools:linux_arm64',
+        'linux/amd64': '//tools:linux_x86_64',
+    }
+    bazel_platform = platform_map.get(platform, '//tools:linux_arm64')
+    
+    # Ensure watch_paths is a list
+    if type(watch_paths) == 'string':
+        watch_paths = [watch_paths]
+    
+    print("\n🏗️  Building images:")
+    for app_name, config in apps_dict.items():
+        enabled_env = config.get('enabled_env', '')
+        if not enabled_env or get_env_bool(enabled_env, default='true'):
+            print("  ✓ {}".format(config['image_name']))
+            
+            # Custom build command that uses Bazel to build and load image
+            # Bazel loads as image_name:latest, then we tag it with Tilt's expected ref
+            # $EXPECTED_REF is set by Tilt to the tag it expects
+            custom_build(
+                config['image_name'],
+                'bazel run {} --platforms={} && docker tag {}:latest $EXPECTED_REF'.format(
+                    config['bazel_target'], bazel_platform, config['image_name']
+                ),
+                deps=watch_paths,
+                skips_local_docker=False,
+                disable_push=True,
+            )
+        else:
+            print("  ✗ {} (disabled)".format(config['image_name']))
+
+def bazel_build_image(app_name, watch_paths, bazel_target, platform='linux/arm64'):
+    """
+    Build a container image using Bazel and load it into Docker.
+    
+    This function uses Bazel's cross-compilation support to build images
+    for the correct architecture.
+    
+    Args:
+        app_name: Name of the app for the image tag
+        watch_paths: Paths to watch for changes (can be string or list)
+        bazel_target: Bazel target for the image (e.g., //path/to/app:app_image_load)
+        platform: Target platform (linux/arm64 or linux/amd64)
+        
+    Example:
+        bazel_build_image(
+            'my-api',
+            ['./src', './libs/python'],
+            '//my-domain:my_api_image_load',
+            platform=detect_platform()
+        )
+    """
+    # Map platform to Bazel platform
+    platform_map = {
+        'linux/arm64': '//tools:linux_arm64',
+        'linux/amd64': '//tools:linux_x86_64',
+    }
+    bazel_platform = platform_map.get(platform, '//tools:linux_arm64')
+    
+    # Ensure watch_paths is a list
+    if type(watch_paths) == 'string':
+        watch_paths = [watch_paths]
+    
+    # Custom build command that uses Bazel and tags for Tilt
+    # Tilt sets $EXPECTED_REF which is the full image:tag that it expects
+    custom_build(
+        app_name,
+        'bazel run {} --platforms={} && docker tag {}:latest $EXPECTED_REF'.format(
+            bazel_target, bazel_platform, app_name
+        ),
+        watch_paths,
+        skips_local_docker=False,
+        disable_push=True,
+    )
+
+def detect_platform():
+    """
+    Auto-detect the platform based on host architecture.
+    
+    Returns:
+        'linux/arm64' for ARM Macs, 'linux/amd64' for Intel
+    """
+    arch = str(local('uname -m')).strip()
+    return 'linux/arm64' if arch == 'arm64' else 'linux/amd64'
+
+def get_bazel_platform(platform='auto'):
+    """
+    Get the Bazel platform string for a given platform.
+    
+    Args:
+        platform: 'auto', 'linux/arm64', or 'linux/amd64'
+        
+    Returns:
+        Bazel platform string (e.g., '//tools:linux_arm64')
+    """
+    if platform == 'auto':
+        platform = detect_platform()
+    
+    platform_map = {
+        'linux/arm64': '//tools:linux_arm64',
+        'linux/amd64': '//tools:linux_x86_64',
+    }
+    return platform_map.get(platform, '//tools:linux_arm64')
+
+def get_watch_paths(domain):
+    """
+    Get watch paths for a domain.
+    
+    Simple approach: Watch entire domain directory and shared libraries.
+    Favors false positives (rebuilds) over false negatives (missed changes).
+    
+    Args:
+        domain: Domain name (e.g., 'manman', 'friendly_computing_machine')
+        
+    Returns:
+        List of paths to watch
+        
+    Example:
+        watch_paths = get_watch_paths('manman')
+        # Returns: ['./manman', './libs/python', './libs/go']
+    """
+    return [
+        './{}'.format(domain),
+        './libs/python',
+        './libs/go',
+    ]
+
+# ===========================
+# Infrastructure Setup
+# ===========================
+
+def setup_dev_util(namespace):
+    """
+    Setup the dev-util helm repository.
+    
+    This repository contains shared development services like postgres,
+    rabbitmq, and otelcollector.
+    
+    Args:
+        namespace: Kubernetes namespace to use
+        
+    Example:
+        setup_dev_util('my-domain-dev')
+    """
+    helm_repo('dev-util', 'https://whale-net.github.io/dev-util')
+
+def setup_postgres(namespace, db_name='default', resource_name='postgres-dev', port_forward=True):
+    """
+    Setup PostgreSQL using dev-util helm chart.
+    
+    Args:
+        namespace: Kubernetes namespace
+        db_name: Database name to create
+        resource_name: K8s resource name
+        port_forward: Whether to forward port 5432
+        
+    Returns:
+        Dict with connection info:
+        {
+            'url': 'postgresql+psycopg2://...',
+            'host': 'postgres-dev.namespace.svc.cluster.local',
+            'port': '5432',
+            'user': 'postgres',
+            'password': 'password',
+            'database': 'dbname',
+            'service_info': 'localhost:5432 (user: postgres, pass: password)',
+        }
+        
+    Example:
+        db_info = setup_postgres('my-domain-dev', db_name='myapp')
+        db_url = db_info['url']
+    """
+    helm_resource(resource_name, 'dev-util/postgres-dev',
+        resource_deps=['dev-util'],
+        flags=[
+            '--set=postgresDB={}'.format(db_name),
+            '--set=namespace={}'.format(namespace)
+        ]
+    )
+    
+    if port_forward:
+        k8s_resource(workload=resource_name, port_forwards='5432:5432')
+    
+    host = '{}.{}.svc.cluster.local'.format(resource_name, namespace)
+    
+    return {
+        'url': 'postgresql+psycopg2://postgres:password@{}:5432/{}'.format(host, db_name),
+        'host': host,
+        'port': '5432',
+        'user': 'postgres',
+        'password': 'password',
+        'database': db_name,
+        'service_info': 'localhost:5432 (user: postgres, pass: password)',
+    }
+
+def setup_rabbitmq(namespace, resource_name='rabbitmq-dev', port_forward=True):
+    """
+    Setup RabbitMQ using dev-util helm chart.
+    
+    Args:
+        namespace: Kubernetes namespace
+        resource_name: K8s resource name
+        port_forward: Whether to forward ports 5672 and 15672
+        
+    Returns:
+        Dict with connection info:
+        {
+            'host': 'rabbitmq-dev.namespace.svc.cluster.local',
+            'port': '5672',
+            'user': 'rabbit',
+            'password': 'password',
+            'service_info': 'localhost:5672 (user: rabbit, pass: password)',
+            'mgmt_service_info': 'http://localhost:15672',
+        }
+        
+    Example:
+        rmq_info = setup_rabbitmq('my-domain-dev')
+        rmq_host = rmq_info['host']
+    """
+    
+    helm_resource(resource_name, 'dev-util/rabbitmq-dev',
+        resource_deps=['dev-util'],
+        flags=['--set=namespace={}'.format(namespace)]
+    )
+    
+    if port_forward:
+        k8s_resource(workload=resource_name, port_forwards='5672:5672')
+        k8s_resource(workload=resource_name, port_forwards='15672:15672')
+    
+    return {
+        'host': '{}.{}.svc.cluster.local'.format(resource_name, namespace),
+        'port': '5672',
+        'user': 'rabbit',
+        'password': 'password',
+        'service_info': 'localhost:5672 (user: rabbit, pass: password)',
+        'mgmt_service_info': 'http://localhost:15672',
+    }
+
+def setup_otelcollector(namespace, resource_name='otelcollector-dev'):
+    """
+    Setup OpenTelemetry Collector using dev-util helm chart.
+    
+    Args:
+        namespace: Kubernetes namespace
+        resource_name: K8s resource name
+        
+    Returns:
+        OTLP endpoint URL
+        
+    Example:
+        otlp_endpoint = setup_otelcollector('my-domain-dev')
+    """
+    
+    helm_resource(resource_name, 'dev-util/otelcollector-dev',
+        resource_deps=['dev-util'],
+        flags=['--set=namespace={}'.format(namespace)]
+    )
+    
+    return 'http://otel-collector.{}.svc.cluster.local:4317'.format(namespace)
+
+def setup_nginx_ingress(ingress_class='nginx', http_port=30080, https_port=30443):
+    """
+    Setup Nginx Ingress Controller for local development.
+    
+    Args:
+        ingress_class: Ingress class name
+        http_port: NodePort for HTTP (default: 30080)
+        https_port: NodePort for HTTPS (default: 30443)
+        
+    Example:
+        setup_nginx_ingress(ingress_class='my-domain-nginx')
+    """
+    
+    helm_repo('ingress-nginx', 'https://kubernetes.github.io/ingress-nginx')
+    helm_resource('{}-ingress'.format(ingress_class), 'ingress-nginx/ingress-nginx',
+        namespace='ingress-nginx',
+        flags=[
+            '--create-namespace',
+            '--set=controller.service.type=NodePort',
+            '--set=controller.hostPort.enabled=true',
+            '--set=controller.service.nodePorts.http={}'.format(http_port),
+            '--set=controller.service.nodePorts.https={}'.format(https_port),
+            '--set=controller.admissionWebhooks.enabled=false',
+            '--set=controller.ingressClassResource.name={}'.format(ingress_class),
+            '--set=controller.ingressClass={}'.format(ingress_class)
+        ]
+    )
+
+# ===========================
+# Helm Deployment
+# ===========================
+
+def build_apps_config(apps_dict, domain, env_vars={}):
+    """
+    Build apps configuration for Helm deployment.
+    
+    Converts APPS dict to the format expected by deploy_helm_chart().
+    All apps receive the same environment variables.
+    
+    Args:
+        apps_dict: Dict of app configurations (same structure as APPS)
+        domain: Domain name for generating helm keys
+        env_vars: Dict of environment variables to set for all apps
+        
+    Returns:
+        Dict suitable for passing to deploy_helm_chart() as apps_config
+        
+    Example:
+        apps_config = build_apps_config(
+            APPS,
+            'manman',
+            env_vars={
+                'POSTGRES_URL': db_url,
+                'RABBITMQ_HOST': rmq_host,
+                'RABBITMQ_PORT': '5672',
+            }
+        )
+        # Then customize as needed:
+        apps_config['my-api']['helm_config']['ingress.tlsEnabled'] = 'false'
+    """
+    apps_config = {}
+    
+    for app_name, config in apps_dict.items():
+        app_key = '{}-{}'.format(domain, app_name)
+        
+        apps_config[app_name] = {
+            'enabled_env': config.get('enabled_env', ''),
+            'image_name': config['image_name'],
+            'helm_key': app_key,
+            'env': dict(env_vars),  # Copy to avoid mutation
+            'helm_config': {},
+        }
+    
+    return apps_config
+
+def deploy_helm_chart(domain, namespace, chart_bazel_target, chart_name, apps_config, global_config={}):
+    """
+    Deploy a Bazel-generated Helm chart using helm_resource().
+    
+    This function handles:
+    1. Building a Helm chart with Bazel
+    2. Setting global configuration
+    3. Configuring per-app settings (images, environment variables)
+    4. Deploying via helm_resource()
+    
+    Args:
+        domain: Domain name (e.g., 'manman', 'friendly_computing_machine')
+        namespace: Kubernetes namespace
+        chart_bazel_target: Bazel target for the chart (e.g., '//manman:manman_chart')
+        chart_name: Name of the generated chart (e.g., 'manman-host-services')
+        apps_config: Dict of app configurations with structure:
+            {
+                'app-name': {
+                    'enabled_env': 'ENABLE_APP_NAME',  # Optional, defaults to True
+                    'image_name': 'domain-app-name',
+                    'env': {  # Environment variables to set
+                        'VAR_NAME': 'value',
+                    },
+                    'helm_config': {  # Additional helm config
+                        'ingress.tlsEnabled': 'false',
+                    }
+                }
+            }
+        global_config: Dict of global helm values to set
+            {
+                'ingressDefaults.enabled': 'true',
+                'ingressDefaults.className': 'nginx',
+                'someOtherGlobal': 'value',
+            }
+    
+    Returns:
+        None (deploys to k8s via helm_resource)
+        
+    Example:
+        deploy_helm_chart(
+            'manman',
+            'manman-local-dev',
+            '//manman:manman_chart',
+            'manman-host-services',
+            apps_config={...},
+            global_config={...}
+        )
+    """
+    # Build the Helm chart using Bazel
+    local('bazel build {}'.format(chart_bazel_target))
+    
+    # Extract chart path from Bazel target
+    domain_path = chart_bazel_target.replace('//', '').split(':')[0]
+    relative_chart_path = 'bazel-bin/{}/helm-{}_chart/{}'.format(
+        domain_path,
+        chart_name,
+        chart_name
+    )
+    
+    # Bazel runs from repo root, so use bazel info to get the correct path
+    workspace_root = str(local('bazel info workspace', quiet=True)).strip()
+    chart_path = '{}/{}'.format(workspace_root, relative_chart_path)
+    
+    # Build helm values dict
+    helm_values = {
+        'global': {
+            'environment': 'dev',
+            'domain': domain,
+            'namespace': namespace,
+        }
+    }
+    
+    # Add user-provided global config
+    for key, value in global_config.items():
+        _merge_nested_dict(helm_values, key, value)
+    
+    # Configure each app
+    helm_values['apps'] = {}
+    for app_name, config in apps_config.items():
+        # Check if app is enabled
+        enabled_env = config.get('enabled_env')
+        if enabled_env and not get_env_bool(enabled_env, default='true'):
+            continue
+        
+        # Determine helm key
+        app_key = config.get('helm_key', '{}-{}'.format(domain, app_name))
+        image_name = config.get('image_name', app_key)
+        
+        # Build app config
+        # When using image_keys with a single element list, Tilt injects full image:tag
+        # The helm template will still try to append :{{ imageTag }}, so we need special handling
+        # For now, we'll include both image and imageTag in the injection
+        app_helm_config = {
+            'image': image_name,
+            'imageTag': 'latest',  # Will be overridden by Tilt
+        }
+        
+        # Environment variables
+        env_vars = config.get('env', {})
+        if env_vars:
+            app_helm_config['env'] = env_vars
+        
+        # Additional helm configuration
+        helm_config = config.get('helm_config', {})
+        for helm_key, helm_value in helm_config.items():
+            _merge_nested_dict(app_helm_config, helm_key, helm_value)
+        
+        helm_values['apps'][app_key] = app_helm_config
+    
+    print("\n🔨 Deploying with Helm...")
+    print("   Chart:     {}".format(chart_path))
+    print("   Namespace: {}".format(namespace))
+    
+    # Collect image dependencies for resource ordering
+    image_deps = []
+    for app_name, config in apps_config.items():
+        enabled_env = config.get('enabled_env')
+        if enabled_env and not get_env_bool(enabled_env, default='true'):
+            continue
+        image_name = config.get('image_name')
+        if image_name:
+            image_deps.append(image_name)
+    
+    print("\n🔨 Deploying with Helm...")
+    print("   Chart:     {}".format(chart_path))
+    print("   Namespace: {}".format(namespace))
+    
+    # Use helm template to render the chart, then apply with k8s_yaml
+    # This is simpler and Tilt can discover images automatically
+    helm_set_args = _flatten_dict(helm_values)
+    # _flatten_dict already includes '--set=' prefix, just join them
+    helm_set_flags = ' '.join(helm_set_args)
+    
+    # Debug: print first few set args  
+    print("   Set args:  {} (showing first 100 chars)".format(helm_set_flags[:100]))
+    
+    # Render helm template
+    helm_cmd = 'helm template {} {} --namespace {} {}'.format(
+        domain,
+        chart_path,
+        namespace,
+        helm_set_flags
+    )
+    print("   Running helm template...")
+    yaml = local(helm_cmd)
+    print("   ✓ Helm template rendered")
+    
+    # Deploy the rendered YAML
+    k8s_yaml(yaml)
+    
+    # Group k8s resources by image name for better UX
+    for app_name, config in apps_config.items():
+        enabled_env = config.get('enabled_env')
+        if enabled_env and not get_env_bool(enabled_env, default='true'):
+            continue
+        
+        image_name = config.get('image_name')
+        if image_name:
+            # K8s resources have -dev suffix, group them with the image build
+            k8s_resource(
+                workload='{}-dev'.format(image_name),
+                new_name=image_name,
+                resource_deps=[],
+            )
+
+# ===========================
+# Configuration Helpers
+# ===========================
+
+def get_env_bool(key, default='false'):
+    """
+    Get a boolean environment variable.
+    
+    Args:
+        key: Environment variable name
+        default: Default value if not set
+        
+    Returns:
+        Boolean value
+        
+    Example:
+        if get_env_bool('ENABLE_FEATURE'):
+            print("Feature enabled")
+    """
+    return os.environ.get(key, default).lower() == 'true'
+
+def get_custom_or_default(custom_env_key, custom_value_key, default_value):
+    """
+    Get a custom value if custom mode is enabled, otherwise use default.
+    
+    This pattern is useful for allowing external infrastructure in development.
+    
+    Args:
+        custom_env_key: Environment variable to check for custom mode (e.g., 'BUILD_POSTGRES_ENV')
+        custom_value_key: Environment variable with custom value (e.g., 'POSTGRES_URL')
+        default_value: Default value to use
+        
+    Returns:
+        Custom value if custom mode, otherwise default
+        
+    Example:
+        db_url = get_custom_or_default(
+            'BUILD_POSTGRES_ENV',
+            'POSTGRES_URL',
+            'postgresql://localhost:5432/mydb'
+        )
+    """
+    if os.environ.get(custom_env_key, 'default') == 'custom':
+        return os.environ.get(custom_value_key, default_value)
+    return default_value
+
+# ===========================
+# Output Helpers
+# ===========================
+
+def print_service_info(title, services):
+    """
+    Print formatted service information.
+    
+    Args:
+        title: Section title
+        services: Dict of service_name -> url
+        
+    Example:
+        print_service_info("APIs", {
+            "Experience API": "http://localhost:8000/api",
+            "Admin API": "http://localhost:8001/admin"
+        })
+    """
+    print("\n" + "="*60)
+    print(title)
+    print("="*60)
+    for name, url in services.items():
+        print("  {}: {}".format(name, url))
+
+def print_startup_banner(domain_name, namespace, platform):
+    """
+    Print a startup banner with configuration info.
+    
+    Args:
+        domain_name: Name of the domain
+        namespace: Kubernetes namespace
+        platform: Target platform
+        
+    Example:
+        print_startup_banner("ManMan", "manman-dev", "linux/arm64")
+    """
+    print("\n" + "="*60)
+    print("🐳 {} Development Environment".format(domain_name))
+    print("="*60)
+    print("📦 Namespace: {}".format(namespace))
+    print("🏗️  Platform:  {}".format(platform))
+    print("="*60 + "\n")
+
+def print_access_info(domain_name, apps_dict, ingress_port=30080, additional_services={}):
+    """
+    Print access information for services and infrastructure.
+    
+    Args:
+        domain_name: Name of the domain (used for constructing hostnames)
+        apps_dict: Dict of app configurations (checks enabled_env for each)
+        ingress_port: Port where ingress is accessible (default: 30080)
+        additional_services: Dict of additional services to display
+            {
+                'Service Name': 'Access info or URL',
+            }
+    
+    Example:
+        print_access_info(
+            'manman',
+            APPS,
+            ingress_port=30080,
+            additional_services={
+                'PostgreSQL': 'localhost:5432 (user: postgres, pass: password)',
+                'RabbitMQ Management': 'http://localhost:15672',
+            }
+        )
+    """
+    services = {}
+    
+    # Check for external-api apps (those that would have ingress)
+    for app_name, config in apps_dict.items():
+        if get_env_bool(config.get('enabled_env', ''), default='true'):
+            # Construct likely hostname based on app name
+            # This is a heuristic - could be made configurable
+            if 'api' in app_name or 'experience' in app_name:
+                app_parts = app_name.split('-')
+                if app_parts[0] == 'experience':
+                    hostname = 'experience'
+                elif app_parts[0] == 'worker' and 'dal' in app_name:
+                    hostname = 'dal'
+                elif app_parts[0] == 'status':
+                    hostname = 'status'
+                else:
+                    hostname = app_parts[0]
+                
+                services['{} (via curl)'.format(config['image_name'])] = \
+                    'curl -H "Host: {}.{}.local" http://localhost:{}/docs'.format(
+                        hostname, domain_name, ingress_port
+                    )
+    
+    # Add additional services
+    services.update(additional_services)
+    
+    if services:
+        print_service_info("📡 Access Information", services)
+
+def print_footer_info(domain_name):
+    """
+    Print footer with useful commands and tips.
+    
+    Args:
+        domain_name: Name of the domain
+    
+    Example:
+        print_footer_info('manman')
+    """
+    print("\n📝 Useful Commands:")
+    print("   View logs:          tilt logs <resource-name>")
+    print("   Restart resource:   tilt trigger <resource-name>")
+    
+    print("\n💡 Configuration Tips:")
+    print("   - Use .env file for environment variables")
+    print("   - Set BUILD_POSTGRES_ENV=custom for external postgres")
+    print("   - Set BUILD_RABBITMQ_ENV=custom for external rabbitmq")
+    print("   - Set ENABLE_<SERVICE>=false to disable services")
+    print("   - Run 'tilt down' to stop all services")
+    
+    print("\n" + "="*60 + "\n")
+

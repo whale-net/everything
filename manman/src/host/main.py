@@ -217,10 +217,10 @@ def create_worker_dal_app():
 
 @app.command()
 def start_experience_api(
-    rabbitmq_host: Annotated[str, typer.Option(envvar="MANMAN_RABBITMQ_HOST")],
-    rabbitmq_port: Annotated[int, typer.Option(envvar="MANMAN_RABBITMQ_PORT")],
-    rabbitmq_username: Annotated[str, typer.Option(envvar="MANMAN_RABBITMQ_USER")],
-    rabbitmq_password: Annotated[str, typer.Option(envvar="MANMAN_RABBITMQ_PASSWORD")],
+    rabbitmq_host: Annotated[str, typer.Option(envvar="RABBITMQ_HOST")],
+    rabbitmq_port: Annotated[int, typer.Option(envvar="RABBITMQ_PORT")],
+    rabbitmq_username: Annotated[str, typer.Option(envvar="RABBITMQ_USER")],
+    rabbitmq_password: Annotated[str, typer.Option(envvar="RABBITMQ_PASSWORD")],
     app_env: Annotated[Optional[str], typer.Option(envvar="APP_ENV")] = None,
     port: int = 8000,
     workers: Annotated[
@@ -234,15 +234,15 @@ def start_experience_api(
     ] = True,
     should_run_migration_check: Optional[bool] = True,
     enable_ssl: Annotated[
-        bool, typer.Option(envvar="MANMAN_RABBITMQ_ENABLE_SSL")
+        bool, typer.Option(envvar="RABBITMQ_ENABLE_SSL")
     ] = False,
     rabbitmq_ssl_hostname: Annotated[
-        str, typer.Option(envvar="MANMAN_RABBITMQ_SSL_HOSTNAME")
+        str, typer.Option(envvar="RABBITMQ_SSL_HOSTNAME")
     ] = None,
     log_otlp: Annotated[
         bool,
         typer.Option(
-            envvar="MANMAN_LOG_OTLP", help="Enable OpenTelemetry OTLP logging"
+            envvar="LOG_OTLP", help="Enable OpenTelemetry OTLP logging"
         ),
     ] = False,
     create_vhost: Annotated[
@@ -285,10 +285,10 @@ def start_experience_api(
 
 @app.command()
 def start_status_api(
-    rabbitmq_host: Annotated[str, typer.Option(envvar="MANMAN_RABBITMQ_HOST")],
-    rabbitmq_port: Annotated[int, typer.Option(envvar="MANMAN_RABBITMQ_PORT")],
-    rabbitmq_username: Annotated[str, typer.Option(envvar="MANMAN_RABBITMQ_USER")],
-    rabbitmq_password: Annotated[str, typer.Option(envvar="MANMAN_RABBITMQ_PASSWORD")],
+    rabbitmq_host: Annotated[str, typer.Option(envvar="RABBITMQ_HOST")],
+    rabbitmq_port: Annotated[int, typer.Option(envvar="RABBITMQ_PORT")],
+    rabbitmq_username: Annotated[str, typer.Option(envvar="RABBITMQ_USER")],
+    rabbitmq_password: Annotated[str, typer.Option(envvar="RABBITMQ_PASSWORD")],
     app_env: Annotated[Optional[str], typer.Option(envvar="APP_ENV")] = None,
     port: int = 8000,
     workers: Annotated[
@@ -302,15 +302,15 @@ def start_status_api(
     ] = True,
     should_run_migration_check: Optional[bool] = True,
     enable_ssl: Annotated[
-        bool, typer.Option(envvar="MANMAN_RABBITMQ_ENABLE_SSL")
+        bool, typer.Option(envvar="RABBITMQ_ENABLE_SSL")
     ] = False,
     rabbitmq_ssl_hostname: Annotated[
-        str, typer.Option(envvar="MANMAN_RABBITMQ_SSL_HOSTNAME")
+        str, typer.Option(envvar="RABBITMQ_SSL_HOSTNAME")
     ] = None,
     log_otlp: Annotated[
         bool,
         typer.Option(
-            envvar="MANMAN_LOG_OTLP", help="Enable OpenTelemetry OTLP logging"
+            envvar="LOG_OTLP", help="Enable OpenTelemetry OTLP logging"
         ),
     ] = False,
     create_vhost: Annotated[
@@ -351,10 +351,10 @@ def start_status_api(
 
 @app.command()
 def start_worker_dal_api(
-    rabbitmq_host: Annotated[str, typer.Option(envvar="MANMAN_RABBITMQ_HOST")],
-    rabbitmq_port: Annotated[int, typer.Option(envvar="MANMAN_RABBITMQ_PORT")],
-    rabbitmq_username: Annotated[str, typer.Option(envvar="MANMAN_RABBITMQ_USER")],
-    rabbitmq_password: Annotated[str, typer.Option(envvar="MANMAN_RABBITMQ_PASSWORD")],
+    rabbitmq_host: Annotated[str, typer.Option(envvar="RABBITMQ_HOST")],
+    rabbitmq_port: Annotated[int, typer.Option(envvar="RABBITMQ_PORT")],
+    rabbitmq_username: Annotated[str, typer.Option(envvar="RABBITMQ_USER")],
+    rabbitmq_password: Annotated[str, typer.Option(envvar="RABBITMQ_PASSWORD")],
     app_env: Annotated[Optional[str], typer.Option(envvar="APP_ENV")] = None,
     port: int = 8000,
     workers: Annotated[
@@ -368,15 +368,15 @@ def start_worker_dal_api(
     ] = True,
     should_run_migration_check: Optional[bool] = True,
     enable_ssl: Annotated[
-        bool, typer.Option(envvar="MANMAN_RABBITMQ_ENABLE_SSL")
+        bool, typer.Option(envvar="RABBITMQ_ENABLE_SSL")
     ] = False,
     rabbitmq_ssl_hostname: Annotated[
-        str, typer.Option(envvar="MANMAN_RABBITMQ_SSL_HOSTNAME")
+        str, typer.Option(envvar="RABBITMQ_SSL_HOSTNAME")
     ] = None,
     log_otlp: Annotated[
         bool,
         typer.Option(
-            envvar="MANMAN_LOG_OTLP", help="Enable OpenTelemetry OTLP logging"
+            envvar="LOG_OTLP", help="Enable OpenTelemetry OTLP logging"
         ),
     ] = False,
     create_vhost: Annotated[
@@ -419,22 +419,22 @@ def start_worker_dal_api(
 
 @app.command()
 def start_status_processor(
-    rabbitmq_host: Annotated[str, typer.Option(envvar="MANMAN_RABBITMQ_HOST")],
-    rabbitmq_port: Annotated[int, typer.Option(envvar="MANMAN_RABBITMQ_PORT")],
-    rabbitmq_username: Annotated[str, typer.Option(envvar="MANMAN_RABBITMQ_USER")],
-    rabbitmq_password: Annotated[str, typer.Option(envvar="MANMAN_RABBITMQ_PASSWORD")],
+    rabbitmq_host: Annotated[str, typer.Option(envvar="RABBITMQ_HOST")],
+    rabbitmq_port: Annotated[int, typer.Option(envvar="RABBITMQ_PORT")],
+    rabbitmq_username: Annotated[str, typer.Option(envvar="RABBITMQ_USER")],
+    rabbitmq_password: Annotated[str, typer.Option(envvar="RABBITMQ_PASSWORD")],
     app_env: Annotated[Optional[str], typer.Option(envvar="APP_ENV")] = None,
     should_run_migration_check: Optional[bool] = True,
     enable_ssl: Annotated[
-        bool, typer.Option(envvar="MANMAN_RABBITMQ_ENABLE_SSL")
+        bool, typer.Option(envvar="RABBITMQ_ENABLE_SSL")
     ] = False,
     rabbitmq_ssl_hostname: Annotated[
-        str, typer.Option(envvar="MANMAN_RABBITMQ_SSL_HOSTNAME")
+        str, typer.Option(envvar="RABBITMQ_SSL_HOSTNAME")
     ] = None,
     log_otlp: Annotated[
         bool,
         typer.Option(
-            envvar="MANMAN_LOG_OTLP", help="Enable OpenTelemetry OTLP logging"
+            envvar="LOG_OTLP", help="Enable OpenTelemetry OTLP logging"
         ),
     ] = False,
     create_vhost: Annotated[
@@ -527,7 +527,7 @@ def run_downgrade(target: str):
 
 @app.callback()
 def callback(
-    db_connection_string: Annotated[str, typer.Option(envvar="MANMAN_POSTGRES_URL")],
+    db_connection_string: Annotated[str, typer.Option(envvar="POSTGRES_URL")],
 ):
     # Initialize database connection for CLI operations
     # Note: Logging will be configured by individual commands as needed
@@ -538,10 +538,10 @@ def callback(
 def _get_alembic_config():
     """Get Alembic configuration using consolidated library."""
     migrations_dir = str(files("manman.src.migrations"))
-    db_url = os.environ.get("MANMAN_POSTGRES_URL", "")
+    db_url = os.environ.get("POSTGRES_URL", "")
     
     if not db_url:
-        raise RuntimeError("MANMAN_POSTGRES_URL environment variable not set")
+        raise RuntimeError("POSTGRES_URL environment variable not set")
     
     return create_alembic_config(
         migrations_dir=migrations_dir,

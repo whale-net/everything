@@ -83,16 +83,16 @@ def dev():
 @app.callback()
 def callback(
     # auth_url: Annotated[str, typer.Option(envvar="MANMAN_AUTH_URL")],
-    rabbitmq_host: Annotated[str, typer.Option(envvar="MANMAN_RABBITMQ_HOST")],
-    rabbitmq_port: Annotated[int, typer.Option(envvar="MANMAN_RABBITMQ_PORT")],
-    rabbitmq_username: Annotated[str, typer.Option(envvar="MANMAN_RABBITMQ_USER")],
-    rabbitmq_password: Annotated[str, typer.Option(envvar="MANMAN_RABBITMQ_PASSWORD")],
+    rabbitmq_host: Annotated[str, typer.Option(envvar="RABBITMQ_HOST")],
+    rabbitmq_port: Annotated[int, typer.Option(envvar="RABBITMQ_PORT")],
+    rabbitmq_username: Annotated[str, typer.Option(envvar="RABBITMQ_USER")],
+    rabbitmq_password: Annotated[str, typer.Option(envvar="RABBITMQ_PASSWORD")],
     app_env: Annotated[Optional[str], typer.Option(envvar="APP_ENV")] = None,
     enable_ssl: Annotated[
-        bool, typer.Option(envvar="MANMAN_RABBITMQ_ENABLE_SSL")
+        bool, typer.Option(envvar="RABBITMQ_ENABLE_SSL")
     ] = False,
     rabbitmq_ssl_hostname: Annotated[
-        str, typer.Option(envvar="MANMAN_RABBITMQ_SSL_HOSTNAME")
+        str, typer.Option(envvar="RABBITMQ_SSL_HOSTNAME")
     ] = None,
 ):
     # Setup logging first

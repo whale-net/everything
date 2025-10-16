@@ -25,12 +25,12 @@ class TestStatusProcessor:
         """Setup test environment variables."""
         # Mock environment variables for testing
         test_env = {
-            "MANMAN_RABBITMQ_HOST": "localhost",
-            "MANMAN_RABBITMQ_PORT": "5672",
-            "MANMAN_RABBITMQ_USER": "guest",
-            "MANMAN_RABBITMQ_PASSWORD": "guest",
-            "MANMAN_RABBITMQ_ENABLE_SSL": "false",
-            "MANMAN_POSTGRES_URL": "postgresql+psycopg2://postgres:postgres@localhost:5432/manman_test",
+            "RABBITMQ_HOST": "localhost",
+            "RABBITMQ_PORT": "5672",
+            "RABBITMQ_USER": "guest",
+            "RABBITMQ_PASSWORD": "guest",
+            "RABBITMQ_ENABLE_SSL": "false",
+            "POSTGRES_URL": "postgresql+psycopg2://postgres:postgres@localhost:5432/manman_test",
             "APP_ENV": "test",
         }
 
