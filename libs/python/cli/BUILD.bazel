@@ -1,0 +1,15 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+package(default_visibility = ["//visibility:public"])
+
+py_library(
+    name = "cli",
+    srcs = [
+        "__init__.py",
+        "deps.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@pypi//typer",
+    ],
+)
