@@ -37,12 +37,23 @@ def parse_app_list(apps: str) -> list[str]:
         
     Returns:
         List of app names with whitespace stripped
+        
+    Raises:
+        ValueError: If apps is empty or None
     """
+    if not apps or not apps.strip():
+        raise ValueError("App list cannot be empty")
+    
     # Split by comma if present, otherwise split by whitespace
     if ',' in apps:
-        return [app.strip() for app in apps.split(',') if app.strip()]
+        result = [app.strip() for app in apps.split(',') if app.strip()]
     else:
-        return [app.strip() for app in apps.split() if app.strip()]
+        result = [app.strip() for app in apps.split() if app.strip()]
+    
+    if not result:
+        raise ValueError("App list resulted in no valid apps after parsing")
+    
+    return result
 
 
 @app.command()
