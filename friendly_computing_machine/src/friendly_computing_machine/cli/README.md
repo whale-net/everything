@@ -17,7 +17,7 @@ from typing import Annotated
 
 import typer
 
-from friendly_computing_machine.cli.deps import Depends, inject_dependencies
+from libs.python.cli.deps import Depends, inject_dependencies
 from friendly_computing_machine.cli.injectable import get_db_context
 from friendly_computing_machine.cli.context.db import DBContext
 
@@ -137,7 +137,7 @@ from typing import Annotated
 
 import typer
 
-from friendly_computing_machine.cli.deps import Depends, inject_dependencies
+from libs.python.cli.deps import Depends, inject_dependencies
 from friendly_computing_machine.cli.injectable import get_db_context
 from friendly_computing_machine.cli.context.db import DBContext
 from friendly_computing_machine.db.util import run_migration
@@ -178,7 +178,7 @@ from typing import Annotated
 
 import typer
 
-from friendly_computing_machine.cli.deps import injectable, Depends
+from libs.python.cli.deps import injectable, Depends
 from friendly_computing_machine.cli.injectable import get_db_context
 from friendly_computing_machine.cli.context.db import DBContext
 
@@ -261,7 +261,7 @@ If you have existing CLI code using the old callback pattern, see:
 
 1. Import DI system:
    ```python
-   from friendly_computing_machine.cli.deps import Depends, inject_dependencies
+   from libs.python.cli.deps import Depends, inject_dependencies
    from friendly_computing_machine.cli.injectable import get_db_context, ...
    ```
 

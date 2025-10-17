@@ -30,7 +30,7 @@ import typer
 from friendly_computing_machine.src.friendly_computing_machine.cli.context.db import (
     DBContext,
 )
-from friendly_computing_machine.src.friendly_computing_machine.cli.deps import (
+from libs.python.cli.deps import (
     Depends,
     inject_dependencies,
 )

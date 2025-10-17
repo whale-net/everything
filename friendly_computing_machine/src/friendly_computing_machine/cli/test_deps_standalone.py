@@ -35,7 +35,7 @@ class MockTyperModule:
 sys.modules['typer'] = MockTyperModule()
 
 # Now import our modules
-from friendly_computing_machine.src.friendly_computing_machine.cli.deps import (
+from libs.python.cli.deps import (
     Depends,
     inject_dependencies,
     injectable,

@@ -11,7 +11,7 @@ from unittest.mock import Mock
 import pytest
 import typer
 
-from friendly_computing_machine.src.friendly_computing_machine.cli.deps import (
+from libs.python.cli.deps import (
     Depends,
     inject_dependencies,
     injectable,

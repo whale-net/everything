@@ -8,7 +8,7 @@ annotation to enable automatic dependency injection.
 Example:
     ```python
     from friendly_computing_machine.cli.injectable import get_db_context
-    from friendly_computing_machine.cli.deps import Depends
+    from libs.python.cli.deps import Depends
     
     @app.command()
     def my_command(
@@ -77,7 +77,7 @@ from friendly_computing_machine.src.friendly_computing_machine.cli.context.tempo
     setup_temporal,
     FILENAME as TEMPORAL_FILENAME,
 )
-from friendly_computing_machine.src.friendly_computing_machine.cli.deps import (
+from libs.python.cli.deps import (
     Depends,
     injectable,
 )
