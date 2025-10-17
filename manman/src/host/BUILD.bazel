@@ -74,13 +74,21 @@ py_test(
     size = "small",
 )
 
-# Migration binary
+# Migration binaries
 py_binary(
     name = "migration",
     srcs = ["main.py"],
     main = "main.py",
     deps = [":host_main"],
     args = ["run-migration"],
+    visibility = ["//manman:__pkg__"],
+)
+
+py_binary(
+    name = "migration_cli",
+    srcs = ["main.py"],
+    main = "main.py",
+    deps = [":host_main"],
     visibility = ["//manman:__pkg__"],
 )
 

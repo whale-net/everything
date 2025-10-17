@@ -6,6 +6,7 @@ without requiring alembic.ini files. This is essential for containerized deploym
 
 import logging
 import os
+from pathlib import Path
 from typing import Optional
 
 import alembic.config
@@ -13,11 +14,30 @@ import alembic.config
 logger = logging.getLogger(__name__)
 
 
+def get_default_script_template() -> str:
+    """Get the path to the default script.py.mako template.
+    
+    Returns:
+        Absolute path to the bundled script.py.mako template
+    """
+    # Get the directory containing this config.py file
+    alembic_lib_dir = Path(__file__).parent
+    template_path = alembic_lib_dir / "script.py.mako"
+    
+    if not template_path.exists():
+        raise FileNotFoundError(
+            f"Default script template not found: {template_path}"
+        )
+    
+    return str(template_path)
+
+
 def create_alembic_config(
     migrations_dir: str,
     database_url: str,
     file_template: Optional[str] = None,
     version_table_schema: Optional[str] = "public",
+    script_template: Optional[str] = None,
 ) -> alembic.config.Config:
     """Create an Alembic configuration programmatically.
 
@@ -27,6 +47,8 @@ def create_alembic_config(
         file_template: Optional template for migration filenames.
             Default: "%%(year)d_%%(month).2d_%%(day).2d_%%(hour).2d%%(minute).2d-%%(rev)s_%%(slug)s"
         version_table_schema: Schema to store the alembic_version table. Default: "public"
+        script_template: Optional path to script.py.mako template.
+            If None, uses the library's default template.
 
     Returns:
         Configured alembic.config.Config object
@@ -64,10 +86,24 @@ def create_alembic_config(
         )
     config.set_main_option("file_template", file_template)
 
+    # Copy the library's default script template to the migrations directory
+    # Alembic expects script.py.mako to be in the migrations directory
+    if script_template is None:
+        script_template = get_default_script_template()
+        
+    # Copy the template to migrations directory if it doesn't exist or if we're using the default
+    migrations_template = os.path.join(migrations_dir, "script.py.mako")
+    if script_template == get_default_script_template():
+        # Always use the library template - copy it to migrations dir
+        import shutil
+        shutil.copy2(script_template, migrations_template)
+        logger.debug(f"Copied default script template to: {migrations_template}")
+
     # Store version_table_schema for use in env.py
     if version_table_schema:
         config.set_main_option("version_table_schema", version_table_schema)
 
     logger.debug(f"Created alembic config for migrations in: {migrations_dir}")
+    logger.debug(f"Using script template: {script_template}")
 
     return config
