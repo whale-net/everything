@@ -39,7 +39,7 @@ def parse_app_list(apps: str) -> list[str]:
         List of app names with whitespace stripped
         
     Raises:
-        ValueError: If apps is empty or None
+        ValueError: If apps is empty, None, or results in no valid apps
     """
     if not apps or not apps.strip():
         raise ValueError("App list cannot be empty")
