@@ -236,7 +236,7 @@ def plan(
 
 @app.command()
 def plan_openapi_builds(
-    apps: Annotated[str, typer.Option(help="Comma-separated list of apps to check for OpenAPI specs")],
+    apps: Annotated[str, typer.Option(help="Space or comma-separated list of apps to check for OpenAPI specs")],
     format: Annotated[str, typer.Option(help="Output format (json or github)")] = "github",
 ):
     """Plan OpenAPI spec builds for apps that have fastapi_app configured.
@@ -248,8 +248,12 @@ def plan_openapi_builds(
         typer.echo("Error: format must be one of: json, github", err=True)
         raise typer.Exit(1)
     
-    # Parse app list
-    app_list = [app.strip() for app in apps.split(',') if app.strip()]
+    # Parse app list - handle both space and comma separated formats
+    # First try splitting by comma, if that doesn't work, split by whitespace
+    if ',' in apps:
+        app_list = [app.strip() for app in apps.split(',') if app.strip()]
+    else:
+        app_list = [app.strip() for app in apps.split() if app.strip()]
     
     # Filter to apps with OpenAPI spec targets
     # Use validate_apps to handle all naming formats and detect ambiguity
@@ -492,7 +496,11 @@ def create_combined_github_release_with_notes(
         
         # Determine which apps to include
         if apps:
-            app_list = [app.strip() for app in apps.split(',')]
+            # Handle both comma and space-separated formats for flexibility
+            if ',' in apps:
+                app_list = [app.strip() for app in apps.split(',') if app.strip()]
+            else:
+                app_list = [app.strip() for app in apps.split() if app.strip()]
         else:
             # Get all apps
             all_apps = list_all_apps()
