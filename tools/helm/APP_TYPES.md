@@ -9,11 +9,13 @@ The helm chart system supports 4 app types, each generating different Kubernetes
 | App Type | Deployment | Service | Ingress | PDB | Job | Use Case |
 |----------|-----------|---------|---------|-----|-----|----------|
 | `external-api` | ✅ | ✅ | ✅ | ✅ | ❌ | Public HTTP APIs (REST, GraphQL) |
-| `internal-api` | ✅ | ✅ | ❌ | ✅ | ❌ | Internal HTTP services |
+| `internal-api` | ✅ | ✅ | ⚙️ Optional* | ✅ | ❌ | Internal HTTP services |
 | `worker` | ✅ | ❌ | ❌ | ✅ | ❌ | Background processors (queues, streams) |
 | `job` | ❌ | ❌ | ❌ | ❌ | ✅ | One-time or scheduled batch tasks |
 
 **Note**: All app types generate ConfigMap resources automatically. PDB (PodDisruptionBudget) generation is controlled by the `pdb.enabled` flag.
+
+*For `internal-api`: Ingress is optional and can be enabled by setting `exposeIngress: true` in values.yaml (useful for debugging/testing)
 
 ## 1. external-api
 
@@ -183,10 +185,13 @@ Internal HTTP services for cluster-internal communication only.
 
 - **Deployment**: Application pods with configurable replicas
 - **Service**: ClusterIP service for internal routing
+- **Ingress**: Optional - can be exposed externally via `exposeIngress: true` (useful for debugging)
 - **PDB**: Pod disruption budget (if `pdb.enabled: true`)
 - **ConfigMap**: Environment variables
 
-**Not Generated**: No Ingress (cluster-internal only)
+**Default Behavior**: No Ingress generated (cluster-internal only)
+
+**Optional**: Set `exposeIngress: true` to expose the internal API externally via Ingress
 
 ### When to Use
 
@@ -275,6 +280,7 @@ apps:
     image: "user_service:latest"
     replicas: 1
     port: 9000
+    exposeIngress: false  # Set to true to expose via Ingress for debugging
     resources:
       requests:
         memory: "128Mi"
@@ -283,6 +289,32 @@ apps:
         memory: "256Mi"
         cpu: "200m"
 ```
+
+### Exposing Internal APIs for Debugging
+
+By default, internal-api apps are not exposed externally. However, for debugging or development purposes, you can expose them via Ingress:
+
+**Option 1: Override in values.yaml**
+```yaml
+apps:
+  user_service:
+    exposeIngress: true  # Expose this internal API externally
+    ingress:
+      host: user-service-debug.example.com
+      tlsSecretName: user-service-tls
+```
+
+**Option 2: Helm command line**
+```bash
+helm install my-app ./chart/ \
+  --set apps.user_service.exposeIngress=true
+```
+
+When `exposeIngress: true` is set:
+- An Ingress resource is generated for the internal-api app
+- The app becomes accessible from outside the cluster
+- Useful for direct API testing and debugging
+- Should typically be `false` in production environments
 
 ### ArgoCD Sync-Wave
 

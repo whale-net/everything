@@ -9,15 +9,15 @@ import unittest
 from unittest.mock import Mock, call, patch
 
 from manman.src.constants import EntityRegistry
-from manman.src.repository.rabbitmq.config import (
+from libs.python.rmq import (
     BindingConfig,
     ExchangeRegistry,
     MessageTypeRegistry,
     QueueConfig,
+    RabbitSubscriber,
     RoutingKeyConfig,
     TopicWildcard,
 )
-from manman.src.repository.rabbitmq.subscriber import RabbitSubscriber
 
 
 class TestRabbitSubscriberMultipleExchanges(unittest.TestCase):
@@ -33,7 +33,7 @@ class TestRabbitSubscriberMultipleExchanges(unittest.TestCase):
         self.mock_channel.queue.declare.return_value = {"queue": "test-queue-123"}
         self.mock_channel.basic.consume.return_value = "consumer-tag-123"
 
-    @patch("manman.src.repository.rabbitmq.subscriber.threading.Thread")
+    @patch("libs.python.rmq.subscriber.threading.Thread")
     def test_single_binding_config(self, mock_thread):
         """Test RabbitSubscriber with single binding configuration."""
         # Arrange
@@ -71,7 +71,7 @@ class TestRabbitSubscriberMultipleExchanges(unittest.TestCase):
             routing_key=str(routing_key),
         )
 
-    @patch("manman.src.repository.rabbitmq.subscriber.threading.Thread")
+    @patch("libs.python.rmq.subscriber.threading.Thread")
     def test_multiple_binding_configs(self, mock_thread):
         """Test RabbitSubscriber with multiple binding configurations."""
         # Arrange
@@ -130,7 +130,7 @@ class TestRabbitSubscriberMultipleExchanges(unittest.TestCase):
         ]
         self.mock_channel.queue.bind.assert_has_calls(expected_calls, any_order=True)
 
-    @patch("manman.src.repository.rabbitmq.subscriber.threading.Thread")
+    @patch("libs.python.rmq.subscriber.threading.Thread")
     def test_multiple_routing_keys_per_exchange(self, mock_thread):
         """Test RabbitSubscriber with multiple routing keys per exchange."""
         # Arrange
@@ -183,7 +183,7 @@ class TestRabbitSubscriberMultipleExchanges(unittest.TestCase):
         ]
         self.mock_channel.queue.bind.assert_has_calls(expected_calls, any_order=True)
 
-    @patch("manman.src.repository.rabbitmq.subscriber.threading.Thread")
+    @patch("libs.python.rmq.subscriber.threading.Thread")
     def test_message_consumption(self, mock_thread):
         """Test that messages can be consumed correctly."""
         # Arrange

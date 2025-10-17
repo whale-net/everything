@@ -7,7 +7,12 @@ from typing_extensions import Annotated, Optional
 
 from manman.src.config import ManManConfig
 from manman.src.logging_config import setup_logging
-from manman.src.util import get_rabbitmq_connection, get_rabbitmq_ssl_options, init_rabbitmq
+from manman.src.util import get_sqlalchemy_session
+from libs.python.rmq import (
+    get_rabbitmq_connection,
+    get_rabbitmq_ssl_options,
+    init_rabbitmq,
+)
 from manman.src.worker.worker_service import WorkerService
 
 app = typer.Typer()

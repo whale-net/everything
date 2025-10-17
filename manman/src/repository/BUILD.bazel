@@ -12,9 +12,9 @@ py_library(
     visibility = ["//manman/src/repository:__subpackages__"],
     deps = [
         "//libs/python/postgres",
+        "//libs/python/rmq",
         "//manman/src:manman_core",
         "//manman/src/repository/message",
-        "//manman/src/repository/rabbitmq",
         "@pypi//:sqlmodel",
         "@pypi//:asyncpg",
         "@pypi//:httpx",
@@ -32,7 +32,6 @@ py_library(
     deps = [
         ":repository_core",
         "//manman/src/repository/message",
-        "//manman/src/repository/rabbitmq",
     ],
 )
 
