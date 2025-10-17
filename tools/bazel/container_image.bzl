@@ -25,7 +25,8 @@ ARCHITECTURE: Single Binary → Platform Transitions → Single Push
    - Users pull ONE tag that works on any platform
    - Release system ONLY uses this target
 
-This is the idiomatic Bazel way to build multiplatform images.
+PYTHON OPTIMIZATION: 400MB → 87MB via deterministic genrule
+See tools/toolchains/README.md for rationale.
 """
 
 load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index", "oci_load", "oci_push")
