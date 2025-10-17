@@ -19,13 +19,12 @@ from manman.src.logging_config import (
     setup_logging,
     setup_server_logging,
 )
-from manman.src.repository.rabbitmq.config import ExchangeRegistry
-from manman.src.util import (
+from libs.python.rmq import ExchangeRegistry
+from manman.src.util import get_sqlalchemy_engine, init_sql_alchemy_engine
+from libs.python.rmq import (
     create_rabbitmq_vhost,
     get_rabbitmq_ssl_options,
-    get_sqlalchemy_engine,
     init_rabbitmq,
-    init_sql_alchemy_engine,
 )
 
 app = typer.Typer()
@@ -151,7 +150,7 @@ def _init_common_services(
     )
 
     # declare rabbitmq exchanges - use persistent connection for this operation
-    from manman.src.util import get_rabbitmq_connection
+    from libs.python.rmq import get_rabbitmq_connection
 
     rmq_connection = get_rabbitmq_connection()
 
@@ -465,7 +464,7 @@ def start_status_processor(
         add_health_check,  # Ensure this import is present or add it
     )
     from manman.src.host.status_processor import StatusEventProcessor
-    from manman.src.util import get_rabbitmq_connection
+    from libs.python.rmq import get_rabbitmq_connection
 
     # Define and run health check API in a separate thread
     health_check_app = FastAPI(title="ManMan Status Processor Health Check")

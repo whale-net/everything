@@ -14,18 +14,15 @@ from manman.src.repository.database import (
 )
 from manman.src.repository.message.pub import CommandPubService
 from manman.src.constants import EntityRegistry
-from manman.src.repository.rabbitmq.config import (
+from libs.python.rmq import (
     BindingConfig,
     ExchangeRegistry,
     MessageTypeRegistry,
+    RabbitPublisher,
     RoutingKeyConfig,
 )
-from manman.src.repository.rabbitmq.publisher import RabbitPublisher
-from manman.src.util import (
-    get_auth_api_client,
-    get_rabbitmq_connection,
-    get_sqlalchemy_session,
-)
+from manman.src.util import get_auth_api_client, get_sqlalchemy_session
+from libs.python.rmq import get_rabbitmq_connection
 
 logger = logging.getLogger(__name__)
 

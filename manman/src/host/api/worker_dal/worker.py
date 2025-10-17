@@ -10,13 +10,13 @@ from manman.src.models import InternalStatusInfo, StatusType, Worker
 from manman.src.repository.database import WorkerRepository
 from manman.src.repository.message.pub import InternalStatusInfoPubService
 from manman.src.constants import EntityRegistry
-from manman.src.repository.rabbitmq.config import (
+from libs.python.rmq import (
     BindingConfig,
     ExchangeRegistry,
     MessageTypeRegistry,
+    RabbitPublisher,
     RoutingKeyConfig,
 )
-from manman.src.repository.rabbitmq.publisher import RabbitPublisher
 
 logger = logging.getLogger(__name__)
 

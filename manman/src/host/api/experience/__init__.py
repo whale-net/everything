@@ -11,7 +11,7 @@ async def lifespan(app):
     # Startup
     yield
     # Shutdown - cleanup RabbitMQ connections
-    from manman.src.util import cleanup_rabbitmq_connections
+    from libs.python.rmq import cleanup_rabbitmq_connections
 
     cleanup_rabbitmq_connections()
 

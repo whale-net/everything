@@ -1,7 +1,6 @@
-from manman.src.repository.rabbitmq.util import (
-    add_routing_key_prefix,
-    add_routing_key_suffix,
-)
+"""Tests for RabbitMQ utility functions."""
+
+from libs.python.rmq.util import add_routing_key_prefix, add_routing_key_suffix
 
 
 def test_add_routing_key_suffix_with_suffix():

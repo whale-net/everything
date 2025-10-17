@@ -2,7 +2,7 @@
 RabbitMQ subscriber implementations.
 
 This module contains concrete implementations of message subscribers
-for receiving commands and status messages via RabbitMQ.
+for receiving messages via RabbitMQ.
 """
 
 import logging
@@ -12,17 +12,15 @@ from typing import List, Union
 
 from amqpstorm import Channel, Connection, Message
 
-from manman.src.repository.message.abstract_interface import MessageSubscriberInterface
-from manman.src.repository.rabbitmq.config import BindingConfig, QueueConfig
+from libs.python.rmq.config import BindingConfig, QueueConfig
+from libs.python.rmq.interface import MessageSubscriberInterface
 
 logger = logging.getLogger(__name__)
-
-# TODO - reduce duplication with RabbitCommandPublisher
 
 
 class RabbitSubscriber(MessageSubscriberInterface):
     """
-    Base class for RabbitMQ subscribers
+    Base class for RabbitMQ subscribers.
     This class provides common functionality for subscribing to RabbitMQ exchanges.
     """
 
@@ -32,6 +30,14 @@ class RabbitSubscriber(MessageSubscriberInterface):
         binding_configs: Union[BindingConfig, list[BindingConfig]],
         queue_config: QueueConfig,
     ) -> None:
+        """
+        Initialize the RabbitMQ subscriber.
+        
+        Args:
+            connection: Active RabbitMQ connection
+            binding_configs: Single or list of binding configurations
+            queue_config: Queue configuration
+        """
         self._channel: Channel = connection.channel()
         # Set QoS to ensure fair dispatching of messages
         self._channel.basic.qos(prefetch_count=1)
@@ -40,10 +46,8 @@ class RabbitSubscriber(MessageSubscriberInterface):
             binding_configs = [binding_configs]
         self._binding_configs: list[BindingConfig] = binding_configs
 
-        # exchange already declared
-
         # Declare queue
-        logger.info("declaring queue with config: %s", queue_config)
+        logger.info("Declaring queue with config: %s", queue_config)
         result = self._channel.queue.declare(
             queue=queue_config.name or "",
             durable=queue_config.durable,
@@ -51,10 +55,11 @@ class RabbitSubscriber(MessageSubscriberInterface):
             auto_delete=queue_config.auto_delete,
         )
 
-        # mutate config to store actual name. kind of a hack, but want to keep name stored
+        # Store actual queue name (important for server-generated names)
         queue_config.actual_queue_name = result.get("queue", queue_config.name)
-        logger.info("Queue declared %s", queue_config.actual_queue_name)
+        logger.info("Queue declared: %s", queue_config.actual_queue_name)
 
+        # Bind queue to exchanges with routing keys
         for binding_config in self._binding_configs:
             for routing_key in binding_config.routing_keys:
                 self._channel.queue.bind(
@@ -69,11 +74,13 @@ class RabbitSubscriber(MessageSubscriberInterface):
                     routing_key,
                 )
 
+        # Internal queue for message buffering
         self._internal_message_queue = queue.Queue()
+        
+        # Start consuming messages
         self._consumer_tag = self._channel.basic.consume(
             callback=self._message_handler,
             queue=queue_config.actual_queue_name,
-            # no_ack=True,  # enable for at most, but message loss
         )
 
         self._consumer_thread = threading.Thread(
@@ -85,9 +92,15 @@ class RabbitSubscriber(MessageSubscriberInterface):
 
         logger.info("RabbitSubscriber initialized with channel %s", self._channel)
 
-    def _message_handler(self, message: Message):
+    def _message_handler(self, message: Message) -> None:
         """
-        Write messages to internal queue for retrieval in `consume` method.
+        Internal handler for incoming messages.
+        
+        Writes messages to internal queue for retrieval in `consume` method
+        and acknowledges them.
+        
+        Args:
+            message: Incoming AMQP message
         """
         self._internal_message_queue.put(message.body)
         message.ack()
@@ -96,28 +109,27 @@ class RabbitSubscriber(MessageSubscriberInterface):
     def consume(self) -> List[str]:
         """
         Consume messages from the internal queue.
+        
         This method retrieves all available messages and is non-blocking.
 
-        :return: List of message bodies as strings.
+        Returns:
+            List of message bodies as strings
         """
         messages = []
         while not self._internal_message_queue.empty():
             try:
-                # don't block - will return immediately if no messages are available
-                message_body = self._internal_message_queue.get(block=True)
+                # Non-blocking get - returns immediately if no messages available
+                message_body = self._internal_message_queue.get(block=False)
                 messages.append(message_body)
             except queue.Empty:
                 break
         return messages
 
-    # TODO - move this to common base rabbit connection wrapper class or something
-    # feels bad having pub and sub
-    # when eventually probably will have a pubsub
     def shutdown(self) -> None:
         """
-        Shutdown the publisher by closing the channel.
+        Shutdown the subscriber by stopping consumption and closing the channel.
         """
-        logger.info("Shutting down RabbitPublisher...")
+        logger.info("Shutting down RabbitSubscriber...")
 
         try:
             # Cancel the consumer

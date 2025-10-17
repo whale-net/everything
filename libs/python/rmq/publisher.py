@@ -2,7 +2,7 @@
 RabbitMQ publisher implementations.
 
 This module contains concrete implementations of message publishers
-for sending status messages via RabbitMQ.
+for sending messages via RabbitMQ.
 """
 
 import logging
@@ -10,8 +10,8 @@ from typing import Union
 
 from amqpstorm import Channel, Connection
 
-from manman.src.repository.message.abstract_interface import MessagePublisherInterface
-from manman.src.repository.rabbitmq.config import BindingConfig
+from libs.python.rmq.config import BindingConfig
+from libs.python.rmq.interface import MessagePublisherInterface
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,13 @@ class RabbitPublisher(MessagePublisherInterface):
         connection: Connection,
         binding_configs: Union[BindingConfig, list[BindingConfig]],
     ) -> None:
+        """
+        Initialize the RabbitMQ publisher.
+        
+        Args:
+            connection: Active RabbitMQ connection
+            binding_configs: Single or list of binding configurations
+        """
         self._channel: Channel = connection.channel()
 
         if isinstance(binding_configs, BindingConfig):
@@ -39,7 +46,8 @@ class RabbitPublisher(MessagePublisherInterface):
         """
         Publish a message to all configured exchanges with their routing keys.
 
-        :param message: The message to be published.
+        Args:
+            message: The message to be published
         """
         for binding_config in self._binding_configs:
             for routing_key in binding_config.routing_keys:
@@ -54,17 +62,6 @@ class RabbitPublisher(MessagePublisherInterface):
                     routing_key,
                 )
 
-    def __del__(self) -> None:
-        """
-        Destructor to ensure the channel is closed when the object is deleted.
-        """
-        try:
-            self.shutdown()
-        except Exception:
-            # Suppress exceptions during cleanup to avoid issues during interpreter shutdown
-            pass
-
-    # TODO - move this to common base rabbit connection wrapper class or something
     def shutdown(self) -> None:
         """
         Shutdown the publisher by closing the channel.
@@ -76,3 +73,13 @@ class RabbitPublisher(MessagePublisherInterface):
                 logger.info("Channel closed.")
         except Exception as e:
             logger.exception("Error closing channel: %s", e)
+
+    def __del__(self) -> None:
+        """
+        Destructor to ensure the channel is closed when the object is deleted.
+        """
+        try:
+            self.shutdown()
+        except Exception:
+            # Suppress exceptions during cleanup to avoid issues during interpreter shutdown
+            pass
