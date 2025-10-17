@@ -29,6 +29,22 @@ from tools.release_helper.helm import (
 app = typer.Typer(help="Release helper for Everything monorepo")
 
 
+def parse_app_list(apps: str) -> list:
+    """Parse app list from either comma or space-separated format.
+    
+    Args:
+        apps: App list string, either comma-separated or space-separated
+        
+    Returns:
+        List of app names with whitespace stripped
+    """
+    # Split by comma if present, otherwise split by whitespace
+    if ',' in apps:
+        return [app.strip() for app in apps.split(',') if app.strip()]
+    else:
+        return [app.strip() for app in apps.split() if app.strip()]
+
+
 @app.command()
 def list_apps(
     format: Annotated[Optional[str], typer.Option(help="Output format (text or json)")] = "text",
@@ -248,12 +264,8 @@ def plan_openapi_builds(
         typer.echo("Error: format must be one of: json, github", err=True)
         raise typer.Exit(1)
     
-    # Parse app list - handle both space and comma separated formats
-    # First try splitting by comma, if that doesn't work, split by whitespace
-    if ',' in apps:
-        app_list = [app.strip() for app in apps.split(',') if app.strip()]
-    else:
-        app_list = [app.strip() for app in apps.split() if app.strip()]
+    # Parse app list using helper function
+    app_list = parse_app_list(apps)
     
     # Filter to apps with OpenAPI spec targets
     # Use validate_apps to handle all naming formats and detect ambiguity
@@ -496,11 +508,8 @@ def create_combined_github_release_with_notes(
         
         # Determine which apps to include
         if apps:
-            # Handle both comma and space-separated formats for flexibility
-            if ',' in apps:
-                app_list = [app.strip() for app in apps.split(',') if app.strip()]
-            else:
-                app_list = [app.strip() for app in apps.split() if app.strip()]
+            # Parse app list using helper function
+            app_list = parse_app_list(apps)
         else:
             # Get all apps
             all_apps = list_all_apps()
