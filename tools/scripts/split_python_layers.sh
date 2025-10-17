@@ -15,10 +15,24 @@ RUNFILES_DIR="$4"
 PYTHON_VERSION_PATTERN="$5"
 STRIP_SCRIPT="$6"
 
+# Validate inputs exist
+if [ ! -f "$UNSTRIPPED_TAR" ]; then
+    echo "Error: Input tar not found: $UNSTRIPPED_TAR" >&2
+    exit 1
+fi
+
+if [ ! -f "$STRIP_SCRIPT" ]; then
+    echo "Error: Strip script not found: $STRIP_SCRIPT" >&2
+    exit 1
+fi
+
 TMPDIR=$(mktemp -d)
 EXTRACT_DIR="$TMPDIR/extract"
 DEPS_LAYER_DIR="$TMPDIR/deps_layer"
 APP_LAYER_DIR="$TMPDIR/app_layer"
+
+# Ensure cleanup on exit or error
+trap 'rm -rf "$TMPDIR"' EXIT ERR
 
 mkdir -p "$EXTRACT_DIR" "$DEPS_LAYER_DIR" "$APP_LAYER_DIR"
 
@@ -55,4 +69,10 @@ fi
 
 tar -cf "$APP_TAR" -C "$APP_LAYER_DIR" .
 
-rm -rf "$TMPDIR"
+# Output layer sizes for monitoring
+echo "Layer splitting complete:"
+echo "  Dependencies layer: $(stat -c%s "$DEPS_TAR" 2>/dev/null || stat -f%z "$DEPS_TAR") bytes"
+echo "  Application layer:  $(stat -c%s "$APP_TAR" 2>/dev/null || stat -f%z "$APP_TAR") bytes"
+
+# Cleanup handled by trap
+# rm -rf "$TMPDIR"  # Removed: trap handles this now

@@ -18,6 +18,16 @@ py_binary(
     visibility = ["//visibility:public"],
 )
 
+py_test(
+    name = "test_main",
+    srcs = ["test_main.py"],
+    deps = [
+        ":main_lib",
+        "@pypi//:pytest",
+    ],
+    size = "small",
+)
+
 release_app(
     name = "hello-openapi-consumer",
     language = "python",

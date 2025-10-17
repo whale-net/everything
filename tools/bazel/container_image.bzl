@@ -122,6 +122,11 @@ def container_image(
     binary_name = _get_binary_name(binary)
     binary_path = _get_binary_path(binary)
 
+    # Layer ordering is critical for Docker cache efficiency:
+    # 1. CA certificates - rarely changes, shared across all images
+    # 2. Python runtime + third-party wheels - changes when dependencies update
+    # 3. Application code - changes frequently during development
+    # This ordering ensures that code changes only invalidate the smallest layer.
     image_tars = ["//tools/cacerts:cacerts"]
 
     if language == "python":
@@ -158,8 +163,8 @@ def container_image(
         )
 
         image_tars.extend([
-            ":" + name + "_deps_layer.tar",
-            ":" + name + "_app_layer.tar",
+            ":" + name + "_deps_layer.tar",  # Layer 2: Python runtime + dependencies
+            ":" + name + "_app_layer.tar",   # Layer 3: Application code
         ])
     else:
         native.alias(
