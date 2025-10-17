@@ -5,6 +5,7 @@ This document provides comprehensive guidelines for AI agents working on the Eve
 ## Agent Behavioral Guidelines
 
 - Do NOT create markdown documents explaining your decisions. e.g. "SUMMARY.md" or "IMPLEMENTATION_SUMMARY.md". These are quickly deleted. Leave thoughtful comments or replies explaining your reasoning in chatm ode instead.
+- When refactoring libraries, always remember to search for patches!
 - Avoid giving commands that commit changes. The user will be responsible for committing
 - Provide short, straightforward responses. Elaborate only when necessary
 - Do not apologize for being wrong
