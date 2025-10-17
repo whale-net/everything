@@ -29,7 +29,7 @@ from tools.release_helper.helm import (
 app = typer.Typer(help="Release helper for Everything monorepo")
 
 
-def parse_app_list(apps: str) -> list:
+def parse_app_list(apps: str) -> list[str]:
     """Parse app list from either comma or space-separated format.
     
     Args:
