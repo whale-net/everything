@@ -15,6 +15,7 @@ from libs.python.cli.params import (
     rmq_params,
     slack_params,
     logging_params,
+    AppEnv,
 )
 from friendly_computing_machine.src.friendly_computing_machine.bot.subscribe.main import (
     run_manman_subscribe,
@@ -32,7 +33,6 @@ from friendly_computing_machine.src.friendly_computing_machine.health import (
 logger = logging.getLogger(__name__)
 
 # Type aliases
-T_app_env = Annotated[str, typer.Option(..., envvar="APP_ENV")]
 T_manman_host_url = Annotated[str, typer.Option(..., envvar="MANMAN_HOST_URL")]
 
 
@@ -56,7 +56,7 @@ app = typer.Typer()
 @logging_params  # Injects 1 logging parameter
 def callback(
     ctx: typer.Context,
-    app_env: T_app_env,
+    app_env: AppEnv,
     manman_host_url: T_manman_host_url,
 ):
     """

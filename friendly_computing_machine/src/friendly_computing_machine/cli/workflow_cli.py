@@ -5,7 +5,7 @@ from typing import Annotated
 import google.generativeai as genai
 import typer
 
-from libs.python.cli.params import logging_params
+from libs.python.cli.params import logging_params, AppEnv
 from libs.python.cli.providers.logging import create_logging_context
 from libs.python.cli.providers.postgres import PostgresUrl
 from libs.python.cli.providers.slack import SlackBotToken
@@ -31,7 +31,6 @@ logger = logging.getLogger(__name__)
 
 # Type aliases
 T_temporal_host = Annotated[str, typer.Option(..., envvar="TEMPORAL_HOST")]
-T_app_env = Annotated[str, typer.Option(..., envvar="APP_ENV")]
 T_google_api_key = Annotated[str, typer.Option(..., envvar="GOOGLE_API_KEY")]
 
 app = typer.Typer(
@@ -44,7 +43,7 @@ app = typer.Typer(
 def callback(
     ctx: typer.Context,
     temporal_host: T_temporal_host,
-    app_env: T_app_env,
+    app_env: AppEnv,
 ):
     logger.debug("CLI callback starting")
     

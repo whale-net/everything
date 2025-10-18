@@ -9,6 +9,7 @@ from libs.python.cli.params import (
     slack_params,
     pg_params,
     logging_params,
+    AppEnv,
 )
 from libs.python.cli.providers.logging import create_logging_context
 from libs.python.cli.providers.postgres import DatabaseContext, PostgresUrl
@@ -31,7 +32,6 @@ logger = logging.getLogger(__name__)
 
 # Type aliases
 T_temporal_host = Annotated[str, typer.Option(..., envvar="TEMPORAL_HOST")]
-T_app_env = Annotated[str, typer.Option(..., envvar="APP_ENV")]
 T_manman_host_url = Annotated[str, typer.Option(..., envvar="MANMAN_HOST_URL")]
 T_google_api_key = Annotated[str, typer.Option(..., envvar="GOOGLE_API_KEY")]
 
@@ -51,14 +51,15 @@ app = typer.Typer()
 
 
 @app.callback()
-@slack_params    # Injects Slack parameters
-@pg_params       # Injects PostgreSQL parameters
-@logging_params  # Injects logging parameters
+@slack_params
+@pg_params
+@logging_params
 def callback(
     ctx: typer.Context,
     temporal_host: T_temporal_host,
-    app_env: T_app_env,
+    app_env: AppEnv,
     manman_host_url: T_manman_host_url,
+    google_api_key: T_google_api_key,
 ):
     logger.debug("CLI callback starting")
     

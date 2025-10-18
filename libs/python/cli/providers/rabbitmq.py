@@ -46,7 +46,7 @@ class RabbitMQContext:
     Attributes:
         host: RabbitMQ host
         port: RabbitMQ port
-        user: Optional username
+        username: Optional username
         password: Optional password
         vhost: Virtual host (defaults to "/")
         enable_ssl: Whether SSL is enabled
@@ -55,7 +55,7 @@ class RabbitMQContext:
 
     host: str
     port: int
-    user: Optional[str] = None
+    username: Optional[str] = None
     password: Optional[str] = None
     vhost: str = "/"
     enable_ssl: bool = False
@@ -65,7 +65,7 @@ class RabbitMQContext:
 def create_rabbitmq_context(
     host: RabbitMQHost,
     port: RabbitMQPort = 5672,
-    user: RabbitMQUser = None,
+    username: RabbitMQUser = None,
     password: RabbitMQPassword = None,
     vhost: RabbitMQVHost = "/",
     enable_ssl: RabbitMQEnableSSL = False,
@@ -77,7 +77,7 @@ def create_rabbitmq_context(
     Args:
         host: RabbitMQ host
         port: RabbitMQ port (default: 5672)
-        user: Optional username
+        username: Optional username
         password: Optional password
         vhost: Virtual host (default: "/")
         enable_ssl: Enable SSL connections
@@ -108,7 +108,7 @@ def create_rabbitmq_context(
     ctx = RabbitMQContext(
         host=host,
         port=port,
-        user=user,
+        username=username,
         password=password,
         vhost=vhost,
         enable_ssl=enable_ssl,
@@ -180,7 +180,7 @@ def rmq_params(func: Callable) -> Callable:
         return {
             'host': kwargs.pop('rabbitmq_host', 'localhost'),
             'port': kwargs.pop('rabbitmq_port', 5672),
-            'user': kwargs.pop('rabbitmq_user', 'guest'),
+            'username': kwargs.pop('rabbitmq_user', 'guest'),
             'password': kwargs.pop('rabbitmq_password', 'guest'),
             'vhost': kwargs.pop('rabbitmq_vhost', '/'),
             'enable_ssl': kwargs.pop('rabbitmq_enable_ssl', False),

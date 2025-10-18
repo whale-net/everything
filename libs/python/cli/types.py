@@ -1,6 +1,8 @@
 """Base types and protocols for CLI providers."""
 
-from typing import Protocol, TypeVar
+from typing import Annotated, Optional, Protocol, TypeVar
+
+import typer
 
 
 class CLIContext(Protocol):
@@ -15,3 +17,11 @@ class CLIContext(Protocol):
 
 # Generic type variable for contexts
 TContext = TypeVar("TContext", bound=CLIContext)
+
+
+# ==============================================================================
+# Common CLI parameter types
+# ==============================================================================
+
+# Application environment (dev, staging, prod, etc.)
+AppEnv = Annotated[Optional[str], typer.Option(envvar="APP_ENV")]

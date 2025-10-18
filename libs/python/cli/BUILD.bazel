@@ -1,9 +1,23 @@
 load("@rules_python//python:defs.bzl", "py_library")
 
 py_library(
+    name = "types",
+    srcs = [
+        "types.py",
+    ],
+    deps = [
+        "@pypi//:typer",
+    ],
+    visibility = ["//libs/python/cli:__subpackages__"],
+)
+
+py_library(
     name = "params_base",
     srcs = [
         "params.py",
+    ],
+    deps = [
+        ":types",
     ],
     visibility = ["//libs/python/cli:__subpackages__"],
 )
@@ -13,6 +27,7 @@ py_library(
     srcs = glob(["providers/*.py"]),
     deps = [
         ":params_base",
+        ":types",
         "//libs/python/alembic",
         "@pypi//:sqlalchemy",
         "@pypi//:typer",
@@ -27,9 +42,9 @@ py_library(
     name = "cli",
     srcs = [
         "__init__.py",
-        "types.py",
     ],
     deps = [
+        ":types",
         ":params_base",
         ":providers",
     ],

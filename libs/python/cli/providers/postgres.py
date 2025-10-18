@@ -39,7 +39,8 @@ logger = logging.getLogger(__name__)
 
 
 # Type alias for CLI parameters - preserves Typer hints and envvar support
-PostgresUrl = Annotated[str, typer.Option(..., envvar="DATABASE_URL")]
+# Note: Uses POSTGRES_URL for backwards compatibility with existing apps
+PostgresUrl = Annotated[str, typer.Option(..., envvar="POSTGRES_URL")]
 
 
 @dataclass

@@ -132,6 +132,7 @@ from libs.python.cli.providers.rabbitmq import rmq_params
 from libs.python.cli.providers.postgres import pg_params
 from libs.python.cli.providers.slack import slack_params
 from libs.python.cli.providers.logging import logging_params
+from libs.python.cli.types import AppEnv
 
 
 __all__ = [
@@ -150,6 +151,7 @@ __all__ = [
     'SlackAppToken',
     'PostgresURL',
     'EnableOTLP',
+    'AppEnv',
     
     # Decorators
     'rmq_params',
