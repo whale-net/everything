@@ -6,6 +6,10 @@ This module provides:
 2. Type aliases for common parameters (re-exported from providers)
 3. Re-exports of decorators from provider modules for convenience
 
+NOTE: For minimal dependencies, import directly from provider submodules:
+    from libs.python.cli.providers.postgres import pg_params, PostgresUrl
+    from libs.python.cli.providers.rabbitmq import rmq_params
+
 Stack decorators to add multiple service parameter groups:
     ```python
     from libs.python.cli.params import rmq_params, pg_params, slack_params

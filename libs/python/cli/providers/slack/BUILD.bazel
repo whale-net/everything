@@ -1,0 +1,11 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+py_library(
+    name = "slack",
+    srcs = ["__init__.py"],
+    deps = [
+        "//libs/python/cli:params_base",
+        "@pypi//:typer",
+    ],
+    visibility = ["//visibility:public"],
+)

@@ -19,22 +19,6 @@ py_library(
     deps = [
         ":types",
     ],
-    visibility = ["//libs/python/cli:__subpackages__"],
-)
-
-py_library(
-    name = "providers",
-    srcs = glob(["providers/*.py"]),
-    deps = [
-        ":params_base",
-        ":types",
-        "//libs/python/alembic",
-        "@pypi//:sqlalchemy",
-        "@pypi//:typer",
-        "@pypi//:opentelemetry-api",
-        "@pypi//:opentelemetry-sdk",
-        "@pypi//:opentelemetry-exporter-otlp",
-    ],
     visibility = ["//visibility:public"],
 )
 
@@ -42,11 +26,11 @@ py_library(
     name = "cli",
     srcs = [
         "__init__.py",
+        "providers/__init__.py",
     ],
     deps = [
         ":types",
         ":params_base",
-        ":providers",
     ],
     visibility = ["//visibility:public"],
 )
