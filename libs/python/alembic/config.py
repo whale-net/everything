@@ -96,7 +96,14 @@ def create_alembic_config(
     migrations_template = os.path.join(migrations_dir, "script.py.mako")
     if script_template == get_default_script_template():
         # Only copy if template doesn't exist or is outdated
-        if not os.path.exists(migrations_template) or os.path.getmtime(script_template) > os.path.getmtime(migrations_template):
+        if (
+            not os.path.exists(migrations_template)
+            or (
+                os.path.exists(script_template)
+                and os.path.exists(migrations_template)
+                and os.path.getmtime(script_template) > os.path.getmtime(migrations_template)
+            )
+        ):
             shutil.copy2(script_template, migrations_template)
             logger.debug(f"Copied default script template to: {migrations_template}")
 

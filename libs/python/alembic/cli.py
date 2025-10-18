@@ -94,9 +94,10 @@ def create_migration_app(
             migrations_resource = files(migrations_package)
             
             # Use public API to get filesystem path
-            try:
+            # Check if the resource supports __fspath__ before calling os.fspath
+            if hasattr(migrations_resource, "__fspath__"):
                 migrations_dir = os.fspath(migrations_resource)
-            except TypeError:
+            else:
                 # Fallback for resource types that don't support fspath
                 migrations_dir = str(migrations_resource)
 
