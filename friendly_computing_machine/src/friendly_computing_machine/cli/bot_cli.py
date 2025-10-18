@@ -1,7 +1,8 @@
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Annotated, Optional
 
+import google.generativeai as genai
 import typer
 
 from libs.python.cli.params import (
@@ -9,37 +10,30 @@ from libs.python.cli.params import (
     pg_params,
     logging_params,
 )
-from libs.python.cli.providers.logging import EnableOTLP, create_logging_context
-from libs.python.cli.providers.postgres import DatabaseContext, PostgresUrl, create_postgres_context
-from libs.python.cli.providers.slack import (
-    SlackAppToken,
-    SlackBotToken,
-    SlackContext,
-)
+from libs.python.cli.providers.logging import create_logging_context
+from libs.python.cli.providers.postgres import DatabaseContext, PostgresUrl
+from libs.python.cli.providers.slack import SlackContext
 from libs.python.cli.providers.combinators import (
     setup_postgres_with_fcm_init,
     setup_slack_with_fcm_init,
 )
-from friendly_computing_machine.src.friendly_computing_machine.cli.context.app_env import (
-    T_app_env,
+from friendly_computing_machine.src.friendly_computing_machine.manman.api import (
+    ManManExperienceAPI,
 )
-from friendly_computing_machine.src.friendly_computing_machine.cli.context.gemini import (
-    T_google_api_key,
-    setup_gemini,
-)
-from friendly_computing_machine.src.friendly_computing_machine.cli.context.manman_host import (
-    T_manman_host_url,
-    setup_manman_experience_api,
-)
-from friendly_computing_machine.src.friendly_computing_machine.cli.context.temporal import (
-    T_temporal_host,
-    setup_temporal,
+from friendly_computing_machine.src.friendly_computing_machine.temporal.util import (
+    init_temporal,
 )
 from friendly_computing_machine.src.friendly_computing_machine.db.util import (
     should_run_migration,
 )
 
 logger = logging.getLogger(__name__)
+
+# Type aliases
+T_temporal_host = Annotated[str, typer.Option(..., envvar="TEMPORAL_HOST")]
+T_app_env = Annotated[str, typer.Option(..., envvar="APP_ENV")]
+T_manman_host_url = Annotated[str, typer.Option(..., envvar="MANMAN_HOST_URL")]
+T_google_api_key = Annotated[str, typer.Option(..., envvar="GOOGLE_API_KEY")]
 
 
 @dataclass
@@ -48,8 +42,9 @@ class FCMBotContext:
 
     db: Optional[DatabaseContext] = None
     slack: Optional[SlackContext] = None
-    # Legacy context dict for gradual migration
-    legacy: dict = None
+    temporal_host: str = ""
+    app_env: str = ""
+    manman_host_url: str = ""
 
 
 app = typer.Typer()
@@ -82,26 +77,20 @@ def callback(
         app_token=slack_config.get('app_token', ''),
     )
     
-    # Create legacy context dict for remaining non-migrated dependencies
-    legacy_ctx = {}
-    setup_temporal(
-        type("Context", (), {"obj": legacy_ctx})(),
-        temporal_host,
-        app_env,
-    )
-    setup_manman_experience_api(
-        type("Context", (), {"obj": legacy_ctx})(),
-        manman_host_url,
-    )
-    setup_gemini(
-        type("Context", (), {"obj": legacy_ctx})(),
-        "",  # Will be provided by commands that need it
-    )
+    # Initialize Temporal client
+    init_temporal(host=temporal_host, app_env=app_env)
+    
+    # Initialize ManMan Experience API
+    url = manman_host_url.strip().rstrip("/")
+    ManManExperienceAPI.init(url + "/experience")
+    logger.info(f"ManMan Experience API initialized with host: {url}")
     
     # Store typed context
     ctx.obj = FCMBotContext(
         slack=slack_ctx,
-        legacy=legacy_ctx,
+        temporal_host=temporal_host,
+        app_env=app_env,
+        manman_host_url=manman_host_url,
     )
     
     logger.debug("CLI callback complete")
@@ -149,11 +138,8 @@ def cli_run_slack_socket_app(
     else:
         logger.info("migration check passed, starting normally")
 
-    # Setup gemini using legacy context
-    setup_gemini(
-        type("Context", (), {"obj": fcm_ctx.legacy})(),
-        google_api_key,
-    )
+    # Setup Gemini API
+    genai.configure(api_key=google_api_key)
     
     # Create database context with automatic FCM initialization
     fcm_ctx.db = setup_postgres_with_fcm_init(database_url)
