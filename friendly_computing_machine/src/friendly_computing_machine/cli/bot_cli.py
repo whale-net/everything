@@ -4,8 +4,13 @@ from typing import Optional
 
 import typer
 
+from libs.python.cli.params import (
+    slack_params,
+    pg_params,
+    logging_params,
+)
 from libs.python.cli.providers.logging import EnableOTLP, create_logging_context
-from libs.python.cli.providers.postgres import DatabaseContext, PostgresUrl
+from libs.python.cli.providers.postgres import DatabaseContext, PostgresUrl, create_postgres_context
 from libs.python.cli.providers.slack import (
     SlackAppToken,
     SlackBotToken,
@@ -51,28 +56,30 @@ app = typer.Typer()
 
 
 @app.callback()
+@slack_params    # Injects Slack parameters
+@pg_params       # Injects PostgreSQL parameters
+@logging_params  # Injects logging parameters
 def callback(
     ctx: typer.Context,
-    slack_app_token: SlackAppToken,
-    slack_bot_token: SlackBotToken,
     temporal_host: T_temporal_host,
     app_env: T_app_env,
     manman_host_url: T_manman_host_url,
-    log_otlp: EnableOTLP = False,
 ):
     logger.debug("CLI callback starting")
     
-    # Create logging context using new provider
+    # Create logging context from decorator-injected params
+    log_config = ctx.obj.get('logging', {})
     create_logging_context(
         service_name="friendly-computing-machine-bot",
         log_level="DEBUG",
-        enable_otlp=log_otlp,
+        enable_otlp=log_config.get('enable_otlp', False),
     )
     
-    # Create Slack context with automatic FCM initialization
+    # Create Slack context from decorator-injected params
+    slack_config = ctx.obj.get('slack', {})
     slack_ctx = setup_slack_with_fcm_init(
-        bot_token=slack_bot_token,
-        app_token=slack_app_token,
+        bot_token=slack_config['bot_token'],
+        app_token=slack_config.get('app_token', ''),
     )
     
     # Create legacy context dict for remaining non-migrated dependencies

@@ -7,14 +7,15 @@ import typer
 from libs.python.cli.providers.logging import EnableOTLP, create_logging_context
 from libs.python.cli.providers.postgres import DatabaseContext, PostgresUrl
 from libs.python.cli.providers.slack import SlackBotToken
-from libs.python.cli.providers.rabbitmq import RabbitMQContext
+from libs.python.cli.providers.rabbitmq import RabbitMQContext, create_rabbitmq_context
 from libs.python.cli.providers.combinators import (
     setup_postgres_with_fcm_init,
     setup_slack_with_fcm_init,
 )
 from libs.python.cli.params import (
-    build_rabbitmq_context,
-    common_params,
+    rmq_params,
+    slack_params,
+    logging_params,
 )
 from friendly_computing_machine.src.friendly_computing_machine.bot.subscribe.main import (
     run_manman_subscribe,
@@ -52,13 +53,13 @@ app = typer.Typer()
 
 
 @app.callback()
-@common_params(rabbitmq=True)  # Injects 7 RabbitMQ params into signature!
+@rmq_params      # Injects 7 RabbitMQ parameters
+@slack_params    # Injects 2 Slack parameters  
+@logging_params  # Injects 1 logging parameter
 def callback(
     ctx: typer.Context,
-    slack_bot_token: SlackBotToken,
     app_env: T_app_env,
     manman_host_url: T_manman_host_url,
-    log_otlp: EnableOTLP = False,
 ):
     """
     ManMan Subscribe Service - Event-driven microservice for manman notifications.
@@ -66,24 +67,26 @@ def callback(
     Subscribes to RabbitMQ topics for worker and instance lifecycle events
     and sends formatted Slack notifications with action buttons.
     
-    Note: RabbitMQ parameters are injected by @common_params decorator.
+    Note: Service parameters (RabbitMQ, Slack, Logging) are injected by decorators.
     """
     logger.debug("Subscribe CLI callback starting")
     
-    # Create logging context using new provider
+    # Create logging context from decorator-injected params
+    log_config = ctx.obj.get('logging', {})
     create_logging_context(
         service_name="friendly-computing-machine-subscribe",
         log_level="DEBUG",
-        enable_otlp=log_otlp,
+        enable_otlp=log_config.get('enable_otlp', False),
     )
     
-    # Create Slack context with automatic FCM initialization (web client only)
-    slack_ctx = setup_slack_with_fcm_init(bot_token=slack_bot_token)
+    # Create Slack context from decorator-injected params
+    slack_config = ctx.obj.get('slack', {})
+    slack_ctx = setup_slack_with_fcm_init(bot_token=slack_config['bot_token'])
     
-    # Get RabbitMQ params from context (populated by @common_params decorator)
-    rabbitmq_params = ctx.obj.get('rabbitmq')
-    if rabbitmq_params:
-        rabbitmq_ctx = build_rabbitmq_context(**rabbitmq_params)
+    # Create RabbitMQ context from decorator-injected params
+    rabbitmq_config = ctx.obj.get('rabbitmq', {})
+    if rabbitmq_config:
+        rabbitmq_ctx = create_rabbitmq_context(**rabbitmq_config)
     else:
         rabbitmq_ctx = None
     
