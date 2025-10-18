@@ -1,0 +1,26 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+py_library(
+    name = "cli",
+    srcs = [
+        "__init__.py",
+        "types.py",
+        "params.py",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+py_library(
+    name = "providers",
+    srcs = glob(["providers/*.py"]),
+    deps = [
+        ":cli",
+        "//libs/python/alembic",
+        "@pypi//:sqlalchemy",
+        "@pypi//:typer",
+        "@pypi//:opentelemetry-api",
+        "@pypi//:opentelemetry-sdk",
+        "@pypi//:opentelemetry-exporter-otlp",
+    ],
+    visibility = ["//visibility:public"],
+)
