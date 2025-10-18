@@ -143,7 +143,7 @@ def rmq_params(func: Callable) -> Callable:
             rmq = ctx.obj['rabbitmq']
             # rmq = {'host': ..., 'port': ..., 'user': ..., ...}
     """
-    from libs.python.cli.params import _create_param_decorator
+    from libs.python.cli.params_base import _create_param_decorator
     
     param_specs = [
         ('rabbitmq_host', inspect.Parameter(

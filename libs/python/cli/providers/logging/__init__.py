@@ -157,7 +157,7 @@ def logging_params(func: Callable) -> Callable:
             log_config = ctx.obj['logging']
             # log_config = {'enable_otlp': True/False}
     """
-    from libs.python.cli.params import _create_param_decorator
+    from libs.python.cli.params_base import _create_param_decorator
     
     param_specs = [
         ('log_otlp', inspect.Parameter(

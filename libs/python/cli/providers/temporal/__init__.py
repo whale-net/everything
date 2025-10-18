@@ -71,7 +71,7 @@ def temporal_params(func: Callable) -> Callable:
             temporal = ctx.obj['temporal']
             # temporal = {'host': '...'}
     """
-    from libs.python.cli.params import _create_param_decorator
+    from libs.python.cli.params_base import _create_param_decorator
     
     param_specs = [
         ('temporal_host', inspect.Parameter(

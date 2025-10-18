@@ -71,7 +71,7 @@ def gemini_params(func: Callable) -> Callable:
             gemini = ctx.obj['gemini']
             # gemini = {'api_key': '...'}
     """
-    from libs.python.cli.params import _create_param_decorator
+    from libs.python.cli.params_base import _create_param_decorator
     
     param_specs = [
         ('google_api_key', inspect.Parameter(

@@ -130,7 +130,7 @@ def slack_params(func: Callable) -> Callable:
             slack = ctx.obj['slack']
             # slack = {'bot_token': '...', 'app_token': '...'}
     """
-    from libs.python.cli.params import _create_param_decorator
+    from libs.python.cli.params_base import _create_param_decorator
     
     param_specs = [
         ('slack_bot_token', inspect.Parameter(

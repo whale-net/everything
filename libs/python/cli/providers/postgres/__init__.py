@@ -141,7 +141,7 @@ def pg_params(func: Callable) -> Callable:
             pg = ctx.obj['postgres']
             # pg = {'database_url': '...'}
     """
-    from libs.python.cli.params import _create_param_decorator
+    from libs.python.cli.params_base import _create_param_decorator
     
     param_specs = [
         ('database_url', inspect.Parameter(

@@ -25,7 +25,7 @@ from libs.python.alembic import (
 from libs.python.cli.providers.rabbitmq import rmq_params
 from libs.python.cli.providers.logging import logging_params, create_logging_context
 from libs.python.cli.providers.postgres import pg_params
-from libs.python.cli.params import AppEnv
+from libs.python.cli.types import AppEnv
 from manman.src.config import ManManConfig
 from manman.src.logging_config import (
     get_gunicorn_config,
