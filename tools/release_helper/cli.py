@@ -29,6 +29,33 @@ from tools.release_helper.helm import (
 app = typer.Typer(help="Release helper for Everything monorepo")
 
 
+def parse_app_list(apps: str) -> list[str]:
+    """Parse app list from either comma or space-separated format.
+    
+    Args:
+        apps: App list string, either comma-separated or space-separated
+        
+    Returns:
+        List of app names with whitespace stripped
+        
+    Raises:
+        ValueError: If apps is empty, None, or results in no valid apps
+    """
+    if not apps or not apps.strip():
+        raise ValueError("App list cannot be empty")
+    
+    # Split by comma if present, otherwise split by whitespace
+    if ',' in apps:
+        result = [app.strip() for app in apps.split(',') if app.strip()]
+    else:
+        result = [app.strip() for app in apps.split() if app.strip()]
+    
+    if not result:
+        raise ValueError("App list resulted in no valid apps after parsing")
+    
+    return result
+
+
 @app.command()
 def list_apps(
     format: Annotated[Optional[str], typer.Option(help="Output format (text or json)")] = "text",
@@ -236,7 +263,7 @@ def plan(
 
 @app.command()
 def plan_openapi_builds(
-    apps: Annotated[str, typer.Option(help="Comma-separated list of apps to check for OpenAPI specs")],
+    apps: Annotated[str, typer.Option(help="Space or comma-separated list of apps to check for OpenAPI specs")],
     format: Annotated[str, typer.Option(help="Output format (json or github)")] = "github",
 ):
     """Plan OpenAPI spec builds for apps that have fastapi_app configured.
@@ -248,8 +275,8 @@ def plan_openapi_builds(
         typer.echo("Error: format must be one of: json, github", err=True)
         raise typer.Exit(1)
     
-    # Parse app list
-    app_list = [app.strip() for app in apps.split(',') if app.strip()]
+    # Parse app list using helper function
+    app_list = parse_app_list(apps)
     
     # Filter to apps with OpenAPI spec targets
     # Use validate_apps to handle all naming formats and detect ambiguity
@@ -492,7 +519,8 @@ def create_combined_github_release_with_notes(
         
         # Determine which apps to include
         if apps:
-            app_list = [app.strip() for app in apps.split(',')]
+            # Parse app list using helper function
+            app_list = parse_app_list(apps)
         else:
             # Get all apps
             all_apps = list_all_apps()
