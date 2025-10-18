@@ -1,12 +1,17 @@
 load("@rules_python//python:defs.bzl", "py_library")
 
 # Alembic database migrations
+# Note: script.py.mako template is provided by //libs/python/alembic
 py_library(
     name = "manman_migrations",
     srcs = glob(["**/*.py"]),
-    data = glob(["**/*.mako", "**/README"]),
+    data = glob(
+        ["**/*.mako", "**/README"],
+        allow_empty = True,
+    ),
     visibility = ["//manman:__subpackages__"],
     deps = [
+        "//libs/python/alembic",
         "//manman/src:manman_core",
         "@pypi//:alembic",
         "@pypi//:sqlmodel",
