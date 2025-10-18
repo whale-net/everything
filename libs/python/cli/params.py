@@ -1,8 +1,10 @@
 """
-Parameter groups for CLI commands using stackable decorators.
+Parameter registry and decorator factory for CLI commands.
 
-This module provides decorators that inject parameter groups into Typer callbacks,
-dramatically reducing function signatures while keeping all CLI options visible.
+This module provides:
+1. A base decorator factory (_create_param_decorator) used by all provider modules
+2. Type aliases for common parameters (re-exported from providers)
+3. Re-exports of decorators from provider modules for convenience
 
 Stack decorators to add multiple service parameter groups:
     ```python
@@ -11,7 +13,7 @@ Stack decorators to add multiple service parameter groups:
     @app.callback()
     @rmq_params      # Adds 7 RabbitMQ parameters
     @pg_params       # Adds 1 Postgres parameter
-    @slack_params    # Adds 1-2 Slack parameters
+    @slack_params    # Adds 2 Slack parameters
     def callback(ctx: typer.Context):
         # Access via ctx.obj dictionary
         rmq = ctx.obj['rabbitmq']
@@ -25,106 +27,16 @@ Each decorator:
 3. Stores them in ctx.obj[key] as a dict
 4. Keeps all parameters visible in --help output
 
-Available decorators:
-- @rmq_params: RabbitMQ connection (7 params)
-- @pg_params: PostgreSQL database (1 param)
-- @slack_params: Slack authentication (1-2 params)
-- @logging_params: Logging configuration (1 param)
+Available decorators (defined in their respective provider modules):
+- @rmq_params: RabbitMQ connection (7 params) - from libs.python.cli.providers.rabbitmq
+- @pg_params: PostgreSQL database (1 param) - from libs.python.cli.providers.postgres
+- @slack_params: Slack authentication (2 params) - from libs.python.cli.providers.slack
+- @logging_params: Logging configuration (1 param) - from libs.python.cli.providers.logging
 """
 
-from dataclasses import dataclass
 from functools import wraps
-from typing import Annotated, Callable, get_type_hints
+from typing import Callable
 import inspect
-
-import typer
-
-# ==============================================================================
-# Type Aliases for Common Parameters
-# ==============================================================================
-
-# RabbitMQ
-RabbitMQHost = Annotated[str, typer.Option("--rabbitmq-host", envvar="RABBITMQ_HOST")]
-RabbitMQPort = Annotated[int, typer.Option("--rabbitmq-port", envvar="RABBITMQ_PORT")]
-RabbitMQUser = Annotated[str, typer.Option("--rabbitmq-user", envvar="RABBITMQ_USER")]
-RabbitMQPassword = Annotated[str, typer.Option("--rabbitmq-password", envvar="RABBITMQ_PASSWORD")]
-RabbitMQVhost = Annotated[str, typer.Option("--rabbitmq-vhost", envvar="RABBITMQ_VHOST")]
-RabbitMQEnableSSL = Annotated[bool, typer.Option("--rabbitmq-enable-ssl", envvar="RABBITMQ_ENABLE_SSL")]
-RabbitMQSSLHostname = Annotated[str, typer.Option("--rabbitmq-ssl-hostname", envvar="RABBITMQ_SSL_HOSTNAME")]
-
-# Slack
-SlackBotToken = Annotated[str, typer.Option("--slack-bot-token", envvar="SLACK_BOT_TOKEN")]
-SlackAppToken = Annotated[str, typer.Option("--slack-app-token", envvar="SLACK_APP_TOKEN")]
-
-# PostgreSQL
-PostgresURL = Annotated[str, typer.Option("--database-url", envvar="DATABASE_URL")]
-
-# Logging
-EnableOTLP = Annotated[bool, typer.Option("--log-otlp", help="Enable OTLP logging")]
-
-
-# ==============================================================================
-# Builder Functions - Simplest Pattern
-# ==============================================================================
-
-def build_rabbitmq_context(
-    host: str,
-    port: int,
-    user: str,
-    password: str,
-    vhost: str,
-    enable_ssl: bool,
-    ssl_hostname: str,
-):
-    """
-    Build RabbitMQ context from individual parameters.
-    
-    Reduces boilerplate from:
-        create_rabbitmq_context(
-            host=rabbitmq_host,
-            port=rabbitmq_port,
-            user=rabbitmq_user,
-            password=rabbitmq_password,
-            vhost=rabbitmq_vhost,
-            enable_ssl=rabbitmq_enable_ssl,
-            ssl_hostname=rabbitmq_ssl_hostname,
-        )
-    
-    To:
-        build_rabbitmq_context(
-            rabbitmq_host, rabbitmq_port, rabbitmq_user,
-            rabbitmq_password, rabbitmq_vhost, rabbitmq_enable_ssl,
-            rabbitmq_ssl_hostname
-        )
-    
-    Usage in CLI callback:
-        def callback(
-            ctx: typer.Context,
-            rabbitmq_host: RabbitMQHost = "localhost",
-            rabbitmq_port: RabbitMQPort = 5672,
-            rabbitmq_user: RabbitMQUser = "guest",
-            rabbitmq_password: RabbitMQPassword = "guest",
-            rabbitmq_vhost: RabbitMQVhost = "/",
-            rabbitmq_enable_ssl: RabbitMQEnableSSL = False,
-            rabbitmq_ssl_hostname: RabbitMQSSLHostname = "",
-        ):
-            rmq = build_rabbitmq_context(
-                rabbitmq_host, rabbitmq_port, rabbitmq_user,
-                rabbitmq_password, rabbitmq_vhost, rabbitmq_enable_ssl,
-                rabbitmq_ssl_hostname
-            )
-    """
-    from libs.python.cli.providers.rabbitmq import create_rabbitmq_context
-    
-    return create_rabbitmq_context(
-        host=host,
-        port=port,
-        user=user,
-        password=password,
-        vhost=vhost,
-        enable_ssl=enable_ssl,
-        ssl_hostname=ssl_hostname,
-    )
 
 
 # ==============================================================================
@@ -138,6 +50,8 @@ def _create_param_decorator(
 ) -> Callable:
     """
     Factory for creating parameter injection decorators.
+    
+    Used by provider modules to create their decorators.
     
     Args:
         param_specs: List of (param_name, Parameter) tuples to inject
@@ -179,150 +93,68 @@ def _create_param_decorator(
 
 
 # ==============================================================================
-# Service-Specific Decorators
+# Type Aliases - Re-exported from Providers
 # ==============================================================================
 
-def rmq_params(func: Callable) -> Callable:
-    """
-    Decorator that injects RabbitMQ parameters into the callback.
-    
-    Reduces callback signature from N+7 to N parameters while keeping
-    all 7 RabbitMQ options visible in CLI help.
-    
-    Usage:
-        @app.callback()
-        @rmq_params
-        def callback(ctx: typer.Context, ...):
-            rmq = ctx.obj['rabbitmq']
-            # rmq = {'host': ..., 'port': ..., 'user': ..., ...}
-    """
-    param_specs = [
-        ('rabbitmq_host', inspect.Parameter(
-            'rabbitmq_host', inspect.Parameter.KEYWORD_ONLY,
-            default="localhost", annotation=RabbitMQHost
-        )),
-        ('rabbitmq_port', inspect.Parameter(
-            'rabbitmq_port', inspect.Parameter.KEYWORD_ONLY,
-            default=5672, annotation=RabbitMQPort
-        )),
-        ('rabbitmq_user', inspect.Parameter(
-            'rabbitmq_user', inspect.Parameter.KEYWORD_ONLY,
-            default="guest", annotation=RabbitMQUser
-        )),
-        ('rabbitmq_password', inspect.Parameter(
-            'rabbitmq_password', inspect.Parameter.KEYWORD_ONLY,
-            default="guest", annotation=RabbitMQPassword
-        )),
-        ('rabbitmq_vhost', inspect.Parameter(
-            'rabbitmq_vhost', inspect.Parameter.KEYWORD_ONLY,
-            default="/", annotation=RabbitMQVhost
-        )),
-        ('rabbitmq_enable_ssl', inspect.Parameter(
-            'rabbitmq_enable_ssl', inspect.Parameter.KEYWORD_ONLY,
-            default=False, annotation=RabbitMQEnableSSL
-        )),
-        ('rabbitmq_ssl_hostname', inspect.Parameter(
-            'rabbitmq_ssl_hostname', inspect.Parameter.KEYWORD_ONLY,
-            default="", annotation=RabbitMQSSLHostname
-        )),
-    ]
-    
-    def extractor(kwargs):
-        return {
-            'host': kwargs.pop('rabbitmq_host', 'localhost'),
-            'port': kwargs.pop('rabbitmq_port', 5672),
-            'user': kwargs.pop('rabbitmq_user', 'guest'),
-            'password': kwargs.pop('rabbitmq_password', 'guest'),
-            'vhost': kwargs.pop('rabbitmq_vhost', '/'),
-            'enable_ssl': kwargs.pop('rabbitmq_enable_ssl', False),
-            'ssl_hostname': kwargs.pop('rabbitmq_ssl_hostname', ''),
-        }
-    
-    return _create_param_decorator(param_specs, 'rabbitmq', extractor)(func)
+# RabbitMQ
+from libs.python.cli.providers.rabbitmq import (
+    RabbitMQHost,
+    RabbitMQPort,
+    RabbitMQUser,
+    RabbitMQPassword,
+    RabbitMQVHost as RabbitMQVhost,  # Alias for backwards compatibility
+    RabbitMQEnableSSL,
+    RabbitMQSSLHostname,
+)
+
+# Slack
+from libs.python.cli.providers.slack import (
+    SlackBotToken,
+    SlackAppToken,
+)
+
+# PostgreSQL
+from libs.python.cli.providers.postgres import (
+    PostgresUrl as PostgresURL,  # Alias for backwards compatibility
+)
+
+# Logging
+from libs.python.cli.providers.logging import (
+    EnableOTLP,
+)
 
 
-def pg_params(func: Callable) -> Callable:
-    """
-    Decorator that injects PostgreSQL parameters into the callback.
-    
-    Usage:
-        @app.callback()
-        @pg_params
-        def callback(ctx: typer.Context, ...):
-            pg = ctx.obj['postgres']
-            # pg = {'database_url': '...'}
-    """
-    param_specs = [
-        ('database_url', inspect.Parameter(
-            'database_url', inspect.Parameter.KEYWORD_ONLY,
-            annotation=PostgresURL
-        )),
-    ]
-    
-    def extractor(kwargs):
-        return {
-            'database_url': kwargs.pop('database_url'),
-        }
-    
-    return _create_param_decorator(param_specs, 'postgres', extractor)(func)
+# ==============================================================================
+# Decorator Re-exports
+# ==============================================================================
+
+from libs.python.cli.providers.rabbitmq import rmq_params
+from libs.python.cli.providers.postgres import pg_params
+from libs.python.cli.providers.slack import slack_params
+from libs.python.cli.providers.logging import logging_params
 
 
-def slack_params(func: Callable) -> Callable:
-    """
-    Decorator that injects Slack parameters into the callback.
+__all__ = [
+    # Factory
+    '_create_param_decorator',
     
-    Usage:
-        @app.callback()
-        @slack_params
-        def callback(ctx: typer.Context, ...):
-            slack = ctx.obj['slack']
-            # slack = {'bot_token': '...', 'app_token': '...'}
-    """
-    param_specs = [
-        ('slack_bot_token', inspect.Parameter(
-            'slack_bot_token', inspect.Parameter.KEYWORD_ONLY,
-            annotation=SlackBotToken
-        )),
-        ('slack_app_token', inspect.Parameter(
-            'slack_app_token', inspect.Parameter.KEYWORD_ONLY,
-            default="", annotation=SlackAppToken
-        )),
-    ]
+    # Type aliases
+    'RabbitMQHost',
+    'RabbitMQPort',
+    'RabbitMQUser',
+    'RabbitMQPassword',
+    'RabbitMQVhost',
+    'RabbitMQEnableSSL',
+    'RabbitMQSSLHostname',
+    'SlackBotToken',
+    'SlackAppToken',
+    'PostgresURL',
+    'EnableOTLP',
     
-    def extractor(kwargs):
-        return {
-            'bot_token': kwargs.pop('slack_bot_token'),
-            'app_token': kwargs.pop('slack_app_token', ''),
-        }
-    
-    return _create_param_decorator(param_specs, 'slack', extractor)(func)
+    # Decorators
+    'rmq_params',
+    'pg_params',
+    'slack_params',
+    'logging_params',
+]
 
-
-def logging_params(func: Callable) -> Callable:
-    """
-    Decorator that injects logging parameters into the callback.
-    
-    Usage:
-        @app.callback()
-        @logging_params
-        def callback(ctx: typer.Context, ...):
-            log_config = ctx.obj['logging']
-            # log_config = {'enable_otlp': True/False}
-    """
-    param_specs = [
-        ('log_otlp', inspect.Parameter(
-            'log_otlp', inspect.Parameter.KEYWORD_ONLY,
-            default=False, annotation=EnableOTLP
-        )),
-    ]
-    
-    def extractor(kwargs):
-        return {
-            'enable_otlp': kwargs.pop('log_otlp', False),
-        }
-    
-    return _create_param_decorator(param_specs, 'logging', extractor)(func)
-
-
-# Backwards compatibility
-common_params = lambda **groups: rmq_params if groups.get('rabbitmq') else lambda f: f

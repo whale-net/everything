@@ -1,19 +1,43 @@
-# CLI Provider Library
+# CLI Library
 
-Reusable CLI components for building typed, composable command-line interfaces with Typer.
+Reusable CLI components for building type-safe, composable Typer applications with automatic parameter injection.
 
-## Overview
+## Architecture
 
-This library provides:
-- **Parameter Decorators**: Stack decorators to inject service parameters into CLI callbacks
-- **Provider Functions**: Create typed contexts for databases, message queues, logging, etc.
-- **Combinators**: Project-specific initialization wrappers
+The library is organized into three layers:
+
+### 1. Provider Modules (`libs/python/cli/providers/`)
+
+Each provider module defines:
+- **Type aliases**: `Annotated` types for Typer CLI parameters with environment variable support
+- **Context classes**: Dataclasses holding the provider's resources
+- **Factory functions**: Create context from parameters
+- **Decorator**: Injects the provider's parameters into callbacks
+
+Available providers:
+- `rabbitmq.py` - RabbitMQ connections with SSL support
+- `postgres.py` - PostgreSQL with Alembic integration
+- `slack.py` - Slack Web API and Socket Mode clients
+- `logging.py` - OpenTelemetry logging setup
+
+### 2. Parameter Registry (`libs/python/cli/params.py`)
+
+Central registry that:
+- Exports `_create_param_decorator` factory used by all providers
+- Re-exports type aliases from all providers for convenience
+- Re-exports decorators from all providers
+
+### 3. Combinators (`libs/python/cli/providers/combinators.py`)
+
+High-level functions for project-specific initialization:
+- FCM-specific setup functions (e.g., `setup_postgres_with_fcm_init`)
+- Factory creators for building project-specific providers
 
 ## Quick Start
 
-### Stackable Parameter Decorators
+### Using Decorators (Recommended)
 
-Reduce CLI callback signatures while keeping all parameters visible in `--help`:
+Decorators are defined in their provider modules but can be imported from params.py:
 
 ```python
 from libs.python.cli.params import rmq_params, pg_params, slack_params, logging_params
@@ -22,46 +46,229 @@ import typer
 app = typer.Typer()
 
 @app.callback()
-@rmq_params      # Adds 7 RabbitMQ parameters
-@pg_params       # Adds 1 PostgreSQL parameter
-@slack_params    # Adds 2 Slack parameters
-@logging_params  # Adds 1 logging parameter
-def callback(
-    ctx: typer.Context,
-    # Only your app-specific params here!
-    app_env: str = typer.Option(..., envvar="APP_ENV"),
-):
-    """Your CLI with automatic parameter injection."""
-    
-    # Access injected parameters from context
+@rmq_params       # Injects 7 RabbitMQ parameters
+@pg_params        # Injects 1 Postgres parameter
+@slack_params     # Injects 2 Slack parameters
+@logging_params   # Injects 1 logging parameter
+def callback(ctx: typer.Context):
+    # Parameters automatically stored in ctx.obj
     rmq = ctx.obj['rabbitmq']
     pg = ctx.obj['postgres']
     slack = ctx.obj['slack']
-    log_config = ctx.obj['logging']
+    logging = ctx.obj['logging']
+```
+
+### Decorator Details
+
+#### `@rmq_params` (from `libs.python.cli.providers.rabbitmq`)
+Injects 7 RabbitMQ parameters:
+- `--rabbitmq-host` (envvar: RABBITMQ_HOST)
+- `--rabbitmq-port` (envvar: RABBITMQ_PORT, default: 5672)
+- `--rabbitmq-user` (envvar: RABBITMQ_USER, default: "guest")
+- `--rabbitmq-password` (envvar: RABBITMQ_PASSWORD, default: "guest")
+- `--rabbitmq-vhost` (envvar: RABBITMQ_VHOST, default: "/")
+- `--rabbitmq-enable-ssl` (envvar: RABBITMQ_ENABLE_SSL, default: False)
+- `--rabbitmq-ssl-hostname` (envvar: RABBITMQ_SSL_HOSTNAME, default: "")
+
+Stores in `ctx.obj['rabbitmq']` as dict with keys: `host`, `port`, `user`, `password`, `vhost`, `enable_ssl`, `ssl_hostname`
+
+#### `@pg_params` (from `libs.python.cli.providers.postgres`)
+Injects 1 PostgreSQL parameter:
+- `--database-url` (envvar: DATABASE_URL, required)
+
+Stores in `ctx.obj['postgres']` as dict with key: `database_url`
+
+#### `@slack_params` (from `libs.python.cli.providers.slack`)
+Injects 2 Slack parameters:
+- `--slack-bot-token` (envvar: SLACK_BOT_TOKEN, required)
+- `--slack-app-token` (envvar: SLACK_APP_TOKEN, optional, default: "")
+
+Stores in `ctx.obj['slack']` as dict with keys: `bot_token`, `app_token`
+
+#### `@logging_params` (from `libs.python.cli.providers.logging`)
+Injects 1 logging parameter:
+- `--log-otlp` (default: False)
+
+Stores in `ctx.obj['logging']` as dict with key: `enable_otlp`
+
+## Using Provider Functions
+
+For more control, use provider factory functions directly:
+
+```python
+from libs.python.cli.providers.rabbitmq import RabbitMQHost, create_rabbitmq_context
+from libs.python.cli.providers.postgres import PostgresUrl, create_postgres_context
+
+@app.callback()
+def callback(
+    ctx: typer.Context,
+    rabbitmq_host: RabbitMQHost,
+    database_url: PostgresUrl,
+):
+    # Manual context creation
+    ctx.obj = {
+        'rabbitmq': create_rabbitmq_context(host=rabbitmq_host),
+        'postgres': create_postgres_context(
+            database_url=database_url,
+            migrations_package="myapp.migrations"
+        ),
+    }
+```
+
+## Using Combinators
+
+For project-specific initialization patterns:
+
+```python
+from libs.python.cli.providers.combinators import (
+    setup_postgres_with_fcm_init,
+    setup_slack_with_fcm_init,
+)
+
+@app.callback()
+def callback(
+    ctx: typer.Context,
+    database_url: PostgresUrl,
+    slack_bot_token: SlackBotToken,
+):
+    ctx.obj = {
+        'postgres': setup_postgres_with_fcm_init(database_url),
+        'slack': setup_slack_with_fcm_init(slack_bot_token),
+    }
+```
+
+## Best Practices
+
+1. **Stack decorators** for multiple services - cleaner than manual parameters
+2. **Use combinators** for project-specific initialization (FCM, manman)
+3. **Import from params.py** for convenience, or from provider modules directly
+4. **All parameters remain visible** in `--help` output regardless of approach
+
+## Migration Guide
+
+### From Manual Parameters to Decorators
+
+**Before** (12 parameters):
+```python
+@app.callback()
+def callback(
+    ctx: typer.Context,
+    rabbitmq_host: RabbitMQHost = "localhost",
+    rabbitmq_port: RabbitMQPort = 5672,
+    rabbitmq_user: RabbitMQUser = "guest",
+    rabbitmq_password: RabbitMQPassword = "guest",
+    rabbitmq_vhost: RabbitMQVhost = "/",
+    rabbitmq_enable_ssl: RabbitMQEnableSSL = False,
+    rabbitmq_ssl_hostname: RabbitMQSSLHostname = "",
+    slack_bot_token: SlackBotToken,
+    slack_app_token: SlackAppToken = "",
+    database_url: PostgresURL,
+    log_otlp: EnableOTLP = False,
+):
+    # Manual context creation
+    ...
+```
+
+**After** (1 parameter + decorators):
+```python
+@app.callback()
+@rmq_params
+@pg_params
+@slack_params
+@logging_params
+def callback(ctx: typer.Context):
+    # Parameters automatically in ctx.obj
+    rmq = ctx.obj['rabbitmq']
+    pg = ctx.obj['postgres']
+    slack = ctx.obj['slack']
+    logging = ctx.obj['logging']
+```
+
+**Result**: 92% parameter reduction, identical CLI help output
+
+## Testing
+
+When testing CLIs with decorators:
+
+```python
+from typer.testing import CliRunner
+
+def test_cli():
+    runner = CliRunner()
+    result = runner.invoke(app, [
+        "--rabbitmq-host", "localhost",
+        "--database-url", "postgresql://localhost/test",
+        "--slack-bot-token", "xoxb-test",
+        "command",
+    ])
+    assert result.exit_code == 0
+```
+
+## Creating New Decorators
+
+To add a new provider with decorator support:
+
+1. Create provider module in `libs/python/cli/providers/your_provider.py`:
+
+```python
+import inspect
+from typing import Annotated, Callable
+import typer
+
+# Define type aliases
+YourParam = Annotated[str, typer.Option("--your-param", envvar="YOUR_PARAM")]
+
+# Define context class and factory function
+# ...
+
+# Define decorator
+def your_params(func: Callable) -> Callable:
+    """Decorator that injects your parameters."""
+    from libs.python.cli.params import _create_param_decorator
     
-    # Use provider functions to create contexts
-    from libs.python.cli.providers.rabbitmq import create_rabbitmq_context
-    rmq_ctx = create_rabbitmq_context(**rmq)
+    param_specs = [
+        ('your_param', inspect.Parameter(
+            'your_param', inspect.Parameter.KEYWORD_ONLY,
+            annotation=YourParam
+        )),
+    ]
+    
+    def extractor(kwargs):
+        return {
+            'param': kwargs.pop('your_param'),
+        }
+    
+    return _create_param_decorator(param_specs, 'your_service', extractor)(func)
 ```
 
-**Result**: Callback has 1 parameter instead of 11, but CLI still exposes all 11!
+2. Re-export from `libs/python/cli/params.py`:
 
-```bash
-$ my-app --help
-Options:
-  --app-env TEXT                [required]
-  --rabbitmq-host TEXT          [default: localhost]
-  --rabbitmq-port INTEGER       [default: 5672]
-  --rabbitmq-user TEXT          [default: guest]
-  --rabbitmq-password TEXT      [default: guest]
-  --rabbitmq-vhost TEXT         [default: /]
-  --rabbitmq-enable-ssl
-  --rabbitmq-ssl-hostname TEXT
-  --database-url TEXT           [required]
-  --slack-bot-token TEXT        [required]
-  --slack-app-token TEXT
-  --log-otlp                    Enable OTLP logging
+```python
+from libs.python.cli.providers.your_provider import (
+    YourParam,
+    your_params,
+)
+
+__all__ = [
+    ...
+    'YourParam',
+    'your_params',
+]
 ```
+
+## Troubleshooting
+
+### CLI help doesn't show parameters
+- Decorators must be applied AFTER `@app.callback()` or `@app.command()`
+- Correct order: `@app.callback()` → `@decorator` → `def callback()`
+
+### Type hints not working
+- Import type aliases from `libs.python.cli.params` or provider modules
+- Ensure `Annotated` types are used
+
+### Context not available in commands
+- Decorators only work on callbacks
+- Commands access context via `ctx.obj` parameter
 
 ## Available Decorators
 

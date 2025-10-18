@@ -4,26 +4,23 @@ Provides RabbitMQ connection context with optional SSL configuration.
 
 Example:
     ```python
-    from libs.python.cli.providers.rabbitmq import RabbitMQHost, create_rabbitmq_context
+    from libs.python.cli.providers.rabbitmq import rmq_params
 
     app = typer.Typer()
 
     @app.callback()
-    def setup(
-        ctx: typer.Context,
-        rabbitmq_host: RabbitMQHost,
-        rabbitmq_port: RabbitMQPort = 5672,
-    ):
-        ctx.obj = create_rabbitmq_context(
-            host=rabbitmq_host,
-            port=rabbitmq_port,
-        )
+    @rmq_params
+    def setup(ctx: typer.Context):
+        rmq = ctx.obj['rabbitmq']
+        # rmq = {'host': ..., 'port': ..., 'user': ..., ...}
     ```
 """
 
+import inspect
 import logging
 from dataclasses import dataclass
-from typing import Annotated, Optional
+from functools import wraps
+from typing import Annotated, Callable, Optional
 
 import typer
 
@@ -126,3 +123,68 @@ def create_rabbitmq_context(
     logger.debug("RabbitMQ context created successfully")
 
     return ctx
+
+
+# ==============================================================================
+# Decorator for injecting RabbitMQ parameters
+# ==============================================================================
+
+def rmq_params(func: Callable) -> Callable:
+    """
+    Decorator that injects RabbitMQ parameters into the callback.
+    
+    Reduces callback signature from N+7 to N parameters while keeping
+    all 7 RabbitMQ options visible in CLI help.
+    
+    Usage:
+        @app.callback()
+        @rmq_params
+        def callback(ctx: typer.Context, ...):
+            rmq = ctx.obj['rabbitmq']
+            # rmq = {'host': ..., 'port': ..., 'user': ..., ...}
+    """
+    from libs.python.cli.params import _create_param_decorator
+    
+    param_specs = [
+        ('rabbitmq_host', inspect.Parameter(
+            'rabbitmq_host', inspect.Parameter.KEYWORD_ONLY,
+            default="localhost", annotation=RabbitMQHost
+        )),
+        ('rabbitmq_port', inspect.Parameter(
+            'rabbitmq_port', inspect.Parameter.KEYWORD_ONLY,
+            default=5672, annotation=RabbitMQPort
+        )),
+        ('rabbitmq_user', inspect.Parameter(
+            'rabbitmq_user', inspect.Parameter.KEYWORD_ONLY,
+            default="guest", annotation=RabbitMQUser
+        )),
+        ('rabbitmq_password', inspect.Parameter(
+            'rabbitmq_password', inspect.Parameter.KEYWORD_ONLY,
+            default="guest", annotation=RabbitMQPassword
+        )),
+        ('rabbitmq_vhost', inspect.Parameter(
+            'rabbitmq_vhost', inspect.Parameter.KEYWORD_ONLY,
+            default="/", annotation=RabbitMQVHost
+        )),
+        ('rabbitmq_enable_ssl', inspect.Parameter(
+            'rabbitmq_enable_ssl', inspect.Parameter.KEYWORD_ONLY,
+            default=False, annotation=RabbitMQEnableSSL
+        )),
+        ('rabbitmq_ssl_hostname', inspect.Parameter(
+            'rabbitmq_ssl_hostname', inspect.Parameter.KEYWORD_ONLY,
+            default="", annotation=RabbitMQSSLHostname
+        )),
+    ]
+    
+    def extractor(kwargs):
+        return {
+            'host': kwargs.pop('rabbitmq_host', 'localhost'),
+            'port': kwargs.pop('rabbitmq_port', 5672),
+            'user': kwargs.pop('rabbitmq_user', 'guest'),
+            'password': kwargs.pop('rabbitmq_password', 'guest'),
+            'vhost': kwargs.pop('rabbitmq_vhost', '/'),
+            'enable_ssl': kwargs.pop('rabbitmq_enable_ssl', False),
+            'ssl_hostname': kwargs.pop('rabbitmq_ssl_hostname', ''),
+        }
+    
+    return _create_param_decorator(param_specs, 'rabbitmq', extractor)(func)

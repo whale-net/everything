@@ -4,28 +4,24 @@ Provides configurable logging setup with optional OTLP export.
 
 Example:
     ```python
-    from libs.python.cli.providers.logging import LogLevel, create_logging_context
+    from libs.python.cli.providers.logging import logging_params
 
     app = typer.Typer()
 
     @app.callback()
-    def setup(
-        ctx: typer.Context,
-        log_level: LogLevel = "INFO",
-        log_otlp: bool = False,
-    ):
-        ctx.obj = create_logging_context(
-            service_name="my-service",
-            log_level=log_level,
-            enable_otlp=log_otlp,
-        )
+    @logging_params
+    def setup(ctx: typer.Context):
+        log_config = ctx.obj['logging']
+        # log_config = {'enable_otlp': True/False}
     ```
 """
 
+import inspect
 import logging
 import os
 from dataclasses import dataclass
-from typing import Annotated, Literal, Optional
+from functools import wraps
+from typing import Annotated, Callable, Literal, Optional
 
 import typer
 from opentelemetry._logs import set_logger_provider
@@ -144,3 +140,35 @@ def create_logging_context(
         enable_console=enable_console,
         logger_provider=logger_provider,
     )
+
+
+# ==============================================================================
+# Decorator for injecting logging parameters
+# ==============================================================================
+
+def logging_params(func: Callable) -> Callable:
+    """
+    Decorator that injects logging parameters into the callback.
+    
+    Usage:
+        @app.callback()
+        @logging_params
+        def callback(ctx: typer.Context, ...):
+            log_config = ctx.obj['logging']
+            # log_config = {'enable_otlp': True/False}
+    """
+    from libs.python.cli.params import _create_param_decorator
+    
+    param_specs = [
+        ('log_otlp', inspect.Parameter(
+            'log_otlp', inspect.Parameter.KEYWORD_ONLY,
+            default=False, annotation=EnableOTLP
+        )),
+    ]
+    
+    def extractor(kwargs):
+        return {
+            'enable_otlp': kwargs.pop('log_otlp', False),
+        }
+    
+    return _create_param_decorator(param_specs, 'logging', extractor)(func)

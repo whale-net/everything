@@ -4,31 +4,23 @@ Provides Slack client context with both app token (Socket Mode) and bot token (W
 
 Example:
     ```python
-    from libs.python.cli.providers.slack import SlackBotToken, create_slack_context
+    from libs.python.cli.providers.slack import slack_params
 
     app = typer.Typer()
 
     @app.callback()
-    def setup(
-        ctx: typer.Context,
-        slack_bot_token: SlackBotToken,
-        slack_app_token: SlackAppToken,
-    ):
-        ctx.obj = create_slack_context(
-            bot_token=slack_bot_token,
-            app_token=slack_app_token,
-        )
-
-    @app.command()
-    def send(ctx: typer.Context, channel: str, message: str):
-        slack_ctx: SlackContext = ctx.obj
-        slack_ctx.web_client.chat_postMessage(channel=channel, text=message)
+    @slack_params
+    def setup(ctx: typer.Context):
+        slack = ctx.obj['slack']
+        # slack = {'bot_token': '...', 'app_token': '...'}
     ```
 """
 
+import inspect
 import logging
 from dataclasses import dataclass
-from typing import Annotated, Optional
+from functools import wraps
+from typing import Annotated, Callable, Optional
 
 import typer
 
@@ -121,3 +113,40 @@ def create_slack_web_client_only(
         app_token=None,
         web_client_initializer=web_client_initializer,
     )
+
+
+# ==============================================================================
+# Decorator for injecting Slack parameters
+# ==============================================================================
+
+def slack_params(func: Callable) -> Callable:
+    """
+    Decorator that injects Slack parameters into the callback.
+    
+    Usage:
+        @app.callback()
+        @slack_params
+        def callback(ctx: typer.Context, ...):
+            slack = ctx.obj['slack']
+            # slack = {'bot_token': '...', 'app_token': '...'}
+    """
+    from libs.python.cli.params import _create_param_decorator
+    
+    param_specs = [
+        ('slack_bot_token', inspect.Parameter(
+            'slack_bot_token', inspect.Parameter.KEYWORD_ONLY,
+            annotation=SlackBotToken
+        )),
+        ('slack_app_token', inspect.Parameter(
+            'slack_app_token', inspect.Parameter.KEYWORD_ONLY,
+            default="", annotation=SlackAppToken
+        )),
+    ]
+    
+    def extractor(kwargs):
+        return {
+            'bot_token': kwargs.pop('slack_bot_token'),
+            'app_token': kwargs.pop('slack_app_token', ''),
+        }
+    
+    return _create_param_decorator(param_specs, 'slack', extractor)(func)

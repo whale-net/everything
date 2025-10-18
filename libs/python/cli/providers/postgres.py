@@ -5,27 +5,23 @@ with integrated Alembic configuration.
 
 Example:
     ```python
-    from libs.python.cli.providers.postgres import PostgresUrl, create_postgres_context
+    from libs.python.cli.providers.postgres import pg_params
 
     app = typer.Typer()
 
     @app.callback()
-    def setup(ctx: typer.Context, database_url: PostgresUrl):
-        ctx.obj = create_postgres_context(
-            database_url=database_url,
-            migrations_package="myapp.migrations",
-        )
-
-    @app.command()
-    def migrate(ctx: typer.Context):
-        db_ctx: DatabaseContext = ctx.obj
-        run_migration(db_ctx.engine, db_ctx.alembic_config)
+    @pg_params
+    def setup(ctx: typer.Context):
+        pg = ctx.obj['postgres']
+        # pg = {'database_url': '...'}
     ```
 """
 
+import inspect
 import logging
 from dataclasses import dataclass
-from typing import Annotated, Optional
+from functools import wraps
+from typing import Annotated, Callable, Optional
 
 import alembic.config
 import typer
@@ -127,3 +123,35 @@ def create_postgres_context(
         url=database_url,
         migrations_package=migrations_package,
     )
+
+
+# ==============================================================================
+# Decorator for injecting PostgreSQL parameters
+# ==============================================================================
+
+def pg_params(func: Callable) -> Callable:
+    """
+    Decorator that injects PostgreSQL parameters into the callback.
+    
+    Usage:
+        @app.callback()
+        @pg_params
+        def callback(ctx: typer.Context, ...):
+            pg = ctx.obj['postgres']
+            # pg = {'database_url': '...'}
+    """
+    from libs.python.cli.params import _create_param_decorator
+    
+    param_specs = [
+        ('database_url', inspect.Parameter(
+            'database_url', inspect.Parameter.KEYWORD_ONLY,
+            annotation=PostgresUrl
+        )),
+    ]
+    
+    def extractor(kwargs):
+        return {
+            'database_url': kwargs.pop('database_url'),
+        }
+    
+    return _create_param_decorator(param_specs, 'postgres', extractor)(func)
