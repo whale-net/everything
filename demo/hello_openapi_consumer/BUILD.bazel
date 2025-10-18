@@ -1,0 +1,37 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+py_library(
+    name = "main_lib",
+    srcs = ["__init__.py", "main.py"],
+    deps = [
+        "//generated/demo:internal_api",
+    ],
+    visibility = ["//demo/hello_openapi_consumer:__pkg__"],
+)
+
+py_binary(
+    name = "hello-openapi-consumer",
+    srcs = ["main.py"],
+    main = "main.py",
+    deps = [":main_lib"],
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "test_main",
+    srcs = ["test_main.py"],
+    deps = [
+        ":main_lib",
+        "@pypi//:pytest",
+    ],
+    size = "small",
+)
+
+release_app(
+    name = "hello-openapi-consumer",
+    language = "python",
+    domain = "demo",
+    description = "Test app demonstrating OpenAPI client consumption for cross-compilation verification",
+    app_type = "worker",
+)

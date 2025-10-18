@@ -1,0 +1,12 @@
+"""Python runtime optimization for containers.
+
+We optimize Python containers (400MB → 87MB) via genrule in container_image.bzl,
+not custom toolchains. See README.md for rationale.
+"""
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "all_files",
+    srcs = glob(["*.bzl", "*.md"]) + ["BUILD.bazel"],
+)

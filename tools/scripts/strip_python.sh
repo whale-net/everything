@@ -20,6 +20,16 @@ fi
 
 echo "Optimizing Python installation in $PYTHON_DIR"
 
+# Check if strip is available
+if ! command -v strip &> /dev/null; then
+    echo "Warning: 'strip' command not found. Skipping debug symbol stripping."
+    echo "Install binutils to enable debug symbol stripping for further size reduction."
+    STRIP_AVAILABLE=false
+else
+    echo "Found 'strip' command. Will strip debug symbols."
+    STRIP_AVAILABLE=true
+fi
+
 # Find the Python runfiles directory - look for any .runfiles directory
 RUNFILES_DIRS=$(find "$PYTHON_DIR" -type d -name "*.runfiles" 2>/dev/null || true)
 
@@ -43,16 +53,51 @@ for RUNFILES_DIR in $RUNFILES_DIRS; do
     for PYTHON_INSTALL in $PYTHON_INSTALLS; do
         echo "  Found Python installation: $PYTHON_INSTALL"
         
-        # Strip debug symbols from binaries
-        if [ -d "$PYTHON_INSTALL/bin" ]; then
+        # Remove unnecessary runtime files to reduce image size
+        echo "  Removing unnecessary files..."
+        
+        # Remove TCL/TK (not needed for most Python apps, saves ~10MB)
+        rm -rf "$PYTHON_INSTALL/lib/tcl"* "$PYTHON_INSTALL/lib/tk"* "$PYTHON_INSTALL/lib/itcl"* \
+               "$PYTHON_INSTALL/lib/thread"* "$PYTHON_INSTALL/lib/libtcl"* "$PYTHON_INSTALL/lib/libtk"* 2>/dev/null || true
+        
+        # Remove include headers (not needed at runtime, saves ~2.4MB)
+        rm -rf "$PYTHON_INSTALL/include" 2>/dev/null || true
+        
+        # Remove pkgconfig files (not needed at runtime)
+        rm -rf "$PYTHON_INSTALL/lib/pkgconfig" 2>/dev/null || true
+        
+        # Remove man pages and docs (not needed in containers)
+        rm -rf "$PYTHON_INSTALL/share" 2>/dev/null || true
+        
+        # Strip debug symbols from binaries (use --strip-all for max reduction)
+        if [ "$STRIP_AVAILABLE" = true ] && [ -d "$PYTHON_INSTALL/bin" ]; then
             echo "  Stripping binaries in $PYTHON_INSTALL/bin..."
-            find "$PYTHON_INSTALL/bin" -type f -executable -exec strip --strip-debug {} \; 2>/dev/null || true
+            # Make files writable before stripping (Bazel files are read-only)
+            find "$PYTHON_INSTALL/bin" -type f -executable -exec chmod u+w {} \;
+            find "$PYTHON_INSTALL/bin" -type f -executable -exec strip --strip-all {} \; 2>/dev/null || true
         fi
         
-        # Strip debug symbols from shared libraries
-        if [ -d "$PYTHON_INSTALL/lib" ]; then
+        # Strip shared libraries (use --strip-unneeded to keep required symbols)
+        if [ "$STRIP_AVAILABLE" = true ] && [ -d "$PYTHON_INSTALL/lib" ]; then
             echo "  Stripping shared libraries in $PYTHON_INSTALL/lib..."
-            find "$PYTHON_INSTALL/lib" -type f -name "*.so*" -exec strip --strip-debug {} \; 2>/dev/null || true
+            # Make files writable before stripping
+            find "$PYTHON_INSTALL/lib" -type f -name "*.so*" -exec chmod u+w {} \;
+            find "$PYTHON_INSTALL/lib" -type f -name "*.so*" -exec strip --strip-unneeded {} \; 2>/dev/null || true
+        fi
+        
+        # Remove Python cache files (*.pyc, __pycache__ directories)
+        if [ -d "$PYTHON_INSTALL/lib/python3.13" ]; then
+            echo "  Removing Python cache files..."
+            find "$PYTHON_INSTALL/lib/python3.13" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+            find "$PYTHON_INSTALL/lib/python3.13" -type f -name "*.pyc" -delete 2>/dev/null || true
+            find "$PYTHON_INSTALL/lib/python3.13" -type f -name "*.pyo" -delete 2>/dev/null || true
+        fi
+        
+        # Remove test directories (saves significant space)
+        if [ -d "$PYTHON_INSTALL/lib/python3.13" ]; then
+            echo "  Removing test directories..."
+            find "$PYTHON_INSTALL/lib/python3.13" -type d -name "test" -prune -exec rm -rf {} + 2>/dev/null || true
+            find "$PYTHON_INSTALL/lib/python3.13" -type d -name "tests" -prune -exec rm -rf {} + 2>/dev/null || true
         fi
         
         # Remove duplicate Python binaries and replace with symlinks

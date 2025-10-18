@@ -63,13 +63,14 @@ def _openapi_client_provider_impl(ctx):
 openapi_client_provider_rule = rule(
     implementation = _openapi_client_provider_impl,
     attrs = {
-        "tar": attr.label(allow_single_file = [".tar"], mandatory = True),
+        "tar": attr.label(allow_single_file = [".tar"], mandatory = True, cfg = "exec"),
         "app": attr.string(mandatory = True),
         "deps": attr.label_list(providers = [PyInfo]),
         "_package_inits": attr.label_list(
             default = [
                 "//generated:init",
                 "//generated/manman:namespace_init",
+                "//generated/demo:namespace_init",
             ],
         ),
     },
@@ -105,6 +106,14 @@ def openapi_client(name, spec, namespace, app, package_name = None, visibility =
             "@openapi_generator_cli//file",
         ],
         toolchains = ["@bazel_tools//tools/jdk:current_java_runtime"],
+        exec_compatible_with = [
+            "@platforms//os:linux",
+            "@platforms//cpu:x86_64",
+        ],
+        tags = [
+            "openapi",
+            "no-remote",
+        ],
         cmd = """
             # Use wrapper with "auto" to find system Java, fallback to Bazel Java
             $(location //tools:openapi_gen_wrapper) \\
@@ -123,7 +132,6 @@ def openapi_client(name, spec, namespace, app, package_name = None, visibility =
             app = app,
         ),
         visibility = ["//visibility:private"],
-        tags = ["openapi"],
     )
     
     # Step 2: Create PyInfo provider (target configuration)
@@ -139,13 +147,3 @@ def openapi_client(name, spec, namespace, app, package_name = None, visibility =
         visibility = visibility or ["//visibility:public"],
     )
     
-    # For containers: Create a tar file that can be properly included
-    # Container build will extract this at runtime if needed
-    native.genrule(
-        name = name + "_tar",
-        srcs = [":" + name],
-        outs = ["{}_container.tar".format(app)],
-        cmd = "tar -cf $@ -C $(location :{})/../ {}".format(name, app),
-        visibility = ["//visibility:public"],
-        tags = ["manual"],
-    )

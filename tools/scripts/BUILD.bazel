@@ -10,6 +10,7 @@ exports_files([
     "sync_generated_clients.sh",
     "test_container_images.sh",
     "strip_python.sh",
+    "split_python_layers.sh",
 ])
 
 # Cross-compilation verification test
@@ -20,6 +21,7 @@ sh_test(
     srcs = ["test_cross_compilation.sh"],
     data = [
         "//demo/hello_fastapi:hello-fastapi_image",
+        "//demo/hello_openapi_consumer:hello-openapi-consumer_image",
     ],
     tags = [
         "manual",  # Don't run with //...
