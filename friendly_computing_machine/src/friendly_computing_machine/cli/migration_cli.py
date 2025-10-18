@@ -32,7 +32,7 @@ migration_app = create_migration_app(
 
 
 # Add callback for logging setup
-@migration_app.callback(invoke_without_command=True)
+@migration_app.callback()
 def callback(
     ctx: typer.Context,
     log_otlp: bool = typer.Option(False, help="Enable OpenTelemetry logging"),

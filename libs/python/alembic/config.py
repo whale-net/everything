@@ -6,6 +6,7 @@ without requiring alembic.ini files. This is essential for containerized deploym
 
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -91,13 +92,13 @@ def create_alembic_config(
     if script_template is None:
         script_template = get_default_script_template()
         
-    # Copy the template to migrations directory if it doesn't exist or if we're using the default
+    # Copy the template to migrations directory if using the default and it's outdated
     migrations_template = os.path.join(migrations_dir, "script.py.mako")
     if script_template == get_default_script_template():
-        # Always use the library template - copy it to migrations dir
-        import shutil
-        shutil.copy2(script_template, migrations_template)
-        logger.debug(f"Copied default script template to: {migrations_template}")
+        # Only copy if template doesn't exist or is outdated
+        if not os.path.exists(migrations_template) or os.path.getmtime(script_template) > os.path.getmtime(migrations_template):
+            shutil.copy2(script_template, migrations_template)
+            logger.debug(f"Copied default script template to: {migrations_template}")
 
     # Store version_table_schema for use in env.py
     if version_table_schema:

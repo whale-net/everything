@@ -7,7 +7,9 @@ from manman.src.models import ManManBase
 
 def include_object(object, name, type_, reflected, compare_to):
     """Include only manman schema tables."""
-    return type_ != "table" or object.schema == "manman"
+    if type_ == "table":
+        return object.schema == "manman"
+    return True
 
 
 run_migrations(

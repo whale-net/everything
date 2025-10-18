@@ -541,7 +541,7 @@ def _get_alembic_config():
     db_url = os.environ.get("POSTGRES_URL", "")
     
     if not db_url:
-        raise RuntimeError("POSTGRES_URL environment variable not set")
+        raise RuntimeError("Required environment variable 'POSTGRES_URL' is not set. Please set 'POSTGRES_URL' to your database connection string.")
     
     return create_alembic_config(
         migrations_dir=migrations_dir,

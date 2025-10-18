@@ -92,13 +92,12 @@ def create_migration_app(
         """Get the migrations directory path."""
         try:
             migrations_resource = files(migrations_package)
-
-            # Handle different types of resource paths
-            # MultiplexedPath (most common): access _paths[0]
-            # Other Traversable types: convert to string
-            if hasattr(migrations_resource, "_paths") and migrations_resource._paths:
-                migrations_dir = str(migrations_resource._paths[0])
-            else:
+            
+            # Use public API to get filesystem path
+            try:
+                migrations_dir = os.fspath(migrations_resource)
+            except TypeError:
+                # Fallback for resource types that don't support fspath
                 migrations_dir = str(migrations_resource)
 
             # Verify the directory exists and has env.py
