@@ -132,14 +132,20 @@ from libs.python.cli.providers.rabbitmq import rmq_params
 from libs.python.cli.providers.postgres import pg_params
 from libs.python.cli.providers.slack import slack_params
 from libs.python.cli.providers.logging import logging_params
-from libs.python.cli.types import AppEnv
+from libs.python.cli.providers.temporal import temporal_params
+from libs.python.cli.providers.gemini import gemini_params
+from libs.python.cli.types import AppEnv, ManManHostUrl
 
 
 __all__ = [
     # Factory
     '_create_param_decorator',
     
-    # Type aliases
+    # Type aliases - Common
+    'AppEnv',
+    'ManManHostUrl',
+    
+    # Type aliases - RabbitMQ
     'RabbitMQHost',
     'RabbitMQPort',
     'RabbitMQUser',
@@ -147,16 +153,23 @@ __all__ = [
     'RabbitMQVhost',
     'RabbitMQEnableSSL',
     'RabbitMQSSLHostname',
+    
+    # Type aliases - Slack
     'SlackBotToken',
     'SlackAppToken',
+    
+    # Type aliases - PostgreSQL
     'PostgresURL',
+    
+    # Type aliases - Logging
     'EnableOTLP',
-    'AppEnv',
     
     # Decorators
     'rmq_params',
     'pg_params',
     'slack_params',
     'logging_params',
+    'temporal_params',
+    'gemini_params',
 ]
 

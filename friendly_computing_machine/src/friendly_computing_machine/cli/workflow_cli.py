@@ -5,7 +5,7 @@ from typing import Annotated
 import google.generativeai as genai
 import typer
 
-from libs.python.cli.params import logging_params, AppEnv
+from libs.python.cli.params import logging_params, temporal_params, gemini_params, AppEnv
 from libs.python.cli.providers.logging import create_logging_context
 from libs.python.cli.providers.postgres import PostgresUrl
 from libs.python.cli.providers.slack import SlackBotToken
@@ -29,26 +29,25 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.util imp
 
 logger = logging.getLogger(__name__)
 
-# Type aliases
-T_temporal_host = Annotated[str, typer.Option(..., envvar="TEMPORAL_HOST")]
-T_google_api_key = Annotated[str, typer.Option(..., envvar="GOOGLE_API_KEY")]
-
 app = typer.Typer(
     context_settings={"obj": {}},
 )
 
 
 @app.callback()
+@temporal_params
 @logging_params
 def callback(
     ctx: typer.Context,
-    temporal_host: T_temporal_host,
     app_env: AppEnv,
 ):
     logger.debug("CLI callback starting")
     
-    # Setup logging from decorator-injected params
+    # Get contexts from decorators
+    temporal_config = ctx.obj.get('temporal', {})
     log_config = ctx.obj.get('logging', {})
+    
+    # Setup logging
     create_logging_context(
         service_name="friendly-computing-machine-workflow",
         log_level="DEBUG",
@@ -56,19 +55,19 @@ def callback(
     )
     
     # Initialize Temporal client
-    init_temporal(host=temporal_host, app_env=app_env)
+    init_temporal(host=temporal_config['host'], app_env=app_env)
     
     # Store context
-    ctx.obj['temporal_host'] = temporal_host
+    ctx.obj['temporal_host'] = temporal_config['host']
     ctx.obj['app_env'] = app_env
     
     logger.debug("CLI callback complete")
 
 
 @app.command("run")
+@gemini_params
 def cli_run(
     ctx: typer.Context,
-    google_api_key: T_google_api_key,
     database_url: PostgresUrl,
     slack_bot_token: SlackBotToken,
     skip_migration_check: bool = False,
@@ -86,7 +85,8 @@ def cli_run(
         logger.info("migration check passed, starting normally")
 
     # Setup Gemini API
-    genai.configure(api_key=google_api_key)
+    gemini_config = ctx.obj.get('gemini', {})
+    genai.configure(api_key=gemini_config['api_key'])
     
     # Setup Slack client
     init_web_client(slack_bot_token)

@@ -25,3 +25,6 @@ TContext = TypeVar("TContext", bound=CLIContext)
 
 # Application environment (dev, staging, prod, etc.)
 AppEnv = Annotated[Optional[str], typer.Option(envvar="APP_ENV")]
+
+# ManMan service host URL (used by multiple apps, just a URL string)
+ManManHostUrl = Annotated[str, typer.Option(..., envvar="MANMAN_HOST_URL")]

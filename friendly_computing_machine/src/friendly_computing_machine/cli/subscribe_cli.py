@@ -16,6 +16,7 @@ from libs.python.cli.params import (
     slack_params,
     logging_params,
     AppEnv,
+    ManManHostUrl,
 )
 from friendly_computing_machine.src.friendly_computing_machine.bot.subscribe.main import (
     run_manman_subscribe,
@@ -31,9 +32,6 @@ from friendly_computing_machine.src.friendly_computing_machine.health import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Type aliases
-T_manman_host_url = Annotated[str, typer.Option(..., envvar="MANMAN_HOST_URL")]
 
 
 @dataclass
@@ -57,7 +55,7 @@ app = typer.Typer()
 def callback(
     ctx: typer.Context,
     app_env: AppEnv,
-    manman_host_url: T_manman_host_url,
+    manman_host_url: ManManHostUrl,
 ):
     """
     ManMan Subscribe Service - Event-driven microservice for manman notifications.
