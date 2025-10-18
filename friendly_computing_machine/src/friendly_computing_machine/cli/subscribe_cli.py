@@ -5,12 +5,9 @@ from typing import Annotated, Optional
 import typer
 
 from libs.python.cli.providers.logging import create_logging_context
-from libs.python.cli.providers.postgres import DatabaseContext, PostgresUrl
+from libs.python.cli.providers.postgres import DatabaseContext, PostgresUrl, create_postgres_context
 from libs.python.cli.providers.rabbitmq import RabbitMQContext, create_rabbitmq_context
-from libs.python.cli.providers.combinators import (
-    setup_postgres_with_fcm_init,
-    setup_slack_with_fcm_init,
-)
+from libs.python.cli.providers.slack import create_slack_context
 from libs.python.cli.params import (
     rmq_params,
     slack_params,
@@ -75,9 +72,14 @@ def callback(
         enable_otlp=log_config.get('enable_otlp', False),
     )
     
-    # Create Slack context from decorator-injected params
+    # Create Slack context with FCM initialization
+    from friendly_computing_machine.src.friendly_computing_machine.bot.app import init_web_client
+    
     slack_config = ctx.obj.get('slack', {})
-    slack_ctx = setup_slack_with_fcm_init(bot_token=slack_config['bot_token'])
+    slack_ctx = create_slack_context(
+        bot_token=slack_config['bot_token'],
+        web_client_initializer=init_web_client,
+    )
     
     # Create RabbitMQ context from decorator-injected params
     rabbitmq_config = ctx.obj.get('rabbitmq', {})
@@ -116,8 +118,14 @@ def cli_run(
     """
     subscribe_ctx: FCMSubscribeContext = ctx.obj
     
-    # Create database context with automatic FCM initialization
-    subscribe_ctx.db = setup_postgres_with_fcm_init(database_url)
+    # Create database context with FCM initialization
+    from friendly_computing_machine.src.friendly_computing_machine.db.util import init_engine
+    
+    subscribe_ctx.db = create_postgres_context(
+        database_url=database_url,
+        migrations_package="friendly_computing_machine.src.migrations",
+        engine_initializer=init_engine,
+    )
 
     if skip_migration_check:
         logger.info("skipping migration check")

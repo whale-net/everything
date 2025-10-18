@@ -15,12 +15,8 @@ from libs.python.cli.params import (
     ManManHostUrl,
 )
 from libs.python.cli.providers.logging import create_logging_context
-from libs.python.cli.providers.postgres import DatabaseContext, PostgresUrl
-from libs.python.cli.providers.slack import SlackContext
-from libs.python.cli.providers.combinators import (
-    setup_postgres_with_fcm_init,
-    setup_slack_with_fcm_init,
-)
+from libs.python.cli.providers.postgres import DatabaseContext, PostgresUrl, create_postgres_context
+from libs.python.cli.providers.slack import SlackContext, create_slack_context
 from friendly_computing_machine.src.friendly_computing_machine.manman.api import (
     ManManExperienceAPI,
 )
@@ -74,10 +70,13 @@ def callback(
     gemini_config = ctx.obj.get('gemini', {})
     slack_config = ctx.obj.get('slack', {})
     
-    # Create Slack context
-    slack_ctx = setup_slack_with_fcm_init(
+    # Create Slack context with FCM initialization
+    from friendly_computing_machine.src.friendly_computing_machine.bot.app import init_web_client
+    
+    slack_ctx = create_slack_context(
         bot_token=slack_config['bot_token'],
         app_token=slack_config.get('app_token', ''),
+        web_client_initializer=init_web_client,
     )
     
     # Initialize Temporal client
@@ -110,8 +109,14 @@ def cli_run_taskpool(
 ):
     fcm_ctx: FCMBotContext = ctx.obj
     
-    # Create database context with automatic FCM initialization
-    fcm_ctx.db = setup_postgres_with_fcm_init(database_url)
+    # Create database context with FCM initialization
+    from friendly_computing_machine.src.friendly_computing_machine.db.util import init_engine
+    
+    fcm_ctx.db = create_postgres_context(
+        database_url=database_url,
+        migrations_package="friendly_computing_machine.src.migrations",
+        engine_initializer=init_engine,
+    )
     
     if skip_migration_check:
         logger.info("skipping migration check")
@@ -148,8 +153,14 @@ def cli_run_slack_socket_app(
     gemini_config = ctx.obj.get('gemini', {})
     genai.configure(api_key=gemini_config['api_key'])
     
-    # Create database context with automatic FCM initialization
-    fcm_ctx.db = setup_postgres_with_fcm_init(database_url)
+    # Create database context with FCM initialization
+    from friendly_computing_machine.src.friendly_computing_machine.db.util import init_engine
+    
+    fcm_ctx.db = create_postgres_context(
+        database_url=database_url,
+        migrations_package="friendly_computing_machine.src.migrations",
+        engine_initializer=init_engine,
+    )
 
     logger.info("starting slack bot service (no task pool)")
     # Lazy import to avoid initializing Slack app during module import
