@@ -5,9 +5,8 @@ import logging
 import typer
 
 from libs.python.alembic.cli import create_migration_app
-from friendly_computing_machine.src.friendly_computing_machine.cli.context.log import (
-    setup_logging,
-)
+from libs.python.cli.params import logging_params
+from libs.python.cli.providers.logging import create_logging_context
 
 # Import all models to ensure they are registered with SQLAlchemy
 from friendly_computing_machine.src.friendly_computing_machine.models import (  # noqa: F401
@@ -33,10 +32,13 @@ migration_app = create_migration_app(
 
 # Add callback for logging setup
 @migration_app.callback()
-def callback(
-    ctx: typer.Context,
-    log_otlp: bool = typer.Option(False, help="Enable OpenTelemetry logging"),
-):
+@logging_params
+def callback(ctx: typer.Context):
     """Migration commands for friendly_computing_machine database."""
-    # Setup logging for all migration commands
-    setup_logging(ctx, log_otlp=log_otlp)
+    # Setup logging from decorator-injected params
+    log_config = ctx.obj.get('logging', {})
+    create_logging_context(
+        service_name="friendly-computing-machine-migrations",
+        log_level="DEBUG",
+        enable_otlp=log_config.get('enable_otlp', False),
+    )

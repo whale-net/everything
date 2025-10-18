@@ -5,8 +5,9 @@ import amqpstorm
 import typer
 from typing_extensions import Annotated, Optional
 
+from libs.python.cli.params import rmq_params, logging_params, AppEnv
+from libs.python.cli.providers.logging import create_logging_context
 from manman.src.config import ManManConfig
-from manman.src.logging_config import setup_logging
 from manman.src.util import get_sqlalchemy_session
 from libs.python.rmq import (
     get_rabbitmq_connection,
@@ -86,37 +87,40 @@ def dev():
 
 
 @app.callback()
+@rmq_params
+@logging_params
 def callback(
-    # auth_url: Annotated[str, typer.Option(envvar="MANMAN_AUTH_URL")],
-    rabbitmq_host: Annotated[str, typer.Option(envvar="RABBITMQ_HOST")],
-    rabbitmq_port: Annotated[int, typer.Option(envvar="RABBITMQ_PORT")],
-    rabbitmq_username: Annotated[str, typer.Option(envvar="RABBITMQ_USER")],
-    rabbitmq_password: Annotated[str, typer.Option(envvar="RABBITMQ_PASSWORD")],
-    app_env: Annotated[Optional[str], typer.Option(envvar="APP_ENV")] = None,
-    enable_ssl: Annotated[
-        bool, typer.Option(envvar="RABBITMQ_ENABLE_SSL")
-    ] = False,
-    rabbitmq_ssl_hostname: Annotated[
-        str, typer.Option(envvar="RABBITMQ_SSL_HOSTNAME")
-    ] = None,
+    ctx: typer.Context,
+    app_env: AppEnv = None,
 ):
-    # Setup logging first
-    setup_logging(microservice_name=ManManConfig.WORKER, app_env=app_env)
+    # Setup logging from decorator-injected params
+    log_config = ctx.obj.get('logging', {})
+    create_logging_context(
+        service_name=f"{ManManConfig.WORKER}-{app_env}" if app_env else ManManConfig.WORKER,
+        log_level="DEBUG",
+        enable_otlp=log_config.get('enable_otlp', False),
+    )
 
     virtual_host = f"manman-{app_env}" if app_env else "/"
-
+    
+    # Get RabbitMQ config from decorator-injected params
+    rmq_config = ctx.obj.get('rabbitmq', {})
+    
     # Initialize with AMQPStorm connection parameters
     init_rabbitmq(
-        host=rabbitmq_host,
-        port=rabbitmq_port,
-        username=rabbitmq_username,
-        password=rabbitmq_password,
+        host=rmq_config['host'],
+        port=rmq_config['port'],
+        username=rmq_config['username'],
+        password=rmq_config['password'],
         virtual_host=virtual_host,
-        ssl_enabled=enable_ssl,
-        ssl_options=get_rabbitmq_ssl_options(rabbitmq_ssl_hostname)
-        if enable_ssl
+        ssl_enabled=rmq_config['enable_ssl'],
+        ssl_options=get_rabbitmq_ssl_options(rmq_config['ssl_hostname'])
+        if rmq_config['enable_ssl']
         else None,
     )
+    
+    # Store context
+    ctx.obj['app_env'] = app_env
 
 
 @app.command()

@@ -22,6 +22,10 @@ from libs.python.alembic import (
     run_migration as run_migration_util,
     should_run_migration,
 )
+from libs.python.cli.providers.rabbitmq import rmq_params
+from libs.python.cli.providers.logging import logging_params, create_logging_context
+from libs.python.cli.providers.postgres import pg_params
+from libs.python.cli.params import AppEnv
 from manman.src.config import ManManConfig
 from manman.src.logging_config import (
     get_gunicorn_config,
@@ -216,11 +220,8 @@ def create_worker_dal_app():
 
 @app.command()
 def start_experience_api(
-    rabbitmq_host: Annotated[str, typer.Option(envvar="RABBITMQ_HOST")],
-    rabbitmq_port: Annotated[int, typer.Option(envvar="RABBITMQ_PORT")],
-    rabbitmq_username: Annotated[str, typer.Option(envvar="RABBITMQ_USER")],
-    rabbitmq_password: Annotated[str, typer.Option(envvar="RABBITMQ_PASSWORD")],
-    app_env: Annotated[Optional[str], typer.Option(envvar="APP_ENV")] = None,
+    ctx: typer.Context,
+    app_env: AppEnv = None,
     port: int = 8000,
     workers: Annotated[
         int, typer.Option(help="Number of Gunicorn worker processes")
@@ -232,23 +233,16 @@ def start_experience_api(
         ),
     ] = True,
     should_run_migration_check: Optional[bool] = True,
-    enable_ssl: Annotated[
-        bool, typer.Option(envvar="RABBITMQ_ENABLE_SSL")
-    ] = False,
-    rabbitmq_ssl_hostname: Annotated[
-        str, typer.Option(envvar="RABBITMQ_SSL_HOSTNAME")
-    ] = None,
-    log_otlp: Annotated[
-        bool,
-        typer.Option(
-            envvar="LOG_OTLP", help="Enable OpenTelemetry OTLP logging"
-        ),
-    ] = False,
     create_vhost: Annotated[
         bool, typer.Option(help="Create RabbitMQ vhost before initialization")
     ] = False,
 ):
     """Start the experience API (host layer) that provides game server management and user-facing functionality."""
+    # Get contexts from callback
+    rmq_ctx = ctx.obj.get("rabbitmq", {})
+    logging_ctx = ctx.obj.get("logging", {})
+    log_otlp = logging_ctx.get("log_otlp", False)
+    
     # Setup logging first
     setup_logging(
         microservice_name=ManManConfig.EXPERIENCE_API,
@@ -258,13 +252,13 @@ def start_experience_api(
 
     # Store initialization configuration for use in app factory
     store_initialization_config(
-        rabbitmq_host=rabbitmq_host,
-        rabbitmq_port=rabbitmq_port,
-        rabbitmq_username=rabbitmq_username,
-        rabbitmq_password=rabbitmq_password,
+        rabbitmq_host=rmq_ctx.get("host"),
+        rabbitmq_port=rmq_ctx.get("port"),
+        rabbitmq_username=rmq_ctx.get("username"),
+        rabbitmq_password=rmq_ctx.get("password"),
         app_env=app_env,
-        enable_ssl=enable_ssl,
-        rabbitmq_ssl_hostname=rabbitmq_ssl_hostname,
+        enable_ssl=rmq_ctx.get("enable_ssl"),
+        rabbitmq_ssl_hostname=rmq_ctx.get("ssl_hostname"),
         should_run_migration_check=should_run_migration_check,
         create_vhost=create_vhost,
         enable_otel=log_otlp,  # Store OTEL flag for app factory
@@ -284,11 +278,8 @@ def start_experience_api(
 
 @app.command()
 def start_status_api(
-    rabbitmq_host: Annotated[str, typer.Option(envvar="RABBITMQ_HOST")],
-    rabbitmq_port: Annotated[int, typer.Option(envvar="RABBITMQ_PORT")],
-    rabbitmq_username: Annotated[str, typer.Option(envvar="RABBITMQ_USER")],
-    rabbitmq_password: Annotated[str, typer.Option(envvar="RABBITMQ_PASSWORD")],
-    app_env: Annotated[Optional[str], typer.Option(envvar="APP_ENV")] = None,
+    ctx: typer.Context,
+    app_env: AppEnv = None,
     port: int = 8000,
     workers: Annotated[
         int, typer.Option(help="Number of Gunicorn worker processes")
@@ -300,23 +291,16 @@ def start_status_api(
         ),
     ] = True,
     should_run_migration_check: Optional[bool] = True,
-    enable_ssl: Annotated[
-        bool, typer.Option(envvar="RABBITMQ_ENABLE_SSL")
-    ] = False,
-    rabbitmq_ssl_hostname: Annotated[
-        str, typer.Option(envvar="RABBITMQ_SSL_HOSTNAME")
-    ] = None,
-    log_otlp: Annotated[
-        bool,
-        typer.Option(
-            envvar="LOG_OTLP", help="Enable OpenTelemetry OTLP logging"
-        ),
-    ] = False,
     create_vhost: Annotated[
         bool, typer.Option(help="Create RabbitMQ vhost before initialization")
     ] = False,
 ):
     """Start the status API that provides status and monitoring functionality."""
+    # Get contexts from callback
+    rmq_ctx = ctx.obj.get("rabbitmq", {})
+    logging_ctx = ctx.obj.get("logging", {})
+    log_otlp = logging_ctx.get("log_otlp", False)
+    
     # Setup logging first
     setup_logging(
         microservice_name=ManManConfig.STATUS_API, app_env=app_env, enable_otel=log_otlp
@@ -324,13 +308,13 @@ def start_status_api(
 
     # Store initialization configuration for use in app factory
     store_initialization_config(
-        rabbitmq_host=rabbitmq_host,
-        rabbitmq_port=rabbitmq_port,
-        rabbitmq_username=rabbitmq_username,
-        rabbitmq_password=rabbitmq_password,
+        rabbitmq_host=rmq_ctx.get("host"),
+        rabbitmq_port=rmq_ctx.get("port"),
+        rabbitmq_username=rmq_ctx.get("username"),
+        rabbitmq_password=rmq_ctx.get("password"),
         app_env=app_env,
-        enable_ssl=enable_ssl,
-        rabbitmq_ssl_hostname=rabbitmq_ssl_hostname,
+        enable_ssl=rmq_ctx.get("enable_ssl"),
+        rabbitmq_ssl_hostname=rmq_ctx.get("ssl_hostname"),
         should_run_migration_check=should_run_migration_check,
         create_vhost=create_vhost,
         enable_otel=log_otlp,  # Store OTEL flag for app factory
@@ -350,11 +334,8 @@ def start_status_api(
 
 @app.command()
 def start_worker_dal_api(
-    rabbitmq_host: Annotated[str, typer.Option(envvar="RABBITMQ_HOST")],
-    rabbitmq_port: Annotated[int, typer.Option(envvar="RABBITMQ_PORT")],
-    rabbitmq_username: Annotated[str, typer.Option(envvar="RABBITMQ_USER")],
-    rabbitmq_password: Annotated[str, typer.Option(envvar="RABBITMQ_PASSWORD")],
-    app_env: Annotated[Optional[str], typer.Option(envvar="APP_ENV")] = None,
+    ctx: typer.Context,
+    app_env: AppEnv = None,
     port: int = 8000,
     workers: Annotated[
         int, typer.Option(help="Number of Gunicorn worker processes")
@@ -366,23 +347,16 @@ def start_worker_dal_api(
         ),
     ] = True,
     should_run_migration_check: Optional[bool] = True,
-    enable_ssl: Annotated[
-        bool, typer.Option(envvar="RABBITMQ_ENABLE_SSL")
-    ] = False,
-    rabbitmq_ssl_hostname: Annotated[
-        str, typer.Option(envvar="RABBITMQ_SSL_HOSTNAME")
-    ] = None,
-    log_otlp: Annotated[
-        bool,
-        typer.Option(
-            envvar="LOG_OTLP", help="Enable OpenTelemetry OTLP logging"
-        ),
-    ] = False,
     create_vhost: Annotated[
         bool, typer.Option(help="Create RabbitMQ vhost before initialization")
     ] = False,
 ):
     """Start the worker DAL API that provides data access endpoints for worker services."""
+    # Get contexts from callback
+    rmq_ctx = ctx.obj.get("rabbitmq", {})
+    logging_ctx = ctx.obj.get("logging", {})
+    log_otlp = logging_ctx.get("log_otlp", False)
+    
     # Setup logging first
     setup_logging(
         microservice_name=ManManConfig.WORKER_DAL_API,
@@ -392,13 +366,13 @@ def start_worker_dal_api(
 
     # Store initialization configuration for use in app factory
     store_initialization_config(
-        rabbitmq_host=rabbitmq_host,
-        rabbitmq_port=rabbitmq_port,
-        rabbitmq_username=rabbitmq_username,
-        rabbitmq_password=rabbitmq_password,
+        rabbitmq_host=rmq_ctx.get("host"),
+        rabbitmq_port=rmq_ctx.get("port"),
+        rabbitmq_username=rmq_ctx.get("username"),
+        rabbitmq_password=rmq_ctx.get("password"),
         app_env=app_env,
-        enable_ssl=enable_ssl,
-        rabbitmq_ssl_hostname=rabbitmq_ssl_hostname,
+        enable_ssl=rmq_ctx.get("enable_ssl"),
+        rabbitmq_ssl_hostname=rmq_ctx.get("ssl_hostname"),
         should_run_migration_check=should_run_migration_check,
         create_vhost=create_vhost,
         enable_otel=log_otlp,  # Store OTEL flag for app factory
@@ -418,29 +392,18 @@ def start_worker_dal_api(
 
 @app.command()
 def start_status_processor(
-    rabbitmq_host: Annotated[str, typer.Option(envvar="RABBITMQ_HOST")],
-    rabbitmq_port: Annotated[int, typer.Option(envvar="RABBITMQ_PORT")],
-    rabbitmq_username: Annotated[str, typer.Option(envvar="RABBITMQ_USER")],
-    rabbitmq_password: Annotated[str, typer.Option(envvar="RABBITMQ_PASSWORD")],
-    app_env: Annotated[Optional[str], typer.Option(envvar="APP_ENV")] = None,
+    ctx: typer.Context,
+    app_env: AppEnv = None,
     should_run_migration_check: Optional[bool] = True,
-    enable_ssl: Annotated[
-        bool, typer.Option(envvar="RABBITMQ_ENABLE_SSL")
-    ] = False,
-    rabbitmq_ssl_hostname: Annotated[
-        str, typer.Option(envvar="RABBITMQ_SSL_HOSTNAME")
-    ] = None,
-    log_otlp: Annotated[
-        bool,
-        typer.Option(
-            envvar="LOG_OTLP", help="Enable OpenTelemetry OTLP logging"
-        ),
-    ] = False,
     create_vhost: Annotated[
         bool, typer.Option(help="Create RabbitMQ vhost before initialization")
     ] = False,
 ):
     """Start the status event processor that handles status-related pub/sub messages."""
+    # Get contexts from callback
+    rmq_ctx = ctx.obj.get("rabbitmq", {})
+    logging_ctx = ctx.obj.get("logging", {})
+    log_otlp = logging_ctx.get("log_otlp", False)
 
     # Setup logging first - this is a standalone service (no uvicorn)
     setup_logging(
@@ -452,13 +415,13 @@ def start_status_processor(
     logger.info("Starting status event processor...")
 
     store_initialization_config(
-        rabbitmq_host=rabbitmq_host,
-        rabbitmq_port=rabbitmq_port,
-        rabbitmq_username=rabbitmq_username,
-        rabbitmq_password=rabbitmq_password,
+        rabbitmq_host=rmq_ctx.get("host"),
+        rabbitmq_port=rmq_ctx.get("port"),
+        rabbitmq_username=rmq_ctx.get("username"),
+        rabbitmq_password=rmq_ctx.get("password"),
         app_env=app_env,
-        enable_ssl=enable_ssl,
-        rabbitmq_ssl_hostname=rabbitmq_ssl_hostname,
+        enable_ssl=rmq_ctx.get("enable_ssl"),
+        rabbitmq_ssl_hostname=rmq_ctx.get("ssl_hostname"),
         should_run_migration_check=should_run_migration_check,
         create_vhost=create_vhost,
         enable_otel=log_otlp,  # Store OTEL flag for status processor
@@ -525,12 +488,16 @@ def run_downgrade(target: str):
 
 
 @app.callback()
-def callback(
-    db_connection_string: Annotated[str, typer.Option(envvar="POSTGRES_URL")],
-):
+@rmq_params
+@logging_params
+@pg_params
+def callback(ctx: typer.Context):
     # Initialize database connection for CLI operations
-    # Note: Logging will be configured by individual commands as needed
-    init_sql_alchemy_engine(db_connection_string)
+    init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
+    
+    # Initialize logging
+    logging_ctx = create_logging_context(ctx.obj.get("logging", {}).get("log_otlp", False))
+    ctx.obj["logging_context"] = logging_ctx
 
 
 # alembic helpers using consolidated library
