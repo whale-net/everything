@@ -1,5 +1,4 @@
 import logging
-from dataclasses import dataclass
 from typing import Annotated, Optional
 
 import google.generativeai as genai
@@ -32,18 +31,6 @@ from friendly_computing_machine.src.friendly_computing_machine.db.util import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class FCMBotContext:
-    """Typed context for FCM bot CLI."""
-
-    db: Optional[DatabaseContext] = None
-    slack: Optional[SlackContext] = None
-    temporal_host: str = ""
-    app_env: str = ""
-    manman_host_url: str = ""
-
 
 app = typer.Typer()
 
@@ -94,13 +81,11 @@ def callback(
     ManManExperienceAPI.init(url + "/experience")
     logger.info(f"ManMan Experience API initialized with host: {url}")
     
-    # Store typed context
-    ctx.obj = FCMBotContext(
-        slack=slack_ctx,
-        temporal_host=temporal_config['host'],
-        app_env=app_env,
-        manman_host_url=manman_host_url,
-    )
+    # Store context in dict (keep compatible with decorator pattern)
+    ctx.obj['slack'] = slack_ctx
+    ctx.obj['temporal_host'] = temporal_config['host']
+    ctx.obj['app_env'] = app_env
+    ctx.obj['manman_host_url'] = manman_host_url
     
     logger.debug("CLI callback complete")
 
@@ -111,12 +96,10 @@ def cli_run_taskpool(
     database_url: PostgresUrl,
     skip_migration_check: bool = False,
 ):
-    fcm_ctx: FCMBotContext = ctx.obj
-    
     # Create database context with FCM initialization
     from friendly_computing_machine.src.friendly_computing_machine.db.util import init_engine
     
-    fcm_ctx.db = create_postgres_context(
+    db_ctx = create_postgres_context(
         database_url=database_url,
         migrations_package="friendly_computing_machine.src.migrations",
         engine_initializer=init_engine,
@@ -124,7 +107,7 @@ def cli_run_taskpool(
     
     if skip_migration_check:
         logger.info("skipping migration check")
-    elif should_run_migration(fcm_ctx.db.engine, fcm_ctx.db.alembic_config):
+    elif should_run_migration(db_ctx.engine, db_ctx.alembic_config):
         logger.critical("migration check failed, please migrate")
         raise RuntimeError("need to run migration")
     else:
@@ -140,27 +123,22 @@ def cli_run_taskpool(
 
 
 @app.command("run-slack-socket-app")
-@gemini_params
 def cli_run_slack_socket_app(
     ctx: typer.Context,
     database_url: PostgresUrl,
     skip_migration_check: bool = False,
 ):
-    fcm_ctx: FCMBotContext = ctx.obj
-    
     if skip_migration_check:
         logger.info("skipping migration check")
     else:
         logger.info("migration check passed, starting normally")
 
-    # Setup Gemini API
-    gemini_config = ctx.obj.get('gemini', {})
-    genai.configure(api_key=gemini_config['api_key'])
+    # Gemini API is already configured in callback
     
     # Create database context with FCM initialization
     from friendly_computing_machine.src.friendly_computing_machine.db.util import init_engine
     
-    fcm_ctx.db = create_postgres_context(
+    db_ctx = create_postgres_context(
         database_url=database_url,
         migrations_package="friendly_computing_machine.src.migrations",
         engine_initializer=init_engine,
@@ -172,15 +150,14 @@ def cli_run_slack_socket_app(
         run_slack_bot_only,
     )
 
+    slack_ctx = ctx.obj['slack']
     run_slack_bot_only(
-        app_token=fcm_ctx.slack.app_token,
+        app_token=slack_ctx.app_token,
     )
 
 
 @app.command("send-test-command")
 def cli_bot_test_message(ctx: typer.Context, channel: str, message: str):
-    fcm_ctx: FCMBotContext = ctx.obj
-    
     # Lazy import to avoid initializing Slack app during module import
     from friendly_computing_machine.src.friendly_computing_machine.bot.util import (
         slack_send_message,
@@ -191,8 +168,6 @@ def cli_bot_test_message(ctx: typer.Context, channel: str, message: str):
 
 @app.command("who-am-i")
 def cli_bot_who_am_i(ctx: typer.Context):
-    fcm_ctx: FCMBotContext = ctx.obj
-    
     # Lazy import to avoid initializing Slack app during module import
     from friendly_computing_machine.src.friendly_computing_machine.bot.util import (
         slack_bot_who_am_i,

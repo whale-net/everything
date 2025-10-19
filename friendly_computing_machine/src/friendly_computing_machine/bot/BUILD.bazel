@@ -12,6 +12,7 @@ py_library(
         "//friendly_computing_machine/src/friendly_computing_machine:util",
         "//friendly_computing_machine/src/friendly_computing_machine/manman",
         "//friendly_computing_machine/src/friendly_computing_machine/temporal",
+        "//libs/python/rmq",
         "@pypi//:slack-bolt",
         "@pypi//:slack-sdk",
         "@pypi//:opentelemetry-api",

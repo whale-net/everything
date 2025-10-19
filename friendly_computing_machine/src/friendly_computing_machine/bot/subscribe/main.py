@@ -1,5 +1,6 @@
 import logging
 
+from libs.python.rmq import get_rabbitmq_connection
 from friendly_computing_machine.src.friendly_computing_machine.bot.app import (
     get_slack_web_client,
 )
@@ -8,9 +9,6 @@ from friendly_computing_machine.src.friendly_computing_machine.bot.subscribe.ser
 )
 from friendly_computing_machine.src.friendly_computing_machine.manman.api import (
     ManManStatusAPI,
-)
-from friendly_computing_machine.src.friendly_computing_machine.rabbitmq.util import (
-    get_rabbitmq_connection,
 )
 
 logger = logging.getLogger(__name__)
