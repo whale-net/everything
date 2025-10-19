@@ -9,6 +9,8 @@ py_library(
     deps = [
         "//libs/python/alembic",
         "//libs/python/cli:params_base",
+        "//libs/python/cli:params",
+        "//libs/python/cli:types",
         "//libs/python/cli/providers/logging",
         "//libs/python/cli/providers/postgres",
         "//libs/python/cli/providers/slack",
