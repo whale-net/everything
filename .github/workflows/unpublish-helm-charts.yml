@@ -104,8 +104,8 @@ jobs:
             
             # Copy charts directory if it exists and is not empty
             if [ -d /tmp/gh-pages-checkout/charts ]; then
-              # Use find to handle empty directory case and avoid glob expansion issues
-              if [ "$(find /tmp/gh-pages-checkout/charts -mindepth 1 -maxdepth 1 | wc -l)" -gt 0 ]; then
+              # Check if directory is non-empty and copy contents
+              if [ -n "$(ls -A /tmp/gh-pages-checkout/charts 2>/dev/null)" ]; then
                 cp -r /tmp/gh-pages-checkout/charts/. /tmp/helm-repo/
                 echo "✅ Copied existing chart files"
                 ls -lh /tmp/helm-repo/
