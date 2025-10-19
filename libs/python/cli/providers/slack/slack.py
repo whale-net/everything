@@ -1,14 +1,20 @@
-"""Slack provider for Web API and Socket Mode."""
+"""Slack provider for bot and web API clients.
 
-from libs.python.cli.providers.slack.slack import (
-    SlackAppToken,
-    SlackBotToken,
-    SlackContext,
-    create_slack_context,
-    create_slack_web_client_only,
-    slack_params,
-)
+Provides Slack client context with both app token (Socket Mode) and bot token (Web API).
 
+Example:
+    ```python
+    from libs.python.cli.providers.slack import slack_params
+
+    app = typer.Typer()
+
+    @app.callback()
+    @slack_params
+    def setup(ctx: typer.Context):
+        slack = ctx.obj['slack']
+        # slack = {'bot_token': '...', 'app_token': '...'}
+    ```
+"""
 
 import inspect
 import logging

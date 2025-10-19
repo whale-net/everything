@@ -1,14 +1,20 @@
-"""Logging provider with OpenTelemetry support."""
+"""Logging provider with OpenTelemetry support.
 
-from libs.python.cli.providers.logging.logging import (
-    EnableConsoleExporter,
-    EnableOTLP,
-    LogLevel,
-    LoggingContext,
-    create_logging_context,
-    logging_params,
-)
+Provides configurable logging setup with optional OTLP export.
 
+Example:
+    ```python
+    from libs.python.cli.providers.logging import logging_params
+
+    app = typer.Typer()
+
+    @app.callback()
+    @logging_params
+    def setup(ctx: typer.Context):
+        log_config = ctx.obj['logging']
+        # log_config = {'enable_otlp': True/False}
+    ```
+"""
 
 import inspect
 import logging

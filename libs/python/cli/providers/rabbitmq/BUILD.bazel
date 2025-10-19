@@ -2,7 +2,10 @@ load("@rules_python//python:defs.bzl", "py_library")
 
 py_library(
     name = "rabbitmq",
-    srcs = ["__init__.py"],
+    srcs = [
+        "__init__.py",
+        "rabbitmq.py",
+    ],
     deps = [
         "//libs/python/cli:params_base",
         "@pypi//:typer",
