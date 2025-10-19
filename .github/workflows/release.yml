@@ -622,9 +622,8 @@ jobs:
     if: github.event.inputs.helm_charts != '' && (always() && !cancelled())
     runs-on: ubuntu-latest
     permissions:
-      contents: write     # Push git tags and read repository content
-      pages: write        # Deploy to GitHub Pages
-      id-token: write     # Required for GitHub Pages OIDC
+      contents: write      # Create git tags
+      packages: write      # Push to ghcr.io
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -786,119 +785,53 @@ jobs:
         
         echo "✅ All helm chart tags created and pushed"
         
-    - name: Download existing Helm repository index
+    - name: Login to GitHub Container Registry
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
-      continue-on-error: true
-      run: |
-        echo "Downloading existing Helm repository charts if available..."
-        mkdir -p /tmp/helm-repo/charts
-        
-        # Download existing index.yaml from GitHub Pages /charts subdirectory
-        if curl -fsSL -o /tmp/helm-repo/charts/index.yaml \
-          "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts/index.yaml"; then
-          echo "✅ Downloaded existing index.yaml"
-          
-          # Parse index.yaml to extract all chart URLs and download them
-          # This ensures we maintain historical chart versions when merging
-          if command -v yq &> /dev/null; then
-            echo "Downloading all existing chart files referenced in index..."
-            
-            # Extract all chart URLs from index.yaml
-            CHART_URLS=$(yq eval '.entries[].[] | .urls[]' /tmp/helm-repo/charts/index.yaml 2>/dev/null || echo "")
-            
-            if [[ -n "$CHART_URLS" ]]; then
-              while IFS= read -r URL; do
-                if [[ -n "$URL" ]]; then
-                  FILENAME=$(basename "$URL")
-                  echo "Downloading: $FILENAME"
-                  
-                  # Download chart file, handling both absolute and relative URLs
-                  if [[ "$URL" == http* ]]; then
-                    curl -fsSL -o "/tmp/helm-repo/charts/$FILENAME" "$URL"
-                  else
-                    # Relative URL - construct full URL
-                    curl -fsSL -o "/tmp/helm-repo/charts/$FILENAME" \
-                      "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts/$URL"
-                  fi
-                  
-                  if [[ -f "/tmp/helm-repo/charts/$FILENAME" ]]; then
-                    echo "  ✅ Downloaded: $FILENAME"
-                  else
-                    echo "  ⚠️ Failed to download: $FILENAME"
-                  fi
-                fi
-              done <<< "$CHART_URLS"
-            fi
-          else
-            echo "ℹ️ yq not found, skipping historical chart download. Only new charts will be in index."
-          fi
-          
-          ls -lh /tmp/helm-repo/charts/
-        else
-          echo "ℹ️ No existing index.yaml found (this is normal for first deployment)"
-        fi
-        
-    - name: Generate Helm repository index
-      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
-      run: |
-        echo "Generating Helm repository index..."
-        
-        # Ensure charts directory exists and is ready
-        mkdir -p /tmp/helm-repo/charts
-        
-        # Copy newly built charts to charts directory
-        cp /tmp/helm-charts/*.tgz /tmp/helm-repo/charts/
-        
-        # Save existing index if it exists (for merge)
-        EXISTING_INDEX=""
-        if [ -f /tmp/helm-repo/charts/index.yaml ]; then
-          EXISTING_INDEX="/tmp/helm-repo/charts/index.yaml"
-          echo "Found existing index with historical charts"
-        fi
-        
-        # Generate or merge index in the charts directory
-        BASE_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
-        
-        if [ -n "$EXISTING_INDEX" ]; then
-          echo "Merging new charts with existing index (preserving historical versions)..."
-          helm repo index /tmp/helm-repo/charts --url "$BASE_URL" --merge "$EXISTING_INDEX"
-          echo "✅ Index merged - preserving all historical chart versions"
-        else
-          echo "Creating new index (first deployment)..."
-          helm repo index /tmp/helm-repo/charts --url "$BASE_URL"
-          echo "✅ Index created"
-        fi
-        
-        echo ""
-        echo "📊 Final Helm repository structure:"
-        tree /tmp/helm-repo/ || ls -laR /tmp/helm-repo/
-        
-        echo ""
-        echo "Total charts in repository:"
-        ls -1 /tmp/helm-repo/charts/*.tgz | wc -l
-        
-    - name: Upload Pages artifact
-      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
-      uses: actions/upload-pages-artifact@v3
+      uses: docker/login-action@v3
       with:
-        path: /tmp/helm-repo
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
         
-    - name: Deploy to GitHub Pages
+    - name: Push Helm charts to OCI registry
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
-      id: deployment
-      uses: actions/deploy-pages@v4
-        
-    - name: Report deployment URL
-      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
+      env:
+        CHARTS: ${{ steps.plan.outputs.charts }}
       run: |
-        echo "✅ Helm charts deployed to GitHub Pages!"
+        echo "Pushing Helm charts to OCI registry (ghcr.io)..."
+        
+        # Parse chart list and push each chart
+        IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
+        
+        for CHART in "${CHART_ARRAY[@]}"; do
+          # Strip helm- prefix from chart name for file lookup
+          PUBLISHED_NAME="${CHART#helm-}"
+          
+          # Find the packaged chart file
+          CHART_FILE=$(ls /tmp/helm-charts/${PUBLISHED_NAME}-*.tgz 2>/dev/null | head -n1)
+          
+          if [[ -f "$CHART_FILE" ]]; then
+            echo "Pushing chart: $CHART_FILE"
+            
+            # Push to OCI registry
+            # Charts will be available at: oci://ghcr.io/whale-net/charts/<chart-name>
+            helm push "$CHART_FILE" oci://ghcr.io/${{ github.repository_owner }}/charts
+            
+            echo "✅ Pushed $CHART to OCI registry"
+          else
+            echo "⚠️ Warning: Could not find chart file for $CHART"
+            exit 1
+          fi
+        done
+        
         echo ""
-        echo "📦 Helm Repository URL:"
-        echo "  https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
+        echo "✅ All Helm charts pushed to OCI registry!"
         echo ""
-        echo "Users can add the repository with:"
-        echo "  helm repo add ${{ github.event.repository.name }} https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
-        echo "  helm repo update"
+        echo "📦 Charts available at:"
+        echo "  oci://ghcr.io/${{ github.repository_owner }}/charts/<chart-name>"
+        echo ""
+        echo "Users can install with:"
+        echo "  helm install myapp oci://ghcr.io/${{ github.repository_owner }}/charts/<chart-name> --version <version>"
         
     - name: Upload helm chart artifacts
       if: steps.plan.outputs.charts != ''
