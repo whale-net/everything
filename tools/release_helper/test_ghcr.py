@@ -28,6 +28,18 @@ class TestGHCRClient:
         """Create a GHCRClient instance for testing."""
         return GHCRClient(owner="test-owner", token=mock_token)
 
+    @pytest.fixture
+    def mock_httpx_client(self):
+        """Provide a properly mocked httpx.Client with context manager support."""
+        mock_response = MagicMock()
+        mock_client = MagicMock()
+        mock_client.__enter__.return_value = mock_client
+        mock_client.__exit__.return_value = None
+        mock_client.get.return_value = mock_response
+        mock_client.delete.return_value = mock_response
+        mock_client.post.return_value = mock_response
+        return mock_client, mock_response
+
     def test_client_initialization_with_token(self, mock_token):
         """Test client initialization with explicit token."""
         client = GHCRClient(owner="test-owner", token=mock_token)
@@ -96,28 +108,32 @@ class TestGHCRClient:
 
     def test_list_package_versions_pagination(self, client):
         """Test pagination when listing package versions."""
-        # Mock multiple pages of results
-        page1_data = [{"id": i, "name": f"sha256:hash{i}", "metadata": {"container": {"tags": [f"v1.0.{i}"]}}} for i in range(100)]
-        page2_data = [{"id": i, "name": f"sha256:hash{i}", "metadata": {"container": {"tags": [f"v1.1.{i}"]}}} for i in range(50)]
+        # Mock the owner type detection first
+        with patch.object(client, '_detect_owner_type', return_value='orgs'):
+            # Mock multiple pages of results
+            page1_data = [{"id": i, "name": f"sha256:hash{i}", "metadata": {"container": {"tags": [f"v1.0.{i}"]}}} for i in range(100)]
+            page2_data = [{"id": i, "name": f"sha256:hash{i}", "metadata": {"container": {"tags": [f"v1.1.{i}"]}}} for i in range(50)]
 
-        mock_client = MagicMock()
-        mock_response1 = MagicMock()
-        mock_response1.status_code = 200
-        mock_response1.json.return_value = page1_data
-        mock_response1.headers = {"Link": '<https://api.github.com/next>; rel="next"'}
+            mock_response1 = MagicMock()
+            mock_response1.status_code = 200
+            mock_response1.json.return_value = page1_data
+            mock_response1.headers = {"Link": '<https://api.github.com/next>; rel="next"'}
 
-        mock_response2 = MagicMock()
-        mock_response2.status_code = 200
-        mock_response2.json.return_value = page2_data
-        mock_response2.headers = {}
+            mock_response2 = MagicMock()
+            mock_response2.status_code = 200
+            mock_response2.json.return_value = page2_data
+            mock_response2.headers = {}
 
-        mock_client.get.side_effect = [mock_response1, mock_response2]
+            mock_http_client = MagicMock()
+            mock_http_client.__enter__.return_value = mock_http_client
+            mock_http_client.__exit__.return_value = None
+            mock_http_client.get.side_effect = [mock_response1, mock_response2]
 
-        with patch("httpx.Client", return_value=mock_client):
-            versions = client.list_package_versions("demo-hello-python")
+            with patch("httpx.Client", return_value=mock_http_client):
+                versions = client.list_package_versions("demo-hello-python")
 
-        assert len(versions) == 150
-        assert mock_client.get.call_count == 2
+            assert len(versions) == 150
+            assert mock_http_client.get.call_count == 2
 
     def test_list_package_versions_empty(self, client):
         """Test listing package versions when package has no versions."""
@@ -170,139 +186,146 @@ class TestGHCRClient:
 
     def test_delete_package_version_success(self, client, mock_httpx_client):
         """Test deleting a package version successfully."""
-        mock_client, mock_response = mock_httpx_client
-        mock_response.status_code = 204  # No content - successful deletion
+        with patch.object(client, '_detect_owner_type', return_value='orgs'):
+            mock_client, mock_response = mock_httpx_client
+            mock_response.status_code = 204  # No content - successful deletion
 
-        with patch("httpx.Client", return_value=mock_client):
-            result = client.delete_package_version("demo-hello-python", 12345)
+            with patch("httpx.Client", return_value=mock_client):
+                result = client.delete_package_version("demo-hello-python", 12345)
 
-        assert result is True
-        mock_client.delete.assert_called_once()
+            assert result is True
+            mock_client.delete.assert_called_once()
 
     def test_delete_package_version_not_found(self, client, mock_httpx_client):
         """Test deleting a package version that doesn't exist."""
-        mock_client, mock_response = mock_httpx_client
-        mock_response.status_code = 404
+        with patch.object(client, '_detect_owner_type', return_value='orgs'):
+            mock_client, mock_response = mock_httpx_client
+            mock_response.status_code = 404
 
-        with patch("httpx.Client", return_value=mock_client):
-            result = client.delete_package_version("demo-hello-python", 99999)
+            with patch("httpx.Client", return_value=mock_client):
+                result = client.delete_package_version("demo-hello-python", 99999)
 
-        assert result is False
+            assert result is False
 
     def test_delete_package_version_forbidden(self, client, mock_httpx_client):
         """Test deleting a package version without permission."""
-        mock_client, mock_response = mock_httpx_client
-        mock_response.status_code = 403
-        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-            "Forbidden", request=Mock(), response=mock_response
-        )
+        with patch.object(client, '_detect_owner_type', return_value='orgs'):
+            mock_client, mock_response = mock_httpx_client
+            mock_response.status_code = 403
+            mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+                "Forbidden", request=Mock(), response=mock_response
+            )
 
-        with patch("httpx.Client", return_value=mock_client):
-            with pytest.raises(httpx.HTTPStatusError):
-                client.delete_package_version("demo-hello-python", 12345)
+            with patch("httpx.Client", return_value=mock_client):
+                with pytest.raises(httpx.HTTPStatusError):
+                    client.delete_package_version("demo-hello-python", 12345)
 
     def test_find_versions_by_tags(self, client, mock_httpx_client):
         """Test finding package versions by specific tags."""
-        mock_client, mock_response = mock_httpx_client
-        mock_response.status_code = 200
-        mock_response.json.return_value = [
-            {
-                "id": 12345,
-                "name": "sha256:abc123",
-                "metadata": {
-                    "container": {
-                        "tags": ["v1.0.0", "latest"]
+        with patch.object(client, '_detect_owner_type', return_value='orgs'):
+            mock_client, mock_response = mock_httpx_client
+            mock_response.status_code = 200
+            mock_response.headers = {}  # No pagination
+            mock_response.json.return_value = [
+                {
+                    "id": 12345,
+                    "name": "sha256:abc123",
+                    "metadata": {
+                        "container": {
+                            "tags": ["v1.0.0", "latest"]
+                        }
+                    }
+                },
+                {
+                    "id": 12346,
+                    "name": "sha256:def456",
+                    "metadata": {
+                        "container": {
+                            "tags": ["v1.0.1"]
+                        }
+                    }
+                },
+                {
+                    "id": 12347,
+                    "name": "sha256:ghi789",
+                    "metadata": {
+                        "container": {
+                            "tags": ["v1.1.0", "v1.1.0-amd64", "v1.1.0-arm64"]
+                        }
                     }
                 }
-            },
-            {
-                "id": 12346,
-                "name": "sha256:def456",
-                "metadata": {
-                    "container": {
-                        "tags": ["v1.0.1"]
-                    }
-                }
-            },
-            {
-                "id": 12347,
-                "name": "sha256:ghi789",
-                "metadata": {
-                    "container": {
-                        "tags": ["v1.1.0", "v1.1.0-amd64", "v1.1.0-arm64"]
-                    }
-                }
-            }
-        ]
+            ]
 
-        with patch("httpx.Client", return_value=mock_client):
-            versions = client.find_versions_by_tags(
-                "demo-hello-python",
-                ["v1.0.0", "v1.1.0"]
-            )
+            with patch("httpx.Client", return_value=mock_client):
+                versions = client.find_versions_by_tags(
+                    "demo-hello-python",
+                    ["v1.0.0", "v1.1.0"]
+                )
 
-        assert len(versions) == 2
-        assert versions[0].version_id == 12345
-        assert "v1.0.0" in versions[0].tags
-        assert versions[1].version_id == 12347
-        assert "v1.1.0" in versions[1].tags
+            assert len(versions) == 2
+            assert versions[0].version_id == 12345
+            assert "v1.0.0" in versions[0].tags
+            assert versions[1].version_id == 12347
+            assert "v1.1.0" in versions[1].tags
 
     def test_find_versions_by_tags_no_matches(self, client, mock_httpx_client):
         """Test finding package versions when no tags match."""
-        mock_client, mock_response = mock_httpx_client
-        mock_response.status_code = 200
-        mock_response.json.return_value = [
-            {
-                "id": 12345,
-                "name": "sha256:abc123",
-                "metadata": {
-                    "container": {
-                        "tags": ["v2.0.0"]
+        with patch.object(client, '_detect_owner_type', return_value='orgs'):
+            mock_client, mock_response = mock_httpx_client
+            mock_response.status_code = 200
+            mock_response.json.return_value = [
+                {
+                    "id": 12345,
+                    "name": "sha256:abc123",
+                    "metadata": {
+                        "container": {
+                            "tags": ["v2.0.0"]
+                        }
                     }
                 }
-            }
-        ]
+            ]
 
-        with patch("httpx.Client", return_value=mock_client):
-            versions = client.find_versions_by_tags(
-                "demo-hello-python",
-                ["v1.0.0", "v1.1.0"]
-            )
+            with patch("httpx.Client", return_value=mock_client):
+                versions = client.find_versions_by_tags(
+                    "demo-hello-python",
+                    ["v1.0.0", "v1.1.0"]
+                )
 
-        assert len(versions) == 0
+            assert len(versions) == 0
 
     def test_find_versions_by_tags_handles_untagged(self, client, mock_httpx_client):
         """Test finding package versions handles untagged images."""
-        mock_client, mock_response = mock_httpx_client
-        mock_response.status_code = 200
-        mock_response.json.return_value = [
-            {
-                "id": 12345,
-                "name": "sha256:abc123",
-                "metadata": {
-                    "container": {
-                        "tags": []  # Untagged image
+        with patch.object(client, '_detect_owner_type', return_value='orgs'):
+            mock_client, mock_response = mock_httpx_client
+            mock_response.status_code = 200
+            mock_response.json.return_value = [
+                {
+                    "id": 12345,
+                    "name": "sha256:abc123",
+                    "metadata": {
+                        "container": {
+                            "tags": []  # Untagged image
+                        }
+                    }
+                },
+                {
+                    "id": 12346,
+                    "name": "sha256:def456",
+                    "metadata": {
+                        "container": {
+                            "tags": ["v1.0.0"]
+                        }
                     }
                 }
-            },
-            {
-                "id": 12346,
-                "name": "sha256:def456",
-                "metadata": {
-                    "container": {
-                        "tags": ["v1.0.0"]
-                    }
-                }
-            }
-        ]
+            ]
 
-        with patch("httpx.Client", return_value=mock_client):
-            versions = client.find_versions_by_tags(
-                "demo-hello-python",
-                ["v1.0.0"]
-            )
+            with patch("httpx.Client", return_value=mock_client):
+                versions = client.find_versions_by_tags(
+                    "demo-hello-python",
+                    ["v1.0.0"]
+                )
 
-        assert len(versions) == 1
+            assert len(versions) == 1
         assert versions[0].version_id == 12346
 
     def test_validate_permissions_success(self, client, mock_httpx_client):

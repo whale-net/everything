@@ -260,9 +260,9 @@ class GHCRClient:
                     # Check OAuth scopes in headers
                     scopes = response.headers.get("X-OAuth-Scopes", "")
                     
-                    # Need write:packages for deletion
-                    has_write = "write:packages" in scopes or "repo" in scopes
-                    has_read = "read:packages" in scopes or "repo" in scopes
+                    # Need write:packages for deletion and read:packages for listing
+                    has_write = "write:packages" in scopes
+                    has_read = "read:packages" in scopes or "write:packages" in scopes  # write implies read
                     
                     if has_write and has_read:
                         return True
