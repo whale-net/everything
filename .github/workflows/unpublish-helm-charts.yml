@@ -149,12 +149,33 @@ jobs:
           # Create the deployment structure
           mkdir -p /tmp/helm-pages/charts
           
-          # Copy ALL chart files (.tgz) from the repository
+          # Parse the versions to delete
+          IFS=',' read -ra VERSIONS_ARRAY <<< "${{ github.event.inputs.versions }}"
+          
+          # Delete the .tgz files for the unpublished versions
+          DELETED_COUNT=0
+          for version in "${VERSIONS_ARRAY[@]}"; do
+            version=$(echo "$version" | xargs)  # Trim whitespace
+            # Chart files are named: {chart-name}-{version}.tgz
+            chart_file="/tmp/helm-repo/${{ github.event.inputs.chart_name }}-${version}.tgz"
+            if [ -f "$chart_file" ]; then
+              rm "$chart_file"
+              echo "🗑️ Deleted ${{ github.event.inputs.chart_name }}-${version}.tgz"
+              DELETED_COUNT=$((DELETED_COUNT + 1))
+            else
+              echo "⚠️ Chart file not found: ${{ github.event.inputs.chart_name }}-${version}.tgz"
+            fi
+          done
+          
+          echo "Deleted $DELETED_COUNT chart file(s)"
+          
+          # Copy remaining chart files (.tgz) to deployment directory
           if ls /tmp/helm-repo/*.tgz 1> /dev/null 2>&1; then
             cp /tmp/helm-repo/*.tgz /tmp/helm-pages/charts/
-            echo "✅ Copied $(ls /tmp/helm-repo/*.tgz | wc -l) chart file(s)"
+            REMAINING_COUNT=$(ls /tmp/helm-repo/*.tgz | wc -l)
+            echo "✅ Copied $REMAINING_COUNT remaining chart file(s)"
           else
-            echo "⚠️ No .tgz chart files found to copy"
+            echo "⚠️ No .tgz chart files remaining after unpublish"
           fi
           
           # Copy the modified index to the charts directory
@@ -189,9 +210,9 @@ jobs:
           echo "### ⚠️ Important Notes" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- Chart versions have been removed from the Helm repository index" >> $GITHUB_STEP_SUMMARY
-          echo "- All existing .tgz files have been preserved on the gh-pages branch" >> $GITHUB_STEP_SUMMARY
+          echo "- The .tgz files for unpublished versions have been deleted from gh-pages" >> $GITHUB_STEP_SUMMARY
+          echo "- Other chart versions remain available in the repository" >> $GITHUB_STEP_SUMMARY
           echo "- Users will no longer see the unpublished versions when searching the repository" >> $GITHUB_STEP_SUMMARY
-          echo "- The chart .tgz files remain accessible by direct URL if needed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📦 Helm Repository" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -217,8 +238,6 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**User:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
           echo "**Action:** Attempted to unpublish Helm chart versions" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "⚠️ **Note:** All existing chart .tgz files are preserved during unpublish operation." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Required Permissions" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
