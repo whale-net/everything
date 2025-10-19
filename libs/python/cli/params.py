@@ -88,7 +88,13 @@ from libs.python.cli.providers.slack import slack_params
 from libs.python.cli.providers.logging import logging_params
 from libs.python.cli.providers.temporal import temporal_params
 from libs.python.cli.providers.gemini import gemini_params
-from libs.python.cli.types import AppEnv, ManManHostUrl
+from libs.python.cli.types import (
+    AppEnv,
+    ManManHostUrl,
+    ManManExperienceApiUrl,
+    ManManStatusApiUrl,
+    ManManWorkerDalApiUrl,
+)
 
 
 __all__ = [
@@ -98,6 +104,9 @@ __all__ = [
     # Type aliases - Common
     'AppEnv',
     'ManManHostUrl',
+    'ManManExperienceApiUrl',
+    'ManManStatusApiUrl',
+    'ManManWorkerDalApiUrl',
     
     # Type aliases - RabbitMQ
     'RabbitMQHost',

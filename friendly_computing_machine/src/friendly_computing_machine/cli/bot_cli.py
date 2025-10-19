@@ -11,7 +11,7 @@ from libs.python.cli.params import (
     temporal_params,
     gemini_params,
     AppEnv,
-    ManManHostUrl,
+    ManManExperienceApiUrl,
 )
 from libs.python.cli.providers.logging import create_logging_context
 from libs.python.cli.providers.postgres import (
@@ -44,7 +44,7 @@ app = typer.Typer()
 def callback(
     ctx: typer.Context,
     app_env: AppEnv,
-    manman_host_url: ManManHostUrl,
+    manman_experience_api_url: ManManExperienceApiUrl,
 ):
     logger.debug("CLI callback starting")
     
@@ -76,16 +76,16 @@ def callback(
     # Initialize Gemini
     genai.configure(api_key=gemini_config['api_key'])
     
-    # Initialize ManMan Experience API
-    url = manman_host_url.strip().rstrip("/")
-    ManManExperienceAPI.init(url + "/experience")
-    logger.info(f"ManMan Experience API initialized with host: {url}")
+    # Initialize ManMan Experience API with its dedicated URL
+    experience_url = manman_experience_api_url.strip().rstrip("/")
+    ManManExperienceAPI.init(experience_url)
+    logger.info(f"ManMan Experience API initialized with host: {experience_url}")
     
     # Store context in dict (keep compatible with decorator pattern)
     ctx.obj['slack'] = slack_ctx
     ctx.obj['temporal_host'] = temporal_config['host']
     ctx.obj['app_env'] = app_env
-    ctx.obj['manman_host_url'] = manman_host_url
+    ctx.obj['manman_experience_api_url'] = experience_url
     
     logger.debug("CLI callback complete")
 
