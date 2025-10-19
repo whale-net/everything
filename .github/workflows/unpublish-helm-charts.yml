@@ -89,20 +89,37 @@ jobs:
         with:
           version: 'latest'
           
-      - name: Download current Helm repository index
+      - name: Download current Helm repository
         id: download
         run: |
-          echo "Downloading current Helm repository index..."
+          echo "Downloading current Helm repository from gh-pages branch..."
           mkdir -p /tmp/helm-repo
           
-          # Download index.yaml from GitHub Pages
-          if curl -fsSL -o /tmp/helm-repo/index.yaml \
-            "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts/index.yaml"; then
-            echo "✅ Downloaded existing index.yaml"
-            ls -lh /tmp/helm-repo/
-            echo "downloaded=true" >> $GITHUB_OUTPUT
+          # Clone the gh-pages branch to get all chart files
+          if git clone --branch gh-pages --depth 1 \
+            https://github.com/${{ github.repository_owner }}/${{ github.event.repository.name }}.git \
+            /tmp/gh-pages-checkout; then
+            echo "✅ Downloaded gh-pages branch"
+            
+            # Copy charts directory if it exists
+            if [ -d /tmp/gh-pages-checkout/charts ]; then
+              cp -r /tmp/gh-pages-checkout/charts/* /tmp/helm-repo/
+              echo "✅ Copied existing chart files"
+              ls -lh /tmp/helm-repo/
+            else
+              echo "⚠️ No charts directory found in gh-pages"
+            fi
+            
+            # Verify index.yaml exists
+            if [ -f /tmp/helm-repo/index.yaml ]; then
+              echo "downloaded=true" >> $GITHUB_OUTPUT
+            else
+              echo "❌ No index.yaml found in gh-pages branch"
+              echo "downloaded=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
           else
-            echo "❌ Failed to download index.yaml - repository may not exist yet"
+            echo "❌ Failed to clone gh-pages branch - repository may not exist yet"
             echo "downloaded=false" >> $GITHUB_OUTPUT
             exit 1
           fi
@@ -126,8 +143,22 @@ jobs:
           # Create the deployment structure
           mkdir -p /tmp/helm-pages/charts
           
+          # Copy ALL chart files (.tgz) from the repository
+          if ls /tmp/helm-repo/*.tgz 1> /dev/null 2>&1; then
+            cp /tmp/helm-repo/*.tgz /tmp/helm-pages/charts/
+            echo "✅ Copied $(ls /tmp/helm-repo/*.tgz | wc -l) chart file(s)"
+          else
+            echo "⚠️ No .tgz chart files found to copy"
+          fi
+          
           # Copy the modified index to the charts directory
           cp /tmp/helm-repo/index.yaml /tmp/helm-pages/charts/
+          
+          # Copy README if it exists in the gh-pages checkout
+          if [ -f /tmp/gh-pages-checkout/README.md ]; then
+            cp /tmp/gh-pages-checkout/README.md /tmp/helm-pages/
+            echo "✅ Copied README.md"
+          fi
           
           echo "✅ Deployment structure prepared"
           tree /tmp/helm-pages/ || ls -laR /tmp/helm-pages/
@@ -152,8 +183,9 @@ jobs:
           echo "### ⚠️ Important Notes" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- Chart versions have been removed from the Helm repository index" >> $GITHUB_STEP_SUMMARY
-          echo "- The actual .tgz files were NOT deleted from the gh-pages branch" >> $GITHUB_STEP_SUMMARY
-          echo "- Users will no longer see these versions when searching the repository" >> $GITHUB_STEP_SUMMARY
+          echo "- All existing .tgz files have been preserved on the gh-pages branch" >> $GITHUB_STEP_SUMMARY
+          echo "- Users will no longer see the unpublished versions when searching the repository" >> $GITHUB_STEP_SUMMARY
+          echo "- The chart .tgz files remain accessible by direct URL if needed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📦 Helm Repository" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -179,6 +211,8 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**User:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
           echo "**Action:** Attempted to unpublish Helm chart versions" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ **Note:** All existing chart .tgz files are preserved during unpublish operation." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Required Permissions" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
