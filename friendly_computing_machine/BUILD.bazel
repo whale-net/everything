@@ -127,7 +127,7 @@ FCM_APPS = [
 release_helm_chart(
     name = "fcm_chart",
     apps = FCM_APPS,
-    chart_name = "fcm-services",
+    chart_name = "bot-services",
     namespace = "fcm",
     environment = "dev",
     domain = "friendly-computing-machine",

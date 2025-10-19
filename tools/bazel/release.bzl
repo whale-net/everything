@@ -293,14 +293,14 @@ def release_helm_chart(
     """Convenience macro to set up a releasable Helm chart.
     
     This macro wraps helm_chart and creates release metadata for CI/CD integration.
-    The actual chart name will be prefixed with "helm-{namespace}-" to make artifacts
+    The actual chart name will be prefixed with "helm-{domain}-" to make artifacts
     clearly identifiable (e.g., "helm-demo-hello-fastapi").
     
     Args:
         name: Target name for the chart
         apps: List of app_metadata targets to include (e.g., ["//demo/hello_python:hello-python_metadata"])
         chart_name: Base name of the Helm chart (defaults to name, MUST use dashes not underscores). 
-                   Will be prefixed with "helm-{namespace}-" automatically.
+                   Will be prefixed with "helm-{domain}-" automatically.
         chart_version: Version for local builds (default: "0.0.0-dev"). 
                       This is overridden during release by auto-versioning from git tags.
                       Only affects local/development builds.
@@ -330,9 +330,9 @@ def release_helm_chart(
     if "_" in base_chart_name:
         fail("Chart name '{}' contains underscores. Use dashes instead (e.g., 'my-chart' not 'my_chart')".format(base_chart_name))
     
-    # Construct the actual chart name with helm-namespace- prefix
+    # Construct the actual chart name with helm-domain- prefix
     # This makes chart artifacts clearly identifiable (e.g., helm-demo-hello-fastapi)
-    actual_chart_name = "helm-{}-{}".format(namespace, base_chart_name)
+    actual_chart_name = "helm-{}-{}".format(domain, base_chart_name)
     
     # Create the helm_chart target
     helm_chart(

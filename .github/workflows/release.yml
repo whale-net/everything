@@ -790,14 +790,50 @@ jobs:
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
       continue-on-error: true
       run: |
-        echo "Downloading existing Helm repository index if available..."
-        mkdir -p /tmp/helm-repo
+        echo "Downloading existing Helm repository charts if available..."
+        mkdir -p /tmp/helm-repo/charts
         
-        # Try to download existing index.yaml from GitHub Pages /charts subdirectory
-        if curl -fsSL -o /tmp/helm-repo/index.yaml \
+        # Download existing index.yaml from GitHub Pages /charts subdirectory
+        if curl -fsSL -o /tmp/helm-repo/charts/index.yaml \
           "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts/index.yaml"; then
           echo "✅ Downloaded existing index.yaml"
-          ls -lh /tmp/helm-repo/
+          
+          # Parse index.yaml to extract all chart URLs and download them
+          # This ensures we maintain historical chart versions when merging
+          if command -v yq &> /dev/null; then
+            echo "Downloading all existing chart files referenced in index..."
+            
+            # Extract all chart URLs from index.yaml
+            CHART_URLS=$(yq eval '.entries[].[] | .urls[]' /tmp/helm-repo/charts/index.yaml 2>/dev/null || echo "")
+            
+            if [[ -n "$CHART_URLS" ]]; then
+              while IFS= read -r URL; do
+                if [[ -n "$URL" ]]; then
+                  FILENAME=$(basename "$URL")
+                  echo "Downloading: $FILENAME"
+                  
+                  # Download chart file, handling both absolute and relative URLs
+                  if [[ "$URL" == http* ]]; then
+                    curl -fsSL -o "/tmp/helm-repo/charts/$FILENAME" "$URL"
+                  else
+                    # Relative URL - construct full URL
+                    curl -fsSL -o "/tmp/helm-repo/charts/$FILENAME" \
+                      "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts/$URL"
+                  fi
+                  
+                  if [[ -f "/tmp/helm-repo/charts/$FILENAME" ]]; then
+                    echo "  ✅ Downloaded: $FILENAME"
+                  else
+                    echo "  ⚠️ Failed to download: $FILENAME"
+                  fi
+                fi
+              done <<< "$CHART_URLS"
+            fi
+          else
+            echo "ℹ️ yq not found, skipping historical chart download. Only new charts will be in index."
+          fi
+          
+          ls -lh /tmp/helm-repo/charts/
         else
           echo "ℹ️ No existing index.yaml found (this is normal for first deployment)"
         fi
@@ -807,30 +843,39 @@ jobs:
       run: |
         echo "Generating Helm repository index..."
         
-        # Create charts directory structure
+        # Ensure charts directory exists and is ready
         mkdir -p /tmp/helm-repo/charts
         
-        # Copy charts to charts directory
+        # Copy newly built charts to charts directory
         cp /tmp/helm-charts/*.tgz /tmp/helm-repo/charts/
         
-        # Copy existing index to charts directory if it exists
-        if [ -f /tmp/helm-repo/index.yaml ]; then
-          mv /tmp/helm-repo/index.yaml /tmp/helm-repo/charts/
+        # Save existing index if it exists (for merge)
+        EXISTING_INDEX=""
+        if [ -f /tmp/helm-repo/charts/index.yaml ]; then
+          EXISTING_INDEX="/tmp/helm-repo/charts/index.yaml"
+          echo "Found existing index with historical charts"
         fi
         
         # Generate or merge index in the charts directory
         BASE_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
         
-        if [ -f /tmp/helm-repo/charts/index.yaml ]; then
-          echo "Merging with existing index..."
-          helm repo index /tmp/helm-repo/charts --url "$BASE_URL" --merge /tmp/helm-repo/charts/index.yaml
+        if [ -n "$EXISTING_INDEX" ]; then
+          echo "Merging new charts with existing index (preserving historical versions)..."
+          helm repo index /tmp/helm-repo/charts --url "$BASE_URL" --merge "$EXISTING_INDEX"
+          echo "✅ Index merged - preserving all historical chart versions"
         else
-          echo "Creating new index..."
+          echo "Creating new index (first deployment)..."
           helm repo index /tmp/helm-repo/charts --url "$BASE_URL"
+          echo "✅ Index created"
         fi
         
-        echo "✅ Generated Helm repository structure:"
+        echo ""
+        echo "📊 Final Helm repository structure:"
         tree /tmp/helm-repo/ || ls -laR /tmp/helm-repo/
+        
+        echo ""
+        echo "Total charts in repository:"
+        ls -1 /tmp/helm-repo/charts/*.tgz | wc -l
         
     - name: Upload Pages artifact
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
