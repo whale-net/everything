@@ -1,12 +1,15 @@
 import logging
 from textwrap import dedent
 
-import google.generativeai as genai
+from google import genai
 
 from friendly_computing_machine.src.friendly_computing_machine.db.dal import get_genai_texts_by_slack_channel
 from friendly_computing_machine.src.friendly_computing_machine.util import deprecated
 
 logger = logging.getLogger(__name__)
+
+# Global client instance (should be initialized before use)
+genai_client: genai.Client = None
 
 
 @deprecated
@@ -58,10 +61,15 @@ def generate_text_with_slack_context(
 @deprecated
 def generate_text(user_name: str, prompt_text: str) -> tuple:
     try:
-        # TODO - model name - using default for now
-        model = genai.GenerativeModel()
+        if not genai_client:
+            raise RuntimeError("Gemini client not initialized. Call genai.Client() first.")
+        
+        # Generate content using the new API
         logger.info("about to generate response for %s", prompt_text[:100])
-        response = model.generate_content(prompt_text)
+        response = genai_client.models.generate_content(
+            model='gemini-2.0-flash-exp',
+            contents=prompt_text,
+        )
 
         response_text = response.text
         # Check for prompt feedback (e.g., blocked due to safety settings)
@@ -85,10 +93,11 @@ def generate_text(user_name: str, prompt_text: str) -> tuple:
 
             # You might want to handle blocked prompts differently, e.g.,
             # by informing the user or modifying the prompt.
-            feedback_response = model.generate_content(
-                feedback_prompt.replace("{user_name}", user_name)
+            feedback_response = genai_client.models.generate_content(
+                model='gemini-2.0-flash-exp',
+                contents=feedback_prompt.replace("{user_name}", user_name),
             )
-            response_text = feedback_response.text or feedback_response.prompt_feedback
+            response_text = feedback_response.text or str(feedback_response.prompt_feedback)
             is_safe = False
 
         logger.info("response generated, is_safe=%s", is_safe)

@@ -2,7 +2,7 @@ import asyncio
 import logging
 from typing import Annotated
 
-import google.generativeai as genai
+from google import genai
 import typer
 
 from libs.python.cli.params import logging_params, temporal_params, gemini_params, AppEnv
@@ -89,9 +89,12 @@ def cli_run(
     else:
         logger.info("migration check passed, starting normally")
 
-    # Setup Gemini API
+    # Setup Gemini API client (stored globally for activity access)
     gemini_config = ctx.obj.get('gemini', {})
-    genai.configure(api_key=gemini_config['api_key'])
+    genai_client = genai.Client(api_key=gemini_config['api_key'])
+    # Store globally for activities to access
+    import friendly_computing_machine.src.friendly_computing_machine.temporal.ai.activity as ai_activity
+    ai_activity.genai_client = genai_client
     
     # Setup Slack client
     init_web_client(slack_bot_token)

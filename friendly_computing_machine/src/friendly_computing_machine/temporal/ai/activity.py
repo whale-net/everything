@@ -1,18 +1,26 @@
 import random
 from textwrap import dedent
 
-import google.generativeai as genai
+from google import genai
 from temporalio import activity
 
 from friendly_computing_machine.src.friendly_computing_machine.models.genai import GenAIText
+
+# Global client instance (initialized by CLI)
+genai_client: genai.Client = None
 
 
 async def gen_text(prompt: str) -> str:
     """
     Generate text using the Gemini AI model.
     """
-    model = genai.GenerativeModel()
-    response = await model.generate_content_async(prompt)
+    if not genai_client:
+        raise RuntimeError("Gemini client not initialized. Call genai.Client() in CLI first.")
+    
+    response = await genai_client.aio.models.generate_content(
+        model='gemini-2.0-flash-exp',
+        contents=prompt,
+    )
     return response.text
 
 
