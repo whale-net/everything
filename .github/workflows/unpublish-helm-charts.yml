@@ -96,16 +96,22 @@ jobs:
           mkdir -p /tmp/helm-repo
           
           # Clone the gh-pages branch to get all chart files
+          # Use GitHub token for authentication to support private repos
           if git clone --branch gh-pages --depth 1 \
-            https://github.com/${{ github.repository_owner }}/${{ github.event.repository.name }}.git \
+            https://x-access-token:${{ github.token }}@github.com/${{ github.repository_owner }}/${{ github.event.repository.name }}.git \
             /tmp/gh-pages-checkout; then
             echo "✅ Downloaded gh-pages branch"
             
-            # Copy charts directory if it exists
+            # Copy charts directory if it exists and is not empty
             if [ -d /tmp/gh-pages-checkout/charts ]; then
-              cp -r /tmp/gh-pages-checkout/charts/* /tmp/helm-repo/
-              echo "✅ Copied existing chart files"
-              ls -lh /tmp/helm-repo/
+              # Use find to handle empty directory case and avoid glob expansion issues
+              if [ "$(find /tmp/gh-pages-checkout/charts -mindepth 1 -maxdepth 1 | wc -l)" -gt 0 ]; then
+                cp -r /tmp/gh-pages-checkout/charts/. /tmp/helm-repo/
+                echo "✅ Copied existing chart files"
+                ls -lh /tmp/helm-repo/
+              else
+                echo "⚠️ Charts directory is empty"
+              fi
             else
               echo "⚠️ No charts directory found in gh-pages"
             fi
