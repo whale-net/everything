@@ -142,13 +142,10 @@ def cli_run(
     """
     subscribe_ctx: FCMSubscribeContext = ctx.obj
     
-    # Create database context with FCM initialization
-    from friendly_computing_machine.src.friendly_computing_machine.db.util import init_engine
-    
+    # Create database context with migrations package
     subscribe_ctx.db = create_postgres_context(
         database_url=database_url,
         migrations_package="friendly_computing_machine.src.migrations",
-        engine_initializer=init_engine,
     )
 
     if skip_migration_check:

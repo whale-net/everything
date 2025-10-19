@@ -71,13 +71,10 @@ def cli_run(
     slack_bot_token: SlackBotToken,
     skip_migration_check: bool = False,
 ):
-    # Setup database with FCM initialization
-    from friendly_computing_machine.src.friendly_computing_machine.db.util import init_engine
-    
+    # Setup database with migrations package
     db_ctx = create_postgres_context(
         database_url=database_url,
         migrations_package="friendly_computing_machine.src.migrations",
-        engine_initializer=init_engine,
     )
     
     # Check migrations

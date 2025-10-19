@@ -96,13 +96,10 @@ def cli_run_taskpool(
     database_url: PostgresUrl,
     skip_migration_check: bool = False,
 ):
-    # Create database context with FCM initialization
-    from friendly_computing_machine.src.friendly_computing_machine.db.util import init_engine
-    
+    # Create database context with migrations package
     db_ctx = create_postgres_context(
         database_url=database_url,
         migrations_package="friendly_computing_machine.src.migrations",
-        engine_initializer=init_engine,
     )
     
     if skip_migration_check:
@@ -135,13 +132,10 @@ def cli_run_slack_socket_app(
 
     # Gemini API is already configured in callback
     
-    # Create database context with FCM initialization
-    from friendly_computing_machine.src.friendly_computing_machine.db.util import init_engine
-    
+    # Create database context with migrations package
     db_ctx = create_postgres_context(
         database_url=database_url,
         migrations_package="friendly_computing_machine.src.migrations",
-        engine_initializer=init_engine,
     )
 
     logger.info("starting slack bot service (no task pool)")
