@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 migration_app = create_migration_app(
     migrations_package="friendly_computing_machine.src.migrations",
     target_metadata=Base.metadata,
-    database_url_envvar="DATABASE_URL",
+    database_url_envvar="POSTGRES_URL",
     version_table_schema="public",
 )
 
