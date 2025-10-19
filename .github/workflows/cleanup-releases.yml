@@ -1,0 +1,97 @@
+name: Cleanup Old Releases
+
+on:
+  workflow_dispatch:
+    inputs:
+      keep_minor_versions:
+        description: 'Number of recent minor versions to keep'
+        required: false
+        default: 2
+        type: number
+      min_age_days:
+        description: 'Minimum age in days for deletion'
+        required: false
+        default: 14
+        type: number
+      dry_run:
+        description: 'Dry run mode (preview changes without executing)'
+        required: false
+        default: true
+        type: boolean
+      delete_packages:
+        description: 'Also delete corresponding GHCR packages'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write  # Required for deleting Git tags
+  packages: write  # Required for deleting GHCR packages
+
+jobs:
+  cleanup-releases:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history and tags
+      
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.8.5
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+      
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      
+      - name: Run cleanup (dry-run)
+        if: ${{ inputs.dry_run }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          bazel run //tools:release -- cleanup-releases \
+            --keep-minor-versions ${{ inputs.keep_minor_versions }} \
+            --min-age-days ${{ inputs.min_age_days }} \
+            --dry-run \
+            ${{ inputs.delete_packages && '--delete-packages' || '--no-delete-packages' }}
+      
+      - name: Run cleanup (real mode)
+        if: ${{ !inputs.dry_run }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          bazel run //tools:release -- cleanup-releases \
+            --keep-minor-versions ${{ inputs.keep_minor_versions }} \
+            --min-age-days ${{ inputs.min_age_days }} \
+            --no-dry-run \
+            ${{ inputs.delete_packages && '--delete-packages' || '--no-delete-packages' }}
+      
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Cleanup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Configuration:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Keep minor versions: ${{ inputs.keep_minor_versions }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Minimum age (days): ${{ inputs.min_age_days }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Dry run: ${{ inputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Delete GHCR packages: ${{ inputs.delete_packages }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ inputs.dry_run }}" == "true" ]; then
+            echo "**Mode:** 🧪 Dry Run (No actual deletions performed)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "To actually delete releases, run this workflow again with dry_run=false" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Mode:** ⚠️ Live Deletion (Tags and packages were deleted)" >> $GITHUB_STEP_SUMMARY
+          fi

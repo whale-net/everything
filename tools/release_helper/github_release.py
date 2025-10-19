@@ -295,6 +295,82 @@ class GitHubReleaseClient:
                 print(f"❌ Failed to list releases: {e}", file=sys.stderr)
                 return []
     
+    def delete_release(self, release_id: int) -> bool:
+        """Delete a GitHub release by ID.
+        
+        Args:
+            release_id: ID of the release to delete
+            
+        Returns:
+            True if deletion successful, False if release not found
+            
+        Raises:
+            httpx.HTTPStatusError: If deletion fails (e.g., permission denied)
+        """
+        url = f"{self.base_url}/repos/{self.owner}/{self.repo}/releases/{release_id}"
+        
+        with httpx.Client() as client:
+            try:
+                response = client.delete(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+                
+                if response.status_code == 204:
+                    # Successfully deleted
+                    return True
+                elif response.status_code == 404:
+                    # Release doesn't exist
+                    return False
+                else:
+                    # Other error (e.g., 403 Forbidden)
+                    response.raise_for_status()
+                    return False
+            except httpx.HTTPStatusError:
+                raise
+            except httpx.HTTPError as e:
+                print(f"❌ Error deleting release {release_id}: {e}", file=sys.stderr)
+                return False
+    
+    def delete_release_by_tag(self, tag_name: str) -> bool:
+        """Delete a GitHub release by tag name.
+        
+        This is a convenience method that first looks up the release ID
+        by tag name, then deletes it.
+        
+        Args:
+            tag_name: Git tag name
+            
+        Returns:
+            True if deletion successful, False if release not found
+            
+        Raises:
+            httpx.HTTPStatusError: If deletion fails (e.g., permission denied)
+        """
+        # First, get the release by tag
+        release = self.get_release_by_tag(tag_name)
+        if not release:
+            return False
+        
+        # Delete the release
+        return self.delete_release(release["id"])
+    
+    def find_releases_by_tags(self, tag_names: List[str]) -> Dict[str, Dict]:
+        """Find releases by tag names.
+        
+        Args:
+            tag_names: List of tag names to search for
+            
+        Returns:
+            Dictionary mapping tag names to release data
+        """
+        releases_map = {}
+        all_releases = self.list_releases(per_page=100)
+        
+        for release in all_releases:
+            tag_name = release.get("tag_name")
+            if tag_name in tag_names:
+                releases_map[tag_name] = release
+        
+        return releases_map
+    
     def verify_tag_exists(self, tag_name: str, expected_commit_sha: Optional[str] = None, max_retries: int = 3) -> bool:
         """Verify that a git tag exists in the repository and optionally check its commit SHA.
         

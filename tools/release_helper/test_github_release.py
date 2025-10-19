@@ -10,6 +10,7 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock
 import sys
 import json
+import httpx
 
 # Add the parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -620,3 +621,127 @@ class TestOpenAPISpecValidation:
                 assert "hello-python" in results
                 assert results["hello-python"] is not None
                 assert results["hello-python"]["id"] == 456
+
+
+class TestGitHubReleaseClientDeletion:
+    """Test cases for GitHubReleaseClient deletion operations."""
+
+    @pytest.fixture
+    def mock_token(self):
+        """Provide a mock GitHub token."""
+        return "ghp_test_token_1234567890"
+
+    @pytest.fixture
+    def client(self, mock_token):
+        """Create a GitHubReleaseClient instance for testing."""
+        return GitHubReleaseClient(owner="test-owner", repo="test-repo", token=mock_token)
+
+    @pytest.fixture
+    def mock_httpx_client(self):
+        """Create a mock httpx.Client with proper context manager support."""
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=None)
+        return mock_client
+
+    def test_delete_release_success(self, client, mock_httpx_client):
+        """Test successfully deleting a release by ID."""
+        mock_response = Mock()
+        mock_response.status_code = 204
+        mock_httpx_client.delete.return_value = mock_response
+
+        with patch("httpx.Client", return_value=mock_httpx_client):
+            result = client.delete_release(12345)
+
+        assert result is True
+        mock_httpx_client.delete.assert_called_once()
+        call_args = mock_httpx_client.delete.call_args
+        # Verify URL contains release ID
+        assert "/releases/12345" in str(call_args)
+
+    def test_delete_release_not_found(self, client, mock_httpx_client):
+        """Test deleting a release that doesn't exist returns False."""
+        mock_response = Mock()
+        mock_response.status_code = 404
+        mock_httpx_client.delete.return_value = mock_response
+
+        with patch("httpx.Client", return_value=mock_httpx_client):
+            result = client.delete_release(12345)
+
+        assert result is False
+
+    def test_delete_release_permission_denied(self, client, mock_httpx_client):
+        """Test deleting a release without permission raises error."""
+        mock_response = Mock()
+        mock_response.status_code = 403
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Forbidden", request=Mock(), response=mock_response
+        )
+        mock_httpx_client.delete.return_value = mock_response
+
+        with patch("httpx.Client", return_value=mock_httpx_client):
+            with pytest.raises(httpx.HTTPStatusError):
+                client.delete_release(12345)
+
+    def test_delete_release_by_tag_success(self, client, mock_httpx_client):
+        """Test deleting a release by tag name."""
+        # Mock get_release_by_tag
+        mock_get_response = Mock()
+        mock_get_response.status_code = 200
+        mock_get_response.json.return_value = {
+            "id": 12345,
+            "tag_name": "v1.0.0",
+            "name": "Release v1.0.0"
+        }
+        
+        # Mock delete
+        mock_delete_response = Mock()
+        mock_delete_response.status_code = 204
+        
+        mock_httpx_client.get.return_value = mock_get_response
+        mock_httpx_client.delete.return_value = mock_delete_response
+
+        with patch("httpx.Client", return_value=mock_httpx_client):
+            result = client.delete_release_by_tag("v1.0.0")
+
+        assert result is True
+        # Should have called get and delete
+        assert mock_httpx_client.get.call_count == 1
+        assert mock_httpx_client.delete.call_count == 1
+
+    def test_delete_release_by_tag_not_found(self, client, mock_httpx_client):
+        """Test deleting a release by tag when release doesn't exist."""
+        mock_response = Mock()
+        mock_response.status_code = 404
+        mock_httpx_client.get.return_value = mock_response
+
+        with patch("httpx.Client", return_value=mock_httpx_client):
+            result = client.delete_release_by_tag("v1.0.0")
+
+        assert result is False
+        # Should only call get, not delete
+        mock_httpx_client.get.assert_called_once()
+        mock_httpx_client.delete.assert_not_called()
+
+    def test_find_releases_by_tags(self, client, mock_httpx_client):
+        """Test finding releases by tag names."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = [
+            {"id": 1, "tag_name": "v1.0.0", "name": "Release 1.0.0"},
+            {"id": 2, "tag_name": "v1.1.0", "name": "Release 1.1.0"},
+            {"id": 3, "tag_name": "v2.0.0", "name": "Release 2.0.0"},
+        ]
+        # Prevent pagination
+        mock_response.headers = {}
+        mock_httpx_client.get.return_value = mock_response
+
+        with patch("httpx.Client", return_value=mock_httpx_client):
+            releases = client.find_releases_by_tags(["v1.0.0", "v2.0.0"])
+
+        assert len(releases) == 2
+        assert "v1.0.0" in releases
+        assert "v2.0.0" in releases
+        assert "v1.1.0" not in releases
+        assert releases["v1.0.0"]["id"] == 1
+        assert releases["v2.0.0"]["id"] == 3

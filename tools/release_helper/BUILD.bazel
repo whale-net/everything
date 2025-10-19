@@ -183,3 +183,26 @@ py_test(
     ],
     size = "small",
 )
+
+# Unit tests for GHCR package management
+py_test(
+    name = "test_ghcr",
+    srcs = ["test_ghcr.py"],
+    deps = [
+        ":release_helper_lib",
+        "@pypi//:pytest",
+        "@pypi//:httpx",
+    ],
+    size = "small",
+)
+
+# Unit tests for cleanup orchestration
+py_test(
+    name = "test_cleanup",
+    srcs = ["test_cleanup.py"],
+    deps = [
+        ":release_helper_lib",
+        "@pypi//:pytest",
+    ],
+    size = "small",
+)

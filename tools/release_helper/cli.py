@@ -743,6 +743,142 @@ def unpublish_helm_chart_cmd(
         raise typer.Exit(1)
 
 
+@app.command("cleanup-releases")
+def cleanup_releases_cmd(
+    keep_minor_versions: Annotated[int, typer.Option("--keep-minor-versions", help="Number of recent minor versions to keep")] = 2,
+    min_age_days: Annotated[int, typer.Option("--min-age-days", help="Minimum age in days for deletion")] = 14,
+    dry_run: Annotated[bool, typer.Option("--dry-run/--no-dry-run", help="Preview changes without executing")] = True,
+    delete_packages: Annotated[bool, typer.Option("--delete-packages/--no-delete-packages", help="Also delete corresponding GHCR packages")] = True,
+):
+    """Clean up old Git tags and optionally their corresponding GHCR packages.
+    
+    This command identifies old releases based on intelligent retention policies:
+    - Keeps only the latest patch of each minor version
+    - Keeps the last N minor versions (default: 2)
+    - Always keeps the latest minor version of each major version
+    - Only deletes tags older than the age threshold (default: 14 days)
+    
+    By default, runs in dry-run mode to preview changes. Use --no-dry-run to actually delete.
+    
+    Examples:
+        # Preview what would be deleted (recommended first step)
+        bazel run //tools:release -- cleanup-releases
+        
+        # Actually delete old releases (prompts for confirmation)
+        bazel run //tools:release -- cleanup-releases --no-dry-run
+        
+        # Custom retention policy
+        bazel run //tools:release -- cleanup-releases \\
+            --keep-minor-versions 3 \\
+            --min-age-days 30
+        
+        # Delete tags only (keep GHCR packages)
+        bazel run //tools:release -- cleanup-releases \\
+            --no-delete-packages --no-dry-run
+    """
+    import os
+    import sys
+    from tools.release_helper.cleanup import ReleaseCleanup
+    
+    try:
+        # Get repository information from environment
+        owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "whale-net").lower()
+        repo = os.environ.get("GITHUB_REPOSITORY", "whale-net/everything").split("/")[-1]
+        
+        # Get GitHub token
+        token = os.environ.get("GITHUB_TOKEN")
+        if not token:
+            typer.echo("❌ GITHUB_TOKEN environment variable not set", err=True)
+            typer.echo("Please set GITHUB_TOKEN with appropriate permissions:", err=True)
+            typer.echo("  - contents:write (for tag deletion)", err=True)
+            typer.echo("  - packages:write (for GHCR package deletion)", err=True)
+            raise typer.Exit(1)
+        
+        typer.echo(f"🔍 Analyzing releases for {owner}/{repo}...")
+        typer.echo(f"Retention policy:")
+        typer.echo(f"  - Keep last {keep_minor_versions} minor versions")
+        typer.echo(f"  - Delete only tags older than {min_age_days} days")
+        typer.echo(f"  - Delete GHCR packages: {delete_packages}")
+        typer.echo("")
+        
+        # Create cleanup orchestrator
+        cleanup = ReleaseCleanup(owner, repo, token)
+        
+        # Plan the cleanup
+        typer.echo("📋 Planning cleanup...")
+        plan = cleanup.plan_cleanup(
+            keep_minor_versions=keep_minor_versions,
+            min_age_days=min_age_days
+        )
+        
+        # Display plan
+        typer.echo(f"\n📊 Cleanup Plan:")
+        typer.echo(f"  Tags to delete: {plan.total_tag_deletions()}")
+        typer.echo(f"  GitHub releases to delete: {plan.total_release_deletions()}")
+        typer.echo(f"  Tags to keep: {len(plan.tags_to_keep)}")
+        
+        if delete_packages:
+            typer.echo(f"  GHCR package versions to delete: {plan.total_package_deletions()}")
+        
+        if plan.is_empty():
+            typer.echo("\n✅ Nothing to clean up!")
+            return
+        
+        # Show what will be deleted
+        if plan.tags_to_delete:
+            typer.echo(f"\n🗑️  Tags marked for deletion ({len(plan.tags_to_delete)}):")
+            for tag in plan.tags_to_delete[:10]:  # Show first 10
+                release_info = ""
+                if tag in plan.releases_to_delete:
+                    release_info = f" (+ release)"
+                typer.echo(f"  - {tag}{release_info}")
+            if len(plan.tags_to_delete) > 10:
+                typer.echo(f"  ... and {len(plan.tags_to_delete) - 10} more")
+        
+        if delete_packages and plan.packages_to_delete:
+            typer.echo(f"\n📦 GHCR packages marked for deletion:")
+            for package_name, version_ids in list(plan.packages_to_delete.items())[:5]:
+                typer.echo(f"  - {package_name}: {len(version_ids)} versions")
+            if len(plan.packages_to_delete) > 5:
+                typer.echo(f"  ... and {len(plan.packages_to_delete) - 5} more packages")
+        
+        # Remove GHCR packages from plan if user doesn't want to delete them
+        if not delete_packages:
+            plan.packages_to_delete.clear()
+        
+        # Execute cleanup
+        if dry_run:
+            typer.echo("\n🧪 DRY RUN MODE - No actual deletions will occur")
+            typer.echo("Run with --no-dry-run to actually delete these releases")
+        else:
+            typer.echo("\n⚠️  WARNING: This will permanently delete tags, releases, and packages!")
+            confirm = typer.confirm("Are you sure you want to proceed?")
+            if not confirm:
+                typer.echo("Cleanup cancelled.")
+                return
+        
+        result = cleanup.execute_cleanup(plan, dry_run=dry_run)
+        
+        # Display results
+        typer.echo(f"\n{result.summary()}")
+        
+        if result.errors:
+            typer.echo(f"\n❌ Errors encountered:")
+            for error in result.errors[:10]:
+                typer.echo(f"  - {error}")
+            if len(result.errors) > 10:
+                typer.echo(f"  ... and {len(result.errors) - 10} more errors")
+        
+        if not result.is_successful():
+            raise typer.Exit(1)
+        
+        typer.echo("\n✅ Cleanup complete!")
+        
+    except Exception as e:
+        typer.echo(f"\n❌ Error during cleanup: {e}", err=True)
+        raise typer.Exit(1)
+
+
 def main():
     """Main entry point for the CLI."""
     try:
