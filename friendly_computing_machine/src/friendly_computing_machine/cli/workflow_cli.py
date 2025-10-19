@@ -1,42 +1,17 @@
 import asyncio
 import logging
+from typing import Annotated
 
+import google.generativeai as genai
 import typer
 
-from friendly_computing_machine.src.friendly_computing_machine.cli.context.app_env import (
-    FILENAME as APP_ENV_FILENAME,
-)
-from friendly_computing_machine.src.friendly_computing_machine.cli.context.app_env import (
-    T_app_env,
-    setup_app_env,
-)
-from friendly_computing_machine.src.friendly_computing_machine.cli.context.db import (
-    FILENAME as DB_FILENAME,
-)
-from friendly_computing_machine.src.friendly_computing_machine.cli.context.db import (
-    T_database_url,
-    setup_db,
-)
-from friendly_computing_machine.src.friendly_computing_machine.cli.context.gemini import (
-    T_google_api_key,
-    setup_gemini,
-)
-from friendly_computing_machine.src.friendly_computing_machine.cli.context.log import (
-    setup_logging,
-)
+from libs.python.cli.params import logging_params, temporal_params, gemini_params, AppEnv
+from libs.python.cli.providers.logging import create_logging_context
+from libs.python.cli.providers.postgres import PostgresUrl, create_postgres_context
+from libs.python.cli.providers.slack import SlackBotToken
 
-# from friendly_computing_machine.cli.context.slack import (
-#     setup_slack,
-#     T_slack_app_token,
-#     FILENAME as SLACK_FILENAME,
-# )
-from friendly_computing_machine.src.friendly_computing_machine.cli.context.slack import (
-    T_slack_bot_token,
-    setup_slack_web_client_only,
-)
-from friendly_computing_machine.src.friendly_computing_machine.cli.context.temporal import (
-    T_temporal_host,
-    setup_temporal,
+from friendly_computing_machine.src.friendly_computing_machine.bot.app import (
+    init_web_client,
 )
 from friendly_computing_machine.src.friendly_computing_machine.db.util import (
     should_run_migration,
@@ -47,6 +22,9 @@ from friendly_computing_machine.src.friendly_computing_machine.health import (
 from friendly_computing_machine.src.friendly_computing_machine.temporal.worker import (
     run_worker,
 )
+from friendly_computing_machine.src.friendly_computing_machine.temporal.util import (
+    init_temporal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,49 +34,73 @@ app = typer.Typer(
 
 
 @app.callback()
+@temporal_params
+@logging_params
 def callback(
     ctx: typer.Context,
-    # slack_bot_token: Annotated[str, typer.Option(envvar="SLACK_BOT_TOKEN")],
-    # slack_app_token: T_slack_app_token,
-    temporal_host: T_temporal_host,
-    app_env: T_app_env,
-    log_otlp: bool = False,
+    app_env: AppEnv,
 ):
     logger.debug("CLI callback starting")
-    setup_logging(ctx, log_otlp=log_otlp)
-    # setup_slack(ctx, slack_app_token)
-    setup_app_env(ctx, app_env)
-    setup_temporal(ctx, temporal_host, app_env)
+    
+    # Get contexts from decorators
+    temporal_config = ctx.obj.get('temporal', {})
+    log_config = ctx.obj.get('logging', {})
+    
+    # Setup logging
+    create_logging_context(
+        service_name="friendly-computing-machine-workflow",
+        log_level="DEBUG",
+        enable_otlp=log_config.get('enable_otlp', False),
+    )
+    
+    # Initialize Temporal client
+    init_temporal(host=temporal_config['host'], app_env=app_env)
+    
+    # Store context
+    ctx.obj['temporal_host'] = temporal_config['host']
+    ctx.obj['app_env'] = app_env
+    
     logger.debug("CLI callback complete")
 
 
 @app.command("run")
+@gemini_params
 def cli_run(
     ctx: typer.Context,
-    # keeping these on run for now just since it seems right
-    google_api_key: T_google_api_key,
-    database_url: T_database_url,
-    slack_bot_token: T_slack_bot_token,
+    database_url: PostgresUrl,
+    slack_bot_token: SlackBotToken,
     skip_migration_check: bool = False,
 ):
-    setup_db(ctx, database_url)
+    # Setup database with FCM initialization
+    from friendly_computing_machine.src.friendly_computing_machine.db.util import init_engine
+    
+    db_ctx = create_postgres_context(
+        database_url=database_url,
+        migrations_package="friendly_computing_machine.src.migrations",
+        engine_initializer=init_engine,
+    )
+    
+    # Check migrations
     if skip_migration_check:
         logger.info("skipping migration check")
-    elif should_run_migration(
-        ctx.obj[DB_FILENAME].engine, ctx.obj[DB_FILENAME].alembic_config
-    ):
+    elif should_run_migration(db_ctx.engine, db_ctx.alembic_config):
         logger.critical("migration check failed, please migrate")
         raise RuntimeError("need to run migration")
     else:
         logger.info("migration check passed, starting normally")
 
-    setup_gemini(ctx, google_api_key)
-    setup_slack_web_client_only(ctx, slack_bot_token)
+    # Setup Gemini API
+    gemini_config = ctx.obj.get('gemini', {})
+    genai.configure(api_key=gemini_config['api_key'])
+    
+    # Setup Slack client
+    init_web_client(slack_bot_token)
+    
+    # Start health server
     run_health_server()
 
     logger.info("starting temporal worker")
-    # TODO - pass down context
-    asyncio.run(run_worker(app_env=ctx.obj[APP_ENV_FILENAME]["app_env"]))
+    asyncio.run(run_worker(app_env=ctx.obj['app_env']))
 
 
 @app.command("test")

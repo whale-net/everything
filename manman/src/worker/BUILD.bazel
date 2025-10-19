@@ -8,6 +8,10 @@ py_library(
     deps = [
         "//manman/src:manman_core",
         "//manman/src/repository:manman_repository",
+        "//libs/python/cli:params_base",
+        "//libs/python/cli:types",
+        "//libs/python/cli/providers/logging",
+        "//libs/python/cli/providers/rabbitmq",
         "@pypi//:amqpstorm",
         "@pypi//:typer",
         "@pypi//:requests",

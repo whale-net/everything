@@ -1,0 +1,52 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+py_library(
+    name = "types",
+    srcs = [
+        "types.py",
+    ],
+    deps = [
+        "@pypi//:typer",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+py_library(
+    name = "params_base",
+    srcs = [
+        "params_base.py",
+    ],
+    deps = [],
+    visibility = ["//visibility:public"],
+)
+
+py_library(
+    name = "params",
+    srcs = [
+        "params.py",
+    ],
+    deps = [
+        ":types",
+        ":params_base",
+        "//libs/python/cli/providers/rabbitmq",
+        "//libs/python/cli/providers/postgres",
+        "//libs/python/cli/providers/slack",
+        "//libs/python/cli/providers/logging",
+        "//libs/python/cli/providers/temporal",
+        "//libs/python/cli/providers/gemini",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+py_library(
+    name = "cli",
+    srcs = [
+        "__init__.py",
+        "providers/__init__.py",
+    ],
+    deps = [
+        ":types",
+        ":params_base",
+    ],
+    visibility = ["//visibility:public"],
+)
