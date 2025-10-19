@@ -16,7 +16,6 @@ py_library(
         "//friendly_computing_machine/src/friendly_computing_machine/models",
         "//friendly_computing_machine/src/friendly_computing_machine/db",
         "//friendly_computing_machine/src/friendly_computing_machine/manman",
-        "//friendly_computing_machine/src/friendly_computing_machine/rabbitmq",
         "//friendly_computing_machine/src/friendly_computing_machine/temporal",
         "//friendly_computing_machine/src/friendly_computing_machine/gemini",
         "//friendly_computing_machine/src/friendly_computing_machine/bot",
