@@ -13,10 +13,14 @@ from libs.python.alembic import (
     should_run_migration,
 )
 
+# Database setup
+from libs.python.cli.providers.postgres import (
+    create_postgres_context,
+    DatabaseContext,
+    PostgresUrl,
+)
+
 from friendly_computing_machine.src.friendly_computing_machine.models.base import Base
-
-__GLOBALS = {"engine": None}
-
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +105,24 @@ def db_update(
 # These are imported at the top of the file for backward compatibility
 
 
+def setup_database(database_url: PostgresUrl) -> DatabaseContext:
+    """Set up the FCM database context.
+    
+    This is the app-specific database initialization that wraps the common
+    create_postgres_context provider with FCM's migrations package.
+    
+    Args:
+        database_url: PostgreSQL connection URL (from CLI parameter)
+    
+    Returns:
+        DatabaseContext configured for FCM
+    """
+    return create_postgres_context(
+        database_url=database_url,
+        migrations_package="friendly_computing_machine.src.migrations",
+    )
+
+
 class SessionManager:
     def __init__(self, session: Optional[Session] = None):
         # TODO autocommit
@@ -110,9 +132,11 @@ class SessionManager:
         self.should_close = session is None
         # session is established during init instead of enter.
         # shouldn't be problematic, but maybe in some odd situation
-        self.session = session or Session(get_engine())
+        self.session = session
 
     def __enter__(self):
+        if self.session is None:
+            raise RuntimeError("session is None")
         return self.session
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -123,16 +147,3 @@ class SessionManager:
             self.session.close()
         else:
             logger.debug("session is passthrough, not closing")
-
-
-def get_engine() -> Engine:
-    if __GLOBALS["engine"] is None:
-        raise RuntimeError("engine is none")
-    return __GLOBALS["engine"]
-
-
-def init_engine(engine: Engine):
-    if __GLOBALS["engine"] is not None:
-        raise RuntimeError("engine already initialized")
-    __GLOBALS["engine"] = engine
-    logger.info("engine singleton created")
