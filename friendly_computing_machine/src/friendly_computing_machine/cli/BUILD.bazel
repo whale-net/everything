@@ -25,6 +25,6 @@ py_library(
         "//friendly_computing_machine/src/friendly_computing_machine/temporal",
         "//friendly_computing_machine/src/migrations",
         "@pypi//:typer",
-        "@pypi//:google-generativeai",
+        "@pypi//:google-genai",
     ],
 )

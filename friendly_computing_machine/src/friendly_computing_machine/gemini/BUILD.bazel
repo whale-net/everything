@@ -7,9 +7,8 @@ py_library(
     srcs = glob(["**/*.py"]),
     visibility = ["//visibility:public"],
     deps = [
-        "//friendly_computing_machine/src/friendly_computing_machine/models",
-        "//friendly_computing_machine/src/friendly_computing_machine/db",
+        "//friendly_computing_machine/src/friendly_computing_machine/db:dal",
         "//friendly_computing_machine/src/friendly_computing_machine:util",
-        "@pypi//:google-generativeai",
+        "@pypi//:google-genai",
     ],
 )
