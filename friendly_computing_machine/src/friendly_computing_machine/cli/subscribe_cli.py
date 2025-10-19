@@ -8,7 +8,6 @@ from libs.python.cli.providers.logging import create_logging_context
 from libs.python.cli.providers.postgres import (
     DatabaseContext,
     PostgresUrl,
-    create_postgres_context,
 )
 from libs.python.cli.providers.rabbitmq import (
     RabbitMQContext,
@@ -30,6 +29,7 @@ from friendly_computing_machine.src.friendly_computing_machine.manman.api import
 )
 from friendly_computing_machine.src.friendly_computing_machine.db.util import (
     should_run_migration,
+    setup_database,
 )
 from friendly_computing_machine.src.friendly_computing_machine.health import (
     run_health_server,
@@ -142,11 +142,8 @@ def cli_run(
     """
     subscribe_ctx: FCMSubscribeContext = ctx.obj
     
-    # Create database context with migrations package
-    subscribe_ctx.db = create_postgres_context(
-        database_url=database_url,
-        migrations_package="friendly_computing_machine.src.migrations",
-    )
+    # Set up database
+    subscribe_ctx.db = setup_database(database_url)
 
     if skip_migration_check:
         logger.info("skipping migration check")

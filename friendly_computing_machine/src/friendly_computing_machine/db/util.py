@@ -13,6 +13,13 @@ from libs.python.alembic import (
     should_run_migration,
 )
 
+# Database setup
+from libs.python.cli.providers.postgres import (
+    create_postgres_context,
+    DatabaseContext,
+    PostgresUrl,
+)
+
 from friendly_computing_machine.src.friendly_computing_machine.models.base import Base
 
 logger = logging.getLogger(__name__)
@@ -96,6 +103,24 @@ def db_update(
 # Migration utilities are re-exported from consolidated library
 # They are available as: run_migration, run_downgrade, create_migration, should_run_migration
 # These are imported at the top of the file for backward compatibility
+
+
+def setup_database(database_url: PostgresUrl) -> DatabaseContext:
+    """Set up the FCM database context.
+    
+    This is the app-specific database initialization that wraps the common
+    create_postgres_context provider with FCM's migrations package.
+    
+    Args:
+        database_url: PostgreSQL connection URL (from CLI parameter)
+    
+    Returns:
+        DatabaseContext configured for FCM
+    """
+    return create_postgres_context(
+        database_url=database_url,
+        migrations_package="friendly_computing_machine.src.migrations",
+    )
 
 
 class SessionManager:

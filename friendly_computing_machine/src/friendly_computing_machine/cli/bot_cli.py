@@ -17,7 +17,6 @@ from libs.python.cli.providers.logging import create_logging_context
 from libs.python.cli.providers.postgres import (
     DatabaseContext,
     PostgresUrl,
-    create_postgres_context,
 )
 from libs.python.cli.providers.slack import SlackContext, create_slack_context
 from friendly_computing_machine.src.friendly_computing_machine.manman.api import (
@@ -28,6 +27,7 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.util imp
 )
 from friendly_computing_machine.src.friendly_computing_machine.db.util import (
     should_run_migration,
+    setup_database,
 )
 
 logger = logging.getLogger(__name__)
@@ -96,11 +96,8 @@ def cli_run_taskpool(
     database_url: PostgresUrl,
     skip_migration_check: bool = False,
 ):
-    # Create database context with migrations package
-    db_ctx = create_postgres_context(
-        database_url=database_url,
-        migrations_package="friendly_computing_machine.src.migrations",
-    )
+    # Set up database
+    db_ctx = setup_database(database_url)
     
     if skip_migration_check:
         logger.info("skipping migration check")
@@ -132,11 +129,8 @@ def cli_run_slack_socket_app(
 
     # Gemini API is already configured in callback
     
-    # Create database context with migrations package
-    db_ctx = create_postgres_context(
-        database_url=database_url,
-        migrations_package="friendly_computing_machine.src.migrations",
-    )
+    # Set up database
+    db_ctx = setup_database(database_url)
 
     logger.info("starting slack bot service (no task pool)")
     # Lazy import to avoid initializing Slack app during module import

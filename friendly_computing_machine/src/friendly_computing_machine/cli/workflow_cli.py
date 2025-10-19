@@ -7,7 +7,7 @@ import typer
 
 from libs.python.cli.params import logging_params, temporal_params, gemini_params, AppEnv
 from libs.python.cli.providers.logging import create_logging_context
-from libs.python.cli.providers.postgres import PostgresUrl, create_postgres_context
+from libs.python.cli.providers.postgres import PostgresUrl
 from libs.python.cli.providers.slack import SlackBotToken
 
 from friendly_computing_machine.src.friendly_computing_machine.bot.app import (
@@ -15,6 +15,7 @@ from friendly_computing_machine.src.friendly_computing_machine.bot.app import (
 )
 from friendly_computing_machine.src.friendly_computing_machine.db.util import (
     should_run_migration,
+    setup_database,
 )
 from friendly_computing_machine.src.friendly_computing_machine.health import (
     run_health_server,
@@ -71,11 +72,8 @@ def cli_run(
     slack_bot_token: SlackBotToken,
     skip_migration_check: bool = False,
 ):
-    # Setup database with migrations package
-    db_ctx = create_postgres_context(
-        database_url=database_url,
-        migrations_package="friendly_computing_machine.src.migrations",
-    )
+    # Setup database
+    db_ctx = setup_database(database_url)
     
     # Check migrations
     if skip_migration_check:
