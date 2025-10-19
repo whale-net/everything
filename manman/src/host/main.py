@@ -299,11 +299,11 @@ def start_status_api(
     # Get contexts from callback
     rmq_ctx = ctx.obj.get("rabbitmq", {})
     logging_ctx = ctx.obj.get("logging", {})
-    log_otlp = logging_ctx.get("log_otlp", False)
+    log_otlp = logging_ctx.get("enable_otlp", False)
     
     # Setup logging first
     setup_logging(
-        microservice_name=ManManConfig.STATUS_API, app_env=app_env, enable_otel=log_otlp
+        microservice_name=ManManConfig.WORKER_DAL_API, app_env=app_env, enable_otel=log_otlp
     )
 
     # Store initialization configuration for use in app factory
@@ -496,7 +496,10 @@ def callback(ctx: typer.Context):
     init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
     
     # Initialize logging
-    logging_ctx = create_logging_context(ctx.obj.get("logging", {}).get("log_otlp", False))
+    logging_ctx = create_logging_context(
+        service_name="manman-host-cli",
+        enable_otlp=ctx.obj.get("logging", {}).get("enable_otlp", False)
+    )
     ctx.obj["logging_context"] = logging_ctx
 
 

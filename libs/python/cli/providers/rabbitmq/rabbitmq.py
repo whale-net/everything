@@ -69,7 +69,7 @@ def create_rabbitmq_context(
     vhost: RabbitMQVHost = "/",
     enable_ssl: RabbitMQEnableSSL = False,
     ssl_hostname: RabbitMQSSLHostname = None,
-    rabbitmq_initializer: Optional[callable] = None,
+    rabbitmq_initializer: Optional[Callable[[RabbitMQContext], None]] = None,
 ) -> RabbitMQContext:
     """Create RabbitMQ context with connection configuration.
     

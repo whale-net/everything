@@ -66,7 +66,7 @@ def create_postgres_context(
     pool_pre_ping: bool = True,
     pool_recycle: int = 60,
     version_table_schema: str = "public",
-    engine_initializer: Optional[callable] = None,
+    engine_initializer: Optional[Callable[[Engine], None]] = None,
 ) -> DatabaseContext:
     """Create PostgreSQL database context with Alembic support.
     

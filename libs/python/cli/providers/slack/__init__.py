@@ -13,7 +13,6 @@ from libs.python.cli.providers.slack.slack import (
 import inspect
 import logging
 from dataclasses import dataclass
-from functools import wraps
 from typing import Annotated, Callable, Optional
 
 import typer
@@ -44,7 +43,7 @@ class SlackContext:
 def create_slack_context(
     bot_token: SlackBotToken,
     app_token: Optional[SlackAppToken] = None,
-    web_client_initializer: Optional[callable] = None,
+    web_client_initializer: Optional[Callable[[str], object]] = None,
 ) -> SlackContext:
     """Create Slack context with bot and optional app tokens.
     
@@ -85,7 +84,7 @@ def create_slack_context(
 
 def create_slack_web_client_only(
     bot_token: SlackBotToken,
-    web_client_initializer: Optional[callable] = None,
+    web_client_initializer: Optional[Callable[[str], object]] = None,
 ) -> SlackContext:
     """Create Slack context with only bot token (no Socket Mode).
     

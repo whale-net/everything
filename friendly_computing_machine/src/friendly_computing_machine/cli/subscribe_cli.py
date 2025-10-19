@@ -5,9 +5,16 @@ from typing import Annotated, Optional
 import typer
 
 from libs.python.cli.providers.logging import create_logging_context
-from libs.python.cli.providers.postgres import DatabaseContext, PostgresUrl, create_postgres_context
-from libs.python.cli.providers.rabbitmq import RabbitMQContext, create_rabbitmq_context
-from libs.python.cli.providers.slack import create_slack_context
+from libs.python.cli.providers.postgres import (
+    DatabaseContext,
+    PostgresUrl,
+    create_postgres_context,
+)
+from libs.python.cli.providers.rabbitmq import (
+    RabbitMQContext,
+    create_rabbitmq_context,
+)
+from libs.python.cli.providers.slack import SlackContext, create_slack_context
 from libs.python.cli.params import (
     rmq_params,
     slack_params,
@@ -84,7 +91,13 @@ def callback(
     # Create RabbitMQ context from decorator-injected params
     rabbitmq_config = ctx.obj.get('rabbitmq', {})
     if rabbitmq_config:
-        rabbitmq_ctx = create_rabbitmq_context(**rabbitmq_config)
+        # Add FCM-specific initialization
+        from friendly_computing_machine.src.friendly_computing_machine.rabbitmq.util import init_rabbitmq
+        
+        rabbitmq_ctx = create_rabbitmq_context(
+            **rabbitmq_config,
+            rabbitmq_initializer=init_rabbitmq,
+        )
     else:
         rabbitmq_ctx = None
     
