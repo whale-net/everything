@@ -26,11 +26,13 @@ class CleanupPlan:
         tags_to_delete: List of Git tag names to delete
         tags_to_keep: List of Git tag names to keep
         packages_to_delete: Dict mapping package names to list of version IDs to delete
+        releases_to_delete: Dict mapping tag names to release IDs to delete
         retention_policy: Dict containing the retention policy parameters
     """
     tags_to_delete: List[str]
     tags_to_keep: List[str]
     packages_to_delete: Dict[str, List[int]] = field(default_factory=dict)
+    releases_to_delete: Dict[str, int] = field(default_factory=dict)
     retention_policy: Dict = field(default_factory=dict)
 
     def total_tag_deletions(self) -> int:
@@ -40,10 +42,16 @@ class CleanupPlan:
     def total_package_deletions(self) -> int:
         """Get total number of package versions to delete."""
         return sum(len(versions) for versions in self.packages_to_delete.values())
+    
+    def total_release_deletions(self) -> int:
+        """Get total number of releases to delete."""
+        return len(self.releases_to_delete)
 
     def is_empty(self) -> bool:
         """Check if cleanup plan is empty."""
-        return len(self.tags_to_delete) == 0 and len(self.packages_to_delete) == 0
+        return (len(self.tags_to_delete) == 0 and 
+                len(self.packages_to_delete) == 0 and
+                len(self.releases_to_delete) == 0)
 
 
 @dataclass
@@ -53,11 +61,13 @@ class CleanupResult:
     Attributes:
         tags_deleted: List of successfully deleted tag names
         packages_deleted: Dict mapping package names to deleted version IDs
+        releases_deleted: List of successfully deleted tag names (with releases)
         errors: List of error messages
         dry_run: Whether this was a dry run
     """
     tags_deleted: List[str] = field(default_factory=list)
     packages_deleted: Dict[str, List[int]] = field(default_factory=dict)
+    releases_deleted: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     dry_run: bool = True
 
@@ -69,6 +79,7 @@ class CleanupResult:
         """Generate a summary of the cleanup result."""
         lines = []
         lines.append(f"Tags deleted: {len(self.tags_deleted)}")
+        lines.append(f"Releases deleted: {len(self.releases_deleted)}")
         
         total_packages = sum(len(versions) for versions in self.packages_deleted.values())
         lines.append(f"Package versions deleted: {total_packages}")
@@ -83,11 +94,11 @@ class CleanupResult:
 
 
 class ReleaseCleanup:
-    """Orchestrate cleanup of Git tags and GHCR packages.
+    """Orchestrate cleanup of Git tags, GitHub Releases, and GHCR packages.
     
-    This class coordinates the deletion of old releases, ensuring both
-    Git tags and their corresponding GHCR container packages are cleaned
-    up together following the same retention policy.
+    This class coordinates the deletion of old releases, ensuring Git tags,
+    GitHub Releases, and their corresponding GHCR container packages are 
+    cleaned up atomically following the same retention policy.
     """
 
     def __init__(self, owner: str, repo: str, token: Optional[str] = None):
@@ -101,20 +112,24 @@ class ReleaseCleanup:
         self.owner = owner
         self.repo = repo
         self.ghcr_client = GHCRClient(owner, token)
+        
+        # Import here to avoid circular dependency
+        from tools.release_helper.github_release import GitHubReleaseClient
+        self.release_client = GitHubReleaseClient(owner, repo, token)
 
     def plan_cleanup(
         self,
         keep_minor_versions: int = 2,
         min_age_days: int = 14
     ) -> CleanupPlan:
-        """Plan what tags and packages to delete.
+        """Plan what tags, releases, and packages to delete.
         
         Args:
             keep_minor_versions: Number of minor versions to keep
             min_age_days: Minimum age in days for deletion
             
         Returns:
-            CleanupPlan with tags and packages to delete
+            CleanupPlan with tags, releases, and packages to delete
         """
         # Get all tags
         all_tags = get_all_tags()
@@ -125,6 +140,16 @@ class ReleaseCleanup:
             keep_minor_versions=keep_minor_versions,
             min_age_days=min_age_days
         )
+        
+        # Find corresponding GitHub Releases
+        releases_to_delete: Dict[str, int] = {}
+        try:
+            releases_map = self.release_client.find_releases_by_tags(tags_to_delete)
+            for tag_name, release_data in releases_map.items():
+                releases_to_delete[tag_name] = release_data["id"]
+                print(f"  Found GitHub release {release_data['id']} for tag {tag_name}")
+        except Exception as e:
+            print(f"⚠️  Error finding GitHub releases: {e}", file=sys.stderr)
         
         # Map tags to GHCR packages
         packages_to_delete: Dict[str, List[int]] = {}
@@ -161,6 +186,7 @@ class ReleaseCleanup:
             tags_to_delete=tags_to_delete,
             tags_to_keep=tags_to_keep,
             packages_to_delete=packages_to_delete,
+            releases_to_delete=releases_to_delete,
             retention_policy={
                 "keep_minor_versions": keep_minor_versions,
                 "min_age_days": min_age_days
@@ -172,9 +198,10 @@ class ReleaseCleanup:
         plan: CleanupPlan,
         dry_run: bool = True
     ) -> CleanupResult:
-        """Execute the cleanup plan.
+        """Execute the cleanup plan atomically.
         
-        Deletes tags first, then packages (safer order for rollback).
+        Deletes in order: GitHub Releases -> Git tags -> GHCR packages
+        This ensures atomic cleanup - if a release exists, we delete it along with its tag.
         
         Args:
             plan: CleanupPlan to execute
@@ -189,8 +216,31 @@ class ReleaseCleanup:
             print("🧪 DRY RUN MODE - No actual deletions will occur")
             print("")
         
-        # Phase 1: Delete Git tags
-        print(f"📋 Deleting {len(plan.tags_to_delete)} Git tags...")
+        # Phase 1: Delete GitHub Releases (must happen before tag deletion)
+        if plan.releases_to_delete:
+            print(f"� Deleting {len(plan.releases_to_delete)} GitHub releases...")
+            for tag_name, release_id in plan.releases_to_delete.items():
+                try:
+                    if dry_run:
+                        print(f"  [DRY RUN] Would delete release {release_id} for tag: {tag_name}")
+                        result.releases_deleted.append(tag_name)
+                    else:
+                        success = self.release_client.delete_release(release_id)
+                        if success:
+                            result.releases_deleted.append(tag_name)
+                            print(f"  ✅ Deleted release {release_id} for tag: {tag_name}")
+                        else:
+                            error_msg = f"Failed to delete release {release_id} for tag: {tag_name}"
+                            result.errors.append(error_msg)
+                            print(f"  ❌ {error_msg}", file=sys.stderr)
+                except Exception as e:
+                    error_msg = f"Error deleting release {release_id} for tag {tag_name}: {e}"
+                    result.errors.append(error_msg)
+                    print(f"  ❌ {error_msg}", file=sys.stderr)
+            print("")
+        
+        # Phase 2: Delete Git tags
+        print(f"🏷️  Deleting {len(plan.tags_to_delete)} Git tags...")
         for tag in plan.tags_to_delete:
             try:
                 if dry_run:
@@ -210,32 +260,33 @@ class ReleaseCleanup:
                 result.errors.append(error_msg)
                 print(f"  ❌ {error_msg}", file=sys.stderr)
         
-        # Phase 2: Delete GHCR packages
+        # Phase 3: Delete GHCR packages
         total_packages = sum(len(versions) for versions in plan.packages_to_delete.values())
-        print(f"\n📦 Deleting {total_packages} GHCR package versions...")
-        
-        for package_name, version_ids in plan.packages_to_delete.items():
-            if package_name not in result.packages_deleted:
-                result.packages_deleted[package_name] = []
+        if total_packages > 0:
+            print(f"\n📦 Deleting {total_packages} GHCR package versions...")
             
-            for version_id in version_ids:
-                try:
-                    if dry_run:
-                        print(f"  [DRY RUN] Would delete {package_name} version {version_id}")
-                        result.packages_deleted[package_name].append(version_id)
-                    else:
-                        success = self.ghcr_client.delete_package_version(package_name, version_id)
-                        if success:
+            for package_name, version_ids in plan.packages_to_delete.items():
+                if package_name not in result.packages_deleted:
+                    result.packages_deleted[package_name] = []
+                
+                for version_id in version_ids:
+                    try:
+                        if dry_run:
+                            print(f"  [DRY RUN] Would delete {package_name} version {version_id}")
                             result.packages_deleted[package_name].append(version_id)
-                            print(f"  ✅ Deleted {package_name} version {version_id}")
                         else:
-                            error_msg = f"Failed to delete {package_name} version {version_id}"
-                            result.errors.append(error_msg)
-                            print(f"  ❌ {error_msg}", file=sys.stderr)
-                except Exception as e:
-                    error_msg = f"Error deleting {package_name} version {version_id}: {e}"
-                    result.errors.append(error_msg)
-                    print(f"  ❌ {error_msg}", file=sys.stderr)
+                            success = self.ghcr_client.delete_package_version(package_name, version_id)
+                            if success:
+                                result.packages_deleted[package_name].append(version_id)
+                                print(f"  ✅ Deleted {package_name} version {version_id}")
+                            else:
+                                error_msg = f"Failed to delete {package_name} version {version_id}"
+                                result.errors.append(error_msg)
+                                print(f"  ❌ {error_msg}", file=sys.stderr)
+                    except Exception as e:
+                        error_msg = f"Error deleting {package_name} version {version_id}: {e}"
+                        result.errors.append(error_msg)
+                        print(f"  ❌ {error_msg}", file=sys.stderr)
         
         return result
 

@@ -814,6 +814,7 @@ def cleanup_releases_cmd(
         # Display plan
         typer.echo(f"\n📊 Cleanup Plan:")
         typer.echo(f"  Tags to delete: {plan.total_tag_deletions()}")
+        typer.echo(f"  GitHub releases to delete: {plan.total_release_deletions()}")
         typer.echo(f"  Tags to keep: {len(plan.tags_to_keep)}")
         
         if delete_packages:
@@ -827,7 +828,10 @@ def cleanup_releases_cmd(
         if plan.tags_to_delete:
             typer.echo(f"\n🗑️  Tags marked for deletion ({len(plan.tags_to_delete)}):")
             for tag in plan.tags_to_delete[:10]:  # Show first 10
-                typer.echo(f"  - {tag}")
+                release_info = ""
+                if tag in plan.releases_to_delete:
+                    release_info = f" (+ release)"
+                typer.echo(f"  - {tag}{release_info}")
             if len(plan.tags_to_delete) > 10:
                 typer.echo(f"  ... and {len(plan.tags_to_delete) - 10} more")
         
@@ -847,7 +851,7 @@ def cleanup_releases_cmd(
             typer.echo("\n🧪 DRY RUN MODE - No actual deletions will occur")
             typer.echo("Run with --no-dry-run to actually delete these releases")
         else:
-            typer.echo("\n⚠️  WARNING: This will permanently delete tags and packages!")
+            typer.echo("\n⚠️  WARNING: This will permanently delete tags, releases, and packages!")
             confirm = typer.confirm("Are you sure you want to proceed?")
             if not confirm:
                 typer.echo("Cleanup cancelled.")

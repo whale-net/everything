@@ -415,6 +415,7 @@ class TestCleanupResult:
         """Test generating result summary."""
         result = CleanupResult(
             tags_deleted=["tag1", "tag2"],
+            releases_deleted=["tag1"],
             packages_deleted={"app1": [123, 456]},
             errors=["Error 1"],
             dry_run=False
@@ -422,5 +423,103 @@ class TestCleanupResult:
 
         summary = result.summary()
         assert "2" in summary  # 2 tags deleted
+        assert "1" in summary  # 1 release deleted
         assert "2" in summary  # 2 packages deleted
         assert "1" in summary  # 1 error
+
+
+class TestReleaseCleanupWithReleases:
+    """Test cases for ReleaseCleanup with GitHub Releases integration."""
+
+    @pytest.fixture
+    def mock_token(self):
+        """Provide a mock GitHub token."""
+        return "ghp_test_token_1234567890"
+
+    @pytest.fixture
+    def cleanup(self, mock_token):
+        """Create a ReleaseCleanup instance for testing."""
+        return ReleaseCleanup(
+            owner="test-owner",
+            repo="test-repo",
+            token=mock_token
+        )
+
+    @pytest.fixture
+    def sample_tags(self):
+        """Provide sample git tags for testing."""
+        return [
+            "demo-hello-python.v2.0.0",
+            "demo-hello-python.v1.2.5",
+            "demo-hello-python.v1.2.4",
+            "demo-hello-python.v1.1.3",
+        ]
+
+    @pytest.fixture
+    def sample_tag_dates(self):
+        """Provide sample tag dates for testing."""
+        now = datetime.now()
+        return {
+            "demo-hello-python.v2.0.0": now - timedelta(days=5),
+            "demo-hello-python.v1.2.5": now - timedelta(days=10),
+            "demo-hello-python.v1.2.4": now - timedelta(days=20),
+            "demo-hello-python.v1.1.3": now - timedelta(days=30),
+        }
+
+    def test_plan_cleanup_with_releases(self, cleanup, sample_tags, sample_tag_dates):
+        """Test planning cleanup identifies GitHub releases."""
+        with patch("tools.release_helper.cleanup.get_all_tags", return_value=sample_tags):
+            with patch("tools.release_helper.cleanup.get_tag_creation_date") as mock_get_date:
+                mock_get_date.side_effect = lambda tag: sample_tag_dates.get(tag, datetime.now())
+                
+                # Mock release client
+                mock_release_client = Mock()
+                mock_release_client.find_releases_by_tags.return_value = {
+                    "demo-hello-python.v1.2.4": {"id": 111, "tag_name": "demo-hello-python.v1.2.4"},
+                    "demo-hello-python.v1.1.3": {"id": 222, "tag_name": "demo-hello-python.v1.1.3"},
+                }
+                cleanup.release_client = mock_release_client
+                
+                # Mock GHCR client to avoid real API calls
+                cleanup.ghcr_client.list_package_versions = Mock(return_value=[])
+                
+                plan = cleanup.plan_cleanup(keep_minor_versions=2, min_age_days=7)
+                
+                # Should identify releases to delete
+                assert len(plan.releases_to_delete) == 2
+                assert "demo-hello-python.v1.2.4" in plan.releases_to_delete
+                assert "demo-hello-python.v1.1.3" in plan.releases_to_delete
+                assert plan.releases_to_delete["demo-hello-python.v1.2.4"] == 111
+                assert plan.releases_to_delete["demo-hello-python.v1.1.3"] == 222
+    
+    def test_execute_cleanup_deletes_releases(self, cleanup):
+        """Test executing cleanup deletes releases atomically."""
+        plan = CleanupPlan(
+            tags_to_delete=["tag1", "tag2"],
+            tags_to_keep=["tag3"],
+            packages_to_delete={},
+            releases_to_delete={"tag1": 123, "tag2": 456}
+        )
+        
+        # Mock the release client
+        mock_release_client = Mock()
+        mock_release_client.delete_release.return_value = True
+        cleanup.release_client = mock_release_client
+        
+        # Execute dry run
+        result = cleanup.execute_cleanup(plan, dry_run=True)
+        
+        # Should mark releases for deletion in dry run
+        assert len(result.releases_deleted) == 2
+        assert "tag1" in result.releases_deleted
+        assert "tag2" in result.releases_deleted
+        mock_release_client.delete_release.assert_not_called()
+        
+        # Execute real cleanup
+        result = cleanup.execute_cleanup(plan, dry_run=False)
+        
+        # Should actually delete releases
+        assert len(result.releases_deleted) == 2
+        assert mock_release_client.delete_release.call_count == 2
+        mock_release_client.delete_release.assert_any_call(123)
+        mock_release_client.delete_release.assert_any_call(456)

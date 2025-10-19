@@ -1,19 +1,29 @@
-# Tag and GHCR Package Cleanup Tool
+# Tag, Release, and GHCR Package Cleanup Tool
 
-Unified cleanup tool for managing Git tags and GitHub Container Registry (GHCR) packages with intelligent retention policies.
+Unified cleanup tool for managing Git tags, GitHub Releases, and GitHub Container Registry (GHCR) packages with intelligent retention policies.
 
 ## Overview
 
-As the repository grows, the number of tags and container images increases over time. Old releases from superseded versions accumulate, making it harder to navigate and manage releases. This tool provides an automated way to prune old releases while maintaining a sensible retention policy.
+As the repository grows, the number of tags, releases, and container images increases over time. Old releases from superseded versions accumulate, making it harder to navigate and manage releases. This tool provides an automated way to prune old releases **atomically** while maintaining a sensible retention policy.
 
 ## Features
 
 - 🎯 **Intelligent Retention** - Keeps recent versions while cleaning old ones
 - 🔒 **Safety First** - Dry-run by default, confirmation prompts, age thresholds
-- 🔄 **Unified Cleanup** - Deletes both Git tags and GHCR packages together
+- 🔄 **Atomic Cleanup** - Deletes Git tags, GitHub Releases, and GHCR packages together
 - 💪 **Error Resilient** - Continues on partial failures, reports all errors
 - ⚙️ **Flexible Configuration** - Customizable retention policies via CLI flags
 - 📦 **Multi-App Support** - Handles multiple apps/charts independently
+
+## What Gets Deleted
+
+When you delete a tag (e.g., `v1.0.0`), the tool automatically removes:
+
+1. **Git Tag** - The lightweight or annotated tag from the repository
+2. **GitHub Release** - The release page associated with that tag (if it exists)
+3. **GHCR Packages** - All container images tagged with that version (optional)
+
+This ensures complete cleanup without leaving orphaned releases or stale container images.
 
 ## Retention Policy
 
@@ -107,7 +117,10 @@ The cleanup tool can be run via GitHub Actions:
 
 ### Permissions
 
+## Permissions Required
+
 - **Git Tags:** `contents:write` permission
+- **GitHub Releases:** `contents:write` permission (same as tags)
 - **GHCR Packages:** `packages:write` permission
 
 ### Environment Variables
@@ -125,13 +138,18 @@ The cleanup tool can be run via GitHub Actions:
    - Lists, searches, and deletes package versions
    - Handles pagination and error recovery
 
-2. **Cleanup Orchestrator** (`tools/release_helper/cleanup.py`)
-   - Coordinates tag and package deletion
+2. **GitHub Release Client** (`tools/release_helper/github_release.py`)
+   - Interfaces with GitHub Releases API
+   - Finds and deletes releases by tag name
+   - Maps tags to release IDs
+
+3. **Cleanup Orchestrator** (`tools/release_helper/cleanup.py`)
+   - Coordinates atomic deletion of tags, releases, and packages
    - Implements retention algorithm
-   - Maps tags to GHCR packages
+   - Maps tags to releases and GHCR packages
    - Generates cleanup plans and execution results
 
-3. **CLI Command** (`tools/release_helper/cli.py`)
+4. **CLI Command** (`tools/release_helper/cli.py`)
    - Provides user-friendly interface
    - Validates inputs and permissions
    - Displays progress and results
@@ -148,15 +166,26 @@ The cleanup tool can be run via GitHub Actions:
 │  ReleaseCleanup │ (Orchestrator)
 └────────┬────────┘
          │
-    ┌────┴────┐
-    ▼         ▼
-┌─────┐   ┌──────┐
-│ Git │   │ GHCR │
-│Tags │   │Client│
-└─────┘   └──────┘
+    ┌────┼────┐
+    ▼    ▼    ▼
+┌─────┐┌────┐┌──────┐
+│ Git ││GH  ││ GHCR │
+│Tags ││Rel ││Client│
+└─────┘└────┘└──────┘
 ```
 
-### Cleanup Process
+### Cleanup Process (Atomic Deletion)
+
+1. **Planning Phase**
+   - Query all Git tags
+   - Apply retention algorithm to identify tags to delete
+   - Find corresponding GitHub Releases (if any)
+   - Find corresponding GHCR packages (if enabled)
+   
+2. **Execution Phase** (runs in order for atomicity)
+   - Delete GitHub Releases first (prevents orphaned releases)
+   - Delete Git tags second (removes the tag reference)
+   - Delete GHCR packages last (container images)
 
 1. **Planning Phase**
    - Fetch all Git tags
