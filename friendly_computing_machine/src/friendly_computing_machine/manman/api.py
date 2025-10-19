@@ -31,7 +31,10 @@ T_API = TypeVar("T_API")
 
 
 class BaseManManAPI(Generic[T_Configuration, T_Client, T_API]):
-    """Base class for ManMan API clients."""
+    """Base class for ManMan API clients.
+    
+    Supports separate URL initialization for split API architecture.
+    """
 
     _config: T_Configuration = None  # type: ignore
     _client: T_Client = None  # type: ignore
@@ -43,7 +46,11 @@ class BaseManManAPI(Generic[T_Configuration, T_Client, T_API]):
 
     @classmethod
     def init(cls, host: str):
-        """Initialize the API client configuration."""
+        """Initialize the API client configuration with a full URL.
+        
+        Args:
+            host: Full URL to the API (e.g., http://experience-api.manman.svc.cluster.local)
+        """
         if cls._config is not None:
             return
         cls._config = cls._configuration_type(host=host)

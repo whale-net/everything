@@ -22,7 +22,7 @@ def create_app():
 
     from manman.src.host.api.shared import add_health_check
 
-    app = FastAPI(title="ManMan Status API", root_path="/status", lifespan=lifespan)
+    app = FastAPI(title="ManMan Status API", lifespan=lifespan)
     app.include_router(router)
     add_health_check(app)
     return app

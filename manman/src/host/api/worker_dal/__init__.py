@@ -25,11 +25,9 @@ def create_app():
 
     app = FastAPI(
         title="ManMan Worker DAL API",
-        root_path="/workerdal",  # Configure root path for reverse proxy
         lifespan=lifespan,
     )
     app.include_router(server_router)
     app.include_router(worker_router)
-    # For worker DAL, health check should be at the root level since root_path handles the /workerdal prefix
     add_health_check(app)
     return app

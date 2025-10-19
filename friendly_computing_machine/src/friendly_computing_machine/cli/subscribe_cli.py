@@ -20,7 +20,7 @@ from libs.python.cli.params import (
     slack_params,
     logging_params,
     AppEnv,
-    ManManHostUrl,
+    ManManStatusApiUrl,
 )
 from friendly_computing_machine.src.friendly_computing_machine.bot.subscribe.main import (
     run_manman_subscribe,
@@ -59,7 +59,7 @@ app = typer.Typer()
 def callback(
     ctx: typer.Context,
     app_env: AppEnv,
-    manman_host_url: ManManHostUrl,
+    manman_status_api_url: ManManStatusApiUrl,
 ):
     """
     ManMan Subscribe Service - Event-driven microservice for manman notifications.
@@ -112,17 +112,17 @@ def callback(
     else:
         rabbitmq_ctx = None
     
-    # Initialize ManMan Status API
-    url = manman_host_url.strip().rstrip("/")
-    ManManStatusAPI.init(url + "/status")
-    logger.info(f"ManMan Status API initialized with host: {url}")
+    # Initialize ManMan Status API with its dedicated URL
+    status_url = manman_status_api_url.strip().rstrip("/")
+    ManManStatusAPI.init(status_url)
+    logger.info(f"ManMan Status API initialized with host: {status_url}")
     
     # Store typed context
     ctx.obj = FCMSubscribeContext(
         rabbitmq=rabbitmq_ctx,
         slack=slack_ctx,
         app_env=app_env,
-        manman_host_url=manman_host_url,
+        manman_host_url=status_url,
     )
     
     logger.debug("Subscribe CLI callback complete")
