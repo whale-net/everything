@@ -140,7 +140,6 @@ def cli_run_taskpool(
 
 
 @app.command("run-slack-socket-app")
-@gemini_params
 def cli_run_slack_socket_app(
     ctx: typer.Context,
     database_url: PostgresUrl,
@@ -153,9 +152,7 @@ def cli_run_slack_socket_app(
     else:
         logger.info("migration check passed, starting normally")
 
-    # Setup Gemini API
-    gemini_config = ctx.obj.get('gemini', {})
-    genai.configure(api_key=gemini_config['api_key'])
+    # Gemini API is already configured in callback
     
     # Create database context with FCM initialization
     from friendly_computing_machine.src.friendly_computing_machine.db.util import init_engine
