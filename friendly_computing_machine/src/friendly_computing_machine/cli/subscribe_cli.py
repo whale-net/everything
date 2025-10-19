@@ -91,13 +91,24 @@ def callback(
     # Create RabbitMQ context from decorator-injected params
     rabbitmq_config = ctx.obj.get('rabbitmq', {})
     if rabbitmq_config:
-        # Add FCM-specific initialization
-        from friendly_computing_machine.src.friendly_computing_machine.rabbitmq.util import init_rabbitmq
+        # Use standard lib RabbitMQ with proper initialization
+        from libs.python.rmq import init_rabbitmq, get_rabbitmq_ssl_options
         
-        rabbitmq_ctx = create_rabbitmq_context(
-            **rabbitmq_config,
-            rabbitmq_initializer=init_rabbitmq,
+        ssl_options = None
+        if rabbitmq_config.get('enable_ssl') and rabbitmq_config.get('ssl_hostname'):
+            ssl_options = get_rabbitmq_ssl_options(rabbitmq_config['ssl_hostname'])
+        
+        init_rabbitmq(
+            host=rabbitmq_config['host'],
+            port=rabbitmq_config['port'],
+            username=rabbitmq_config['username'],
+            password=rabbitmq_config['password'],
+            virtual_host=rabbitmq_config['vhost'],
+            ssl_enabled=rabbitmq_config['enable_ssl'],
+            ssl_options=ssl_options,
         )
+        
+        rabbitmq_ctx = create_rabbitmq_context(**rabbitmq_config)
     else:
         rabbitmq_ctx = None
     
