@@ -47,7 +47,6 @@ from libs.python.alembic.migration import (
     run_migration,
     should_run_migration,
 )
-from libs.python.cli.params import pg_params
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +80,10 @@ def create_migration_app(
         help=f"Database migration commands for {migrations_package}",
         context_settings={"obj": {}},
     )
+
+    # Import pg_params here to avoid circular import
+    # (libs.python.cli.params imports from postgres which imports from alembic)
+    from libs.python.cli.params import pg_params
 
     # Add callback with pg_params decorator to inject POSTGRES_URL
     @migration_app.callback()
