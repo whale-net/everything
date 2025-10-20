@@ -74,7 +74,7 @@ Stores in `ctx.obj['rabbitmq']` as dict with keys: `host`, `port`, `user`, `pass
 
 #### `@pg_params` (from `libs.python.cli.providers.postgres`)
 Injects 1 PostgreSQL parameter:
-- `--database-url` (envvar: DATABASE_URL, required)
+- `--database-url` (envvar: POSTGRES_URL, required)
 
 Stores in `ctx.obj['postgres']` as dict with key: `database_url`
 
@@ -200,7 +200,7 @@ def test_cli():
         "--database-url", "postgresql://localhost/test",
         "--slack-bot-token", "xoxb-test",
         "command",
-    ])
+    ], env={"POSTGRES_URL": "postgresql://localhost/test"})
     assert result.exit_code == 0
 ```
 
@@ -305,7 +305,7 @@ def callback(ctx: typer.Context, ...):
 ```
 
 **CLI Options**:
-- `--database-url` (envvar: `DATABASE_URL`, required)
+- `--database-url` (envvar: `POSTGRES_URL`, required)
 
 ### `@slack_params` - Slack Authentication
 

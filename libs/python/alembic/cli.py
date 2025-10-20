@@ -15,7 +15,7 @@ Example usage in your CLI:
     migration_cli = create_migration_app(
         migrations_package="myapp.migrations",
         target_metadata=Base.metadata,
-        database_url_envvar="DATABASE_URL",
+        database_url_envvar="POSTGRES_URL",
     )
 
     # Add to your main CLI
@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 def create_migration_app(
     migrations_package: str,
     target_metadata: Optional[MetaData] = None,
-    database_url_envvar: str = "DATABASE_URL",
+    database_url_envvar: str = "POSTGRES_URL",
     include_object: Optional[Callable] = None,
     version_table_schema: str = "public",
 ) -> typer.Typer:
