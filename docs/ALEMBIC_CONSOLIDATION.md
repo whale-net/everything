@@ -79,7 +79,6 @@ app = typer.Typer()
     migration_app = create_migration_app(
         migrations_package="myapp.migrations",
         target_metadata=Base.metadata,
-        database_url_envvar="POSTGRES_URL",
     )
 
 app.add_typer(migration_cli, name="migration")
@@ -184,8 +183,9 @@ run_migrations(
 create_migration_app(
     migrations_package: str,
     target_metadata: Optional[MetaData],
-    database_url_envvar: str = "POSTGRES_URL",
     include_object: Optional[Callable] = None,
     version_table_schema: str = "public",
 ) -> typer.Typer
 ```
+
+The created app uses `@pg_params` decorator which automatically injects `POSTGRES_URL` environment variable.
