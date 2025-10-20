@@ -622,8 +622,9 @@ jobs:
     if: github.event.inputs.helm_charts != '' && (always() && !cancelled())
     runs-on: ubuntu-latest
     permissions:
-      contents: write      # Create git tags
-      packages: write      # Push to ghcr.io
+      contents: write     # Push git tags and read repository content
+      pages: write        # Deploy to GitHub Pages
+      id-token: write     # Required for GitHub Pages OIDC
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -785,53 +786,111 @@ jobs:
         
         echo "✅ All helm chart tags created and pushed"
         
-    - name: Login to GitHub Container Registry
-      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+    # TODO: Migrate to self-hosted Helm repository or OCI registry
+    # GitHub Pages + deploy-pages action is suboptimal for Helm charts because:
+    # 1. deploy-pages does a full site replacement on each deployment
+    # 2. We must download all existing charts via HTTP before each release
+    # 3. This scales poorly and adds latency to releases
+    # 
+    # Better alternatives to consider:
+    # - Self-hosted Helm repository (ChartMuseum, Harbor, Artifactory)
+    # - OCI registry (ghcr.io supports Helm charts, but ArgoCD integration needs work)
+    # - GitHub Releases (each chart version as a release asset)
+    #
+    # For now, we use wget --mirror to download existing charts and merge with new ones
+    # before deploying to GitHub Pages, ensuring historical versions are preserved.
         
-    - name: Push Helm charts to OCI registry
+    - name: Download existing charts from GitHub Pages
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
-      env:
-        CHARTS: ${{ steps.plan.outputs.charts }}
+      continue-on-error: true
       run: |
-        echo "Pushing Helm charts to OCI registry (ghcr.io)..."
+        echo "Downloading existing Helm repository from GitHub Pages..."
+        mkdir -p /tmp/helm-repo
         
-        # Parse chart list and push each chart
-        IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
+        # Mirror the entire /charts directory from the live GitHub Pages site
+        PAGES_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts/"
         
-        for CHART in "${CHART_ARRAY[@]}"; do
-          # Strip helm- prefix from chart name for file lookup
-          PUBLISHED_NAME="${CHART#helm-}"
+        echo "Attempting to download from: $PAGES_URL"
+        
+        # Use wget to mirror the entire charts directory (faster than one-by-one downloads)
+        if wget --mirror --no-parent --no-host-directories --cut-dirs=2 \
+                --directory-prefix=/tmp/helm-repo \
+                --accept="*.tgz,index.yaml" \
+                --reject="index.html*" \
+                --quiet \
+                "$PAGES_URL" 2>/dev/null; then
+          echo "✅ Downloaded existing charts directory"
           
-          # Find the packaged chart file
-          CHART_FILE=$(ls /tmp/helm-charts/${PUBLISHED_NAME}-*.tgz 2>/dev/null | head -n1)
-          
-          if [[ -f "$CHART_FILE" ]]; then
-            echo "Pushing chart: $CHART_FILE"
-            
-            # Push to OCI registry
-            # Charts will be available at: oci://ghcr.io/whale-net/charts/<chart-name>
-            helm push "$CHART_FILE" oci://ghcr.io/${{ github.repository_owner }}/charts
-            
-            echo "✅ Pushed $CHART to OCI registry"
-          else
-            echo "⚠️ Warning: Could not find chart file for $CHART"
-            exit 1
-          fi
-        done
+          echo ""
+          echo "📊 Downloaded existing charts:"
+          ls -lh /tmp/helm-repo/charts/*.tgz 2>/dev/null || echo "No .tgz files found"
+        else
+          echo "ℹ️ No existing charts found at $PAGES_URL (this is normal for first deployment)"
+          mkdir -p /tmp/helm-repo/charts
+        fi
+        
+    - name: Add new charts to repository
+      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
+      run: |
+        echo "Adding new charts to repository..."
+        mkdir -p /tmp/helm-repo/charts
+        
+        # Copy newly built charts
+        cp -v /tmp/helm-charts/*.tgz /tmp/helm-repo/charts/
         
         echo ""
-        echo "✅ All Helm charts pushed to OCI registry!"
+        echo "📊 All charts (existing + new):"
+        ls -lh /tmp/helm-repo/charts/*.tgz
+        
+    - name: Generate Helm repository index
+      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
+      run: |
+        echo "Generating Helm repository index..."
+        
+        # Set base URL for chart downloads
+        BASE_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
+        
+        # Check if index.yaml exists for merging
+        if [ -f /tmp/helm-repo/charts/index.yaml ]; then
+          echo "Merging new charts with existing index (preserving historical versions)..."
+          helm repo index /tmp/helm-repo/charts --url "$BASE_URL" --merge /tmp/helm-repo/charts/index.yaml
+          echo "✅ Index merged - all historical chart versions preserved"
+        else
+          echo "Creating new index (first deployment)..."
+          helm repo index /tmp/helm-repo/charts --url "$BASE_URL"
+          echo "✅ Index created"
+        fi
+        
         echo ""
-        echo "📦 Charts available at:"
-        echo "  oci://ghcr.io/${{ github.repository_owner }}/charts/<chart-name>"
+        echo "📊 Final Helm repository structure:"
+        tree /tmp/helm-repo/charts || ls -laR /tmp/helm-repo/charts
+        
         echo ""
-        echo "Users can install with:"
-        echo "  helm install myapp oci://ghcr.io/${{ github.repository_owner }}/charts/<chart-name> --version <version>"
+        echo "Total charts in repository:"
+        ls -1 /tmp/helm-repo/charts/*.tgz 2>/dev/null | wc -l
+        
+    - name: Upload Pages artifact
+      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: /tmp/helm-repo
+        
+    - name: Deploy to GitHub Pages
+      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
+      id: deployment
+      uses: actions/deploy-pages@v4
+        
+    - name: Report deployment URL
+      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
+      run: |
+        echo "✅ Helm charts deployed to GitHub Pages!"
+        echo ""
+        echo "📦 Helm Repository URL:"
+        echo "  https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
+        echo ""
+        echo "Users can add the repository with:"
+        echo "  helm repo add ${{ github.event.repository.name }} https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
+        echo "  helm repo update"
         
     - name: Upload helm chart artifacts
       if: steps.plan.outputs.charts != ''
