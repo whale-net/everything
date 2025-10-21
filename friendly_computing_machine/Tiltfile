@@ -87,11 +87,24 @@ build_images_from_apps(APPS, watch_paths, platform)
 # ===========================
 
 # Build apps configuration with infrastructure settings
+# Note: Get sensitive tokens from environment or .env file
+slack_bot_token = os.environ.get('SLACK_BOT_TOKEN', '')
+slack_app_token = os.environ.get('SLACK_APP_TOKEN', '')
+google_api_key = os.environ.get('GOOGLE_API_KEY', '')
+
 apps_config = build_apps_config(
     APPS,
     'friendly-computing-machine',
     env_vars={
         'POSTGRES_URL': db_url,
+        'APP_ENV': 'dev',
+        'TEMPORAL_HOST': 'temporal-dev.fcm-local-dev.svc.cluster.local:7233',
+        'MANMAN_EXPERIENCE_API_URL': 'http://experience-api-dev.manman-local-dev.svc.cluster.local',
+        'MANMAN_STATUS_API_URL': 'http://status-api-dev.manman-local-dev.svc.cluster.local',
+        'MANMAN_WORKER_DAL_API_URL': 'http://worker-dal-api-dev.manman-local-dev.svc.cluster.local',
+        'SLACK_BOT_TOKEN': slack_bot_token,
+        'SLACK_APP_TOKEN': slack_app_token,
+        'GOOGLE_API_KEY': google_api_key,
     }
 )
 
@@ -100,7 +113,7 @@ deploy_helm_chart(
     'fcm',
     namespace,
     '//friendly_computing_machine:fcm_chart',
-    'fcm-fcm-services',
+    'friendly-computing-machine-bot-services',
     apps_config,
     global_config={}
 )
