@@ -5,7 +5,7 @@ import logging
 import typer
 
 from libs.python.alembic.cli import create_migration_app
-from libs.python.cli.params import logging_params
+from libs.python.cli.params import logging_params, pg_params
 from libs.python.cli.providers.logging import create_logging_context
 
 # Import all models to ensure they are registered with SQLAlchemy
@@ -30,7 +30,9 @@ migration_app = create_migration_app(
 
 
 # Add callback for logging setup
+# NOTE: pg_params must come before logging_params to ensure proper context injection
 @migration_app.callback()
+@pg_params
 @logging_params
 def callback(ctx: typer.Context):
     """Migration commands for friendly_computing_machine database."""
