@@ -76,11 +76,10 @@ from myapp.models import Base
 
 app = typer.Typer()
 
-migration_cli = create_migration_app(
-    migrations_package="myapp.migrations",
-    target_metadata=Base.metadata,
-    database_url_envvar="DATABASE_URL",
-)
+    migration_app = create_migration_app(
+        migrations_package="myapp.migrations",
+        target_metadata=Base.metadata,
+    )
 
 app.add_typer(migration_cli, name="migration")
 ```
@@ -112,10 +111,11 @@ from libs.python.alembic import (
 
 # Setup
 migrations_dir = str(files("myapp.migrations"))
-database_url = os.environ["DATABASE_URL"]
+```python
+database_url = os.environ["POSTGRES_URL"]
 engine = create_engine(database_url, pool_pre_ping=True)
 config = create_alembic_config(
-    migrations_dir=migrations_dir,
+    migrations_dir="myapp/migrations",
     database_url=database_url,
 )
 
@@ -183,8 +183,9 @@ run_migrations(
 create_migration_app(
     migrations_package: str,
     target_metadata: Optional[MetaData],
-    database_url_envvar: str = "DATABASE_URL",
     include_object: Optional[Callable] = None,
     version_table_schema: str = "public",
 ) -> typer.Typer
 ```
+
+The created app uses `@pg_params` decorator which automatically injects `POSTGRES_URL` environment variable.

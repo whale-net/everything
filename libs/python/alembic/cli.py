@@ -15,7 +15,6 @@ Example usage in your CLI:
     migration_cli = create_migration_app(
         migrations_package="myapp.migrations",
         target_metadata=Base.metadata,
-        database_url_envvar="DATABASE_URL",
     )
 
     # Add to your main CLI
@@ -25,11 +24,7 @@ Example usage in your CLI:
         app()
     ```
 
-Or use directly:
-    ```bash
-    python -m libs.python.alembic.cli --migrations-package myapp.migrations \\
-        --database-url postgresql://... run
-    ```
+The migration app uses @pg_params decorator which injects POSTGRES_URL automatically.
 """
 
 import logging
@@ -59,7 +54,6 @@ logger = logging.getLogger(__name__)
 def create_migration_app(
     migrations_package: str,
     target_metadata: Optional[MetaData] = None,
-    database_url_envvar: str = "DATABASE_URL",
     include_object: Optional[Callable] = None,
     version_table_schema: str = "public",
 ) -> typer.Typer:
@@ -68,12 +62,11 @@ def create_migration_app(
     Args:
         migrations_package: Python package path to migrations (e.g., "myapp.migrations")
         target_metadata: SQLAlchemy MetaData object. If None, must be provided by migrations/env.py
-        database_url_envvar: Environment variable name for database URL
         include_object: Optional callback for filtering objects during autogenerate
         version_table_schema: Schema for alembic_version table
 
     Returns:
-        Configured Typer application
+        Configured Typer application with @pg_params decorator applied
 
     Example:
         >>> from myapp.models import Base
@@ -81,12 +74,24 @@ def create_migration_app(
         ...     migrations_package="myapp.migrations",
         ...     target_metadata=Base.metadata,
         ... )
-        >>> # Use as: app() or integrate into larger CLI
+        >>> # Database URL comes from POSTGRES_URL env var via @pg_params
     """
     migration_app = typer.Typer(
         help=f"Database migration commands for {migrations_package}",
         context_settings={"obj": {}},
     )
+
+    # Import pg_params here to avoid circular import
+    # (libs.python.cli.params imports from postgres which imports from alembic)
+    from libs.python.cli.params import pg_params
+
+    # Add callback with pg_params decorator to inject POSTGRES_URL
+    @migration_app.callback()
+    @pg_params
+    def callback(ctx: typer.Context):
+        """Database migration commands."""
+        # pg_params decorator injects postgres config into ctx.obj
+        pass
 
     def _get_migrations_dir() -> str:
         """Get the migrations directory path."""
@@ -117,29 +122,9 @@ def create_migration_app(
                 f"Ensure the package is properly installed and accessible."
             ) from e
 
-    def _get_database_url(explicit_url: Optional[str] = None) -> str:
-        """Get database URL from explicit parameter or environment."""
-        if explicit_url:
-            return explicit_url
-
-        db_url = os.environ.get(database_url_envvar)
-        if not db_url:
-            raise RuntimeError(
-                f"Database URL not found. Set {database_url_envvar} environment variable "
-                f"or provide --database-url parameter."
-            )
-        return db_url
-
     @migration_app.command("run")
     def run_cmd(
-        database_url: Annotated[
-            Optional[str],
-            typer.Option(
-                "--database-url",
-                envvar=database_url_envvar,
-                help=f"Database URL (or set {database_url_envvar} env var)",
-            ),
-        ] = None,
+        ctx: typer.Context,
         echo: Annotated[
             bool, typer.Option("--echo", help="Echo SQL statements")
         ] = False,
@@ -147,7 +132,11 @@ def create_migration_app(
         """Run pending database migrations to head."""
         logger.info("Running database migrations")
 
-        db_url = _get_database_url(database_url)
+        # Get database URL from pg_params context
+        db_url = ctx.obj.get("postgres", {}).get("database_url")
+        if not db_url:
+            raise RuntimeError("Database URL not found in context. Ensure POSTGRES_URL is set.")
+        
         migrations_dir = _get_migrations_dir()
 
         engine = create_engine(url=db_url, echo=echo, pool_pre_ping=True)
@@ -162,14 +151,7 @@ def create_migration_app(
 
     @migration_app.command("check")
     def check_cmd(
-        database_url: Annotated[
-            Optional[str],
-            typer.Option(
-                "--database-url",
-                envvar=database_url_envvar,
-                help=f"Database URL (or set {database_url_envvar} env var)",
-            ),
-        ] = None,
+        ctx: typer.Context,
         echo: Annotated[
             bool, typer.Option("--echo", help="Echo SQL statements")
         ] = False,
@@ -177,7 +159,11 @@ def create_migration_app(
         """Check if there are pending migrations."""
         logger.info("Checking for pending migrations")
 
-        db_url = _get_database_url(database_url)
+        # Get database URL from pg_params context
+        db_url = ctx.obj.get("postgres", {}).get("database_url")
+        if not db_url:
+            raise RuntimeError("Database URL not found in context. Ensure POSTGRES_URL is set.")
+        
         migrations_dir = _get_migrations_dir()
 
         engine = create_engine(url=db_url, echo=echo, pool_pre_ping=True)
@@ -196,15 +182,8 @@ def create_migration_app(
 
     @migration_app.command("create")
     def create_cmd(
+        ctx: typer.Context,
         message: Annotated[Optional[str], typer.Argument(help="Migration message")],
-        database_url: Annotated[
-            Optional[str],
-            typer.Option(
-                "--database-url",
-                envvar=database_url_envvar,
-                help=f"Database URL (or set {database_url_envvar} env var)",
-            ),
-        ] = None,
         echo: Annotated[
             bool, typer.Option("--echo", help="Echo SQL statements")
         ] = False,
@@ -212,7 +191,11 @@ def create_migration_app(
         """Create a new migration based on model changes."""
         logger.info(f"Creating migration: {message or '(no message)'}")
 
-        db_url = _get_database_url(database_url)
+        # Get database URL from pg_params context
+        db_url = ctx.obj.get("postgres", {}).get("database_url")
+        if not db_url:
+            raise RuntimeError("Database URL not found in context. Ensure POSTGRES_URL is set.")
+        
         migrations_dir = _get_migrations_dir()
 
         engine = create_engine(url=db_url, echo=echo, pool_pre_ping=True)
@@ -231,17 +214,10 @@ def create_migration_app(
 
     @migration_app.command("downgrade")
     def downgrade_cmd(
+        ctx: typer.Context,
         revision: Annotated[
             str, typer.Argument(help="Target revision (e.g., -1, base, or revision hash)")
         ],
-        database_url: Annotated[
-            Optional[str],
-            typer.Option(
-                "--database-url",
-                envvar=database_url_envvar,
-                help=f"Database URL (or set {database_url_envvar} env var)",
-            ),
-        ] = None,
         echo: Annotated[
             bool, typer.Option("--echo", help="Echo SQL statements")
         ] = False,
@@ -249,7 +225,11 @@ def create_migration_app(
         """Downgrade database to a specific revision."""
         logger.info(f"Downgrading to revision: {revision}")
 
-        db_url = _get_database_url(database_url)
+        # Get database URL from pg_params context
+        db_url = ctx.obj.get("postgres", {}).get("database_url")
+        if not db_url:
+            raise RuntimeError("Database URL not found in context. Ensure POSTGRES_URL is set.")
+        
         migrations_dir = _get_migrations_dir()
 
         engine = create_engine(url=db_url, echo=echo, pool_pre_ping=True)
