@@ -569,8 +569,8 @@ jobs:
           if [[ "$DRY_RUN" != "true" ]]; then
             echo "### 📚 Helm Repository" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Charts have been published to GitHub Pages:" >> $GITHUB_STEP_SUMMARY
-            echo "- **Repository URL:** https://${REPO_OWNER}.github.io/${REPO_NAME}/charts" >> $GITHUB_STEP_SUMMARY
+            echo "Charts have been published to the Helm repository:" >> $GITHUB_STEP_SUMMARY
+            echo "- **Repository URL:** https://charts.whalenet.dev/" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             
             echo "### 🏷️ Git Tags" >> $GITHUB_STEP_SUMMARY
@@ -591,14 +591,14 @@ jobs:
             
             echo "**Add the repository:**" >> $GITHUB_STEP_SUMMARY
             echo '```bash' >> $GITHUB_STEP_SUMMARY
-            echo "helm repo add ${REPO_NAME} https://${REPO_OWNER}.github.io/${REPO_NAME}/charts" >> $GITHUB_STEP_SUMMARY
+            echo "helm repo add whalenet https://charts.whalenet.dev/" >> $GITHUB_STEP_SUMMARY
             echo "helm repo update" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Install a chart:**" >> $GITHUB_STEP_SUMMARY
             echo '```bash' >> $GITHUB_STEP_SUMMARY
-            echo "helm search repo ${REPO_NAME}" >> $GITHUB_STEP_SUMMARY
-            echo "helm install my-release ${REPO_NAME}/<chart-name>" >> $GITHUB_STEP_SUMMARY
+            echo "helm search repo whalenet" >> $GITHUB_STEP_SUMMARY
+            echo "helm install my-release whalenet/<chart-name>" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
           fi
@@ -607,7 +607,7 @@ jobs:
           
           if [[ "$DRY_RUN" == "true" ]]; then
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "ℹ️ *Dry run mode - charts built but not published to GitHub Pages*" >> $GITHUB_STEP_SUMMARY
+            echo "ℹ️ *Dry run mode - charts built but not published*" >> $GITHUB_STEP_SUMMARY
           fi
         elif [[ "$HELM_JOB_RESULT" == "skipped" ]]; then
           echo "**Status:** ⏭️ Skipped (no charts specified)" >> $GITHUB_STEP_SUMMARY
@@ -623,8 +623,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write     # Push git tags and read repository content
-      pages: write        # Deploy to GitHub Pages
-      id-token: write     # Required for GitHub Pages OIDC
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -786,111 +784,50 @@ jobs:
         
         echo "✅ All helm chart tags created and pushed"
         
-    # TODO: Migrate to self-hosted Helm repository or OCI registry
-    # GitHub Pages + deploy-pages action is suboptimal for Helm charts because:
-    # 1. deploy-pages does a full site replacement on each deployment
-    # 2. We must download all existing charts via HTTP before each release
-    # 3. This scales poorly and adds latency to releases
-    # 
-    # Better alternatives to consider:
-    # - Self-hosted Helm repository (ChartMuseum, Harbor, Artifactory)
-    # - OCI registry (ghcr.io supports Helm charts, but ArgoCD integration needs work)
-    # - GitHub Releases (each chart version as a release asset)
-    #
-    # For now, we use wget --mirror to download existing charts and merge with new ones
-    # before deploying to GitHub Pages, ensuring historical versions are preserved.
-        
-    - name: Download existing charts from GitHub Pages
+    - name: Publish charts to ChartMuseum
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
-      continue-on-error: true
+      env:
+        CHART_REPO_USER: ${{ secrets.CHART_REPO_USER }}
+        CHART_REPO_PASS: ${{ secrets.CHART_REPO_PASS }}
       run: |
-        echo "Downloading existing Helm repository from GitHub Pages..."
-        mkdir -p /tmp/helm-repo
+        echo "Publishing charts to https://charts.whalenet.dev/..."
         
-        # Mirror the entire /charts directory from the live GitHub Pages site
-        PAGES_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts/"
+        REPO_URL="https://charts.whalenet.dev"
         
-        echo "Attempting to download from: $PAGES_URL"
+        # Upload new chart packages using ChartMuseum API
+        # ChartMuseum will automatically regenerate index.yaml
+        # See: https://github.com/helm/chartmuseum#uploading-a-chart-package
+        for chart in /tmp/helm-charts/*.tgz; do
+          if [ -f "$chart" ]; then
+            chart_name=$(basename "$chart")
+            echo "Uploading $chart_name via ChartMuseum API..."
+            
+            # POST to /api/charts endpoint
+            # ChartMuseum will extract version from the chart package and update index
+            curl -f -u "${CHART_REPO_USER}:${CHART_REPO_PASS}" \
+                 --data-binary "@${chart}" \
+                 "${REPO_URL}/api/charts"
+            
+            echo "✅ Uploaded $chart_name"
+          fi
+        done
         
-        # Use wget to mirror the entire charts directory (faster than one-by-one downloads)
-        if wget --mirror --no-parent --no-host-directories --cut-dirs=2 \
-                --directory-prefix=/tmp/helm-repo \
-                --accept="*.tgz,index.yaml" \
-                --reject="index.html*" \
-                --quiet \
-                "$PAGES_URL" 2>/dev/null; then
-          echo "✅ Downloaded existing charts directory"
-          
-          echo ""
-          echo "📊 Downloaded existing charts:"
-          ls -lh /tmp/helm-repo/charts/*.tgz 2>/dev/null || echo "No .tgz files found"
-        else
-          echo "ℹ️ No existing charts found at $PAGES_URL (this is normal for first deployment)"
-          mkdir -p /tmp/helm-repo/charts
-        fi
-        
-    - name: Add new charts to repository
-      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
-      run: |
-        echo "Adding new charts to repository..."
-        mkdir -p /tmp/helm-repo/charts
-        
-        # Copy newly built charts
-        cp -v /tmp/helm-charts/*.tgz /tmp/helm-repo/charts/
-        
-        echo ""
-        echo "📊 All charts (existing + new):"
-        ls -lh /tmp/helm-repo/charts/*.tgz
-        
-    - name: Generate Helm repository index
-      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
-      run: |
-        echo "Generating Helm repository index..."
-        
-        # Set base URL for chart downloads
-        BASE_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
-        
-        # Check if index.yaml exists for merging
-        if [ -f /tmp/helm-repo/charts/index.yaml ]; then
-          echo "Merging new charts with existing index (preserving historical versions)..."
-          helm repo index /tmp/helm-repo/charts --url "$BASE_URL" --merge /tmp/helm-repo/charts/index.yaml
-          echo "✅ Index merged - all historical chart versions preserved"
-        else
-          echo "Creating new index (first deployment)..."
-          helm repo index /tmp/helm-repo/charts --url "$BASE_URL"
-          echo "✅ Index created"
-        fi
-        
-        echo ""
-        echo "📊 Final Helm repository structure:"
-        tree /tmp/helm-repo/charts || ls -laR /tmp/helm-repo/charts
-        
-        echo ""
-        echo "Total charts in repository:"
-        ls -1 /tmp/helm-repo/charts/*.tgz 2>/dev/null | wc -l
-        
-    - name: Upload Pages artifact
-      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
-      uses: actions/upload-pages-artifact@v3
-      with:
-        path: /tmp/helm-repo
-        
-    - name: Deploy to GitHub Pages
-      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
-      id: deployment
-      uses: actions/deploy-pages@v4
+        echo "✅ All charts published successfully"
         
     - name: Report deployment URL
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
       run: |
-        echo "✅ Helm charts deployed to GitHub Pages!"
+        echo "✅ Helm charts deployed to https://charts.whalenet.dev/!"
         echo ""
         echo "📦 Helm Repository URL:"
-        echo "  https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
+        echo "  https://charts.whalenet.dev/"
         echo ""
         echo "Users can add the repository with:"
-        echo "  helm repo add ${{ github.event.repository.name }} https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/charts"
+        echo "  helm repo add whalenet https://charts.whalenet.dev/"
         echo "  helm repo update"
+        echo ""
+        echo "⚠️ Note: Chart unpublishing is not supported with the current repository approach."
+        echo "To remove a chart version, contact the repository administrator."
         
     - name: Upload helm chart artifacts
       if: steps.plan.outputs.charts != ''
@@ -899,4 +836,3 @@ jobs:
         name: helm-charts-auto-versioned
         path: /tmp/helm-charts/*.tgz
         if-no-files-found: error
-
