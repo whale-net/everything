@@ -818,7 +818,7 @@ jobs:
             
             # POST to /api/charts endpoint with error handling
             # ChartMuseum will extract version from the chart package and update index
-            if curl -f --fail-with-body -u "${CHART_REPO_USER}:${CHART_REPO_PASS}" \
+            if curl --fail-with-body -u "${CHART_REPO_USER}:${CHART_REPO_PASS}" \
                     --data-binary "@${chart}" \
                     "${REPO_URL}/api/charts" 2>&1; then
               echo "✅ Uploaded $chart_name"
