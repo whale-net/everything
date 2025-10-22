@@ -522,4 +522,38 @@ class TestReleaseCleanupWithReleases:
         assert len(result.releases_deleted) == 2
         assert mock_release_client.delete_release.call_count == 2
         mock_release_client.delete_release.assert_any_call(123)
+
+    def test_plan_cleanup_handles_none_release_data(self, cleanup, sample_tags, sample_tag_dates):
+        """Test planning cleanup handles None and invalid release data gracefully."""
+        with patch("tools.release_helper.cleanup.get_all_tags") as mock_get_tags, \
+             patch("tools.release_helper.cleanup.get_tag_creation_date") as mock_get_date, \
+             patch.object(cleanup.ghcr_client, "list_package_versions") as mock_list_versions, \
+             patch.object(cleanup.release_client, "find_releases_by_tags") as mock_find_releases:
+            
+            mock_get_tags.return_value = sample_tags
+            mock_get_date.side_effect = lambda tag: sample_tag_dates.get(tag)
+            mock_list_versions.return_value = []
+            
+            # Mock releases with None values and missing IDs
+            mock_find_releases.return_value = {
+                "demo-hello-python.v1.2.4": None,  # None release
+                "demo-hello-python.v1.1.3": "invalid_string",  # Invalid type
+                "demo-hello-python.v1.0.1": {"tag_name": "v1.0.1"},  # Missing ID
+                "helm-demo-fastapi.v0.1.0": {"id": 12345, "tag_name": "v0.1.0"},  # Valid
+            }
+            
+            plan = cleanup.plan_cleanup(
+                keep_minor_versions=2,
+                min_age_days=14
+            )
+            
+            # Should only include the valid release with ID
+            assert len(plan.releases_to_delete) == 1
+            assert "helm-demo-fastapi.v0.1.0" in plan.releases_to_delete
+            assert plan.releases_to_delete["helm-demo-fastapi.v0.1.0"] == 12345
+            
+            # Invalid releases should be filtered out silently
+            assert "demo-hello-python.v1.2.4" not in plan.releases_to_delete
+            assert "demo-hello-python.v1.1.3" not in plan.releases_to_delete
+            assert "demo-hello-python.v1.0.1" not in plan.releases_to_delete
         mock_release_client.delete_release.assert_any_call(456)

@@ -146,8 +146,19 @@ class ReleaseCleanup:
         try:
             releases_map = self.release_client.find_releases_by_tags(tags_to_delete)
             for tag_name, release_data in releases_map.items():
-                releases_to_delete[tag_name] = release_data["id"]
-                print(f"  Found GitHub release {release_data['id']} for tag {tag_name}")
+                # Skip None or invalid release data
+                if release_data is None or not isinstance(release_data, dict):
+                    print(f"⚠️  Skipping invalid release data for tag {tag_name}", file=sys.stderr)
+                    continue
+                
+                # Ensure release has an ID
+                release_id = release_data.get("id")
+                if release_id is None:
+                    print(f"⚠️  Release for tag {tag_name} has no ID", file=sys.stderr)
+                    continue
+                
+                releases_to_delete[tag_name] = release_id
+                print(f"  Found GitHub release {release_id} for tag {tag_name}")
         except Exception as e:
             print(f"⚠️  Error finding GitHub releases: {e}", file=sys.stderr)
         

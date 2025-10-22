@@ -744,4 +744,30 @@ class TestGitHubReleaseClientDeletion:
         assert "v2.0.0" in releases
         assert "v1.1.0" not in releases
         assert releases["v1.0.0"]["id"] == 1
+
+    def test_find_releases_by_tags_handles_none_values(self, client, mock_httpx_client):
+        """Test finding releases handles None values and invalid releases gracefully."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = [
+            None,  # None value in the list
+            {"id": 1, "tag_name": "v1.0.0", "name": "Release 1.0.0"},
+            "invalid_string",  # Invalid non-dict value
+            {"id": 2, "tag_name": "v1.1.0", "name": "Release 1.1.0"},
+            None,  # Another None
+            {"id": 3, "tag_name": "v2.0.0", "name": "Release 2.0.0"},
+        ]
+        # Prevent pagination
+        mock_response.headers = {}
+        mock_httpx_client.get.return_value = mock_response
+
+        with patch("httpx.Client", return_value=mock_httpx_client):
+            releases = client.find_releases_by_tags(["v1.0.0", "v2.0.0"])
+
+        # Should successfully filter out None and invalid values
+        assert len(releases) == 2
+        assert "v1.0.0" in releases
+        assert "v2.0.0" in releases
+        assert releases["v1.0.0"]["id"] == 1
+        assert releases["v2.0.0"]["id"] == 3
         assert releases["v2.0.0"]["id"] == 3

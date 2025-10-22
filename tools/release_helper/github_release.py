@@ -365,6 +365,10 @@ class GitHubReleaseClient:
         all_releases = self.list_releases(per_page=100)
         
         for release in all_releases:
+            # Skip None or invalid releases
+            if release is None or not isinstance(release, dict):
+                continue
+            
             tag_name = release.get("tag_name")
             if tag_name in tag_names:
                 releases_map[tag_name] = release
