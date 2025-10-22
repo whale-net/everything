@@ -354,6 +354,12 @@ helm search repo whalenet
 helm install my-release whalenet/<chart-name>
 ```
 
+### Chart Management
+
+**Publishing**: Charts are automatically published during releases using the ChartMuseum API. ChartMuseum handles index generation and version management automatically.
+
+**Unpublishing**: ⚠️ Chart version removal is not supported through the automated workflow with the current ChartMuseum setup. To remove a chart version, contact the repository administrator who can use ChartMuseum's delete API or access the backend storage directly.
+
 ## Future Enhancements
 
 The following features are planned for future iterations:

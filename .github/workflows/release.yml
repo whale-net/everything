@@ -794,23 +794,41 @@ jobs:
         
         REPO_URL="https://charts.whalenet.dev"
         
+        # Verify chart files exist before attempting upload
+        CHART_COUNT=$(ls -1 /tmp/helm-charts/*.tgz 2>/dev/null | wc -l)
+        if [ "$CHART_COUNT" -eq 0 ]; then
+          echo "❌ Error: No chart files found in /tmp/helm-charts/"
+          exit 1
+        fi
+        
+        echo "Found $CHART_COUNT chart(s) to publish"
+        
         # Upload new chart packages using ChartMuseum API
         # ChartMuseum will automatically regenerate index.yaml
         # See: https://github.com/helm/chartmuseum#uploading-a-chart-package
+        UPLOAD_FAILED=0
         for chart in /tmp/helm-charts/*.tgz; do
           if [ -f "$chart" ]; then
             chart_name=$(basename "$chart")
             echo "Uploading $chart_name via ChartMuseum API..."
             
-            # POST to /api/charts endpoint
+            # POST to /api/charts endpoint with error handling
             # ChartMuseum will extract version from the chart package and update index
-            curl -f -u "${CHART_REPO_USER}:${CHART_REPO_PASS}" \
-                 --data-binary "@${chart}" \
-                 "${REPO_URL}/api/charts"
-            
-            echo "✅ Uploaded $chart_name"
+            if curl -f --fail-with-body -u "${CHART_REPO_USER}:${CHART_REPO_PASS}" \
+                    --data-binary "@${chart}" \
+                    "${REPO_URL}/api/charts" 2>&1; then
+              echo "✅ Uploaded $chart_name"
+            else
+              echo "❌ Failed to upload $chart_name"
+              UPLOAD_FAILED=1
+            fi
           fi
         done
+        
+        if [ "$UPLOAD_FAILED" -eq 1 ]; then
+          echo "❌ One or more chart uploads failed"
+          exit 1
+        fi
         
         echo "✅ All charts published successfully"
         
@@ -825,9 +843,6 @@ jobs:
         echo "Users can add the repository with:"
         echo "  helm repo add whalenet https://charts.whalenet.dev/"
         echo "  helm repo update"
-        echo ""
-        echo "⚠️ Note: Chart unpublishing is not supported with the current repository approach."
-        echo "To remove a chart version, contact the repository administrator."
         
     - name: Upload helm chart artifacts
       if: steps.plan.outputs.charts != ''
