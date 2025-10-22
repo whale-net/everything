@@ -629,6 +629,9 @@ jobs:
       with:
         fetch-depth: 0
         fetch-tags: true
+        # Use PAT to allow pushing tags when commit contains workflow changes
+        # GITHUB_TOKEN cannot push tags pointing to commits with workflow file modifications
+        token: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
         
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
