@@ -328,6 +328,59 @@ class TestGHCRClient:
             assert len(versions) == 1
         assert versions[0].version_id == 12346
 
+    def test_list_package_versions_handles_null_metadata(self, client):
+        """Test listing package versions when metadata is null or missing container key."""
+        with patch.object(client, '_detect_owner_type', return_value='orgs'):
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {}  # No Link header = no pagination
+            mock_response.json.return_value = [
+                {
+                    "id": 12345,
+                    "name": "sha256:abc123",
+                    "metadata": None,  # Null metadata
+                    "created_at": "2025-01-15T10:00:00Z",
+                    "updated_at": "2025-01-15T10:00:00Z"
+                },
+                {
+                    "id": 12346,
+                    "name": "sha256:def456",
+                    "metadata": {
+                        "package_type": "container"
+                        # Missing "container" key
+                    },
+                    "created_at": "2025-01-20T10:00:00Z",
+                    "updated_at": "2025-01-20T10:00:00Z"
+                },
+                {
+                    "id": 12347,
+                    "name": "sha256:ghi789",
+                    "metadata": {
+                        "container": {
+                            "tags": ["v1.0.0"]
+                        }
+                    },
+                    "created_at": "2025-01-25T10:00:00Z",
+                    "updated_at": "2025-01-25T10:00:00Z"
+                }
+            ]
+
+            mock_http_client = MagicMock()
+            mock_http_client.__enter__.return_value = mock_http_client
+            mock_http_client.get.return_value = mock_response
+
+            with patch("httpx.Client", return_value=mock_http_client):
+                versions = client.list_package_versions("demo-hello-python")
+
+            # Should successfully parse all versions, with empty tags for problematic ones
+            assert len(versions) == 3
+            assert versions[0].version_id == 12345
+            assert versions[0].tags == []  # No tags due to null metadata
+            assert versions[1].version_id == 12346
+            assert versions[1].tags == []  # No tags due to missing container key
+            assert versions[2].version_id == 12347
+            assert versions[2].tags == ["v1.0.0"]  # Normal tags
+
     def test_validate_permissions_success(self, client, mock_httpx_client):
         """Test permission validation succeeds with correct scopes."""
         mock_client, mock_response = mock_httpx_client

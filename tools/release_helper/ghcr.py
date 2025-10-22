@@ -150,7 +150,14 @@ class GHCRClient:
                         
                         # Parse versions
                         for version_data in versions_data:
-                            tags = version_data.get("metadata", {}).get("container", {}).get("tags", [])
+                            # Safely extract tags from nested structure
+                            metadata = version_data.get("metadata")
+                            tags = []
+                            if metadata is not None:
+                                container = metadata.get("container")
+                                if container is not None:
+                                    tags = container.get("tags", [])
+                            
                             version = GHCRPackageVersion(
                                 version_id=version_data["id"],
                                 tags=tags,
