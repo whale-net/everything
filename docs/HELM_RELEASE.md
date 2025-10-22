@@ -360,6 +360,24 @@ helm install my-release whalenet/<chart-name>
 
 **Unpublishing**: ⚠️ Chart version removal is not supported through the automated workflow with the current ChartMuseum setup. To remove a chart version, contact the repository administrator who can use ChartMuseum's delete API or access the backend storage directly.
 
+### Known Limitations
+
+**Workflow Changes and Helm Releases**: If a helm chart release fails with the error:
+```
+refusing to allow a GitHub App to create or update workflow `.github/workflows/release.yml` without `workflows` permission
+```
+
+This occurs when the commit being tagged contains workflow file modifications. GitHub's default `GITHUB_TOKEN` security policy prevents tagging commits that modify `.github/workflows/*` files.
+
+**Workaround**: Push an empty commit after the workflow change, then re-run the release:
+```bash
+git commit --allow-empty -m "Empty commit for helm chart release"
+git push
+# Then trigger the release workflow again
+```
+
+This is a security feature, not a bug, and only affects releases where the commit itself modified workflow files.
+
 ## Future Enhancements
 
 The following features are planned for future iterations:

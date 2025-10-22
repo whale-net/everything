@@ -629,9 +629,12 @@ jobs:
       with:
         fetch-depth: 0
         fetch-tags: true
-        # Use PAT to allow pushing tags when commit contains workflow changes
-        # GITHUB_TOKEN cannot push tags pointing to commits with workflow file modifications
-        token: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
+        # NOTE: If helm chart release fails with "refusing to allow a GitHub App to create or update workflow"
+        # this means the commit being tagged contains workflow changes. GitHub's default GITHUB_TOKEN
+        # cannot push tags pointing to commits that modify .github/workflows/*.
+        # Workaround: Push an empty commit after the workflow change, then run the release again:
+        #   git commit --allow-empty -m "Empty commit for helm chart release"
+        #   git push
         
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
