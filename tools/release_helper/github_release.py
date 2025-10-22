@@ -349,8 +349,14 @@ class GitHubReleaseClient:
         if not release:
             return False
         
+        # Ensure release has an ID
+        release_id = release.get("id")
+        if release_id is None:
+            print(f"⚠️  Release for tag {tag_name} has no ID", file=sys.stderr)
+            return False
+        
         # Delete the release
-        return self.delete_release(release["id"])
+        return self.delete_release(release_id)
     
     def find_releases_by_tags(self, tag_names: List[str]) -> Dict[str, Dict]:
         """Find releases by tag names.
