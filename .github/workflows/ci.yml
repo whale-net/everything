@@ -244,17 +244,6 @@ jobs:
     needs: [build, test, plan-docker, test-container-arch, docker]
     if: always()
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Setup Build Environment
-      uses: ./.github/actions/setup-build-env
-      with:
-        cache-suffix: 'summary'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-      
     - name: Collect build results and generate summary
       run: |
         echo "=== CI Build Summary ===" >> $GITHUB_STEP_SUMMARY
