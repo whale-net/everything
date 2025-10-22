@@ -12,7 +12,7 @@ The helm chart release system is integrated into the main CI/CD release workflow
 - Git tags created for each chart release (format: `helm-{chart-name}.v{version}`)
 - Auto-increment support (minor/patch) using git tag history
 - Optional - specify charts to release or leave empty to skip
-- Charts published to GitHub Pages Helm repository
+- Charts published to https://charts.whalenet.dev/ (basic auth protected)
 - Chart packages also uploaded as workflow artifacts (.tgz files)
 
 ## Architecture
@@ -281,7 +281,7 @@ This separation allows:
 - App container images pushed to registry
 - Git tags created for apps (format: `{domain}-{app}.v{version}`)
 - Git tags created for helm charts (format: `helm-{chart-name}.v{version}`)
-- Helm charts published to GitHub Pages at `https://{owner}.github.io/{repo}/charts`
+- Helm charts published to https://charts.whalenet.dev/
 - Helm chart tarballs uploaded as workflow artifacts
 - GitHub releases created with release notes for apps
 - Combined summary showing both apps and charts
@@ -334,15 +334,39 @@ This automatically creates:
 - Metadata target (`:fastapi_chart_chart_metadata`)
 - Makes the chart discoverable for releases
 
+## Chart Repository
+
+Helm charts are published to https://charts.whalenet.dev/ with basic authentication.
+
+**Required secrets:**
+- `CHART_REPO_USER` - Username for chart repository authentication
+- `CHART_REPO_PASS` - Password for chart repository authentication
+
+**Adding the repository:**
+```bash
+helm repo add whalenet https://charts.whalenet.dev/
+helm repo update
+```
+
+**Installing charts:**
+```bash
+helm search repo whalenet
+helm install my-release whalenet/<chart-name>
+```
+
+### Chart Management
+
+**Publishing**: Charts are automatically published during releases using the ChartMuseum API. ChartMuseum handles index generation and version management automatically.
+
+**Unpublishing**: ⚠️ Chart version removal is not supported through the automated workflow with the current ChartMuseum setup. To remove a chart version, contact the repository administrator who can use ChartMuseum's delete API or access the backend storage directly.
+
 ## Future Enhancements
 
 The following features are planned for future iterations:
 
-1. **Helm repository publishing** - Publish charts to GitHub Pages
-2. **Chart version injection** - Dynamically inject app versions during build
-3. **Chart signing** - Sign charts with GPG keys for verification
-4. **Chart testing** - Automated chart installation and validation
-5. **Multi-environment charts** - Different chart variants per environment
+1. **Chart signing** - Sign charts with GPG keys for verification
+2. **Chart testing** - Automated chart installation and validation
+3. **Multi-environment charts** - Different chart variants per environment
 
 ## Testing
 
