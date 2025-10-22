@@ -381,6 +381,39 @@ class TestGHCRClient:
             assert versions[2].version_id == 12347
             assert versions[2].tags == ["v1.0.0"]  # Normal tags
 
+    def test_list_package_versions_handles_missing_id(self, client):
+        """Test listing package versions when version data is missing ID or is invalid."""
+        with patch.object(client, '_detect_owner_type', return_value='orgs'):
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {}  # No Link header = no pagination
+            mock_response.json.return_value = [
+                None,  # None value
+                "invalid_string",  # Invalid type
+                {
+                    "name": "sha256:abc123",
+                    # Missing "id" field
+                    "metadata": {"container": {"tags": ["v1.0.0"]}}
+                },
+                {
+                    "id": 12345,
+                    "name": "sha256:def456",
+                    "metadata": {"container": {"tags": ["v1.0.1"]}}
+                },
+            ]
+
+            mock_http_client = MagicMock()
+            mock_http_client.__enter__.return_value = mock_http_client
+            mock_http_client.get.return_value = mock_response
+
+            with patch("httpx.Client", return_value=mock_http_client):
+                versions = client.list_package_versions("demo-hello-python")
+
+            # Should only include valid versions with IDs
+            assert len(versions) == 1
+            assert versions[0].version_id == 12345
+            assert versions[0].tags == ["v1.0.1"]
+
     def test_validate_permissions_success(self, client, mock_httpx_client):
         """Test permission validation succeeds with correct scopes."""
         mock_client, mock_response = mock_httpx_client

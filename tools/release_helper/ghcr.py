@@ -150,6 +150,16 @@ class GHCRClient:
                         
                         # Parse versions
                         for version_data in versions_data:
+                            # Skip None or invalid version data
+                            if version_data is None or not isinstance(version_data, dict):
+                                continue
+                            
+                            # Ensure version has an ID (required field)
+                            version_id = version_data.get("id")
+                            if version_id is None:
+                                print(f"⚠️  Skipping package version without ID", file=sys.stderr)
+                                continue
+                            
                             # Safely extract tags from nested structure
                             metadata = version_data.get("metadata")
                             tags = []
@@ -159,7 +169,7 @@ class GHCRClient:
                                     tags = container.get("tags", [])
                             
                             version = GHCRPackageVersion(
-                                version_id=version_data["id"],
+                                version_id=version_id,
                                 tags=tags,
                                 created_at=version_data.get("created_at"),
                                 updated_at=version_data.get("updated_at")
