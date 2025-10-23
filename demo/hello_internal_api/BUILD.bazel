@@ -36,4 +36,5 @@ release_app(
     domain = "demo",
     description = "Internal FastAPI service - accessible within cluster only",
     app_type = "internal-api",
+    port = 8000,
 )

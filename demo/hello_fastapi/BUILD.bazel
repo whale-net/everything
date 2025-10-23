@@ -47,5 +47,6 @@ release_app(
     domain = "demo",
     description = "FastAPI hello world application with uvicorn",
     app_type = "external-api",
+    port = 8000,
     fastapi_app = "demo.hello_fastapi.main:app",
 )
