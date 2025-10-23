@@ -24,8 +24,9 @@ build:ci --guard_against_concurrent_changes
 build:ci --experimental_remote_merkle_tree_cache
 build:ci --remote_timeout=60
 build:ci --remote_cache_compression
-# Download all outputs from remote cache for better cache effectiveness
-build:ci --remote_download_outputs=all
+# Download only metadata from remote cache for faster builds
+# Actual outputs are only downloaded when needed (e.g., for tests, or final artifacts)
+build:ci --remote_download_minimal
 # Build metadata optimizations  
 build:ci --nolegacy_external_runfiles
 # Memory and CPU optimizations
@@ -33,6 +34,12 @@ build:ci --tool_java_runtime_version=remotejdk_11
 build:ci --java_runtime_version=remotejdk_11
 test:ci --cache_test_results=yes
 test:ci --test_timeout_filters=-eternal
+
+# Container image build optimization
+# Use toplevel downloads - downloads only the final outputs needed
+# Intermediate layer tars are cached remotely but not downloaded locally in CI
+build:ci-images --config=ci
+build:ci-images --remote_download_toplevel
 
 # Test configurations
 test --test_output=errors

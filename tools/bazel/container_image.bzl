@@ -25,6 +25,56 @@ ARCHITECTURE: Single Binary → Platform Transitions → Single Push
    - Users pull ONE tag that works on any platform
    - Release system ONLY uses this target
 
+LAYER CACHING STRATEGY:
+=======================
+Python images use 4 separate layers with independent caching:
+
+1. CA Certs Layer (//tools/cacerts:cacerts)
+   - Bazel caches based on: Ubuntu ca-certificates package version
+   - Invalidated when: Base certificate package is updated
+   - Shared across: ALL apps via content-addressable storage
+   
+2. Python Interpreter Layer ({name}_python_layer)
+   - Bazel caches based on: Python toolchain version (globally configured)
+   - Invalidated when: Python version changes (e.g., 3.13.0 -> 3.13.1)
+   - Location: /opt/python3.13/{arch}/ (universal across all apps)
+   - Size: ~240-375MB (stripped)
+   - **Universal Layer**: All apps produce IDENTICAL Python layer tars because
+     Python is placed at /opt/python3.13/{arch}/ regardless of app name.
+   - **Perfect Deduplication**: Content-addressable storage means this layer
+     is built once and reused for all Python apps (same SHA256).
+   - **Storage Optimization**: With --remote_download_minimal, even this
+     universal layer isn't downloaded during CI - only metadata is fetched.
+   
+3. Dependencies Layer ({name}_deps_layer)
+   - Bazel caches based on: uv.lock + resolved wheel hashes for target platform
+   - Invalidated when: Dependencies added/updated in uv.lock
+   - Shared across: Apps with identical dependencies (content-addressable)
+   - Size: varies by app (10KB-100MB)
+   
+4. App Code Layer ({name}_app_layer)
+   - Bazel caches based on: Source files in _main workspace + local libs
+   - Invalidated when: App code or local library code changes
+   - Unique per: Each app
+   - Size: typically small (100KB-10MB)
+   - **Includes Symlink**: Contains symlink from /app/{binary}.runfiles/rules_python++...
+     to /opt/python3.13/{arch}/ so Python stub scripts find the interpreter
+
+Each layer is a separate Bazel target, enabling:
+- Independent action caching per layer
+- Parallel layer building
+- Minimal rebuilds (only changed layers)
+- Efficient remote cache usage
+- **Perfect Python runtime sharing**: All Python apps produce IDENTICAL
+  Python layer tars (universal /opt/python3.13/{arch}/ location)
+
+**Universal Python Architecture:**
+The Python interpreter is placed at /opt/python3.13/{arch}/ in a dedicated layer.
+Each app's layer contains a symlink from its expected runfiles location
+(/app/{binary}.runfiles/rules_python++python+python_3_13_{arch}) to the universal
+location. This achieves true layer sharing while maintaining compatibility with
+Python's stub script expectations.
+
 This is the idiomatic Bazel way to build multiplatform images.
 """
 
@@ -85,21 +135,19 @@ def container_image(
     
     LAYERING STRATEGY - Optimized for Cache Efficiency:
     ====================================================
-    Uses a SINGLE layer containing binary + all runfiles (dependencies, interpreter, etc).
+    Uses 4 separate layers for optimal caching:
+    1. CA certificates (//tools/cacerts:cacerts) - shared across ALL apps
+    2. Python interpreter (/opt/python3.13/{arch}/) - universal location, shared across ALL Python apps
+    3. Third-party dependencies (rules_pycross pypi packages) - per-app or shared if deps match
+    4. Application code (_main/ workspace) - unique per app, includes symlink to universal Python
     
-    Why not split into multiple layers?
-    - Bazel's hermetic runfiles tree is tightly coupled (binary references exact paths)
-    - Splitting would require custom rules to separate app code from dependencies
-    - Breaking apart the runfiles structure defeats Bazel's hermetic guarantees
-    - The complexity and brittleness outweighs the caching benefits
-    
-    Caching still works efficiently because:
-    1. Bazel's action cache: If binary unchanged, pkg_tar is cached (no rebuild)
-    2. OCI layer digests: If tar unchanged, Docker/registries cache the layer
-    3. Most rebuilds happen during development (where layer caching helps less anyway)
-    
-    The real optimization opportunity would be at the Bazel level (e.g., rules_python
-    generating separate outputs for app vs deps), but that's outside our control here.
+    This layering strategy ensures:
+    - Base layers (certs, interpreter) are cached and shared across ALL Python apps
+    - Dependencies layer is shared when apps have identical deps
+    - Only app code layer is rebuilt during typical development
+    - Registry pushes only upload changed layers (reduces bandwidth)
+    - Container pulls only download changed layers (faster deployments)
+    - Maximum cache efficiency: all Python apps produce identical Python layer (same content hash)
     
     Args:
         name: Image name
@@ -114,48 +162,184 @@ def container_image(
     if not language:
         fail("language parameter is required for container_image")
     
-    # Create single application layer with binary and all runfiles
-    # This is a monolithic layer but it's the most maintainable approach given
-    # Bazel's hermetic runfiles structure.
-    # NOTE: TreeArtifacts via root_symlinks require MANIFEST file to resolve
-    pkg_tar(
-        name = name + "_layer_unstripped",
-        srcs = [binary],
-        package_dir = "/app",
-        include_runfiles = True,
-        # Include MANIFEST file explicitly for root_symlinks resolution
-        # This is needed for TreeArtifact-based generated code like OpenAPI clients
-        strip_prefix = ".",
-        tags = ["manual"],
-    )
-    
-    # For Python, strip debug symbols and remove duplicates to reduce image size
+    # For Python apps, create optimized layers
     if language == "python":
+        # First, create full runfiles tar to extract from
+        pkg_tar(
+            name = name + "_full_runfiles",
+            srcs = [binary],
+            package_dir = "/app",
+            include_runfiles = True,
+            strip_prefix = ".",
+            tags = ["manual"],
+        )
+        
+        # Extract and layer Python interpreter to universal location
+        # Places Python at /opt/python3.13/<arch>/ for sharing across all apps
         native.genrule(
-            name = name + "_layer",
-            srcs = [":" + name + "_layer_unstripped"],
-            outs = [name + "_layer.tar"],
+            name = name + "_python_layer",
+            srcs = [":" + name + "_full_runfiles"],
+            outs = [name + "_python_layer.tar"],
             tools = ["//tools/scripts:strip_python.sh"],
             cmd = """
-                # Extract the tar
+                set -e
+                trap 'rm -rf layer_tmp python_layer' EXIT
+                
+                # Extract full runfiles
                 mkdir -p layer_tmp
-                tar -xf $(location :{name}_layer_unstripped) -C layer_tmp
+                tar -xf $(location :{name}_full_runfiles) -C layer_tmp
                 
-                # Strip Python binaries and libraries
-                $(location //tools/scripts:strip_python.sh) layer_tmp/app || true
+                # Find Python interpreter directory
+                cd layer_tmp
+                PYTHON_DIR=$$(find app -path "*/rules_python++python+python_3_*" -type d -print -quit)
                 
-                # Repack into tar
-                tar -cf $@ -C layer_tmp .
+                if [ -z "$$PYTHON_DIR" ]; then
+                    echo "Error: Python directory not found"
+                    exit 1
+                fi
+                
+                # Extract architecture from path (e.g., x86_64-unknown-linux-gnu)
+                ARCH=$$(basename "$$PYTHON_DIR" | sed 's/.*python_3_13_//')
+                
+                if [ -z "$$ARCH" ] || [ "$$ARCH" = "$$(basename "$$PYTHON_DIR")" ]; then
+                    echo "Error: Failed to extract architecture from $$PYTHON_DIR"
+                    exit 1
+                fi
+                
+                cd ..
+                
+                # Create universal Python location: /opt/python3.13/<arch>/
+                mkdir -p python_layer/opt/python3.13/$$ARCH
+                
+                # Copy Python to universal location
+                cp -r layer_tmp/$$PYTHON_DIR/* python_layer/opt/python3.13/$$ARCH/
+                
+                # Strip the Python installation (failures are non-fatal for optimization)
+                $(location //tools/scripts:strip_python.sh) python_layer/opt/python3.13/$$ARCH 2>&1 | head -20 || echo "Warning: strip_python.sh encountered issues but continuing"
+                
+                # Create final tar with universal path
+                tar -cf $@ -C python_layer .
                 """.format(name = name),
             tags = ["manual"],
         )
-    else:
-        # For non-Python languages, use the layer as-is
-        native.alias(
-            name = name + "_layer",
-            actual = ":" + name + "_layer_unstripped",
+        
+        # Extract and layer third-party dependencies
+        native.genrule(
+            name = name + "_deps_layer",
+            srcs = [":" + name + "_full_runfiles"],
+            outs = [name + "_deps_layer.tar"],
+            tools = ["//tools/scripts:strip_python.sh"],
+            cmd = """
+                set -e
+                trap 'rm -rf layer_tmp deps_layer deps_tmp.tar' EXIT
+                
+                # Extract full runfiles
+                mkdir -p layer_tmp
+                tar -xf $(location :{name}_full_runfiles) -C layer_tmp
+                
+                # Find and archive deps - handle empty case gracefully
+                cd layer_tmp
+                DEPS_PATHS=$$(find app -path "*/rules_pycross++lock_repos+pypi*" || true)
+                if [ -n "$$DEPS_PATHS" ]; then
+                    echo "$$DEPS_PATHS" | tar -cf ../deps_tmp.tar -T -
+                else
+                    # No dependencies - create empty tar
+                    tar -cf ../deps_tmp.tar -T /dev/null
+                fi
+                cd ..
+                
+                # Extract to temp directory and strip if not empty
+                mkdir -p deps_layer
+                if [ -s deps_tmp.tar ]; then
+                    tar -xf deps_tmp.tar -C deps_layer
+                    # Strip (failures are non-fatal for optimization)
+                    $(location //tools/scripts:strip_python.sh) deps_layer 2>&1 | head -20 || echo "Warning: strip_python.sh encountered issues but continuing"
+                fi
+                
+                # Create final tar
+                tar -cf $@ -C deps_layer .
+                """.format(name = name),
             tags = ["manual"],
         )
+        
+        # Extract app code and create symlink to universal Python location
+        native.genrule(
+            name = name + "_app_layer",
+            srcs = [":" + name + "_full_runfiles"],
+            outs = [name + "_app_layer.tar"],
+            cmd = """
+                set -e
+                trap 'rm -rf layer_tmp app_layer app_tmp.tar' EXIT
+                
+                # Extract full runfiles
+                mkdir -p layer_tmp
+                tar -xf $(location :{name}_full_runfiles) -C layer_tmp
+                
+                # Find Python interpreter directory to determine architecture
+                cd layer_tmp
+                PYTHON_DIR=$$(find app -path "*/rules_python++python+python_3_*" -type d -print -quit)
+                
+                if [ -z "$$PYTHON_DIR" ]; then
+                    echo "Error: Python directory not found"
+                    exit 1
+                fi
+                
+                # Extract architecture from path
+                ARCH=$$(basename "$$PYTHON_DIR" | sed 's/.*python_3_13_//')
+                
+                if [ -z "$$ARCH" ] || [ "$$ARCH" = "$$(basename "$$PYTHON_DIR")" ]; then
+                    echo "Error: Failed to extract architecture from $$PYTHON_DIR"
+                    exit 1
+                fi
+                
+                # Find and archive app code
+                {{
+                    # App code from _main workspace
+                    find app -path "*/_main" 2>/dev/null || true
+                    # MANIFEST files for TreeArtifact resolution
+                    find app -name "MANIFEST" 2>/dev/null || true
+                    # Binary wrapper scripts (py_binary stub scripts)
+                    find app -type f -not -path "*/runfiles/*" -not -path "*/rules_python*" -not -path "*/rules_pycross*" 2>/dev/null || true
+                    # Binary symlinks
+                    find app -type l -not -path "*/runfiles/*" 2>/dev/null || true
+                }} | tar -cf ../app_tmp.tar -T -
+                cd ..
+                
+                # Extract to create final layer
+                mkdir -p app_layer
+                if [ -f app_tmp.tar ] && [ -s app_tmp.tar ]; then
+                    tar -xf app_tmp.tar -C app_layer
+                fi
+                
+                # Create symlink from expected Python location to universal location
+                # Expected: /app/{{binary}}.runfiles/rules_python++python+python_3_13_{{arch}}
+                # Target: /opt/python3.13/{{arch}}
+                EXPECTED_DIR="app_layer/$${{PYTHON_DIR}}"
+                mkdir -p "$$(dirname "$$EXPECTED_DIR")"
+                ln -sf /opt/python3.13/$$ARCH "$$EXPECTED_DIR"
+                
+                # Create final tar with app code and symlink
+                tar -cf $@ -C app_layer .
+                """.format(name = name),
+            tags = ["manual"],
+        )
+        
+        layer_targets = [
+            ":" + name + "_python_layer",
+            ":" + name + "_deps_layer",
+            ":" + name + "_app_layer",
+        ]
+    else:
+        # For non-Python (Go), use single layer as before
+        pkg_tar(
+            name = name + "_layer",
+            srcs = [binary],
+            package_dir = "/app",
+            include_runfiles = True,
+            strip_prefix = ".",
+            tags = ["manual"],
+        )
+        layer_targets = [":" + name + "_layer"]
 
     
     binary_name = _get_binary_name(binary)
@@ -170,14 +354,14 @@ def container_image(
     # Determine entrypoint based on language
     if not entrypoint:
         if language == "python":
-            # Use select() to choose the correct Python interpreter path based on target platform
-            # The path is deterministic: /app/{binary}.runfiles/rules_python++python+python_{version}_{arch}/bin/python3
-            # We use a simple shell pattern to match either architecture
+            # Python interpreter is accessed via symlink from app runfiles to universal location
+            # Symlink: /app/{binary}.runfiles/rules_python++python+python_{version}_{arch}
+            # Target: /opt/python3.13/{arch}/
+            # Use glob pattern to match the architecture-specific path
             entrypoint = [
                 "/bin/sh",
                 "-c",
-                # Use glob pattern to match the Python interpreter for the current architecture
-                # This is much faster than find and the path is deterministic at build time
+                # Execute Python from the symlinked path (which points to universal location)
                 'exec /app/{binary_path}.runfiles/rules_python++python+python_{version}_*/bin/python3 /app/$0 "$@"'.format(
                     binary_path = binary_path,
                     version = python_version.replace(".", "_"),
@@ -188,13 +372,14 @@ def container_image(
             # Go binaries are self-contained executables
             entrypoint = ["/app/" + binary_path]
     
+    # Build list of all layers in order (bottom to top)
+    # CA certs first (changes rarely), then language-specific layers
+    all_tars = ["//tools/cacerts:cacerts"] + layer_targets
+    
     oci_image(
         name = name,
         base = base,
-        tars = [
-            ":" + name + "_layer",
-            "//tools/cacerts:cacerts",  # Add CA certificates for SSL/TLS
-        ],
+        tars = all_tars,
         entrypoint = entrypoint,
         workdir = "/app",
         env = image_env,

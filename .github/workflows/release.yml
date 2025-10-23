@@ -250,7 +250,7 @@ jobs:
         echo "Target: $OPENAPI_TARGET"
         
         # Build the OpenAPI spec
-        if bazel build --config=ci "$OPENAPI_TARGET"; then
+        if bazel build --config=ci-images "$OPENAPI_TARGET"; then
           # Find the generated spec file - it's now named {domain}-{app}_openapi_spec.json
           # Remove @@// or // prefix from target (Bazel 8.x uses @@ prefix for main repo)
           TARGET_PATH="${OPENAPI_TARGET#@@//}"
@@ -258,7 +258,7 @@ jobs:
           
           # The target name includes _openapi_spec suffix, and now the file includes domain prefix
           # Format: bazel-bin/{path}/{domain}-{app}_openapi_spec.json
-          BAZEL_BIN=$(bazel info bazel-bin --config=ci)
+          BAZEL_BIN=$(bazel info bazel-bin --config=ci-images)
           TARGET_DIR=$(echo "$TARGET_PATH" | sed 's#:#/#' | sed 's#/[^/]*$##')
           
           # Try the new naming format with domain prefix first
@@ -352,10 +352,10 @@ jobs:
         
         # Build the release helper binary first (avoids nested Bazel invocations)
         echo "Building release helper..."
-        bazel build --config=ci //tools:release
+        bazel build --config=ci-images //tools:release
         
         # Execute the release helper directly (not via 'bazel run' to avoid deadlocks)
-        RELEASE_HELPER="$(bazel info bazel-bin --config=ci)/tools/release_helper/release_helper"
+        RELEASE_HELPER="$(bazel info bazel-bin --config=ci-images)/tools/release_helper/release_helper"
         
         # Use release-multiarch with full domain-app name to ensure correct artifact is released
         if [[ "$DRY_RUN" == "true" ]]; then
