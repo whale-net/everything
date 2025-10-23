@@ -22,6 +22,7 @@ from libs.python.rmq.connection import (
     get_rabbitmq_connection,
     get_rabbitmq_ssl_options,
     init_rabbitmq,
+    init_rabbitmq_from_config,
 )
 from libs.python.rmq.interface import (
     MessagePublisherInterface,
@@ -45,6 +46,7 @@ __all__ = [
     "get_rabbitmq_connection",
     "get_rabbitmq_ssl_options",
     "init_rabbitmq",
+    "init_rabbitmq_from_config",
     # Interfaces
     "MessagePublisherInterface",
     "MessageSubscriberInterface",

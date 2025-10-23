@@ -36,8 +36,7 @@ from libs.python.rmq import ExchangeRegistry
 from manman.src.util import get_sqlalchemy_engine, init_sql_alchemy_engine
 from libs.python.rmq import (
     create_rabbitmq_vhost,
-    get_rabbitmq_ssl_options,
-    init_rabbitmq,
+    init_rabbitmq_from_config,
 )
 
 app = typer.Typer()
@@ -136,7 +135,9 @@ def _init_common_services(
     """Initialize common services required by both APIs."""
     if should_run_migration_check and _need_migration():
         raise RuntimeError("migration needs to be ran before starting")
+    
     virtual_host = f"manman-{app_env}" if app_env else "/"
+    
     # Optionally create vhost via management API
     if create_vhost and app_env == "dev":
         create_rabbitmq_vhost(
@@ -147,20 +148,17 @@ def _init_common_services(
             vhost=virtual_host,
         )
 
-    # Initialize with AMQPStorm connection parameters
-    init_rabbitmq(
-        host=rabbitmq_host,
-        port=rabbitmq_port,
-        username=rabbitmq_username,
-        password=rabbitmq_password,
-        virtual_host=virtual_host,
-        ssl_enabled=enable_ssl,
-        ssl_options=get_rabbitmq_ssl_options(
-            hostname=rabbitmq_ssl_hostname,
-        )
-        if enable_ssl
-        else None,
-    )
+    # Build RabbitMQ config and initialize
+    rmq_config = {
+        'host': rabbitmq_host,
+        'port': rabbitmq_port,
+        'username': rabbitmq_username,
+        'password': rabbitmq_password,
+        'vhost': '/',  # Base vhost
+        'enable_ssl': enable_ssl,
+        'ssl_hostname': rabbitmq_ssl_hostname,
+    }
+    init_rabbitmq_from_config(rmq_config, vhost_suffix=app_env)
 
     # declare rabbitmq exchanges - use persistent connection for this operation
     from libs.python.rmq import get_rabbitmq_connection
