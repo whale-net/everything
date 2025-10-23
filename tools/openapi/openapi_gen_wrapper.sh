@@ -68,5 +68,20 @@ else
         {} +
 fi
 
+# Fix bug in api_client.py where it references the wrong module name for model deserialization
+# The generator creates a reference like "manman_worker_dal_api.models" but the correct import
+# is "generated.manman.worker_dal_api.models" (already imported at top of file)
+if [ -f "$TMPDIR/$PKG_UNDERSCORE/api_client.py" ]; then
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+        sed -i '' "s|klass = getattr(${PKG_UNDERSCORE}.models, klass)|import generated.${NAMESPACE}.${APP_NAME}.models\\n                klass = getattr(generated.${NAMESPACE}.${APP_NAME}.models, klass)|g" \
+            "$TMPDIR/$PKG_UNDERSCORE/api_client.py"
+    else
+        # Linux
+        sed -i "s|klass = getattr(${PKG_UNDERSCORE}.models, klass)|import generated.${NAMESPACE}.${APP_NAME}.models\\n                klass = getattr(generated.${NAMESPACE}.${APP_NAME}.models, klass)|g" \
+            "$TMPDIR/$PKG_UNDERSCORE/api_client.py"
+    fi
+fi
+
 # Create tar
 tar -cf "$OUTPUT_TAR" -C "$TMPDIR" "$PKG_UNDERSCORE/"

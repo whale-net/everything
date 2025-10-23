@@ -47,10 +47,11 @@ class WorkerService(ManManService):
         sa_client_id: str,
         sa_client_secret: str,
         heartbeat_length: int = 2,
+        verify_ssl: bool = True,
     ):
         # pre-init
         # TODO: Add access token support when authentication is re-enabled
-        self._wapi = WorkerDALClient(base_url=host_url, access_token=None)
+        self._wapi = WorkerDALClient(base_url=host_url, access_token=None, verify_ssl=verify_ssl)
 
         try:
             self._worker_instance = self._wapi.create_worker()
