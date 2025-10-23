@@ -32,27 +32,48 @@ Python images use 4 separate layers with independent caching:
 1. CA Certs Layer (//tools/cacerts:cacerts)
    - Bazel caches based on: Ubuntu ca-certificates package version
    - Invalidated when: Base certificate package is updated
+   - Shared across: ALL apps via content-addressable storage
    
 2. Python Interpreter Layer ({name}_python_layer)
-   - Bazel caches based on: Python toolchain version + platform
+   - Bazel caches based on: Python toolchain version (globally configured)
    - Invalidated when: Python version changes (e.g., 3.13.0 -> 3.13.1)
+   - Location: /opt/python3.13/{arch}/ (universal across all apps)
    - Size: ~240-375MB (stripped)
+   - **Universal Layer**: All apps produce IDENTICAL Python layer tars because
+     Python is placed at /opt/python3.13/{arch}/ regardless of app name.
+   - **Perfect Deduplication**: Content-addressable storage means this layer
+     is built once and reused for all Python apps (same SHA256).
+   - **Storage Optimization**: With --remote_download_minimal, even this
+     universal layer isn't downloaded during CI - only metadata is fetched.
    
 3. Dependencies Layer ({name}_deps_layer)
    - Bazel caches based on: uv.lock + resolved wheel hashes for target platform
    - Invalidated when: Dependencies added/updated in uv.lock
+   - Shared across: Apps with identical dependencies (content-addressable)
    - Size: varies by app (10KB-100MB)
    
 4. App Code Layer ({name}_app_layer)
    - Bazel caches based on: Source files in _main workspace + local libs
    - Invalidated when: App code or local library code changes
+   - Unique per: Each app
    - Size: typically small (100KB-10MB)
+   - **Includes Symlink**: Contains symlink from /app/{binary}.runfiles/rules_python++...
+     to /opt/python3.13/{arch}/ so Python stub scripts find the interpreter
 
 Each layer is a separate Bazel target, enabling:
 - Independent action caching per layer
 - Parallel layer building
 - Minimal rebuilds (only changed layers)
 - Efficient remote cache usage
+- **Perfect Python runtime sharing**: All Python apps produce IDENTICAL
+  Python layer tars (universal /opt/python3.13/{arch}/ location)
+
+**Universal Python Architecture:**
+The Python interpreter is placed at /opt/python3.13/{arch}/ in a dedicated layer.
+Each app's layer contains a symlink from its expected runfiles location
+(/app/{binary}.runfiles/rules_python++python+python_3_13_{arch}) to the universal
+location. This achieves true layer sharing while maintaining compatibility with
+Python's stub script expectations.
 
 This is the idiomatic Bazel way to build multiplatform images.
 """
@@ -115,16 +136,18 @@ def container_image(
     LAYERING STRATEGY - Optimized for Cache Efficiency:
     ====================================================
     Uses 4 separate layers for optimal caching:
-    1. CA certificates (//tools/cacerts:cacerts) - changes rarely
-    2. Python interpreter (rules_python++) - changes on Python version updates
-    3. Third-party dependencies (rules_pycross pypi packages) - changes on dependency updates
-    4. Application code (_main/ workspace) - changes frequently during development
+    1. CA certificates (//tools/cacerts:cacerts) - shared across ALL apps
+    2. Python interpreter (//tools/python_runtime:python_runtime_layer) - shared across ALL Python apps
+    3. Third-party dependencies (rules_pycross pypi packages) - per-app or shared if deps match
+    4. Application code (_main/ workspace) - unique per app
     
     This layering strategy ensures:
-    - Base layers (certs, interpreter, deps) are cached across rebuilds
+    - Base layers (certs, interpreter) are cached and shared across ALL Python apps
+    - Dependencies layer is shared when apps have identical deps
     - Only app code layer is rebuilt during typical development
     - Registry pushes only upload changed layers (reduces bandwidth)
     - Container pulls only download changed layers (faster deployments)
+    - Maximum cache efficiency through universal base layers
     
     Args:
         name: Image name
@@ -151,7 +174,8 @@ def container_image(
             tags = ["manual"],
         )
         
-        # Extract and layer Python interpreter
+        # Extract and layer Python interpreter to universal location
+        # Places Python at /opt/python3.13/<arch>/ for sharing across all apps
         native.genrule(
             name = name + "_python_layer",
             srcs = [":" + name + "_full_runfiles"],
@@ -163,20 +187,32 @@ def container_image(
                 mkdir -p layer_tmp
                 tar -xf $(location :{name}_full_runfiles) -C layer_tmp
                 
-                # Find and archive Python interpreter directly into tar
-                # This avoids permission issues with copying
+                # Find Python interpreter directory
                 cd layer_tmp
-                find app -path "*/rules_python++python+python_*" | tar -cf ../python_tmp.tar -T -
+                PYTHON_DIR=$$(find app -path "*/rules_python++python+python_3_*" -type d -print -quit)
+                
+                if [ -z "$$PYTHON_DIR" ]; then
+                    echo "Error: Python directory not found"
+                    exit 1
+                fi
+                
+                # Extract architecture from path (e.g., x86_64-unknown-linux-gnu)
+                ARCH=$$(basename "$$PYTHON_DIR" | sed 's/.*python_3_13_//')
+                
                 cd ..
                 
-                # Extract to temp directory and strip
-                mkdir -p python_layer
-                tar -xf python_tmp.tar -C python_layer
-                $(location //tools/scripts:strip_python.sh) python_layer || true
+                # Create universal Python location: /opt/python3.13/<arch>/
+                mkdir -p python_layer/opt/python3.13/$$ARCH
                 
-                # Create final tar
+                # Copy Python to universal location
+                cp -r layer_tmp/$$PYTHON_DIR/* python_layer/opt/python3.13/$$ARCH/
+                
+                # Strip the Python installation
+                $(location //tools/scripts:strip_python.sh) python_layer/opt/python3.13/$$ARCH || true
+                
+                # Create final tar with universal path
                 tar -cf $@ -C python_layer .
-                rm -rf layer_tmp python_layer python_tmp.tar
+                rm -rf layer_tmp python_layer
                 """.format(name = name),
             tags = ["manual"],
         )
@@ -210,7 +246,7 @@ def container_image(
             tags = ["manual"],
         )
         
-        # Extract app code and required metadata
+        # Extract app code and create symlink to universal Python location
         native.genrule(
             name = name + "_app_layer",
             srcs = [":" + name + "_full_runfiles"],
@@ -221,8 +257,19 @@ def container_image(
                 mkdir -p layer_tmp
                 tar -xf $(location :{name}_full_runfiles) -C layer_tmp
                 
-                # Find and archive app code directly into tar
+                # Find Python interpreter directory to determine architecture
                 cd layer_tmp
+                PYTHON_DIR=$$(find app -path "*/rules_python++python+python_3_*" -type d -print -quit)
+                
+                if [ -z "$$PYTHON_DIR" ]; then
+                    echo "Error: Python directory not found"
+                    exit 1
+                fi
+                
+                # Extract architecture from path
+                ARCH=$$(basename "$$PYTHON_DIR" | sed 's/.*python_3_13_//')
+                
+                # Find and archive app code
                 {{
                     # App code from _main workspace
                     find app -path "*/_main" 2>/dev/null || true
@@ -239,7 +286,14 @@ def container_image(
                     tar -xf app_tmp.tar -C app_layer
                 fi
                 
-                # Create final tar
+                # Create symlink from expected Python location to universal location
+                # Expected: /app/{{binary}}.runfiles/rules_python++python+python_3_13_{{arch}}
+                # Target: /opt/python3.13/{{arch}}
+                EXPECTED_DIR="app_layer/$${{PYTHON_DIR}}"
+                mkdir -p "$$(dirname "$$EXPECTED_DIR")"
+                ln -sf /opt/python3.13/$$ARCH "$$EXPECTED_DIR"
+                
+                # Create final tar with app code and symlink
                 tar -cf $@ -C app_layer .
                 rm -rf layer_tmp app_layer app_tmp.tar
                 """.format(name = name),
@@ -276,14 +330,12 @@ def container_image(
     # Determine entrypoint based on language
     if not entrypoint:
         if language == "python":
-            # Use select() to choose the correct Python interpreter path based on target platform
+            # Use glob pattern to match the Python interpreter for the current architecture
             # The path is deterministic: /app/{binary}.runfiles/rules_python++python+python_{version}_{arch}/bin/python3
-            # We use a simple shell pattern to match either architecture
             entrypoint = [
                 "/bin/sh",
                 "-c",
                 # Use glob pattern to match the Python interpreter for the current architecture
-                # This is much faster than find and the path is deterministic at build time
                 'exec /app/{binary_path}.runfiles/rules_python++python+python_{version}_*/bin/python3 /app/$0 "$@"'.format(
                     binary_path = binary_path,
                     version = python_version.replace(".", "_"),
