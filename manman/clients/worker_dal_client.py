@@ -76,14 +76,31 @@ class WorkerDALClient:
         return Worker.model_validate(generated.to_dict())
 
     def _to_generated_game_server_instance(self, domain: GameServerInstance) -> GeneratedGameServerInstance:
-        """Convert domain GameServerInstance to generated model."""
-        # Exclude unset fields (like SQLAlchemy default functions) and only send explicit values
-        data = domain.model_dump(exclude_unset=True, exclude_none=True)
-        return GeneratedGameServerInstance(**data)
+        """Convert domain GameServerInstance to generated model.
+        
+        Creates a minimal object with required fields. The generated model requires all fields
+        but the API endpoints typically only use the ID fields.
+        """
+        return GeneratedGameServerInstance(
+            game_server_instance_id=domain.game_server_instance_id or 0,
+            game_server_config_id=domain.game_server_config_id or 0,
+            worker_id=domain.worker_id or 0,
+            end_date=domain.end_date,
+            last_heartbeat=domain.last_heartbeat,
+        )
 
     def _to_generated_worker(self, domain: Worker) -> GeneratedWorker:
-        """Convert domain Worker to generated model."""
-        return GeneratedWorker(**domain.model_dump())
+        """Convert domain Worker to generated model.
+        
+        Creates a minimal object with required fields. The generated model requires all fields
+        but the API endpoints typically only use worker_id.
+        """
+        return GeneratedWorker(
+            worker_id=domain.worker_id,
+            created_date=domain.created_date,
+            end_date=domain.end_date,
+            last_heartbeat=domain.last_heartbeat,
+        )
 
     # Game Server methods
     def get_game_server(self, game_server_id: int) -> GameServer:
@@ -103,15 +120,13 @@ class WorkerDALClient:
         worker_id: int,
     ) -> GameServerInstance:
         """Create a new game server instance."""
-        # Create a minimal instance with only the required fields for creation
-        # The API will set game_server_instance_id, created_date, etc.
-        generated_instance = GeneratedGameServerInstance(
+        # Create domain instance with only the fields needed for creation
+        # API will set game_server_instance_id, created_date, etc.
+        instance = GameServerInstance(
             game_server_config_id=game_server_config_id,
             worker_id=worker_id,
-            game_server_instance_id=0,  # Placeholder - API will set actual ID
-            end_date=None,
-            last_heartbeat=None,
         )
+        generated_instance = self._to_generated_game_server_instance(instance)
         result = self._api.server_instance_create_server_instance_create_post(generated_instance)
         return self._to_domain_game_server_instance(result)
 
