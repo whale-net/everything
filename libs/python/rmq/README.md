@@ -29,6 +29,45 @@ py_library(
 
 ### 1. Initialize Connection
 
+There are two ways to initialize the RabbitMQ connection:
+
+#### Option A: From Configuration Dictionary (Recommended)
+
+```python
+from libs.python.rmq import init_rabbitmq_from_config
+
+# Simple configuration
+config = {
+    'host': 'localhost',
+    'port': 5672,
+    'username': 'guest',
+    'password': 'guest',
+}
+init_rabbitmq_from_config(config)
+
+# With SSL
+config = {
+    'host': 'rabbitmq.example.com',
+    'port': 5671,
+    'username': 'user',
+    'password': 'pass',
+    'enable_ssl': True,
+    'ssl_hostname': 'rabbitmq.example.com',
+}
+init_rabbitmq_from_config(config)
+
+# Environment-specific vhost
+config = {
+    'host': 'rabbitmq.example.com',
+    'port': 5672,
+    'username': 'user',
+    'password': 'pass',
+}
+init_rabbitmq_from_config(config, vhost_suffix='dev')  # Creates vhost 'dev'
+```
+
+#### Option B: Direct Initialization
+
 ```python
 from libs.python.rmq import init_rabbitmq, get_rabbitmq_ssl_options
 

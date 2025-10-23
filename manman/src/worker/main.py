@@ -12,8 +12,7 @@ from manman.src.config import ManManConfig
 from manman.src.util import get_sqlalchemy_session
 from libs.python.rmq import (
     get_rabbitmq_connection,
-    get_rabbitmq_ssl_options,
-    init_rabbitmq,
+    init_rabbitmq_from_config,
 )
 from manman.src.worker.worker_service import WorkerService
 
@@ -105,24 +104,10 @@ def callback(
         log_level="DEBUG",
         enable_otlp=log_config.get('enable_otlp', False),
     )
-
-    virtual_host = f"manman-{app_env}" if app_env else "/"
     
-    # Get RabbitMQ config from decorator-injected params
+    # Get RabbitMQ config from decorator-injected params and initialize
     rmq_config = ctx.obj.get('rabbitmq', {})
-    
-    # Initialize with AMQPStorm connection parameters
-    init_rabbitmq(
-        host=rmq_config['host'],
-        port=rmq_config['port'],
-        username=rmq_config['username'],
-        password=rmq_config['password'],
-        virtual_host=virtual_host,
-        ssl_enabled=rmq_config['enable_ssl'],
-        ssl_options=get_rabbitmq_ssl_options(rmq_config['ssl_hostname'])
-        if rmq_config['enable_ssl']
-        else None,
-    )
+    init_rabbitmq_from_config(rmq_config, vhost_suffix=app_env)
     
     # Store context
     ctx.obj['app_env'] = app_env

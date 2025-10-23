@@ -55,6 +55,72 @@ def init_rabbitmq(
     logger.info("RabbitMQ parameters stored")
 
 
+def init_rabbitmq_from_config(
+    config: dict,
+    vhost_suffix: Optional[str] = None,
+) -> None:
+    """
+    Initialize RabbitMQ from a configuration dictionary.
+    
+    This is a convenience function for initializing RabbitMQ from CLI provider configs
+    or other dictionary-based configuration sources.
+    
+    Args:
+        config: Configuration dict with keys:
+            - host: RabbitMQ server hostname
+            - port: RabbitMQ server port
+            - username: Authentication username
+            - password: Authentication password
+            - vhost (optional): Virtual host (default: "/")
+            - enable_ssl (optional): Whether to use SSL (default: False)
+            - ssl_hostname (optional): SSL hostname for cert verification
+        vhost_suffix: Optional suffix to append to vhost (e.g., for environment-specific vhosts)
+            If provided and vhost is "/", creates vhost with just the suffix.
+            Otherwise appends with dash: "{vhost}-{suffix}"
+    
+    Example:
+        >>> config = {'host': 'localhost', 'port': 5672, 'username': 'guest', 'password': 'guest'}
+        >>> init_rabbitmq_from_config(config)
+        
+        >>> # Environment-specific vhost
+        >>> init_rabbitmq_from_config(config, vhost_suffix='dev')  # Creates vhost 'dev'
+    """
+    # Build virtual host
+    base_vhost = config.get('vhost', '/')
+    if vhost_suffix:
+        if base_vhost == '/':
+            virtual_host = vhost_suffix
+        else:
+            virtual_host = f"{base_vhost}-{vhost_suffix}"
+    else:
+        virtual_host = base_vhost
+    
+    # Build SSL options if needed
+    ssl_enabled = config.get('enable_ssl', False)
+    ssl_options = None
+    if ssl_enabled and config.get('ssl_hostname'):
+        ssl_options = get_rabbitmq_ssl_options(config['ssl_hostname'])
+    
+    # Initialize
+    init_rabbitmq(
+        host=config['host'],
+        port=config['port'],
+        username=config['username'],
+        password=config['password'],
+        virtual_host=virtual_host,
+        ssl_enabled=ssl_enabled,
+        ssl_options=ssl_options,
+    )
+    
+    logger.info(
+        "RabbitMQ initialized from config: host=%s, port=%s, vhost=%s, ssl=%s",
+        config['host'],
+        config['port'],
+        virtual_host,
+        ssl_enabled,
+    )
+
+
 def get_rabbitmq_ssl_options(hostname: str) -> dict:
     """
     Create SSL options for RabbitMQ connection.
