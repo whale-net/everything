@@ -23,15 +23,12 @@ from libs.python.alembic import (
     should_run_migration,
 )
 from libs.python.cli.providers.rabbitmq import rmq_params
-from libs.python.cli.providers.logging import logging_params, create_logging_context
 from libs.python.cli.providers.postgres import pg_params
+from libs.python.cli.params import logging_params
 from libs.python.cli.types import AppEnv
 from manman.src.config import ManManConfig
-from manman.src.logging_config import (
-    get_gunicorn_config,
-    setup_logging,
-    setup_server_logging,
-)
+from manman.src.logging_config import get_gunicorn_config
+from libs.python.logging import configure_logging
 from libs.python.rmq import ExchangeRegistry
 from manman.src.util import get_sqlalchemy_engine, init_sql_alchemy_engine
 from libs.python.rmq import (
@@ -182,9 +179,6 @@ def create_experience_app():
     # Ensure services are initialized when creating the app
     ensure_common_services_initialized()
 
-    # Configure server-specific logging using Python objects
-    setup_server_logging(ManManConfig.EXPERIENCE_API)
-
     from manman.src.host.api.experience import create_app
 
     return create_app()
@@ -195,9 +189,6 @@ def create_status_app():
     # Ensure services are initialized when creating the app
     ensure_common_services_initialized()
 
-    # Configure server-specific logging using Python objects
-    setup_server_logging(ManManConfig.STATUS_API)
-
     from manman.src.host.api.status import create_app
 
     return create_app()
@@ -207,9 +198,6 @@ def create_worker_dal_app():
     """Factory function to create the Worker DAL API FastAPI application with service initialization."""
     # Ensure services are initialized when creating the app
     ensure_common_services_initialized()
-
-    # Configure server-specific logging using Python objects
-    setup_server_logging(ManManConfig.WORKER_DAL_API)
 
     from manman.src.host.api.worker_dal import create_app
 
@@ -241,11 +229,16 @@ def start_experience_api(
     logging_ctx = ctx.obj.get("logging", {})
     log_otlp = logging_ctx.get("log_otlp", False)
     
-    # Setup logging first
-    setup_logging(
-        microservice_name=ManManConfig.EXPERIENCE_API,
-        app_env=app_env,
-        enable_otel=log_otlp,
+    # Setup logging with OTLP for production observability
+    configure_logging(
+        app_name=ManManConfig.EXPERIENCE_API,
+        domain="manman",
+        app_type="external-api",
+        environment=app_env or "development",
+        log_level="INFO",
+        enable_otlp=log_otlp,  # OTLP for production
+        enable_console=True,
+        json_format=False,  # Simple console for debugging
     )
 
     # Store initialization configuration for use in app factory
@@ -299,9 +292,16 @@ def start_status_api(
     logging_ctx = ctx.obj.get("logging", {})
     log_otlp = logging_ctx.get("enable_otlp", False)
     
-    # Setup logging first
-    setup_logging(
-        microservice_name=ManManConfig.WORKER_DAL_API, app_env=app_env, enable_otel=log_otlp
+    # Setup logging with OTLP for production observability
+    configure_logging(
+        app_name=ManManConfig.STATUS_API,
+        domain="manman",
+        app_type="internal-api",
+        environment=app_env or "development",
+        log_level="INFO",
+        enable_otlp=log_otlp,
+        enable_console=True,
+        json_format=False,
     )
 
     # Store initialization configuration for use in app factory
@@ -355,11 +355,16 @@ def start_worker_dal_api(
     logging_ctx = ctx.obj.get("logging", {})
     log_otlp = logging_ctx.get("log_otlp", False)
     
-    # Setup logging first
-    setup_logging(
-        microservice_name=ManManConfig.WORKER_DAL_API,
-        app_env=app_env,
-        enable_otel=log_otlp,
+    # Setup logging with OTLP for production observability
+    configure_logging(
+        app_name=ManManConfig.WORKER_DAL_API,
+        domain="manman",
+        app_type="internal-api",
+        environment=app_env or "development",
+        log_level="INFO",
+        enable_otlp=log_otlp,
+        enable_console=True,
+        json_format=False,
     )
 
     # Store initialization configuration for use in app factory
@@ -403,11 +408,16 @@ def start_status_processor(
     logging_ctx = ctx.obj.get("logging", {})
     log_otlp = logging_ctx.get("log_otlp", False)
 
-    # Setup logging first - this is a standalone service (no uvicorn)
-    setup_logging(
-        microservice_name=ManManConfig.STATUS_PROCESSOR,
-        app_env=app_env,
-        enable_otel=log_otlp,
+    # Setup logging with OTLP for production observability
+    configure_logging(
+        app_name=ManManConfig.STATUS_PROCESSOR,
+        domain="manman",
+        app_type="worker",
+        environment=app_env or "development",
+        log_level="INFO",
+        enable_otlp=log_otlp,
+        enable_console=True,
+        json_format=False,
     )
 
     logger.info("Starting status event processor...")
@@ -441,10 +451,7 @@ def start_status_processor(
     add_health_check(health_check_app)
 
     def run_health_check_server():
-        # Use our uvicorn config for the health check server too
-        # Configure server logging directly using Python objects
-        setup_server_logging("status-processor")
-
+        # Health check server uses same logging as parent process
         uvicorn.run(
             health_check_app,
             host="0.0.0.0",
@@ -463,14 +470,14 @@ def start_status_processor(
 
 
 @app.command()
-def run_migration():
-    setup_logging()  # Basic logging for CLI operations
+@logging_params  # Auto-configures logging from environment variables
+def run_migration(ctx: typer.Context):
     _run_migration(get_sqlalchemy_engine())
 
 
 @app.command()
-def create_migration(migration_message: Optional[str] = None):
-    setup_logging()  # Basic logging for CLI operations
+@logging_params  # Auto-configures logging from environment variables
+def create_migration(ctx: typer.Context, migration_message: Optional[str] = None):
     # TODO - make use of this? or remove
     if os.environ.get("ENVIRONMENT", "DEV") == "PROD":
         raise RuntimeError("cannot create revisions in production")
@@ -478,8 +485,8 @@ def create_migration(migration_message: Optional[str] = None):
 
 
 @app.command()
-def run_downgrade(target: str):
-    setup_logging()  # Basic logging for CLI operations
+@logging_params  # Auto-configures logging from environment variables
+def run_downgrade(ctx: typer.Context, target: str):
     config = _get_alembic_config()
     engine = get_sqlalchemy_engine()
     run_downgrade_util(engine, config, target)
@@ -487,18 +494,15 @@ def run_downgrade(target: str):
 
 @app.callback()
 @rmq_params
-@logging_params
+@logging_params  # Auto-configures logging from environment variables
 @pg_params
-def callback(ctx: typer.Context):
+def callback(ctx: typer.Context, app_env: AppEnv = "dev"):
     # Initialize database connection for CLI operations
     init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
     
-    # Initialize logging
-    logging_ctx = create_logging_context(
-        service_name="manman-host-cli",
-        enable_otlp=ctx.obj.get("logging", {}).get("enable_otlp", False)
-    )
-    ctx.obj["logging_context"] = logging_ctx
+    # Logging is already configured by @logging_params decorator
+    # No need to call configure_logging() here!
+    # Config read from: APP_NAME, APP_DOMAIN, APP_TYPE, APP_VERSION, LOG_LEVEL, LOG_OTLP, etc.
 
 
 # alembic helpers using consolidated library

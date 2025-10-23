@@ -148,6 +148,12 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     
     # Create multiplatform OCI image using SINGLE binary target
     # Bazel will build it for different platforms based on --platforms flag
+    # Inject default environment variables for logging auto-detection
+    default_env = {
+        "APP_NAME": name,
+        "APP_DOMAIN": domain,
+        "APP_TYPE": app_type,
+    }
     multiplatform_image(
         name = image_target,
         binary = base_label,  # Single binary, built for different platforms
@@ -155,6 +161,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         repository = organization,
         image_name = image_name,
         language = language,
+        env = default_env,  # Bake default environment variables
         cmd = args if args else [],  # Pass container args if specified
     )
     

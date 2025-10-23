@@ -36,7 +36,7 @@ Available decorators (defined in their respective provider modules):
 - @rmq_params: RabbitMQ connection (7 params) - from libs.python.cli.providers.rabbitmq
 - @pg_params: PostgreSQL database (1 param) - from libs.python.cli.providers.postgres
 - @slack_params: Slack authentication (2 params) - from libs.python.cli.providers.slack
-- @logging_params: Logging configuration (1 param) - from libs.python.cli.providers.logging
+- @logging_params: Logging configuration (1 param: --log-otlp) - from libs.python.cli.providers.logging
 """
 
 # ==============================================================================
@@ -47,7 +47,7 @@ from libs.python.cli.params_base import _create_param_decorator
 
 
 # ==============================================================================
-# Type Aliases - Re-exported from Providers
+# Type Aliases - Re-exported from provider modules
 # ==============================================================================
 
 # RabbitMQ
@@ -72,10 +72,8 @@ from libs.python.cli.providers.postgres import (
     PostgresUrl as PostgresURL,  # Alias for backwards compatibility
 )
 
-# Logging
-from libs.python.cli.providers.logging import (
-    EnableOTLP,
-)
+# Logging (for CLI flags)
+from libs.python.cli.providers.logging import EnableOTLP, logging_params
 
 
 # ==============================================================================
@@ -85,7 +83,6 @@ from libs.python.cli.providers.logging import (
 from libs.python.cli.providers.rabbitmq import rmq_params
 from libs.python.cli.providers.postgres import pg_params
 from libs.python.cli.providers.slack import slack_params
-from libs.python.cli.providers.logging import logging_params
 from libs.python.cli.providers.temporal import temporal_params
 from libs.python.cli.providers.gemini import gemini_params
 from libs.python.cli.types import (

@@ -6,7 +6,7 @@ import typer
 from typing_extensions import Annotated, Optional
 
 from libs.python.cli.providers.rabbitmq import rmq_params
-from libs.python.cli.providers.logging import logging_params, create_logging_context
+from libs.python.cli.params import logging_params
 from libs.python.cli.types import AppEnv
 from manman.src.config import ManManConfig
 from manman.src.util import get_sqlalchemy_session
@@ -92,19 +92,23 @@ def dev():
 
 @app.callback()
 @rmq_params
-@logging_params
+@logging_params  # Auto-configures logging from environment variables
 def callback(
     ctx: typer.Context,
     app_env: AppEnv = None,
 ):
-    # Setup logging from decorator-injected params
-    log_config = ctx.obj.get('logging', {})
-    create_logging_context(
-        service_name=f"{ManManConfig.WORKER}-{app_env}" if app_env else ManManConfig.WORKER,
-        log_level="DEBUG",
-        enable_otlp=log_config.get('enable_otlp', False),
-    )
+    """
+    ManMan Worker Service CLI.
     
+    Logging defaults for worker (can be overridden via env vars):
+    - LOG_OTLP=false (console-only by default)
+    - LOG_CONSOLE=true (human-readable text)
+    - LOG_JSON_FORMAT=false (plain text format)
+    
+    Override with env vars if needed:
+    - LOG_OTLP=true to enable OTLP
+    - LOG_JSON_FORMAT=true for JSON format
+    """
     # Get RabbitMQ config from decorator-injected params and initialize
     rmq_config = ctx.obj.get('rabbitmq', {})
     init_rabbitmq_from_config(rmq_config, vhost_suffix=app_env)

@@ -7,13 +7,12 @@ import typer
 from libs.python.cli.params import (
     slack_params,
     pg_params,
-    logging_params,
     temporal_params,
     gemini_params,
+    logging_params,
     AppEnv,
     ManManExperienceApiUrl,
 )
-from libs.python.cli.providers.logging import create_logging_context
 from libs.python.cli.providers.postgres import (
     DatabaseContext,
     PostgresUrl,
@@ -39,23 +38,8 @@ app = typer.Typer()
 @temporal_params
 @gemini_params
 @slack_params
-@pg_params
-@logging_params
-def callback(
-    ctx: typer.Context,
-    app_env: AppEnv,
-    manman_experience_api_url: ManManExperienceApiUrl,
-):
-    logger.debug("CLI callback starting")
-    
-    # Create logging context from decorator-injected params
-    log_config = ctx.obj.get('logging', {})
-    create_logging_context(
-        service_name="friendly-computing-machine-bot",
-        log_level="DEBUG",
-        enable_otlp=log_config.get('enable_otlp', False),
-    )
-    
+@logging_params  # Auto-configures logging from environment variables
+def callback(ctx: typer.Context, app_env: AppEnv, manman_experience_api_url: ManManExperienceApiUrl):
     # Get contexts from decorators
     temporal_config = ctx.obj.get('temporal', {})
     gemini_config = ctx.obj.get('gemini', {})

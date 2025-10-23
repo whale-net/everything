@@ -395,6 +395,7 @@ def multiplatform_image(
     repository = None,
     image_name = None,
     language = None,
+    env = None,
     **kwargs):
     """Build multiplatform OCI images using platform transitions.
     
@@ -431,6 +432,7 @@ def multiplatform_image(
             binary = ":my_app",  # Single binary target
             image_name = "demo-my_app",
             language = "python",  # or "go"
+            env = {"APP_NAME": "my_app"},  # Default env vars
         )
     
     Args:
@@ -441,6 +443,7 @@ def multiplatform_image(
         repository: Organization/namespace (e.g., "whale-net")
         image_name: Image name in domain-app format (e.g., "demo-my_app") - REQUIRED
         language: Language of binary ("python" or "go") - REQUIRED
+        env: Default environment variables to bake into the image
         **kwargs: Additional arguments passed to container_image
     """
     if not binary:
@@ -457,6 +460,7 @@ def multiplatform_image(
         binary = binary,
         base = base,
         language = language,
+        env = env,
         **kwargs
     )
     

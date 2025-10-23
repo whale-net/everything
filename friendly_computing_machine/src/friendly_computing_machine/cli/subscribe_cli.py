@@ -4,7 +4,7 @@ from typing import Annotated, Optional
 
 import typer
 
-from libs.python.cli.providers.logging import create_logging_context
+from libs.python.cli.params import logging_params
 from libs.python.cli.providers.postgres import (
     DatabaseContext,
     PostgresUrl,
@@ -54,8 +54,8 @@ app = typer.Typer()
 
 @app.callback()
 @rmq_params      # Injects 7 RabbitMQ parameters
-@slack_params    # Injects 2 Slack parameters  
-@logging_params  # Injects 1 logging parameter
+@slack_params    # Injects 2 Slack parameters
+@logging_params  # Auto-configures logging from environment variables
 def callback(
     ctx: typer.Context,
     app_env: AppEnv,
@@ -70,14 +70,6 @@ def callback(
     Note: Service parameters (RabbitMQ, Slack, Logging) are injected by decorators.
     """
     logger.debug("Subscribe CLI callback starting")
-    
-    # Create logging context from decorator-injected params
-    log_config = ctx.obj.get('logging', {})
-    create_logging_context(
-        service_name="friendly-computing-machine-subscribe",
-        log_level="DEBUG",
-        enable_otlp=log_config.get('enable_otlp', False),
-    )
     
     # Create Slack context with FCM initialization
     from friendly_computing_machine.src.friendly_computing_machine.bot.app import init_web_client
