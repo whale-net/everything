@@ -5,6 +5,7 @@ from typing import Annotated, Optional
 import typer
 
 from libs.python.logging import configure_logging
+from libs.python.cli.params import logging_params
 from libs.python.cli.providers.postgres import (
     DatabaseContext,
     PostgresUrl,
@@ -18,6 +19,7 @@ from libs.python.cli.providers.slack import SlackContext, create_slack_context
 from libs.python.cli.params import (
     rmq_params,
     slack_params,
+    logging_params,
     AppEnv,
     ManManStatusApiUrl,
 )
@@ -54,6 +56,7 @@ app = typer.Typer()
 @app.callback()
 @rmq_params      # Injects 7 RabbitMQ parameters
 @slack_params    # Injects 2 Slack parameters
+@logging_params  # Injects 1 logging parameter: --log-otlp
 def callback(
     ctx: typer.Context,
     app_env: AppEnv,
@@ -65,15 +68,16 @@ def callback(
     Subscribes to RabbitMQ topics for worker and instance lifecycle events
     and sends formatted Slack notifications with action buttons.
     
-    Note: Service parameters (RabbitMQ, Slack) are injected by decorators.
+    Note: Service parameters (RabbitMQ, Slack, Logging) are injected by decorators.
     """
-    # Configure OTLP-first logging
+    # Configure OTLP-first logging (with CLI flag override)
+    log_config = ctx.obj.get("logging", {})
     configure_logging(
         service_name="friendly-computing-machine-subscribe",
         service_version="1.0.0",
         deployment_environment=app_env,
         log_level="DEBUG",
-        enable_otlp=True,
+        enable_otlp=log_config.get("enable_otlp", True),  # Default True, CLI can override
         json_format=False,
     )
     

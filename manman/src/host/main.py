@@ -23,8 +23,8 @@ from libs.python.alembic import (
     should_run_migration,
 )
 from libs.python.cli.providers.rabbitmq import rmq_params
-from libs.python.cli.providers.logging import logging_params, create_logging_context
 from libs.python.cli.providers.postgres import pg_params
+from libs.python.cli.params import logging_params
 from libs.python.cli.types import AppEnv
 from manman.src.config import ManManConfig
 from manman.src.logging_config import (
@@ -520,16 +520,20 @@ def run_downgrade(target: str):
 @rmq_params
 @logging_params
 @pg_params
-def callback(ctx: typer.Context):
+def callback(ctx: typer.Context, app_env: AppEnv = AppEnv.DEV):
     # Initialize database connection for CLI operations
     init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
     
-    # Initialize logging
-    logging_ctx = create_logging_context(
+    # Configure OTLP-first logging (with CLI flag override)
+    log_config = ctx.obj.get("logging", {})
+    configure_logging(
         service_name="manman-host-cli",
-        enable_otlp=ctx.obj.get("logging", {}).get("enable_otlp", False)
+        service_version="1.0.0",
+        deployment_environment=app_env,
+        log_level="DEBUG",
+        enable_otlp=log_config.get("enable_otlp", True),  # Default True, CLI can override
+        json_format=False,
     )
-    ctx.obj["logging_context"] = logging_ctx
 
 
 # alembic helpers using consolidated library

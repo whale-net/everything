@@ -9,6 +9,7 @@ from libs.python.cli.params import (
     pg_params,
     temporal_params,
     gemini_params,
+    logging_params,
     AppEnv,
     ManManExperienceApiUrl,
 )
@@ -35,26 +36,16 @@ app = typer.Typer()
 
 
 @app.callback()
-@temporal_params
-@gemini_params
-@slack_params
-@pg_params
-def callback(
-    ctx: typer.Context,
-    app_env: AppEnv,
-    manman_experience_api_url: ManManExperienceApiUrl,
-):
-    logger.debug("CLI callback starting")
-    
-    # Configure OTLP-first logging for FCM bot
+@logging_params
+def callback(ctx: typer.Context, app_env: AppEnv):
+    # Configure OTLP-first logging (with CLI flag override)
+    log_config = ctx.obj.get("logging", {})
     configure_logging(
-        app_name="fcm-bot",
-        domain="fcm",
-        app_type="worker",
-        environment=app_env or "development",
+        service_name="friendly-computing-machine-bot",
+        service_version="1.0.0",
+        deployment_environment=app_env,
         log_level="DEBUG",
-        enable_otlp=True,  # FCM uses OTLP in production
-        enable_console=True,
+        enable_otlp=log_config.get("enable_otlp", True),  # Default True, CLI can override
         json_format=False,
     )
     

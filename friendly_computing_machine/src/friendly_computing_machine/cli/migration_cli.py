@@ -5,7 +5,7 @@ import logging
 import typer
 
 from libs.python.alembic.cli import create_migration_app
-from libs.python.cli.params import pg_params
+from libs.python.cli.params import pg_params, logging_params
 from libs.python.logging import configure_logging
 
 # Import all models to ensure they are registered with SQLAlchemy
@@ -32,14 +32,16 @@ migration_app = create_migration_app(
 # Add callback for logging setup
 @migration_app.callback()
 @pg_params
+@logging_params
 def callback(ctx: typer.Context):
     """Migration commands for friendly_computing_machine database."""
-    # Configure OTLP-first logging
+    # Configure OTLP-first logging (with CLI flag override)
+    log_config = ctx.obj.get("logging", {})
     configure_logging(
         service_name="friendly-computing-machine-migrations",
         service_version="1.0.0",
         deployment_environment="dev",
         log_level="DEBUG",
-        enable_otlp=True,
+        enable_otlp=log_config.get("enable_otlp", True),  # Default True, CLI can override
         json_format=False,
     )

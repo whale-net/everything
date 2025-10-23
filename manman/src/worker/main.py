@@ -6,6 +6,7 @@ import typer
 from typing_extensions import Annotated, Optional
 
 from libs.python.cli.providers.rabbitmq import rmq_params
+from libs.python.cli.params import logging_params
 from libs.python.cli.types import AppEnv
 from libs.python.logging import configure_logging
 from manman.src.config import ManManConfig
@@ -92,18 +93,21 @@ def dev():
 
 @app.callback()
 @rmq_params
+@logging_params
 def callback(
     ctx: typer.Context,
     app_env: AppEnv = None,
 ):
     # Setup logging - CONSOLE ONLY for manman-worker (human readable)
+    # Note: enable_otlp defaults to False for worker, but can be overridden with --log-otlp
+    log_config = ctx.obj.get("logging", {})
     configure_logging(
         app_name=f"{ManManConfig.WORKER}-{app_env}" if app_env else ManManConfig.WORKER,
         domain="manman",
         app_type="worker",
         environment=app_env or "development",
         log_level="DEBUG",
-        enable_otlp=False,  # Worker runs externally - no OTLP
+        enable_otlp=log_config.get("enable_otlp", False),  # Default False for worker
         enable_console=True,  # Console only
         json_format=False,  # Human readable text
     )
