@@ -26,8 +26,8 @@ from libs.python.cli.providers.rabbitmq import rmq_params
 from libs.python.cli.providers.postgres import pg_params
 from libs.python.cli.params import logging_params
 from libs.python.cli.types import AppEnv
+from libs.python.gunicorn import get_gunicorn_config
 from manman.src.config import ManManConfig
-from manman.src.logging_config import get_gunicorn_config
 from libs.python.rmq import ExchangeRegistry
 from manman.src.util import get_sqlalchemy_engine, init_sql_alchemy_engine
 from libs.python.rmq import (
