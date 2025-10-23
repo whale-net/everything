@@ -216,7 +216,7 @@ jobs:
         # Use full domain-app format to avoid ambiguity
         FULL_APP_NAME="${DOMAIN}-${APP}"
         echo "Building Docker image for $FULL_APP_NAME using release tool..."
-        bazel run //tools:release -- build "$FULL_APP_NAME"
+        bazel run --config=ci-images //tools:release -- build "$FULL_APP_NAME"
         
         # Show the built Docker image
         echo "Built Docker image for $FULL_APP_NAME:"
@@ -233,7 +233,7 @@ jobs:
         FULL_APP_NAME="${DOMAIN}-${APP}"
         echo "Publishing $FULL_APP_NAME image to registry..."
         # Only push 'latest' tag on main branch - version-specific and commit tags are reserved for releases
-        bazel run //tools:release -- release-multiarch "$FULL_APP_NAME" --version "latest"
+        bazel run --config=ci-images //tools:release -- release-multiarch "$FULL_APP_NAME" --version "latest"
         # Shutdown Bazel server to prevent hanging
         bazel shutdown
         

@@ -25,6 +25,35 @@ ARCHITECTURE: Single Binary → Platform Transitions → Single Push
    - Users pull ONE tag that works on any platform
    - Release system ONLY uses this target
 
+LAYER CACHING STRATEGY:
+=======================
+Python images use 4 separate layers with independent caching:
+
+1. CA Certs Layer (//tools/cacerts:cacerts)
+   - Bazel caches based on: Ubuntu ca-certificates package version
+   - Invalidated when: Base certificate package is updated
+   
+2. Python Interpreter Layer ({name}_python_layer)
+   - Bazel caches based on: Python toolchain version + platform
+   - Invalidated when: Python version changes (e.g., 3.13.0 -> 3.13.1)
+   - Size: ~240-375MB (stripped)
+   
+3. Dependencies Layer ({name}_deps_layer)
+   - Bazel caches based on: uv.lock + resolved wheel hashes for target platform
+   - Invalidated when: Dependencies added/updated in uv.lock
+   - Size: varies by app (10KB-100MB)
+   
+4. App Code Layer ({name}_app_layer)
+   - Bazel caches based on: Source files in _main workspace + local libs
+   - Invalidated when: App code or local library code changes
+   - Size: typically small (100KB-10MB)
+
+Each layer is a separate Bazel target, enabling:
+- Independent action caching per layer
+- Parallel layer building
+- Minimal rebuilds (only changed layers)
+- Efficient remote cache usage
+
 This is the idiomatic Bazel way to build multiplatform images.
 """
 
