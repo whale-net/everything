@@ -103,11 +103,15 @@ class WorkerDALClient:
         worker_id: int,
     ) -> GameServerInstance:
         """Create a new game server instance."""
-        instance = GameServerInstance(
+        # Create a minimal instance with only the required fields for creation
+        # The API will set game_server_instance_id, created_date, etc.
+        generated_instance = GeneratedGameServerInstance(
             game_server_config_id=game_server_config_id,
             worker_id=worker_id,
+            game_server_instance_id=0,  # Placeholder - API will set actual ID
+            end_date=None,
+            last_heartbeat=None,
         )
-        generated_instance = self._to_generated_game_server_instance(instance)
         result = self._api.server_instance_create_server_instance_create_post(generated_instance)
         return self._to_domain_game_server_instance(result)
 
