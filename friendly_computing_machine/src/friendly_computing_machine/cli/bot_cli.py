@@ -39,7 +39,11 @@ app = typer.Typer()
 @gemini_params
 @slack_params
 @logging_params  # Auto-configures logging from environment variables
-def callback(ctx: typer.Context, app_env: AppEnv, manman_experience_api_url: ManManExperienceApiUrl):
+def callback(
+    ctx: typer.Context,
+    app_env: AppEnv,
+    manman_experience_api_url: ManManExperienceApiUrl,
+):
     # Get contexts from decorators
     temporal_config = ctx.obj.get('temporal', {})
     gemini_config = ctx.obj.get('gemini', {})

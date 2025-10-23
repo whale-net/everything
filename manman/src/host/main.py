@@ -496,7 +496,7 @@ def run_downgrade(ctx: typer.Context, target: str):
 @rmq_params
 @logging_params  # Auto-configures logging from environment variables
 @pg_params
-def callback(ctx: typer.Context, app_env: AppEnv = "dev"):
+def callback(ctx: typer.Context, app_env: AppEnv = AppEnv(None)):
     # Initialize database connection for CLI operations
     init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
     
