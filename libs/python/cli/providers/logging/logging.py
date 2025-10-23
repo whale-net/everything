@@ -150,25 +150,61 @@ def logging_params(func: Callable) -> Callable:
     """
     Decorator that injects logging parameters into the callback.
     
+    Reads from CLI flags or environment variables:
+    - LOG_OTLP (true/1/yes) or --log-otlp flag
+    - LOG_LEVEL (DEBUG/INFO/WARNING/ERROR/CRITICAL) or --log-level flag
+    
+    Environment variables take precedence if set.
+    
     Usage:
         @app.callback()
         @logging_params
         def callback(ctx: typer.Context, ...):
             log_config = ctx.obj['logging']
-            # log_config = {'enable_otlp': True/False}
+            # log_config = {'enable_otlp': True/False, 'log_level': 'INFO'}
     """
     from libs.python.cli.params_base import _create_param_decorator
+    
+    # Read defaults from environment variables
+    env_log_otlp = os.getenv('LOG_OTLP', '').lower() in ('true', '1', 'yes')
+    env_log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+    
+    # Validate log level
+    valid_levels = ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
+    if env_log_level not in valid_levels:
+        env_log_level = 'INFO'
     
     param_specs = [
         ('log_otlp', inspect.Parameter(
             'log_otlp', inspect.Parameter.KEYWORD_ONLY,
-            default=False, annotation=EnableOTLP
+            default=env_log_otlp, annotation=EnableOTLP
+        )),
+        ('log_level', inspect.Parameter(
+            'log_level', inspect.Parameter.KEYWORD_ONLY,
+            default=env_log_level, annotation=LogLevel
         )),
     ]
     
     def extractor(kwargs):
+        # Environment variables take precedence over CLI flags
+        enable_otlp = os.getenv('LOG_OTLP', '').lower() in ('true', '1', 'yes')
+        if not enable_otlp:
+            # Fall back to CLI flag if env var not set
+            enable_otlp = kwargs.pop('log_otlp', False)
+        else:
+            kwargs.pop('log_otlp', None)  # Remove from kwargs
+        
+        # Environment variable takes precedence for log level
+        log_level = os.getenv('LOG_LEVEL', '').upper()
+        if not log_level or log_level not in valid_levels:
+            # Fall back to CLI flag if env var not set or invalid
+            log_level = kwargs.pop('log_level', 'INFO')
+        else:
+            kwargs.pop('log_level', None)  # Remove from kwargs
+        
         return {
-            'enable_otlp': kwargs.pop('log_otlp', False),
+            'enable_otlp': enable_otlp,
+            'log_level': log_level,
         }
     
     return _create_param_decorator(param_specs, 'logging', extractor)(func)

@@ -44,11 +44,12 @@ rabbitmq_user = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_USER', rmq
 rabbitmq_password = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_PASSWORD', rmq_info['password'])
 
 # OpenTelemetry Collector
-setup_otelcollector(namespace)
+otel_endpoint = setup_otelcollector(namespace)
 
 print("📊 Infrastructure configured:")
 print("  Postgres:  {}".format("custom" if os.environ.get('BUILD_POSTGRES_ENV') == 'custom' else "local"))
 print("  RabbitMQ:  {}".format("custom" if os.environ.get('BUILD_RABBITMQ_ENV') == 'custom' else "local"))
+print("  OTEL:      {}".format(otel_endpoint))
 
 # ===========================
 # Application Configuration
@@ -107,6 +108,8 @@ apps_config = build_apps_config(
         'RABBITMQ_PORT': rabbitmq_port,
         'RABBITMQ_USER': rabbitmq_user,
         'RABBITMQ_PASSWORD': rabbitmq_password,
+        'LOG_OTLP': 'true',  # Enable OTLP logging in dev
+        'LOG_LEVEL': 'DEBUG',  # Verbose logging for development
     }
 )
 
@@ -124,6 +127,7 @@ deploy_helm_chart(
     global_config={
         'ingressDefaults.enabled': 'true',
         'ingressDefaults.className': 'manman-nginx',
+        'otlp.endpoint': otel_endpoint,
     }
 )
 
