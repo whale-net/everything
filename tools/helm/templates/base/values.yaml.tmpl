@@ -1,11 +1,16 @@
 # Generated Helm values for {{ .ChartName }}
 # This file contains configuration for all apps in the chart
 
-namespace: {{ .Namespace }}
+global:
+  namespace: {{ .Namespace }}
+  environment: {{ .Environment }}
+  {{- if .Domain }}
+  domain: {{ .Domain }}
+  {{- end }}
 
-# Environment configuration
-env:
-  app_env: {{ .Environment }}
+# OpenTelemetry configuration
+otlp:
+  endpoint: "http://otel-collector:4317"
 
 # Application configurations
 apps:
@@ -13,9 +18,14 @@ apps:
   {{ .Name }}:
     enabled: true
     type: {{ .Type }}
-    image:
-      repository: {{ .Image }}
-      tag: {{ .ImageTag }}
+    {{- if .Domain }}
+    domain: {{ .Domain }}
+    {{- end }}
+    image: {{ .Image }}
+    imageTag: {{ .ImageTag }}
+    {{- if .CommitSha }}
+    commitSha: {{ .CommitSha }}
+    {{- end }}
     {{- if .Port }}
     port: {{ .Port }}
     {{- end }}
@@ -47,19 +57,10 @@ apps:
 {{- end }}
 
 {{- if .HasIngress }}
-# Ingress configuration
-ingress:
+# Ingress defaults (applied to all external-api apps)
+# Each external-api gets its own dedicated Ingress resource
+ingressDefaults:
   enabled: {{ .IngressEnabled }}
-  mode: {{ .IngressMode }}  # "single" or "per-app"
-  {{- if eq .IngressMode "single" }}
-  name: {{ .ChartName }}-ingress-{{ .Environment }}
-  {{- end }}
   className: ""
   annotations: {}
-  {{- if .IngressHost }}
-  host: {{ .IngressHost }}
-  {{- end }}
-  tls:
-    enabled: false
-    configs: []
 {{- end }}

@@ -1,82 +1,89 @@
 # Consolidated Structured Logging
 
-**OTLP-first structured logging** with full OpenTelemetry semantic conventions support.
+**OTLP-first structured logging** with automatic environment detection and full OpenTelemetry semantic conventions support.
 
 ## Primary Use Case: OpenTelemetry (OTLP)
 
-This library is designed **OTLP-first** - all your rich context is sent to OpenTelemetry collectors as proper structured attributes following OTEL semantic conventions. Console output is for debugging only.
+This library is designed **OTLP-first** with **automatic environment detection** - your application metadata is discovered from environment variables (set by Bazel build + Helm charts), so you don't need to hardcode anything in your application code.
 
 ## Features
 
+- **Auto-Detection from Environment**: APP_NAME, APP_VERSION, APP_ENV automatically used
 - **OTLP Primary Backend**: All logs sent to OpenTelemetry collector with full context
 - **OTEL Semantic Conventions**: HTTP, K8s, service attributes follow standards
-- **Automatic Context Injection**: Environment, domain, app metadata as resource attributes
+- **Zero-Config in Apps**: Just call `configure_logging()` - everything else auto-detected
 - **Request Context**: User ID, request ID, correlation as log attributes
 - **Trace Correlation**: Automatic trace_id/span_id linking
 - **Kubernetes Aware**: Auto-detects pod, node, namespace
 - **Type-Safe**: Full type hints and dataclass-based context
 - **Console Debug**: Optional simple text output for local development
 
-## Standard Attributes → OTLP Mapping
+## Environment Variables (Auto-Detected)
 
-All attributes are sent to OTLP following semantic conventions:
+Set by `release_app` macro + Helm charts - **you don't need to set these in code**:
 
-### Resource Attributes (Stable Service Metadata)
-- `service.name` ← app_name
-- `service.namespace` ← domain
-- `service.version` ← version
-- `service.type` ← app_type (custom)
-- `deployment.environment` ← environment
-- `k8s.pod.name` ← pod_name
-- `k8s.namespace.name` ← namespace
-- `k8s.node.name` ← node_name
-- `k8s.container.name` ← container_name
-- `host.name` ← hostname
-- `host.arch` ← platform
-- `vcs.commit.id` ← commit_sha
+### Core Metadata
+- `APP_NAME`: Application name (e.g., "hello-fastapi")
+- `APP_VERSION`: Application version (e.g., "v1.2.3")
+- `APP_DOMAIN`: Application domain (e.g., "demo", "api")
+- `APP_TYPE`: Application type (external-api, internal-api, worker, job)
+- `APP_ENV` / `ENVIRONMENT`: Environment (dev, staging, prod)
+- `GIT_COMMIT` / `COMMIT_SHA`: Git commit SHA
 
-### Log Record Attributes (Request/Operation Context)
-- `request.id` ← request_id
-- `correlation.id` ← correlation_id
-- `enduser.id` ← user_id (OTEL semantic convention)
-- `http.request.method` ← http_method
-- `http.route` ← http_path
-- `http.response.status_code` ← http_status_code
-- `client.address` ← client_ip
-- `worker.id` ← worker_id (custom)
-- `task.id` ← task_id (custom)
-- `operation.name` ← operation (custom)
+### Kubernetes Context (from Downward API)
+- `POD_NAME`: Kubernetes pod name
+- `NAMESPACE` / `POD_NAMESPACE`: Kubernetes namespace
+- `NODE_NAME`: Kubernetes node name
+- `CONTAINER_NAME`: Container name
 
-### Automatic Trace Correlation
-- `trace_id` - From active OpenTelemetry span
-- `span_id` - From active OpenTelemetry span
-- `trace_flags` - From active OpenTelemetry span
+### Helm Context
+- `HELM_CHART_NAME`: Helm chart name
+- `HELM_RELEASE_NAME`: Helm release name
 
 ## Quick Start
 
-### 1. Configure at Startup (OTLP-First)
+### 1. Configure at Startup (Zero-Config - Auto-Detection)
 
 ```python
 from libs.python.logging import configure_logging
 
-# Configure once in your app's main entry point
-# OTLP is enabled by default - this is the primary use case
+# SIMPLEST: Everything auto-detected from environment
+configure_logging()
+
+# OTLP is enabled by default, all metadata auto-detected from:
+# - APP_NAME, APP_VERSION, APP_DOMAIN, APP_TYPE (from release_app)
+# - APP_ENV (from Helm)
+# - POD_NAME, NAMESPACE (from Kubernetes downward API)
+```
+
+### 2. Override Only What You Need
+
+```python
+from libs.python.logging import configure_logging
+
+# Override specific values, auto-detect the rest
 configure_logging(
-    app_name="my-app",
-    domain="api",
-    app_type="external-api",
-    environment="production",
-    version="v1.2.3",
-    log_level="INFO",
-    # OTLP enabled by default - sends to collector
-    enable_otlp=True,  # Default: True
-    # Console for debugging only
-    enable_console=True,  # Default: True
-    json_format=False,    # Default: False (simple text for debug)
+    service_name="custom-name",  # Override auto-detected APP_NAME
+    log_level="DEBUG",
+    enable_otlp=False,  # Disable OTLP if needed (worker running externally)
 )
 ```
 
-### 2. Use Standard Python Logging
+### 3. Full Manual Control (Legacy Pattern)
+
+```python
+from libs.python.logging import configure_logging
+
+# Explicit configuration (old pattern - not needed anymore)
+configure_logging(
+    service_name="my-app",
+    service_version="v1.2.3",
+    deployment_environment="production",
+    log_level="INFO",
+    enable_otlp=True,
+    json_format=False,
+)
+```
 
 ```python
 import logging

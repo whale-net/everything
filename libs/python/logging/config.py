@@ -30,16 +30,21 @@ _global_context: Optional[LogContext] = None
 
 
 def configure_logging(
-    app_name: str,
-    domain: str,
-    app_type: str = "external-api",
-    environment: Optional[str] = None,
-    version: Optional[str] = None,
+    service_name: Optional[str] = None,  # Made optional - auto-detect from env
+    service_version: Optional[str] = None,  # Made optional - auto-detect from env
+    deployment_environment: Optional[str] = None,  # Made optional - auto-detect from env
+    # Legacy parameter names for backward compatibility
+    app_name: Optional[str] = None,  # DEPRECATED: use service_name
+    domain: Optional[str] = None,  # Auto-detected from APP_DOMAIN
+    app_type: Optional[str] = None,  # Auto-detected from APP_TYPE
+    environment: Optional[str] = None,  # DEPRECATED: use deployment_environment
+    version: Optional[str] = None,  # DEPRECATED: use service_version
+    # Configuration options
     log_level: str = "INFO",
-    enable_otlp: bool = True,  # Changed default to True - OTLP-first
+    enable_otlp: bool = True,  # OTLP-first
     otlp_endpoint: Optional[str] = None,
-    enable_console: bool = True,
-    json_format: bool = False,  # Changed default to False - simple console for debug
+    enable_console: bool = True,  # DEPRECATED: always true now
+    json_format: bool = False,  # Simple console for debug
     force_reconfigure: bool = False,
     **context_kwargs,
 ) -> LogContext:
@@ -48,35 +53,44 @@ def configure_logging(
     This should be called once at application startup. It sets up:
     - OTLP export with full context as resource and log attributes (PRIMARY)
     - Optional console output for debugging
-    - Global context (environment, domain, app metadata)
+    - Global context auto-detected from environment variables
     - OpenTelemetry integration with proper semantic conventions
     
-    All log context is sent to OTLP as structured attributes following
-    OpenTelemetry semantic conventions for maximum observability.
+    All parameters are optional and will be auto-detected from environment variables
+    if not provided. This eliminates the need to hardcode values in application code.
+    
+    Environment variables used (from release_app metadata + Helm charts):
+    - APP_NAME: Application name (e.g., "hello-fastapi")
+    - APP_VERSION: Application version (e.g., "v1.2.3")
+    - APP_DOMAIN: Application domain (e.g., "demo")
+    - APP_TYPE: Application type (external-api, internal-api, worker, job)
+    - APP_ENV / ENVIRONMENT: Environment (dev, staging, prod)
+    - GIT_COMMIT / COMMIT_SHA: Git commit SHA
+    - POD_NAME, NAMESPACE, NODE_NAME: Kubernetes context (from downward API)
+    - HELM_CHART_NAME, HELM_RELEASE_NAME: Helm context
     
     Args:
-        app_name: Application name (e.g., "hello-fastapi")
-        domain: Application domain (e.g., "demo", "api")
-        app_type: Application type (external-api, internal-api, worker, job)
-        environment: Environment (dev, staging, prod) - auto-detected if not provided
-        version: Application version - auto-detected from env if not provided
+        service_name: Service name for OTLP (auto-detected from APP_NAME if not provided)
+        service_version: Service version (auto-detected from APP_VERSION if not provided)
+        deployment_environment: Environment (auto-detected from APP_ENV if not provided)
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         enable_otlp: Enable OpenTelemetry Protocol (OTLP) export (default: True)
         otlp_endpoint: OTLP collector endpoint (defaults to env or http://localhost:4317)
-        enable_console: Enable console logging output (default: True, for debugging)
         json_format: Use JSON formatting for console (default: False, simple text for debug)
         force_reconfigure: Force reconfiguration even if already configured
-        **context_kwargs: Additional context attributes to set
+        **context_kwargs: Additional context attributes to override auto-detected values
     
     Returns:
         LogContext: The configured global log context
         
     Example:
+        >>> # Minimal usage - everything auto-detected from environment
+        >>> configure_logging()
+        
+        >>> # Override specific values
         >>> configure_logging(
-        ...     app_name="hello-fastapi",
-        ...     domain="demo",
-        ...     environment="production",
-        ...     enable_otlp=True,  # Primary use case
+        ...     service_name="custom-name",
+        ...     enable_otlp=True,
         ... )
     """
     global _configured, _global_context
@@ -90,28 +104,45 @@ def configure_logging(
     if force_reconfigure:
         root_logger.handlers.clear()
     
-    # Auto-detect environment if not provided
-    if environment is None:
-        environment = os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "development"
-    
-    # Auto-detect version if not provided
-    if version is None:
-        version = os.getenv("APP_VERSION") or os.getenv("GIT_COMMIT") or "latest"
-    
-    # Create global context
+    # Start with auto-detected context from environment
     context = LogContext.from_environment()
-    context.app_name = app_name
-    context.domain = domain
-    context.app_type = app_type
-    context.environment = environment
-    context.version = version
     
-    # Apply additional context
+    # Handle legacy parameter names (backward compatibility)
+    if app_name and not service_name:
+        service_name = app_name
+    if environment and not deployment_environment:
+        deployment_environment = environment
+    if version and not service_version:
+        service_version = version
+    
+    # Apply domain and app_type if provided
+    if domain:
+        context.domain = domain
+    if app_type:
+        context.app_type = app_type
+    
+    # Override with explicit parameters if provided
+    if service_name:
+        context.app_name = service_name
+    if service_version:
+        context.version = service_version
+    if deployment_environment:
+        context.environment = deployment_environment
+    
+    # Apply additional context overrides
     for key, value in context_kwargs.items():
         if hasattr(context, key):
             setattr(context, key, value)
         else:
             context.custom[key] = value
+    
+    # Set defaults for any still-missing values
+    if not context.app_name:
+        context.app_name = "unknown-app"
+    if not context.environment:
+        context.environment = "development"
+    if not context.version:
+        context.version = "latest"
     
     # Set as global context
     set_context(context)
@@ -130,9 +161,8 @@ def configure_logging(
             "Install with: pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp"
         )
     
-    # Configure console logging if enabled
-    if enable_console:
-        _setup_console(context, json_format)
+    # Always setup console logging (can be disabled with json_format=None future enhancement)
+    _setup_console(context, json_format)
     
     # Reduce noise from common third-party libraries
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
@@ -146,12 +176,14 @@ def configure_logging(
     _configured = True
     
     logging.info(
-        f"Logging configured for {app_name}",
+        f"Logging configured for {context.app_name}",
         extra={
-            "environment": environment,
-            "domain": domain,
-            "app_type": app_type,
+            "environment": context.environment,
+            "domain": context.domain,
+            "app_type": context.app_type,
+            "version": context.version,
             "otlp_enabled": enable_otlp,
+            "auto_detected": not (service_name or service_version or deployment_environment),
         }
     )
     

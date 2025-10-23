@@ -101,8 +101,10 @@ func (r ResourceConfig) ToValuesFormat() ValuesResourceConfig {
 // AppConfig represents the configuration for a single app in values.yaml
 type AppConfig struct {
 	Type         string               `yaml:"type"`
+	Domain       string               `yaml:"domain,omitempty"`       // App domain for grouping
 	Image        string               `yaml:"image"`
 	ImageTag     string               `yaml:"imageTag"`
+	CommitSha    string               `yaml:"commitSha,omitempty"`    // Git commit SHA
 	Port         int                  `yaml:"port,omitempty"`
 	Replicas     int                  `yaml:"replicas"`
 	Resources    ValuesResourceConfig `yaml:"resources"`
@@ -128,17 +130,24 @@ type IngressDefaultsConfig struct {
 	Annotations map[string]string `yaml:"annotations,omitempty"`
 }
 
+// GlobalConfig represents global configuration
+type GlobalConfig struct {
+	Namespace   string `yaml:"namespace"`
+	Environment string `yaml:"environment"`
+	Domain      string `yaml:"domain,omitempty"`  // Default domain for all apps
+}
+
+// OTLPConfig represents OpenTelemetry configuration
+type OTLPConfig struct {
+	Endpoint string `yaml:"endpoint"`
+}
+
 // ValuesData represents the structure of values.yaml
 type ValuesData struct {
 	Global          GlobalConfig            `yaml:"global"`
 	Apps            map[string]AppConfig    `yaml:"apps"`
 	IngressDefaults IngressDefaultsConfig   `yaml:"ingressDefaults"`
-}
-
-// GlobalConfig represents global configuration
-type GlobalConfig struct {
-	Namespace   string `yaml:"namespace"`
-	Environment string `yaml:"environment"`
+	OTLP            OTLPConfig              `yaml:"otlp"`
 }
 
 // TemplateData represents the data passed to Kubernetes resource templates
@@ -405,8 +414,10 @@ func (c *Composer) buildAppConfig(app AppMetadata) (AppConfig, error) {
 
 	config := AppConfig{
 		Type:          appType.String(),
+		Domain:        app.Domain,  // Add domain from metadata
 		Image:         app.GetImage(),
 		ImageTag:      app.GetImageTag(),
+		CommitSha:     "",  // TODO: Add commit SHA from build metadata
 		Port:          port,
 		Replicas:      replicas,
 		Resources:     resources.ToValuesFormat(),
@@ -452,6 +463,9 @@ func (c *Composer) generateValuesYaml(chartDir string) error {
 		Apps: make(map[string]AppConfig),
 		IngressDefaults: IngressDefaultsConfig{
 			Enabled: c.hasExternalAPIs(),
+		},
+		OTLP: OTLPConfig{
+			Endpoint: "http://otel-collector:4317",
 		},
 	}
 
@@ -621,8 +635,14 @@ func writeValuesYAML(f *os.File, data ValuesData) error {
 	for name, app := range data.Apps {
 		w.StartSection(name)
 		w.WriteString("type", app.Type)
+		if app.Domain != "" {
+			w.WriteString("domain", app.Domain)
+		}
 		w.WriteString("image", app.Image)
 		w.WriteString("imageTag", app.ImageTag)
+		if app.CommitSha != "" {
+			w.WriteString("commitSha", app.CommitSha)
+		}
 		w.WriteIntIf("port", app.Port, app.Port > 0)
 		w.WriteInt("replicas", app.Replicas)
 
@@ -673,6 +693,12 @@ func writeValuesYAML(f *os.File, data ValuesData) error {
 		w.Newline()
 	}
 	w.EndSection()
+
+	// Write OTLP configuration section
+	w.StartSection("otlp")
+	w.WriteString("endpoint", data.OTLP.Endpoint)
+	w.EndSection()
+	w.Newline()
 
 	// Write ingress defaults section
 	// Note: Each external-api app gets its own dedicated Ingress resource
