@@ -108,6 +108,7 @@ apps_config = build_apps_config(
         'RABBITMQ_PORT': rabbitmq_port,
         'RABBITMQ_USER': rabbitmq_user,
         'RABBITMQ_PASSWORD': rabbitmq_password,
+        'RABBITMQ_VHOST': 'dev',  # Environment-specific vhost (dev, staging, prod)
         # Logging configuration (applies to all apps by default)
         # Individual apps can override via their Helm values
         'LOG_OTLP': 'true',  # Enable OTLP logging in dev

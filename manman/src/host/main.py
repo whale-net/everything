@@ -146,16 +146,9 @@ def _init_common_services(
         )
 
     # Build RabbitMQ config and initialize
-    rmq_config = {
-        'host': rabbitmq_host,
-        'port': rabbitmq_port,
-        'username': rabbitmq_username,
-        'password': rabbitmq_password,
-        'vhost': '/',  # Base vhost
-        'enable_ssl': enable_ssl,
-        'ssl_hostname': rabbitmq_ssl_hostname,
-    }
-    init_rabbitmq_from_config(rmq_config, vhost_suffix=app_env)
+    # Get RabbitMQ config from decorator-injected params and initialize
+    rmq_config = ctx.obj.get('rabbitmq', {})
+    init_rabbitmq_from_config(rmq_config)  # Use vhost from provider, not app_env
 
     # declare rabbitmq exchanges - use persistent connection for this operation
     from libs.python.rmq import get_rabbitmq_connection
