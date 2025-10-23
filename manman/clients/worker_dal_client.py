@@ -33,17 +33,19 @@ class WorkerDALClient:
     interface that matches the domain model structure.
     """
 
-    def __init__(self, base_url: str, access_token: Optional[str] = None):
+    def __init__(self, base_url: str, access_token: Optional[str] = None, verify_ssl: bool = True):
         """
         Initialize the Worker DAL client.
         
         Args:
             base_url: Base URL for the Worker DAL API (e.g., "http://dal.manman.local")
             access_token: Optional bearer token for authentication
+            verify_ssl: Whether to verify SSL certificates (default: True)
         """
         configuration = Configuration(host=base_url)
         if access_token:
             configuration.access_token = access_token
+        configuration.verify_ssl = verify_ssl
 
         api_client = ApiClient(configuration)
         self._api = DefaultApi(api_client)
@@ -51,27 +53,37 @@ class WorkerDALClient:
     # Model translation helpers
     def _to_domain_game_server(self, generated: GeneratedGameServer) -> GameServer:
         """Convert generated GameServer to domain GameServer."""
+        if isinstance(generated, dict):
+            return GameServer.model_validate(generated)
         return GameServer.model_validate(generated.to_dict())
 
     def _to_domain_game_server_config(self, generated: GeneratedGameServerConfig) -> GameServerConfig:
         """Convert generated GameServerConfig to domain GameServerConfig."""
+        if isinstance(generated, dict):
+            return GameServerConfig.model_validate(generated)
         return GameServerConfig.model_validate(generated.to_dict())
 
     def _to_domain_game_server_instance(self, generated: GeneratedGameServerInstance) -> GameServerInstance:
         """Convert generated GameServerInstance to domain GameServerInstance."""
+        if isinstance(generated, dict):
+            return GameServerInstance.model_validate(generated)
         return GameServerInstance.model_validate(generated.to_dict())
 
     def _to_domain_worker(self, generated: GeneratedWorker) -> Worker:
         """Convert generated Worker to domain Worker."""
+        if isinstance(generated, dict):
+            return Worker.model_validate(generated)
         return Worker.model_validate(generated.to_dict())
 
     def _to_generated_game_server_instance(self, domain: GameServerInstance) -> GeneratedGameServerInstance:
         """Convert domain GameServerInstance to generated model."""
-        return GeneratedGameServerInstance(**domain.model_dump(exclude_none=True))
+        # Exclude unset fields (like SQLAlchemy default functions) and only send explicit values
+        data = domain.model_dump(exclude_unset=True, exclude_none=True)
+        return GeneratedGameServerInstance(**data)
 
     def _to_generated_worker(self, domain: Worker) -> GeneratedWorker:
         """Convert domain Worker to generated model."""
-        return GeneratedWorker(**domain.model_dump(exclude_none=True))
+        return GeneratedWorker(**domain.model_dump())
 
     # Game Server methods
     def get_game_server(self, game_server_id: int) -> GameServer:

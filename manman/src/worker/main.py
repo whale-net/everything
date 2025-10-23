@@ -34,6 +34,9 @@ def start(
     heartbeat_length: Annotated[
         int, typer.Option(help="Heartbeat interval in seconds (default: 2)")
     ] = 2,
+    verify_ssl: Annotated[
+        bool, typer.Option(envvar="MANMAN_WORKER_VERIFY_SSL", help="Verify SSL certificates (default: True)")
+    ] = True,
     # steamcmd_override: Annotated[
     #     Optional[str], typer.Option(envvar="MANMAN_STEAMCMD_OVERRIDE"), None
     # ] = None,
@@ -47,6 +50,7 @@ def start(
         sa_client_id=None,
         sa_client_secret=None,
         heartbeat_length=heartbeat_length,
+        verify_ssl=verify_ssl,
     )
     service.run()
 
