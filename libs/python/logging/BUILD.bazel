@@ -1,0 +1,18 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+py_library(
+    name = "logging",
+    srcs = [
+        "__init__.py",
+        "config.py",
+        "context.py",
+        "factory.py",
+        "formatters.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@pypi//:opentelemetry-api",
+        "@pypi//:opentelemetry-sdk",
+        "@pypi//:opentelemetry-exporter-otlp",
+    ],
+)

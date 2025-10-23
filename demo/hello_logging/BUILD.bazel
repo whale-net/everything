@@ -1,0 +1,21 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
+
+py_binary(
+    name = "hello_logging",
+    srcs = ["main.py"],
+    main = "main.py",
+    deps = [
+        "//libs/python/logging",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "test_main",
+    srcs = ["test_main.py"],
+    deps = [
+        ":hello_logging",
+        "//libs/python/logging",
+    ],
+    size = "small",
+)
