@@ -87,8 +87,21 @@ class Server(ManManService):
         logger.info("ProcessBuilder initialized with executable: %s", executable_path)
 
     def _send_heartbeat(self):
-        """Send a heartbeat for the game server instance."""
-        self._wapi.heartbeat_game_server_instance(self._instance.game_server_instance_id)
+        """
+        Send a heartbeat for the game server instance.
+        
+        Heartbeat failures are logged but do not crash the service. The service
+        will continue running and retry on the next heartbeat interval.
+        """
+        try:
+            self._wapi.heartbeat_game_server_instance(self._instance.game_server_instance_id)
+        except Exception as e:
+            logger.warning(
+                "Failed to send game server instance heartbeat (instance_id=%s): %s. "
+                "Service will continue running and retry on next interval.",
+                self._instance.game_server_instance_id,
+                e,
+            )
 
     def _initialize_service(self):
         """Initialize the server service - install SteamCMD."""

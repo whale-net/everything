@@ -51,6 +51,17 @@ class WorkerDALClient:
         exponential_base=2.0,
         exception_filter=is_transient_http_error,
     )
+    
+    # Retry configuration for heartbeat calls
+    # 1 retry with minimal delay - heartbeats should fail fast and not block the service
+    # Heartbeat failures are logged but don't crash the service
+    _HEARTBEAT_RETRY_CONFIG = RetryConfig(
+        max_attempts=2,  # 1 retry (2 total attempts)
+        initial_delay=0.5,
+        max_delay=1.0,
+        exponential_base=2.0,
+        exception_filter=is_transient_http_error,
+    )
 
     def __init__(self, base_url: str, access_token: Optional[str] = None, verify_ssl: bool = True):
         """
@@ -165,9 +176,14 @@ class WorkerDALClient:
         result = self._api.server_instance_server_instance_id_get(instance_id)
         return self._to_domain_game_server_instance(result)
 
-    @retry(_RETRY_CONFIG)
+    @retry(_HEARTBEAT_RETRY_CONFIG)
     def heartbeat_game_server_instance(self, instance_id: int) -> GameServerInstance:
-        """Send heartbeat for game server instance."""
+        """
+        Send heartbeat for game server instance.
+        
+        Uses minimal retry (1 retry) to avoid blocking the service run loop.
+        Caller should handle exceptions gracefully to prevent service crashes.
+        """
         result = self._api.server_instance_heartbeat_server_instance_heartbeat_id_post(instance_id)
         return self._to_domain_game_server_instance(result)
 
@@ -185,9 +201,14 @@ class WorkerDALClient:
         result = self._api.worker_shutdown_worker_shutdown_put(generated_worker)
         return self._to_domain_worker(result)
 
-    @retry(_RETRY_CONFIG)
+    @retry(_HEARTBEAT_RETRY_CONFIG)
     def heartbeat_worker(self, worker: Worker) -> Worker:
-        """Send heartbeat for worker."""
+        """
+        Send heartbeat for worker.
+        
+        Uses minimal retry (1 retry) to avoid blocking the service run loop.
+        Caller should handle exceptions gracefully to prevent service crashes.
+        """
         generated_worker = self._to_generated_worker(worker)
         result = self._api.worker_heartbeat_worker_heartbeat_post(generated_worker)
         return self._to_domain_worker(result)

@@ -82,7 +82,21 @@ class WorkerService(ManManService):
         self._futures = []
 
     def _send_heartbeat(self):
-        self._wapi.heartbeat_worker(self._worker_instance)
+        """
+        Send heartbeat to Worker DAL API.
+        
+        Heartbeat failures are logged but do not crash the service. The service
+        will continue running and retry on the next heartbeat interval.
+        """
+        try:
+            self._wapi.heartbeat_worker(self._worker_instance)
+        except Exception as e:
+            logger.warning(
+                "Failed to send worker heartbeat (worker_id=%s): %s. "
+                "Service will continue running and retry on next interval.",
+                self._worker_instance.worker_id,
+                e,
+            )
 
     def _initialize_service(self):
         logger.info("noop")
