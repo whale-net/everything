@@ -1,0 +1,21 @@
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+
+py_library(
+    name = "retry",
+    srcs = [
+        "__init__.py",
+        "retry.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [],
+)
+
+py_test(
+    name = "test_retry",
+    srcs = ["test_retry.py"],
+    deps = [
+        ":retry",
+        "@pypi//:pytest",
+    ],
+    size = "small",
+)

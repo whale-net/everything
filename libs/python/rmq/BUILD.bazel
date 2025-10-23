@@ -13,6 +13,7 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//libs/python/retry",
         "@pypi//:amqpstorm",
     ],
 )

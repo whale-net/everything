@@ -9,6 +9,7 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//libs/python/retry",
         "//manman/src:manman_core",
         "//generated/manman:worker_dal_api",
     ],

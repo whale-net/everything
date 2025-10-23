@@ -13,6 +13,8 @@ from typing import Optional
 
 import amqpstorm
 
+from libs.python.retry import RetryConfig, retry, is_transient_rmq_error
+
 logger = logging.getLogger(__name__)
 
 # Global state for connection management
@@ -80,6 +82,57 @@ def get_rabbitmq_ssl_options(hostname: str) -> dict:
     return ssl_options
 
 
+def _create_connection(params: dict, current_pid: int) -> amqpstorm.Connection:
+    """
+    Internal function to create a RabbitMQ connection with retry logic.
+    
+    This function is separated to allow retry decorator to work properly.
+    The retry decorator will handle transient connection failures.
+    
+    Args:
+        params: Connection parameters dict
+        current_pid: Current process ID for logging
+        
+    Returns:
+        Active RabbitMQ connection
+        
+    Raises:
+        Connection errors on failure (will be retried by decorator)
+    """
+    # Create fresh SSL options for this process to avoid context sharing issues
+    ssl_options = None
+    if params["ssl"] and params.get("ssl_options"):
+        # Recreate SSL context to avoid fork issues
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.load_default_certs(purpose=ssl.Purpose.SERVER_AUTH)
+        ssl_options = {
+            "context": context,
+            "server_hostname": params["ssl_options"]["server_hostname"],
+        }
+
+    connection = amqpstorm.Connection(
+        hostname=params["host"],
+        port=params["port"],
+        username=params["username"],
+        password=params["password"],
+        virtual_host=params["virtual_host"],
+        ssl=params["ssl"],
+        ssl_options=ssl_options,
+    )
+    logger.info("RabbitMQ connection established for process %d", current_pid)
+    return connection
+
+
+# Apply retry decorator to connection creation
+_create_connection_with_retry = retry(RetryConfig(
+    max_attempts=10,
+    initial_delay=1.0,
+    max_delay=30.0,
+    exponential_base=2.0,
+    exception_filter=is_transient_rmq_error,
+))(_create_connection)
+
+
 def get_rabbitmq_connection() -> amqpstorm.Connection:
     """
     Get or create a RabbitMQ connection for the current process.
@@ -88,11 +141,15 @@ def get_rabbitmq_connection() -> amqpstorm.Connection:
     Each process gets its own connection with a fresh SSL context to avoid
     SSL context sharing issues across forked processes.
     
+    Connection creation includes automatic retry with exponential backoff for
+    transient errors (connection failures, dropped connections, etc.).
+    
     Returns:
         Active RabbitMQ connection
         
     Raises:
         RuntimeError: If init_rabbitmq() has not been called
+        AMQPConnectionError: If connection fails after all retries
     """
     with _connection_lock:
         # Check if we have a valid connection for this process
@@ -121,33 +178,10 @@ def get_rabbitmq_connection() -> amqpstorm.Connection:
 
         params = __GLOBALS["rmq_parameters"]
 
-        # Create fresh SSL options for this process to avoid context sharing issues
-        ssl_options = None
-        if params["ssl"] and params.get("ssl_options"):
-            # Recreate SSL context to avoid fork issues
-            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-            context.load_default_certs(purpose=ssl.Purpose.SERVER_AUTH)
-            ssl_options = {
-                "context": context,
-                "server_hostname": params["ssl_options"]["server_hostname"],
-            }
-
-        try:
-            connection = amqpstorm.Connection(
-                hostname=params["host"],
-                port=params["port"],
-                username=params["username"],
-                password=params["password"],
-                virtual_host=params["virtual_host"],
-                ssl=params["ssl"],
-                ssl_options=ssl_options,
-            )
-            __GLOBALS[connection_key] = connection
-            logger.info("RabbitMQ connection established for process %d", current_pid)
-            return connection
-        except Exception as e:
-            logger.error("Failed to create RabbitMQ connection: %s", e)
-            raise
+        # Create connection with retry logic
+        connection = _create_connection_with_retry(params, current_pid)
+        __GLOBALS[connection_key] = connection
+        return connection
 
 
 def cleanup_rabbitmq_connections() -> None:

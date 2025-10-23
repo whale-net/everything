@@ -3,6 +3,7 @@ Worker DAL API client wrapper.
 
 Provides a wrapper around the generated OpenAPI client for the Worker DAL API.
 Handles model translation between domain models and generated client models.
+Includes automatic retry logic for transient HTTP failures (502, 503, 504, timeouts).
 
 Note: Cannot use generated client directly in repository layer due to circular dependency:
 - Generated client depends on OpenAPI spec
@@ -23,6 +24,7 @@ from generated.manman.worker_dal_api.models.game_server_instance import GameServ
 from generated.manman.worker_dal_api.models.worker import Worker as GeneratedWorker
 
 from manman.src.models import GameServer, GameServerConfig, GameServerInstance, Worker
+from libs.python.retry import RetryConfig, retry, is_transient_http_error
 
 
 class WorkerDALClient:
@@ -31,7 +33,24 @@ class WorkerDALClient:
     
     Translates between domain models and generated models, providing a stable
     interface that matches the domain model structure.
+    
+    All API calls include automatic retry logic for transient HTTP failures:
+    - Connection errors (network issues, DNS failures)
+    - Timeouts (connect, read)
+    - 502 Bad Gateway
+    - 503 Service Unavailable
+    - 504 Gateway Timeout
     """
+
+    # Retry configuration for all API calls
+    # 5 attempts with exponential backoff: ~1s, ~2s, ~4s, ~8s
+    _RETRY_CONFIG = RetryConfig(
+        max_attempts=5,
+        initial_delay=1.0,
+        max_delay=30.0,
+        exponential_base=2.0,
+        exception_filter=is_transient_http_error,
+    )
 
     def __init__(self, base_url: str, access_token: Optional[str] = None, verify_ssl: bool = True):
         """
@@ -103,17 +122,20 @@ class WorkerDALClient:
         )
 
     # Game Server methods
+    @retry(_RETRY_CONFIG)
     def get_game_server(self, game_server_id: int) -> GameServer:
         """Get game server by ID."""
         result = self._api.server_server_id_get(game_server_id)
         return self._to_domain_game_server(result)
 
+    @retry(_RETRY_CONFIG)
     def get_game_server_config(self, game_server_config_id: int) -> GameServerConfig:
         """Get game server configuration by ID."""
         result = self._api.server_config_server_config_id_get(game_server_config_id)
         return self._to_domain_game_server_config(result)
 
     # Game Server Instance methods
+    @retry(_RETRY_CONFIG)
     def create_game_server_instance(
         self,
         game_server_config_id: int,
@@ -130,40 +152,47 @@ class WorkerDALClient:
         result = self._api.server_instance_create_server_instance_create_post(generated_instance)
         return self._to_domain_game_server_instance(result)
 
+    @retry(_RETRY_CONFIG)
     def shutdown_game_server_instance(self, instance: GameServerInstance) -> GameServerInstance:
         """Shutdown a game server instance."""
         generated_instance = self._to_generated_game_server_instance(instance)
         result = self._api.server_instance_shutdown_server_instance_shutdown_put(generated_instance)
         return self._to_domain_game_server_instance(result)
 
+    @retry(_RETRY_CONFIG)
     def get_game_server_instance(self, instance_id: int) -> GameServerInstance:
         """Get game server instance by ID."""
         result = self._api.server_instance_server_instance_id_get(instance_id)
         return self._to_domain_game_server_instance(result)
 
+    @retry(_RETRY_CONFIG)
     def heartbeat_game_server_instance(self, instance_id: int) -> GameServerInstance:
         """Send heartbeat for game server instance."""
         result = self._api.server_instance_heartbeat_server_instance_heartbeat_id_post(instance_id)
         return self._to_domain_game_server_instance(result)
 
     # Worker methods
+    @retry(_RETRY_CONFIG)
     def create_worker(self) -> Worker:
         """Create a new worker."""
         result = self._api.worker_create_worker_create_post()
         return self._to_domain_worker(result)
 
+    @retry(_RETRY_CONFIG)
     def shutdown_worker(self, worker: Worker) -> Worker:
         """Shutdown a worker."""
         generated_worker = self._to_generated_worker(worker)
         result = self._api.worker_shutdown_worker_shutdown_put(generated_worker)
         return self._to_domain_worker(result)
 
+    @retry(_RETRY_CONFIG)
     def heartbeat_worker(self, worker: Worker) -> Worker:
         """Send heartbeat for worker."""
         generated_worker = self._to_generated_worker(worker)
         result = self._api.worker_heartbeat_worker_heartbeat_post(generated_worker)
         return self._to_domain_worker(result)
 
+    @retry(_RETRY_CONFIG)
     def shutdown_other_workers(self, worker: Worker) -> None:
         """Shutdown all other workers except the specified one."""
         generated_worker = self._to_generated_worker(worker)
