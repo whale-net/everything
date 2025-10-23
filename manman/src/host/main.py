@@ -125,6 +125,7 @@ def _init_common_services(
     rabbitmq_port: int,
     rabbitmq_username: str,
     rabbitmq_password: str,
+    rabbitmq_vhost: str,
     app_env: Optional[str],
     enable_ssl: bool,
     rabbitmq_ssl_hostname: Optional[str],
@@ -136,7 +137,10 @@ def _init_common_services(
     if should_run_migration_check and _need_migration():
         raise RuntimeError("migration needs to be ran before starting")
     
-    virtual_host = f"manman-{app_env}" if app_env else "/"
+    # Only apply vhost_suffix if user hasn't explicitly set a non-default RABBITMQ_VHOST
+    # This allows explicit RABBITMQ_VHOST to be respected
+    suffix = app_env if rabbitmq_vhost == '/' else None
+    virtual_host = f"manman-{app_env}" if app_env and rabbitmq_vhost == '/' else rabbitmq_vhost
     
     # Optionally create vhost via management API
     if create_vhost and app_env == "dev":
@@ -154,11 +158,11 @@ def _init_common_services(
         'port': rabbitmq_port,
         'username': rabbitmq_username,
         'password': rabbitmq_password,
-        'vhost': '/',  # Base vhost
+        'vhost': rabbitmq_vhost,
         'enable_ssl': enable_ssl,
         'ssl_hostname': rabbitmq_ssl_hostname,
     }
-    init_rabbitmq_from_config(rmq_config, vhost_suffix=app_env)
+    init_rabbitmq_from_config(rmq_config, vhost_suffix=suffix)
 
     # declare rabbitmq exchanges - use persistent connection for this operation
     from libs.python.rmq import get_rabbitmq_connection
@@ -254,6 +258,7 @@ def start_experience_api(
         rabbitmq_port=rmq_ctx.get("port"),
         rabbitmq_username=rmq_ctx.get("username"),
         rabbitmq_password=rmq_ctx.get("password"),
+        rabbitmq_vhost=rmq_ctx.get("vhost", "/"),
         app_env=app_env,
         enable_ssl=rmq_ctx.get("enable_ssl"),
         rabbitmq_ssl_hostname=rmq_ctx.get("ssl_hostname"),
@@ -310,6 +315,7 @@ def start_status_api(
         rabbitmq_port=rmq_ctx.get("port"),
         rabbitmq_username=rmq_ctx.get("username"),
         rabbitmq_password=rmq_ctx.get("password"),
+        rabbitmq_vhost=rmq_ctx.get("vhost", "/"),
         app_env=app_env,
         enable_ssl=rmq_ctx.get("enable_ssl"),
         rabbitmq_ssl_hostname=rmq_ctx.get("ssl_hostname"),
@@ -368,6 +374,7 @@ def start_worker_dal_api(
         rabbitmq_port=rmq_ctx.get("port"),
         rabbitmq_username=rmq_ctx.get("username"),
         rabbitmq_password=rmq_ctx.get("password"),
+        rabbitmq_vhost=rmq_ctx.get("vhost", "/"),
         app_env=app_env,
         enable_ssl=rmq_ctx.get("enable_ssl"),
         rabbitmq_ssl_hostname=rmq_ctx.get("ssl_hostname"),
@@ -417,6 +424,7 @@ def start_status_processor(
         rabbitmq_port=rmq_ctx.get("port"),
         rabbitmq_username=rmq_ctx.get("username"),
         rabbitmq_password=rmq_ctx.get("password"),
+        rabbitmq_vhost=rmq_ctx.get("vhost", "/"),
         app_env=app_env,
         enable_ssl=rmq_ctx.get("enable_ssl"),
         rabbitmq_ssl_hostname=rmq_ctx.get("ssl_hostname"),

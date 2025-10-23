@@ -27,3 +27,13 @@ py_test(
     ],
     size = "small",
 )
+
+py_test(
+    name = "connection_test",
+    srcs = ["connection_test.py"],
+    deps = [
+        ":rmq",
+        "@pypi//:pytest",
+    ],
+    size = "small",
+)

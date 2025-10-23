@@ -107,7 +107,11 @@ def callback(
     
     # Get RabbitMQ config from decorator-injected params and initialize
     rmq_config = ctx.obj.get('rabbitmq', {})
-    init_rabbitmq_from_config(rmq_config, vhost_suffix=app_env)
+    # Only apply vhost_suffix if user hasn't explicitly set a non-default RABBITMQ_VHOST
+    # This allows explicit RABBITMQ_VHOST to be respected
+    vhost = rmq_config.get('vhost', '/')
+    suffix = app_env if vhost == '/' else None
+    init_rabbitmq_from_config(rmq_config, vhost_suffix=suffix)
     
     # Store context
     ctx.obj['app_env'] = app_env
