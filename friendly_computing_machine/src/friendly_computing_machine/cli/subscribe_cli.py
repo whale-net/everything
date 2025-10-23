@@ -4,7 +4,7 @@ from typing import Annotated, Optional
 
 import typer
 
-from libs.python.cli.providers.logging import create_logging_context
+from libs.python.logging import configure_logging
 from libs.python.cli.providers.postgres import (
     DatabaseContext,
     PostgresUrl,
@@ -18,7 +18,6 @@ from libs.python.cli.providers.slack import SlackContext, create_slack_context
 from libs.python.cli.params import (
     rmq_params,
     slack_params,
-    logging_params,
     AppEnv,
     ManManStatusApiUrl,
 )
@@ -54,8 +53,7 @@ app = typer.Typer()
 
 @app.callback()
 @rmq_params      # Injects 7 RabbitMQ parameters
-@slack_params    # Injects 2 Slack parameters  
-@logging_params  # Injects 1 logging parameter
+@slack_params    # Injects 2 Slack parameters
 def callback(
     ctx: typer.Context,
     app_env: AppEnv,
@@ -67,17 +65,19 @@ def callback(
     Subscribes to RabbitMQ topics for worker and instance lifecycle events
     and sends formatted Slack notifications with action buttons.
     
-    Note: Service parameters (RabbitMQ, Slack, Logging) are injected by decorators.
+    Note: Service parameters (RabbitMQ, Slack) are injected by decorators.
     """
-    logger.debug("Subscribe CLI callback starting")
-    
-    # Create logging context from decorator-injected params
-    log_config = ctx.obj.get('logging', {})
-    create_logging_context(
+    # Configure OTLP-first logging
+    configure_logging(
         service_name="friendly-computing-machine-subscribe",
+        service_version="1.0.0",
+        deployment_environment=app_env,
         log_level="DEBUG",
-        enable_otlp=log_config.get('enable_otlp', False),
+        enable_otlp=True,
+        json_format=False,
     )
+    
+    logger.debug("Subscribe CLI callback starting")
     
     # Create Slack context with FCM initialization
     from friendly_computing_machine.src.friendly_computing_machine.bot.app import init_web_client

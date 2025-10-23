@@ -21,9 +21,9 @@ py_library(
         "//libs/python/alembic",
         "//libs/python/cli:params_base",
         "//libs/python/cli:types",
-        "//libs/python/cli/providers/logging",
         "//libs/python/cli/providers/postgres",
         "//libs/python/cli/providers/rabbitmq",
+        "//libs/python/logging",  # Use consolidated logging
         "//manman/src:manman_core",
         "//manman/src/repository:manman_repository",
         "//manman/src/migrations:manman_migrations",

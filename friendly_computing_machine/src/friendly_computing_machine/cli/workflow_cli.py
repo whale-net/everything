@@ -5,8 +5,8 @@ from typing import Annotated
 import google.generativeai as genai
 import typer
 
-from libs.python.cli.params import logging_params, temporal_params, gemini_params, AppEnv
-from libs.python.cli.providers.logging import create_logging_context
+from libs.python.cli.params import temporal_params, gemini_params, AppEnv
+from libs.python.logging import configure_logging
 from libs.python.cli.providers.postgres import PostgresUrl, create_postgres_context
 from libs.python.cli.providers.slack import SlackBotToken
 
@@ -35,23 +35,24 @@ app = typer.Typer(
 
 @app.callback()
 @temporal_params
-@logging_params
 def callback(
     ctx: typer.Context,
     app_env: AppEnv,
 ):
+    # Configure OTLP-first logging
+    configure_logging(
+        service_name="friendly-computing-machine-workflow",
+        service_version="1.0.0",
+        deployment_environment=app_env,
+        log_level="DEBUG",
+        enable_otlp=True,
+        json_format=False,
+    )
+    
     logger.debug("CLI callback starting")
     
     # Get contexts from decorators
     temporal_config = ctx.obj.get('temporal', {})
-    log_config = ctx.obj.get('logging', {})
-    
-    # Setup logging
-    create_logging_context(
-        service_name="friendly-computing-machine-workflow",
-        log_level="DEBUG",
-        enable_otlp=log_config.get('enable_otlp', False),
-    )
     
     # Initialize Temporal client
     init_temporal(host=temporal_config['host'], app_env=app_env)

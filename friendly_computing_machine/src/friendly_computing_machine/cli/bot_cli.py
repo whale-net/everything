@@ -7,13 +7,12 @@ import typer
 from libs.python.cli.params import (
     slack_params,
     pg_params,
-    logging_params,
     temporal_params,
     gemini_params,
     AppEnv,
     ManManExperienceApiUrl,
 )
-from libs.python.cli.providers.logging import create_logging_context
+from libs.python.logging import configure_logging
 from libs.python.cli.providers.postgres import (
     DatabaseContext,
     PostgresUrl,
@@ -40,7 +39,6 @@ app = typer.Typer()
 @gemini_params
 @slack_params
 @pg_params
-@logging_params
 def callback(
     ctx: typer.Context,
     app_env: AppEnv,
@@ -48,12 +46,16 @@ def callback(
 ):
     logger.debug("CLI callback starting")
     
-    # Create logging context from decorator-injected params
-    log_config = ctx.obj.get('logging', {})
-    create_logging_context(
-        service_name="friendly-computing-machine-bot",
+    # Configure OTLP-first logging for FCM bot
+    configure_logging(
+        app_name="fcm-bot",
+        domain="fcm",
+        app_type="worker",
+        environment=app_env or "development",
         log_level="DEBUG",
-        enable_otlp=log_config.get('enable_otlp', False),
+        enable_otlp=True,  # FCM uses OTLP in production
+        enable_console=True,
+        json_format=False,
     )
     
     # Get contexts from decorators
