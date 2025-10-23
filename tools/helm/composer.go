@@ -100,20 +100,20 @@ func (r ResourceConfig) ToValuesFormat() ValuesResourceConfig {
 
 // AppConfig represents the configuration for a single app in values.yaml
 type AppConfig struct {
-	Type         string               `yaml:"type"`
-	Domain       string               `yaml:"domain,omitempty"`       // App domain for grouping
-	Image        string               `yaml:"image"`
-	ImageTag     string               `yaml:"imageTag"`
-	CommitSha    string               `yaml:"commitSha,omitempty"`    // Git commit SHA
-	Port         int                  `yaml:"port,omitempty"`
-	Replicas     int                  `yaml:"replicas"`
-	Resources    ValuesResourceConfig `yaml:"resources"`
-	HealthCheck  *HealthCheckConfig   `yaml:"healthCheck,omitempty"`
-	Command      []string             `yaml:"command,omitempty"`
-	Args         []string             `yaml:"args,omitempty"`
-	Env          map[string]string    `yaml:"env,omitempty"`
+	Type          string               `yaml:"type"`
+	Domain        string               `yaml:"domain,omitempty"` // App domain for grouping
+	Image         string               `yaml:"image"`
+	ImageTag      string               `yaml:"imageTag"`
+	CommitSha     string               `yaml:"commitSha,omitempty"` // Git commit SHA
+	Port          int                  `yaml:"port,omitempty"`
+	Replicas      int                  `yaml:"replicas"`
+	Resources     ValuesResourceConfig `yaml:"resources"`
+	HealthCheck   *HealthCheckConfig   `yaml:"healthCheck,omitempty"`
+	Command       []string             `yaml:"command,omitempty"`
+	Args          []string             `yaml:"args,omitempty"`
+	Env           map[string]string    `yaml:"env,omitempty"`
 	ExposeIngress bool                 `yaml:"exposeIngress,omitempty"` // For internal-api: expose via ingress for debugging
-	Ingress      *AppIngressConfig    `yaml:"ingress,omitempty"`       // Per-app ingress config
+	Ingress       *AppIngressConfig    `yaml:"ingress,omitempty"`       // Per-app ingress config
 }
 
 // AppIngressConfig represents per-app ingress configuration
@@ -134,7 +134,7 @@ type IngressDefaultsConfig struct {
 type GlobalConfig struct {
 	Namespace   string `yaml:"namespace"`
 	Environment string `yaml:"environment"`
-	Domain      string `yaml:"domain,omitempty"`  // Default domain for all apps
+	Domain      string `yaml:"domain,omitempty"` // Default domain for all apps
 }
 
 // OTLPConfig represents OpenTelemetry configuration
@@ -144,10 +144,10 @@ type OTLPConfig struct {
 
 // ValuesData represents the structure of values.yaml
 type ValuesData struct {
-	Global          GlobalConfig            `yaml:"global"`
-	Apps            map[string]AppConfig    `yaml:"apps"`
-	IngressDefaults IngressDefaultsConfig   `yaml:"ingressDefaults"`
-	OTLP            OTLPConfig              `yaml:"otlp"`
+	Global          GlobalConfig          `yaml:"global"`
+	Apps            map[string]AppConfig  `yaml:"apps"`
+	IngressDefaults IngressDefaultsConfig `yaml:"ingressDefaults"`
+	OTLP            OTLPConfig            `yaml:"otlp"`
 }
 
 // TemplateData represents the data passed to Kubernetes resource templates
@@ -414,10 +414,10 @@ func (c *Composer) buildAppConfig(app AppMetadata) (AppConfig, error) {
 
 	config := AppConfig{
 		Type:          appType.String(),
-		Domain:        app.Domain,  // Add domain from metadata
+		Domain:        app.Domain, // Add domain from metadata
 		Image:         app.GetImage(),
 		ImageTag:      app.GetImageTag(),
-		CommitSha:     "",  // TODO: Add commit SHA from build metadata
+		CommitSha:     "", // TODO: Add commit SHA from build metadata
 		Port:          port,
 		Replicas:      replicas,
 		Resources:     resources.ToValuesFormat(),
