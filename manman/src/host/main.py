@@ -27,10 +27,7 @@ from libs.python.cli.providers.postgres import pg_params
 from libs.python.cli.params import logging_params
 from libs.python.cli.types import AppEnv
 from manman.src.config import ManManConfig
-from manman.src.logging_config import (
-    GunicornApplication,
-    get_gunicorn_config,
-)
+from manman.src.logging_config import get_gunicorn_config
 from libs.python.logging import configure_logging
 from libs.python.rmq import ExchangeRegistry
 from manman.src.util import get_sqlalchemy_engine, init_sql_alchemy_engine
@@ -520,7 +517,7 @@ def run_downgrade(target: str):
 @rmq_params
 @logging_params
 @pg_params
-def callback(ctx: typer.Context, app_env: AppEnv = AppEnv.DEV):
+def callback(ctx: typer.Context, app_env: AppEnv = "dev"):
     # Initialize database connection for CLI operations
     init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
     

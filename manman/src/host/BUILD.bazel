@@ -19,7 +19,7 @@ py_library(
     visibility = ["//manman/src/host:__subpackages__"],
     deps = [
         "//libs/python/alembic",
-        "//libs/python/cli:params_base",
+        "//libs/python/cli:params",
         "//libs/python/cli:types",
         "//libs/python/cli/providers/postgres",
         "//libs/python/cli/providers/rabbitmq",
