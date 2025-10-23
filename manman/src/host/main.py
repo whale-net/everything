@@ -56,6 +56,28 @@ def initialize_rabbitmq_exchanges():
         logger.info("Exchange declared %s", exchange)
 
 
+def maybe_create_vhost(rmq_ctx: dict, app_env: Optional[str]):
+    """Create RabbitMQ vhost if in dev environment.
+    
+    This is only useful for local development where vhosts may not exist yet.
+    In production, vhosts should be pre-created by infrastructure.
+    
+    Args:
+        rmq_ctx: RabbitMQ context dict with connection params
+        app_env: Application environment (only creates if 'dev')
+    """
+    if app_env == "dev":
+        create_rabbitmq_vhost(
+            host=rmq_ctx.get("host"),
+            port=rmq_ctx.get("port"),
+            username=rmq_ctx.get("username"),
+            password=rmq_ctx.get("password"),
+            vhost=rmq_ctx.get("vhost", "/"),
+        )
+        logger.info("Dev vhost created/verified: %s", rmq_ctx.get("vhost", "/"))
+
+
+
 class GunicornApplication(BaseApplication):
     """Custom Gunicorn application that allows programmatic configuration."""
 
@@ -106,7 +128,6 @@ def create_worker_dal_app():
 @app.command()
 def start_experience_api(
     ctx: typer.Context,
-    app_env: AppEnv = None,
     port: int = 8000,
     workers: Annotated[
         int, typer.Option(help="Number of Gunicorn worker processes")
@@ -118,35 +139,16 @@ def start_experience_api(
         ),
     ] = True,
     should_run_migration_check: Optional[bool] = True,
-    create_vhost: Annotated[
-        bool, typer.Option(help="Create RabbitMQ vhost before initialization")
-    ] = False,
 ):
     """Start the experience API (host layer) that provides game server management and user-facing functionality."""
-    # Get contexts from decorators
-    rmq_ctx = ctx.obj.get("rabbitmq", {})
-    logging_ctx = ctx.obj.get("logging", {})
-    log_otlp = logging_ctx.get("log_otlp", False)
-    
-    # Check migrations if needed
+    # Check migrations if needed (callback already initialized DB)
     if should_run_migration_check and _need_migration():
         raise RuntimeError("migration needs to be ran before starting")
     
-    # Optionally create vhost
-    if create_vhost and app_env == "dev":
-        create_rabbitmq_vhost(
-            host=rmq_ctx.get("host"),
-            port=rmq_ctx.get("port"),
-            username=rmq_ctx.get("username"),
-            password=rmq_ctx.get("password"),
-            vhost=rmq_ctx.get("vhost", "/"),
-        )
-    
-    # Initialize RabbitMQ connection (reads vhost from provider config)
-    init_rabbitmq_from_config(rmq_ctx)
-    
-    # Declare exchanges
-    initialize_rabbitmq_exchanges()
+    # RabbitMQ and exchanges already initialized by callback
+    # Get logging context for Gunicorn config
+    logging_ctx = ctx.obj.get("logging", {})
+    log_otlp = logging_ctx.get("log_otlp", False)
 
     # Configure and run with Gunicorn
     options = get_gunicorn_config(
@@ -164,7 +166,6 @@ def start_experience_api(
 @app.command()
 def start_status_api(
     ctx: typer.Context,
-    app_env: AppEnv = None,
     port: int = 8000,
     workers: Annotated[
         int, typer.Option(help="Number of Gunicorn worker processes")
@@ -176,35 +177,16 @@ def start_status_api(
         ),
     ] = True,
     should_run_migration_check: Optional[bool] = True,
-    create_vhost: Annotated[
-        bool, typer.Option(help="Create RabbitMQ vhost before initialization")
-    ] = False,
 ):
     """Start the status API that provides status and monitoring functionality."""
-    # Get contexts from decorators
-    rmq_ctx = ctx.obj.get("rabbitmq", {})
-    logging_ctx = ctx.obj.get("logging", {})
-    log_otlp = logging_ctx.get("log_otlp", False)
-    
-    # Check migrations if needed
+    # Check migrations if needed (callback already initialized DB)
     if should_run_migration_check and _need_migration():
         raise RuntimeError("migration needs to be ran before starting")
     
-    # Optionally create vhost
-    if create_vhost and app_env == "dev":
-        create_rabbitmq_vhost(
-            host=rmq_ctx.get("host"),
-            port=rmq_ctx.get("port"),
-            username=rmq_ctx.get("username"),
-            password=rmq_ctx.get("password"),
-            vhost=rmq_ctx.get("vhost", "/"),
-        )
-    
-    # Initialize RabbitMQ connection (reads vhost from provider config)
-    init_rabbitmq_from_config(rmq_ctx)
-    
-    # Declare exchanges
-    initialize_rabbitmq_exchanges()
+    # RabbitMQ and exchanges already initialized by callback
+    # Get logging context for Gunicorn config
+    logging_ctx = ctx.obj.get("logging", {})
+    log_otlp = logging_ctx.get("log_otlp", False)
 
     # Configure and run with Gunicorn
     options = get_gunicorn_config(
@@ -222,7 +204,6 @@ def start_status_api(
 @app.command()
 def start_worker_dal_api(
     ctx: typer.Context,
-    app_env: AppEnv = None,
     port: int = 8000,
     workers: Annotated[
         int, typer.Option(help="Number of Gunicorn worker processes")
@@ -234,35 +215,16 @@ def start_worker_dal_api(
         ),
     ] = True,
     should_run_migration_check: Optional[bool] = True,
-    create_vhost: Annotated[
-        bool, typer.Option(help="Create RabbitMQ vhost before initialization")
-    ] = False,
 ):
     """Start the worker DAL API that provides data access endpoints for worker services."""
-    # Get contexts from decorators
-    rmq_ctx = ctx.obj.get("rabbitmq", {})
-    logging_ctx = ctx.obj.get("logging", {})
-    log_otlp = logging_ctx.get("log_otlp", False)
-    
-    # Check migrations if needed
+    # Check migrations if needed (callback already initialized DB)
     if should_run_migration_check and _need_migration():
         raise RuntimeError("migration needs to be ran before starting")
     
-    # Optionally create vhost
-    if create_vhost and app_env == "dev":
-        create_rabbitmq_vhost(
-            host=rmq_ctx.get("host"),
-            port=rmq_ctx.get("port"),
-            username=rmq_ctx.get("username"),
-            password=rmq_ctx.get("password"),
-            vhost=rmq_ctx.get("vhost", "/"),
-        )
-    
-    # Initialize RabbitMQ connection (reads vhost from provider config)
-    init_rabbitmq_from_config(rmq_ctx)
-    
-    # Declare exchanges
-    initialize_rabbitmq_exchanges()
+    # RabbitMQ and exchanges already initialized by callback
+    # Get logging context for Gunicorn config
+    logging_ctx = ctx.obj.get("logging", {})
+    log_otlp = logging_ctx.get("log_otlp", False)
 
     # Configure and run with Gunicorn
     options = get_gunicorn_config(
@@ -280,39 +242,16 @@ def start_worker_dal_api(
 @app.command()
 def start_status_processor(
     ctx: typer.Context,
-    app_env: AppEnv = None,
     should_run_migration_check: Optional[bool] = True,
-    create_vhost: Annotated[
-        bool, typer.Option(help="Create RabbitMQ vhost before initialization")
-    ] = False,
 ):
     """Start the status event processor that handles status-related pub/sub messages."""
-    # Get contexts from decorators
-    rmq_ctx = ctx.obj.get("rabbitmq", {})
-    logging_ctx = ctx.obj.get("logging", {})
-    log_otlp = logging_ctx.get("log_otlp", False)
-
     logger.info("Starting status event processor...")
 
-    # Check migrations if needed
+    # Check migrations if needed (callback already initialized DB)
     if should_run_migration_check and _need_migration():
         raise RuntimeError("migration needs to be ran before starting")
     
-    # Optionally create vhost
-    if create_vhost and app_env == "dev":
-        create_rabbitmq_vhost(
-            host=rmq_ctx.get("host"),
-            port=rmq_ctx.get("port"),
-            username=rmq_ctx.get("username"),
-            password=rmq_ctx.get("password"),
-            vhost=rmq_ctx.get("vhost", "/"),
-        )
-    
-    # Initialize RabbitMQ connection (reads vhost from provider config)
-    init_rabbitmq_from_config(rmq_ctx)
-    
-    # Declare exchanges
-    initialize_rabbitmq_exchanges()
+    # RabbitMQ and exchanges already initialized by callback
 
     # Start the status event processor (pub/sub only, no HTTP server other than health check)
     from fastapi import FastAPI
@@ -373,12 +312,29 @@ def run_downgrade(ctx: typer.Context, target: str):
 @logging_params  # Auto-configures logging from environment variables
 @pg_params
 def callback(ctx: typer.Context, app_env: AppEnv = None):
+    """
+    ManMan Host Service CLI.
+    
+    Initializes database and RabbitMQ connections for all commands.
+    Logging is auto-configured via @logging_params decorator.
+    """
     # Initialize database connection for CLI operations
     init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
     
-    # Logging is already configured by @logging_params decorator
-    # No need to call configure_logging() here!
-    # Config read from: APP_NAME, APP_DOMAIN, APP_TYPE, APP_VERSION, LOG_LEVEL, LOG_OTLP, etc.
+    # Get RabbitMQ config from decorator-injected params
+    rmq_ctx = ctx.obj.get('rabbitmq', {})
+    
+    # Create vhost if in dev environment (useful for local development)
+    maybe_create_vhost(rmq_ctx, app_env)
+    
+    # Initialize RabbitMQ connection
+    init_rabbitmq_from_config(rmq_ctx)
+    
+    # Declare exchanges
+    initialize_rabbitmq_exchanges()
+    
+    # Store app_env for commands that need it
+    ctx.obj['app_env'] = app_env
 
 
 # alembic helpers using consolidated library
