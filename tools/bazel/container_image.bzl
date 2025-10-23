@@ -85,21 +85,17 @@ def container_image(
     
     LAYERING STRATEGY - Optimized for Cache Efficiency:
     ====================================================
-    Uses a SINGLE layer containing binary + all runfiles (dependencies, interpreter, etc).
+    Uses 4 separate layers for optimal caching:
+    1. CA certificates (//tools/cacerts:cacerts) - changes rarely
+    2. Python interpreter (rules_python++) - changes on Python version updates
+    3. Third-party dependencies (rules_pycross pypi packages) - changes on dependency updates
+    4. Application code (_main/ workspace) - changes frequently during development
     
-    Why not split into multiple layers?
-    - Bazel's hermetic runfiles tree is tightly coupled (binary references exact paths)
-    - Splitting would require custom rules to separate app code from dependencies
-    - Breaking apart the runfiles structure defeats Bazel's hermetic guarantees
-    - The complexity and brittleness outweighs the caching benefits
-    
-    Caching still works efficiently because:
-    1. Bazel's action cache: If binary unchanged, pkg_tar is cached (no rebuild)
-    2. OCI layer digests: If tar unchanged, Docker/registries cache the layer
-    3. Most rebuilds happen during development (where layer caching helps less anyway)
-    
-    The real optimization opportunity would be at the Bazel level (e.g., rules_python
-    generating separate outputs for app vs deps), but that's outside our control here.
+    This layering strategy ensures:
+    - Base layers (certs, interpreter, deps) are cached across rebuilds
+    - Only app code layer is rebuilt during typical development
+    - Registry pushes only upload changed layers (reduces bandwidth)
+    - Container pulls only download changed layers (faster deployments)
     
     Args:
         name: Image name
@@ -114,48 +110,129 @@ def container_image(
     if not language:
         fail("language parameter is required for container_image")
     
-    # Create single application layer with binary and all runfiles
-    # This is a monolithic layer but it's the most maintainable approach given
-    # Bazel's hermetic runfiles structure.
-    # NOTE: TreeArtifacts via root_symlinks require MANIFEST file to resolve
-    pkg_tar(
-        name = name + "_layer_unstripped",
-        srcs = [binary],
-        package_dir = "/app",
-        include_runfiles = True,
-        # Include MANIFEST file explicitly for root_symlinks resolution
-        # This is needed for TreeArtifact-based generated code like OpenAPI clients
-        strip_prefix = ".",
-        tags = ["manual"],
-    )
-    
-    # For Python, strip debug symbols and remove duplicates to reduce image size
+    # For Python apps, create optimized layers
     if language == "python":
+        # First, create full runfiles tar to extract from
+        pkg_tar(
+            name = name + "_full_runfiles",
+            srcs = [binary],
+            package_dir = "/app",
+            include_runfiles = True,
+            strip_prefix = ".",
+            tags = ["manual"],
+        )
+        
+        # Extract and layer Python interpreter
         native.genrule(
-            name = name + "_layer",
-            srcs = [":" + name + "_layer_unstripped"],
-            outs = [name + "_layer.tar"],
+            name = name + "_python_layer",
+            srcs = [":" + name + "_full_runfiles"],
+            outs = [name + "_python_layer.tar"],
             tools = ["//tools/scripts:strip_python.sh"],
             cmd = """
-                # Extract the tar
+                set -e
+                # Extract full runfiles
                 mkdir -p layer_tmp
-                tar -xf $(location :{name}_layer_unstripped) -C layer_tmp
+                tar -xf $(location :{name}_full_runfiles) -C layer_tmp
                 
-                # Strip Python binaries and libraries
-                $(location //tools/scripts:strip_python.sh) layer_tmp/app || true
+                # Find and archive Python interpreter directly into tar
+                # This avoids permission issues with copying
+                cd layer_tmp
+                find app -path "*/rules_python++python+python_*" | tar -cf ../python_tmp.tar -T -
+                cd ..
                 
-                # Repack into tar
-                tar -cf $@ -C layer_tmp .
+                # Extract to temp directory and strip
+                mkdir -p python_layer
+                tar -xf python_tmp.tar -C python_layer
+                $(location //tools/scripts:strip_python.sh) python_layer || true
+                
+                # Create final tar
+                tar -cf $@ -C python_layer .
+                rm -rf layer_tmp python_layer python_tmp.tar
                 """.format(name = name),
             tags = ["manual"],
         )
-    else:
-        # For non-Python languages, use the layer as-is
-        native.alias(
-            name = name + "_layer",
-            actual = ":" + name + "_layer_unstripped",
+        
+        # Extract and layer third-party dependencies
+        native.genrule(
+            name = name + "_deps_layer",
+            srcs = [":" + name + "_full_runfiles"],
+            outs = [name + "_deps_layer.tar"],
+            tools = ["//tools/scripts:strip_python.sh"],
+            cmd = """
+                set -e
+                # Extract full runfiles
+                mkdir -p layer_tmp
+                tar -xf $(location :{name}_full_runfiles) -C layer_tmp
+                
+                # Find and archive deps directly into tar
+                cd layer_tmp
+                find app -path "*/rules_pycross++lock_repos+pypi*" | tar -cf ../deps_tmp.tar -T -
+                cd ..
+                
+                # Extract to temp directory and strip
+                mkdir -p deps_layer
+                tar -xf deps_tmp.tar -C deps_layer
+                $(location //tools/scripts:strip_python.sh) deps_layer || true
+                
+                # Create final tar
+                tar -cf $@ -C deps_layer .
+                rm -rf layer_tmp deps_layer deps_tmp.tar
+                """.format(name = name),
             tags = ["manual"],
         )
+        
+        # Extract app code and required metadata
+        native.genrule(
+            name = name + "_app_layer",
+            srcs = [":" + name + "_full_runfiles"],
+            outs = [name + "_app_layer.tar"],
+            cmd = """
+                set -e
+                # Extract full runfiles
+                mkdir -p layer_tmp
+                tar -xf $(location :{name}_full_runfiles) -C layer_tmp
+                
+                # Find and archive app code directly into tar
+                cd layer_tmp
+                {{
+                    # App code from _main workspace
+                    find app -path "*/_main" 2>/dev/null || true
+                    # MANIFEST files for TreeArtifact resolution
+                    find app -name "MANIFEST" 2>/dev/null || true
+                    # Binary symlinks at root level
+                    find app -maxdepth 1 \\( -type f -o -type l \\) 2>/dev/null || true
+                }} | tar -cf ../app_tmp.tar -T -
+                cd ..
+                
+                # Extract to create final layer
+                mkdir -p app_layer
+                if [ -f app_tmp.tar ] && [ -s app_tmp.tar ]; then
+                    tar -xf app_tmp.tar -C app_layer
+                fi
+                
+                # Create final tar
+                tar -cf $@ -C app_layer .
+                rm -rf layer_tmp app_layer app_tmp.tar
+                """.format(name = name),
+            tags = ["manual"],
+        )
+        
+        layer_targets = [
+            ":" + name + "_python_layer",
+            ":" + name + "_deps_layer",
+            ":" + name + "_app_layer",
+        ]
+    else:
+        # For non-Python (Go), use single layer as before
+        pkg_tar(
+            name = name + "_layer",
+            srcs = [binary],
+            package_dir = "/app",
+            include_runfiles = True,
+            strip_prefix = ".",
+            tags = ["manual"],
+        )
+        layer_targets = [":" + name + "_layer"]
 
     
     binary_name = _get_binary_name(binary)
@@ -188,13 +265,14 @@ def container_image(
             # Go binaries are self-contained executables
             entrypoint = ["/app/" + binary_path]
     
+    # Build list of all layers in order (bottom to top)
+    # CA certs first (changes rarely), then language-specific layers
+    all_tars = ["//tools/cacerts:cacerts"] + layer_targets
+    
     oci_image(
         name = name,
         base = base,
-        tars = [
-            ":" + name + "_layer",
-            "//tools/cacerts:cacerts",  # Add CA certificates for SSL/TLS
-        ],
+        tars = all_tars,
         entrypoint = entrypoint,
         workdir = "/app",
         env = image_env,
