@@ -137,9 +137,9 @@ def container_image(
     ====================================================
     Uses 4 separate layers for optimal caching:
     1. CA certificates (//tools/cacerts:cacerts) - shared across ALL apps
-    2. Python interpreter (//tools/python_runtime:python_runtime_layer) - shared across ALL Python apps
+    2. Python interpreter (/opt/python3.13/{arch}/) - universal location, shared across ALL Python apps
     3. Third-party dependencies (rules_pycross pypi packages) - per-app or shared if deps match
-    4. Application code (_main/ workspace) - unique per app
+    4. Application code (_main/ workspace) - unique per app, includes symlink to universal Python
     
     This layering strategy ensures:
     - Base layers (certs, interpreter) are cached and shared across ALL Python apps
@@ -147,7 +147,7 @@ def container_image(
     - Only app code layer is rebuilt during typical development
     - Registry pushes only upload changed layers (reduces bandwidth)
     - Container pulls only download changed layers (faster deployments)
-    - Maximum cache efficiency through universal base layers
+    - Maximum cache efficiency: all Python apps produce identical Python layer (same content hash)
     
     Args:
         name: Image name
@@ -183,6 +183,8 @@ def container_image(
             tools = ["//tools/scripts:strip_python.sh"],
             cmd = """
                 set -e
+                trap 'rm -rf layer_tmp python_layer' EXIT
+                
                 # Extract full runfiles
                 mkdir -p layer_tmp
                 tar -xf $(location :{name}_full_runfiles) -C layer_tmp
@@ -199,6 +201,11 @@ def container_image(
                 # Extract architecture from path (e.g., x86_64-unknown-linux-gnu)
                 ARCH=$$(basename "$$PYTHON_DIR" | sed 's/.*python_3_13_//')
                 
+                if [ -z "$$ARCH" ] || [ "$$ARCH" = "$$(basename "$$PYTHON_DIR")" ]; then
+                    echo "Error: Failed to extract architecture from $$PYTHON_DIR"
+                    exit 1
+                fi
+                
                 cd ..
                 
                 # Create universal Python location: /opt/python3.13/<arch>/
@@ -207,12 +214,11 @@ def container_image(
                 # Copy Python to universal location
                 cp -r layer_tmp/$$PYTHON_DIR/* python_layer/opt/python3.13/$$ARCH/
                 
-                # Strip the Python installation
-                $(location //tools/scripts:strip_python.sh) python_layer/opt/python3.13/$$ARCH || true
+                # Strip the Python installation (failures are non-fatal for optimization)
+                $(location //tools/scripts:strip_python.sh) python_layer/opt/python3.13/$$ARCH 2>&1 | head -20 || echo "Warning: strip_python.sh encountered issues but continuing"
                 
                 # Create final tar with universal path
                 tar -cf $@ -C python_layer .
-                rm -rf layer_tmp python_layer
                 """.format(name = name),
             tags = ["manual"],
         )
@@ -225,23 +231,33 @@ def container_image(
             tools = ["//tools/scripts:strip_python.sh"],
             cmd = """
                 set -e
+                trap 'rm -rf layer_tmp deps_layer deps_tmp.tar' EXIT
+                
                 # Extract full runfiles
                 mkdir -p layer_tmp
                 tar -xf $(location :{name}_full_runfiles) -C layer_tmp
                 
-                # Find and archive deps directly into tar
+                # Find and archive deps - handle empty case gracefully
                 cd layer_tmp
-                find app -path "*/rules_pycross++lock_repos+pypi*" | tar -cf ../deps_tmp.tar -T -
+                DEPS_PATHS=$$(find app -path "*/rules_pycross++lock_repos+pypi*" || true)
+                if [ -n "$$DEPS_PATHS" ]; then
+                    echo "$$DEPS_PATHS" | tar -cf ../deps_tmp.tar -T -
+                else
+                    # No dependencies - create empty tar
+                    tar -cf ../deps_tmp.tar -T /dev/null
+                fi
                 cd ..
                 
-                # Extract to temp directory and strip
+                # Extract to temp directory and strip if not empty
                 mkdir -p deps_layer
-                tar -xf deps_tmp.tar -C deps_layer
-                $(location //tools/scripts:strip_python.sh) deps_layer || true
+                if [ -s deps_tmp.tar ]; then
+                    tar -xf deps_tmp.tar -C deps_layer
+                    # Strip (failures are non-fatal for optimization)
+                    $(location //tools/scripts:strip_python.sh) deps_layer 2>&1 | head -20 || echo "Warning: strip_python.sh encountered issues but continuing"
+                fi
                 
                 # Create final tar
                 tar -cf $@ -C deps_layer .
-                rm -rf layer_tmp deps_layer deps_tmp.tar
                 """.format(name = name),
             tags = ["manual"],
         )
@@ -253,6 +269,8 @@ def container_image(
             outs = [name + "_app_layer.tar"],
             cmd = """
                 set -e
+                trap 'rm -rf layer_tmp app_layer app_tmp.tar' EXIT
+                
                 # Extract full runfiles
                 mkdir -p layer_tmp
                 tar -xf $(location :{name}_full_runfiles) -C layer_tmp
@@ -269,14 +287,21 @@ def container_image(
                 # Extract architecture from path
                 ARCH=$$(basename "$$PYTHON_DIR" | sed 's/.*python_3_13_//')
                 
+                if [ -z "$$ARCH" ] || [ "$$ARCH" = "$$(basename "$$PYTHON_DIR")" ]; then
+                    echo "Error: Failed to extract architecture from $$PYTHON_DIR"
+                    exit 1
+                fi
+                
                 # Find and archive app code
                 {{
                     # App code from _main workspace
                     find app -path "*/_main" 2>/dev/null || true
                     # MANIFEST files for TreeArtifact resolution
                     find app -name "MANIFEST" 2>/dev/null || true
-                    # Binary symlinks at root level
-                    find app -maxdepth 1 \\( -type f -o -type l \\) 2>/dev/null || true
+                    # Binary wrapper scripts (py_binary stub scripts)
+                    find app -type f -not -path "*/runfiles/*" -not -path "*/rules_python*" -not -path "*/rules_pycross*" 2>/dev/null || true
+                    # Binary symlinks
+                    find app -type l -not -path "*/runfiles/*" 2>/dev/null || true
                 }} | tar -cf ../app_tmp.tar -T -
                 cd ..
                 
@@ -295,7 +320,6 @@ def container_image(
                 
                 # Create final tar with app code and symlink
                 tar -cf $@ -C app_layer .
-                rm -rf layer_tmp app_layer app_tmp.tar
                 """.format(name = name),
             tags = ["manual"],
         )
@@ -330,12 +354,14 @@ def container_image(
     # Determine entrypoint based on language
     if not entrypoint:
         if language == "python":
-            # Use glob pattern to match the Python interpreter for the current architecture
-            # The path is deterministic: /app/{binary}.runfiles/rules_python++python+python_{version}_{arch}/bin/python3
+            # Python interpreter is accessed via symlink from app runfiles to universal location
+            # Symlink: /app/{binary}.runfiles/rules_python++python+python_{version}_{arch}
+            # Target: /opt/python3.13/{arch}/
+            # Use glob pattern to match the architecture-specific path
             entrypoint = [
                 "/bin/sh",
                 "-c",
-                # Use glob pattern to match the Python interpreter for the current architecture
+                # Execute Python from the symlinked path (which points to universal location)
                 'exec /app/{binary_path}.runfiles/rules_python++python+python_{version}_*/bin/python3 /app/$0 "$@"'.format(
                     binary_path = binary_path,
                     version = python_version.replace(".", "_"),

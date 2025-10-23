@@ -36,11 +36,9 @@ test:ci --cache_test_results=yes
 test:ci --test_timeout_filters=-eternal
 
 # Container image build optimization
-# Use minimal downloads when building images - we only need the final pushed image
-# Intermediate layer tars don't need to be downloaded locally in CI
+# Use toplevel downloads - downloads only the final outputs needed
+# Intermediate layer tars are cached remotely but not downloaded locally in CI
 build:ci-images --config=ci
-build:ci-images --remote_download_minimal
-# Download toplevel outputs for oci_push targets
 build:ci-images --remote_download_toplevel
 
 # Test configurations

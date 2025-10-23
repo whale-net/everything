@@ -45,7 +45,7 @@ for layer in python deps app; do
     
     # Show key dependencies
     echo "   Key inputs:"
-    echo "$deps" | grep -E "(\.py$|\.bzl$|strip_python|_full_runfiles)" | head -5 | sed 's/^/     - /'
+    echo "$deps" | grep -E "(\.py$|\.bzl$|strip_python\.sh|_full_runfiles)" | head -5 | sed 's/^/     - /'
     
     echo
 done
