@@ -515,22 +515,15 @@ def run_downgrade(target: str):
 
 @app.callback()
 @rmq_params
-@logging_params
+@logging_params  # Auto-configures logging from environment variables
 @pg_params
 def callback(ctx: typer.Context, app_env: AppEnv = "dev"):
     # Initialize database connection for CLI operations
     init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
     
-    # Configure OTLP-first logging (with CLI flag override)
-    log_config = ctx.obj.get("logging", {})
-    configure_logging(
-        service_name="manman-host-cli",
-        service_version="1.0.0",
-        deployment_environment=app_env,
-        log_level="DEBUG",
-        enable_otlp=log_config.get("enable_otlp", True),  # Default True, CLI can override
-        json_format=False,
-    )
+    # Logging is already configured by @logging_params decorator
+    # No need to call configure_logging() here!
+    # Config read from: APP_NAME, APP_DOMAIN, APP_TYPE, APP_VERSION, LOG_LEVEL, LOG_OTLP, etc.
 
 
 # alembic helpers using consolidated library

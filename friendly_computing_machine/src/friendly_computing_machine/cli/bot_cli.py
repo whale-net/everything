@@ -13,7 +13,6 @@ from libs.python.cli.params import (
     AppEnv,
     ManManExperienceApiUrl,
 )
-from libs.python.logging import configure_logging
 from libs.python.cli.providers.postgres import (
     DatabaseContext,
     PostgresUrl,
@@ -36,19 +35,11 @@ app = typer.Typer()
 
 
 @app.callback()
-@logging_params
-def callback(ctx: typer.Context, app_env: AppEnv):
-    # Configure OTLP-first logging (with CLI flag override)
-    log_config = ctx.obj.get("logging", {})
-    configure_logging(
-        service_name="friendly-computing-machine-bot",
-        service_version="1.0.0",
-        deployment_environment=app_env,
-        log_level="DEBUG",
-        enable_otlp=log_config.get("enable_otlp", True),  # Default True, CLI can override
-        json_format=False,
-    )
-    
+@temporal_params
+@gemini_params
+@slack_params
+@logging_params  # Auto-configures logging from environment variables
+def callback(ctx: typer.Context, app_env: AppEnv, manman_experience_api_url: ManManExperienceApiUrl):
     # Get contexts from decorators
     temporal_config = ctx.obj.get('temporal', {})
     gemini_config = ctx.obj.get('gemini', {})

@@ -108,8 +108,13 @@ apps_config = build_apps_config(
         'RABBITMQ_PORT': rabbitmq_port,
         'RABBITMQ_USER': rabbitmq_user,
         'RABBITMQ_PASSWORD': rabbitmq_password,
+        # Logging configuration (applies to all apps by default)
+        # Individual apps can override via their Helm values
         'LOG_OTLP': 'true',  # Enable OTLP logging in dev
         'LOG_LEVEL': 'DEBUG',  # Verbose logging for development
+        'LOG_CONSOLE': 'true',  # Also log to console for visibility
+        'LOG_JSON_FORMAT': 'false',  # Human-readable logs in dev
+        # Note: Worker apps may want to override LOG_OTLP=false for console-only logging
     }
 )
 

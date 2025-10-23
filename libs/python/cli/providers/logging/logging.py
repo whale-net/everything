@@ -148,26 +148,29 @@ def create_logging_context(
 
 def logging_params(func: Callable) -> Callable:
     """
-    Decorator that injects logging parameters into the callback.
+    Decorator that auto-configures logging and injects parameters.
     
-    Reads from CLI flags or environment variables:
-    - LOG_OTLP (true/1/yes) or --log-otlp flag
-    - LOG_LEVEL (DEBUG/INFO/WARNING/ERROR/CRITICAL) or --log-level flag
+    Automatically calls configure_logging() using environment variables:
+    - APP_NAME, APP_DOMAIN, APP_TYPE, APP_VERSION (build-time metadata)
+    - LOG_LEVEL, LOG_OTLP, LOG_JSON_FORMAT, LOG_CONSOLE (runtime config)
     
-    Environment variables take precedence if set.
+    CLI flags can override environment variables if needed.
     
     Usage:
         @app.callback()
-        @logging_params
+        @logging_params  # Logging is auto-configured!
         def callback(ctx: typer.Context, ...):
+            # Logging already configured, just use it
             log_config = ctx.obj['logging']
-            # log_config = {'enable_otlp': True/False, 'log_level': 'INFO'}
     """
     from libs.python.cli.params_base import _create_param_decorator
+    from libs.python.logging import configure_logging
     
-    # Read defaults from environment variables
+    # Read environment variables for runtime config
     env_log_otlp = os.getenv('LOG_OTLP', '').lower() in ('true', '1', 'yes')
     env_log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+    env_json_format = os.getenv('LOG_JSON_FORMAT', '').lower() in ('true', '1', 'yes')
+    env_console = os.getenv('LOG_CONSOLE', 'true').lower() in ('true', '1', 'yes')
     
     # Validate log level
     valid_levels = ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
@@ -186,25 +189,36 @@ def logging_params(func: Callable) -> Callable:
     ]
     
     def extractor(kwargs):
-        # Environment variables take precedence over CLI flags
+        # Get runtime config from env vars (with CLI override)
         enable_otlp = os.getenv('LOG_OTLP', '').lower() in ('true', '1', 'yes')
         if not enable_otlp:
-            # Fall back to CLI flag if env var not set
             enable_otlp = kwargs.pop('log_otlp', False)
         else:
-            kwargs.pop('log_otlp', None)  # Remove from kwargs
+            kwargs.pop('log_otlp', None)
         
-        # Environment variable takes precedence for log level
         log_level = os.getenv('LOG_LEVEL', '').upper()
         if not log_level or log_level not in valid_levels:
-            # Fall back to CLI flag if env var not set or invalid
             log_level = kwargs.pop('log_level', 'INFO')
         else:
-            kwargs.pop('log_level', None)  # Remove from kwargs
+            kwargs.pop('log_level', None)
+        
+        json_format = os.getenv('LOG_JSON_FORMAT', '').lower() in ('true', '1', 'yes')
+        enable_console = os.getenv('LOG_CONSOLE', 'true').lower() in ('true', '1', 'yes')
+        
+        # Auto-configure logging using consolidated library
+        # This reads APP_NAME, APP_DOMAIN, APP_TYPE, etc. from environment
+        configure_logging(
+            log_level=log_level,
+            enable_otlp=enable_otlp,
+            enable_console=enable_console,
+            json_format=json_format,
+        )
         
         return {
             'enable_otlp': enable_otlp,
             'log_level': log_level,
+            'json_format': json_format,
+            'enable_console': enable_console,
         }
     
     return _create_param_decorator(param_specs, 'logging', extractor)(func)

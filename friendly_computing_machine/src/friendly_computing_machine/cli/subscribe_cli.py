@@ -4,7 +4,6 @@ from typing import Annotated, Optional
 
 import typer
 
-from libs.python.logging import configure_logging
 from libs.python.cli.params import logging_params
 from libs.python.cli.providers.postgres import (
     DatabaseContext,
@@ -56,7 +55,7 @@ app = typer.Typer()
 @app.callback()
 @rmq_params      # Injects 7 RabbitMQ parameters
 @slack_params    # Injects 2 Slack parameters
-@logging_params  # Injects 1 logging parameter: --log-otlp
+@logging_params  # Auto-configures logging from environment variables
 def callback(
     ctx: typer.Context,
     app_env: AppEnv,
@@ -70,17 +69,6 @@ def callback(
     
     Note: Service parameters (RabbitMQ, Slack, Logging) are injected by decorators.
     """
-    # Configure OTLP-first logging (with CLI flag override)
-    log_config = ctx.obj.get("logging", {})
-    configure_logging(
-        service_name="friendly-computing-machine-subscribe",
-        service_version="1.0.0",
-        deployment_environment=app_env,
-        log_level="DEBUG",
-        enable_otlp=log_config.get("enable_otlp", True),  # Default True, CLI can override
-        json_format=False,
-    )
-    
     logger.debug("Subscribe CLI callback starting")
     
     # Create Slack context with FCM initialization
