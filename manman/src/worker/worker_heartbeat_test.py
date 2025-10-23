@@ -13,15 +13,15 @@ class TestWorkerHeartbeat(unittest.TestCase):
     """Test worker heartbeat configuration"""
 
     @patch("manman.src.worker.worker_service.get_auth_api_client")
-    @patch("manman.src.worker.worker_service.WorkerAPIClient")
+    @patch("manman.src.worker.worker_service.WorkerDALClient")
     def test_default_heartbeat_length(self, mock_api_client_class, mock_auth_client):
         """Test that WorkerService uses default heartbeat length of 2 seconds"""
         # Mock the API client and worker instance
         mock_api_client = Mock()
         mock_api_client_class.return_value = mock_api_client
         mock_worker_instance = Mock()
-        mock_api_client.worker_create.return_value = mock_worker_instance
-        mock_api_client.close_other_workers.return_value = None
+        mock_api_client.create_worker.return_value = mock_worker_instance
+        mock_api_client.shutdown_other_workers.return_value = None
 
         # Mock the connection
         mock_connection = Mock()
@@ -40,15 +40,15 @@ class TestWorkerHeartbeat(unittest.TestCase):
         self.assertEqual(service._heartbeat_length, 2)
 
     @patch("manman.src.worker.worker_service.get_auth_api_client")
-    @patch("manman.src.worker.worker_service.WorkerAPIClient")
+    @patch("manman.src.worker.worker_service.WorkerDALClient")
     def test_custom_heartbeat_length(self, mock_api_client_class, mock_auth_client):
         """Test that WorkerService uses custom heartbeat length when provided"""
         # Mock the API client and worker instance
         mock_api_client = Mock()
         mock_api_client_class.return_value = mock_api_client
         mock_worker_instance = Mock()
-        mock_api_client.worker_create.return_value = mock_worker_instance
-        mock_api_client.close_other_workers.return_value = None
+        mock_api_client.create_worker.return_value = mock_worker_instance
+        mock_api_client.shutdown_other_workers.return_value = None
 
         # Mock the connection
         mock_connection = Mock()
@@ -71,7 +71,7 @@ class TestWorkerHeartbeat(unittest.TestCase):
         self.assertEqual(service._heartbeat_length, custom_heartbeat)
 
     @patch("manman.src.worker.worker_service.get_auth_api_client")
-    @patch("manman.src.worker.worker_service.WorkerAPIClient")
+    @patch("manman.src.worker.worker_service.WorkerDALClient")
     def test_heartbeat_length_simulation_lost_condition(
         self, mock_api_client_class, mock_auth_client
     ):
@@ -80,8 +80,8 @@ class TestWorkerHeartbeat(unittest.TestCase):
         mock_api_client = Mock()
         mock_api_client_class.return_value = mock_api_client
         mock_worker_instance = Mock()
-        mock_api_client.worker_create.return_value = mock_worker_instance
-        mock_api_client.close_other_workers.return_value = None
+        mock_api_client.create_worker.return_value = mock_worker_instance
+        mock_api_client.shutdown_other_workers.return_value = None
 
         # Mock the connection
         mock_connection = Mock()

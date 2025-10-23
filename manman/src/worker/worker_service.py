@@ -13,7 +13,7 @@ from manman.src.models import (
 )
 
 # from sqlalchemy.orm import Session
-from manman.src.repository.api_client import WorkerAPIClient
+from manman.clients import WorkerDALClient
 from manman.src.constants import EntityRegistry
 from manman.src.util import NamedThreadPool, get_auth_api_client
 from manman.src.worker.abstract_service import ManManService
@@ -49,15 +49,11 @@ class WorkerService(ManManService):
         heartbeat_length: int = 2,
     ):
         # pre-init
-        self._wapi = WorkerAPIClient(
-            host_url,
-            auth_api_client=get_auth_api_client(),
-            sa_client_id=sa_client_id,
-            sa_client_secret=sa_client_secret,
-        )
+        # TODO: Add access token support when authentication is re-enabled
+        self._wapi = WorkerDALClient(base_url=host_url, access_token=None)
 
         try:
-            self._worker_instance = self._wapi.worker_create()
+            self._worker_instance = self._wapi.create_worker()
         except ConnectionError as e:
             logger.exception(e)
             # if you see this while debugging, wait for tilt to start the api server
@@ -66,8 +62,8 @@ class WorkerService(ManManService):
             logger.exception(e)
             raise RuntimeError("failed to create worker instance") from e
 
-        # SHUT DOWN OTHER WORKERS to enfroce single worker for now
-        self._wapi.close_other_workers(self._worker_instance)
+        # SHUT DOWN OTHER WORKERS to enforce single worker for now
+        self._wapi.shutdown_other_workers(self._worker_instance)
 
         # Store heartbeat length and override the HEARTBEAT_INTERVAL
         self._heartbeat_length = heartbeat_length
@@ -85,7 +81,7 @@ class WorkerService(ManManService):
         self._futures = []
 
     def _send_heartbeat(self):
-        self._wapi.worker_heartbeat(self._worker_instance)
+        self._wapi.heartbeat_worker(self._worker_instance)
 
     def _initialize_service(self):
         logger.info("noop")
@@ -219,10 +215,10 @@ class WorkerService(ManManService):
         logger.info(
             "All dependent servers shutdown complete, proceeding with worker shutdown"
         )
-        self._wapi.worker_shutdown(self._worker_instance)
+        self._wapi.shutdown_worker(self._worker_instance)
 
     def _create_server(self, game_server_config_id: int):
-        config: GameServerConfig = self._wapi.game_server_config(game_server_config_id)
+        config: GameServerConfig = self._wapi.get_game_server_config(game_server_config_id)
 
         # Temp check to prevent duplicates
         # ideally this will be a check against the database via api

@@ -24,12 +24,12 @@ class TestWorkerShutdownCascade(unittest.TestCase):
         self.mock_worker_instance = Mock()
         self.mock_worker_instance.worker_id = 123
 
-        self.mock_wapi.worker_create.return_value = self.mock_worker_instance
-        self.mock_wapi.close_other_workers.return_value = None
-        self.mock_wapi.worker_shutdown.return_value = None
+        self.mock_wapi.create_worker.return_value = self.mock_worker_instance
+        self.mock_wapi.shutdown_other_workers.return_value = None
+        self.mock_wapi.shutdown_worker.return_value = None
 
     @patch("manman.src.worker.worker_service.get_auth_api_client")
-    @patch("manman.src.worker.worker_service.WorkerAPIClient")
+    @patch("manman.src.worker.worker_service.WorkerDALClient")
     def test_shutdown_with_no_servers(self, mock_api_client_class, mock_auth_client):
         """Test worker shutdown when no dependent servers exist."""
         mock_api_client_class.return_value = self.mock_wapi
@@ -47,12 +47,12 @@ class TestWorkerShutdownCascade(unittest.TestCase):
         service._shutdown()
 
         # Verify worker API shutdown was called
-        self.mock_wapi.worker_shutdown.assert_called_once_with(
+        self.mock_wapi.shutdown_worker.assert_called_once_with(
             self.mock_worker_instance
         )
 
     @patch("manman.src.worker.worker_service.get_auth_api_client")
-    @patch("manman.src.worker.worker_service.WorkerAPIClient")
+    @patch("manman.src.worker.worker_service.WorkerDALClient")
     def test_shutdown_cascade_to_dependent_servers(
         self, mock_api_client_class, mock_auth_client
     ):
@@ -100,12 +100,12 @@ class TestWorkerShutdownCascade(unittest.TestCase):
         mock_server2._trigger_internal_shutdown.assert_called_once()
 
         # Verify worker API shutdown was called after servers
-        self.mock_wapi.worker_shutdown.assert_called_once_with(
+        self.mock_wapi.shutdown_worker.assert_called_once_with(
             self.mock_worker_instance
         )
 
     @patch("manman.src.worker.worker_service.get_auth_api_client")
-    @patch("manman.src.worker.worker_service.WorkerAPIClient")
+    @patch("manman.src.worker.worker_service.WorkerDALClient")
     def test_shutdown_waits_for_server_completion(
         self, mock_api_client_class, mock_auth_client
     ):
@@ -155,12 +155,12 @@ class TestWorkerShutdownCascade(unittest.TestCase):
 
         # Verify shutdown was triggered and worker shutdown was called
         mock_server._trigger_internal_shutdown.assert_called_once()
-        self.mock_wapi.worker_shutdown.assert_called_once_with(
+        self.mock_wapi.shutdown_worker.assert_called_once_with(
             self.mock_worker_instance
         )
 
     @patch("manman.src.worker.worker_service.get_auth_api_client")
-    @patch("manman.src.worker.worker_service.WorkerAPIClient")
+    @patch("manman.src.worker.worker_service.WorkerDALClient")
     def test_shutdown_handles_already_shutdown_servers(
         self, mock_api_client_class, mock_auth_client
     ):
@@ -191,7 +191,7 @@ class TestWorkerShutdownCascade(unittest.TestCase):
         mock_server._trigger_internal_shutdown.assert_not_called()
 
         # Verify worker API shutdown was still called
-        self.mock_wapi.worker_shutdown.assert_called_once_with(
+        self.mock_wapi.shutdown_worker.assert_called_once_with(
             self.mock_worker_instance
         )
 

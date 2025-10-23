@@ -20,81 +20,85 @@ echo -e "${BLUE}Syncing Generated OpenAPI Clients${NC}"
 echo "=================================="
 echo
 
-# Discover all openapi_client targets using Bazel query
-echo -e "${YELLOW}Discovering OpenAPI client targets...${NC}"
+# Build all generated clients
+echo -e "${YELLOW}Building generated clients...${NC}"
 cd "$REPO_ROOT"
 
-# Query for all targets with "openapi_client_rule" in their kind
-# This finds targets like //generated/manman:experience_api
-CLIENT_TARGETS=$(bazel query 'kind("openapi_client_rule", //generated/...)' 2>/dev/null || echo "")
-
-if [ -z "$CLIENT_TARGETS" ]; then
-    echo -e "${YELLOW}⚠${NC}  No OpenAPI client targets found"
-    exit 0
-fi
-
-# Build all discovered clients
-echo -e "${YELLOW}Building OpenAPI clients...${NC}"
+# Build everything under //generated/
 bazel build //generated/...
 
 echo
 echo -e "${YELLOW}Syncing clients to local directory...${NC}"
 echo
 
-# Sync top-level __init__.py if it exists
+# Find all generated client directories in bazel-bin/generated/
+# Look for directories that contain __init__.py, api/, models/ structure (typical OpenAPI client structure)
+total_synced=0
+
+# Sync top-level generated/__init__.py
 if [ -f "$REPO_ROOT/bazel-bin/generated/__init__.py" ]; then
+    mkdir -p "$REPO_ROOT/generated"
     rm -f "$REPO_ROOT/generated/__init__.py"
     cp "$REPO_ROOT/bazel-bin/generated/__init__.py" "$REPO_ROOT/generated/"
     chmod u+w "$REPO_ROOT/generated/__init__.py"
     echo -e "${GREEN}✓${NC} Synced generated/__init__.py"
 fi
 
-# Process each client target
-total_synced=0
-for target in $CLIENT_TARGETS; do
-    # Extract package and target name from //generated/namespace:target
-    package=$(echo "$target" | sed 's|//||' | sed 's|:.*||')
-    client_name=$(echo "$target" | sed 's|.*:||')
+# Find all namespace directories under generated/ in bazel-bin
+for namespace_dir in "$REPO_ROOT/bazel-bin/generated"/*; do
+    if [ ! -d "$namespace_dir" ]; then
+        continue
+    fi
     
-    # Source directory (Bazel build output)
-    BAZEL_BIN_DIR="$REPO_ROOT/bazel-bin/$package"
-    SOURCE_CLIENT="$BAZEL_BIN_DIR/$client_name"
+    namespace=$(basename "$namespace_dir")
     
-    # Destination directory
-    DEST_DIR="$REPO_ROOT/$package"
+    # Skip if it's not a valid namespace directory
+    if [[ "$namespace" == "_"* ]] || [[ "$namespace" == "."* ]]; then
+        continue
+    fi
     
-    # Create destination directory if needed
-    mkdir -p "$DEST_DIR"
-    
-    # Sync namespace __init__.py if it exists and hasn't been synced yet
-    NAMESPACE_INIT="$BAZEL_BIN_DIR/__init__.py"
-    if [ -f "$NAMESPACE_INIT" ] && [ ! -f "$DEST_DIR/__init__.py" ]; then
-        rm -f "$DEST_DIR/__init__.py"
-        cp "$NAMESPACE_INIT" "$DEST_DIR/"
-        chmod u+w "$DEST_DIR/__init__.py"
-        namespace=$(basename "$package")
+    # Sync namespace __init__.py if it exists
+    if [ -f "$namespace_dir/__init__.py" ]; then
+        mkdir -p "$REPO_ROOT/generated/$namespace"
+        rm -f "$REPO_ROOT/generated/$namespace/__init__.py"
+        cp "$namespace_dir/__init__.py" "$REPO_ROOT/generated/$namespace/"
+        chmod u+w "$REPO_ROOT/generated/$namespace/__init__.py"
         echo -e "${GREEN}✓${NC} Synced generated/$namespace/__init__.py"
     fi
     
-    # Sync the client
-    if [ -d "$SOURCE_CLIENT" ]; then
+    # Find all client directories in this namespace
+    # Look for directories that have typical OpenAPI client structure
+    for client_dir in "$namespace_dir"/*; do
+        if [ ! -d "$client_dir" ]; then
+            continue
+        fi
+        
+        client_name=$(basename "$client_dir")
+        
+        # Skip if it's not a valid client directory (check for api or models subdirs)
+        if [ ! -d "$client_dir/api" ] && [ ! -d "$client_dir/models" ]; then
+            continue
+        fi
+        
+        # This looks like a generated OpenAPI client - sync it
+        dest_dir="$REPO_ROOT/generated/$namespace"
+        mkdir -p "$dest_dir"
+        
         # Remove old version if exists (make writable first)
-        if [ -d "$DEST_DIR/$client_name" ]; then
-            chmod -R u+w "$DEST_DIR/$client_name" 2>/dev/null || true
-            rm -rf "$DEST_DIR/$client_name"
+        if [ -d "$dest_dir/$client_name" ]; then
+            chmod -R u+w "$dest_dir/$client_name" 2>/dev/null || true
+            rm -rf "$dest_dir/$client_name"
         fi
         
         # Copy new version
-        cp -r "$SOURCE_CLIENT" "$DEST_DIR/"
-        chmod -R u+w "$DEST_DIR/$client_name"
+        cp -r "$client_dir" "$dest_dir/"
+        chmod -R u+w "$dest_dir/$client_name"
         
         # Count files
-        file_count=$(find "$DEST_DIR/$client_name" -type f -name "*.py" 2>/dev/null | wc -l)
-        echo -e "${GREEN}✓${NC} Synced $client_name ($file_count Python files)"
+        file_count=$(find "$dest_dir/$client_name" -type f -name "*.py" 2>/dev/null | wc -l)
+        echo -e "${GREEN}✓${NC} Synced $namespace/$client_name ($file_count Python files)"
         ((total_synced++))
-    else
-        echo -e "${YELLOW}⚠${NC}  Skipped $client_name (not found at $SOURCE_CLIENT)"
-    fi
+    done
 done
 
 echo

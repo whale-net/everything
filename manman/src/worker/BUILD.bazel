@@ -7,6 +7,7 @@ py_library(
     visibility = ["//manman:__subpackages__"],
     deps = [
         "//manman/src:manman_core",
+        "//manman/clients:clients",
         "//manman/src/repository:manman_repository",
         "//libs/python/cli:params_base",
         "//libs/python/cli:types",
