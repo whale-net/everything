@@ -10,7 +10,7 @@ from manman.src.models import (
     GameServerInstance,
     ServerType,
 )
-from manman.src.repository.api_client import WorkerAPIClient
+from manman.clients import WorkerDALClient
 from manman.src.constants import EntityRegistry
 from manman.src.util import env_list_to_dict
 from manman.src.worker.abstract_service import ManManService
@@ -50,7 +50,7 @@ class Server(ManManService):
         self,
         rabbitmq_connection: Connection,
         *,
-        wapi: WorkerAPIClient,
+        wapi: WorkerDALClient,
         root_install_directory: str,
         config: GameServerConfig,
         worker_id: int,
@@ -59,14 +59,14 @@ class Server(ManManService):
         self._wapi = wapi
         self._worker_id = worker_id
         self._config = config
-        self._instance = self._wapi.game_server_instance_create(
-            self._config, self._worker_id
+        self._instance = self._wapi.create_game_server_instance(
+            self._config.game_server_config_id, self._worker_id
         )
 
         # Initialize the ManManService base class
         super().__init__(rabbitmq_connection)
 
-        self._game_server = self._wapi.game_server(self._config.game_server_id)
+        self._game_server = self._wapi.get_game_server(self._config.game_server_id)
         logger.info("starting instance %s", self._instance.model_dump_json())
 
         self._root_install_directory = root_install_directory
@@ -88,7 +88,7 @@ class Server(ManManService):
 
     def _send_heartbeat(self):
         """Send a heartbeat for the game server instance."""
-        self._wapi.server_heartbeat(self._instance)
+        self._wapi.heartbeat_game_server_instance(self._instance.game_server_instance_id)
 
     def _initialize_service(self):
         """Initialize the server service - install SteamCMD."""
@@ -164,7 +164,7 @@ class Server(ManManService):
 
             if hasattr(self, "_proc"):
                 self._proc.stop()
-            self._instance = self._wapi.game_server_instance_shutdown(self._instance)
+            self._instance = self._wapi.shutdown_game_server_instance(self._instance)
 
             logger.info(
                 "shutdown complete for instance %s",

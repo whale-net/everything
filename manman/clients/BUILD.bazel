@@ -1,0 +1,28 @@
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+
+# API client wrappers for ManMan services
+py_library(
+    name = "clients",
+    srcs = [
+        "__init__.py",
+        "worker_dal_client.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//manman/src:manman_core",
+        "//generated/manman:worker_dal_api",
+    ],
+)
+
+py_test(
+    name = "worker_dal_client_test",
+    srcs = ["test_worker_dal_client.py"],
+    main = "test_worker_dal_client.py",
+    deps = [
+        ":clients",
+        "//manman/src:manman_core",
+        "//generated/manman:worker_dal_api",
+        "@pypi//:pytest",
+    ],
+    size = "small",
+)
