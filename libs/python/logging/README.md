@@ -1,78 +1,66 @@
 # Consolidated Structured Logging
 
-A standardized logging library with rich context and OpenTelemetry integration.
+**OTLP-first structured logging** with full OpenTelemetry semantic conventions support.
+
+## Primary Use Case: OpenTelemetry (OTLP)
+
+This library is designed **OTLP-first** - all your rich context is sent to OpenTelemetry collectors as proper structured attributes following OTEL semantic conventions. Console output is for debugging only.
 
 ## Features
 
-- **Automatic Context Injection**: Environment, domain, app name, app type, and more
-- **OpenTelemetry Integration**: Automatic trace/span correlation
-- **Kubernetes Aware**: Auto-detects pod, node, namespace from environment
-- **Request Correlation**: Track requests across services with correlation IDs
-- **Flexible Formatting**: JSON for production, colored text for development
+- **OTLP Primary Backend**: All logs sent to OpenTelemetry collector with full context
+- **OTEL Semantic Conventions**: HTTP, K8s, service attributes follow standards
+- **Automatic Context Injection**: Environment, domain, app metadata as resource attributes
+- **Request Context**: User ID, request ID, correlation as log attributes
+- **Trace Correlation**: Automatic trace_id/span_id linking
+- **Kubernetes Aware**: Auto-detects pod, node, namespace
 - **Type-Safe**: Full type hints and dataclass-based context
+- **Console Debug**: Optional simple text output for local development
 
-## Standard Attributes
+## Standard Attributes → OTLP Mapping
 
-Every log automatically includes:
+All attributes are sent to OTLP following semantic conventions:
 
-### Application Metadata
-- `environment` - dev, staging, prod
-- `domain` - api, web, worker, etc.
-- `app_name` - hello-fastapi, manman-worker
-- `app_type` - external-api, internal-api, worker, job
-- `version` - v1.2.3 or commit SHA
-- `commit_sha` - Full git commit
+### Resource Attributes (Stable Service Metadata)
+- `service.name` ← app_name
+- `service.namespace` ← domain
+- `service.version` ← version
+- `service.type` ← app_type (custom)
+- `deployment.environment` ← environment
+- `k8s.pod.name` ← pod_name
+- `k8s.namespace.name` ← namespace
+- `k8s.node.name` ← node_name
+- `k8s.container.name` ← container_name
+- `host.name` ← hostname
+- `host.arch` ← platform
+- `vcs.commit.id` ← commit_sha
 
-### Kubernetes Context
-- `pod_name` - K8s pod name
-- `container_name` - Container name
-- `node_name` - K8s node name
-- `namespace` - K8s namespace
+### Log Record Attributes (Request/Operation Context)
+- `request.id` ← request_id
+- `correlation.id` ← correlation_id
+- `enduser.id` ← user_id (OTEL semantic convention)
+- `http.request.method` ← http_method
+- `http.route` ← http_path
+- `http.response.status_code` ← http_status_code
+- `client.address` ← client_ip
+- `worker.id` ← worker_id (custom)
+- `task.id` ← task_id (custom)
+- `operation.name` ← operation (custom)
 
-### Request/Operation Context
-- `request_id` - Request identifier
-- `correlation_id` - Cross-service correlation
-- `user_id` - User identifier
-- `session_id` - Session identifier
-- `operation` - Operation being performed
-- `resource_id` - Resource being operated on
-
-### HTTP Context (for APIs)
-- `http_method` - GET, POST, etc.
-- `http_path` - Request path
-- `http_status_code` - Response status
-- `client_ip` - Client IP address
-- `user_agent` - Client user agent
-
-### Worker Context
-- `worker_id` - Worker identifier
-- `task_id` - Task identifier
-- `job_id` - Job identifier
-
-### OpenTelemetry
-- `trace_id` - Trace identifier
-- `span_id` - Span identifier
-- `trace_flags` - Trace flags
-
-### Source Location
-- `module` - Python module
-- `function` - Function name
-- `line` - Line number
-- `file` - File path
-
-### Platform
-- `platform` - linux/amd64, linux/arm64
-- `architecture` - amd64, arm64
-- `bazel_target` - Bazel build target
+### Automatic Trace Correlation
+- `trace_id` - From active OpenTelemetry span
+- `span_id` - From active OpenTelemetry span
+- `trace_flags` - From active OpenTelemetry span
 
 ## Quick Start
 
-### 1. Configure at Startup
+### 1. Configure at Startup (OTLP-First)
 
 ```python
 from libs.python.logging import configure_logging
 
 # Configure once in your app's main entry point
+# OTLP is enabled by default - this is the primary use case
 configure_logging(
     app_name="my-app",
     domain="api",
@@ -80,36 +68,40 @@ configure_logging(
     environment="production",
     version="v1.2.3",
     log_level="INFO",
-    enable_otlp=True,  # Enable OpenTelemetry export
-    json_format=True,  # JSON for production
+    # OTLP enabled by default - sends to collector
+    enable_otlp=True,  # Default: True
+    # Console for debugging only
+    enable_console=True,  # Default: True
+    json_format=False,    # Default: False (simple text for debug)
 )
 ```
 
-### 2. Get Logger and Use
+### 2. Use Standard Python Logging
 
 ```python
-from libs.python.logging import get_logger
+import logging
 
-logger = get_logger(__name__)
+# Standard Python logging works - context is automatic!
+logger = logging.getLogger(__name__)
 
-# Basic logging - context is automatic
+# All logs sent to OTLP with resource + log attributes
 logger.info("Server started")
 
-# Add request-specific context
+# Add request-specific context as OTLP log attributes
 logger.info("Processing request", extra={
     "request_id": "req-123",
     "user_id": "user-456",
 })
 ```
 
-### 3. Update Context Per-Request
+### 3. Or Use Enhanced Context Logger
 
 ```python
-from libs.python.logging import update_context, get_logger
+from libs.python.logging import get_logger, update_context
 
 logger = get_logger(__name__)
 
-# Set context for this request (thread-safe)
+# Set context once - automatically added to all logs
 update_context(
     request_id="req-abc-123",
     user_id="user-789",
@@ -117,7 +109,7 @@ update_context(
     http_path="/api/orders",
 )
 
-# All subsequent logs include this context automatically
+# All subsequent logs include this context as OTLP attributes
 logger.info("Validating payload")
 logger.info("Creating order")
 ```
@@ -237,41 +229,109 @@ export BAZEL_TARGET=//demo/my-app:my-app
 
 ## Output Formats
 
-### JSON (Production)
+### OTLP Export (PRIMARY - Production Use)
 
+All logs are sent to OpenTelemetry collector as structured OTLP log records:
+
+**Resource Attributes** (set once per service instance):
+```json
+{
+  "service.name": "my-api",
+  "service.namespace": "api",
+  "service.version": "v1.2.3",
+  "deployment.environment": "production",
+  "k8s.pod.name": "my-api-xyz",
+  "k8s.namespace.name": "production",
+  "vcs.commit.id": "abc123def456"
+}
+```
+
+**Log Record** (per log call):
 ```json
 {
   "timestamp": "2025-10-23T10:30:45.123Z",
-  "severity": "INFO",
-  "severity_number": 20,
-  "message": "Processing request",
-  "environment": "production",
-  "domain": "api",
-  "app_name": "my-api",
-  "app_type": "external-api",
-  "version": "v1.2.3",
-  "request_id": "req-abc-123",
-  "user_id": "user-789",
-  "http_method": "POST",
-  "http_path": "/api/orders",
-  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
-  "span_id": "00f067aa0ba902b7",
-  "source": {
-    "module": "main",
-    "function": "create_order",
-    "line": 45,
-    "file": "/app/main.py"
+  "severity_number": 9,  // INFO
+  "severity_text": "INFO",
+  "body": "Processing request",
+  "attributes": {
+    "request.id": "req-abc-123",
+    "enduser.id": "user-789",
+    "http.request.method": "POST",
+    "http.route": "/api/orders",
+    "http.response.status_code": 201,
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "span_id": "00f067aa0ba902b7"
   }
 }
 ```
 
-### Colored Console (Development)
+### Console Output (DEBUG - Development Only)
+
+Simple text format for local debugging:
+```
+2025-10-23 10:30:45 - [my-api] main - INFO - Processing request
+```
+
+Or JSON if `json_format=True`:
+```json
+{
+  "timestamp": "2025-10-23 10:30:45",
+  "severity": "INFO",
+  "message": "Processing request",
+  "app_name": "my-api",
+  "request_id": "req-abc-123"
+}
+```
+
+## Architecture: OTLP-First Design
 
 ```
-2025-10-23 10:30:45 - [my-api | production | req=abc123] INFO - main.create_order:45 - Processing request
+┌─────────────────────────────────────────────────────────┐
+│ Your App: logger.info("message", extra={...})          │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│ Python logging.Logger                                    │
+│ + LogContext (thread-safe contextvars)                  │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          ├──────────────────┬────────────┐
+                          ▼                  ▼            ▼
+    ┌─────────────────────────────┐ ┌──────────────┐ ┌──────────┐
+    │ OTELContextHandler          │ │ Console      │ │ (others) │
+    │ (PRIMARY)                   │ │ (debug only) │ │          │
+    └─────────────────────────────┘ └──────────────┘ └──────────┘
+                │                           │
+                ▼                           ▼
+    ┌─────────────────────────────┐ ┌──────────────┐
+    │ OTLP SDK                    │ │ Simple Text  │
+    │ - Maps to OTEL semantics    │ │ Formatter    │
+    │ - Resource attributes       │ └──────────────┘
+    │ - Log record attributes     │
+    │ - Batch processing          │
+    └─────────────────────────────┘
+                │
+                ▼
+    ┌─────────────────────────────────────┐
+    │ OTLP Collector (gRPC)               │
+    │ ↓                                   │
+    │ Grafana Loki (logs)                 │
+    │ Grafana Tempo (traces)              │
+    │ Prometheus (metrics)                │
+    │                                     │
+    │ Automatic correlation via           │
+    │ trace_id/span_id                    │
+    └─────────────────────────────────────┘
 ```
 
-## Advanced Usage
+### Why OTLP-First?
+
+1. **Structured Observability**: Logs correlated with traces and metrics
+2. **Semantic Conventions**: Industry-standard attribute names
+3. **Efficient Transport**: Batched gRPC with protobuf encoding
+4. **Vendor Neutral**: Works with any OTLP-compatible backend
+5. **Rich Context**: All attributes preserved, not flattened to text
 
 ### Custom Context Attributes
 

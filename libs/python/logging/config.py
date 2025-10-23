@@ -10,6 +10,7 @@ from typing import Optional, Dict, Any
 
 from libs.python.logging.context import LogContext, set_context
 from libs.python.logging.formatters import StructuredFormatter
+from libs.python.logging.otel_handler import OTELContextHandler
 
 try:
     from opentelemetry._logs import set_logger_provider
@@ -35,20 +36,23 @@ def configure_logging(
     environment: Optional[str] = None,
     version: Optional[str] = None,
     log_level: str = "INFO",
-    enable_otlp: bool = False,
+    enable_otlp: bool = True,  # Changed default to True - OTLP-first
     otlp_endpoint: Optional[str] = None,
     enable_console: bool = True,
-    json_format: bool = True,
+    json_format: bool = False,  # Changed default to False - simple console for debug
     force_reconfigure: bool = False,
     **context_kwargs,
 ) -> LogContext:
-    """Configure logging for the application.
+    """Configure logging for the application with OTLP as the primary backend.
     
     This should be called once at application startup. It sets up:
-    - Log handlers (console, OTLP)
-    - Log formatting (JSON or text)
+    - OTLP export with full context as resource and log attributes (PRIMARY)
+    - Optional console output for debugging
     - Global context (environment, domain, app metadata)
-    - OpenTelemetry integration
+    - OpenTelemetry integration with proper semantic conventions
+    
+    All log context is sent to OTLP as structured attributes following
+    OpenTelemetry semantic conventions for maximum observability.
     
     Args:
         app_name: Application name (e.g., "hello-fastapi")
@@ -57,10 +61,10 @@ def configure_logging(
         environment: Environment (dev, staging, prod) - auto-detected if not provided
         version: Application version - auto-detected from env if not provided
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-        enable_otlp: Enable OpenTelemetry Protocol (OTLP) export
+        enable_otlp: Enable OpenTelemetry Protocol (OTLP) export (default: True)
         otlp_endpoint: OTLP collector endpoint (defaults to env or http://localhost:4317)
-        enable_console: Enable console logging output
-        json_format: Use JSON formatting (recommended for production)
+        enable_console: Enable console logging output (default: True, for debugging)
+        json_format: Use JSON formatting for console (default: False, simple text for debug)
         force_reconfigure: Force reconfiguration even if already configured
         **context_kwargs: Additional context attributes to set
     
@@ -72,7 +76,7 @@ def configure_logging(
         ...     app_name="hello-fastapi",
         ...     domain="demo",
         ...     environment="production",
-        ...     enable_otlp=True,
+        ...     enable_otlp=True,  # Primary use case
         ... )
     """
     global _configured, _global_context
@@ -155,21 +159,38 @@ def configure_logging(
 
 
 def _setup_otlp(context: LogContext, otlp_endpoint: Optional[str]) -> None:
-    """Setup OpenTelemetry Protocol (OTLP) logging export.
+    """Setup OpenTelemetry Protocol (OTLP) logging export with full context.
+    
+    Maps all LogContext fields to proper OTEL semantic conventions:
+    - Resource attributes for stable service/infrastructure metadata
+    - Log record attributes for request/operation context
     
     Args:
         context: Global log context
         otlp_endpoint: OTLP collector endpoint
     """
-    # Create resource attributes from context
+    # Create resource attributes from context (stable service metadata)
+    # Following OTEL semantic conventions: https://opentelemetry.io/docs/specs/semconv/
     resource_attrs = {
+        # Service identification (REQUIRED)
         "service.name": context.app_name,
         "service.namespace": context.domain,
-        "deployment.environment": context.environment,
-        "service.version": context.version,
+        "service.version": context.version or "unknown",
+        
+        # Deployment metadata
+        "deployment.environment": context.environment or "unknown",
     }
     
-    # Add optional attributes
+    # Add commit/build metadata
+    if context.commit_sha:
+        resource_attrs["service.instance.id"] = context.commit_sha[:8]
+        resource_attrs["vcs.commit.id"] = context.commit_sha
+    
+    # Add custom service type (our domain-specific attribute)
+    if context.app_type:
+        resource_attrs["service.type"] = context.app_type
+    
+    # Kubernetes resource attributes (semantic conventions)
     if context.pod_name:
         resource_attrs["k8s.pod.name"] = context.pod_name
     if context.namespace:
@@ -178,10 +199,26 @@ def _setup_otlp(context: LogContext, otlp_endpoint: Optional[str]) -> None:
         resource_attrs["k8s.node.name"] = context.node_name
     if context.container_name:
         resource_attrs["k8s.container.name"] = context.container_name
+    
+    # Host attributes
     if context.hostname:
         resource_attrs["host.name"] = context.hostname
+    if context.platform:
+        resource_attrs["host.arch"] = context.platform  # e.g., "linux/arm64"
+    if context.architecture:
+        resource_attrs["host.cpu.family"] = context.architecture  # e.g., "arm64"
     
-    # Create logger provider
+    # Helm/deployment attributes (custom)
+    if context.chart_name:
+        resource_attrs["helm.chart.name"] = context.chart_name
+    if context.release_name:
+        resource_attrs["helm.release.name"] = context.release_name
+    
+    # Build attributes (custom)
+    if context.bazel_target:
+        resource_attrs["build.target"] = context.bazel_target
+    
+    # Create logger provider with resource
     resource = Resource.create(resource_attrs)
     logger_provider = LoggerProvider(resource=resource)
     set_logger_provider(logger_provider)
@@ -194,17 +231,18 @@ def _setup_otlp(context: LogContext, otlp_endpoint: Optional[str]) -> None:
         or "http://localhost:4317"
     )
     
-    # Add OTLP exporter
+    # Add OTLP exporter with batching for efficiency
     otlp_exporter = OTLPLogExporter(endpoint=endpoint, insecure=True)
     logger_provider.add_log_record_processor(
         BatchLogRecordProcessor(otlp_exporter)
     )
     
-    # Add handler to root logger
-    handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
+    # Add handler to root logger with context-aware handler
+    handler = OTELContextHandler(level=logging.NOTSET, logger_provider=logger_provider)
     logging.getLogger().addHandler(handler)
     
     logging.debug(f"OTLP logging enabled: {endpoint}")
+    logging.debug(f"OTLP resource attributes: {resource_attrs}")
 
 
 def _setup_console(context: LogContext, json_format: bool) -> None:

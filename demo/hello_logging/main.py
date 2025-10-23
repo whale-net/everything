@@ -10,7 +10,7 @@ from libs.python.logging import configure_logging, get_logger, update_context
 def main():
     """Main function demonstrating logging features."""
     
-    # Configure logging once at startup
+    # Configure logging once at startup - OTLP is the primary backend
     configure_logging(
         app_name="hello-logging",
         domain="demo",
@@ -18,9 +18,10 @@ def main():
         environment="development",
         version="v1.0.0",
         log_level="DEBUG",
-        enable_otlp=False,  # Set to True to enable OTLP export
-        json_format=True,   # Set to False for colored console output
-        # Additional context
+        enable_otlp=True,   # PRIMARY: Send to OTLP collector (default: True)
+        enable_console=True,  # DEBUG: Also show in console
+        json_format=False,    # DEBUG: Simple text console (default: False)
+        # Additional context sent as OTLP resource attributes
         commit_sha="abc123def456",
         platform="linux/arm64",
     )
@@ -28,13 +29,13 @@ def main():
     # Get a logger for this module
     logger = get_logger(__name__)
     
-    # Basic logging
+    # Basic logging - all sent to OTLP with full context
     logger.debug("Debug message - detailed diagnostic info")
     logger.info("Info message - general information")
     logger.warning("Warning message - something unexpected")
     logger.error("Error message - something went wrong")
     
-    # Logging with additional context
+    # Logging with additional context - sent as OTLP log attributes
     logger.info(
         "Processing user request",
         extra={
@@ -55,10 +56,14 @@ def main():
 
 
 def simulate_request_handler():
-    """Simulate handling an HTTP request with context."""
+    """Simulate handling an HTTP request with context.
+    
+    All context updates are sent as OTLP log attributes following
+    semantic conventions (http.request.method, http.route, etc.)
+    """
     logger = get_logger(__name__)
     
-    # Set request-specific context
+    # Set request-specific context - sent as OTLP attributes
     update_context(
         request_id="req-abc-123",
         correlation_id="corr-xyz-789",
