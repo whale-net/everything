@@ -470,28 +470,14 @@ def start_status_processor(
 
 
 @app.command()
-def run_migration():
-    configure_logging(
-        app_name="manman-migration",
-        domain="manman",
-        app_type="job",
-        enable_otlp=False,
-        enable_console=True,
-        json_format=False,
-    )
+@logging_params  # Auto-configures logging from environment variables
+def run_migration(ctx: typer.Context):
     _run_migration(get_sqlalchemy_engine())
 
 
 @app.command()
-def create_migration(migration_message: Optional[str] = None):
-    configure_logging(
-        app_name="manman-migration",
-        domain="manman",
-        app_type="job",
-        enable_otlp=False,
-        enable_console=True,
-        json_format=False,
-    )
+@logging_params  # Auto-configures logging from environment variables
+def create_migration(ctx: typer.Context, migration_message: Optional[str] = None):
     # TODO - make use of this? or remove
     if os.environ.get("ENVIRONMENT", "DEV") == "PROD":
         raise RuntimeError("cannot create revisions in production")
@@ -499,15 +485,8 @@ def create_migration(migration_message: Optional[str] = None):
 
 
 @app.command()
-def run_downgrade(target: str):
-    configure_logging(
-        app_name="manman-downgrade",
-        domain="manman",
-        app_type="job",
-        enable_otlp=False,
-        enable_console=True,
-        json_format=False,
-    )
+@logging_params  # Auto-configures logging from environment variables
+def run_downgrade(ctx: typer.Context, target: str):
     config = _get_alembic_config()
     engine = get_sqlalchemy_engine()
     run_downgrade_util(engine, config, target)

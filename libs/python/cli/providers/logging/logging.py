@@ -168,7 +168,7 @@ def logging_params(func: Callable) -> Callable:
     
     # Read environment variables for runtime config
     env_log_otlp = os.getenv('LOG_OTLP', '').lower() in ('true', '1', 'yes')
-    env_log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+    env_log_level = os.getenv('LOG_LEVEL', 'INFO').upper()  # Default INFO for production
     env_json_format = os.getenv('LOG_JSON_FORMAT', '').lower() in ('true', '1', 'yes')
     env_console = os.getenv('LOG_CONSOLE', 'true').lower() in ('true', '1', 'yes')
     
