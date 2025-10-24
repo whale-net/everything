@@ -10,11 +10,11 @@ import typer
 from fastapi import FastAPI
 from typing_extensions import Annotated
 
+from libs.python.logging import configure_logging, get_logger
 from manman.src.config import ManManConfig
-from manman.src.logging_config import setup_logging
 
 app = typer.Typer()
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _generate_openapi_spec(fastapi_app: FastAPI, service_name: str) -> None:
@@ -42,7 +42,7 @@ def main(
 ):
     """Generate OpenAPI specification for a specific API without requiring environment setup."""
     # Setup logging
-    setup_logging(microservice_name="openapi-generator")
+    configure_logging(service_name="openapi-generator", domain="manman")
     logger.info(f"Generating OpenAPI spec for {api_name}...")
 
     # Validate API name

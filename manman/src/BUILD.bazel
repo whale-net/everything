@@ -9,7 +9,6 @@ py_library(
         "config.py",
         "constants.py",
         "exceptions.py",
-        "logging_config.py",
         "models.py", 
         "util.py",
         "runner.py",
