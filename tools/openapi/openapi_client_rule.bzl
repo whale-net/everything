@@ -124,6 +124,8 @@ def openapi_client(name, spec, namespace, app, package_name = None, visibility =
         ),
         visibility = ["//visibility:private"],
         tags = ["openapi"],
+        # Force deterministic caching - client generation is deterministic for given spec
+        stamp = 0,
     )
     
     # Step 2: Create PyInfo provider (target configuration)
