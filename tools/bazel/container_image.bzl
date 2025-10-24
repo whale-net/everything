@@ -194,8 +194,11 @@ def container_image(
                 # Detect architecture from path
                 if [[ "$$PYTHON_DIR" == *"x86_64"* ]]; then
                     ARCH="x86_64-unknown-linux-gnu"
-                else
+                elif [[ "$$PYTHON_DIR" == *"aarch64"* ]]; then
                     ARCH="aarch64-unknown-linux-gnu"
+                else
+                    echo "Error: Unsupported architecture in PYTHON_DIR: $$PYTHON_DIR" >&2
+                    exit 1
                 fi
                 
                 # Create universal Python location: /opt/python3.13/<arch>/
