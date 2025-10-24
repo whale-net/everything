@@ -103,4 +103,6 @@ if __name__ == "__main__":
         tools = [":" + generator_name],
         visibility = kwargs.get("visibility", ["//visibility:public"]),
         tags = kwargs.get("tags", []) + ["openapi"],
+        # Force deterministic caching - OpenAPI specs should be stable for given app
+        stamp = 0,
     )
