@@ -41,6 +41,9 @@ class CleanupPlan:
 
     def total_package_deletions(self) -> int:
         """Get total number of package versions to delete."""
+        if self.packages_to_delete is None:
+            print("WARNING: packages_to_delete is None", file=sys.stderr)
+            return 0
         total = 0
         for package_name, versions in self.packages_to_delete.items():
             if versions is None:
