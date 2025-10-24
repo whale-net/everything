@@ -52,6 +52,15 @@ http_file(
     downloaded_file_path = "openapi-generator-cli.jar",
 )
 
+# SteamCMD for game server management
+# SteamCMD is architecture-independent - it's a shell script that downloads
+# the appropriate binaries on first run
+http_file(
+    name = "steamcmd_linux",
+    sha256 = "cebf0046bfd08cf45da6bc094ae47aa39ebf4155e5ede41373b579b8f1071e7c",
+    urls = ["https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz"],
+)
+
 # Python setup with rules_python for interpreter registration
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(

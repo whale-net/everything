@@ -126,6 +126,7 @@ def container_image(
     entrypoint = None,
     language = None,
     python_version = "3.13",
+    additional_tars = None,
     **kwargs):
     """Build a single-platform OCI container image.
     
@@ -140,6 +141,8 @@ def container_image(
     2. Python interpreter (/opt/python3.13/{arch}/) - universal location, shared across ALL Python apps
     3. Third-party dependencies (rules_pycross pypi packages) - per-app or shared if deps match
     4. Application code (_main/ workspace) - unique per app, includes symlink to universal Python
+    
+    Additional layers can be added via additional_tars parameter for tools like SteamCMD.
     
     This layering strategy ensures:
     - Base layers (certs, interpreter) are cached and shared across ALL Python apps
@@ -157,6 +160,7 @@ def container_image(
         entrypoint: Override entrypoint (auto-detected from language)
         language: Language of the binary ("python" or "go") - REQUIRED
         python_version: Python version for path construction (default: "3.13")
+        additional_tars: Additional tar layers to include (e.g., ["//tools/steamcmd:steamcmd"])
         **kwargs: Additional oci_image arguments
     """
     if not language:
@@ -369,8 +373,12 @@ def container_image(
             entrypoint = ["/app/" + binary_path]
     
     # Build list of all layers in order (bottom to top)
-    # CA certs first (changes rarely), then language-specific layers
+    # CA certs first (changes rarely), then language-specific layers, then optional additional layers
     all_tars = ["//tools/cacerts:cacerts"] + layer_targets
+    
+    # Add additional tars if provided (e.g., steamcmd, other tools)
+    if additional_tars:
+        all_tars = all_tars + additional_tars
     
     oci_image(
         name = name,
@@ -392,6 +400,7 @@ def multiplatform_image(
     image_name = None,
     language = None,
     env = None,
+    additional_tars = None,
     **kwargs):
     """Build multiplatform OCI images using platform transitions.
     
@@ -429,6 +438,7 @@ def multiplatform_image(
             image_name = "demo-my_app",
             language = "python",  # or "go"
             env = {"APP_NAME": "my_app"},  # Default env vars
+            additional_tars = ["//tools/steamcmd:steamcmd"],  # Optional additional layers
         )
     
     Args:
@@ -440,6 +450,7 @@ def multiplatform_image(
         image_name: Image name in domain-app format (e.g., "demo-my_app") - REQUIRED
         language: Language of binary ("python" or "go") - REQUIRED
         env: Default environment variables to bake into the image
+        additional_tars: Additional tar layers to include (e.g., ["//tools/steamcmd:steamcmd"])
         **kwargs: Additional arguments passed to container_image
     """
     if not binary:
@@ -457,6 +468,7 @@ def multiplatform_image(
         base = base,
         language = language,
         env = env,
+        additional_tars = additional_tars,
         **kwargs
     )
     
