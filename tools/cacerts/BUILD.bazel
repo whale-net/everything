@@ -23,8 +23,8 @@ genrule(
         # Concatenate all Mozilla certificates into single file
         cat $$TMPDIR/usr/share/ca-certificates/mozilla/*.crt > $$TMPDIR/etc/ssl/certs/ca-certificates.crt
         
-        # Create tar.gz of just the certificate file
-        tar czf $@ -C $$TMPDIR etc/ssl/certs/ca-certificates.crt
+        # Create tar.gz with fixed timestamp for reproducibility
+        tar --mtime='@0' -czf $@ -C $$TMPDIR etc/ssl/certs/ca-certificates.crt
         
         # Cleanup
         rm -rf $$TMPDIR data.tar.xz
