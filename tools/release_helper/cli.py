@@ -856,7 +856,10 @@ def cleanup_releases_cmd(
                 for idx, (package_name, version_ids) in enumerate(top_5):
                     typer.echo(f"DEBUG: Processing package {idx}: {package_name}, version_ids type: {type(version_ids)}", err=True)
                     if version_ids is None:
-                        typer.echo(f"ERROR: version_ids is None for package {package_name}!", err=True)
+                        typer.echo(f"ERROR: version_ids is None for package {package_name}! Skipping.", err=True)
+                        continue
+                    if not isinstance(version_ids, list):
+                        typer.echo(f"ERROR: version_ids is not a list for package {package_name}: {type(version_ids)}! Skipping.", err=True)
                         continue
                     typer.echo(f"  - {package_name}: {len(version_ids)} versions")
                 if len(plan.packages_to_delete) > 5:
