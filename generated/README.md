@@ -36,11 +36,15 @@ py_binary(
 For local development with IDE autocomplete, sync the generated files:
 
 ```bash
-# Generate and copy clients to local directory
+# Generate and copy clients to local directories
 ./tools/scripts/sync_generated_clients.sh
 ```
 
-Then your IDE will find the imports at `generated/`.
+This will sync both Python and Go clients to local directories:
+- Python clients → `generated/py/{namespace}/{app}/`
+- Go clients → `generated/go/{namespace}/{app}/`
+
+Then your IDE will find the imports.
 
 #### Importing Python Clients
 
