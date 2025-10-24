@@ -41,7 +41,15 @@ class CleanupPlan:
 
     def total_package_deletions(self) -> int:
         """Get total number of package versions to delete."""
-        return sum(len(versions) for versions in self.packages_to_delete.values())
+        total = 0
+        for package_name, versions in self.packages_to_delete.items():
+            if versions is None:
+                # This should never happen since we always initialize to []
+                # If it does, it indicates a bug elsewhere
+                print(f"ERROR: versions is None for package {package_name} - this indicates a bug!", file=sys.stderr)
+                continue
+            total += len(versions)
+        return total
     
     def total_release_deletions(self) -> int:
         """Get total number of releases to delete."""
@@ -146,6 +154,14 @@ class ReleaseCleanup:
         try:
             releases_map = self.release_client.find_releases_by_tags(tags_to_delete)
             for tag_name, release_data in releases_map.items():
+                # Defensive check for None release_data
+                if release_data is None:
+                    print(f"⚠️  Warning: release_data is None for tag {tag_name}, skipping", file=sys.stderr)
+                    continue
+                if "id" not in release_data:
+                    print(f"⚠️  Warning: release_data missing 'id' for tag {tag_name}, skipping", file=sys.stderr)
+                    continue
+                    
                 releases_to_delete[tag_name] = release_data["id"]
                 print(f"  Found GitHub release {release_data['id']} for tag {tag_name}")
         except Exception as e:
@@ -175,6 +191,11 @@ class ReleaseCleanup:
                     if version in pkg_version.tags:
                         if package_name not in packages_to_delete:
                             packages_to_delete[package_name] = []
+                        
+                        # Defensive check for None version_id
+                        if pkg_version.version_id is None:
+                            print(f"⚠️  Warning: version_id is None for {package_name}:{version}, skipping", file=sys.stderr)
+                            continue
                         
                         packages_to_delete[package_name].append(pkg_version.version_id)
                         print(f"  Found GHCR version {pkg_version.version_id} for {package_name}:{version}")
