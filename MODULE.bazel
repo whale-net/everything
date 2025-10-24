@@ -61,6 +61,20 @@ http_file(
     urls = ["https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz"],
 )
 
+# 32-bit libraries needed for SteamCMD (from Ubuntu 24.04)
+# Downloaded at build time - not committed to repository
+http_file(
+    name = "lib32gcc_s1_deb",
+    sha256 = "1ce0330ec5a978480f61864f9038214f8d8f6f5375c00b46f08a1af92fdd764c",
+    urls = ["http://archive.ubuntu.com/ubuntu/pool/main/g/gcc-14/lib32gcc-s1_14.2.0-4ubuntu2~24.04_amd64.deb"],
+)
+
+http_file(
+    name = "libc6_i386_deb",
+    sha256 = "c1d612f7ce6f0effa0e7b75fd71b052842cea142fa0f64f5b7161a43464aa738",
+    urls = ["http://archive.ubuntu.com/ubuntu/pool/main/g/glibc/libc6-i386_2.39-0ubuntu8.6_amd64.deb"],
+)
+
 # Python setup with rules_python for interpreter registration
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(

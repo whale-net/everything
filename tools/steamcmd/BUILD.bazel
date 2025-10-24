@@ -9,14 +9,11 @@ Usage in your image:
         binary_name = ":my_binary",
         language = "python",
         domain = "demo",
-        additional_tars = ["//tools/steamcmd:steamcmd_layers"],
+        additional_tars = ["//tools/steamcmd:steamcmd_with_lib32"],
     )
 
-The steamcmd executable will be available at /opt/steamcmd/steamcmd.sh and 
-/usr/local/bin/steamcmd (symlink) in the container.
-
-Note: SteamCMD is the same binary for all architectures - it's a shell script
-that downloads the appropriate binaries on first run.
+The steamcmd executable will be available at /opt/steamcmd/steamcmd.sh in the container,
+and the necessary 32-bit libraries will be installed automatically.
 """
 
 load("@rules_pkg//:pkg.bzl", "pkg_tar")
@@ -69,7 +66,7 @@ pkg_tar(
     visibility = ["//visibility:public"],
 )
 
-# Create a symlink layer for easy access
+# Create a symlink layer for easy access + 32-bit loader symlink
 genrule(
     name = "steamcmd_symlink_layer",
     outs = ["steamcmd_symlink.tar"],
@@ -78,11 +75,16 @@ genrule(
         TMPDIR=$$(mktemp -d)
         trap 'rm -rf $$TMPDIR' EXIT
         
-        # Create directory structure for symlink
+        # Create directory structure for symlinks
         mkdir -p $$TMPDIR/usr/local/bin
+        mkdir -p $$TMPDIR/lib
         
         # Create symlink from /usr/local/bin/steamcmd to /opt/steamcmd/steamcmd.sh
         ln -sf /opt/steamcmd/steamcmd.sh $$TMPDIR/usr/local/bin/steamcmd
+        
+        # Create symlink from /lib/ld-linux.so.2 to /usr/lib32/ld-linux.so.2
+        # This is needed so the kernel can find the 32-bit dynamic linker for steamcmd binary
+        ln -sf /usr/lib32/ld-linux.so.2 $$TMPDIR/lib/ld-linux.so.2
         
         # Create tar with fixed timestamp for reproducibility
         tar --mtime='@0' -cf $@ -C $$TMPDIR .
@@ -90,13 +92,22 @@ genrule(
     visibility = ["//visibility:public"],
 )
 
-# Combined steamcmd layers (main files + symlink)
-# Use this filegroup in additional_tars to get both layers
+# Combined steamcmd layers (main files + symlink + 32-bit libraries)
+# This is the recommended target to use - includes everything needed for SteamCMD
 filegroup(
-    name = "steamcmd_layers",
+    name = "steamcmd_with_lib32",
     srcs = [
         ":steamcmd",
         ":steamcmd_symlink_layer",
+        "//tools/lib32:lib32",
     ],
     visibility = ["//visibility:public"],
 )
+
+# Legacy name for backwards compatibility
+alias(
+    name = "steamcmd_layers",
+    actual = ":steamcmd_with_lib32",
+    visibility = ["//visibility:public"],
+)
+

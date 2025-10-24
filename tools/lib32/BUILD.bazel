@@ -1,0 +1,80 @@
+"""32-bit library support for SteamCMD.
+
+This dynamically downloads and extracts 32-bit libraries from Ubuntu 24.04 packages at build time.
+SteamCMD is a 32-bit application that requires these libraries to run on 64-bit systems.
+
+PREREQUISITES:
+- zstd must be installed on the build system (for extracting .deb files)
+  Ubuntu/Debian: sudo apt-get install zstd
+  macOS: brew install zstd
+
+The libraries are extracted from:
+- lib32gcc-s1_14.2.0-4ubuntu2~24.04_amd64.deb
+- libc6-i386_2.39-0ubuntu8.6_amd64.deb
+"""
+
+load("@rules_pkg//:pkg.bzl", "pkg_tar")
+
+# Download and extract 32-bit libraries from Ubuntu packages
+genrule(
+    name = "lib32_extracted",
+    srcs = [
+        "@lib32gcc_s1_deb//file:downloaded",
+        "@libc6_i386_deb//file:downloaded",
+    ],
+    outs = ["lib32_files.tar"],
+    cmd = """
+        set -e
+        TMPDIR=$$(mktemp -d)
+        trap 'rm -rf $$TMPDIR data.tar*' EXIT
+        
+        # Try common zstd locations
+        ZSTD=""
+        for path in /usr/bin/zstd /usr/local/bin/zstd /home/linuxbrew/.linuxbrew/bin/zstd /opt/homebrew/bin/zstd; do
+            if [ -x "$$path" ]; then
+                ZSTD="$$path"
+                break
+            fi
+        done
+        
+        if [ -z "$$ZSTD" ]; then
+            # Try PATH as last resort
+            if command -v zstd >/dev/null 2>&1; then
+                ZSTD="zstd"
+            else
+                echo "Error: zstd is required to extract .deb files" >&2
+                echo "Please install: sudo apt-get install zstd  OR  brew install zstd" >&2
+                exit 1
+            fi
+        fi
+        
+        # Extract lib32gcc-s1 package
+        ar x $(location @lib32gcc_s1_deb//file:downloaded)
+        $$ZSTD -d data.tar.zst --stdout | tar -x -C $$TMPDIR
+        rm -f data.tar.zst control.tar.* debian-binary
+        
+        # Extract libc6-i386 package
+        ar x $(location @libc6_i386_deb//file:downloaded)
+        $$ZSTD -d data.tar.zst --stdout | tar -x -C $$TMPDIR
+        rm -f data.tar.zst control.tar.* debian-binary
+        
+        # Package only usr/lib32/ with deterministic timestamps
+        cd $$TMPDIR
+        if [ -d usr/lib32 ]; then
+            tar --mtime='@0' --owner=0 --group=0 -cf "$$OLDPWD/$@" usr/lib32
+        else
+            echo "Error: usr/lib32 not found after extraction"
+            ls -la usr/ || true
+            exit 1
+        fi
+    """,
+    tags = ["no-sandbox"],  # Needs access to system zstd
+    visibility = ["//visibility:private"],
+)# Re-export as a filegroup for use in steamcmd
+filegroup(
+    name = "lib32",
+    srcs = [":lib32_extracted"],
+    visibility = ["//visibility:public"],
+)
+
+
