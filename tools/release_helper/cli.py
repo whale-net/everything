@@ -817,15 +817,6 @@ def cleanup_releases_cmd(
         typer.echo(f"  GitHub releases to delete: {plan.total_release_deletions()}")
         typer.echo(f"  Tags to keep: {len(plan.tags_to_keep)}")
         
-        typer.echo(f"DEBUG: plan.packages_to_delete type: {type(plan.packages_to_delete)}", err=True)
-        typer.echo(f"DEBUG: plan.packages_to_delete is None: {plan.packages_to_delete is None}", err=True)
-        if plan.packages_to_delete is not None:
-            typer.echo(f"DEBUG: Number of packages: {len(plan.packages_to_delete)}", err=True)
-            # Check for None values
-            none_packages = [name for name, versions in plan.packages_to_delete.items() if versions is None]
-            if none_packages:
-                typer.echo(f"WARNING: Found packages with None values: {none_packages}", err=True)
-        
         if delete_packages:
             typer.echo(f"  GHCR package versions to delete: {plan.total_package_deletions()}")
         
@@ -847,30 +838,37 @@ def cleanup_releases_cmd(
         if delete_packages and plan.packages_to_delete:
             typer.echo(f"\n📦 GHCR packages marked for deletion:")
             try:
-                packages_items = plan.packages_to_delete.items()
-                typer.echo(f"DEBUG: Got packages_items: {type(packages_items)}", err=True)
-                packages_list = list(packages_items)
-                typer.echo(f"DEBUG: Converted to list, length: {len(packages_list)}", err=True)
-                
-                top_5 = packages_list[:5]
-                typer.echo(f"DEBUG: Got top 5, length: {len(top_5)}", err=True)
-                for idx, (package_name, version_ids) in enumerate(top_5):
-                    typer.echo(f"DEBUG: Processing package {idx}: {package_name}, version_ids type: {type(version_ids)}", err=True)
-                    if version_ids is None:
-                        # This should never happen since we always initialize to []
-                        typer.echo(f"ERROR: version_ids is None for package {package_name}! This indicates a bug. Skipping.", err=True)
-                        continue
-                    if not isinstance(version_ids, list):
-                        typer.echo(f"ERROR: version_ids is not a list for package {package_name}: {type(version_ids)}! Skipping.", err=True)
-                        continue
-                    typer.echo(f"  - {package_name}: {len(version_ids)} versions")
-                if len(plan.packages_to_delete) > 5:
-                    typer.echo(f"  ... and {len(plan.packages_to_delete) - 5} more packages")
+                # Defensive check: ensure packages_to_delete is not None
+                if plan.packages_to_delete is None:
+                    typer.echo(f"WARNING: packages_to_delete is None, skipping package display", err=True)
+                else:
+                    packages_items = plan.packages_to_delete.items()
+                    if packages_items is None:
+                        typer.echo(f"WARNING: packages_items is None, skipping package display", err=True)
+                    else:
+                        packages_list = list(packages_items) if packages_items is not None else []
+                        if packages_list is None:
+                            typer.echo(f"WARNING: packages_list is None after conversion, using empty list", err=True)
+                            packages_list = []
+                        
+                        top_5 = packages_list[:5]
+                        for idx, (package_name, version_ids) in enumerate(top_5):
+                            if version_ids is None:
+                                # This should never happen since we always initialize to []
+                                typer.echo(f"WARNING: version_ids is None for package {package_name}! Skipping.", err=True)
+                                continue
+                            if not isinstance(version_ids, list):
+                                typer.echo(f"WARNING: version_ids is not a list for package {package_name}: {type(version_ids)}! Skipping.", err=True)
+                                continue
+                            typer.echo(f"  - {package_name}: {len(version_ids)} versions")
+                        if len(plan.packages_to_delete) > 5:
+                            typer.echo(f"  ... and {len(plan.packages_to_delete) - 5} more packages")
             except Exception as e:
                 typer.echo(f"ERROR in GHCR package display: {e}", err=True)
                 import traceback
                 traceback.print_exc()
-                raise
+                # Don't re-raise - allow cleanup to continue
+                typer.echo(f"Continuing despite error in package display...", err=True)
         
         # Remove GHCR packages from plan if user doesn't want to delete them
         if not delete_packages:
