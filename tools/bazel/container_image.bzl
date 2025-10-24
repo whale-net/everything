@@ -223,7 +223,6 @@ def container_image(
             name = name + "_deps_layer",
             srcs = [":" + name + "_full_runfiles"],
             outs = [name + "_deps_layer.tar"],
-            tools = ["//tools/scripts:strip_python.sh"],
             cmd = """
                 set -e
                 trap 'rm -rf layer_tmp deps_layer deps_tmp.tar' EXIT
@@ -243,12 +242,10 @@ def container_image(
                 fi
                 cd ..
                 
-                # Extract to temp directory and strip if not empty
+                # Extract to temp directory
                 mkdir -p deps_layer
                 if [ -s deps_tmp.tar ]; then
                     tar -xf deps_tmp.tar -C deps_layer
-                    # Strip (failures are non-fatal for optimization)
-                    $(location //tools/scripts:strip_python.sh) deps_layer 2>&1 | head -20 || echo "Warning: strip_python.sh encountered issues but continuing"
                 fi
                 
                 # Create final tar with fixed timestamp for reproducibility

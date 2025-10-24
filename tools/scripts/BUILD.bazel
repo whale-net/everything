@@ -5,11 +5,12 @@ load("@rules_python//python:defs.bzl", "py_binary")
 package(default_visibility = ["//visibility:public"])
 
 exports_files([
-    "python_runner.py",
-    "test_cross_compilation.sh",
+    "analyze_layer_caching.sh",
+    "get_app_changes.sh",
+    "get_binary_name.sh",
+    "get_deps_hash.sh",
     "sync_generated_clients.sh",
-    "test_container_images.sh",
-    "strip_python.sh",
+    "test_cross_compilation.sh",
 ])
 
 # Cross-compilation verification test
