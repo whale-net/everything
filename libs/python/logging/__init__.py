@@ -6,13 +6,14 @@ in the monorepo with automatic context injection and OpenTelemetry integration.
 Key features:
 - Automatic injection of standard attributes (environment, domain, app_name, etc.)
 - OpenTelemetry trace/span correlation
+- OpenTelemetry metrics collection and export
 - Kubernetes context (pod, node, namespace)
 - Request correlation (request_id, user_id, etc.)
 - Consistent JSON formatting for log aggregation
 
 Example:
     ```python
-    from libs.python.logging import get_logger, configure_logging
+    from libs.python.logging import get_logger, configure_logging, configure_metrics
     
     # Configure once at app startup
     configure_logging(
@@ -21,6 +22,9 @@ Example:
         environment="production",
         enable_otlp=True,
     )
+    
+    # Optionally enable metrics
+    configure_metrics()
     
     # Use throughout your app
     logger = get_logger(__name__)
@@ -33,6 +37,7 @@ Example:
 
 from libs.python.logging.config import configure_logging
 from libs.python.logging.factory import get_logger
+from libs.python.logging.metrics import configure_metrics, is_metrics_configured
 from libs.python.logging.context import (
     LogContext,
     set_context,
@@ -43,6 +48,8 @@ from libs.python.logging.context import (
 
 __all__ = [
     "configure_logging",
+    "configure_metrics",
+    "is_metrics_configured",
     "get_logger",
     "LogContext",
     "set_context",

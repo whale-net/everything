@@ -4,6 +4,7 @@ from datetime import timedelta
 from threading import Lock
 
 from amqpstorm import Connection
+from opentelemetry import trace
 from requests import ConnectionError
 
 from manman.src.models import (
@@ -20,6 +21,7 @@ from manman.src.worker.abstract_service import ManManService
 from manman.src.worker.server import Server
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 
 class WorkerService(ManManService):
@@ -127,28 +129,33 @@ class WorkerService(ManManService):
 
     def __handle_start_command(self, command: Command):
         # for now, just taking in the id from the arg list as-is until better typing TODO
-        if len(command.command_args) != 1:
-            logger.warning(
-                "too many args, just want ID %s",
-                command.command_args,
-            )
-            return
-        self._servers_lock.acquire()
-        game_server_config_id = int(command.command_args[0])
-
-        can_start = True
-        for server in self._servers:
-            if server._config.game_server_config_id == game_server_config_id:
+        with tracer.start_as_current_span("handle_start_command") as span:
+            if len(command.command_args) != 1:
                 logger.warning(
-                    "server with app_id %s already running, ignoring create request",
-                    server._config.game_server_config_id,
+                    "too many args, just want ID %s",
+                    command.command_args,
                 )
-                can_start = False
-                break
-        self._servers_lock.release()
-        if can_start:
-            self._create_server(game_server_config_id)
-            # don't pass command through, doing creation in service layer for now
+                span.set_attribute("command.status", "invalid_args")
+                return
+            self._servers_lock.acquire()
+            game_server_config_id = int(command.command_args[0])
+            span.set_attribute("game_server_config_id", game_server_config_id)
+
+            can_start = True
+            for server in self._servers:
+                if server._config.game_server_config_id == game_server_config_id:
+                    logger.warning(
+                        "server with app_id %s already running, ignoring create request",
+                        server._config.game_server_config_id,
+                    )
+                    span.set_attribute("command.status", "already_running")
+                    can_start = False
+                    break
+            self._servers_lock.release()
+            if can_start:
+                span.set_attribute("command.status", "creating_server")
+                self._create_server(game_server_config_id)
+                # don't pass command through, doing creation in service layer for now
 
     def __handle_stop_command(self, command: Command):
         if len(command.command_args) == 0:
@@ -233,29 +240,36 @@ class WorkerService(ManManService):
         self._wapi.shutdown_worker(self._worker_instance)
 
     def _create_server(self, game_server_config_id: int):
-        config: GameServerConfig = self._wapi.get_game_server_config(game_server_config_id)
+        with tracer.start_as_current_span("create_server") as span:
+            span.set_attribute("game_server_config_id", game_server_config_id)
+            
+            config: GameServerConfig = self._wapi.get_game_server_config(game_server_config_id)
+            span.set_attribute("game_server.app_id", config.app_id)
+            span.set_attribute("game_server.game_server_id", config.game_server_id)
 
-        # Temp check to prevent duplicates
-        # ideally this will be a check against the database via api
-        self._servers_lock.acquire()
-        game_server_ids = {
-            server._game_server.game_server_id for server in self._servers
-        }
-        if config.game_server_id in game_server_ids:
-            logger.warning(
-                "server with app_id %s already running, ignoring create request",
-                config.game_server_id,
-            )
+            # Temp check to prevent duplicates
+            # ideally this will be a check against the database via api
+            self._servers_lock.acquire()
+            game_server_ids = {
+                server._game_server.game_server_id for server in self._servers
+            }
+            if config.game_server_id in game_server_ids:
+                logger.warning(
+                    "server with app_id %s already running, ignoring create request",
+                    config.game_server_id,
+                )
+                span.set_attribute("server.status", "already_exists")
+                self._servers_lock.release()
+                return
             self._servers_lock.release()
-            return
-        self._servers_lock.release()
 
-        server = Server(
-            rabbitmq_connection=self._rabbitmq_connection,
-            wapi=self._wapi,
-            root_install_directory=self._install_dir,
-            config=config,
-            worker_id=self._worker_instance.worker_id,
+            span.set_attribute("server.status", "creating")
+            server = Server(
+                rabbitmq_connection=self._rabbitmq_connection,
+                wapi=self._wapi,
+                root_install_directory=self._install_dir,
+                config=config,
+                worker_id=self._worker_instance.worker_id,
         )
         try:
             future = self._threadpool.submit(

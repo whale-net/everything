@@ -19,6 +19,9 @@ async def lifespan(app):
 def create_app():
     """Factory function to create the Experience API FastAPI application."""
     from fastapi import FastAPI
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from libs.python.logging import configure_metrics
+    import os
 
     from manman.src.host.api.shared import add_health_check
 
@@ -27,4 +30,14 @@ def create_app():
     )
     app.include_router(router)
     add_health_check(app)
+    
+    # Setup metrics (if OTLP enabled)
+    if os.getenv('LOG_OTLP', '').lower() in ('true', '1', 'yes'):
+        configure_metrics()
+    
+    # Automatically instrument FastAPI with OpenTelemetry
+    # This creates spans for all endpoints and captures request/response details
+    # Also automatically creates metrics when meter provider is configured
+    FastAPIInstrumentor.instrument_app(app)
+    
     return app

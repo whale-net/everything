@@ -8,6 +8,7 @@ py_library(
         "context.py",
         "factory.py",
         "formatters.py",
+        "metrics.py",
         "otel_handler.py",
     ],
     visibility = ["//visibility:public"],

@@ -181,14 +181,35 @@ class StatusRepository(DatabaseRepository):
         Returns:
             The latest StatusInfo for the worker, or None if not found
         """
-        with self._get_session_context() as session:
-            stmt = (
-                select(ExternalStatusInfo)
-                .where(ExternalStatusInfo.worker_id == worker_id)
-                .order_by(desc(ExternalStatusInfo.as_of))
-                .limit(1)
-            )
-            return session.exec(stmt).first()
+        from opentelemetry import trace
+        
+        tracer = trace.get_tracer(__name__)
+        
+        with tracer.start_as_current_span(
+            "status_repository.get_latest_worker_status",
+            attributes={
+                "db.operation": "select",
+                "db.table": "external_status_info",
+                "worker_id": worker_id,
+            }
+        ):
+            with self._get_session_context() as session:
+                stmt = (
+                    select(ExternalStatusInfo)
+                    .where(ExternalStatusInfo.worker_id == worker_id)
+                    .order_by(desc(ExternalStatusInfo.as_of))
+                    .limit(1)
+                )
+                result = session.exec(stmt).first()
+                
+                # Add result info to span
+                current_span = trace.get_current_span()
+                if current_span:
+                    current_span.set_attribute("result.found", result is not None)
+                    if result:
+                        current_span.set_attribute("result.status_type", result.status_type)
+                
+                return result
 
     def get_latest_instance_status(
         self, game_server_instance_id: int
