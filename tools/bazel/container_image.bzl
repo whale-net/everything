@@ -191,10 +191,10 @@ def container_image(
                 # Get the Python directory from srcs
                 PYTHON_DIR=$(SRCS)
                 
-                # Detect architecture from path
-                if [[ "$$PYTHON_DIR" == *"x86_64"* ]]; then
+                # Detect architecture from path (check both target name and actual arch)
+                if [[ "$$PYTHON_DIR" == *"x86_64"* ]] || [[ "$$PYTHON_DIR" == *"amd64"* ]]; then
                     ARCH="x86_64-unknown-linux-gnu"
-                elif [[ "$$PYTHON_DIR" == *"aarch64"* ]]; then
+                elif [[ "$$PYTHON_DIR" == *"arm64"* ]] || [[ "$$PYTHON_DIR" == *"aarch64"* ]]; then
                     ARCH="aarch64-unknown-linux-gnu"
                 else
                     echo "Error: Unsupported architecture in PYTHON_DIR: $$PYTHON_DIR" >&2
