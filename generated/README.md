@@ -1,10 +1,17 @@
 # Generated OpenAPI Clients
 
-This directory contains generated OpenAPI client code for openapi-based services.
+This directory contains generated OpenAPI client code for openapi-based services in both Python and Go.
+
+## Language Support
+
+- **Python**: Uses `openapi_client` rule - clients importable as `from generated.{namespace}.{app} import ...`
+- **Go**: Uses `openapi_go_client` rule - clients importable as `import "github.com/whale-net/everything/generated/{namespace}/{app}"`
 
 ## Usage
 
-### For Bazel Builds (Production)
+### Python Clients
+
+#### For Bazel Builds (Production)
 
 In production and CI, use the Bazel targets directly:
 
@@ -19,7 +26,7 @@ py_binary(
 )
 ```
 
-### For Local Development (IDE Support)
+#### For Local Development (IDE Support)
 
 For local development with IDE autocomplete, sync the generated files:
 
@@ -30,9 +37,8 @@ For local development with IDE autocomplete, sync the generated files:
 
 Then your IDE will find the imports at `generated/`.
 
+#### Importing Python Clients
 
-## Importing Clients
-example:
 ```python
 from generated.manman.experience_api import DefaultApi as ExperienceApi
 from generated.manman.experience_api.api_client import ApiClient
@@ -41,6 +47,39 @@ from generated.manman.experience_api.configuration import Configuration
 from generated.manman.status_api import DefaultApi as StatusApi
 from generated.manman.worker_dal_api import DefaultApi as WorkerDalApi
 ```
+
+### Go Clients
+
+#### For Bazel Builds
+
+```starlark
+# In BUILD.bazel
+load("@rules_go//go:def.bzl", "go_binary")
+
+go_binary(
+    name = "my_app",
+    srcs = ["main.go"],
+    deps = [
+        "//generated/demo:hello_fastapi_go",
+    ],
+)
+```
+
+#### Importing Go Clients
+
+```go
+import (
+    client "github.com/whale-net/everything/generated/demo/hello_fastapi_go"
+)
+
+func main() {
+    cfg := client.NewConfiguration()
+    apiClient := client.NewAPIClient(cfg)
+    // Use apiClient...
+}
+```
+
+See `//demo/hello_go_client` for a complete example.
 
 ## Regenerating Clients
 
