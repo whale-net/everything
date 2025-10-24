@@ -891,7 +891,10 @@ def cleanup_releases_cmd(
                     typer.echo("Cleanup cancelled.")
                     return
             else:
-                typer.echo("Running in non-interactive mode (CI detected), proceeding with cleanup...")
+                if is_ci:
+                    typer.echo("Running in CI environment, proceeding with cleanup...")
+                else:
+                    typer.echo("Running in non-interactive mode, proceeding with cleanup...")
         
         result = cleanup.execute_cleanup(plan, dry_run=dry_run)
         
