@@ -6,8 +6,10 @@ for managing container packages and versions.
 """
 
 import os
+import re
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 import httpx
@@ -46,6 +48,46 @@ class GHCRPackageVersion:
             True if version has no tags
         """
         return len(self.tags) == 0
+
+    def has_hash_tag(self) -> bool:
+        """Check if this version has any hash (commit SHA) tags.
+        
+        Hash tags are 7-40 character hexadecimal strings that don't start with 'v'.
+        Examples: "abc123d", "1234567890abcdef"
+        Not hash tags: "v1.0.0", "latest", "v1.0.0-amd64"
+        
+        Returns:
+            True if version has at least one hash tag
+        """
+        hash_pattern = re.compile(r'^[0-9a-f]{7,40}$', re.IGNORECASE)
+        return any(hash_pattern.match(tag) for tag in self.tags)
+
+    def get_hash_tags(self) -> List[str]:
+        """Get all hash (commit SHA) tags from this version.
+        
+        Returns:
+            List of hash tags
+        """
+        hash_pattern = re.compile(r'^[0-9a-f]{7,40}$', re.IGNORECASE)
+        return [tag for tag in self.tags if hash_pattern.match(tag)]
+
+    def age_days(self) -> Optional[float]:
+        """Calculate the age of this version in days.
+        
+        Returns:
+            Age in days, or None if created_at is not available
+        """
+        if not self.created_at:
+            return None
+        
+        try:
+            # Parse ISO 8601 timestamp
+            created = datetime.fromisoformat(self.created_at.replace('Z', '+00:00'))
+            now = datetime.now(timezone.utc)
+            delta = now - created
+            return delta.total_seconds() / 86400  # Convert to days
+        except (ValueError, AttributeError):
+            return None
 
     def __repr__(self) -> str:
         """String representation of version."""
@@ -316,3 +358,84 @@ class GHCRClient:
             except httpx.HTTPError as e:
                 print(f"⚠️  Error getting package info: {e}", file=sys.stderr)
                 return None
+
+    def find_hash_tagged_versions(self, package_name: str, 
+                                   min_age_days: float = 3.0) -> List[GHCRPackageVersion]:
+        """Find package versions with hash (commit SHA) tags older than specified age.
+        
+        Hash tags are 7-40 character hexadecimal strings that don't start with 'v'.
+        This is useful for cleaning up old commit-specific container images.
+        
+        Args:
+            package_name: Package name (e.g., "demo-hello-python")
+            min_age_days: Minimum age in days (default: 3.0)
+            
+        Returns:
+            List of versions with hash tags that are older than min_age_days
+        """
+        all_versions = self.list_package_versions(package_name)
+        
+        old_hash_versions = []
+        for version in all_versions:
+            # Check if this version has hash tags
+            if not version.has_hash_tag():
+                continue
+            
+            # Check if version is old enough
+            age = version.age_days()
+            if age is None:
+                # Skip versions without creation date
+                print(f"⚠️  Version {version.version_id} has no creation date, skipping", file=sys.stderr)
+                continue
+            
+            if age >= min_age_days:
+                old_hash_versions.append(version)
+        
+        return old_hash_versions
+
+    def list_all_packages(self, package_type: str = "container") -> List[str]:
+        """List all packages for the owner.
+        
+        Args:
+            package_type: Package type (default: "container")
+            
+        Returns:
+            List of package names
+        """
+        owner_type = self._detect_owner_type()
+        url = f"{self.base_url}/{owner_type}/{self.owner}/packages"
+        
+        packages = []
+        params = {"package_type": package_type, "per_page": 100}
+        
+        with httpx.Client() as client:
+            while True:
+                try:
+                    response = client.get(url, headers=self.headers, params=params, timeout=self.DEFAULT_TIMEOUT)
+                    
+                    if response.status_code == 200:
+                        packages_data = response.json()
+                        
+                        for package_data in packages_data:
+                            packages.append(package_data["name"])
+                        
+                        # Check for pagination
+                        link_header = response.headers.get("Link", "")
+                        if 'rel="next"' not in link_header:
+                            break
+                        
+                        # Extract next page URL
+                        for link in link_header.split(","):
+                            if 'rel="next"' in link:
+                                next_url = link.split(";")[0].strip("<>").strip()
+                                url = next_url
+                                params = {}
+                                break
+                    else:
+                        response.raise_for_status()
+                        
+                except httpx.HTTPError as e:
+                    print(f"❌ Error listing packages: {e}", file=sys.stderr)
+                    raise
+        
+        return packages
