@@ -760,11 +760,15 @@ def cleanup_releases_cmd(
     
     By default, runs in dry-run mode to preview changes. Use --no-dry-run to actually delete.
     
+    When running with --no-dry-run in an interactive terminal, prompts for confirmation
+    before proceeding. In CI environments (GitHub Actions) or non-interactive terminals,
+    proceeds automatically without prompting.
+    
     Examples:
         # Preview what would be deleted (recommended first step)
         bazel run //tools:release -- cleanup-releases
         
-        # Actually delete old releases (prompts for confirmation)
+        # Actually delete old releases (prompts for confirmation in interactive mode)
         bazel run //tools:release -- cleanup-releases --no-dry-run
         
         # Custom retention policy

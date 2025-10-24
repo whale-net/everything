@@ -61,6 +61,8 @@ v1.0.1 (30 days old)  → DELETE (outside retention window)
 
 ### Local Usage
 
+**Note:** When running with `--no-dry-run` in an interactive terminal, the tool prompts for confirmation before proceeding. In CI environments (GitHub Actions) or non-interactive terminals, it proceeds automatically without prompting.
+
 ```bash
 # Preview what would be deleted (recommended first step)
 bazel run //tools:release -- cleanup-releases
@@ -68,7 +70,7 @@ bazel run //tools:release -- cleanup-releases
 # Show help and all options
 bazel run //tools:release -- cleanup-releases --help
 
-# Actually delete old releases (prompts for confirmation)
+# Actually delete old releases (prompts for confirmation in interactive mode)
 bazel run //tools:release -- cleanup-releases --no-dry-run
 
 # Custom retention policy
@@ -87,7 +89,7 @@ bazel run //tools:release -- cleanup-releases \
 
 ### GitHub Actions Workflow
 
-The cleanup tool can be run via GitHub Actions:
+The cleanup tool can be run via GitHub Actions without manual confirmation:
 
 1. Go to **Actions** tab in GitHub
 2. Select **"Cleanup Old Releases"** workflow
