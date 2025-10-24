@@ -5,11 +5,9 @@ py_library(
     name = "manman_core",
     srcs = [
         "__init__.py",
-        "__main__.py", 
         "config.py",
         "constants.py",
         "exceptions.py",
-        "logging_config.py",
         "models.py", 
         "util.py",
         "runner.py",
