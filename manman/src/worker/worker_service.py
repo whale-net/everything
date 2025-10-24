@@ -103,7 +103,7 @@ class WorkerService(ManManService):
 
     def _do_work(self, log_still_running: bool):
         # prune servers
-        logger.debug("%s", log_still_running)
+        #logger.debug("%s", log_still_running)
         self._servers_lock.acquire()
         new_server_list = []
         for server in self._servers:
