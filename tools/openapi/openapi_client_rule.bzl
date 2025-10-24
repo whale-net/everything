@@ -147,7 +147,7 @@ def openapi_client(name, spec, namespace, app, package_name = None, visibility =
         name = name + "_tar",
         srcs = [":" + name],
         outs = ["{}_container.tar".format(app)],
-        cmd = "tar -cf $@ -C $(location :{})/../ {}".format(name, app),
+        cmd = "tar --mtime='@0' -cf $@ -C $(location :{})/../ {}".format(name, app),
         visibility = ["//visibility:public"],
         tags = ["manual"],
     )

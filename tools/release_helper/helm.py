@@ -580,7 +580,7 @@ def package_chart_with_version(
         chart_data['version'] = chart_version
         
         with open(chart_yaml_path, 'w') as f:
-            yaml.safe_dump(chart_data, f, default_flow_style=False, sort_keys=False)
+            yaml.safe_dump(chart_data, f, default_flow_style=False, sort_keys=True)
     
     # Update values.yaml with resolved app versions (imageTag)
     # This ensures published Helm charts use specific semver tags instead of "latest"
@@ -599,7 +599,7 @@ def package_chart_with_version(
                         print(f"Updated {app_name} imageTag to {app_version}")
             
             with open(values_yaml_path, 'w') as f:
-                yaml.safe_dump(values_data, f, default_flow_style=False, sort_keys=False)
+                yaml.safe_dump(values_data, f, default_flow_style=False, sort_keys=True)
     
     # Use helm package command to create the tarball from the temporary copy
     result = subprocess.run(
@@ -754,7 +754,7 @@ def unpublish_helm_chart_versions(
     
     # Write the updated index back
     with open(index_path, 'w') as f:
-        yaml.safe_dump(index_data, f, default_flow_style=False, sort_keys=False)
+        yaml.safe_dump(index_data, f, default_flow_style=False, sort_keys=True)
     
     print(f"✅ Successfully updated {index_path}")
     return True

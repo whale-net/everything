@@ -83,5 +83,5 @@ if [ -f "$TMPDIR/$PKG_UNDERSCORE/api_client.py" ]; then
     fi
 fi
 
-# Create tar
-tar -cf "$OUTPUT_TAR" -C "$TMPDIR" "$PKG_UNDERSCORE/"
+# Create tar with deterministic timestamp for reproducible builds
+tar --mtime='@0' -cf "$OUTPUT_TAR" -C "$TMPDIR" "$PKG_UNDERSCORE/"
