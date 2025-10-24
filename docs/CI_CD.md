@@ -24,7 +24,7 @@ graph TD
     H --> J{Main Branch?}
     J -->|Yes| K[Docker Job]
     J -->|No| L[Build Summary]
-    K --> M[Build & Push Images]
+    K --> M[Build Images]
     M --> L
     L --> N[Report Status]
     C --> O[Upload Test Results]
@@ -62,7 +62,7 @@ Verifies cross-compilation for multi-architecture containers (critical for ARM64
 Determines which apps need Docker images built based on changes
 
 ### Docker
-Builds container images and pushes to registry (only runs on main branch commits)
+Builds container images to verify they compile correctly (only runs on main branch commits). Images are not pushed to the registry; use the Release workflow for publishing images.
 
 ### Build Summary
 Collects and reports the status of all CI jobs
