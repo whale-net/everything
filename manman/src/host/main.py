@@ -24,11 +24,11 @@ from libs.python.alembic import (
 )
 from libs.python.cli.providers.rabbitmq import rmq_params
 from libs.python.cli.providers.postgres import pg_params
+from libs.python.cli.providers.app_env import app_env_params
 from libs.python.cli.params import logging_params
 from libs.python.cli.types import AppEnv
+from libs.python.gunicorn import get_gunicorn_config
 from manman.src.config import ManManConfig
-from manman.src.logging_config import get_gunicorn_config
-from libs.python.logging import configure_logging
 from libs.python.rmq import ExchangeRegistry
 from manman.src.util import get_sqlalchemy_engine, init_sql_alchemy_engine
 from libs.python.rmq import (
@@ -40,58 +40,43 @@ app = typer.Typer()
 logger = logging.getLogger(__name__)
 
 
-# Global configuration store for initialization parameters
-_initialization_config = {}
-_initialization_lock = threading.Lock()
-_services_initialized = False
+# Helper function for exchange initialization
+def initialize_rabbitmq_exchanges():
+    """Declare RabbitMQ exchanges using the persistent connection."""
+    from libs.python.rmq import get_rabbitmq_connection
+
+    rmq_connection = get_rabbitmq_connection()
+
+    exchanges = [exchange.value for exchange in ExchangeRegistry]
+    for exchange in exchanges:
+        rmq_connection.channel().exchange.declare(
+            exchange=exchange,
+            exchange_type="topic",
+            durable=True,
+        )
+        logger.info("Exchange declared %s", exchange)
 
 
-def store_initialization_config(**kwargs):
-    """Store initialization configuration globally for use in app factories."""
-    global _initialization_config
-    with _initialization_lock:
-        _initialization_config.update(kwargs)
-
-
-def get_initialization_config():
-    """Get stored initialization configuration."""
-    with _initialization_lock:
-        return _initialization_config.copy()
-
-
-def ensure_common_services_initialized():
+def maybe_create_vhost(rmq_ctx: dict, app_env: Optional[str]):
+    """Create RabbitMQ vhost if in dev environment.
+    
+    This is only useful for local development where vhosts may not exist yet.
+    In production, vhosts should be pre-created by infrastructure.
+    
+    Args:
+        rmq_ctx: RabbitMQ context dict with connection params
+        app_env: Application environment (only creates if 'dev')
     """
-    Ensure common services are initialized using stored configuration, thread-safe.
+    if app_env == "dev":
+        create_rabbitmq_vhost(
+            host=rmq_ctx.get("host"),
+            port=rmq_ctx.get("port"),
+            username=rmq_ctx.get("username"),
+            password=rmq_ctx.get("password"),
+            vhost=rmq_ctx.get("vhost", "/"),
+        )
+        logger.info("Dev vhost created/verified: %s", rmq_ctx.get("vhost", "/"))
 
-    This function handles several race condition scenarios:
-    1. Multiple Gunicorn workers starting simultaneously (preload_app=False)
-    2. App factory called during preload and again in workers (preload_app=True)
-    3. Concurrent access to global configuration state
-
-    Uses a threading lock and initialization flag to ensure services are
-    initialized exactly once, regardless of how many times this is called.
-    """
-    global _services_initialized
-
-    with _initialization_lock:
-        if _services_initialized:
-            logger.debug("Common services already initialized, skipping")
-            return
-
-        config = _initialization_config.copy()
-        if not config:
-            logger.warning(
-                "No initialization configuration found - services may not be properly initialized"
-            )
-            return
-
-        try:
-            _init_common_services(**config)
-            _services_initialized = True
-            logger.info("Common services initialized successfully")
-        except Exception as e:
-            logger.error("Failed to initialize common services: %s", e)
-            raise
 
 
 class GunicornApplication(BaseApplication):
@@ -117,97 +102,36 @@ class GunicornApplication(BaseApplication):
         return self.app_factory()
 
 
-def _init_common_services(
-    rabbitmq_host: str,
-    rabbitmq_port: int,
-    rabbitmq_username: str,
-    rabbitmq_password: str,
-    app_env: Optional[str],
-    enable_ssl: bool,
-    rabbitmq_ssl_hostname: Optional[str],
-    should_run_migration_check: bool,
-    create_vhost: bool = False,
-    enable_otel: bool = False,  # Add enable_otel parameter
-):
-    """Initialize common services required by both APIs."""
-    if should_run_migration_check and _need_migration():
-        raise RuntimeError("migration needs to be ran before starting")
-    
-    virtual_host = f"manman-{app_env}" if app_env else "/"
-    
-    # Optionally create vhost via management API
-    if create_vhost and app_env == "dev":
-        create_rabbitmq_vhost(
-            host=rabbitmq_host,
-            port=rabbitmq_port,
-            username=rabbitmq_username,
-            password=rabbitmq_password,
-            vhost=virtual_host,
-        )
-
-    # Build RabbitMQ config and initialize
-    rmq_config = {
-        'host': rabbitmq_host,
-        'port': rabbitmq_port,
-        'username': rabbitmq_username,
-        'password': rabbitmq_password,
-        'vhost': '/',  # Base vhost
-        'enable_ssl': enable_ssl,
-        'ssl_hostname': rabbitmq_ssl_hostname,
-    }
-    init_rabbitmq_from_config(rmq_config, vhost_suffix=app_env)
-
-    # declare rabbitmq exchanges - use persistent connection for this operation
-    from libs.python.rmq import get_rabbitmq_connection
-
-    rmq_connection = get_rabbitmq_connection()
-
-    exchanges = []
-    for exchange in ExchangeRegistry:
-        exchanges.append(exchange.value)
-    for exchange in exchanges:
-        rmq_connection.channel().exchange.declare(
-            exchange=exchange,
-            exchange_type="topic",
-            durable=True,
-        )
-        logger.info("Exchange declared %s", exchange)
 
 
 def create_experience_app():
-    """Factory function to create the Experience API FastAPI application with service initialization."""
-    # Ensure services are initialized when creating the app
-    ensure_common_services_initialized()
-
+    """Factory function to create the Experience API FastAPI application."""
     from manman.src.host.api.experience import create_app
 
     return create_app()
 
 
 def create_status_app():
-    """Factory function to create the Status API FastAPI application with service initialization."""
-    # Ensure services are initialized when creating the app
-    ensure_common_services_initialized()
-
+    """Factory function to create the Status API FastAPI application."""
     from manman.src.host.api.status import create_app
 
     return create_app()
 
 
 def create_worker_dal_app():
-    """Factory function to create the Worker DAL API FastAPI application with service initialization."""
-    # Ensure services are initialized when creating the app
-    ensure_common_services_initialized()
-
+    """Factory function to create the Worker DAL API FastAPI application."""
     from manman.src.host.api.worker_dal import create_app
 
     return create_app()
 
 
+
 @app.command()
+@rmq_params
+@pg_params
+@logging_params
 def start_experience_api(
     ctx: typer.Context,
-    app_env: AppEnv = None,
     port: int = 8000,
     workers: Annotated[
         int, typer.Option(help="Number of Gunicorn worker processes")
@@ -219,41 +143,15 @@ def start_experience_api(
         ),
     ] = True,
     should_run_migration_check: Optional[bool] = True,
-    create_vhost: Annotated[
-        bool, typer.Option(help="Create RabbitMQ vhost before initialization")
-    ] = False,
 ):
     """Start the experience API (host layer) that provides game server management and user-facing functionality."""
-    # Get contexts from callback
-    rmq_ctx = ctx.obj.get("rabbitmq", {})
+    # Check migrations if needed
+    if should_run_migration_check and _need_migration():
+        raise RuntimeError("migration needs to be ran before starting")
+    
+    # Get logging context for Gunicorn config
     logging_ctx = ctx.obj.get("logging", {})
     log_otlp = logging_ctx.get("log_otlp", False)
-    
-    # Setup logging with OTLP for production observability
-    configure_logging(
-        app_name=ManManConfig.EXPERIENCE_API,
-        domain="manman",
-        app_type="external-api",
-        environment=app_env or "development",
-        log_level="INFO",
-        enable_otlp=log_otlp,  # OTLP for production
-        enable_console=True,
-        json_format=False,  # Simple console for debugging
-    )
-
-    # Store initialization configuration for use in app factory
-    store_initialization_config(
-        rabbitmq_host=rmq_ctx.get("host"),
-        rabbitmq_port=rmq_ctx.get("port"),
-        rabbitmq_username=rmq_ctx.get("username"),
-        rabbitmq_password=rmq_ctx.get("password"),
-        app_env=app_env,
-        enable_ssl=rmq_ctx.get("enable_ssl"),
-        rabbitmq_ssl_hostname=rmq_ctx.get("ssl_hostname"),
-        should_run_migration_check=should_run_migration_check,
-        create_vhost=create_vhost,
-        enable_otel=log_otlp,  # Store OTEL flag for app factory
-    )
 
     # Configure and run with Gunicorn
     options = get_gunicorn_config(
@@ -267,10 +165,13 @@ def start_experience_api(
     GunicornApplication(create_experience_app, options).run()
 
 
+
 @app.command()
+@rmq_params
+@pg_params
+@logging_params
 def start_status_api(
     ctx: typer.Context,
-    app_env: AppEnv = None,
     port: int = 8000,
     workers: Annotated[
         int, typer.Option(help="Number of Gunicorn worker processes")
@@ -282,41 +183,15 @@ def start_status_api(
         ),
     ] = True,
     should_run_migration_check: Optional[bool] = True,
-    create_vhost: Annotated[
-        bool, typer.Option(help="Create RabbitMQ vhost before initialization")
-    ] = False,
 ):
     """Start the status API that provides status and monitoring functionality."""
-    # Get contexts from callback
-    rmq_ctx = ctx.obj.get("rabbitmq", {})
-    logging_ctx = ctx.obj.get("logging", {})
-    log_otlp = logging_ctx.get("enable_otlp", False)
+    # Check migrations if needed
+    if should_run_migration_check and _need_migration():
+        raise RuntimeError("migration needs to be ran before starting")
     
-    # Setup logging with OTLP for production observability
-    configure_logging(
-        app_name=ManManConfig.STATUS_API,
-        domain="manman",
-        app_type="internal-api",
-        environment=app_env or "development",
-        log_level="INFO",
-        enable_otlp=log_otlp,
-        enable_console=True,
-        json_format=False,
-    )
-
-    # Store initialization configuration for use in app factory
-    store_initialization_config(
-        rabbitmq_host=rmq_ctx.get("host"),
-        rabbitmq_port=rmq_ctx.get("port"),
-        rabbitmq_username=rmq_ctx.get("username"),
-        rabbitmq_password=rmq_ctx.get("password"),
-        app_env=app_env,
-        enable_ssl=rmq_ctx.get("enable_ssl"),
-        rabbitmq_ssl_hostname=rmq_ctx.get("ssl_hostname"),
-        should_run_migration_check=should_run_migration_check,
-        create_vhost=create_vhost,
-        enable_otel=log_otlp,  # Store OTEL flag for app factory
-    )
+    # Get logging context for Gunicorn config
+    logging_ctx = ctx.obj.get("logging", {})
+    log_otlp = logging_ctx.get("log_otlp", False)
 
     # Configure and run with Gunicorn
     options = get_gunicorn_config(
@@ -330,10 +205,13 @@ def start_status_api(
     GunicornApplication(create_status_app, options).run()
 
 
+
 @app.command()
+@rmq_params
+@pg_params
+@logging_params
 def start_worker_dal_api(
     ctx: typer.Context,
-    app_env: AppEnv = None,
     port: int = 8000,
     workers: Annotated[
         int, typer.Option(help="Number of Gunicorn worker processes")
@@ -345,41 +223,15 @@ def start_worker_dal_api(
         ),
     ] = True,
     should_run_migration_check: Optional[bool] = True,
-    create_vhost: Annotated[
-        bool, typer.Option(help="Create RabbitMQ vhost before initialization")
-    ] = False,
 ):
     """Start the worker DAL API that provides data access endpoints for worker services."""
-    # Get contexts from callback
-    rmq_ctx = ctx.obj.get("rabbitmq", {})
+    # Check migrations if needed
+    if should_run_migration_check and _need_migration():
+        raise RuntimeError("migration needs to be ran before starting")
+    
+    # Get logging context for Gunicorn config
     logging_ctx = ctx.obj.get("logging", {})
     log_otlp = logging_ctx.get("log_otlp", False)
-    
-    # Setup logging with OTLP for production observability
-    configure_logging(
-        app_name=ManManConfig.WORKER_DAL_API,
-        domain="manman",
-        app_type="internal-api",
-        environment=app_env or "development",
-        log_level="INFO",
-        enable_otlp=log_otlp,
-        enable_console=True,
-        json_format=False,
-    )
-
-    # Store initialization configuration for use in app factory
-    store_initialization_config(
-        rabbitmq_host=rmq_ctx.get("host"),
-        rabbitmq_port=rmq_ctx.get("port"),
-        rabbitmq_username=rmq_ctx.get("username"),
-        rabbitmq_password=rmq_ctx.get("password"),
-        app_env=app_env,
-        enable_ssl=rmq_ctx.get("enable_ssl"),
-        rabbitmq_ssl_hostname=rmq_ctx.get("ssl_hostname"),
-        should_run_migration_check=should_run_migration_check,
-        create_vhost=create_vhost,
-        enable_otel=log_otlp,  # Store OTEL flag for app factory
-    )
 
     # Configure and run with Gunicorn
     options = get_gunicorn_config(
@@ -393,56 +245,26 @@ def start_worker_dal_api(
     GunicornApplication(create_worker_dal_app, options).run()
 
 
+
 @app.command()
+@rmq_params
+@pg_params
+@logging_params
 def start_status_processor(
     ctx: typer.Context,
-    app_env: AppEnv = None,
     should_run_migration_check: Optional[bool] = True,
-    create_vhost: Annotated[
-        bool, typer.Option(help="Create RabbitMQ vhost before initialization")
-    ] = False,
 ):
     """Start the status event processor that handles status-related pub/sub messages."""
-    # Get contexts from callback
-    rmq_ctx = ctx.obj.get("rabbitmq", {})
-    logging_ctx = ctx.obj.get("logging", {})
-    log_otlp = logging_ctx.get("log_otlp", False)
-
-    # Setup logging with OTLP for production observability
-    configure_logging(
-        app_name=ManManConfig.STATUS_PROCESSOR,
-        domain="manman",
-        app_type="worker",
-        environment=app_env or "development",
-        log_level="INFO",
-        enable_otlp=log_otlp,
-        enable_console=True,
-        json_format=False,
-    )
-
     logger.info("Starting status event processor...")
 
-    store_initialization_config(
-        rabbitmq_host=rmq_ctx.get("host"),
-        rabbitmq_port=rmq_ctx.get("port"),
-        rabbitmq_username=rmq_ctx.get("username"),
-        rabbitmq_password=rmq_ctx.get("password"),
-        app_env=app_env,
-        enable_ssl=rmq_ctx.get("enable_ssl"),
-        rabbitmq_ssl_hostname=rmq_ctx.get("ssl_hostname"),
-        should_run_migration_check=should_run_migration_check,
-        create_vhost=create_vhost,
-        enable_otel=log_otlp,  # Store OTEL flag for status processor
-    )
-
-    ensure_common_services_initialized()
+    # Check migrations if needed
+    if should_run_migration_check and _need_migration():
+        raise RuntimeError("migration needs to be ran before starting")
 
     # Start the status event processor (pub/sub only, no HTTP server other than health check)
-    from fastapi import FastAPI  # Add FastAPI import
+    from fastapi import FastAPI
 
-    from manman.src.host.api.shared import (
-        add_health_check,  # Ensure this import is present or add it
-    )
+    from manman.src.host.api.shared import add_health_check
     from manman.src.host.status_processor import StatusEventProcessor
     from libs.python.rmq import get_rabbitmq_connection
 
@@ -467,6 +289,7 @@ def start_status_processor(
 
     processor = StatusEventProcessor(get_rabbitmq_connection())
     processor.run()
+
 
 
 @app.command()
@@ -496,13 +319,19 @@ def run_downgrade(ctx: typer.Context, target: str):
 @rmq_params
 @logging_params  # Auto-configures logging from environment variables
 @pg_params
-def callback(ctx: typer.Context, app_env: AppEnv = "dev"):
-    # Initialize database connection for CLI operations
-    init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
+@app_env_params  # Injects app_env from APP_ENV environment variable
+def callback(ctx: typer.Context):
+    """
+    ManMan Host Service CLI.
     
-    # Logging is already configured by @logging_params decorator
-    # No need to call configure_logging() here!
-    # Config read from: APP_NAME, APP_DOMAIN, APP_TYPE, APP_VERSION, LOG_LEVEL, LOG_OTLP, etc.
+    Initializes database connection for all commands.
+    Logging is auto-configured via @logging_params decorator.
+    RabbitMQ config is injected by @rmq_params but not initialized here
+    (server commands will initialize when needed).
+    App environment injected by @app_env_params.
+    """
+    # Initialize database connection for CLI operations (needed by all commands)
+    init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
 
 
 # alembic helpers using consolidated library

@@ -166,11 +166,15 @@ def logging_params(func: Callable) -> Callable:
     from libs.python.cli.params_base import _create_param_decorator
     from libs.python.logging import configure_logging
     
+    def str_to_bool(value: str) -> bool:
+        """Convert string environment variable to boolean."""
+        return value.lower() in ('true', '1', 'yes')
+    
     # Read environment variables for runtime config
-    env_log_otlp = os.getenv('LOG_OTLP', '').lower() in ('true', '1', 'yes')
+    env_log_otlp = str_to_bool(os.getenv('LOG_OTLP', ''))
     env_log_level = os.getenv('LOG_LEVEL', 'INFO').upper()  # Default INFO for production
-    env_json_format = os.getenv('LOG_JSON_FORMAT', '').lower() in ('true', '1', 'yes')
-    env_console = os.getenv('LOG_CONSOLE', 'true').lower() in ('true', '1', 'yes')
+    env_json_format = str_to_bool(os.getenv('LOG_JSON_FORMAT', ''))
+    env_console = str_to_bool(os.getenv('LOG_CONSOLE', 'true'))
     
     # Validate log level
     valid_levels = ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
@@ -189,12 +193,12 @@ def logging_params(func: Callable) -> Callable:
     ]
     
     def extractor(kwargs):
+        # Extract app_env if available (from AppEnv type annotation)
+        # Don't pop it - leave it for the function signature
+        app_env = kwargs.get('app_env', os.getenv('APP_ENV', 'dev'))
+        
         # Get runtime config from env vars (with CLI override)
-        enable_otlp = os.getenv('LOG_OTLP', '').lower() in ('true', '1', 'yes')
-        if not enable_otlp:
-            enable_otlp = kwargs.pop('log_otlp', False)
-        else:
-            kwargs.pop('log_otlp', None)
+        enable_otlp = kwargs.pop('log_otlp', env_log_otlp)
         
         log_level = os.getenv('LOG_LEVEL', '').upper()
         if not log_level or log_level not in valid_levels:
@@ -207,7 +211,9 @@ def logging_params(func: Callable) -> Callable:
         
         # Auto-configure logging using consolidated library
         # This reads APP_NAME, APP_DOMAIN, APP_TYPE, etc. from environment
+        # Pass app_env to configure logging context
         configure_logging(
+            deployment_environment=app_env,
             log_level=log_level,
             enable_otlp=enable_otlp,
             enable_console=enable_console,

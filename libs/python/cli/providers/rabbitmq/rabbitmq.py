@@ -130,7 +130,7 @@ def create_rabbitmq_context(
 
 def rmq_params(func: Callable) -> Callable:
     """
-    Decorator that injects RabbitMQ parameters into the callback.
+    Decorator that injects RabbitMQ parameters into the callback AND initializes RabbitMQ.
     
     Reduces callback signature from N+7 to N parameters while keeping
     all 7 RabbitMQ options visible in CLI help.
@@ -143,6 +143,7 @@ def rmq_params(func: Callable) -> Callable:
             # rmq = {'host': ..., 'port': ..., 'user': ..., ...}
     """
     from libs.python.cli.params_base import _create_param_decorator
+    from libs.python.rmq import init_rabbitmq
     
     param_specs = [
         ('rabbitmq_host', inspect.Parameter(
@@ -176,7 +177,7 @@ def rmq_params(func: Callable) -> Callable:
     ]
     
     def extractor(kwargs):
-        return {
+        rmq_config = {
             'host': kwargs.pop('rabbitmq_host', 'localhost'),
             'port': kwargs.pop('rabbitmq_port', 5672),
             'username': kwargs.pop('rabbitmq_user', 'guest'),
@@ -185,5 +186,19 @@ def rmq_params(func: Callable) -> Callable:
             'enable_ssl': kwargs.pop('rabbitmq_enable_ssl', False),
             'ssl_hostname': kwargs.pop('rabbitmq_ssl_hostname', ''),
         }
+        
+        # Initialize RabbitMQ with the extracted config
+        logger.debug(f"Initializing RabbitMQ: {rmq_config['host']}:{rmq_config['port']} vhost={rmq_config['vhost']}")
+        init_rabbitmq(
+            host=rmq_config['host'],
+            port=rmq_config['port'],
+            username=rmq_config['username'],
+            password=rmq_config['password'],
+            virtual_host=rmq_config['vhost'],
+            ssl_enabled=rmq_config['enable_ssl'],
+            ssl_options={'server_hostname': rmq_config['ssl_hostname']} if rmq_config['ssl_hostname'] else None,
+        )
+        
+        return rmq_config
     
     return _create_param_decorator(param_specs, 'rabbitmq', extractor)(func)

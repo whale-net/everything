@@ -1,0 +1,14 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+py_library(
+    name = "app_env",
+    srcs = [
+        "__init__.py",
+        "app_env.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/python/cli:params_base",
+        "//libs/python/cli:types",
+    ],
+)

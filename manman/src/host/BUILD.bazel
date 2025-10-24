@@ -21,8 +21,10 @@ py_library(
         "//libs/python/alembic",
         "//libs/python/cli:params",
         "//libs/python/cli:types",
+        "//libs/python/cli/providers/app_env",
         "//libs/python/cli/providers/postgres",
         "//libs/python/cli/providers/rabbitmq",
+        "//libs/python/gunicorn",  # Gunicorn config utilities
         "//libs/python/logging",  # Use consolidated logging
         "//manman/src:manman_core",
         "//manman/src/repository:manman_repository",
