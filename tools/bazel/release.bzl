@@ -342,6 +342,7 @@ def release_helm_chart(
     actual_chart_name = "helm-{}-{}".format(domain, base_chart_name)
     
     # Create the helm_chart target
+    # Tags: manual - not built by default, no_test - excludes from test runs, helm-chart - for discovery
     helm_chart(
         name = name,
         apps = apps,
@@ -350,6 +351,7 @@ def release_helm_chart(
         namespace = namespace,
         environment = environment,
         manual_manifests = manual_manifests,
+        tags = ["manual", "no_test", "helm-chart"],
         **kwargs
     )
     
@@ -376,6 +378,6 @@ def release_helm_chart(
         domain = domain,
         app_names = app_names,
         chart_target = ":" + name,
-        tags = ["helm-release-metadata"],
+        tags = ["helm-release-metadata", "manual", "no_test"],
         visibility = ["//visibility:public"],
     )
