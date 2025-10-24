@@ -233,14 +233,14 @@ def main():
     
     # Output results
     if args.output_format == "json":
-        json.dump(values, sys.stdout, indent=2)
+        json.dump(values, sys.stdout, indent=2, sort_keys=True)
     else:
         try:
             import yaml
-            yaml.dump(values, sys.stdout, default_flow_style=False, sort_keys=False)
+            yaml.dump(values, sys.stdout, default_flow_style=False, sort_keys=True)
         except ImportError:
             print("Error: PyYAML not available. Use --output-format json instead.", file=sys.stderr)
-            json.dump(values, sys.stdout, indent=2)
+            json.dump(values, sys.stdout, indent=2, sort_keys=True)
 
 if __name__ == "__main__":
     main()
