@@ -171,6 +171,7 @@ def container_image(
             package_dir = "/app",
             include_runfiles = True,
             strip_prefix = ".",
+            portable_mtime = True,  # Use fixed timestamp for reproducible builds
             tags = ["manual"],
         )
         
@@ -217,8 +218,8 @@ def container_image(
                 # Strip the Python installation (failures are non-fatal for optimization)
                 $(location //tools/scripts:strip_python.sh) python_layer/opt/python3.13/$$ARCH 2>&1 | head -20 || echo "Warning: strip_python.sh encountered issues but continuing"
                 
-                # Create final tar with universal path
-                tar -cf $@ -C python_layer .
+                # Create final tar with universal path and fixed timestamp for reproducibility
+                tar --mtime='@0' -cf $@ -C python_layer .
                 """.format(name = name),
             tags = ["manual"],
         )
@@ -241,10 +242,10 @@ def container_image(
                 cd layer_tmp
                 DEPS_PATHS=$$(find app -path "*/rules_pycross++lock_repos+pypi*" || true)
                 if [ -n "$$DEPS_PATHS" ]; then
-                    echo "$$DEPS_PATHS" | tar -cf ../deps_tmp.tar -T -
+                    echo "$$DEPS_PATHS" | tar --mtime='@0' -cf ../deps_tmp.tar -T -
                 else
                     # No dependencies - create empty tar
-                    tar -cf ../deps_tmp.tar -T /dev/null
+                    tar --mtime='@0' -cf ../deps_tmp.tar -T /dev/null
                 fi
                 cd ..
                 
@@ -256,8 +257,8 @@ def container_image(
                     $(location //tools/scripts:strip_python.sh) deps_layer 2>&1 | head -20 || echo "Warning: strip_python.sh encountered issues but continuing"
                 fi
                 
-                # Create final tar
-                tar -cf $@ -C deps_layer .
+                # Create final tar with fixed timestamp for reproducibility
+                tar --mtime='@0' -cf $@ -C deps_layer .
                 """.format(name = name),
             tags = ["manual"],
         )
@@ -302,7 +303,7 @@ def container_image(
                     find app -type f -not -path "*/runfiles/*" -not -path "*/rules_python*" -not -path "*/rules_pycross*" 2>/dev/null || true
                     # Binary symlinks
                     find app -type l -not -path "*/runfiles/*" 2>/dev/null || true
-                }} | tar -cf ../app_tmp.tar -T -
+                }} | tar --mtime='@0' -cf ../app_tmp.tar -T -
                 cd ..
                 
                 # Extract to create final layer
@@ -318,8 +319,8 @@ def container_image(
                 mkdir -p "$$(dirname "$$EXPECTED_DIR")"
                 ln -sf /opt/python3.13/$$ARCH "$$EXPECTED_DIR"
                 
-                # Create final tar with app code and symlink
-                tar -cf $@ -C app_layer .
+                # Create final tar with app code, symlink, and fixed timestamp for reproducibility
+                tar --mtime='@0' -cf $@ -C app_layer .
                 """.format(name = name),
             tags = ["manual"],
         )
@@ -337,6 +338,7 @@ def container_image(
             package_dir = "/app",
             include_runfiles = True,
             strip_prefix = ".",
+            portable_mtime = True,  # Use fixed timestamp for reproducible builds
             tags = ["manual"],
         )
         layer_targets = [":" + name + "_layer"]
