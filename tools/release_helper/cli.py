@@ -880,10 +880,18 @@ def cleanup_releases_cmd(
             typer.echo("Run with --no-dry-run to actually delete these releases")
         else:
             typer.echo("\n⚠️  WARNING: This will permanently delete tags, releases, and packages!")
-            confirm = typer.confirm("Are you sure you want to proceed?")
-            if not confirm:
-                typer.echo("Cleanup cancelled.")
-                return
+            
+            # Skip confirmation in CI/non-interactive environments
+            is_ci = os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true"
+            is_interactive = sys.stdin.isatty()
+            
+            if not is_ci and is_interactive:
+                confirm = typer.confirm("Are you sure you want to proceed?")
+                if not confirm:
+                    typer.echo("Cleanup cancelled.")
+                    return
+            else:
+                typer.echo("Running in non-interactive mode (CI detected), proceeding with cleanup...")
         
         result = cleanup.execute_cleanup(plan, dry_run=dry_run)
         
