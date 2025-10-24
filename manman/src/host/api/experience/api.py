@@ -101,7 +101,7 @@ async def start_game_server(
     :param channel: rabbitmq channel
     :return: arbitrary response
     """
-
+    # FastAPI instrumentation automatically creates spans for this endpoint
     # Create a Command object with CommandType.START and game_server_config_id as arg
     command = Command(command_type=CommandType.START, command_args=[str(id)])
     worker_command_pub_svc.publish_command(command)
@@ -141,6 +141,7 @@ async def stop_game_server(
     :param channel: rabbitmq channel
     :return: arbitrary response
     """
+    # FastAPI instrumentation automatically creates spans for this endpoint
     command = Command(command_type=CommandType.STOP, command_args=[str(id)])
     worker_command_pub_svc.publish_command(command)
 
@@ -173,7 +174,7 @@ async def stdin_game_server(
     :param body: StdinCommandRequest
     :return: arbitrary response
     """
-
+    # FastAPI instrumentation automatically creates spans for this endpoint
     command = Command(
         command_type=CommandType.STDIN, command_args=[str(id), *body.commands]
     )

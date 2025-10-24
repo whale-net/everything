@@ -1,9 +1,12 @@
 import logging
 import os
 
+from opentelemetry import trace
+
 from manman.src.worker.processbuilder import ProcessBuilder, ProcessBuilderStatus
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 
 class SteamCMD:
@@ -46,33 +49,41 @@ class SteamCMD:
 
         :param app_id: steam app_id
         """
-        logger.info("installing app_id=[%s]", app_id)
+        with tracer.start_as_current_span("steamcmd_install") as span:
+            span.set_attribute("steamcmd.app_id", app_id)
+            span.set_attribute("steamcmd.install_dir", self._install_dir)
+            span.set_attribute("steamcmd.username", self._username)
+            
+            logger.info("installing app_id=[%s]", app_id)
 
-        # prepare directory
-        if not os.path.exists(self._install_dir):
-            logger.info("directroy not found, creating=[%s]", self._install_dir)
-            os.makedirs(self._install_dir)
+            # prepare directory
+            if not os.path.exists(self._install_dir):
+                logger.info("directroy not found, creating=[%s]", self._install_dir)
+                os.makedirs(self._install_dir)
 
-        # leave a little something behind
-        # check_file_name = os.path.join(self._install_dir, ".manman")
-        # pathlib.Path(check_file_name).touch()
+            # leave a little something behind
+            # check_file_name = os.path.join(self._install_dir, ".manman")
+            # pathlib.Path(check_file_name).touch()
 
-        pb = ProcessBuilder(self._steamcmd_executable)
-        # steamcmd is different and uses + for args
-        # TODO - temp? should come from config
-        pb.add_parameter("+@sSteamCmdForcePlatformType", "linux")
-        pb.add_parameter("+force_install_dir", self._install_dir)
-        pb.add_parameter("+login", self._username)
-        if self._password is not None:
-            pb.add_parameter_stdin(self._password)
-        pb.add_parameter("+app_update", str(app_id))
-        pb.add_parameter("+exit")
+            pb = ProcessBuilder(self._steamcmd_executable)
+            # steamcmd is different and uses + for args
+            # TODO - temp? should come from config
+            pb.add_parameter("+@sSteamCmdForcePlatformType", "linux")
+            pb.add_parameter("+force_install_dir", self._install_dir)
+            pb.add_parameter("+login", self._username)
+            if self._password is not None:
+                pb.add_parameter_stdin(self._password)
+            pb.add_parameter("+app_update", str(app_id))
+            pb.add_parameter("+exit")
 
-        pb.run(wait=True)
-        if pb.status == ProcessBuilderStatus.STOPPED:
-            logger.info("successfully installed app_id=[%s]", app_id)
-        elif pb.status == ProcessBuilderStatus.FAILED:
-            logger.error(
-                "failed to install app_id=[%s], exit code: %s", app_id, pb.exit_code
-            )
-            raise Exception(f"SteamCMD failed (exit code: {pb.exit_code})")
+            pb.run(wait=True)
+            if pb.status == ProcessBuilderStatus.STOPPED:
+                span.set_attribute("steamcmd.status", "success")
+                logger.info("successfully installed app_id=[%s]", app_id)
+            elif pb.status == ProcessBuilderStatus.FAILED:
+                span.set_attribute("steamcmd.status", "failed")
+                span.set_attribute("steamcmd.exit_code", pb.exit_code)
+                logger.error(
+                    "failed to install app_id=[%s], exit code: %s", app_id, pb.exit_code
+                )
+                raise Exception(f"SteamCMD failed (exit code: {pb.exit_code})")

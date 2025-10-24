@@ -35,12 +35,14 @@ router = APIRouter(
 
 @router.post("/create")
 async def worker_create() -> Worker:
+    # FastAPI instrumentation automatically creates spans for this endpoint
     repository = WorkerRepository()
     return repository.create_worker()
 
 
 @router.put("/shutdown")
 async def worker_shutdown(instance: Worker) -> Worker:
+    # FastAPI instrumentation automatically creates spans for this endpoint
     repository = WorkerRepository()
     try:
         result = repository.shutdown_worker(instance.worker_id)

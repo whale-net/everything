@@ -2,6 +2,7 @@ import logging
 import os
 
 from amqpstorm import Connection
+from opentelemetry import trace
 
 from manman.src.models import (
     Command,
@@ -18,6 +19,7 @@ from manman.src.worker.processbuilder import ProcessBuilder, ProcessBuilderStatu
 from manman.src.worker.steamcmd import SteamCMD
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 
 class Server(ManManService):

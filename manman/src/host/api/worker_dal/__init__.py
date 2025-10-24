@@ -20,6 +20,7 @@ async def lifespan(app):
 def create_app():
     """Factory function to create the Worker DAL API FastAPI application."""
     from fastapi import FastAPI
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
     from manman.src.host.api.shared import add_health_check
 
@@ -30,4 +31,9 @@ def create_app():
     app.include_router(server_router)
     app.include_router(worker_router)
     add_health_check(app)
+    
+    # Automatically instrument FastAPI with OpenTelemetry
+    # This creates spans for all endpoints and captures request/response details
+    FastAPIInstrumentor.instrument_app(app)
+    
     return app

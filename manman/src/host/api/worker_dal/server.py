@@ -16,12 +16,14 @@ router = APIRouter(
 
 @router.post("/instance/create")
 async def server_instance_create(body: GameServerInstance) -> GameServerInstance:
+    # FastAPI instrumentation automatically creates spans for this endpoint
     repository = GameServerInstanceRepository()
     return repository.create_instance(body.game_server_config_id, body.worker_id)
 
 
 @router.put("/instance/shutdown")
 async def server_instance_shutdown(instance: GameServerInstance) -> GameServerInstance:
+    # FastAPI instrumentation automatically creates spans for this endpoint
     repository = GameServerInstanceRepository()
     try:
         result = repository.shutdown_instance(instance.game_server_instance_id)
