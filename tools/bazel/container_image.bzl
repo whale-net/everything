@@ -126,6 +126,7 @@ def container_image(
     entrypoint = None,
     language = None,
     python_version = "3.13",
+    additional_tars = None,
     **kwargs):
     """Build a single-platform OCI container image.
     
@@ -135,14 +136,16 @@ def container_image(
     
     LAYERING STRATEGY - Optimized for Cache Efficiency:
     ====================================================
-    Uses 4 separate layers for optimal caching:
+    Uses 5 layers for optimal caching (when additional_tars provided):
     1. CA certificates (//tools/cacerts:cacerts) - shared across ALL apps
     2. Python interpreter (/opt/python3.13/{arch}/) - universal location, shared across ALL Python apps
-    3. Third-party dependencies (rules_pycross pypi packages) - per-app or shared if deps match
-    4. Application code (_main/ workspace) - unique per app, includes symlink to universal Python
+    3. Additional tools (e.g., //tools/steamcmd:steamcmd_layers) - shared when same tools used
+    4. Third-party dependencies (rules_pycross pypi packages) - per-app or shared if deps match
+    5. Application code (_main/ workspace) - unique per app, includes symlink to universal Python
     
     This layering strategy ensures:
-    - Base layers (certs, interpreter) are cached and shared across ALL Python apps
+    - Base layers (certs, interpreter, tools) are cached and shared across apps
+    - Tools with system libraries (like 32-bit libs for SteamCMD) are installed before app dependencies
     - Dependencies layer is shared when apps have identical deps
     - Only app code layer is rebuilt during typical development
     - Registry pushes only upload changed layers (reduces bandwidth)
@@ -157,6 +160,7 @@ def container_image(
         entrypoint: Override entrypoint (auto-detected from language)
         language: Language of the binary ("python" or "go") - REQUIRED
         python_version: Python version for path construction (default: "3.13")
+        additional_tars: Additional tar layers to include (e.g., ["//tools/steamcmd:steamcmd"])
         **kwargs: Additional oci_image arguments
     """
     if not language:
@@ -319,9 +323,19 @@ def container_image(
             tags = ["manual"],
         )
         
-        layer_targets = [
+        # Build list of base layers (CA certs + Python)
+        base_layers = [
+            "//tools/cacerts:cacerts",
             ":" + name + "_python_layer",
             ":" + name + "_deps_layer",
+        ]
+        
+        # Add additional layers (e.g., steamcmd, tools) before dependencies
+        if additional_tars:
+            base_layers = base_layers + additional_tars
+        
+        # Then add dependencies and app code layers
+        layer_targets = base_layers + [
             ":" + name + "_app_layer",
         ]
     else:
@@ -335,7 +349,12 @@ def container_image(
             portable_mtime = True,  # Use fixed timestamp for reproducible builds
             tags = ["manual"],
         )
-        layer_targets = [":" + name + "_layer"]
+        
+        # Build list: CA certs, then additional layers (if any), then app layer
+        layer_targets = ["//tools/cacerts:cacerts"]
+        if additional_tars:
+            layer_targets = layer_targets + additional_tars
+        layer_targets = layer_targets + [":" + name + "_layer"]
 
     
     binary_name = _get_binary_name(binary)
@@ -368,14 +387,13 @@ def container_image(
             # Go binaries are self-contained executables
             entrypoint = ["/app/" + binary_path]
     
-    # Build list of all layers in order (bottom to top)
-    # CA certs first (changes rarely), then language-specific layers
-    all_tars = ["//tools/cacerts:cacerts"] + layer_targets
-    
+    # layer_targets is already built with correct ordering in the language-specific sections above
+    # For Python: CA certs → Python → additional_tars → deps → app
+    # For Go: CA certs → additional_tars → app
     oci_image(
         name = name,
         base = base,
-        tars = all_tars,
+        tars = layer_targets,
         entrypoint = entrypoint,
         workdir = "/app",
         env = image_env,
@@ -392,6 +410,7 @@ def multiplatform_image(
     image_name = None,
     language = None,
     env = None,
+    additional_tars = None,
     **kwargs):
     """Build multiplatform OCI images using platform transitions.
     
@@ -429,6 +448,7 @@ def multiplatform_image(
             image_name = "demo-my_app",
             language = "python",  # or "go"
             env = {"APP_NAME": "my_app"},  # Default env vars
+            additional_tars = ["//tools/steamcmd:steamcmd"],  # Optional additional layers
         )
     
     Args:
@@ -440,6 +460,7 @@ def multiplatform_image(
         image_name: Image name in domain-app format (e.g., "demo-my_app") - REQUIRED
         language: Language of binary ("python" or "go") - REQUIRED
         env: Default environment variables to bake into the image
+        additional_tars: Additional tar layers to include (e.g., ["//tools/steamcmd:steamcmd"])
         **kwargs: Additional arguments passed to container_image
     """
     if not binary:
@@ -457,6 +478,7 @@ def multiplatform_image(
         base = base,
         language = language,
         env = env,
+        additional_tars = additional_tars,
         **kwargs
     )
     

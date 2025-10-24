@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 class SteamCMD:
     DEFAULT_USERNAME = "anonymous"
-    DEFAULT_EXECUTABLE = "steamcmd"
+    DEFAULT_EXECUTABLE = "/opt/steamcmd/steamcmd.sh"
 
     def __init__(
         self,

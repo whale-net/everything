@@ -1,0 +1,113 @@
+"""SteamCMD extraction and packaging for container images.
+
+This provides a reusable tar layer containing the SteamCMD executable that can be
+included in any container image that needs Steam game server management capabilities.
+
+Usage in your image:
+    release_app(
+        name = "my_app",
+        binary_name = ":my_binary",
+        language = "python",
+        domain = "demo",
+        additional_tars = ["//tools/steamcmd:steamcmd_with_lib32"],
+    )
+
+The steamcmd executable will be available at /opt/steamcmd/steamcmd.sh in the container,
+and the necessary 32-bit libraries will be installed automatically.
+"""
+
+load("@rules_pkg//:pkg.bzl", "pkg_tar")
+
+# Download and extract SteamCMD
+# SteamCMD is distributed as a tar.gz containing the steamcmd.sh script and dependencies
+# We extract it to a filegroup that can be packaged into a tar layer
+genrule(
+    name = "steamcmd_extracted",
+    srcs = ["@steamcmd_linux//file"],
+    outs = [
+        "steamcmd/steamcmd.sh",
+        "steamcmd/linux32/steamcmd",
+        "steamcmd/linux32/steamerrorreporter",
+        "steamcmd/linux32/libstdc++.so.6",
+        "steamcmd/linux32/crashhandler.so",
+    ],
+    cmd = """
+        set -e
+        
+        # Extract to temp directory
+        TMPDIR=$$(mktemp -d)
+        trap 'rm -rf $$TMPDIR' EXIT
+        tar -xzf $(location @steamcmd_linux//file) -C $$TMPDIR
+        
+        # Get output base directory
+        OUT_DIR="$$(dirname $(location steamcmd/steamcmd.sh))"
+        
+        # Copy files maintaining structure
+        mkdir -p $$OUT_DIR/linux32
+        cp $$TMPDIR/steamcmd.sh $$OUT_DIR/
+        cp $$TMPDIR/linux32/* $$OUT_DIR/linux32/
+        
+        # Make executables
+        chmod +x $$OUT_DIR/steamcmd.sh
+        chmod +x $$OUT_DIR/linux32/steamcmd
+        chmod +x $$OUT_DIR/linux32/steamerrorreporter
+    """,
+    visibility = ["//visibility:private"],
+)
+
+# Package SteamCMD into a tar layer for container images
+pkg_tar(
+    name = "steamcmd",
+    srcs = [":steamcmd_extracted"],
+    package_dir = "/opt/steamcmd",
+    strip_prefix = "steamcmd",
+    mode = "0755",
+    portable_mtime = True,  # Use fixed timestamp for reproducible builds
+    visibility = ["//visibility:public"],
+)
+
+# Create a symlink layer for easy access + 32-bit loader symlink
+genrule(
+    name = "steamcmd_symlink_layer",
+    outs = ["steamcmd_symlink.tar"],
+    cmd = """
+        set -e
+        TMPDIR=$$(mktemp -d)
+        trap 'rm -rf $$TMPDIR' EXIT
+        
+        # Create directory structure for symlinks
+        mkdir -p $$TMPDIR/usr/local/bin
+        mkdir -p $$TMPDIR/lib
+        
+        # Create symlink from /usr/local/bin/steamcmd to /opt/steamcmd/steamcmd.sh
+        ln -sf /opt/steamcmd/steamcmd.sh $$TMPDIR/usr/local/bin/steamcmd
+        
+        # Create symlink from /lib/ld-linux.so.2 to /usr/lib32/ld-linux.so.2
+        # This is needed so the kernel can find the 32-bit dynamic linker for steamcmd binary
+        ln -sf /usr/lib32/ld-linux.so.2 $$TMPDIR/lib/ld-linux.so.2
+        
+        # Create tar with fixed timestamp for reproducibility
+        tar --mtime='@0' -cf $@ -C $$TMPDIR .
+    """,
+    visibility = ["//visibility:public"],
+)
+
+# Combined steamcmd layers (main files + symlink + 32-bit libraries)
+# This is the recommended target to use - includes everything needed for SteamCMD
+filegroup(
+    name = "steamcmd_with_lib32",
+    srcs = [
+        ":steamcmd",
+        ":steamcmd_symlink_layer",
+        "//tools/lib32:lib32",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Legacy name for backwards compatibility
+alias(
+    name = "steamcmd_layers",
+    actual = ":steamcmd_with_lib32",
+    visibility = ["//visibility:public"],
+)
+

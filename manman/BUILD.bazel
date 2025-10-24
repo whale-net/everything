@@ -80,6 +80,7 @@ release_app(
     app_type = "worker",
     replicas = 1,  # Single replica for development
     args = ["start"],
+    additional_tars = ["//tools/steamcmd:steamcmd_layers"],
 )
 
 release_app(

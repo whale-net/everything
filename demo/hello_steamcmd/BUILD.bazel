@@ -1,0 +1,20 @@
+load("@rules_python//python:defs.bzl", "py_binary")
+load("//tools/bazel:release.bzl", "release_app")
+
+py_binary(
+    name = "hello_steamcmd",
+    srcs = ["main.py"],
+    main = "main.py",
+    visibility = ["//visibility:public"],
+)
+
+# Demo app showing SteamCMD integration
+release_app(
+    name = "hello-steamcmd",
+    binary_name = ":hello_steamcmd",
+    language = "python",
+    domain = "demo",
+    description = "Demo showing SteamCMD integration in container images",
+    app_type = "worker",
+    additional_tars = ["//tools/steamcmd:steamcmd_layers"],
+)
