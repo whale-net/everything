@@ -9,7 +9,7 @@ py_library(
         "//manman/src:manman_core",
         "//manman/clients:clients",
         "//manman/src/repository:manman_repository",
-        "//libs/python/cli:params_base",
+        "//libs/python/cli:params",  # Changed from params_base to params
         "//libs/python/cli:types",
         "//libs/python/cli/providers/rabbitmq",
         "//libs/python/logging",  # Use consolidated logging
