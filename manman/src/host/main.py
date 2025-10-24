@@ -24,6 +24,7 @@ from libs.python.alembic import (
 )
 from libs.python.cli.providers.rabbitmq import rmq_params
 from libs.python.cli.providers.postgres import pg_params
+from libs.python.cli.providers.app_env import app_env_params
 from libs.python.cli.params import logging_params
 from libs.python.cli.types import AppEnv
 from libs.python.gunicorn import get_gunicorn_config
@@ -126,6 +127,9 @@ def create_worker_dal_app():
 
 
 @app.command()
+@rmq_params
+@pg_params
+@logging_params
 def start_experience_api(
     ctx: typer.Context,
     port: int = 8000,
@@ -141,11 +145,10 @@ def start_experience_api(
     should_run_migration_check: Optional[bool] = True,
 ):
     """Start the experience API (host layer) that provides game server management and user-facing functionality."""
-    # Check migrations if needed (callback already initialized DB)
+    # Check migrations if needed
     if should_run_migration_check and _need_migration():
         raise RuntimeError("migration needs to be ran before starting")
     
-    # RabbitMQ and exchanges already initialized by callback
     # Get logging context for Gunicorn config
     logging_ctx = ctx.obj.get("logging", {})
     log_otlp = logging_ctx.get("log_otlp", False)
@@ -164,6 +167,9 @@ def start_experience_api(
 
 
 @app.command()
+@rmq_params
+@pg_params
+@logging_params
 def start_status_api(
     ctx: typer.Context,
     port: int = 8000,
@@ -179,11 +185,10 @@ def start_status_api(
     should_run_migration_check: Optional[bool] = True,
 ):
     """Start the status API that provides status and monitoring functionality."""
-    # Check migrations if needed (callback already initialized DB)
+    # Check migrations if needed
     if should_run_migration_check and _need_migration():
         raise RuntimeError("migration needs to be ran before starting")
     
-    # RabbitMQ and exchanges already initialized by callback
     # Get logging context for Gunicorn config
     logging_ctx = ctx.obj.get("logging", {})
     log_otlp = logging_ctx.get("log_otlp", False)
@@ -202,6 +207,9 @@ def start_status_api(
 
 
 @app.command()
+@rmq_params
+@pg_params
+@logging_params
 def start_worker_dal_api(
     ctx: typer.Context,
     port: int = 8000,
@@ -217,11 +225,10 @@ def start_worker_dal_api(
     should_run_migration_check: Optional[bool] = True,
 ):
     """Start the worker DAL API that provides data access endpoints for worker services."""
-    # Check migrations if needed (callback already initialized DB)
+    # Check migrations if needed
     if should_run_migration_check and _need_migration():
         raise RuntimeError("migration needs to be ran before starting")
     
-    # RabbitMQ and exchanges already initialized by callback
     # Get logging context for Gunicorn config
     logging_ctx = ctx.obj.get("logging", {})
     log_otlp = logging_ctx.get("log_otlp", False)
@@ -240,6 +247,9 @@ def start_worker_dal_api(
 
 
 @app.command()
+@rmq_params
+@pg_params
+@logging_params
 def start_status_processor(
     ctx: typer.Context,
     should_run_migration_check: Optional[bool] = True,
@@ -247,11 +257,9 @@ def start_status_processor(
     """Start the status event processor that handles status-related pub/sub messages."""
     logger.info("Starting status event processor...")
 
-    # Check migrations if needed (callback already initialized DB)
+    # Check migrations if needed
     if should_run_migration_check and _need_migration():
         raise RuntimeError("migration needs to be ran before starting")
-    
-    # RabbitMQ and exchanges already initialized by callback
 
     # Start the status event processor (pub/sub only, no HTTP server other than health check)
     from fastapi import FastAPI
@@ -311,30 +319,19 @@ def run_downgrade(ctx: typer.Context, target: str):
 @rmq_params
 @logging_params  # Auto-configures logging from environment variables
 @pg_params
-def callback(ctx: typer.Context, app_env: AppEnv = None):
+@app_env_params  # Injects app_env from APP_ENV environment variable
+def callback(ctx: typer.Context):
     """
     ManMan Host Service CLI.
     
-    Initializes database and RabbitMQ connections for all commands.
+    Initializes database connection for all commands.
     Logging is auto-configured via @logging_params decorator.
+    RabbitMQ config is injected by @rmq_params but not initialized here
+    (server commands will initialize when needed).
+    App environment injected by @app_env_params.
     """
-    # Initialize database connection for CLI operations
+    # Initialize database connection for CLI operations (needed by all commands)
     init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
-    
-    # Get RabbitMQ config from decorator-injected params
-    rmq_ctx = ctx.obj.get('rabbitmq', {})
-    
-    # Create vhost if in dev environment (useful for local development)
-    maybe_create_vhost(rmq_ctx, app_env)
-    
-    # Initialize RabbitMQ connection
-    init_rabbitmq_from_config(rmq_ctx)
-    
-    # Declare exchanges
-    initialize_rabbitmq_exchanges()
-    
-    # Store app_env for commands that need it
-    ctx.obj['app_env'] = app_env
 
 
 # alembic helpers using consolidated library

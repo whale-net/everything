@@ -12,6 +12,7 @@ py_library(
         "//libs/python/cli:params",
         "//libs/python/cli:types",
         "//libs/python/logging",
+        "//libs/python/cli/providers/app_env",
         "//libs/python/cli/providers/postgres",
         "//libs/python/cli/providers/slack",
         "//libs/python/cli/providers/rabbitmq",

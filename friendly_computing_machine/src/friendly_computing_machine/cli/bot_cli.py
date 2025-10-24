@@ -10,9 +10,9 @@ from libs.python.cli.params import (
     temporal_params,
     gemini_params,
     logging_params,
-    AppEnv,
     ManManExperienceApiUrl,
 )
+from libs.python.cli.providers.app_env import app_env_params
 from libs.python.cli.providers.postgres import (
     DatabaseContext,
     PostgresUrl,
@@ -39,15 +39,16 @@ app = typer.Typer()
 @gemini_params
 @slack_params
 @logging_params  # Auto-configures logging from environment variables
+@app_env_params  # Injects app_env from APP_ENV environment variable
 def callback(
     ctx: typer.Context,
-    app_env: AppEnv,
     manman_experience_api_url: ManManExperienceApiUrl,
 ):
     # Get contexts from decorators
     temporal_config = ctx.obj.get('temporal', {})
     gemini_config = ctx.obj.get('gemini', {})
     slack_config = ctx.obj.get('slack', {})
+    app_env = ctx.obj.get('app_env')
     
     # Create Slack context with FCM initialization
     from friendly_computing_machine.src.friendly_computing_machine.bot.app import init_web_client

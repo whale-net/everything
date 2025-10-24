@@ -19,9 +19,9 @@ from libs.python.cli.params import (
     rmq_params,
     slack_params,
     logging_params,
-    AppEnv,
     ManManStatusApiUrl,
 )
+from libs.python.cli.providers.app_env import app_env_params
 from friendly_computing_machine.src.friendly_computing_machine.bot.subscribe.main import (
     run_manman_subscribe,
 )
@@ -56,9 +56,9 @@ app = typer.Typer()
 @rmq_params      # Injects 7 RabbitMQ parameters
 @slack_params    # Injects 2 Slack parameters
 @logging_params  # Auto-configures logging from environment variables
+@app_env_params  # Injects app_env from APP_ENV environment variable
 def callback(
     ctx: typer.Context,
-    app_env: AppEnv,
     manman_status_api_url: ManManStatusApiUrl,
 ):
     """
@@ -70,6 +70,9 @@ def callback(
     Note: Service parameters (RabbitMQ, Slack, Logging) are injected by decorators.
     """
     logger.debug("Subscribe CLI callback starting")
+    
+    # Get app_env from decorator
+    app_env = ctx.obj.get('app_env')
     
     # Create Slack context with FCM initialization
     from friendly_computing_machine.src.friendly_computing_machine.bot.app import init_web_client

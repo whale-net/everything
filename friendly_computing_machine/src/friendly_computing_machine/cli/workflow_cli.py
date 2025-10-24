@@ -5,7 +5,8 @@ from typing import Annotated
 import google.generativeai as genai
 import typer
 
-from libs.python.cli.params import temporal_params, gemini_params, logging_params, AppEnv
+from libs.python.cli.params import temporal_params, gemini_params, logging_params
+from libs.python.cli.providers.app_env import app_env_params
 from libs.python.cli.providers.postgres import PostgresUrl, create_postgres_context
 from libs.python.cli.providers.slack import SlackBotToken
 
@@ -35,21 +36,21 @@ app = typer.Typer(
 @app.callback()
 @temporal_params
 @logging_params  # Auto-configures logging from environment variables
+@app_env_params  # Injects app_env from APP_ENV environment variable
 def callback(
     ctx: typer.Context,
-    app_env: AppEnv,
 ):
     logger.debug("CLI callback starting")
     
     # Get contexts from decorators
     temporal_config = ctx.obj.get('temporal', {})
+    app_env = ctx.obj.get('app_env')
     
     # Initialize Temporal client
     init_temporal(host=temporal_config['host'], app_env=app_env)
     
     # Store context
     ctx.obj['temporal_host'] = temporal_config['host']
-    ctx.obj['app_env'] = app_env
     
     logger.debug("CLI callback complete")
 
