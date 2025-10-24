@@ -303,6 +303,13 @@ def release_helm_chart(
     The actual chart name will be prefixed with "helm-{domain}-" to make artifacts
     clearly identifiable (e.g., "helm-demo-hello-fastapi").
     
+    **Performance Optimization**: Helm chart targets are tagged with `manual`, `no_test`,
+    and `helm-chart`. This prevents `bazel test //...` from building chart tarball outputs,
+    avoiding unnecessary genrule executions in test runs. Charts can still be:
+    - Manually built: `bazel build //demo:fastapi_chart`
+    - Discovered: `bazel query "kind('helm_chart', //)"`
+    - Released: Release system queries with tag filters find them automatically
+    
     Args:
         name: Target name for the chart
         apps: List of app_metadata targets to include (e.g., ["//demo/hello_python:hello-python_metadata"])
