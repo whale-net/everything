@@ -41,13 +41,12 @@ class CleanupPlan:
 
     def total_package_deletions(self) -> int:
         """Get total number of package versions to delete."""
-        if self.packages_to_delete is None:
-            print("WARNING: packages_to_delete is None", file=sys.stderr)
-            return 0
         total = 0
         for package_name, versions in self.packages_to_delete.items():
             if versions is None:
-                print(f"WARNING: versions is None for package {package_name}", file=sys.stderr)
+                # This should never happen since we always initialize to []
+                # If it does, it indicates a bug elsewhere
+                print(f"ERROR: versions is None for package {package_name} - this indicates a bug!", file=sys.stderr)
                 continue
             total += len(versions)
         return total

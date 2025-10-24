@@ -847,25 +847,18 @@ def cleanup_releases_cmd(
         if delete_packages and plan.packages_to_delete:
             typer.echo(f"\n📦 GHCR packages marked for deletion:")
             try:
-                if plan.packages_to_delete is None:
-                    typer.echo("ERROR: plan.packages_to_delete is None!", err=True)
-                    return
-                    
                 packages_items = plan.packages_to_delete.items()
                 typer.echo(f"DEBUG: Got packages_items: {type(packages_items)}", err=True)
                 packages_list = list(packages_items)
                 typer.echo(f"DEBUG: Converted to list, length: {len(packages_list)}", err=True)
                 
-                if not packages_list:
-                    typer.echo("  (No packages to display)")
-                    return
-                    
                 top_5 = packages_list[:5]
                 typer.echo(f"DEBUG: Got top 5, length: {len(top_5)}", err=True)
                 for idx, (package_name, version_ids) in enumerate(top_5):
                     typer.echo(f"DEBUG: Processing package {idx}: {package_name}, version_ids type: {type(version_ids)}", err=True)
                     if version_ids is None:
-                        typer.echo(f"ERROR: version_ids is None for package {package_name}! Skipping.", err=True)
+                        # This should never happen since we always initialize to []
+                        typer.echo(f"ERROR: version_ids is None for package {package_name}! This indicates a bug. Skipping.", err=True)
                         continue
                     if not isinstance(version_ids, list):
                         typer.echo(f"ERROR: version_ids is not a list for package {package_name}: {type(version_ids)}! Skipping.", err=True)
