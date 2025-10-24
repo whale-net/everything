@@ -6,7 +6,9 @@ exports_files([
     "openapi.bzl",
     "openapi_client.bzl",
     "openapi_client_rule.bzl",
+    "openapi_go_client.bzl",
     "openapi_gen_wrapper.sh",
+    "openapi_gen_go_wrapper.sh",
     "run_openapi_gen.sh",
 ])
 
@@ -14,6 +16,13 @@ exports_files([
 sh_binary(
     name = "openapi_gen_wrapper",
     srcs = ["openapi_gen_wrapper.sh"],
+    visibility = ["//visibility:public"],
+)
+
+# Wrapper script for Go OpenAPI generation
+sh_binary(
+    name = "openapi_gen_go_wrapper",
+    srcs = ["openapi_gen_go_wrapper.sh"],
     visibility = ["//visibility:public"],
 )
 
