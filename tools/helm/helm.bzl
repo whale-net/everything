@@ -83,7 +83,7 @@ def _helm_chart_impl(ctx):
     # Create a tarball of the chart directory (which is inside chart_parent_dir)
     # The composer creates a directory with the published name (without helm- prefix)
     ctx.actions.run_shell(
-        command = "tar -czf {} -C {} {}".format(
+        command = "tar --mtime='@0' -czf {} -C {} {}".format(
             chart_tarball.path,
             chart_parent_dir.path,
             published_chart_name,
