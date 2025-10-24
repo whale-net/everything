@@ -164,7 +164,7 @@ def container_image(
     
     # For Python apps, create optimized layers
     if language == "python":
-        # First, create full runfiles tar to extract from
+        # First, create full runfiles tar to extract from (for deps and app code)
         pkg_tar(
             name = name + "_full_runfiles",
             srcs = [binary],
@@ -175,52 +175,46 @@ def container_image(
             tags = ["manual"],
         )
         
-        # Extract and layer Python interpreter to universal location
-        # Places Python at /opt/python3.13/<arch>/ for sharing across all apps
+        # Use stripped Python from python-build-standalone for production containers
+        # This gives us ~20MB binary instead of ~108MB debug binary from rules_python  
         native.genrule(
             name = name + "_python_layer",
-            srcs = [":" + name + "_full_runfiles"],
+            srcs = select({
+                "@platforms//cpu:x86_64": ["@python_stripped_x86_64//:python"],
+                "@platforms//cpu:arm64": ["@python_stripped_arm64//:python"],
+            }),
             outs = [name + "_python_layer.tar"],
-            tools = ["//tools/scripts:strip_python.sh"],
             cmd = """
                 set -e
-                trap 'rm -rf layer_tmp python_layer' EXIT
+                trap 'rm -rf python_layer' EXIT
                 
-                # Extract full runfiles
-                mkdir -p layer_tmp
-                tar -xf $(location :{name}_full_runfiles) -C layer_tmp
+                # Get the Python directory from srcs
+                PYTHON_DIR=$(SRCS)
                 
-                # Find Python interpreter directory
-                cd layer_tmp
-                PYTHON_DIR=$$(find app -path "*/rules_python++python+python_3_*" -type d -print -quit)
-                
-                if [ -z "$$PYTHON_DIR" ]; then
-                    echo "Error: Python directory not found"
-                    exit 1
+                # Detect architecture from path
+                if [[ "$$PYTHON_DIR" == *"x86_64"* ]]; then
+                    ARCH="x86_64-unknown-linux-gnu"
+                else
+                    ARCH="aarch64-unknown-linux-gnu"
                 fi
-                
-                # Extract architecture from path (e.g., x86_64-unknown-linux-gnu)
-                ARCH=$$(basename "$$PYTHON_DIR" | sed 's/.*python_3_13_//')
-                
-                if [ -z "$$ARCH" ] || [ "$$ARCH" = "$$(basename "$$PYTHON_DIR")" ]; then
-                    echo "Error: Failed to extract architecture from $$PYTHON_DIR"
-                    exit 1
-                fi
-                
-                cd ..
                 
                 # Create universal Python location: /opt/python3.13/<arch>/
                 mkdir -p python_layer/opt/python3.13/$$ARCH
                 
                 # Copy Python to universal location
-                cp -r layer_tmp/$$PYTHON_DIR/* python_layer/opt/python3.13/$$ARCH/
+                cp -r "$$PYTHON_DIR"/* python_layer/opt/python3.13/$$ARCH/
                 
-                # Strip the Python installation (failures are non-fatal for optimization)
-                $(location //tools/scripts:strip_python.sh) python_layer/opt/python3.13/$$ARCH 2>&1 | head -20 || echo "Warning: strip_python.sh encountered issues but continuing"
+                # Verify Python was copied
+                if [ ! -f python_layer/opt/python3.13/$$ARCH/bin/python3.13 ]; then
+                    echo "Error: Python binary not found"
+                    echo "PYTHON_DIR=$$PYTHON_DIR"
+                    ls -la "$$PYTHON_DIR" || true
+                    exit 1
+                fi
                 
-                # Create final tar with universal path and fixed timestamp for reproducibility
+                # Create final tar with fixed timestamp for reproducibility
                 tar --mtime='@0' -cf $@ -C python_layer .
-                """.format(name = name),
+                """,
             tags = ["manual"],
         )
         
