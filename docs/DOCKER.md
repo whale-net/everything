@@ -89,8 +89,8 @@ demo-hello-python:latest
 ```
 
 **Tagging Strategy:**
-- **Main branch pushes**: Only update the `:latest` tag
-- **Release workflow**: Creates version-specific (`:v1.2.3`) and commit-specific (`:abc123def`) tags in addition to `:latest`
+- **Main branch pushes**: Build images but do not push to registry (validation only)
+- **Release workflow**: Creates and pushes version-specific (`:v1.2.3`) and commit-specific (`:abc123def`) tags, plus updates `:latest`
 
 ## Advanced: Manual OCI Rules
 
