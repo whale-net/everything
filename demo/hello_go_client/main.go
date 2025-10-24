@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	client "github.com/whale-net/everything/generated/demo/hello_fastapi_go"
+	client "github.com/whale-net/everything/generated/go/demo/hello_fastapi_go"
 )
 
 func main() {

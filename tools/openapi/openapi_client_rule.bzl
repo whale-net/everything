@@ -54,7 +54,7 @@ def _openapi_client_provider_impl(ctx):
                 transitive = deps_transitive_sources,
             ),
             imports = depset(
-                direct = ["generated"],  # Add "generated" to Python path so imports work
+                direct = ["generated/py"],  # Add "generated/py" to Python path so imports work
                 transitive = deps_imports,
             ),
         ),
@@ -68,8 +68,7 @@ openapi_client_provider_rule = rule(
         "deps": attr.label_list(providers = [PyInfo]),
         "_package_inits": attr.label_list(
             default = [
-                "//generated:init",
-                "//generated/manman:namespace_init",
+                "//generated/py:init",
             ],
         ),
     },
@@ -79,8 +78,8 @@ openapi_client_provider_rule = rule(
 def openapi_client(name, spec, namespace, app, package_name = None, visibility = None):
     """Generate OpenAPI client with automatic model discovery.
     
-    Should be defined in //generated/{namespace}/ to ensure generated code appears at
-    the correct import path: from generated.{namespace}.{app} import ...
+    Should be defined in //generated/py/{namespace}/ to ensure generated code appears at
+    the correct import path: from generated.py.{namespace}.{app} import ...
     
     Args:
         name: Target name

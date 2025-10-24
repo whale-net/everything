@@ -1,27 +1,27 @@
 # if these ever need to be broken up, we can move it into the class for tighter scope
 from typing import Generic, Type, TypeVar
 
-from generated.manman.experience_api.api.default_api import (
+from generated.py.manman.experience_api.api.default_api import (
     DefaultApi as ManManExperienceDefaultApi,
 )
-from generated.manman.experience_api.api_client import (
+from generated.py.manman.experience_api.api_client import (
     ApiClient as ManManExperienceApiClient,
 )
-from generated.manman.experience_api.configuration import (
+from generated.py.manman.experience_api.configuration import (
     Configuration as ManManExperienceConfiguration,
 )
-from generated.manman.status_api.api.default_api import DefaultApi as StatusDefaultApi
-from generated.manman.status_api.api_client import ApiClient as StatusApiClient
-from generated.manman.status_api.configuration import (
+from generated.py.manman.status_api.api.default_api import DefaultApi as StatusDefaultApi
+from generated.py.manman.status_api.api_client import ApiClient as StatusApiClient
+from generated.py.manman.status_api.configuration import (
     Configuration as StatusConfiguration,
 )
-from generated.manman.worker_dal_api.api.default_api import (
+from generated.py.manman.worker_dal_api.api.default_api import (
     DefaultApi as WorkerDalDefaultApi,
 )
-from generated.manman.worker_dal_api.api_client import (
+from generated.py.manman.worker_dal_api.api_client import (
     ApiClient as WorkerDalApiClient,
 )
-from generated.manman.worker_dal_api.configuration import (
+from generated.py.manman.worker_dal_api.configuration import (
     Configuration as WorkerDalConfiguration,
 )
 

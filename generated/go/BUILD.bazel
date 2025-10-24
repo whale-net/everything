@@ -1,0 +1,4 @@
+# Go generated OpenAPI clients
+# Import pattern: import "github.com/whale-net/everything/generated/go/{namespace}/{app}"
+
+package(default_visibility = ["//visibility:public"])

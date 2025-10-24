@@ -1,0 +1,10 @@
+# Python generated OpenAPI clients
+# Import pattern: from generated.py.{namespace}.{app} import ...
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "init",
+    outs = ["__init__.py"],
+    cmd = "touch $@",
+)

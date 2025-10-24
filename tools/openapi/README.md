@@ -17,7 +17,7 @@ openapi_client(
 )
 ```
 
-Import pattern: `from generated.{namespace}.{app} import ...`
+Import pattern: `from generated.py.{namespace}.{app} import ...`
 
 ## Go Clients
 
@@ -31,11 +31,11 @@ openapi_go_client(
     spec = "//path/to:openapi_spec",
     namespace = "demo",
     app = "my_api_go",
-    importpath = "github.com/whale-net/everything/generated/demo/my_api_go",
+    importpath = "github.com/whale-net/everything/generated/go/demo/my_api_go",
 )
 ```
 
-Import pattern: `import "github.com/whale-net/everything/generated/{namespace}/{app}"`
+Import pattern: `import "github.com/whale-net/everything/generated/go/{namespace}/{app}"`
 
 ### Using Go Clients
 
@@ -46,7 +46,7 @@ package main
 
 import (
     "fmt"
-    client "github.com/whale-net/everything/generated/demo/hello_fastapi_go"
+    client "github.com/whale-net/everything/generated/go/demo/hello_fastapi_go"
 )
 
 func main() {
@@ -68,25 +68,25 @@ go_binary(
     name = "my_app",
     srcs = ["main.go"],
     deps = [
-        "//generated/demo:hello_fastapi_go",
+        "//generated/go/demo:hello_fastapi_go",
     ],
 )
 ```
 
 ## Examples
 
-- Python client: `//generated/demo:hello_fastapi`
-- Go client: `//generated/demo:hello_fastapi_go`
+- Python client: `//generated/py/demo:hello_fastapi`
+- Go client: `//generated/go/demo:hello_fastapi_go`
 - Go usage example: `//demo/hello_go_client:hello_go_client`
 
 ## Building and Testing
 
 ```bash
 # Build Python client
-bazel build //generated/demo:hello_fastapi
+bazel build //generated/py/demo:hello_fastapi
 
 # Build Go client
-bazel build //generated/demo:hello_fastapi_go
+bazel build //generated/go/demo:hello_fastapi_go
 
 # Run Go example
 bazel run //demo/hello_go_client:hello_go_client

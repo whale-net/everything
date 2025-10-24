@@ -17,11 +17,11 @@ from manman.src.models import (
 )
 
 # Import generated models for mocking
-from generated.manman.worker_dal_api.models.game_server import GameServer as GeneratedGameServer
-from generated.manman.worker_dal_api.models.game_server_config import GameServerConfig as GeneratedGameServerConfig
-from generated.manman.worker_dal_api.models.game_server_instance import GameServerInstance as GeneratedGameServerInstance
-from generated.manman.worker_dal_api.models.worker import Worker as GeneratedWorker
-from generated.manman.worker_dal_api.models.server_type import ServerType as GeneratedServerType
+from generated.py.manman.worker_dal_api.models.game_server import GameServer as GeneratedGameServer
+from generated.py.manman.worker_dal_api.models.game_server_config import GameServerConfig as GeneratedGameServerConfig
+from generated.py.manman.worker_dal_api.models.game_server_instance import GameServerInstance as GeneratedGameServerInstance
+from generated.py.manman.worker_dal_api.models.worker import Worker as GeneratedWorker
+from generated.py.manman.worker_dal_api.models.server_type import ServerType as GeneratedServerType
 
 
 @pytest.fixture

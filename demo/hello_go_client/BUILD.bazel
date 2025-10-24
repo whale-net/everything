@@ -5,7 +5,7 @@ go_binary(
     name = "hello_go_client",
     srcs = ["main.go"],
     deps = [
-        "//generated/demo:hello_fastapi_go",
+        "//generated/go/demo:hello_fastapi_go",
     ],
     visibility = ["//visibility:public"],
 )
@@ -15,7 +15,7 @@ go_test(
     name = "main_test",
     srcs = ["main_test.go"],
     deps = [
-        "//generated/demo:hello_fastapi_go",
+        "//generated/go/demo:hello_fastapi_go",
     ],
     size = "small",
 )

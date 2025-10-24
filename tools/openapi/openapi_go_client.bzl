@@ -1,7 +1,7 @@
 """Bazel rule for generating OpenAPI Go clients.
 
 This generates Go client libraries from OpenAPI specifications using openapi-generator-cli.
-Generated code is placed in the workspace at generated/{namespace}/{app}/.
+Generated code is placed in the workspace at generated/go/{namespace}/{app}/.
 
 Example:
     load("//tools/openapi:openapi_go_client.bzl", "openapi_go_client")
@@ -11,7 +11,7 @@ Example:
         spec = "//demo/hello_fastapi:hello-fastapi_openapi_spec",
         namespace = "demo",
         app = "hello_fastapi",
-        importpath = "github.com/whale-net/everything/generated/demo/hello_fastapi",
+        importpath = "github.com/whale-net/everything/generated/go/demo/hello_fastapi",
     )
 """
 
@@ -20,7 +20,7 @@ load("@rules_go//go:def.bzl", "go_library")
 def openapi_go_client(name, spec, namespace, app, importpath, package_name = None, visibility = None):
     """Generate OpenAPI Go client with proper Go module structure.
     
-    Should be defined in //generated/{namespace}/ to ensure generated code appears at
+    Should be defined in //generated/go/{namespace}/ to ensure generated code appears at
     the correct path in the workspace.
     
     Args:
@@ -28,7 +28,7 @@ def openapi_go_client(name, spec, namespace, app, importpath, package_name = Non
         spec: OpenAPI spec file (label)
         namespace: Namespace (e.g., "demo", "manman")
         app: App name (e.g., "hello_fastapi")
-        importpath: Go import path (e.g., "github.com/whale-net/everything/generated/demo/hello_fastapi")
+        importpath: Go import path (e.g., "github.com/whale-net/everything/generated/go/demo/hello_fastapi")
         package_name: Optional Go package name (defaults to app with underscores)
         visibility: Target visibility
     """

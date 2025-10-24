@@ -2,10 +2,15 @@
 
 This directory contains generated OpenAPI client code for openapi-based services in both Python and Go.
 
+## Directory Structure
+
+- **`py/`** - Python OpenAPI clients (import as `from generated.py.{namespace}.{app} import ...`)
+- **`go/`** - Go OpenAPI clients (import as `import "github.com/whale-net/everything/generated/go/{namespace}/{app}"`)
+
 ## Language Support
 
-- **Python**: Uses `openapi_client` rule - clients importable as `from generated.{namespace}.{app} import ...`
-- **Go**: Uses `openapi_go_client` rule - clients importable as `import "github.com/whale-net/everything/generated/{namespace}/{app}"`
+- **Python**: Uses `openapi_client` rule - clients generated in `generated/py/{namespace}/{app}/`
+- **Go**: Uses `openapi_go_client` rule - clients generated in `generated/go/{namespace}/{app}/`
 
 ## Usage
 
@@ -20,8 +25,8 @@ In production and CI, use the Bazel targets directly:
 py_binary(
     name = "my_app",
     deps = [
-        "//generated/manman:experience_api",
-        "//generated/manman:status_api",
+        "//generated/py/manman:experience_api",
+        "//generated/py/manman:status_api",
     ],
 )
 ```
@@ -40,12 +45,12 @@ Then your IDE will find the imports at `generated/`.
 #### Importing Python Clients
 
 ```python
-from generated.manman.experience_api import DefaultApi as ExperienceApi
-from generated.manman.experience_api.api_client import ApiClient
-from generated.manman.experience_api.configuration import Configuration
+from generated.py.manman.experience_api import DefaultApi as ExperienceApi
+from generated.py.manman.experience_api.api_client import ApiClient
+from generated.py.manman.experience_api.configuration import Configuration
 
-from generated.manman.status_api import DefaultApi as StatusApi
-from generated.manman.worker_dal_api import DefaultApi as WorkerDalApi
+from generated.py.manman.status_api import DefaultApi as StatusApi
+from generated.py.manman.worker_dal_api import DefaultApi as WorkerDalApi
 ```
 
 ### Go Clients
@@ -60,7 +65,7 @@ go_binary(
     name = "my_app",
     srcs = ["main.go"],
     deps = [
-        "//generated/demo:hello_fastapi_go",
+        "//generated/go/demo:hello_fastapi_go",
     ],
 )
 ```
@@ -69,7 +74,7 @@ go_binary(
 
 ```go
 import (
-    client "github.com/whale-net/everything/generated/demo/hello_fastapi_go"
+    client "github.com/whale-net/everything/generated/go/demo/hello_fastapi_go"
 )
 
 func main() {
@@ -86,11 +91,14 @@ See `//demo/hello_go_client` for a complete example.
 Clients are automatically regenerated when the OpenAPI specs change:
 
 ```bash
-# Rebuild all clients
-bazel build //generated/manman:all
+# Rebuild all Python clients
+bazel build //generated/py/manman:all
 
-# Rebuild specific client
-bazel build //generated/manman:experience_api
+# Rebuild specific Python client
+bazel build //generated/py/manman:experience_api
+
+# Rebuild all Go clients
+bazel build //generated/go/demo:all
 
 # Sync to local directory for IDE
 ./tools/scripts/sync_generated_clients.sh
