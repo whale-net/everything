@@ -2,64 +2,83 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
-	// TODO: Import the generated Go Experience API client
-	// "github.com/whale-net/everything/generated/go/manman/experience_api"
+	"strconv"
+	"time"
+
+	"github.com/whale-net/everything/generated/go/manman/experience_api"
 )
 
 // getActiveWorkerID fetches the active worker ID for a user from Experience API
 func (app *App) getActiveWorkerID(ctx context.Context, userID string) (string, error) {
-	// TODO: Use generated Experience API client
-	// For now, return placeholder
 	log.Printf("Getting active worker ID for user: %s", userID)
 
-	// Example implementation once client is generated:
-	/*
-		client := experience_api.NewAPIClient(&experience_api.Configuration{
-			BasePath: app.config.ExperienceAPIURL,
-		})
+	cfg := experience_api.NewConfiguration()
+	cfg.Servers = experience_api.ServerConfigurations{
+		experience_api.ServerConfiguration{
+			URL: app.config.ExperienceAPIURL,
+		},
+	}
+	client := experience_api.NewAPIClient(cfg)
 
-		resp, _, err := client.DefaultApi.GetActiveWorkerIdApiV1ActiveWorkerIdUserIdGet(ctx, userID)
-		if err != nil {
-			return "", fmt.Errorf("failed to get worker ID: %w", err)
+	// Create a fresh context with timeout to avoid using the potentially cancelled HTTP request context
+	apiCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	worker, httpResp, err := client.DefaultAPI.WorkerCurrentWorkerCurrentGet(apiCtx).Execute()
+	if err != nil {
+		if httpResp != nil {
+			log.Printf("API error: status=%d", httpResp.StatusCode)
 		}
+		return "", fmt.Errorf("failed to get worker: %w", err)
+	}
 
-		return resp.WorkerId, nil
-	*/
+	if worker == nil {
+		return "", nil
+	}
 
-	return "", nil // Placeholder
+	return strconv.Itoa(int(worker.WorkerId)), nil
 }
 
 // getRunningServers fetches the list of running servers for a user from Experience API
 func (app *App) getRunningServers(ctx context.Context, userID string) ([]Server, error) {
-	// TODO: Use generated Experience API client
-	// For now, return placeholder
 	log.Printf("Getting running servers for user: %s", userID)
 
-	// Example implementation once client is generated:
-	/*
-		client := experience_api.NewAPIClient(&experience_api.Configuration{
-			BasePath: app.config.ExperienceAPIURL,
+	cfg := experience_api.NewConfiguration()
+	cfg.Servers = experience_api.ServerConfigurations{
+		experience_api.ServerConfiguration{
+			URL: app.config.ExperienceAPIURL,
+		},
+	}
+	client := experience_api.NewAPIClient(cfg)
+
+	// Create a fresh context with timeout to avoid using the potentially cancelled HTTP request context
+	apiCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	gameServers, httpResp, err := client.DefaultAPI.GetGameServersGameserverGet(apiCtx).Execute()
+	if err != nil {
+		if httpResp != nil {
+			log.Printf("API error: status=%d", httpResp.StatusCode)
+		}
+		return nil, fmt.Errorf("failed to get game servers: %w", err)
+	}
+
+	servers := make([]Server, 0, len(gameServers))
+	for _, gs := range gameServers {
+		// Get server ID and name
+		serverID := strconv.Itoa(int(gs.GameServerConfigId))
+		serverName := gs.Name
+
+		servers = append(servers, Server{
+			ID:     serverID,
+			Name:   serverName,
+			Status: "active", // GameServerConfig doesn't have status, assuming active
+			IP:     "",       // Not available in config
+			Port:   "",       // Not available in config
 		})
+	}
 
-		resp, _, err := client.DefaultApi.GetServersByUserIdApiV1ServersUserUserIdGet(ctx, userID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get servers: %w", err)
-		}
-
-		servers := make([]Server, 0, len(resp.Servers))
-		for _, s := range resp.Servers {
-			servers = append(servers, Server{
-				ID:     s.Id,
-				Name:   s.Name,
-				Status: s.Status,
-				IP:     s.Ip,
-				Port:   fmt.Sprintf("%d", s.Port),
-			})
-		}
-
-		return servers, nil
-	*/
-
-	return []Server{}, nil // Placeholder
+	return servers, nil
 }
