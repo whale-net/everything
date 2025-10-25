@@ -8,6 +8,7 @@ bazel-*
 generated/go/*/
 !generated/go/BUILD.bazel
 !generated/go/*/BUILD.bazel
+# Note: go.mod files in generated/ are also gitignored for IDE support
 
 # Environment files
 .env
@@ -75,6 +76,7 @@ coverage.xml
 
 # Go workspace file
 go.work
+go.work.sum
 
 # IDEs and editors
 .vscode/

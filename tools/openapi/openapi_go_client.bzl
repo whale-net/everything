@@ -1,7 +1,8 @@
-"""Macro for generating OpenAPI Go clients with workspace sync pattern.
+"""Macro for generating OpenAPI Go clients fully integrated in Bazel build graph.
 
 This provides a simple interface for creating Go clients from OpenAPI specs.
-Generated code is synced to workspace via ./tools/scripts/sync_go_clients.sh
+All code generation happens automatically within Bazel - no manual steps required.
+Generated files are never committed, only built on-demand.
 
 Example:
     load("//tools/openapi:openapi_go_client.bzl", "openapi_go_client")
@@ -10,24 +11,23 @@ Example:
         name = "my_api",
         spec = "//path/to:api_spec",
         namespace = "my_namespace",
-        app = "my-app",
+        app = "my-api",
         importpath = "github.com/whale-net/everything/generated/go/my_namespace/my_api",
     )
 """
 
 load("@rules_go//go:def.bzl", "go_library")
+load("//tools/openapi:go_client.bzl", "go_openapi_sources")
 
 def openapi_go_client(name, spec, namespace, app, importpath, package_name = None, visibility = None):
-    """Generate OpenAPI Go client that can be synced to workspace.
+    """Generate OpenAPI Go client as part of Bazel build graph.
     
-    Creates two targets:
-    1. {name}_tar - Genrule that generates client code as a tar
-    2. {name} - go_library that references synced files in workspace
+    Creates targets:
+    1. {name}_srcs - Custom rule that generates and extracts .go files
+    2. {name} - go_library that uses the generated files
     
-    Workflow:
-        1. Define openapi_go_client in BUILD.bazel
-        2. Run: ./tools/scripts/sync_go_clients.sh
-        3. Use the client in your code with normal imports
+    The generation happens automatically when the go_library is built.
+    Files are generated into bazel-bin and never committed to the repo.
     
     Args:
         name: Target name (also used as go_library name)
@@ -41,42 +41,22 @@ def openapi_go_client(name, spec, namespace, app, importpath, package_name = Non
     if not package_name:
         package_name = app.replace("-", "_")
     
-    # Target 1: Generate tar file with OpenAPI generator
-    native.genrule(
-        name = name + "_tar",
-        srcs = [spec],
-        outs = ["{}.tar".format(app)],
-        tools = [
-            "//tools/openapi:openapi_gen_go_wrapper",
-            "@openapi_generator_cli//file",
-        ],
-        toolchains = ["@bazel_tools//tools/jdk:current_java_runtime"],
-        cmd = """
-            $(location //tools/openapi:openapi_gen_go_wrapper) \\
-                auto \\
-                $(JAVA) \\
-                $(location @openapi_generator_cli//file) \\
-                $(location {spec}) \\
-                $@ \\
-                {package_name} \\
-                {importpath}
-        """.format(
-            spec = spec,
-            package_name = package_name,
-            importpath = importpath,
-        ),
-        tags = ["openapi", "go", "manual"],
+    src_target = name + "_srcs"
+    
+    # Target 1: Generate Go client files using custom rule
+    go_openapi_sources(
+        name = src_target,
+        spec = spec,
+        package_name = package_name,
+        importpath = importpath,
+        tags = ["openapi", "go"],
         visibility = ["//visibility:private"],
     )
     
-    # Target 2: go_library referencing workspace-synced files
-    # Files are synced via: ./tools/scripts/sync_go_clients.sh
+    # Target 2: go_library using generated files
     go_library(
         name = name,
-        srcs = native.glob(
-            ["{}/*.go".format(package_name)],
-            exclude = ["{}/*_test.go".format(package_name)],
-        ),
+        srcs = [":{}".format(src_target)],
         importpath = importpath,
         visibility = visibility or ["//visibility:public"],
     )
