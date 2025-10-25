@@ -14,8 +14,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//libs/go/htmxauth",
-        # TODO: Add generated Go Experience API client once it's built
-        # "//generated/go/manman:experience_api",
+        "//generated/go/manman:experience_api",
     ],
 )
 

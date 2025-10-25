@@ -3,6 +3,12 @@ bazel-*
 .bazel
 .bazelrc.remote
 
+# Generated OpenAPI clients (synced from Bazel)
+# Regenerate with: ./tools/scripts/sync_go_clients.sh
+generated/go/*/
+!generated/go/BUILD.bazel
+!generated/go/*/BUILD.bazel
+
 # Environment files
 .env
 .env.local

@@ -6,15 +6,45 @@ load("//tools/openapi:openapi_go_client.bzl", "openapi_go_client")
 package(default_visibility = ["//visibility:public"])
 
 # Demo API Clients (Go)
-# TODO: Fix openapi_go_client rule to handle dynamic model generation
-# The current implementation assumes all APIs have the same models,
-# but each API generates different models based on its schema.
-# For now, commented out until we implement proper dynamic file handling.
-#
-# openapi_go_client(
-#     name = "hello_fastapi_go",
-#     spec = "//demo/hello_fastapi:hello-fastapi_openapi_spec",
-#     namespace = "demo",
-#     app = "hello_fastapi_go",
-#     importpath = "github.com/whale-net/everything/generated/go/demo/hello_fastapi_go",
-# )
+
+load("@rules_go//go:def.bzl", "go_library")
+
+# ==============================================================================
+# OpenAPI Client Generation
+# ==============================================================================
+# To regenerate clients after API spec changes:
+#   ./tools/scripts/sync_go_clients.sh
+
+# Generate Hello FastAPI client tar (for regeneration)
+genrule(
+    name = "hello_fastapi_tar",
+    srcs = ["//demo/hello_fastapi:hello-fastapi_openapi_spec"],
+    outs = ["hello_fastapi.tar"],
+    tools = [
+        "//tools/openapi:openapi_gen_go_wrapper",
+        "@openapi_generator_cli//file",
+    ],
+    toolchains = ["@bazel_tools//tools/jdk:current_java_runtime"],
+    cmd = """
+        $(location //tools/openapi:openapi_gen_go_wrapper) \\
+            auto \\
+            $(JAVA) \\
+            $(location @openapi_generator_cli//file) \\
+            $(location //demo/hello_fastapi:hello-fastapi_openapi_spec) \\
+            $@ \\
+            hello_fastapi \\
+            github.com/whale-net/everything/generated/go/demo/hello_fastapi
+    """,
+    tags = ["openapi", "go", "manual"],
+)
+
+# Go library for Hello FastAPI client
+go_library(
+    name = "hello_fastapi",
+    srcs = glob(
+        ["hello_fastapi/*.go"],
+        exclude = ["hello_fastapi/*_test.go"],
+    ),
+    importpath = "github.com/whale-net/everything/generated/go/demo/hello_fastapi",
+    visibility = ["//visibility:public"],
+)
