@@ -81,6 +81,11 @@ APPS = {
         'bazel_target': '//manman:status-processor_image_load',
         'image_name': 'manman-status-processor',
     },
+    'management-ui': {
+        'enabled_env': 'ENABLE_MANAGEMENT_UI',
+        'bazel_target': '//manman/management-ui:management-ui_image_load',
+        'image_name': 'manman-management-ui',
+    },
     'migration': {
         'enabled_env': 'ENABLE_MIGRATION',
         'bazel_target': '//manman:migration_image_load',
@@ -108,7 +113,7 @@ apps_config = build_apps_config(
         'RABBITMQ_PORT': rabbitmq_port,
         'RABBITMQ_USER': rabbitmq_user,
         'RABBITMQ_PASSWORD': rabbitmq_password,
-        'RABBITMQ_VHOST': 'dev',  # Environment-specific vhost (dev, staging, prod)
+        'RABBITMQ_VHOST': 'manman-dev',  # Environment-specific vhost (dev, staging, prod)
         # Logging configuration (applies to all apps by default)
         # Individual apps can override via their Helm values
         'LOG_OTLP': 'true',  # Enable OTLP logging in dev
@@ -122,6 +127,13 @@ apps_config = build_apps_config(
 # Disable TLS for ingress-exposed apps in local development
 apps_config['experience-api']['helm_config']['ingress.tlsEnabled'] = 'false'
 apps_config['worker-dal-api']['helm_config']['ingress.tlsEnabled'] = 'false'
+apps_config['management-ui']['helm_config']['ingress.tlsEnabled'] = 'false'
+
+# Management UI configuration: use no-auth mode for local development
+if 'management-ui' in apps_config:
+    if 'env_vars' not in apps_config['management-ui']:
+        apps_config['management-ui']['env_vars'] = {}
+    apps_config['management-ui']['env_vars']['AUTH_MODE'] = 'none'
 
 # Deploy the helm chart
 deploy_helm_chart(

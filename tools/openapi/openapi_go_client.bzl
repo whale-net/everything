@@ -1,115 +1,62 @@
-"""Bazel rule for generating OpenAPI Go clients.
+"""Macro for generating OpenAPI Go clients fully integrated in Bazel build graph.
 
-This generates Go client libraries from OpenAPI specifications using openapi-generator-cli.
-Generated code is placed in the workspace at generated/go/{namespace}/{app}/.
+This provides a simple interface for creating Go clients from OpenAPI specs.
+All code generation happens automatically within Bazel - no manual steps required.
+Generated files are never committed, only built on-demand.
 
 Example:
     load("//tools/openapi:openapi_go_client.bzl", "openapi_go_client")
     
     openapi_go_client(
-        name = "demo_api_client",
-        spec = "//demo/hello_fastapi:hello-fastapi_openapi_spec",
-        namespace = "demo",
-        app = "hello_fastapi",
-        importpath = "github.com/whale-net/everything/generated/go/demo/hello_fastapi",
+        name = "my_api",
+        spec = "//path/to:api_spec",
+        namespace = "my_namespace",
+        app = "my-api",
+        importpath = "github.com/whale-net/everything/generated/go/my_namespace/my_api",
     )
 """
 
 load("@rules_go//go:def.bzl", "go_library")
+load("//tools/openapi:go_client.bzl", "go_openapi_sources")
 
 def openapi_go_client(name, spec, namespace, app, importpath, package_name = None, visibility = None):
-    """Generate OpenAPI Go client with proper Go module structure.
+    """Generate OpenAPI Go client as part of Bazel build graph.
     
-    Should be defined in //generated/go/{namespace}/ to ensure generated code appears at
-    the correct path in the workspace.
+    Creates targets:
+    1. {name}_srcs - Custom rule that generates and extracts .go files
+    2. {name} - go_library that uses the generated files
+    
+    The generation happens automatically when the go_library is built.
+    Files are generated into bazel-bin and never committed to the repo.
     
     Args:
-        name: Target name
-        spec: OpenAPI spec file (label)
-        namespace: Namespace (e.g., "demo", "manman")
-        app: App name (e.g., "hello_fastapi")
-        importpath: Go import path (e.g., "github.com/whale-net/everything/generated/go/demo/hello_fastapi")
-        package_name: Optional Go package name (defaults to app with underscores)
-        visibility: Target visibility
+        name: Target name (also used as go_library name)
+        spec: Label to OpenAPI spec file
+        namespace: Namespace (e.g., "manman", "demo")
+        app: App name (e.g., "experience-api", "hello_fastapi")
+        importpath: Go import path for the generated library
+        package_name: Go package name (defaults to app with hyphens->underscores)
+        visibility: Target visibility (defaults to public)
     """
     if not package_name:
         package_name = app.replace("-", "_")
     
-    # Step 1: Generate Go client code using genrule (exec configuration)
-    # This ensures Java runs on the execution platform, not the target platform
-    tar_name = name + "_tar_gen"
-    native.genrule(
-        name = tar_name,
-        srcs = [spec],
-        outs = ["{}.tar".format(app)],
-        tools = [
-            "//tools/openapi:openapi_gen_go_wrapper",
-            "@openapi_generator_cli//file",
-        ],
-        toolchains = ["@bazel_tools//tools/jdk:current_java_runtime"],
-        cmd = """
-            # Use wrapper with "auto" to find system Java, fallback to Bazel Java
-            $(location //tools/openapi:openapi_gen_go_wrapper) \\
-                auto \\
-                $(JAVA) \\
-                $(location @openapi_generator_cli//file) \\
-                $(location {spec}) \\
-                $@ \\
-                {package_name} \\
-                {importpath}
-        """.format(
-            spec = spec,
-            package_name = package_name,
-            importpath = importpath,
-        ),
-        visibility = ["//visibility:private"],
+    src_target = name + "_srcs"
+    
+    # Target 1: Generate Go client files using custom rule
+    go_openapi_sources(
+        name = src_target,
+        spec = spec,
+        package_name = package_name,
+        importpath = importpath,
         tags = ["openapi", "go"],
-        # Force deterministic caching - client generation is deterministic for given spec
-        stamp = 0,
-    )
-    
-    # Step 2: Extract tar and list all .go files to create source files
-    # OpenAPI generator creates multiple Go files, we need to extract them all
-    extract_name = name + "_extract"
-    native.genrule(
-        name = extract_name,
-        srcs = [":" + tar_name],
-        outs = [
-            "{}/client.go".format(app),
-            "{}/configuration.go".format(app),
-            "{}/response.go".format(app),
-            "{}/utils.go".format(app),
-            "{}/api_default.go".format(app),
-            "{}/go.mod".format(app),
-            "{}/go.sum".format(app),
-        ],
-        cmd = """
-            mkdir -p $(RULEDIR)/{app}
-            tar -xf $(location :{tar_name}) -C $(RULEDIR)/{app} --strip-components=0
-            # Move root-level files to app directory
-            if [ -f $(RULEDIR)/{app}/client.go ]; then
-                # Files are already in the right place
-                true
-            fi
-        """.format(
-            app = app,
-            tar_name = tar_name,
-        ),
         visibility = ["//visibility:private"],
     )
     
-    # Step 3: Create go_library target that other Go code can depend on
-    # Only include .go source files, not go.mod/go.sum
+    # Target 2: go_library using generated files
     go_library(
         name = name,
-        srcs = [
-            "{}/client.go".format(app),
-            "{}/configuration.go".format(app),
-            "{}/response.go".format(app),
-            "{}/utils.go".format(app),
-            "{}/api_default.go".format(app),
-        ],
+        srcs = [":{}".format(src_target)],
         importpath = importpath,
         visibility = visibility or ["//visibility:public"],
-        deps = [],  # OpenAPI generated Go code typically has no external deps for basic clients
     )

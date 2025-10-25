@@ -1,0 +1,12 @@
+{{if .Servers}}
+    {{range .Servers}}
+    <div class="server-item">
+        <div class="server-name">{{.Name}}</div>
+        <div class="server-details">
+            Status: {{.Status}} | IP: {{.IP}}:{{.Port}}
+        </div>
+    </div>
+    {{end}}
+{{else}}
+    <div class="empty-state">No servers running</div>
+{{end}}

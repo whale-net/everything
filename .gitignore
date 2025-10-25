@@ -3,6 +3,13 @@ bazel-*
 .bazel
 .bazelrc.remote
 
+# Generated OpenAPI clients (synced from Bazel)
+# Regenerate with: ./tools/scripts/sync_go_clients.sh
+generated/go/*/
+!generated/go/BUILD.bazel
+!generated/go/*/BUILD.bazel
+# Note: go.mod files in generated/ are also gitignored for IDE support
+
 # Environment files
 .env
 .env.local
@@ -69,6 +76,7 @@ coverage.xml
 
 # Go workspace file
 go.work
+go.work.sum
 
 # IDEs and editors
 .vscode/

@@ -6,10 +6,19 @@ load("//tools/openapi:openapi_go_client.bzl", "openapi_go_client")
 package(default_visibility = ["//visibility:public"])
 
 # Demo API Clients (Go)
+
+load("//tools/openapi:openapi_go_client.bzl", "openapi_go_client")
+
+# ==============================================================================
+# OpenAPI Client Generation
+# ==============================================================================
+# To regenerate clients after API spec changes:
+#   ./tools/scripts/sync_go_clients.sh
+
 openapi_go_client(
-    name = "hello_fastapi_go",
+    name = "hello_fastapi",
     spec = "//demo/hello_fastapi:hello-fastapi_openapi_spec",
     namespace = "demo",
-    app = "hello_fastapi_go",
-    importpath = "github.com/whale-net/everything/generated/go/demo/hello_fastapi_go",
+    app = "hello_fastapi",
+    importpath = "github.com/whale-net/everything/generated/go/demo/hello_fastapi",
 )

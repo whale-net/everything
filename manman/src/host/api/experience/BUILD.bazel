@@ -12,6 +12,7 @@ py_library(
         "//manman/src:manman_core",
         "//manman/src/repository:manman_repository",
         "//manman/src/host/api:api_shared",
+        "//libs/python:fastapi_utils",
         "@pypi//:fastapi",
         "@pypi//:uvicorn",
         "@pypi//:pydantic",
