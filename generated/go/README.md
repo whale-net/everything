@@ -57,57 +57,35 @@ go_binary(
 
 ## Adding New Clients
 
-1. **Create genrule for tar generation** in `generated/go/{namespace}/BUILD.bazel`:
+1. **Use the `openapi_go_client` macro** in `generated/go/{namespace}/BUILD.bazel`:
 
 ```python
-genrule(
-    name = "my_api_tar",
-    srcs = ["//path/to:api_spec"],
-    outs = ["my-api.tar"],
-    tools = [
-        "//tools/openapi:openapi_gen_go_wrapper",
-        "@openapi_generator_cli//file",
-    ],
-    toolchains = ["@bazel_tools//tools/jdk:current_java_runtime"],
-    cmd = """
-        $(location //tools/openapi:openapi_gen_go_wrapper) \\
-            auto \\
-            $(JAVA) \\
-            $(location @openapi_generator_cli//file) \\
-            $(location //path/to:api_spec) \\
-            $@ \\
-            my_api \\
-            github.com/whale-net/everything/generated/go/namespace/my_api
-    """,
-    tags = ["openapi", "go", "manual"],
-)
-```
+load("//tools/openapi:openapi_go_client.bzl", "openapi_go_client")
 
-2. **Create go_library**:
-
-```python
-go_library(
+openapi_go_client(
     name = "my_api",
-    srcs = glob(
-        ["my_api/*.go"],
-        exclude = ["my_api/*_test.go"],
-    ),
-    importpath = "github.com/whale-net/everything/generated/go/namespace/my_api",
-    visibility = ["//visibility:public"],
+    spec = "//path/to:api_spec",
+    namespace = "my_namespace",
+    app = "my-api",
+    importpath = "github.com/whale-net/everything/generated/go/my_namespace/my_api",
 )
 ```
 
-3. **Add to sync script** (`tools/scripts/sync_go_clients.sh`):
+The macro automatically creates:
+- `{name}_tar` - Genrule for tar generation
+- `{name}` - go_library with workspace-synced files
+
+2. **Add to sync script** (`tools/scripts/sync_go_clients.sh`):
 
 ```bash
 sync_client \
     "My API" \
-    "//generated/go/namespace:my_api_tar" \
-    "generated/go/namespace/my_api" \
-    "bazel-bin/generated/go/namespace/my-api.tar"
+    "//generated/go/my_namespace:my_api_tar" \
+    "generated/go/my_namespace/my_api" \
+    "bazel-bin/generated/go/my_namespace/my-api.tar"
 ```
 
-4. **Run sync**:
+3. **Run sync**:
 
 ```bash
 ./tools/scripts/sync_go_clients.sh

@@ -1,45 +1,49 @@
-"""Bazel rule for generating OpenAPI Go clients.
+"""Macro for generating OpenAPI Go clients with workspace sync pattern.
 
-This generates Go client libraries from OpenAPI specifications using openapi-generator-cli.
-Generated code is placed in the workspace at generated/go/{namespace}/{app}/.
+This provides a simple interface for creating Go clients from OpenAPI specs.
+Generated code is synced to workspace via ./tools/scripts/sync_go_clients.sh
 
 Example:
     load("//tools/openapi:openapi_go_client.bzl", "openapi_go_client")
     
     openapi_go_client(
-        name = "demo_api_client",
-        spec = "//demo/hello_fastapi:hello-fastapi_openapi_spec",
-        namespace = "demo",
-        app = "hello_fastapi",
-        importpath = "github.com/whale-net/everything/generated/go/demo/hello_fastapi",
+        name = "my_api",
+        spec = "//path/to:api_spec",
+        namespace = "my_namespace",
+        app = "my-app",
+        importpath = "github.com/whale-net/everything/generated/go/my_namespace/my_api",
     )
 """
 
 load("@rules_go//go:def.bzl", "go_library")
 
 def openapi_go_client(name, spec, namespace, app, importpath, package_name = None, visibility = None):
-    """Generate OpenAPI Go client with proper Go module structure.
+    """Generate OpenAPI Go client that can be synced to workspace.
     
-    Should be defined in //generated/go/{namespace}/ to ensure generated code appears at
-    the correct path in the workspace.
+    Creates two targets:
+    1. {name}_tar - Genrule that generates client code as a tar
+    2. {name} - go_library that references synced files in workspace
+    
+    Workflow:
+        1. Define openapi_go_client in BUILD.bazel
+        2. Run: ./tools/scripts/sync_go_clients.sh
+        3. Use the client in your code with normal imports
     
     Args:
-        name: Target name
-        spec: OpenAPI spec file (label)
-        namespace: Namespace (e.g., "demo", "manman")
-        app: App name (e.g., "hello_fastapi")
-        importpath: Go import path (e.g., "github.com/whale-net/everything/generated/go/demo/hello_fastapi")
-        package_name: Optional Go package name (defaults to app with underscores)
-        visibility: Target visibility
+        name: Target name (also used as go_library name)
+        spec: Label to OpenAPI spec file
+        namespace: Namespace (e.g., "manman", "demo")
+        app: App name (e.g., "experience-api", "hello_fastapi")
+        importpath: Go import path for the generated library
+        package_name: Go package name (defaults to app with hyphens->underscores)
+        visibility: Target visibility (defaults to public)
     """
     if not package_name:
         package_name = app.replace("-", "_")
     
-    # Step 1: Generate Go client code using genrule (exec configuration)
-    # This ensures Java runs on the execution platform, not the target platform
-    tar_name = name + "_tar_gen"
+    # Target 1: Generate tar file with OpenAPI generator
     native.genrule(
-        name = tar_name,
+        name = name + "_tar",
         srcs = [spec],
         outs = ["{}.tar".format(app)],
         tools = [
@@ -48,7 +52,6 @@ def openapi_go_client(name, spec, namespace, app, importpath, package_name = Non
         ],
         toolchains = ["@bazel_tools//tools/jdk:current_java_runtime"],
         cmd = """
-            # Use wrapper with "auto" to find system Java, fallback to Bazel Java
             $(location //tools/openapi:openapi_gen_go_wrapper) \\
                 auto \\
                 $(JAVA) \\
@@ -62,55 +65,18 @@ def openapi_go_client(name, spec, namespace, app, importpath, package_name = Non
             package_name = package_name,
             importpath = importpath,
         ),
-        visibility = ["//visibility:private"],
-        tags = ["openapi", "go"],
-        # Force deterministic caching - client generation is deterministic for given spec
-        stamp = 0,
-    )
-    
-    # Step 2: Extract tar and list all .go files to create source files
-    # OpenAPI generator creates multiple Go files, we need to extract them all
-    extract_name = name + "_extract"
-    
-    # For the Experience API spec, we know exactly what models are generated
-    # based on the API schema. List them explicitly here.
-    # These were determined from the OpenAPI generator output log
-    generated_files = [
-        "{}/client.go".format(app),
-        "{}/configuration.go".format(app),
-        "{}/response.go".format(app),
-        "{}/utils.go".format(app),
-        "{}/api_default.go".format(app),
-        "{}/model_current_instance_response.go".format(app),
-        "{}/model_game_server_config.go".format(app),
-        "{}/model_game_server_instance.go".format(app),
-        "{}/model_http_validation_error.go".format(app),
-        "{}/model_stdin_command_request.go".format(app),
-        "{}/model_validation_error.go".format(app),
-        "{}/model_validation_error_loc_inner.go".format(app),
-        "{}/model_worker.go".format(app),
-    ]
-    
-    native.genrule(
-        name = extract_name,
-        srcs = [":" + tar_name],
-        outs = generated_files,
-        cmd = """
-            mkdir -p $(RULEDIR)/{app}
-            tar -xf $(location :{tar_name}) -C $(RULEDIR)/{app}
-        """.format(
-            app = app,
-            tar_name = tar_name,
-        ),
+        tags = ["openapi", "go", "manual"],
         visibility = ["//visibility:private"],
     )
     
-    # Step 3: Create go_library target that other Go code can depend on
-    # Only include .go source files (no go.mod/go.sum needed)
+    # Target 2: go_library referencing workspace-synced files
+    # Files are synced via: ./tools/scripts/sync_go_clients.sh
     go_library(
         name = name,
-        srcs = generated_files,
+        srcs = native.glob(
+            ["{}/*.go".format(package_name)],
+            exclude = ["{}/*_test.go".format(package_name)],
+        ),
         importpath = importpath,
         visibility = visibility or ["//visibility:public"],
-        deps = [],  # OpenAPI generated Go code typically has no external deps for basic clients
     )
