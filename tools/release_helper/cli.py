@@ -749,6 +749,8 @@ def cleanup_releases_cmd(
     min_age_days: Annotated[int, typer.Option("--min-age-days", help="Minimum age in days for deletion")] = 14,
     dry_run: Annotated[bool, typer.Option("--dry-run/--no-dry-run", help="Preview changes without executing")] = True,
     delete_packages: Annotated[bool, typer.Option("--delete-packages/--no-delete-packages", help="Also delete corresponding GHCR packages")] = True,
+    cleanup_hash_tags: Annotated[bool, typer.Option("--cleanup-hash-tags/--no-cleanup-hash-tags", help="Also clean up old hash (commit SHA) tags from GHCR")] = False,
+    hash_tag_age_days: Annotated[float, typer.Option("--hash-tag-age-days", help="Minimum age in days for hash tag deletion")] = 3.0,
 ):
     """Clean up old Git tags and optionally their corresponding GHCR packages.
     
@@ -757,6 +759,10 @@ def cleanup_releases_cmd(
     - Keeps the last N minor versions (default: 2)
     - Always keeps the latest minor version of each major version
     - Only deletes tags older than the age threshold (default: 14 days)
+    
+    Optionally, also cleans up hash (commit SHA) tags from GHCR packages that are
+    older than the hash tag age threshold (default: 3 days). Hash tags are commit
+    SHA tags like "abc123d" that accumulate during releases.
     
     By default, runs in dry-run mode to preview changes. Use --no-dry-run to actually delete.
     
@@ -779,6 +785,14 @@ def cleanup_releases_cmd(
         # Delete tags only (keep GHCR packages)
         bazel run //tools:release -- cleanup-releases \\
             --no-delete-packages --no-dry-run
+        
+        # Also clean up hash tags from GHCR
+        bazel run //tools:release -- cleanup-releases \\
+            --cleanup-hash-tags --no-dry-run
+        
+        # Clean up hash tags with custom age threshold
+        bazel run //tools:release -- cleanup-releases \\
+            --cleanup-hash-tags --hash-tag-age-days 7 --no-dry-run
     """
     import os
     import sys
@@ -803,6 +817,8 @@ def cleanup_releases_cmd(
         typer.echo(f"  - Keep last {keep_minor_versions} minor versions")
         typer.echo(f"  - Delete only tags older than {min_age_days} days")
         typer.echo(f"  - Delete GHCR packages: {delete_packages}")
+        if cleanup_hash_tags:
+            typer.echo(f"  - Clean up hash tags: yes (older than {hash_tag_age_days} days)")
         typer.echo("")
         
         # Create cleanup orchestrator
@@ -812,7 +828,9 @@ def cleanup_releases_cmd(
         typer.echo("📋 Planning cleanup...")
         plan = cleanup.plan_cleanup(
             keep_minor_versions=keep_minor_versions,
-            min_age_days=min_age_days
+            min_age_days=min_age_days,
+            cleanup_hash_tags=cleanup_hash_tags,
+            hash_tag_age_days=hash_tag_age_days,
         )
         
         # Display plan
@@ -823,6 +841,9 @@ def cleanup_releases_cmd(
         
         if delete_packages:
             typer.echo(f"  GHCR package versions to delete: {plan.total_package_deletions()}")
+        
+        if cleanup_hash_tags:
+            typer.echo(f"  Hash-tagged versions to delete: {plan.total_hash_tag_deletions()}")
         
         if plan.is_empty():
             typer.echo("\n✅ Nothing to clean up!")
@@ -870,6 +891,16 @@ def cleanup_releases_cmd(
             except Exception as e:
                 typer.echo(f"ERROR in GHCR package display: {e}", err=True)
                 import traceback
+                traceback.print_exc()
+                # Don't re-raise - allow cleanup to continue
+                typer.echo(f"Continuing despite error in package display...", err=True)
+        
+        if cleanup_hash_tags and plan.hash_tags_to_delete:
+            typer.echo(f"\n🔖 Hash-tagged versions marked for deletion:")
+            for package_name, version_ids in list(plan.hash_tags_to_delete.items())[:5]:
+                typer.echo(f"  - {package_name}: {len(version_ids)} hash-tagged versions")
+            if len(plan.hash_tags_to_delete) > 5:
+                typer.echo(f"  ... and {len(plan.hash_tags_to_delete) - 5} more packages")
                 traceback.print_exc()
                 # Don't re-raise - allow cleanup to continue
                 typer.echo(f"Continuing despite error in package display...", err=True)
