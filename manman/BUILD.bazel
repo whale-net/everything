@@ -96,7 +96,7 @@ release_app(
 
 release_app(
     name = "management-ui",
-    binary_name = "//manman/management-ui:management_ui",
+    binary_name = "//manman/management-ui:management-ui",
     language = "go",
     domain = "manman",
     description = "HTMX-based web interface for managing ManMan services with OIDC authentication",

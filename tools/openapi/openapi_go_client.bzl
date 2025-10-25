@@ -71,26 +71,33 @@ def openapi_go_client(name, spec, namespace, app, importpath, package_name = Non
     # Step 2: Extract tar and list all .go files to create source files
     # OpenAPI generator creates multiple Go files, we need to extract them all
     extract_name = name + "_extract"
+    
+    # For the Experience API spec, we know exactly what models are generated
+    # based on the API schema. List them explicitly here.
+    # These were determined from the OpenAPI generator output log
+    generated_files = [
+        "{}/client.go".format(app),
+        "{}/configuration.go".format(app),
+        "{}/response.go".format(app),
+        "{}/utils.go".format(app),
+        "{}/api_default.go".format(app),
+        "{}/model_current_instance_response.go".format(app),
+        "{}/model_game_server_config.go".format(app),
+        "{}/model_game_server_instance.go".format(app),
+        "{}/model_http_validation_error.go".format(app),
+        "{}/model_stdin_command_request.go".format(app),
+        "{}/model_validation_error.go".format(app),
+        "{}/model_validation_error_loc_inner.go".format(app),
+        "{}/model_worker.go".format(app),
+    ]
+    
     native.genrule(
         name = extract_name,
         srcs = [":" + tar_name],
-        outs = [
-            "{}/client.go".format(app),
-            "{}/configuration.go".format(app),
-            "{}/response.go".format(app),
-            "{}/utils.go".format(app),
-            "{}/api_default.go".format(app),
-            "{}/go.mod".format(app),
-            "{}/go.sum".format(app),
-        ],
+        outs = generated_files,
         cmd = """
             mkdir -p $(RULEDIR)/{app}
-            tar -xf $(location :{tar_name}) -C $(RULEDIR)/{app} --strip-components=0
-            # Move root-level files to app directory
-            if [ -f $(RULEDIR)/{app}/client.go ]; then
-                # Files are already in the right place
-                true
-            fi
+            tar -xf $(location :{tar_name}) -C $(RULEDIR)/{app}
         """.format(
             app = app,
             tar_name = tar_name,
@@ -99,16 +106,10 @@ def openapi_go_client(name, spec, namespace, app, importpath, package_name = Non
     )
     
     # Step 3: Create go_library target that other Go code can depend on
-    # Only include .go source files, not go.mod/go.sum
+    # Only include .go source files (no go.mod/go.sum needed)
     go_library(
         name = name,
-        srcs = [
-            "{}/client.go".format(app),
-            "{}/configuration.go".format(app),
-            "{}/response.go".format(app),
-            "{}/utils.go".format(app),
-            "{}/api_default.go".format(app),
-        ],
+        srcs = generated_files,
         importpath = importpath,
         visibility = visibility or ["//visibility:public"],
         deps = [],  # OpenAPI generated Go code typically has no external deps for basic clients
