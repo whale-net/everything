@@ -1,0 +1,35 @@
+# Generated OpenAPI Python clients for manman namespace
+# Import pattern: from generated.py.manman.{app} import ...
+
+load("//tools/openapi:openapi_client_rule.bzl", "openapi_client")
+
+package(default_visibility = ["//visibility:public"])
+
+# Package Structure __init__.py File
+genrule(
+    name = "namespace_init",
+    outs = ["__init__.py"],
+    cmd = "touch $@",
+)
+
+# ManMan API Clients
+openapi_client(
+    name = "experience_api",
+    spec = "//manman:experience_api_spec",
+    namespace = "manman",
+    app = "experience_api",
+)
+
+openapi_client(
+    name = "status_api",
+    spec = "//manman:status_api_spec",
+    namespace = "manman",
+    app = "status_api",
+)
+
+openapi_client(
+    name = "worker_dal_api",
+    spec = "//manman:worker_dal_api_spec",
+    namespace = "manman",
+    app = "worker_dal_api",
+)
