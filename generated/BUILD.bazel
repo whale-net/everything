@@ -1,9 +1,7 @@
 # Top-level package initialization for generated code
+# 
+# Generated OpenAPI clients are organized by language:
+# - Python clients: //generated/py/{namespace}:{app}
+# - Go clients: //generated/go/{namespace}:{app}
 
 package(default_visibility = ["//visibility:public"])
-
-genrule(
-    name = "init",
-    outs = ["__init__.py"],
-    cmd = "touch $@",
-)

@@ -3,7 +3,7 @@ import re
 
 from slack_bolt import Ack
 
-from generated.manman.experience_api.models import StdinCommandRequest
+from generated.py.manman.experience_api.models import StdinCommandRequest
 from friendly_computing_machine.src.friendly_computing_machine.bot.app import app
 from friendly_computing_machine.src.friendly_computing_machine.bot.slack_client import (
     SlackWebClientFCM,

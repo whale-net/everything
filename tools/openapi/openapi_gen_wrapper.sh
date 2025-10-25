@@ -48,37 +48,37 @@ PKG_UNDERSCORE=$(echo "$PACKAGE_NAME" | tr '-' '_')
     --package-name "$PKG_UNDERSCORE" \
     --additional-properties=packageName=$PKG_UNDERSCORE,generateSourceCodeOnly=true,library=urllib3
 
-# Fix imports - replace package references with generated.namespace.app
+# Fix imports - replace package references with generated.py.namespace.app
 # Use sed -i '' for macOS compatibility (empty string for no backup), -i for Linux
 if [[ "$OSTYPE" == "darwin"* ]]; then
     # macOS
     find "$TMPDIR/$PKG_UNDERSCORE" -name "*.py" -type f -exec sed -i '' \
-        -e "s|from $PKG_UNDERSCORE\\.|from generated.$NAMESPACE.$APP_NAME.|g" \
-        -e "s|import $PKG_UNDERSCORE\\.|import generated.$NAMESPACE.$APP_NAME.|g" \
-        -e "s|from $PKG_UNDERSCORE import|from generated.$NAMESPACE.$APP_NAME import|g" \
-        -e "s|^import $PKG_UNDERSCORE\$|import generated.$NAMESPACE.$APP_NAME|g" \
+        -e "s|from $PKG_UNDERSCORE\\.|from generated.py.$NAMESPACE.$APP_NAME.|g" \
+        -e "s|import $PKG_UNDERSCORE\\.|import generated.py.$NAMESPACE.$APP_NAME.|g" \
+        -e "s|from $PKG_UNDERSCORE import|from generated.py.$NAMESPACE.$APP_NAME import|g" \
+        -e "s|^import $PKG_UNDERSCORE\$|import generated.py.$NAMESPACE.$APP_NAME|g" \
         {} +
 else
     # Linux
     find "$TMPDIR/$PKG_UNDERSCORE" -name "*.py" -type f -exec sed -i \
-        -e "s|from $PKG_UNDERSCORE\\.|from generated.$NAMESPACE.$APP_NAME.|g" \
-        -e "s|import $PKG_UNDERSCORE\\.|import generated.$NAMESPACE.$APP_NAME.|g" \
-        -e "s|from $PKG_UNDERSCORE import|from generated.$NAMESPACE.$APP_NAME import|g" \
-        -e "s|^import $PKG_UNDERSCORE\$|import generated.$NAMESPACE.$APP_NAME|g" \
+        -e "s|from $PKG_UNDERSCORE\\.|from generated.py.$NAMESPACE.$APP_NAME.|g" \
+        -e "s|import $PKG_UNDERSCORE\\.|import generated.py.$NAMESPACE.$APP_NAME.|g" \
+        -e "s|from $PKG_UNDERSCORE import|from generated.py.$NAMESPACE.$APP_NAME import|g" \
+        -e "s|^import $PKG_UNDERSCORE\$|import generated.py.$NAMESPACE.$APP_NAME|g" \
         {} +
 fi
 
 # Fix bug in api_client.py where it references the wrong module name for model deserialization
 # The generator creates a reference like "manman_worker_dal_api.models" but the correct import
-# is "generated.manman.worker_dal_api.models" (already imported at top of file)
+# is "generated.py.manman.worker_dal_api.models" (already imported at top of file)
 if [ -f "$TMPDIR/$PKG_UNDERSCORE/api_client.py" ]; then
     if [[ "$OSTYPE" == "darwin"* ]]; then
         # macOS
-        sed -i '' "s|klass = getattr(${PKG_UNDERSCORE}.models, klass)|import generated.${NAMESPACE}.${APP_NAME}.models\\n                klass = getattr(generated.${NAMESPACE}.${APP_NAME}.models, klass)|g" \
+        sed -i '' "s|klass = getattr(${PKG_UNDERSCORE}.models, klass)|import generated.py.${NAMESPACE}.${APP_NAME}.models\\n                klass = getattr(generated.py.${NAMESPACE}.${APP_NAME}.models, klass)|g" \
             "$TMPDIR/$PKG_UNDERSCORE/api_client.py"
     else
         # Linux
-        sed -i "s|klass = getattr(${PKG_UNDERSCORE}.models, klass)|import generated.${NAMESPACE}.${APP_NAME}.models\\n                klass = getattr(generated.${NAMESPACE}.${APP_NAME}.models, klass)|g" \
+        sed -i "s|klass = getattr(${PKG_UNDERSCORE}.models, klass)|import generated.py.${NAMESPACE}.${APP_NAME}.models\\n                klass = getattr(generated.py.${NAMESPACE}.${APP_NAME}.models, klass)|g" \
             "$TMPDIR/$PKG_UNDERSCORE/api_client.py"
     fi
 fi

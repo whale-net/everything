@@ -1,14 +1,11 @@
-# Generated OpenAPI clients for manman namespace
-# Clients defined here are importable as: from generated.manman.{app} import ...
+# Generated OpenAPI Python clients for manman namespace
+# Import pattern: from generated.py.manman.{app} import ...
 
 load("//tools/openapi:openapi_client_rule.bzl", "openapi_client")
 
 package(default_visibility = ["//visibility:public"])
 
 # Package Structure __init__.py File
-# ===================================
-# This makes "from generated.manman.{app}" work as proper Python packages.
-
 genrule(
     name = "namespace_init",
     outs = ["__init__.py"],
@@ -16,8 +13,6 @@ genrule(
 )
 
 # ManMan API Clients
-# ==================
-
 openapi_client(
     name = "experience_api",
     spec = "//manman:experience_api_spec",
@@ -38,4 +33,3 @@ openapi_client(
     namespace = "manman",
     app = "worker_dal_api",
 )
-

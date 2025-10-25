@@ -1,0 +1,15 @@
+# Generated OpenAPI Go clients for demo namespace
+# Import pattern: import "github.com/whale-net/everything/generated/go/demo/{app}"
+
+load("//tools/openapi:openapi_go_client.bzl", "openapi_go_client")
+
+package(default_visibility = ["//visibility:public"])
+
+# Demo API Clients (Go)
+openapi_go_client(
+    name = "hello_fastapi_go",
+    spec = "//demo/hello_fastapi:hello-fastapi_openapi_spec",
+    namespace = "demo",
+    app = "hello_fastapi_go",
+    importpath = "github.com/whale-net/everything/generated/go/demo/hello_fastapi_go",
+)

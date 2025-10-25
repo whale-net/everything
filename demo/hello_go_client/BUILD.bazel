@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_test")
+
+# Example Go binary that uses the generated OpenAPI client
+go_binary(
+    name = "hello_go_client",
+    srcs = ["main.go"],
+    deps = [
+        "//generated/go/demo:hello_fastapi_go",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Test for the generated OpenAPI client
+go_test(
+    name = "main_test",
+    srcs = ["main_test.go"],
+    deps = [
+        "//generated/go/demo:hello_fastapi_go",
+    ],
+    size = "small",
+)

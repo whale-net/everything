@@ -11,7 +11,7 @@ py_library(
     deps = [
         "//libs/python/retry",
         "//manman/src:manman_core",
-        "//generated/manman:worker_dal_api",
+        "//generated/py/manman:worker_dal_api",
     ],
 )
 
@@ -22,7 +22,7 @@ py_test(
     deps = [
         ":clients",
         "//manman/src:manman_core",
-        "//generated/manman:worker_dal_api",
+        "//generated/py/manman:worker_dal_api",
         "@pypi//:pytest",
     ],
     size = "small",
