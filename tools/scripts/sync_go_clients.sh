@@ -90,3 +90,8 @@ echo
 echo "💡 Your IDE should now have full autocomplete and type checking."
 echo "   Remember: These files are gitignored and only for local dev."
 echo "   Bazel builds generate them automatically - no sync needed."
+echo
+echo "📝 What was synced:"
+echo "   - Generated .go files copied from bazel-bin/"
+echo "   - go.mod files created for each package"
+echo "   - go.work updated automatically (if it exists)"
