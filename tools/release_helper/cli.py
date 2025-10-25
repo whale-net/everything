@@ -925,6 +925,172 @@ def cleanup_releases_cmd(
         raise typer.Exit(1)
 
 
+@app.command("cleanup-hash-tags")
+def cleanup_hash_tags_cmd(
+    min_age_days: Annotated[float, typer.Option("--min-age-days", help="Minimum age in days for deletion")] = 3.0,
+    dry_run: Annotated[bool, typer.Option("--dry-run/--no-dry-run", help="Preview changes without executing")] = True,
+    packages: Annotated[Optional[str], typer.Option("--packages", help="Comma-separated list of package names (defaults to all)")] = None,
+):
+    """Clean up old hash (commit SHA) tags from GHCR packages.
+    
+    Hash tags are commit SHA tags like "abc123d" or "1234567890abcdef" that are created
+    during releases. This command finds and deletes hash-tagged versions older than
+    the specified age threshold (default: 3 days).
+    
+    By default, runs in dry-run mode to preview changes. Use --no-dry-run to actually delete.
+    
+    When running with --no-dry-run in an interactive terminal, prompts for confirmation
+    before proceeding. In CI environments (GitHub Actions) or non-interactive terminals,
+    proceeds automatically without prompting.
+    
+    Examples:
+        # Preview what would be deleted (recommended first step)
+        bazel run //tools:release -- cleanup-hash-tags
+        
+        # Actually delete old hash tags (prompts for confirmation in interactive mode)
+        bazel run //tools:release -- cleanup-hash-tags --no-dry-run
+        
+        # Clean up specific packages only
+        bazel run //tools:release -- cleanup-hash-tags \\
+            --packages demo-hello-python,demo-hello-go
+        
+        # Use a different age threshold
+        bazel run //tools:release -- cleanup-hash-tags \\
+            --min-age-days 7 --no-dry-run
+    """
+    import os
+    import sys
+    from tools.release_helper.ghcr import GHCRClient
+    
+    try:
+        # Get repository owner from environment
+        owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "whale-net").lower()
+        
+        # Get GitHub token
+        token = os.environ.get("GITHUB_TOKEN")
+        if not token:
+            typer.echo("❌ GITHUB_TOKEN environment variable not set", err=True)
+            typer.echo("Please set GITHUB_TOKEN with appropriate permissions:", err=True)
+            typer.echo("  - packages:write (for GHCR package deletion)", err=True)
+            typer.echo("  - read:packages (for listing package versions)", err=True)
+            raise typer.Exit(1)
+        
+        typer.echo(f"🔍 Finding hash-tagged GHCR packages for {owner}...")
+        typer.echo(f"Minimum age threshold: {min_age_days} days")
+        typer.echo("")
+        
+        # Create GHCR client
+        ghcr_client = GHCRClient(owner, token)
+        
+        # Determine which packages to scan
+        if packages:
+            package_list = [p.strip() for p in packages.split(',')]
+            typer.echo(f"Scanning {len(package_list)} specified packages...")
+        else:
+            typer.echo("Scanning all packages (this may take a while)...")
+            package_list = ghcr_client.list_all_packages()
+            typer.echo(f"Found {len(package_list)} total packages")
+        
+        # Find hash-tagged versions in each package
+        total_versions_to_delete = 0
+        packages_with_hash_tags = {}
+        
+        for package_name in package_list:
+            try:
+                old_hash_versions = ghcr_client.find_hash_tagged_versions(
+                    package_name,
+                    min_age_days=min_age_days
+                )
+                
+                if old_hash_versions:
+                    packages_with_hash_tags[package_name] = old_hash_versions
+                    total_versions_to_delete += len(old_hash_versions)
+                    typer.echo(f"  📦 {package_name}: {len(old_hash_versions)} old hash-tagged versions")
+                    
+            except Exception as e:
+                typer.echo(f"  ⚠️  Error scanning {package_name}: {e}", err=True)
+        
+        # Display summary
+        typer.echo(f"\n📊 Summary:")
+        typer.echo(f"  Packages with old hash tags: {len(packages_with_hash_tags)}")
+        typer.echo(f"  Total versions to delete: {total_versions_to_delete}")
+        
+        if total_versions_to_delete == 0:
+            typer.echo("\n✅ No old hash-tagged versions found!")
+            return
+        
+        # Show detailed list of what will be deleted
+        typer.echo(f"\n🗑️  Versions marked for deletion:")
+        for package_name, versions in packages_with_hash_tags.items():
+            typer.echo(f"\n  📦 {package_name}:")
+            for version in versions[:5]:  # Show first 5
+                hash_tags = version.get_hash_tags()
+                age = version.age_days()
+                age_str = f"{age:.1f} days" if age else "unknown age"
+                typer.echo(f"    - Version {version.version_id}: tags={hash_tags} ({age_str})")
+            if len(versions) > 5:
+                typer.echo(f"    ... and {len(versions) - 5} more versions")
+        
+        # Execute deletion
+        if dry_run:
+            typer.echo("\n🧪 DRY RUN MODE - No actual deletions will occur")
+            typer.echo("Run with --no-dry-run to actually delete these versions")
+        else:
+            typer.echo("\n⚠️  WARNING: This will permanently delete hash-tagged package versions!")
+            
+            # Skip confirmation in CI/non-interactive environments
+            is_ci = os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true"
+            is_interactive = sys.stdin.isatty()
+            
+            if not is_ci and is_interactive:
+                confirm = typer.confirm("Are you sure you want to proceed?")
+                if not confirm:
+                    typer.echo("Cleanup cancelled.")
+                    return
+            else:
+                if is_ci:
+                    typer.echo("Running in CI environment, proceeding with cleanup...")
+                else:
+                    typer.echo("Running in non-interactive mode, proceeding with cleanup...")
+            
+            # Delete versions
+            deleted_count = 0
+            error_count = 0
+            
+            for package_name, versions in packages_with_hash_tags.items():
+                typer.echo(f"\n📦 Deleting versions from {package_name}...")
+                
+                for version in versions:
+                    try:
+                        success = ghcr_client.delete_package_version(package_name, version.version_id)
+                        if success:
+                            deleted_count += 1
+                            hash_tags = version.get_hash_tags()
+                            typer.echo(f"  ✅ Deleted version {version.version_id} (tags: {hash_tags})")
+                        else:
+                            error_count += 1
+                            typer.echo(f"  ❌ Failed to delete version {version.version_id}", err=True)
+                    except Exception as e:
+                        error_count += 1
+                        typer.echo(f"  ❌ Error deleting version {version.version_id}: {e}", err=True)
+            
+            # Final summary
+            typer.echo(f"\n{'='*80}")
+            typer.echo(f"✅ Cleanup complete!")
+            typer.echo(f"  Deleted: {deleted_count} versions")
+            if error_count > 0:
+                typer.echo(f"  Errors: {error_count} versions")
+                raise typer.Exit(1)
+            typer.echo(f"{'='*80}")
+        
+    except Exception as e:
+        import traceback
+        typer.echo(f"\n❌ Error during hash tag cleanup: {e}", err=True)
+        typer.echo(f"\nFull traceback:", err=True)
+        traceback.print_exc()
+        raise typer.Exit(1)
+
+
 def main():
     """Main entry point for the CLI."""
     try:
