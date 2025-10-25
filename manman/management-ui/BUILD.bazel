@@ -34,13 +34,3 @@ go_test(
     ],
 )
 
-release_app(
-    name = "management-ui",
-    language = "go",
-    domain = "manman",
-    description = "HTMX-based management UI with dual authentication modes",
-    app_type = "external-api",
-    port = 8000,
-    health_check_enabled = True,
-    health_check_path = "/health",
-)
