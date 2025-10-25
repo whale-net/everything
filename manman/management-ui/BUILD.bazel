@@ -9,6 +9,7 @@ go_library(
         "main.go",
         "templates.go",
     ],
+    embedsrcs = glob(["templates/*.html"]),
     importpath = "github.com/whale-net/everything/manman/management-ui",
     visibility = ["//visibility:private"],
     deps = [

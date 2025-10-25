@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"html/template"
 	"log"
 	"net/http"
 	"strings"
@@ -25,34 +24,12 @@ func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get user ID (prefer sub, fallback to preferred_username)
-	userID := user.Sub
-	if userID == "" {
-		userID = user.PreferredUsername
-	}
-
-	// Fetch worker ID and servers from Experience API
-	workerID, err := app.getActiveWorkerID(r.Context(), userID)
-	if err != nil {
-		log.Printf("Failed to get worker ID: %v", err)
-		workerID = ""
-	}
-
-	servers, err := app.getRunningServers(r.Context(), userID)
-	if err != nil {
-		log.Printf("Failed to get servers: %v", err)
-		servers = []Server{}
-	}
-
 	// Render template
 	data := HomePageData{
-		User:     user,
-		UserID:   userID,
-		WorkerID: workerID,
-		Servers:  servers,
+		User: user,
 	}
 
-	if err := homeTemplate.Execute(w, data); err != nil {
+	if err := templates.ExecuteTemplate(w, "home.html", data); err != nil {
 		log.Printf("Template error: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
@@ -73,16 +50,25 @@ func (app *App) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	workerID, err := app.getActiveWorkerID(r.Context(), userID)
+	status := "inactive"
 	if err != nil {
 		log.Printf("Failed to get worker ID: %v", err)
-		fmt.Fprint(w, `<span class="worker-inactive">Error loading worker</span>`)
-		return
+		workerID = "Error"
+		status = "error"
+	} else if workerID != "" {
+		status = "active"
+	} else {
+		workerID = "No active worker"
 	}
 
-	if workerID != "" {
-		fmt.Fprintf(w, `<span class="worker-active">%s</span>`, workerID)
-	} else {
-		fmt.Fprint(w, `<span class="worker-inactive">No active worker</span>`)
+	data := WorkerStatusData{
+		WorkerID: workerID,
+		Status:   status,
+	}
+
+	if err := templates.ExecuteTemplate(w, "worker_status.html", data); err != nil {
+		log.Printf("Template error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
 
@@ -103,36 +89,33 @@ func (app *App) handleServers(w http.ResponseWriter, r *http.Request) {
 	servers, err := app.getRunningServers(r.Context(), userID)
 	if err != nil {
 		log.Printf("Failed to get servers: %v", err)
-		fmt.Fprint(w, `<tr><td colspan="3"><p class="no-servers">Error loading servers</p></td></tr>`)
-		return
+		servers = []Server{}
 	}
 
-	if len(servers) == 0 {
-		fmt.Fprint(w, `<tr><td colspan="3"><p class="no-servers">No running servers</p></td></tr>`)
-		return
+	data := ServersData{
+		Servers: servers,
 	}
 
-	// Render server rows
-	for _, server := range servers {
-		statusClass := "status-other"
-		if server.Status == "running" {
-			statusClass = "status-running"
-		}
-		fmt.Fprintf(w, `<tr><td>%s</td><td><span class="%s">%s</span></td><td>%s:%s</td></tr>`,
-			template.HTMLEscapeString(server.Name),
-			statusClass,
-			template.HTMLEscapeString(server.Status),
-			template.HTMLEscapeString(server.IP),
-			template.HTMLEscapeString(server.Port))
+	if err := templates.ExecuteTemplate(w, "servers.html", data); err != nil {
+		log.Printf("Template error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
 
 // HomePageData holds data for the home page template
 type HomePageData struct {
-	User     *htmxauth.UserInfo
-	UserID   string
+	User *htmxauth.UserInfo
+}
+
+// WorkerStatusData holds data for worker status template
+type WorkerStatusData struct {
 	WorkerID string
-	Servers  []Server
+	Status   string
+}
+
+// ServersData holds data for servers template
+type ServersData struct {
+	Servers []Server
 }
 
 // Server represents a game server
