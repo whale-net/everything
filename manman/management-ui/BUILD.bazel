@@ -1,0 +1,47 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "management_ui_lib",
+    srcs = [
+        "api_client.go",
+        "handlers.go",
+        "main.go",
+        "templates.go",
+    ],
+    importpath = "github.com/whale-net/everything/manman/management-ui",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/htmxauth",
+        # TODO: Add generated Go Experience API client once it's built
+        # "//generated/go/manman:experience_api",
+    ],
+)
+
+go_binary(
+    name = "management_ui",
+    embed = [":management_ui_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "management_ui_test",
+    srcs = ["main_test.go"],
+    embed = [":management_ui_lib"],
+    deps = [
+        "//libs/go/htmxauth",
+        "@com_github_stretchr_testify//assert",
+    ],
+)
+
+release_app(
+    name = "management-ui",
+    binary_name = "management_ui",
+    language = "go",
+    domain = "manman",
+    description = "HTMX-based management UI with dual authentication modes",
+    app_type = "external-api",
+    port = 8000,
+    health_check_enabled = True,
+    health_check_path = "/health",
+)
