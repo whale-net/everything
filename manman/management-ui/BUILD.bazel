@@ -20,7 +20,7 @@ go_library(
 )
 
 go_binary(
-    name = "management_ui",
+    name = "management-ui",
     embed = [":management_ui_lib"],
     visibility = ["//visibility:public"],
 )
@@ -37,7 +37,6 @@ go_test(
 
 release_app(
     name = "management-ui",
-    binary_name = "management_ui",
     language = "go",
     domain = "manman",
     description = "HTMX-based management UI with dual authentication modes",
