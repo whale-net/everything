@@ -14,19 +14,19 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	Host        string
-	Port        string
-	AuthMode    string
-	
+	Host     string
+	Port     string
+	AuthMode string
+
 	// OIDC Configuration (optional, only for oidc mode)
 	OIDCIssuer       string
 	OIDCClientID     string
 	OIDCClientSecret string
 	OIDCRedirectURL  string
-	
+
 	// Session
 	SessionSecret string
-	
+
 	// Experience API
 	ExperienceAPIURL string
 }
