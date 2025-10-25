@@ -384,8 +384,9 @@ def container_image(
                 binary_path,
             ]
         else:
-            # Go binaries are self-contained executables
-            entrypoint = ["/app/" + binary_path]
+            # Go binaries are packaged by Bazel in a directory with underscore suffix
+            # Structure: /app/{binary_name}_/{binary_name}
+            entrypoint = ["/app/" + binary_name + "_/" + binary_name]
     
     # layer_targets is already built with correct ordering in the language-specific sections above
     # For Python: CA certs → Python → additional_tars → deps → app

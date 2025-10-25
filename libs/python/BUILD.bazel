@@ -8,3 +8,24 @@ py_library(
     ],
     visibility = ["//visibility:public"],
 )
+
+py_library(
+    name = "fastapi_utils",
+    srcs = ["fastapi_utils.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@pypi//:fastapi",
+    ],
+)
+
+py_test(
+    name = "fastapi_utils_test",
+    srcs = ["fastapi_utils_test.py"],
+    deps = [
+        ":fastapi_utils",
+        "@pypi//:pytest",
+        "@pypi//:fastapi",
+        "@pypi//:httpx",
+    ],
+    size = "small",
+)
