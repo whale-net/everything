@@ -1,5 +1,4 @@
 package htmxauth
-package htmxauth
 
 import (
 	"context"
