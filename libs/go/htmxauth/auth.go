@@ -33,11 +33,11 @@ const (
 // Config holds authentication configuration
 type Config struct {
 	Mode AuthMode
-	
+
 	// Session configuration
 	SessionSecret string
 	SessionName   string
-	
+
 	// OIDC configuration (required if Mode == AuthModeOIDC)
 	OIDCIssuer       string
 	OIDCClientID     string
