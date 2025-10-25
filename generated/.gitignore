@@ -1,7 +1,23 @@
-# Ignore everything in generated/ except BUILD.bazel files
-*
-!BUILD.bazel
-!.gitignore
-!README.md
-!/*/
-!/**/BUILD.bazel
+# Ignore generated code files, keep BUILD.bazel and structure
+
+# === Python clients (never synced to workspace) ===
+# Python clients are generated on-demand by Bazel, ignore all Python files
+py/**/*.py
+py/**/__init__.py
+py/**/docs/
+py/**/test/
+
+# === Go clients (optionally synced for IDE support) ===
+# Ignore all .go files and go module files
+*.go
+go.mod
+go.sum
+go.work
+go.work.sum
+
+# === General ===
+# Ignore Python bytecode
+*.pyc
+__pycache__/
+# Ignore tars from generators
+*.tar

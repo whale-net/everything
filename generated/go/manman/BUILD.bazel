@@ -1,0 +1,21 @@
+# Generated OpenAPI Go clients for manman namespace
+# Import pattern: import "github.com/whale-net/everything/generated/go/manman/experience_api"
+
+load("//tools/openapi:openapi_go_client.bzl", "openapi_go_client")
+
+package(default_visibility = ["//visibility:public"])
+
+# ==============================================================================
+# OpenAPI Client Generation
+# ==============================================================================
+# To regenerate clients after API spec changes:
+#   ./tools/scripts/sync_go_clients.sh
+
+openapi_go_client(
+    name = "experience_api",
+    spec = "//manman:experience_api_spec",
+    namespace = "manman",
+    app = "experience-api",
+    importpath = "github.com/whale-net/everything/generated/go/manman/experience_api",
+)
+
