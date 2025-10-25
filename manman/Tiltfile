@@ -129,11 +129,26 @@ apps_config['experience-api']['helm_config']['ingress.tlsEnabled'] = 'false'
 apps_config['worker-dal-api']['helm_config']['ingress.tlsEnabled'] = 'false'
 apps_config['management-ui']['helm_config']['ingress.tlsEnabled'] = 'false'
 
-# Management UI configuration: use no-auth mode for local development
+# Management UI configuration: use OIDC mode for authentication
 if 'management-ui' in apps_config:
     if 'env_vars' not in apps_config['management-ui']:
         apps_config['management-ui']['env_vars'] = {}
-    apps_config['management-ui']['env_vars']['AUTH_MODE'] = 'none'
+    
+    # Configure OIDC authentication
+    apps_config['management-ui']['env_vars']['AUTH_MODE'] = 'oidc'
+    apps_config['management-ui']['env_vars']['OIDC_ISSUER'] = os.environ.get('OIDC_ISSUER', '')
+    apps_config['management-ui']['env_vars']['OIDC_CLIENT_ID'] = os.environ.get('OIDC_CLIENT_ID', '')
+    apps_config['management-ui']['env_vars']['OIDC_CLIENT_SECRET'] = os.environ.get('OIDC_CLIENT_SECRET', '')
+    apps_config['management-ui']['env_vars']['OIDC_REDIRECT_URI'] = os.environ.get('OIDC_REDIRECT_URI', 'http://management-ui.manman.local:30080/auth/callback')
+    apps_config['management-ui']['env_vars']['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
+    
+    # Validate required OIDC configuration
+    if not apps_config['management-ui']['env_vars']['OIDC_ISSUER']:
+        fail('OIDC_ISSUER environment variable is required for OIDC mode')
+    if not apps_config['management-ui']['env_vars']['OIDC_CLIENT_ID']:
+        fail('OIDC_CLIENT_ID environment variable is required for OIDC mode')
+    if not apps_config['management-ui']['env_vars']['OIDC_CLIENT_SECRET']:
+        fail('OIDC_CLIENT_SECRET environment variable is required for OIDC mode')
 
 # Deploy the helm chart
 deploy_helm_chart(
