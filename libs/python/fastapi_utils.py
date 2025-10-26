@@ -1,4 +1,22 @@
-"""FastAPI utilities for consistent API behavior."""
+"""FastAPI utilities for consistent API behavior.
+
+This module provides utilities to ensure FastAPI applications serialize data
+in formats compatible with OpenAPI clients across different programming languages.
+
+Key Features:
+- RFC3339 datetime serialization with timezone information
+- Compatibility with Go OpenAPI clients (which require RFC3339 format)
+- Automatic UTC timezone assumption for naive datetime objects
+
+Common Issue:
+Go OpenAPI clients expect datetime strings in RFC3339 format (e.g., "2025-10-25T18:43:04.629347Z").
+Without timezone info, Go's time.Parse fails with:
+    parsing time "2025-10-25T18:43:04.629347" as "2006-01-02T15:04:05Z07:00": cannot parse "" as "Z07:00"
+
+Solution:
+Call configure_fastapi_datetime_serialization(app) in your FastAPI app factory to enable
+RFC3339 serialization for all datetime responses.
+"""
 
 import datetime
 import json

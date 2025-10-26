@@ -1,7 +1,8 @@
 import datetime
 from enum import Enum, StrEnum
-from typing import Optional
+from typing import Any, Optional
 
+from pydantic import model_serializer
 from sqlalchemy import (  # using postgres.ARRAY I guess; MetaData,; ForeignKey,
     ARRAY,
     CheckConstraint,  # Add CheckConstraint
@@ -27,10 +28,20 @@ class ServerType(Enum):
 
 class ManManBase(SQLModel):
     metadata = MetaData(schema="manman")
-    # type_annotation_map = {
-    #     dict[str, Any]: JSON,
-    #     list[str]: ARRAY(String),
-    # }
+    
+    @model_serializer(mode='wrap')
+    def _serialize_model(self, serializer: Any) -> dict[str, Any]:
+        """Custom serializer to ensure datetime fields have timezone info (RFC3339 compatible)."""
+        data = serializer(self)
+        
+        # Convert any datetime values to RFC3339 format with timezone
+        for key, value in data.items():
+            if isinstance(value, datetime.datetime):
+                if value.tzinfo is None:
+                    value = value.replace(tzinfo=datetime.timezone.utc)
+                data[key] = value.isoformat()
+        
+        return data
 
 
 class Worker(ManManBase, table=True):

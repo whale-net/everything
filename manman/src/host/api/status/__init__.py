@@ -21,6 +21,7 @@ def create_app():
     from fastapi import FastAPI
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
     from libs.python.logging import configure_metrics
+    from libs.python.fastapi_utils import configure_fastapi_datetime_serialization
     import os
 
     from manman.src.host.api.shared import add_health_check
@@ -28,6 +29,10 @@ def create_app():
     app = FastAPI(
         title="ManMan Status API",
     )
+    
+    # Configure datetime serialization to RFC3339 format for OpenAPI client compatibility
+    configure_fastapi_datetime_serialization(app)
+    
     app.include_router(router)
     add_health_check(app)
     
