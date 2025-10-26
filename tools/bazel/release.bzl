@@ -47,6 +47,15 @@ def _app_metadata_impl(ctx):
     if ctx.attr.args:
         metadata["args"] = ctx.attr.args
     
+    # Add resource configuration if provided
+    if ctx.attr.resources_requests_cpu or ctx.attr.resources_requests_memory or ctx.attr.resources_limits_cpu or ctx.attr.resources_limits_memory:
+        metadata["resources"] = {
+            "requests_cpu": ctx.attr.resources_requests_cpu,
+            "requests_memory": ctx.attr.resources_requests_memory,
+            "limits_cpu": ctx.attr.resources_limits_cpu,
+            "limits_memory": ctx.attr.resources_limits_memory,
+        }
+    
     # Add OpenAPI spec target if provided
     if ctx.attr.openapi_spec_target:
         metadata["openapi_spec_target"] = str(ctx.attr.openapi_spec_target.label)
@@ -81,21 +90,26 @@ app_metadata = rule(
         "ingress_tls_secret": attr.string(default = ""),
         "command": attr.string_list(default = []),
         "args": attr.string_list(default = []),
+        "resources_requests_cpu": attr.string(default = ""),
+        "resources_requests_memory": attr.string(default = ""),
+        "resources_limits_cpu": attr.string(default = ""),
+        "resources_limits_memory": attr.string(default = ""),
         "openapi_spec_target": attr.label(default = None),
     },
 )
 
-# Note: This function has many parameters (20) to support flexible app configuration.
+# Note: This function has many parameters (24) to support flexible app configuration.
 # They are logically grouped as:
 # - Binary config: name, binary_name, language
 # - Release config: domain, description, version, registry, organization, custom_repo_name
 # - Deployment config: app_type, port, replicas, command, args
 # - Health check config: health_check_enabled, health_check_path
 # - Ingress config: ingress_host, ingress_tls_secret
+# - Resource config: resources_requests_cpu, resources_requests_memory, resources_limits_cpu, resources_limits_memory
 # - OpenAPI config: fastapi_app
 # - Container config: additional_tars
 # Bazel/Starlark does not support nested struct parameters, so they remain flat.
-def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], fastapi_app = None, additional_tars = None):
+def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], resources_requests_cpu = "", resources_requests_memory = "", resources_limits_cpu = "", resources_limits_memory = "", fastapi_app = None, additional_tars = None):
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
@@ -127,6 +141,10 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         ingress_tls_secret: TLS secret name for ingress (empty = no TLS)
         command: Override container command (default: use image ENTRYPOINT)
         args: Container arguments
+        resources_requests_cpu: Custom CPU request (e.g., "100m", "0.5"). Empty = use defaults from app type
+        resources_requests_memory: Custom memory request (e.g., "128Mi", "1Gi"). Empty = use defaults from app type
+        resources_limits_cpu: Custom CPU limit (e.g., "200m", "1"). Empty = use defaults from app type
+        resources_limits_memory: Custom memory limit (e.g., "256Mi", "2Gi"). Empty = use defaults from app type
         fastapi_app: For FastAPI apps, specify the module path and variable name (e.g., "main:app")
                      to auto-generate OpenAPI specs. Creates a {name}_openapi_spec target.
         additional_tars: Additional tar layers to include in the image (e.g., ["//tools/steamcmd:steamcmd"])
@@ -224,6 +242,10 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         ingress_tls_secret = ingress_tls_secret,
         command = command,
         args = args,
+        resources_requests_cpu = resources_requests_cpu,
+        resources_requests_memory = resources_requests_memory,
+        resources_limits_cpu = resources_limits_cpu,
+        resources_limits_memory = resources_limits_memory,
         openapi_spec_target = openapi_spec_target_ref,
         tags = ["release-metadata"],
         visibility = ["//visibility:public"],

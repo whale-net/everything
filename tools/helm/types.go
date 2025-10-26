@@ -143,6 +143,30 @@ type ResourceConfig struct {
 	LimitsMemory   string `json:"limits_memory"`
 }
 
+// IsEmpty returns true if all fields are empty
+func (r ResourceConfig) IsEmpty() bool {
+	return r.RequestsCPU == "" && r.RequestsMemory == "" &&
+		r.LimitsCPU == "" && r.LimitsMemory == ""
+}
+
+// MergeWithDefaults merges this config with defaults, preferring non-empty values from this config
+func (r ResourceConfig) MergeWithDefaults(defaults ResourceConfig) ResourceConfig {
+	result := r
+	if result.RequestsCPU == "" {
+		result.RequestsCPU = defaults.RequestsCPU
+	}
+	if result.RequestsMemory == "" {
+		result.RequestsMemory = defaults.RequestsMemory
+	}
+	if result.LimitsCPU == "" {
+		result.LimitsCPU = defaults.LimitsCPU
+	}
+	if result.LimitsMemory == "" {
+		result.LimitsMemory = defaults.LimitsMemory
+	}
+	return result
+}
+
 // DefaultResourceConfig returns sensible defaults based on app type
 func (t AppType) DefaultResourceConfig() ResourceConfig {
 	switch t {
@@ -181,12 +205,12 @@ func (t AppType) DefaultResourceConfig() ResourceConfig {
 func (t AppType) DefaultResourceConfigForLanguage(language string) ResourceConfig {
 	// Get base config for app type
 	config := t.DefaultResourceConfig()
-	
+
 	// Apply language-specific optimizations for Python
 	if language == "python" {
 		config.RequestsMemory = "64Mi"
 		config.LimitsMemory = "256Mi"
 	}
-	
+
 	return config
 }

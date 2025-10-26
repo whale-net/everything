@@ -23,6 +23,7 @@ type AppMetadata struct {
 	Language     string            `json:"language"`
 	Port         int               `json:"port,omitempty"`
 	Replicas     int               `json:"replicas,omitempty"`
+	Resources    *ResourceConfig   `json:"resources,omitempty"`
 	Labels       map[string]string `json:"labels,omitempty"`
 	Annotations  map[string]string `json:"annotations,omitempty"`
 	Dependencies []string          `json:"dependencies,omitempty"`
@@ -395,7 +396,16 @@ func (c *Composer) buildAppConfig(app AppMetadata) (AppConfig, error) {
 	}
 
 	// Get default resources for this app type and language
-	resources := appType.DefaultResourceConfigForLanguage(app.Language)
+	defaultResources := appType.DefaultResourceConfigForLanguage(app.Language)
+
+	// Use custom resources if provided, otherwise use defaults
+	var resources ResourceConfig
+	if app.Resources != nil && !app.Resources.IsEmpty() {
+		// Merge custom resources with defaults (custom values take precedence)
+		resources = app.Resources.MergeWithDefaults(defaultResources)
+	} else {
+		resources = defaultResources
+	}
 
 	// Set replicas: use metadata if provided, otherwise default based on type
 	replicas := app.Replicas
