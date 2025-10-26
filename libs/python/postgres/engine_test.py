@@ -15,6 +15,7 @@ def test_create_engine_with_defaults():
     assert engine.pool.size() == 20
     assert engine.pool._max_overflow == 30
     assert engine.pool._recycle == 3600
+    assert engine.pool._timeout == 30  # Default pool timeout
     assert engine.pool._pre_ping is True
 
 
@@ -25,11 +26,13 @@ def test_create_engine_with_custom_settings():
         pool_size=10,
         max_overflow=15,
         pool_recycle=1800,
+        pool_timeout=15,
     )
     
     assert engine.pool.size() == 10
     assert engine.pool._max_overflow == 15
     assert engine.pool._recycle == 1800
+    assert engine.pool._timeout == 15
 
 
 def test_create_engine_with_env_overrides():

@@ -53,13 +53,21 @@ async def has_basic_worker_authz(
         raise HTTPException(status_code=401, detail="access token missing proper role")
 
 
-async def sql_session() -> SQLSession:
+async def sql_session() -> AsyncGenerator[SQLSession, None]:
     """
-    Dependency to inject a SQLAlchemy/SQLModel session.
+    Dependency to inject a SQLAlchemy/SQLModel session with proper lifecycle management.
 
-    Wraps my own function to decouple my weird implementation from FastAPI's dependency injection system.
+    This creates a new session per request and ensures it's properly closed
+    when the request completes, preventing connection leaks.
+    
+    Yields:
+        SQLSession that will be automatically closed after the request
     """
-    return get_sqlalchemy_session()
+    session = get_sqlalchemy_session()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 async def worker_db_repository(
