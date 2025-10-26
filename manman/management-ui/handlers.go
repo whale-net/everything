@@ -51,19 +51,35 @@ func (app *App) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
 
 	workerID, err := app.getActiveWorkerID(r.Context(), userID)
 	status := "inactive"
+	statusType := ""
+	lastHeartbeat := ""
+
 	if err != nil {
 		log.Printf("Failed to get worker ID: %v", err)
 		workerID = "Error"
 		status = "error"
 	} else if workerID != "" {
 		status = "active"
+
+		// Try to get detailed status information
+		workerStatus, statusErr := app.getWorkerStatus(r.Context(), userID)
+		if statusErr != nil {
+			log.Printf("Failed to get worker status: %v", statusErr)
+		} else if workerStatus != nil {
+			statusType = string(workerStatus.StatusType)
+			if workerStatus.AsOf != nil {
+				lastHeartbeat = workerStatus.AsOf.Format("2006-01-02 15:04:05")
+			}
+		}
 	} else {
 		workerID = "No active worker"
 	}
 
 	data := WorkerStatusData{
-		WorkerID: workerID,
-		Status:   status,
+		WorkerID:      workerID,
+		Status:        status,
+		StatusType:    statusType,
+		LastHeartbeat: lastHeartbeat,
 	}
 
 	if err := templates.ExecuteTemplate(w, "worker_status.html", data); err != nil {
@@ -109,8 +125,10 @@ type HomePageData struct {
 
 // WorkerStatusData holds data for worker status template
 type WorkerStatusData struct {
-	WorkerID string
-	Status   string
+	WorkerID      string
+	Status        string
+	StatusType    string
+	LastHeartbeat string
 }
 
 // ServersData holds data for servers template
@@ -120,9 +138,11 @@ type ServersData struct {
 
 // Server represents a game server
 type Server struct {
-	ID     string
-	Name   string
-	Status string
-	IP     string
-	Port   string
+	ID         string
+	InstanceID string
+	Name       string
+	Status     string
+	StatusType string
+	IP         string
+	Port       string
 }
