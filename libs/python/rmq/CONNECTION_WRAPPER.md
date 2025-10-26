@@ -19,7 +19,7 @@ This would cause immediate service shutdown, even for transient network issues.
 
 A lightweight wrapper that:
 - Validates connection health before operations
-- Automatically reconnects on stale/dead connections  
+- Automatically reconnects on stale/dead connections
 - Provides retry logic for transient failures with exponential backoff
 - Invalidates failed connections to force reconnection on retry
 
@@ -75,7 +75,7 @@ Default retry configuration in `RabbitPublisher`:
 - **Max attempts**: 3
 - **Initial delay**: 0.5 seconds
 - **Max delay**: 5 seconds
-- **Exponential base**: 2.0 (delays: 0.5s, 1.0s, 2.0s)
+- **Exponential base**: 2.0 (delays: 0.5s, 1.0s, 2.0s on first 3 attempts)
 
 ### Transient Errors
 
@@ -142,8 +142,8 @@ On failure:
 ## Future Enhancements
 
 Potential improvements:
-- [ ] Async support for non-blocking retries
-- [ ] Circuit breaker pattern for persistent failures
-- [ ] Metrics/monitoring integration
-- [ ] Connection pooling support
-- [ ] Configurable retry policies per publisher
+- Async support for non-blocking retries
+- Circuit breaker pattern for persistent failures
+- Metrics/monitoring integration
+- Connection pooling support
+- Configurable retry policies per publisher
