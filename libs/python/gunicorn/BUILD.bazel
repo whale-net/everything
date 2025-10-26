@@ -5,6 +5,10 @@ py_library(
     srcs = [
         "__init__.py",
         "config.py",
+        "uvicorn_worker.py",
     ],
     visibility = ["//visibility:public"],
+    deps = [
+        "//libs/python/logging",
+    ],
 )
