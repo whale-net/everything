@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/gob"
 	"fmt"
 	"net/http"
 	"sync"
@@ -14,13 +13,6 @@ import (
 	"github.com/gorilla/sessions"
 	"golang.org/x/oauth2"
 )
-
-func init() {
-	// Register types for gob encoding
-	gob.Register(&oauth2.Token{})
-	gob.Register(&oidc.IDToken{})
-	gob.Register(map[string]interface{}{})
-}
 
 // AuthMode defines the authentication mode
 type AuthMode string
@@ -247,7 +239,9 @@ func (a *Authenticator) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Store user info in session
 	if err := a.sessions.SetUserInfo(w, r, oauth2Token, idToken); err != nil {
-		http.Error(w, "Failed to create session", http.StatusInternalServerError)
+		// Log the actual error for debugging
+		fmt.Printf("ERROR: Failed to create session: %v\n", err)
+		http.Error(w, fmt.Sprintf("Failed to create session: %v", err), http.StatusInternalServerError)
 		return
 	}
 
@@ -326,14 +320,13 @@ func (sm *SessionManager) GetUserInfo(r *http.Request) (*UserInfo, error) {
 	username, _ := session.Values["preferred_username"].(string)
 	name, _ := session.Values["name"].(string)
 	email, _ := session.Values["email"].(string)
-	claims, _ := session.Values["claims"].(map[string]interface{})
 
 	return &UserInfo{
 		Sub:               sub,
 		PreferredUsername: username,
 		Name:              name,
 		Email:             email,
-		RawClaims:         claims,
+		RawClaims:         map[string]interface{}{}, // Empty since we don't store full claims
 	}, nil
 }
 
@@ -350,13 +343,10 @@ func (sm *SessionManager) SetUserInfo(w http.ResponseWriter, r *http.Request, to
 		return fmt.Errorf("failed to parse claims: %w", err)
 	}
 
-	// Store authentication data
+	// Store authentication data - only store essential user info to avoid cookie size limits
 	session.Values["authenticated"] = true
-	session.Values["token"] = token
-	session.Values["id_token"] = idToken
-	session.Values["claims"] = claims
 
-	// Extract standard claims
+	// Extract and store only essential claims (keep cookie size small)
 	if sub, ok := claims["sub"].(string); ok {
 		session.Values["sub"] = sub
 	}

@@ -83,7 +83,7 @@ APPS = {
     },
     'management-ui': {
         'enabled_env': 'ENABLE_MANAGEMENT_UI',
-        'bazel_target': '//manman/management-ui:management-ui_image_load',
+        'bazel_target': '//manman:management-ui_image_load',
         'image_name': 'manman-management-ui',
     },
     'migration': {
@@ -129,11 +129,38 @@ apps_config['experience-api']['helm_config']['ingress.tlsEnabled'] = 'false'
 apps_config['worker-dal-api']['helm_config']['ingress.tlsEnabled'] = 'false'
 apps_config['management-ui']['helm_config']['ingress.tlsEnabled'] = 'false'
 
-# Management UI configuration: use no-auth mode for local development
+# Management UI configuration: use OIDC mode for authentication
 if 'management-ui' in apps_config:
-    if 'env_vars' not in apps_config['management-ui']:
-        apps_config['management-ui']['env_vars'] = {}
-    apps_config['management-ui']['env_vars']['AUTH_MODE'] = 'none'
+    if 'env' not in apps_config['management-ui']:
+        apps_config['management-ui']['env'] = {}
+    
+    # Determine auth mode from environment variable (defaults to 'none' for development)
+    auth_mode = os.environ.get('MANAGEMENT_UI_AUTH_MODE', 'none').lower()
+    
+    # Configure authentication mode
+    apps_config['management-ui']['env']['AUTH_MODE'] = auth_mode
+    
+    if auth_mode == 'oidc':
+        # Configure OIDC authentication
+        apps_config['management-ui']['env']['OIDC_ISSUER'] = os.environ.get('OIDC_ISSUER', '')
+        apps_config['management-ui']['env']['OIDC_CLIENT_ID'] = os.environ.get('OIDC_CLIENT_ID', '')
+        apps_config['management-ui']['env']['OIDC_CLIENT_SECRET'] = os.environ.get('OIDC_CLIENT_SECRET', '')
+        apps_config['management-ui']['env']['OIDC_REDIRECT_URI'] = os.environ.get('OIDC_REDIRECT_URI', 'http://management-ui.manman.local:30080/auth/callback')
+        apps_config['management-ui']['env']['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
+        
+        # Validate required OIDC configuration
+        if not apps_config['management-ui']['env']['OIDC_ISSUER']:
+            fail('OIDC_ISSUER environment variable is required when MANAGEMENT_UI_AUTH_MODE=oidc')
+        if not apps_config['management-ui']['env']['OIDC_CLIENT_ID']:
+            fail('OIDC_CLIENT_ID environment variable is required when MANAGEMENT_UI_AUTH_MODE=oidc')
+        if not apps_config['management-ui']['env']['OIDC_CLIENT_SECRET']:
+            fail('OIDC_CLIENT_SECRET environment variable is required when MANAGEMENT_UI_AUTH_MODE=oidc')
+    
+    # Configure Experience API URL (use remote dev API or local if available)
+    apps_config['management-ui']['env']['EXPERIENCE_API_URL'] = os.environ.get(
+        'EXPERIENCE_API_URL',
+        'https://dev-experience-api.manman.whalenet.dev'  # Default to remote dev API
+    )
 
 # Deploy the helm chart
 deploy_helm_chart(

@@ -30,6 +30,10 @@ func (app *App) getActiveWorkerID(ctx context.Context, userID string) (string, e
 	if err != nil {
 		if httpResp != nil {
 			log.Printf("API error: status=%d", httpResp.StatusCode)
+			// Log response body for debugging datetime parsing issues
+			if httpResp.StatusCode == 200 {
+				log.Printf("Response succeeded but unmarsh failed - possible datetime format issue")
+			}
 		}
 		return "", fmt.Errorf("failed to get worker: %w", err)
 	}

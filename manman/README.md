@@ -101,6 +101,97 @@ ManMan consists of 5 microservices:
 
 ## 🛠️ Development
 
+### Local Development with Tilt
+
+The fastest way to develop locally is using [Tilt](https://tilt.dev/), which provides:
+- Hot reloading on code changes
+- Automatic image rebuilds
+- Local Kubernetes deployment
+- Infrastructure provisioning (PostgreSQL, RabbitMQ, OTEL Collector)
+
+#### Prerequisites
+
+```bash
+# Install Tilt
+curl -fsSL https://raw.githubusercontent.com/tilt-dev/tilt/master/scripts/install.sh | bash
+
+# Start local Kubernetes cluster (Docker Desktop, minikube, or kind)
+```
+
+#### Setup Environment
+
+```bash
+# Copy environment template
+cd manman
+cp .env.example .env
+
+# Edit .env with your OIDC configuration
+# Required variables:
+# - OIDC_ISSUER (your OIDC provider URL)
+# - OIDC_CLIENT_ID (registered client ID)
+# - OIDC_CLIENT_SECRET (client secret from provider)
+```
+
+#### Start Development Environment
+
+```bash
+# From manman directory
+tilt up
+
+# Or from repository root
+tilt up -f manman/Tiltfile
+```
+
+This will:
+1. Build all ManMan services with Bazel
+2. Deploy PostgreSQL, RabbitMQ, and OTEL Collector
+3. Deploy all ManMan services via Helm
+4. Watch for code changes and hot reload
+
+#### Access Services
+
+After running `tilt up`, services are available at:
+
+- **Management UI**: http://management-ui.manman.local:30080 (OIDC auth required)
+- **Experience API**: http://experience-api.manman.local:30080
+- **Worker DAL API**: http://worker-dal-api.manman.local:30080
+- **PostgreSQL**: localhost:5432 (via port-forward)
+- **RabbitMQ Management**: http://localhost:15672
+
+Add to `/etc/hosts`:
+```
+127.0.0.1 management-ui.manman.local
+127.0.0.1 experience-api.manman.local
+127.0.0.1 worker-dal-api.manman.local
+```
+
+#### Management UI Authentication
+
+The Management UI runs in **OIDC mode** with Tilt. You need to configure:
+
+1. **OIDC Provider**: Set up a client in your OIDC provider (Keycloak, Auth0, etc.)
+2. **Redirect URI**: Configure `http://management-ui.manman.local:30080/auth/callback`
+3. **Environment Variables**: Set in `.env` file
+   ```bash
+   OIDC_ISSUER=https://your-keycloak.com/realms/your-realm
+   OIDC_CLIENT_ID=management-ui
+   OIDC_CLIENT_SECRET=your-secret-from-provider
+   ```
+
+If you want to run without authentication (dev only):
+```bash
+# Modify manman/Tiltfile and change:
+apps_config['management-ui']['env_vars']['AUTH_MODE'] = 'none'
+```
+
+#### Disable Specific Services
+
+```bash
+# Set in .env to disable services
+ENABLE_STATUS_PROCESSOR=false
+ENABLE_WORKER_DAL_API=false
+```
+
 ### Project Structure
 
 ```
