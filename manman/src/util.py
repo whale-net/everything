@@ -5,9 +5,9 @@ import os
 import threading
 from typing import Optional
 
-import sqlalchemy
 from sqlmodel import Session
 
+from libs.python.postgres import create_engine as create_postgres_engine
 from manman.src.repository.api_client import AuthAPIClient
 from libs.python.rmq import (
     cleanup_rabbitmq_connections,
@@ -58,7 +58,8 @@ class NamedThreadPool(concurrent.futures.ThreadPoolExecutor):
         return super().submit(rename_thread, *args, **kwargs)
 
 
-def get_sqlalchemy_engine() -> sqlalchemy.engine:
+def get_sqlalchemy_engine():
+    """Get the global SQLAlchemy engine."""
     if __GLOBALS.get("engine") is None:
         raise RuntimeError("global engine not defined - cannot start")
     return __GLOBALS["engine"]
@@ -67,12 +68,20 @@ def get_sqlalchemy_engine() -> sqlalchemy.engine:
 def init_sql_alchemy_engine(
     connection_string: str,
 ):
+    """
+    Initialize the global SQLAlchemy engine with production-ready pool settings.
+    
+    Uses libs.python.postgres.create_engine() which provides:
+    - pool_size=20 (configurable via SQLALCHEMY_POOL_SIZE)
+    - max_overflow=30 (configurable via SQLALCHEMY_MAX_OVERFLOW)
+    - pool_recycle=3600 (configurable via SQLALCHEMY_POOL_RECYCLE)
+    - pool_pre_ping=True
+    
+    This supports up to 50 concurrent database operations per process.
+    """
     if "engine" in __GLOBALS:
         return
-    __GLOBALS["engine"] = sqlalchemy.create_engine(
-        connection_string,
-        pool_pre_ping=True,
-    )
+    __GLOBALS["engine"] = create_postgres_engine(connection_string)
 
 
 def get_sqlalchemy_session(session: Optional[Session] = None) -> Session:
