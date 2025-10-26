@@ -3,9 +3,10 @@ import io
 import logging
 import os
 import threading
-from typing import Optional
+from typing import AsyncGenerator, Optional
 
 import sqlalchemy
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlmodel import Session
 
 from manman.src.repository.api_client import AuthAPIClient
@@ -64,6 +65,13 @@ def get_sqlalchemy_engine() -> sqlalchemy.engine:
     return __GLOBALS["engine"]
 
 
+def get_async_engine() -> AsyncEngine:
+    """Get the global async SQLAlchemy engine."""
+    if __GLOBALS.get("async_engine") is None:
+        raise RuntimeError("global async engine not defined - cannot start")
+    return __GLOBALS["async_engine"]
+
+
 def init_sql_alchemy_engine(
     connection_string: str,
 ):
@@ -73,6 +81,30 @@ def init_sql_alchemy_engine(
         connection_string,
         pool_pre_ping=True,
     )
+    
+    # Also create async engine by converting connection string
+    # postgresql:// -> postgresql+asyncpg://
+    async_connection_string = connection_string.replace(
+        "postgresql://", "postgresql+asyncpg://"
+    )
+    __GLOBALS["async_engine"] = create_async_engine(
+        async_connection_string,
+        pool_pre_ping=True,
+        echo=False,
+    )
+
+
+async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Get an async database session.
+    
+    This should be used with async context manager in FastAPI dependencies:
+    async for session in get_async_session():
+        # use session
+    """
+    engine = get_async_engine()
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        yield session
 
 
 def get_sqlalchemy_session(session: Optional[Session] = None) -> Session:

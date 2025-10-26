@@ -3,6 +3,7 @@ from typing import Annotated, AsyncGenerator
 
 from amqpstorm import Channel, Connection
 from fastapi import Depends, Header, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Session as SQLSession
 
 from manman.src.models import GameServerInstance, Worker
@@ -21,7 +22,7 @@ from libs.python.rmq import (
     RabbitPublisher,
     RoutingKeyConfig,
 )
-from manman.src.util import get_auth_api_client, get_sqlalchemy_session
+from manman.src.util import get_async_session, get_auth_api_client, get_sqlalchemy_session
 from libs.python.rmq import get_rabbitmq_connection
 
 logger = logging.getLogger(__name__)
@@ -53,74 +54,56 @@ async def has_basic_worker_authz(
         raise HTTPException(status_code=401, detail="access token missing proper role")
 
 
+# Sync session dependency for endpoints that haven't been migrated to async yet
 async def sql_session() -> SQLSession:
     """
-    Dependency to inject a SQLAlchemy/SQLModel session.
-
-    Wraps my own function to decouple my weird implementation from FastAPI's dependency injection system.
+    Dependency to inject a sync SQLAlchemy/SQLModel session.
+    
+    NOTE: This is kept for backward compatibility with endpoints not yet migrated to async.
+    New code should use get_async_session instead.
     """
     return get_sqlalchemy_session()
-
-
-async def worker_db_repository(
-    session: Annotated[SQLSession, Depends(sql_session)],
-) -> WorkerRepository:
-    """
-    Dependency to inject a WorkerRepository.
-    This repository is used to interact with the worker database.
-    """
-    return WorkerRepository(session=session)
-
-
-async def game_server_instance_db_repository(
-    session: Annotated[SQLSession, Depends(sql_session)],
-) -> GameServerInstanceRepository:
-    """
-    Dependency to inject a GameServerInstanceRepository.
-    This repository is used to interact with game server instances in the database.
-    """
-    return GameServerInstanceRepository(session=session)
 
 
 async def game_server_config_db_repository(
     session: Annotated[SQLSession, Depends(sql_session)],
 ) -> GameServerConfigRepository:
     """
-    Dependency to inject a GameServerInstanceRepository for game server configs.
-    This repository is used to interact with game server configurations in the database.
+    Dependency to inject a GameServerConfigRepository (sync version).
     """
     return GameServerConfigRepository(session=session)
 
 
 async def current_worker(
-    worker_repo: Annotated[WorkerRepository, Depends(worker_db_repository)],
+    session: Annotated[AsyncSession, Depends(get_async_session)],
 ) -> Worker:
     """
-    Dependency to inject the current worker.
-    This worker is determined by the worker ID in the request context.
+    Dependency to inject the current worker using async database operations.
+    
+    This properly uses AsyncSession to avoid blocking the event loop,
+    preventing gunicorn worker timeouts under load.
     """
-    worker = worker_repo.get_current_worker()
+    worker_repo = WorkerRepository(session=session)
+    worker = await worker_repo.get_current_worker_async(session)
     if not worker:
         raise HTTPException(status_code=404, detail="Worker not found")
     return worker
 
 
 async def current_game_server_instances(
-    game_server_instance_repo: Annotated[
-        GameServerInstanceRepository, Depends(game_server_instance_db_repository)
-    ],
+    session: Annotated[SQLSession, Depends(sql_session)],
     current_worker: Annotated[Worker, Depends(current_worker)],
 ) -> list[GameServerInstance]:
     """
     Dependency to inject the current game server instances for the worker.
-    This is used to get the game server instances that are currently running on the worker.
+    
+    NOTE: Uses sync session since get_current_instances hasn't been migrated to async yet.
+    This is fine since this endpoint is called less frequently than current_worker.
     """
+    game_server_instance_repo = GameServerInstanceRepository(session=session)
     instances = game_server_instance_repo.get_current_instances(
         current_worker.worker_id
     )
-    # allow empty lists
-    # if not instances:
-    #     raise HTTPException(status_code=404, detail="No game server instances found for this worker")
     return instances
 
 

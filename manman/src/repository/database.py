@@ -466,6 +466,29 @@ class WorkerRepository(DatabaseRepository):
             worker = session.exec(stmt).one_or_none()
             return worker
 
+    async def get_current_worker_async(self, session) -> Optional[Worker]:
+        """
+        Async version of get_current_worker.
+        
+        Args:
+            session: AsyncSession to use for the query
+            
+        Returns:
+            The current active worker, or None if not found
+        """
+        from sqlalchemy import select as sa_select
+        from sqlalchemy.ext.asyncio import AsyncSession
+        
+        stmt = (
+            sa_select(Worker)
+            .where(Worker.end_date.is_(None))
+            .order_by(Worker.created_date.desc())
+            .limit(1)
+        )
+        result = await session.execute(stmt)
+        worker = result.scalar_one_or_none()
+        return worker
+
 
 class GameServerRepository(DatabaseRepository):
     """Repository class for game server-related database operations."""
