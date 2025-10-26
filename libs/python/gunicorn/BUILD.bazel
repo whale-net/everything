@@ -1,4 +1,4 @@
-load("@rules_python//python:defs.bzl", "py_library")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
 
 py_library(
     name = "gunicorn",
@@ -11,4 +11,14 @@ py_library(
     deps = [
         "//libs/python/logging",
     ],
+)
+
+py_test(
+    name = "test_config",
+    srcs = ["test_config.py"],
+    deps = [
+        ":gunicorn",
+        "//libs/python/logging",
+    ],
+    size = "small",
 )
