@@ -4,6 +4,7 @@ py_library(
     name = "postgres",
     srcs = [
         "__init__.py",
+        "engine.py",
         "repository.py",
     ],
     deps = [
@@ -20,6 +21,18 @@ py_test(
         ":postgres",
         "@pypi//:pytest",
         "@pypi//:sqlmodel",
+    ],
+    size = "small",
+)
+
+py_test(
+    name = "engine_test",
+    srcs = ["engine_test.py"],
+    main = "engine_test.py",
+    deps = [
+        ":postgres",
+        "@pypi//:pytest",
+        "@pypi//:sqlalchemy",
     ],
     size = "small",
 )
