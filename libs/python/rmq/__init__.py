@@ -24,6 +24,7 @@ from libs.python.rmq.connection import (
     init_rabbitmq,
     init_rabbitmq_from_config,
 )
+from libs.python.rmq.connection_wrapper import ResilientConnection
 from libs.python.rmq.interface import (
     MessagePublisherInterface,
     MessageSubscriberInterface,
@@ -47,6 +48,8 @@ __all__ = [
     "get_rabbitmq_ssl_options",
     "init_rabbitmq",
     "init_rabbitmq_from_config",
+    # Connection Wrapper
+    "ResilientConnection",
     # Interfaces
     "MessagePublisherInterface",
     "MessageSubscriberInterface",
