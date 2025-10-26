@@ -17,8 +17,10 @@ def create_engine(
     pool_size: Optional[int] = None,
     max_overflow: Optional[int] = None,
     pool_recycle: Optional[int] = None,
+    pool_timeout: Optional[float] = None,
     pool_pre_ping: bool = True,
     echo: bool = False,
+    connect_args: Optional[dict] = None,
     **kwargs,
 ) -> Engine:
     """
@@ -38,8 +40,10 @@ def create_engine(
         pool_size: Number of persistent connections in pool (default: 20)
         max_overflow: Max temporary connections beyond pool_size (default: 30)
         pool_recycle: Recycle connections after N seconds (default: 3600)
+        pool_timeout: Seconds to wait for connection from pool (default: 30)
         pool_pre_ping: Test connections before using (default: True)
         echo: Log all SQL statements (default: False)
+        connect_args: Additional connection arguments (e.g., statement timeout)
         **kwargs: Additional engine arguments
         
     Returns:
@@ -49,9 +53,11 @@ def create_engine(
         SQLALCHEMY_POOL_SIZE: Override default pool_size
         SQLALCHEMY_MAX_OVERFLOW: Override default max_overflow
         SQLALCHEMY_POOL_RECYCLE: Override default pool_recycle
+        SQLALCHEMY_POOL_TIMEOUT: Override default pool_timeout (in seconds)
+        SQLALCHEMY_STATEMENT_TIMEOUT: Set statement timeout in milliseconds (PostgreSQL)
         
     Example:
-        >>> from libs.python.postgres.engine import create_engine
+        >>> from libs.python.postgres import create_engine
         >>> engine = create_engine("postgresql://user:pass@localhost/db")
         >>> # Engine now supports 50 concurrent connections (20 + 30 overflow)
         
@@ -60,6 +66,12 @@ def create_engine(
         ...     "postgresql://user:pass@localhost/db",
         ...     pool_size=10,
         ...     max_overflow=20,
+        ... )
+        
+        >>> # With statement timeout (30 seconds)
+        >>> engine = create_engine(
+        ...     "postgresql://user:pass@localhost/db",
+        ...     connect_args={"options": "-c statement_timeout=30000"}
         ... )
     """
     # Apply environment variable overrides or defaults
@@ -72,12 +84,27 @@ def create_engine(
     if pool_recycle is None:
         pool_recycle = int(os.environ.get("SQLALCHEMY_POOL_RECYCLE", "3600"))
     
+    if pool_timeout is None:
+        pool_timeout = float(os.environ.get("SQLALCHEMY_POOL_TIMEOUT", "30"))
+    
+    # Set up connect_args with statement timeout if specified
+    if connect_args is None:
+        connect_args = {}
+    
+    # Add statement timeout from environment if not already set
+    statement_timeout = os.environ.get("SQLALCHEMY_STATEMENT_TIMEOUT")
+    if statement_timeout and "options" not in connect_args:
+        # PostgreSQL statement timeout in milliseconds
+        connect_args["options"] = f"-c statement_timeout={statement_timeout}"
+    
     return sqlalchemy.create_engine(
         connection_string,
         pool_size=pool_size,
         max_overflow=max_overflow,
         pool_recycle=pool_recycle,
+        pool_timeout=pool_timeout,
         pool_pre_ping=pool_pre_ping,
         echo=echo,
+        connect_args=connect_args,
         **kwargs,
     )
