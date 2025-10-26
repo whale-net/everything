@@ -142,6 +142,12 @@ if 'management-ui' in apps_config:
     apps_config['management-ui']['env_vars']['OIDC_REDIRECT_URI'] = os.environ.get('OIDC_REDIRECT_URI', 'http://management-ui.manman.local:30080/auth/callback')
     apps_config['management-ui']['env_vars']['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
     
+    # Configure Experience API URL (use remote dev API or local if available)
+    apps_config['management-ui']['env_vars']['EXPERIENCE_API_URL'] = os.environ.get(
+        'EXPERIENCE_API_URL',
+        'https://dev-experience-api.manman.whalenet.dev'  # Default to remote dev API
+    )
+    
     # Validate required OIDC configuration
     if not apps_config['management-ui']['env_vars']['OIDC_ISSUER']:
         fail('OIDC_ISSUER environment variable is required for OIDC mode')

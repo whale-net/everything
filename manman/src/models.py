@@ -1,8 +1,8 @@
 import datetime
 from enum import Enum, StrEnum
-from typing import Any, Optional
+from typing import Optional
 
-from pydantic import model_serializer
+from pydantic import field_serializer
 from sqlalchemy import (  # using postgres.ARRAY I guess; MetaData,; ForeignKey,
     ARRAY,
     CheckConstraint,  # Add CheckConstraint
@@ -27,21 +27,21 @@ class ServerType(Enum):
 
 
 class ManManBase(SQLModel):
+    """Base model for ManMan entities with automatic RFC3339 datetime serialization."""
     metadata = MetaData(schema="manman")
     
-    @model_serializer(mode='wrap')
-    def _serialize_model(self, serializer: Any) -> dict[str, Any]:
-        """Custom serializer to ensure datetime fields have timezone info (RFC3339 compatible)."""
-        data = serializer(self)
+    @field_serializer('*', when_used='json')
+    def serialize_datetime_fields(self, value, _info):
+        """Serialize datetime fields with timezone info for RFC3339 compatibility.
         
-        # Convert any datetime values to RFC3339 format with timezone
-        for key, value in data.items():
-            if isinstance(value, datetime.datetime):
-                if value.tzinfo is None:
-                    value = value.replace(tzinfo=datetime.timezone.utc)
-                data[key] = value.isoformat()
-        
-        return data
+        This ensures Go OpenAPI clients can parse datetime strings correctly.
+        The serializer only activates during JSON serialization, not schema generation.
+        """
+        if isinstance(value, datetime.datetime):
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=datetime.timezone.utc)
+            return value.isoformat()
+        return value
 
 
 class Worker(ManManBase, table=True):
