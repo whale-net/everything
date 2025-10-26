@@ -156,12 +156,16 @@ class StatusEventProcessor:
     def _check_worker_heartbeats(self):
         """
         Check for stale worker heartbeats and mark them as lost if necessary.
-        This sends a notification to the external queue if a worker is marked as lost.
+        Also check for workers that have recovered from LOST status.
+        This sends notifications to the external queue for both lost and recovered workers.
         """
         try:
-            # Get workers with stale heartbeats using the database repository
-            stale_workers = self._db_repository.get_workers_with_stale_heartbeats()
+            # Get workers with stale and recovered heartbeats using the database repository
+            stale_workers, recovered_workers = (
+                self._db_repository.get_workers_with_heartbeat_status()
+            )
 
+            # Handle stale workers
             for worker, current_status in stale_workers:
                 logger.warning(
                     "Worker %s heartbeat is stale (last: %s), marking as LOST from %s",
@@ -186,6 +190,34 @@ class StatusEventProcessor:
                         worker.worker_id,
                     )
                     self._send_game_server_lost_notification(
+                        instance.game_server_instance_id
+                    )
+
+            # Handle recovered workers
+            for worker, current_status in recovered_workers:
+                logger.info(
+                    "Worker %s has recovered (current heartbeat: %s), recovering from %s",
+                    worker.worker_id,
+                    worker.last_heartbeat,
+                    current_status,
+                )
+
+                # Send worker recovered notification with prior status
+                self._send_worker_recovered_notification(worker.worker_id)
+
+                # Get all active game server instances for this worker
+                active_instances = self._db_repository.get_active_game_server_instances(
+                    worker.worker_id
+                )
+
+                # Send recovered notifications for all active game server instances
+                for instance in active_instances:
+                    logger.info(
+                        "Marking game server instance %s as RECOVERED due to worker %s recovering",
+                        instance.game_server_instance_id,
+                        worker.worker_id,
+                    )
+                    self._send_game_server_recovered_notification(
                         instance.game_server_instance_id
                     )
 
@@ -243,6 +275,80 @@ class StatusEventProcessor:
         except Exception as e:
             logger.exception(
                 "Error sending game server lost notification for instance %s: %s",
+                game_server_instance_id,
+                e,
+            )
+
+    def _send_worker_recovered_notification(self, worker_id: int):
+        """Send a worker recovered notification to external queue with prior status"""
+        try:
+            # Get the status before LOST
+            from manman.src.repository.database import StatusRepository
+            
+            status_repo = StatusRepository()
+            prior_status = status_repo.get_prior_worker_status(worker_id)
+            
+            # Default to RUNNING if no prior status found
+            recovery_status_type = (
+                prior_status.status_type if prior_status else StatusType.RUNNING
+            )
+
+            # Create a status message indicating the worker has recovered
+            recovered_status = ExternalStatusInfo.create(
+                class_name="StatusEventProcessor",
+                status_type=recovery_status_type,
+                worker_id=worker_id,
+            )
+
+            self._send_external_status(recovered_status)
+            self._db_repository.write_external_status_to_database(recovered_status)
+            logger.info(
+                "Worker recovered notification sent for worker %s with status %s",
+                worker_id,
+                recovery_status_type,
+            )
+
+        except Exception as e:
+            logger.exception(
+                "Error sending worker recovered notification for worker %s: %s",
+                worker_id,
+                e,
+            )
+
+    def _send_game_server_recovered_notification(self, game_server_instance_id: int):
+        """Send a game server recovered notification to external queue with prior status"""
+        try:
+            # Get the status before LOST
+            from manman.src.repository.database import StatusRepository
+            
+            status_repo = StatusRepository()
+            prior_status = status_repo.get_prior_instance_status(
+                game_server_instance_id
+            )
+            
+            # Default to RUNNING if no prior status found
+            recovery_status_type = (
+                prior_status.status_type if prior_status else StatusType.RUNNING
+            )
+
+            # Create a status message indicating the game server instance has recovered
+            recovered_status = ExternalStatusInfo.create(
+                class_name="StatusEventProcessor",
+                status_type=recovery_status_type,
+                game_server_instance_id=game_server_instance_id,
+            )
+
+            self._send_external_status(recovered_status)
+            self._db_repository.write_external_status_to_database(recovered_status)
+            logger.info(
+                "Game server recovered notification sent for instance %s with status %s",
+                game_server_instance_id,
+                recovery_status_type,
+            )
+
+        except Exception as e:
+            logger.exception(
+                "Error sending game server recovered notification for instance %s: %s",
                 game_server_instance_id,
                 e,
             )

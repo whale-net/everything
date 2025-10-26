@@ -75,35 +75,50 @@ class DatabaseRepository(BaseRepository):
         ).subquery()
         return last_status
 
-    def get_stale_workers_with_status(
+    def get_workers_by_heartbeat_status(
         self, heartbeat_threshold: datetime, heartbeat_max_lookback: datetime
-    ) -> List[Tuple[Worker, str]]:
+    ) -> tuple[List[Tuple[Worker, str]], List[Tuple[Worker, str]]]:
         """
-        Get workers whose heartbeats are stale along with their current status.
+        Get workers whose heartbeats are stale or have recovered, along with their current status.
 
         Args:
             heartbeat_threshold: Workers with heartbeat before this time are considered stale
             heartbeat_max_lookback: Only consider workers that had a heartbeat within this lookback period
 
         Returns:
-            List of tuples containing (Worker, current_status_type)
+            Tuple of (stale_workers, recovered_workers) where each is a list of tuples containing (Worker, current_status_type)
+            - stale_workers: Workers with active status but stale heartbeats
+            - recovered_workers: Workers with LOST status but active heartbeats
         """
         with self._get_session_context() as session:
             last_status = DatabaseRepository.get_worker_current_status_subquery()
 
-            # Query for workers with stale heartbeats
-            candidate_workers = (
+            # Base query shared by both stale and recovered workers
+            base_query = (
                 select(Worker, last_status.c.status_type)
                 .join(last_status)
                 .where(
-                    Worker.last_heartbeat > heartbeat_max_lookback,
-                    Worker.last_heartbeat < heartbeat_threshold,
                     Worker.end_date.is_(None),
-                    last_status.c.status_type.in_(ACTIVE_STATUS_TYPES),
                 )
             )
 
-            return session.exec(candidate_workers).all()
+            # Query for workers with stale heartbeats (active status but old heartbeat)
+            stale_workers_query = base_query.where(
+                Worker.last_heartbeat > heartbeat_max_lookback,
+                Worker.last_heartbeat < heartbeat_threshold,
+                last_status.c.status_type.in_(ACTIVE_STATUS_TYPES),
+            )
+
+            # Query for workers that have recovered (LOST status but recent heartbeat)
+            recovered_workers_query = base_query.where(
+                Worker.last_heartbeat >= heartbeat_threshold,
+                last_status.c.status_type == StatusType.LOST,
+            )
+
+            return (
+                session.exec(stale_workers_query).all(),
+                session.exec(recovered_workers_query).all(),
+            )
 
     def get_active_game_server_instances(
         self, worker_id: int
@@ -140,20 +155,22 @@ class DatabaseRepository(BaseRepository):
             session.add(status_info)
             session.commit()
 
-    def get_workers_with_stale_heartbeats(
+    def get_workers_with_heartbeat_status(
         self,
         heartbeat_threshold_seconds: int = 5,
         heartbeat_max_lookback_hours: int = 1,
-    ) -> List[Tuple[Worker, str]]:
+    ) -> tuple[List[Tuple[Worker, str]], List[Tuple[Worker, str]]]:
         """
-        Convenience method to get workers with stale heartbeats using default time periods.
+        Convenience method to get workers with stale or recovered heartbeats using default time periods.
 
         Args:
             heartbeat_threshold_seconds: Seconds before now to consider heartbeat stale (default: 5)
             heartbeat_max_lookback_hours: Hours before now to look back for workers (default: 1)
 
         Returns:
-            List of tuples containing (Worker, current_status_type)
+            Tuple of (stale_workers, recovered_workers) where each is a list of tuples containing (Worker, current_status_type)
+            - stale_workers: Workers with active status but stale heartbeats
+            - recovered_workers: Workers with LOST status but active heartbeats
         """
         current_time = datetime.now(timezone.utc)
         heartbeat_threshold = current_time - timedelta(
@@ -163,7 +180,7 @@ class DatabaseRepository(BaseRepository):
             hours=heartbeat_max_lookback_hours
         )
 
-        return self.get_stale_workers_with_status(
+        return self.get_workers_by_heartbeat_status(
             heartbeat_threshold, heartbeat_max_lookback
         )
 
@@ -211,6 +228,33 @@ class StatusRepository(DatabaseRepository):
                 
                 return result
 
+    def get_prior_worker_status(self, worker_id: int) -> Optional[ExternalStatusInfo]:
+        """
+        Get the status before the current LOST status for a specific worker.
+        This is useful for determining what status to restore when a worker recovers.
+
+        Args:
+            worker_id: The ID of the worker
+
+        Returns:
+            The prior StatusInfo before LOST, or None if not found or worker is not LOST
+        """
+        with self._get_session_context() as session:
+            # Get the latest status
+            latest = self.get_latest_worker_status(worker_id)
+            if latest is None or latest.status_type != StatusType.LOST:
+                return None
+
+            # Get the status before the LOST status
+            stmt = (
+                select(ExternalStatusInfo)
+                .where(ExternalStatusInfo.worker_id == worker_id)
+                .where(ExternalStatusInfo.status_type != StatusType.LOST)
+                .order_by(desc(ExternalStatusInfo.as_of))
+                .limit(1)
+            )
+            return session.exec(stmt).first()
+
     def get_latest_instance_status(
         self, game_server_instance_id: int
     ) -> Optional[ExternalStatusInfo]:
@@ -230,6 +274,38 @@ class StatusRepository(DatabaseRepository):
                     ExternalStatusInfo.game_server_instance_id
                     == game_server_instance_id
                 )
+                .order_by(desc(ExternalStatusInfo.as_of))
+                .limit(1)
+            )
+            return session.exec(stmt).first()
+
+    def get_prior_instance_status(
+        self, game_server_instance_id: int
+    ) -> Optional[ExternalStatusInfo]:
+        """
+        Get the status before the current LOST status for a specific game server instance.
+        This is useful for determining what status to restore when an instance recovers.
+
+        Args:
+            game_server_instance_id: The ID of the game server instance
+
+        Returns:
+            The prior StatusInfo before LOST, or None if not found or instance is not LOST
+        """
+        with self._get_session_context() as session:
+            # Get the latest status
+            latest = self.get_latest_instance_status(game_server_instance_id)
+            if latest is None or latest.status_type != StatusType.LOST:
+                return None
+
+            # Get the status before the LOST status
+            stmt = (
+                select(ExternalStatusInfo)
+                .where(
+                    ExternalStatusInfo.game_server_instance_id
+                    == game_server_instance_id
+                )
+                .where(ExternalStatusInfo.status_type != StatusType.LOST)
                 .order_by(desc(ExternalStatusInfo.as_of))
                 .limit(1)
             )
@@ -389,6 +465,29 @@ class WorkerRepository(DatabaseRepository):
             )
             worker = session.exec(stmt).one_or_none()
             return worker
+
+    async def get_current_worker_async(self, session) -> Optional[Worker]:
+        """
+        Async version of get_current_worker.
+        
+        Args:
+            session: AsyncSession to use for the query
+            
+        Returns:
+            The current active worker, or None if not found
+        """
+        from sqlalchemy import select as sa_select
+        from sqlalchemy.ext.asyncio import AsyncSession
+        
+        stmt = (
+            sa_select(Worker)
+            .where(Worker.end_date.is_(None))
+            .order_by(Worker.created_date.desc())
+            .limit(1)
+        )
+        result = await session.execute(stmt)
+        worker = result.scalar_one_or_none()
+        return worker
 
 
 class GameServerRepository(DatabaseRepository):
