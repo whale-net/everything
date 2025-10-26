@@ -35,7 +35,7 @@ Example:
     ```
 """
 
-from libs.python.logging.config import configure_logging
+from libs.python.logging.config import configure_logging, is_configured
 from libs.python.logging.factory import get_logger
 from libs.python.logging.metrics import configure_metrics, is_metrics_configured
 from libs.python.logging.context import (
@@ -48,6 +48,7 @@ from libs.python.logging.context import (
 
 __all__ = [
     "configure_logging",
+    "is_configured",
     "configure_metrics",
     "is_metrics_configured",
     "get_logger",
