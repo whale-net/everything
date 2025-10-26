@@ -10,7 +10,6 @@ from typing import Optional, Dict, Any
 
 from libs.python.logging.context import LogContext, set_context
 from libs.python.logging.formatters import StructuredFormatter
-from libs.python.logging.otel_handler import OTELContextHandler
 
 try:
     from opentelemetry._logs import set_logger_provider
@@ -18,10 +17,12 @@ try:
     from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
     from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
     from opentelemetry.sdk.resources import Resource
+    from libs.python.logging.otel_handler import OTELContextHandler
     
     OTEL_AVAILABLE = True
 except ImportError:
     OTEL_AVAILABLE = False
+    OTELContextHandler = None  # Not available
 
 
 # Global configuration state

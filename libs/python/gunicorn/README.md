@@ -1,11 +1,12 @@
 # Gunicorn Configuration Library
 
-Production-ready Gunicorn configuration utilities for FastAPI applications.
+Production-ready Gunicorn configuration utilities for FastAPI applications with integrated OTLP logging.
 
 ## Features
 
 - **Production Defaults**: Worker management, request limits, graceful shutdown
-- **Logging Integration**: Structured access logs with service identification
+- **Integrated Logging**: Automatic integration with `libs.python.logging` for OTLP export
+- **Custom Uvicorn Worker**: Disables uvicorn's logging to use consolidated logging
 - **Worker Management**: Automatic worker recycling to prevent memory leaks
 - **Graceful Shutdown**: Proper timeout handling for zero-downtime deployments
 
@@ -41,6 +42,23 @@ class GunicornApplication(BaseApplication):
 GunicornApplication(create_app, options).run()
 ```
 
+## Logging Integration
+
+The gunicorn configuration automatically integrates with the consolidated logging library (`libs.python.logging`):
+
+1. **Custom Uvicorn Worker**: Uses `libs.python.gunicorn.uvicorn_worker.UvicornWorker` by default, which disables uvicorn's own logging configuration
+2. **Post-Fork Hook**: Configures logging in each worker process using `configure_logging()` from `libs.python.logging`
+3. **Environment Variables**: Reads `LOG_OTLP`, `LOG_LEVEL`, `LOG_JSON_FORMAT` from environment to auto-configure
+
+This ensures that all logs (access logs, error logs, application logs) are sent via OTLP when enabled.
+
+### Environment Variables
+
+- `LOG_OTLP`: Enable OTLP logging (true/false)
+- `LOG_LEVEL`: Logging level (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+- `LOG_JSON_FORMAT`: Use JSON formatting for console logs (true/false)
+- `APP_NAME`, `APP_VERSION`, `APP_ENV`: Auto-detected by consolidated logging
+
 ## Configuration Options
 
 ### Required Parameters
@@ -51,9 +69,9 @@ GunicornApplication(create_app, options).run()
 
 - `port`: Port to bind to (default: 8000)
 - `workers`: Number of worker processes (default: 1)
-- `worker_class`: Worker class (default: "uvicorn.workers.UvicornWorker")
+- `worker_class`: Worker class (default: "libs.python.gunicorn.uvicorn_worker.UvicornWorker")
 - `preload_app`: Preload app before forking (default: True)
-- `enable_otel`: OTEL flag (currently unused, kept for compatibility)
+- `enable_otel`: OTEL flag (deprecated, use `LOG_OTLP` env var instead)
 
 ## Production Defaults
 
@@ -70,10 +88,11 @@ This library is designed to work with the CLI provider pattern:
 
 ```python
 @app.command()
+@logging_params  # Configures logging before starting server
 def start_api(ctx: typer.Context, port: int = 8000, workers: int = 1):
     """Start the API server."""
     # Logging already configured by @logging_params decorator
-    # RabbitMQ already initialized by @rmq_params decorator
+    # Each gunicorn worker will also configure logging via post_fork hook
     
     # Get Gunicorn config
     options = get_gunicorn_config(
