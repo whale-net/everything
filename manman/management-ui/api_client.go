@@ -175,3 +175,57 @@ func (app *App) getRunningServers(ctx context.Context, userID string) ([]Server,
 
 	return servers, nil
 }
+
+// getAllGameServerConfigs fetches all available game server configurations
+func (app *App) getAllGameServerConfigs(ctx context.Context) ([]experience_api.GameServerConfig, error) {
+	log.Printf("Getting all game server configs")
+
+	cfg := experience_api.NewConfiguration()
+	cfg.Servers = experience_api.ServerConfigurations{
+		experience_api.ServerConfiguration{
+			URL: app.config.ExperienceAPIURL,
+		},
+	}
+	client := experience_api.NewAPIClient(cfg)
+
+	// Create a fresh context with timeout
+	apiCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	configs, httpResp, err := client.DefaultAPI.GetGameServersGameserverGet(apiCtx).Execute()
+	if err != nil {
+		if httpResp != nil {
+			log.Printf("API error: status=%d", httpResp.StatusCode)
+		}
+		return nil, fmt.Errorf("failed to get game server configs: %w", err)
+	}
+
+	return configs, nil
+}
+
+// startGameServer starts a game server by config ID
+func (app *App) startGameServer(ctx context.Context, configID int32) error {
+	log.Printf("Starting game server with config ID: %d", configID)
+
+	cfg := experience_api.NewConfiguration()
+	cfg.Servers = experience_api.ServerConfigurations{
+		experience_api.ServerConfiguration{
+			URL: app.config.ExperienceAPIURL,
+		},
+	}
+	client := experience_api.NewAPIClient(cfg)
+
+	// Create a fresh context with timeout
+	apiCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, httpResp, err := client.DefaultAPI.StartGameServerGameserverIdStartPost(apiCtx, configID).Execute()
+	if err != nil {
+		if httpResp != nil {
+			log.Printf("API error: status=%d", httpResp.StatusCode)
+		}
+		return fmt.Errorf("failed to start game server: %w", err)
+	}
+
+	return nil
+}

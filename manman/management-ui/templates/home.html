@@ -101,7 +101,126 @@
             color: #9ca3af;
             padding: 20px;
         }
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.show {
+            display: flex;
+        }
+        .modal {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+        .modal h2 {
+            margin-bottom: 20px;
+            color: #1f2937;
+        }
+        .modal-close {
+            float: right;
+            font-size: 24px;
+            font-weight: bold;
+            color: #6b7280;
+            cursor: pointer;
+            background: none;
+            border: none;
+            padding: 0;
+            margin: -10px -10px 0 0;
+        }
+        .modal-close:hover {
+            color: #1f2937;
+        }
+        .available-server-item {
+            padding: 12px;
+            background: #f9fafb;
+            border-radius: 4px;
+            margin: 8px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .available-server-item.running {
+            background: #fef3c7;
+            border-left: 4px solid #f59e0b;
+        }
+        .server-info {
+            flex: 1;
+        }
+        .server-info .name {
+            font-weight: 600;
+            color: #1f2937;
+        }
+        .server-info .status {
+            color: #6b7280;
+            font-size: 14px;
+        }
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: #2563eb;
+            color: white;
+        }
+        .btn-primary:hover:not(:disabled) {
+            background: #1d4ed8;
+        }
+        .btn-primary:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+        .btn-secondary {
+            background: #6b7280;
+            color: white;
+            margin-top: 20px;
+        }
+        .btn-secondary:hover {
+            background: #4b5563;
+        }
+        .add-server-btn {
+            margin-top: 15px;
+            width: 100%;
+        }
+        .success-message {
+            background: #d1fae5;
+            color: #065f46;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
     </style>
+    <script>
+        function openModal() {
+            document.getElementById('serverModal').classList.add('show');
+        }
+        function closeModal() {
+            document.getElementById('serverModal').classList.remove('show');
+        }
+        // Close modal when clicking outside
+        document.addEventListener('click', function(e) {
+            if (e.target.id === 'serverModal') {
+                closeModal();
+            }
+        });
+    </script>
 </head>
 <body>
     <div class="container">
@@ -125,14 +244,33 @@
             </div>
 
             <div class="card">
-                <h2>Running Servers</h2>
+                <h2>Active Servers</h2>
+                <button class="btn btn-primary add-server-btn" onclick="openModal()">
+                    + Add New Server
+                </button>
                 <div id="servers" 
                      hx-get="/api/servers/{{.User.Sub}}" 
-                     hx-trigger="load, every 15s"
+                     hx-trigger="load, every 15s, serverStarted from:body"
                      hx-indicator="#servers-indicator">
                     <div class="empty-state">Loading...</div>
                 </div>
                 <div id="servers-indicator" class="htmx-indicator" style="display:none;"></div>
+            </div>
+        </div>
+
+        <!-- Modal for adding new server -->
+        <div id="serverModal" class="modal-overlay">
+            <div class="modal">
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+                <h2>Start a Game Server</h2>
+                <div id="available-servers"
+                     hx-get="/api/available-servers"
+                     hx-trigger="load, serverStarted from:body"
+                     hx-indicator="#available-indicator">
+                    <div class="empty-state">Loading available servers...</div>
+                </div>
+                <div id="available-indicator" class="htmx-indicator" style="display:none;"></div>
+                <button class="btn btn-secondary" onclick="closeModal()">Close</button>
             </div>
         </div>
     </div>

@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
+	"github.com/whale-net/everything/generated/go/manman/experience_api"
 	"github.com/whale-net/everything/libs/go/htmxauth"
 )
 
@@ -118,6 +120,100 @@ func (app *App) handleServers(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleAvailableServers returns HTMX fragment for available server configurations
+func (app *App) handleAvailableServers(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+	if user == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get all server configs
+	configs, err := app.getAllGameServerConfigs(r.Context())
+	if err != nil {
+		log.Printf("Failed to get game server configs: %v", err)
+		configs = []experience_api.GameServerConfig{}
+	}
+
+	// Get currently running servers to check which ones are already running
+	runningInstances, err := app.getCurrentServers(r.Context(), user.Sub)
+	if err != nil {
+		log.Printf("Failed to get current servers: %v", err)
+		runningInstances = []experience_api.GameServerInstance{}
+	}
+
+	// Create a map of running config IDs
+	runningConfigIDs := make(map[int32]bool)
+	for _, inst := range runningInstances {
+		runningConfigIDs[inst.GameServerConfigId] = true
+	}
+
+	// Build available servers list
+	availableServers := make([]AvailableServer, 0, len(configs))
+	for _, config := range configs {
+		isRunning := runningConfigIDs[config.GameServerConfigId]
+		
+		availableServers = append(availableServers, AvailableServer{
+			ConfigID:  strconv.Itoa(int(config.GameServerConfigId)),
+			Name:      config.Name,
+			IsRunning: isRunning,
+		})
+	}
+
+	data := AvailableServersData{
+		Servers: availableServers,
+	}
+
+	if err := templates.ExecuteTemplate(w, "available_servers.html", data); err != nil {
+		log.Printf("Template error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+// handleStartServer handles the start server action
+func (app *App) handleStartServer(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+	if user == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get config ID from form
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	configIDStr := r.FormValue("config_id")
+	if configIDStr == "" {
+		http.Error(w, "Missing config_id", http.StatusBadRequest)
+		return
+	}
+
+	configID, err := strconv.ParseInt(configIDStr, 10, 32)
+	if err != nil {
+		http.Error(w, "Invalid config_id", http.StatusBadRequest)
+		return
+	}
+
+	// Start the server
+	if err := app.startGameServer(r.Context(), int32(configID)); err != nil {
+		log.Printf("Failed to start server: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to start server: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Return success - HTMX will handle the response
+	w.Header().Set("HX-Trigger", "serverStarted")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "Server start command sent successfully")
+}
+
 // HomePageData holds data for the home page template
 type HomePageData struct {
 	User *htmxauth.UserInfo
@@ -145,4 +241,16 @@ type Server struct {
 	StatusType string
 	IP         string
 	Port       string
+}
+
+// AvailableServer represents a game server configuration that can be started
+type AvailableServer struct {
+	ConfigID  string
+	Name      string
+	IsRunning bool
+}
+
+// AvailableServersData holds data for available servers template
+type AvailableServersData struct {
+	Servers []AvailableServer
 }
