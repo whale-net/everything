@@ -177,6 +177,19 @@ deploy_helm_chart(
 )
 
 # ===========================
+# Port Forwards
+# ===========================
+
+# Forward management UI to localhost for direct access
+if 'management-ui' in apps_config:
+    k8s_resource(
+        'manman-management-ui',
+        port_forwards=['8080:8000'],
+        labels=['manman']
+    )
+    print("🌐 Management UI forwarded to http://localhost:8080")
+
+# ===========================
 # Access Information
 # ===========================
 
