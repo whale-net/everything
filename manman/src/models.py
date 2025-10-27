@@ -124,6 +124,9 @@ class GameServerConfig(ManManBase, table=True):
     executable: str = Field()
     args: list[str] = Field(sa_column=Column(ARRAY(String()), nullable=False))
     env_var: list[str] = Field(sa_column=Column(ARRAY(String()), nullable=False))
+    post_install_commands: list[str] = Field(
+        sa_column=Column(ARRAY(String()), nullable=False), default=[]
+    )
 
     __table_args__ = (
         Index(
