@@ -115,7 +115,10 @@ class Server(ManManService):
         # Install game server via SteamCMD
         steam = SteamCMD(self._server_directory)
         try:
-            steam.install(app_id=self._game_server.app_id)
+            steam.install(
+                app_id=self._game_server.app_id,
+                post_install_commands=self._config.post_install_commands,
+            )
         except Exception as e:
             logger.exception("Failed to install game server: %s", e)
             raise RuntimeError(
@@ -124,8 +127,8 @@ class Server(ManManService):
 
         # Start the game server process
         try:
-            # TODO - temp workaround for env var, need to come from config
-            extra_env = env_list_to_dict(self._config.env_var)
+            # Resolve environment variables with install directory paths
+            extra_env = env_list_to_dict(self._config.env_var, install_dir=self._server_directory)
             logger.info("extra_env=%s", extra_env)
             self._proc.run(extra_env=extra_env)
         except Exception as e:

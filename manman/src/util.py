@@ -91,13 +91,35 @@ def get_sqlalchemy_session(session: Optional[Session] = None) -> Session:
     return Session(get_sqlalchemy_engine())
 
 
-def env_list_to_dict(env_list: list[str]) -> dict[str, str]:
-    """Convert a list of environment variables to a dictionary."""
+def env_list_to_dict(env_list: list[str], install_dir: str | None = None) -> dict[str, str]:
+    """Convert a list of environment variables to a dictionary.
+    
+    Supports variable expansion for paths relative to the installation directory:
+    - $INSTALL_DIR or ${INSTALL_DIR} will be replaced with the actual install directory
+    
+    Args:
+        env_list: List of "KEY=VALUE" strings
+        install_dir: Optional installation directory for variable expansion
+        
+    Returns:
+        Dictionary of environment variables with resolved paths
+        
+    Example:
+        env_list = ["LD_LIBRARY_PATH=$INSTALL_DIR/game/bin:$INSTALL_DIR/csgo/bin"]
+        install_dir = "/app/data/steam/730/server"
+        result = {"LD_LIBRARY_PATH": "/app/data/steam/730/server/game/bin:/app/data/steam/730/server/csgo/bin"}
+    """
     env_dict = {}
     for env in env_list:
         if "=" not in env:
             raise ValueError(f"Invalid environment variable: {env}")
         key, value = env.split("=", 1)
+        
+        # Resolve $INSTALL_DIR variables if install_dir is provided
+        if install_dir and ("$INSTALL_DIR" in value or "${INSTALL_DIR}" in value):
+            value = value.replace("${INSTALL_DIR}", install_dir)
+            value = value.replace("$INSTALL_DIR", install_dir)
+        
         env_dict[key] = value
     return env_dict
 
