@@ -152,7 +152,7 @@ func (app *App) handleAvailableServers(w http.ResponseWriter, r *http.Request) {
 	availableServers := make([]AvailableServer, 0, len(configs))
 	for _, config := range configs {
 		isRunning := runningConfigIDs[config.GameServerConfigId]
-		
+
 		availableServers = append(availableServers, AvailableServer{
 			ConfigID:  strconv.Itoa(int(config.GameServerConfigId)),
 			Name:      config.Name,
