@@ -1,26 +1,53 @@
 """Tests for RabbitPublisher with retry logic."""
 
-import unittest
-from unittest.mock import Mock, MagicMock, patch
+import pytest
+from unittest.mock import Mock
 
-from amqpstorm.exception import AMQPConnectionError, AMQPChannelError
+from amqpstorm.exception import AMQPConnectionError
 
 from libs.python.rmq.config import BindingConfig
 from libs.python.rmq.publisher import RabbitPublisher
+from libs.python.retry import RetryConfig
 
 
-class TestRabbitPublisherRetry(unittest.TestCase):
+class TestRabbitPublisherRetry:
     """Tests for RabbitPublisher retry functionality."""
     
-    def test_publish_successful(self):
-        """Test successful message publishing."""
+    def test_publish_successful_no_retry(self):
+        """Test successful message publishing without retry."""
         mock_conn = Mock()
         mock_channel = Mock()
         mock_channel.is_open = True
         mock_conn.channel.return_value = mock_channel
         
         binding = BindingConfig(exchange="test.exchange", routing_keys=["test.key"])
-        publisher = RabbitPublisher(mock_conn, binding)
+        publisher = RabbitPublisher(mock_conn, binding)  # No retry_config
+        
+        # Publish message
+        publisher.publish("test message")
+        
+        # Verify publish was called
+        mock_channel.basic.publish.assert_called_once_with(
+            body="test message",
+            exchange="test.exchange",
+            routing_key="test.key",
+        )
+    
+    def test_publish_successful_with_retry_config(self):
+        """Test successful message publishing with retry config provided."""
+        mock_conn = Mock()
+        mock_channel = Mock()
+        mock_channel.is_open = True
+        mock_conn.channel.return_value = mock_channel
+        
+        retry_config = RetryConfig(
+            max_attempts=3,
+            initial_delay=0.01,
+            max_delay=0.1,
+        )
+        
+        binding = BindingConfig(exchange="test.exchange", routing_keys=["test.key"])
+        publisher = RabbitPublisher(mock_conn, binding, retry_config=retry_config)
         
         # Publish message
         publisher.publish("test message")
@@ -33,7 +60,7 @@ class TestRabbitPublisherRetry(unittest.TestCase):
         )
     
     def test_publish_retries_on_channel_error(self):
-        """Test that publish retries on channel errors."""
+        """Test that publish retries on channel errors when retry_config is provided."""
         mock_conn = Mock()
         
         # First channel fails, second succeeds
@@ -45,18 +72,24 @@ class TestRabbitPublisherRetry(unittest.TestCase):
         
         mock_conn.channel.side_effect = [mock_channel_fail, mock_channel_success]
         
+        retry_config = RetryConfig(
+            max_attempts=3,
+            initial_delay=0.01,
+            max_delay=0.1,
+        )
+        
         binding = BindingConfig(exchange="test.exchange", routing_keys=["test.key"])
-        publisher = RabbitPublisher(mock_conn, binding)
+        publisher = RabbitPublisher(mock_conn, binding, retry_config=retry_config)
         
         # Should succeed after recreating channel
         publisher.publish("test message")
         
         # Verify channel was recreated
-        self.assertEqual(mock_conn.channel.call_count, 2)
+        assert mock_conn.channel.call_count == 2
         mock_channel_success.basic.publish.assert_called_once()
     
     def test_publish_retries_on_connection_error(self):
-        """Test that publish retries on connection errors."""
+        """Test that publish retries on connection errors when retry_config is provided."""
         mock_conn = Mock()
         mock_channel = Mock()
         mock_channel.is_open = True
@@ -69,17 +102,23 @@ class TestRabbitPublisherRetry(unittest.TestCase):
         
         mock_conn.channel.return_value = mock_channel
         
+        retry_config = RetryConfig(
+            max_attempts=3,
+            initial_delay=0.01,
+            max_delay=0.1,
+        )
+        
         binding = BindingConfig(exchange="test.exchange", routing_keys=["test.key"])
-        publisher = RabbitPublisher(mock_conn, binding)
+        publisher = RabbitPublisher(mock_conn, binding, retry_config=retry_config)
         
         # Should succeed after retry
         publisher.publish("test message")
         
         # Verify publish was called twice
-        self.assertEqual(mock_channel.basic.publish.call_count, 2)
+        assert mock_channel.basic.publish.call_count == 2
     
     def test_publish_raises_after_max_retries(self):
-        """Test that publish raises exception after max retries."""
+        """Test that publish raises exception after max retries when retry_config is provided."""
         mock_conn = Mock()
         mock_channel = Mock()
         mock_channel.is_open = True
@@ -89,15 +128,42 @@ class TestRabbitPublisherRetry(unittest.TestCase):
         
         mock_conn.channel.return_value = mock_channel
         
+        retry_config = RetryConfig(
+            max_attempts=3,
+            initial_delay=0.01,
+            max_delay=0.1,
+        )
+        
         binding = BindingConfig(exchange="test.exchange", routing_keys=["test.key"])
-        publisher = RabbitPublisher(mock_conn, binding)
+        publisher = RabbitPublisher(mock_conn, binding, retry_config=retry_config)
         
         # Should raise after exhausting retries
-        with self.assertRaises(AMQPConnectionError):
+        with pytest.raises(AMQPConnectionError):
             publisher.publish("test message")
         
         # Verify retry attempts were made
-        self.assertEqual(mock_channel.basic.publish.call_count, 3)  # max_attempts in retry_config
+        assert mock_channel.basic.publish.call_count == 3  # max_attempts
+    
+    def test_publish_no_retry_on_error_without_config(self):
+        """Test that publish does not retry on error when no retry_config is provided."""
+        mock_conn = Mock()
+        mock_channel = Mock()
+        mock_channel.is_open = True
+        
+        # First attempt fails
+        mock_channel.basic.publish.side_effect = AMQPConnectionError("Connection dead")
+        
+        mock_conn.channel.return_value = mock_channel
+        
+        binding = BindingConfig(exchange="test.exchange", routing_keys=["test.key"])
+        publisher = RabbitPublisher(mock_conn, binding)  # No retry_config
+        
+        # Should raise immediately without retry
+        with pytest.raises(AMQPConnectionError):
+            publisher.publish("test message")
+        
+        # Verify only one attempt was made
+        assert mock_channel.basic.publish.call_count == 1
     
     def test_publish_multiple_routing_keys(self):
         """Test publishing to multiple routing keys."""
@@ -116,13 +182,13 @@ class TestRabbitPublisherRetry(unittest.TestCase):
         publisher.publish("test message")
         
         # Verify publish was called for each routing key
-        self.assertEqual(mock_channel.basic.publish.call_count, 3)
+        assert mock_channel.basic.publish.call_count == 3
         
         # Check each call had correct routing key
         calls = mock_channel.basic.publish.call_args_list
-        self.assertEqual(calls[0].kwargs["routing_key"], "key1")
-        self.assertEqual(calls[1].kwargs["routing_key"], "key2")
-        self.assertEqual(calls[2].kwargs["routing_key"], "key3")
+        assert calls[0].kwargs["routing_key"] == "key1"
+        assert calls[1].kwargs["routing_key"] == "key2"
+        assert calls[2].kwargs["routing_key"] == "key3"
     
     def test_channel_recreation_on_closed_channel(self):
         """Test that channel is recreated when it's closed."""
@@ -145,9 +211,9 @@ class TestRabbitPublisherRetry(unittest.TestCase):
         publisher.publish("test message")
         
         # Verify new channel was created
-        self.assertEqual(mock_conn.channel.call_count, 2)
+        assert mock_conn.channel.call_count == 2
         mock_channel_new.basic.publish.assert_called_once()
 
 
 if __name__ == "__main__":
-    unittest.main()
+    pytest.main([__file__])

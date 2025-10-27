@@ -6,12 +6,11 @@ for sending messages via RabbitMQ.
 """
 
 import logging
-from typing import Union
+from typing import Optional, Union
 
 from amqpstorm import Channel, Connection
 
 from libs.python.rmq.config import BindingConfig
-from libs.python.rmq.connection_wrapper import ResilientConnection
 from libs.python.rmq.interface import MessagePublisherInterface
 from libs.python.retry import RetryConfig, retry, is_transient_rmq_error
 
@@ -22,14 +21,13 @@ class RabbitPublisher(MessagePublisherInterface):
     """
     Base class for RabbitMQ publishers.
     This class provides common functionality for publishing messages to RabbitMQ exchanges.
-    
-    Includes automatic retry logic for publish operations to handle transient connection failures.
     """
 
     def __init__(
         self,
         connection: Connection,
         binding_configs: Union[BindingConfig, list[BindingConfig]],
+        retry_config: Optional[RetryConfig] = None,
     ) -> None:
         """
         Initialize the RabbitMQ publisher.
@@ -37,6 +35,8 @@ class RabbitPublisher(MessagePublisherInterface):
         Args:
             connection: Active RabbitMQ connection
             binding_configs: Single or list of binding configurations
+            retry_config: Optional retry configuration for publish operations.
+                         If None (default), no retry is performed.
         """
         self._connection = connection
         self._channel: Channel = connection.channel()
@@ -45,14 +45,8 @@ class RabbitPublisher(MessagePublisherInterface):
             binding_configs = [binding_configs]
         self._binding_configs: list[BindingConfig] = binding_configs
         
-        # Configure retry for publish operations
-        self._retry_config = RetryConfig(
-            max_attempts=3,
-            initial_delay=0.5,
-            max_delay=5.0,
-            exponential_base=2.0,
-            exception_filter=is_transient_rmq_error,
-        )
+        # Store retry config (None means no retry)
+        self._retry_config = retry_config
 
         logger.info("RabbitPublisher initialized with channel %s", self._channel)
 
@@ -72,13 +66,13 @@ class RabbitPublisher(MessagePublisherInterface):
         """
         Publish a message to all configured exchanges with their routing keys.
         
-        Includes automatic retry logic for transient failures like connection timeouts.
+        If retry_config was provided during initialization, publish operations will
+        automatically retry on transient failures like connection timeouts.
 
         Args:
             message: The message to be published
         """
-        @retry(self._retry_config)
-        def _publish_with_retry():
+        def _do_publish():
             channel = self._ensure_channel()
             for binding_config in self._binding_configs:
                 for routing_key in binding_config.routing_keys:
@@ -93,7 +87,12 @@ class RabbitPublisher(MessagePublisherInterface):
                         routing_key,
                     )
         
-        _publish_with_retry()
+        # Apply retry if configured
+        if self._retry_config:
+            retry_decorator = retry(self._retry_config)
+            retry_decorator(_do_publish)()
+        else:
+            _do_publish()
 
     def shutdown(self) -> None:
         """

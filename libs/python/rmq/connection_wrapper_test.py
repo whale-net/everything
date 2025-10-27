@@ -1,7 +1,7 @@
 """Tests for ResilientConnection wrapper."""
 
-import unittest
-from unittest.mock import Mock, MagicMock, call, patch
+import pytest
+from unittest.mock import Mock
 
 from amqpstorm.exception import AMQPConnectionError
 
@@ -9,7 +9,7 @@ from libs.python.rmq.connection_wrapper import ResilientConnection
 from libs.python.retry import RetryConfig
 
 
-class TestResilientConnection(unittest.TestCase):
+class TestResilientConnection:
     """Tests for ResilientConnection wrapper."""
     
     def test_initial_connection_created_on_demand(self):
@@ -41,7 +41,7 @@ class TestResilientConnection(unittest.TestCase):
         channel = wrapper.channel()
         
         # Verify
-        self.assertEqual(channel, mock_channel)
+        assert channel == mock_channel
         mock_conn.channel.assert_called_once()
     
     def test_reconnect_on_closed_connection(self):
@@ -64,8 +64,8 @@ class TestResilientConnection(unittest.TestCase):
         channel = wrapper.channel()
         
         # Verify reconnection happened (factory called to create new connection)
-        self.assertEqual(factory.call_count, 1)
-        self.assertEqual(channel, mock_channel)
+        assert factory.call_count == 1
+        assert channel == mock_channel
     
     def test_retry_on_connection_error(self):
         """Test that connection errors are retried."""
@@ -96,15 +96,15 @@ class TestResilientConnection(unittest.TestCase):
         channel = wrapper.channel()
         
         # Verify retry happened
-        self.assertEqual(factory.call_count, 2)
-        self.assertEqual(channel, mock_channel)
+        assert factory.call_count == 2
+        assert channel == mock_channel
     
     def test_is_open_with_no_connection(self):
         """Test is_open returns False when no connection exists."""
         factory = Mock()
         wrapper = ResilientConnection(factory)
         
-        self.assertFalse(wrapper.is_open())
+        assert not wrapper.is_open()
         factory.assert_not_called()
     
     def test_is_open_with_closed_connection(self):
@@ -116,7 +116,7 @@ class TestResilientConnection(unittest.TestCase):
         wrapper = ResilientConnection(factory)
         wrapper._connection = mock_conn
         
-        self.assertFalse(wrapper.is_open())
+        assert not wrapper.is_open()
     
     def test_is_open_with_open_connection(self):
         """Test is_open returns True when connection is open."""
@@ -127,7 +127,7 @@ class TestResilientConnection(unittest.TestCase):
         wrapper = ResilientConnection(factory)
         wrapper._connection = mock_conn
         
-        self.assertTrue(wrapper.is_open())
+        assert wrapper.is_open()
     
     def test_close_gracefully(self):
         """Test closing connection gracefully."""
@@ -143,7 +143,7 @@ class TestResilientConnection(unittest.TestCase):
         
         # Verify
         mock_conn.close.assert_called_once()
-        self.assertIsNone(wrapper._connection)
+        assert wrapper._connection is None
     
     def test_close_handles_errors(self):
         """Test that close() doesn't raise exceptions."""
@@ -159,7 +159,7 @@ class TestResilientConnection(unittest.TestCase):
         wrapper.close()
         
         # Connection should still be cleared
-        self.assertIsNone(wrapper._connection)
+        assert wrapper._connection is None
     
     def test_context_manager(self):
         """Test using wrapper as context manager."""
@@ -169,7 +169,7 @@ class TestResilientConnection(unittest.TestCase):
         factory = Mock(return_value=mock_conn)
         
         with ResilientConnection(factory) as wrapper:
-            self.assertTrue(wrapper.is_open())
+            assert wrapper.is_open()
         
         # Connection should be closed after context
         mock_conn.close.assert_called_once()
@@ -192,9 +192,9 @@ class TestResilientConnection(unittest.TestCase):
         wrapper = ResilientConnection(factory, retry_config=retry_config)
         
         # Should raise after exhausting retries
-        with self.assertRaises(AMQPConnectionError):
+        with pytest.raises(AMQPConnectionError):
             wrapper.channel()
 
 
 if __name__ == "__main__":
-    unittest.main()
+    pytest.main([__file__])
