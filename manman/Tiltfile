@@ -156,11 +156,18 @@ if 'management-ui' in apps_config:
         if not apps_config['management-ui']['env']['OIDC_CLIENT_SECRET']:
             fail('OIDC_CLIENT_SECRET environment variable is required when MANAGEMENT_UI_AUTH_MODE=oidc')
     
-    # Configure Experience API URL (use remote dev API or local if available)
-    apps_config['management-ui']['env']['EXPERIENCE_API_URL'] = os.environ.get(
-        'EXPERIENCE_API_URL',
-        'https://dev-experience-api.manman.whalenet.dev'  # Default to remote dev API
-    )
+    # Configure Experience API URL (use local if enabled, otherwise remote dev)
+    if 'experience-api' in apps_config:
+        # Use local experience API via ingress
+        apps_config['management-ui']['env']['EXPERIENCE_API_URL'] = 'http://experience-api.manman.local:30080'
+        print("🔗 Management UI configured to use local Experience API")
+    else:
+        # Fall back to remote dev API
+        apps_config['management-ui']['env']['EXPERIENCE_API_URL'] = os.environ.get(
+            'EXPERIENCE_API_URL',
+            'https://dev-experience-api.manman.whalenet.dev'
+        )
+        print("🔗 Management UI configured to use remote Experience API")
 
 # Deploy the helm chart
 deploy_helm_chart(
@@ -188,6 +195,26 @@ if 'management-ui' in apps_config:
         labels=['manman']
     )
     print("🌐 Management UI forwarded to http://localhost:8080")
+
+# Forward Experience API for local access
+if 'experience-api' in apps_config:
+    k8s_resource(
+        'manman-experience-api',
+        port_forwards=['9001:8000'],
+        labels=['manman']
+    )
+    print("🔌 Experience API forwarded to http://localhost:9001")
+
+# Forward Worker DAL API for local worker access
+if 'worker-dal-api' in apps_config:
+    k8s_resource(
+        'manman-worker-dal-api',
+        port_forwards=['9002:8000'],
+        labels=['manman']
+    )
+    print("🔌 Worker DAL API forwarded to http://localhost:9002")
+
+# Note: RabbitMQ ports (5672, 15672) are already forwarded by setup_rabbitmq() in common.tilt
 
 # ===========================
 # Access Information

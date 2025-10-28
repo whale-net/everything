@@ -9,7 +9,11 @@ __all__ = ["worker_router", "server_router", "create_app"]
 @asynccontextmanager
 async def lifespan(app):
     """Lifespan context manager for FastAPI application."""
-    # Startup
+    # Startup - initialize RabbitMQ exchanges
+    from manman.src.host.main import initialize_rabbitmq_exchanges
+    
+    initialize_rabbitmq_exchanges()
+    
     yield
     # Shutdown - cleanup RabbitMQ connections
     from libs.python.rmq import cleanup_rabbitmq_connections

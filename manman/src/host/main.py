@@ -261,6 +261,9 @@ def start_status_processor(
     if should_run_migration_check and _need_migration():
         raise RuntimeError("migration needs to be ran before starting")
 
+    # Initialize RabbitMQ exchanges before starting processor
+    initialize_rabbitmq_exchanges()
+
     # Start the status event processor (pub/sub only, no HTTP server other than health check)
     from fastapi import FastAPI
 
