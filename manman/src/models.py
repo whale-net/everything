@@ -334,11 +334,17 @@ ACTIVE_STATUS_TYPES = {
     StatusType.INITIALIZING,
     StatusType.RUNNING,
 }
-# Although a little strange, these are types that cannot be produced by a running system
-# and must be observed by the status processor
+
+# Types that cannot be produced by the worker/instance
+# and must be monitored via the stauts processor
 OBSERVED_STATUS_TYPES = {
     StatusType.LOST,
+}
+
+# Types that indicate completion
+COMPLETE_STATUS_TYPES = {
     StatusType.CRASHED,
+    StatusType.COMPLETE,
 }
 
 

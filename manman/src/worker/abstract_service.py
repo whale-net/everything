@@ -240,6 +240,11 @@ class ManManService(ABC):
                 self.__class__.__name__,
                 e,
             )
+            self._status_pub_service.publish_status(
+                internal_status=self.__create_internal_status_info(
+                    StatusType.CRASHED
+                ),
+            )
             raise RuntimeError(
                 f"Failed to initialize service {self.__class__.__name__}: {e}"
             ) from e

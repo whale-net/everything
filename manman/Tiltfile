@@ -158,9 +158,10 @@ if 'management-ui' in apps_config:
     
     # Configure Experience API URL (use local if enabled, otherwise remote dev)
     if 'experience-api' in apps_config:
-        # Use local experience API via ingress
-        apps_config['management-ui']['env']['EXPERIENCE_API_URL'] = 'http://experience-api.manman.local:30080'
-        print("🔗 Management UI configured to use local Experience API")
+        # Use local experience API via Kubernetes service (in-cluster DNS)
+        # Service name format: {appName}-{environment}-service from helm chart
+        apps_config['management-ui']['env']['EXPERIENCE_API_URL'] = 'http://manman-experience-api-dev-service.{}.svc.cluster.local:8000'.format(namespace)
+        print("🔗 Management UI configured to use local Experience API (in-cluster)")
     else:
         # Fall back to remote dev API
         apps_config['management-ui']['env']['EXPERIENCE_API_URL'] = os.environ.get(
