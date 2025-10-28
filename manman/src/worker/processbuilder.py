@@ -124,7 +124,12 @@ class ProcessBuilder:
         # used by steamcmd to ensure it finishes before starting game server
         if wait:
             logger.info("waiting for process to finish")
-            self._proc.wait()
+            # Read output while waiting to prevent pipe buffer overflow
+            # This is important for processes that produce lots of output (like steamcmd)
+            while self._proc.poll() is None:
+                self.read_output()
+            # Read any remaining output after process completes
+            self.read_output()
 
         # if is_subprocess_running and self.status == ProcessBuilderStatus.RUNNING:
         #     # TODO kill logic
