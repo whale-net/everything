@@ -9,6 +9,7 @@ from manman.src.host.api.shared.injectors import (
     current_game_server_instances,
     current_worker,
     game_server_config_db_repository,
+    game_server_instance_db_repository,
     worker_command_pub_service,
 )
 
@@ -27,7 +28,11 @@ from manman.src.models import (
     GameServerInstance,
     Worker,
 )
-from manman.src.repository.database import GameServerConfigRepository, StatusRepository
+from manman.src.repository.database import (
+    GameServerConfigRepository,
+    GameServerInstanceRepository,
+    StatusRepository,
+)
 from manman.src.repository.message.pub import CommandPubService
 
 router = APIRouter()
@@ -265,14 +270,22 @@ async def stdin_game_server(
 
 @router.get("/gameserver/instances/active")
 async def get_active_game_server_instances(
-    current_game_server_instance: Annotated[
-        list[GameServerInstance], Depends(current_game_server_instances)
+    game_server_instance_repo: Annotated[
+        GameServerInstanceRepository, Depends(game_server_instance_db_repository)
     ],
+    current_worker: Annotated[Worker, Depends(current_worker)],
+    include_crashed: bool = False,
 ) -> CurrentInstanceResponse:
     """
     Get all active game server instances for the current worker.
+    
+    Args:
+        include_crashed: If True, also includes the last crashed instance for each game server config
     """
-    return CurrentInstanceResponse.from_instances(current_game_server_instance)
+    instances = game_server_instance_repo.get_current_instances(
+        current_worker.worker_id, include_crashed=include_crashed
+    )
+    return CurrentInstanceResponse.from_instances(instances)
 
 
 # @router.post("/gameserver/instance/{id}/stdin")

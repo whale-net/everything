@@ -87,9 +87,32 @@
             margin: 8px 0;
             border-left: 4px solid #10b981;
         }
+        .server-item.crashed {
+            background: #fee;
+            border-left-color: #ef4444;
+        }
         .server-name {
             font-weight: 600;
             color: #1f2937;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .status-badge.active {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        .status-badge.crashed {
+            background: #fee2e2;
+            color: #991b1b;
         }
         .server-details {
             color: #6b7280;

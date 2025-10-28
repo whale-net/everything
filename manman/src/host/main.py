@@ -145,9 +145,12 @@ def start_experience_api(
     should_run_migration_check: Optional[bool] = True,
 ):
     """Start the experience API (host layer) that provides game server management and user-facing functionality."""
-    # Check migrations if needed
-    if should_run_migration_check and _need_migration():
-        raise RuntimeError("migration needs to be ran before starting")
+    # Initialize engine temporarily for migration check
+    # Workers will re-initialize after fork
+    if should_run_migration_check:
+        init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
+        if _need_migration():
+            raise RuntimeError("migration needs to be ran before starting")
     
     # Get logging context for Gunicorn config
     logging_ctx = ctx.obj.get("logging", {})
@@ -185,9 +188,12 @@ def start_status_api(
     should_run_migration_check: Optional[bool] = True,
 ):
     """Start the status API that provides status and monitoring functionality."""
-    # Check migrations if needed
-    if should_run_migration_check and _need_migration():
-        raise RuntimeError("migration needs to be ran before starting")
+    # Initialize engine temporarily for migration check
+    # Workers will re-initialize after fork
+    if should_run_migration_check:
+        init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
+        if _need_migration():
+            raise RuntimeError("migration needs to be ran before starting")
     
     # Get logging context for Gunicorn config
     logging_ctx = ctx.obj.get("logging", {})
@@ -225,9 +231,12 @@ def start_worker_dal_api(
     should_run_migration_check: Optional[bool] = True,
 ):
     """Start the worker DAL API that provides data access endpoints for worker services."""
-    # Check migrations if needed
-    if should_run_migration_check and _need_migration():
-        raise RuntimeError("migration needs to be ran before starting")
+    # Initialize engine temporarily for migration check
+    # Workers will re-initialize after fork
+    if should_run_migration_check:
+        init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
+        if _need_migration():
+            raise RuntimeError("migration needs to be ran before starting")
     
     # Get logging context for Gunicorn config
     logging_ctx = ctx.obj.get("logging", {})
@@ -256,6 +265,9 @@ def start_status_processor(
 ):
     """Start the status event processor that handles status-related pub/sub messages."""
     logger.info("Starting status event processor...")
+
+    # Initialize engine for single-process use
+    init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
 
     # Check migrations if needed
     if should_run_migration_check and _need_migration():
@@ -298,6 +310,8 @@ def start_status_processor(
 @app.command()
 @logging_params  # Auto-configures logging from environment variables
 def run_migration(ctx: typer.Context):
+    # Initialize engine for single-process CLI use
+    init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
     _run_migration(get_sqlalchemy_engine())
 
 
@@ -307,12 +321,16 @@ def create_migration(ctx: typer.Context, migration_message: Optional[str] = None
     # TODO - make use of this? or remove
     if os.environ.get("ENVIRONMENT", "DEV") == "PROD":
         raise RuntimeError("cannot create revisions in production")
+    # Initialize engine for single-process CLI use
+    init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
     _create_migration(get_sqlalchemy_engine(), message=migration_message)
 
 
 @app.command()
 @logging_params  # Auto-configures logging from environment variables
 def run_downgrade(ctx: typer.Context, target: str):
+    # Initialize engine for single-process CLI use
+    init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
     config = _get_alembic_config()
     engine = get_sqlalchemy_engine()
     run_downgrade_util(engine, config, target)
@@ -327,14 +345,21 @@ def callback(ctx: typer.Context):
     """
     ManMan Host Service CLI.
     
-    Initializes database connection for all commands.
+    Database connection initialization depends on the command:
+    - API servers (experience-api, status-api, worker-dal-api): 
+      Initialize per-worker in lifespan to avoid connection sharing
+    - CLI commands (migrations, status-processor):
+      Initialize here for single-process use
+    
     Logging is auto-configured via @logging_params decorator.
     RabbitMQ config is injected by @rmq_params but not initialized here
     (server commands will initialize when needed).
     App environment injected by @app_env_params.
     """
-    # Initialize database connection for CLI operations (needed by all commands)
-    init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
+    # For API servers with multiple workers, database initialization happens
+    # in the FastAPI lifespan context (after worker fork) to avoid connection sharing.
+    # For single-process CLI commands, we initialize here.
+    pass
 
 
 # alembic helpers using consolidated library

@@ -8,7 +8,8 @@ worker management, and related functionality extracted from the status processor
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
-from sqlalchemy import desc
+from sqlalchemy import desc, exists
+from sqlalchemy.orm import aliased
 from sqlalchemy.sql.functions import current_timestamp
 from sqlmodel import Session, not_, select
 
@@ -631,17 +632,78 @@ class GameServerInstanceRepository(DatabaseRepository):
             return instance
 
     def get_current_instances(
-        self, worker_id: int, session: Optional[Session] = None
+        self, worker_id: int, include_crashed: bool = False, session: Optional[Session] = None
     ) -> list[GameServerInstance]:
+        """
+        Get current game server instances for a worker.
+        
+        Args:
+            worker_id: The worker ID to filter by
+            include_crashed: If True, includes the last crashed instance for each game server config
+            session: Optional database session
+            
+        Returns:
+            List of active instances, and optionally the last crashed instance per config
+        """
         # TODO - don't re-use a session in the context manager if one is provided
         #        doing so will cause the session to be closed when the context manager exits
         #        #35
         # TODO - addres if above todo is stil lrelevant - copy patsed from somewhere else in the project
         with self._get_session_context() as session:
-            stmt = (
+            # Get active instances (end_date is NULL)
+            active_stmt = (
                 select(GameServerInstance)
                 .where(GameServerInstance.worker_id == worker_id)
                 .where(GameServerInstance.end_date.is_(None))
             )
-            results = session.exec(stmt).all()
-            return results
+            active_instances = list(session.exec(active_stmt).all())
+            
+            if not include_crashed:
+                return active_instances
+            
+            # Get the last crashed instance for each game_server_config_id
+            # that doesn't already have an active instance
+            active_config_ids = {inst.game_server_config_id for inst in active_instances}
+            
+            if active_config_ids:
+                # Use NOT IN clause to exclude configs with active instances
+                config_filter = GameServerInstance.game_server_config_id.notin_(active_config_ids)
+            else:
+                # No active instances, so include all configs
+                config_filter = True
+            
+            # Aliases for the subquery to avoid column name conflicts
+            GSI2 = aliased(GameServerInstance)
+            ESI2 = aliased(ExternalStatusInfo)
+            
+            # Get crashed instances where there does not exist a crashed instance
+            # with a later end_date for the same config
+            crashed_stmt = (
+                select(GameServerInstance)
+                .join(
+                    ExternalStatusInfo,
+                    ExternalStatusInfo.game_server_instance_id == GameServerInstance.game_server_instance_id
+                )
+                .where(GameServerInstance.worker_id == worker_id)
+                .where(GameServerInstance.end_date.isnot(None))
+                .where(ExternalStatusInfo.status_type == StatusType.CRASHED)
+                .where(config_filter)
+                .where(
+                    ~exists(
+                        select(GSI2.game_server_instance_id)
+                        .join(
+                            ESI2,
+                            ESI2.game_server_instance_id == GSI2.game_server_instance_id
+                        )
+                        .where(GSI2.worker_id == worker_id)
+                        .where(GSI2.end_date.isnot(None))
+                        .where(ESI2.status_type == StatusType.CRASHED)
+                        .where(GSI2.game_server_config_id == GameServerInstance.game_server_config_id)
+                        .where(GSI2.end_date > GameServerInstance.end_date)
+                    )
+                )
+            )
+            
+            crashed_instances = list(session.exec(crashed_stmt).all())
+            
+            return active_instances + crashed_instances

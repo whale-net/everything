@@ -1,4 +1,8 @@
 from contextlib import asynccontextmanager
+import os
+
+from manman.src.util import init_sql_alchemy_engine
+from libs.python.rmq import cleanup_rabbitmq_connections
 
 from .api import router
 
@@ -8,11 +12,18 @@ __all__ = ["router", "create_app"]
 @asynccontextmanager
 async def lifespan(app):
     """Lifespan context manager for FastAPI application."""
-    # Startup
+    # Startup - Initialize database engine for this worker process
+    # This MUST be done per-worker to avoid connection sharing issues
+    # force_reinit=True because parent process may have initialized for migration check
+    connection_string = os.environ.get("POSTGRES_URL")
+    if not connection_string:
+        raise RuntimeError("POSTGRES_URL environment variable not set")
+    
+    init_sql_alchemy_engine(connection_string, force_reinit=True)
+    
     yield
+    
     # Shutdown - cleanup RabbitMQ connections
-    from libs.python.rmq import cleanup_rabbitmq_connections
-
     cleanup_rabbitmq_connections()
 
 

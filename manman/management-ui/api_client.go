@@ -77,6 +77,7 @@ func (app *App) getWorkerStatus(ctx context.Context, userID string) (*experience
 }
 
 // getCurrentServers fetches the list of currently running server instances from Experience API
+// Now includes crashed instances to show servers that recently failed
 func (app *App) getCurrentServers(ctx context.Context, userID string) ([]experience_api.GameServerInstance, error) {
 	log.Printf("Getting current servers for user: %s", userID)
 
@@ -92,7 +93,11 @@ func (app *App) getCurrentServers(ctx context.Context, userID string) ([]experie
 	apiCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	instances, httpResp, err := client.DefaultAPI.GetCurrentGameServersGameserverCurrentGet(apiCtx).Execute()
+	// Use the active instances endpoint with include_crashed=true to get both
+	// active and recently crashed instances
+	resp, httpResp, err := client.DefaultAPI.GetActiveGameServerInstancesGameserverInstancesActiveGet(apiCtx).
+		IncludeCrashed(true).
+		Execute()
 	if err != nil {
 		if httpResp != nil {
 			log.Printf("API error: status=%d", httpResp.StatusCode)
@@ -100,7 +105,7 @@ func (app *App) getCurrentServers(ctx context.Context, userID string) ([]experie
 		return nil, fmt.Errorf("failed to get current servers: %w", err)
 	}
 
-	return instances, nil
+	return resp.GameServerInstances, nil
 }
 
 // getServerStatus fetches the status information for a specific game server by config ID
@@ -149,14 +154,23 @@ func (app *App) getRunningServers(ctx context.Context, userID string) ([]Server,
 		// Get the config details for this instance
 		serverID := strconv.Itoa(int(inst.GameServerConfigId))
 
-		// Try to get status for this server
-		status, statusErr := app.getServerStatus(ctx, inst.GameServerConfigId)
-		statusStr := "unknown"
-		statusType := ""
+		// Determine if instance is active or crashed based on end_date
+		// EndDate is NullableTime - if not set (nil), instance is active
+		isActive := !inst.EndDate.IsSet() || inst.EndDate.Get() == nil
+		statusStr := "active"
+		statusType := "active"
 
-		if statusErr == nil && status != nil {
-			statusType = string(status.StatusType)
-			statusStr = statusType
+		if !isActive {
+			// Instance has ended - it's crashed
+			statusStr = "crashed"
+			statusType = "crashed"
+		} else {
+			// Try to get more detailed status for active instances
+			status, statusErr := app.getServerStatus(ctx, inst.GameServerConfigId)
+			if statusErr == nil && status != nil {
+				statusType = string(status.StatusType)
+				statusStr = statusType
+			}
 		}
 
 		// Get instance details

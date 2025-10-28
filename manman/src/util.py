@@ -67,6 +67,7 @@ def get_sqlalchemy_engine():
 
 def init_sql_alchemy_engine(
     connection_string: str,
+    force_reinit: bool = False,
 ):
     """
     Initialize the global SQLAlchemy engine with production-ready pool settings.
@@ -78,8 +79,13 @@ def init_sql_alchemy_engine(
     - pool_pre_ping=True
     
     This supports up to 50 concurrent database operations per process.
+    
+    Args:
+        connection_string: Database connection string
+        force_reinit: If True, allows re-initialization (useful for worker processes)
     """
-    if "engine" in __GLOBALS:
+    if "engine" in __GLOBALS and not force_reinit:
+        logger.warning("Engine already initialized, skipping re-initialization")
         return
     __GLOBALS["engine"] = create_postgres_engine(connection_string)
 
