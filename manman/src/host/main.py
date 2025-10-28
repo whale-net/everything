@@ -146,7 +146,7 @@ def start_experience_api(
 ):
     """Start the experience API (host layer) that provides game server management and user-facing functionality."""
     # Initialize engine temporarily for migration check
-    # Workers will re-initialize after fork
+    # Workers will re-initialize after fork via post_worker_init hook
     if should_run_migration_check:
         init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
         if _need_migration():
@@ -155,6 +155,15 @@ def start_experience_api(
     # Get logging context for Gunicorn config
     logging_ctx = ctx.obj.get("logging", {})
     log_otlp = logging_ctx.get("log_otlp", False)
+    
+    # Get database connection string for worker initialization
+    connection_string = ctx.obj.get("postgres")["database_url"]
+    
+    # Define post_worker_init hook for per-worker database initialization
+    def init_worker(worker):
+        """Initialize database engine for each worker after fork."""
+        logger.info(f"Initializing worker {worker.pid}")
+        init_sql_alchemy_engine(connection_string, force_reinit=True)
 
     # Configure and run with Gunicorn
     options = get_gunicorn_config(
@@ -163,6 +172,7 @@ def start_experience_api(
         workers=workers,
         enable_otel=log_otlp,
         preload_app=preload_app,
+        post_worker_init=init_worker,
     )
 
     GunicornApplication(create_experience_app, options).run()
@@ -189,7 +199,7 @@ def start_status_api(
 ):
     """Start the status API that provides status and monitoring functionality."""
     # Initialize engine temporarily for migration check
-    # Workers will re-initialize after fork
+    # Workers will re-initialize after fork via post_worker_init hook
     if should_run_migration_check:
         init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
         if _need_migration():
@@ -198,6 +208,15 @@ def start_status_api(
     # Get logging context for Gunicorn config
     logging_ctx = ctx.obj.get("logging", {})
     log_otlp = logging_ctx.get("log_otlp", False)
+    
+    # Get database connection string for worker initialization
+    connection_string = ctx.obj.get("postgres")["database_url"]
+    
+    # Define post_worker_init hook for per-worker database initialization
+    def init_worker(worker):
+        """Initialize database engine for each worker after fork."""
+        logger.info(f"Initializing worker {worker.pid}")
+        init_sql_alchemy_engine(connection_string, force_reinit=True)
 
     # Configure and run with Gunicorn
     options = get_gunicorn_config(
@@ -206,6 +225,7 @@ def start_status_api(
         workers=workers,
         enable_otel=log_otlp,
         preload_app=preload_app,
+        post_worker_init=init_worker,
     )
 
     GunicornApplication(create_status_app, options).run()
@@ -232,7 +252,7 @@ def start_worker_dal_api(
 ):
     """Start the worker DAL API that provides data access endpoints for worker services."""
     # Initialize engine temporarily for migration check
-    # Workers will re-initialize after fork
+    # Workers will re-initialize after fork via post_worker_init hook
     if should_run_migration_check:
         init_sql_alchemy_engine(ctx.obj.get("postgres")["database_url"])
         if _need_migration():
@@ -241,6 +261,15 @@ def start_worker_dal_api(
     # Get logging context for Gunicorn config
     logging_ctx = ctx.obj.get("logging", {})
     log_otlp = logging_ctx.get("log_otlp", False)
+    
+    # Get database connection string for worker initialization
+    connection_string = ctx.obj.get("postgres")["database_url"]
+    
+    # Define post_worker_init hook for per-worker database initialization
+    def init_worker(worker):
+        """Initialize database engine for each worker after fork."""
+        logger.info(f"Initializing worker {worker.pid}")
+        init_sql_alchemy_engine(connection_string, force_reinit=True)
 
     # Configure and run with Gunicorn
     options = get_gunicorn_config(
@@ -249,6 +278,7 @@ def start_worker_dal_api(
         workers=workers,
         enable_otel=log_otlp,
         preload_app=preload_app,
+        post_worker_init=init_worker,
     )
 
     GunicornApplication(create_worker_dal_app, options).run()

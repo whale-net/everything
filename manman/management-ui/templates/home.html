@@ -273,7 +273,8 @@
                 </button>
                 <div id="servers" 
                      hx-get="/api/servers/{{.User.Sub}}" 
-                     hx-trigger="load, every 15s, serverStarted from:body"
+                     hx-trigger="load, every 5s, serverStarted from:body"
+                     hx-swap="innerHTML"
                      hx-indicator="#servers-indicator">
                     <div class="empty-state">Loading...</div>
                 </div>

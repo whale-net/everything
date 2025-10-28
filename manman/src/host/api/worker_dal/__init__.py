@@ -1,7 +1,5 @@
 from contextlib import asynccontextmanager
-import os
 
-from manman.src.util import init_sql_alchemy_engine
 from manman.src.host.main import initialize_rabbitmq_exchanges
 from libs.python.rmq import cleanup_rabbitmq_connections
 
@@ -14,14 +12,8 @@ __all__ = ["worker_router", "server_router", "create_app"]
 @asynccontextmanager
 async def lifespan(app):
     """Lifespan context manager for FastAPI application."""
-    # Startup - Initialize database engine for this worker process
-    # This MUST be done per-worker to avoid connection sharing issues
-    # force_reinit=True because parent process may have initialized for migration check
-    connection_string = os.environ.get("POSTGRES_URL")
-    if not connection_string:
-        raise RuntimeError("POSTGRES_URL environment variable not set")
-    
-    init_sql_alchemy_engine(connection_string, force_reinit=True)
+    # Database initialization is handled by Gunicorn's post_worker_init hook
+    # This lifespan handles app-level startup/shutdown
     
     # Initialize RabbitMQ exchanges
     initialize_rabbitmq_exchanges()

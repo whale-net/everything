@@ -76,10 +76,9 @@ func (app *App) getWorkerStatus(ctx context.Context, userID string) (*experience
 	return status, nil
 }
 
-// getCurrentServers fetches the list of currently running server instances from Experience API
-// Now includes crashed instances to show servers that recently failed
-func (app *App) getCurrentServers(ctx context.Context, userID string) ([]experience_api.GameServerInstance, error) {
-	log.Printf("Getting current servers for user: %s", userID)
+// getCurrentServersWithConfigs fetches the full response including instances and configs
+func (app *App) getCurrentServersWithConfigs(ctx context.Context, userID string) (*experience_api.CurrentInstanceResponse, error) {
+	log.Printf("Getting current servers with configs for user: %s", userID)
 
 	cfg := experience_api.NewConfiguration()
 	cfg.Servers = experience_api.ServerConfigurations{
@@ -105,6 +104,16 @@ func (app *App) getCurrentServers(ctx context.Context, userID string) ([]experie
 		return nil, fmt.Errorf("failed to get current servers: %w", err)
 	}
 
+	return resp, nil
+}
+
+// getCurrentServers fetches the list of currently running server instances from Experience API
+// Now includes crashed instances to show servers that recently failed
+func (app *App) getCurrentServers(ctx context.Context, userID string) ([]experience_api.GameServerInstance, error) {
+	resp, err := app.getCurrentServersWithConfigs(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 	return resp.GameServerInstances, nil
 }
 
@@ -144,13 +153,19 @@ func (app *App) getServerStatus(ctx context.Context, serverConfigID int32) (*exp
 func (app *App) getRunningServers(ctx context.Context, userID string) ([]Server, error) {
 	log.Printf("Getting running servers for user: %s", userID)
 
-	instances, err := app.getCurrentServers(ctx, userID)
+	resp, err := app.getCurrentServersWithConfigs(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 
-	servers := make([]Server, 0, len(instances))
-	for _, inst := range instances {
+	// Build a map of config ID to config name
+	configNames := make(map[int32]string)
+	for _, config := range resp.Configs {
+		configNames[config.GameServerConfigId] = config.Name
+	}
+
+	servers := make([]Server, 0, len(resp.GameServerInstances))
+	for _, inst := range resp.GameServerInstances {
 		// Get the config details for this instance
 		serverID := strconv.Itoa(int(inst.GameServerConfigId))
 
@@ -176,10 +191,16 @@ func (app *App) getRunningServers(ctx context.Context, userID string) ([]Server,
 		// Get instance details
 		instanceID := strconv.Itoa(int(inst.GameServerInstanceId))
 
+		// Get the name from the config map, or fall back to a default
+		name := configNames[inst.GameServerConfigId]
+		if name == "" {
+			name = fmt.Sprintf("Server Config %s", serverID)
+		}
+
 		servers = append(servers, Server{
 			ID:         serverID,
 			InstanceID: instanceID,
-			Name:       fmt.Sprintf("Server Config %s", serverID),
+			Name:       name,
 			Status:     statusStr,
 			StatusType: statusType,
 			IP:         "", // Not available in current API
