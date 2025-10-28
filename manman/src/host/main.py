@@ -135,7 +135,7 @@ def start_experience_api(
     port: int = 8000,
     workers: Annotated[
         int, typer.Option(help="Number of Gunicorn worker processes")
-    ] = 4,  # Increased default from 1 to 4 for better concurrency
+    ] = 3,  # Reduced from 4 to 3 workers
     preload_app: Annotated[
         bool,
         typer.Option(
