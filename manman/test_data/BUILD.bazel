@@ -1,0 +1,21 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+
+# Library for seed data functions
+py_library(
+    name = "seed_data_lib",
+    srcs = ["seed_data.py"],
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        "//manman/src:manman_core",
+        "@pypi//:sqlalchemy",
+    ],
+)
+
+# Binary to run seed data script
+py_binary(
+    name = "seed_data",
+    srcs = ["seed_data.py"],
+    main = "seed_data.py",
+    deps = [":seed_data_lib"],
+    visibility = ["//visibility:public"],
+)
