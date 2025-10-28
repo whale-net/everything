@@ -135,16 +135,20 @@ func (app *App) handleAvailableServers(w http.ResponseWriter, r *http.Request) {
 		configs = []experience_api.GameServerConfig{}
 	}
 
-	// Get currently running servers to check which ones are already running
-	runningInstances, err := app.getCurrentServers(r.Context(), user.Sub)
+	// Get currently running servers with full response (includes crashed servers)
+	resp, err := app.getCurrentServersWithConfigs(r.Context(), user.Sub)
 	if err != nil {
 		log.Printf("Failed to get current servers: %v", err)
-		runningInstances = []experience_api.GameServerInstance{}
+		resp = &experience_api.CurrentInstanceResponse{
+			GameServerInstances: []experience_api.GameServerInstance{},
+			Workers:             []experience_api.Worker{},
+			Configs:             []experience_api.GameServerConfig{},
+		}
 	}
 
 	// Create a map of running config IDs (exclude crashed servers - they can be restarted)
 	runningConfigIDs := make(map[int32]bool)
-	for _, inst := range runningInstances {
+	for _, inst := range resp.GameServerInstances {
 		// Only mark as running if the instance is actually active (no end_date)
 		isActive := !inst.EndDate.IsSet() || inst.EndDate.Get() == nil
 		if isActive {

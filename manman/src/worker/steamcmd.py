@@ -63,37 +63,64 @@ class SteamCMD:
                 logger.info("directroy not found, creating=[%s]", self._install_dir)
                 os.makedirs(self._install_dir)
 
-            # leave a little something behind
-            # check_file_name = os.path.join(self._install_dir, ".manman")
-            # pathlib.Path(check_file_name).touch()
-
-            pb = ProcessBuilder(self._steamcmd_executable)
-            # steamcmd is different and uses + for args
-            # TODO - temp? should come from config
-            pb.add_parameter("+@sSteamCmdForcePlatformType", "linux")
-            pb.add_parameter("+force_install_dir", self._install_dir)
-            pb.add_parameter("+login", self._username)
-            if self._password is not None:
-                pb.add_parameter_stdin(self._password)
-            pb.add_parameter("+app_update", str(app_id))
-            pb.add_parameter("+exit")
-
-            pb.run(wait=True)
-            if pb.status == ProcessBuilderStatus.STOPPED:
-                span.set_attribute("steamcmd.status", "success")
-                logger.info("successfully installed app_id=[%s]", app_id)
+            # Special handling for L4D2 (app 222860) - requires dual Windows/Linux install
+            # This is a workaround for L4D2 requiring login on Linux-only installs
+            if app_id == 222860:
+                logger.info("L4D2 detected - performing dual Windows/Linux install")
                 
-                # Execute post-install commands if provided
-                if post_install_commands:
-                    self._run_post_install_commands(post_install_commands, span)
-                    
-            elif pb.status == ProcessBuilderStatus.FAILED:
-                span.set_attribute("steamcmd.status", "failed")
-                span.set_attribute("steamcmd.exit_code", pb.exit_code)
-                logger.error(
-                    "failed to install app_id=[%s], exit code: %s", app_id, pb.exit_code
-                )
-                raise Exception(f"SteamCMD failed (exit code: {pb.exit_code})")
+                # First install as Windows
+                logger.info("Installing L4D2 as Windows platform...")
+                self._install_with_platform(app_id, "windows", span)
+                
+                # Then install as Linux to get Linux binaries
+                logger.info("Installing L4D2 as Linux platform...")
+                self._install_with_platform(app_id, "linux", span)
+                
+                logger.info("L4D2 dual-platform install completed")
+            else:
+                # force linux for now
+                self._install_with_platform(app_id, "linux", span)
+            
+            # Execute post-install commands if provided
+            if post_install_commands:
+                self._run_post_install_commands(post_install_commands, span)
+
+    def _install_with_platform(self, app_id: int, platform: str | None, span):
+        """
+        Install app with optional platform forcing.
+        
+        :param app_id: Steam app ID
+        :param platform: Platform to force (windows/linux) or None for no forcing
+        :param span: OpenTelemetry span for tracing
+        """
+        pb = ProcessBuilder(self._steamcmd_executable)
+        
+        # Add platform forcing if specified
+        if platform:
+            logger.info(f"Forcing platform type to {platform}")
+            pb.add_parameter("+@sSteamCmdForcePlatformType", platform)
+        
+        pb.add_parameter("+force_install_dir", self._install_dir)
+        pb.add_parameter("+login", self._username)
+        if self._password is not None:
+            pb.add_parameter_stdin(self._password)
+        pb.add_parameter("+app_update", str(app_id))
+        pb.add_parameter("+exit")
+
+        pb.run(wait=True)
+        
+        if pb.status == ProcessBuilderStatus.STOPPED:
+            platform_str = f" ({platform})" if platform else ""
+            span.set_attribute("steamcmd.status", "success")
+            logger.info(f"successfully installed app_id=[{app_id}]{platform_str}")
+        elif pb.status == ProcessBuilderStatus.FAILED:
+            platform_str = f" ({platform})" if platform else ""
+            span.set_attribute("steamcmd.status", "failed")
+            span.set_attribute("steamcmd.exit_code", pb.exit_code)
+            logger.error(
+                f"failed to install app_id=[{app_id}]{platform_str}, exit code: {pb.exit_code}"
+            )
+            raise Exception(f"SteamCMD failed (exit code: {pb.exit_code})")
 
     def _run_post_install_commands(self, commands: list[str], span):
         """Execute post-installation shell commands.
