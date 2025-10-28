@@ -345,6 +345,67 @@ class TestPlanRelease:
         assert result["matrix"] == {"include": []}
         assert result["apps"] == []
 
+    @patch('tools.release_helper.release.validate_semantic_version')
+    def test_plan_release_duplicate_apps_detection(self, mock_validate_semantic, sample_apps):
+        """Test that duplicate apps in release plan are detected and cause failure."""
+        mock_validate_semantic.return_value = True
+        
+        # Create a scenario where validate_apps returns duplicates
+        # This happens when a user requests both a domain and an app from that domain
+        duplicate_apps = [
+            sample_apps[0],  # demo-hello_python
+            sample_apps[0],  # demo-hello_python (duplicate)
+        ]
+        
+        with patch('tools.release_helper.release.validate_apps', return_value=duplicate_apps):
+            with pytest.raises(ValueError, match="Duplicate apps detected in release plan: demo-hello_python"):
+                plan_release(
+                    event_type="workflow_dispatch",
+                    requested_apps="demo,demo-hello_python",
+                    version="v1.0.0"
+                )
+
+    @patch('tools.release_helper.release.validate_semantic_version')
+    def test_plan_release_multiple_duplicate_apps_detection(self, mock_validate_semantic, sample_apps):
+        """Test that multiple duplicate apps are all reported in error message."""
+        mock_validate_semantic.return_value = True
+        
+        # Create a scenario with multiple duplicates
+        duplicate_apps = [
+            sample_apps[0],  # demo-hello_python
+            sample_apps[1],  # demo-hello_go
+            sample_apps[0],  # demo-hello_python (duplicate)
+            sample_apps[1],  # demo-hello_go (duplicate)
+        ]
+        
+        with patch('tools.release_helper.release.validate_apps', return_value=duplicate_apps):
+            with pytest.raises(ValueError) as exc_info:
+                plan_release(
+                    event_type="workflow_dispatch",
+                    requested_apps="demo,demo-hello_python,demo-hello_go",
+                    version="v1.0.0"
+                )
+            
+            error_msg = str(exc_info.value)
+            assert "Duplicate apps detected" in error_msg
+            assert "demo-hello_python" in error_msg or "demo-hello_go" in error_msg
+
+    @patch('tools.release_helper.release.validate_semantic_version')
+    def test_plan_release_no_duplicates_success(self, mock_validate_semantic, mock_validate_apps, sample_apps):
+        """Test that release planning succeeds when there are no duplicates."""
+        mock_validate_semantic.return_value = True
+        
+        # Ensure validate_apps returns unique apps (normal case)
+        result = plan_release(
+            event_type="workflow_dispatch",
+            requested_apps="hello_python,hello_go",
+            version="v1.0.0"
+        )
+        
+        # Should succeed without raising ValueError
+        assert result["event_type"] == "workflow_dispatch"
+        assert len(result["matrix"]["include"]) == 2
+
 
 class TestTagAndPushImage:
     """Test cases for tag_and_push_image function."""

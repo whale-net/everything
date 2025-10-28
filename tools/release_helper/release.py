@@ -91,6 +91,25 @@ def plan_release(
             requested = [app.strip() for app in requested_apps.split(',')]
             release_apps = validate_apps(requested)
             
+            # Check for duplicate apps in the release plan
+            app_identifiers = [f"{app['domain']}-{app['name']}" for app in release_apps]
+            unique_identifiers = set(app_identifiers)
+            if len(app_identifiers) != len(unique_identifiers):
+                # Find which apps are duplicated
+                seen = set()
+                duplicates = []
+                for identifier in app_identifiers:
+                    if identifier in seen and identifier not in duplicates:
+                        duplicates.append(identifier)
+                    seen.add(identifier)
+                
+                raise ValueError(
+                    f"Duplicate apps detected in release plan: {', '.join(duplicates)}. "
+                    f"This usually happens when you request both a domain and specific apps from that domain. "
+                    f"Please either request the domain name (e.g., 'demo') to release all apps in that domain, "
+                    f"or request specific apps (e.g., 'demo-app1,demo-app2'), but not both."
+                )
+            
         # For increment modes, calculate versions for each app
         if version_mode in ["increment_minor", "increment_patch"]:
             increment_type = version_mode.replace("increment_", "")
