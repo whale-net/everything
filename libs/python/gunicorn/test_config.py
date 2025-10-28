@@ -15,11 +15,13 @@ def test_get_gunicorn_config_defaults():
     config = get_gunicorn_config(microservice_name="test-api")
     
     assert config["bind"] == "0.0.0.0:8000"
-    assert config["workers"] == 1
+    assert config["workers"] == 4  # Increased default
+    assert config["threads"] == 2  # New default
     assert config["worker_class"] == "libs.python.gunicorn.uvicorn_worker.UvicornWorker"
     assert config["preload_app"] is True
     assert config["max_requests"] == 1000
-    assert config["timeout"] == 30
+    assert config["timeout"] == 120  # Increased default
+    assert config["keepalive"] == 5  # Increased default
     assert config["post_fork"] == _configure_worker_logging
     assert "[test-api]" in config["access_log_format"]
 

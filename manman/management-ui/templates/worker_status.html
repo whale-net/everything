@@ -6,3 +6,15 @@
     <span class="status-label">Status:</span>
     <span class="status-value">{{.Status}}</span>
 </div>
+{{if .StatusType}}
+<div class="status">
+    <span class="status-label">Status Type:</span>
+    <span class="status-value">{{.StatusType}}</span>
+</div>
+{{end}}
+{{if .LastHeartbeat}}
+<div class="status">
+    <span class="status-label">Last Heartbeat:</span>
+    <span class="status-value">{{.LastHeartbeat}}</span>
+</div>
+{{end}}

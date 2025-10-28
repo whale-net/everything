@@ -249,9 +249,24 @@ Set in `release_app`:
 release_app(
     name = "my_api",
     app_type = "external-api",
-    # Add custom fields here
+    port = 8080,
+    replicas = 3,
+    # Custom resource requests and limits
+    resources_requests_cpu = "200m",
+    resources_requests_memory = "512Mi",
+    resources_limits_cpu = "500m",
+    resources_limits_memory = "1Gi",
 )
 ```
+
+**Resource Defaults**: If not specified, resources are automatically set based on `app_type` and `language`:
+- **Python apps**: Optimized for lower memory (64Mi request / 256Mi limit)
+- **Go apps**: Standard resources (256Mi request / 512Mi limit)
+- **external-api/internal-api**: 50m CPU request / 100m limit
+- **worker**: 50m CPU request / 100m limit
+- **job**: 100m CPU request / 200m limit
+
+You can customize any or all resource fields - unspecified fields will use the defaults.
 
 ### At Deploy Time
 

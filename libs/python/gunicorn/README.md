@@ -68,8 +68,9 @@ This ensures that all logs (access logs, error logs, application logs) are sent 
 ### Optional Parameters
 
 - `port`: Port to bind to (default: 8000)
-- `workers`: Number of worker processes (default: 1)
+- `workers`: Number of worker processes (default: 4, increased for better concurrency)
 - `worker_class`: Worker class (default: "libs.python.gunicorn.uvicorn_worker.UvicornWorker")
+- `threads`: Number of threads per worker for blocking operations (default: 2)
 - `preload_app`: Preload app before forking (default: True)
 - `enable_otel`: OTEL flag (deprecated, use `LOG_OTLP` env var instead)
 
@@ -77,10 +78,12 @@ This ensures that all logs (access logs, error logs, application logs) are sent 
 
 The configuration includes production-ready defaults:
 
+- **Worker Count**: 4 workers by default for improved concurrency
+- **Thread Pool**: 2 threads per worker for blocking operations
 - **Worker Recycling**: Workers restart after 1000 requests (±100 jitter) to prevent memory leaks
-- **Timeouts**: 30s worker timeout, 30s graceful shutdown
-- **Keepalive**: 2s HTTP keepalive
-- **Logging**: Structured access logs with service name, stdout/stderr output
+- **Timeouts**: 120s worker timeout (increased for long-running requests), 30s graceful shutdown
+- **Keepalive**: 5s HTTP keepalive (increased for persistent connections)
+- **Logging**: Structured access logs with service name, stdout/stderr output, OTLP integration
 
 ## Integration with CLI Providers
 

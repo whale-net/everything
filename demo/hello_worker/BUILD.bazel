@@ -35,4 +35,9 @@ release_app(
     registry = "ghcr.io",
     version = "1.0.0",
     description = "Background worker example - no service exposure",
+    # Custom resource configuration example
+    resources_requests_cpu = "200m",
+    resources_requests_memory = "512Mi",
+    resources_limits_cpu = "500m",
+    resources_limits_memory = "1Gi",
 )

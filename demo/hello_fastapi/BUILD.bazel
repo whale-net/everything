@@ -49,4 +49,10 @@ release_app(
     app_type = "external-api",
     port = 8000,
     fastapi_app = "demo.hello_fastapi.main:app",
+    # Optional: Custom resource requests and limits
+    # If not specified, defaults based on app_type and language are used
+    # resources_requests_cpu = "100m",
+    # resources_requests_memory = "128Mi",
+    # resources_limits_cpu = "200m",
+    # resources_limits_memory = "256Mi",
 )

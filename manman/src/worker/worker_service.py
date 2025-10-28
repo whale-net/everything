@@ -10,6 +10,7 @@ from requests import ConnectionError
 from manman.src.models import (
     Command,
     CommandType,
+    GameServer,
     GameServerConfig,
 )
 
@@ -244,7 +245,10 @@ class WorkerService(ManManService):
             span.set_attribute("game_server_config_id", game_server_config_id)
             
             config: GameServerConfig = self._wapi.get_game_server_config(game_server_config_id)
-            span.set_attribute("game_server.app_id", config.app_id)
+            
+            # Get the GameServer to access app_id
+            game_server: GameServer = self._wapi.get_game_server(config.game_server_id)
+            span.set_attribute("game_server.app_id", game_server.app_id)
             span.set_attribute("game_server.game_server_id", config.game_server_id)
 
             # Temp check to prevent duplicates

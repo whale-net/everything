@@ -240,11 +240,11 @@ func TestAppType_DefaultResourceConfigForLanguage(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.appType.DefaultResourceConfigForLanguage(tt.language)
 			if got.RequestsMemory != tt.expectedMemReq {
-				t.Errorf("DefaultResourceConfigForLanguage() RequestsMemory = %v, want %v", 
+				t.Errorf("DefaultResourceConfigForLanguage() RequestsMemory = %v, want %v",
 					got.RequestsMemory, tt.expectedMemReq)
 			}
 			if got.LimitsMemory != tt.expectedMemLim {
-				t.Errorf("DefaultResourceConfigForLanguage() LimitsMemory = %v, want %v", 
+				t.Errorf("DefaultResourceConfigForLanguage() LimitsMemory = %v, want %v",
 					got.LimitsMemory, tt.expectedMemLim)
 			}
 			// Verify CPU settings remain unchanged
@@ -253,6 +253,135 @@ func TestAppType_DefaultResourceConfigForLanguage(t *testing.T) {
 			}
 			if got.LimitsCPU == "" {
 				t.Errorf("DefaultResourceConfigForLanguage() LimitsCPU is empty")
+			}
+		})
+	}
+}
+
+func TestResourceConfig_IsEmpty(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   ResourceConfig
+		expected bool
+	}{
+		{
+			"Empty config is empty",
+			ResourceConfig{},
+			true,
+		},
+		{
+			"Config with only CPU request is not empty",
+			ResourceConfig{RequestsCPU: "100m"},
+			false,
+		},
+		{
+			"Config with only memory request is not empty",
+			ResourceConfig{RequestsMemory: "256Mi"},
+			false,
+		},
+		{
+			"Config with all fields is not empty",
+			ResourceConfig{
+				RequestsCPU:    "100m",
+				RequestsMemory: "256Mi",
+				LimitsCPU:      "200m",
+				LimitsMemory:   "512Mi",
+			},
+			false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.config.IsEmpty(); got != tt.expected {
+				t.Errorf("ResourceConfig.IsEmpty() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestResourceConfig_MergeWithDefaults(t *testing.T) {
+	defaults := ResourceConfig{
+		RequestsCPU:    "50m",
+		RequestsMemory: "128Mi",
+		LimitsCPU:      "100m",
+		LimitsMemory:   "256Mi",
+	}
+
+	tests := []struct {
+		name     string
+		config   ResourceConfig
+		expected ResourceConfig
+	}{
+		{
+			"Empty config gets all defaults",
+			ResourceConfig{},
+			defaults,
+		},
+		{
+			"Custom CPU request overrides default",
+			ResourceConfig{RequestsCPU: "200m"},
+			ResourceConfig{
+				RequestsCPU:    "200m",
+				RequestsMemory: "128Mi",
+				LimitsCPU:      "100m",
+				LimitsMemory:   "256Mi",
+			},
+		},
+		{
+			"Custom memory limit overrides default",
+			ResourceConfig{LimitsMemory: "1Gi"},
+			ResourceConfig{
+				RequestsCPU:    "50m",
+				RequestsMemory: "128Mi",
+				LimitsCPU:      "100m",
+				LimitsMemory:   "1Gi",
+			},
+		},
+		{
+			"All custom values override defaults",
+			ResourceConfig{
+				RequestsCPU:    "500m",
+				RequestsMemory: "512Mi",
+				LimitsCPU:      "1000m",
+				LimitsMemory:   "2Gi",
+			},
+			ResourceConfig{
+				RequestsCPU:    "500m",
+				RequestsMemory: "512Mi",
+				LimitsCPU:      "1000m",
+				LimitsMemory:   "2Gi",
+			},
+		},
+		{
+			"Partial custom values merge with defaults",
+			ResourceConfig{
+				RequestsCPU: "300m",
+				LimitsCPU:   "600m",
+			},
+			ResourceConfig{
+				RequestsCPU:    "300m",
+				RequestsMemory: "128Mi",
+				LimitsCPU:      "600m",
+				LimitsMemory:   "256Mi",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.config.MergeWithDefaults(defaults)
+			if got.RequestsCPU != tt.expected.RequestsCPU {
+				t.Errorf("RequestsCPU = %v, want %v", got.RequestsCPU, tt.expected.RequestsCPU)
+			}
+			if got.RequestsMemory != tt.expected.RequestsMemory {
+				t.Errorf("RequestsMemory = %v, want %v", got.RequestsMemory, tt.expected.RequestsMemory)
+			}
+			if got.LimitsCPU != tt.expected.LimitsCPU {
+				t.Errorf("LimitsCPU = %v, want %v", got.LimitsCPU, tt.expected.LimitsCPU)
+			}
+			if got.LimitsMemory != tt.expected.LimitsMemory {
+				t.Errorf("LimitsMemory = %v, want %v", got.LimitsMemory, tt.expected.LimitsMemory)
 			}
 		})
 	}

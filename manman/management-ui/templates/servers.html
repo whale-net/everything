@@ -3,7 +3,13 @@
     <div class="server-item">
         <div class="server-name">{{.Name}}</div>
         <div class="server-details">
-            Status: {{.Status}} | IP: {{.IP}}:{{.Port}}
+            Instance: {{.InstanceID}} | Config ID: {{.ID}}
+            {{if .StatusType}}
+            <br>Status: {{.StatusType}}
+            {{else}}
+            <br>Status: {{.Status}}
+            {{end}}
+            {{if .IP}}| IP: {{.IP}}:{{.Port}}{{end}}
         </div>
     </div>
     {{end}}

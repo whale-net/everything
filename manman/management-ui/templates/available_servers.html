@@ -1,0 +1,31 @@
+{{if .Servers}}
+    {{range .Servers}}
+    <div class="available-server-item {{if .IsRunning}}running{{end}}">
+        <div class="server-info">
+            <div class="name">{{.Name}}</div>
+            <div class="status">
+                {{if .IsRunning}}
+                    Currently Running
+                {{else}}
+                    Config ID: {{.ConfigID}}
+                {{end}}
+            </div>
+        </div>
+        {{if .IsRunning}}
+            <button class="btn btn-primary" disabled>Already Running</button>
+        {{else}}
+            <button class="btn btn-primary"
+                    hx-post="/api/start-server"
+                    hx-vals='{"config_id": "{{.ConfigID}}"}'
+                    hx-target="#start-result-{{.ConfigID}}"
+                    hx-swap="innerHTML"
+                    onclick="this.disabled=true; this.textContent='Starting...'">
+                Start Server
+            </button>
+        {{end}}
+        <div id="start-result-{{.ConfigID}}"></div>
+    </div>
+    {{end}}
+{{else}}
+    <div class="empty-state">No server configurations available</div>
+{{end}}

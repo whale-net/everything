@@ -5,6 +5,7 @@ This module provides reusable database session management patterns
 that prevent connection leaks and work across multiple projects.
 """
 
+from libs.python.postgres.engine import create_engine
 from libs.python.postgres.repository import DatabaseRepository
 
-__all__ = ["DatabaseRepository"]
+__all__ = ["DatabaseRepository", "create_engine"]

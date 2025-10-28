@@ -1,9 +1,9 @@
 import logging
 
 # The application logic layer
-from typing import Annotated
+from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from manman.src.host.api.shared.injectors import (
     current_game_server_instances,
@@ -22,11 +22,12 @@ from manman.src.host.api.shared.models import (
 from manman.src.models import (
     Command,
     CommandType,
+    ExternalStatusInfo,
     GameServerConfig,
     GameServerInstance,
     Worker,
 )
-from manman.src.repository.database import GameServerConfigRepository
+from manman.src.repository.database import GameServerConfigRepository, StatusRepository
 from manman.src.repository.message.pub import CommandPubService
 
 router = APIRouter()
@@ -67,6 +68,25 @@ async def worker_shutdown(
     }
 
 
+@router.get("/worker/status")
+async def get_worker_status(
+    current_worker: Annotated[Worker, Depends(current_worker)],
+) -> Optional[ExternalStatusInfo]:
+    """
+    Get the latest status information for the current worker.
+
+    This queries the status repository to get the most recent status update
+    from the worker, including heartbeat and health information.
+
+    :return: Latest status info for the current worker, or None if no status exists
+    """
+    status_repo = StatusRepository()
+    status = status_repo.get_latest_worker_status(current_worker.worker_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Worker status not found")
+    return status
+
+
 @router.get("/gameserver")
 async def get_game_servers(
     game_server_config_repo: Annotated[
@@ -84,6 +104,63 @@ async def get_game_servers(
     :return: list of game server configs
     """
     return game_server_config_repo.get_game_server_configs()
+
+
+@router.get("/gameserver/current")
+async def get_current_game_servers(
+    current_game_server_instance: Annotated[
+        list[GameServerInstance], Depends(current_game_server_instances)
+    ],
+) -> list[GameServerInstance]:
+    """
+    Get all currently running game server instances for the current worker.
+
+    This returns the actual running instances, not configs.
+    Useful for seeing what's actively running right now.
+
+    :return: list of active game server instances
+    """
+    return current_game_server_instance
+
+
+@router.get("/gameserver/{id}/status")
+async def get_game_server_status(
+    id: int,
+    current_game_server_instance: Annotated[
+        list[GameServerInstance], Depends(current_game_server_instances)
+    ],
+) -> Optional[ExternalStatusInfo]:
+    """
+    Get the latest status information for a game server by config ID.
+
+    This finds the currently running instance for the given game server config ID
+    and returns its most recent status information.
+
+    :param id: game server config ID
+    :return: Latest status info for the game server instance, or None if not running
+    """
+    # Find the instance for this config ID among currently running instances
+    instance = next(
+        (i for i in current_game_server_instance if i.game_server_config_id == id),
+        None,
+    )
+    
+    if not instance:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No running instance found for game server config {id}",
+        )
+    
+    status_repo = StatusRepository()
+    status = status_repo.get_latest_instance_status(instance.game_server_instance_id)
+    
+    if not status:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No status information found for instance {instance.game_server_instance_id}",
+        )
+    
+    return status
 
 
 @router.post("/gameserver/{id}/start")
