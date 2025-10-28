@@ -142,10 +142,14 @@ func (app *App) handleAvailableServers(w http.ResponseWriter, r *http.Request) {
 		runningInstances = []experience_api.GameServerInstance{}
 	}
 
-	// Create a map of running config IDs
+	// Create a map of running config IDs (exclude crashed servers - they can be restarted)
 	runningConfigIDs := make(map[int32]bool)
 	for _, inst := range runningInstances {
-		runningConfigIDs[inst.GameServerConfigId] = true
+		// Only mark as running if the instance is actually active (no end_date)
+		isActive := !inst.EndDate.IsSet() || inst.EndDate.Get() == nil
+		if isActive {
+			runningConfigIDs[inst.GameServerConfigId] = true
+		}
 	}
 
 	// Build available servers list
