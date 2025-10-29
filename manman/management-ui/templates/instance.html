@@ -256,10 +256,10 @@
                     </div>
                 </div>
                 <div>
-                    {{if eq .Instance.Instance.EndDate nil}}
-                    <span class="status-badge active">ACTIVE</span>
-                    {{else}}
+                    {{if and .Instance.Instance.EndDate.IsSet (ne .Instance.Instance.EndDate.Get nil)}}
                     <span class="status-badge crashed">CRASHED</span>
+                    {{else}}
+                    <span class="status-badge active">ACTIVE</span>
                     {{end}}
                 </div>
             </div>
@@ -272,16 +272,16 @@
                 <div class="command-list">
                     {{if .Instance.ConfigCommands}}
                     {{range .Instance.ConfigCommands}}
-                    <div class="command-item {{if ne $.Instance.Instance.EndDate nil}}crashed{{end}}">
+                    <div class="command-item {{if and $.Instance.Instance.EndDate.IsSet (ne $.Instance.Instance.EndDate.Get nil)}}crashed{{end}}">
                         <div class="command-info">
                             <div class="command-name">{{.GameServerCommand.Name}}</div>
-                            {{if .Description}}
-                            <div class="command-desc">{{.Description}}</div>
+                            {{if .Description.IsSet}}
+                            <div class="command-desc">{{.Description.Get}}</div>
                             {{end}}
                             <div class="command-value">Value: {{.CommandValue}}</div>
                         </div>
                         <button class="btn btn-execute"
-                                {{if ne $.Instance.Instance.EndDate nil}}disabled{{end}}
+                                {{if and $.Instance.Instance.EndDate.IsSet (ne $.Instance.Instance.EndDate.Get nil)}}disabled{{end}}
                                 hx-post="/api/execute-command"
                                 hx-vals='{"instance_id": "{{$.Instance.Instance.GameServerInstanceId}}", "command_type": "config", "command_id": "{{.GameServerConfigCommandId}}"}'
                                 hx-target="#command-feedback"
@@ -294,16 +294,16 @@
 
                     {{if .Instance.CommandDefaults}}
                     {{range .Instance.CommandDefaults}}
-                    <div class="command-item default {{if ne $.Instance.Instance.EndDate nil}}crashed{{end}}">
+                    <div class="command-item default {{if and $.Instance.Instance.EndDate.IsSet (ne $.Instance.Instance.EndDate.Get nil)}}crashed{{end}}">
                         <div class="command-info">
                             <div class="command-name">{{.GameServerCommand.Name}} <small>(default)</small></div>
-                            {{if .Description}}
-                            <div class="command-desc">{{.Description}}</div>
+                            {{if .Description.IsSet}}
+                            <div class="command-desc">{{.Description.Get}}</div>
                             {{end}}
                             <div class="command-value">Value: {{.CommandValue}}</div>
                         </div>
                         <button class="btn btn-execute"
-                                {{if ne $.Instance.Instance.EndDate nil}}disabled{{end}}
+                                {{if and $.Instance.Instance.EndDate.IsSet (ne $.Instance.Instance.EndDate.Get nil)}}disabled{{end}}
                                 hx-post="/api/execute-command"
                                 hx-vals='{"instance_id": "{{$.Instance.Instance.GameServerInstanceId}}", "command_type": "default", "command_id": "{{.GameServerCommandDefaultId}}"}'
                                 hx-target="#command-feedback"

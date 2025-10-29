@@ -836,3 +836,85 @@ class GameServerInstanceRepository(DatabaseRepository):
             crashed_instances = list(session.exec(crashed_stmt).all())
             
             return active_instances + crashed_instances
+
+    def get_instance_history(
+        self, game_server_id: int, limit: int = 10
+    ) -> list[GameServerInstance]:
+        """
+        Get the last N instances for a game server across all configs.
+
+        Args:
+            game_server_id: The game server ID
+            limit: Maximum number of instances to return
+
+        Returns:
+            List of instances ordered by created_date descending
+        """
+        with self._get_session_context() as session:
+            stmt = (
+                select(GameServerInstance)
+                .join(
+                    GameServerConfig,
+                    GameServerConfig.game_server_config_id
+                    == GameServerInstance.game_server_config_id,
+                )
+                .where(GameServerConfig.game_server_id == game_server_id)
+                .order_by(desc(GameServerInstance.created_date))
+                .limit(limit)
+            )
+            instances = list(session.exec(stmt).all())
+            for inst in instances:
+                session.expunge(inst)
+            return instances
+
+    def list_game_servers(self) -> list[GameServer]:
+        """Get all game servers."""
+        with self._get_session_context() as session:
+            stmt = select(GameServer)
+            servers = list(session.exec(stmt).all())
+            for s in servers:
+                session.expunge(s)
+            return servers
+
+    def get_game_server(self, game_server_id: int) -> Optional[GameServer]:
+        """Get a game server by ID."""
+        with self._get_session_context() as session:
+            server = session.get(GameServer, game_server_id)
+            if server:
+                session.expunge(server)
+            return server
+
+    def create_game_server(
+        self, name: str, server_type: str, app_id: int
+    ) -> GameServer:
+        """Create a new game server."""
+        with self._get_session_context() as session:
+            server = GameServer(name=name, server_type=server_type, app_id=app_id)
+            session.add(server)
+            session.flush()
+            session.expunge(server)
+            session.commit()
+            return server
+
+    def create_game_server_command(
+        self,
+        game_server_id: int,
+        name: str,
+        command: str,
+        description: Optional[str] = None,
+        is_visible: bool = True,
+    ) -> GameServerCommand:
+        """Create a new game server command."""
+        with self._get_session_context() as session:
+            cmd = GameServerCommand(
+                game_server_id=game_server_id,
+                name=name,
+                command=command,
+                description=description,
+                is_visible=is_visible,
+            )
+            session.add(cmd)
+            session.flush()
+            session.expunge(cmd)
+            session.commit()
+            return cmd

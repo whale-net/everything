@@ -17,17 +17,24 @@ from manman.src.host.api.shared.injectors import (
 # from manman.src.repository.message.pub import CommandPubService
 # from manman.src.repository.rabbitmq.publisher import RabbitPublisher
 from manman.src.host.api.shared.models import (
+    CommandDefaultWithCommand,
+    ConfigCommandWithCommand,
     CreateConfigCommandRequest,
+    CreateGameServerCommandRequest,
+    CreateGameServerRequest,
     CurrentInstanceResponse,  # TODO - move this
     ExecuteCommandRequest,
     ExecuteCommandResponse,
-    InstanceDetailsResponse,
+    InstanceDetailsResponseWithCommands,
+    InstanceHistoryItem,
+    InstanceHistoryResponse,
     StdinCommandRequest,
 )
 from manman.src.models import (
     Command,
     CommandType,
     ExternalStatusInfo,
+    GameServer,
     GameServerCommand,
     GameServerConfig,
     GameServerConfigCommands,
@@ -300,7 +307,7 @@ async def get_instance_details(
     game_server_instance_repo: Annotated[
         GameServerInstanceRepository, Depends(game_server_instance_db_repository)
     ],
-) -> InstanceDetailsResponse:
+) -> InstanceDetailsResponseWithCommands:
     """
     Get detailed information about a specific game server instance including available commands.
 
@@ -315,11 +322,38 @@ async def get_instance_details(
         raise HTTPException(status_code=404, detail="Instance not found")
 
     instance, config, defaults, config_cmds = result
-    return InstanceDetailsResponse(
+    
+    # Convert to response models with nested command info
+    command_defaults_with_cmds = [
+        CommandDefaultWithCommand(
+            game_server_command_default_id=d.game_server_command_default_id,
+            game_server_command_id=d.game_server_command_id,
+            command_value=d.command_value,
+            description=d.description,
+            is_visible=d.is_visible,
+            game_server_command=d.game_server_command,
+        )
+        for d in defaults
+    ]
+    
+    config_commands_with_cmds = [
+        ConfigCommandWithCommand(
+            game_server_config_command_id=c.game_server_config_command_id,
+            game_server_config_id=c.game_server_config_id,
+            game_server_command_id=c.game_server_command_id,
+            command_value=c.command_value,
+            description=c.description,
+            is_visible=c.is_visible,
+            game_server_command=c.game_server_command,
+        )
+        for c in config_cmds
+    ]
+    
+    return InstanceDetailsResponseWithCommands(
         instance=instance,
         config=config,
-        command_defaults=defaults,
-        config_commands=config_cmds,
+        command_defaults=command_defaults_with_cmds,
+        config_commands=config_commands_with_cmds,
     )
 
 
@@ -495,3 +529,110 @@ async def create_config_command(
 #     # Copy from above, but send to instance
 #     # first I think I need to make the instance handle the command though
 #     raise NotImplementedError("Not implemented yet")
+
+
+@router.get("/gameserver/{game_server_id}/instances")
+async def get_game_server_instance_history(
+    game_server_id: int,
+    game_server_instance_repo: Annotated[
+        GameServerInstanceRepository, Depends(game_server_instance_db_repository)
+    ],
+    limit: int = 10,
+):
+    """
+    Get instance history for a game server with runtime calculations.
+
+    Args:
+        game_server_id: The game server ID
+        limit: Maximum number of instances to return (default 10)
+
+    Returns:
+        Instance history with runtime information
+    """
+    from datetime import datetime, timezone
+
+    instances = game_server_instance_repo.get_instance_history(game_server_id, limit)
+
+    history_items = []
+    for inst in instances:
+        if inst.end_date:
+            runtime_seconds = int((inst.end_date - inst.created_date).total_seconds())
+            status = "stopped"
+            end_date_str = inst.end_date.isoformat()
+        else:
+            runtime_seconds = int(
+                (datetime.now(timezone.utc) - inst.created_date).total_seconds()
+            )
+            status = "running"
+            end_date_str = None
+
+        history_items.append(
+            InstanceHistoryItem(
+                game_server_instance_id=inst.game_server_instance_id,
+                game_server_config_id=inst.game_server_config_id,
+                created_date=inst.created_date.isoformat(),
+                end_date=end_date_str,
+                runtime_seconds=runtime_seconds,
+                status=status,
+            )
+        )
+
+    return InstanceHistoryResponse(
+        game_server_id=game_server_id, instances=history_items
+    )
+
+
+@router.get("/gameserver/types")
+async def list_game_servers(
+    game_server_instance_repo: Annotated[
+        GameServerInstanceRepository, Depends(game_server_instance_db_repository)
+    ],
+) -> list[GameServer]:
+    """Get all game server types."""
+    return game_server_instance_repo.list_game_servers()
+
+
+@router.post("/gameserver/types")
+async def create_game_server(
+    body: CreateGameServerRequest,
+    game_server_instance_repo: Annotated[
+        GameServerInstanceRepository, Depends(game_server_instance_db_repository)
+    ],
+) -> GameServer:
+    """Create a new game server type."""
+    try:
+        return game_server_instance_repo.create_game_server(
+            name=body.name, server_type=body.server_type, app_id=body.app_id
+        )
+    except Exception as e:
+        if "unique constraint" in str(e).lower():
+            raise HTTPException(
+                status_code=409, detail="Game server with this name already exists"
+            )
+        raise
+
+
+@router.post("/gameserver/types/{game_server_id}/command")
+async def create_game_server_command(
+    game_server_id: int,
+    body: CreateGameServerCommandRequest,
+    game_server_instance_repo: Annotated[
+        GameServerInstanceRepository, Depends(game_server_instance_db_repository)
+    ],
+) -> GameServerCommand:
+    """Create a new command for a game server type."""
+    try:
+        return game_server_instance_repo.create_game_server_command(
+            game_server_id=game_server_id,
+            name=body.name,
+            command=body.command,
+            description=body.description,
+            is_visible=body.is_visible,
+        )
+    except Exception as e:
+        if "unique constraint" in str(e).lower():
+            raise HTTPException(
+                status_code=409,
+                detail="Command with this name already exists for this game server",
+            )
+        raise

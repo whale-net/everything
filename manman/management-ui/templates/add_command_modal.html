@@ -6,7 +6,7 @@
         <select name="command_id" id="command_id" required>
             <option value="">-- Select a command --</option>
             {{range .Commands}}
-            <option value="{{.GameServerCommandId}}">{{.Name}} - {{.Description}}</option>
+            <option value="{{.GameServerCommandId}}">{{.Name}}{{if .Description.IsSet}} - {{.Description.Get}}{{end}}</option>
             {{end}}
         </select>
     </div>

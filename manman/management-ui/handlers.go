@@ -467,11 +467,206 @@ func (app *App) handleCreateCommand(w http.ResponseWriter, r *http.Request) {
 // InstancePageData holds data for the instance page
 type InstancePageData struct {
 	User     *htmxauth.UserInfo
-	Instance experience_api.InstanceDetailsResponse
+	Instance experience_api.InstanceDetailsResponseWithCommands
 }
 
 // AddCommandModalData holds data for the add command modal
 type AddCommandModalData struct {
 	Commands []experience_api.GameServerCommand
 	ConfigID int
+}
+
+// handleGameServerPage renders the game server detail page
+func (app *App) handleGameServerPage(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+	if user == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Extract game server ID from URL path
+	gameServerIDStr := strings.TrimPrefix(r.URL.Path, "/gameserver/")
+	if gameServerIDStr == "" {
+		http.Error(w, "Missing game server ID", http.StatusBadRequest)
+		return
+	}
+
+	gameServerID, err := strconv.Atoi(gameServerIDStr)
+	if err != nil {
+		http.Error(w, "Invalid game server ID", http.StatusBadRequest)
+		return
+	}
+
+	// Get game server details (from the list, since we don't have a get endpoint yet)
+	servers, err := app.getAllGameServers(r.Context())
+	if err != nil {
+		log.Printf("Failed to get game servers: %v", err)
+		http.Error(w, "Failed to load game server", http.StatusInternalServerError)
+		return
+	}
+
+	var gameServer *experience_api.GameServer
+	for _, s := range servers {
+		if int(s.GameServerId) == gameServerID {
+			gameServer = &s
+			break
+		}
+	}
+
+	if gameServer == nil {
+		http.Error(w, "Game server not found", http.StatusNotFound)
+		return
+	}
+
+	// Get commands for this game server
+	commands, err := app.getGameServerCommands(r.Context(), int32(gameServerID))
+	if err != nil {
+		log.Printf("Failed to get commands: %v", err)
+		commands = []experience_api.GameServerCommand{}
+	}
+
+	// Get instance history
+	history, err := app.getGameServerInstanceHistory(r.Context(), int32(gameServerID), 10)
+	if err != nil {
+		log.Printf("Failed to get instance history: %v", err)
+		history = []InstanceHistoryItem{}
+	}
+
+	// Prepare data for template
+	data := GameServerPageData{
+		User:            user,
+		GameServer:      *gameServer,
+		Commands:        commands,
+		InstanceHistory: history,
+	}
+
+	if err := templates.ExecuteTemplate(w, "gameserver.html", data); err != nil {
+		log.Printf("Template error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+// handleGameServersList renders the game servers list page
+func (app *App) handleGameServersList(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+	if user == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get all game servers
+	servers, err := app.getAllGameServers(r.Context())
+	if err != nil {
+		log.Printf("Failed to get game servers: %v", err)
+		servers = []experience_api.GameServer{}
+	}
+
+	data := GameServersListPageData{
+		User:        user,
+		GameServers: servers,
+	}
+
+	if err := templates.ExecuteTemplate(w, "gameservers_list.html", data); err != nil {
+		log.Printf("Template error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+// handleAddGameServerCommandModal returns the modal HTML for adding a command to a game server
+func (app *App) handleAddGameServerCommandModal(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+	if user == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	gameServerIDStr := r.URL.Query().Get("game_server_id")
+	gameServerID, err := strconv.Atoi(gameServerIDStr)
+	if err != nil {
+		http.Error(w, "Invalid game server ID", http.StatusBadRequest)
+		return
+	}
+
+	data := AddGameServerCommandModalData{
+		GameServerID: gameServerID,
+	}
+
+	if err := templates.ExecuteTemplate(w, "add_gameserver_command_modal.html", data); err != nil {
+		log.Printf("Template error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+// handleCreateGameServerCommand handles creating a new command for a game server
+func (app *App) handleCreateGameServerCommand(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+	if user == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse form data
+	gameServerIDStr := r.FormValue("game_server_id")
+	name := r.FormValue("name")
+	command := r.FormValue("command")
+	description := r.FormValue("description")
+	isVisible := r.FormValue("is_visible") == "on"
+
+	gameServerID, err := strconv.Atoi(gameServerIDStr)
+	if err != nil {
+		http.Error(w, "Invalid game server ID", http.StatusBadRequest)
+		return
+	}
+
+	if name == "" || command == "" {
+		http.Error(w, "Name and command are required", http.StatusBadRequest)
+		return
+	}
+
+	// Create command
+	_, err = app.createGameServerCommand(r.Context(), int32(gameServerID), name, command, description, isVisible)
+	if err != nil {
+		log.Printf("Failed to create command: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to create command: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Trigger page refresh
+	w.Header().Set("HX-Trigger", "commandCreated")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "Command created successfully")
+}
+
+// GameServerPageData holds data for the game server detail page
+type GameServerPageData struct {
+	User            *htmxauth.UserInfo
+	GameServer      experience_api.GameServer
+	Commands        []experience_api.GameServerCommand
+	InstanceHistory []InstanceHistoryItem
+}
+
+// GameServersListPageData holds data for the game servers list page
+type GameServersListPageData struct {
+	User        *htmxauth.UserInfo
+	GameServers []experience_api.GameServer
+}
+
+// AddGameServerCommandModalData holds data for the add game server command modal
+type AddGameServerCommandModalData struct {
+	GameServerID int
+}
+
+// InstanceHistoryItem represents a single instance history entry
+type InstanceHistoryItem struct {
+	InstanceID     int32
+	ConfigID       int32
+	CreatedDate    string
+	EndDate        *string
+	RuntimeSeconds int
+	Status         string
 }
