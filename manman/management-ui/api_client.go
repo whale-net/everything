@@ -419,10 +419,29 @@ func (app *App) getGameServerInstanceHistory(ctx context.Context, gameServerID i
 		return nil, fmt.Errorf("failed to get instance history: %w", err)
 	}
 
-	// Convert the response to our struct (the API returns interface{} so we need to parse it)
-	// For now, return empty list - we'll fix this when the OpenAPI spec is corrected
-	log.Printf("Instance history response: %+v", historyResp)
-	return []InstanceHistoryItem{}, nil
+	// Convert the API response to our struct
+	var items []InstanceHistoryItem
+	for _, apiItem := range historyResp.Instances {
+		var runtimeSeconds int
+		if apiItem.RuntimeSeconds.IsSet() && apiItem.RuntimeSeconds.Get() != nil {
+			runtimeSeconds = int(*apiItem.RuntimeSeconds.Get())
+		}
+
+		item := InstanceHistoryItem{
+			InstanceID:     apiItem.GameServerInstanceId,
+			ConfigID:       apiItem.GameServerConfigId,
+			CreatedDate:    apiItem.CreatedDate,
+			RuntimeSeconds: runtimeSeconds,
+			Status:         apiItem.Status,
+		}
+		if apiItem.EndDate.IsSet() && apiItem.EndDate.Get() != nil {
+			endDate := *apiItem.EndDate.Get()
+			item.EndDate = &endDate
+		}
+		items = append(items, item)
+	}
+
+	return items, nil
 }
 
 // createGameServerCommand creates a new command for a game server type

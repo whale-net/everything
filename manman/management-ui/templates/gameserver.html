@@ -289,6 +289,44 @@
             border-radius: 4px;
             margin-bottom: 15px;
         }
+        .config-list {
+            margin-top: 15px;
+        }
+        .config-item {
+            padding: 10px 12px;
+            background: #f9fafb;
+            border-radius: 4px;
+            margin: 8px 0;
+            border-left: 4px solid #10b981;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .config-item.disabled {
+            background: #f3f4f6;
+            border-left-color: #9ca3af;
+            opacity: 0.7;
+        }
+        .config-name {
+            font-weight: 500;
+            color: #1f2937;
+        }
+        .config-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .config-badge.enabled {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        .config-badge.disabled {
+            background: #e5e7eb;
+            color: #6b7280;
+        }
     </style>
     <script>
         function openAddCommandModal() {
@@ -345,6 +383,22 @@
                         <div class="info-label">App ID:</div>
                         <div class="info-value">{{.GameServer.AppId}}</div>
                     </div>
+                </div>
+
+                <h2 style="margin-top: 20px; font-size: 16px;">Configurations ({{len .Configs}})</h2>
+                <div class="config-list">
+                    {{if .Configs}}
+                        {{range .Configs}}
+                        <div class="config-item {{if not .IsVisible}}disabled{{end}}">
+                            <div class="config-name">{{.Name}}</div>
+                            <span class="config-badge {{if .IsVisible}}enabled{{else}}disabled{{end}}">
+                                {{if .IsVisible}}Enabled{{else}}Disabled{{end}}
+                            </span>
+                        </div>
+                        {{end}}
+                    {{else}}
+                        <div class="empty-state">No configurations defined yet.</div>
+                    {{end}}
                 </div>
             </div>
 
@@ -406,7 +460,9 @@
             <div class="modal">
                 <button class="modal-close" onclick="closeAddCommandModal()">&times;</button>
                 <h2>Add Command to {{.GameServer.Name}}</h2>
-                <form hx-post="/api/create-gameserver-command" hx-swap="none">
+                <form hx-post="/api/create-gameserver-command" 
+                      hx-swap="none"
+                      hx-indicator="#submit-indicator">
                     <input type="hidden" name="game_server_id" value="{{.GameServer.GameServerId}}">
                     
                     <div class="form-group">
@@ -431,7 +487,10 @@
                         </label>
                     </div>
 
-                    <button type="submit" class="btn btn-primary">Create Command</button>
+                    <button type="submit" class="btn btn-primary">
+                        Create Command
+                        <span id="submit-indicator" class="htmx-indicator" style="display:none; margin-left: 8px;">⏳</span>
+                    </button>
                     <button type="button" class="btn btn-secondary" onclick="closeAddCommandModal()">Cancel</button>
                 </form>
             </div>

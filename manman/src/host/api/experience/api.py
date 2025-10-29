@@ -538,7 +538,7 @@ async def get_game_server_instance_history(
         GameServerInstanceRepository, Depends(game_server_instance_db_repository)
     ],
     limit: int = 10,
-):
+) -> InstanceHistoryResponse:
     """
     Get instance history for a game server with runtime calculations.
 
@@ -555,13 +555,21 @@ async def get_game_server_instance_history(
 
     history_items = []
     for inst in instances:
+        # Ensure created_date is timezone-aware (assume UTC if naive)
+        created_date = inst.created_date
+        if created_date.tzinfo is None:
+            created_date = created_date.replace(tzinfo=timezone.utc)
+        
         if inst.end_date:
-            runtime_seconds = int((inst.end_date - inst.created_date).total_seconds())
+            end_date = inst.end_date
+            if end_date.tzinfo is None:
+                end_date = end_date.replace(tzinfo=timezone.utc)
+            runtime_seconds = int((end_date - created_date).total_seconds())
             status = "stopped"
-            end_date_str = inst.end_date.isoformat()
+            end_date_str = end_date.isoformat()
         else:
             runtime_seconds = int(
-                (datetime.now(timezone.utc) - inst.created_date).total_seconds()
+                (datetime.now(timezone.utc) - created_date).total_seconds()
             )
             status = "running"
             end_date_str = None
@@ -570,7 +578,7 @@ async def get_game_server_instance_history(
             InstanceHistoryItem(
                 game_server_instance_id=inst.game_server_instance_id,
                 game_server_config_id=inst.game_server_config_id,
-                created_date=inst.created_date.isoformat(),
+                created_date=created_date.isoformat(),
                 end_date=end_date_str,
                 runtime_seconds=runtime_seconds,
                 status=status,

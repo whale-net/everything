@@ -525,6 +525,20 @@ func (app *App) handleGameServerPage(w http.ResponseWriter, r *http.Request) {
 		commands = []experience_api.GameServerCommand{}
 	}
 
+	// Get all configs and filter by this game server ID
+	allConfigs, err := app.getAllGameServerConfigs(r.Context())
+	if err != nil {
+		log.Printf("Failed to get configs: %v", err)
+		allConfigs = []experience_api.GameServerConfig{}
+	}
+
+	var configs []experience_api.GameServerConfig
+	for _, cfg := range allConfigs {
+		if int(cfg.GameServerId) == gameServerID {
+			configs = append(configs, cfg)
+		}
+	}
+
 	// Get instance history
 	history, err := app.getGameServerInstanceHistory(r.Context(), int32(gameServerID), 10)
 	if err != nil {
@@ -537,6 +551,7 @@ func (app *App) handleGameServerPage(w http.ResponseWriter, r *http.Request) {
 		User:            user,
 		GameServer:      *gameServer,
 		Commands:        commands,
+		Configs:         configs,
 		InstanceHistory: history,
 	}
 
@@ -636,8 +651,9 @@ func (app *App) handleCreateGameServerCommand(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Trigger page refresh
+	// Set trigger header and respond
 	w.Header().Set("HX-Trigger", "commandCreated")
+	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "Command created successfully")
 }
@@ -647,6 +663,7 @@ type GameServerPageData struct {
 	User            *htmxauth.UserInfo
 	GameServer      experience_api.GameServer
 	Commands        []experience_api.GameServerCommand
+	Configs         []experience_api.GameServerConfig
 	InstanceHistory []InstanceHistoryItem
 }
 
