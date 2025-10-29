@@ -17,14 +17,20 @@ from manman.src.host.api.shared.injectors import (
 # from manman.src.repository.message.pub import CommandPubService
 # from manman.src.repository.rabbitmq.publisher import RabbitPublisher
 from manman.src.host.api.shared.models import (
+    CreateConfigCommandRequest,
     CurrentInstanceResponse,  # TODO - move this
+    ExecuteCommandRequest,
+    ExecuteCommandResponse,
+    InstanceDetailsResponse,
     StdinCommandRequest,
 )
 from manman.src.models import (
     Command,
     CommandType,
     ExternalStatusInfo,
+    GameServerCommand,
     GameServerConfig,
+    GameServerConfigCommands,
     GameServerInstance,
     Worker,
 )
@@ -286,6 +292,185 @@ async def get_active_game_server_instances(
         current_worker.worker_id, include_crashed=include_crashed
     )
     return CurrentInstanceResponse.from_instances(instances)
+
+
+@router.get("/gameserver/instance/{instance_id}")
+async def get_instance_details(
+    instance_id: int,
+    game_server_instance_repo: Annotated[
+        GameServerInstanceRepository, Depends(game_server_instance_db_repository)
+    ],
+) -> InstanceDetailsResponse:
+    """
+    Get detailed information about a specific game server instance including available commands.
+
+    Args:
+        instance_id: The game server instance ID
+
+    Returns:
+        Instance details with config, command defaults, and config-specific commands
+    """
+    result = game_server_instance_repo.get_instance_with_commands(instance_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Instance not found")
+
+    instance, config, defaults, config_cmds = result
+    return InstanceDetailsResponse(
+        instance=instance,
+        config=config,
+        command_defaults=defaults,
+        config_commands=config_cmds,
+    )
+
+
+@router.post("/gameserver/instance/{instance_id}/command")
+async def execute_instance_command(
+    instance_id: int,
+    body: ExecuteCommandRequest,
+    game_server_instance_repo: Annotated[
+        GameServerInstanceRepository, Depends(game_server_instance_db_repository)
+    ],
+    worker_command_pub_svc: Annotated[
+        CommandPubService, Depends(worker_command_pub_service)
+    ],
+) -> ExecuteCommandResponse:
+    """
+    Execute a command on a game server instance.
+
+    Args:
+        instance_id: The game server instance ID
+        body: Command execution request
+
+    Returns:
+        Execution status and the resolved command string
+    """
+    from manman.src.models import GameServerCommandDefaults, StatusType
+
+    # Get instance and validate it's active
+    result = game_server_instance_repo.get_instance_with_commands(instance_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Instance not found")
+
+    instance, config, defaults, config_cmds = result
+
+    # Check instance is active (get latest status)
+    status_repo = StatusRepository()
+    latest_status = status_repo.get_latest_instance_status(instance_id)
+    if latest_status and latest_status.status_type == StatusType.CRASHED:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot execute command on crashed instance",
+        )
+
+    # Resolve the command based on type
+    command_str = None
+    description = None
+
+    if body.command_type == "default":
+        # Find the default command
+        default_cmd = next(
+            (d for d in defaults if d.game_server_command_default_id == body.command_id),
+            None,
+        )
+        if not default_cmd:
+            raise HTTPException(status_code=404, detail="Default command not found")
+
+        command_value = body.custom_value or default_cmd.command_value
+        command_str = default_cmd.game_server_command.command.replace(
+            "{value}", command_value
+        ).replace("{map}", command_value)
+        description = default_cmd.description or default_cmd.game_server_command.description
+
+    elif body.command_type == "config":
+        # Find the config command
+        config_cmd = next(
+            (
+                c
+                for c in config_cmds
+                if c.game_server_config_command_id == body.command_id
+            ),
+            None,
+        )
+        if not config_cmd:
+            raise HTTPException(status_code=404, detail="Config command not found")
+
+        command_value = body.custom_value or config_cmd.command_value
+        command_str = config_cmd.game_server_command.command.replace(
+            "{value}", command_value
+        ).replace("{map}", command_value)
+        description = config_cmd.description or config_cmd.game_server_command.description
+
+    else:
+        raise HTTPException(
+            status_code=400, detail="Invalid command_type (must be 'default' or 'config')"
+        )
+
+    # Send command via existing stdin mechanism
+    command = Command(
+        command_type=CommandType.STDIN,
+        command_args=[str(config.game_server_config_id), command_str],
+    )
+    worker_command_pub_svc.publish_command(command)
+
+    return ExecuteCommandResponse(
+        status="success",
+        message=f"Command sent to instance {instance_id}",
+        command=command_str,
+    )
+
+
+@router.get("/gameserver/{game_server_id}/commands")
+async def get_available_commands(
+    game_server_id: int,
+    game_server_config_repo: Annotated[
+        GameServerConfigRepository, Depends(game_server_config_db_repository)
+    ],
+) -> list[GameServerCommand]:
+    """
+    Get all available commands for a game server.
+
+    Args:
+        game_server_id: The game server ID
+
+    Returns:
+        List of available commands
+    """
+    return game_server_config_repo.get_commands_for_game_server(game_server_id)
+
+
+@router.post("/gameserver/config/{config_id}/command")
+async def create_config_command(
+    config_id: int,
+    body: CreateConfigCommandRequest,
+    game_server_config_repo: Annotated[
+        GameServerConfigRepository, Depends(game_server_config_db_repository)
+    ],
+) -> GameServerConfigCommands:
+    """
+    Create a new config-specific command.
+
+    Args:
+        config_id: The game server config ID
+        body: Command creation request
+
+    Returns:
+        The created config command
+    """
+    try:
+        return game_server_config_repo.create_config_command(
+            config_id=config_id,
+            command_id=body.game_server_command_id,
+            command_value=body.command_value,
+            description=body.description,
+        )
+    except Exception as e:
+        # Handle duplicate command errors
+        if "unique constraint" in str(e).lower():
+            raise HTTPException(
+                status_code=409,
+                detail="Command with this value already exists for this config",
+            )
+        raise
 
 
 # @router.post("/gameserver/instance/{id}/stdin")

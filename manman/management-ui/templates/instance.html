@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instance {{.Instance.Instance.GameServerInstanceId}} - ManMan</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        header {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2563eb;
+            margin-bottom: 10px;
+        }
+        .back-link {
+            display: inline-block;
+            color: #2563eb;
+            text-decoration: none;
+            margin-bottom: 15px;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+        .instance-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .status-badge.active {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        .status-badge.crashed {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        .content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .card h2 {
+            color: #1f2937;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+        .console-panel {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            min-height: 300px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .command-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .command-item {
+            padding: 12px;
+            background: #f9fafb;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-left: 4px solid #3b82f6;
+        }
+        .command-item.default {
+            opacity: 0.85;
+            background: #f3f4f6;
+            border-left-color: #9ca3af;
+        }
+        .command-item.crashed {
+            opacity: 0.5;
+        }
+        .command-info {
+            flex: 1;
+        }
+        .command-name {
+            font-weight: 600;
+            color: #1f2937;
+        }
+        .command-desc {
+            color: #6b7280;
+            font-size: 14px;
+            margin-top: 2px;
+        }
+        .command-value {
+            color: #4b5563;
+            font-size: 13px;
+            font-family: monospace;
+            margin-top: 4px;
+        }
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-execute {
+            background: #2563eb;
+            color: white;
+        }
+        .btn-execute:hover:not(:disabled) {
+            background: #1d4ed8;
+        }
+        .btn-execute:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+        .btn-add {
+            background: #10b981;
+            color: white;
+            width: 100%;
+            margin-top: 10px;
+        }
+        .btn-add:hover {
+            background: #059669;
+        }
+        .success-message {
+            background: #d1fae5;
+            color: #065f46;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.show {
+            display: flex;
+        }
+        .modal {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+        }
+        .modal h2 {
+            margin-bottom: 20px;
+            color: #1f2937;
+        }
+        .modal-close {
+            float: right;
+            font-size: 24px;
+            font-weight: bold;
+            color: #6b7280;
+            cursor: pointer;
+            background: none;
+            border: none;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #4b5563;
+        }
+        .form-group select,
+        .form-group input,
+        .form-group textarea {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            font-family: inherit;
+        }
+    </style>
+    <script>
+        function openAddCommandModal() {
+            document.getElementById('addCommandModal').classList.add('show');
+        }
+        function closeAddCommandModal() {
+            document.getElementById('addCommandModal').classList.remove('show');
+        }
+        // Close modal when clicking outside
+        document.addEventListener('click', function(e) {
+            if (e.target.id === 'addCommandModal') {
+                closeAddCommandModal();
+            }
+        });
+        // Handle command created event
+        document.body.addEventListener('commandCreated', function() {
+            closeAddCommandModal();
+            // Reload the page to show the new command
+            window.location.reload();
+        });
+    </script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <a href="/" class="back-link">← Back to Home</a>
+            <div class="instance-header">
+                <div>
+                    <h1>{{.Instance.Config.Name}}</h1>
+                    <div class="user-info">
+                        Instance ID: {{.Instance.Instance.GameServerInstanceId}} | 
+                        Config ID: {{.Instance.Config.GameServerConfigId}}
+                    </div>
+                </div>
+                <div>
+                    {{if eq .Instance.Instance.EndDate nil}}
+                    <span class="status-badge active">ACTIVE</span>
+                    {{else}}
+                    <span class="status-badge crashed">CRASHED</span>
+                    {{end}}
+                </div>
+            </div>
+        </header>
+
+        <div class="content">
+            <div class="card">
+                <h2>Available Commands</h2>
+                <div id="command-feedback"></div>
+                <div class="command-list">
+                    {{if .Instance.ConfigCommands}}
+                    {{range .Instance.ConfigCommands}}
+                    <div class="command-item {{if ne $.Instance.Instance.EndDate nil}}crashed{{end}}">
+                        <div class="command-info">
+                            <div class="command-name">{{.GameServerCommand.Name}}</div>
+                            {{if .Description}}
+                            <div class="command-desc">{{.Description}}</div>
+                            {{end}}
+                            <div class="command-value">Value: {{.CommandValue}}</div>
+                        </div>
+                        <button class="btn btn-execute"
+                                {{if ne $.Instance.Instance.EndDate nil}}disabled{{end}}
+                                hx-post="/api/execute-command"
+                                hx-vals='{"instance_id": "{{$.Instance.Instance.GameServerInstanceId}}", "command_type": "config", "command_id": "{{.GameServerConfigCommandId}}"}'
+                                hx-target="#command-feedback"
+                                hx-swap="innerHTML">
+                            Execute
+                        </button>
+                    </div>
+                    {{end}}
+                    {{end}}
+
+                    {{if .Instance.CommandDefaults}}
+                    {{range .Instance.CommandDefaults}}
+                    <div class="command-item default {{if ne $.Instance.Instance.EndDate nil}}crashed{{end}}">
+                        <div class="command-info">
+                            <div class="command-name">{{.GameServerCommand.Name}} <small>(default)</small></div>
+                            {{if .Description}}
+                            <div class="command-desc">{{.Description}}</div>
+                            {{end}}
+                            <div class="command-value">Value: {{.CommandValue}}</div>
+                        </div>
+                        <button class="btn btn-execute"
+                                {{if ne $.Instance.Instance.EndDate nil}}disabled{{end}}
+                                hx-post="/api/execute-command"
+                                hx-vals='{"instance_id": "{{$.Instance.Instance.GameServerInstanceId}}", "command_type": "default", "command_id": "{{.GameServerCommandDefaultId}}"}'
+                                hx-target="#command-feedback"
+                                hx-swap="innerHTML">
+                            Execute
+                        </button>
+                    </div>
+                    {{end}}
+                    {{end}}
+
+                    {{if not .Instance.ConfigCommands}}
+                    {{if not .Instance.CommandDefaults}}
+                    <div class="empty-state">No commands available</div>
+                    {{end}}
+                    {{end}}
+                </div>
+                <button class="btn btn-add" onclick="openAddCommandModal()">
+                    + Add Custom Command
+                </button>
+            </div>
+
+            <div class="card">
+                <h2>Console Output</h2>
+                <div class="console-panel">
+Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+
+[Server] Starting game server...
+[Server] Loading map de_dust2...
+[Server] Server is ready!
+[Server] Listening on 0.0.0.0:27015
+
+Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.
+Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
+                </div>
+            </div>
+        </div>
+
+        <!-- Add Command Modal -->
+        <div id="addCommandModal" class="modal-overlay">
+            <div class="modal">
+                <button class="modal-close" onclick="closeAddCommandModal()">&times;</button>
+                <h2>Add Custom Command</h2>
+                <div hx-get="/api/add-command-modal?game_server_id={{.Instance.Config.GameServerId}}&config_id={{.Instance.Config.GameServerConfigId}}"
+                     hx-trigger="load"
+                     hx-swap="innerHTML">
+                    Loading...
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

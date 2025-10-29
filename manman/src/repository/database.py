@@ -22,7 +22,10 @@ from manman.src.models import (
     ACTIVE_STATUS_TYPES,
     ExternalStatusInfo,
     GameServer,
+    GameServerCommand,
+    GameServerCommandDefaults,
     GameServerConfig,
+    GameServerConfigCommands,
     GameServerInstance,
     StatusType,
     Worker,
@@ -528,6 +531,64 @@ class GameServerConfigRepository(DatabaseRepository):
                 session.expunge(config)
             return results
 
+    def get_commands_for_game_server(self, game_server_id: int) -> list[GameServerCommand]:
+        """
+        Get all visible commands for a game server.
+
+        Args:
+            game_server_id: The ID of the game server
+
+        Returns:
+            List of GameServerCommand instances
+        """
+        with self._get_session_context() as session:
+            stmt = (
+                select(GameServerCommand)
+                .where(GameServerCommand.game_server_id == game_server_id)
+                .where(GameServerCommand.is_visible.is_(True))
+                .order_by(GameServerCommand.name)
+            )
+            results = session.exec(stmt).all()
+            for cmd in results:
+                session.expunge(cmd)
+            return results
+
+    def create_config_command(
+        self,
+        config_id: int,
+        command_id: int,
+        command_value: str,
+        description: Optional[str] = None,
+    ) -> GameServerConfigCommands:
+        """
+        Create a new config-specific command.
+
+        Args:
+            config_id: The game server config ID
+            command_id: The game server command ID
+            command_value: The command value/parameters
+            description: Optional description
+
+        Returns:
+            The created GameServerConfigCommands instance
+
+        Raises:
+            IntegrityError: If duplicate command+value exists
+        """
+        with self._get_session_context() as session:
+            cmd = GameServerConfigCommands(
+                game_server_config_id=config_id,
+                game_server_command_id=command_id,
+                command_value=command_value,
+                description=description,
+                is_visible=True,
+            )
+            session.add(cmd)
+            session.flush()
+            session.expunge(cmd)
+            session.commit()
+            return cmd
+
 
 class GameServerInstanceRepository(DatabaseRepository):
     """Repository class for game server instance-related database operations."""
@@ -570,6 +631,74 @@ class GameServerInstanceRepository(DatabaseRepository):
             if instance:
                 session.expunge(instance)
             return instance
+
+    def get_instance_with_commands(
+        self, instance_id: int
+    ) -> Optional[
+        Tuple[
+            GameServerInstance,
+            GameServerConfig,
+            list[GameServerCommandDefaults],
+            list[GameServerConfigCommands],
+        ]
+    ]:
+        """
+        Get instance with config and all available commands.
+
+        Args:
+            instance_id: The game server instance ID
+
+        Returns:
+            Tuple of (instance, config, command_defaults, config_commands) or None if not found
+        """
+        from sqlalchemy.orm import selectinload
+
+        with self._get_session_context() as session:
+            # Get instance with eager loading of config
+            stmt = (
+                select(GameServerInstance)
+                .options(selectinload(GameServerInstance.game_server_config))
+                .where(GameServerInstance.game_server_instance_id == instance_id)
+            )
+            instance = session.exec(stmt).first()
+
+            if not instance:
+                return None
+
+            config = instance.game_server_config
+            game_server_id = config.game_server_id
+
+            # Get command defaults for this game server
+            defaults_stmt = (
+                select(GameServerCommandDefaults)
+                .join(GameServerCommand)
+                .where(GameServerCommand.game_server_id == game_server_id)
+                .where(GameServerCommandDefaults.is_visible.is_(True))
+                .options(selectinload(GameServerCommandDefaults.game_server_command))
+            )
+            defaults = list(session.exec(defaults_stmt).all())
+
+            # Get config-specific commands
+            config_cmds_stmt = (
+                select(GameServerConfigCommands)
+                .where(
+                    GameServerConfigCommands.game_server_config_id
+                    == config.game_server_config_id
+                )
+                .where(GameServerConfigCommands.is_visible.is_(True))
+                .options(selectinload(GameServerConfigCommands.game_server_command))
+            )
+            config_cmds = list(session.exec(config_cmds_stmt).all())
+
+            # Expunge all objects before returning
+            session.expunge(instance)
+            session.expunge(config)
+            for d in defaults:
+                session.expunge(d)
+            for c in config_cmds:
+                session.expunge(c)
+
+            return (instance, config, defaults, config_cmds)
 
     def shutdown_instance(self, instance_id: int) -> Optional[GameServerInstance]:
         """

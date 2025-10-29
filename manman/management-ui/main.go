@@ -142,4 +142,8 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/servers/", app.auth.RequireAuthFunc(app.handleServers))
 	mux.HandleFunc("/api/available-servers", app.auth.RequireAuthFunc(app.handleAvailableServers))
 	mux.HandleFunc("/api/start-server", app.auth.RequireAuthFunc(app.handleStartServer))
+	mux.HandleFunc("/instance/", app.auth.RequireAuthFunc(app.handleInstancePage))
+	mux.HandleFunc("/api/execute-command", app.auth.RequireAuthFunc(app.handleExecuteCommand))
+	mux.HandleFunc("/api/add-command-modal", app.auth.RequireAuthFunc(app.handleAddCommandModal))
+	mux.HandleFunc("/api/create-command", app.auth.RequireAuthFunc(app.handleCreateCommand))
 }

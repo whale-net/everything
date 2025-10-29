@@ -264,3 +264,107 @@ func (app *App) startGameServer(ctx context.Context, configID int32) error {
 
 	return nil
 }
+
+// getInstanceDetails fetches instance details with commands
+func (app *App) getInstanceDetails(ctx context.Context, instanceID int) (*experience_api.InstanceDetailsResponse, error) {
+	log.Printf("Getting instance details for instance ID: %d", instanceID)
+
+	cfg := experience_api.NewConfiguration()
+	cfg.Servers = experience_api.ServerConfigurations{
+		experience_api.ServerConfiguration{
+			URL: app.config.ExperienceAPIURL,
+		},
+	}
+	client := experience_api.NewAPIClient(cfg)
+
+	apiCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	details, httpResp, err := client.DefaultAPI.GetInstanceDetailsGameserverInstanceInstanceIdGet(apiCtx, int32(instanceID)).Execute()
+	if err != nil {
+		if httpResp != nil {
+			log.Printf("API error: status=%d", httpResp.StatusCode)
+		}
+		return nil, fmt.Errorf("failed to get instance details: %w", err)
+	}
+
+	return details, nil
+}
+
+// executeInstanceCommand executes a command on an instance
+func (app *App) executeInstanceCommand(ctx context.Context, instanceID int, request experience_api.ExecuteCommandRequest) (*experience_api.ExecuteCommandResponse, error) {
+	log.Printf("Executing command on instance %d: type=%s, id=%d", instanceID, request.CommandType, request.CommandId)
+
+	cfg := experience_api.NewConfiguration()
+	cfg.Servers = experience_api.ServerConfigurations{
+		experience_api.ServerConfiguration{
+			URL: app.config.ExperienceAPIURL,
+		},
+	}
+	client := experience_api.NewAPIClient(cfg)
+
+	apiCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	response, httpResp, err := client.DefaultAPI.ExecuteInstanceCommandGameserverInstanceInstanceIdCommandPost(apiCtx, int32(instanceID)).ExecuteCommandRequest(request).Execute()
+	if err != nil {
+		if httpResp != nil {
+			log.Printf("API error: status=%d", httpResp.StatusCode)
+		}
+		return nil, fmt.Errorf("failed to execute command: %w", err)
+	}
+
+	return response, nil
+}
+
+// getAvailableCommands fetches available commands for a game server
+func (app *App) getAvailableCommands(ctx context.Context, gameServerID int) ([]experience_api.GameServerCommand, error) {
+	log.Printf("Getting available commands for game server ID: %d", gameServerID)
+
+	cfg := experience_api.NewConfiguration()
+	cfg.Servers = experience_api.ServerConfigurations{
+		experience_api.ServerConfiguration{
+			URL: app.config.ExperienceAPIURL,
+		},
+	}
+	client := experience_api.NewAPIClient(cfg)
+
+	apiCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	commands, httpResp, err := client.DefaultAPI.GetAvailableCommandsGameserverGameServerIdCommandsGet(apiCtx, int32(gameServerID)).Execute()
+	if err != nil {
+		if httpResp != nil {
+			log.Printf("API error: status=%d", httpResp.StatusCode)
+		}
+		return nil, fmt.Errorf("failed to get available commands: %w", err)
+	}
+
+	return commands, nil
+}
+
+// createConfigCommand creates a new config-specific command
+func (app *App) createConfigCommand(ctx context.Context, configID int, request experience_api.CreateConfigCommandRequest) (*experience_api.GameServerConfigCommands, error) {
+	log.Printf("Creating config command for config ID: %d", configID)
+
+	cfg := experience_api.NewConfiguration()
+	cfg.Servers = experience_api.ServerConfigurations{
+		experience_api.ServerConfiguration{
+			URL: app.config.ExperienceAPIURL,
+		},
+	}
+	client := experience_api.NewAPIClient(cfg)
+
+	apiCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	command, httpResp, err := client.DefaultAPI.CreateConfigCommandGameserverConfigConfigIdCommandPost(apiCtx, int32(configID)).CreateConfigCommandRequest(request).Execute()
+	if err != nil {
+		if httpResp != nil {
+			log.Printf("API error: status=%d", httpResp.StatusCode)
+		}
+		return nil, fmt.Errorf("failed to create config command: %w", err)
+	}
+
+	return command, nil
+}

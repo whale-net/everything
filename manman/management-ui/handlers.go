@@ -262,3 +262,216 @@ type AvailableServer struct {
 type AvailableServersData struct {
 	Servers []AvailableServer
 }
+
+// handleInstancePage renders the instance detail page
+func (app *App) handleInstancePage(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+	if user == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Extract instance ID from URL path
+	instanceIDStr := strings.TrimPrefix(r.URL.Path, "/instance/")
+	if instanceIDStr == "" {
+		http.Error(w, "Missing instance ID", http.StatusBadRequest)
+		return
+	}
+
+	instanceID, err := strconv.Atoi(instanceIDStr)
+	if err != nil {
+		http.Error(w, "Invalid instance ID", http.StatusBadRequest)
+		return
+	}
+
+	// Get instance details
+	details, err := app.getInstanceDetails(r.Context(), instanceID)
+	if err != nil {
+		log.Printf("Failed to get instance details: %v", err)
+		http.Error(w, "Failed to load instance details", http.StatusInternalServerError)
+		return
+	}
+
+	// Prepare data for template
+	data := InstancePageData{
+		User:     user,
+		Instance: *details,
+	}
+
+	if err := templates.ExecuteTemplate(w, "instance.html", data); err != nil {
+		log.Printf("Template error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+// handleExecuteCommand handles command execution
+func (app *App) handleExecuteCommand(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+	if user == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse form data
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	instanceIDStr := r.FormValue("instance_id")
+	commandType := r.FormValue("command_type")
+	commandIDStr := r.FormValue("command_id")
+	customValue := r.FormValue("custom_value")
+
+	instanceID, err := strconv.Atoi(instanceIDStr)
+	if err != nil {
+		http.Error(w, "Invalid instance ID", http.StatusBadRequest)
+		return
+	}
+
+	commandID, err := strconv.Atoi(commandIDStr)
+	if err != nil {
+		http.Error(w, "Invalid command ID", http.StatusBadRequest)
+		return
+	}
+
+	// Build request
+	request := experience_api.ExecuteCommandRequest{
+		CommandType: commandType,
+		CommandId:   int32(commandID),
+	}
+	if customValue != "" {
+		request.CustomValue = *experience_api.NewNullableString(&customValue)
+	}
+
+	// Execute command
+	response, err := app.executeInstanceCommand(r.Context(), instanceID, request)
+	if err != nil {
+		log.Printf("Failed to execute command: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to execute command: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Return success message
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, `<div class="success-message">%s</div>`, response.Message)
+}
+
+// handleAddCommandModal renders the add command modal
+func (app *App) handleAddCommandModal(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+	if user == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get game_server_id from query params
+	gameServerIDStr := r.URL.Query().Get("game_server_id")
+	configIDStr := r.URL.Query().Get("config_id")
+
+	gameServerID, err := strconv.Atoi(gameServerIDStr)
+	if err != nil {
+		http.Error(w, "Invalid game_server_id", http.StatusBadRequest)
+		return
+	}
+
+	configID, err := strconv.Atoi(configIDStr)
+	if err != nil {
+		http.Error(w, "Invalid config_id", http.StatusBadRequest)
+		return
+	}
+
+	// Get available commands
+	commands, err := app.getAvailableCommands(r.Context(), gameServerID)
+	if err != nil {
+		log.Printf("Failed to get available commands: %v", err)
+		http.Error(w, "Failed to load commands", http.StatusInternalServerError)
+		return
+	}
+
+	data := AddCommandModalData{
+		Commands: commands,
+		ConfigID: configID,
+	}
+
+	if err := templates.ExecuteTemplate(w, "add_command_modal.html", data); err != nil {
+		log.Printf("Template error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+// handleCreateCommand creates a new config command
+func (app *App) handleCreateCommand(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+	if user == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse form data
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	configIDStr := r.FormValue("config_id")
+	commandIDStr := r.FormValue("command_id")
+	commandValue := r.FormValue("command_value")
+	description := r.FormValue("description")
+
+	configID, err := strconv.Atoi(configIDStr)
+	if err != nil {
+		http.Error(w, "Invalid config ID", http.StatusBadRequest)
+		return
+	}
+
+	commandID, err := strconv.Atoi(commandIDStr)
+	if err != nil {
+		http.Error(w, "Invalid command ID", http.StatusBadRequest)
+		return
+	}
+
+	// Build request
+	request := experience_api.CreateConfigCommandRequest{
+		GameServerCommandId: int32(commandID),
+		CommandValue:        commandValue,
+	}
+	if description != "" {
+		request.Description = *experience_api.NewNullableString(&description)
+	}
+
+	// Create command
+	_, err = app.createConfigCommand(r.Context(), configID, request)
+	if err != nil {
+		log.Printf("Failed to create command: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to create command: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Trigger page refresh
+	w.Header().Set("HX-Trigger", "commandCreated")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "Command created successfully")
+}
+
+// InstancePageData holds data for the instance page
+type InstancePageData struct {
+	User     *htmxauth.UserInfo
+	Instance experience_api.InstanceDetailsResponse
+}
+
+// AddCommandModalData holds data for the add command modal
+type AddCommandModalData struct {
+	Commands []experience_api.GameServerCommand
+	ConfigID int
+}
