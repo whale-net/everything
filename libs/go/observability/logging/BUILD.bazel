@@ -13,10 +13,10 @@ go_library(
         "@io_opentelemetry_go_otel//log",
         "@io_opentelemetry_go_otel//log/global",
         "@io_opentelemetry_go_otel//trace",
+        "@io_opentelemetry_go_otel//semconv/v1.24.0",
         "@io_opentelemetry_go_otel_exporters_otlp_otlplog_otlploggrpc//:otlploggrpc",
         "@io_opentelemetry_go_otel_sdk//resource",
         "@io_opentelemetry_go_otel_sdk_log//:log",
-        "@io_opentelemetry_go_otel//semconv/v1.24.0:semconv",
     ],
 )
 

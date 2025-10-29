@@ -2,6 +2,7 @@ package logging
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -221,12 +222,30 @@ func toString(v interface{}) string {
 	switch val := v.(type) {
 	case string:
 		return val
-	case int, int64, int32, int16, int8:
-		return string(rune(val.(int)))
-	case uint, uint64, uint32, uint16, uint8:
-		return string(rune(val.(uint)))
-	case float64, float32:
-		return string(rune(int(val.(float64))))
+	case int:
+		return fmt.Sprintf("%d", val)
+	case int64:
+		return fmt.Sprintf("%d", val)
+	case int32:
+		return fmt.Sprintf("%d", val)
+	case int16:
+		return fmt.Sprintf("%d", val)
+	case int8:
+		return fmt.Sprintf("%d", val)
+	case uint:
+		return fmt.Sprintf("%d", val)
+	case uint64:
+		return fmt.Sprintf("%d", val)
+	case uint32:
+		return fmt.Sprintf("%d", val)
+	case uint16:
+		return fmt.Sprintf("%d", val)
+	case uint8:
+		return fmt.Sprintf("%d", val)
+	case float64:
+		return fmt.Sprintf("%f", val)
+	case float32:
+		return fmt.Sprintf("%f", val)
 	case bool:
 		if val {
 			return "true"
@@ -235,6 +254,6 @@ func toString(v interface{}) string {
 	case time.Time:
 		return val.Format(time.RFC3339)
 	default:
-		return ""
+		return fmt.Sprintf("%v", v)
 	}
 }
