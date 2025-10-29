@@ -1,0 +1,26 @@
+name: Cram testing jose-util
+on:
+  push:
+    branches: [ '**' ]
+  pull_request:
+    branches: [ '**' ]
+
+jobs:
+  cram:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+
+      - run: pip install cram
+
+      - uses: actions/setup-go@v6
+
+      - run: go build .
+        working-directory: jose-util
+
+      - run: PATH=$PWD:$PATH cram -v jose-util.t
+        working-directory: jose-util
