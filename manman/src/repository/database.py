@@ -8,7 +8,8 @@ worker management, and related functionality extracted from the status processor
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
-from sqlalchemy import desc
+from sqlalchemy import desc, exists
+from sqlalchemy.orm import aliased
 from sqlalchemy.sql.functions import current_timestamp
 from sqlmodel import Session, not_, select
 
@@ -21,7 +22,10 @@ from manman.src.models import (
     ACTIVE_STATUS_TYPES,
     ExternalStatusInfo,
     GameServer,
+    GameServerCommand,
+    GameServerCommandDefaults,
     GameServerConfig,
+    GameServerConfigCommands,
     GameServerInstance,
     StatusType,
     Worker,
@@ -527,6 +531,64 @@ class GameServerConfigRepository(DatabaseRepository):
                 session.expunge(config)
             return results
 
+    def get_commands_for_game_server(self, game_server_id: int) -> list[GameServerCommand]:
+        """
+        Get all visible commands for a game server.
+
+        Args:
+            game_server_id: The ID of the game server
+
+        Returns:
+            List of GameServerCommand instances
+        """
+        with self._get_session_context() as session:
+            stmt = (
+                select(GameServerCommand)
+                .where(GameServerCommand.game_server_id == game_server_id)
+                .where(GameServerCommand.is_visible.is_(True))
+                .order_by(GameServerCommand.name)
+            )
+            results = session.exec(stmt).all()
+            for cmd in results:
+                session.expunge(cmd)
+            return results
+
+    def create_config_command(
+        self,
+        config_id: int,
+        command_id: int,
+        command_value: str,
+        description: Optional[str] = None,
+    ) -> GameServerConfigCommands:
+        """
+        Create a new config-specific command.
+
+        Args:
+            config_id: The game server config ID
+            command_id: The game server command ID
+            command_value: The command value/parameters
+            description: Optional description
+
+        Returns:
+            The created GameServerConfigCommands instance
+
+        Raises:
+            IntegrityError: If duplicate command+value exists
+        """
+        with self._get_session_context() as session:
+            cmd = GameServerConfigCommands(
+                game_server_config_id=config_id,
+                game_server_command_id=command_id,
+                command_value=command_value,
+                description=description,
+                is_visible=True,
+            )
+            session.add(cmd)
+            session.flush()
+            session.expunge(cmd)
+            session.commit()
+            return cmd
+
 
 class GameServerInstanceRepository(DatabaseRepository):
     """Repository class for game server instance-related database operations."""
@@ -569,6 +631,74 @@ class GameServerInstanceRepository(DatabaseRepository):
             if instance:
                 session.expunge(instance)
             return instance
+
+    def get_instance_with_commands(
+        self, instance_id: int
+    ) -> Optional[
+        Tuple[
+            GameServerInstance,
+            GameServerConfig,
+            list[GameServerCommandDefaults],
+            list[GameServerConfigCommands],
+        ]
+    ]:
+        """
+        Get instance with config and all available commands.
+
+        Args:
+            instance_id: The game server instance ID
+
+        Returns:
+            Tuple of (instance, config, command_defaults, config_commands) or None if not found
+        """
+        from sqlalchemy.orm import selectinload
+
+        with self._get_session_context() as session:
+            # Get instance with eager loading of config
+            stmt = (
+                select(GameServerInstance)
+                .options(selectinload(GameServerInstance.game_server_config))
+                .where(GameServerInstance.game_server_instance_id == instance_id)
+            )
+            instance = session.exec(stmt).first()
+
+            if not instance:
+                return None
+
+            config = instance.game_server_config
+            game_server_id = config.game_server_id
+
+            # Get command defaults for this game server
+            defaults_stmt = (
+                select(GameServerCommandDefaults)
+                .join(GameServerCommand)
+                .where(GameServerCommand.game_server_id == game_server_id)
+                .where(GameServerCommandDefaults.is_visible.is_(True))
+                .options(selectinload(GameServerCommandDefaults.game_server_command))
+            )
+            defaults = list(session.exec(defaults_stmt).all())
+
+            # Get config-specific commands
+            config_cmds_stmt = (
+                select(GameServerConfigCommands)
+                .where(
+                    GameServerConfigCommands.game_server_config_id
+                    == config.game_server_config_id
+                )
+                .where(GameServerConfigCommands.is_visible.is_(True))
+                .options(selectinload(GameServerConfigCommands.game_server_command))
+            )
+            config_cmds = list(session.exec(config_cmds_stmt).all())
+
+            # Expunge all objects before returning
+            session.expunge(instance)
+            session.expunge(config)
+            for d in defaults:
+                session.expunge(d)
+            for c in config_cmds:
+                session.expunge(c)
+
+            return (instance, config, defaults, config_cmds)
 
     def shutdown_instance(self, instance_id: int) -> Optional[GameServerInstance]:
         """
@@ -631,17 +761,160 @@ class GameServerInstanceRepository(DatabaseRepository):
             return instance
 
     def get_current_instances(
-        self, worker_id: int, session: Optional[Session] = None
+        self, worker_id: int, include_crashed: bool = False, session: Optional[Session] = None
     ) -> list[GameServerInstance]:
+        """
+        Get current game server instances for a worker.
+        
+        Args:
+            worker_id: The worker ID to filter by
+            include_crashed: If True, includes the last crashed instance for each game server config
+            session: Optional database session
+            
+        Returns:
+            List of active instances, and optionally the last crashed instance per config
+        """
         # TODO - don't re-use a session in the context manager if one is provided
         #        doing so will cause the session to be closed when the context manager exits
         #        #35
         # TODO - addres if above todo is stil lrelevant - copy patsed from somewhere else in the project
         with self._get_session_context() as session:
-            stmt = (
+            # Get active instances (end_date is NULL)
+            active_stmt = (
                 select(GameServerInstance)
                 .where(GameServerInstance.worker_id == worker_id)
                 .where(GameServerInstance.end_date.is_(None))
             )
-            results = session.exec(stmt).all()
-            return results
+            active_instances = list(session.exec(active_stmt).all())
+            
+            if not include_crashed:
+                return active_instances
+            
+            # Get the last crashed instance for each game_server_config_id
+            # that doesn't already have an active instance
+            active_config_ids = {inst.game_server_config_id for inst in active_instances}
+            
+            if active_config_ids:
+                # Use NOT IN clause to exclude configs with active instances
+                config_filter = GameServerInstance.game_server_config_id.notin_(active_config_ids)
+            else:
+                # No active instances, so include all configs
+                config_filter = True
+            
+            # Aliases for the subquery to avoid column name conflicts
+            GSI2 = aliased(GameServerInstance)
+            ESI2 = aliased(ExternalStatusInfo)
+            
+            # Get crashed instances where there does not exist a crashed instance
+            # with a later end_date for the same config
+            crashed_stmt = (
+                select(GameServerInstance)
+                .join(
+                    ExternalStatusInfo,
+                    ExternalStatusInfo.game_server_instance_id == GameServerInstance.game_server_instance_id
+                )
+                .where(GameServerInstance.worker_id == worker_id)
+                .where(GameServerInstance.end_date.isnot(None))
+                .where(ExternalStatusInfo.status_type == StatusType.CRASHED)
+                .where(config_filter)
+                .where(
+                    ~exists(
+                        select(GSI2.game_server_instance_id)
+                        .join(
+                            ESI2,
+                            ESI2.game_server_instance_id == GSI2.game_server_instance_id
+                        )
+                        .where(GSI2.worker_id == worker_id)
+                        .where(GSI2.end_date.isnot(None))
+                        .where(ESI2.status_type == StatusType.CRASHED)
+                        .where(GSI2.game_server_config_id == GameServerInstance.game_server_config_id)
+                        .where(GSI2.end_date > GameServerInstance.end_date)
+                    )
+                )
+            )
+            
+            crashed_instances = list(session.exec(crashed_stmt).all())
+            
+            return active_instances + crashed_instances
+
+    def get_instance_history(
+        self, game_server_id: int, limit: int = 10
+    ) -> list[GameServerInstance]:
+        """
+        Get the last N instances for a game server across all configs.
+
+        Args:
+            game_server_id: The game server ID
+            limit: Maximum number of instances to return
+
+        Returns:
+            List of instances ordered by created_date descending
+        """
+        with self._get_session_context() as session:
+            stmt = (
+                select(GameServerInstance)
+                .join(
+                    GameServerConfig,
+                    GameServerConfig.game_server_config_id
+                    == GameServerInstance.game_server_config_id,
+                )
+                .where(GameServerConfig.game_server_id == game_server_id)
+                .order_by(desc(GameServerInstance.created_date))
+                .limit(limit)
+            )
+            instances = list(session.exec(stmt).all())
+            for inst in instances:
+                session.expunge(inst)
+            return instances
+
+    def list_game_servers(self) -> list[GameServer]:
+        """Get all game servers."""
+        with self._get_session_context() as session:
+            stmt = select(GameServer)
+            servers = list(session.exec(stmt).all())
+            for s in servers:
+                session.expunge(s)
+            return servers
+
+    def get_game_server(self, game_server_id: int) -> Optional[GameServer]:
+        """Get a game server by ID."""
+        with self._get_session_context() as session:
+            server = session.get(GameServer, game_server_id)
+            if server:
+                session.expunge(server)
+            return server
+
+    def create_game_server(
+        self, name: str, server_type: str, app_id: int
+    ) -> GameServer:
+        """Create a new game server."""
+        with self._get_session_context() as session:
+            server = GameServer(name=name, server_type=server_type, app_id=app_id)
+            session.add(server)
+            session.flush()
+            session.expunge(server)
+            session.commit()
+            return server
+
+    def create_game_server_command(
+        self,
+        game_server_id: int,
+        name: str,
+        command: str,
+        description: Optional[str] = None,
+        is_visible: bool = True,
+    ) -> GameServerCommand:
+        """Create a new game server command."""
+        with self._get_session_context() as session:
+            cmd = GameServerCommand(
+                game_server_id=game_server_id,
+                name=name,
+                command=command,
+                description=description,
+                is_visible=is_visible,
+            )
+            session.add(cmd)
+            session.flush()
+            session.expunge(cmd)
+            session.commit()
+            return cmd

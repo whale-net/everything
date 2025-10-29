@@ -145,6 +145,160 @@ class GameServerConfig(ManManBase, table=True):
     )
 
 
+class ConfigOptionType(StrEnum):
+    """Type of configuration option."""
+    ARG = "arg"
+    ENV_VAR = "env_var"
+    POST_INSTALL_SCRIPT = "post_install_script"
+
+
+class GameServerConfigOption(ManManBase, table=True):
+    """Configuration options for game servers.
+    
+    Options can be args, environment variables, or post-install scripts.
+    They supersede the existing args/env_var/post_install_commands fields on GameServerConfig.
+    """
+    __tablename__ = "game_server_config_options"
+    
+    game_server_config_option_id: int = Field(primary_key=True)
+    game_server_config_id: int = Field(
+        foreign_key="game_server_configs.game_server_config_id", 
+        index=True
+    )
+    
+    option_type: ConfigOptionType = Field()
+    value: str = Field()
+    
+    # Order for execution: 0=default, -1=before, 1=after (ascending order)
+    order: int = Field(default=0)
+    
+    # Options are enabled by default
+    is_enabled: bool = Field(default=True)
+    
+    # Optional description for UI display
+    description: Optional[str] = Field(nullable=True, default=None)
+    
+    game_server_config: GameServerConfig = Relationship()
+    
+    __table_args__ = (
+        Index(
+            "ix_game_server_config_options_config_order",
+            "game_server_config_id",
+            "order",
+            "option_type",
+        ),
+    )
+
+
+class GameServerCommand(ManManBase, table=True):
+    """Generic runtime commands that can be sent to game servers via stdin.
+    
+    These are reusable command templates (e.g., map change, gamemode change)
+    that are not specific to any particular server configuration.
+    """
+    __tablename__ = "game_server_commands"
+    
+    game_server_command_id: int = Field(primary_key=True)
+    game_server_id: int = Field(
+        foreign_key="game_servers.game_server_id",
+        index=True
+    )
+    
+    # Command name/identifier (e.g., "change_map", "set_gamemode")
+    name: str = Field()
+    
+    # The actual command or command template
+    # Could be complete: "changelevel de_dust2"
+    # Or a stub: "changelevel {map_name}"
+    command: str = Field()
+    
+    # Human-readable description for UI display
+    description: Optional[str] = Field(nullable=True, default=None)
+    
+    # Visibility toggle for UI
+    is_visible: bool = Field(default=True)
+    
+    game_server: GameServer = Relationship()
+    
+    __table_args__ = (
+        Index(
+            "ixu_game_server_commands_game_server_name",
+            "game_server_id",
+            "name",
+            unique=True,
+        ),
+    )
+
+
+class GameServerCommandDefaults(ManManBase, table=True):
+    """Default command configurations shared across all game servers.
+    
+    These are specific command instances with values (e.g., "change to dust2")
+    that reference GameServerCommand templates and can be used across multiple configs.
+    """
+    __tablename__ = "game_server_command_defaults"
+    
+    game_server_command_default_id: int = Field(primary_key=True)
+    game_server_command_id: int = Field(
+        foreign_key="game_server_commands.game_server_command_id",
+        index=True
+    )
+    
+    # The specific values/parameters for this command instance
+    # For a map change: could store the map name
+    # For gamemode: could store the mode value
+    command_value: str = Field()
+    
+    # Human-readable description for this specific command instance
+    description: Optional[str] = Field(nullable=True, default=None)
+    
+    # Visibility toggle for UI
+    is_visible: bool = Field(default=True)
+    
+    game_server_command: GameServerCommand = Relationship()
+
+
+class GameServerConfigCommands(ManManBase, table=True):
+    """Config-specific command configurations.
+    
+    These are commands specific to a particular game server config,
+    allowing per-config customization (e.g., cheats enabled in test servers).
+    """
+    __tablename__ = "game_server_config_commands"
+    
+    game_server_config_command_id: int = Field(primary_key=True)
+    game_server_config_id: int = Field(
+        foreign_key="game_server_configs.game_server_config_id",
+        index=True
+    )
+    game_server_command_id: int = Field(
+        foreign_key="game_server_commands.game_server_command_id",
+        index=True
+    )
+    
+    # The specific values/parameters for this command instance
+    command_value: str = Field()
+    
+    # Human-readable description for this specific command instance
+    description: Optional[str] = Field(nullable=True, default=None)
+    
+    # Visibility toggle for UI
+    is_visible: bool = Field(default=True)
+    
+    game_server_config: GameServerConfig = Relationship()
+    game_server_command: GameServerCommand = Relationship()
+    
+    __table_args__ = (
+        Index(
+            "ixu_game_server_config_commands_config_command",
+            "game_server_config_id",
+            "game_server_command_id",
+            "command_value",
+            unique=True,
+        ),
+    )
+
+
 ### NON TABLES # unsure if this is good idea
 
 
@@ -180,11 +334,17 @@ ACTIVE_STATUS_TYPES = {
     StatusType.INITIALIZING,
     StatusType.RUNNING,
 }
-# Although a little strange, these are types that cannot be produced by a running system
-# and must be observed by the status processor
+
+# Types that cannot be produced by the worker/instance
+# and must be monitored via the stauts processor
 OBSERVED_STATUS_TYPES = {
     StatusType.LOST,
+}
+
+# Types that indicate completion
+COMPLETE_STATUS_TYPES = {
     StatusType.CRASHED,
+    StatusType.COMPLETE,
 }
 
 

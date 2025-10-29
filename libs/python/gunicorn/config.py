@@ -14,6 +14,7 @@ def get_gunicorn_config(
     threads: int = 2,  # Add thread pool for blocking operations
     preload_app: bool = True,
     enable_otel: bool = False,
+    post_worker_init: callable = None,  # Hook function called after worker initialization
 ) -> dict:
     """
     Get Gunicorn configuration for FastAPI services.
@@ -30,16 +31,23 @@ def get_gunicorn_config(
         threads: Number of threads per worker for blocking operations (default: 2)
         preload_app: Whether to preload the application before forking workers (default: True)
         enable_otel: Whether OTEL logging is enabled (unused but kept for compatibility)
+        post_worker_init: Optional callable to run after each worker initializes (default: None)
 
     Returns:
         Configuration dict for Gunicorn
 
     Example:
         >>> from libs.python.gunicorn import get_gunicorn_config
+        >>> 
+        >>> def init_worker(worker):
+        ...     # Initialize database per worker
+        ...     init_sql_alchemy_engine(connection_string, force_reinit=True)
+        >>> 
         >>> options = get_gunicorn_config(
         ...     microservice_name="my-api",
         ...     port=8000,
         ...     workers=4,
+        ...     post_worker_init=init_worker,
         ... )
         >>> GunicornApplication(create_app, options).run()
     """
@@ -67,5 +75,9 @@ def get_gunicorn_config(
         "capture_output": True,
         "enable_stdio_inheritance": True,
     }
+    
+    # Add post_worker_init hook if provided
+    if post_worker_init is not None:
+        config["post_worker_init"] = post_worker_init
 
     return config

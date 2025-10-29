@@ -1,5 +1,8 @@
 from contextlib import asynccontextmanager
 
+from manman.src.host.main import initialize_rabbitmq_exchanges
+from libs.python.rmq import cleanup_rabbitmq_connections
+
 from .server import router as server_router
 from .worker import router as worker_router
 
@@ -9,11 +12,15 @@ __all__ = ["worker_router", "server_router", "create_app"]
 @asynccontextmanager
 async def lifespan(app):
     """Lifespan context manager for FastAPI application."""
-    # Startup
+    # Database initialization is handled by Gunicorn's post_worker_init hook
+    # This lifespan handles app-level startup/shutdown
+    
+    # Initialize RabbitMQ exchanges
+    initialize_rabbitmq_exchanges()
+    
     yield
+    
     # Shutdown - cleanup RabbitMQ connections
-    from libs.python.rmq import cleanup_rabbitmq_connections
-
     cleanup_rabbitmq_connections()
 
 

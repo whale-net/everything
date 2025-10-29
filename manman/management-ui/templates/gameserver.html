@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.GameServer.Name}} - ManMan</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        header {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        h1 {
+            color: #2563eb;
+            margin-bottom: 5px;
+        }
+        .breadcrumb {
+            color: #666;
+            font-size: 14px;
+        }
+        .breadcrumb a {
+            color: #2563eb;
+            text-decoration: none;
+        }
+        .breadcrumb a:hover {
+            text-decoration: underline;
+        }
+        .content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .card h2 {
+            color: #1f2937;
+            margin-bottom: 15px;
+            font-size: 18px;
+            border-bottom: 2px solid #e5e7eb;
+            padding-bottom: 10px;
+        }
+        .full-width {
+            grid-column: 1 / -1;
+        }
+        .info-grid {
+            display: grid;
+            gap: 12px;
+        }
+        .info-item {
+            display: grid;
+            grid-template-columns: 140px 1fr;
+            gap: 10px;
+        }
+        .info-label {
+            font-weight: 600;
+            color: #4b5563;
+        }
+        .info-value {
+            color: #1f2937;
+        }
+        .command-list {
+            display: grid;
+            gap: 10px;
+        }
+        .command-item {
+            padding: 12px;
+            background: #f9fafb;
+            border-radius: 4px;
+            border-left: 4px solid #10b981;
+        }
+        .command-name {
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 4px;
+        }
+        .command-details {
+            color: #6b7280;
+            font-size: 14px;
+            font-family: monospace;
+        }
+        .command-description {
+            color: #6b7280;
+            font-size: 13px;
+            margin-top: 4px;
+        }
+        .instance-history {
+            display: grid;
+            gap: 10px;
+        }
+        .history-item {
+            padding: 12px;
+            background: #f9fafb;
+            border-radius: 4px;
+            border-left: 4px solid #3b82f6;
+            text-decoration: none;
+            color: inherit;
+            display: block;
+            transition: all 0.2s;
+        }
+        .history-item:hover {
+            background: #f3f4f6;
+            transform: translateX(2px);
+        }
+        .history-item.stopped {
+            border-left-color: #6b7280;
+        }
+        .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .history-id {
+            font-weight: 600;
+            color: #1f2937;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .status-badge.running {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        .status-badge.stopped {
+            background: #e5e7eb;
+            color: #4b5563;
+        }
+        .history-details {
+            color: #6b7280;
+            font-size: 14px;
+        }
+        .history-time {
+            display: flex;
+            gap: 15px;
+            margin-top: 4px;
+            font-size: 13px;
+        }
+        .empty-state {
+            text-align: center;
+            color: #9ca3af;
+            padding: 20px;
+        }
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: #2563eb;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #1d4ed8;
+        }
+        .add-command-btn {
+            width: 100%;
+            margin-top: 10px;
+        }
+        .back-link {
+            display: inline-block;
+            color: #2563eb;
+            text-decoration: none;
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.show {
+            display: flex;
+        }
+        .modal {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+        .modal h2 {
+            margin-bottom: 20px;
+            color: #1f2937;
+        }
+        .modal-close {
+            float: right;
+            font-size: 24px;
+            font-weight: bold;
+            color: #6b7280;
+            cursor: pointer;
+            background: none;
+            border: none;
+            padding: 0;
+            margin: -10px -10px 0 0;
+        }
+        .modal-close:hover {
+            color: #1f2937;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #4b5563;
+        }
+        .form-group input[type="text"],
+        .form-group textarea {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            font-family: inherit;
+        }
+        .form-group textarea {
+            resize: vertical;
+            min-height: 60px;
+            font-family: monospace;
+        }
+        .form-group input[type="checkbox"] {
+            margin-right: 8px;
+        }
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            font-weight: normal;
+        }
+        .btn-secondary {
+            background: #6b7280;
+            color: white;
+            margin-top: 10px;
+        }
+        .btn-secondary:hover {
+            background: #4b5563;
+        }
+        .success-message {
+            background: #d1fae5;
+            color: #065f46;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+        .config-list {
+            margin-top: 15px;
+        }
+        .config-item {
+            padding: 10px 12px;
+            background: #f9fafb;
+            border-radius: 4px;
+            margin: 8px 0;
+            border-left: 4px solid #10b981;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .config-item.disabled {
+            background: #f3f4f6;
+            border-left-color: #9ca3af;
+            opacity: 0.7;
+        }
+        .config-name {
+            font-weight: 500;
+            color: #1f2937;
+        }
+        .config-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .config-badge.enabled {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        .config-badge.disabled {
+            background: #e5e7eb;
+            color: #6b7280;
+        }
+    </style>
+    <script>
+        function openAddCommandModal() {
+            document.getElementById('addCommandModal').classList.add('show');
+        }
+        function closeAddCommandModal() {
+            document.getElementById('addCommandModal').classList.remove('show');
+        }
+        document.addEventListener('click', function(e) {
+            if (e.target.id === 'addCommandModal') {
+                closeAddCommandModal();
+            }
+        });
+        // Reload page when command is created
+        document.body.addEventListener('commandCreated', function() {
+            closeAddCommandModal();
+            location.reload();
+        });
+    </script>
+</head>
+<body>
+    <div class="container">
+        <a href="/gameservers" class="back-link">← Back to Game Server Types</a>
+        
+        <header>
+            <div class="header-content">
+                <div>
+                    <h1>{{.GameServer.Name}}</h1>
+                    <div class="breadcrumb">
+                        <a href="/">Home</a> / <a href="/gameservers">Game Server Types</a> / {{.GameServer.Name}}
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <div class="content">
+            <!-- Server Info -->
+            <div class="card">
+                <h2>Server Information</h2>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="info-label">Server ID:</div>
+                        <div class="info-value">{{.GameServer.GameServerId}}</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Name:</div>
+                        <div class="info-value">{{.GameServer.Name}}</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Server Type:</div>
+                        <div class="info-value">{{.GameServer.ServerType}}</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">App ID:</div>
+                        <div class="info-value">{{.GameServer.AppId}}</div>
+                    </div>
+                </div>
+
+                <h2 style="margin-top: 20px; font-size: 16px;">Configurations ({{len .Configs}})</h2>
+                <div class="config-list">
+                    {{if .Configs}}
+                        {{range .Configs}}
+                        <div class="config-item {{if not .IsVisible}}disabled{{end}}">
+                            <div class="config-name">{{.Name}}</div>
+                            <span class="config-badge {{if .IsVisible}}enabled{{else}}disabled{{end}}">
+                                {{if .IsVisible}}Enabled{{else}}Disabled{{end}}
+                            </span>
+                        </div>
+                        {{end}}
+                    {{else}}
+                        <div class="empty-state">No configurations defined yet.</div>
+                    {{end}}
+                </div>
+            </div>
+
+            <!-- Available Commands -->
+            <div class="card">
+                <h2>Available Commands</h2>
+                <button class="btn btn-primary add-command-btn" onclick="openAddCommandModal()">
+                    + Add Command
+                </button>
+                <div class="command-list">
+                    {{if .Commands}}
+                        {{range .Commands}}
+                        <div class="command-item">
+                            <div class="command-name">{{.Name}}</div>
+                            <div class="command-details">{{.Command}}</div>
+                            {{if .Description.IsSet}}
+                                <div class="command-description">{{.Description.Get}}</div>
+                            {{end}}
+                        </div>
+                        {{end}}
+                    {{else}}
+                        <div class="empty-state">No commands configured yet.</div>
+                    {{end}}
+                </div>
+            </div>
+
+            <!-- Instance History -->
+            <div class="card full-width">
+                <h2>Instance History (Last 10)</h2>
+                <div class="instance-history">
+                    {{if .InstanceHistory}}
+                        {{range .InstanceHistory}}
+                        <a href="/instance/{{.InstanceID}}" class="history-item {{.Status}}">
+                            <div class="history-header">
+                                <div class="history-id">Instance #{{.InstanceID}}</div>
+                                <span class="status-badge {{.Status}}">{{.Status}}</span>
+                            </div>
+                            <div class="history-details">
+                                Config ID: {{.ConfigID}}
+                            </div>
+                            <div class="history-time">
+                                <span>Started: {{.CreatedDate}}</span>
+                                {{if .EndDate}}
+                                    <span>Ended: {{.EndDate}}</span>
+                                {{end}}
+                                <span>Runtime: {{.RuntimeSeconds}}s</span>
+                            </div>
+                        </a>
+                        {{end}}
+                    {{else}}
+                        <div class="empty-state">No instance history available.</div>
+                    {{end}}
+                </div>
+            </div>
+        </div>
+
+        <!-- Add Command Modal -->
+        <div id="addCommandModal" class="modal-overlay">
+            <div class="modal">
+                <button class="modal-close" onclick="closeAddCommandModal()">&times;</button>
+                <h2>Add Command to {{.GameServer.Name}}</h2>
+                <form hx-post="/api/create-gameserver-command" 
+                      hx-swap="none"
+                      hx-indicator="#submit-indicator">
+                    <input type="hidden" name="game_server_id" value="{{.GameServer.GameServerId}}">
+                    
+                    <div class="form-group">
+                        <label for="name">Command Name*</label>
+                        <input type="text" id="name" name="name" required placeholder="e.g., Update Server">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="command">Command*</label>
+                        <textarea id="command" name="command" required placeholder="e.g., steamcmd +login anonymous +app_update 1829350 validate +quit"></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="description">Description</label>
+                        <input type="text" id="description" name="description" placeholder="Optional description">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="is_visible" checked>
+                            Visible to users
+                        </label>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary">
+                        Create Command
+                        <span id="submit-indicator" class="htmx-indicator" style="display:none; margin-left: 8px;">⏳</span>
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="closeAddCommandModal()">Cancel</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

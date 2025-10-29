@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 
 from amqpstorm import Connection
 from opentelemetry import trace
@@ -72,13 +73,19 @@ class Server(ManManService):
         logger.info("starting instance %s", self._instance.model_dump_json())
 
         self._root_install_directory = root_install_directory
+        
+        # Sanitize game server name for use in filesystem path
+        # Remove or replace spaces and special characters
+        sanitized_name = re.sub(r'[^a-zA-Z0-9_-]', '_', self._game_server.name)
+        
+        # Build directory: {root}/{server_type}/{app_id}/{config_id}-{game_server_name}
         self._server_directory = os.path.join(
             self._root_install_directory,
             # game_server is unique on server_type_appid
             ServerType(self._game_server.server_type).name.lower(),
             str(self._game_server.app_id),
-            # and then config is unique on game_server_id, name
-            self._config.name,
+            # config_id and sanitized game server name
+            f"{self._config.game_server_config_id}-{sanitized_name}",
         )
 
         executable_path = os.path.join(self._server_directory, self._config.executable)

@@ -1,7 +1,12 @@
 {{if .Servers}}
     {{range .Servers}}
-    <div class="server-item">
-        <div class="server-name">{{.Name}}</div>
+    <a href="/instance/{{.InstanceID}}" class="server-item {{if eq .StatusType "crashed"}}crashed{{end}}">
+        <div class="server-name">
+            {{.Name}}
+            {{if eq .StatusType "crashed"}}
+            <span class="status-badge crashed">CRASHED</span>
+            {{end}}
+        </div>
         <div class="server-details">
             Instance: {{.InstanceID}} | Config ID: {{.ID}}
             {{if .StatusType}}
@@ -11,7 +16,7 @@
             {{end}}
             {{if .IP}}| IP: {{.IP}}:{{.Port}}{{end}}
         </div>
-    </div>
+    </a>
     {{end}}
 {{else}}
     <div class="empty-state">No servers running</div>

@@ -310,6 +310,47 @@ migration_app = create_migration_app(
 
 See [`docs/ALEMBIC_CONSOLIDATION.md`](docs/ALEMBIC_CONSOLIDATION.md) for complete documentation and migration guide.
 
+#### Creating Database Migrations
+
+When adding or modifying database models, create Alembic migrations:
+
+1. **Ensure database is running**:
+   ```bash
+   # Via Tilt (recommended for local dev)
+   tilt up --file=manman/Tiltfile
+   
+   # Get database credentials from running pod
+   kubectl exec -n manman-local-dev postgres-dev-0 -- env | grep POSTGRES
+   ```
+
+2. **Create migration with message**:
+   ```bash
+   # Use the database URL from the running postgres pod
+   POSTGRES_URL="postgresql://postgres:password@localhost:5432/manman" \
+     bazel run //manman/src/host:migration_cli -- \
+     create-migration --migration-message "your migration description"
+   ```
+
+3. **Move migration from Bazel cache to workspace** (CRITICAL):
+   ```bash
+   # Find the generated migration file
+   MIGRATION_FILE=$(find ~/.cache/bazel -name "*_your_migration*.py" -type f ! -name "*.pyc" 2>/dev/null | head -1)
+   
+   # Copy to workspace
+   cp "$MIGRATION_FILE" manman/src/migrations/versions/
+   ```
+   
+   **Why this step is critical**: Bazel generates migrations in its cache directory. If not copied to the workspace, the migration will not be committed and will cause errors in CI/CD and other developers' environments.
+
+4. **Verify migration**:
+   ```bash
+   # Check migration was created
+   ls -la manman/src/migrations/versions/
+   
+   # Run tests to ensure models are correct
+   bazel test //manman/src:models_test
+   ```
+
 #### Go Libraries
 Reference shared Go code from `//libs/go`:
 ```starlark
