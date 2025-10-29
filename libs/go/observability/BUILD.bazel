@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+# Top-level observability library that re-exports all subpackages
+go_library(
+    name = "observability",
+    srcs = ["observability.go"],
+    importpath = "github.com/whale-net/everything/libs/go/observability",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/observability/context",
+        "//libs/go/observability/logging",
+        "//libs/go/observability/tracing",
+    ],
+)

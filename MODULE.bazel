@@ -203,6 +203,73 @@ go_deps.module(
     version = "v3.0.1",
 )
 
+# OpenTelemetry dependencies for observability
+go_deps.module(
+    path = "go.opentelemetry.io/otel",
+    sum = "h1:9l4+ROzaUHD3w5oo/VUDHLjKtgVxYzz/cAvOz/Qmjx0=",
+    version = "v1.32.0",
+)
+
+go_deps.module(
+    path = "go.opentelemetry.io/otel/sdk",
+    sum = "h1:OkjOqD5bM3rDN0zfH8Y3WCKBLuOPzbnPO6YfJqnVg0U=",
+    version = "v1.32.0",
+)
+
+go_deps.module(
+    path = "go.opentelemetry.io/otel/trace",
+    sum = "h1:+SZ0+wW0VX/5hxL4M4V7V+J3sIPpPNMh43h0fChvL3g=",
+    version = "v1.32.0",
+)
+
+go_deps.module(
+    path = "go.opentelemetry.io/otel/log",
+    sum = "h1:tqQFGFOxG+2Vb4p3Bh5sKTSxX9n3cAJJ9DQe6a9LdG4=",
+    version = "v0.8.0",
+)
+
+go_deps.module(
+    path = "go.opentelemetry.io/otel/sdk/log",
+    sum = "h1:xQ3HmxMdCqEDlz5TQpPRCu5ZF2jHJPL2c1/yMQkkS7E=",
+    version = "v0.8.0",
+)
+
+go_deps.module(
+    path = "go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc",
+    sum = "h1:kVEZOeIe2sE+rRhpMBHQVIYL2xJPVY0L4ZJEEOz3WCs=",
+    version = "v0.8.0",
+)
+
+go_deps.module(
+    path = "go.opentelemetry.io/otel/exporters/otlp/otlptrace",
+    sum = "h1:8m7/R7s+mhgFaSJRZY5qF/hOcQwP2o4MaTq0Sm/XJGo=",
+    version = "v1.32.0",
+)
+
+go_deps.module(
+    path = "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc",
+    sum = "h1:5aL0PhRJuXDkWbLbOgZUz4B4QBpTBwX6W0u7R/E0fss=",
+    version = "v1.32.0",
+)
+
+go_deps.module(
+    path = "go.opentelemetry.io/proto/otlp",
+    sum = "h1:Q3+wnQ11w4S+P5cJTp86xYLFOhH3JQW6TYqP2VFMN7M=",
+    version = "v1.4.0",
+)
+
+go_deps.module(
+    path = "google.golang.org/grpc",
+    sum = "h1:OT9G0y6xFRUQOQRBLX6DxFGvhv+LXWamQ9TJZt5zmYA=",
+    version = "v1.70.0",
+)
+
+go_deps.module(
+    path = "google.golang.org/protobuf",
+    sum = "h1:mtbLrKL6MqpWq8X5JqE7xFHkXTb8mKwYlscFJtOcx3o=",
+    version = "v1.36.6",
+)
+
 use_repo(
     go_deps,
     "com_github_coreos_go_oidc_v3",
@@ -213,7 +280,18 @@ use_repo(
     "com_github_pmezard_go_difflib",
     "com_github_stretchr_testify",
     "in_gopkg_yaml_v3",
+    "io_opentelemetry_go_otel",
+    "io_opentelemetry_go_otel_exporters_otlp_otlplog_otlploggrpc",
+    "io_opentelemetry_go_otel_exporters_otlp_otlptrace",
+    "io_opentelemetry_go_otel_exporters_otlp_otlptrace_otlptracegrpc",
+    "io_opentelemetry_go_otel_log",
+    "io_opentelemetry_go_otel_sdk",
+    "io_opentelemetry_go_otel_sdk_log",
+    "io_opentelemetry_go_otel_trace",
+    "io_opentelemetry_go_proto_otlp",
     "org_golang_x_crypto",
     "org_golang_x_net",
     "org_golang_x_oauth2",
+    "org_golang_google_grpc",
+    "org_golang_google_protobuf",
 )

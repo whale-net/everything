@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "logging",
+    srcs = [
+        "logging.go",
+        "otlp_handler.go",
+    ],
+    importpath = "github.com/whale-net/everything/libs/go/observability/logging",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/observability/context",
+        "@io_opentelemetry_go_otel//log",
+        "@io_opentelemetry_go_otel//log/global",
+        "@io_opentelemetry_go_otel//trace",
+        "@io_opentelemetry_go_otel_exporters_otlp_otlplog_otlploggrpc//:otlploggrpc",
+        "@io_opentelemetry_go_otel_sdk//resource",
+        "@io_opentelemetry_go_otel_sdk_log//:log",
+        "@io_opentelemetry_go_otel//semconv/v1.24.0:semconv",
+    ],
+)
+
+go_test(
+    name = "logging_test",
+    srcs = ["logging_test.go"],
+    embed = [":logging"],
+    deps = [
+        "//libs/go/observability/context",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
