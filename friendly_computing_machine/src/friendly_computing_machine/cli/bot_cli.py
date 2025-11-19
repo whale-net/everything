@@ -1,7 +1,7 @@
 import logging
 from typing import Annotated, Optional
 
-import google.generativeai as genai
+from google import genai
 import typer
 
 from libs.python.cli.params import (
@@ -62,8 +62,11 @@ def callback(
     # Initialize Temporal client
     init_temporal(host=temporal_config['host'], app_env=app_env)
     
-    # Initialize Gemini
-    genai.configure(api_key=gemini_config['api_key'])
+    # Initialize Gemini client (stored globally for activity access)
+    genai_client = genai.Client(api_key=gemini_config['api_key'])
+    # Store globally for activities to access
+    import friendly_computing_machine.src.friendly_computing_machine.temporal.ai.activity as ai_activity
+    ai_activity.genai_client = genai_client
     
     # Initialize ManMan Experience API with its dedicated URL
     experience_url = manman_experience_api_url.strip().rstrip("/")

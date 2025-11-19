@@ -45,7 +45,7 @@ dependencies = [
     "opentelemetry-exporter-otlp",
     
     # Generative AI
-    "google-generativeai",
+    "google-genai",
 
     # HTTP client
     "httpx",
