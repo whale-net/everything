@@ -16,7 +16,7 @@ This document provides comprehensive guidelines for AI agents working on the Eve
 
 ## ⚠️ CRITICAL: Cross-Compilation
 
-**MUST READ**: [`docs/BUILDING_CONTAINERS.md`](docs/BUILDING_CONTAINERS.md)
+**MUST READ**: [`docs/DOCKER.md`](docs/DOCKER.md)
 
 This repository implements true cross-compilation for Python apps using rules_pycross for platform-specific wheel resolution. **This is critical for ARM64 container deployments**. If cross-compilation breaks, ARM64 containers will crash at runtime with compiled dependencies (pydantic, numpy, pandas, etc.).
 
@@ -52,12 +52,18 @@ This repository implements true cross-compilation for Python apps using rules_py
 
 ### Repository Structure
 ```
-├── demo/                    # Example applications
-├── libs/                    # Shared libraries (python/, go/)
-├── tools/                   # Build and release tooling
-├── docs/                    # Documentation (including CROSS_COMPILATION.md)
+├── manman/                  # ManMan - Game server orchestration system (Python + Go)
+│   ├── src/                # Python services (APIs, workers)
+│   └── management-ui/      # Go-based HTMX management interface
+├── friendly_computing_machine/  # Slack bot with Temporal workflows
+├── demo/                    # Example applications (hello_python, hello_go, hello_fastapi, etc.)
+├── libs/                    # Shared libraries
+│   ├── python/             # Python libs (alembic, cli, gunicorn, logging, postgres, rmq, retry)
+│   └── go/                 # Go libs (htmxauth)
+├── generated/              # Generated OpenAPI clients (py/, go/)
+├── tools/                   # Build and release tooling (helm, release_helper, tilt, etc.)
+├── docs/                    # Documentation
 ├── .github/                 # CI/CD workflows
-├── tools/scripts/test_cross_compilation.sh # CRITICAL: Cross-compilation verification
 └── BUILD.bazel, MODULE.bazel # Bazel configuration
 ```
 

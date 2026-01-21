@@ -15,11 +15,19 @@ A modern Bazel monorepo supporting both Python and Go development with automated
 
 ```
 everything/
-├── demo/                    # Example applications
-├── libs/                    # Shared libraries (python/, go/)
+├── manman/                  # ManMan - Game server orchestration system
+│   ├── src/                # Python services (APIs, workers, migrations)
+│   └── management-ui/      # Go-based HTMX management interface
+├── friendly_computing_machine/  # Slack bot with Temporal workflows
+├── demo/                    # Example applications (hello_python, hello_go, hello_fastapi, etc.)
+├── libs/                    # Shared libraries
+│   ├── python/             # Python libs (alembic, cli, gunicorn, logging, postgres, rmq, retry)
+│   └── go/                 # Go libs (htmxauth)
+├── generated/              # Generated OpenAPI clients (py/, go/)
 ├── tools/                   # Build and release tooling
 │   ├── helm/               # Helm chart generation
-│   └── release_helper/     # Release automation
+│   ├── release_helper/     # Release automation
+│   └── tilt/               # Local development with Tilt
 ├── docs/                    # Documentation
 ├── .github/workflows/      # CI/CD pipelines
 ├── BUILD.bazel             # Root build configuration
@@ -31,6 +39,13 @@ everything/
 - **True Cross-Compilation**: Platform transitions for correct ARM64 wheel selection
 - **Monorepo Structure**: Multiple apps and shared libraries in a single repository
 - **Release Automation**: Comprehensive CI/CD with intelligent change detection
+
+### Main Projects
+
+| Project | Description | Documentation |
+|---------|-------------|---------------|
+| **ManMan** | Game server orchestration with APIs, workers, and HTMX UI | [manman/README.md](manman/README.md) |
+| **Friendly Computing Machine** | Slack bot with Temporal workflow support | [friendly_computing_machine/README.md](friendly_computing_machine/README.md) |
 
 ## 🚀 Quick Start
 
@@ -150,14 +165,16 @@ See the complete guide: [docs/RELEASE.md](docs/RELEASE.md)
 
 ### Repository Structure
 ```
-├── .github/workflows/     # CI/CD workflows (ci.yml, release.yml)
+├── manman/                # ManMan - Game server orchestration
+├── friendly_computing_machine/  # Slack bot with Temporal
 ├── demo/                  # Example applications
-├── docs/                  # Documentation (guides and references)
 ├── libs/                  # Shared libraries (python/, go/)
+├── generated/            # Generated OpenAPI clients
 ├── tools/                 # Build and release tooling
+├── docs/                  # Documentation
+├── .github/workflows/     # CI/CD workflows
 ├── BUILD.bazel           # Root build configuration
-├── MODULE.bazel          # External dependencies
-└── README.md             # This file
+└── MODULE.bazel          # External dependencies
 ```
 
 ### Future Improvements
