@@ -3,7 +3,7 @@ import logging
 # The application logic layer
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 
 from manman.src.host.api.shared.injectors import (
     current_game_server_instances,
@@ -13,19 +13,11 @@ from manman.src.host.api.shared.injectors import (
     worker_command_pub_service,
 )
 
-# TODO - make use of these
-# from manman.src.repository.message.pub import CommandPubService
-# from manman.src.repository.rabbitmq.publisher import RabbitPublisher
 from manman.src.host.api.shared.models import (
-    CommandDefaultWithCommand,
-    ConfigCommandWithCommand,
-    CreateConfigCommandRequest,
-    CreateGameServerCommandRequest,
-    CreateGameServerRequest,
-    CurrentInstanceResponse,  # TODO - move this
+    CurrentInstanceResponse,
     ExecuteCommandRequest,
     ExecuteCommandResponse,
-    InstanceDetailsResponseWithCommands,
+    InstanceDetailsResponse,
     InstanceHistoryItem,
     InstanceHistoryResponse,
     StdinCommandRequest,
@@ -39,6 +31,7 @@ from manman.src.models import (
     GameServerConfig,
     GameServerConfigCommands,
     GameServerInstance,
+    ServerType,
     Worker,
 )
 from manman.src.repository.database import (
@@ -307,7 +300,7 @@ async def get_instance_details(
     game_server_instance_repo: Annotated[
         GameServerInstanceRepository, Depends(game_server_instance_db_repository)
     ],
-) -> InstanceDetailsResponseWithCommands:
+) -> InstanceDetailsResponse:
     """
     Get detailed information about a specific game server instance including available commands.
 
@@ -315,7 +308,8 @@ async def get_instance_details(
         instance_id: The game server instance ID
 
     Returns:
-        Instance details with config, command defaults, and config-specific commands
+        Instance details with config, command defaults, and config-specific commands.
+        Commands are returned as flat structures - join with game_server_command if needed.
     """
     result = game_server_instance_repo.get_instance_with_commands(instance_id)
     if not result:
@@ -323,37 +317,11 @@ async def get_instance_details(
 
     instance, config, defaults, config_cmds = result
     
-    # Convert to response models with nested command info
-    command_defaults_with_cmds = [
-        CommandDefaultWithCommand(
-            game_server_command_default_id=d.game_server_command_default_id,
-            game_server_command_id=d.game_server_command_id,
-            command_value=d.command_value,
-            description=d.description,
-            is_visible=d.is_visible,
-            game_server_command=d.game_server_command,
-        )
-        for d in defaults
-    ]
-    
-    config_commands_with_cmds = [
-        ConfigCommandWithCommand(
-            game_server_config_command_id=c.game_server_config_command_id,
-            game_server_config_id=c.game_server_config_id,
-            game_server_command_id=c.game_server_command_id,
-            command_value=c.command_value,
-            description=c.description,
-            is_visible=c.is_visible,
-            game_server_command=c.game_server_command,
-        )
-        for c in config_cmds
-    ]
-    
-    return InstanceDetailsResponseWithCommands(
+    return InstanceDetailsResponse(
         instance=instance,
         config=config,
-        command_defaults=command_defaults_with_cmds,
-        config_commands=config_commands_with_cmds,
+        command_defaults=defaults,
+        config_commands=config_cmds,
     )
 
 
@@ -475,17 +443,21 @@ async def get_available_commands(
 @router.post("/gameserver/config/{config_id}/command")
 async def create_config_command(
     config_id: int,
-    body: CreateConfigCommandRequest,
     game_server_config_repo: Annotated[
         GameServerConfigRepository, Depends(game_server_config_db_repository)
     ],
+    game_server_command_id: int = Body(...),
+    command_value: str = Body(...),
+    description: Optional[str] = Body(None),
 ) -> GameServerConfigCommands:
     """
     Create a new config-specific command.
 
     Args:
         config_id: The game server config ID
-        body: Command creation request
+        game_server_command_id: The game server command ID to use
+        command_value: The value for this command instance
+        description: Optional description
 
     Returns:
         The created config command
@@ -493,9 +465,9 @@ async def create_config_command(
     try:
         return game_server_config_repo.create_config_command(
             config_id=config_id,
-            command_id=body.game_server_command_id,
-            command_value=body.command_value,
-            description=body.description,
+            command_id=game_server_command_id,
+            command_value=command_value,
+            description=description,
         )
     except Exception as e:
         # Handle duplicate command errors
@@ -602,15 +574,17 @@ async def list_game_servers(
 
 @router.post("/gameserver/types")
 async def create_game_server(
-    body: CreateGameServerRequest,
     game_server_instance_repo: Annotated[
         GameServerInstanceRepository, Depends(game_server_instance_db_repository)
     ],
+    name: str = Body(...),
+    server_type: ServerType = Body(...),
+    app_id: int = Body(...),
 ) -> GameServer:
     """Create a new game server type."""
     try:
         return game_server_instance_repo.create_game_server(
-            name=body.name, server_type=body.server_type, app_id=body.app_id
+            name=name, server_type=server_type, app_id=app_id
         )
     except Exception as e:
         if "unique constraint" in str(e).lower():
@@ -623,19 +597,22 @@ async def create_game_server(
 @router.post("/gameserver/types/{game_server_id}/command")
 async def create_game_server_command(
     game_server_id: int,
-    body: CreateGameServerCommandRequest,
     game_server_instance_repo: Annotated[
         GameServerInstanceRepository, Depends(game_server_instance_db_repository)
     ],
+    name: str = Body(...),
+    command: str = Body(...),
+    description: Optional[str] = Body(None),
+    is_visible: bool = Body(True),
 ) -> GameServerCommand:
     """Create a new command for a game server type."""
     try:
         return game_server_instance_repo.create_game_server_command(
             game_server_id=game_server_id,
-            name=body.name,
-            command=body.command,
-            description=body.description,
-            is_visible=body.is_visible,
+            name=name,
+            command=command,
+            description=description,
+            is_visible=is_visible,
         )
     except Exception as e:
         if "unique constraint" in str(e).lower():

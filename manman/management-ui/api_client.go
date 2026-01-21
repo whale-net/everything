@@ -293,7 +293,7 @@ func (app *App) startGameServer(ctx context.Context, configID int32) error {
 }
 
 // getInstanceDetails fetches instance details with commands
-func (app *App) getInstanceDetails(ctx context.Context, instanceID int) (*experience_api.InstanceDetailsResponseWithCommands, error) {
+func (app *App) getInstanceDetails(ctx context.Context, instanceID int) (*experience_api.InstanceDetailsResponse, error) {
 	log.Printf("Getting instance details for instance ID: %d", instanceID)
 
 	cfg := experience_api.NewConfiguration()
@@ -459,17 +459,14 @@ func (app *App) createGameServerCommand(ctx context.Context, gameServerID int32,
 	apiCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Build request
-	request := experience_api.CreateGameServerCommandRequest{
-		Name:      name,
-		Command:   command,
-		IsVisible: &isVisible,
-	}
+	// Build inline request body
+	request := experience_api.NewBodyCreateGameServerCommandGameserverTypesGameServerIdCommandPost(name, command)
 	if description != "" {
 		request.Description = *experience_api.NewNullableString(&description)
 	}
+	request.IsVisible = &isVisible
 
-	cmd, httpResp, err := client.DefaultAPI.CreateGameServerCommandGameserverTypesGameServerIdCommandPost(apiCtx, gameServerID).CreateGameServerCommandRequest(request).Execute()
+	cmd, httpResp, err := client.DefaultAPI.CreateGameServerCommandGameserverTypesGameServerIdCommandPost(apiCtx, gameServerID).BodyCreateGameServerCommandGameserverTypesGameServerIdCommandPost(*request).Execute()
 	if err != nil {
 		if httpResp != nil {
 			log.Printf("API error: status=%d", httpResp.StatusCode)
@@ -481,7 +478,7 @@ func (app *App) createGameServerCommand(ctx context.Context, gameServerID int32,
 }
 
 // createConfigCommand creates a new config-specific command
-func (app *App) createConfigCommand(ctx context.Context, configID int, request experience_api.CreateConfigCommandRequest) (*experience_api.GameServerConfigCommands, error) {
+func (app *App) createConfigCommand(ctx context.Context, configID int, request experience_api.BodyCreateConfigCommandGameserverConfigConfigIdCommandPost) (*experience_api.GameServerConfigCommands, error) {
 	log.Printf("Creating config command for config ID: %d", configID)
 
 	cfg := experience_api.NewConfiguration()
@@ -495,7 +492,7 @@ func (app *App) createConfigCommand(ctx context.Context, configID int, request e
 	apiCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	command, httpResp, err := client.DefaultAPI.CreateConfigCommandGameserverConfigConfigIdCommandPost(apiCtx, int32(configID)).CreateConfigCommandRequest(request).Execute()
+	command, httpResp, err := client.DefaultAPI.CreateConfigCommandGameserverConfigConfigIdCommandPost(apiCtx, int32(configID)).BodyCreateConfigCommandGameserverConfigConfigIdCommandPost(request).Execute()
 	if err != nil {
 		if httpResp != nil {
 			log.Printf("API error: status=%d", httpResp.StatusCode)

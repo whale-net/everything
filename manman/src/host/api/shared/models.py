@@ -12,17 +12,13 @@ from manman.src.models import (
 
 
 class StdinCommandRequest(ManManBase):
-    """
-    Request to send to the worker to start a game server instance.
-    """
+    """Request to send commands to a worker's game server instance."""
 
     commands: list[str]
 
 
 class CurrentInstanceResponse(ManManBase):
-    """
-    Response to the worker to start a game server instance.
-    """
+    """Response containing current game server instances with denormalized data."""
 
     game_server_instances: list[GameServerInstance]
     workers: list[Worker]
@@ -45,44 +41,15 @@ class CurrentInstanceResponse(ManManBase):
 
 
 class InstanceDetailsResponse(ManManBase):
-    """Response containing instance details with available commands."""
+    """Response containing instance details with available commands.
+    
+    Returns flattened command data - UI can join with command details if needed.
+    """
 
     instance: GameServerInstance
     config: GameServerConfig
     command_defaults: list[GameServerCommandDefaults]
     config_commands: list[GameServerConfigCommands]
-
-
-class CommandDefaultWithCommand(ManManBase):
-    """Command default with nested command details."""
-    
-    game_server_command_default_id: int
-    game_server_command_id: int
-    command_value: str
-    description: Optional[str]
-    is_visible: bool
-    game_server_command: GameServerCommand
-
-
-class ConfigCommandWithCommand(ManManBase):
-    """Config command with nested command details."""
-    
-    game_server_config_command_id: int
-    game_server_config_id: int
-    game_server_command_id: int
-    command_value: str
-    description: Optional[str]
-    is_visible: bool
-    game_server_command: GameServerCommand
-
-
-class InstanceDetailsResponseWithCommands(ManManBase):
-    """Response containing instance details with available commands and nested command info."""
-
-    instance: GameServerInstance
-    config: GameServerConfig
-    command_defaults: list[CommandDefaultWithCommand]
-    config_commands: list[ConfigCommandWithCommand]
 
 
 class ExecuteCommandRequest(ManManBase):
@@ -101,14 +68,6 @@ class ExecuteCommandResponse(ManManBase):
     command: str
 
 
-class CreateConfigCommandRequest(ManManBase):
-    """Request to create a new config command."""
-
-    game_server_command_id: int
-    command_value: str
-    description: Optional[str] = None
-
-
 class InstanceHistoryItem(ManManBase):
     """Single instance with runtime information."""
 
@@ -125,20 +84,3 @@ class InstanceHistoryResponse(ManManBase):
 
     game_server_id: int
     instances: list[InstanceHistoryItem]
-
-
-class CreateGameServerRequest(ManManBase):
-    """Request to create a new game server."""
-
-    name: str
-    server_type: str
-    app_id: int
-
-
-class CreateGameServerCommandRequest(ManManBase):
-    """Request to create a new game server command."""
-
-    name: str
-    command: str
-    description: Optional[str] = None
-    is_visible: bool = True
