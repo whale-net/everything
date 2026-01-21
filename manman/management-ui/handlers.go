@@ -441,17 +441,14 @@ func (app *App) handleCreateCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build request
-	request := experience_api.CreateConfigCommandRequest{
-		GameServerCommandId: int32(commandID),
-		CommandValue:        commandValue,
-	}
+	// Build inline request body
+	request := experience_api.NewBodyCreateConfigCommandGameserverConfigConfigIdCommandPost(int32(commandID), commandValue)
 	if description != "" {
 		request.Description = *experience_api.NewNullableString(&description)
 	}
 
 	// Create command
-	_, err = app.createConfigCommand(r.Context(), configID, request)
+	_, err = app.createConfigCommand(r.Context(), configID, *request)
 	if err != nil {
 		log.Printf("Failed to create command: %v", err)
 		http.Error(w, fmt.Sprintf("Failed to create command: %v", err), http.StatusInternalServerError)
@@ -467,7 +464,7 @@ func (app *App) handleCreateCommand(w http.ResponseWriter, r *http.Request) {
 // InstancePageData holds data for the instance page
 type InstancePageData struct {
 	User     *htmxauth.UserInfo
-	Instance experience_api.InstanceDetailsResponseWithCommands
+	Instance experience_api.InstanceDetailsResponse
 }
 
 // AddCommandModalData holds data for the add command modal
