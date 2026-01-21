@@ -275,38 +275,42 @@ service WrapperControl {
 
 ```
 //manman/
-├── protos/                      # Protobuf definitions
+├── models.go                    # Database models (package manman)
+│                                # Flat structure - no nested pkg/db/
+│
+├── migrate/                     # Migration tool (manmanv2-migration)
+│   ├── main.go                  # CLI runner using libs/go/migrate
+│   ├── migrations/              # Embedded SQL migration files
+│   │   ├── 001_initial_schema.up.sql
+│   │   └── 001_initial_schema.down.sql
+│   └── BUILD.bazel              # release_app for migration job
+│
+├── protos/                      # Protobuf definitions (planned)
 │   ├── api.proto                # Control plane API
 │   ├── wrapper.proto            # Host ↔ Wrapper protocol
 │   └── messages.proto           # Shared message types
 │
-├── api/                         # manmanv2-api service
+├── api/                         # manmanv2-api service (planned)
 │   ├── main.go
 │   ├── handlers/
 │   └── BUILD.bazel
 │
-├── processor/                   # manmanv2-processor service
+├── processor/                   # manmanv2-processor service (planned)
 │   ├── main.go
 │   └── BUILD.bazel
 │
-├── host/                        # manmanv2-host service
+├── host/                        # manmanv2-host service (planned)
 │   ├── main.go
 │   ├── docker/                  # Docker SDK integration
 │   ├── grpc/                    # gRPC client for wrappers
 │   └── BUILD.bazel
 │
-├── wrapper/                     # manmanv2-wrapper service
+├── wrapper/                     # manmanv2-wrapper service (planned)
 │   ├── main.go
 │   ├── process/                 # Game process management
 │   └── BUILD.bazel
 │
-├── models/                      # Shared Go types
-│   ├── db/                      # Database models
-│   └── proto/                   # Generated proto types
-│
-├── migrations/                  # SQL migrations
-│
-└── BUILD.bazel
+└── BUILD.bazel                  # Root BUILD with :models target
 
 # Existing v1 code (to be deprecated)
 ├── src/                         # [LEGACY] Python v1 code
@@ -314,15 +318,25 @@ service WrapperControl {
 └── clients/                     # [LEGACY] Generated clients
 ```
 
+**Design Principles:**
+- Flat package structure (avoid deep nesting)
+- Shared models at root level (package `manman`)
+- Each service is a separate subdirectory with its own main.go
+- Migration tool uses go:embed for SQL files
+
 ### New Shared Infrastructure
 
 ```
 //libs/go/
-├── grpc/                        # Shared gRPC utilities (new)
-└── rmq/                         # RabbitMQ utilities (new)
+├── migrate/                     # Generic database migration library ✓
+│   ├── migrate.go               # Runner type with Up/Down/Steps/Version/Force
+│   ├── cli.go                   # RunCLI helper for CLI applications
+│   └── BUILD.bazel
+├── grpc/                        # Shared gRPC utilities (planned)
+└── rmq/                         # RabbitMQ utilities (planned)
 
 //tools/bazel/
-└── grpc.bzl                     # gRPC build rules (new)
+└── grpc.bzl                     # gRPC build rules ✓
 ```
 
 ---
@@ -335,7 +349,11 @@ service WrapperControl {
   - Added gRPC and protobuf Go dependencies
   - Created `//tools/bazel/grpc.bzl` with `go_grpc_library` macro
   - Demo app validated: `//demo/hello_grpc_go/`
-- [ ] Core data models and database schema
+- [x] **Core data models and database schema** ✓
+  - Created `//manman/models.go` with all database models (package manman)
+  - Created SQL migrations in `//manman/migrate/migrations/`
+  - Built generic migration library at `//libs/go/migrate/`
+  - Migration tool configured as release_app: `//manman/migrate:manmanv2-migration`
 - [ ] Basic control plane API (CRUD for Game, GameConfig, Server)
 
 ### Phase 2: Host Manager
