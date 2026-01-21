@@ -15,6 +15,7 @@ bazel_dep(name = "rules_helm", version = "0.6.0.bcr.1")
 bazel_dep(name = "rules_pkg", version = "1.0.1")
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "rules_java", version = "8.12.0")
+bazel_dep(name = "rules_proto", version = "7.0.2")
 
 # OCI/Docker setup - Ubuntu base image for all containers
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
@@ -203,6 +204,25 @@ go_deps.module(
     version = "v3.0.1",
 )
 
+# gRPC and protobuf for Go
+go_deps.module(
+    path = "google.golang.org/grpc",
+    sum = "h1:pWFv03aZoHzlRKHWicjsZytKAiYCtNS0dHbXnIdq7jQ=",
+    version = "v1.70.0",
+)
+
+go_deps.module(
+    path = "google.golang.org/protobuf",
+    sum = "h1:tPhr+woSbjfYvY6/GPufUoYizxw1cF/yFoxJ2fmpwlM=",
+    version = "v1.36.1",
+)
+
+go_deps.module(
+    path = "google.golang.org/genproto/googleapis/rpc",
+    sum = "h1:GXlROi7mbvMNy0MnP83EeJCfCqAZ13Vrf/CEFiNvw34=",
+    version = "v0.0.0-20241216192217-9240e9c98484",
+)
+
 use_repo(
     go_deps,
     "com_github_coreos_go_oidc_v3",
@@ -213,6 +233,9 @@ use_repo(
     "com_github_pmezard_go_difflib",
     "com_github_stretchr_testify",
     "in_gopkg_yaml_v3",
+    "org_golang_google_genproto_googleapis_rpc",
+    "org_golang_google_grpc",
+    "org_golang_google_protobuf",
     "org_golang_x_crypto",
     "org_golang_x_net",
     "org_golang_x_oauth2",

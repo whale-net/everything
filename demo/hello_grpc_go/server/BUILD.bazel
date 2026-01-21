@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_binary")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_binary(
+    name = "hello-grpc-server",
+    srcs = ["main.go"],
+    deps = [
+        "//demo/hello_grpc_go/protos:hello_go_proto",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//reflection",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata and OCI images for this app
+release_app(
+    name = "hello-grpc-server",
+    language = "go",
+    domain = "demo",
+    description = "Demo gRPC server in Go",
+    app_type = "internal-api",
+    port = 50051,
+)
