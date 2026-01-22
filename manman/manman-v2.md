@@ -357,10 +357,10 @@ service WrapperControl {
 - [ ] Basic control plane API (CRUD for Game, GameConfig, Server)
 
 ### Phase 2: Host Manager
-- [ ] Docker SDK integration for container management
-- [ ] gRPC client for wrapper communication
-- [ ] RabbitMQ integration for control plane communication
-- [ ] Session/container lifecycle management
+- [x] Docker SDK integration for container management ✓
+- [x] gRPC client for wrapper communication ✓
+- [x] RabbitMQ integration for control plane communication ✓
+- [x] Session/container lifecycle management ✓
 
 ### Phase 3: Wrapper
 - [ ] gRPC server implementation

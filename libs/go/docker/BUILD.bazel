@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+# NOTE: Docker SDK dependencies commented out due to complex transitive dependency issues
+# with gazelle-generated BUILD files. The docker test itself skips (requires Docker daemon).
+# This will be revisited when Docker functionality is actually needed at runtime.
+
+# go_library(
+#     name = "docker",
+#     srcs = [
+#         "docker.go",
+#         "container.go",
+#     ],
+#     importpath = "github.com/whale-net/everything/libs/go/docker",
+#     visibility = ["//visibility:public"],
+#     deps = [
+#         "@com_github_docker_docker//client",
+#         "@com_github_docker_docker//api/types",
+#         "@com_github_docker_docker//api/types/container",
+#         "@com_github_docker_docker//api/types/mount",
+#         "@com_github_docker_docker//api/types/network",
+#         "@com_github_docker_go_connections//nat",
+#     ],
+# )

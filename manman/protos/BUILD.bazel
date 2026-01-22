@@ -7,6 +7,7 @@ go_grpc_library(
     srcs = [
         "messages.proto",
         "api.proto",
+        "wrapper.proto",
     ],
     importpath = "github.com/whale-net/everything/manman/protos",
     visibility = ["//visibility:public"],
