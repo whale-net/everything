@@ -1,0 +1,9 @@
+load("//tools/bazel:grpc.bzl", "go_grpc_library")
+
+# Generate Go code with gRPC support from proto files
+go_grpc_library(
+    name = "hello_go_proto",
+    srcs = ["hello.proto"],
+    importpath = "github.com/whale-net/everything/demo/hello_grpc_go/protos",
+    visibility = ["//demo/hello_grpc_go:__subpackages__"],
+)
