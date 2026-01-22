@@ -11,10 +11,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/whale-net/everything/manman/host/docker"
+	"github.com/whale-net/everything/libs/go/docker"
+	rmqlib "github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/manman/host/rmq"
 	"github.com/whale-net/everything/manman/host/session"
-	rmqlib "github.com/whale-net/everything/libs/go/rmq"
 )
 
 func main() {

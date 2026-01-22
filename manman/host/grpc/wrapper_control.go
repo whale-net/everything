@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/whale-net/everything/libs/go/grpcclient"
 	pb "github.com/whale-net/everything/manman/protos"
 )
 
@@ -14,7 +15,7 @@ type WrapperControlClient struct {
 }
 
 // NewWrapperControlClient creates a new wrapper control client
-func NewWrapperControlClient(grpcClient *Client) *WrapperControlClient {
+func NewWrapperControlClient(grpcClient *grpcclient.Client) *WrapperControlClient {
 	return &WrapperControlClient{
 		client: pb.NewWrapperControlClient(grpcClient.GetConnection()),
 	}

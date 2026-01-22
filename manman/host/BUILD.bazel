@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("@rules_go//go:def.bzl", "go_binary")
 load("//tools/bazel:release.bzl", "release_app")
 
 # Main host service binary - commented out due to docker SDK dependency issues
@@ -6,14 +6,13 @@ load("//tools/bazel:release.bzl", "release_app")
 #     name = "manmanv2-host",
 #     srcs = ["main.go"],
 #     deps = [
-#         "//manman/host/docker",
+#         "//libs/go/docker",
+#         "//libs/go/rmq",
 #         "//manman/host/rmq",
 #         "//manman/host/session",
-#         "//libs/go/rmq",
 #     ],
 #     visibility = ["//visibility:public"],
 # )
-
 
 # Release metadata for host service - commented out since binary is commented out
 # release_app(

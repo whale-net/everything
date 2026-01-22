@@ -14,9 +14,10 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 #     importpath = "github.com/whale-net/everything/manman/host/session",
 #     visibility = ["//visibility:public"],
 #     deps = [
-#         "//manman/host/docker",
+#         "//libs/go/docker",
+#         "//libs/go/grpcclient",
+#         "//manman:manman",
 #         "//manman/host/grpc",
-#         "//manman:models",
 #         "//manman/protos:manmanpb",
 #     ],
 # )
@@ -26,7 +27,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 #     srcs = ["state_test.go"],
 #     deps = [
 #         ":session",
-#         "//manman:models",
+#         "//manman:manman",
 #     ],
 #     size = "small",
 # )

@@ -30,6 +30,8 @@ func NewClient(socketPath string) (*Client, error) {
 	ctx := context.Background()
 	_, err = cli.Ping(ctx)
 	if err != nil {
+		// Close the client on ping failure to prevent resource leak
+		cli.Close()
 		return nil, fmt.Errorf("failed to ping Docker daemon: %w", err)
 	}
 

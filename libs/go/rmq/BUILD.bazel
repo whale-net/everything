@@ -20,9 +20,8 @@ go_test(
         "connection_test.go",
         "publisher_test.go",
         "consumer_test.go",
+        "consumer_internal_test.go",
     ],
-    deps = [
-        ":rmq",
-    ],
+    embed = [":rmq"],
     size = "small",
 )

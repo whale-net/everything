@@ -2,12 +2,12 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
+	"github.com/whale-net/everything/libs/go/docker"
+	"github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/manman"
-	// "github.com/whale-net/everything/manman/host/docker"  // Commented out - docker SDK dependency issues
 	"github.com/whale-net/everything/manman/host/grpc"
 	pb "github.com/whale-net/everything/manman/protos"
 )
@@ -32,6 +32,11 @@ func NewSessionManager(dockerClient *docker.Client, wrapperImage string) *Sessio
 func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCommand) error {
 	sessionID := cmd.SessionID
 	sgcID := cmd.SGCID
+
+	// Check if session already exists to prevent orphaned containers
+	if _, exists := sm.stateManager.GetSession(sessionID); exists {
+		return fmt.Errorf("session %d already exists", sessionID)
+	}
 
 	// Create session state
 	state := &State{
@@ -77,7 +82,7 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	time.Sleep(2 * time.Second) // Temporary: wait for wrapper to start
 
 	grpcAddress := fmt.Sprintf("%s:50051", networkName) // Wrapper exposes gRPC on network
-	grpcClient, err := grpc.NewClient(ctx, grpcAddress)
+	grpcClient, err := grpcclient.NewClient(ctx, grpcAddress)
 	if err != nil {
 		sm.cleanupSession(ctx, state)
 		state.UpdateStatus(manman.SessionStatusCrashed)
@@ -171,7 +176,6 @@ func (sm *SessionManager) KillSession(ctx context.Context, sessionID int64) erro
 // createWrapperContainer creates the wrapper container
 func (sm *SessionManager) createWrapperContainer(ctx context.Context, state *State, cmd *StartSessionCommand) (string, error) {
 	dataPath := fmt.Sprintf("/data/session-%d", state.SessionID)
-	wrapperPath := fmt.Sprintf("%s/wrapper", dataPath)
 
 	config := docker.ContainerConfig{
 		Image:     sm.wrapperImage,

@@ -1,12 +1,5 @@
 package rmq
 
-// Command types for host manager
-const (
-	CommandTypeStartSession = "session.start"
-	CommandTypeStopSession  = "session.stop"
-	CommandTypeKillSession  = "session.kill"
-)
-
 // StartSessionCommand represents a command to start a session
 type StartSessionCommand struct {
 	SessionID int64                  `json:"session_id"`

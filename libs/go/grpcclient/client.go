@@ -1,4 +1,4 @@
-package grpc
+package grpcclient
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// Client manages gRPC connections to wrapper containers
+// Client manages gRPC connections
 type Client struct {
 	conn *grpc.ClientConn
 }

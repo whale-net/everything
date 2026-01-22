@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/whale-net/everything/libs/go/docker"
+	"github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/manman"
-	"github.com/whale-net/everything/manman/host/docker"
 	"github.com/whale-net/everything/manman/host/grpc"
 	pb "github.com/whale-net/everything/manman/protos"
 )
@@ -14,8 +15,10 @@ import (
 // RecoverOrphanedSessions recovers sessions from existing Docker containers
 func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID int64) error {
 	// List all containers with manman labels
+	// Filter by server_id to only recover sessions for this host
 	filters := map[string]string{
-		"manman.wrapper": "true",
+		"manman.wrapper":  "true",
+		"manman.server_id": fmt.Sprintf("%d", serverID),
 	}
 	containers, err := sm.dockerClient.ListContainers(ctx, filters)
 	if err != nil {
@@ -72,7 +75,7 @@ func (sm *SessionManager) recoverSession(ctx context.Context, sessionID int64, w
 	networkName := fmt.Sprintf("session-%d", sessionID)
 	grpcAddress := fmt.Sprintf("%s:50051", networkName)
 
-	grpcClient, err := grpc.NewClient(ctx, grpcAddress)
+	grpcClient, err := grpcclient.NewClient(ctx, grpcAddress)
 	if err != nil {
 		// If we can't connect, mark as lost but keep state
 		fmt.Printf("Warning: Could not reconnect to wrapper for session %d: %v\n", sessionID, err)
@@ -102,9 +105,16 @@ func (sm *SessionManager) recoverSession(ctx context.Context, sessionID int64, w
 
 // extractSessionID extracts session ID from container name or labels
 func extractSessionID(containerName string, status *docker.ContainerStatus) (int64, error) {
+	// Docker returns container names with leading slash (e.g., /wrapper-123)
+	// Strip leading slash if present
+	name := containerName
+	if len(name) > 0 && name[0] == '/' {
+		name = name[1:]
+	}
+
 	// Try to extract from name pattern: wrapper-{session_id}
-	if len(containerName) > 8 && containerName[:8] == "wrapper-" {
-		sessionIDStr := containerName[8:]
+	if len(name) > 8 && name[:8] == "wrapper-" {
+		sessionIDStr := name[8:]
 		sessionID, err := strconv.ParseInt(sessionIDStr, 10, 64)
 		if err == nil {
 			return sessionID, nil

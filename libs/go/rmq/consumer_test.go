@@ -78,52 +78,6 @@ func TestConsumer_RegisterHandler(t *testing.T) {
 	}
 }
 
-func TestMatchesRoutingKey(t *testing.T) {
-	tests := []struct {
-		name     string
-		key      string
-		pattern  string
-		expected bool
-	}{
-		{"exact match", "test.key", "test.key", true},
-		{"wildcard # matches all", "test.key", "#", true},
-		{"wildcard # matches prefix", "test.key.value", "test.#", true},
-		{"no match", "test.key", "other.key", false},
-		{"empty pattern", "test.key", "", false},
-		{"empty key", "", "test.key", false},
-	}
-	
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := matchesRoutingKey(tt.key, tt.pattern)
-			if result != tt.expected {
-				t.Errorf("matchesRoutingKey(%q, %q) = %v, want %v", tt.key, tt.pattern, result, tt.expected)
-			}
-		})
-	}
-}
-
-// matchesRoutingKey is a helper function for testing
-// This mirrors the internal function in consumer.go
-func matchesRoutingKey(key, pattern string) bool {
-	if pattern == "#" {
-		return true
-	}
-	if pattern == key {
-		return true
-	}
-	
-	// Simple prefix matching for now
-	if len(pattern) > 0 && pattern[len(pattern)-1] == '#' {
-		prefix := pattern[:len(pattern)-1]
-		if len(key) >= len(prefix) && key[:len(prefix)] == prefix {
-			return true
-		}
-	}
-	
-	return false
-}
-
 func TestUnmarshalMessage(t *testing.T) {
 	type TestStruct struct {
 		ID   int    `json:"id"`
