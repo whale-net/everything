@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_binary")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_binary(
+    name = "manmanv2-wrapper",
+    srcs = [
+        "main.go",
+        "server.go",
+        "state.go",
+    ],
+    deps = [
+        "//manman/protos:manmanpb",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//reflection",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata and OCI images for the wrapper service
+release_app(
+    name = "manmanv2-wrapper",
+    language = "go",
+    domain = "manman",
+    description = "ManManV2 wrapper sidecar (game server container manager)",
+    app_type = "worker",
+    port = 50051,
+)

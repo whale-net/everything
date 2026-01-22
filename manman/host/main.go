@@ -161,11 +161,11 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 	// Convert to session manager command format
 	sessionCmd := &session.StartSessionCommand{
 		SessionID:        cmd.SessionID,
-		SGCID:           cmd.SGCID,
-		ServerID:        h.serverID,
-		GameConfig:      cmd.GameConfig,
+		SGCID:            cmd.SGCID,
+		ServerID:         h.serverID,
+		GameConfig:       cmd.GameConfig,
 		ServerGameConfig: cmd.ServerGameConfig,
-		ParametersJSON:  parametersJSON,
+		ParametersJSON:   parametersJSON,
 	}
 
 	// Start the session

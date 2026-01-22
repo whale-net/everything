@@ -16,16 +16,16 @@ import (
 
 // ContainerConfig holds configuration for creating a container
 type ContainerConfig struct {
-	Image       string
-	Name        string
-	Command     []string
-	Env         []string
-	Labels      map[string]string
-	NetworkID   string
-	Volumes     []string // Mount points in format "host_path:container_path"
-	Ports       map[string]string // Container port -> host port mapping
-	AutoRemove  bool
-	Privileged  bool
+	Image      string
+	Name       string
+	Command    []string
+	Env        []string
+	Labels     map[string]string
+	NetworkID  string
+	Volumes    []string          // Mount points in format "host_path:container_path"
+	Ports      map[string]string // Container port -> host port mapping
+	AutoRemove bool
+	Privileged bool
 }
 
 // CreateContainer creates a new Docker container
@@ -124,10 +124,10 @@ func (c *Client) GetContainerStatus(ctx context.Context, containerID string) (*C
 	}
 
 	status := &ContainerStatus{
-		ID:      info.ID,
-		Name:    info.Name,
-		Status:  info.State.Status,
-		Running: info.State.Running,
+		ID:       info.ID,
+		Name:     info.Name,
+		Status:   info.State.Status,
+		Running:  info.State.Running,
 		ExitCode: info.State.ExitCode,
 	}
 
@@ -150,12 +150,12 @@ func (c *Client) GetContainerStatus(ctx context.Context, containerID string) (*C
 
 // ContainerStatus represents the status of a container
 type ContainerStatus struct {
-	ID        string
-	Name      string
-	Status    string // "created", "running", "exited", etc.
-	Running   bool
-	ExitCode  int
-	StartedAt *time.Time
+	ID         string
+	Name       string
+	Status     string // "created", "running", "exited", etc.
+	Running    bool
+	ExitCode   int
+	StartedAt  *time.Time
 	FinishedAt *time.Time
 }
 
