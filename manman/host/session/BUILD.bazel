@@ -12,7 +12,7 @@ go_library(
     deps = [
         "//manman/host/docker",
         "//manman/host/grpc",
-        "//manman",
+        "//manman:models",
         "//manman/protos:manmanpb",
     ],
 )
@@ -22,7 +22,7 @@ go_test(
     srcs = ["state_test.go"],
     deps = [
         ":session",
-        "//manman",
+        "//manman:models",
     ],
     size = "small",
 )
