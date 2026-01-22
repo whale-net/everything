@@ -10,7 +10,7 @@ go_library(
     importpath = "github.com/whale-net/everything/libs/go/rmq",
     visibility = ["//visibility:public"],
     deps = [
-        "@com_github_rabbitmq_amqp091_go//",
+        "@com_github_rabbitmq_amqp091_go//:go_default_library",
     ],
 )
 

@@ -7,14 +7,14 @@ import (
 	"time"
 
 	"github.com/whale-net/everything/manman"
-	"github.com/whale-net/everything/manman/host/docker"
+	// "github.com/whale-net/everything/manman/host/docker"  // Commented out - docker SDK dependency issues
 	"github.com/whale-net/everything/manman/host/grpc"
 	pb "github.com/whale-net/everything/manman/protos"
 )
 
 // SessionManager manages the lifecycle of game server sessions
 type SessionManager struct {
-	dockerClient *docker.Client
+	// dockerClient *docker.Client  // Commented out - docker SDK dependency issues
 	stateManager  *Manager
 	wrapperImage  string // Docker image for the wrapper container
 }

@@ -1,28 +1,32 @@
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
-go_library(
-    name = "session",
-    srcs = [
-        "manager.go",
-        "state.go",
-        "recovery.go",
-    ],
-    importpath = "github.com/whale-net/everything/manman/host/session",
-    visibility = ["//visibility:public"],
-    deps = [
-        "//manman/host/docker",
-        "//manman/host/grpc",
-        "//manman:models",
-        "//manman/protos:manmanpb",
-    ],
-)
+# NOTE: Session library commented out due to heavy dependency on docker SDK
+# which has complex transitive dependency issues with gazelle-generated BUILD files.
+# This will be revisited when Docker functionality is needed.
 
-go_test(
-    name = "state_test",
-    srcs = ["state_test.go"],
-    deps = [
-        ":session",
-        "//manman:models",
-    ],
-    size = "small",
-)
+# go_library(
+#     name = "session",
+#     srcs = [
+#         "manager.go",
+#         "state.go",
+#         "recovery.go",
+#     ],
+#     importpath = "github.com/whale-net/everything/manman/host/session",
+#     visibility = ["//visibility:public"],
+#     deps = [
+#         "//manman/host/docker",
+#         "//manman/host/grpc",
+#         "//manman:models",
+#         "//manman/protos:manmanpb",
+#     ],
+# )
+
+# go_test(
+#     name = "state_test",
+#     srcs = ["state_test.go"],
+#     deps = [
+#         ":session",
+#         "//manman:models",
+#     ],
+#     size = "small",
+# )
