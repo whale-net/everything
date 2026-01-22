@@ -142,8 +142,9 @@ func (sm *SessionManager) StopSession(ctx context.Context, sessionID int64, forc
 		if err != nil {
 			// Log error but continue with cleanup
 			fmt.Printf("Error stopping wrapper: %v\n", err)
-		} else if stopResp.ExitCode != nil {
-			state.ExitCode = &stopResp.ExitCode
+		} else if stopResp.ExitCode != 0 {
+			exitCode := int(stopResp.ExitCode)
+			state.ExitCode = &exitCode
 		}
 	}
 
