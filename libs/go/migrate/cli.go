@@ -44,7 +44,6 @@ func DefaultConfig() *Config {
 // migrateDir: subdirectory within migrations (e.g., "migrations")
 func RunCLI(migrations embed.FS, migrateDir string) {
 	var (
-		up      = flag.Bool("up", false, "Run all pending migrations (default)")
 		down    = flag.Bool("down", false, "Rollback all migrations")
 		steps   = flag.Int("steps", 0, "Run N migrations (positive=up, negative=down)")
 		version = flag.Bool("version", false, "Print current migration version")
