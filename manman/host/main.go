@@ -1,0 +1,225 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
+	"time"
+
+	"github.com/whale-net/everything/manman/host/docker"
+	"github.com/whale-net/everything/manman/host/rmq"
+	"github.com/whale-net/everything/manman/host/session"
+	rmqlib "github.com/whale-net/everything/libs/go/rmq"
+)
+
+func main() {
+	if err := run(); err != nil {
+		log.Fatalf("Fatal error: %v", err)
+	}
+}
+
+func run() error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Get configuration from environment
+	serverIDStr := getEnv("SERVER_ID", "")
+	if serverIDStr == "" {
+		return fmt.Errorf("SERVER_ID environment variable is required")
+	}
+	serverID, err := strconv.ParseInt(serverIDStr, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid SERVER_ID: %w", err)
+	}
+
+	rabbitMQURL := getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
+	dockerSocket := getEnv("DOCKER_SOCKET", "/var/run/docker.sock")
+	wrapperImage := getEnv("WRAPPER_IMAGE", "manmanv2-wrapper:latest")
+
+	log.Printf("Starting ManManV2 Host Manager (server_id=%d)", serverID)
+
+	// Initialize Docker client
+	log.Println("Connecting to Docker...")
+	dockerClient, err := docker.NewClient(dockerSocket)
+	if err != nil {
+		return fmt.Errorf("failed to initialize Docker client: %w", err)
+	}
+	defer dockerClient.Close()
+
+	// Initialize RabbitMQ connection
+	log.Println("Connecting to RabbitMQ...")
+	rmqConn, err := rmqlib.NewConnectionFromURL(rabbitMQURL)
+	if err != nil {
+		return fmt.Errorf("failed to connect to RabbitMQ: %w", err)
+	}
+	defer rmqConn.Close()
+
+	// Initialize session manager
+	sessionManager := session.NewSessionManager(dockerClient, wrapperImage)
+
+	// Recover orphaned sessions on startup
+	log.Println("Recovering orphaned sessions...")
+	if err := sessionManager.RecoverOrphanedSessions(ctx, serverID); err != nil {
+		log.Printf("Warning: Failed to recover some sessions: %v", err)
+	}
+
+	// Initialize RabbitMQ publisher
+	rmqPublisher, err := rmq.NewPublisher(rmqConn, serverID)
+	if err != nil {
+		return fmt.Errorf("failed to create RabbitMQ publisher: %w", err)
+	}
+	defer rmqPublisher.Close()
+
+	// Publish initial host status
+	if err := rmqPublisher.PublishHostStatus(ctx, "online"); err != nil {
+		log.Printf("Warning: Failed to publish host status: %v", err)
+	}
+
+	// Initialize command handler
+	commandHandler := &CommandHandlerImpl{
+		sessionManager: sessionManager,
+		publisher:      rmqPublisher,
+		serverID:       serverID,
+	}
+
+	// Initialize RabbitMQ consumer
+	rmqConsumer, err := rmq.NewConsumer(rmqConn, serverID, commandHandler)
+	if err != nil {
+		return fmt.Errorf("failed to create RabbitMQ consumer: %w", err)
+	}
+	defer rmqConsumer.Close()
+
+	// Start consuming commands
+	log.Println("Starting command consumer...")
+	if err := rmqConsumer.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start consumer: %w", err)
+	}
+
+	// Start health check publisher
+	healthTicker := time.NewTicker(30 * time.Second)
+	defer healthTicker.Stop()
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-healthTicker.C:
+				if err := rmqPublisher.PublishHealth(ctx); err != nil {
+					log.Printf("Warning: Failed to publish health: %v", err)
+				}
+			}
+		}
+	}()
+
+	// Handle graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	log.Println("ManManV2 Host Manager is running. Press Ctrl+C to stop.")
+
+	// Wait for shutdown signal
+	<-sigCh
+	log.Println("Shutting down...")
+
+	// Publish offline status
+	_ = rmqPublisher.PublishHostStatus(ctx, "offline")
+
+	// Cancel context to stop all goroutines
+	cancel()
+
+	// Give some time for cleanup
+	time.Sleep(2 * time.Second)
+
+	return nil
+}
+
+// CommandHandlerImpl implements the CommandHandler interface
+type CommandHandlerImpl struct {
+	sessionManager *session.SessionManager
+	publisher      *rmq.Publisher
+	serverID       int64
+}
+
+// HandleStartSession handles a start session command
+func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.StartSessionCommand) error {
+	// Convert parameters to JSON
+	parametersJSON := ""
+	if cmd.Parameters != nil {
+		paramsBytes, err := json.Marshal(cmd.Parameters)
+		if err != nil {
+			return fmt.Errorf("failed to marshal parameters: %w", err)
+		}
+		parametersJSON = string(paramsBytes)
+	}
+
+	// Convert to session manager command format
+	sessionCmd := &session.StartSessionCommand{
+		SessionID:        cmd.SessionID,
+		SGCID:           cmd.SGCID,
+		ServerID:        h.serverID,
+		GameConfig:      cmd.GameConfig,
+		ServerGameConfig: cmd.ServerGameConfig,
+		ParametersJSON:  parametersJSON,
+	}
+
+	// Start the session
+	if err := h.sessionManager.StartSession(ctx, sessionCmd); err != nil {
+		// Publish error status
+		statusUpdate := &rmq.SessionStatusUpdate{
+			SessionID: cmd.SessionID,
+			SGCID:     cmd.SGCID,
+			Status:    "crashed",
+		}
+		_ = h.publisher.PublishSessionStatus(ctx, statusUpdate)
+		return fmt.Errorf("failed to start session: %w", err)
+	}
+
+	// Publish success status
+	statusUpdate := &rmq.SessionStatusUpdate{
+		SessionID: cmd.SessionID,
+		SGCID:     cmd.SGCID,
+		Status:    "running",
+	}
+	return h.publisher.PublishSessionStatus(ctx, statusUpdate)
+}
+
+// HandleStopSession handles a stop session command
+func (h *CommandHandlerImpl) HandleStopSession(ctx context.Context, cmd *rmq.StopSessionCommand) error {
+	if err := h.sessionManager.StopSession(ctx, cmd.SessionID, cmd.Force); err != nil {
+		return fmt.Errorf("failed to stop session: %w", err)
+	}
+
+	// Publish status update
+	statusUpdate := &rmq.SessionStatusUpdate{
+		SessionID: cmd.SessionID,
+		Status:    "stopped",
+	}
+	return h.publisher.PublishSessionStatus(ctx, statusUpdate)
+}
+
+// HandleKillSession handles a kill session command
+func (h *CommandHandlerImpl) HandleKillSession(ctx context.Context, cmd *rmq.KillSessionCommand) error {
+	if err := h.sessionManager.KillSession(ctx, cmd.SessionID); err != nil {
+		return fmt.Errorf("failed to kill session: %w", err)
+	}
+
+	// Publish status update
+	statusUpdate := &rmq.SessionStatusUpdate{
+		SessionID: cmd.SessionID,
+		Status:    "stopped",
+	}
+	return h.publisher.PublishSessionStatus(ctx, statusUpdate)
+}
+
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}

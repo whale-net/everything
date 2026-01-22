@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "session",
+    srcs = [
+        "manager.go",
+        "state.go",
+        "recovery.go",
+    ],
+    importpath = "github.com/whale-net/everything/manman/host/session",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//manman/host/docker",
+        "//manman/host/grpc",
+        "//manman",
+        "//manman/protos:manmanpb",
+    ],
+)
+
+go_test(
+    name = "state_test",
+    srcs = ["state_test.go"],
+    deps = [
+        ":session",
+        "//manman",
+    ],
+    size = "small",
+)

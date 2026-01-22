@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "rmq",
+    srcs = [
+        "connection.go",
+        "publisher.go",
+        "consumer.go",
+    ],
+    importpath = "github.com/whale-net/everything/libs/go/rmq",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_rabbitmq_amqp091_go//",
+    ],
+)
+
+go_test(
+    name = "rmq_test",
+    srcs = [
+        "connection_test.go",
+        "publisher_test.go",
+        "consumer_test.go",
+    ],
+    deps = [
+        ":rmq",
+    ],
+    size = "small",
+)
