@@ -39,6 +39,7 @@ use_repo(oci, "ubuntu_base", "ubuntu_base_linux_amd64", "ubuntu_base_linux_arm64
 
 # CA certificates from Debian (architecture-independent .deb file)
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+
 http_file(
     name = "ca_certificates_deb",
     sha256 = "b2d488ad4d8d8adb3ba319fc9cb2cf9909fc42cb82ad239a26c570a2e749c389",
@@ -48,9 +49,9 @@ http_file(
 # OpenAPI Generator CLI for client code generation
 http_file(
     name = "openapi_generator_cli",
+    downloaded_file_path = "openapi-generator-cli.jar",
     sha256 = "615e014705af34861e789e0b2a11075d3c80db134f881e937265479a4a83996e",
     urls = ["https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/7.10.0/openapi-generator-cli-7.10.0.jar"],
-    downloaded_file_path = "openapi-generator-cli.jar",
 )
 
 # SteamCMD for game server management
@@ -90,18 +91,18 @@ http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "ht
 
 http_archive(
     name = "python_stripped_x86_64",
-    url = "https://github.com/astral-sh/python-build-standalone/releases/download/20251014/cpython-3.13.9%2B20251014-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
     build_file_content = """
 exports_files(["python"])
 """,
+    url = "https://github.com/astral-sh/python-build-standalone/releases/download/20251014/cpython-3.13.9%2B20251014-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
 )
 
 http_archive(
     name = "python_stripped_arm64",
-    url = "https://github.com/astral-sh/python-build-standalone/releases/download/20251014/cpython-3.13.9%2B20251014-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
     build_file_content = """
 exports_files(["python"])
 """,
+    url = "https://github.com/astral-sh/python-build-standalone/releases/download/20251014/cpython-3.13.9%2B20251014-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
 )
 
 # Pycross setup for cross-platform Python dependency management
@@ -137,67 +138,56 @@ go_sdk.download(version = "1.25.0")
 
 # Go dependencies
 go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
-
 go_deps.module(
     path = "github.com/coreos/go-oidc/v3",
     sum = "h1:M66zd0pcc5VxvBNM4pB331Wrsanby+QomQYjN8HamW8=",
     version = "v3.13.0",
 )
-
 go_deps.module(
     path = "github.com/gorilla/sessions",
     sum = "h1:lqzMYz6bOfvn2WriPUjNByzeXIlVzURcPmgMczkmTjY=",
     version = "v1.2.2",
 )
-
 go_deps.module(
     path = "golang.org/x/oauth2",
     sum = "h1:CrgCKl8PPAVtLnU3c+EDw6x11699EWlsDeWNWKdIOkc=",
     version = "v0.28.0",
 )
-
 go_deps.module(
     path = "golang.org/x/crypto",
     sum = "h1:AnAEvhDddvBdpY+uR+MyHmuZzzNqXSe/GvuDeob5L34=",
     version = "v0.36.0",
 )
-
 go_deps.module(
     path = "golang.org/x/net",
     sum = "h1:1zLorHbz+LYj7MQlSf1+2tPIIgibq2eL5xkrGk6f+2c=",
     version = "v0.37.0",
 )
-
 go_deps.module(
     path = "github.com/gorilla/securecookie",
     sum = "h1:YCIWL56dvtr73r6715mJs5ZvhtnY73hBvEF8kXD8ePA=",
     version = "v1.1.2",
 )
-
 go_deps.module(
     path = "github.com/stretchr/testify",
     sum = "h1:HtqpIVDClZ4nwg75+f6Lvsy/wHu+3BoSGCbBAcpTsTg=",
     version = "v1.9.0",
 )
-
 go_deps.module(
     path = "github.com/go-jose/go-jose/v4",
     sum = "h1:M6T8+mKZl/+fNNuFHvGIzDz7BTLQPIounk/b9dw3AaE=",
     version = "v4.0.5",
 )
-
 go_deps.module(
     path = "github.com/davecgh/go-spew",
     sum = "h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=",
     version = "v1.1.1",
 )
-
 go_deps.module(
     path = "github.com/pmezard/go-difflib",
     sum = "h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=",
     version = "v1.0.0",
 )
-
 go_deps.module(
     path = "gopkg.in/yaml.v3",
     sum = "h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=",
@@ -210,41 +200,57 @@ go_deps.module(
     sum = "h1:pWFv03aZoHzlRKHWicjsZytKAiYCtNS0dHbXnIdq7jQ=",
     version = "v1.70.0",
 )
-
 go_deps.module(
     path = "google.golang.org/protobuf",
     sum = "h1:tPhr+woSbjfYvY6/GPufUoYizxw1cF/yFoxJ2fmpwlM=",
     version = "v1.36.1",
 )
-
 go_deps.module(
     path = "google.golang.org/genproto/googleapis/rpc",
     sum = "h1:GXlROi7mbvMNy0MnP83EeJCfCqAZ13Vrf/CEFiNvw34=",
     version = "v0.0.0-20241216192217-9240e9c98484",
 )
 
-# Database libraries
+# Database libraries (PostgreSQL)
 go_deps.module(
     path = "github.com/jackc/pgx/v5",
-    sum = "h1:cMLVkZu+aFcSxmG9cFIrCqOsuS3L/e6AiPbYOfJo0CA=",
+    sum = "h1:mLoDLV6sonKlvjIEsV56SkWNCnuNv531l94GaIzO+XI=",
     version = "v5.7.2",
 )
+go_deps.module(
+    path = "github.com/jackc/puddle/v2",
+    sum = "h1:PR8nw+E/1w0GLuRFSmiioY6UooMp6KJv0/61nB7icHo=",
+    version = "v2.2.2",
+)
+go_deps.module(
+    path = "github.com/jackc/pgservicefile",
+    sum = "h1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=",
+    version = "v0.0.0-20240606120523-5a60cdf6a761",
+)
+go_deps.module(
+    path = "github.com/jackc/pgpassfile",
+    sum = "h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=",
+    version = "v1.0.0",
+)
 
+# Database migrations
 go_deps.module(
     path = "github.com/golang-migrate/migrate/v4",
     sum = "h1:3pAe4dHVm3r88cGOP6n0r00Tn0qLdRyLuJmSDEHf5Is=",
     version = "v4.18.1",
 )
-
 use_repo(
     go_deps,
     "com_github_coreos_go_oidc_v3",
     "com_github_davecgh_go_spew",
     "com_github_go_jose_go_jose_v4",
     "com_github_golang_migrate_migrate_v4",
-    "com_github_gorilla_sessions",
     "com_github_gorilla_securecookie",
+    "com_github_gorilla_sessions",
+    "com_github_jackc_pgpassfile",
+    "com_github_jackc_pgservicefile",
     "com_github_jackc_pgx_v5",
+    "com_github_jackc_puddle_v2",
     "com_github_pmezard_go_difflib",
     "com_github_stretchr_testify",
     "in_gopkg_yaml_v3",

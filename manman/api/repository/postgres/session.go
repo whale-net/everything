@@ -1,0 +1,132 @@
+package postgres
+
+import (
+	"context"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/whale-net/everything/manman"
+)
+
+type SessionRepository struct {
+	db *pgxpool.Pool
+}
+
+func NewSessionRepository(db *pgxpool.Pool) *SessionRepository {
+	return &SessionRepository{db: db}
+}
+
+func (r *SessionRepository) Create(ctx context.Context, session *manman.Session) (*manman.Session, error) {
+	query := `
+		INSERT INTO sessions (sgc_id, status, parameters)
+		VALUES ($1, $2, $3)
+		RETURNING session_id
+	`
+
+	err := r.db.QueryRow(ctx, query,
+		session.SGCID,
+		session.Status,
+		session.Parameters,
+	).Scan(&session.SessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	return session, nil
+}
+
+func (r *SessionRepository) Get(ctx context.Context, sessionID int64) (*manman.Session, error) {
+	session := &manman.Session{}
+
+	query := `
+		SELECT session_id, sgc_id, started_at, ended_at, exit_code, status, parameters
+		FROM sessions
+		WHERE session_id = $1
+	`
+
+	err := r.db.QueryRow(ctx, query, sessionID).Scan(
+		&session.SessionID,
+		&session.SGCID,
+		&session.StartedAt,
+		&session.EndedAt,
+		&session.ExitCode,
+		&session.Status,
+		&session.Parameters,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return session, nil
+}
+
+func (r *SessionRepository) List(ctx context.Context, sgcID *int64, limit, offset int) ([]*manman.Session, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	var query string
+	var args []interface{}
+
+	if sgcID != nil {
+		query = `
+			SELECT session_id, sgc_id, started_at, ended_at, exit_code, status, parameters
+			FROM sessions
+			WHERE sgc_id = $1
+			ORDER BY session_id DESC
+			LIMIT $2 OFFSET $3
+		`
+		args = []interface{}{*sgcID, limit, offset}
+	} else {
+		query = `
+			SELECT session_id, sgc_id, started_at, ended_at, exit_code, status, parameters
+			FROM sessions
+			ORDER BY session_id DESC
+			LIMIT $1 OFFSET $2
+		`
+		args = []interface{}{limit, offset}
+	}
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessions []*manman.Session
+	for rows.Next() {
+		session := &manman.Session{}
+		err := rows.Scan(
+			&session.SessionID,
+			&session.SGCID,
+			&session.StartedAt,
+			&session.EndedAt,
+			&session.ExitCode,
+			&session.Status,
+			&session.Parameters,
+		)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+
+	return sessions, rows.Err()
+}
+
+func (r *SessionRepository) Update(ctx context.Context, session *manman.Session) error {
+	query := `
+		UPDATE sessions
+		SET started_at = $2, ended_at = $3, exit_code = $4, status = $5, parameters = $6
+		WHERE session_id = $1
+	`
+
+	_, err := r.db.Exec(ctx, query,
+		session.SessionID,
+		session.StartedAt,
+		session.EndedAt,
+		session.ExitCode,
+		session.Status,
+		session.Parameters,
+	)
+	return err
+}

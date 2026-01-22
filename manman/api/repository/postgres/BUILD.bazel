@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "postgres",
+    srcs = [
+        "game.go",
+        "gameconfig.go",
+        "repository.go",
+        "server.go",
+        "servergameconfig.go",
+        "session.go",
+    ],
+    importpath = "github.com/whale-net/everything/manman/api/repository/postgres",
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        "//manman:models",
+        "//manman/api/repository",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)

@@ -1,0 +1,11 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "repository",
+    srcs = ["repository.go"],
+    importpath = "github.com/whale-net/everything/manman/api/repository",
+    visibility = ["//manman:__subpackages__"],
+    deps = [
+        "//manman:models",
+    ],
+)

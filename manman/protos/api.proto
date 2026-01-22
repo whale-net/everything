@@ -1,0 +1,287 @@
+syntax = "proto3";
+
+package manman.v1;
+
+option go_package = "github.com/whale-net/everything/manman/protos;manmanpb";
+
+import "manman/protos/messages.proto";
+
+// ManManAPI is the main control plane API for managing game servers
+service ManManAPI {
+  // Server management
+  rpc ListServers(ListServersRequest) returns (ListServersResponse);
+  rpc GetServer(GetServerRequest) returns (GetServerResponse);
+  rpc CreateServer(CreateServerRequest) returns (CreateServerResponse);
+  rpc UpdateServer(UpdateServerRequest) returns (UpdateServerResponse);
+  rpc DeleteServer(DeleteServerRequest) returns (DeleteServerResponse);
+
+  // Game management
+  rpc ListGames(ListGamesRequest) returns (ListGamesResponse);
+  rpc GetGame(GetGameRequest) returns (GetGameResponse);
+  rpc CreateGame(CreateGameRequest) returns (CreateGameResponse);
+  rpc UpdateGame(UpdateGameRequest) returns (UpdateGameResponse);
+  rpc DeleteGame(DeleteGameRequest) returns (DeleteGameResponse);
+
+  // GameConfig management
+  rpc ListGameConfigs(ListGameConfigsRequest) returns (ListGameConfigsResponse);
+  rpc GetGameConfig(GetGameConfigRequest) returns (GetGameConfigResponse);
+  rpc CreateGameConfig(CreateGameConfigRequest) returns (CreateGameConfigResponse);
+  rpc UpdateGameConfig(UpdateGameConfigRequest) returns (UpdateGameConfigResponse);
+  rpc DeleteGameConfig(DeleteGameConfigRequest) returns (DeleteGameConfigResponse);
+
+  // ServerGameConfig management (deployment)
+  rpc ListServerGameConfigs(ListServerGameConfigsRequest) returns (ListServerGameConfigsResponse);
+  rpc GetServerGameConfig(GetServerGameConfigRequest) returns (GetServerGameConfigResponse);
+  rpc DeployGameConfig(DeployGameConfigRequest) returns (DeployGameConfigResponse);
+  rpc UpdateServerGameConfig(UpdateServerGameConfigRequest) returns (UpdateServerGameConfigResponse);
+  rpc DeleteServerGameConfig(DeleteServerGameConfigRequest) returns (DeleteServerGameConfigResponse);
+
+  // Session management
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  rpc StartSession(StartSessionRequest) returns (StartSessionResponse);
+  rpc StopSession(StopSessionRequest) returns (StopSessionResponse);
+}
+
+// ============================================================================
+// Server RPCs
+// ============================================================================
+
+message ListServersRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListServersResponse {
+  repeated Server servers = 1;
+  string next_page_token = 2;
+}
+
+message GetServerRequest {
+  int64 server_id = 1;
+}
+
+message GetServerResponse {
+  Server server = 1;
+}
+
+message CreateServerRequest {
+  string name = 1;
+}
+
+message CreateServerResponse {
+  Server server = 1;
+}
+
+message UpdateServerRequest {
+  int64 server_id = 1;
+  string name = 2;
+  string status = 3;
+}
+
+message UpdateServerResponse {
+  Server server = 1;
+}
+
+message DeleteServerRequest {
+  int64 server_id = 1;
+}
+
+message DeleteServerResponse {}
+
+// ============================================================================
+// Game RPCs
+// ============================================================================
+
+message ListGamesRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListGamesResponse {
+  repeated Game games = 1;
+  string next_page_token = 2;
+}
+
+message GetGameRequest {
+  int64 game_id = 1;
+}
+
+message GetGameResponse {
+  Game game = 1;
+}
+
+message CreateGameRequest {
+  string name = 1;
+  string steam_app_id = 2;  // optional
+  string metadata = 3;  // JSON string
+}
+
+message CreateGameResponse {
+  Game game = 1;
+}
+
+message UpdateGameRequest {
+  int64 game_id = 1;
+  string name = 2;
+  string steam_app_id = 3;
+  string metadata = 4;  // JSON string
+}
+
+message UpdateGameResponse {
+  Game game = 1;
+}
+
+message DeleteGameRequest {
+  int64 game_id = 1;
+}
+
+message DeleteGameResponse {}
+
+// ============================================================================
+// GameConfig RPCs
+// ============================================================================
+
+message ListGameConfigsRequest {
+  int64 game_id = 1;  // optional filter
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListGameConfigsResponse {
+  repeated GameConfig configs = 1;
+  string next_page_token = 2;
+}
+
+message GetGameConfigRequest {
+  int64 config_id = 1;
+}
+
+message GetGameConfigResponse {
+  GameConfig config = 1;
+}
+
+message CreateGameConfigRequest {
+  int64 game_id = 1;
+  string name = 2;
+  string image = 3;
+  string args_template = 4;
+  string env_template = 5;  // JSON string
+  string files = 6;  // JSON string
+  string parameters = 7;  // JSON string
+}
+
+message CreateGameConfigResponse {
+  GameConfig config = 1;
+}
+
+message UpdateGameConfigRequest {
+  int64 config_id = 1;
+  string name = 2;
+  string image = 3;
+  string args_template = 4;
+  string env_template = 5;  // JSON string
+  string files = 6;  // JSON string
+  string parameters = 7;  // JSON string
+}
+
+message UpdateGameConfigResponse {
+  GameConfig config = 1;
+}
+
+message DeleteGameConfigRequest {
+  int64 config_id = 1;
+}
+
+message DeleteGameConfigResponse {}
+
+// ============================================================================
+// ServerGameConfig RPCs
+// ============================================================================
+
+message ListServerGameConfigsRequest {
+  int64 server_id = 1;  // optional filter
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListServerGameConfigsResponse {
+  repeated ServerGameConfig configs = 1;
+  string next_page_token = 2;
+}
+
+message GetServerGameConfigRequest {
+  int64 sgc_id = 1;
+}
+
+message GetServerGameConfigResponse {
+  ServerGameConfig config = 1;
+}
+
+message DeployGameConfigRequest {
+  int64 server_id = 1;
+  int64 game_config_id = 2;
+  string port_bindings = 3;  // JSON string
+  string parameters = 4;  // JSON string
+}
+
+message DeployGameConfigResponse {
+  ServerGameConfig config = 1;
+}
+
+message UpdateServerGameConfigRequest {
+  int64 sgc_id = 1;
+  string port_bindings = 2;  // JSON string
+  string parameters = 3;  // JSON string
+  string status = 4;
+}
+
+message UpdateServerGameConfigResponse {
+  ServerGameConfig config = 1;
+}
+
+message DeleteServerGameConfigRequest {
+  int64 sgc_id = 1;
+}
+
+message DeleteServerGameConfigResponse {}
+
+// ============================================================================
+// Session RPCs
+// ============================================================================
+
+message ListSessionsRequest {
+  int64 sgc_id = 1;  // optional filter
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+  string next_page_token = 2;
+}
+
+message GetSessionRequest {
+  int64 session_id = 1;
+}
+
+message GetSessionResponse {
+  Session session = 1;
+}
+
+message StartSessionRequest {
+  int64 sgc_id = 1;
+  string parameters = 2;  // JSON string, optional session-level overrides
+}
+
+message StartSessionResponse {
+  Session session = 1;
+}
+
+message StopSessionRequest {
+  int64 session_id = 1;
+}
+
+message StopSessionResponse {
+  Session session = 1;
+}

@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package manman.v1;
+
+option go_package = "github.com/whale-net/everything/manman/protos;manmanpb";
+
+// Server represents a physical/virtual machine running the host manager
+message Server {
+  int64 server_id = 1;
+  string name = 2;
+  string status = 3;  // "online" | "offline"
+  int64 last_seen = 4;  // Unix timestamp (seconds since epoch), 0 if never seen
+}
+
+// Game represents a game definition (e.g., Minecraft, Valheim)
+message Game {
+  int64 game_id = 1;
+  string name = 2;
+  string steam_app_id = 3;  // optional
+  string metadata = 4;  // JSON string
+}
+
+// GameConfig represents a preset/template for running a game
+message GameConfig {
+  int64 config_id = 1;
+  int64 game_id = 2;
+  string name = 3;
+  string image = 4;
+  string args_template = 5;  // optional
+  string env_template = 6;  // JSON string
+  string files = 7;  // JSON string
+  string parameters = 8;  // JSON string
+}
+
+// ServerGameConfig represents a game configuration deployed on a specific server
+message ServerGameConfig {
+  int64 sgc_id = 1;
+  int64 server_id = 2;
+  int64 game_config_id = 3;
+  string port_bindings = 4;  // JSON string
+  string parameters = 5;  // JSON string
+  string status = 6;  // "active" | "inactive"
+}
+
+// Session represents an execution of a ServerGameConfig
+message Session {
+  int64 session_id = 1;
+  int64 sgc_id = 2;
+  int64 started_at = 3;  // Unix timestamp, 0 if not started
+  int64 ended_at = 4;  // Unix timestamp, 0 if not ended
+  int32 exit_code = 5;
+  string status = 6;  // "pending" | "starting" | "running" | "stopping" | "stopped" | "crashed" | "completed"
+  string parameters = 7;  // JSON string
+}
+
+// ServerPort represents port allocation tracking at server level
+message ServerPort {
+  int64 server_id = 1;
+  int32 port = 2;
+  string protocol = 3;  // "TCP" | "UDP"
+  int64 sgc_id = 4;  // 0 if not allocated
+  int64 allocated_at = 5;  // Unix timestamp
+}

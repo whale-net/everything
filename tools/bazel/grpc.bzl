@@ -7,7 +7,8 @@ load("@rules_go//proto:def.bzl", "go_proto_library")
 def go_grpc_library(
         name,
         srcs,
-        deps = [],
+        proto_deps = [],
+        go_deps = [],
         importpath = None,
         visibility = None,
         **kwargs):
@@ -21,7 +22,8 @@ def go_grpc_library(
     Args:
         name: Name of the generated go_library target
         srcs: List of .proto files
-        deps: List of other proto_library targets this depends on
+        proto_deps: List of other proto_library targets this depends on
+        go_deps: List of go_proto_library targets this depends on (for proto imports)
         importpath: Go import path for the generated library
         visibility: Visibility of the generated targets
         **kwargs: Additional arguments passed to the targets
@@ -33,7 +35,7 @@ def go_grpc_library(
     proto_library(
         name = proto_name,
         srcs = srcs,
-        deps = deps,
+        deps = proto_deps,
         visibility = ["//visibility:private"],
     )
 
@@ -43,6 +45,7 @@ def go_grpc_library(
         proto = ":" + proto_name,
         compilers = ["@rules_go//proto:go_grpc"],
         importpath = importpath,
+        deps = go_deps,
         visibility = ["//visibility:private"],
         **kwargs
     )
