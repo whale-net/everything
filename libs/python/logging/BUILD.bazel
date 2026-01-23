@@ -14,7 +14,7 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "@pypi//:opentelemetry-api",
-        "@pypi//:opentelemetry-sdk",
         "@pypi//:opentelemetry-exporter-otlp",
+        "@pypi//:opentelemetry-sdk",
     ],
 )

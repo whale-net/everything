@@ -6,12 +6,12 @@ py_library(
         "__init__.py",
         "logging.py",
     ],
+    visibility = ["//visibility:public"],
     deps = [
         "//libs/python/cli:params_base",
-        "@pypi//:typer",
         "@pypi//:opentelemetry-api",
-        "@pypi//:opentelemetry-sdk",
         "@pypi//:opentelemetry-exporter-otlp",
+        "@pypi//:opentelemetry-sdk",
+        "@pypi//:typer",
     ],
-    visibility = ["//visibility:public"],
 )

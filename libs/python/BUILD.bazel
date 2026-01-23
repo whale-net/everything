@@ -20,12 +20,12 @@ py_library(
 
 py_test(
     name = "fastapi_utils_test",
+    size = "small",
     srcs = ["fastapi_utils_test.py"],
     deps = [
         ":fastapi_utils",
-        "@pypi//:pytest",
         "@pypi//:fastapi",
         "@pypi//:httpx",
+        "@pypi//:pytest",
     ],
-    size = "small",
 )

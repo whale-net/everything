@@ -6,9 +6,9 @@ py_library(
         "__init__.py",
         "rabbitmq.py",
     ],
+    visibility = ["//visibility:public"],
     deps = [
         "//libs/python/cli:params_base",
         "@pypi//:typer",
     ],
-    visibility = ["//visibility:public"],
 )

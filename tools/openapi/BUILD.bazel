@@ -12,7 +12,7 @@ exports_files([
     "run_openapi_gen.sh",
 ])
 
-# Wrapper script for OpenAPI generation  
+# Wrapper script for OpenAPI generation
 sh_binary(
     name = "openapi_gen_wrapper",
     srcs = ["openapi_gen_wrapper.sh"],

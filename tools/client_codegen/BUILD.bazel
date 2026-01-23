@@ -14,9 +14,9 @@ load("//tools/openapi:openapi_client.bzl", "openapi_client")
 # Demo API Client (example)
 openapi_client(
     name = "demo_hello_fastapi",
-    spec = "//demo/hello_fastapi:hello-fastapi_openapi_spec",
-    namespace = "demo",
     app = "hello_fastapi",
+    namespace = "demo",
+    spec = "//demo/hello_fastapi:hello-fastapi_openapi_spec",
     # No model files - demo API has no data models
 )
 
@@ -31,5 +31,3 @@ py_test(
         "//generated/py/manman:experience_api",
     ],
 )
-
-

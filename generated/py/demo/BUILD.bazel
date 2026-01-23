@@ -15,7 +15,7 @@ genrule(
 # Demo API Clients (Python)
 openapi_client(
     name = "hello_fastapi",
-    spec = "//demo/hello_fastapi:hello-fastapi_openapi_spec",
-    namespace = "demo",
     app = "hello_fastapi",
+    namespace = "demo",
+    spec = "//demo/hello_fastapi:hello-fastapi_openapi_spec",
 )

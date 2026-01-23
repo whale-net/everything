@@ -2,9 +2,7 @@ load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "grpc",
-    srcs = [
-        "wrapper_control.go",
-    ],
+    srcs = ["wrapper_control.go"],
     importpath = "github.com/whale-net/everything/manman/host/grpc",
     visibility = ["//visibility:public"],
     deps = [

@@ -70,11 +70,10 @@ genrule(
     """,
     tags = ["no-sandbox"],  # Needs access to system zstd
     visibility = ["//visibility:private"],
-)# Re-export as a filegroup for use in steamcmd
+)  # Re-export as a filegroup for use in steamcmd
+
 filegroup(
     name = "lib32",
     srcs = [":lib32_extracted"],
     visibility = ["//visibility:public"],
 )
-
-

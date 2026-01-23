@@ -7,10 +7,10 @@ py_library(
     srcs = glob(["**/*.py"]),
     visibility = ["//visibility:public"],
     deps = [
-        "//libs/python/alembic",
         "//friendly_computing_machine/src/friendly_computing_machine/models",
-        "@pypi//:sqlmodel",
-        "@pypi//:sqlalchemy",
+        "//libs/python/alembic",
         "@pypi//:psycopg2-binary",
+        "@pypi//:sqlalchemy",
+        "@pypi//:sqlmodel",
     ],
 )

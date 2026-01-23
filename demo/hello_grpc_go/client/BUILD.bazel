@@ -1,12 +1,19 @@
-load("@rules_go//go:def.bzl", "go_binary")
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
 
 go_binary(
     name = "hello-grpc-client",
+    embed = [":client_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_library(
+    name = "client_lib",
     srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/demo/hello_grpc_go/client",
+    visibility = ["//visibility:private"],
     deps = [
         "//demo/hello_grpc_go/protos:hello_go_proto",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//credentials/insecure",
     ],
-    visibility = ["//visibility:public"],
 )

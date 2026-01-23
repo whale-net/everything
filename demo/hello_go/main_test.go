@@ -2,7 +2,7 @@ package main
 
 import (
 	"testing"
-	"github.com/example/everything/libs/go"
+	"github.com/whale-net/everything/libs/go"
 )
 
 func TestFormatGreeting(t *testing.T) {

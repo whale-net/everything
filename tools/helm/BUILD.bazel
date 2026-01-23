@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 # Go library for Helm chart composition
 go_library(
@@ -8,15 +8,6 @@ go_library(
         "types.go",
     ],
     importpath = "github.com/whale-net/everything/tools/helm",
-    visibility = ["//visibility:public"],
-)
-
-# Go binary for Helm chart composer CLI
-go_binary(
-    name = "helm_composer",
-    srcs = ["cmd/helm_composer/main.go"],
-    data = [":templates"],
-    deps = [":helm_lib"],
     visibility = ["//visibility:public"],
 )
 
@@ -59,5 +50,18 @@ sh_test(
     data = [
         "//demo:fastapi_chart",
     ],
-    tags = ["manual", "integration"],  # Requires helm binary to run
+    tags = [
+        "integration",
+        "manual",
+    ],  # Requires helm binary to run
+)
+
+go_test(
+    name = "helm_test",
+    srcs = [
+        "composer_test.go",
+        "types_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":helm_lib"],
 )

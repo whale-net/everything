@@ -7,8 +7,6 @@ package(default_visibility = ["//visibility:public"])
 
 # Demo API Clients (Go)
 
-load("//tools/openapi:openapi_go_client.bzl", "openapi_go_client")
-
 # ==============================================================================
 # OpenAPI Client Generation
 # ==============================================================================
@@ -17,8 +15,8 @@ load("//tools/openapi:openapi_go_client.bzl", "openapi_go_client")
 
 openapi_go_client(
     name = "hello_fastapi",
-    spec = "//demo/hello_fastapi:hello-fastapi_openapi_spec",
-    namespace = "demo",
     app = "hello_fastapi",
     importpath = "github.com/whale-net/everything/generated/go/demo/hello_fastapi",
+    namespace = "demo",
+    spec = "//demo/hello_fastapi:hello-fastapi_openapi_spec",
 )

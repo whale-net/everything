@@ -9,21 +9,21 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//generated/py/manman:worker_dal_api",
         "//libs/python/retry",
         "//manman/src:manman_core",
-        "//generated/py/manman:worker_dal_api",
     ],
 )
 
 py_test(
     name = "worker_dal_client_test",
+    size = "small",
     srcs = ["test_worker_dal_client.py"],
     main = "test_worker_dal_client.py",
     deps = [
         ":clients",
-        "//manman/src:manman_core",
         "//generated/py/manman:worker_dal_api",
+        "//manman/src:manman_core",
         "@pypi//:pytest",
     ],
-    size = "small",
 )

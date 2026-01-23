@@ -5,53 +5,54 @@ package(default_visibility = ["//friendly_computing_machine:__pkg__"])
 # Bot tests
 py_test(
     name = "test_bot",
+    size = "small",
     srcs = [
-        "conftest.py",
         "bot/test_slack_models.py",
+        "conftest.py",
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
-    size = "small",
 )
 
 # Database tests
 py_test(
     name = "test_db",
+    size = "small",
     srcs = [
         "conftest.py",
         "test_db.py",
         "test_db_util.py",
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
-    size = "small",
 )
 
 # ManMan integration tests
 py_test(
     name = "test_manman",
+    size = "small",
     srcs = [
         "conftest.py",
-        "test_manman_subscribe.py",
         "manman/test_manman_util.py",
+        "test_manman_subscribe.py",
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
-    size = "small",
 )
 
 # Temporal workflow tests
 py_test(
     name = "test_temporal",
+    size = "small",
     srcs = [
         "conftest.py",
         "test_scheduled_abstract_task.py",
         "test_temporal_workflow_fix.py",
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
-    size = "small",
 )
 
 # Utility tests
 py_test(
     name = "test_utils",
+    size = "small",
     srcs = [
         "conftest.py",
         "test_blocks.py",
@@ -59,5 +60,4 @@ py_test(
         "test_weirdge.py",
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
-    size = "small",
 )

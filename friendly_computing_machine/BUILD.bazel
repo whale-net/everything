@@ -14,99 +14,105 @@ alias(
 
 filegroup(
     name = "docs",
-    srcs = glob(["docs/**/*"], allow_empty = True),
+    srcs = glob(
+        ["docs/**/*"],
+        allow_empty = True,
+    ),
 )
 
 filegroup(
     name = "tests",
-    srcs = glob(["tests/**/*"], allow_empty = True),
+    srcs = glob(
+        ["tests/**/*"],
+        allow_empty = True,
+    ),
 )
 
 release_app(
     name = "bot",
-    binary_name = "//friendly_computing_machine/src:fcm_cli",
-    language = "python",
-    domain = "friendly-computing-machine",
-    description = "Slack Socket Mode bot for Friendly Computing Machine",
     app_type = "worker",
-    port = 7654,
-    replicas = 1,
-    health_check_enabled = False,
     args = [
         "bot",
         "--log-otlp",
         "run-slack-socket-app",
         "--skip-migration-check",
     ],
+    binary_name = "//friendly_computing_machine/src:fcm_cli",
+    description = "Slack Socket Mode bot for Friendly Computing Machine",
+    domain = "friendly-computing-machine",
+    health_check_enabled = False,
+    language = "python",
+    port = 7654,
+    replicas = 1,
 )
 
 release_app(
     name = "taskpool",
-    binary_name = "//friendly_computing_machine/src:fcm_cli",
-    language = "python",
-    domain = "friendly-computing-machine",
-    description = "Background task pool for Friendly Computing Machine",
     app_type = "worker",
-    port = 7654,
-    replicas = 1,
-    health_check_enabled = False,
     args = [
         "bot",
         "--log-otlp",
         "run-taskpool",
         "--skip-migration-check",
     ],
+    binary_name = "//friendly_computing_machine/src:fcm_cli",
+    description = "Background task pool for Friendly Computing Machine",
+    domain = "friendly-computing-machine",
+    health_check_enabled = False,
+    language = "python",
+    port = 7654,
+    replicas = 1,
 )
 
 release_app(
     name = "subscribe",
-    binary_name = "//friendly_computing_machine/src:fcm_cli",
-    language = "python",
-    domain = "friendly-computing-machine",
-    description = "RabbitMQ subscriber for ManMan status notifications",
     app_type = "worker",
-    port = 7654,
-    replicas = 1,
-    health_check_enabled = False,
     args = [
         "subscribe",
         "--log-otlp",
         "run",
         "--skip-migration-check",
     ],
+    binary_name = "//friendly_computing_machine/src:fcm_cli",
+    description = "RabbitMQ subscriber for ManMan status notifications",
+    domain = "friendly-computing-machine",
+    health_check_enabled = False,
+    language = "python",
+    port = 7654,
+    replicas = 1,
 )
 
 release_app(
     name = "worker",
-    binary_name = "//friendly_computing_machine/src:fcm_cli",
-    language = "python",
-    domain = "friendly-computing-machine",
-    description = "Temporal worker for Friendly Computing Machine",
     app_type = "worker",
-    port = 7654,
-    replicas = 1,
-    health_check_enabled = False,
     args = [
         "workflow",
         "--log-otlp",
         "run",
         "--skip-migration-check",
     ],
+    binary_name = "//friendly_computing_machine/src:fcm_cli",
+    description = "Temporal worker for Friendly Computing Machine",
+    domain = "friendly-computing-machine",
+    health_check_enabled = False,
+    language = "python",
+    port = 7654,
+    replicas = 1,
 )
 
 release_app(
     name = "migration",
-    binary_name = "//friendly_computing_machine/src:fcm_cli",
-    language = "python",
-    domain = "friendly-computing-machine",
-    description = "Database migration job for Friendly Computing Machine",
     app_type = "job",
-    replicas = 1,
     args = [
         "migration",
         "--log-otlp",
         "run",
     ],
+    binary_name = "//friendly_computing_machine/src:fcm_cli",
+    description = "Database migration job for Friendly Computing Machine",
+    domain = "friendly-computing-machine",
+    language = "python",
+    replicas = 1,
 )
 
 # ==============================================================================
@@ -128,8 +134,8 @@ release_helm_chart(
     name = "fcm_chart",
     apps = FCM_APPS,
     chart_name = "bot-services",
-    namespace = "fcm",
-    environment = "dev",
     domain = "friendly-computing-machine",
+    environment = "dev",
+    namespace = "fcm",
     visibility = ["//visibility:public"],
 )

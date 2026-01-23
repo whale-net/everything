@@ -1,18 +1,22 @@
+load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
+
 # Release helper package
 load("@rules_python//python:defs.bzl", "py_binary", "py_library")
 load("//tools/bazel:pytest.bzl", "py_test")
-load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 
 package(default_visibility = ["//visibility:public"])
 
 # Release helper library
 py_library(
     name = "release_helper_lib",
-    srcs = glob(["*.py"], exclude = ["test_*.py"]),
+    srcs = glob(
+        ["*.py"],
+        exclude = ["test_*.py"],
+    ),
     deps = [
-        "@pypi//:typer",
-        "@pypi//:pyyaml",
         "@pypi//:httpx",
+        "@pypi//:pyyaml",
+        "@pypi//:typer",
     ],
 )
 
@@ -27,182 +31,191 @@ py_binary(
 # Unit tests for metadata module
 py_test(
     name = "test_metadata",
+    size = "small",
     srcs = ["test_metadata.py"],
     deps = [
         ":release_helper_lib",
         "@pypi//:pytest",
     ],
-    size = "small",
 )
 
 # Unit tests for git module
 py_test(
     name = "test_git",
+    size = "small",
     srcs = ["test_git.py"],
     deps = [
         ":release_helper_lib",
         "@pypi//:pytest",
     ],
-    size = "small",
 )
 
 # Unit tests for git operations in changes module
 py_test(
     name = "test_changes_git",
+    size = "small",
     srcs = ["test_changes_git.py"],
     deps = [
         ":release_helper_lib",
         "@pypi//:pytest",
     ],
-    size = "small",
 )
 
 # Integration tests using pytest-git
 py_test(
     name = "test_git_integration",
+    size = "medium",
     srcs = ["test_git_integration.py"],
     deps = [
         ":release_helper_lib",
         "@pypi//:pytest",
         "@pypi//:pytest-git",
     ],
-    size = "medium",
 )
 
 # Unit tests for validation module
 py_test(
     name = "test_validation",
+    size = "small",
     srcs = ["test_validation.py"],
     deps = [
         ":release_helper_lib",
         "@pypi//:pytest",
     ],
-    size = "small",
 )
 
-# Unit tests for core module  
+# Unit tests for core module
 py_test(
     name = "test_core",
+    size = "small",
     srcs = ["test_core.py"],
     deps = [
         ":release_helper_lib",
         "@pypi//:pytest",
     ],
-    size = "small",
 )
 
 # Unit tests for images module
 py_test(
     name = "test_images",
     srcs = ["test_images.py"],
-    deps = [
-        ":images",
-        ":core",
-    ],
     # These are integration tests that call bazel commands.
     # They require a working bazel installation and cannot be mocked effectively
     # due to module import timing issues with pytest fixtures.
-    tags = ["manual", "integration"],
+    tags = [
+        "integration",
+        "manual",
+    ],
+    deps = [
+        ":core",
+        ":images",
+    ],
 )
 
 # Unit tests for release module
 py_test(
     name = "test_release",
+    size = "small",
     srcs = ["test_release.py"],
     deps = [
         ":release_helper_lib",
         "@pypi//:pytest",
     ],
-    size = "small",
 )
 
 # Unit tests for summary module
 py_test(
     name = "test_summary",
+    size = "small",
     srcs = ["test_summary.py"],
     deps = [
         ":release_helper_lib",
         "@pypi//:pytest",
     ],
-    size = "small",
 )
 
 # Unit tests for github release module
 py_test(
     name = "test_github_release",
+    size = "small",
     srcs = ["test_github_release.py"],
+    tags = [
+        "integration",
+        "manual",
+    ],  # Requires httpx and external HTTP calls
     deps = [
         ":release_helper_lib",
         "@pypi//:pytest",
     ],
-    size = "small",
-    tags = ["manual", "integration"],  # Requires httpx and external HTTP calls
 )
 
 # Unit tests for release notes module
 py_test(
     name = "test_release_notes",
+    size = "small",
     srcs = ["test_release_notes.py"],
     deps = [
         ":release_helper_lib",
         "@pypi//:pytest",
     ],
-    size = "small",
 )
 
 # Unit tests for helm unpublish functionality
 py_test(
     name = "test_helm_unpublish",
+    size = "small",
     srcs = ["test_helm_unpublish.py"],
     deps = [
         ":release_helper_lib",
         "@pypi//:pytest",
     ],
-    size = "small",
 )
 
 # Unit tests for helm app version resolution
 py_test(
     name = "test_helm_app_versions",
+    size = "small",
     srcs = ["test_helm_app_versions.py"],
+    tags = [
+        "integration",
+        "manual",
+    ],  # Requires bazel commands to run
     deps = [
         ":release_helper_lib",
         "@pypi//:pytest",
     ],
-    size = "small",
-    tags = ["manual", "integration"],  # Requires bazel commands to run
 )
 
 # Unit tests for exclude demo domain functionality
 py_test(
     name = "test_exclude_demo",
+    size = "small",
     srcs = ["test_exclude_demo.py"],
     deps = [
         ":release_helper_lib",
         "@pypi//:pytest",
     ],
-    size = "small",
 )
 
 # Unit tests for GHCR package management
 py_test(
     name = "test_ghcr",
+    size = "small",
     srcs = ["test_ghcr.py"],
     deps = [
         ":release_helper_lib",
-        "@pypi//:pytest",
         "@pypi//:httpx",
+        "@pypi//:pytest",
     ],
-    size = "small",
 )
 
 # Unit tests for cleanup orchestration
 py_test(
     name = "test_cleanup",
+    size = "small",
     srcs = ["test_cleanup.py"],
     deps = [
         ":release_helper_lib",
         "@pypi//:pytest",
     ],
-    size = "small",
 )
