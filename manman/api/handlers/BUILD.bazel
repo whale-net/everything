@@ -4,8 +4,12 @@ go_library(
     name = "handlers",
     srcs = [
         "api.go",
+        "converters.go",
         "game.go",
+        "logs.go",
+        "registration.go",
         "server.go",
+        "validation.go",
     ],
     importpath = "github.com/whale-net/everything/manman/api/handlers",
     visibility = ["//manman/api:__subpackages__"],

@@ -20,6 +20,9 @@ type APIServer struct {
 	gameConfigHandler       *GameConfigHandler
 	serverGameConfigHandler *ServerGameConfigHandler
 	sessionHandler          *SessionHandler
+	registrationHandler     *RegistrationHandler
+	validationHandler       *ValidationHandler
+	logsHandler             *LogsHandler
 }
 
 func NewAPIServer(repo *repository.Repository) *APIServer {
@@ -30,6 +33,9 @@ func NewAPIServer(repo *repository.Repository) *APIServer {
 		gameConfigHandler:       NewGameConfigHandler(repo.GameConfigs),
 		serverGameConfigHandler: NewServerGameConfigHandler(repo.ServerGameConfigs),
 		sessionHandler:          NewSessionHandler(repo.Sessions),
+		registrationHandler:     NewRegistrationHandler(repo.Servers),
+		validationHandler:       NewValidationHandler(repo.Servers, repo.GameConfigs),
+		logsHandler:             NewLogsHandler(),
 	}
 }
 
@@ -212,30 +218,9 @@ func (h *GameConfigHandler) CreateGameConfig(ctx context.Context, req *pb.Create
 		Name:         req.Name,
 		Image:        req.Image,
 		ArgsTemplate: stringPtr(req.ArgsTemplate),
-	}
-
-	if req.EnvTemplate != "" {
-		envTemplate, err := parseJSONB(req.EnvTemplate)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid env_template JSON: %v", err)
-		}
-		config.EnvTemplate = envTemplate
-	}
-
-	if req.Files != "" {
-		files, err := parseJSONB(req.Files)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid files JSON: %v", err)
-		}
-		config.Files = files
-	}
-
-	if req.Parameters != "" {
-		parameters, err := parseJSONB(req.Parameters)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid parameters JSON: %v", err)
-		}
-		config.Parameters = parameters
+		EnvTemplate:  mapToJSONB(req.EnvTemplate),
+		Files:        filesToJSONB(req.Files),
+		Parameters:   parametersToJSONB(req.Parameters),
 	}
 
 	config, err := h.repo.Create(ctx, config)
@@ -254,35 +239,45 @@ func (h *GameConfigHandler) UpdateGameConfig(ctx context.Context, req *pb.Update
 		return nil, status.Errorf(codes.NotFound, "game config not found: %v", err)
 	}
 
-	if req.Name != "" {
-		config.Name = req.Name
-	}
-	if req.Image != "" {
-		config.Image = req.Image
-	}
-	if req.ArgsTemplate != "" {
-		config.ArgsTemplate = stringPtr(req.ArgsTemplate)
-	}
-	if req.EnvTemplate != "" {
-		envTemplate, err := parseJSONB(req.EnvTemplate)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid env_template JSON: %v", err)
+	// Apply field mask
+	if req.UpdateMask == nil || len(req.UpdateMask.Paths) == 0 {
+		// Update all provided fields
+		if req.Name != "" {
+			config.Name = req.Name
 		}
-		config.EnvTemplate = envTemplate
-	}
-	if req.Files != "" {
-		files, err := parseJSONB(req.Files)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid files JSON: %v", err)
+		if req.Image != "" {
+			config.Image = req.Image
 		}
-		config.Files = files
-	}
-	if req.Parameters != "" {
-		parameters, err := parseJSONB(req.Parameters)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid parameters JSON: %v", err)
+		if req.ArgsTemplate != "" {
+			config.ArgsTemplate = stringPtr(req.ArgsTemplate)
 		}
-		config.Parameters = parameters
+		if req.EnvTemplate != nil {
+			config.EnvTemplate = mapToJSONB(req.EnvTemplate)
+		}
+		if req.Files != nil {
+			config.Files = filesToJSONB(req.Files)
+		}
+		if req.Parameters != nil {
+			config.Parameters = parametersToJSONB(req.Parameters)
+		}
+	} else {
+		// Update only masked fields
+		for _, path := range req.UpdateMask.Paths {
+			switch path {
+			case "name":
+				config.Name = req.Name
+			case "image":
+				config.Image = req.Image
+			case "args_template":
+				config.ArgsTemplate = stringPtr(req.ArgsTemplate)
+			case "env_template":
+				config.EnvTemplate = mapToJSONB(req.EnvTemplate)
+			case "files":
+				config.Files = filesToJSONB(req.Files)
+			case "parameters":
+				config.Parameters = parametersToJSONB(req.Parameters)
+			}
+		}
 	}
 
 	if err := h.repo.Update(ctx, config); err != nil {
@@ -304,19 +299,18 @@ func (h *GameConfigHandler) DeleteGameConfig(ctx context.Context, req *pb.Delete
 
 func gameConfigToProto(c *manman.GameConfig) *pb.GameConfig {
 	pbConfig := &pb.GameConfig{
-		ConfigId: c.ConfigID,
-		GameId:   c.GameID,
-		Name:     c.Name,
-		Image:    c.Image,
+		ConfigId:    c.ConfigID,
+		GameId:      c.GameID,
+		Name:        c.Name,
+		Image:       c.Image,
+		EnvTemplate: jsonbToMap(c.EnvTemplate),
+		Files:       jsonbToFiles(c.Files),
+		Parameters:  jsonbToParameters(c.Parameters),
 	}
 
 	if c.ArgsTemplate != nil {
 		pbConfig.ArgsTemplate = *c.ArgsTemplate
 	}
-
-	pbConfig.EnvTemplate = jsonbToString(c.EnvTemplate)
-	pbConfig.Files = jsonbToString(c.Files)
-	pbConfig.Parameters = jsonbToString(c.Parameters)
 
 	return pbConfig
 }
@@ -376,7 +370,7 @@ func (h *ServerGameConfigHandler) ListServerGameConfigs(ctx context.Context, req
 }
 
 func (h *ServerGameConfigHandler) GetServerGameConfig(ctx context.Context, req *pb.GetServerGameConfigRequest) (*pb.GetServerGameConfigResponse, error) {
-	config, err := h.repo.Get(ctx, req.SgcId)
+	config, err := h.repo.Get(ctx, req.ServerGameConfigId)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "server game config not found: %v", err)
 	}
@@ -391,22 +385,8 @@ func (h *ServerGameConfigHandler) DeployGameConfig(ctx context.Context, req *pb.
 		ServerID:     req.ServerId,
 		GameConfigID: req.GameConfigId,
 		Status:       manman.SGCStatusInactive,
-	}
-
-	if req.PortBindings != "" {
-		portBindings, err := parseJSONB(req.PortBindings)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid port_bindings JSON: %v", err)
-		}
-		sgc.PortBindings = portBindings
-	}
-
-	if req.Parameters != "" {
-		parameters, err := parseJSONB(req.Parameters)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid parameters JSON: %v", err)
-		}
-		sgc.Parameters = parameters
+		PortBindings: portBindingsToJSONB(req.PortBindings),
+		Parameters:   mapToJSONB(req.Parameters),
 	}
 
 	sgc, err := h.repo.Create(ctx, sgc)
@@ -420,29 +400,35 @@ func (h *ServerGameConfigHandler) DeployGameConfig(ctx context.Context, req *pb.
 }
 
 func (h *ServerGameConfigHandler) UpdateServerGameConfig(ctx context.Context, req *pb.UpdateServerGameConfigRequest) (*pb.UpdateServerGameConfigResponse, error) {
-	sgc, err := h.repo.Get(ctx, req.SgcId)
+	sgc, err := h.repo.Get(ctx, req.ServerGameConfigId)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "server game config not found: %v", err)
 	}
 
-	if req.PortBindings != "" {
-		portBindings, err := parseJSONB(req.PortBindings)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid port_bindings JSON: %v", err)
+	// Apply field mask
+	if req.UpdateMask == nil || len(req.UpdateMask.Paths) == 0 {
+		// Update all provided fields
+		if req.PortBindings != nil {
+			sgc.PortBindings = portBindingsToJSONB(req.PortBindings)
 		}
-		sgc.PortBindings = portBindings
-	}
-
-	if req.Parameters != "" {
-		parameters, err := parseJSONB(req.Parameters)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid parameters JSON: %v", err)
+		if req.Parameters != nil {
+			sgc.Parameters = mapToJSONB(req.Parameters)
 		}
-		sgc.Parameters = parameters
-	}
-
-	if req.Status != "" {
-		sgc.Status = req.Status
+		if req.Status != "" {
+			sgc.Status = req.Status
+		}
+	} else {
+		// Update only masked fields
+		for _, path := range req.UpdateMask.Paths {
+			switch path {
+			case "port_bindings":
+				sgc.PortBindings = portBindingsToJSONB(req.PortBindings)
+			case "parameters":
+				sgc.Parameters = mapToJSONB(req.Parameters)
+			case "status":
+				sgc.Status = req.Status
+			}
+		}
 	}
 
 	if err := h.repo.Update(ctx, sgc); err != nil {
@@ -455,7 +441,7 @@ func (h *ServerGameConfigHandler) UpdateServerGameConfig(ctx context.Context, re
 }
 
 func (h *ServerGameConfigHandler) DeleteServerGameConfig(ctx context.Context, req *pb.DeleteServerGameConfigRequest) (*pb.DeleteServerGameConfigResponse, error) {
-	if err := h.repo.Delete(ctx, req.SgcId); err != nil {
+	if err := h.repo.Delete(ctx, req.ServerGameConfigId); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete server game config: %v", err)
 	}
 
@@ -464,12 +450,12 @@ func (h *ServerGameConfigHandler) DeleteServerGameConfig(ctx context.Context, re
 
 func serverGameConfigToProto(sgc *manman.ServerGameConfig) *pb.ServerGameConfig {
 	return &pb.ServerGameConfig{
-		SgcId:        sgc.SGCID,
-		ServerId:     sgc.ServerID,
-		GameConfigId: sgc.GameConfigID,
-		PortBindings: jsonbToString(sgc.PortBindings),
-		Parameters:   jsonbToString(sgc.Parameters),
-		Status:       sgc.Status,
+		ServerGameConfigId: sgc.SGCID,
+		ServerId:           sgc.ServerID,
+		GameConfigId:       sgc.GameConfigID,
+		PortBindings:       jsonbToPortBindings(sgc.PortBindings),
+		Parameters:         jsonbToMap(sgc.Parameters),
+		Status:             sgc.Status,
 	}
 }
 
@@ -501,9 +487,12 @@ func (h *SessionHandler) ListSessions(ctx context.Context, req *pb.ListSessionsR
 	}
 
 	var sgcID *int64
-	if req.SgcId > 0 {
-		sgcID = &req.SgcId
+	if req.ServerGameConfigId > 0 {
+		sgcID = &req.ServerGameConfigId
 	}
+
+	// TODO: Use enhanced filters (status_filter, started_after, started_before, server_id, live_only)
+	// This will require updating the repository layer to support these filters
 
 	sessions, err := h.repo.List(ctx, sgcID, pageSize+1, offset)
 	if err != nil {
@@ -540,16 +529,9 @@ func (h *SessionHandler) GetSession(ctx context.Context, req *pb.GetSessionReque
 
 func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionRequest) (*pb.StartSessionResponse, error) {
 	session := &manman.Session{
-		SGCID:  req.SgcId,
-		Status: manman.SessionStatusPending,
-	}
-
-	if req.Parameters != "" {
-		parameters, err := parseJSONB(req.Parameters)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid parameters JSON: %v", err)
-		}
-		session.Parameters = parameters
+		SGCID:      req.ServerGameConfigId,
+		Status:     manman.SessionStatusPending,
+		Parameters: mapToJSONB(req.Parameters),
 	}
 
 	session, err := h.repo.Create(ctx, session)
@@ -584,10 +566,10 @@ func (h *SessionHandler) StopSession(ctx context.Context, req *pb.StopSessionReq
 
 func sessionToProto(s *manman.Session) *pb.Session {
 	pbSession := &pb.Session{
-		SessionId:  s.SessionID,
-		SgcId:      s.SGCID,
-		Status:     s.Status,
-		Parameters: jsonbToString(s.Parameters),
+		SessionId:          s.SessionID,
+		ServerGameConfigId: s.SGCID,
+		Status:             s.Status,
+		Parameters:         jsonbToMap(s.Parameters),
 	}
 
 	if s.StartedAt != nil {
@@ -603,4 +585,23 @@ func sessionToProto(s *manman.Session) *pb.Session {
 	}
 
 	return pbSession
+}
+
+// Registration RPCs
+func (s *APIServer) RegisterServer(ctx context.Context, req *pb.RegisterServerRequest) (*pb.RegisterServerResponse, error) {
+	return s.registrationHandler.RegisterServer(ctx, req)
+}
+
+func (s *APIServer) Heartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*pb.HeartbeatResponse, error) {
+	return s.registrationHandler.Heartbeat(ctx, req)
+}
+
+// Log Management RPCs
+func (s *APIServer) SendBatchedLogs(ctx context.Context, req *pb.SendBatchedLogsRequest) (*pb.SendBatchedLogsResponse, error) {
+	return s.logsHandler.SendBatchedLogs(ctx, req)
+}
+
+// Validation RPCs
+func (s *APIServer) ValidateDeployment(ctx context.Context, req *pb.ValidateDeploymentRequest) (*pb.ValidateDeploymentResponse, error) {
+	return s.validationHandler.ValidateDeployment(ctx, req)
 }

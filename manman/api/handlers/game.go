@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/whale-net/everything/manman"
 	"github.com/whale-net/everything/manman/api/repository"
@@ -78,14 +77,7 @@ func (h *GameHandler) CreateGame(ctx context.Context, req *pb.CreateGameRequest)
 	game := &manman.Game{
 		Name:       req.Name,
 		SteamAppID: stringPtr(req.SteamAppId),
-	}
-
-	if req.Metadata != "" {
-		metadata, err := parseJSONB(req.Metadata)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid metadata JSON: %v", err)
-		}
-		game.Metadata = metadata
+		Metadata:   metadataToJSONB(req.Metadata),
 	}
 
 	game, err := h.repo.Create(ctx, game)
@@ -104,18 +96,30 @@ func (h *GameHandler) UpdateGame(ctx context.Context, req *pb.UpdateGameRequest)
 		return nil, status.Errorf(codes.NotFound, "game not found: %v", err)
 	}
 
-	if req.Name != "" {
-		game.Name = req.Name
-	}
-	if req.SteamAppId != "" {
-		game.SteamAppID = stringPtr(req.SteamAppId)
-	}
-	if req.Metadata != "" {
-		metadata, err := parseJSONB(req.Metadata)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid metadata JSON: %v", err)
+	// Apply field mask
+	if req.UpdateMask == nil || len(req.UpdateMask.Paths) == 0 {
+		// Update all provided fields
+		if req.Name != "" {
+			game.Name = req.Name
 		}
-		game.Metadata = metadata
+		if req.SteamAppId != "" {
+			game.SteamAppID = stringPtr(req.SteamAppId)
+		}
+		if req.Metadata != nil {
+			game.Metadata = metadataToJSONB(req.Metadata)
+		}
+	} else {
+		// Update only masked fields
+		for _, path := range req.UpdateMask.Paths {
+			switch path {
+			case "name":
+				game.Name = req.Name
+			case "steam_app_id":
+				game.SteamAppID = stringPtr(req.SteamAppId)
+			case "metadata":
+				game.Metadata = metadataToJSONB(req.Metadata)
+			}
+		}
 	}
 
 	if err := h.repo.Update(ctx, game); err != nil {
@@ -137,44 +141,14 @@ func (h *GameHandler) DeleteGame(ctx context.Context, req *pb.DeleteGameRequest)
 
 func gameToProto(g *manman.Game) *pb.Game {
 	pbGame := &pb.Game{
-		GameId: g.GameID,
-		Name:   g.Name,
+		GameId:   g.GameID,
+		Name:     g.Name,
+		Metadata: jsonbToMetadata(g.Metadata),
 	}
 
 	if g.SteamAppID != nil {
 		pbGame.SteamAppId = *g.SteamAppID
 	}
 
-	if g.Metadata != nil {
-		pbGame.Metadata = jsonbToString(g.Metadata)
-	}
-
 	return pbGame
-}
-
-// Helper functions
-func stringPtr(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}
-
-func parseJSONB(s string) (manman.JSONB, error) {
-	if s == "" {
-		return nil, nil
-	}
-	var result manman.JSONB
-	if err := json.Unmarshal([]byte(s), &result); err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
-func jsonbToString(j manman.JSONB) string {
-	if j == nil {
-		return ""
-	}
-	data, _ := json.Marshal(j)
-	return string(data)
 }

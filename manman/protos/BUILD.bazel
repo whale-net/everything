@@ -20,4 +20,7 @@ proto_library(
         "wrapper.proto",
     ],
     visibility = ["//visibility:public"],
+    deps = [
+        "@protobuf+//google/protobuf:field_mask_proto",
+    ],
 )
