@@ -5,8 +5,10 @@ go_library(
     srcs = [
         "game.go",
         "gameconfig.go",
+        "log_reference.go",
         "repository.go",
         "server.go",
+        "server_capability.go",
         "servergameconfig.go",
         "session.go",
     ],

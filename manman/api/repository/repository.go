@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/whale-net/everything/manman"
 )
@@ -10,6 +11,7 @@ import (
 type ServerRepository interface {
 	Create(ctx context.Context, name string) (*manman.Server, error)
 	Get(ctx context.Context, serverID int64) (*manman.Server, error)
+	GetByName(ctx context.Context, name string) (*manman.Server, error)
 	List(ctx context.Context, limit, offset int) ([]*manman.Server, error)
 	Update(ctx context.Context, server *manman.Server) error
 	Delete(ctx context.Context, serverID int64) error
@@ -42,19 +44,44 @@ type ServerGameConfigRepository interface {
 	Delete(ctx context.Context, sgcID int64) error
 }
 
+// SessionFilters defines filters for session queries
+type SessionFilters struct {
+	SGCID         *int64
+	ServerID      *int64
+	StatusFilter  []string
+	StartedAfter  *time.Time
+	StartedBefore *time.Time
+	LiveOnly      bool
+}
+
 // SessionRepository defines operations for Session entities
 type SessionRepository interface {
 	Create(ctx context.Context, session *manman.Session) (*manman.Session, error)
 	Get(ctx context.Context, sessionID int64) (*manman.Session, error)
 	List(ctx context.Context, sgcID *int64, limit, offset int) ([]*manman.Session, error)
+	ListWithFilters(ctx context.Context, filters *SessionFilters, limit, offset int) ([]*manman.Session, error)
 	Update(ctx context.Context, session *manman.Session) error
+}
+
+// ServerCapabilityRepository defines operations for ServerCapability entities
+type ServerCapabilityRepository interface {
+	Upsert(ctx context.Context, cap *manman.ServerCapability) error
+	Get(ctx context.Context, serverID int64) (*manman.ServerCapability, error)
+}
+
+// LogReferenceRepository defines operations for LogReference entities
+type LogReferenceRepository interface {
+	Create(ctx context.Context, logRef *manman.LogReference) error
+	ListBySession(ctx context.Context, sessionID int64) ([]*manman.LogReference, error)
 }
 
 // Repository aggregates all repository interfaces
 type Repository struct {
-	Servers           ServerRepository
-	Games             GameRepository
-	GameConfigs       GameConfigRepository
-	ServerGameConfigs ServerGameConfigRepository
-	Sessions          SessionRepository
+	Servers            ServerRepository
+	Games              GameRepository
+	GameConfigs        GameConfigRepository
+	ServerGameConfigs  ServerGameConfigRepository
+	Sessions           SessionRepository
+	ServerCapabilities ServerCapabilityRepository
+	LogReferences      LogReferenceRepository
 }

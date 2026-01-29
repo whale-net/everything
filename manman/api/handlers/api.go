@@ -33,9 +33,9 @@ func NewAPIServer(repo *repository.Repository) *APIServer {
 		gameConfigHandler:       NewGameConfigHandler(repo.GameConfigs),
 		serverGameConfigHandler: NewServerGameConfigHandler(repo.ServerGameConfigs),
 		sessionHandler:          NewSessionHandler(repo.Sessions),
-		registrationHandler:     NewRegistrationHandler(repo.Servers),
+		registrationHandler:     NewRegistrationHandler(repo.Servers, repo.ServerCapabilities),
 		validationHandler:       NewValidationHandler(repo.Servers, repo.GameConfigs),
-		logsHandler:             NewLogsHandler(),
+		logsHandler:             NewLogsHandler(repo.LogReferences),
 	}
 }
 

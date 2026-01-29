@@ -12,13 +12,14 @@ import (
 )
 
 type RegistrationHandler struct {
-	serverRepo repository.ServerRepository
-	// capabilityRepo will be added in Phase 5
+	serverRepo     repository.ServerRepository
+	capabilityRepo repository.ServerCapabilityRepository
 }
 
-func NewRegistrationHandler(serverRepo repository.ServerRepository) *RegistrationHandler {
+func NewRegistrationHandler(serverRepo repository.ServerRepository, capRepo repository.ServerCapabilityRepository) *RegistrationHandler {
 	return &RegistrationHandler{
-		serverRepo: serverRepo,
+		serverRepo:     serverRepo,
+		capabilityRepo: capRepo,
 	}
 }
 
@@ -27,13 +28,17 @@ func (h *RegistrationHandler) RegisterServer(ctx context.Context, req *pb.Regist
 		return nil, status.Error(codes.InvalidArgument, "name is required")
 	}
 
-	// TODO: Check if server with this name exists (requires GetByName method in repository)
-	// For now, just create a new server
-	server, err := h.serverRepo.Create(ctx, req.Name)
+	// Check if server with this name exists
+	server, err := h.serverRepo.GetByName(ctx, req.Name)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create server: %v", err)
+		// Server doesn't exist, create it
+		server, err = h.serverRepo.Create(ctx, req.Name)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to create server: %v", err)
+		}
 	}
 
+	// Update server status
 	now := time.Now()
 	server.Status = manman.ServerStatusOnline
 	server.LastSeen = &now
@@ -42,7 +47,21 @@ func (h *RegistrationHandler) RegisterServer(ctx context.Context, req *pb.Regist
 		return nil, status.Errorf(codes.Internal, "failed to update server status: %v", err)
 	}
 
-	// TODO: Store capabilities using capabilityRepo (Phase 5)
+	// Store capabilities
+	if req.Capabilities != nil {
+		capability := &manman.ServerCapability{
+			ServerID:               server.ServerID,
+			TotalMemoryMB:          req.Capabilities.TotalMemoryMb,
+			AvailableMemoryMB:      req.Capabilities.AvailableMemoryMb,
+			CPUCores:               req.Capabilities.CpuCores,
+			AvailableCPUMillicores: req.Capabilities.AvailableCpuMillicores,
+			DockerVersion:          req.Capabilities.DockerVersion,
+		}
+
+		if err := h.capabilityRepo.Upsert(ctx, capability); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to store capabilities: %v", err)
+		}
+	}
 
 	return &pb.RegisterServerResponse{
 		ServerId: server.ServerID,
@@ -64,7 +83,21 @@ func (h *RegistrationHandler) Heartbeat(ctx context.Context, req *pb.HeartbeatRe
 		return nil, status.Errorf(codes.Internal, "failed to update server: %v", err)
 	}
 
-	// TODO: Update capabilities using capabilityRepo (Phase 5)
+	// Update capabilities
+	if req.Capabilities != nil {
+		capability := &manman.ServerCapability{
+			ServerID:               req.ServerId,
+			TotalMemoryMB:          req.Capabilities.TotalMemoryMb,
+			AvailableMemoryMB:      req.Capabilities.AvailableMemoryMb,
+			CPUCores:               req.Capabilities.CpuCores,
+			AvailableCPUMillicores: req.Capabilities.AvailableCpuMillicores,
+			DockerVersion:          req.Capabilities.DockerVersion,
+		}
+
+		if err := h.capabilityRepo.Upsert(ctx, capability); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to update capabilities: %v", err)
+		}
+	}
 
 	return &pb.HeartbeatResponse{
 		Acknowledged:         true,

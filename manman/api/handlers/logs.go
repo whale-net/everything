@@ -11,17 +11,20 @@ import (
 	"time"
 
 	"github.com/whale-net/everything/manman"
+	"github.com/whale-net/everything/manman/api/repository"
 	pb "github.com/whale-net/everything/manman/protos"
 )
 
 const logsBaseDir = "/var/lib/manman/logs" // Configurable
 
 type LogsHandler struct {
-	// logRefRepo will be added in Phase 5
+	logRefRepo repository.LogReferenceRepository
 }
 
-func NewLogsHandler() *LogsHandler {
-	return &LogsHandler{}
+func NewLogsHandler(logRefRepo repository.LogReferenceRepository) *LogsHandler {
+	return &LogsHandler{
+		logRefRepo: logRefRepo,
+	}
 }
 
 func (h *LogsHandler) SendBatchedLogs(ctx context.Context, req *pb.SendBatchedLogsRequest) (*pb.SendBatchedLogsResponse, error) {
@@ -53,7 +56,7 @@ func (h *LogsHandler) SendBatchedLogs(ctx context.Context, req *pb.SendBatchedLo
 			continue
 		}
 
-		// 3. Store reference in database (TODO: requires logRefRepo from Phase 5)
+		// 3. Store reference in database
 		logRef := &manman.LogReference{
 			SessionID: batch.SessionId,
 			FilePath:  filePath, // Local path (not S3 URL)
@@ -64,13 +67,11 @@ func (h *LogsHandler) SendBatchedLogs(ctx context.Context, req *pb.SendBatchedLo
 			CreatedAt: time.Now(),
 		}
 
-		// if err := h.logRefRepo.Create(ctx, logRef); err != nil {
-		//     failed = append(failed, batch.BatchId)
-		//     continue
-		// }
+		if err := h.logRefRepo.Create(ctx, logRef); err != nil {
+			failed = append(failed, batch.BatchId)
+			continue
+		}
 
-		// For now, just accept it (stub)
-		_ = logRef
 		accepted++
 	}
 
