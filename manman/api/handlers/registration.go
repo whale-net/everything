@@ -58,7 +58,7 @@ func (h *RegistrationHandler) RegisterServer(ctx context.Context, req *pb.Regist
 			DockerVersion:          req.Capabilities.DockerVersion,
 		}
 
-		if err := h.capabilityRepo.Upsert(ctx, capability); err != nil {
+		if err := h.capabilityRepo.Insert(ctx, capability); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to store capabilities: %v", err)
 		}
 	}
@@ -94,7 +94,7 @@ func (h *RegistrationHandler) Heartbeat(ctx context.Context, req *pb.HeartbeatRe
 			DockerVersion:          req.Capabilities.DockerVersion,
 		}
 
-		if err := h.capabilityRepo.Upsert(ctx, capability); err != nil {
+		if err := h.capabilityRepo.Insert(ctx, capability); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to update capabilities: %v", err)
 		}
 	}

@@ -1,13 +1,17 @@
--- Server capabilities table for tracking resource availability
+-- Server capabilities table for tracking resource availability (time series)
 CREATE TABLE IF NOT EXISTS server_capabilities (
-    server_id BIGINT PRIMARY KEY REFERENCES servers(server_id) ON DELETE CASCADE,
+    capability_id BIGSERIAL PRIMARY KEY,
+    server_id BIGINT NOT NULL REFERENCES servers(server_id) ON DELETE CASCADE,
     total_memory_mb INT NOT NULL,
     available_memory_mb INT NOT NULL,
     cpu_cores INT NOT NULL,
     available_cpu_millicores INT NOT NULL,
     docker_version VARCHAR(50),
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Index for querying latest capabilities by server
+CREATE INDEX idx_server_capabilities_server_recorded ON server_capabilities(server_id, recorded_at DESC);
 
 -- Log references table for tracking log files (local storage)
 CREATE TABLE IF NOT EXISTS log_references (

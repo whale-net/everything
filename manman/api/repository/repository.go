@@ -65,7 +65,7 @@ type SessionRepository interface {
 
 // ServerCapabilityRepository defines operations for ServerCapability entities
 type ServerCapabilityRepository interface {
-	Upsert(ctx context.Context, cap *manman.ServerCapability) error
+	Insert(ctx context.Context, cap *manman.ServerCapability) error
 	Get(ctx context.Context, serverID int64) (*manman.ServerCapability, error)
 }
 

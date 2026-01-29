@@ -90,13 +90,14 @@ type ServerPort struct {
 
 // ServerCapability represents the resources available on a server
 type ServerCapability struct {
+	CapabilityID           int64      `db:"capability_id"`
 	ServerID               int64      `db:"server_id"`
 	TotalMemoryMB          int32      `db:"total_memory_mb"`
 	AvailableMemoryMB      int32      `db:"available_memory_mb"`
 	CPUCores               int32      `db:"cpu_cores"`
 	AvailableCPUMillicores int32      `db:"available_cpu_millicores"`
 	DockerVersion          string     `db:"docker_version"`
-	UpdatedAt              *time.Time `db:"updated_at"`
+	RecordedAt             *time.Time `db:"recorded_at"`
 }
 
 // LogReference represents a reference to a log file for a session
