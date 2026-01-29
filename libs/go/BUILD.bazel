@@ -3,6 +3,6 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "go",
     srcs = ["utils.go"],
-    importpath = "github.com/example/everything/libs/go",
+    importpath = "github.com/whale-net/everything/libs/go",
     visibility = ["//visibility:public"],
 )

@@ -31,3 +31,31 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 #     ],
 #     size = "small",
 # )
+
+# Temporarily commented out due to Docker SDK dependency issues
+# go_library(
+#     name = "session",
+#     srcs = [
+#         "manager.go",
+#         "recovery.go",
+#         "state.go",
+#     ],
+#     importpath = "github.com/whale-net/everything/manman/host/session",
+#     visibility = ["//visibility:public"],
+#     deps = [
+#         "//libs/go/docker",
+#         "//libs/go/grpcclient",
+#         "//manman:models",
+#         "//manman/host/grpc",
+#         "//manman/protos:manmanpb",
+#     ],
+# )
+#
+# go_test(
+#     name = "session_test",
+#     srcs = ["state_test.go"],
+#     deps = [
+#         ":session",
+#         "//manman:models",
+#     ],
+# )

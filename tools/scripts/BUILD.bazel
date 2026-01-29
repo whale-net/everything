@@ -18,17 +18,17 @@ exports_files([
 sh_test(
     name = "test_cross_compilation",
     size = "large",
+    timeout = "long",
     srcs = ["test_cross_compilation.sh"],
     data = [
         "//demo/hello_fastapi:hello-fastapi_image",
     ],
     tags = [
-        "manual",  # Don't run with //...
-        "integration",  # Integration test, not unit test
         "image-integration",  # Image integration test for container architecture verification
+        "integration",  # Integration test, not unit test
+        "manual",  # Don't run with //...
         "no-cache",  # Always run, never cache
     ],
-    timeout = "long",
 )
 
 # Version resolver utility for Helm charts

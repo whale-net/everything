@@ -59,10 +59,10 @@ genrule(
 pkg_tar(
     name = "steamcmd",
     srcs = [":steamcmd_extracted"],
-    package_dir = "/opt/steamcmd",
-    strip_prefix = "steamcmd",
     mode = "0755",
+    package_dir = "/opt/steamcmd",
     portable_mtime = True,  # Use fixed timestamp for reproducible builds
+    strip_prefix = "steamcmd",
     visibility = ["//visibility:public"],
 )
 
@@ -99,7 +99,7 @@ filegroup(
     srcs = [
         ":steamcmd",
         ":steamcmd_symlink_layer",
-        "//tools/lib32:lib32",
+        "//tools/lib32",
     ],
     visibility = ["//visibility:public"],
 )
@@ -110,4 +110,3 @@ alias(
     actual = ":steamcmd_with_lib32",
     visibility = ["//visibility:public"],
 )
-

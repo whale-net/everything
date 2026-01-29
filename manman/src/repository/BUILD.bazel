@@ -15,13 +15,13 @@ py_library(
         "//libs/python/rmq",
         "//manman/src:manman_core",
         "//manman/src/repository/message",
-        "@pypi//:sqlmodel",
+        "@pypi//:alembic",
         "@pypi//:asyncpg",
         "@pypi//:httpx",
-        "@pypi//:alembic",
         "@pypi//:opentelemetry-instrumentation-sqlalchemy",
-        "@pypi//:requests",
         "@pypi//:python-jose",
+        "@pypi//:requests",
+        "@pypi//:sqlmodel",
     ],
 )
 
@@ -38,6 +38,7 @@ py_library(
 # Database repository tests
 py_test(
     name = "database_repository_test",
+    size = "small",
     srcs = ["database_repository_test.py"],
     main = "database_repository_test.py",
     deps = [
@@ -46,12 +47,12 @@ py_test(
         "@pypi//:pytest-asyncio",
         "@pypi//:sqlalchemy",
     ],
-    size = "small",
 )
 
 # Validator tests
 py_test(
     name = "validator_test",
+    size = "small",
     srcs = ["validator_test.py"],
     main = "validator_test.py",
     deps = [
@@ -59,5 +60,4 @@ py_test(
         "@pypi//:pytest",
         "@pypi//:pytest-asyncio",
     ],
-    size = "small",
 )

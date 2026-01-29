@@ -13,9 +13,8 @@ package(default_visibility = ["//visibility:public"])
 
 openapi_go_client(
     name = "experience_api",
-    spec = "//manman:experience_api_spec",
-    namespace = "manman",
     app = "experience-api",
     importpath = "github.com/whale-net/everything/generated/go/manman/experience_api",
+    namespace = "manman",
+    spec = "//manman:experience_api_spec",
 )
-

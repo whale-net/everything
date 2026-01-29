@@ -1,14 +1,23 @@
+load("@rules_go//proto:def.bzl", "go_proto_library")
+load("@rules_proto//proto:defs.bzl", "proto_library")
 load("//tools/bazel:grpc.bzl", "go_grpc_library")
 
 # Generate Go code for ManManAPI
 # Combines messages and API service definitions into a single package
-go_grpc_library(
+go_proto_library(
     name = "manmanpb",
+    compilers = ["@rules_go//proto:go_grpc"],
+    importpath = "github.com/whale-net/everything/manman/protos",
+    proto = ":manmanpb_proto",
+    visibility = ["//visibility:public"],
+)
+
+proto_library(
+    name = "manmanpb_proto",
     srcs = [
-        "messages.proto",
         "api.proto",
+        "messages.proto",
         "wrapper.proto",
     ],
-    importpath = "github.com/whale-net/everything/manman/protos",
     visibility = ["//visibility:public"],
 )

@@ -6,11 +6,11 @@ py_library(
         "__init__.py",
         "postgres.py",
     ],
-    deps = [
-        "//libs/python/cli:params_base",
-        "//libs/python/alembic",
-        "@pypi//:typer",
-        "@pypi//:sqlalchemy",
-    ],
     visibility = ["//visibility:public"],
+    deps = [
+        "//libs/python/alembic",
+        "//libs/python/cli:params_base",
+        "@pypi//:sqlalchemy",
+        "@pypi//:typer",
+    ],
 )

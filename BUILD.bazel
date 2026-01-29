@@ -1,3 +1,5 @@
+# Go setup with Gazelle for automated BUILD file generation
+load("@gazelle//:def.bzl", "gazelle")
 load("@rules_python//python:defs.bzl", "py_library")
 
 # Export files needed by other packages
@@ -8,17 +10,18 @@ exports_files([
     "MODULE.bazel.lock",
 ])
 
-# Go setup
-# gazelle:prefix github.com/example/everything
-# Note: Gazelle rules are not currently needed as there are no external Go dependencies
-# If external Go dependencies are added in the future, these can be enabled:
-# gazelle(name = "gazelle")
-# gazelle(
-#     name = "gazelle-update-repos",
-#     args = [
-#         "-from_file=go.mod",
-#         "-to_macro=deps.bzl%go_dependencies",
-#         "-prune",
-#     ],
-#     command = "update-repos",
-# )
+# CRITICAL: This prefix must match the module name in go.mod
+# gazelle:prefix github.com/whale-net/everything
+# gazelle:exclude generated
+gazelle(name = "gazelle")
+
+# Update repositories from go.mod (optional, typically not needed with Bzlmod)
+gazelle(
+    name = "gazelle-update-repos",
+    args = [
+        "-from_file=go.mod",
+        "-to_macro=go_deps.bzl%go_dependencies",
+        "-prune",
+    ],
+    command = "update-repos",
+)

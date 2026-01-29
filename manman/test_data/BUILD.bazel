@@ -16,6 +16,6 @@ py_binary(
     name = "seed_data",
     srcs = ["seed_data.py"],
     main = "seed_data.py",
-    deps = [":seed_data_lib"],
     visibility = ["//visibility:public"],
+    deps = [":seed_data_lib"],
 )

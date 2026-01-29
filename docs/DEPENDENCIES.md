@@ -55,12 +55,59 @@ deps = ["@pypi//:fastapi"]
 
 ## Go Dependencies
 
-This repository currently uses only Go standard library packages and internal packages. No external Go dependencies are needed.
+This repository uses external Go dependencies with **automated dependency tracking** via `go.mod` and Bazel's Bzlmod system.
 
-### If you need to add external Go dependencies in the future
+### Quick Start - Adding a Go Dependency
 
-1. Add `go.mod` file with the dependency
-2. Enable and run gazelle rules (currently commented out in BUILD.bazel)
-3. Import normally in Go code
+```bash
+# 1. Add the dependency
+go get github.com/package/name@version
 
-**Current state:** All Go code uses standard library (`fmt`, `os`, `encoding/json`, etc.) and internal packages (`github.com/example/everything/libs/go`).
+# 2. Update BUILD files
+bazel run //:gazelle
+
+# 3. Update MODULE.bazel
+bazel mod tidy
+
+# 4. Build
+bazel build //your/target
+```
+
+### How It Works
+
+Dependencies are declared in `go.mod` and automatically synced to `MODULE.bazel`:
+
+1. **`go.mod`** - Declares direct dependencies using standard Go tooling
+2. **Gazelle** - Auto-generates BUILD.bazel files from Go imports
+3. **`bazel mod tidy`** - Automatically manages `use_repo()` in MODULE.bazel
+
+**Key benefit:** Transitive dependencies are automatically resolved - no manual tracking required!
+
+### Example - Adding UUID Package
+
+```bash
+# Add dependency
+go get github.com/google/uuid@v1.6.0
+
+# Use in your code
+cat > mypackage/id.go <<'EOF'
+package mypackage
+
+import "github.com/google/uuid"
+
+func GenerateID() string {
+    return uuid.New().String()
+}
+EOF
+
+# Update Bazel
+bazel run //:gazelle
+bazel mod tidy
+
+# Build
+bazel build //mypackage
+```
+
+### Detailed Documentation
+
+For comprehensive documentation on the Go dependency workflow, see [GO_DEPENDENCIES.md](GO_DEPENDENCIES.md).

@@ -16,9 +16,9 @@ py_library(
     ),
     visibility = ["//visibility:public"],
     deps = [
-        "//libs/python/alembic",
-        "//friendly_computing_machine/src/friendly_computing_machine/models",
         "//friendly_computing_machine/src/friendly_computing_machine/db",
+        "//friendly_computing_machine/src/friendly_computing_machine/models",
+        "//libs/python/alembic",
         "@pypi//:alembic",
     ],
 )

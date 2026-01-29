@@ -1,21 +1,33 @@
-load("@rules_go//go:def.bzl", "go_binary", "go_test")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 
 # Example Go binary that uses the generated OpenAPI client
 go_binary(
     name = "hello_go_client",
-    srcs = ["main.go"],
-    deps = [
-        "//generated/go/demo:hello_fastapi",
-    ],
+    embed = [":hello_go_client_lib"],
     visibility = ["//visibility:public"],
 )
 
 # Test for the generated OpenAPI client
 go_test(
     name = "main_test",
+    size = "small",
     srcs = ["main_test.go"],
     deps = [
         "//generated/go/demo:hello_fastapi",
     ],
-    size = "small",
+)
+
+go_library(
+    name = "hello_go_client_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/demo/hello_go_client",
+    visibility = ["//visibility:private"],
+    deps = ["//generated/go/demo:hello_fastapi"],
+)
+
+go_test(
+    name = "hello_go_client_test",
+    srcs = ["main_test.go"],
+    embed = [":hello_go_client_lib"],
+    deps = ["//generated/go/demo:hello_fastapi"],
 )

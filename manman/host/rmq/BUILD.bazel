@@ -4,8 +4,8 @@ go_library(
     name = "rmq",
     srcs = [
         "consumer.go",
-        "publisher.go",
         "messages.go",
+        "publisher.go",
     ],
     importpath = "github.com/whale-net/everything/manman/host/rmq",
     visibility = ["//visibility:public"],
@@ -16,9 +16,9 @@ go_library(
 
 go_test(
     name = "rmq_test",
+    size = "small",
     srcs = ["messages_test.go"],
     deps = [
         ":rmq",
     ],
-    size = "small",
 )

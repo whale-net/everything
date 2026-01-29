@@ -4,24 +4,24 @@ go_library(
     name = "rmq",
     srcs = [
         "connection.go",
-        "publisher.go",
         "consumer.go",
+        "publisher.go",
     ],
     importpath = "github.com/whale-net/everything/libs/go/rmq",
     visibility = ["//visibility:public"],
     deps = [
-        "@com_github_rabbitmq_amqp091_go//:go_default_library",
+        "@com_github_rabbitmq_amqp091_go//:amqp091-go",
     ],
 )
 
 go_test(
     name = "rmq_test",
+    size = "small",
     srcs = [
         "connection_test.go",
-        "publisher_test.go",
-        "consumer_test.go",
         "consumer_internal_test.go",
+        "consumer_test.go",
+        "publisher_test.go",
     ],
     embed = [":rmq"],
-    size = "small",
 )

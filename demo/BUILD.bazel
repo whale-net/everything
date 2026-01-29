@@ -5,7 +5,7 @@ load("//tools/bazel:release.bzl", "release_helm_chart")
 # Individual release_app definitions for each demo app are in their respective
 # directories (hello_python/BUILD.bazel, hello_go/BUILD.bazel, etc.)
 #
-# For complex multi-app deployments, use helm_chart_composed from 
+# For complex multi-app deployments, use helm_chart_composed from
 # helm_composition_simple.bzl like the manman domain does.
 
 # Example Helm chart with a single external API
@@ -17,9 +17,9 @@ release_helm_chart(
         "//demo/hello_fastapi:hello-fastapi_metadata",
     ],
     chart_name = "hello-fastapi",
-    namespace = "demo",
-    environment = "production",
     domain = "demo",
+    environment = "production",
+    namespace = "demo",
     # chart_version omitted - uses default "0.0.0-dev" for local builds
     # Release system auto-versions from git tags (helm-demo-hello-fastapi.v*)
     visibility = ["//visibility:public"],
@@ -31,13 +31,13 @@ release_helm_chart(
     apps = [
         "//demo/hello_fastapi:hello-fastapi_metadata",
     ],
+    chart_name = "hello-fastapi-enhanced",
+    domain = "demo",
+    environment = "production",
     manual_manifests = [
         "//demo/hello_fastapi:k8s_manifests",
     ],
-    chart_name = "hello-fastapi-enhanced",
     namespace = "demo",
-    environment = "production",
-    domain = "demo",
     # chart_version omitted - uses default "0.0.0-dev" for local builds
     # Release system auto-versions from git tags (helm-demo-hello-fastapi-enhanced.v*)
     visibility = ["//visibility:public"],
@@ -51,9 +51,9 @@ release_helm_chart(
         "//demo/hello_go:hello-go_metadata",
     ],
     chart_name = "demo-workers",
-    namespace = "workers",
-    environment = "staging",
     domain = "demo",
+    environment = "staging",
+    namespace = "workers",
     # chart_version omitted - uses default "0.0.0-dev" for local builds
     # Release system auto-versions from git tags (helm-workers-demo-workers.v*)
 )
@@ -66,9 +66,9 @@ release_helm_chart(
         "//demo/hello_internal_api:hello-internal-api_metadata",
     ],
     chart_name = "hello-internal-api",
-    namespace = "demo",
-    environment = "production",
     domain = "demo",
+    environment = "production",
+    namespace = "demo",
     # chart_version omitted - uses default "0.0.0-dev" for local builds
     # Release system auto-versions from git tags (helm-demo-hello-internal-api.v*)
 )
@@ -80,9 +80,9 @@ release_helm_chart(
         "//demo/hello_job:hello-job_metadata",
     ],
     chart_name = "hello-job",
-    namespace = "demo",
-    environment = "production",
     domain = "demo",
+    environment = "production",
+    namespace = "demo",
     # chart_version omitted - uses default "0.0.0-dev" for local builds
     # Release system auto-versions from git tags (helm-demo-hello-job.v*)
 )
@@ -94,9 +94,9 @@ release_helm_chart(
         "//demo/hello_worker:hello-worker_metadata",
     ],
     chart_name = "hello-worker",
-    namespace = "demo",
-    environment = "production",
     domain = "demo",
+    environment = "production",
+    namespace = "demo",
     # chart_version omitted - uses default "0.0.0-dev" for local builds
     # Release system auto-versions from git tags (helm-demo-hello-worker.v*)
 )
@@ -111,9 +111,9 @@ release_helm_chart(
         "//demo/hello_job:hello-job_metadata",
     ],
     chart_name = "demo-all-types",
-    namespace = "demo",
-    environment = "production",
     domain = "demo",
+    environment = "production",
+    namespace = "demo",
     # chart_version omitted - uses default "0.0.0-dev" for local builds
     # Release system auto-versions from git tags (helm-demo-demo-all-types.v*)
 )

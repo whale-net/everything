@@ -13,8 +13,8 @@ go_library(
     importpath = "github.com/whale-net/everything/manman/management-ui",
     visibility = ["//visibility:private"],
     deps = [
-        "//libs/go/htmxauth",
         "//generated/go/manman:experience_api",
+        "//libs/go/htmxauth",
     ],
 )
 
@@ -33,4 +33,3 @@ go_test(
         "@com_github_stretchr_testify//assert",
     ],
 )
-

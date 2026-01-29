@@ -18,6 +18,7 @@ py_library(
     ],
     visibility = ["//manman/src/host:__subpackages__"],
     deps = [
+        ":status_processor_lib",
         "//libs/python/alembic",
         "//libs/python/cli:params",
         "//libs/python/cli:types",
@@ -27,18 +28,17 @@ py_library(
         "//libs/python/gunicorn",  # Gunicorn config utilities
         "//libs/python/logging",  # Use consolidated logging
         "//manman/src:manman_core",
-        "//manman/src/repository:manman_repository",
-        "//manman/src/migrations:manman_migrations",
         "//manman/src/host/api:api_shared",
         "//manman/src/host/api/experience:experience_api_lib",
         "//manman/src/host/api/status:status_api_lib",
         "//manman/src/host/api/worker_dal:worker_dal_api_lib",
-        ":status_processor_lib",
-        "@pypi//:typer",
-        "@pypi//:uvicorn",
-        "@pypi//:gunicorn",
+        "//manman/src/migrations:manman_migrations",
+        "//manman/src/repository:manman_repository",
         "@pypi//:alembic",
         "@pypi//:fastapi",
+        "@pypi//:gunicorn",
+        "@pypi//:typer",
+        "@pypi//:uvicorn",
     ],
 )
 
@@ -52,8 +52,8 @@ py_library(
     deps = [
         "//manman/src:manman_core",
         "//manman/src/repository:manman_repository",
-        "@pypi//:requests",
         "@pypi//:python-jose",
+        "@pypi//:requests",
     ],
 )
 
@@ -61,50 +61,50 @@ py_library(
 py_binary(
     name = "status_processor",
     srcs = ["main.py"],
-    main = "main.py",
-    deps = [":host_main"],
     args = ["start-status-processor"],
+    main = "main.py",
     visibility = ["//manman:__pkg__"],
+    deps = [":host_main"],
 )
 
 # Status processor test
 py_test(
     name = "status_processor_test",
+    size = "small",
     srcs = ["status_processor_test.py"],
     main = "status_processor_test.py",
     deps = [
-        ":status_processor_lib",
         ":host_main",
+        ":status_processor_lib",
         "@pypi//:pytest",
         "@pypi//:pytest-asyncio",
     ],
-    size = "small",
 )
 
 # Migration binaries
 py_binary(
     name = "migration",
     srcs = ["main.py"],
-    main = "main.py",
-    deps = [":host_main"],
     args = ["run-migration"],
+    main = "main.py",
     visibility = ["//manman:__pkg__"],
+    deps = [":host_main"],
 )
 
 py_binary(
     name = "migration_cli",
     srcs = ["main.py"],
     main = "main.py",
-    deps = [":host_main"],
     visibility = ["//manman:__pkg__"],
+    deps = [":host_main"],
 )
 
 # Legacy compatibility: Combined library for all host services
 py_library(
     name = "manman_host",
     visibility = [
-        "//manman:__subpackages__",
         "//libs/python/openapi_gen:__pkg__",
+        "//manman:__subpackages__",
     ],
     deps = [
         ":host_main",

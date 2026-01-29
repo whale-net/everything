@@ -7,14 +7,15 @@ py_library(
         "engine.py",
         "repository.py",
     ],
+    visibility = ["//visibility:public"],
     deps = [
         "@pypi//:sqlmodel",
     ],
-    visibility = ["//visibility:public"],
 )
 
 py_test(
     name = "repository_test",
+    size = "small",
     srcs = ["repository_test.py"],
     main = "repository_test.py",
     deps = [
@@ -22,11 +23,11 @@ py_test(
         "@pypi//:pytest",
         "@pypi//:sqlmodel",
     ],
-    size = "small",
 )
 
 py_test(
     name = "engine_test",
+    size = "small",
     srcs = ["engine_test.py"],
     main = "engine_test.py",
     deps = [
@@ -34,5 +35,4 @@ py_test(
         "@pypi//:pytest",
         "@pypi//:sqlalchemy",
     ],
-    size = "small",
 )

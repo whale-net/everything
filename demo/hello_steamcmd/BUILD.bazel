@@ -11,10 +11,10 @@ py_binary(
 # Demo app showing SteamCMD integration
 release_app(
     name = "hello-steamcmd",
-    binary_name = ":hello_steamcmd",
-    language = "python",
-    domain = "demo",
-    description = "Demo showing SteamCMD integration in container images",
-    app_type = "worker",
     additional_tars = ["//tools/steamcmd:steamcmd_layers"],
+    app_type = "worker",
+    binary_name = ":hello_steamcmd",
+    description = "Demo showing SteamCMD integration in container images",
+    domain = "demo",
+    language = "python",
 )

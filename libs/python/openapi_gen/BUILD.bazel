@@ -19,4 +19,3 @@ py_binary(
     visibility = ["//visibility:public"],
     deps = [":openapi_gen_generic_lib"],
 )
-

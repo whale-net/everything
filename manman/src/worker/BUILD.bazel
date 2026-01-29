@@ -1,22 +1,25 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 
-# Worker services library  
+# Worker services library
 py_library(
     name = "manman_worker",
-    srcs = glob(["**/*.py"], exclude=["*_test.py"]),
+    srcs = glob(
+        ["**/*.py"],
+        exclude = ["*_test.py"],
+    ),
     visibility = ["//manman:__subpackages__"],
     deps = [
-        "//manman/src:manman_core",
-        "//manman/clients:clients",
-        "//manman/src/repository:manman_repository",
         "//libs/python/cli:params",  # Changed from params_base to params
         "//libs/python/cli:types",
         "//libs/python/cli/providers/rabbitmq",
         "//libs/python/logging",  # Use consolidated logging
+        "//manman/clients",
+        "//manman/src:manman_core",
+        "//manman/src/repository:manman_repository",
         "@pypi//:amqpstorm",
-        "@pypi//:typer",
-        "@pypi//:requests",
         "@pypi//:python-jose",
+        "@pypi//:requests",
+        "@pypi//:typer",
     ],
 )
 
@@ -25,13 +28,14 @@ py_binary(
     name = "worker",
     srcs = ["main.py"],
     main = "main.py",
-    deps = [":manman_worker"],
     visibility = ["//manman:__pkg__"],
+    deps = [":manman_worker"],
 )
 
 # Individual test targets for better granularity
 py_test(
     name = "server_status_test",
+    size = "small",
     srcs = ["server_status_test.py"],
     main = "server_status_test.py",
     deps = [
@@ -39,11 +43,11 @@ py_test(
         "@pypi//:pytest",
         "@pypi//:pytest-asyncio",
     ],
-    size = "small",
 )
 
 py_test(
     name = "subscriber_multiple_exchanges_test",
+    size = "small",
     srcs = ["subscriber_multiple_exchanges_test.py"],
     main = "subscriber_multiple_exchanges_test.py",
     deps = [
@@ -51,11 +55,11 @@ py_test(
         "@pypi//:pytest",
         "@pypi//:pytest-asyncio",
     ],
-    size = "small",
 )
 
 py_test(
     name = "worker_heartbeat_test",
+    size = "small",
     srcs = ["worker_heartbeat_test.py"],
     main = "worker_heartbeat_test.py",
     deps = [
@@ -63,11 +67,11 @@ py_test(
         "@pypi//:pytest",
         "@pypi//:pytest-asyncio",
     ],
-    size = "small",
 )
 
 py_test(
     name = "worker_shutdown_cascade_test",
+    size = "small",
     srcs = ["worker_shutdown_cascade_test.py"],
     main = "worker_shutdown_cascade_test.py",
     deps = [
@@ -75,5 +79,4 @@ py_test(
         "@pypi//:pytest",
         "@pypi//:pytest-asyncio",
     ],
-    size = "small",
 )

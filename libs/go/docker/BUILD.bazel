@@ -21,3 +21,29 @@ load("@rules_go//go:def.bzl", "go_library")
 #         "@com_github_docker_go_connections//nat",
 #     ],
 # )
+
+# Temporarily commented out due to Docker SDK transitive dependency issues
+# The Docker library's auto-generated BUILD file doesn't include all transitive deps
+# TODO: Re-enable when Docker functionality is needed or add go_repository override
+# go_library(
+#     name = "docker",
+#     srcs = [
+#         "container.go",
+#         "deps.go",
+#         "docker.go",
+#     ],
+#     importpath = "github.com/whale-net/everything/libs/go/docker",
+#     visibility = ["//visibility:public"],
+#     deps = [
+#         "@com_github_containerd_errdefs//:errdefs",
+#         "@com_github_distribution_reference//:reference",
+#         "@com_github_docker_docker//api/types",
+#         "@com_github_docker_docker//api/types/container",
+#         "@com_github_docker_docker//api/types/mount",
+#         "@com_github_docker_docker//api/types/network",
+#         "@com_github_docker_docker//client",
+#         "@com_github_docker_go_connections//nat",
+#         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+#         "@io_opentelemetry_go_otel_trace//:trace",
+#     ],
+# )

@@ -15,21 +15,21 @@ genrule(
 # ManMan API Clients
 openapi_client(
     name = "experience_api",
-    spec = "//manman:experience_api_spec",
-    namespace = "manman",
     app = "experience_api",
+    namespace = "manman",
+    spec = "//manman:experience_api_spec",
 )
 
 openapi_client(
     name = "status_api",
-    spec = "//manman:status_api_spec",
-    namespace = "manman",
     app = "status_api",
+    namespace = "manman",
+    spec = "//manman:status_api_spec",
 )
 
 openapi_client(
     name = "worker_dal_api",
-    spec = "//manman:worker_dal_api_spec",
-    namespace = "manman",
     app = "worker_dal_api",
+    namespace = "manman",
+    spec = "//manman:worker_dal_api_spec",
 )

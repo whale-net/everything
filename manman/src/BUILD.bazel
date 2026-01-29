@@ -5,40 +5,41 @@ py_library(
     name = "manman_core",
     srcs = [
         "__init__.py",
-        "__main__.py", 
+        "__main__.py",
         "config.py",
+        "conftest.py",
         "constants.py",
         "exceptions.py",
-        "models.py", 
-        "util.py",
+        "models.py",
         "runner.py",
-        "conftest.py",
+        "util.py",
     ],
     visibility = [
-        "//manman:__subpackages__",
         "//libs/python/openapi_gen:__pkg__",
+        "//manman:__subpackages__",
     ],
     deps = [
         "//libs/python/rmq",
-        "@pypi//:pydantic",
-        "@pypi//:sqlmodel",
-        "@pypi//:fastapi",
         "@pypi//:alembic",
-        "@pypi//:asyncpg",
-        "@pypi//:psycopg2-binary",
         "@pypi//:amqpstorm",
+        "@pypi//:asyncpg",
+        "@pypi//:fastapi",
         "@pypi//:opentelemetry-api",
         "@pypi//:opentelemetry-sdk",
-        "@pypi//:python-dotenv",
-        "@pypi//:typer",
+        "@pypi//:psycopg2-binary",
+        "@pypi//:pydantic",
         "@pypi//:pytest",
         "@pypi//:pytest-asyncio",
+        "@pypi//:python-dotenv",
+        "@pypi//:sqlmodel",
+        "@pypi//:typer",
     ],
 )
 
 # Individual test targets for better granularity
 py_test(
     name = "config_test",
+    size = "small",
     srcs = [
         "config_test.py",
         "conftest.py",
@@ -50,14 +51,14 @@ py_test(
         "@pypi//:pytest",
         "@pypi//:pytest-asyncio",
     ],
-    size = "small",
 )
 
 py_test(
     name = "models_test",
+    size = "small",
     srcs = [
-        "models_test.py",
         "conftest.py",
+        "models_test.py",
         "runner.py",
     ],
     main = "runner.py",
@@ -66,15 +67,15 @@ py_test(
         "@pypi//:pytest",
         "@pypi//:pytest-asyncio",
     ],
-    size = "small",
 )
 
 py_test(
     name = "simple_status_test",
+    size = "small",
     srcs = [
-        "simple_status_test.py",
         "conftest.py",
         "runner.py",
+        "simple_status_test.py",
     ],
     main = "runner.py",
     deps = [
@@ -82,5 +83,4 @@ py_test(
         "@pypi//:pytest",
         "@pypi//:pytest-asyncio",
     ],
-    size = "small",
 )

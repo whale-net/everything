@@ -1,4 +1,5 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+
 package(default_visibility = ["//friendly_computing_machine:__pkg__"])
 
 # ==============================================================================
@@ -13,13 +14,13 @@ py_library(
     ],
     deps = [
         "//friendly_computing_machine/src/friendly_computing_machine:util",
-        "//friendly_computing_machine/src/friendly_computing_machine/models",
-        "//friendly_computing_machine/src/friendly_computing_machine/db",
-        "//friendly_computing_machine/src/friendly_computing_machine/manman",
-        "//friendly_computing_machine/src/friendly_computing_machine/temporal",
-        "//friendly_computing_machine/src/friendly_computing_machine/gemini",
         "//friendly_computing_machine/src/friendly_computing_machine/bot",
         "//friendly_computing_machine/src/friendly_computing_machine/cli",
+        "//friendly_computing_machine/src/friendly_computing_machine/db",
+        "//friendly_computing_machine/src/friendly_computing_machine/gemini",
+        "//friendly_computing_machine/src/friendly_computing_machine/manman",
+        "//friendly_computing_machine/src/friendly_computing_machine/models",
+        "//friendly_computing_machine/src/friendly_computing_machine/temporal",
         "//friendly_computing_machine/src/migrations",
     ],
 )
@@ -32,6 +33,6 @@ py_binary(
     name = "fcm_cli",
     srcs = ["//friendly_computing_machine/src/friendly_computing_machine:main"],
     main = "__main__.py",
-    deps = [":fcm_lib"],
     visibility = ["//visibility:public"],
+    deps = [":fcm_lib"],
 )

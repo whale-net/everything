@@ -6,9 +6,9 @@ package(default_visibility = ["//friendly_computing_machine:__subpackages__"])
 py_library(
     name = "util",
     srcs = [
-        "util.py",
-        "health.py",
         "__init__.py",
+        "health.py",
+        "util.py",
     ],
     visibility = ["//visibility:public"],
     deps = [

@@ -6,7 +6,10 @@ py_library(
     name = "manman_migrations",
     srcs = glob(["**/*.py"]),
     data = glob(
-        ["**/*.mako", "**/README"],
+        [
+            "**/*.mako",
+            "**/README",
+        ],
         allow_empty = True,
     ),
     visibility = ["//manman:__subpackages__"],
