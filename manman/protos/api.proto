@@ -5,7 +5,6 @@ package manman.v1;
 option go_package = "github.com/whale-net/everything/manman/protos;manmanpb";
 
 import "manman/protos/messages.proto";
-import "google/protobuf/field_mask.proto";
 
 // ManManAPI is the main control plane API for managing game servers
 service ManManAPI {
@@ -106,7 +105,7 @@ message UpdateServerRequest {
   int64 server_id = 1;
   string name = 2;
   string status = 3;
-  google.protobuf.FieldMask update_mask = 4;
+  repeated string update_paths = 4;  // Field paths to update (empty = update all)
 }
 
 message UpdateServerResponse {
@@ -156,7 +155,7 @@ message UpdateGameRequest {
   string name = 2;
   string steam_app_id = 3;
   GameMetadata metadata = 4;
-  google.protobuf.FieldMask update_mask = 5;
+  repeated string update_paths = 5;  // Field paths to update (empty = update all)
 }
 
 message UpdateGameResponse {
@@ -214,7 +213,7 @@ message UpdateGameConfigRequest {
   map<string, string> env_template = 5;
   repeated FileTemplate files = 6;
   repeated Parameter parameters = 7;
-  google.protobuf.FieldMask update_mask = 8;
+  repeated string update_paths = 8;  // Field paths to update (empty = update all)
 }
 
 message UpdateGameConfigResponse {
@@ -266,7 +265,7 @@ message UpdateServerGameConfigRequest {
   repeated PortBinding port_bindings = 2;
   map<string, string> parameters = 3;
   string status = 4;
-  google.protobuf.FieldMask update_mask = 5;
+  repeated string update_paths = 5;  // Field paths to update (empty = update all)
 }
 
 message UpdateServerGameConfigResponse {

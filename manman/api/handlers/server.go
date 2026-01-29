@@ -93,8 +93,8 @@ func (h *ServerHandler) UpdateServer(ctx context.Context, req *pb.UpdateServerRe
 		return nil, status.Errorf(codes.NotFound, "server not found: %v", err)
 	}
 
-	// Apply field mask
-	if req.UpdateMask == nil || len(req.UpdateMask.Paths) == 0 {
+	// Apply field paths
+	if len(req.UpdatePaths) == 0 {
 		// Update all provided fields
 		if req.Name != "" {
 			server.Name = req.Name
@@ -103,8 +103,8 @@ func (h *ServerHandler) UpdateServer(ctx context.Context, req *pb.UpdateServerRe
 			server.Status = req.Status
 		}
 	} else {
-		// Update only masked fields
-		for _, path := range req.UpdateMask.Paths {
+		// Update only specified fields
+		for _, path := range req.UpdatePaths {
 			switch path {
 			case "name":
 				server.Name = req.Name

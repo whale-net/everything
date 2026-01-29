@@ -239,8 +239,8 @@ func (h *GameConfigHandler) UpdateGameConfig(ctx context.Context, req *pb.Update
 		return nil, status.Errorf(codes.NotFound, "game config not found: %v", err)
 	}
 
-	// Apply field mask
-	if req.UpdateMask == nil || len(req.UpdateMask.Paths) == 0 {
+	// Apply field paths
+	if len(req.UpdatePaths) == 0 {
 		// Update all provided fields
 		if req.Name != "" {
 			config.Name = req.Name
@@ -261,8 +261,8 @@ func (h *GameConfigHandler) UpdateGameConfig(ctx context.Context, req *pb.Update
 			config.Parameters = parametersToJSONB(req.Parameters)
 		}
 	} else {
-		// Update only masked fields
-		for _, path := range req.UpdateMask.Paths {
+		// Update only specified fields
+		for _, path := range req.UpdatePaths {
 			switch path {
 			case "name":
 				config.Name = req.Name
@@ -405,8 +405,8 @@ func (h *ServerGameConfigHandler) UpdateServerGameConfig(ctx context.Context, re
 		return nil, status.Errorf(codes.NotFound, "server game config not found: %v", err)
 	}
 
-	// Apply field mask
-	if req.UpdateMask == nil || len(req.UpdateMask.Paths) == 0 {
+	// Apply field paths
+	if len(req.UpdatePaths) == 0 {
 		// Update all provided fields
 		if req.PortBindings != nil {
 			sgc.PortBindings = portBindingsToJSONB(req.PortBindings)
@@ -418,8 +418,8 @@ func (h *ServerGameConfigHandler) UpdateServerGameConfig(ctx context.Context, re
 			sgc.Status = req.Status
 		}
 	} else {
-		// Update only masked fields
-		for _, path := range req.UpdateMask.Paths {
+		// Update only specified fields
+		for _, path := range req.UpdatePaths {
 			switch path {
 			case "port_bindings":
 				sgc.PortBindings = portBindingsToJSONB(req.PortBindings)
