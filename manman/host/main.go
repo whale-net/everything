@@ -75,9 +75,15 @@ func run() error {
 	}
 	defer rmqPublisher.Close()
 
-	// Publish initial host status
+	// Publish initial host status and health
 	if err := rmqPublisher.PublishHostStatus(ctx, "online"); err != nil {
 		log.Printf("Warning: Failed to publish host status: %v", err)
+	}
+
+	// Publish initial health with session stats
+	stats := sessionManager.GetSessionStats()
+	if err := rmqPublisher.PublishHealth(ctx, convertSessionStats(&stats)); err != nil {
+		log.Printf("Warning: Failed to publish initial health: %v", err)
 	}
 
 	// Initialize command handler
@@ -110,8 +116,27 @@ func run() error {
 			case <-ctx.Done():
 				return
 			case <-healthTicker.C:
-				if err := rmqPublisher.PublishHealth(ctx); err != nil {
+				// Get current session statistics
+				stats := sessionManager.GetSessionStats()
+				if err := rmqPublisher.PublishHealth(ctx, convertSessionStats(&stats)); err != nil {
 					log.Printf("Warning: Failed to publish health: %v", err)
+				}
+			}
+		}
+	}()
+
+	// Start periodic orphan cleanup (every 5 minutes)
+	orphanCleanupTicker := time.NewTicker(5 * time.Minute)
+	defer orphanCleanupTicker.Stop()
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-orphanCleanupTicker.C:
+				if err := sessionManager.CleanupOrphans(ctx, serverID); err != nil {
+					log.Printf("Warning: Orphan cleanup failed: %v", err)
 				}
 			}
 		}
@@ -242,4 +267,20 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// convertSessionStats converts session.SessionStats to rmq.SessionStats
+func convertSessionStats(stats *session.SessionStats) *rmq.SessionStats {
+	if stats == nil {
+		return nil
+	}
+	return &rmq.SessionStats{
+		Total:    stats.Total,
+		Pending:  stats.Pending,
+		Starting: stats.Starting,
+		Running:  stats.Running,
+		Stopping: stats.Stopping,
+		Stopped:  stats.Stopped,
+		Crashed:  stats.Crashed,
+	}
 }

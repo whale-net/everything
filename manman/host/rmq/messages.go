@@ -76,7 +76,19 @@ type SessionStatusUpdate struct {
 	ExitCode  *int   `json:"exit_code,omitempty"`
 }
 
-// HealthUpdate represents a health/keepalive message
+// HealthUpdate represents a health/keepalive message with session metrics
 type HealthUpdate struct {
-	ServerID int64 `json:"server_id"`
+	ServerID        int64           `json:"server_id"`
+	SessionStats    *SessionStats   `json:"session_stats,omitempty"`
+}
+
+// SessionStats represents aggregated session statistics
+type SessionStats struct {
+	Total    int `json:"total"`
+	Pending  int `json:"pending"`
+	Starting int `json:"starting"`
+	Running  int `json:"running"`
+	Stopping int `json:"stopping"`
+	Stopped  int `json:"stopped"`
+	Crashed  int `json:"crashed"`
 }
