@@ -2,9 +2,12 @@ package postgres
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/whale-net/everything/manman"
+	"github.com/whale-net/everything/manman/api/repository"
 )
 
 type SessionRepository struct {
@@ -129,4 +132,103 @@ func (r *SessionRepository) Update(ctx context.Context, session *manman.Session)
 		session.Parameters,
 	)
 	return err
+}
+
+func (r *SessionRepository) ListWithFilters(ctx context.Context, filters *repository.SessionFilters, limit, offset int) ([]*manman.Session, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	baseQuery := `
+		SELECT s.session_id, s.sgc_id, s.started_at, s.ended_at, s.exit_code, s.status, s.parameters
+		FROM sessions s
+	`
+
+	whereClauses := []string{}
+	args := []interface{}{}
+	argIdx := 1
+
+	// Filter by SGCID
+	if filters.SGCID != nil {
+		whereClauses = append(whereClauses, fmt.Sprintf("s.sgc_id = $%d", argIdx))
+		args = append(args, *filters.SGCID)
+		argIdx++
+	}
+
+	// Filter by ServerID (requires join)
+	if filters.ServerID != nil {
+		baseQuery = `
+			SELECT s.session_id, s.sgc_id, s.started_at, s.ended_at, s.exit_code, s.status, s.parameters
+			FROM sessions s
+			JOIN server_game_configs sgc ON s.sgc_id = sgc.sgc_id
+		`
+		whereClauses = append(whereClauses, fmt.Sprintf("sgc.server_id = $%d", argIdx))
+		args = append(args, *filters.ServerID)
+		argIdx++
+	}
+
+	// Filter by status
+	if len(filters.StatusFilter) > 0 {
+		placeholders := make([]string, len(filters.StatusFilter))
+		for i, status := range filters.StatusFilter {
+			placeholders[i] = fmt.Sprintf("$%d", argIdx)
+			args = append(args, status)
+			argIdx++
+		}
+		whereClauses = append(whereClauses, fmt.Sprintf("s.status IN (%s)", strings.Join(placeholders, ",")))
+	}
+
+	// Filter by started_after
+	if filters.StartedAfter != nil {
+		whereClauses = append(whereClauses, fmt.Sprintf("s.started_at > $%d", argIdx))
+		args = append(args, *filters.StartedAfter)
+		argIdx++
+	}
+
+	// Filter by started_before
+	if filters.StartedBefore != nil {
+		whereClauses = append(whereClauses, fmt.Sprintf("s.started_at < $%d", argIdx))
+		args = append(args, *filters.StartedBefore)
+		argIdx++
+	}
+
+	// Filter for live_only
+	if filters.LiveOnly {
+		whereClauses = append(whereClauses, "s.status IN ('pending', 'starting', 'running')")
+	}
+
+	// Build WHERE clause
+	if len(whereClauses) > 0 {
+		baseQuery += " WHERE " + strings.Join(whereClauses, " AND ")
+	}
+
+	// Add ORDER BY and pagination
+	baseQuery += fmt.Sprintf(" ORDER BY s.session_id DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
+	args = append(args, limit, offset)
+
+	rows, err := r.db.Query(ctx, baseQuery, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessions []*manman.Session
+	for rows.Next() {
+		session := &manman.Session{}
+		err := rows.Scan(
+			&session.SessionID,
+			&session.SGCID,
+			&session.StartedAt,
+			&session.EndedAt,
+			&session.ExitCode,
+			&session.Status,
+			&session.Parameters,
+		)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+
+	return sessions, rows.Err()
 }

@@ -63,6 +63,28 @@ func (r *ServerRepository) Get(ctx context.Context, serverID int64) (*manman.Ser
 	return server, nil
 }
 
+func (r *ServerRepository) GetByName(ctx context.Context, name string) (*manman.Server, error) {
+	server := &manman.Server{}
+
+	query := `
+		SELECT server_id, name, status, last_seen
+		FROM servers
+		WHERE name = $1
+	`
+
+	err := r.db.QueryRow(ctx, query, name).Scan(
+		&server.ServerID,
+		&server.Name,
+		&server.Status,
+		&server.LastSeen,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return server, nil
+}
+
 func (r *ServerRepository) List(ctx context.Context, limit, offset int) ([]*manman.Server, error) {
 	if limit <= 0 {
 		limit = 50

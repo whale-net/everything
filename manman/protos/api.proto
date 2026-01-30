@@ -41,7 +41,35 @@ service ManManAPI {
   rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
   rpc StartSession(StartSessionRequest) returns (StartSessionResponse);
   rpc StopSession(StopSessionRequest) returns (StopSessionResponse);
+
+  // Server registration (new)
+  rpc RegisterServer(RegisterServerRequest) returns (RegisterServerResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // Log management (new)
+  rpc SendBatchedLogs(SendBatchedLogsRequest) returns (SendBatchedLogsResponse);
+
+  // Validation (new)
+  rpc ValidateDeployment(ValidateDeploymentRequest) returns (ValidateDeploymentResponse);
 }
+
+// ============================================================================
+// Future Work TODOs
+// ============================================================================
+
+// TODO: Add batch update RPC for multiple ServerGameConfigs
+// Use case: Bulk port reassignment, mass parameter updates
+// Design: BatchUpdateServerGameConfigsRequest with repeated updates
+// rpc BatchUpdateServerGameConfigs(BatchUpdateServerGameConfigsRequest) returns (BatchUpdateServerGameConfigsResponse);
+
+// TODO: Add diagnostics/events system for debugging deployment failures
+// Design considerations:
+// - Event stream per session (gRPC streaming)
+// - Structured event types (container_created, port_bound, process_started)
+// - Searchable event log with filters (session_id, event_type, severity)
+// - Integration with log batching for complete observability
+// Example:
+// rpc StreamSessionEvents(StreamSessionEventsRequest) returns (stream SessionEvent);
 
 // ============================================================================
 // Server RPCs
@@ -77,6 +105,7 @@ message UpdateServerRequest {
   int64 server_id = 1;
   string name = 2;
   string status = 3;
+  repeated string update_paths = 4;  // Field paths to update (empty = update all)
 }
 
 message UpdateServerResponse {
@@ -114,7 +143,7 @@ message GetGameResponse {
 message CreateGameRequest {
   string name = 1;
   string steam_app_id = 2;  // optional
-  string metadata = 3;  // JSON string
+  GameMetadata metadata = 3;
 }
 
 message CreateGameResponse {
@@ -125,7 +154,8 @@ message UpdateGameRequest {
   int64 game_id = 1;
   string name = 2;
   string steam_app_id = 3;
-  string metadata = 4;  // JSON string
+  GameMetadata metadata = 4;
+  repeated string update_paths = 5;  // Field paths to update (empty = update all)
 }
 
 message UpdateGameResponse {
@@ -166,9 +196,9 @@ message CreateGameConfigRequest {
   string name = 2;
   string image = 3;
   string args_template = 4;
-  string env_template = 5;  // JSON string
-  string files = 6;  // JSON string
-  string parameters = 7;  // JSON string
+  map<string, string> env_template = 5;
+  repeated FileTemplate files = 6;
+  repeated Parameter parameters = 7;
 }
 
 message CreateGameConfigResponse {
@@ -180,9 +210,10 @@ message UpdateGameConfigRequest {
   string name = 2;
   string image = 3;
   string args_template = 4;
-  string env_template = 5;  // JSON string
-  string files = 6;  // JSON string
-  string parameters = 7;  // JSON string
+  map<string, string> env_template = 5;
+  repeated FileTemplate files = 6;
+  repeated Parameter parameters = 7;
+  repeated string update_paths = 8;  // Field paths to update (empty = update all)
 }
 
 message UpdateGameConfigResponse {
@@ -211,7 +242,7 @@ message ListServerGameConfigsResponse {
 }
 
 message GetServerGameConfigRequest {
-  int64 sgc_id = 1;
+  int64 server_game_config_id = 1;
 }
 
 message GetServerGameConfigResponse {
@@ -221,8 +252,8 @@ message GetServerGameConfigResponse {
 message DeployGameConfigRequest {
   int64 server_id = 1;
   int64 game_config_id = 2;
-  string port_bindings = 3;  // JSON string
-  string parameters = 4;  // JSON string
+  repeated PortBinding port_bindings = 3;
+  map<string, string> parameters = 4;
 }
 
 message DeployGameConfigResponse {
@@ -230,10 +261,11 @@ message DeployGameConfigResponse {
 }
 
 message UpdateServerGameConfigRequest {
-  int64 sgc_id = 1;
-  string port_bindings = 2;  // JSON string
-  string parameters = 3;  // JSON string
+  int64 server_game_config_id = 1;
+  repeated PortBinding port_bindings = 2;
+  map<string, string> parameters = 3;
   string status = 4;
+  repeated string update_paths = 5;  // Field paths to update (empty = update all)
 }
 
 message UpdateServerGameConfigResponse {
@@ -241,7 +273,7 @@ message UpdateServerGameConfigResponse {
 }
 
 message DeleteServerGameConfigRequest {
-  int64 sgc_id = 1;
+  int64 server_game_config_id = 1;
 }
 
 message DeleteServerGameConfigResponse {}
@@ -251,9 +283,16 @@ message DeleteServerGameConfigResponse {}
 // ============================================================================
 
 message ListSessionsRequest {
-  int64 sgc_id = 1;  // optional filter
+  int64 server_game_config_id = 1;  // optional filter
   int32 page_size = 2;
   string page_token = 3;
+
+  // Enhanced filters
+  repeated string status_filter = 4;
+  int64 started_after = 5;
+  int64 started_before = 6;
+  int64 server_id = 7;
+  bool live_only = 8;
 }
 
 message ListSessionsResponse {
@@ -270,8 +309,8 @@ message GetSessionResponse {
 }
 
 message StartSessionRequest {
-  int64 sgc_id = 1;
-  string parameters = 2;  // JSON string, optional session-level overrides
+  int64 server_game_config_id = 1;
+  map<string, string> parameters = 2;  // optional session-level overrides
 }
 
 message StartSessionResponse {
@@ -284,4 +323,79 @@ message StopSessionRequest {
 
 message StopSessionResponse {
   Session session = 1;
+}
+
+// ============================================================================
+// Server Registration RPCs
+// ============================================================================
+
+message RegisterServerRequest {
+  string name = 1;
+  ServerCapabilities capabilities = 2;
+}
+
+message RegisterServerResponse {
+  int64 server_id = 1;
+  Server server = 2;
+}
+
+message HeartbeatRequest {
+  int64 server_id = 1;
+  ServerCapabilities capabilities = 2;
+}
+
+message HeartbeatResponse {
+  bool acknowledged = 1;
+  int64 next_heartbeat_seconds = 2;
+}
+
+// ============================================================================
+// Log Management RPCs
+// ============================================================================
+
+message SendBatchedLogsRequest {
+  int64 server_id = 1;
+  repeated LogBatch batches = 2;
+}
+
+message SendBatchedLogsResponse {
+  int32 accepted_batches = 1;
+  repeated string failed_batch_ids = 2;
+}
+
+// ============================================================================
+// Validation RPCs
+// ============================================================================
+
+message ValidateDeploymentRequest {
+  int64 server_id = 1;
+  int64 game_config_id = 2;
+  repeated PortBinding port_bindings = 3;
+  map<string, string> parameters = 4;
+}
+
+message ValidateDeploymentResponse {
+  bool valid = 1;
+  repeated ValidationIssue issues = 2;
+  DeploymentEstimate estimate = 3;
+}
+
+message ValidationIssue {
+  ValidationSeverity severity = 1;
+  string field = 2;
+  string message = 3;
+  string suggestion = 4;
+}
+
+enum ValidationSeverity {
+  VALIDATION_SEVERITY_UNSPECIFIED = 0;
+  VALIDATION_SEVERITY_ERROR = 1;
+  VALIDATION_SEVERITY_WARNING = 2;
+  VALIDATION_SEVERITY_INFO = 3;
+}
+
+message DeploymentEstimate {
+  int32 estimated_memory_mb = 1;
+  int32 estimated_cpu_millicores = 2;
+  repeated int32 allocated_ports = 3;
 }

@@ -88,6 +88,30 @@ type ServerPort struct {
 	AllocatedAt time.Time `db:"allocated_at"`
 }
 
+// ServerCapability represents the resources available on a server
+type ServerCapability struct {
+	CapabilityID           int64      `db:"capability_id"`
+	ServerID               int64      `db:"server_id"`
+	TotalMemoryMB          int32      `db:"total_memory_mb"`
+	AvailableMemoryMB      int32      `db:"available_memory_mb"`
+	CPUCores               int32      `db:"cpu_cores"`
+	AvailableCPUMillicores int32      `db:"available_cpu_millicores"`
+	DockerVersion          string     `db:"docker_version"`
+	RecordedAt             *time.Time `db:"recorded_at"`
+}
+
+// LogReference represents a reference to a log file for a session
+type LogReference struct {
+	LogID     int64     `db:"log_id"`
+	SessionID int64     `db:"session_id"`
+	FilePath  string    `db:"file_path"`
+	StartTime time.Time `db:"start_time"`
+	EndTime   time.Time `db:"end_time"`
+	LineCount int32     `db:"line_count"`
+	Source    string    `db:"source"`
+	CreatedAt time.Time `db:"created_at"`
+}
+
 // Status constants
 const (
 	ServerStatusOnline  = "online"

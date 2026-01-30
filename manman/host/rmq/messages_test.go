@@ -11,15 +11,31 @@ func TestStartSessionCommand_MarshalUnmarshal(t *testing.T) {
 	cmd := rmq.StartSessionCommand{
 		SessionID: 123,
 		SGCID:     456,
-		GameConfig: map[string]interface{}{
-			"config_id": float64(789),
-			"name":      "test-config",
+		GameConfig: rmq.GameConfigMessage{
+			ConfigID:     789,
+			Image:        "test-image:latest",
+			ArgsTemplate: "-port {{.Port}}",
+			EnvTemplate: map[string]string{
+				"GAME_MODE": "survival",
+			},
+			Files: []rmq.FileTemplateMessage{
+				{Path: "/config/server.cfg", Content: "port=27015", Mode: "0644", IsTemplate: false},
+			},
+			Parameters: []rmq.ParameterMessage{
+				{Key: "max_players", Value: "20", Type: "int", Description: "Max players", Required: true, DefaultValue: "10"},
+			},
 		},
-		ServerGameConfig: map[string]interface{}{
-			"sgc_id": float64(101),
+		ServerGameConfig: rmq.ServerGameConfigMessage{
+			SGCID: 101,
+			PortBindings: []rmq.PortBindingMessage{
+				{ContainerPort: 27015, HostPort: 27015, Protocol: "UDP"},
+			},
+			Parameters: map[string]string{
+				"world_name": "TestWorld",
+			},
 		},
-		Parameters: map[string]interface{}{
-			"max_players": float64(20),
+		Parameters: map[string]string{
+			"max_players": "20",
 		},
 	}
 
