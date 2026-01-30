@@ -80,7 +80,10 @@ go_library(
 
 go_test(
     name = "session_test",
-    srcs = ["state_test.go"],
+    srcs = [
+        "lifecycle_test.go",
+        "state_test.go",
+    ],
     deps = [
         ":session",
         "//manman:models",
