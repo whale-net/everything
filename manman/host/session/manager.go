@@ -50,8 +50,9 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	// 1. Create Docker network
 	networkName := fmt.Sprintf("session-%d", sessionID)
 	networkLabels := map[string]string{
+		"manman.type":       "network",
 		"manman.session_id": fmt.Sprintf("%d", sessionID),
-		"manman.server_id":   fmt.Sprintf("%d", cmd.ServerID),
+		"manman.server_id":  fmt.Sprintf("%d", cmd.ServerID),
 	}
 	networkID, err := sm.dockerClient.CreateNetwork(ctx, networkName, networkLabels)
 	if err != nil {
@@ -173,17 +174,23 @@ func (sm *SessionManager) KillSession(ctx context.Context, sessionID int64) erro
 	return sm.StopSession(ctx, sessionID, true)
 }
 
-// createWrapperContainer creates the wrapper container
+// createWrapperContainer creates the wrapper container with SGC-based naming
 func (sm *SessionManager) createWrapperContainer(ctx context.Context, state *State, cmd *StartSessionCommand) (string, error) {
 	dataPath := fmt.Sprintf("/data/session-%d", state.SessionID)
 
+	// Use SGC-based naming for idempotency and recovery
+	wrapperName := fmt.Sprintf("wrapper-%d-%d", cmd.ServerID, state.SGCID)
+
 	config := docker.ContainerConfig{
 		Image:     sm.wrapperImage,
-		Name:      fmt.Sprintf("wrapper-%d", state.SessionID),
+		Name:      wrapperName,
 		NetworkID: state.NetworkID,
 		Labels: map[string]string{
+			"manman.type":       "wrapper",
 			"manman.session_id": fmt.Sprintf("%d", state.SessionID),
-			"manman.wrapper":    "true",
+			"manman.sgc_id":     fmt.Sprintf("%d", state.SGCID),
+			"manman.server_id":  fmt.Sprintf("%d", cmd.ServerID),
+			"manman.created_at": time.Now().Format(time.RFC3339),
 		},
 		Volumes: []string{
 			fmt.Sprintf("%s:/data", dataPath),
@@ -191,6 +198,8 @@ func (sm *SessionManager) createWrapperContainer(ctx context.Context, state *Sta
 		},
 		Env: []string{
 			fmt.Sprintf("SESSION_ID=%d", state.SessionID),
+			fmt.Sprintf("SGC_ID=%d", state.SGCID),
+			fmt.Sprintf("SERVER_ID=%d", cmd.ServerID),
 			fmt.Sprintf("NETWORK_NAME=%s", state.NetworkName),
 		},
 	}

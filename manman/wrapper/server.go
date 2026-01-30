@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/whale-net/everything/libs/go/docker"
@@ -16,12 +17,23 @@ type server struct {
 	stateManager  *StateManager
 	dockerClient  *docker.Client
 	sessionID     string // Session ID from environment
+	sgcID         string // SGC ID from environment
+	serverID      string // Server ID from environment
 	networkName   string // Network name from environment
 }
 
 // newServer creates a new wrapper control server
-func newServer(dockerClient *docker.Client, sessionID, networkName string, previousState *SessionState) *server {
+func newServer(dockerClient *docker.Client, sessionID, sgcID, serverID, networkName string, previousState *SessionState) *server {
 	stateManager := NewStateManager()
+
+	s := &server{
+		stateManager: stateManager,
+		dockerClient: dockerClient,
+		sessionID:    sessionID,
+		sgcID:        sgcID,
+		serverID:     serverID,
+		networkName:  networkName,
+	}
 
 	// Restore previous state if available
 	if previousState != nil {
@@ -29,11 +41,41 @@ func newServer(dockerClient *docker.Client, sessionID, networkName string, previ
 		log.Printf("Restored session %d from previous state", previousState.SessionID)
 	}
 
-	return &server{
-		stateManager: stateManager,
-		dockerClient: dockerClient,
-		sessionID:    sessionID,
-		networkName:  networkName,
+	// Check for existing game container on startup
+	s.detectExistingContainer(context.Background())
+
+	return s
+}
+
+// detectExistingContainer checks for existing game container on wrapper startup
+func (s *server) detectExistingContainer(ctx context.Context) {
+	if s.sgcID == "" || s.serverID == "" {
+		log.Println("SGC_ID or SERVER_ID not set, skipping container detection")
+		return
+	}
+
+	containerName := fmt.Sprintf("game-%s-%s", s.serverID, s.sgcID)
+	log.Printf("Checking for existing container: %s", containerName)
+
+	// Try to find container by name
+	status, err := s.dockerClient.GetContainerStatusByName(ctx, containerName)
+	if err != nil {
+		log.Printf("No existing container found (this is normal for new sessions)")
+		return
+	}
+
+	if status.Running {
+		// Container is running - reconnect to it (recovery from wrapper crash)
+		log.Printf("Found running container %s, reconnecting", containerName)
+		// TODO: Extract session info from labels and restore state
+		// For now, just log that we found it
+		// The actual Start call will handle reconnection
+	} else {
+		// Container exists but stopped - cleanup from previous crash
+		log.Printf("Found stopped container %s, removing (cleanup from crash)", containerName)
+		if err := s.dockerClient.RemoveContainer(ctx, status.ContainerID, true); err != nil {
+			log.Printf("Warning: Failed to remove stopped container: %v", err)
+		}
 	}
 }
 
@@ -61,8 +103,8 @@ func (s *server) Start(ctx context.Context, req *pb.StartRequest) (*pb.StartResp
 	session.UpdateStatus("starting")
 	log.Printf("Session %d: status updated to starting", req.SessionId)
 
-	// Build container configuration
-	containerName := fmt.Sprintf("game-%d", req.SessionId)
+	// Build container configuration with SGC-based naming
+	containerName := fmt.Sprintf("game-%s-%s", s.serverID, s.sgcID)
 	dataPath := fmt.Sprintf("/data/game")
 
 	// Build environment variables
@@ -90,7 +132,7 @@ func (s *server) Start(ctx context.Context, req *pb.StartRequest) (*pb.StartResp
 		command = []string{"/bin/sh", "-c", req.GameConfig.ArgsTemplate}
 	}
 
-	// Create container config
+	// Create container config with comprehensive labels
 	containerConfig := docker.ContainerConfig{
 		Image:      req.GameConfig.Image,
 		Name:       containerName,
@@ -101,15 +143,64 @@ func (s *server) Start(ctx context.Context, req *pb.StartRequest) (*pb.StartResp
 		Ports:      ports,
 		AutoRemove: false, // Keep container for log retrieval
 		Labels: map[string]string{
+			"manman.type":       "game",
 			"manman.session_id": fmt.Sprintf("%d", req.SessionId),
-			"manman.game":       "true",
+			"manman.sgc_id":     s.sgcID,
+			"manman.wrapper_id": fmt.Sprintf("wrapper-%d", req.SessionId), // Wrapper container name
+			"manman.created_at": time.Now().Format(time.RFC3339),
 		},
 	}
 
-	// Create the game container
+	// Try to create the game container
 	log.Printf("Session %d: Creating game container with image %s", req.SessionId, req.GameConfig.Image)
 	containerID, err := s.dockerClient.CreateContainer(ctx, containerConfig)
 	if err != nil {
+		// Check if error is due to name conflict (race condition or existing container)
+		if isNameConflictError(err) {
+			log.Printf("Session %d: Container name conflict, checking existing container", req.SessionId)
+
+			// Container already exists - check its state
+			existingStatus, statusErr := s.dockerClient.GetContainerStatusByName(ctx, containerName)
+			if statusErr != nil {
+				session.UpdateStatus("crashed")
+				return &pb.StartResponse{
+					Success:      false,
+					ErrorMessage: fmt.Sprintf("container exists but cannot get status: %v", statusErr),
+				}, nil
+			}
+
+			if existingStatus.Running {
+				// Already running - idempotent success
+				log.Printf("Session %d: Container already running, returning success (idempotent)", req.SessionId)
+				session.GameContainerID = existingStatus.ContainerID
+				session.UpdateStatus("running")
+				return &pb.StartResponse{
+					Success:      true,
+					ErrorMessage: "",
+					ContainerId:  existingStatus.ContainerID,
+				}, nil
+			} else {
+				// Stopped container - restart it
+				log.Printf("Session %d: Container stopped, restarting", req.SessionId)
+				containerID = existingStatus.ContainerID
+				session.GameContainerID = containerID
+				if err := s.dockerClient.StartContainer(ctx, containerID); err != nil {
+					session.UpdateStatus("crashed")
+					return &pb.StartResponse{
+						Success:      false,
+						ErrorMessage: fmt.Sprintf("failed to restart existing container: %v", err),
+					}, nil
+				}
+				session.UpdateStatus("running")
+				return &pb.StartResponse{
+					Success:      true,
+					ErrorMessage: "",
+					ContainerId:  containerID,
+				}, nil
+			}
+		}
+
+		// Other error
 		session.UpdateStatus("crashed")
 		return &pb.StartResponse{
 			Success:      false,
@@ -415,4 +506,17 @@ func (s *server) StreamOutput(req *pb.StreamOutputRequest, stream pb.WrapperCont
 			}
 		}
 	}
+}
+
+// isNameConflictError checks if the error is due to container name conflict
+func isNameConflictError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errMsg := err.Error()
+	// Docker returns "Conflict" status code (409) for name conflicts
+	// The error message typically contains "already in use" or "Conflict"
+	return strings.Contains(errMsg, "already in use") ||
+		strings.Contains(errMsg, "Conflict") ||
+		strings.Contains(errMsg, "name is already in use")
 }

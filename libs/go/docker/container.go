@@ -121,7 +121,7 @@ func (c *Client) RemoveContainer(ctx context.Context, containerID string, force 
 	return c.cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: force})
 }
 
-// GetContainerStatus returns the status of a container
+// GetContainerStatus returns the status of a container by ID or name
 func (c *Client) GetContainerStatus(ctx context.Context, containerID string) (*ContainerStatus, error) {
 	info, err := c.cli.ContainerInspect(ctx, containerID)
 	if err != nil {
@@ -129,11 +129,13 @@ func (c *Client) GetContainerStatus(ctx context.Context, containerID string) (*C
 	}
 
 	status := &ContainerStatus{
-		ID:       info.ID,
-		Name:     info.Name,
-		Status:   info.State.Status,
-		Running:  info.State.Running,
-		ExitCode: info.State.ExitCode,
+		ContainerID: info.ID,
+		ID:          info.ID,
+		Name:        info.Name,
+		Status:      info.State.Status,
+		Running:     info.State.Running,
+		ExitCode:    info.State.ExitCode,
+		Labels:      info.Config.Labels,
 	}
 
 	if info.State.StartedAt != "" {
@@ -153,15 +155,23 @@ func (c *Client) GetContainerStatus(ctx context.Context, containerID string) (*C
 	return status, nil
 }
 
+// GetContainerStatusByName returns the status of a container by name
+// This is an alias for GetContainerStatus since Docker's inspect accepts both ID and name
+func (c *Client) GetContainerStatusByName(ctx context.Context, containerName string) (*ContainerStatus, error) {
+	return c.GetContainerStatus(ctx, containerName)
+}
+
 // ContainerStatus represents the status of a container
 type ContainerStatus struct {
-	ID         string
-	Name       string
-	Status     string // "created", "running", "exited", etc.
-	Running    bool
-	ExitCode   int
-	StartedAt  *time.Time
-	FinishedAt *time.Time
+	ContainerID string            // Full container ID
+	ID          string            // Alias for ContainerID (for backwards compatibility)
+	Name        string            // Container name
+	Status      string            // "created", "running", "exited", etc.
+	Running     bool              // Whether container is currently running
+	ExitCode    int               // Exit code if stopped
+	StartedAt   *time.Time        // When container started
+	FinishedAt  *time.Time        // When container finished
+	Labels      map[string]string // Container labels
 }
 
 // ListContainers lists containers matching the given filters
