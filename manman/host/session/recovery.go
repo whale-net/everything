@@ -13,16 +13,16 @@ import (
 )
 
 // RecoverOrphanedSessions recovers sessions from existing Docker containers
-// following the Phase 4 orphan prevention strategy
+// following the Phase 4 orphan prevention strategy with SGC-based naming
 func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID int64) error {
 	fmt.Printf("Starting orphan recovery for server %d\n", serverID)
 
 	// 1. Find all ManMan wrapper containers for this server
-	filters := map[string]string{
+	wrapperFilters := map[string]string{
 		"manman.type":      "wrapper",
 		"manman.server_id": fmt.Sprintf("%d", serverID),
 	}
-	wrappers, err := sm.dockerClient.ListContainers(ctx, filters)
+	wrappers, err := sm.dockerClient.ListContainers(ctx, wrapperFilters)
 	if err != nil {
 		return fmt.Errorf("failed to list wrapper containers: %w", err)
 	}
@@ -31,163 +31,118 @@ func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID 
 
 	// 2. For each wrapper, attempt to reconnect or clean up
 	for _, wrapper := range wrappers {
-		// Get container status
 		status, err := sm.dockerClient.GetContainerStatus(ctx, wrapper.ID)
 		if err != nil {
 			fmt.Printf("Warning: Failed to get status for wrapper %s: %v\n", wrapper.ID, err)
 			continue
 		}
 
-		// Extract session ID from container labels or name
-		sessionID, err := extractSessionIDFromLabels(status.Labels)
+		// Extract session ID and SGC ID from labels
+		sessionID, sgcID, err := extractIDsFromLabels(status.Labels)
 		if err != nil {
-			sessionID, err = extractSessionID(wrapper.Name, status)
-			if err != nil {
-				fmt.Printf("Warning: Could not extract session ID from wrapper %s, skipping\n", wrapper.ID)
-				continue
-			}
-		}
-
-		// Check if session already exists
-		if _, exists := sm.stateManager.GetSession(sessionID); exists {
-			fmt.Printf("Session %d already recovered, skipping\n", sessionID)
+			fmt.Printf("Warning: Could not extract IDs from wrapper %s: %v, cleaning up\n", wrapper.ID, err)
+			sm.cleanupDeadWrapper(ctx, wrapper.ID, status.Labels)
 			continue
 		}
 
-		// Try to reconnect to wrapper via gRPC
+		// Check if session already exists in memory
+		if _, exists := sm.stateManager.GetSession(sessionID); exists {
+			fmt.Printf("Session %d (SGC %d) already tracked, skipping\n", sessionID, sgcID)
+			continue
+		}
+
+		// Try to reconnect to wrapper via gRPC if it's running
 		if status.Running {
-			networkName := fmt.Sprintf("session-%d", sessionID)
+			// Extract network name from labels or use SGC-based pattern
+			networkName := extractNetworkName(status.Labels, sessionID, sgcID, serverID)
 			grpcAddress := fmt.Sprintf("%s:50051", networkName)
 
 			grpcClient, err := grpcclient.NewClient(ctx, grpcAddress)
 			if err == nil {
 				// Wrapper is alive! Restore session state
-				fmt.Printf("Session %d: Wrapper is alive, reconnecting\n", sessionID)
-				if err := sm.recoverLiveSession(ctx, sessionID, wrapper.ID, status, grpcClient); err != nil {
-					fmt.Printf("Session %d: Failed to recover live session: %v\n", sessionID, err)
+				fmt.Printf("Session %d (SGC %d): Wrapper alive, reconnecting via gRPC\n", sessionID, sgcID)
+				if err := sm.recoverLiveSession(ctx, sessionID, sgcID, wrapper.ID, status, grpcClient); err != nil {
+					fmt.Printf("Session %d: Failed to recover: %v, cleaning up\n", sessionID, err)
 					_ = grpcClient.Close()
+					sm.cleanupDeadWrapper(ctx, wrapper.ID, status.Labels)
 				}
 				continue
 			}
-			fmt.Printf("Session %d: Wrapper container running but gRPC unreachable: %v\n", sessionID, err)
+			fmt.Printf("Session %d: Wrapper running but gRPC unreachable: %v, cleaning up\n", sessionID, err)
+		} else {
+			fmt.Printf("Session %d: Wrapper not running (status: %s), cleaning up\n", sessionID, status.Status)
 		}
 
-		// Wrapper is dead or unreachable - clean up orphans
-		fmt.Printf("Session %d: Wrapper is dead, cleaning up orphans\n", sessionID)
-		sm.cleanupOrphanedSession(ctx, sessionID, wrapper.ID)
+		// Wrapper is dead, stopped, or unreachable - clean up
+		sm.cleanupDeadWrapper(ctx, wrapper.ID, status.Labels)
 	}
 
-	// 3. Clean up orphaned networks
+	// 3. Find and clean up orphaned game containers (no wrapper)
+	gameFilters := map[string]string{
+		"manman.type": "game",
+	}
+	games, err := sm.dockerClient.ListContainers(ctx, gameFilters)
+	if err != nil {
+		fmt.Printf("Warning: Failed to list game containers: %v\n", err)
+	} else {
+		sm.cleanupOrphanedGames(ctx, games, serverID)
+	}
+
+	// 4. Clean up orphaned networks
 	sm.cleanupOrphanedNetworks(ctx, serverID)
 
 	fmt.Println("Orphan recovery completed")
 	return nil
 }
 
-// recoverSession recovers a single session from a wrapper container
-func (sm *SessionManager) recoverSession(ctx context.Context, sessionID int64, wrapperContainerID string, status *docker.ContainerStatus) error {
-	// Create session state
-	state := &State{
-		SessionID:         sessionID,
-		WrapperContainerID: wrapperContainerID,
-		Status:            manman.SessionStatusRunning, // Assume running if container is running
+// extractIDsFromLabels extracts session ID and SGC ID from container labels
+func extractIDsFromLabels(labels map[string]string) (sessionID int64, sgcID int64, err error) {
+	sessionIDStr, hasSessionID := labels["manman.session_id"]
+	sgcIDStr, hasSGCID := labels["manman.sgc_id"]
+
+	if !hasSessionID || !hasSGCID {
+		return 0, 0, fmt.Errorf("missing required labels (session_id: %v, sgc_id: %v)", hasSessionID, hasSGCID)
 	}
 
-	if !status.Running {
-		state.Status = manman.SessionStatusStopped
-		if status.ExitCode != 0 {
-			state.ExitCode = &status.ExitCode
-			state.Status = manman.SessionStatusCrashed
-		}
-	}
-
-	// Try to reconnect gRPC client
-	// Extract network name from container or use default pattern
-	networkName := fmt.Sprintf("session-%d", sessionID)
-	grpcAddress := fmt.Sprintf("%s:50051", networkName)
-
-	grpcClient, err := grpcclient.NewClient(ctx, grpcAddress)
+	sessionID, err = strconv.ParseInt(sessionIDStr, 10, 64)
 	if err != nil {
-		// If we can't connect, mark as lost but keep state
-		fmt.Printf("Warning: Could not reconnect to wrapper for session %d: %v\n", sessionID, err)
-		state.Status = manman.SessionStatusCrashed
-	} else {
-		state.GRPCClient = grpcClient
-		state.WrapperClient = grpc.NewWrapperControlClient(grpcClient)
-
-		// Try to get status from wrapper
-		statusReq := &pb.GetStatusRequest{
-			SessionId: sessionID,
-		}
-		statusResp, err := state.WrapperClient.GetStatus(ctx, statusReq)
-		if err == nil {
-			state.Status = statusResp.Status
-			state.GameContainerID = statusResp.ContainerId
-			if statusResp.ExitCode != 0 {
-				exitCode := int(statusResp.ExitCode)
-				state.ExitCode = &exitCode
-			}
-		}
+		return 0, 0, fmt.Errorf("invalid session_id: %v", err)
 	}
 
-	sm.stateManager.AddSession(state)
-	return nil
+	sgcID, err = strconv.ParseInt(sgcIDStr, 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid sgc_id: %v", err)
+	}
+
+	return sessionID, sgcID, nil
 }
 
-// extractSessionIDFromLabels extracts session ID from container labels
-func extractSessionIDFromLabels(labels map[string]string) (int64, error) {
-	if sessionIDStr, ok := labels["manman.session_id"]; ok {
-		sessionID, err := strconv.ParseInt(sessionIDStr, 10, 64)
-		if err != nil {
-			return 0, fmt.Errorf("invalid session_id in labels: %v", err)
-		}
-		return sessionID, nil
-	}
-	return 0, fmt.Errorf("manman.session_id label not found")
+// extractNetworkName extracts network name from labels or constructs it
+func extractNetworkName(labels map[string]string, sessionID, sgcID, serverID int64) string {
+	// For now, use session-based pattern
+	// TODO: Consider if network naming should also be SGC-based
+	return fmt.Sprintf("session-%d", sessionID)
 }
 
-// extractSessionID extracts session ID from container name or labels
-func extractSessionID(containerName string, status *docker.ContainerStatus) (int64, error) {
-	// Docker returns container names with leading slash (e.g., /wrapper-123)
-	// Strip leading slash if present
-	name := containerName
-	if len(name) > 0 && name[0] == '/' {
-		name = name[1:]
-	}
-
-	// Try to extract from name pattern: wrapper-{session_id}
-	if len(name) > 8 && name[:8] == "wrapper-" {
-		sessionIDStr := name[8:]
-		sessionID, err := strconv.ParseInt(sessionIDStr, 10, 64)
-		if err == nil {
-			return sessionID, nil
-		}
-	}
-
-	return 0, fmt.Errorf("could not extract session ID from container name: %s", containerName)
-}
-
-// recoverLiveSession recovers a session where the wrapper is still alive
-func (sm *SessionManager) recoverLiveSession(ctx context.Context, sessionID int64, wrapperContainerID string, status *docker.ContainerStatus, grpcClient *grpcclient.Client) error {
-	// Extract SGCID from labels
-	sgcID := int64(0)
-	if sgcIDStr, ok := status.Labels["manman.sgc_id"]; ok {
-		if parsed, err := strconv.ParseInt(sgcIDStr, 10, 64); err == nil {
-			sgcID = parsed
-		}
-	}
+// recoverLiveSession recovers a session where the wrapper is still alive and reachable
+func (sm *SessionManager) recoverLiveSession(ctx context.Context, sessionID, sgcID int64, wrapperContainerID string, status *docker.ContainerStatus, grpcClient *grpcclient.Client) error {
+	// Extract network info
+	networkID := ""
+	networkName := extractNetworkName(status.Labels, sessionID, sgcID, 0)
 
 	// Create session state
 	state := &State{
 		SessionID:          sessionID,
 		SGCID:              sgcID,
 		WrapperContainerID: wrapperContainerID,
+		NetworkID:          networkID,
+		NetworkName:        networkName,
 		Status:             manman.SessionStatusRunning,
 		GRPCClient:         grpcClient,
 		WrapperClient:      grpc.NewWrapperControlClient(grpcClient),
 	}
 
-	// Try to get status from wrapper
+	// Query wrapper for current game status
 	statusReq := &pb.GetStatusRequest{
 		SessionId: sessionID,
 	}
@@ -199,51 +154,94 @@ func (sm *SessionManager) recoverLiveSession(ctx context.Context, sessionID int6
 			exitCode := int(statusResp.ExitCode)
 			state.ExitCode = &exitCode
 		}
+	} else {
+		fmt.Printf("Session %d: Warning - wrapper connected but GetStatus failed: %v\n", sessionID, err)
 	}
 
 	// Add to state manager
 	sm.stateManager.AddSession(state)
-	fmt.Printf("Session %d: Successfully recovered live session\n", sessionID)
+	fmt.Printf("Session %d (SGC %d): Successfully recovered live session\n", sessionID, sgcID)
 	return nil
 }
 
-// cleanupOrphanedSession cleans up containers for an orphaned session
-func (sm *SessionManager) cleanupOrphanedSession(ctx context.Context, sessionID int64, wrapperContainerID string) {
-	// Find orphaned game containers for this session
-	gameFilters := map[string]string{
-		"manman.type":       "game",
-		"manman.session_id": fmt.Sprintf("%d", sessionID),
-	}
-	gameContainers, err := sm.dockerClient.ListContainers(ctx, gameFilters)
-	if err != nil {
-		fmt.Printf("Session %d: Failed to list game containers: %v\n", sessionID, err)
-	} else {
-		for _, gameContainer := range gameContainers {
-			gameStatus, err := sm.dockerClient.GetContainerStatus(ctx, gameContainer.ID)
-			if err != nil {
-				fmt.Printf("Session %d: Failed to get game container status: %v\n", sessionID, err)
-				continue
-			}
+// cleanupDeadWrapper cleans up a dead or unreachable wrapper and its associated containers
+func (sm *SessionManager) cleanupDeadWrapper(ctx context.Context, wrapperID string, labels map[string]string) {
+	fmt.Printf("Cleaning up dead wrapper %s\n", wrapperID)
 
-			if gameStatus.Running {
-				fmt.Printf("Session %d: Orphaned game container %s is running, terminating\n", sessionID, gameContainer.ID)
-				_ = sm.dockerClient.StopContainer(ctx, gameContainer.ID, nil)
+	// Extract SGC ID to find associated game containers
+	sgcIDStr, ok := labels["manman.sgc_id"]
+	if ok {
+		// Find associated game containers by SGC ID
+		gameFilters := map[string]string{
+			"manman.type":   "game",
+			"manman.sgc_id": sgcIDStr,
+		}
+		games, err := sm.dockerClient.ListContainers(ctx, gameFilters)
+		if err != nil {
+			fmt.Printf("Warning: Failed to list game containers for sgc_id=%s: %v\n", sgcIDStr, err)
+		} else {
+			for _, game := range games {
+				gameStatus, err := sm.dockerClient.GetContainerStatus(ctx, game.ID)
+				if err != nil {
+					continue
+				}
+				if gameStatus.Running {
+					fmt.Printf("Stopping orphaned game container %s\n", game.ID)
+					_ = sm.dockerClient.StopContainer(ctx, game.ID, nil)
+				}
+				fmt.Printf("Removing orphaned game container %s\n", game.ID)
+				_ = sm.dockerClient.RemoveContainer(ctx, game.ID, true)
 			}
-			fmt.Printf("Session %d: Removing game container %s\n", sessionID, gameContainer.ID)
-			_ = sm.dockerClient.RemoveContainer(ctx, gameContainer.ID, true)
 		}
 	}
 
 	// Remove wrapper container
-	fmt.Printf("Session %d: Removing wrapper container %s\n", sessionID, wrapperContainerID)
-	_ = sm.dockerClient.StopContainer(ctx, wrapperContainerID, nil)
-	_ = sm.dockerClient.RemoveContainer(ctx, wrapperContainerID, true)
+	_ = sm.dockerClient.StopContainer(ctx, wrapperID, nil)
+	_ = sm.dockerClient.RemoveContainer(ctx, wrapperID, true)
+	fmt.Printf("Removed wrapper %s\n", wrapperID)
+}
+
+// cleanupOrphanedGames cleans up game containers that have no associated wrapper
+func (sm *SessionManager) cleanupOrphanedGames(ctx context.Context, games []docker.ContainerStatus, serverID int64) {
+	// Get active SGC IDs from session manager
+	activeSGCs := sm.stateManager.GetActiveSGCIDs()
+
+	for _, game := range games {
+		status, err := sm.dockerClient.GetContainerStatus(ctx, game.ID)
+		if err != nil {
+			continue
+		}
+
+		// Check if this game's SGC is tracked by an active session
+		sgcIDStr, ok := status.Labels["manman.sgc_id"]
+		if !ok {
+			fmt.Printf("Game container %s missing sgc_id label, skipping\n", game.ID)
+			continue
+		}
+
+		sgcID, err := strconv.ParseInt(sgcIDStr, 10, 64)
+		if err != nil {
+			continue
+		}
+
+		// If SGC is active, skip (wrapper should exist)
+		if activeSGCs[sgcID] {
+			continue
+		}
+
+		// Orphaned game container - no active session tracking it
+		fmt.Printf("Found orphaned game container %s (SGC %d), cleaning up\n", game.ID, sgcID)
+		if status.Running {
+			_ = sm.dockerClient.StopContainer(ctx, game.ID, nil)
+		}
+		_ = sm.dockerClient.RemoveContainer(ctx, game.ID, true)
+	}
 }
 
 // cleanupOrphanedNetworks removes networks that don't have any containers
 func (sm *SessionManager) cleanupOrphanedNetworks(ctx context.Context, serverID int64) {
 	// Note: Docker client may not support filtering networks by labels
-	// This is a placeholder for the cleanup logic
-	// In practice, you'd need to list all networks and filter manually
+	// This is a placeholder - implementing network cleanup requires
+	// listing all networks and checking container membership
 	fmt.Printf("TODO: Implement network cleanup for server %d\n", serverID)
 }
