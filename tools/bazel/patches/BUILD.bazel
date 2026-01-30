@@ -1,0 +1,5 @@
+# Bazel patches for external dependencies
+
+exports_files([
+    "containerd-errdefs-pkg-errhttp.patch",
+])

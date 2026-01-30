@@ -1,8 +1,8 @@
-# Bazel Integration Limitation for Wrapper Tests
+# Bazel Integration Status for Wrapper Tests
 
-## Issue
+## Status: RESOLVED ✓
 
-The wrapper integration tests cannot currently run in Bazel due to a complex dependency issue with the Docker SDK.
+The wrapper integration tests now build successfully in Bazel. The Docker SDK dependency issue has been resolved with a temporary patch.
 
 ## Root Cause
 
@@ -25,10 +25,20 @@ BUILD file not found in directory 'pkg/errhttp' of external repository
 
 4. **Upgrade attempted**: Tried upgrading containerd/errdefs to latest - no change (v1.0.0 is already latest)
 
-## Current Workaround
+## Solution Applied
 
-**Tests work perfectly with Go's native test runner:**
+A temporary patch has been applied to fix the Docker SDK dependency issue. See `tools/bazel/patches/PATCH_REMOVAL_PLAN.md` for details and removal instructions.
 
+**Building with Bazel:**
+```bash
+# Build wrapper tests
+bazel build //manman/wrapper:wrapper_integration_test
+
+# Run tests (requires Docker)
+bazel test //manman/wrapper:wrapper_integration_test --test_tag_filters=integration
+```
+
+**Alternative: Tests also work with Go's native test runner:**
 ```bash
 # Build test image
 cd manman/wrapper/testdata
@@ -39,23 +49,36 @@ cd ..
 go test -tags=integration -v .
 ```
 
-## Potential Solutions (Future Work)
+## Solution Details
 
-1. **Wait for Docker SDK fix**: The Docker SDK may release a version compatible with released containerd/errdefs versions
+**Chosen Approach**: Patch containerd/errdefs with stub pkg/errhttp package
 
-2. **Patch approach**: Create a Bazel patch file to manually add missing dependencies to Docker SDK's BUILD file
+This approach was selected because it:
+- Adds minimal code (stub package that re-exports parent functionality)
+- Doesn't modify Docker SDK (upstream dependency)
+- Works with current Docker SDK v28.5.2
+- Has clear removal path when upstream is fixed
+- Low maintenance burden
 
-3. **Custom BUILD override**: Use `go_repository` with a custom build_file to completely replace Docker SDK's BUILD configuration
+**Files Modified**:
+- `tools/bazel/patches/containerd-errdefs-pkg-errhttp.patch` - Stub package implementation
+- `MODULE.bazel` - Applies patch via go_deps.module_override
+- `libs/go/docker/container.go` - Updated to Docker SDK v28 API
+- `tools/bazel/patches/PATCH_REMOVAL_PLAN.md` - Removal instructions
 
-4. **Fork approach**: Temporarily fork containerd/errdefs with a stub pkg/errhttp package (not recommended)
+**Other Approaches Considered**:
+1. Wait for Docker SDK fix - Would block development indefinitely
+2. Custom BUILD override - More complex, harder to maintain
+3. Fork containerd/errdefs - Creates maintenance burden
+4. Downgrade Docker SDK - May lose needed features
 
-5. **Downgrade Docker SDK**: Try an older Docker SDK version that doesn't import pkg/errhttp (may lose needed features)
+## Impact (Resolved)
 
-## Impact
-
-- Tests must be run manually with `go test` on machines with Docker
-- CI cannot run integration tests until this is resolved or Docker is added to CI
-- Manual testing required before merging wrapper changes
+- ✓ Tests now build successfully with Bazel
+- ✓ Integration tests can run with Bazel (requires Docker on build machine)
+- ⚠️ CI still cannot run integration tests (no Docker in CI environment)
+- ℹ️ Manual testing with `go test` or `bazel test` required before merging wrapper changes
+- ℹ️ Patch will need removal when upstream is fixed (see PATCH_REMOVAL_PLAN.md)
 
 ## References
 

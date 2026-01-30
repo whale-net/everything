@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/whale-net/everything/libs/go/docker"
 	pb "github.com/whale-net/everything/manman/protos"
@@ -178,15 +179,15 @@ func (s *server) Stop(ctx context.Context, req *pb.StopRequest) (*pb.StopRespons
 	log.Printf("Session %d: status updated to stopping", req.SessionId)
 
 	// Stop the container
-	var stopTimeout *int64
+	var stopTimeout *time.Duration
 	if !req.Force {
 		// Graceful shutdown with 30 second timeout
-		timeout := int64(30)
+		timeout := 30 * time.Second
 		stopTimeout = &timeout
 	}
 
 	log.Printf("Session %d: Stopping container %s (force=%v)", req.SessionId, session.GameContainerID, req.Force)
-	if err := s.dockerClient.StopContainer(ctx, session.GameContainerID, nil); err != nil {
+	if err := s.dockerClient.StopContainer(ctx, session.GameContainerID, stopTimeout); err != nil {
 		log.Printf("Session %d: Error stopping container: %v", req.SessionId, err)
 		// Continue to try to get exit code even if stop failed
 	}
@@ -360,7 +361,6 @@ func (s *server) StreamOutput(req *pb.StreamOutputRequest, stream pb.WrapperCont
 	// Docker logs format uses an 8-byte header: [STREAM_TYPE, 0, 0, 0, SIZE1, SIZE2, SIZE3, SIZE4]
 	// STREAM_TYPE: 1=stdout, 2=stderr
 	// SIZE: 4-byte big-endian uint32
-	buffer := make([]byte, 8192)
 	for {
 		select {
 		case <-ctx.Done():

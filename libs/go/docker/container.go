@@ -9,6 +9,7 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/go-connections/nat"
@@ -99,21 +100,25 @@ func (c *Client) CreateContainer(ctx context.Context, config ContainerConfig) (s
 
 // StartContainer starts a container
 func (c *Client) StartContainer(ctx context.Context, containerID string) error {
-	return c.cli.ContainerStart(ctx, containerID, types.ContainerStartOptions{})
+	return c.cli.ContainerStart(ctx, containerID, container.StartOptions{})
 }
 
 // StopContainer stops a container gracefully
 func (c *Client) StopContainer(ctx context.Context, containerID string, timeout *time.Duration) error {
-	if timeout == nil {
-		defaultTimeout := 30 * time.Second
-		timeout = &defaultTimeout
+	var timeoutSecs *int
+	if timeout != nil {
+		secs := int(timeout.Seconds())
+		timeoutSecs = &secs
+	} else {
+		defaultSecs := 30
+		timeoutSecs = &defaultSecs
 	}
-	return c.cli.ContainerStop(ctx, containerID, container.StopOptions{Timeout: timeout})
+	return c.cli.ContainerStop(ctx, containerID, container.StopOptions{Timeout: timeoutSecs})
 }
 
 // RemoveContainer removes a container
 func (c *Client) RemoveContainer(ctx context.Context, containerID string, force bool) error {
-	return c.cli.ContainerRemove(ctx, containerID, types.ContainerRemoveOptions{Force: force})
+	return c.cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: force})
 }
 
 // GetContainerStatus returns the status of a container
@@ -160,16 +165,16 @@ type ContainerStatus struct {
 }
 
 // ListContainers lists containers matching the given filters
-func (c *Client) ListContainers(ctx context.Context, filters map[string]string) ([]ContainerStatus, error) {
+func (c *Client) ListContainers(ctx context.Context, labelFilters map[string]string) ([]ContainerStatus, error) {
 	// Convert filters to Docker format
-	dockerFilters := make(map[string][]string)
-	for key, value := range filters {
-		dockerFilters["label"] = append(dockerFilters["label"], fmt.Sprintf("%s=%s", key, value))
+	filterArgs := filters.NewArgs()
+	for key, value := range labelFilters {
+		filterArgs.Add("label", fmt.Sprintf("%s=%s", key, value))
 	}
 
-	containers, err := c.cli.ContainerList(ctx, types.ContainerListOptions{
+	containers, err := c.cli.ContainerList(ctx, container.ListOptions{
 		All:     true,
-		Filters: dockerFilters,
+		Filters: filterArgs,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list containers: %w", err)
@@ -194,7 +199,7 @@ func (c *Client) ListContainers(ctx context.Context, filters map[string]string) 
 
 // CreateNetwork creates a Docker network
 func (c *Client) CreateNetwork(ctx context.Context, name string, labels map[string]string) (string, error) {
-	resp, err := c.cli.NetworkCreate(ctx, name, types.NetworkCreate{
+	resp, err := c.cli.NetworkCreate(ctx, name, network.CreateOptions{
 		Labels: labels,
 	})
 	if err != nil {
@@ -210,7 +215,7 @@ func (c *Client) RemoveNetwork(ctx context.Context, networkID string) error {
 
 // GetContainerLogs returns the logs from a container
 func (c *Client) GetContainerLogs(ctx context.Context, containerID string, follow bool, tail string) (io.ReadCloser, error) {
-	options := types.ContainerLogsOptions{
+	options := container.LogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Follow:     follow,
@@ -221,7 +226,7 @@ func (c *Client) GetContainerLogs(ctx context.Context, containerID string, follo
 
 // AttachToContainer attaches to a running container for stdin/stdout/stderr
 func (c *Client) AttachToContainer(ctx context.Context, containerID string) (types.HijackedResponse, error) {
-	options := types.ContainerAttachOptions{
+	options := container.AttachOptions{
 		Stream: true,
 		Stdin:  true,
 		Stdout: true,
