@@ -14,7 +14,7 @@ import (
 
 // SessionManager manages the lifecycle of game server sessions
 type SessionManager struct {
-	// dockerClient *docker.Client  // Commented out - docker SDK dependency issues
+	dockerClient *docker.Client
 	stateManager  *Manager
 	wrapperImage  string // Docker image for the wrapper container
 }
@@ -187,6 +187,7 @@ func (sm *SessionManager) createWrapperContainer(ctx context.Context, state *Sta
 		},
 		Volumes: []string{
 			fmt.Sprintf("%s:/data", dataPath),
+			"/var/run/docker.sock:/var/run/docker.sock", // Docker-out-of-Docker
 		},
 		Env: []string{
 			fmt.Sprintf("SESSION_ID=%d", state.SessionID),
@@ -260,7 +261,7 @@ func convertGameConfig(config map[string]interface{}) *pb.GameConfig {
 func convertServerGameConfig(config map[string]interface{}) *pb.ServerGameConfig {
 	sgc := &pb.ServerGameConfig{}
 	if sgcID, ok := config["sgc_id"].(float64); ok {
-		sgc.SgcId = int64(sgcID)
+		sgc.ServerGameConfigId = int64(sgcID)
 	}
 	if serverID, ok := config["server_id"].(float64); ok {
 		sgc.ServerId = int64(serverID)

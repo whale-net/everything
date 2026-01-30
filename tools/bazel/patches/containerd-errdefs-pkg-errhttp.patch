@@ -1,0 +1,46 @@
+diff --git a/pkg/errhttp/BUILD.bazel b/pkg/errhttp/BUILD.bazel
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/pkg/errhttp/BUILD.bazel
+@@ -0,0 +1,12 @@
++load("@io_bazel_rules_go//go:def.bzl", "go_library")
++
++# Stub package for pkg/errhttp
++# This package doesn't exist in containerd/errdefs v1.0.0 but is imported by Docker SDK v28.5.2
++# This stub re-exports the parent package's error handling to satisfy the import
++go_library(
++    name = "errhttp",
++    srcs = ["errhttp.go"],
++    importpath = "github.com/containerd/errdefs/pkg/errhttp",
++    visibility = ["//visibility:public"],
++    deps = ["//:errdefs"],
++)
+diff --git a/pkg/errhttp/errhttp.go b/pkg/errhttp/errhttp.go
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/pkg/errhttp/errhttp.go
+@@ -0,0 +1,22 @@
++// Package errhttp provides HTTP error conversions for containerd errors.
++//
++// This is a stub package created to satisfy Docker SDK v28.5.2's import requirements.
++// The pkg/errhttp package doesn't exist in containerd/errdefs v1.0.0, but Docker SDK
++// imports it. This stub provides the minimal functionality needed.
++//
++// TEMPORARY: Remove this patch once Docker SDK is updated to work with released
++// versions of containerd/errdefs or once containerd/errdefs re-adds this package.
++package errhttp
++
++import (
++	cerrdefs "github.com/containerd/errdefs"
++)
++
++// ToNative converts an HTTP status code to a native containerd error.
++// This is a minimal stub implementation.
++func ToNative(statusCode int) error {
++	if statusCode >= 400 {
++		return cerrdefs.ErrUnknown
++	}
++	return nil
++}

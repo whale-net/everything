@@ -363,14 +363,15 @@ service WrapperControl {
 - [x] Session/container lifecycle management ✓
 
 ### Phase 3: Wrapper
-- [ ] gRPC server implementation
-- [ ] Game container management (spawn, monitor, attach)
-- [ ] State persistence for recovery
-- [ ] stdin/stdout/stderr forwarding
+- [x] gRPC server implementation ✓
+- [x] Game container management (spawn, monitor, attach) ✓
+- [x] State persistence for recovery ✓
+- [x] stdin/stdout/stderr forwarding ✓
 
 ### Phase 4: Integration
 - [ ] End-to-end flow: deploy → start session → interact → stop
 - [ ] Health monitoring and status aggregation
+- [ ] Orphan container detection and cleanup
 - [ ] Port allocation enforcement
 
 ### Phase 5: Polish
@@ -380,6 +381,149 @@ service WrapperControl {
 - [ ] 3rd party image support
 
 ---
+
+## Orphan Prevention Strategy (Phase 4)
+
+### Problem
+
+With wrapper and game containers running separately from the host manager process, orphaned resources can occur:
+
+1. **Host manager crash**: Loses in-memory session state, can't track running containers
+2. **Wrapper crash without recovery**: Game container keeps running, no wrapper to manage it
+3. **Network failures**: Host can't reach wrapper, but both wrapper and game still run
+4. **Deployment issues**: Old containers from previous deployments left behind
+
+### Solution: Label-Based Reconciliation
+
+**1. Container Labeling**
+
+All ManMan-created resources MUST be labeled:
+
+```go
+// Wrapper container labels
+labels := map[string]string{
+    "manman.type":        "wrapper",
+    "manman.session_id":  "12345",
+    "manman.sgc_id":      "67890",
+    "manman.server_id":   "42",
+    "manman.created_at":  "2026-01-29T12:00:00Z",
+}
+
+// Game container labels (created by wrapper)
+labels := map[string]string{
+    "manman.type":        "game",
+    "manman.session_id":  "12345",
+    "manman.sgc_id":      "67890",
+    "manman.wrapper_id":  "abc123",  // Links back to wrapper
+}
+
+// Network labels
+labels := map[string]string{
+    "manman.type":        "network",
+    "manman.session_id":  "12345",
+    "manman.server_id":   "42",
+}
+```
+
+**2. Host Manager Startup Reconciliation**
+
+On startup, host manager scans Docker for ManMan containers:
+
+```go
+func (h *HostManager) ReconcileOnStartup(ctx context.Context) error {
+    // 1. Find all ManMan containers
+    containers := h.docker.ListContainers(ctx, map[string]string{
+        "manman.server_id": h.serverID,
+    })
+
+    // 2. For each wrapper, attempt to reconnect
+    for _, wrapper := range wrappers {
+        sessionID := wrapper.Labels["manman.session_id"]
+
+        // Try gRPC connection
+        if client := tryConnect(wrapper); client != nil {
+            // Wrapper is alive! Restore session state
+            status := client.GetStatus(sessionID)
+            h.restoreSession(sessionID, wrapper.ID, status)
+        } else {
+            // Wrapper is dead, check if game is still running
+            gameContainer := findGameContainer(sessionID)
+            if gameContainer != nil && gameContainer.Running {
+                // Orphaned game! Clean it up
+                log.Printf("Orphaned game container %s, terminating", gameContainer.ID)
+                h.docker.StopContainer(ctx, gameContainer.ID, true)
+            }
+            // Remove dead wrapper
+            h.docker.RemoveContainer(ctx, wrapper.ID, true)
+        }
+    }
+
+    // 3. Clean up orphaned networks
+    h.cleanupOrphanedNetworks(ctx)
+}
+```
+
+**3. Periodic Orphan Cleanup**
+
+Background goroutine runs every 5 minutes:
+
+```go
+func (h *HostManager) OrphanCleanupLoop(ctx context.Context) {
+    ticker := time.NewTicker(5 * time.Minute)
+    for {
+        select {
+        case <-ticker.C:
+            h.cleanupOrphans(ctx)
+        case <-ctx.Done():
+            return
+        }
+    }
+}
+
+func (h *HostManager) cleanupOrphans(ctx context.Context) {
+    // Find containers not in active session list
+    activeSessionIDs := h.getActiveSessionIDs()
+
+    allContainers := h.docker.ListContainers(ctx, map[string]string{
+        "manman.server_id": h.serverID,
+    })
+
+    for _, container := range allContainers {
+        sessionID := container.Labels["manman.session_id"]
+
+        // Not tracked by this host manager?
+        if !activeSessionIDs.Contains(sessionID) {
+            age := time.Since(container.CreatedAt)
+
+            // Grace period: 5 minutes (in case host manager just started)
+            if age > 5*time.Minute {
+                log.Printf("Orphaned container %s (session %s), cleaning up",
+                    container.ID, sessionID)
+                h.docker.StopContainer(ctx, container.ID, true)
+                h.docker.RemoveContainer(ctx, container.ID, true)
+            }
+        }
+    }
+}
+```
+
+**4. TTL-Based Cleanup (Future Enhancement)**
+
+Add TTL labels for additional safety:
+
+```go
+labels["manman.ttl"] = "24h"  // Absolute max lifetime
+labels["manman.heartbeat"] = time.Now().Format(time.RFC3339)
+```
+
+Containers without recent heartbeat updates get cleaned up even if host manager is down.
+
+### Benefits
+
+- **Self-healing**: Host manager restart automatically discovers and reconnects to surviving wrappers
+- **Cleanup on failure**: Orphaned containers are detected and terminated
+- **Multi-host safe**: Each host only manages containers with matching `manman.server_id`
+- **Audit trail**: Labels provide metadata for debugging ("why is this container running?")
 
 ## Deferred Decisions
 

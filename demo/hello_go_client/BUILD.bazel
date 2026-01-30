@@ -22,12 +22,13 @@ go_library(
     srcs = ["main.go"],
     importpath = "github.com/whale-net/everything/demo/hello_go_client",
     visibility = ["//visibility:private"],
-    deps = ["//generated/go/demo:hello_fastapi"],
+    deps = [
+        "//generated/go/demo:hello_fastapi",
+    ],
 )
 
 go_test(
     name = "hello_go_client_test",
     srcs = ["main_test.go"],
     embed = [":hello_go_client_lib"],
-    deps = ["//generated/go/demo:hello_fastapi"],
 )

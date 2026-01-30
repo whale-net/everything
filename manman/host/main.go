@@ -158,13 +158,33 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 		parametersJSON = string(paramsBytes)
 	}
 
+	// Convert GameConfig to map[string]interface{}
+	gameConfigMap := make(map[string]interface{})
+	gcBytes, err := json.Marshal(cmd.GameConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal game config: %w", err)
+	}
+	if err := json.Unmarshal(gcBytes, &gameConfigMap); err != nil {
+		return fmt.Errorf("failed to unmarshal game config: %w", err)
+	}
+
+	// Convert ServerGameConfig to map[string]interface{}
+	sgcMap := make(map[string]interface{})
+	sgcBytes, err := json.Marshal(cmd.ServerGameConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal server game config: %w", err)
+	}
+	if err := json.Unmarshal(sgcBytes, &sgcMap); err != nil {
+		return fmt.Errorf("failed to unmarshal server game config: %w", err)
+	}
+
 	// Convert to session manager command format
 	sessionCmd := &session.StartSessionCommand{
 		SessionID:        cmd.SessionID,
 		SGCID:            cmd.SGCID,
 		ServerID:         h.serverID,
-		GameConfig:       cmd.GameConfig,
-		ServerGameConfig: cmd.ServerGameConfig,
+		GameConfig:       gameConfigMap,
+		ServerGameConfig: sgcMap,
 		ParametersJSON:   parametersJSON,
 	}
 

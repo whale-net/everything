@@ -1,26 +1,29 @@
 load("@rules_go//go:def.bzl", "go_library")
 
-# NOTE: Docker SDK dependencies commented out due to complex transitive dependency issues
-# with gazelle-generated BUILD files. The docker test itself skips (requires Docker daemon).
-# This will be revisited when Docker functionality is actually needed at runtime.
-
-# go_library(
-#     name = "docker",
-#     srcs = [
-#         "docker.go",
-#         "container.go",
-#     ],
-#     importpath = "github.com/whale-net/everything/libs/go/docker",
-#     visibility = ["//visibility:public"],
-#     deps = [
-#         "@com_github_docker_docker//client",
-#         "@com_github_docker_docker//api/types",
-#         "@com_github_docker_docker//api/types/container",
-#         "@com_github_docker_docker//api/types/mount",
-#         "@com_github_docker_docker//api/types/network",
-#         "@com_github_docker_go_connections//nat",
-#     ],
-# )
+# Docker SDK library for container management
+go_library(
+    name = "docker",
+    srcs = [
+        "container.go",
+        "deps.go",
+        "docker.go",
+    ],
+    importpath = "github.com/whale-net/everything/libs/go/docker",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_containerd_errdefs//:errdefs",
+        "@com_github_distribution_reference//:reference",
+        "@com_github_docker_docker//api/types",
+        "@com_github_docker_docker//api/types/container",
+        "@com_github_docker_docker//api/types/filters",
+        "@com_github_docker_docker//api/types/mount",
+        "@com_github_docker_docker//api/types/network",
+        "@com_github_docker_docker//client",
+        "@com_github_docker_go_connections//nat",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "@io_opentelemetry_go_otel_trace//:trace",
+    ],
+)
 
 # Temporarily commented out due to Docker SDK transitive dependency issues
 # The Docker library's auto-generated BUILD file doesn't include all transitive deps

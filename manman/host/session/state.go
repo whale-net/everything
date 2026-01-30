@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/manman/host/grpc"
 )
 
@@ -16,7 +17,7 @@ type State struct {
 	NetworkName     string
 	WrapperContainerID string
 	GameContainerID string
-	GRPCClient      *grpc.Client
+	GRPCClient      *grpcclient.Client
 	WrapperClient   *grpc.WrapperControlClient
 	StartedAt       *time.Time
 	StoppedAt       *time.Time

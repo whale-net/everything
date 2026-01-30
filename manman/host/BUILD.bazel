@@ -43,3 +43,22 @@ load("//tools/bazel:release.bzl", "release_app")
 #     embed = [":host_lib"],
 #     visibility = ["//visibility:public"],
 # )
+
+go_library(
+    name = "host_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/manman/host",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/docker",
+        "//libs/go/rmq",
+        "//manman/host/rmq",
+        "//manman/host/session",
+    ],
+)
+
+go_binary(
+    name = "host",
+    embed = [":host_lib"],
+    visibility = ["//visibility:public"],
+)
