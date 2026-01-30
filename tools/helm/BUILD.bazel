@@ -63,5 +63,5 @@ go_test(
         "types_test.go",
     ],
     data = glob(["testdata/**"]),
-    embed = [":helm_lib"],
+    embed = [":helm"],
 )
