@@ -187,6 +187,7 @@ func (sm *SessionManager) createWrapperContainer(ctx context.Context, state *Sta
 		},
 		Volumes: []string{
 			fmt.Sprintf("%s:/data", dataPath),
+			"/var/run/docker.sock:/var/run/docker.sock", // Docker-out-of-Docker
 		},
 		Env: []string{
 			fmt.Sprintf("SESSION_ID=%d", state.SessionID),

@@ -9,6 +9,7 @@ go_binary(
         "state.go",
     ],
     deps = [
+        "//libs/go/docker",
         "//manman/protos:manmanpb",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//reflection",

@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/whale-net/everything/libs/go/docker"
 	pb "github.com/whale-net/everything/manman/protos"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -24,15 +25,38 @@ func main() {
 func run() error {
 	// Get configuration from environment
 	port := getEnv("GRPC_PORT", "50051")
-	
+	dockerSocket := getEnv("DOCKER_SOCKET", "/var/run/docker.sock")
+	sessionID := getEnv("SESSION_ID", "")
+	networkName := getEnv("NETWORK_NAME", "")
+
 	log.Printf("Starting ManManV2 Wrapper Service")
 	log.Printf("gRPC port: %s", port)
+	log.Printf("Session ID: %s", sessionID)
+	log.Printf("Network: %s", networkName)
+
+	// Initialize Docker client
+	log.Println("Connecting to Docker...")
+	dockerClient, err := docker.NewClient(dockerSocket)
+	if err != nil {
+		return fmt.Errorf("failed to initialize Docker client: %w", err)
+	}
+	defer dockerClient.Close()
+
+	// Try to load previous state (for recovery after restart)
+	log.Println("Checking for previous state...")
+	previousState, err := LoadState()
+	if err != nil {
+		log.Printf("Warning: Failed to load previous state: %v", err)
+	} else if previousState != nil {
+		log.Printf("Recovered previous state: session_id=%d, status=%s, container=%s",
+			previousState.SessionID, previousState.Status, previousState.GameContainerID)
+	}
 
 	// Create gRPC server
 	grpcServer := grpc.NewServer()
-	
+
 	// Register WrapperControl service
-	wrapperServer := newServer()
+	wrapperServer := newServer(dockerClient, sessionID, networkName, previousState)
 	pb.RegisterWrapperControlServer(grpcServer, wrapperServer)
 	
 	// Register reflection service for debugging with grpcurl

@@ -218,3 +218,14 @@ func (c *Client) GetContainerLogs(ctx context.Context, containerID string, follo
 	}
 	return c.cli.ContainerLogs(ctx, containerID, options)
 }
+
+// AttachToContainer attaches to a running container for stdin/stdout/stderr
+func (c *Client) AttachToContainer(ctx context.Context, containerID string) (types.HijackedResponse, error) {
+	options := types.ContainerAttachOptions{
+		Stream: true,
+		Stdin:  true,
+		Stdout: true,
+		Stderr: true,
+	}
+	return c.cli.ContainerAttach(ctx, containerID, options)
+}
