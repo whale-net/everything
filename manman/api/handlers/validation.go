@@ -117,8 +117,19 @@ func (h *ValidationHandler) ValidateDeployment(ctx context.Context, req *pb.Vali
 }
 
 func extractRequiredParams(parametersJSONB interface{}) []*pb.Parameter {
+	// Handle nil case
+	if parametersJSONB == nil {
+		return []*pb.Parameter{}
+	}
+
+	// Safe type assertion
+	paramsMap, ok := parametersJSONB.(map[string]interface{})
+	if !ok {
+		return []*pb.Parameter{}
+	}
+
 	// Use jsonbToParameters converter
-	params := jsonbToParameters(parametersJSONB.(map[string]interface{}))
+	params := jsonbToParameters(paramsMap)
 	required := []*pb.Parameter{}
 	for _, p := range params {
 		if p.Required {

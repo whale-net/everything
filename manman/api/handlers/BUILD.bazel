@@ -17,6 +17,7 @@ go_library(
         "//manman:models",
         "//manman/api/repository",
         "//manman/protos:manmanpb",
+        "@com_github_jackc_pgx_v5//:pgx",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
     ],

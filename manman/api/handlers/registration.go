@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/whale-net/everything/manman"
 	"github.com/whale-net/everything/manman/api/repository"
 	pb "github.com/whale-net/everything/manman/protos"
@@ -31,10 +33,15 @@ func (h *RegistrationHandler) RegisterServer(ctx context.Context, req *pb.Regist
 	// Check if server with this name exists
 	server, err := h.serverRepo.GetByName(ctx, req.Name)
 	if err != nil {
-		// Server doesn't exist, create it
-		server, err = h.serverRepo.Create(ctx, req.Name)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to create server: %v", err)
+		// Only create if server doesn't exist (not found error)
+		if errors.Is(err, pgx.ErrNoRows) {
+			server, err = h.serverRepo.Create(ctx, req.Name)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to create server: %v", err)
+			}
+		} else {
+			// Database error or other issue - don't swallow it
+			return nil, status.Errorf(codes.Internal, "failed to query server: %v", err)
 		}
 	}
 
