@@ -27,11 +27,15 @@ func run() error {
 	port := getEnv("GRPC_PORT", "50051")
 	dockerSocket := getEnv("DOCKER_SOCKET", "/var/run/docker.sock")
 	sessionID := getEnv("SESSION_ID", "")
+	sgcID := getEnv("SGC_ID", "")
+	serverID := getEnv("SERVER_ID", "")
 	networkName := getEnv("NETWORK_NAME", "")
 
 	log.Printf("Starting ManManV2 Wrapper Service")
 	log.Printf("gRPC port: %s", port)
 	log.Printf("Session ID: %s", sessionID)
+	log.Printf("SGC ID: %s", sgcID)
+	log.Printf("Server ID: %s", serverID)
 	log.Printf("Network: %s", networkName)
 
 	// Initialize Docker client
@@ -56,7 +60,7 @@ func run() error {
 	grpcServer := grpc.NewServer()
 
 	// Register WrapperControl service
-	wrapperServer := newServer(dockerClient, sessionID, networkName, previousState)
+	wrapperServer := newServer(dockerClient, sessionID, sgcID, serverID, networkName, previousState)
 	pb.RegisterWrapperControlServer(grpcServer, wrapperServer)
 	
 	// Register reflection service for debugging with grpcurl

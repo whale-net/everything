@@ -84,3 +84,65 @@ func (s *State) GetStatus() string {
 	defer s.mu.RUnlock()
 	return s.Status
 }
+
+// GetActiveSessionIDs returns a set of active session IDs
+func (m *Manager) GetActiveSessionIDs() map[int64]bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	activeIDs := make(map[int64]bool, len(m.sessions))
+	for sessionID := range m.sessions {
+		activeIDs[sessionID] = true
+	}
+	return activeIDs
+}
+
+// GetActiveSGCIDs returns a set of active SGC IDs
+func (m *Manager) GetActiveSGCIDs() map[int64]bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	activeSGCs := make(map[int64]bool)
+	for _, session := range m.sessions {
+		activeSGCs[session.SGCID] = true
+	}
+	return activeSGCs
+}
+
+// SessionStats represents session statistics
+type SessionStats struct {
+	Total    int
+	Pending  int
+	Starting int
+	Running  int
+	Stopping int
+	Stopped  int
+	Crashed  int
+}
+
+// GetSessionStats returns statistics about all sessions
+func (m *Manager) GetSessionStats() SessionStats {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	stats := SessionStats{
+		Total: len(m.sessions),
+	}
+
+	for _, session := range m.sessions {
+		switch session.GetStatus() {
+		case "pending":
+			stats.Pending++
+		case "starting":
+			stats.Starting++
+		case "running":
+			stats.Running++
+		case "stopping":
+			stats.Stopping++
+		case "stopped":
+			stats.Stopped++
+		case "crashed":
+			stats.Crashed++
+		}
+	}
+
+	return stats
+}

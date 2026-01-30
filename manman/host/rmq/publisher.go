@@ -42,10 +42,11 @@ func (p *Publisher) PublishSessionStatus(ctx context.Context, update *SessionSta
 	return p.publisher.Publish(ctx, "manman", routingKey, update)
 }
 
-// PublishHealth publishes a health/keepalive message
-func (p *Publisher) PublishHealth(ctx context.Context) error {
+// PublishHealth publishes a health/keepalive message with optional session stats
+func (p *Publisher) PublishHealth(ctx context.Context, stats *SessionStats) error {
 	update := HealthUpdate{
-		ServerID: p.serverID,
+		ServerID:     p.serverID,
+		SessionStats: stats,
 	}
 	routingKey := fmt.Sprintf("health.host.%d", p.serverID)
 	return p.publisher.Publish(ctx, "manman", routingKey, update)
