@@ -42,6 +42,12 @@ service ManManAPI {
   rpc StartSession(StartSessionRequest) returns (StartSessionResponse);
   rpc StopSession(StopSessionRequest) returns (StopSessionResponse);
 
+  // Backup management
+  rpc CreateBackup(CreateBackupRequest) returns (CreateBackupResponse);
+  rpc ListBackups(ListBackupsRequest) returns (ListBackupsResponse);
+  rpc GetBackup(GetBackupRequest) returns (GetBackupResponse);
+  rpc DeleteBackup(DeleteBackupRequest) returns (DeleteBackupResponse);
+
   // Server registration (new)
   rpc RegisterServer(RegisterServerRequest) returns (RegisterServerResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
@@ -199,6 +205,8 @@ message CreateGameConfigRequest {
   map<string, string> env_template = 5;
   repeated FileTemplate files = 6;
   repeated Parameter parameters = 7;
+  repeated string entrypoint = 8;
+  repeated string command = 9;
 }
 
 message CreateGameConfigResponse {
@@ -214,6 +222,8 @@ message UpdateGameConfigRequest {
   repeated FileTemplate files = 6;
   repeated Parameter parameters = 7;
   repeated string update_paths = 8;  // Field paths to update (empty = update all)
+  repeated string entrypoint = 9;
+  repeated string command = 10;
 }
 
 message UpdateGameConfigResponse {
@@ -323,6 +333,47 @@ message StopSessionRequest {
 
 message StopSessionResponse {
   Session session = 1;
+}
+
+// ============================================================================
+// Backup RPCs
+// ============================================================================
+
+message CreateBackupRequest {
+  int64 session_id = 1;  // Session to backup
+  string description = 2;  // Optional description
+}
+
+message CreateBackupResponse {
+  Backup backup = 1;
+}
+
+message ListBackupsRequest {
+  int64 server_game_config_id = 1;  // Filter by SGC (optional)
+  int64 session_id = 2;  // Filter by session (optional)
+  int32 page_size = 3;
+  string page_token = 4;
+}
+
+message ListBackupsResponse {
+  repeated Backup backups = 1;
+  string next_page_token = 2;
+}
+
+message GetBackupRequest {
+  int64 backup_id = 1;
+}
+
+message GetBackupResponse {
+  Backup backup = 1;
+}
+
+message DeleteBackupRequest {
+  int64 backup_id = 1;
+}
+
+message DeleteBackupResponse {
+  // Empty - success indicated by no error
 }
 
 // ============================================================================

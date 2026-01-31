@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/whale-net/everything/manman/api/repository"
 	pb "github.com/whale-net/everything/manman/protos"
@@ -78,18 +77,10 @@ func (h *ValidationHandler) ValidateDeployment(ctx context.Context, req *pb.Vali
 	//     }
 	// }
 
-	// 4. Validate required parameters
-	requiredParams := extractRequiredParams(gameConfig.Parameters)
-	for _, param := range requiredParams {
-		if _, exists := req.Parameters[param.Key]; !exists && param.DefaultValue == "" {
-			issues = append(issues, &pb.ValidationIssue{
-				Severity:   pb.ValidationSeverity_VALIDATION_SEVERITY_ERROR,
-				Field:      "parameters",
-				Message:    fmt.Sprintf("Required parameter '%s' missing", param.Key),
-				Suggestion: param.Description,
-			})
-		}
-	}
+	// 4. Validate parameters with detailed type checking
+	definitions := jsonbToParamsDefinitions(gameConfig.Parameters)
+	paramIssues := ValidateParametersWithDetails(definitions, req.Parameters)
+	issues = append(issues, paramIssues...)
 
 	// 5. Estimate resources
 	estimate := &pb.DeploymentEstimate{
@@ -116,25 +107,3 @@ func (h *ValidationHandler) ValidateDeployment(ctx context.Context, req *pb.Vali
 	}, nil
 }
 
-func extractRequiredParams(parametersJSONB interface{}) []*pb.Parameter {
-	// Handle nil case
-	if parametersJSONB == nil {
-		return []*pb.Parameter{}
-	}
-
-	// Safe type assertion
-	paramsMap, ok := parametersJSONB.(map[string]interface{})
-	if !ok {
-		return []*pb.Parameter{}
-	}
-
-	// Use jsonbToParameters converter
-	params := jsonbToParameters(paramsMap)
-	required := []*pb.Parameter{}
-	for _, p := range params {
-		if p.Required {
-			required = append(required, p)
-		}
-	}
-	return required
-}

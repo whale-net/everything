@@ -56,6 +56,8 @@ type GameConfig struct {
 	EnvTemplate  JSONB   `db:"env_template"`
 	Files        JSONB   `db:"files"`
 	Parameters   JSONB   `db:"parameters"`
+	Entrypoint   JSONB   `db:"entrypoint"` // []string stored as JSONB
+	Command      JSONB   `db:"command"`    // []string stored as JSONB
 }
 
 // ServerGameConfig represents a game configuration deployed on a specific server
@@ -70,13 +72,14 @@ type ServerGameConfig struct {
 
 // Session represents an execution of a ServerGameConfig
 type Session struct {
-	SessionID  int64      `db:"session_id"`
-	SGCID      int64      `db:"sgc_id"`
-	StartedAt  *time.Time `db:"started_at"`
-	EndedAt    *time.Time `db:"ended_at"`
-	ExitCode   *int       `db:"exit_code"`
-	Status     string     `db:"status"`
-	Parameters JSONB      `db:"parameters"`
+	SessionID            int64      `db:"session_id"`
+	SGCID                int64      `db:"sgc_id"`
+	StartedAt            *time.Time `db:"started_at"`
+	EndedAt              *time.Time `db:"ended_at"`
+	ExitCode             *int       `db:"exit_code"`
+	Status               string     `db:"status"`
+	Parameters           JSONB      `db:"parameters"`
+	RestoredFromBackupID *int64     `db:"restored_from_backup_id"`
 }
 
 // ServerPort represents port allocation tracking at server level
@@ -110,6 +113,17 @@ type LogReference struct {
 	LineCount int32     `db:"line_count"`
 	Source    string    `db:"source"`
 	CreatedAt time.Time `db:"created_at"`
+}
+
+// Backup represents a backup of game save data for a session
+type Backup struct {
+	BackupID            int64     `db:"backup_id"`
+	SessionID           int64     `db:"session_id"`
+	ServerGameConfigID  int64     `db:"server_game_config_id"`
+	S3URL               string    `db:"s3_url"`
+	SizeBytes           int64     `db:"size_bytes"`
+	Description         *string   `db:"description"`
+	CreatedAt           time.Time `db:"created_at"`
 }
 
 // Status constants

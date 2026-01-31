@@ -75,6 +75,14 @@ type LogReferenceRepository interface {
 	ListBySession(ctx context.Context, sessionID int64) ([]*manman.LogReference, error)
 }
 
+// BackupRepository defines operations for Backup entities
+type BackupRepository interface {
+	Create(ctx context.Context, backup *manman.Backup) (*manman.Backup, error)
+	Get(ctx context.Context, backupID int64) (*manman.Backup, error)
+	List(ctx context.Context, sgcID *int64, sessionID *int64, limit int, offset int) ([]*manman.Backup, error)
+	Delete(ctx context.Context, backupID int64) error
+}
+
 // Repository aggregates all repository interfaces
 type Repository struct {
 	Servers            ServerRepository
@@ -84,4 +92,5 @@ type Repository struct {
 	Sessions           SessionRepository
 	ServerCapabilities ServerCapabilityRepository
 	LogReferences      LogReferenceRepository
+	Backups            BackupRepository
 }

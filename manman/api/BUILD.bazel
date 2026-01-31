@@ -5,6 +5,7 @@ go_binary(
     name = "manmanv2-api",
     srcs = ["main.go"],
     deps = [
+        "//libs/go/s3",
         "//manman/api/handlers",
         "//manman/api/repository/postgres",
         "//manman/protos:manmanpb",

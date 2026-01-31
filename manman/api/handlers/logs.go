@@ -6,24 +6,23 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"time"
 
+	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manman"
 	"github.com/whale-net/everything/manman/api/repository"
 	pb "github.com/whale-net/everything/manman/protos"
 )
 
-const logsBaseDir = "/var/lib/manman/logs" // Configurable
-
 type LogsHandler struct {
 	logRefRepo repository.LogReferenceRepository
+	s3Client   *s3.Client
 }
 
-func NewLogsHandler(logRefRepo repository.LogReferenceRepository) *LogsHandler {
+func NewLogsHandler(logRefRepo repository.LogReferenceRepository, s3Client *s3.Client) *LogsHandler {
 	return &LogsHandler{
 		logRefRepo: logRefRepo,
+		s3Client:   s3Client,
 	}
 }
 
@@ -32,26 +31,26 @@ func (h *LogsHandler) SendBatchedLogs(ctx context.Context, req *pb.SendBatchedLo
 	failed := []string{}
 
 	for _, batch := range req.Batches {
-		// 1. Decompress logs
+		// 1. Decompress logs for storage (we store decompressed in S3)
 		logs, err := decompressLogs(batch.CompressedLogs)
 		if err != nil {
 			failed = append(failed, batch.BatchId)
 			continue
 		}
 
-		// 2. Write to local file (stub for S3)
-		filePath := filepath.Join(
-			logsBaseDir,
-			fmt.Sprintf("%d", batch.SessionId),
-			fmt.Sprintf("%d-%s.log", batch.StartTimestamp, batch.BatchId),
-		)
+		// 2. Upload to S3
+		// Key format: logs/{session_id}/{timestamp}-{batch_id}.log
+		s3Key := fmt.Sprintf("logs/%d/%d-%s.log", batch.SessionId, batch.StartTimestamp, batch.BatchId)
 
-		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
-			failed = append(failed, batch.BatchId)
-			continue
-		}
-
-		if err := os.WriteFile(filePath, logs, 0644); err != nil {
+		s3URL, err := h.s3Client.Upload(ctx, s3Key, logs, &s3.UploadOptions{
+			ContentType: "text/plain",
+			Metadata: map[string]string{
+				"session-id": fmt.Sprintf("%d", batch.SessionId),
+				"source":     batch.Source.String(),
+				"line-count": fmt.Sprintf("%d", batch.LineCount),
+			},
+		})
+		if err != nil {
 			failed = append(failed, batch.BatchId)
 			continue
 		}
@@ -59,7 +58,7 @@ func (h *LogsHandler) SendBatchedLogs(ctx context.Context, req *pb.SendBatchedLo
 		// 3. Store reference in database
 		logRef := &manman.LogReference{
 			SessionID: batch.SessionId,
-			FilePath:  filePath, // Local path (not S3 URL)
+			FilePath:  s3URL, // S3 URL (e.g., s3://bucket/logs/123/...)
 			StartTime: time.Unix(batch.StartTimestamp, 0),
 			EndTime:   time.Unix(batch.EndTimestamp, 0),
 			LineCount: batch.LineCount,
