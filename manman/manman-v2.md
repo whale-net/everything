@@ -384,8 +384,12 @@ service WrapperControl {
   - Label-based reconciliation
   - Recovery on host manager restart
   - Implemented in `manman/host/session/recovery.go`
-- [ ] Port allocation enforcement
-  - Model exists, enforcement incomplete
+- [x] **Port allocation enforcement** ✓
+  - ServerPortRepository with full CRUD operations
+  - Atomic batch allocation with transaction support
+  - API integration in DeployGameConfig and DeleteServerGameConfig
+  - Comprehensive test suite (15 tests, 100% pass rate)
+  - Database migration 008_server_ports
 
 ### Phase 5: Polish
 - [x] **Logging pipeline to S3** ✓
@@ -416,13 +420,16 @@ service WrapperControl {
   - Unit tests for handlers and state machine
   - Integration tests for end-to-end flows
   - Mock repositories for testing
+  - Comprehensive port allocation tests (15 tests)
 - [x] **External Integration** ✓
   - Reference subscriber implementation
   - Examples for Slack, Prometheus, audit logging
   - Documentation and extension patterns
-- [ ] **Port Allocation Enforcement**
-  - ServerPort model exists
-  - Enforcement logic not yet implemented
+- [x] **Port Allocation Enforcement** ✓
+  - Test-driven development approach
+  - 15 comprehensive tests covering all edge cases
+  - Full PostgreSQL implementation
+  - API integration with rollback on failure
 
 ---
 
