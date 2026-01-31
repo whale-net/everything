@@ -57,6 +57,9 @@ service ManManAPI {
 
   // Validation (new)
   rpc ValidateDeployment(ValidateDeploymentRequest) returns (ValidateDeploymentResponse);
+
+  // Configuration preview (new)
+  rpc PreviewConfiguration(PreviewConfigurationRequest) returns (PreviewConfigurationResponse);
 }
 
 // ============================================================================
@@ -449,4 +452,17 @@ message DeploymentEstimate {
   int32 estimated_memory_mb = 1;
   int32 estimated_cpu_millicores = 2;
   repeated int32 allocated_ports = 3;
+}
+
+// ============================================================================
+// Configuration Preview RPCs
+// ============================================================================
+
+message PreviewConfigurationRequest {
+  int64 session_id = 1;  // Preview for this session
+  map<string, string> parameter_overrides = 2;  // Try different values
+}
+
+message PreviewConfigurationResponse {
+  repeated RenderedConfiguration configurations = 1;
 }

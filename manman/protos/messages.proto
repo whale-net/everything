@@ -154,3 +154,57 @@ message ServerPort {
   int64 server_game_config_id = 4;  // 0 if not allocated
   int64 allocated_at = 5;  // Unix timestamp
 }
+
+// ============================================================================
+// Configuration Strategy System
+// ============================================================================
+
+// ConfigurationStrategy defines how to render configuration for a game
+message ConfigurationStrategy {
+  int64 strategy_id = 1;
+  int64 game_id = 2;
+  string name = 3;  // "Server Properties", "CLI Args", "Environment Variables"
+  string description = 4;
+  string strategy_type = 5;  // "cli_args", "env_vars", "file_json", "file_properties", etc.
+  string target_path = 6;  // File path or null for CLI/env
+  string base_template = 7;  // Base configuration template
+  map<string, string> render_options = 8;  // Format-specific rendering options
+  int32 apply_order = 9;  // Order to apply strategies (lower first)
+}
+
+// StrategyParameterBinding links parameters to configuration strategies
+message StrategyParameterBinding {
+  int64 binding_id = 1;
+  int64 strategy_id = 2;
+  int64 param_id = 3;
+  string binding_type = 4;  // "direct", "template", "json_path", "xpath", "ini_section"
+  string target_key = 5;  // Where to apply in the config
+  string value_template = 6;  // Optional transformation template
+  string condition_expr = 7;  // Optional conditional logic
+}
+
+// ConfigurationPatch represents configuration overrides at different levels
+message ConfigurationPatch {
+  int64 patch_id = 1;
+  int64 strategy_id = 2;
+  string patch_level = 3;  // "game_config", "server_game_config", "session"
+  int64 entity_id = 4;  // ID of the config/sgc/session
+  string patch_content = 5;  // The patch content
+  string patch_format = 6;  // "template", "json_merge_patch", "json_patch", "yaml_merge"
+}
+
+// PatchLayer shows one layer of configuration patches
+message PatchLayer {
+  string level = 1;  // "game_config", "server_game_config", "session"
+  string patch_content = 2;  // The patch applied at this layer
+}
+
+// RenderedConfiguration shows final rendered configuration
+message RenderedConfiguration {
+  string strategy_name = 1;  // "Server Properties", "CLI Args", etc.
+  string strategy_type = 2;  // "file_json", "env_vars", etc.
+  string target_path = 3;  // Where it will be applied
+  string rendered_content = 4;  // Final rendered configuration
+  string base_content = 5;  // Base template before patches
+  repeated PatchLayer patches = 6;  // Show the layering
+}

@@ -126,6 +126,98 @@ type Backup struct {
 	CreatedAt           time.Time `db:"created_at"`
 }
 
+// ============================================================================
+// Normalized Parameter Schema Models
+// ============================================================================
+
+// ParameterDefinition defines a parameter for a game
+type ParameterDefinition struct {
+	ParamID       int64     `db:"param_id"`
+	GameID        int64     `db:"game_id"`
+	Key           string    `db:"key"`
+	ParamType     string    `db:"param_type"`
+	Description   *string   `db:"description"`
+	Required      bool      `db:"required"`
+	DefaultValue  *string   `db:"default_value"`
+	MinValue      *int64    `db:"min_value"`
+	MaxValue      *int64    `db:"max_value"`
+	AllowedValues *[]string `db:"allowed_values"` // PostgreSQL text[] array
+	CreatedAt     time.Time `db:"created_at"`
+	UpdatedAt     time.Time `db:"updated_at"`
+}
+
+// GameConfigParameterValue stores a parameter value for a GameConfig
+type GameConfigParameterValue struct {
+	ValueID   int64     `db:"value_id"`
+	ConfigID  int64     `db:"config_id"`
+	ParamID   int64     `db:"param_id"`
+	Value     string    `db:"value"`
+	CreatedAt time.Time `db:"created_at"`
+	UpdatedAt time.Time `db:"updated_at"`
+}
+
+// ServerGameConfigParameterValue stores a parameter value override for a ServerGameConfig
+type ServerGameConfigParameterValue struct {
+	ValueID   int64     `db:"value_id"`
+	SGCID     int64     `db:"sgc_id"`
+	ParamID   int64     `db:"param_id"`
+	Value     string    `db:"value"`
+	CreatedAt time.Time `db:"created_at"`
+	UpdatedAt time.Time `db:"updated_at"`
+}
+
+// SessionParameterValue stores a parameter value override for a Session
+type SessionParameterValue struct {
+	ValueID   int64     `db:"value_id"`
+	SessionID int64     `db:"session_id"`
+	ParamID   int64     `db:"param_id"`
+	Value     string    `db:"value"`
+	CreatedAt time.Time `db:"created_at"`
+}
+
+// ============================================================================
+// Configuration Strategy System Models
+// ============================================================================
+
+// ConfigurationStrategy defines how to render configuration for a game
+type ConfigurationStrategy struct {
+	StrategyID    int64     `db:"strategy_id"`
+	GameID        int64     `db:"game_id"`
+	Name          string    `db:"name"`
+	Description   *string   `db:"description"`
+	StrategyType  string    `db:"strategy_type"`
+	TargetPath    *string   `db:"target_path"`
+	BaseTemplate  *string   `db:"base_template"`
+	RenderOptions JSONB     `db:"render_options"`
+	ApplyOrder    int       `db:"apply_order"`
+	CreatedAt     time.Time `db:"created_at"`
+	UpdatedAt     time.Time `db:"updated_at"`
+}
+
+// StrategyParameterBinding links parameters to configuration strategies
+type StrategyParameterBinding struct {
+	BindingID      int64     `db:"binding_id"`
+	StrategyID     int64     `db:"strategy_id"`
+	ParamID        int64     `db:"param_id"`
+	BindingType    string    `db:"binding_type"`
+	TargetKey      string    `db:"target_key"`
+	ValueTemplate  *string   `db:"value_template"`
+	ConditionExpr  *string   `db:"condition_expr"`
+	CreatedAt      time.Time `db:"created_at"`
+}
+
+// ConfigurationPatch stores configuration overrides at different levels
+type ConfigurationPatch struct {
+	PatchID      int64     `db:"patch_id"`
+	StrategyID   int64     `db:"strategy_id"`
+	PatchLevel   string    `db:"patch_level"`
+	EntityID     int64     `db:"entity_id"`
+	PatchContent *string   `db:"patch_content"`
+	PatchFormat  string    `db:"patch_format"`
+	CreatedAt    time.Time `db:"created_at"`
+	UpdatedAt    time.Time `db:"updated_at"`
+}
+
 // Status constants
 const (
 	ServerStatusOnline  = "online"
@@ -144,4 +236,39 @@ const (
 
 	ProtocolTCP = "TCP"
 	ProtocolUDP = "UDP"
+
+	// Parameter types
+	ParamTypeString = "string"
+	ParamTypeInt    = "int"
+	ParamTypeBool   = "bool"
+	ParamTypeSecret = "secret"
+
+	// Configuration strategy types
+	StrategyTypeCLIArgs        = "cli_args"
+	StrategyTypeEnvVars        = "env_vars"
+	StrategyTypeFileProperties = "file_properties"
+	StrategyTypeFileJSON       = "file_json"
+	StrategyTypeFileYAML       = "file_yaml"
+	StrategyTypeFileINI        = "file_ini"
+	StrategyTypeFileXML        = "file_xml"
+	StrategyTypeFileLua        = "file_lua"
+	StrategyTypeFileCustom     = "file_custom"
+
+	// Binding types
+	BindingTypeDirect     = "direct"
+	BindingTypeTemplate   = "template"
+	BindingTypeJSONPath   = "json_path"
+	BindingTypeXPath      = "xpath"
+	BindingTypeINISection = "ini_section"
+
+	// Patch levels
+	PatchLevelGameConfig       = "game_config"
+	PatchLevelServerGameConfig = "server_game_config"
+	PatchLevelSession          = "session"
+
+	// Patch formats
+	PatchFormatTemplate       = "template"
+	PatchFormatJSONMergePatch = "json_merge_patch"
+	PatchFormatJSONPatch      = "json_patch"
+	PatchFormatYAMLMerge      = "yaml_merge"
 )
