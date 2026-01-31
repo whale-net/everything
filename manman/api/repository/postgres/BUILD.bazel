@@ -27,6 +27,7 @@ go_library(
 go_test(
     name = "server_port_test",
     srcs = ["server_port_test.go"],
+    embed = [":postgres"],
     deps = [
         "//manman:models",
     ],

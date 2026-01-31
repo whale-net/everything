@@ -350,6 +350,11 @@ func (e *PortConflictError) Error() string {
 	return fmt.Sprintf("port %d/%s on server %d is already allocated", e.Port, e.Protocol, e.ServerID)
 }
 
+func IsPortConflictError(err error) bool {
+	_, ok := err.(*PortConflictError)
+	return ok
+}
+
 type InvalidPortError struct {
 	Port int
 }
