@@ -161,6 +161,7 @@ MANMAN_APPS = [
     ":status-processor_metadata",
     ":migration_metadata",
     ":management-ui_metadata",
+    "//manman/processor:manmanv2-processor_metadata",
 ]
 
 # Helm chart composition - combines all manman services into a single chart

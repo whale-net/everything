@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "handlers",
+    srcs = [
+        "errors.go",
+        "handler.go",
+        "health.go",
+        "host_status.go",
+        "publisher.go",
+        "session_status.go",
+    ],
+    importpath = "github.com/whale-net/everything/manman/processor/handlers",
+    visibility = ["//manman/processor:__subpackages__"],
+    deps = [
+        "//libs/go/rmq",
+        "//manman:models",
+        "//manman/api/repository",
+        "//manman/host/rmq",
+        "@com_github_jackc_pgx_v5//:pgx",
+    ],
+)

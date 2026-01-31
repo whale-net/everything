@@ -137,3 +137,77 @@ func (r *ServerRepository) Delete(ctx context.Context, serverID int64) error {
 	_, err := r.db.Exec(ctx, query, serverID)
 	return err
 }
+
+func (r *ServerRepository) UpdateStatusAndLastSeen(ctx context.Context, serverID int64, status string, lastSeen time.Time) error {
+	query := `
+		UPDATE servers
+		SET status = $2, last_seen = $3
+		WHERE server_id = $1
+		RETURNING server_id
+	`
+
+	var returnedID int64
+	err := r.db.QueryRow(ctx, query, serverID, status, lastSeen).Scan(&returnedID)
+	return err
+}
+
+func (r *ServerRepository) UpdateLastSeen(ctx context.Context, serverID int64, lastSeen time.Time) error {
+	query := `
+		UPDATE servers
+		SET last_seen = $2
+		WHERE server_id = $1
+		RETURNING server_id
+	`
+
+	var returnedID int64
+	err := r.db.QueryRow(ctx, query, serverID, lastSeen).Scan(&returnedID)
+	return err
+}
+
+func (r *ServerRepository) ListStaleServers(ctx context.Context, thresholdSeconds int) ([]*manman.Server, error) {
+	query := `
+		SELECT server_id, name, status, last_seen
+		FROM servers
+		WHERE status = $1
+		  AND last_seen < NOW() - INTERVAL '1 second' * $2
+		ORDER BY server_id
+	`
+
+	rows, err := r.db.Query(ctx, query, manman.ServerStatusOnline, thresholdSeconds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var servers []*manman.Server
+	for rows.Next() {
+		server := &manman.Server{}
+		err := rows.Scan(
+			&server.ServerID,
+			&server.Name,
+			&server.Status,
+			&server.LastSeen,
+		)
+		if err != nil {
+			return nil, err
+		}
+		servers = append(servers, server)
+	}
+
+	return servers, rows.Err()
+}
+
+func (r *ServerRepository) MarkServersOffline(ctx context.Context, serverIDs []int64) error {
+	if len(serverIDs) == 0 {
+		return nil
+	}
+
+	query := `
+		UPDATE servers
+		SET status = $1
+		WHERE server_id = ANY($2)
+	`
+
+	_, err := r.db.Exec(ctx, query, manman.ServerStatusOffline, serverIDs)
+	return err
+}
