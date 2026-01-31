@@ -258,6 +258,39 @@ func jsonbToMetadata(j manman.JSONB) *pb.GameMetadata {
 }
 
 // ============================================================================
+// String array conversions (for entrypoint/command)
+// ============================================================================
+
+func stringArrayToJSONB(arr []string) manman.JSONB {
+	if len(arr) == 0 {
+		return nil
+	}
+	items := make([]interface{}, len(arr))
+	for i, s := range arr {
+		items[i] = s
+	}
+	return manman.JSONB{"items": items}
+}
+
+func jsonbToStringArray(j manman.JSONB) []string {
+	if j == nil {
+		return nil
+	}
+	items, ok := j["items"].([]interface{})
+	if !ok {
+		return nil
+	}
+
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		if str, ok := item.(string); ok {
+			result = append(result, str)
+		}
+	}
+	return result
+}
+
+// ============================================================================
 // Helper functions
 // ============================================================================
 

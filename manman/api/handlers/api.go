@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 
+	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manman"
 	"github.com/whale-net/everything/manman/api/repository"
 	pb "github.com/whale-net/everything/manman/protos"
@@ -23,9 +24,10 @@ type APIServer struct {
 	registrationHandler     *RegistrationHandler
 	validationHandler       *ValidationHandler
 	logsHandler             *LogsHandler
+	backupHandler           *BackupHandler
 }
 
-func NewAPIServer(repo *repository.Repository) *APIServer {
+func NewAPIServer(repo *repository.Repository, s3Client *s3.Client) *APIServer {
 	return &APIServer{
 		repo:                    repo,
 		serverHandler:           NewServerHandler(repo.Servers),
@@ -35,7 +37,8 @@ func NewAPIServer(repo *repository.Repository) *APIServer {
 		sessionHandler:          NewSessionHandler(repo.Sessions),
 		registrationHandler:     NewRegistrationHandler(repo.Servers, repo.ServerCapabilities),
 		validationHandler:       NewValidationHandler(repo.Servers, repo.GameConfigs),
-		logsHandler:             NewLogsHandler(repo.LogReferences),
+		logsHandler:             NewLogsHandler(repo.LogReferences, s3Client),
+		backupHandler:           NewBackupHandler(repo.Backups, repo.Sessions, s3Client),
 	}
 }
 
@@ -221,6 +224,8 @@ func (h *GameConfigHandler) CreateGameConfig(ctx context.Context, req *pb.Create
 		EnvTemplate:  mapToJSONB(req.EnvTemplate),
 		Files:        filesToJSONB(req.Files),
 		Parameters:   parametersToJSONB(req.Parameters),
+		Entrypoint:   stringArrayToJSONB(req.Entrypoint),
+		Command:      stringArrayToJSONB(req.Command),
 	}
 
 	config, err := h.repo.Create(ctx, config)
@@ -260,6 +265,12 @@ func (h *GameConfigHandler) UpdateGameConfig(ctx context.Context, req *pb.Update
 		if req.Parameters != nil {
 			config.Parameters = parametersToJSONB(req.Parameters)
 		}
+		if req.Entrypoint != nil {
+			config.Entrypoint = stringArrayToJSONB(req.Entrypoint)
+		}
+		if req.Command != nil {
+			config.Command = stringArrayToJSONB(req.Command)
+		}
 	} else {
 		// Update only specified fields
 		for _, path := range req.UpdatePaths {
@@ -276,6 +287,10 @@ func (h *GameConfigHandler) UpdateGameConfig(ctx context.Context, req *pb.Update
 				config.Files = filesToJSONB(req.Files)
 			case "parameters":
 				config.Parameters = parametersToJSONB(req.Parameters)
+			case "entrypoint":
+				config.Entrypoint = stringArrayToJSONB(req.Entrypoint)
+			case "command":
+				config.Command = stringArrayToJSONB(req.Command)
 			}
 		}
 	}
@@ -306,6 +321,8 @@ func gameConfigToProto(c *manman.GameConfig) *pb.GameConfig {
 		EnvTemplate: jsonbToMap(c.EnvTemplate),
 		Files:       jsonbToFiles(c.Files),
 		Parameters:  jsonbToParameters(c.Parameters),
+		Entrypoint:  jsonbToStringArray(c.Entrypoint),
+		Command:     jsonbToStringArray(c.Command),
 	}
 
 	if c.ArgsTemplate != nil {
@@ -604,4 +621,21 @@ func (s *APIServer) SendBatchedLogs(ctx context.Context, req *pb.SendBatchedLogs
 // Validation RPCs
 func (s *APIServer) ValidateDeployment(ctx context.Context, req *pb.ValidateDeploymentRequest) (*pb.ValidateDeploymentResponse, error) {
 	return s.validationHandler.ValidateDeployment(ctx, req)
+}
+
+// Backup RPCs
+func (s *APIServer) CreateBackup(ctx context.Context, req *pb.CreateBackupRequest) (*pb.CreateBackupResponse, error) {
+	return s.backupHandler.CreateBackup(ctx, req)
+}
+
+func (s *APIServer) ListBackups(ctx context.Context, req *pb.ListBackupsRequest) (*pb.ListBackupsResponse, error) {
+	return s.backupHandler.ListBackups(ctx, req)
+}
+
+func (s *APIServer) GetBackup(ctx context.Context, req *pb.GetBackupRequest) (*pb.GetBackupResponse, error) {
+	return s.backupHandler.GetBackup(ctx, req)
+}
+
+func (s *APIServer) DeleteBackup(ctx context.Context, req *pb.DeleteBackupRequest) (*pb.DeleteBackupResponse, error) {
+	return s.backupHandler.DeleteBackup(ctx, req)
 }

@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manman/api/handlers"
 	"github.com/whale-net/everything/manman/api/repository/postgres"
 	pb "github.com/whale-net/everything/manman/protos"
@@ -34,6 +35,9 @@ func run() error {
 	dbPassword := getEnv("DB_PASSWORD", "")
 	dbName := getEnv("DB_NAME", "manman")
 	dbSSLMode := getEnv("DB_SSL_MODE", "disable")
+	s3Bucket := getEnv("S3_BUCKET", "manman-logs")
+	s3Region := getEnv("S3_REGION", "us-east-1")
+	s3Endpoint := getEnv("S3_ENDPOINT", "") // Optional: for S3-compatible storage (OVH, MinIO, etc.)
 
 	// Build connection string
 	connString := fmt.Sprintf(
@@ -49,6 +53,23 @@ func run() error {
 	}
 	log.Println("Database connection established")
 
+	// Initialize S3 client
+	log.Println("Initializing S3 client...")
+	s3Client, err := s3.NewClient(ctx, s3.Config{
+		Bucket:   s3Bucket,
+		Region:   s3Region,
+		Endpoint: s3Endpoint,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to initialize S3 client: %w", err)
+	}
+
+	if s3Endpoint != "" {
+		log.Printf("S3 client initialized (bucket: %s, region: %s, endpoint: %s)", s3Bucket, s3Region, s3Endpoint)
+	} else {
+		log.Printf("S3 client initialized (bucket: %s, region: %s)", s3Bucket, s3Region)
+	}
+
 	// Create gRPC server
 	grpcServer := grpc.NewServer(
 		grpc.MaxRecvMsgSize(10 * 1024 * 1024), // 10 MB
@@ -56,7 +77,7 @@ func run() error {
 	)
 
 	// Register API server
-	apiServer := handlers.NewAPIServer(repo)
+	apiServer := handlers.NewAPIServer(repo, s3Client)
 	pb.RegisterManManAPIServer(grpcServer, apiServer)
 
 	// Register reflection service (for grpcurl, debugging)
