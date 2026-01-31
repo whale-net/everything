@@ -180,6 +180,3 @@ dmypy.json
 
 # profiling data
 .prof
-
-# Claude Code local settings
-.claude/
