@@ -33,7 +33,7 @@ func NewAPIServer(repo *repository.Repository, s3Client *s3.Client) *APIServer {
 		serverHandler:           NewServerHandler(repo.Servers),
 		gameHandler:             NewGameHandler(repo.Games),
 		gameConfigHandler:       NewGameConfigHandler(repo.GameConfigs),
-		serverGameConfigHandler: NewServerGameConfigHandler(repo.ServerGameConfigs),
+		serverGameConfigHandler: NewServerGameConfigHandler(repo.ServerGameConfigs, repo.ServerPorts),
 		sessionHandler:          NewSessionHandler(repo.Sessions),
 		registrationHandler:     NewRegistrationHandler(repo.Servers, repo.ServerCapabilities),
 		validationHandler:       NewValidationHandler(repo.Servers, repo.GameConfigs),
@@ -334,11 +334,15 @@ func gameConfigToProto(c *manman.GameConfig) *pb.GameConfig {
 
 // ServerGameConfigHandler handles ServerGameConfig-related RPCs
 type ServerGameConfigHandler struct {
-	repo repository.ServerGameConfigRepository
+	repo      repository.ServerGameConfigRepository
+	portRepo  repository.ServerPortRepository
 }
 
-func NewServerGameConfigHandler(repo repository.ServerGameConfigRepository) *ServerGameConfigHandler {
-	return &ServerGameConfigHandler{repo: repo}
+func NewServerGameConfigHandler(repo repository.ServerGameConfigRepository, portRepo repository.ServerPortRepository) *ServerGameConfigHandler {
+	return &ServerGameConfigHandler{
+		repo:     repo,
+		portRepo: portRepo,
+	}
 }
 
 func (h *ServerGameConfigHandler) ListServerGameConfigs(ctx context.Context, req *pb.ListServerGameConfigsRequest) (*pb.ListServerGameConfigsResponse, error) {
@@ -398,6 +402,28 @@ func (h *ServerGameConfigHandler) GetServerGameConfig(ctx context.Context, req *
 }
 
 func (h *ServerGameConfigHandler) DeployGameConfig(ctx context.Context, req *pb.DeployGameConfigRequest) (*pb.DeployGameConfigResponse, error) {
+	// Convert protobuf port bindings to manman models
+	portBindings := make([]*manman.PortBinding, len(req.PortBindings))
+	for i, pb := range req.PortBindings {
+		portBindings[i] = &manman.PortBinding{
+			ContainerPort: pb.ContainerPort,
+			HostPort:      pb.HostPort,
+			Protocol:      pb.Protocol,
+		}
+	}
+
+	// Check port availability before creating the ServerGameConfig
+	for _, binding := range portBindings {
+		available, err := h.portRepo.IsPortAvailable(ctx, req.ServerId, int(binding.HostPort), binding.Protocol)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to check port availability: %v", err)
+		}
+		if !available {
+			return nil, status.Errorf(codes.ResourceExhausted, "port %d/%s is already allocated on server %d", binding.HostPort, binding.Protocol, req.ServerId)
+		}
+	}
+
+	// Create the ServerGameConfig
 	sgc := &manman.ServerGameConfig{
 		ServerID:     req.ServerId,
 		GameConfigID: req.GameConfigId,
@@ -409,6 +435,13 @@ func (h *ServerGameConfigHandler) DeployGameConfig(ctx context.Context, req *pb.
 	sgc, err := h.repo.Create(ctx, sgc)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to deploy game config: %v", err)
+	}
+
+	// Allocate ports for the ServerGameConfig
+	if err := h.portRepo.AllocateMultiplePorts(ctx, req.ServerId, portBindings, sgc.SGCID); err != nil {
+		// Rollback: delete the created ServerGameConfig
+		h.repo.Delete(ctx, sgc.SGCID)
+		return nil, status.Errorf(codes.ResourceExhausted, "failed to allocate ports: %v", err)
 	}
 
 	return &pb.DeployGameConfigResponse{
@@ -458,6 +491,12 @@ func (h *ServerGameConfigHandler) UpdateServerGameConfig(ctx context.Context, re
 }
 
 func (h *ServerGameConfigHandler) DeleteServerGameConfig(ctx context.Context, req *pb.DeleteServerGameConfigRequest) (*pb.DeleteServerGameConfigResponse, error) {
+	// Deallocate ports before deleting the ServerGameConfig
+	if err := h.portRepo.DeallocatePortsBySGCID(ctx, req.ServerGameConfigId); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to deallocate ports: %v", err)
+	}
+
+	// Delete the ServerGameConfig
 	if err := h.repo.Delete(ctx, req.ServerGameConfigId); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete server game config: %v", err)
 	}
