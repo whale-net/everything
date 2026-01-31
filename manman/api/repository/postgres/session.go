@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/whale-net/everything/manman"
@@ -231,4 +232,43 @@ func (r *SessionRepository) ListWithFilters(ctx context.Context, filters *reposi
 	}
 
 	return sessions, rows.Err()
+}
+
+func (r *SessionRepository) UpdateStatus(ctx context.Context, sessionID int64, status string) error {
+	query := `
+		UPDATE sessions
+		SET status = $2
+		WHERE session_id = $1
+		RETURNING session_id
+	`
+
+	var returnedID int64
+	err := r.db.QueryRow(ctx, query, sessionID, status).Scan(&returnedID)
+	return err
+}
+
+func (r *SessionRepository) UpdateSessionStart(ctx context.Context, sessionID int64, startedAt time.Time) error {
+	query := `
+		UPDATE sessions
+		SET status = $2, started_at = $3
+		WHERE session_id = $1
+		RETURNING session_id
+	`
+
+	var returnedID int64
+	err := r.db.QueryRow(ctx, query, sessionID, manman.SessionStatusRunning, startedAt).Scan(&returnedID)
+	return err
+}
+
+func (r *SessionRepository) UpdateSessionEnd(ctx context.Context, sessionID int64, status string, endedAt time.Time, exitCode *int) error {
+	query := `
+		UPDATE sessions
+		SET status = $2, ended_at = $3, exit_code = $4
+		WHERE session_id = $1
+		RETURNING session_id
+	`
+
+	var returnedID int64
+	err := r.db.QueryRow(ctx, query, sessionID, status, endedAt, exitCode).Scan(&returnedID)
+	return err
 }

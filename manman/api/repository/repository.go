@@ -15,6 +15,10 @@ type ServerRepository interface {
 	List(ctx context.Context, limit, offset int) ([]*manman.Server, error)
 	Update(ctx context.Context, server *manman.Server) error
 	Delete(ctx context.Context, serverID int64) error
+	UpdateStatusAndLastSeen(ctx context.Context, serverID int64, status string, lastSeen time.Time) error
+	UpdateLastSeen(ctx context.Context, serverID int64, lastSeen time.Time) error
+	ListStaleServers(ctx context.Context, thresholdSeconds int) ([]*manman.Server, error)
+	MarkServersOffline(ctx context.Context, serverIDs []int64) error
 }
 
 // GameRepository defines operations for Game entities
@@ -61,6 +65,9 @@ type SessionRepository interface {
 	List(ctx context.Context, sgcID *int64, limit, offset int) ([]*manman.Session, error)
 	ListWithFilters(ctx context.Context, filters *SessionFilters, limit, offset int) ([]*manman.Session, error)
 	Update(ctx context.Context, session *manman.Session) error
+	UpdateStatus(ctx context.Context, sessionID int64, status string) error
+	UpdateSessionStart(ctx context.Context, sessionID int64, startedAt time.Time) error
+	UpdateSessionEnd(ctx context.Context, sessionID int64, status string, endedAt time.Time, exitCode *int) error
 }
 
 // ServerCapabilityRepository defines operations for ServerCapability entities
