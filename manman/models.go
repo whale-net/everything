@@ -91,6 +91,13 @@ type ServerPort struct {
 	AllocatedAt time.Time `db:"allocated_at"`
 }
 
+// PortBinding represents a container-to-host port mapping
+type PortBinding struct {
+	ContainerPort int32  `json:"container_port"`
+	HostPort      int32  `json:"host_port"`
+	Protocol      string `json:"protocol"` // "TCP" | "UDP"
+}
+
 // ServerCapability represents the resources available on a server
 type ServerCapability struct {
 	CapabilityID           int64      `db:"capability_id"`

@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "external-subscriber_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/manman/examples/external-subscriber",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/rmq",
+        "//manman/host/rmq",
+    ],
+)
+
+go_binary(
+    name = "external-subscriber",
+    embed = [":external-subscriber_lib"],
+    visibility = ["//visibility:public"],
+)

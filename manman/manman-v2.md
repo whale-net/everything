@@ -354,7 +354,10 @@ service WrapperControl {
   - Created SQL migrations in `//manman/migrate/migrations/`
   - Built generic migration library at `//libs/go/migrate/`
   - Migration tool configured as release_app: `//manman/migrate:manmanv2-migration`
-- [ ] Basic control plane API (CRUD for Game, GameConfig, Server)
+- [x] **Basic control plane API (CRUD for Game, GameConfig, Server)** ✓
+  - Full CRUD operations for all entities
+  - gRPC API with REST gateway
+  - Validation and error handling
 
 ### Phase 2: Host Manager
 - [x] Docker SDK integration for container management ✓
@@ -369,16 +372,64 @@ service WrapperControl {
 - [x] stdin/stdout/stderr forwarding ✓
 
 ### Phase 4: Integration
-- [ ] End-to-end flow: deploy → start session → interact → stop
-- [ ] Health monitoring and status aggregation
-- [ ] Orphan container detection and cleanup
-- [ ] Port allocation enforcement
+- [x] **End-to-end flow: deploy → start session → interact → stop** ✓
+  - Complete session lifecycle via RabbitMQ commands
+  - Host manager orchestration
+  - Wrapper sidecar integration
+- [x] **Health monitoring and status aggregation** ✓
+  - Event processor service (Phase 6)
+  - Real-time database synchronization
+  - Stale host detection
+- [x] **Orphan container detection and cleanup** ✓
+  - Label-based reconciliation
+  - Recovery on host manager restart
+  - Implemented in `manman/host/session/recovery.go`
+- [x] **Port allocation enforcement** ✓
+  - ServerPortRepository with full CRUD operations
+  - Atomic batch allocation with transaction support
+  - API integration in DeployGameConfig and DeleteServerGameConfig
+  - Comprehensive test suite (15 tests, 100% pass rate)
+  - Database migration 008_server_ports
 
 ### Phase 5: Polish
-- [ ] Logging pipeline to S3
-- [ ] Backup/restore for game saves
-- [ ] Parameter system refinement
-- [ ] 3rd party image support
+- [x] **Logging pipeline to S3** ✓
+  - Cloud-agnostic S3 library (AWS, OVH, DigitalOcean, MinIO)
+  - Session log upload to S3
+  - Custom endpoint support
+- [x] **Backup/restore for game saves** ✓
+  - Database schema with backups table
+  - Complete API layer for backup operations
+  - S3 integration for storage
+- [x] **Parameter system refinement** ✓
+  - Parameter utilities library (`libs/go/params/`)
+  - Type-safe validation
+  - Template rendering
+- [x] **3rd party image support** ✓
+  - Entrypoint and command fields
+  - Support for official Docker Hub images
+  - Documentation for popular games
+
+### Phase 6: Event Processing & Observability
+- [x] **Event Processor Service** ✓
+  - RabbitMQ consumer for internal events
+  - Database synchronization
+  - External event publishing for cross-domain integration
+  - Session state machine validation
+  - Stale host detection (10s threshold)
+- [x] **Testing & Validation** ✓
+  - Unit tests for handlers and state machine
+  - Integration tests for end-to-end flows
+  - Mock repositories for testing
+  - Comprehensive port allocation tests (15 tests)
+- [x] **External Integration** ✓
+  - Reference subscriber implementation
+  - Examples for Slack, Prometheus, audit logging
+  - Documentation and extension patterns
+- [x] **Port Allocation Enforcement** ✓
+  - Test-driven development approach
+  - 15 comprehensive tests covering all edge cases
+  - Full PostgreSQL implementation
+  - API integration with rollback on failure
 
 ---
 

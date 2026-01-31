@@ -108,6 +108,7 @@ func run() error {
 		ServerCapabilities: postgres.NewServerCapabilityRepository(dbPool),
 		LogReferences:      postgres.NewLogReferenceRepository(dbPool),
 		Backups:            postgres.NewBackupRepository(dbPool),
+		ServerPorts:        postgres.NewServerPortRepository(dbPool),
 	}
 
 	// Initialize publisher for external exchange
