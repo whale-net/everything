@@ -59,6 +59,9 @@ dependencies = [
     # Utility libraries
     "pydantic",
     "python-dotenv",
+
+    # MCP server framework
+    "fastmcp",
 ]
 
 [build-system]

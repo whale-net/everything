@@ -1,0 +1,31 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+load("//tools/bazel:pytest.bzl", "py_test")
+
+py_library(
+    name = "server_lib",
+    srcs = ["server.py"],
+    deps = ["@pypi//:fastmcp"],
+    visibility = ["//tools/tilt-mcp:__pkg__"],
+)
+
+py_binary(
+    name = "tilt-mcp-server",
+    srcs = ["server.py"],
+    main = "server.py",
+    deps = [
+        ":server_lib",
+        "@pypi//:fastmcp",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "test_server",
+    srcs = ["test_server.py"],
+    deps = [
+        ":server_lib",
+        "@pypi//:pytest",
+        "@pypi//:pytest-asyncio",
+    ],
+    size = "small",
+)
