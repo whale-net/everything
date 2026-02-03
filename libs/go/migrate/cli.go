@@ -9,6 +9,8 @@ import (
 	"log"
 	"os"
 	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 // Config holds database connection configuration

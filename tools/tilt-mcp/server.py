@@ -279,5 +279,43 @@ def tilt_trigger(resource: str) -> dict[str, Any]:
     return _tilt_trigger(resource)
 
 
+def _tilt_reload() -> dict[str, Any]:
+    """Reload the Tiltfile configuration.
+
+    Forces Tilt to re-evaluate the Tiltfile, picking up any configuration changes.
+    This is useful after modifying the Tiltfile or related configuration files.
+
+    Returns:
+        Dictionary with success confirmation or error information
+    """
+    # Trigger the special (Tiltfile) resource to reload configuration
+    result = run_tilt_command(['trigger', '(Tiltfile)'])
+
+    if not result['success']:
+        return {
+            'error': 'Failed to reload Tiltfile',
+            'details': result['error']
+        }
+
+    return {
+        'success': True,
+        'message': 'Successfully reloaded Tiltfile configuration',
+        'timestamp': datetime.utcnow().isoformat() + 'Z'
+    }
+
+
+@mcp.tool()
+def tilt_reload() -> dict[str, Any]:
+    """Reload the Tiltfile configuration.
+
+    Forces Tilt to re-evaluate the Tiltfile, picking up any configuration changes.
+    This is useful after modifying the Tiltfile or related configuration files.
+
+    Returns:
+        Dictionary with success confirmation or error information
+    """
+    return _tilt_reload()
+
+
 if __name__ == '__main__':
     mcp.run(transport='stdio')
