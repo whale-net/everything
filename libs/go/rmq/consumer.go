@@ -41,14 +41,32 @@ func NewConsumer(conn *Connection, queueName string) (*Consumer, error) {
 		return nil, fmt.Errorf("failed to set QoS: %w", err)
 	}
 
-	// Declare queue
+	// Declare dead letter queue first
+	dlqName := queueName + "-dlq"
+	_, err = ch.QueueDeclare(
+		dlqName, // name
+		true,    // durable
+		false,   // delete when unused
+		false,   // exclusive
+		false,   // no-wait
+		nil,     // arguments
+	)
+	if err != nil {
+		ch.Close()
+		return nil, fmt.Errorf("failed to declare DLQ: %w", err)
+	}
+
+	// Declare main queue with DLQ configuration
 	queue, err := ch.QueueDeclare(
 		queueName, // name
 		true,      // durable
 		false,     // delete when unused
 		false,     // exclusive
 		false,     // no-wait
-		nil,       // arguments
+		amqp.Table{
+			"x-dead-letter-exchange":    "", // Use default exchange
+			"x-dead-letter-routing-key": dlqName,
+		},
 	)
 	if err != nil {
 		ch.Close()
@@ -153,11 +171,19 @@ func (c *Consumer) handleMessage(ctx context.Context, delivery amqp.Delivery) {
 	if err != nil {
 		log.Printf("Error handling message: %v", err)
 
-		// Check if it's a permanent error (shouldn't be retried)
+		// Check retry count from x-death header
+		retryCount := getRetryCount(delivery)
+		maxRetries := 3
+
+		// Check if it's a permanent error or max retries exceeded
 		if IsPermanentError(err) {
-			log.Printf("Permanent error - discarding message")
-			delivery.Nack(false, false) // Reject and don't requeue
+			log.Printf("Permanent error - sending to DLQ: %v", err)
+			delivery.Nack(false, false) // Reject and send to DLQ
+		} else if retryCount >= maxRetries {
+			log.Printf("Max retries (%d) exceeded - sending to DLQ", maxRetries)
+			delivery.Nack(false, false) // Reject and send to DLQ
 		} else {
+			log.Printf("Transient error (retry %d/%d) - requeuing", retryCount+1, maxRetries)
 			delivery.Nack(false, true) // Reject and requeue for retry
 		}
 		return
@@ -165,6 +191,27 @@ func (c *Consumer) handleMessage(ctx context.Context, delivery amqp.Delivery) {
 
 	// Acknowledge message
 	delivery.Ack(false)
+}
+
+// getRetryCount extracts the retry count from the x-death header
+func getRetryCount(delivery amqp.Delivery) int {
+	if delivery.Headers == nil {
+		return 0
+	}
+
+	xDeath, ok := delivery.Headers["x-death"].([]interface{})
+	if !ok || len(xDeath) == 0 {
+		return 0
+	}
+
+	// First entry in x-death contains the count
+	if deathMap, ok := xDeath[0].(amqp.Table); ok {
+		if count, ok := deathMap["count"].(int64); ok {
+			return int(count)
+		}
+	}
+
+	return 0
 }
 
 // sendReply sends a reply message back to the caller
