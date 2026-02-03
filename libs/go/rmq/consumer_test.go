@@ -63,7 +63,7 @@ func TestConsumer_RegisterHandler(t *testing.T) {
 	}
 	defer consumer.Close()
 	
-	handler := func(ctx context.Context, routingKey string, body []byte) error {
+	handler := func(ctx context.Context, msg rmq.Message) error {
 		return nil
 	}
 	

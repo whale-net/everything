@@ -74,27 +74,27 @@ func (c *Consumer) Close() error {
 	return c.consumer.Close()
 }
 
-func (c *Consumer) handleStartSession(ctx context.Context, routingKey string, body []byte) error {
+func (c *Consumer) handleStartSession(ctx context.Context, msg rmq.Message) error {
 	var cmd StartSessionCommand
-	if err := json.Unmarshal(body, &cmd); err != nil {
+	if err := json.Unmarshal(msg.Body, &cmd); err != nil {
 		return fmt.Errorf("failed to unmarshal start session command: %w", err)
 	}
 	log.Printf("Received start session command: session_id=%d, sgc_id=%d", cmd.SessionID, cmd.SGCID)
 	return c.handler.HandleStartSession(ctx, &cmd)
 }
 
-func (c *Consumer) handleStopSession(ctx context.Context, routingKey string, body []byte) error {
+func (c *Consumer) handleStopSession(ctx context.Context, msg rmq.Message) error {
 	var cmd StopSessionCommand
-	if err := json.Unmarshal(body, &cmd); err != nil {
+	if err := json.Unmarshal(msg.Body, &cmd); err != nil {
 		return fmt.Errorf("failed to unmarshal stop session command: %w", err)
 	}
 	log.Printf("Received stop session command: session_id=%d, force=%v", cmd.SessionID, cmd.Force)
 	return c.handler.HandleStopSession(ctx, &cmd)
 }
 
-func (c *Consumer) handleKillSession(ctx context.Context, routingKey string, body []byte) error {
+func (c *Consumer) handleKillSession(ctx context.Context, msg rmq.Message) error {
 	var cmd KillSessionCommand
-	if err := json.Unmarshal(body, &cmd); err != nil {
+	if err := json.Unmarshal(msg.Body, &cmd); err != nil {
 		return fmt.Errorf("failed to unmarshal kill session command: %w", err)
 	}
 	log.Printf("Received kill session command: session_id=%d", cmd.SessionID)

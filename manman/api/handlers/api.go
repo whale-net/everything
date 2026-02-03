@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/libs/go/s3"
@@ -30,11 +31,18 @@ type APIServer struct {
 }
 
 func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq.Connection) *APIServer {
-	// Create command publisher
+	// Create command publisher with RPC support
 	commandPublisher, err := NewCommandPublisher(rmqConn)
 	if err != nil {
 		// Log error but don't fail - API can still serve reads
 		log.Printf("Warning: Failed to create command publisher: %v", err)
+	} else {
+		// Start reply consumer in background
+		go func() {
+			if err := commandPublisher.Start(context.Background()); err != nil {
+				log.Printf("Warning: Command publisher reply consumer stopped: %v", err)
+			}
+		}()
 	}
 
 	return &APIServer{
@@ -628,7 +636,7 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 	// Publish start session command to RabbitMQ
 	if h.publisher != nil {
 		cmd := buildStartSessionCommand(session, sgc, gc, req.Parameters)
-		if err := h.publisher.PublishStartSession(ctx, sgc.ServerID, cmd); err != nil {
+		if err := h.publisher.PublishStartSession(ctx, sgc.ServerID, cmd, 30*time.Second); err != nil {
 			log.Printf("Warning: Failed to publish start session command: %v", err)
 			// Don't fail the request - the session is created, operator can manually trigger
 		}
@@ -657,7 +665,7 @@ func (h *SessionHandler) StopSession(ctx context.Context, req *pb.StopSessionReq
 			"session_id": session.SessionID,
 			"force":      false,
 		}
-		if err := h.publisher.PublishStopSession(ctx, sgc.ServerID, cmd); err != nil {
+		if err := h.publisher.PublishStopSession(ctx, sgc.ServerID, cmd, 30*time.Second); err != nil {
 			log.Printf("Warning: Failed to publish stop session command: %v", err)
 		}
 	}

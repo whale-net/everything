@@ -73,6 +73,28 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, bo
 	)
 }
 
+// PublishWithReply publishes a message with RPC support (reply_to and correlation_id)
+func (p *Publisher) PublishWithReply(ctx context.Context, exchange, routingKey string, body []byte, replyTo, correlationID string) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	return p.channel.PublishWithContext(
+		ctx,
+		exchange,
+		routingKey,
+		false, // mandatory
+		false, // immediate
+		amqp.Publishing{
+			ContentType:   "application/json",
+			Body:          body,
+			DeliveryMode:  amqp.Persistent,
+			Timestamp:     time.Now(),
+			ReplyTo:       replyTo,
+			CorrelationId: correlationID,
+		},
+	)
+}
+
 // Close closes the publisher channel
 func (p *Publisher) Close() error {
 	if p.channel != nil {

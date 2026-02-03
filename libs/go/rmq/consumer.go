@@ -9,14 +9,23 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
+// Message contains all information about an incoming message
+type Message struct {
+	RoutingKey    string
+	Body          []byte
+	ReplyTo       string
+	CorrelationID string
+}
+
 // MessageHandler is a function that handles incoming messages
-type MessageHandler func(ctx context.Context, routingKey string, body []byte) error
+type MessageHandler func(ctx context.Context, msg Message) error
 
 // Consumer consumes messages from RabbitMQ queues
 type Consumer struct {
 	channel  *amqp.Channel
 	queue    string
 	handlers map[string]MessageHandler
+	conn     *Connection
 }
 
 // NewConsumer creates a new consumer
@@ -50,6 +59,7 @@ func NewConsumer(conn *Connection, queueName string) (*Consumer, error) {
 		channel:  ch,
 		queue:    queue.Name,
 		handlers: make(map[string]MessageHandler),
+		conn:     conn,
 	}, nil
 }
 
@@ -107,11 +117,11 @@ func (c *Consumer) Start(ctx context.Context) error {
 }
 
 // handleMessage processes a single message
-func (c *Consumer) handleMessage(ctx context.Context, msg amqp.Delivery) {
+func (c *Consumer) handleMessage(ctx context.Context, delivery amqp.Delivery) {
 	// Find matching handler
 	var handler MessageHandler
 	for pattern, h := range c.handlers {
-		if matchesRoutingKey(msg.RoutingKey, pattern) {
+		if matchesRoutingKey(delivery.RoutingKey, pattern) {
 			handler = h
 			break
 		}
@@ -119,27 +129,78 @@ func (c *Consumer) handleMessage(ctx context.Context, msg amqp.Delivery) {
 
 	if handler == nil {
 		// Default handler if none registered
-		log.Printf("No handler for routing key: %s", msg.RoutingKey)
-		msg.Nack(false, false) // Reject and don't requeue
+		log.Printf("No handler for routing key: %s", delivery.RoutingKey)
+		delivery.Nack(false, false) // Reject and don't requeue
 		return
 	}
 
+	// Create message struct
+	msg := Message{
+		RoutingKey:    delivery.RoutingKey,
+		Body:          delivery.Body,
+		ReplyTo:       delivery.ReplyTo,
+		CorrelationID: delivery.CorrelationId,
+	}
+
 	// Call handler
-	if err := handler(ctx, msg.RoutingKey, msg.Body); err != nil {
+	err := handler(ctx, msg)
+
+	// Send reply if reply_to is set
+	if msg.ReplyTo != "" && msg.CorrelationID != "" {
+		c.sendReply(ctx, msg.ReplyTo, msg.CorrelationID, err)
+	}
+
+	if err != nil {
 		log.Printf("Error handling message: %v", err)
 
 		// Check if it's a permanent error (shouldn't be retried)
 		if IsPermanentError(err) {
 			log.Printf("Permanent error - discarding message")
-			msg.Nack(false, false) // Reject and don't requeue
+			delivery.Nack(false, false) // Reject and don't requeue
 		} else {
-			msg.Nack(false, true) // Reject and requeue for retry
+			delivery.Nack(false, true) // Reject and requeue for retry
 		}
 		return
 	}
 
 	// Acknowledge message
-	msg.Ack(false)
+	delivery.Ack(false)
+}
+
+// sendReply sends a reply message back to the caller
+func (c *Consumer) sendReply(ctx context.Context, replyTo, correlationID string, err error) {
+	response := map[string]interface{}{
+		"correlation_id": correlationID,
+		"success":        err == nil,
+	}
+
+	if err != nil {
+		response["error"] = err.Error()
+	}
+
+	responseBytes, marshalErr := json.Marshal(response)
+	if marshalErr != nil {
+		log.Printf("Failed to marshal reply: %v", marshalErr)
+		return
+	}
+
+	// Publish reply using the channel directly (no exchange, direct to queue)
+	publishErr := c.channel.PublishWithContext(
+		ctx,
+		"",      // exchange (empty for direct queue publish)
+		replyTo, // routing key (queue name)
+		false,   // mandatory
+		false,   // immediate
+		amqp.Publishing{
+			ContentType:   "application/json",
+			Body:          responseBytes,
+			CorrelationId: correlationID,
+		},
+	)
+
+	if publishErr != nil {
+		log.Printf("Failed to send reply: %v", publishErr)
+	}
 }
 
 // matchesRoutingKey checks if a routing key matches a pattern
