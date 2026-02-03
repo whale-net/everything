@@ -127,7 +127,14 @@ func (c *Consumer) handleMessage(ctx context.Context, msg amqp.Delivery) {
 	// Call handler
 	if err := handler(ctx, msg.RoutingKey, msg.Body); err != nil {
 		log.Printf("Error handling message: %v", err)
-		msg.Nack(false, true) // Reject and requeue
+
+		// Check if it's a permanent error (shouldn't be retried)
+		if IsPermanentError(err) {
+			log.Printf("Permanent error - discarding message")
+			msg.Nack(false, false) // Reject and don't requeue
+		} else {
+			msg.Nack(false, true) // Reject and requeue for retry
+		}
 		return
 	}
 

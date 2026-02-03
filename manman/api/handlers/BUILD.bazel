@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "api.go",
         "backup.go",
+        "command_publisher.go",
         "converters.go",
         "game.go",
         "logs.go",
@@ -17,6 +18,7 @@ go_library(
     visibility = ["//manman/api:__subpackages__"],
     deps = [
         "//libs/go/params",
+        "//libs/go/rmq",
         "//libs/go/s3",
         "//manman:models",
         "//manman/api/repository",

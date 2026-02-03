@@ -107,7 +107,7 @@ func run() error {
 	}
 
 	// Start health check publisher
-	healthTicker := time.NewTicker(30 * time.Second)
+	healthTicker := time.NewTicker(5 * time.Second)
 	defer healthTicker.Stop()
 
 	go func() {

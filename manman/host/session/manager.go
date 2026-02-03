@@ -8,6 +8,7 @@ import (
 
 	"github.com/whale-net/everything/libs/go/docker"
 	"github.com/whale-net/everything/libs/go/grpcclient"
+	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/manman"
 	"github.com/whale-net/everything/manman/host/grpc"
 	pb "github.com/whale-net/everything/manman/protos"
@@ -36,7 +37,7 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 
 	// Check if session already exists to prevent orphaned containers
 	if _, exists := sm.stateManager.GetSession(sessionID); exists {
-		return fmt.Errorf("session %d already exists", sessionID)
+		return &rmq.PermanentError{Err: fmt.Errorf("session %d already exists", sessionID)}
 	}
 
 	// Create session state

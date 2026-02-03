@@ -72,6 +72,7 @@ go_library(
     deps = [
         "//libs/go/docker",
         "//libs/go/grpcclient",
+        "//libs/go/rmq",
         "//manman:models",
         "//manman/host/grpc",
         "//manman/protos:manmanpb",
