@@ -48,22 +48,18 @@ ManManV2 is a game server management platform with a split-plane architecture:
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │                      Host Server Manager                             │   │
 │  │  - Manages Docker containers via Docker SDK                          │   │
-│  │  - Routes commands to wrappers via gRPC                              │   │
+│  │  - Stdin forwarding via Docker attach                                │   │
 │  │  - Aggregates health/status for RabbitMQ reporting                   │   │
-│  │  - Recovers/reconnects to orphaned wrappers on restart               │   │
+│  │  - Recovers/re-attaches to game containers on restart                │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │              │                    │                    │                    │
-│         gRPC │               gRPC │               gRPC │                    │
+│      attach  │            attach  │            attach  │                    │
 │              │                    │                    │                    │
 │  ┌───────────▼──────┐ ┌──────────▼────────┐ ┌────────▼──────────┐         │
-│  │  Server Wrapper  │ │  Server Wrapper   │ │  Server Wrapper   │         │
-│  │  (Sidecar)       │ │  (Sidecar)        │ │  (Sidecar)        │         │
+│  │  Game Server     │ │  Game Server      │ │  Game Server      │         │
+│  │  Container       │ │  Container        │ │  Container        │         │
 │  │                  │ │                   │ │                   │         │
-│  │  ┌────────────┐  │ │  ┌─────────────┐  │ │  ┌─────────────┐  │         │
-│  │  │ Game       │  │ │  │ Game        │  │ │  │ 3rd Party   │  │         │
-│  │  │ Server     │  │ │  │ Server      │  │ │  │ Image       │  │         │
-│  │  │ Process    │  │ │  │ Process     │  │ │  │             │  │         │
-│  │  └────────────┘  │ │  └─────────────┘  │ │  └─────────────┘  │         │
+│  │  (e.g. game img) │ │  (e.g. game img)  │ │  (3rd Party Img)  │         │
 │  └──────────────────┘ └───────────────────┘ └───────────────────┘         │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -79,7 +75,6 @@ ManManV2 is a game server management platform with a split-plane architecture:
 | `manmanv2-processor` | worker | K8s (Cloud) | Event processor, health monitoring |
 | `manmanv2-migration` | job | K8s (Cloud) | Database migration runner |
 | `manmanv2-host` | worker | Bare metal (Docker) | Host server manager |
-| `manmanv2-wrapper` | worker | Bare metal (Docker) | Sidecar for game containers |
 
 ### Host Manager
 
@@ -87,22 +82,23 @@ ManManV2 is a game server management platform with a split-plane architecture:
 - Uses Docker SDK (Go) for container management
 - No privileged mode needed (socket mount sufficient)
 
-### Wrapper (Sidecar)
+### Game Containers
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Docker Network: session-{session_id}                   │
 ├─────────────────────────────────────────────────────────┤
-│  ┌─────────────────────┐  ┌─────────────────────────┐  │
-│  │  manmanv2-wrapper   │  │  Game Server Container  │  │
-│  │  (gRPC on :50051)   │──│  (e.g., minecraft:latest)│  │
-│  └─────────────────────┘  └─────────────────────────┘  │
+│  ┌─────────────────────────────────────────────┐       │
+│  │  Game Server Container                      │       │
+│  │  (e.g., minecraft:latest)                   │       │
+│  │  stdin/stdout via Docker attach             │       │
+│  └─────────────────────────────────────────────┘       │
 │                     │                                   │
-│        Shared Volume: /data/{session_id}                │
+│          Volume: /data/session-{session_id}:/data/game  │
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Key Principle:** Wrappers survive host manager restarts. Host reconnects on recovery.
+**Key Principle:** Game containers survive host manager restarts. Host re-attaches on recovery.
 
 ---
 
@@ -193,29 +189,16 @@ Parameters can be overridden at three levels:
 - `status.session.*` - Session-level status
 - `health.*` - Health/keepalive
 
-### Host Manager ↔ Wrappers
+### Host Manager ↔ Game Containers
 
-| Direction | Protocol | Use Case |
-|-----------|----------|----------|
-| Host → Wrapper | gRPC | Commands, stdin, queries |
-| Wrapper → Host | gRPC (streaming) | stdout/stderr, status updates |
+| Direction | Mechanism | Use Case |
+|-----------|-----------|----------|
+| Host → Game | Docker attach (stdin) | Send commands to game |
+| Game → Host | Docker attach (stdout/stderr) | Stream game output |
 
-**Why gRPC (not RabbitMQ):**
-- Lower latency for interactive commands
-- Host manages all wrapper connections
-- No additional RabbitMQ connections per wrapper
-- Host aggregates and batches status to control plane
-
-### Wrapper State Persistence
-
-```
-/data/{session_id}/
-  ├── wrapper/
-  │   ├── state.json      # Current state, container ID
-  │   └── grpc.sock       # Unix socket or port info
-  ├── game/               # Game server data directory
-  └── logs/               # Session logs before upload
-```
+The host attaches to each game container via the Docker API. Stdin is written
+directly to the container's attached connection. Stdout/stderr are demuxed from
+the same stream using Docker's 8-byte multiplexed header format.
 
 ---
 
@@ -245,18 +228,6 @@ service ManManAPI {
 }
 ```
 
-### Wrapper Control (Host → Wrapper)
-
-```protobuf
-service WrapperControl {
-  rpc Start(...) returns (...);
-  rpc Stop(...) returns (...);
-  rpc SendInput(...) returns (...);
-  rpc GetStatus(...) returns (...);
-  rpc StreamOutput(...) returns (stream ...);
-}
-```
-
 ---
 
 ## Design Decisions
@@ -265,9 +236,9 @@ service WrapperControl {
 |----------|--------|-----------|
 | Execution naming | **Session** | Clear, implies lifecycle and interaction |
 | Host deployment | **Docker + socket mount** | Leverages existing release artifact support |
-| Wrapper model | **Sidecar container** | Separate container, shares network/volumes |
+| Game container model | **Direct attach** | Host manages stdin/stdout via Docker attach API |
 | RabbitMQ topology | **Topic exchange + routing keys** | Simple, proven pattern from v1 |
-| Parameter validation | **Control plane authoritative** | Host/wrapper trust CP, cache locally |
+| Parameter validation | **Control plane authoritative** | Host trusts CP, caches locally |
 
 ---
 
@@ -287,7 +258,6 @@ service WrapperControl {
 │
 ├── protos/                      # Protobuf definitions (planned)
 │   ├── api.proto                # Control plane API
-│   ├── wrapper.proto            # Host ↔ Wrapper protocol
 │   └── messages.proto           # Shared message types
 │
 ├── api/                         # manmanv2-api service (planned)
@@ -301,14 +271,13 @@ service WrapperControl {
 │
 ├── host/                        # manmanv2-host service (planned)
 │   ├── main.go
-│   ├── docker/                  # Docker SDK integration
-│   ├── grpc/                    # gRPC client for wrappers
+│   ├── session/                 # Session lifecycle management
+│   ├── rmq/                     # RabbitMQ consumer/publisher
 │   └── BUILD.bazel
 │
-├── wrapper/                     # manmanv2-wrapper service (planned)
-│   ├── main.go
-│   ├── process/                 # Game process management
-│   └── BUILD.bazel
+├── testdata/                    # Integration test fixtures
+│   ├── Dockerfile               # Test game server image
+│   └── test_game_server.sh      # Simulated game server
 │
 └── BUILD.bazel                  # Root BUILD with :models target
 
@@ -361,21 +330,20 @@ service WrapperControl {
 
 ### Phase 2: Host Manager
 - [x] Docker SDK integration for container management ✓
-- [x] gRPC client for wrapper communication ✓
 - [x] RabbitMQ integration for control plane communication ✓
 - [x] Session/container lifecycle management ✓
 
-### Phase 3: Wrapper
-- [x] gRPC server implementation ✓
-- [x] Game container management (spawn, monitor, attach) ✓
-- [x] State persistence for recovery ✓
-- [x] stdin/stdout/stderr forwarding ✓
+### Phase 3: Game Container Direct Management
+- [x] Game container creation with OpenStdin ✓
+- [x] Stdin forwarding via Docker attach ✓
+- [x] Stdout/stderr demux via multiplexed stream ✓
+- [x] Crash detection on stream EOF ✓
 
 ### Phase 4: Integration
 - [x] **End-to-end flow: deploy → start session → interact → stop** ✓
   - Complete session lifecycle via RabbitMQ commands
   - Host manager orchestration
-  - Wrapper sidecar integration
+  - Direct game container management
 - [x] **Health monitoring and status aggregation** ✓
   - Event processor service (Phase 6)
   - Real-time database synchronization
@@ -437,12 +405,11 @@ service WrapperControl {
 
 ### Problem
 
-With wrapper and game containers running separately from the host manager process, orphaned resources can occur:
+With game containers running independently from the host manager process, orphaned resources can occur:
 
 1. **Host manager crash**: Loses in-memory session state, can't track running containers
-2. **Wrapper crash without recovery**: Game container keeps running, no wrapper to manage it
-3. **Network failures**: Host can't reach wrapper, but both wrapper and game still run
-4. **Deployment issues**: Old containers from previous deployments left behind
+2. **Network failures**: Host can't reach containers, but games still run
+3. **Deployment issues**: Old containers from previous deployments left behind
 
 ### Solution: Label-Based Reconciliation
 
@@ -451,21 +418,13 @@ With wrapper and game containers running separately from the host manager proces
 All ManMan-created resources MUST be labeled:
 
 ```go
-// Wrapper container labels
-labels := map[string]string{
-    "manman.type":        "wrapper",
-    "manman.session_id":  "12345",
-    "manman.sgc_id":      "67890",
-    "manman.server_id":   "42",
-    "manman.created_at":  "2026-01-29T12:00:00Z",
-}
-
-// Game container labels (created by wrapper)
+// Game container labels (created directly by host)
 labels := map[string]string{
     "manman.type":        "game",
     "manman.session_id":  "12345",
     "manman.sgc_id":      "67890",
-    "manman.wrapper_id":  "abc123",  // Links back to wrapper
+    "manman.server_id":   "42",
+    "manman.created_at":  "2026-01-29T12:00:00Z",
 }
 
 // Network labels
@@ -478,34 +437,26 @@ labels := map[string]string{
 
 **2. Host Manager Startup Reconciliation**
 
-On startup, host manager scans Docker for ManMan containers:
+On startup, host manager scans Docker for ManMan game containers:
 
 ```go
 func (h *HostManager) ReconcileOnStartup(ctx context.Context) error {
-    // 1. Find all ManMan containers
-    containers := h.docker.ListContainers(ctx, map[string]string{
-        "manman.server_id": h.serverID,
+    // 1. Find all game containers with manman.type=game
+    games := h.docker.ListContainers(ctx, map[string]string{
+        "manman.type": "game",
     })
 
-    // 2. For each wrapper, attempt to reconnect
-    for _, wrapper := range wrappers {
-        sessionID := wrapper.Labels["manman.session_id"]
+    // 2. For each game container, attempt to re-attach or clean up
+    for _, game := range games {
+        sessionID := game.Labels["manman.session_id"]
 
-        // Try gRPC connection
-        if client := tryConnect(wrapper); client != nil {
-            // Wrapper is alive! Restore session state
-            status := client.GetStatus(sessionID)
-            h.restoreSession(sessionID, wrapper.ID, status)
+        if game.Running {
+            // Re-attach for stdin/stdout
+            attachResp := h.docker.AttachToContainer(ctx, game.ID)
+            h.restoreSession(sessionID, game.ID, attachResp)
         } else {
-            // Wrapper is dead, check if game is still running
-            gameContainer := findGameContainer(sessionID)
-            if gameContainer != nil && gameContainer.Running {
-                // Orphaned game! Clean it up
-                log.Printf("Orphaned game container %s, terminating", gameContainer.ID)
-                h.docker.StopContainer(ctx, gameContainer.ID, true)
-            }
-            // Remove dead wrapper
-            h.docker.RemoveContainer(ctx, wrapper.ID, true)
+            // Dead container — remove it
+            h.docker.RemoveContainer(ctx, game.ID, true)
         }
     }
 
@@ -532,26 +483,26 @@ func (h *HostManager) OrphanCleanupLoop(ctx context.Context) {
 }
 
 func (h *HostManager) cleanupOrphans(ctx context.Context) {
-    // Find containers not in active session list
-    activeSessionIDs := h.getActiveSessionIDs()
+    // Find game containers not in active session list
+    activeSGCIDs := h.getActiveSGCIDs()
 
-    allContainers := h.docker.ListContainers(ctx, map[string]string{
-        "manman.server_id": h.serverID,
+    games := h.docker.ListContainers(ctx, map[string]string{
+        "manman.type": "game",
     })
 
-    for _, container := range allContainers {
-        sessionID := container.Labels["manman.session_id"]
+    for _, game := range games {
+        sgcID := game.Labels["manman.sgc_id"]
 
         // Not tracked by this host manager?
-        if !activeSessionIDs.Contains(sessionID) {
-            age := time.Since(container.CreatedAt)
+        if !activeSGCIDs.Contains(sgcID) {
+            age := time.Since(game.CreatedAt)
 
             // Grace period: 5 minutes (in case host manager just started)
             if age > 5*time.Minute {
-                log.Printf("Orphaned container %s (session %s), cleaning up",
-                    container.ID, sessionID)
-                h.docker.StopContainer(ctx, container.ID, true)
-                h.docker.RemoveContainer(ctx, container.ID, true)
+                log.Printf("Orphaned game container %s (sgc_id %s), cleaning up",
+                    game.ID, sgcID)
+                h.docker.StopContainer(ctx, game.ID, true)
+                h.docker.RemoveContainer(ctx, game.ID, true)
             }
         }
     }
@@ -571,7 +522,7 @@ Containers without recent heartbeat updates get cleaned up even if host manager 
 
 ### Benefits
 
-- **Self-healing**: Host manager restart automatically discovers and reconnects to surviving wrappers
+- **Self-healing**: Host manager restart automatically discovers and re-attaches to surviving game containers
 - **Cleanup on failure**: Orphaned containers are detected and terminated
 - **Multi-host safe**: Each host only manages containers with matching `manman.server_id`
 - **Audit trail**: Labels provide metadata for debugging ("why is this container running?")

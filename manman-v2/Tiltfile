@@ -117,14 +117,14 @@ APPS = {
 
 build_images_from_apps(APPS, watch_paths, platform)
 
-# Build test game server image for wrapper testing
+# Build test game server image for integration testing
 # This is a simple Alpine-based container with a bash script
 if get_env_bool('BUILD_TEST_GAME_SERVER', default='true'):
     print("🎮 Building test game server image...")
     docker_build(
         'manmanv2-test-game-server',
-        context='../manman/wrapper/testdata',
-        dockerfile='../manman/wrapper/testdata/Dockerfile',
+        context='../manman/testdata',
+        dockerfile='../manman/testdata/Dockerfile',
     )
     print("  ✓ manmanv2-test-game-server")
 

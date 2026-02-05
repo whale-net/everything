@@ -138,6 +138,31 @@ func TestSessionStatusUpdate_MarshalUnmarshal(t *testing.T) {
 	}
 }
 
+func TestSendInputCommand_MarshalUnmarshal(t *testing.T) {
+	cmd := rmq.SendInputCommand{
+		SessionID: 123,
+		Input:     []byte("ping\n"),
+	}
+
+	data, err := json.Marshal(cmd)
+	if err != nil {
+		t.Fatalf("Failed to marshal command: %v", err)
+	}
+
+	var unmarshaled rmq.SendInputCommand
+	err = json.Unmarshal(data, &unmarshaled)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal command: %v", err)
+	}
+
+	if unmarshaled.SessionID != cmd.SessionID {
+		t.Errorf("Expected SessionID %d, got %d", cmd.SessionID, unmarshaled.SessionID)
+	}
+	if string(unmarshaled.Input) != string(cmd.Input) {
+		t.Errorf("Expected Input %q, got %q", string(cmd.Input), string(unmarshaled.Input))
+	}
+}
+
 func TestHostStatusUpdate_MarshalUnmarshal(t *testing.T) {
 	update := rmq.HostStatusUpdate{
 		ServerID: 789,

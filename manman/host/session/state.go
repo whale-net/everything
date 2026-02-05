@@ -4,8 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/whale-net/everything/libs/go/grpcclient"
-	"github.com/whale-net/everything/manman/host/grpc"
+	"github.com/docker/docker/api/types"
 )
 
 // State represents the state of a session
@@ -15,10 +14,8 @@ type State struct {
 	Status          string // "pending" | "starting" | "running" | "stopping" | "stopped" | "crashed"
 	NetworkID       string
 	NetworkName     string
-	WrapperContainerID string
 	GameContainerID string
-	GRPCClient      *grpcclient.Client
-	WrapperClient   *grpc.WrapperControlClient
+	AttachResp      *types.HijackedResponse // stdin/stdout attach; nil until container started
 	StartedAt       *time.Time
 	StoppedAt       *time.Time
 	ExitCode        *int

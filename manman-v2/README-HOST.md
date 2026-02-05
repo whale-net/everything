@@ -16,7 +16,6 @@ The host manager runs on **bare metal** (not in Kubernetes) because it needs dir
    ```
 
 3. **RabbitMQ accessible**: Either from Tilt (localhost:5672) or custom
-4. **Wrapper image built**: See [Building the Wrapper Image](#building-the-wrapper-image)
 
 ## Architecture
 
@@ -33,44 +32,27 @@ The host manager runs on **bare metal** (not in Kubernetes) because it needs dir
 ┌──────────────▼──────────────────────────┐
 │  Host Manager (Bare Metal - YOU RUN)    │
 │  - Listens to RabbitMQ commands         │
-│  - Manages Docker containers            │
+│  - Manages Docker containers directly   │
+│  - Stdin forwarding via attach          │
 │  - Publishes session status             │
 └──────────────┬──────────────────────────┘
-               │ Docker SDK
+               │ Docker SDK (attach/create/stop)
                │
 ┌──────────────▼──────────────────────────┐
 │  Docker Daemon (localhost)              │
-│  - Wrapper containers                   │
 │  - Game server containers               │
 └─────────────────────────────────────────┘
 ```
 
-## Building the Wrapper Image
-
-The host manager deploys wrapper containers, so the wrapper image must be available:
-
-```bash
-# Build wrapper binary and Docker image
-bazel run //manman/wrapper:manmanv2-wrapper_image_load --platforms=//tools:linux_amd64
-
-# Verify image is available
-docker images | grep manmanv2-wrapper
-```
-
-Expected output:
-```
-manmanv2-wrapper   latest   abc123def456   ...
-```
-
 ## Building the Test Game Server Image
 
-For testing the wrapper with a simple game server:
+For testing the host manager with a simple game server:
 
 ```bash
-# Build from wrapper testdata directory
+# Build from testdata directory
 docker build -t manmanv2-test-game-server \
-  -f manman/wrapper/testdata/Dockerfile \
-  manman/wrapper/testdata/
+  -f manman/testdata/Dockerfile \
+  manman/testdata/
 
 # Verify image
 docker images | grep manmanv2-test-game-server
@@ -87,8 +69,7 @@ This creates an Alpine-based container with a bash script that simulates a game 
 bazel run //manman/host:host -- \
   --server-id=host-local-dev-1 \
   --rabbitmq-url=amqp://rabbit:password@localhost:5672/manmanv2-dev \
-  --docker-socket=/var/run/docker.sock \
-  --wrapper-image=manmanv2-wrapper:latest
+  --docker-socket=/var/run/docker.sock
 ```
 
 ### Option 2: Build and run binary directly
@@ -104,8 +85,7 @@ ls -la bazel-bin/manman/host/host_/host
 ./bazel-bin/manman/host/host_/host \
   --server-id=host-local-dev-1 \
   --rabbitmq-url=amqp://rabbit:password@localhost:5672/manmanv2-dev \
-  --docker-socket=/var/run/docker.sock \
-  --wrapper-image=manmanv2-wrapper:latest
+  --docker-socket=/var/run/docker.sock
 ```
 
 ### Option 3: Use environment variables
@@ -115,7 +95,6 @@ ls -la bazel-bin/manman/host/host_/host
 export SERVER_ID=host-local-dev-1
 export RABBITMQ_URL=amqp://rabbit:password@localhost:5672/manmanv2-dev
 export DOCKER_SOCKET=/var/run/docker.sock
-export WRAPPER_IMAGE=manmanv2-wrapper:latest
 
 # Run the binary
 bazel run //manman/host:host
@@ -130,7 +109,6 @@ The host manager accepts these configuration options:
 | `SERVER_ID` | `--server-id` | *(required)* | Unique identifier for this host |
 | `RABBITMQ_URL` | `--rabbitmq-url` | `amqp://...` | RabbitMQ connection URL with vhost |
 | `DOCKER_SOCKET` | `--docker-socket` | `/var/run/docker.sock` | Path to Docker socket |
-| `WRAPPER_IMAGE` | `--wrapper-image` | `manmanv2-wrapper:latest` | Wrapper container image |
 
 ### RabbitMQ URL Format
 
@@ -210,11 +188,10 @@ grpcurl -plaintext \
   manman.ManManAPI/GetSession
 
 # 5. Check Docker containers
-docker ps | grep session-
+docker ps | grep game-
 
-# You should see two containers:
-# - manmanv2-wrapper-session-<id>
-# - <game-server>-session-<id>
+# You should see one game container per session:
+# - game-<server_id>-<sgc_id>
 
 # 6. Stop the session
 grpcurl -plaintext \
@@ -249,15 +226,6 @@ telnet localhost 5672
 ```bash
 sudo usermod -aG docker $USER
 # Log out and back in
-```
-
-### Wrapper image not found
-
-**Problem**: `Error response from daemon: No such image: manmanv2-wrapper:latest`
-
-**Solution**: Build the wrapper image first:
-```bash
-bazel run //manman/wrapper:manmanv2-wrapper_image_load --platforms=//tools:linux_amd64
 ```
 
 ### Orphaned containers after crashes
@@ -306,6 +274,5 @@ Each host will:
 ## Related Documentation
 
 - [ManManV2 Architecture](../manman/manman-v2.md)
-- [Wrapper Service](../manman/wrapper/README.md)
 - [Event Processor](../manman/PHASE_6_COMPLETE.md)
 - [Integration Tests](../manman/processor/integration_test.go)

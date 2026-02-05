@@ -29,13 +29,10 @@ This starts:
 ### 2. Build Required Images
 
 ```bash
-# Build wrapper image (required for host manager)
-bazel run //manman/wrapper:manmanv2-wrapper_image_load --platforms=//tools:linux_amd64
-
 # Build test game server (optional, for testing)
 docker build -t manmanv2-test-game-server \
-  -f ../manman/wrapper/testdata/Dockerfile \
-  ../manman/wrapper/testdata/
+  -f ../manman/testdata/Dockerfile \
+  ../manman/testdata/
 ```
 
 ### 3. Run Host Manager (Bare Metal)
@@ -81,14 +78,10 @@ See [README-HOST.md](./README-HOST.md) for detailed host setup instructions.
 │  │  - RabbitMQ consumer                    │         │
 │  │  - Docker SDK for containers            │         │
 │  │  - Session lifecycle orchestration      │         │
+│  │  - Stdin forwarding via attach          │         │
 │  │  - Orphan recovery                      │         │
 │  └────┬──────────┬──────────┬──────────────┘         │
-│       │ gRPC     │ gRPC     │ gRPC                   │
-│  ┌────▼─────┐ ┌─▼──────┐ ┌─▼──────────┐             │
-│  │ Wrapper  │ │Wrapper │ │  Wrapper   │             │
-│  │ :50051   │ │:50051  │ │  :50051    │             │
-│  └────┬─────┘ └─┬──────┘ └─┬──────────┘             │
-│       │         │           │                        │
+│       │ attach   │ attach   │ attach                 │
 │  ┌────▼─────┐ ┌─▼──────┐ ┌─▼──────────┐             │
 │  │  Game    │ │ Game   │ │   Game     │             │
 │  │Container │ │Container│ │ Container  │             │
@@ -113,7 +106,6 @@ See [README-HOST.md](./README-HOST.md) for detailed host setup instructions.
 | Component | Type | Port | Description |
 |-----------|------|------|-------------|
 | Host Manager | Binary | - | Container orchestrator |
-| Wrapper(s) | Container | 50051 | Game server sidecar |
 | Game Server(s) | Container | varies | Actual game servers |
 
 ## Configuration
@@ -146,7 +138,6 @@ S3_BUCKET=manmanv2-dev
 SERVER_ID=host-local-dev-1
 RABBITMQ_URL=amqp://rabbit:password@localhost:5672/manmanv2-dev
 DOCKER_SOCKET=/var/run/docker.sock
-WRAPPER_IMAGE=manmanv2-wrapper:latest
 ```
 
 ### Service Toggle
@@ -222,7 +213,7 @@ manman-v2/
 ├── api/                  # Control plane API (gRPC)
 ├── processor/            # Event processor
 ├── host/                 # Host manager
-├── wrapper/              # Wrapper sidecar
+├── testdata/             # Integration test fixtures
 ├── protos/               # Protobuf definitions
 └── BUILD.bazel           # Bazel build config
 ```
@@ -275,16 +266,6 @@ kubectl logs -n manmanv2-local-dev postgres-dev-...
 2. Verify vhost exists: http://localhost:15672 → Virtual Hosts
 3. Create vhost if needed: Admin → Virtual Hosts → Add "manmanv2-dev"
 
-### Host manager can't find wrapper image
-
-**Problem**: `No such image: manmanv2-wrapper:latest`
-
-**Solution**: Build the wrapper image:
-```bash
-bazel run //manman/wrapper:manmanv2-wrapper_image_load --platforms=//tools:linux_amd64
-docker images | grep manmanv2-wrapper
-```
-
 ## Advanced Topics
 
 ### Running Multiple Hosts
@@ -334,9 +315,6 @@ dlv exec ./bazel-bin/manman/host/host_/host -- \
 ```bash
 # Run processor integration tests
 bazel test //manman/processor:integration_test
-
-# Run wrapper integration tests
-bazel test //manman/wrapper:wrapper_integration_test --test_tag_filters=integration
 ```
 
 ## Related Documentation
@@ -344,7 +322,6 @@ bazel test //manman/wrapper:wrapper_integration_test --test_tag_filters=integrat
 - [ManManV2 Architecture](../manman/manman-v2.md)
 - [Phase 6 Completion Report](../manman/PHASE_6_COMPLETE.md)
 - [Control Plane API](../manman/protos/api.proto)
-- [Wrapper Protocol](../manman/protos/wrapper.proto)
 - [Event Processor Design](../manman/PHASE_6_STATUS.md)
 
 ## Getting Help

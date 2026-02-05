@@ -62,6 +62,12 @@ type KillSessionCommand struct {
 	SessionID int64 `json:"session_id"`
 }
 
+// SendInputCommand represents a command to send stdin input to a running session
+type SendInputCommand struct {
+	SessionID int64  `json:"session_id"`
+	Input     []byte `json:"input"`
+}
+
 // HostStatusUpdate represents a status update from the host
 type HostStatusUpdate struct {
 	ServerID int64  `json:"server_id"`

@@ -14,6 +14,7 @@ type CommandHandler interface {
 	HandleStartSession(ctx context.Context, cmd *StartSessionCommand) error
 	HandleStopSession(ctx context.Context, cmd *StopSessionCommand) error
 	HandleKillSession(ctx context.Context, cmd *KillSessionCommand) error
+	HandleSendInput(ctx context.Context, cmd *SendInputCommand) error
 }
 
 // Consumer consumes commands from RabbitMQ
@@ -38,6 +39,7 @@ func NewConsumer(conn *rmq.Connection, serverID int64, handler CommandHandler) (
 		fmt.Sprintf("command.host.%d.session.start", serverID),
 		fmt.Sprintf("command.host.%d.session.stop", serverID),
 		fmt.Sprintf("command.host.%d.session.kill", serverID),
+		fmt.Sprintf("command.host.%d.session.send_input", serverID),
 	}
 
 	if err := consumer.BindExchange(exchange, routingKeys); err != nil {
@@ -56,10 +58,12 @@ func NewConsumer(conn *rmq.Connection, serverID int64, handler CommandHandler) (
 	startKey := fmt.Sprintf("command.host.%d.session.start", serverID)
 	stopKey := fmt.Sprintf("command.host.%d.session.stop", serverID)
 	killKey := fmt.Sprintf("command.host.%d.session.kill", serverID)
-	
+	sendInputKey := fmt.Sprintf("command.host.%d.session.send_input", serverID)
+
 	consumer.RegisterHandler(startKey, c.handleStartSession)
 	consumer.RegisterHandler(stopKey, c.handleStopSession)
 	consumer.RegisterHandler(killKey, c.handleKillSession)
+	consumer.RegisterHandler(sendInputKey, c.handleSendInput)
 
 	return c, nil
 }
@@ -99,4 +103,13 @@ func (c *Consumer) handleKillSession(ctx context.Context, msg rmq.Message) error
 	}
 	log.Printf("Received kill session command: session_id=%d", cmd.SessionID)
 	return c.handler.HandleKillSession(ctx, &cmd)
+}
+
+func (c *Consumer) handleSendInput(ctx context.Context, msg rmq.Message) error {
+	var cmd SendInputCommand
+	if err := json.Unmarshal(msg.Body, &cmd); err != nil {
+		return fmt.Errorf("failed to unmarshal send input command: %w", err)
+	}
+	log.Printf("Received send input command: session_id=%d, input_length=%d", cmd.SessionID, len(cmd.Input))
+	return c.handler.HandleSendInput(ctx, &cmd)
 }

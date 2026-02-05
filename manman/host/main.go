@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -39,7 +38,6 @@ func run() error {
 
 	rabbitMQURL := getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 	dockerSocket := getEnv("DOCKER_SOCKET", "/var/run/docker.sock")
-	wrapperImage := getEnv("WRAPPER_IMAGE", "manmanv2-wrapper:latest")
 
 	log.Printf("Starting ManManV2 Host Manager (server_id=%d)", serverID)
 
@@ -60,7 +58,7 @@ func run() error {
 	defer rmqConn.Close()
 
 	// Initialize session manager
-	sessionManager := session.NewSessionManager(dockerClient, wrapperImage)
+	sessionManager := session.NewSessionManager(dockerClient)
 
 	// Recover orphaned sessions on startup
 	log.Println("Recovering orphaned sessions...")
@@ -173,65 +171,40 @@ type CommandHandlerImpl struct {
 
 // HandleStartSession handles a start session command
 func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.StartSessionCommand) error {
-	// Convert parameters to JSON
-	parametersJSON := ""
-	if cmd.Parameters != nil {
-		paramsBytes, err := json.Marshal(cmd.Parameters)
-		if err != nil {
-			return fmt.Errorf("failed to marshal parameters: %w", err)
-		}
-		parametersJSON = string(paramsBytes)
+	env := make([]string, 0, len(cmd.GameConfig.EnvTemplate))
+	for k, v := range cmd.GameConfig.EnvTemplate {
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
 
-	// Convert GameConfig to map[string]interface{}
-	gameConfigMap := make(map[string]interface{})
-	gcBytes, err := json.Marshal(cmd.GameConfig)
-	if err != nil {
-		return fmt.Errorf("failed to marshal game config: %w", err)
-	}
-	if err := json.Unmarshal(gcBytes, &gameConfigMap); err != nil {
-		return fmt.Errorf("failed to unmarshal game config: %w", err)
+	var command []string
+	if cmd.GameConfig.ArgsTemplate != "" {
+		command = []string{"/bin/sh", "-c", cmd.GameConfig.ArgsTemplate}
 	}
 
-	// Convert ServerGameConfig to map[string]interface{}
-	sgcMap := make(map[string]interface{})
-	sgcBytes, err := json.Marshal(cmd.ServerGameConfig)
-	if err != nil {
-		return fmt.Errorf("failed to marshal server game config: %w", err)
-	}
-	if err := json.Unmarshal(sgcBytes, &sgcMap); err != nil {
-		return fmt.Errorf("failed to unmarshal server game config: %w", err)
+	ports := make(map[string]string, len(cmd.ServerGameConfig.PortBindings))
+	for _, pb := range cmd.ServerGameConfig.PortBindings {
+		ports[fmt.Sprintf("%d", pb.ContainerPort)] = fmt.Sprintf("%d", pb.HostPort)
 	}
 
-	// Convert to session manager command format
 	sessionCmd := &session.StartSessionCommand{
-		SessionID:        cmd.SessionID,
-		SGCID:            cmd.SGCID,
-		ServerID:         h.serverID,
-		GameConfig:       gameConfigMap,
-		ServerGameConfig: sgcMap,
-		ParametersJSON:   parametersJSON,
+		SessionID:    cmd.SessionID,
+		SGCID:        cmd.SGCID,
+		ServerID:     h.serverID,
+		Image:        cmd.GameConfig.Image,
+		Command:      command,
+		Env:          env,
+		PortBindings: ports,
 	}
 
-	// Start the session
 	if err := h.sessionManager.StartSession(ctx, sessionCmd); err != nil {
-		// Publish error status
-		statusUpdate := &rmq.SessionStatusUpdate{
-			SessionID: cmd.SessionID,
-			SGCID:     cmd.SGCID,
-			Status:    "crashed",
-		}
-		_ = h.publisher.PublishSessionStatus(ctx, statusUpdate)
+		_ = h.publisher.PublishSessionStatus(ctx, &rmq.SessionStatusUpdate{
+			SessionID: cmd.SessionID, SGCID: cmd.SGCID, Status: "crashed",
+		})
 		return fmt.Errorf("failed to start session: %w", err)
 	}
-
-	// Publish success status
-	statusUpdate := &rmq.SessionStatusUpdate{
-		SessionID: cmd.SessionID,
-		SGCID:     cmd.SGCID,
-		Status:    "running",
-	}
-	return h.publisher.PublishSessionStatus(ctx, statusUpdate)
+	return h.publisher.PublishSessionStatus(ctx, &rmq.SessionStatusUpdate{
+		SessionID: cmd.SessionID, SGCID: cmd.SGCID, Status: "running",
+	})
 }
 
 // HandleStopSession handles a stop session command
@@ -260,6 +233,14 @@ func (h *CommandHandlerImpl) HandleKillSession(ctx context.Context, cmd *rmq.Kil
 		Status:    "stopped",
 	}
 	return h.publisher.PublishSessionStatus(ctx, statusUpdate)
+}
+
+// HandleSendInput handles a send input command
+func (h *CommandHandlerImpl) HandleSendInput(ctx context.Context, cmd *rmq.SendInputCommand) error {
+	if err := h.sessionManager.SendInput(ctx, cmd.SessionID, cmd.Input); err != nil {
+		return fmt.Errorf("failed to send input to session %d: %w", cmd.SessionID, err)
+	}
+	return nil
 }
 
 func getEnv(key, defaultValue string) string {

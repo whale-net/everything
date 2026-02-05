@@ -27,6 +27,7 @@ type ContainerConfig struct {
 	Ports      map[string]string // Container port -> host port mapping
 	AutoRemove bool
 	Privileged bool
+	OpenStdin  bool
 }
 
 // CreateContainer creates a new Docker container
@@ -69,6 +70,8 @@ func (c *Client) CreateContainer(ctx context.Context, config ContainerConfig) (s
 		Env:          config.Env,
 		Labels:       config.Labels,
 		ExposedPorts: exposedPorts,
+		OpenStdin:    config.OpenStdin,
+		StdinOnce:    false, // stdin survives detach; needed for recovery re-attach
 	}
 
 	hostConfig := &container.HostConfig{
