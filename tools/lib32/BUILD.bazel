@@ -10,7 +10,7 @@ PREREQUISITES:
 
 The libraries are extracted from:
 - lib32gcc-s1_14.2.0-4ubuntu2~24.04_amd64.deb
-- libc6-i386_2.39-0ubuntu8.6_amd64.deb
+- libc6-i386_2.39-0ubuntu8.7_amd64.deb
 """
 
 load("@rules_pkg//:pkg.bzl", "pkg_tar")

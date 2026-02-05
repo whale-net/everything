@@ -74,8 +74,8 @@ http_file(
 
 http_file(
     name = "libc6_i386_deb",
-    sha256 = "c1d612f7ce6f0effa0e7b75fd71b052842cea142fa0f64f5b7161a43464aa738",
-    urls = ["http://archive.ubuntu.com/ubuntu/pool/main/g/glibc/libc6-i386_2.39-0ubuntu8.6_amd64.deb"],
+    sha256 = "a80dfe7331c74bda498aefcd49c20e531977736e287db224d53e9915bdd6d509",
+    urls = ["http://archive.ubuntu.com/ubuntu/pool/main/g/glibc/libc6-i386_2.39-0ubuntu8.7_amd64.deb"],
 )
 
 # Python setup with rules_python for interpreter registration

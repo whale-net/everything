@@ -6,7 +6,7 @@ This package provides 32-bit libraries needed to run SteamCMD (and other 32-bit 
 
 The libraries are **downloaded and extracted at build time** from Ubuntu 24.04 packages:
 - `lib32gcc-s1_14.2.0-4ubuntu2~24.04_amd64.deb`
-- `libc6-i386_2.39-0ubuntu8.6_amd64.deb`
+- `libc6-i386_2.39-0ubuntu8.7_amd64.deb`
 
 No binary artifacts are committed to the repository. The extraction happens during Bazel build using genrules.
 
