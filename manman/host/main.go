@@ -196,6 +196,13 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 		PortBindings: ports,
 	}
 
+	// Publish starting status before attempting container creation
+	if err := h.publisher.PublishSessionStatus(ctx, &rmq.SessionStatusUpdate{
+		SessionID: cmd.SessionID, SGCID: cmd.SGCID, Status: "starting",
+	}); err != nil {
+		return fmt.Errorf("failed to publish starting status: %w", err)
+	}
+
 	if err := h.sessionManager.StartSession(ctx, sessionCmd); err != nil {
 		_ = h.publisher.PublishSessionStatus(ctx, &rmq.SessionStatusUpdate{
 			SessionID: cmd.SessionID, SGCID: cmd.SGCID, Status: "crashed",
