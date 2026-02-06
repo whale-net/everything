@@ -216,13 +216,21 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 
 // HandleStopSession handles a stop session command
 func (h *CommandHandlerImpl) HandleStopSession(ctx context.Context, cmd *rmq.StopSessionCommand) error {
+	// Get session state to retrieve SGCID before stopping
+	state, exists := h.sessionManager.GetSessionState(cmd.SessionID)
+	if !exists {
+		return fmt.Errorf("session %d not found", cmd.SessionID)
+	}
+	sgcID := state.SGCID
+
 	if err := h.sessionManager.StopSession(ctx, cmd.SessionID, cmd.Force); err != nil {
 		return fmt.Errorf("failed to stop session: %w", err)
 	}
 
-	// Publish status update
+	// Publish status update with SGCID
 	statusUpdate := &rmq.SessionStatusUpdate{
 		SessionID: cmd.SessionID,
+		SGCID:     sgcID,
 		Status:    "stopped",
 	}
 	return h.publisher.PublishSessionStatus(ctx, statusUpdate)

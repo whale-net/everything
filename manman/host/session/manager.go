@@ -371,3 +371,8 @@ func (sm *SessionManager) CleanupOrphans(ctx context.Context, serverID int64) er
 func (sm *SessionManager) GetSessionStats() SessionStats {
 	return sm.stateManager.GetSessionStats()
 }
+
+// GetSessionState retrieves the state for a specific session
+func (sm *SessionManager) GetSessionState(sessionID int64) (*State, bool) {
+	return sm.stateManager.GetSession(sessionID)
+}
