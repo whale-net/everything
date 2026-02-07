@@ -33,13 +33,13 @@ Two new migrations have been added:
 
 ```bash
 # Build the migration binary
-bazel build //manman/migrate:manmanv2-migration
+bazel build //manman/migrate:control-migration
 
 # Run migrations (requires DATABASE_URL environment variable)
-./bazel-bin/manman/migrate/manmanv2-migration_/manmanv2-migration up
+./bazel-bin/manman/migrate/control-migration_/control-migration up
 
 # Or rollback if needed
-./bazel-bin/manman/migrate/manmanv2-migration_/manmanv2-migration down
+./bazel-bin/manman/migrate/control-migration_/control-migration down
 ```
 
 ## Go Models

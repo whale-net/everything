@@ -165,9 +165,9 @@ MANMAN_V1_APPS = [
 
 # List of ManManV2 (Go) app metadata targets for chart composition
 MANMAN_V2_APPS = [
-    "//manman/api:manmanv2-api_metadata",
-    "//manman/migrate:manmanv2-migration_metadata",
-    "//manman/processor:manmanv2-processor_metadata",
+    "//manman/api:control-api_metadata",
+    "//manman/migrate:control-migration_metadata",
+    "//manman/processor:event-processor_metadata",
 ]
 
 # ManMan V1 Helm chart - Python-based legacy services
@@ -186,16 +186,16 @@ release_helm_chart(
 
 # ManManV2 Helm chart - Go-based control plane services
 # This is a separate chart for the V2 rewrite with distinct deployment lifecycle
-# Chart tags will use the format: helm-manmanv2.vX.Y.Z
+# Chart tags will use the format: helm-manman-control-services.vX.Y.Z
 release_helm_chart(
     name = "manmanv2_chart",
     apps = MANMAN_V2_APPS,
-    chart_name = "manmanv2",
+    chart_name = "control-services",
     domain = "manman",
     environment = "dev",
     namespace = "manmanv2",
     # chart_version omitted - uses default "0.0.0-dev" for local builds
-    # Release system auto-versions from git tags (helm-manmanv2.v*)
+    # Release system auto-versions from git tags (helm-manman-control-services.v*)
     visibility = ["//visibility:public"],
 )
 

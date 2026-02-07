@@ -1,6 +1,6 @@
 # ManManV2 Event Processor Service
 
-The ManManV2 Event Processor Service (`manmanv2-processor`) is a RabbitMQ consumer that processes events from host managers and updates the database to maintain data consistency.
+The ManManV2 Event Processor Service (`event-processor`) is a RabbitMQ consumer that processes events from host managers and updates the database to maintain data consistency.
 
 ## Architecture
 
@@ -143,13 +143,13 @@ Default threshold: **10 seconds** (configurable)
 
 ```bash
 # Build binary
-bazel build //manman/processor:manmanv2-processor
+bazel build //manman/processor:event-processor
 
 # Build container image
-bazel build //manman/processor:manmanv2-processor_image
+bazel build //manman/processor:event-processor_image
 
 # Run locally (requires RabbitMQ and PostgreSQL)
-bazel run //manman/processor:manmanv2-processor
+bazel run //manman/processor:event-processor
 ```
 
 ## Deployment

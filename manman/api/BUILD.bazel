@@ -2,7 +2,7 @@ load("@rules_go//go:def.bzl", "go_binary")
 load("//tools/bazel:release.bzl", "release_app")
 
 go_binary(
-    name = "manmanv2-api",
+    name = "control-api",
     srcs = ["main.go"],
     deps = [
         "//libs/go/rmq",
@@ -18,11 +18,11 @@ go_binary(
 
 # Release metadata for API service
 release_app(
-    name = "manmanv2-api",
-    binary_name = ":manmanv2-api",
+    name = "control-api",
+    binary_name = ":control-api",
     language = "go",
     domain = "manman",
-    description = "ManManV2 control plane API (gRPC)",
+    description = "ManMan control plane API (gRPC)",
     app_type = "external-api",
     port = 50051,
     replicas = 2,

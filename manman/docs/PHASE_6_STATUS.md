@@ -29,9 +29,9 @@
 ## In-Scope Components (Already Implemented)
 
 ### ✅ Core Services (All Exist)
-1. **manmanv2-api** - Control plane gRPC API with REST gateway
-2. **manmanv2-processor** - Event processor (just completed)
-3. **manmanv2-migration** - Database migration runner
+1. **control-api** - Control plane gRPC API with REST gateway
+2. **event-processor** - Event processor (just completed)
+3. **control-migration** - Database migration runner
 4. **host** - Host manager with Docker integration
 5. **manmanv2-wrapper** - Sidecar for game containers
 6. **management-ui** - Admin web interface

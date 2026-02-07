@@ -44,13 +44,13 @@ Phase 6 implementation is complete with all core components built, tested, and d
 **Build Commands:**
 ```bash
 # Build binary
-bazel build //manman/processor:manmanv2-processor
+bazel build //manman/processor:event-processor
 
 # Run locally
-bazel run //manman/processor:manmanv2-processor
+bazel run //manman/processor:event-processor
 
 # Build container image
-bazel build //manman/processor:manmanv2-processor_image
+bazel build //manman/processor:event-processor_image
 ```
 
 ### 2. Comprehensive Test Suite ✅

@@ -2,7 +2,7 @@ load("@rules_go//go:def.bzl", "go_binary")
 load("//tools/bazel:release.bzl", "release_app")
 
 go_binary(
-    name = "manmanv2-migration",
+    name = "control-migration",
     srcs = ["main.go"],
     embedsrcs = glob(["migrations/*.sql"]),
     deps = [
@@ -13,10 +13,10 @@ go_binary(
 
 # Release metadata for migration job
 release_app(
-    name = "manmanv2-migration",
-    binary_name = ":manmanv2-migration",
+    name = "control-migration",
+    binary_name = ":control-migration",
     language = "go",
     domain = "manman",
-    description = "ManManV2 database migration runner",
+    description = "ManMan control plane database migration runner",
     app_type = "job",
 )

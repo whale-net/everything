@@ -48,7 +48,7 @@ func run() error {
 	}))
 	slog.SetDefault(logger)
 
-	logger.Info("starting manmanv2-processor",
+	logger.Info("starting event-processor",
 		"queue", cfg.QueueName,
 		"stale_threshold", cfg.StaleHostThreshold,
 		"external_exchange", cfg.ExternalExchange,

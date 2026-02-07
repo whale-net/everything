@@ -76,7 +76,7 @@ When running in Kubernetes, use IAM Roles for Service Accounts (IRSA):
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: manmanv2-api
+  name: manman-control-api
   annotations:
     eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/ManManV2LogsRole
 ```
@@ -194,7 +194,7 @@ log_id | session_id | file_path                                          | start
 Run the migration to update schema comments:
 
 ```bash
-bazel run //manman/migrate:manmanv2-migration -- up
+bazel run //manman/migrate:control-migration -- up
 ```
 
 This applies migration `003_s3_logs.up.sql` which updates the `file_path` column documentation.

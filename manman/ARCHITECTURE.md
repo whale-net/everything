@@ -71,9 +71,9 @@ ManManV2 is a game server management platform with a split-plane architecture:
 
 | Deployable | App Type | Deployment | Description |
 |------------|----------|------------|-------------|
-| `manmanv2-api` | external-api | K8s (Cloud) | User-facing API (gRPC + REST gateway) |
-| `manmanv2-processor` | worker | K8s (Cloud) | Event processor, health monitoring |
-| `manmanv2-migration` | job | K8s (Cloud) | Database migration runner |
+| `control-api` | external-api | K8s (Cloud) | User-facing API (gRPC + REST gateway) |
+| `event-processor` | worker | K8s (Cloud) | Event processor, health monitoring |
+| `control-migration` | job | K8s (Cloud) | Database migration runner |
 | `manmanv2-host` | worker | Bare metal (Docker) | Host server manager |
 
 ### Host Manager
@@ -249,7 +249,7 @@ service ManManAPI {
 ├── models.go                    # Database models (package manman)
 │                                # Flat structure - no nested pkg/db/
 │
-├── migrate/                     # Migration tool (manmanv2-migration)
+├── migrate/                     # Migration tool (control-migration)
 │   ├── main.go                  # CLI runner using libs/go/migrate
 │   ├── migrations/              # Embedded SQL migration files
 │   │   ├── 001_initial_schema.up.sql
@@ -260,12 +260,12 @@ service ManManAPI {
 │   ├── api.proto                # Control plane API
 │   └── messages.proto           # Shared message types
 │
-├── api/                         # manmanv2-api service (planned)
+├── api/                         # control-api service (planned)
 │   ├── main.go
 │   ├── handlers/
 │   └── BUILD.bazel
 │
-├── processor/                   # manmanv2-processor service (planned)
+├── processor/                   # event-processor service (planned)
 │   ├── main.go
 │   └── BUILD.bazel
 │
@@ -322,7 +322,7 @@ service ManManAPI {
   - Created `//manman/models.go` with all database models (package manman)
   - Created SQL migrations in `//manman/migrate/migrations/`
   - Built generic migration library at `//libs/go/migrate/`
-  - Migration tool configured as release_app: `//manman/migrate:manmanv2-migration`
+  - Migration tool configured as release_app: `//manman/migrate:control-migration`
 - [x] **Basic control plane API (CRUD for Game, GameConfig, Server)** ✓
   - Full CRUD operations for all entities
   - gRPC API with REST gateway
