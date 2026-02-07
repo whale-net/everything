@@ -33,6 +33,10 @@ type TLSConfig struct {
 	InsecureSkipVerify bool
 	// CACertPath is the path to a custom CA certificate file for verifying the server certificate
 	CACertPath string
+	// ServerName is used to verify the hostname on the server certificate
+	// Use this when the connection URL hostname differs from the certificate hostname
+	// Example: connecting to internal k8s service but cert is for external domain
+	ServerName string
 }
 
 // NewConnection creates a new RabbitMQ connection
@@ -57,6 +61,7 @@ func NewConnection(config Config) (*Connection, error) {
 // For amqps:// URLs, TLS configuration will be loaded from environment variables:
 //   - RABBITMQ_SSL_VERIFY=false (optional): Disable certificate verification (insecure, dev only)
 //   - RABBITMQ_CA_CERT_PATH=/path/to/ca.crt (optional): Custom CA certificate
+//   - RABBITMQ_TLS_SERVER_NAME=rmq.example.com (optional): Server name for certificate verification
 func NewConnectionFromURL(url string) (*Connection, error) {
 	// Check if URL uses TLS (amqps://)
 	if strings.HasPrefix(url, "amqps://") {
@@ -104,6 +109,11 @@ func getTLSConfigFromEnv() *TLSConfig {
 		config.CACertPath = caPath
 	}
 
+	// Check for custom server name for certificate verification
+	if serverName := os.Getenv("RABBITMQ_TLS_SERVER_NAME"); serverName != "" {
+		config.ServerName = serverName
+	}
+
 	return config
 }
 
@@ -115,6 +125,11 @@ func buildTLSConfig(config *TLSConfig) (*tls.Config, error) {
 
 	tlsConfig := &tls.Config{
 		InsecureSkipVerify: config.InsecureSkipVerify,
+	}
+
+	// Set server name for certificate verification if provided
+	if config.ServerName != "" {
+		tlsConfig.ServerName = config.ServerName
 	}
 
 	// Load custom CA certificate if provided
