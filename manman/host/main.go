@@ -223,11 +223,18 @@ func (h *CommandHandlerImpl) HandleStopSession(ctx context.Context, cmd *rmq.Sto
 	}
 	sgcID := state.SGCID
 
+	// Publish stopping status before attempting to stop container
+	if err := h.publisher.PublishSessionStatus(ctx, &rmq.SessionStatusUpdate{
+		SessionID: cmd.SessionID, SGCID: sgcID, Status: "stopping",
+	}); err != nil {
+		return fmt.Errorf("failed to publish stopping status: %w", err)
+	}
+
 	if err := h.sessionManager.StopSession(ctx, cmd.SessionID, cmd.Force); err != nil {
 		return fmt.Errorf("failed to stop session: %w", err)
 	}
 
-	// Publish status update with SGCID
+	// Publish stopped status after container is stopped
 	statusUpdate := &rmq.SessionStatusUpdate{
 		SessionID: cmd.SessionID,
 		SGCID:     sgcID,
