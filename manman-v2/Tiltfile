@@ -152,7 +152,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: migration
-        image: manman-manmanv2-migration
+        image: manmanv2-migration
         env:
         - name: DB_HOST
           value: "postgres-dev.{namespace}.svc.cluster.local"
@@ -209,7 +209,7 @@ spec:
     spec:
       containers:
       - name: api
-        image: manman-manmanv2-api
+        image: manmanv2-api
         ports:
         - containerPort: 50051
           name: grpc
@@ -277,7 +277,7 @@ spec:
     spec:
       containers:
       - name: processor
-        image: manman-manmanv2-processor
+        image: manmanv2-processor
         ports:
         - containerPort: 8080
           name: health
