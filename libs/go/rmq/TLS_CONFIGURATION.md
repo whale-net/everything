@@ -36,6 +36,22 @@ Path to a custom CA certificate file for verifying the RabbitMQ server's certifi
 export RABBITMQ_CA_CERT_PATH=/etc/ssl/certs/rabbitmq-ca.crt
 ```
 
+### `RABBITMQ_TLS_SERVER_NAME`
+
+Server name to use for TLS certificate verification (SNI - Server Name Indication).
+
+- **Default**: (empty) - uses hostname from connection URL
+- **Use case**: When connecting to internal hostname but certificate is for external domain
+- **Common scenario**: Kubernetes internal service names vs. external certificates
+
+```bash
+# Connect to internal k8s service but verify against external cert
+export RABBITMQ_URL="amqps://user:pass@common-rabbitmq.rabbitmq.svc.cluster.local:5671/vhost"
+export RABBITMQ_TLS_SERVER_NAME="rmq.whalenet.dev"
+```
+
+**Example**: Your RabbitMQ certificate is for `rmq.whalenet.dev`, but in Kubernetes you connect to `common-rabbitmq.rabbitmq.svc.cluster.local`. Set `RABBITMQ_TLS_SERVER_NAME=rmq.whalenet.dev` to verify the certificate correctly.
+
 ## Usage
 
 ### Basic Connection (Non-TLS)
