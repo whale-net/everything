@@ -1,7 +1,6 @@
 ---
-skill: release
+name: release
 description: Interactive release builder for apps and helm charts
-invocable: true
 ---
 
 # Release Builder
@@ -43,31 +42,51 @@ Use `AskUserQuestion` to ask what to release:
 ```
 Question: "What would you like to release?"
 Options:
-  - "Helm Charts" - Release one or more helm charts
-  - "Apps Only" - Release app images without charts (rare)
-  - "Both" - Release apps and charts separately
+  - "Helm Charts Only" - Release helm charts (includes app images referenced by charts)
+  - "Apps Only" - Release standalone app images without helm charts
+  - "Both Apps and Charts" - Release both apps and helm charts in the same workflow
 ```
+
+**Note:** When "Both" is selected, you need to collect both apps and helm charts to release in subsequent steps.
 
 ### Step 2: Select Charts/Apps
 
-Based on selection, present available charts grouped by domain:
+Based on the user's selection, present available options:
 
-**For Helm Charts:**
+**For Helm Charts (or Both):**
+First discover available helm charts:
+```bash
+# Use the release helper to list available charts
+bazel run --config=ci //tools:release -- plan-helm-release --charts "all" --version "v0.1.0" --include-demo --format github 2>&1 | grep -E "charts="
+```
+
+Then ask:
 ```
 Question: "Which helm chart(s) would you like to release?"
 Header: "Charts"
 Options: (multiSelect: true)
-  - "manman-host-services (domain: manman, namespace: manman)"
-  - "control-services (domain: manman, namespace: manmanv2)"
-  - "fcm (domain: friendly_computing_machine, namespace: fcm)"
-  - "All non-demo charts" - Release all production charts
+  - "helm-manman-host-services" - ManMan host services chart
+  - "helm-manmanv2-control-services" - ManManV2 control services chart
+  - "helm-fcm" - FCM chart
+  - "all" - All production charts (excludes demo by default)
 ```
 
-For each selected chart, read its metadata to show:
+**For Apps (when "Apps Only" or "Both" is selected):**
+Discover available apps:
 ```bash
-# Example for manmanv2 chart
-bazel build //manman:manmanv2_chart_chart_metadata 2>/dev/null
-cat bazel-bin/manman/manmanv2_chart_chart_metadata_chart_metadata.json
+# Use the release helper to list available apps
+bazel run --config=ci //tools:release -- plan --event-type "workflow_dispatch" --apps "all" --include-demo --increment-patch --format github 2>&1 | grep -E "apps="
+```
+
+Then ask:
+```
+Question: "Which app(s) would you like to release?"
+Header: "Apps"
+Options: (multiSelect: true)
+  - List discovered apps in domain-app format (e.g., "manman-control-api")
+  - "all" - All apps (excludes demo by default)
+  - "demo" - All demo domain apps
+  - "manman" - All manman domain apps
 ```
 
 ### Step 3: Version Strategy
@@ -114,15 +133,15 @@ Options: (multiSelect: true)
 
 **CRITICAL**: Show complete summary and require explicit confirmation.
 
-Display a clear summary:
+Display a clear summary based on what's being released:
 
+**Example for Helm Charts:**
 ```markdown
 # Release Plan Summary
 
-## Targets
-- **Helm Chart**: manman-control-services
+## Helm Charts
+- **Chart**: helm-manmanv2-control-services
   - **Namespace**: manmanv2
-  - **Apps**: control-api, control-migration, event-processor
   - **Current Version**: v0.2.1
   - **New Version**: v0.3.0 (minor increment)
 
@@ -134,14 +153,39 @@ Display a clear summary:
 - Include demo: No
 
 ## Actions That Will Be Taken
-1. Build chart: //manman:manmanv2_chart
-2. Create git tag: helm-manman-control-services.v0.3.0
-3. Push images to ghcr.io/whale-net:
-   - manman-control-api:v0.3.0
-   - manman-control-migration:v0.3.0
-   - manman-event-processor:v0.3.0
-4. Create GitHub release with artifacts
-5. Publish helm chart to GitHub Pages
+1. Build helm chart with referenced apps
+2. Create git tag: helm-manmanv2-control-services.v0.3.0
+3. Push chart to https://charts.whalenet.dev/
+4. Create GitHub release with chart artifacts
+
+⚠️  **WARNING**: This will create a public release and cannot be easily undone.
+```
+
+**Example for Both Apps and Charts:**
+```markdown
+# Release Plan Summary
+
+## Apps
+- manman-control-api (v0.3.0)
+- manman-event-processor (v0.3.0)
+
+## Helm Charts
+- helm-manmanv2-control-services (v0.3.0)
+
+## Version Strategy
+- Auto-increment minor version (applies to both apps and charts)
+
+## Options
+- Dry run: No
+- Include demo: No
+
+## Actions That Will Be Taken
+1. Build and push app images to ghcr.io/whale-net
+2. Create git tags for each app: manman-control-api.v0.3.0, manman-event-processor.v0.3.0
+3. Build helm chart with versioned app references
+4. Create git tag for chart: helm-manmanv2-control-services.v0.3.0
+5. Push chart to https://charts.whalenet.dev/
+6. Create GitHub releases with artifacts
 
 ⚠️  **WARNING**: This will create a public release and cannot be easily undone.
 ```
@@ -158,24 +202,54 @@ Options:
 
 ### Step 6: Execute Release
 
-Once confirmed, trigger the release via GitHub workflow:
+Once confirmed, trigger the release via GitHub workflow.
 
+**Get current branch:**
 ```bash
-# Get current branch
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
+```
 
-# Trigger workflow
+**For Helm Charts Only:**
+```bash
 gh workflow run release.yml \
   --ref "$BRANCH" \
-  -f helm_charts="control-services" \
+  -f helm_charts="helm-manmanv2-control-services" \
   -f increment_minor=true \
   -f dry_run=false \
   -f include_demo=false
+```
 
-# Get workflow run URL
+**For Apps Only:**
+```bash
+gh workflow run release.yml \
+  --ref "$BRANCH" \
+  -f apps="manman-control-api,manman-event-processor" \
+  -f increment_patch=true \
+  -f dry_run=false \
+  -f include_demo=false
+```
+
+**For Both Apps and Helm Charts:**
+```bash
+gh workflow run release.yml \
+  --ref "$BRANCH" \
+  -f apps="manman-control-api,manman-event-processor" \
+  -f helm_charts="helm-manmanv2-control-services" \
+  -f increment_minor=true \
+  -f dry_run=false \
+  -f include_demo=false
+```
+
+**Monitor the workflow:**
+```bash
 echo "Release triggered! Monitor progress at:"
 gh run list --workflow=release.yml --limit 1 --json url --jq '.[0].url'
 ```
+
+**Version flags (use exactly one):**
+- `-f increment_patch=true` - Bump patch version (v1.2.3 → v1.2.4)
+- `-f increment_minor=true` - Bump minor version (v1.2.3 → v1.3.0)
+- `-f version="v1.5.0"` - Use specific version
 
 ## Safety Checks
 
