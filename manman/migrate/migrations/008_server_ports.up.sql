@@ -13,11 +13,8 @@ CREATE TABLE IF NOT EXISTS server_ports (
     CONSTRAINT idx_server_ports_sgc_id UNIQUE (sgc_id, server_id, port, protocol)
 );
 
--- Index for efficient queries by SGCID
-CREATE INDEX idx_server_ports_sgc_id ON server_ports(sgc_id);
-
 -- Index for efficient availability checks
-CREATE INDEX idx_server_ports_server_id ON server_ports(server_id);
+CREATE INDEX IF NOT EXISTS idx_server_ports_server_id ON server_ports(server_id);
 
 -- Comments for documentation
 COMMENT ON TABLE server_ports IS 'Tracks port allocations on servers to prevent conflicts between ServerGameConfigs';

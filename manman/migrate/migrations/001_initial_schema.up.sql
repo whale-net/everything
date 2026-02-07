@@ -11,8 +11,8 @@ CREATE TABLE IF NOT EXISTS servers (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_servers_status ON servers(status);
-CREATE INDEX idx_servers_last_seen ON servers(last_seen);
+CREATE INDEX IF NOT EXISTS idx_servers_status ON servers(status);
+CREATE INDEX IF NOT EXISTS idx_servers_last_seen ON servers(last_seen);
 
 -- Game: Game definitions (e.g., Minecraft, Valheim)
 CREATE TABLE IF NOT EXISTS games (
@@ -24,8 +24,8 @@ CREATE TABLE IF NOT EXISTS games (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_games_name ON games(name);
-CREATE INDEX idx_games_steam_app_id ON games(steam_app_id) WHERE steam_app_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_games_name ON games(name);
+CREATE INDEX IF NOT EXISTS idx_games_steam_app_id ON games(steam_app_id) WHERE steam_app_id IS NOT NULL;
 
 -- GameConfig: Presets/templates for running games
 CREATE TABLE IF NOT EXISTS game_configs (
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS game_configs (
     UNIQUE(game_id, name)
 );
 
-CREATE INDEX idx_game_configs_game_id ON game_configs(game_id);
+CREATE INDEX IF NOT EXISTS idx_game_configs_game_id ON game_configs(game_id);
 
 -- ServerGameConfig: Game configs deployed on specific servers
 CREATE TABLE IF NOT EXISTS server_game_configs (
@@ -57,9 +57,9 @@ CREATE TABLE IF NOT EXISTS server_game_configs (
     UNIQUE(server_id, game_config_id)
 );
 
-CREATE INDEX idx_sgc_server_id ON server_game_configs(server_id);
-CREATE INDEX idx_sgc_game_config_id ON server_game_configs(game_config_id);
-CREATE INDEX idx_sgc_status ON server_game_configs(status);
+CREATE INDEX IF NOT EXISTS idx_sgc_server_id ON server_game_configs(server_id);
+CREATE INDEX IF NOT EXISTS idx_sgc_game_config_id ON server_game_configs(game_config_id);
+CREATE INDEX IF NOT EXISTS idx_sgc_status ON server_game_configs(status);
 
 -- Session: Executions of ServerGameConfigs
 CREATE TABLE IF NOT EXISTS sessions (
@@ -74,9 +74,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_sessions_sgc_id ON sessions(sgc_id);
-CREATE INDEX idx_sessions_status ON sessions(status);
-CREATE INDEX idx_sessions_started_at ON sessions(started_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_sgc_id ON sessions(sgc_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
 
 -- ServerPort: Port allocation tracking
 CREATE TABLE IF NOT EXISTS server_ports (
@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS server_ports (
     PRIMARY KEY (server_id, port, protocol)
 );
 
-CREATE INDEX idx_server_ports_sgc_id ON server_ports(sgc_id) WHERE sgc_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_server_ports_sgc_id ON server_ports(sgc_id) WHERE sgc_id IS NOT NULL;
 
 -- Updated_at trigger function
 CREATE OR REPLACE FUNCTION update_updated_at_column()
