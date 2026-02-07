@@ -1,49 +1,6 @@
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
 load("//tools/bazel:release.bzl", "release_app")
 
-# Main host service binary - commented out due to docker SDK dependency issues
-# go_binary(
-#     name = "manmanv2-host",
-#     srcs = ["main.go"],
-#     deps = [
-#         "//libs/go/docker",
-#         "//libs/go/rmq",
-#         "//manman/host/rmq",
-#         "//manman/host/session",
-#     ],
-#     visibility = ["//visibility:public"],
-# )
-
-# Release metadata for host service - commented out since binary is commented out
-# release_app(
-#     name = "manmanv2-host",
-#     binary_name = ":manmanv2-host",
-#     language = "go",
-#     domain = "manman",
-#     description = "ManManV2 host manager (Docker container orchestration)",
-#     app_type = "worker",
-# )
-
-# Temporarily commented out due to Docker SDK dependency issues
-# go_library(
-#     name = "host_lib",
-#     srcs = ["main.go"],
-#     importpath = "github.com/whale-net/everything/manman/host",
-#     visibility = ["//visibility:private"],
-#     deps = [
-#         "//libs/go/docker",
-#         "//libs/go/rmq",
-#         "//manman/host/rmq",
-#         "//manman/host/session",
-#     ],
-# )
-#
-# go_binary(
-#     name = "host",
-#     embed = [":host_lib"],
-#     visibility = ["//visibility:public"],
-# )
-
 go_library(
     name = "host_lib",
     srcs = ["main.go"],
@@ -62,7 +19,20 @@ go_library(
 )
 
 go_binary(
-    name = "host",
+    name = "host-manager",
     embed = [":host_lib"],
     visibility = ["//visibility:public"],
+)
+
+# Release metadata for host manager
+# NOTE: Host manager is NOT deployed in the control-services helm chart
+# It runs on bare metal with Docker socket access
+release_app(
+    name = "host-manager",
+    binary_name = ":host-manager",
+    language = "go",
+    domain = "manman",
+    description = "ManMan host manager (Docker container orchestration)",
+    app_type = "worker",
+    replicas = 1,
 )
