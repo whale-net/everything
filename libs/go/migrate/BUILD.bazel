@@ -4,6 +4,8 @@ go_library(
     name = "migrate",
     srcs = [
         "cli.go",
+        "history.go",
+        "history_repo.go",
         "migrate.go",
     ],
     importpath = "github.com/whale-net/everything/libs/go/migrate",

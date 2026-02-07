@@ -46,10 +46,14 @@ func DefaultConfig() *Config {
 // migrateDir: subdirectory within migrations (e.g., "migrations")
 func RunCLI(migrations embed.FS, migrateDir string) {
 	var (
-		down    = flag.Bool("down", false, "Rollback all migrations")
-		steps   = flag.Int("steps", 0, "Run N migrations (positive=up, negative=down)")
-		version = flag.Bool("version", false, "Print current migration version")
-		force   = flag.Int("force", -1, "Force set migration version (for recovery)")
+		down           = flag.Bool("down", false, "Rollback all migrations")
+		steps          = flag.Int("steps", 0, "Run N migrations (positive=up, negative=down)")
+		version        = flag.Bool("version", false, "Print current migration version")
+		force          = flag.Int("force", -1, "Force set migration version (for recovery)")
+		forceDangerous = flag.Bool("force-dangerous", false, "Skip history validation when forcing (dangerous)")
+		history        = flag.Bool("history", false, "Show migration history")
+		historyLimit   = flag.Int("history-limit", 20, "Number of history entries to show")
+		tracked        = flag.Bool("tracked", true, "Use history tracking for migrations (default: true)")
 	)
 	flag.Parse()
 
@@ -61,6 +65,19 @@ func RunCLI(migrations embed.FS, migrateDir string) {
 	defer db.Close()
 
 	runner := NewRunner(db, migrations, migrateDir)
+
+	// Handle history flag
+	if *history {
+		if err := runner.tracker.EnsureHistoryTable(); err != nil {
+			log.Fatalf("Failed to ensure history table: %v", err)
+		}
+		entries, err := runner.tracker.GetHistory(*historyLimit)
+		if err != nil {
+			log.Fatalf("Failed to get history: %v", err)
+		}
+		printHistory(entries)
+		return
+	}
 
 	// Handle version flag
 	if *version {
@@ -75,7 +92,7 @@ func RunCLI(migrations embed.FS, migrateDir string) {
 	// Handle force flag
 	if *force >= 0 {
 		log.Printf("Forcing version to %d...", *force)
-		if err := runner.Force(*force); err != nil {
+		if err := runner.ForceWithValidation(*force, *forceDangerous); err != nil {
 			log.Fatalf("Failed to force version: %v", err)
 		}
 		log.Println("Version forced successfully")
@@ -108,8 +125,16 @@ func RunCLI(migrations embed.FS, migrateDir string) {
 
 	// Default: run up
 	log.Println("Running migrations...")
-	if err := runner.Up(); err != nil {
-		log.Fatalf("Failed to run migrations: %v", err)
+
+	var migrationErr error
+	if *tracked {
+		migrationErr = runner.UpWithTracking()
+	} else {
+		migrationErr = runner.Up()
+	}
+
+	if migrationErr != nil {
+		log.Fatalf("Failed to run migrations: %v", migrationErr)
 	}
 
 	v, dirty, err := runner.Version()
@@ -117,6 +142,51 @@ func RunCLI(migrations embed.FS, migrateDir string) {
 		log.Fatalf("Failed to get final version: %v", err)
 	}
 	log.Printf("Migration completed successfully. Version: %d (dirty: %v)", v, dirty)
+}
+
+// printHistory prints migration history in a formatted table
+func printHistory(entries []HistoryEntry) {
+	if len(entries) == 0 {
+		fmt.Println("No migration history found")
+		return
+	}
+
+	fmt.Println("\nMigration History:")
+	fmt.Println("─────────────────────────────────────────────────────────────────────────────")
+	fmt.Printf("%-10s %-8s %-10s %-10s %-12s %-10s %s\n",
+		"ID", "Version", "Direction", "Status", "Duration", "Started", "Error")
+	fmt.Println("─────────────────────────────────────────────────────────────────────────────")
+
+	for _, entry := range entries {
+		durationStr := "-"
+		if entry.DurationMs != nil {
+			durationStr = fmt.Sprintf("%dms", *entry.DurationMs)
+		}
+
+		errorStr := ""
+		if entry.ErrorMessage != nil && *entry.ErrorMessage != "" {
+			errorStr = truncate(*entry.ErrorMessage, 40)
+		}
+
+		fmt.Printf("%-10d %-8d %-10s %-10s %-12s %-10s %s\n",
+			entry.HistoryID,
+			entry.Version,
+			entry.Direction,
+			entry.Status,
+			durationStr,
+			entry.StartedAt.Format("15:04:05"),
+			errorStr,
+		)
+	}
+	fmt.Println("─────────────────────────────────────────────────────────────────────────────")
+}
+
+// truncate truncates a string to maxLen characters with ellipsis
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }
 
 func connect(ctx context.Context, cfg *Config) (*sql.DB, error) {
