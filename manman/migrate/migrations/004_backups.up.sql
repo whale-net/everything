@@ -10,13 +10,13 @@ CREATE TABLE IF NOT EXISTS backups (
 );
 
 -- Indexes for backup queries
-CREATE INDEX idx_backups_session_id ON backups(session_id);
-CREATE INDEX idx_backups_sgc_id ON backups(server_game_config_id);
-CREATE INDEX idx_backups_created_at ON backups(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_backups_session_id ON backups(session_id);
+CREATE INDEX IF NOT EXISTS idx_backups_sgc_id ON backups(server_game_config_id);
+CREATE INDEX IF NOT EXISTS idx_backups_created_at ON backups(created_at DESC);
 
 -- Add backup_id reference to sessions for tracking restore source
-ALTER TABLE sessions ADD COLUMN restored_from_backup_id BIGINT REFERENCES backups(backup_id) ON DELETE SET NULL;
-CREATE INDEX idx_sessions_restored_from ON sessions(restored_from_backup_id);
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS restored_from_backup_id BIGINT REFERENCES backups(backup_id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_sessions_restored_from ON sessions(restored_from_backup_id);
 
 COMMENT ON TABLE backups IS 'Compressed backups of game save data stored in S3';
 COMMENT ON COLUMN backups.s3_url IS 'S3 URL for the backup tarball (format: s3://bucket/backups/{sgc_id}/{backup_id}.tar.gz)';

@@ -48,8 +48,8 @@ CREATE TABLE configuration_strategies (
     UNIQUE(game_id, name)
 );
 
-CREATE INDEX idx_config_strategies_game_id ON configuration_strategies(game_id);
-CREATE INDEX idx_config_strategies_apply_order ON configuration_strategies(game_id, apply_order);
+CREATE INDEX IF NOT EXISTS idx_config_strategies_game_id ON configuration_strategies(game_id);
+CREATE INDEX IF NOT EXISTS idx_config_strategies_apply_order ON configuration_strategies(game_id, apply_order);
 
 -- ----------------------------------------------------------------------------
 -- Strategy Parameter Bindings
@@ -83,8 +83,8 @@ CREATE TABLE strategy_parameter_bindings (
     UNIQUE(strategy_id, param_id)
 );
 
-CREATE INDEX idx_strategy_bindings_strategy_id ON strategy_parameter_bindings(strategy_id);
-CREATE INDEX idx_strategy_bindings_param_id ON strategy_parameter_bindings(param_id);
+CREATE INDEX IF NOT EXISTS idx_strategy_bindings_strategy_id ON strategy_parameter_bindings(strategy_id);
+CREATE INDEX IF NOT EXISTS idx_strategy_bindings_param_id ON strategy_parameter_bindings(param_id);
 
 -- ----------------------------------------------------------------------------
 -- Configuration Patches
@@ -114,6 +114,6 @@ CREATE TABLE configuration_patches (
     UNIQUE(strategy_id, patch_level, entity_id)
 );
 
-CREATE INDEX idx_config_patches_strategy ON configuration_patches(strategy_id);
-CREATE INDEX idx_config_patches_entity ON configuration_patches(patch_level, entity_id);
-CREATE INDEX idx_config_patches_lookup ON configuration_patches(strategy_id, patch_level, entity_id);
+CREATE INDEX IF NOT EXISTS idx_config_patches_strategy ON configuration_patches(strategy_id);
+CREATE INDEX IF NOT EXISTS idx_config_patches_entity ON configuration_patches(patch_level, entity_id);
+CREATE INDEX IF NOT EXISTS idx_config_patches_lookup ON configuration_patches(strategy_id, patch_level, entity_id);

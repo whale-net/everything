@@ -2,9 +2,9 @@
 -- This helps group servers by deployment environment (dev, staging, prod, etc.)
 
 ALTER TABLE servers
-ADD COLUMN environment VARCHAR(100);
+ADD COLUMN IF NOT EXISTS environment VARCHAR(100);
 
-CREATE INDEX idx_servers_environment ON servers(environment) WHERE environment IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_servers_environment ON servers(environment) WHERE environment IS NOT NULL;
 
 -- Add comment for documentation
 COMMENT ON COLUMN servers.environment IS 'Optional deployment environment (e.g., dev, staging, production)';

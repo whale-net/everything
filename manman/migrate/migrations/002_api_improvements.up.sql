@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS server_capabilities (
 );
 
 -- Index for querying latest capabilities by server
-CREATE INDEX idx_server_capabilities_server_recorded ON server_capabilities(server_id, recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_server_capabilities_server_recorded ON server_capabilities(server_id, recorded_at DESC);
 
 -- Log references table for tracking log files (local storage)
 CREATE TABLE IF NOT EXISTS log_references (
@@ -26,8 +26,5 @@ CREATE TABLE IF NOT EXISTS log_references (
 );
 
 -- Indexes for log references
-CREATE INDEX idx_log_refs_session_id ON log_references(session_id);
-CREATE INDEX idx_log_refs_start_time ON log_references(start_time);
-
--- Index for session filtering by server_id (via server_game_configs join)
-CREATE INDEX idx_sessions_sgc_id ON sessions(sgc_id);
+CREATE INDEX IF NOT EXISTS idx_log_refs_session_id ON log_references(session_id);
+CREATE INDEX IF NOT EXISTS idx_log_refs_start_time ON log_references(start_time);

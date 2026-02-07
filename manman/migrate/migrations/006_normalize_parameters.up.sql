@@ -28,8 +28,8 @@ CREATE TABLE parameter_definitions (
     UNIQUE(game_id, key)  -- Each parameter defined once per game
 );
 
-CREATE INDEX idx_param_defs_game_id ON parameter_definitions(game_id);
-CREATE INDEX idx_param_defs_key ON parameter_definitions(key);
+CREATE INDEX IF NOT EXISTS idx_param_defs_game_id ON parameter_definitions(game_id);
+CREATE INDEX IF NOT EXISTS idx_param_defs_key ON parameter_definitions(key);
 
 -- Apply updated_at trigger
 CREATE TRIGGER update_parameter_definitions_updated_at BEFORE UPDATE ON parameter_definitions
@@ -52,9 +52,9 @@ CREATE TABLE game_config_parameter_values (
     UNIQUE(config_id, param_id)  -- One value per parameter per config
 );
 
-CREATE INDEX idx_gc_param_values_config_id ON game_config_parameter_values(config_id);
-CREATE INDEX idx_gc_param_values_param_id ON game_config_parameter_values(param_id);
-CREATE INDEX idx_gc_param_values_lookup ON game_config_parameter_values(param_id, value);
+CREATE INDEX IF NOT EXISTS idx_gc_param_values_config_id ON game_config_parameter_values(config_id);
+CREATE INDEX IF NOT EXISTS idx_gc_param_values_param_id ON game_config_parameter_values(param_id);
+CREATE INDEX IF NOT EXISTS idx_gc_param_values_lookup ON game_config_parameter_values(param_id, value);
 
 -- Apply updated_at trigger
 CREATE TRIGGER update_gc_param_values_updated_at BEFORE UPDATE ON game_config_parameter_values
@@ -76,8 +76,8 @@ CREATE TABLE server_game_config_parameter_values (
     UNIQUE(sgc_id, param_id)
 );
 
-CREATE INDEX idx_sgc_param_values_sgc_id ON server_game_config_parameter_values(sgc_id);
-CREATE INDEX idx_sgc_param_values_param_id ON server_game_config_parameter_values(param_id);
+CREATE INDEX IF NOT EXISTS idx_sgc_param_values_sgc_id ON server_game_config_parameter_values(sgc_id);
+CREATE INDEX IF NOT EXISTS idx_sgc_param_values_param_id ON server_game_config_parameter_values(param_id);
 
 -- Apply updated_at trigger
 CREATE TRIGGER update_sgc_param_values_updated_at BEFORE UPDATE ON server_game_config_parameter_values
@@ -98,8 +98,8 @@ CREATE TABLE session_parameter_values (
     UNIQUE(session_id, param_id)
 );
 
-CREATE INDEX idx_session_param_values_session_id ON session_parameter_values(session_id);
-CREATE INDEX idx_session_param_values_param_id ON session_parameter_values(param_id);
+CREATE INDEX IF NOT EXISTS idx_session_param_values_session_id ON session_parameter_values(session_id);
+CREATE INDEX IF NOT EXISTS idx_session_param_values_param_id ON session_parameter_values(param_id);
 
 -- ----------------------------------------------------------------------------
 -- Helpful Views for Common Queries
