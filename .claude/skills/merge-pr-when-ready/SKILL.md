@@ -29,29 +29,35 @@ This skill monitors a GitHub Pull Request and automatically merges it when all c
 
 This skill uses the **Haiku model** for cost-efficient monitoring since it's a simple polling task that doesn't require complex reasoning.
 
+Uses **GitHub MCP tools** when available for API access, falls back to `gh` CLI.
+
 ## Process
 
 ### Step 1: Validate Input
 
-Extract PR number from arguments:
-- If no argument provided, ask user for PR number
-- Validate PR exists and is open
-- Show initial PR status
+Extract PR number from arguments. If no argument provided, ask user for PR number.
 
 ### Step 2: Get Initial Status
 
-Fetch PR details to show user what will be monitored:
+Fetch PR details using GitHub MCP:
 
-```bash
-gh pr view <PR_NUMBER> --repo whale-net/everything --json number,title,state,mergeable,mergeStateStatus,statusCheckRollup
+```python
+# Use mcp__github__pull_request_read with method="get"
+mcp__github__pull_request_read(
+    method="get",
+    owner="whale-net",
+    repo="everything",
+    pullNumber=326
+)
 ```
 
 Display summary:
 ```
 Monitoring PR #326: "Fix database migrations"
 - Current State: OPEN
-- Mergeable: UNKNOWN (checks pending)
-- Checks: 3 pending, 0 failed
+- Mergeable: MERGEABLE
+- Merge State: BLOCKED (checks pending)
+- Checks: 3 in progress, 0 failed
 ```
 
 ### Step 3: Confirm Monitoring
@@ -66,179 +72,74 @@ Options:
   - "No, cancel" - Exit without monitoring
 ```
 
-### Step 4: Monitor PR Status
-
-Create a monitoring loop that checks every 30 seconds:
-
-```bash
-#!/bin/bash
-PR_NUMBER=$1
-REPO="whale-net/everything"
-CHECK_INTERVAL=30
-
-echo "🔍 Monitoring PR #${PR_NUMBER}..."
-echo "Checking every ${CHECK_INTERVAL} seconds"
-echo ""
-
-ITERATION=0
-while true; do
-    ITERATION=$((ITERATION + 1))
-    TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[${TIMESTAMP}] Check #${ITERATION}"
-
-    # Fetch PR status
-    PR_JSON=$(gh pr view ${PR_NUMBER} --repo ${REPO} \
-        --json state,mergeable,mergeStateStatus,statusCheckRollup 2>&1)
-
-    if [ $? -ne 0 ]; then
-        echo "❌ Error fetching PR: ${PR_JSON}"
-        exit 1
-    fi
-
-    # Parse status
-    STATE=$(echo "$PR_JSON" | jq -r '.state')
-    MERGEABLE=$(echo "$PR_JSON" | jq -r '.mergeable')
-    MERGE_STATE=$(echo "$PR_JSON" | jq -r '.mergeStateStatus')
-
-    echo "  State: ${STATE}"
-    echo "  Mergeable: ${MERGEABLE}"
-    echo "  Merge State: ${MERGE_STATE}"
-
-    # Check if already merged or closed
-    if [ "$STATE" = "MERGED" ]; then
-        echo "✅ PR already merged!"
-        exit 0
-    fi
-
-    if [ "$STATE" = "CLOSED" ]; then
-        echo "❌ PR was closed without merging"
-        exit 1
-    fi
-
-    # Count check statuses
-    PENDING=$(echo "$PR_JSON" | jq '[.statusCheckRollup[]? | select(.state == "PENDING")] | length')
-    FAILED=$(echo "$PR_JSON" | jq '[.statusCheckRollup[]? | select(.state == "FAILURE" or .state == "ERROR")] | length')
-    SUCCESS=$(echo "$PR_JSON" | jq '[.statusCheckRollup[]? | select(.state == "SUCCESS")] | length')
-    TOTAL=$(echo "$PR_JSON" | jq '[.statusCheckRollup[]?] | length')
-
-    if [ "$TOTAL" -gt 0 ]; then
-        echo "  Checks: ${SUCCESS}/${TOTAL} passed, ${PENDING} pending, ${FAILED} failed"
-    else
-        echo "  Checks: No status checks required"
-    fi
-
-    # Check if ready to merge
-    if [ "$MERGEABLE" = "MERGEABLE" ] && [ "$MERGE_STATE" = "CLEAN" ] && [ "$FAILED" = "0" ]; then
-        # Double-check all checks are done (no pending)
-        if [ "$PENDING" = "0" ] || [ "$TOTAL" = "0" ]; then
-            echo ""
-            echo "✅ PR is ready to merge!"
-            echo "🚀 Merging PR #${PR_NUMBER}..."
-
-            # Merge the PR with squash
-            gh pr merge ${PR_NUMBER} --repo ${REPO} --squash --delete-branch
-
-            if [ $? -eq 0 ]; then
-                echo "✅ PR merged successfully!"
-                echo "🗑️  Branch deleted"
-                exit 0
-            else
-                echo "❌ Failed to merge PR"
-                exit 1
-            fi
-        fi
-    fi
-
-    # Show why not ready
-    if [ "$MERGEABLE" != "MERGEABLE" ]; then
-        echo "  ⏳ Not mergeable yet (may have conflicts or dependencies)"
-    elif [ "$MERGE_STATE" != "CLEAN" ]; then
-        echo "  ⏳ Merge state not clean: ${MERGE_STATE}"
-    elif [ "$FAILED" != "0" ]; then
-        echo "  ❌ ${FAILED} check(s) failing - cannot merge"
-    elif [ "$PENDING" != "0" ]; then
-        echo "  ⏳ Waiting for ${PENDING} check(s) to complete"
-    fi
-
-    echo "  Next check in ${CHECK_INTERVAL}s..."
-    echo ""
-    sleep ${CHECK_INTERVAL}
-done
-```
-
-### Step 5: Execute Monitoring
+### Step 4: Execute Monitoring Script
 
 Run the monitoring script from the skill directory:
 
 ```bash
 # Path to the monitoring script (part of this skill)
-SCRIPT_PATH="${SKILL_BASE_DIR}/monitor-pr.sh"
+SCRIPT_PATH="/home/alex/whale_net/everything/.claude/skills/merge-pr-when-ready/monitor-pr.sh"
 
 # Execute the script with PR number
-"${SCRIPT_PATH}" "${PR_NUMBER}"
+"${SCRIPT_PATH}" 326
 ```
 
+The script (`monitor-pr.sh`) handles:
+- Polling every 30 seconds
+- Parsing check status (IN_PROGRESS, SUCCESS, FAILURE)
+- Detecting when PR is ready (mergeable + clean + all checks passed)
+- Auto-merging with squash
+- Deleting source branch
+- Progress reporting
+
 **IMPORTANT**:
-- The script is part of the skill directory (version controlled)
-- Run directly (not in background) so the user can see real-time updates
-- Script handles all monitoring logic and auto-merge
+- The script is version-controlled in the skill directory
+- Run directly (not in background) for real-time updates
+- Uses `gh` CLI for reliability (GitHub MCP may not have merge permissions)
 
 ## Success Response
 
-When merge completes successfully:
+When merge completes successfully, the script outputs:
 
-```markdown
-✅ **PR #326 merged successfully!**
+```
+✅ PR merged successfully!
+🗑️  Branch deleted
 
-**Details:**
+**Summary:**
 - Title: Fix database migrations
-- Checks: All passed
-- Merged: 2026-02-07 22:15:30 UTC
-- Branch: fix/migration-duplicate-index (deleted)
-
-**Timeline:**
-- Monitoring started: 22:10:15
-- Checks completed: 22:15:20
-- Merged: 22:15:30
-- Total time: 5 minutes 15 seconds
-
-The PR has been squash merged and the source branch has been deleted.
+- Monitoring started: 2026-02-07 22:10:15
+- Merged: 2026-02-07 22:15:30
+- Total time: 5m 15s
 ```
 
 ## Error Handling
 
-Handle these scenarios:
+The script handles:
 
 1. **PR not found**: Exit with error message
 2. **PR already merged**: Show success message, exit
 3. **PR closed**: Show message, exit
-4. **Checks fail**: Stop monitoring, show failed checks
-5. **Network errors**: Retry with exponential backoff
-6. **Timeout**: After 30 minutes, ask user if they want to continue
+4. **Checks fail**: Show failed checks and exit
+5. **Network errors**: Error and exit (user can re-run)
 
 ## Notes
 
-- Uses **Haiku model** for cost efficiency (simple polling task)
-- Monitors every 30 seconds (GitHub API rate limit friendly)
+- Uses **Haiku model** for cost efficiency
+- Monitors every 30 seconds (API rate limit friendly)
 - Auto-deletes source branch after merge
 - Uses squash merge by default
 - Shows progress in real-time
-- Handles edge cases (already merged, closed, etc.)
+- Handles edge cases gracefully
 
-## Examples
+## Files
 
-```bash
-# Monitor and merge PR #326
-/merge-pr-when-ready 326
-
-# If no argument, will prompt for PR number
-/merge-pr-when-ready
-```
+- `SKILL.md` - This documentation
+- `monitor-pr.sh` - Monitoring and merge script
 
 ## Safety
 
 - ✅ Confirms with user before starting monitoring
 - ✅ Only merges when all checks pass
-- ✅ Respects required reviews if configured
+- ✅ Respects merge state (no conflicts)
 - ✅ Shows clear status updates
 - ✅ Fails safely if checks fail
