@@ -1,7 +1,11 @@
 package rmq
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"os"
+	"strings"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -18,6 +22,17 @@ type Config struct {
 	Username string
 	Password string
 	VHost    string
+}
+
+// TLSConfig holds TLS/SSL configuration for RabbitMQ connections
+type TLSConfig struct {
+	// Enabled determines if TLS should be used
+	Enabled bool
+	// InsecureSkipVerify controls whether to verify the server's certificate chain and host name
+	// Setting this to true is insecure and should only be used for development/testing
+	InsecureSkipVerify bool
+	// CACertPath is the path to a custom CA certificate file for verifying the server certificate
+	CACertPath string
 }
 
 // NewConnection creates a new RabbitMQ connection
@@ -39,13 +54,85 @@ func NewConnection(config Config) (*Connection, error) {
 }
 
 // NewConnectionFromURL creates a new RabbitMQ connection from a URL
+// For amqps:// URLs, TLS configuration will be loaded from environment variables:
+//   - RABBITMQ_SSL_VERIFY=false (optional): Disable certificate verification (insecure, dev only)
+//   - RABBITMQ_CA_CERT_PATH=/path/to/ca.crt (optional): Custom CA certificate
 func NewConnectionFromURL(url string) (*Connection, error) {
+	// Check if URL uses TLS (amqps://)
+	if strings.HasPrefix(url, "amqps://") {
+		tlsConfig := getTLSConfigFromEnv()
+		return NewConnectionWithTLS(url, tlsConfig)
+	}
+
 	conn, err := amqp.Dial(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
 	}
 
 	return &Connection{conn: conn}, nil
+}
+
+// NewConnectionWithTLS creates a new RabbitMQ connection with explicit TLS configuration
+func NewConnectionWithTLS(url string, tlsConfig *TLSConfig) (*Connection, error) {
+	config, err := buildTLSConfig(tlsConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build TLS config: %w", err)
+	}
+
+	conn, err := amqp.DialTLS(url, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to RabbitMQ with TLS: %w", err)
+	}
+
+	return &Connection{conn: conn}, nil
+}
+
+// getTLSConfigFromEnv creates TLS configuration from environment variables
+func getTLSConfigFromEnv() *TLSConfig {
+	config := &TLSConfig{
+		Enabled:            true,
+		InsecureSkipVerify: false,
+	}
+
+	// Check if SSL verification should be disabled
+	if verify := os.Getenv("RABBITMQ_SSL_VERIFY"); verify == "false" {
+		config.InsecureSkipVerify = true
+	}
+
+	// Check for custom CA certificate path
+	if caPath := os.Getenv("RABBITMQ_CA_CERT_PATH"); caPath != "" {
+		config.CACertPath = caPath
+	}
+
+	return config
+}
+
+// buildTLSConfig creates a tls.Config from TLSConfig
+func buildTLSConfig(config *TLSConfig) (*tls.Config, error) {
+	if config == nil {
+		return &tls.Config{}, nil
+	}
+
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: config.InsecureSkipVerify,
+	}
+
+	// Load custom CA certificate if provided
+	if config.CACertPath != "" {
+		caCert, err := os.ReadFile(config.CACertPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read CA certificate from %s: %w", config.CACertPath, err)
+		}
+
+		caCertPool := x509.NewCertPool()
+		if ok := caCertPool.AppendCertsFromPEM(caCert); !ok {
+			return nil, fmt.Errorf("failed to parse CA certificate from %s", config.CACertPath)
+		}
+
+		tlsConfig.RootCAs = caCertPool
+	}
+
+	return tlsConfig, nil
 }
 
 // Close closes the RabbitMQ connection
