@@ -204,15 +204,12 @@ Options:
 
 Once confirmed, trigger the release via GitHub workflow.
 
-**Get current branch:**
-```bash
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
-```
+**IMPORTANT**: Always use `--ref "main"` to ensure the workflow runs against the main branch code. You can trigger this from any local branch, but the workflow itself will execute on main (no hotfix flow is supported).
 
 **For Helm Charts Only:**
 ```bash
 gh workflow run release.yml \
-  --ref "$BRANCH" \
+  --ref "main" \
   -f helm_charts="helm-manmanv2-control-services" \
   -f increment_minor=true \
   -f dry_run=false \
@@ -222,7 +219,7 @@ gh workflow run release.yml \
 **For Apps Only:**
 ```bash
 gh workflow run release.yml \
-  --ref "$BRANCH" \
+  --ref "main" \
   -f apps="manman-control-api,manman-event-processor" \
   -f increment_patch=true \
   -f dry_run=false \
@@ -232,7 +229,7 @@ gh workflow run release.yml \
 **For Both Apps and Helm Charts:**
 ```bash
 gh workflow run release.yml \
-  --ref "$BRANCH" \
+  --ref "main" \
   -f apps="manman-control-api,manman-event-processor" \
   -f helm_charts="helm-manmanv2-control-services" \
   -f increment_minor=true \
@@ -259,7 +256,7 @@ gh run list --workflow=release.yml --limit 1 --json url --jq '.[0].url'
 2. ✅ **Current version shown** - User saw what version exists
 3. ✅ **Impact explained** - User understands what will be published
 4. ✅ **Final confirmation** - User gave explicit approval
-5. ✅ **Not on main branch** - Warn if attempting release from main
+5. ✅ **Workflow runs on main** - Always use `--ref "main"` to execute workflow on main branch
 
 ## Error Handling
 
