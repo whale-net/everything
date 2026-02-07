@@ -21,7 +21,7 @@ release_app(
     name = "control-api",
     binary_name = ":control-api",
     language = "go",
-    domain = "manman",
+    domain = "manmanv2",
     description = "ManMan control plane API (gRPC)",
     app_type = "external-api",
     port = 50051,

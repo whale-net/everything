@@ -29,7 +29,7 @@ release_app(
     name = "event-processor",
     binary_name = ":event-processor",
     language = "go",
-    domain = "manman",
+    domain = "manmanv2",
     description = "ManMan event processor (RabbitMQ consumer, DB sync)",
     app_type = "worker",
     replicas = 1,
