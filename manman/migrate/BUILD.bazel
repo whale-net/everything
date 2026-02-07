@@ -16,7 +16,7 @@ release_app(
     name = "control-migration",
     binary_name = ":control-migration",
     language = "go",
-    domain = "manman",
+    domain = "manmanv2",
     description = "ManMan control plane database migration runner",
     app_type = "job",
 )

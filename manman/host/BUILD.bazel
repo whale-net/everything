@@ -31,7 +31,7 @@ release_app(
     name = "host-manager",
     binary_name = ":host-manager",
     language = "go",
-    domain = "manman",
+    domain = "manmanv2",
     description = "ManMan host manager (Docker container orchestration)",
     app_type = "worker",
     replicas = 1,
