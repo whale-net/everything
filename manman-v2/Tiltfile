@@ -97,17 +97,17 @@ APPS = {
     'migration': {
         'enabled_env': 'ENABLE_MANMANV2_MIGRATION',
         'bazel_target': '//manman/migrate:control-migration_image_load',
-        'image_name': 'manman-control-migration',
+        'image_name': 'manmanv2-migration',
     },
     'api': {
         'enabled_env': 'ENABLE_MANMANV2_API',
         'bazel_target': '//manman/api:control-api_image_load',
-        'image_name': 'manman-control-api',
+        'image_name': 'manmanv2-api',
     },
     'processor': {
         'enabled_env': 'ENABLE_MANMANV2_PROCESSOR',
         'bazel_target': '//manman/processor:event-processor_image_load',
-        'image_name': 'manman-event-processor',
+        'image_name': 'manmanv2-processor',
     },
 }
 
@@ -139,7 +139,7 @@ if get_env_bool('ENABLE_MANMANV2_MIGRATION', default='true'):
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: manman-control-migration
+  name: manmanv2-migration
   namespace: {namespace}
 spec:
   # Allow manual re-triggering by deleting completed job
@@ -147,12 +147,12 @@ spec:
   template:
     metadata:
       labels:
-        app: manman-control-migration
+        app: manmanv2-migration
     spec:
       restartPolicy: OnFailure
       containers:
       - name: migration
-        image: manman-manman-control-migration
+        image: manman-manmanv2-migration
         env:
         - name: DB_HOST
           value: "postgres-dev.{namespace}.svc.cluster.local"
@@ -171,7 +171,7 @@ spec:
 """.format(namespace=namespace)))
 
     k8s_resource(
-        'manman-control-migration',
+        'manmanv2-migration',
         labels=['manmanv2-infrastructure']
     )
     print("🔄 Migration job configured")
@@ -182,11 +182,11 @@ if get_env_bool('ENABLE_MANMANV2_API', default='true'):
 apiVersion: v1
 kind: Service
 metadata:
-  name: manman-control-api
+  name: manmanv2-api
   namespace: {namespace}
 spec:
   selector:
-    app: manman-control-api
+    app: manmanv2-api
   ports:
     - name: grpc
       port: 50051
@@ -195,21 +195,21 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: manman-control-api
+  name: manmanv2-api
   namespace: {namespace}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: manman-control-api
+      app: manmanv2-api
   template:
     metadata:
       labels:
-        app: manman-control-api
+        app: manmanv2-api
     spec:
       containers:
       - name: api
-        image: manman-manman-control-api
+        image: manman-manmanv2-api
         ports:
         - containerPort: 50051
           name: grpc
@@ -250,8 +250,8 @@ spec:
 
     # Port forward API to localhost
     k8s_resource(
-        'manman-control-api',
-        resource_deps=['manman-control-migration'] if get_env_bool('ENABLE_MANMANV2_MIGRATION', default='true') else [],
+        'manmanv2-api',
+        resource_deps=['manmanv2-migration'] if get_env_bool('ENABLE_MANMANV2_MIGRATION', default='true') else [],
         port_forwards=['50052:50051'],
         labels=['manmanv2-control-plane']
     )
@@ -263,21 +263,21 @@ if get_env_bool('ENABLE_MANMANV2_PROCESSOR', default='true'):
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: manman-event-processor
+  name: manmanv2-processor
   namespace: {namespace}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: manman-event-processor
+      app: manmanv2-processor
   template:
     metadata:
       labels:
-        app: manman-event-processor
+        app: manmanv2-processor
     spec:
       containers:
       - name: processor
-        image: manman-manman-event-processor
+        image: manman-manmanv2-processor
         ports:
         - containerPort: 8080
           name: health
@@ -313,10 +313,10 @@ spec:
     # Build dependency list for processor
     processor_deps = ['rabbitmq-vhost-setup']
     if get_env_bool('ENABLE_MANMANV2_MIGRATION', default='true'):
-        processor_deps.append('manman-control-migration')
+        processor_deps.append('manmanv2-migration')
 
     k8s_resource(
-        'manman-event-processor',
+        'manmanv2-processor',
         resource_deps=processor_deps,
         labels=['manmanv2-control-plane']
     )
