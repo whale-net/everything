@@ -35,6 +35,35 @@ Parse the output to extract:
 
 ## User Interaction
 
+### Step 0: Branch Verification
+
+**IMPORTANT**: You should be on the main branch locally to ensure accurate discovery of apps and charts.
+
+```bash
+# Check current branch
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+if [[ "$CURRENT_BRANCH" != "main" ]]; then
+  echo "⚠️  WARNING: Not on main branch (currently on: $CURRENT_BRANCH)"
+  echo ""
+  echo "It's recommended to switch to main to ensure app/chart names are correct:"
+  echo "  git checkout main"
+  echo "  git pull origin main"
+  echo ""
+  echo "The workflow will run on main regardless, but local discovery should match."
+
+  # Ask user if they want to continue anyway
+  read -p "Continue anyway? (y/N) " -n 1 -r
+  echo
+  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Release cancelled. Please switch to main and try again."
+    exit 1
+  fi
+else
+  echo "✅ On main branch - proceeding with release"
+fi
+```
+
 ### Step 1: Select Release Type
 
 Use `AskUserQuestion` to ask what to release:
@@ -252,11 +281,12 @@ gh run list --workflow=release.yml --limit 1 --json url --jq '.[0].url'
 
 **ALWAYS perform these checks before execution:**
 
-1. ✅ **Version intentionality verified** - User explicitly confirmed version bump type
-2. ✅ **Current version shown** - User saw what version exists
-3. ✅ **Impact explained** - User understands what will be published
-4. ✅ **Final confirmation** - User gave explicit approval
-5. ✅ **Workflow runs on main** - Always use `--ref "main"` to execute workflow on main branch
+1. ✅ **On main branch locally** - Ensures app/chart discovery matches what will be released
+2. ✅ **Version intentionality verified** - User explicitly confirmed version bump type
+3. ✅ **Current version shown** - User saw what version exists
+4. ✅ **Impact explained** - User understands what will be published
+5. ✅ **Final confirmation** - User gave explicit approval
+6. ✅ **Workflow runs on main** - Always use `--ref "main"` to execute workflow on main branch
 
 ## Error Handling
 
