@@ -191,11 +191,11 @@ release_helm_chart(
     name = "manmanv2_chart",
     apps = MANMAN_V2_APPS,
     chart_name = "control-services",
-    domain = "manman",
+    domain = "manmanv2",
     environment = "dev",
     namespace = "manmanv2",
     # chart_version omitted - uses default "0.0.0-dev" for local builds
-    # Release system auto-versions from git tags (helm-manman-control-services.v*)
+    # Release system auto-versions from git tags (helm-manmanv2-control-services.v*)
     visibility = ["//visibility:public"],
 )
 
