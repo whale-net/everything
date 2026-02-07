@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
@@ -15,6 +16,7 @@ type Runner struct {
 	db         *sql.DB
 	migrations embed.FS
 	migrateDir string
+	tracker    *HistoryTracker
 }
 
 // NewRunner creates a new migration runner
@@ -24,7 +26,13 @@ func NewRunner(db *sql.DB, migrations embed.FS, migrateDir string) *Runner {
 		db:         db,
 		migrations: migrations,
 		migrateDir: migrateDir,
+		tracker:    NewHistoryTracker(db),
 	}
+}
+
+// History returns a simplified repository interface for accessing migration history
+func (r *Runner) History() *HistoryRepo {
+	return NewHistoryRepo(r.tracker)
 }
 
 // Up runs all pending migrations
@@ -102,6 +110,101 @@ func (r *Runner) Force(version int) error {
 	}
 
 	return nil
+}
+
+// ForceWithValidation forces a version after validating against migration history
+func (r *Runner) ForceWithValidation(version int, dangerous bool) error {
+	// Ensure history table exists
+	if err := r.tracker.EnsureHistoryTable(); err != nil {
+		return fmt.Errorf("failed to ensure history table: %w", err)
+	}
+
+	// Validate recovery unless dangerous flag is set
+	if !dangerous {
+		repo := r.History()
+		safe, reason, err := repo.IsVersionSafe(int64(version))
+		if err != nil {
+			return fmt.Errorf("failed to validate version: %w", err)
+		}
+		if !safe {
+			return fmt.Errorf("cannot force to version %d: %s\nUse --force-dangerous to override (not recommended)", version, reason)
+		}
+	}
+
+	// Perform the force
+	return r.Force(version)
+}
+
+// UpWithTracking runs migrations one at a time with history tracking
+func (r *Runner) UpWithTracking() error {
+	// Ensure history table exists first
+	if err := r.tracker.EnsureHistoryTable(); err != nil {
+		return fmt.Errorf("failed to ensure history table: %w", err)
+	}
+
+	// Get current version
+	currentVersion, dirty, err := r.Version()
+	if err != nil && err.Error() != "no migration" {
+		return fmt.Errorf("failed to get current version: %w", err)
+	}
+
+	if dirty {
+		return fmt.Errorf("database is in dirty state (version %d). Use --force to recover", currentVersion)
+	}
+
+	// Run migrations one at a time
+	for {
+		// Get current version before each step
+		beforeVersion, _, err := r.Version()
+		if err != nil && err.Error() != "no migration" {
+			return fmt.Errorf("failed to get version: %w", err)
+		}
+
+		// Create migrator for this step
+		m, err := r.createMigrator()
+		if err != nil {
+			return err
+		}
+
+		// Try to run one migration
+		nextVersion := beforeVersion + 1
+		startTime := time.Now()
+
+		// Record start in history
+		historyID, err := r.tracker.RecordStart(int64(nextVersion), "up")
+		if err != nil {
+			// Log warning but continue - history tracking shouldn't block migrations
+			fmt.Printf("Warning: failed to record migration start in history: %v\n", err)
+		}
+
+		// Run the migration
+		stepErr := m.Steps(1)
+
+		if stepErr == nil {
+			// Success
+			fmt.Printf("✓ Migration %d completed successfully (%dms)\n", nextVersion, time.Since(startTime).Milliseconds())
+			if historyID > 0 {
+				if err := r.tracker.RecordSuccess(historyID, startTime); err != nil {
+					fmt.Printf("Warning: failed to record migration success in history: %v\n", err)
+				}
+			}
+			continue
+		}
+
+		if stepErr == migrate.ErrNoChange {
+			// No more migrations
+			return nil
+		}
+
+		// Migration failed
+		fmt.Printf("✗ Migration %d failed: %v\n", nextVersion, stepErr)
+		if historyID > 0 {
+			if err := r.tracker.RecordFailure(historyID, startTime, stepErr); err != nil {
+				fmt.Printf("Warning: failed to record migration failure in history: %v\n", err)
+			}
+		}
+		return stepErr
+	}
 }
 
 func (r *Runner) createMigrator() (*migrate.Migrate, error) {
