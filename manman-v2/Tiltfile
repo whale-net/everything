@@ -97,17 +97,17 @@ APPS = {
     'migration': {
         'enabled_env': 'ENABLE_MANMANV2_MIGRATION',
         'bazel_target': '//manman/migrate:control-migration_image_load',
-        'image_name': 'manmanv2-migration',
+        'image_name': 'manmanv2-control-migration',
     },
     'api': {
         'enabled_env': 'ENABLE_MANMANV2_API',
         'bazel_target': '//manman/api:control-api_image_load',
-        'image_name': 'manmanv2-api',
+        'image_name': 'manmanv2-control-api',
     },
     'processor': {
         'enabled_env': 'ENABLE_MANMANV2_PROCESSOR',
         'bazel_target': '//manman/processor:event-processor_image_load',
-        'image_name': 'manmanv2-processor',
+        'image_name': 'manmanv2-event-processor',
     },
 }
 
@@ -152,7 +152,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: migration
-        image: manmanv2-migration
+        image: manmanv2-control-migration
         env:
         - name: DB_HOST
           value: "postgres-dev.{namespace}.svc.cluster.local"
@@ -209,7 +209,7 @@ spec:
     spec:
       containers:
       - name: api
-        image: manmanv2-api
+        image: manmanv2-control-api
         ports:
         - containerPort: 50051
           name: grpc
@@ -277,7 +277,7 @@ spec:
     spec:
       containers:
       - name: processor
-        image: manmanv2-processor
+        image: manmanv2-event-processor
         ports:
         - containerPort: 8080
           name: health
