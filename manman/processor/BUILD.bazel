@@ -20,17 +20,17 @@ go_library(
 )
 
 go_binary(
-    name = "manmanv2-processor",
+    name = "event-processor",
     embed = [":processor_lib"],
     visibility = ["//visibility:public"],
 )
 
 release_app(
-    name = "manmanv2-processor",
-    binary_name = ":manmanv2-processor",
+    name = "event-processor",
+    binary_name = ":event-processor",
     language = "go",
     domain = "manman",
-    description = "ManManV2 event processor (RabbitMQ consumer, DB sync)",
+    description = "ManMan event processor (RabbitMQ consumer, DB sync)",
     app_type = "worker",
     replicas = 1,
 )

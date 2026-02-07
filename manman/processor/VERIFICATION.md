@@ -47,13 +47,13 @@
 
 ```bash
 # ✅ Binary builds successfully
-bazel build //manman/processor:manmanv2-processor
+bazel build //manman/processor:event-processor
 
 # ✅ Container image builds successfully
-bazel build //manman/processor:manmanv2-processor_image
+bazel build //manman/processor:event-processor_image
 
 # Binary location
-bazel-bin/manman/processor/manmanv2-processor_/manmanv2-processor
+bazel-bin/manman/processor/event-processor_/event-processor
 ```
 
 ## Configuration Test

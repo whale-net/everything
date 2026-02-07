@@ -64,7 +64,7 @@ secrets:
 ```yaml
 # docker-compose.yml
 services:
-  manmanv2-processor:
+  manman-event-processor:
     environment:
       DB_PASSWORD: ${DB_PASSWORD}  # From .env file
       RABBITMQ_URL: ${RABBITMQ_URL}
@@ -421,14 +421,14 @@ stringData:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: manmanv2-processor
+  name: manman-event-processor
   namespace: manmanv2
 spec:
   template:
     spec:
       containers:
       - name: processor
-        image: ghcr.io/whale-net/manman-manmanv2-processor:v1.0.0
+        image: ghcr.io/whale-net/manman-event-processor:v1.0.0
         env:
         # Database
         - name: DB_HOST
