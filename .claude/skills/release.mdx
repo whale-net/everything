@@ -1,0 +1,224 @@
+---
+skill: release
+description: Interactive release builder for apps and helm charts
+invocable: true
+---
+
+# Release Builder
+
+This skill guides you through creating a release for apps and/or helm charts in the Everything monorepo.
+
+## Process
+
+You will:
+1. **Select release targets** - Choose which apps/charts to release
+2. **Choose version strategy** - Specify version or auto-increment
+3. **Review release plan** - See exactly what will be released
+4. **Confirm** - Final approval before execution
+5. **Execute** - Trigger the release (GitHub workflow or local)
+
+## Discovery Phase
+
+First, discover available apps and helm charts:
+
+```bash
+# Find all helm charts
+bazel query 'kind("helm_chart", //...)' 2>/dev/null | grep -v "_chart_metadata" | grep -v "_chart$" | sort
+
+# Find all release apps (optional - usually release charts which include apps)
+bazel query 'attr("tags", "release-metadata", //...)' 2>/dev/null | sort
+```
+
+Parse the output to extract:
+- **Domains**: demo, manman, friendly_computing_machine, etc.
+- **Chart names**: Extract from targets like `//manman:manmanv2_chart`
+- **Chart metadata**: Read chart metadata files to get details
+
+## User Interaction
+
+### Step 1: Select Release Type
+
+Use `AskUserQuestion` to ask what to release:
+
+```
+Question: "What would you like to release?"
+Options:
+  - "Helm Charts" - Release one or more helm charts
+  - "Apps Only" - Release app images without charts (rare)
+  - "Both" - Release apps and charts separately
+```
+
+### Step 2: Select Charts/Apps
+
+Based on selection, present available charts grouped by domain:
+
+**For Helm Charts:**
+```
+Question: "Which helm chart(s) would you like to release?"
+Header: "Charts"
+Options: (multiSelect: true)
+  - "manman-host-services (domain: manman, namespace: manman)"
+  - "control-services (domain: manman, namespace: manmanv2)"
+  - "fcm (domain: friendly_computing_machine, namespace: fcm)"
+  - "All non-demo charts" - Release all production charts
+```
+
+For each selected chart, read its metadata to show:
+```bash
+# Example for manmanv2 chart
+bazel build //manman:manmanv2_chart_chart_metadata 2>/dev/null
+cat bazel-bin/manman/manmanv2_chart_chart_metadata_chart_metadata.json
+```
+
+### Step 3: Version Strategy
+
+**CRITICAL**: Always verify version upgrade intentionality.
+
+```
+Question: "How should we determine the version?"
+Header: "Version"
+Options:
+  - "Auto-increment patch (vX.Y.Z → vX.Y.Z+1)" - For bug fixes
+  - "Auto-increment minor (vX.Y.Z → vX.Y+1.0)" - For new features
+  - "Specify exact version" - For major releases or custom versions
+```
+
+If "Specify exact version" selected, follow up with:
+```
+Question: "What version should we release?"
+Note: Format should be vX.Y.Z (e.g., v1.2.3)
+```
+
+**Version Verification**: Before proceeding, check current latest version:
+
+```bash
+# For each chart, find latest git tag
+git tag -l "helm-manman-control-services.v*" | sort -V | tail -1
+
+# Show to user:
+"Current version: v0.5.2
+Proposed version: v0.5.3 (patch increment)
+This will create a NEW release. Continue?"
+```
+
+### Step 4: Additional Options
+
+```
+Question: "Additional release options?"
+Options: (multiSelect: true)
+  - "Dry run (build but don't publish)" - Test the release
+  - "Include demo domain" - Also release demo apps/charts
+```
+
+### Step 5: Review Release Plan
+
+**CRITICAL**: Show complete summary and require explicit confirmation.
+
+Display a clear summary:
+
+```markdown
+# Release Plan Summary
+
+## Targets
+- **Helm Chart**: manman-control-services
+  - **Namespace**: manmanv2
+  - **Apps**: control-api, control-migration, event-processor
+  - **Current Version**: v0.2.1
+  - **New Version**: v0.3.0 (minor increment)
+
+## Version Strategy
+- Auto-increment minor version
+
+## Options
+- Dry run: No
+- Include demo: No
+
+## Actions That Will Be Taken
+1. Build chart: //manman:manmanv2_chart
+2. Create git tag: helm-manman-control-services.v0.3.0
+3. Push images to ghcr.io/whale-net:
+   - manman-control-api:v0.3.0
+   - manman-control-migration:v0.3.0
+   - manman-event-processor:v0.3.0
+4. Create GitHub release with artifacts
+5. Publish helm chart to GitHub Pages
+
+⚠️  **WARNING**: This will create a public release and cannot be easily undone.
+```
+
+Then ask for final confirmation:
+```
+Question: "Proceed with this release?"
+Header: "Confirm"
+Options:
+  - "Yes, proceed with release (Recommended)" - Only if everything looks correct
+  - "No, cancel" - Go back to modify
+  - "Show more details" - See full release configuration
+```
+
+### Step 6: Execute Release
+
+Once confirmed, trigger the release via GitHub workflow:
+
+```bash
+# Get current branch
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+# Trigger workflow
+gh workflow run release.yml \
+  --ref "$BRANCH" \
+  -f helm_charts="control-services" \
+  -f increment_minor=true \
+  -f dry_run=false \
+  -f include_demo=false
+
+# Get workflow run URL
+echo "Release triggered! Monitor progress at:"
+gh run list --workflow=release.yml --limit 1 --json url --jq '.[0].url'
+```
+
+## Safety Checks
+
+**ALWAYS perform these checks before execution:**
+
+1. ✅ **Version intentionality verified** - User explicitly confirmed version bump type
+2. ✅ **Current version shown** - User saw what version exists
+3. ✅ **Impact explained** - User understands what will be published
+4. ✅ **Final confirmation** - User gave explicit approval
+5. ✅ **Not on main branch** - Warn if attempting release from main
+
+## Error Handling
+
+If user seems unsure, offer to:
+- Show current deployed versions
+- Explain version semantics (major.minor.patch)
+- Run dry-run first
+- Cancel and investigate further
+
+## Response Format
+
+After triggering:
+```markdown
+✅ Release initiated!
+
+**Workflow**: https://github.com/whale-net/everything/actions/runs/12345
+**Chart**: helm-manman-control-services
+**Version**: v0.3.0
+
+Monitor the workflow for:
+- ✓ Build completion
+- ✓ Image pushes
+- ✓ GitHub release creation
+- ✓ Helm chart publication
+
+The release will be available at:
+https://github.com/whale-net/everything/releases/tag/helm-manman-control-services.v0.3.0
+```
+
+## Notes
+
+- Release builds happen in GitHub Actions, not locally
+- Images are pushed to ghcr.io/whale-net
+- Helm charts are published to GitHub Pages
+- Use `gh run watch` to monitor progress
+- Dry runs are recommended for first-time releases
