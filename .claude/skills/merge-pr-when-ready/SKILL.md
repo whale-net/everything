@@ -168,24 +168,20 @@ done
 
 ### Step 5: Execute Monitoring
 
-Run the monitoring script:
+Run the monitoring script from the skill directory:
 
 ```bash
-# Save script to scratchpad
-SCRIPT_PATH="${SCRATCHPAD_DIR}/monitor-pr-${PR_NUMBER}.sh"
+# Path to the monitoring script (part of this skill)
+SCRIPT_PATH="${SKILL_BASE_DIR}/monitor-pr.sh"
 
-# Write the monitoring script
-cat > "${SCRIPT_PATH}" << 'SCRIPT_EOF'
-[... monitoring script from above ...]
-SCRIPT_EOF
-
-chmod +x "${SCRIPT_PATH}"
-
-# Execute the script
-exec "${SCRIPT_PATH}"
+# Execute the script with PR number
+"${SCRIPT_PATH}" "${PR_NUMBER}"
 ```
 
-**IMPORTANT**: The skill should run the monitoring script directly (not in background) so the user can see real-time updates.
+**IMPORTANT**:
+- The script is part of the skill directory (version controlled)
+- Run directly (not in background) so the user can see real-time updates
+- Script handles all monitoring logic and auto-merge
 
 ## Success Response
 
