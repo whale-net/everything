@@ -2,6 +2,23 @@
 
 A microservices-based manifest management system for game server orchestration.
 
+## 📚 Documentation
+
+- **[Getting Started Guide](./GETTING_STARTED.md)** - Choose your path (dev, deployment, features)
+- **[Architecture Overview](./ARCHITECTURE.md)** - ManManV2 system design (split-plane)
+- **[Feature Documentation](./docs/)** - Parameters, backups, monitoring, etc.
+- **[Local Development](../manman-v2/README.md)** - Run ManManV2 locally with Tilt
+- **[Production Deployment](./docs/PRODUCTION_DEPLOYMENT.md)** - Deploy to production
+
+---
+
+## Project Structure
+
+This repository contains both **ManMan V1** (Python, legacy) and **ManMan V2** (Go, current):
+
+- **V1 (Legacy):** Python microservices in `src/`
+- **V2 (Current):** Go services in `api/`, `processor/`, `host/`, `migrate/`
+
 ---
 
 ## 🚀 Quick Start

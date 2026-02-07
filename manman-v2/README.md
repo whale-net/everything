@@ -2,6 +2,15 @@
 
 Complete local development environment for ManManV2, the split-plane game server management system.
 
+## Documentation
+
+- **[Quick Start](./QUICK-START.md)** - 5-minute getting started guide
+- **[Architecture](../manman/ARCHITECTURE.md)** - System design and component overview
+- **[Production Deployment](../manman/docs/PRODUCTION_DEPLOYMENT.md)** - Deploy to production
+- **[Host Manager Deployment](../manman/host/DEPLOYMENT.md)** - Bare metal host setup
+- **[Feature Documentation](../manman/docs/)** - Parameters, backups, monitoring, etc.
+- **[About This Setup](./ABOUT.md)** - Design decisions for this Tiltfile environment
+
 ## Overview
 
 ManManV2 uses a **split-plane architecture**:
