@@ -154,56 +154,63 @@ func (r *Runner) UpWithTracking() error {
 
 	// Run migrations one at a time
 	for {
-		// Get current version before each step
-		beforeVersion, _, err := r.Version()
-		if err != nil && err.Error() != "no migration" {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-
 		// Create migrator for this step
 		m, err := r.createMigrator()
 		if err != nil {
 			return err
 		}
 
-		// Try to run one migration
+		// Get current version before each step
+		beforeVersion, _, err := r.Version()
+		if err != nil && err.Error() != "no migration" {
+			return fmt.Errorf("failed to get version: %w", err)
+		}
+
 		nextVersion := beforeVersion + 1
 		startTime := time.Now()
 
-		// Record start in history
-		historyID, err := r.tracker.RecordStart(int64(nextVersion), "up")
-		if err != nil {
-			// Log warning but continue - history tracking shouldn't block migrations
-			fmt.Printf("Warning: failed to record migration start in history: %v\n", err)
-		}
-
-		// Run the migration
+		// Try to run one migration (don't record start yet - wait to see if it exists)
 		stepErr := m.Steps(1)
 
-		if stepErr == nil {
-			// Success
-			fmt.Printf("✓ Migration %d completed successfully (%dms)\n", nextVersion, time.Since(startTime).Milliseconds())
-			if historyID > 0 {
-				if err := r.tracker.RecordSuccess(historyID, startTime); err != nil {
-					fmt.Printf("Warning: failed to record migration success in history: %v\n", err)
-				}
-			}
-			continue
-		}
-
 		if stepErr == migrate.ErrNoChange {
-			// No more migrations
+			// No more migrations - this is success
 			return nil
 		}
 
-		// Migration failed
-		fmt.Printf("✗ Migration %d failed: %v\n", nextVersion, stepErr)
+		if stepErr != nil {
+			// Check if this is a "file doesn't exist" error (no more migrations)
+			if stepErr.Error() == "file does not exist" {
+				// No more migration files - this is normal
+				return nil
+			}
+
+			// Real migration error - record it
+			historyID, recErr := r.tracker.RecordStart(int64(nextVersion), "up")
+			if recErr != nil {
+				fmt.Printf("Warning: failed to record migration start in history: %v\n", recErr)
+			}
+
+			fmt.Printf("✗ Migration %d failed: %v\n", nextVersion, stepErr)
+			if historyID > 0 {
+				if recErr := r.tracker.RecordFailure(historyID, startTime, stepErr); recErr != nil {
+					fmt.Printf("Warning: failed to record migration failure in history: %v\n", recErr)
+				}
+			}
+			return stepErr
+		}
+
+		// Migration succeeded - record it in history
+		historyID, err := r.tracker.RecordStart(int64(nextVersion), "up")
+		if err != nil {
+			fmt.Printf("Warning: failed to record migration start in history: %v\n", err)
+		}
+
+		fmt.Printf("✓ Migration %d completed successfully (%dms)\n", nextVersion, time.Since(startTime).Milliseconds())
 		if historyID > 0 {
-			if err := r.tracker.RecordFailure(historyID, startTime, stepErr); err != nil {
-				fmt.Printf("Warning: failed to record migration failure in history: %v\n", err)
+			if err := r.tracker.RecordSuccess(historyID, startTime); err != nil {
+				fmt.Printf("Warning: failed to record migration success in history: %v\n", err)
 			}
 		}
-		return stepErr
 	}
 }
 
