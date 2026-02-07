@@ -2,7 +2,10 @@ package handlers
 
 import (
 	"context"
+	"log"
+	"time"
 
+	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manman"
 	"github.com/whale-net/everything/manman/api/repository"
@@ -27,14 +30,28 @@ type APIServer struct {
 	backupHandler           *BackupHandler
 }
 
-func NewAPIServer(repo *repository.Repository, s3Client *s3.Client) *APIServer {
+func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq.Connection) *APIServer {
+	// Create command publisher with RPC support
+	commandPublisher, err := NewCommandPublisher(rmqConn)
+	if err != nil {
+		// Log error but don't fail - API can still serve reads
+		log.Printf("Warning: Failed to create command publisher: %v", err)
+	} else {
+		// Start reply consumer in background
+		go func() {
+			if err := commandPublisher.Start(context.Background()); err != nil {
+				log.Printf("Warning: Command publisher reply consumer stopped: %v", err)
+			}
+		}()
+	}
+
 	return &APIServer{
 		repo:                    repo,
 		serverHandler:           NewServerHandler(repo.Servers),
 		gameHandler:             NewGameHandler(repo.Games),
 		gameConfigHandler:       NewGameConfigHandler(repo.GameConfigs),
 		serverGameConfigHandler: NewServerGameConfigHandler(repo.ServerGameConfigs, repo.ServerPorts),
-		sessionHandler:          NewSessionHandler(repo.Sessions),
+		sessionHandler:          NewSessionHandler(repo, commandPublisher),
 		registrationHandler:     NewRegistrationHandler(repo.Servers, repo.ServerCapabilities),
 		validationHandler:       NewValidationHandler(repo.Servers, repo.GameConfigs),
 		logsHandler:             NewLogsHandler(repo.LogReferences, s3Client),
@@ -517,11 +534,19 @@ func serverGameConfigToProto(sgc *manman.ServerGameConfig) *pb.ServerGameConfig 
 
 // SessionHandler handles Session-related RPCs
 type SessionHandler struct {
-	repo repository.SessionRepository
+	sessionRepo repository.SessionRepository
+	sgcRepo     repository.ServerGameConfigRepository
+	gcRepo      repository.GameConfigRepository
+	publisher   *CommandPublisher
 }
 
-func NewSessionHandler(repo repository.SessionRepository) *SessionHandler {
-	return &SessionHandler{repo: repo}
+func NewSessionHandler(repo *repository.Repository, publisher *CommandPublisher) *SessionHandler {
+	return &SessionHandler{
+		sessionRepo: repo.Sessions,
+		sgcRepo:     repo.ServerGameConfigs,
+		gcRepo:      repo.GameConfigs,
+		publisher:   publisher,
+	}
 }
 
 func (h *SessionHandler) ListSessions(ctx context.Context, req *pb.ListSessionsRequest) (*pb.ListSessionsResponse, error) {
@@ -550,7 +575,7 @@ func (h *SessionHandler) ListSessions(ctx context.Context, req *pb.ListSessionsR
 	// TODO: Use enhanced filters (status_filter, started_after, started_before, server_id, live_only)
 	// This will require updating the repository layer to support these filters
 
-	sessions, err := h.repo.List(ctx, sgcID, pageSize+1, offset)
+	sessions, err := h.sessionRepo.List(ctx, sgcID, pageSize+1, offset)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list sessions: %v", err)
 	}
@@ -573,7 +598,7 @@ func (h *SessionHandler) ListSessions(ctx context.Context, req *pb.ListSessionsR
 }
 
 func (h *SessionHandler) GetSession(ctx context.Context, req *pb.GetSessionRequest) (*pb.GetSessionResponse, error) {
-	session, err := h.repo.Get(ctx, req.SessionId)
+	session, err := h.sessionRepo.Get(ctx, req.SessionId)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "session not found: %v", err)
 	}
@@ -584,18 +609,38 @@ func (h *SessionHandler) GetSession(ctx context.Context, req *pb.GetSessionReque
 }
 
 func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionRequest) (*pb.StartSessionResponse, error) {
+	// Create session in database
 	session := &manman.Session{
 		SGCID:      req.ServerGameConfigId,
 		Status:     manman.SessionStatusPending,
 		Parameters: mapToJSONB(req.Parameters),
 	}
 
-	session, err := h.repo.Create(ctx, session)
+	session, err := h.sessionRepo.Create(ctx, session)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to start session: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to create session: %v", err)
 	}
 
-	// TODO: Publish command to RabbitMQ for host manager to pick up
+	// Fetch ServerGameConfig to get server ID and deployment details
+	sgc, err := h.sgcRepo.Get(ctx, req.ServerGameConfigId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to fetch server game config: %v", err)
+	}
+
+	// Fetch GameConfig to get game details
+	gc, err := h.gcRepo.Get(ctx, sgc.GameConfigID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to fetch game config: %v", err)
+	}
+
+	// Publish start session command to RabbitMQ
+	if h.publisher != nil {
+		cmd := buildStartSessionCommand(session, sgc, gc, req.Parameters)
+		if err := h.publisher.PublishStartSession(ctx, sgc.ServerID, cmd, 30*time.Second); err != nil {
+			log.Printf("Warning: Failed to publish start session command: %v", err)
+			// Don't fail the request - the session is created, operator can manually trigger
+		}
+	}
 
 	return &pb.StartSessionResponse{
 		Session: sessionToProto(session),
@@ -603,21 +648,106 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 }
 
 func (h *SessionHandler) StopSession(ctx context.Context, req *pb.StopSessionRequest) (*pb.StopSessionResponse, error) {
-	session, err := h.repo.Get(ctx, req.SessionId)
+	session, err := h.sessionRepo.Get(ctx, req.SessionId)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "session not found: %v", err)
 	}
 
-	// TODO: Publish stop command to RabbitMQ
+	// Fetch ServerGameConfig to get server ID
+	sgc, err := h.sgcRepo.Get(ctx, session.SGCID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to fetch server game config: %v", err)
+	}
 
+	// Publish stop session command to RabbitMQ
+	if h.publisher != nil {
+		cmd := map[string]interface{}{
+			"session_id": session.SessionID,
+			"force":      false,
+		}
+		if err := h.publisher.PublishStopSession(ctx, sgc.ServerID, cmd, 30*time.Second); err != nil {
+			log.Printf("Warning: Failed to publish stop session command: %v", err)
+		}
+	}
+
+	// Update session status
 	session.Status = manman.SessionStatusStopping
-	if err := h.repo.Update(ctx, session); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to stop session: %v", err)
+	if err := h.sessionRepo.Update(ctx, session); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update session: %v", err)
 	}
 
 	return &pb.StopSessionResponse{
 		Session: sessionToProto(session),
 	}, nil
+}
+
+// buildStartSessionCommand converts database models to RabbitMQ message format
+func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameConfig, gc *manman.GameConfig, sessionParams map[string]string) map[string]interface{} {
+	// Build game config message
+	gameConfig := map[string]interface{}{
+		"config_id":     gc.ConfigID,
+		"image":         gc.Image,
+		"args_template": gc.ArgsTemplate,
+		"env_template":  jsonbToMap(gc.EnvTemplate),
+		"files":         convertFilesToMessage(gc.Files),
+		"parameters":    convertParametersToMessage(gc.Parameters),
+	}
+
+	// Build server game config message
+	serverGameConfig := map[string]interface{}{
+		"sgc_id":        sgc.SGCID,
+		"port_bindings": convertPortBindingsToMessage(sgc.PortBindings),
+		"parameters":    jsonbToMap(sgc.Parameters),
+	}
+
+	// Merge session-level parameters
+	if sessionParams == nil {
+		sessionParams = make(map[string]string)
+	}
+
+	return map[string]interface{}{
+		"session_id":         session.SessionID,
+		"sgc_id":            sgc.SGCID,
+		"game_config":       gameConfig,
+		"server_game_config": serverGameConfig,
+		"parameters":        sessionParams,
+	}
+}
+
+// Helper functions to convert JSONB to message format
+func convertFilesToMessage(filesJSON manman.JSONB) []interface{} {
+	// Files are stored as array of objects in JSONB
+	if filesJSON == nil {
+		return []interface{}{}
+	}
+	// Return as-is since it's already in the right format
+	if files, ok := filesJSON["files"].([]interface{}); ok {
+		return files
+	}
+	return []interface{}{}
+}
+
+func convertParametersToMessage(paramsJSON manman.JSONB) []interface{} {
+	// Parameters are stored as array of objects in JSONB
+	if paramsJSON == nil {
+		return []interface{}{}
+	}
+	// Return as-is since it's already in the right format
+	if params, ok := paramsJSON["parameters"].([]interface{}); ok {
+		return params
+	}
+	return []interface{}{}
+}
+
+func convertPortBindingsToMessage(bindingsJSON manman.JSONB) []interface{} {
+	if bindingsJSON == nil {
+		return []interface{}{}
+	}
+	// Port bindings are stored as array in JSONB
+	if bindings, ok := bindingsJSON["port_bindings"].([]interface{}); ok {
+		return bindings
+	}
+	return []interface{}{}
 }
 
 func sessionToProto(s *manman.Session) *pb.Session {

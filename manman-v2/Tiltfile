@@ -1,0 +1,346 @@
+# ManManV2 Tiltfile
+# Local development environment for ManManV2 control plane services
+#
+# This Tiltfile sets up the cloud/K8s components of ManManV2:
+# - PostgreSQL database
+# - RabbitMQ message queue
+# - Control Plane API (gRPC)
+# - Event Processor (RabbitMQ consumer)
+#
+# Note: The host manager runs on bare metal (not in K8s) to access Docker.
+# See README-HOST.md for instructions on running the host service.
+
+load('ext://namespace', 'namespace_create')
+load('ext://dotenv', 'dotenv')
+load('../tools/tilt/common.tilt',
+     'build_images_from_apps', 'detect_platform', 'get_bazel_platform', 'get_watch_paths',
+     'setup_dev_util', 'setup_postgres', 'setup_rabbitmq', 'setup_otelcollector',
+     'get_env_bool', 'get_custom_or_default',
+     'print_startup_banner', 'print_footer_info')
+
+# ===========================
+# Configuration
+# ===========================
+
+namespace = 'manmanv2-local-dev'
+namespace_create(namespace)
+dotenv()
+
+platform = detect_platform()
+bazel_platform = get_bazel_platform(platform)
+
+print_startup_banner("ManManV2 Control Plane", namespace, platform)
+
+# ===========================
+# Infrastructure Setup
+# ===========================
+
+setup_dev_util(namespace)
+
+# PostgreSQL Database
+db_info = setup_postgres(namespace, db_name='manmanv2')
+db_url = get_custom_or_default('BUILD_POSTGRES_ENV', 'POSTGRES_URL', db_info['url'])
+
+# RabbitMQ Message Queue
+rmq_info = setup_rabbitmq(namespace)
+rabbitmq_host = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_HOST', rmq_info['host'])
+rabbitmq_port = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_PORT', rmq_info['port'])
+rabbitmq_user = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_USER', rmq_info['user'])
+rabbitmq_password = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_PASSWORD', rmq_info['password'])
+
+# Construct RabbitMQ URL with vhost for environment isolation
+rabbitmq_url = 'amqp://{}:{}@{}:{}/manmanv2-dev'.format(
+    rabbitmq_user,
+    rabbitmq_password,
+    rabbitmq_host,
+    rabbitmq_port
+)
+
+# OpenTelemetry Collector
+otel_endpoint = setup_otelcollector(namespace)
+
+print("📊 Infrastructure configured:")
+print("  Postgres:  {}".format("custom" if os.environ.get('BUILD_POSTGRES_ENV') == 'custom' else "local"))
+print("  RabbitMQ:  {}".format("custom" if os.environ.get('BUILD_RABBITMQ_ENV') == 'custom' else "local"))
+print("  OTEL:      {}".format(otel_endpoint))
+
+# Setup RabbitMQ vhost for ManManV2
+# This ensures the vhost exists and has proper permissions before the processor starts
+local_resource(
+    'rabbitmq-vhost-setup',
+    cmd='''
+    # Wait for RabbitMQ to be ready
+    kubectl wait --for=condition=ready pod -l app=rabbitmq -n {namespace} --timeout=60s
+
+    # Create vhost if it doesn't exist (idempotent)
+    kubectl exec -n {namespace} rabbitmq-dev-0 -- rabbitmqctl add_vhost manmanv2-dev 2>/dev/null || true
+
+    # Set permissions for rabbit user
+    kubectl exec -n {namespace} rabbitmq-dev-0 -- rabbitmqctl set_permissions -p manmanv2-dev rabbit ".*" ".*" ".*"
+
+    echo "✓ RabbitMQ vhost 'manmanv2-dev' configured"
+    '''.format(namespace=namespace),
+    resource_deps=['rabbitmq-dev'],
+    labels=['manmanv2-infrastructure'],
+)
+
+# ===========================
+# Application Configuration
+# ===========================
+
+# Get watch paths for manman apps
+watch_paths = get_watch_paths('manman')
+
+# Define ManManV2 apps (control plane services only)
+# Host manager runs on bare metal - see README-HOST.md
+APPS = {
+    'migration': {
+        'enabled_env': 'ENABLE_MANMANV2_MIGRATION',
+        'bazel_target': '//manman/migrate:manmanv2-migration_image_load',
+        'image_name': 'manman-manmanv2-migration',
+    },
+    'api': {
+        'enabled_env': 'ENABLE_MANMANV2_API',
+        'bazel_target': '//manman/api:manmanv2-api_image_load',
+        'image_name': 'manman-manmanv2-api',
+    },
+    'processor': {
+        'enabled_env': 'ENABLE_MANMANV2_PROCESSOR',
+        'bazel_target': '//manman/processor:manmanv2-processor_image_load',
+        'image_name': 'manman-manmanv2-processor',
+    },
+}
+
+# ===========================
+# Bazel Image Building
+# ===========================
+
+build_images_from_apps(APPS, watch_paths, platform)
+
+# Build test game server image for integration testing
+# This is a simple Alpine-based container with a bash script
+if get_env_bool('BUILD_TEST_GAME_SERVER', default='true'):
+    print("🎮 Building test game server image...")
+    docker_build(
+        'manmanv2-test-game-server',
+        context='../manman/testdata',
+        dockerfile='../manman/testdata/Dockerfile',
+    )
+    print("  ✓ manmanv2-test-game-server")
+
+# ===========================
+# Kubernetes Deployments
+# ===========================
+
+# Database Migration Job
+# Runs automatically before services start to ensure schema is up-to-date
+if get_env_bool('ENABLE_MANMANV2_MIGRATION', default='true'):
+    k8s_yaml(blob("""
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: manmanv2-migration
+  namespace: {namespace}
+spec:
+  # Allow manual re-triggering by deleting completed job
+  ttlSecondsAfterFinished: 30
+  template:
+    metadata:
+      labels:
+        app: manmanv2-migration
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: migration
+        image: manman-manmanv2-migration
+        env:
+        - name: DB_HOST
+          value: "postgres-dev.{namespace}.svc.cluster.local"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USER
+          value: "postgres"
+        - name: DB_PASSWORD
+          value: "password"
+        - name: DB_NAME
+          value: "manmanv2"
+        - name: DB_SSL_MODE
+          value: "disable"
+        - name: MIGRATION_TABLE
+          value: "schema_migrations"
+""".format(namespace=namespace)))
+
+    k8s_resource(
+        'manmanv2-migration',
+        labels=['manmanv2-infrastructure']
+    )
+    print("🔄 Migration job configured")
+
+# Control Plane API (gRPC)
+if get_env_bool('ENABLE_MANMANV2_API', default='true'):
+    k8s_yaml(blob("""
+apiVersion: v1
+kind: Service
+metadata:
+  name: manmanv2-api
+  namespace: {namespace}
+spec:
+  selector:
+    app: manmanv2-api
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: 50051
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: manmanv2-api
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: manmanv2-api
+  template:
+    metadata:
+      labels:
+        app: manmanv2-api
+    spec:
+      containers:
+      - name: api
+        image: manman-manmanv2-api
+        ports:
+        - containerPort: 50051
+          name: grpc
+        env:
+        - name: PORT
+          value: "50051"
+        - name: DB_HOST
+          value: "postgres-dev.{namespace}.svc.cluster.local"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USER
+          value: "postgres"
+        - name: DB_PASSWORD
+          value: "password"
+        - name: DB_NAME
+          value: "manmanv2"
+        - name: DB_SSL_MODE
+          value: "disable"
+        - name: RABBITMQ_URL
+          value: "{rabbitmq_url}"
+        - name: S3_ENDPOINT
+          value: "{s3_endpoint}"
+        - name: S3_ACCESS_KEY
+          value: "{s3_access_key}"
+        - name: S3_SECRET_KEY
+          value: "{s3_secret_key}"
+        - name: S3_BUCKET
+          value: "{s3_bucket}"
+""".format(
+        namespace=namespace,
+        db_url=db_url,
+        rabbitmq_url=rabbitmq_url,
+        s3_endpoint=os.environ.get('S3_ENDPOINT', 'http://minio:9000'),
+        s3_access_key=os.environ.get('S3_ACCESS_KEY', 'minioadmin'),
+        s3_secret_key=os.environ.get('S3_SECRET_KEY', 'minioadmin'),
+        s3_bucket=os.environ.get('S3_BUCKET', 'manmanv2-dev'),
+    )))
+
+    # Port forward API to localhost
+    k8s_resource(
+        'manmanv2-api',
+        resource_deps=['manmanv2-migration'] if get_env_bool('ENABLE_MANMANV2_MIGRATION', default='true') else [],
+        port_forwards=['50052:50051'],
+        labels=['manmanv2-control-plane']
+    )
+    print("🔌 API forwarded to localhost:50052 (gRPC)")
+
+# Event Processor
+if get_env_bool('ENABLE_MANMANV2_PROCESSOR', default='true'):
+    k8s_yaml(blob("""
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: manmanv2-processor
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: manmanv2-processor
+  template:
+    metadata:
+      labels:
+        app: manmanv2-processor
+    spec:
+      containers:
+      - name: processor
+        image: manman-manmanv2-processor
+        ports:
+        - containerPort: 8080
+          name: health
+        env:
+        - name: DB_HOST
+          value: "postgres-dev.{namespace}.svc.cluster.local"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USER
+          value: "postgres"
+        - name: DB_PASSWORD
+          value: "password"
+        - name: DB_NAME
+          value: "manmanv2"
+        - name: DB_SSL_MODE
+          value: "disable"
+        - name: RABBITMQ_URL
+          value: "{rabbitmq_url}"
+        - name: STALE_HOST_THRESHOLD_SECONDS
+          value: "10"
+        - name: EXTERNAL_EXCHANGE
+          value: "external"
+        - name: LOG_LEVEL
+          value: "debug"
+        - name: HEALTH_CHECK_PORT
+          value: "8080"
+""".format(
+        namespace=namespace,
+        db_url=db_url,
+        rabbitmq_url=rabbitmq_url,
+    )))
+
+    # Build dependency list for processor
+    processor_deps = ['rabbitmq-vhost-setup']
+    if get_env_bool('ENABLE_MANMANV2_MIGRATION', default='true'):
+        processor_deps.append('manmanv2-migration')
+
+    k8s_resource(
+        'manmanv2-processor',
+        resource_deps=processor_deps,
+        labels=['manmanv2-control-plane']
+    )
+
+# ===========================
+# Access Information
+# ===========================
+
+print("\n" + "="*60)
+print("📡 Access Information")
+print("="*60)
+print("  PostgreSQL:    localhost:5432 (user: postgres, pass: password)")
+print("  RabbitMQ:      localhost:5672 (user: rabbit, pass: password)")
+print("  RabbitMQ Mgmt: http://localhost:15672")
+print("  API (gRPC):    localhost:50052")
+print("")
+print("🏃 Host Manager:")
+print("  Run separately on bare metal - see README-HOST.md")
+print("  Requires Docker access and wrapper image built")
+print("="*60)
+
+print_footer_info('manmanv2')
+
+print("\n🚀 Quick Start:")
+print("  1. tilt up                     # Start control plane (this)")
+print("  2. See README-HOST.md          # Run host manager on bare metal")
+print("  3. grpcurl localhost:50051 ... # Test API")

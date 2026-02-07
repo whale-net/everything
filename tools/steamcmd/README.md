@@ -100,7 +100,7 @@ The SteamCMD layer is built using multiple components:
 1. **SteamCMD binary**: Downloaded from Valve's CDN and packaged to `/opt/steamcmd/`
 2. **32-bit libraries**: Pre-extracted from Ubuntu 24.04 packages:
    - `lib32gcc-s1_14.2.0-4ubuntu2~24.04_amd64.deb`
-   - `libc6-i386_2.39-0ubuntu8.6_amd64.deb`
+   - `libc6-i386_2.39-0ubuntu8.7_amd64.deb`
 3. **Symlinks**: Convenience and dynamic linker symlinks for proper execution
 
 All components are combined into the `steamcmd_layers` target for easy inclusion.

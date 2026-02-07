@@ -386,9 +386,9 @@ def container_image(
         else:
             # Go binaries are packaged by Bazel in a directory with underscore suffix
             # Bazel's pkg_tar places the binary at /app/{binary_name}_/{binary_name}
-            # For //manman/management-ui:management-ui -> /app/management-ui/management-ui_/management-ui
-            # For //demo/hello:hello -> /app/hello/hello_/hello
-            entrypoint = ["/app/" + binary_name + "/" + binary_name + "_/" + binary_name]
+            # For //manman/api:manmanv2-api -> /app/manmanv2-api_/manmanv2-api
+            # For //demo/hello:hello -> /app/hello_/hello
+            entrypoint = ["/app/" + binary_name + "_/" + binary_name]
     
     # layer_targets is already built with correct ordering in the language-specific sections above
     # For Python: CA certs → Python → additional_tars → deps → app

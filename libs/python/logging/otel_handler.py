@@ -5,15 +5,18 @@ as log record attributes following OTEL semantic conventions.
 """
 
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from libs.python.logging.context import get_context
+
+if TYPE_CHECKING:
+    from opentelemetry.sdk._logs import LogRecord as OTELLogRecord
 
 try:
     from opentelemetry import trace
     from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
     from opentelemetry.sdk._logs import LogRecord as OTELLogRecord
-    
+
     OTEL_AVAILABLE = True
 except ImportError:
     OTEL_AVAILABLE = False
@@ -122,7 +125,7 @@ class OTELContextHandler(LoggingHandler):
         # Call parent emit to send to OTLP
         super().emit(record)
     
-    def _translate(self, record: logging.LogRecord) -> OTELLogRecord:
+    def _translate(self, record: logging.LogRecord) -> "OTELLogRecord":
         """Translate Python LogRecord to OTEL LogRecord with attributes.
         
         Args:

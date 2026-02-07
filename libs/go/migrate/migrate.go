@@ -33,7 +33,7 @@ func (r *Runner) Up() error {
 	if err != nil {
 		return err
 	}
-	defer m.Close()
+	// Don't defer m.Close() here - we're using WithInstance which doesn't own the DB
 
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
 		return fmt.Errorf("failed to run migrations: %w", err)
@@ -48,7 +48,7 @@ func (r *Runner) Down() error {
 	if err != nil {
 		return err
 	}
-	defer m.Close()
+	// Don't defer m.Close() here - we're using WithInstance which doesn't own the DB
 
 	if err := m.Down(); err != nil {
 		return fmt.Errorf("failed to rollback all migrations: %w", err)
@@ -63,7 +63,7 @@ func (r *Runner) Steps(n int) error {
 	if err != nil {
 		return err
 	}
-	defer m.Close()
+	// Don't defer m.Close() here - we're using WithInstance which doesn't own the DB
 
 	if err := m.Steps(n); err != nil {
 		return fmt.Errorf("failed to run %d steps: %w", n, err)
@@ -78,7 +78,7 @@ func (r *Runner) Version() (version uint, dirty bool, err error) {
 	if err != nil {
 		return 0, false, err
 	}
-	defer m.Close()
+	// Don't defer m.Close() here - we're using WithInstance which doesn't own the DB
 
 	version, dirty, err = m.Version()
 	if err != nil && err != migrate.ErrNilVersion {
@@ -95,7 +95,7 @@ func (r *Runner) Force(version int) error {
 	if err != nil {
 		return err
 	}
-	defer m.Close()
+	// Don't defer m.Close() here - we're using WithInstance which doesn't own the DB
 
 	if err := m.Force(version); err != nil {
 		return fmt.Errorf("failed to force version %d: %w", version, err)

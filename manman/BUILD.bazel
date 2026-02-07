@@ -151,31 +151,51 @@ alias(
 # Helm Chart Composition
 # ==============================================================================
 
-# List of all manman app metadata targets for chart composition
+# List of all manman V1 app metadata targets for chart composition
 # Update this list when adding or removing services
 # Note: worker is excluded as it will be deployed outside the cloud
-MANMAN_APPS = [
+MANMAN_V1_APPS = [
     ":experience-api_metadata",
     ":status-api_metadata",
     ":worker-dal-api_metadata",
     ":status-processor_metadata",
     ":migration_metadata",
     ":management-ui_metadata",
+]
+
+# List of ManManV2 (Go) app metadata targets for chart composition
+MANMAN_V2_APPS = [
+    "//manman/api:manmanv2-api_metadata",
+    "//manman/migrate:manmanv2-migration_metadata",
     "//manman/processor:manmanv2-processor_metadata",
 ]
 
-# Helm chart composition - combines all manman services into a single chart
-# This is registered with the release system for CI/CD integration
+# ManMan V1 Helm chart - Python-based legacy services
 # Chart tags will use the format: helm-manman-host-services.vX.Y.Z
 release_helm_chart(
     name = "manman_chart",
-    apps = MANMAN_APPS,
+    apps = MANMAN_V1_APPS,
     chart_name = "host-services",
     domain = "manman",
     environment = "dev",
     namespace = "manman",
     # chart_version omitted - uses default "0.0.0-dev" for local builds
     # Release system auto-versions from git tags (helm-manman-host-services.v*)
+    visibility = ["//visibility:public"],
+)
+
+# ManManV2 Helm chart - Go-based control plane services
+# This is a separate chart for the V2 rewrite with distinct deployment lifecycle
+# Chart tags will use the format: helm-manmanv2.vX.Y.Z
+release_helm_chart(
+    name = "manmanv2_chart",
+    apps = MANMAN_V2_APPS,
+    chart_name = "manmanv2",
+    domain = "manman",
+    environment = "dev",
+    namespace = "manmanv2",
+    # chart_version omitted - uses default "0.0.0-dev" for local builds
+    # Release system auto-versions from git tags (helm-manmanv2.v*)
     visibility = ["//visibility:public"],
 )
 

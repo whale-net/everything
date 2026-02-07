@@ -14,6 +14,7 @@ type CommandHandler interface {
 	HandleStartSession(ctx context.Context, cmd *StartSessionCommand) error
 	HandleStopSession(ctx context.Context, cmd *StopSessionCommand) error
 	HandleKillSession(ctx context.Context, cmd *KillSessionCommand) error
+	HandleSendInput(ctx context.Context, cmd *SendInputCommand) error
 }
 
 // Consumer consumes commands from RabbitMQ
@@ -38,6 +39,7 @@ func NewConsumer(conn *rmq.Connection, serverID int64, handler CommandHandler) (
 		fmt.Sprintf("command.host.%d.session.start", serverID),
 		fmt.Sprintf("command.host.%d.session.stop", serverID),
 		fmt.Sprintf("command.host.%d.session.kill", serverID),
+		fmt.Sprintf("command.host.%d.session.send_input", serverID),
 	}
 
 	if err := consumer.BindExchange(exchange, routingKeys); err != nil {
@@ -56,10 +58,12 @@ func NewConsumer(conn *rmq.Connection, serverID int64, handler CommandHandler) (
 	startKey := fmt.Sprintf("command.host.%d.session.start", serverID)
 	stopKey := fmt.Sprintf("command.host.%d.session.stop", serverID)
 	killKey := fmt.Sprintf("command.host.%d.session.kill", serverID)
-	
+	sendInputKey := fmt.Sprintf("command.host.%d.session.send_input", serverID)
+
 	consumer.RegisterHandler(startKey, c.handleStartSession)
 	consumer.RegisterHandler(stopKey, c.handleStopSession)
 	consumer.RegisterHandler(killKey, c.handleKillSession)
+	consumer.RegisterHandler(sendInputKey, c.handleSendInput)
 
 	return c, nil
 }
@@ -74,29 +78,38 @@ func (c *Consumer) Close() error {
 	return c.consumer.Close()
 }
 
-func (c *Consumer) handleStartSession(ctx context.Context, routingKey string, body []byte) error {
+func (c *Consumer) handleStartSession(ctx context.Context, msg rmq.Message) error {
 	var cmd StartSessionCommand
-	if err := json.Unmarshal(body, &cmd); err != nil {
+	if err := json.Unmarshal(msg.Body, &cmd); err != nil {
 		return fmt.Errorf("failed to unmarshal start session command: %w", err)
 	}
 	log.Printf("Received start session command: session_id=%d, sgc_id=%d", cmd.SessionID, cmd.SGCID)
 	return c.handler.HandleStartSession(ctx, &cmd)
 }
 
-func (c *Consumer) handleStopSession(ctx context.Context, routingKey string, body []byte) error {
+func (c *Consumer) handleStopSession(ctx context.Context, msg rmq.Message) error {
 	var cmd StopSessionCommand
-	if err := json.Unmarshal(body, &cmd); err != nil {
+	if err := json.Unmarshal(msg.Body, &cmd); err != nil {
 		return fmt.Errorf("failed to unmarshal stop session command: %w", err)
 	}
 	log.Printf("Received stop session command: session_id=%d, force=%v", cmd.SessionID, cmd.Force)
 	return c.handler.HandleStopSession(ctx, &cmd)
 }
 
-func (c *Consumer) handleKillSession(ctx context.Context, routingKey string, body []byte) error {
+func (c *Consumer) handleKillSession(ctx context.Context, msg rmq.Message) error {
 	var cmd KillSessionCommand
-	if err := json.Unmarshal(body, &cmd); err != nil {
+	if err := json.Unmarshal(msg.Body, &cmd); err != nil {
 		return fmt.Errorf("failed to unmarshal kill session command: %w", err)
 	}
 	log.Printf("Received kill session command: session_id=%d", cmd.SessionID)
 	return c.handler.HandleKillSession(ctx, &cmd)
+}
+
+func (c *Consumer) handleSendInput(ctx context.Context, msg rmq.Message) error {
+	var cmd SendInputCommand
+	if err := json.Unmarshal(msg.Body, &cmd); err != nil {
+		return fmt.Errorf("failed to unmarshal send input command: %w", err)
+	}
+	log.Printf("Received send input command: session_id=%d, input_length=%d", cmd.SessionID, len(cmd.Input))
+	return c.handler.HandleSendInput(ctx, &cmd)
 }

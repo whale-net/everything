@@ -114,20 +114,20 @@ func run() error {
 }
 
 // handleEvent processes incoming events from the external exchange
-func (s *ExternalEventSubscriber) handleEvent(ctx context.Context, routingKey string, body []byte) error {
+func (s *ExternalEventSubscriber) handleEvent(ctx context.Context, msg rmq.Message) error {
 	s.logger.Info("received external event",
-		"routing_key", routingKey,
-		"size", len(body),
+		"routing_key", msg.RoutingKey,
+		"size", len(msg.Body),
 	)
 
 	// Route to appropriate handler based on routing key
 	switch {
-	case matchesPattern(routingKey, "manman.host.*"):
-		return s.handleHostEvent(routingKey, body)
-	case matchesPattern(routingKey, "manman.session.*"):
-		return s.handleSessionEvent(routingKey, body)
+	case matchesPattern(msg.RoutingKey, "manman.host.*"):
+		return s.handleHostEvent(msg.RoutingKey, msg.Body)
+	case matchesPattern(msg.RoutingKey, "manman.session.*"):
+		return s.handleSessionEvent(msg.RoutingKey, msg.Body)
 	default:
-		s.logger.Warn("unknown event type", "routing_key", routingKey)
+		s.logger.Warn("unknown event type", "routing_key", msg.RoutingKey)
 		return nil
 	}
 }

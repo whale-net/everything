@@ -59,16 +59,16 @@ func NewProcessorConsumer(
 }
 
 // handleMessage processes incoming messages and routes to appropriate handlers
-func (c *ProcessorConsumer) handleMessage(ctx context.Context, routingKey string, body []byte) error {
-	c.logger.Info("received message", "routing_key", routingKey)
+func (c *ProcessorConsumer) handleMessage(ctx context.Context, msg rmq.Message) error {
+	c.logger.Info("received message", "routing_key", msg.RoutingKey)
 
-	err := c.registry.Route(ctx, routingKey, body)
+	err := c.registry.Route(ctx, msg.RoutingKey, msg.Body)
 	if err != nil {
 		// Check if this is a permanent error (don't retry)
 		if handlers.IsPermanentError(err) {
 			c.logger.Warn("permanent error processing message",
 				"error", err,
-				"routing_key", routingKey,
+				"routing_key", msg.RoutingKey,
 			)
 			// Return nil to ACK the message (don't requeue)
 			return nil
@@ -77,12 +77,12 @@ func (c *ProcessorConsumer) handleMessage(ctx context.Context, routingKey string
 		// Transient error - return error to trigger NACK with requeue
 		c.logger.Error("transient error processing message",
 			"error", err,
-			"routing_key", routingKey,
+			"routing_key", msg.RoutingKey,
 		)
 		return err
 	}
 
-	c.logger.Info("message processed successfully", "routing_key", routingKey)
+	c.logger.Info("message processed successfully", "routing_key", msg.RoutingKey)
 	return nil
 }
 

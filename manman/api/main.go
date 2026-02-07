@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	rmqlib "github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manman/api/handlers"
 	"github.com/whale-net/everything/manman/api/repository/postgres"
@@ -35,6 +36,7 @@ func run() error {
 	dbPassword := getEnv("DB_PASSWORD", "")
 	dbName := getEnv("DB_NAME", "manman")
 	dbSSLMode := getEnv("DB_SSL_MODE", "disable")
+	rabbitmqURL := getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 	s3Bucket := getEnv("S3_BUCKET", "manman-logs")
 	s3Region := getEnv("S3_REGION", "us-east-1")
 	s3Endpoint := getEnv("S3_ENDPOINT", "") // Optional: for S3-compatible storage (OVH, MinIO, etc.)
@@ -70,6 +72,15 @@ func run() error {
 		log.Printf("S3 client initialized (bucket: %s, region: %s)", s3Bucket, s3Region)
 	}
 
+	// Initialize RabbitMQ connection
+	log.Println("Connecting to RabbitMQ...")
+	rmqConn, err := rmqlib.NewConnectionFromURL(rabbitmqURL)
+	if err != nil {
+		return fmt.Errorf("failed to connect to RabbitMQ: %w", err)
+	}
+	defer rmqConn.Close()
+	log.Println("RabbitMQ connection established")
+
 	// Create gRPC server
 	grpcServer := grpc.NewServer(
 		grpc.MaxRecvMsgSize(10 * 1024 * 1024), // 10 MB
@@ -77,7 +88,7 @@ func run() error {
 	)
 
 	// Register API server
-	apiServer := handlers.NewAPIServer(repo, s3Client)
+	apiServer := handlers.NewAPIServer(repo, s3Client, rmqConn)
 	pb.RegisterManManAPIServer(grpcServer, apiServer)
 
 	// Register reflection service (for grpcurl, debugging)

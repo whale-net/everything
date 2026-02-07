@@ -54,6 +54,10 @@ go_library(
         "//libs/go/rmq",
         "//manman/host/rmq",
         "//manman/host/session",
+        "//manman/protos:manmanpb",
+        "@com_github_google_uuid//:uuid",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//credentials/insecure",
     ],
 )
 

@@ -74,8 +74,8 @@ http_file(
 
 http_file(
     name = "libc6_i386_deb",
-    sha256 = "c1d612f7ce6f0effa0e7b75fd71b052842cea142fa0f64f5b7161a43464aa738",
-    urls = ["http://archive.ubuntu.com/ubuntu/pool/main/g/glibc/libc6-i386_2.39-0ubuntu8.6_amd64.deb"],
+    sha256 = "a80dfe7331c74bda498aefcd49c20e531977736e287db224d53e9915bdd6d509",
+    urls = ["http://archive.ubuntu.com/ubuntu/pool/main/g/glibc/libc6-i386_2.39-0ubuntu8.7_amd64.deb"],
 )
 
 # Python setup with rules_python for interpreter registration
@@ -161,17 +161,18 @@ go_deps.module_override(
 )
 use_repo(
     go_deps,
-    "com_github_aws_aws_sdk_go_v2",  # keep
-    "com_github_aws_aws_sdk_go_v2_config",  # keep
-    "com_github_aws_aws_sdk_go_v2_service_s3",  # keep
-    "com_github_containerd_errdefs",  # keep
+    "com_github_aws_aws_sdk_go_v2",
+    "com_github_aws_aws_sdk_go_v2_config",
+    "com_github_aws_aws_sdk_go_v2_service_s3",
+    "com_github_containerd_errdefs",
     "com_github_coreos_go_oidc_v3",
-    "com_github_distribution_reference",  # keep
+    "com_github_distribution_reference",
     "com_github_docker_docker",
     "com_github_docker_go_connections",
     "com_github_docker_go_units",
     "com_github_go_jose_go_jose_v4",
     "com_github_golang_migrate_migrate_v4",
+    "com_github_google_uuid",
     "com_github_gorilla_securecookie",
     "com_github_gorilla_sessions",
     "com_github_jackc_pgx_v5",
@@ -179,10 +180,10 @@ use_repo(
     "com_github_opencontainers_go_digest",
     "com_github_opencontainers_image_spec",
     "com_github_pkg_errors",
-    "io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp",  # keep
-    "io_opentelemetry_go_otel_trace",  # keep
     "com_github_rabbitmq_amqp091_go",
     "com_github_stretchr_testify",
+    "io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp",
+    "io_opentelemetry_go_otel_trace",
     "org_golang_google_genproto_googleapis_rpc",
     "org_golang_google_grpc",
     "org_golang_google_protobuf",

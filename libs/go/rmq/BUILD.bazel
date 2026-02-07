@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "connection.go",
         "consumer.go",
+        "errors.go",
         "publisher.go",
     ],
     importpath = "github.com/whale-net/everything/libs/go/rmq",

@@ -2,19 +2,21 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/whale-net/everything/libs/go/docker"
 	rmqlib "github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/manman/host/rmq"
 	"github.com/whale-net/everything/manman/host/session"
+	pb "github.com/whale-net/everything/manman/protos"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
@@ -28,20 +30,19 @@ func run() error {
 	defer cancel()
 
 	// Get configuration from environment
-	serverIDStr := getEnv("SERVER_ID", "")
-	if serverIDStr == "" {
-		return fmt.Errorf("SERVER_ID environment variable is required")
-	}
-	serverID, err := strconv.ParseInt(serverIDStr, 10, 64)
-	if err != nil {
-		return fmt.Errorf("invalid SERVER_ID: %w", err)
-	}
-
 	rabbitMQURL := getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 	dockerSocket := getEnv("DOCKER_SOCKET", "/var/run/docker.sock")
-	wrapperImage := getEnv("WRAPPER_IMAGE", "manmanv2-wrapper:latest")
+	apiAddress := getEnv("API_ADDRESS", "localhost:50051")
+	serverName := getEnv("SERVER_NAME", "")
+	environment := getEnv("ENVIRONMENT", "")
 
-	log.Printf("Starting ManManV2 Host Manager (server_id=%d)", serverID)
+	// Self-registration mode: Register with API and get server_id
+	log.Println("Starting ManManV2 Host Manager (self-registration mode)")
+	serverID, err := selfRegister(ctx, apiAddress, serverName, environment, dockerSocket)
+	if err != nil {
+		return fmt.Errorf("failed to self-register: %w", err)
+	}
+	log.Printf("Successfully registered with control plane (server_id=%d)", serverID)
 
 	// Initialize Docker client
 	log.Println("Connecting to Docker...")
@@ -60,7 +61,7 @@ func run() error {
 	defer rmqConn.Close()
 
 	// Initialize session manager
-	sessionManager := session.NewSessionManager(dockerClient, wrapperImage)
+	sessionManager := session.NewSessionManager(dockerClient)
 
 	// Recover orphaned sessions on startup
 	log.Println("Recovering orphaned sessions...")
@@ -107,7 +108,7 @@ func run() error {
 	}
 
 	// Start health check publisher
-	healthTicker := time.NewTicker(30 * time.Second)
+	healthTicker := time.NewTicker(5 * time.Second)
 	defer healthTicker.Stop()
 
 	go func() {
@@ -173,76 +174,73 @@ type CommandHandlerImpl struct {
 
 // HandleStartSession handles a start session command
 func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.StartSessionCommand) error {
-	// Convert parameters to JSON
-	parametersJSON := ""
-	if cmd.Parameters != nil {
-		paramsBytes, err := json.Marshal(cmd.Parameters)
-		if err != nil {
-			return fmt.Errorf("failed to marshal parameters: %w", err)
-		}
-		parametersJSON = string(paramsBytes)
+	env := make([]string, 0, len(cmd.GameConfig.EnvTemplate))
+	for k, v := range cmd.GameConfig.EnvTemplate {
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
 
-	// Convert GameConfig to map[string]interface{}
-	gameConfigMap := make(map[string]interface{})
-	gcBytes, err := json.Marshal(cmd.GameConfig)
-	if err != nil {
-		return fmt.Errorf("failed to marshal game config: %w", err)
-	}
-	if err := json.Unmarshal(gcBytes, &gameConfigMap); err != nil {
-		return fmt.Errorf("failed to unmarshal game config: %w", err)
+	var command []string
+	if cmd.GameConfig.ArgsTemplate != "" {
+		command = []string{"/bin/sh", "-c", cmd.GameConfig.ArgsTemplate}
 	}
 
-	// Convert ServerGameConfig to map[string]interface{}
-	sgcMap := make(map[string]interface{})
-	sgcBytes, err := json.Marshal(cmd.ServerGameConfig)
-	if err != nil {
-		return fmt.Errorf("failed to marshal server game config: %w", err)
-	}
-	if err := json.Unmarshal(sgcBytes, &sgcMap); err != nil {
-		return fmt.Errorf("failed to unmarshal server game config: %w", err)
+	ports := make(map[string]string, len(cmd.ServerGameConfig.PortBindings))
+	for _, pb := range cmd.ServerGameConfig.PortBindings {
+		ports[fmt.Sprintf("%d", pb.ContainerPort)] = fmt.Sprintf("%d", pb.HostPort)
 	}
 
-	// Convert to session manager command format
 	sessionCmd := &session.StartSessionCommand{
-		SessionID:        cmd.SessionID,
-		SGCID:            cmd.SGCID,
-		ServerID:         h.serverID,
-		GameConfig:       gameConfigMap,
-		ServerGameConfig: sgcMap,
-		ParametersJSON:   parametersJSON,
+		SessionID:    cmd.SessionID,
+		SGCID:        cmd.SGCID,
+		ServerID:     h.serverID,
+		Image:        cmd.GameConfig.Image,
+		Command:      command,
+		Env:          env,
+		PortBindings: ports,
 	}
 
-	// Start the session
+	// Publish starting status before attempting container creation
+	if err := h.publisher.PublishSessionStatus(ctx, &rmq.SessionStatusUpdate{
+		SessionID: cmd.SessionID, SGCID: cmd.SGCID, Status: "starting",
+	}); err != nil {
+		return fmt.Errorf("failed to publish starting status: %w", err)
+	}
+
 	if err := h.sessionManager.StartSession(ctx, sessionCmd); err != nil {
-		// Publish error status
-		statusUpdate := &rmq.SessionStatusUpdate{
-			SessionID: cmd.SessionID,
-			SGCID:     cmd.SGCID,
-			Status:    "crashed",
-		}
-		_ = h.publisher.PublishSessionStatus(ctx, statusUpdate)
+		_ = h.publisher.PublishSessionStatus(ctx, &rmq.SessionStatusUpdate{
+			SessionID: cmd.SessionID, SGCID: cmd.SGCID, Status: "crashed",
+		})
 		return fmt.Errorf("failed to start session: %w", err)
 	}
-
-	// Publish success status
-	statusUpdate := &rmq.SessionStatusUpdate{
-		SessionID: cmd.SessionID,
-		SGCID:     cmd.SGCID,
-		Status:    "running",
-	}
-	return h.publisher.PublishSessionStatus(ctx, statusUpdate)
+	return h.publisher.PublishSessionStatus(ctx, &rmq.SessionStatusUpdate{
+		SessionID: cmd.SessionID, SGCID: cmd.SGCID, Status: "running",
+	})
 }
 
 // HandleStopSession handles a stop session command
 func (h *CommandHandlerImpl) HandleStopSession(ctx context.Context, cmd *rmq.StopSessionCommand) error {
+	// Get session state to retrieve SGCID before stopping
+	state, exists := h.sessionManager.GetSessionState(cmd.SessionID)
+	if !exists {
+		return fmt.Errorf("session %d not found", cmd.SessionID)
+	}
+	sgcID := state.SGCID
+
+	// Publish stopping status before attempting to stop container
+	if err := h.publisher.PublishSessionStatus(ctx, &rmq.SessionStatusUpdate{
+		SessionID: cmd.SessionID, SGCID: sgcID, Status: "stopping",
+	}); err != nil {
+		return fmt.Errorf("failed to publish stopping status: %w", err)
+	}
+
 	if err := h.sessionManager.StopSession(ctx, cmd.SessionID, cmd.Force); err != nil {
 		return fmt.Errorf("failed to stop session: %w", err)
 	}
 
-	// Publish status update
+	// Publish stopped status after container is stopped
 	statusUpdate := &rmq.SessionStatusUpdate{
 		SessionID: cmd.SessionID,
+		SGCID:     sgcID,
 		Status:    "stopped",
 	}
 	return h.publisher.PublishSessionStatus(ctx, statusUpdate)
@@ -260,6 +258,81 @@ func (h *CommandHandlerImpl) HandleKillSession(ctx context.Context, cmd *rmq.Kil
 		Status:    "stopped",
 	}
 	return h.publisher.PublishSessionStatus(ctx, statusUpdate)
+}
+
+// HandleSendInput handles a send input command
+func (h *CommandHandlerImpl) HandleSendInput(ctx context.Context, cmd *rmq.SendInputCommand) error {
+	if err := h.sessionManager.SendInput(ctx, cmd.SessionID, cmd.Input); err != nil {
+		return fmt.Errorf("failed to send input to session %d: %w", cmd.SessionID, err)
+	}
+	return nil
+}
+
+// selfRegister generates a server name (if not provided) and registers with the control plane
+func selfRegister(ctx context.Context, apiAddress, serverName, environment, dockerSocket string) (int64, error) {
+	// Generate server name if not provided
+	if serverName == "" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			hostname = "unknown-host"
+		}
+
+		// Use stable naming based on hostname and environment
+		// This ensures same server record is reused across restarts
+		if environment != "" {
+			serverName = fmt.Sprintf("%s-%s", hostname, environment)
+		} else {
+			// No environment specified - use hostname only
+			// If multiple managers on same host without environment, add UUID
+			serverName = fmt.Sprintf("%s-%s", hostname, uuid.New().String()[:8])
+			log.Printf("Warning: No ENVIRONMENT set. Consider setting it to avoid duplicate servers on restart.")
+		}
+	}
+
+	// Connect to API server
+	conn, err := grpc.NewClient(apiAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return 0, fmt.Errorf("failed to connect to API: %w", err)
+	}
+	defer conn.Close()
+
+	client := pb.NewManManAPIClient(conn)
+
+	// Get Docker info for capabilities
+	dockerClient, err := docker.NewClient(dockerSocket)
+	if err != nil {
+		return 0, fmt.Errorf("failed to connect to Docker for capabilities: %w", err)
+	}
+	defer dockerClient.Close()
+
+	info, err := dockerClient.GetClient().Info(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get Docker info: %w", err)
+	}
+
+	// Build capabilities from Docker info
+	capabilities := &pb.ServerCapabilities{
+		TotalMemoryMb:          int32(info.MemTotal / (1024 * 1024)),
+		AvailableMemoryMb:      int32(info.MemTotal / (1024 * 1024)), // Assume all available initially
+		CpuCores:               int32(info.NCPU),
+		AvailableCpuMillicores: int32(info.NCPU * 1000), // Assume all available initially
+		DockerVersion:          info.ServerVersion,
+	}
+
+	// Call RegisterServer
+	req := &pb.RegisterServerRequest{
+		Name:         serverName,
+		Capabilities: capabilities,
+		Environment:  environment,
+	}
+
+	resp, err := client.RegisterServer(ctx, req)
+	if err != nil {
+		return 0, fmt.Errorf("registration failed: %w", err)
+	}
+
+	log.Printf("Registered as server '%s'", serverName)
+	return resp.ServerId, nil
 }
 
 func getEnv(key, defaultValue string) string {
