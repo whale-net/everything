@@ -34,7 +34,7 @@ func DefaultConfig() *Config {
 		User:            getEnv("DB_USER", "postgres"),
 		Password:        getEnv("DB_PASSWORD", ""),
 		Database:        getEnv("DB_NAME", "postgres"),
-		SSLMode:         getEnv("DB_SSLMODE", "disable"),
+		SSLMode:         getEnv("DB_SSL_MODE", "disable"),
 		MaxOpenConns:    25,
 		MaxIdleConns:    5,
 		ConnMaxLifetime: 5 * time.Minute,
