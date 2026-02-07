@@ -137,18 +137,6 @@ Question: "What version should we release?"
 Note: Format should be vX.Y.Z (e.g., v1.2.3)
 ```
 
-**Version Verification**: Before proceeding, check current latest version:
-
-```bash
-# For each chart, find latest git tag
-git tag -l "helm-manman-control-services.v*" | sort -V | tail -1
-
-# Show to user:
-"Current version: v0.5.2
-Proposed version: v0.5.3 (patch increment)
-This will create a NEW release. Continue?"
-```
-
 ### Step 4: Additional Options
 
 ```
@@ -283,10 +271,9 @@ gh run list --workflow=release.yml --limit 1 --json url --jq '.[0].url'
 
 1. ✅ **On main branch locally** - Ensures app/chart discovery matches what will be released
 2. ✅ **Version intentionality verified** - User explicitly confirmed version bump type
-3. ✅ **Current version shown** - User saw what version exists
-4. ✅ **Impact explained** - User understands what will be published
-5. ✅ **Final confirmation** - User gave explicit approval
-6. ✅ **Workflow runs on main** - Always use `--ref "main"` to execute workflow on main branch
+3. ✅ **Impact explained** - User understands what will be published
+4. ✅ **Final confirmation** - User gave explicit approval
+5. ✅ **Workflow runs on main** - Always use `--ref "main"` to execute workflow on main branch
 
 ## Error Handling
 
