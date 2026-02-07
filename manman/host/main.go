@@ -6,14 +6,17 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/whale-net/everything/libs/go/docker"
 	rmqlib "github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/manman/host/rmq"
 	"github.com/whale-net/everything/manman/host/session"
+	pb "github.com/whale-net/everything/manman/protos"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
@@ -27,19 +30,19 @@ func run() error {
 	defer cancel()
 
 	// Get configuration from environment
-	serverIDStr := getEnv("SERVER_ID", "")
-	if serverIDStr == "" {
-		return fmt.Errorf("SERVER_ID environment variable is required")
-	}
-	serverID, err := strconv.ParseInt(serverIDStr, 10, 64)
-	if err != nil {
-		return fmt.Errorf("invalid SERVER_ID: %w", err)
-	}
-
 	rabbitMQURL := getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 	dockerSocket := getEnv("DOCKER_SOCKET", "/var/run/docker.sock")
+	apiAddress := getEnv("API_ADDRESS", "localhost:50051")
+	serverName := getEnv("SERVER_NAME", "")
+	environment := getEnv("ENVIRONMENT", "")
 
-	log.Printf("Starting ManManV2 Host Manager (server_id=%d)", serverID)
+	// Self-registration mode: Register with API and get server_id
+	log.Println("Starting ManManV2 Host Manager (self-registration mode)")
+	serverID, err := selfRegister(ctx, apiAddress, serverName, environment, dockerSocket)
+	if err != nil {
+		return fmt.Errorf("failed to self-register: %w", err)
+	}
+	log.Printf("Successfully registered with control plane (server_id=%d)", serverID)
 
 	// Initialize Docker client
 	log.Println("Connecting to Docker...")
@@ -263,6 +266,73 @@ func (h *CommandHandlerImpl) HandleSendInput(ctx context.Context, cmd *rmq.SendI
 		return fmt.Errorf("failed to send input to session %d: %w", cmd.SessionID, err)
 	}
 	return nil
+}
+
+// selfRegister generates a server name (if not provided) and registers with the control plane
+func selfRegister(ctx context.Context, apiAddress, serverName, environment, dockerSocket string) (int64, error) {
+	// Generate server name if not provided
+	if serverName == "" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			hostname = "unknown-host"
+		}
+
+		// Use stable naming based on hostname and environment
+		// This ensures same server record is reused across restarts
+		if environment != "" {
+			serverName = fmt.Sprintf("%s-%s", hostname, environment)
+		} else {
+			// No environment specified - use hostname only
+			// If multiple managers on same host without environment, add UUID
+			serverName = fmt.Sprintf("%s-%s", hostname, uuid.New().String()[:8])
+			log.Printf("Warning: No ENVIRONMENT set. Consider setting it to avoid duplicate servers on restart.")
+		}
+	}
+
+	// Connect to API server
+	conn, err := grpc.NewClient(apiAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return 0, fmt.Errorf("failed to connect to API: %w", err)
+	}
+	defer conn.Close()
+
+	client := pb.NewManManAPIClient(conn)
+
+	// Get Docker info for capabilities
+	dockerClient, err := docker.NewClient(dockerSocket)
+	if err != nil {
+		return 0, fmt.Errorf("failed to connect to Docker for capabilities: %w", err)
+	}
+	defer dockerClient.Close()
+
+	info, err := dockerClient.GetClient().Info(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get Docker info: %w", err)
+	}
+
+	// Build capabilities from Docker info
+	capabilities := &pb.ServerCapabilities{
+		TotalMemoryMb:          int32(info.MemTotal / (1024 * 1024)),
+		AvailableMemoryMb:      int32(info.MemTotal / (1024 * 1024)), // Assume all available initially
+		CpuCores:               int32(info.NCPU),
+		AvailableCpuMillicores: int32(info.NCPU * 1000), // Assume all available initially
+		DockerVersion:          info.ServerVersion,
+	}
+
+	// Call RegisterServer
+	req := &pb.RegisterServerRequest{
+		Name:         serverName,
+		Capabilities: capabilities,
+		Environment:  environment,
+	}
+
+	resp, err := client.RegisterServer(ctx, req)
+	if err != nil {
+		return 0, fmt.Errorf("registration failed: %w", err)
+	}
+
+	log.Printf("Registered as server '%s'", serverName)
+	return resp.ServerId, nil
 }
 
 func getEnv(key, defaultValue string) string {

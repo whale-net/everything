@@ -142,6 +142,10 @@ func serverToProto(s *manman.Server) *pb.Server {
 		pbServer.LastSeen = s.LastSeen.Unix()
 	}
 
+	if s.Environment != nil {
+		pbServer.Environment = *s.Environment
+	}
+
 	return pbServer
 }
 

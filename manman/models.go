@@ -32,10 +32,11 @@ func (j *JSONB) Scan(value interface{}) error {
 
 // Server represents a physical/virtual machine running the host manager
 type Server struct {
-	ServerID int64      `db:"server_id"`
-	Name     string     `db:"name"`
-	Status   string     `db:"status"`
-	LastSeen *time.Time `db:"last_seen"`
+	ServerID    int64      `db:"server_id"`
+	Name        string     `db:"name"`
+	Status      string     `db:"status"`
+	Environment *string    `db:"environment"`
+	LastSeen    *time.Time `db:"last_seen"`
 }
 
 // Game represents a game definition (e.g., Minecraft, Valheim)

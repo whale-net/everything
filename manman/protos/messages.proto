@@ -89,6 +89,7 @@ message Server {
   string name = 2;
   string status = 3;  // "online" | "offline"
   int64 last_seen = 4;  // Unix timestamp (seconds since epoch), 0 if never seen
+  string environment = 5;  // Optional: deployment environment (dev, staging, prod, etc.)
 }
 
 // Game represents a game definition (e.g., Minecraft, Valheim)

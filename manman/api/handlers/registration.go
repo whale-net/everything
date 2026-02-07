@@ -14,14 +14,14 @@ import (
 )
 
 type RegistrationHandler struct {
-	serverRepo     repository.ServerRepository
-	capabilityRepo repository.ServerCapabilityRepository
+	serverRepo       repository.ServerRepository
+	capabilityRepo   repository.ServerCapabilityRepository
 }
 
 func NewRegistrationHandler(serverRepo repository.ServerRepository, capRepo repository.ServerCapabilityRepository) *RegistrationHandler {
 	return &RegistrationHandler{
-		serverRepo:     serverRepo,
-		capabilityRepo: capRepo,
+		serverRepo:       serverRepo,
+		capabilityRepo:   capRepo,
 	}
 }
 
@@ -43,12 +43,24 @@ func (h *RegistrationHandler) RegisterServer(ctx context.Context, req *pb.Regist
 			// Database error or other issue - don't swallow it
 			return nil, status.Errorf(codes.Internal, "failed to query server: %v", err)
 		}
+	} else {
+		// Server exists - check if it's already online
+		if server.Status == manman.ServerStatusOnline {
+			return nil, status.Errorf(codes.AlreadyExists,
+				"server '%s' is already online (server_id=%d). Cannot register duplicate instance.",
+				server.Name, server.ServerID)
+		}
 	}
 
-	// Update server status
+	// Update server status and environment
 	now := time.Now()
 	server.Status = manman.ServerStatusOnline
 	server.LastSeen = &now
+
+	// Update environment if provided
+	if req.Environment != "" {
+		server.Environment = &req.Environment
+	}
 
 	if err := h.serverRepo.Update(ctx, server); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update server status: %v", err)

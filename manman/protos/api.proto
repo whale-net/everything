@@ -386,6 +386,7 @@ message DeleteBackupResponse {
 message RegisterServerRequest {
   string name = 1;
   ServerCapabilities capabilities = 2;
+  string environment = 3;  // Optional: deployment environment (dev, staging, prod, etc.)
 }
 
 message RegisterServerResponse {
