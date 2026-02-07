@@ -14,6 +14,7 @@ go_binary(
 # Release metadata for migration job
 release_app(
     name = "manmanv2-migration",
+    binary_name = ":manmanv2-migration",
     language = "go",
     domain = "manman",
     description = "ManManV2 database migration runner",

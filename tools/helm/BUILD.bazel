@@ -11,6 +11,13 @@ go_library(
     visibility = ["//visibility:public"],
 )
 
+# Alias for helm_composer binary (actual binary is in cmd/helm_composer)
+alias(
+    name = "helm_composer",
+    actual = "//tools/helm/cmd/helm_composer",
+    visibility = ["//visibility:public"],
+)
+
 # Unit tests for type system
 go_test(
     name = "types_test",
