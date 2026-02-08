@@ -6,17 +6,17 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/whale-net/everything/libs/go/docker"
+	grpcclient "github.com/whale-net/everything/libs/go/grpcclient"
 	rmqlib "github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/manman/host/rmq"
 	"github.com/whale-net/everything/manman/host/session"
 	pb "github.com/whale-net/everything/manman/protos"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
@@ -289,14 +289,32 @@ func selfRegister(ctx context.Context, apiAddress, serverName, environment, dock
 		}
 	}
 
-	// Connect to API server
-	conn, err := grpc.NewClient(apiAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// Build TLS config based on environment and auto-detection
+	var tlsConfig *grpcclient.TLSConfig
+	apiTLSEnabled := shouldUseAPITLS(apiAddress)
+	if useTLS := os.Getenv("API_USE_TLS"); useTLS != "" {
+		apiTLSEnabled = useTLS == "true"
+	}
+
+	if apiTLSEnabled {
+		tlsConfig = &grpcclient.TLSConfig{
+			Enabled:            true,
+			InsecureSkipVerify: getEnv("API_TLS_SKIP_VERIFY", "false") == "true",
+			CACertPath:         getEnv("API_CA_CERT_PATH", ""),
+			ServerName:         getEnv("API_TLS_SERVER_NAME", ""),
+		}
+	}
+
+	connCtx, connCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer connCancel()
+
+	client, err := grpcclient.NewClientWithTLS(connCtx, apiAddress, tlsConfig)
 	if err != nil {
 		return 0, fmt.Errorf("failed to connect to API: %w", err)
 	}
-	defer conn.Close()
+	defer client.Close()
 
-	client := pb.NewManManAPIClient(conn)
+	grpcClient := pb.NewManManAPIClient(client.GetConnection())
 
 	// Get Docker info for capabilities
 	dockerClient, err := docker.NewClient(dockerSocket)
@@ -326,7 +344,7 @@ func selfRegister(ctx context.Context, apiAddress, serverName, environment, dock
 		Environment:  environment,
 	}
 
-	resp, err := client.RegisterServer(ctx, req)
+	resp, err := grpcClient.RegisterServer(ctx, req)
 	if err != nil {
 		return 0, fmt.Errorf("registration failed: %w", err)
 	}
@@ -340,6 +358,12 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// shouldUseAPITLS determines if TLS should be used for API connection based on address
+func shouldUseAPITLS(address string) bool {
+	lower := strings.ToLower(address)
+	return strings.HasPrefix(lower, "https://") || strings.Contains(lower, ":443")
 }
 
 // convertSessionStats converts session.SessionStats to rmq.SessionStats
