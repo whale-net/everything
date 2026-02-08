@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -206,5 +207,113 @@ func TestRenderConfigurationsMultipleFiles(t *testing.T) {
 
 	if files[0].HostPath != filepath.Join(baseDataDir, "data/server.properties") {
 		t.Errorf("Incorrect host path for server.properties")
+	}
+}
+
+func TestMergeModeEmptyBaseTemplate(t *testing.T) {
+	// Test merge mode: empty base_template means read existing file and merge
+	renderer := NewRenderer(nil)
+
+	// Create a test directory and file
+	testDir := t.TempDir()
+	testFile := filepath.Join(testDir, "data", "server.properties")
+
+	// Create parent directory
+	if err := os.MkdirAll(filepath.Dir(testFile), 0755); err != nil {
+		t.Fatalf("Failed to create test directory: %v", err)
+	}
+
+	// Write existing file with default properties
+	existingContent := `# Minecraft server properties
+motd=Default Server
+max-players=20
+difficulty=normal
+pvp=true
+online-mode=true
+whitelist-enabled=false`
+
+	if err := os.WriteFile(testFile, []byte(existingContent), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	// Configuration with empty base_template (merge mode)
+	config := &pb.RenderedConfiguration{
+		StrategyName:    "Server Properties",
+		StrategyType:    "file_properties",
+		TargetPath:      "/data/server.properties",
+		BaseContent:     "", // Empty = merge mode
+		RenderedContent: "motd=Patched Server Name\nmax-players=50", // Only overrides
+	}
+
+	files, err := renderer.RenderConfigurations([]*pb.RenderedConfiguration{config}, testDir)
+	if err != nil {
+		t.Fatalf("Failed to render configurations: %v", err)
+	}
+
+	if len(files) != 1 {
+		t.Fatalf("Expected 1 file, got %d", len(files))
+	}
+
+	// Parse rendered content
+	properties := parsePropertiesFile(files[0].Content)
+
+	// Verify patched properties were updated
+	if properties["motd"] != "Patched Server Name" {
+		t.Errorf("motd not patched: expected 'Patched Server Name', got '%s'", properties["motd"])
+	}
+	if properties["max-players"] != "50" {
+		t.Errorf("max-players not patched: expected '50', got '%s'", properties["max-players"])
+	}
+
+	// Verify unchanged properties were preserved
+	if properties["difficulty"] != "normal" {
+		t.Errorf("difficulty not preserved: expected 'normal', got '%s'", properties["difficulty"])
+	}
+	if properties["pvp"] != "true" {
+		t.Errorf("pvp not preserved: expected 'true', got '%s'", properties["pvp"])
+	}
+	if properties["online-mode"] != "true" {
+		t.Errorf("online-mode not preserved: expected 'true', got '%s'", properties["online-mode"])
+	}
+	if properties["whitelist-enabled"] != "false" {
+		t.Errorf("whitelist-enabled not preserved: expected 'false', got '%s'", properties["whitelist-enabled"])
+	}
+}
+
+func TestMergeModeNoExistingFile(t *testing.T) {
+	// Test merge mode when no existing file exists
+	renderer := NewRenderer(nil)
+
+	testDir := t.TempDir()
+
+	// Configuration with empty base_template but no existing file
+	config := &pb.RenderedConfiguration{
+		StrategyName:    "Server Properties",
+		StrategyType:    "file_properties",
+		TargetPath:      "/data/server.properties",
+		BaseContent:     "", // Empty = merge mode
+		RenderedContent: "motd=New Server\nmax-players=30",
+	}
+
+	files, err := renderer.RenderConfigurations([]*pb.RenderedConfiguration{config}, testDir)
+	if err != nil {
+		t.Fatalf("Failed to render configurations: %v", err)
+	}
+
+	if len(files) != 1 {
+		t.Fatalf("Expected 1 file, got %d", len(files))
+	}
+
+	// Should only contain the override properties
+	properties := parsePropertiesFile(files[0].Content)
+
+	if len(properties) != 2 {
+		t.Errorf("Expected 2 properties, got %d", len(properties))
+	}
+	if properties["motd"] != "New Server" {
+		t.Errorf("motd incorrect: expected 'New Server', got '%s'", properties["motd"])
+	}
+	if properties["max-players"] != "30" {
+		t.Errorf("max-players incorrect: expected '30', got '%s'", properties["max-players"])
 	}
 }

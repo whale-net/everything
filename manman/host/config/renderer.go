@@ -115,25 +115,52 @@ func (r *Renderer) WriteRenderedFiles(files []*RenderedFile) error {
 
 // renderPropertiesFileFromConfig renders a Java properties file from API configuration
 func (r *Renderer) renderPropertiesFileFromConfig(config *pb.RenderedConfiguration, baseDataDir string) (*RenderedFile, error) {
-	// Use the rendered content from the API
-	// This already has parameter bindings and patches applied
-	content := config.RenderedContent
-
-	// Parse into map and re-render to ensure consistent formatting
-	properties := parsePropertiesFile(content)
-	finalContent := renderPropertiesMap(properties)
-
 	// Determine host path
-	// target_path is the container path (e.g., /data/server.properties)
-	// We need to map this to the host path
 	if config.TargetPath == "" {
 		return nil, fmt.Errorf("no target path specified for configuration %s", config.StrategyName)
 	}
 
-	// Simple path mapping: /data/foo -> {BaseDataDir}/data/foo
-	// Remove leading slash
+	// Map container path to host path: /data/foo -> {BaseDataDir}/data/foo
 	relativePath := strings.TrimPrefix(config.TargetPath, "/")
 	hostPath := filepath.Join(baseDataDir, relativePath)
+
+	var properties map[string]string
+
+	// Two modes:
+	// 1. base_template provided (BaseContent non-empty): Use it as starting point
+	// 2. base_template empty: Read existing file and merge (for auto-generating games)
+	if config.BaseContent != "" {
+		r.logger.Printf("[config-renderer] Using base template for %s", config.StrategyName)
+		properties = parsePropertiesFile(config.BaseContent)
+	} else {
+		r.logger.Printf("[config-renderer] Base template empty, checking for existing file: %s", hostPath)
+		// Try to read existing file
+		existingContent, err := os.ReadFile(hostPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				r.logger.Printf("[config-renderer] No existing file found, starting with empty properties")
+				properties = make(map[string]string)
+			} else {
+				return nil, fmt.Errorf("failed to read existing file %s: %w", hostPath, err)
+			}
+		} else {
+			r.logger.Printf("[config-renderer] Read existing file (%d bytes), merging changes", len(existingContent))
+			properties = parsePropertiesFile(string(existingContent))
+		}
+	}
+
+	// Apply overrides from rendered content (parameter bindings, patches)
+	// If RenderedContent has values, they override the base/existing
+	if config.RenderedContent != "" && config.RenderedContent != config.BaseContent {
+		r.logger.Printf("[config-renderer] Applying overrides from rendered content")
+		overrides := parsePropertiesFile(config.RenderedContent)
+		for key, value := range overrides {
+			properties[key] = value
+		}
+	}
+
+	// Render final content
+	finalContent := renderPropertiesMap(properties)
 
 	return &RenderedFile{
 		Path:     config.TargetPath,

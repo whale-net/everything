@@ -1124,12 +1124,15 @@ func (h *ConfigurationStrategyHandler) GetSessionConfiguration(ctx context.Conte
 			rendered.TargetPath = *strategy.TargetPath
 		}
 
+		// Set base content (may be empty for merge mode)
 		if strategy.BaseTemplate != nil {
 			rendered.BaseContent = *strategy.BaseTemplate
-			// For now, just use base template as rendered content
-			// TODO: Apply parameter bindings and patches
-			rendered.RenderedContent = *strategy.BaseTemplate
 		}
+
+		// For now, rendered content is same as base content
+		// Host-manager will handle merging with existing files if base is empty
+		// TODO: Implement parameter binding resolution and apply here
+		rendered.RenderedContent = rendered.BaseContent
 
 		renderedConfigs = append(renderedConfigs, rendered)
 	}

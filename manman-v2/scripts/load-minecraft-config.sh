@@ -287,10 +287,10 @@ server_props_strategy_payload="$(cat <<EOF
 {
   "game_id": ${game_id},
   "name": "server.properties",
-  "description": "Minecraft server configuration file",
+  "description": "Minecraft server configuration file (merge mode - patches existing file)",
   "strategy_type": "file_properties",
   "target_path": "/data/server.properties",
-  "base_template": "# Minecraft Server Properties\nmotd=A Minecraft Server\nmax-players=20\ndifficulty=normal\npvp=true\nspawn-monsters=true\nview-distance=10\nonline-mode=true\ngamemode=survival\nallow-nether=true",
+  "base_template": "",
   "apply_order": 2
 }
 EOF
