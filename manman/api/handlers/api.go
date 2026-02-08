@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 	"log"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/whale-net/everything/libs/go/rmq"
@@ -881,11 +883,35 @@ func convertPortBindingsToMessage(bindingsJSON manman.JSONB) []interface{} {
 	if bindingsJSON == nil {
 		return []interface{}{}
 	}
-	// Port bindings are stored as array in JSONB
-	if bindings, ok := bindingsJSON["port_bindings"].([]interface{}); ok {
-		return bindings
+	// Port bindings are stored as map: "25565/TCP" -> 25565
+	// Convert to array of port binding messages for RMQ
+	var result []interface{}
+	for key, value := range bindingsJSON {
+		parts := strings.Split(key, "/")
+		if len(parts) != 2 {
+			continue
+		}
+		containerPort, err := strconv.Atoi(parts[0])
+		if err != nil {
+			continue
+		}
+		hostPort := int32(0)
+		switch v := value.(type) {
+		case float64:
+			hostPort = int32(v)
+		case int:
+			hostPort = int32(v)
+		case int32:
+			hostPort = v
+		}
+
+		result = append(result, map[string]interface{}{
+			"container_port": containerPort,
+			"host_port":      hostPort,
+			"protocol":       parts[1],
+		})
 	}
-	return []interface{}{}
+	return result
 }
 
 func sessionToProto(s *manman.Session) *pb.Session {
