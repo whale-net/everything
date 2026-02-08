@@ -282,4 +282,28 @@ EOF
 fi
 
 echo ""
+echo "Creating server.properties configuration strategy..."
+server_props_strategy_payload="$(cat <<EOF
+{
+  "game_id": ${game_id},
+  "name": "server.properties",
+  "description": "Minecraft server configuration file",
+  "strategy_type": "file_properties",
+  "target_path": "/data/server.properties",
+  "base_template": "# Minecraft Server Properties\nmotd=A Minecraft Server\nmax-players=20\ndifficulty=normal\npvp=true\nspawn-monsters=true\nview-distance=10\nonline-mode=true\ngamemode=survival\nallow-nether=true",
+  "apply_order": 2
+}
+EOF
+)"
+
+strategy_resp="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateConfigurationStrategy" "${server_props_strategy_payload}")"
+strategy_id="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); strategy=data.get("strategy", {}); print(strategy.get("strategyId") or "")' <<< "${strategy_resp}")"
+
+if [[ -n "${strategy_id}" && "${strategy_id}" != "null" ]]; then
+  echo "✔ Created server.properties strategy (ID: ${strategy_id})"
+else
+  echo "⚠ Failed to create server.properties strategy (may already exist)"
+fi
+
+echo ""
 echo "✔ Setup complete! You can now start sessions."
