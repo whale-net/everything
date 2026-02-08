@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "handlers",
@@ -24,6 +24,19 @@ go_library(
         "//manman/api/repository",
         "//manman/protos:manmanpb",
         "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
+go_test(
+    name = "handlers_test",
+    srcs = ["registration_test.go"],
+    embed = [":handlers"],
+    deps = [
+        "//manman:models",
+        "//manman/protos:manmanpb",
         "@com_github_jackc_pgx_v5//:pgx",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",

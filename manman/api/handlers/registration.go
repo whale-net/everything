@@ -43,14 +43,9 @@ func (h *RegistrationHandler) RegisterServer(ctx context.Context, req *pb.Regist
 			// Database error or other issue - don't swallow it
 			return nil, status.Errorf(codes.Internal, "failed to query server: %v", err)
 		}
-	} else {
-		// Server exists - check if it's already online
-		if server.Status == manman.ServerStatusOnline {
-			return nil, status.Errorf(codes.AlreadyExists,
-				"server '%s' is already online (server_id=%d). Cannot register duplicate instance.",
-				server.Name, server.ServerID)
-		}
 	}
+	// If server exists, proceed with idempotent registration
+	// This allows the same server to re-register (e.g., after restart)
 
 	// Update server status and environment
 	now := time.Now()
