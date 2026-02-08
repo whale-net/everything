@@ -178,3 +178,34 @@ func (c *ControlClient) ListSessions(ctx context.Context, liveOnly bool) ([]*man
 	}
 	return resp.Sessions, nil
 }
+
+// ListSessionsWithFilters retrieves sessions with custom filters.
+func (c *ControlClient) ListSessionsWithFilters(ctx context.Context, req *manmanpb.ListSessionsRequest) ([]*manmanpb.Session, error) {
+	resp, err := c.api.ListSessions(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list sessions: %w", err)
+	}
+	return resp.Sessions, nil
+}
+
+// GetSession retrieves a single session by ID.
+func (c *ControlClient) GetSession(ctx context.Context, sessionID int64) (*manmanpb.Session, error) {
+	resp, err := c.api.GetSession(ctx, &manmanpb.GetSessionRequest{
+		SessionId: sessionID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get session: %w", err)
+	}
+	return resp.Session, nil
+}
+
+// StopSession stops a running session by ID.
+func (c *ControlClient) StopSession(ctx context.Context, sessionID int64) (*manmanpb.Session, error) {
+	resp, err := c.api.StopSession(ctx, &manmanpb.StopSessionRequest{
+		SessionId: sessionID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to stop session: %w", err)
+	}
+	return resp.Session, nil
+}

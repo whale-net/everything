@@ -1,0 +1,66 @@
+{{define "session_detail_content"}}
+<div class="action-bar">
+    <h1>Session {{.Session.SessionId}}</h1>
+    <div>
+        <a href="/sessions" class="btn btn-secondary btn-sm">Back to Sessions</a>
+        {{if eq .Session.Status "running"}}
+        <form method="POST" action="/sessions/{{.Session.SessionId}}/stop" style="display: inline;">
+            <button type="submit" class="btn btn-danger btn-sm">Stop Session</button>
+        </form>
+        {{end}}
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Session Details</div>
+    </div>
+    <dl style="display: grid; grid-template-columns: 200px 1fr; gap: 0.5rem;">
+        <dt><strong>Session ID:</strong></dt>
+        <dd>{{.Session.SessionId}}</dd>
+
+        <dt><strong>Status:</strong></dt>
+        <dd><span class="badge {{statusBadge .Session.Status}}">{{.Session.Status}}</span></dd>
+
+        <dt><strong>Server Game Config ID:</strong></dt>
+        <dd>{{.Session.ServerGameConfigId}}</dd>
+
+        <dt><strong>Started:</strong></dt>
+        <dd>{{timeAgo .Session.StartedAt}} ({{formatTime .Session.StartedAt}})</dd>
+
+        <dt><strong>Ended:</strong></dt>
+        <dd>{{timeAgo .Session.EndedAt}} ({{formatTime .Session.EndedAt}})</dd>
+
+        <dt><strong>Exit Code:</strong></dt>
+        <dd>{{.Session.ExitCode}}</dd>
+    </dl>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Parameters</div>
+    </div>
+    {{if .Session.Parameters}}
+    <table>
+        <thead>
+            <tr>
+                <th>Key</th>
+                <th>Value</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range $key, $value := .Session.Parameters}}
+            <tr>
+                <td><code>{{$key}}</code></td>
+                <td><code>{{$value}}</code></td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else}}
+    <div class="empty-state">
+        <p>No session parameters.</p>
+    </div>
+    {{end}}
+</div>
+{{end}}
