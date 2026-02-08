@@ -91,7 +91,7 @@ type ServerPort struct {
 	ServerID    int64     `db:"server_id"`
 	Port        int       `db:"port"`
 	Protocol    string    `db:"protocol"`
-	SGCID       *int64    `db:"sgc_id"`
+	SessionID   *int64    `db:"session_id"`
 	AllocatedAt time.Time `db:"allocated_at"`
 }
 

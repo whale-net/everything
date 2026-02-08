@@ -94,14 +94,14 @@ type BackupRepository interface {
 
 // ServerPortRepository defines operations for port allocation management
 type ServerPortRepository interface {
-	AllocatePort(ctx context.Context, serverID int64, port int, protocol string, sgcID int64) error
+	AllocatePort(ctx context.Context, serverID int64, port int, protocol string, sessionID int64) error
 	DeallocatePort(ctx context.Context, serverID int64, port int, protocol string) error
 	IsPortAvailable(ctx context.Context, serverID int64, port int, protocol string) (bool, error)
 	GetPortAllocation(ctx context.Context, serverID int64, port int, protocol string) (*manman.ServerPort, error)
 	ListAllocatedPorts(ctx context.Context, serverID int64) ([]*manman.ServerPort, error)
-	ListPortsBySGCID(ctx context.Context, sgcID int64) ([]*manman.ServerPort, error)
-	DeallocatePortsBySGCID(ctx context.Context, sgcID int64) error
-	AllocateMultiplePorts(ctx context.Context, serverID int64, portBindings []*manman.PortBinding, sgcID int64) error
+	ListPortsBySessionID(ctx context.Context, sessionID int64) ([]*manman.ServerPort, error)
+	DeallocatePortsBySessionID(ctx context.Context, sessionID int64) error
+	AllocateMultiplePorts(ctx context.Context, serverID int64, portBindings []*manman.PortBinding, sessionID int64) error
 	GetAvailablePortsInRange(ctx context.Context, serverID int64, protocol string, startPort, endPort, limit int) ([]int, error)
 }
 

@@ -725,14 +725,14 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 			}
 		}
 
-		// Attempt to allocate ports - will fail if already in use by another SGC's active session
-		if err := h.repo.ServerPorts.AllocateMultiplePorts(ctx, sgc.ServerID, portBindings, sgc.SGCID); err != nil {
+		// Attempt to allocate ports - will fail if already in use by another session
+		if err := h.repo.ServerPorts.AllocateMultiplePorts(ctx, sgc.ServerID, portBindings, session.SessionID); err != nil {
 			// Rollback: mark session as failed
 			session.Status = manman.SessionStatusCrashed
 			h.sessionRepo.Update(ctx, session)
 			return nil, status.Errorf(codes.ResourceExhausted, "failed to allocate ports (ports may be in use by another session): %v", err)
 		}
-		log.Printf("[session %d] allocated %d ports for SGC %d on server %d", session.SessionID, len(portBindings), sgc.SGCID, sgc.ServerID)
+		log.Printf("[session %d] allocated %d ports on server %d", session.SessionID, len(portBindings), sgc.ServerID)
 	}
 
 	// Fetch Configuration Strategies for the game to get volume mounts
@@ -786,12 +786,12 @@ func (h *SessionHandler) StopSession(ctx context.Context, req *pb.StopSessionReq
 		return nil, status.Errorf(codes.Internal, "failed to update session: %v", err)
 	}
 
-	// Deallocate ports for this SGC to allow other sessions to use them
-	if err := h.repo.ServerPorts.DeallocatePortsBySGCID(ctx, sgc.SGCID); err != nil {
-		log.Printf("Warning: Failed to deallocate ports for SGC %d: %v", sgc.SGCID, err)
+	// Deallocate ports for this session to allow other sessions to use them
+	if err := h.repo.ServerPorts.DeallocatePortsBySessionID(ctx, session.SessionID); err != nil {
+		log.Printf("Warning: Failed to deallocate ports for session %d: %v", session.SessionID, err)
 		// Don't fail the stop request - ports can be cleaned up later
 	} else {
-		log.Printf("[session %d] deallocated ports for SGC %d", session.SessionID, sgc.SGCID)
+		log.Printf("[session %d] deallocated ports", session.SessionID)
 	}
 
 	return &pb.StopSessionResponse{
