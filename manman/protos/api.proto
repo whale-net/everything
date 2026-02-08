@@ -325,6 +325,7 @@ message GetSessionResponse {
 message StartSessionRequest {
   int64 server_game_config_id = 1;
   map<string, string> parameters = 2;  // optional session-level overrides
+  bool force = 3;
 }
 
 message StartSessionResponse {

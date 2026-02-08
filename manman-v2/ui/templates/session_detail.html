@@ -22,6 +22,17 @@
         <dt><strong>Status:</strong></dt>
         <dd><span class="badge {{statusBadge .Session.Status}}">{{.Session.Status}}</span></dd>
 
+        <dt><strong>Available:</strong></dt>
+        <dd>
+            {{if eq .Session.Status "running"}}
+            <span class="badge badge-success">Yes (Ready for connections)</span>
+            {{else if or (eq .Session.Status "starting") (eq .Session.Status "pending")}}
+            <span class="badge badge-warning">Starting (Wait for it to be ready)</span>
+            {{else}}
+            <span class="badge badge-danger">No (Server is not running)</span>
+            {{end}}
+        </dd>
+
         <dt><strong>Server Game Config ID:</strong></dt>
         <dd>{{.Session.ServerGameConfigId}}</dd>
 

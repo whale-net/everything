@@ -49,6 +49,7 @@ type StartSessionCommand struct {
 	GameConfig       GameConfigMessage       `json:"game_config"`
 	ServerGameConfig ServerGameConfigMessage `json:"server_game_config"`
 	Parameters       map[string]string       `json:"parameters"`
+	Force            bool                    `json:"force"`
 }
 
 // StopSessionCommand represents a command to stop a session

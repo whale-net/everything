@@ -284,3 +284,20 @@ const (
 	PatchFormatJSONPatch      = "json_patch"
 	PatchFormatYAMLMerge      = "yaml_merge"
 )
+
+// IsActive returns true if the session is in an active state (not completed or stopped)
+// Note: crashed and lost are still considered active for management purposes
+func (s Session) IsActive() bool {
+	switch s.Status {
+	case SessionStatusPending, SessionStatusStarting, SessionStatusRunning,
+		SessionStatusStopping, SessionStatusCrashed, SessionStatusLost:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsAvailable returns true if the session is running and ready for connections
+func (s Session) IsAvailable() bool {
+	return s.Status == SessionStatusRunning
+}

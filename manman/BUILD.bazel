@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 load("@rules_python//python:defs.bzl", "py_library")
 load("//tools/bazel:release.bzl", "release_app", "release_helm_chart")
 load("//tools/openapi:openapi_client.bzl", "openapi_client")
@@ -12,6 +12,12 @@ go_library(
     srcs = ["models.go"],
     importpath = "github.com/whale-net/everything/manman",
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "models_test",
+    srcs = ["models_test.go"],
+    embed = [":models"],
 )
 
 # ==============================================================================

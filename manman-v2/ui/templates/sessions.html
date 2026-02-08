@@ -50,6 +50,18 @@
         {{if .StartError}}
         <div style="margin-bottom: 1rem; padding: 0.75rem; border-left: 4px solid #e74c3c; background: #fdecea;">
             <strong>Start failed:</strong> {{.StartError}}
+            
+            {{if .ShowForce}}
+            <form method="POST" action="/sessions/start" style="margin-top: 0.75rem;">
+                <input type="hidden" name="server_game_config_id" value="{{.ForceSGCID}}">
+                <input type="hidden" name="server_id" value="{{.SelectedServerID}}">
+                <input type="hidden" name="force" value="true">
+                <button type="submit" class="btn btn-danger">Force Start New Session</button>
+                <p style="margin-top: 0.5rem; font-size: 0.85rem; color: #666;">
+                    This will attempt to gracefully stop the existing container, then force stop and remove it before starting a new one.
+                </p>
+            </form>
+            {{end}}
         </div>
         {{end}}
 

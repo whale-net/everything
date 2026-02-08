@@ -32,7 +32,10 @@ go_library(
 
 go_test(
     name = "handlers_test",
-    srcs = ["registration_test.go"],
+    srcs = [
+        "registration_test.go",
+        "session_test.go",
+    ],
     embed = [":handlers"],
     deps = [
         "//manman:models",

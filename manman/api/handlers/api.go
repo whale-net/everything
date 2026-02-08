@@ -615,6 +615,8 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 		manman.SessionStatusStarting,
 		manman.SessionStatusRunning,
 		manman.SessionStatusStopping,
+		manman.SessionStatusCrashed,
+		manman.SessionStatusLost,
 	}
 
 	filters := &repository.SessionFilters{
@@ -627,10 +629,10 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 		return nil, status.Errorf(codes.Internal, "failed to check active sessions: %v", err)
 	}
 
-	if len(activeSessions) > 0 {
+	if len(activeSessions) > 0 && !req.Force {
 		active := activeSessions[0]
 		return nil, status.Errorf(codes.FailedPrecondition,
-			"active session %d already exists with status %s", active.SessionID, active.Status)
+			"active session %d already exists with status %s. Use force=true to override.", active.SessionID, active.Status)
 	}
 
 	// Create session in database
@@ -659,8 +661,9 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 
 	// Publish start session command to RabbitMQ
 	if h.publisher != nil {
-		cmd := buildStartSessionCommand(session, sgc, gc, req.Parameters)
-		if err := h.publisher.PublishStartSession(ctx, sgc.ServerID, cmd, 30*time.Second); err != nil {
+		cmd := buildStartSessionCommand(session, sgc, gc, req.Parameters, req.Force)
+		// Increased timeout to allow for image pulling
+		if err := h.publisher.PublishStartSession(ctx, sgc.ServerID, cmd, 2*time.Minute); err != nil {
 			log.Printf("Warning: Failed to publish start session command: %v", err)
 			// Don't fail the request - the session is created, operator can manually trigger
 		}
@@ -689,7 +692,7 @@ func (h *SessionHandler) StopSession(ctx context.Context, req *pb.StopSessionReq
 			"session_id": session.SessionID,
 			"force":      false,
 		}
-		if err := h.publisher.PublishStopSession(ctx, sgc.ServerID, cmd, 30*time.Second); err != nil {
+		if err := h.publisher.PublishStopSession(ctx, sgc.ServerID, cmd, 1*time.Minute); err != nil {
 			log.Printf("Warning: Failed to publish stop session command: %v", err)
 		}
 	}
@@ -706,7 +709,7 @@ func (h *SessionHandler) StopSession(ctx context.Context, req *pb.StopSessionReq
 }
 
 // buildStartSessionCommand converts database models to RabbitMQ message format
-func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameConfig, gc *manman.GameConfig, sessionParams map[string]string) map[string]interface{} {
+func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameConfig, gc *manman.GameConfig, sessionParams map[string]string, force bool) map[string]interface{} {
 	// Build game config message
 	gameConfig := map[string]interface{}{
 		"config_id":     gc.ConfigID,
@@ -735,6 +738,7 @@ func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameCon
 		"game_config":        gameConfig,
 		"server_game_config": serverGameConfig,
 		"parameters":         sessionParams,
+		"force":              force,
 	}
 }
 

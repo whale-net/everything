@@ -27,6 +27,8 @@ type SessionsPageData struct {
 	SelectedServerStatus string
 	StartWarning string
 	StartError string
+	ShowForce    bool
+	ForceSGCID   string
 	LiveSessionByConfig map[int64]*manmanpb.Session
 }
 
@@ -46,6 +48,8 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 	serverGameConfigIDStr := strings.TrimSpace(r.URL.Query().Get("server_game_config_id"))
 	selectedServerIDStr := strings.TrimSpace(r.URL.Query().Get("server_id"))
 	startError := strings.TrimSpace(r.URL.Query().Get("start_error"))
+	showForce := r.URL.Query().Get("show_force") == "1"
+	forceSGCID := r.URL.Query().Get("sgc_id")
 
 	ctx := context.Background()
 
@@ -154,6 +158,8 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 		SelectedServerStatus: selectedServerStatus,
 		StartWarning: startWarning,
 		StartError: startError,
+		ShowForce:    showForce,
+		ForceSGCID:   forceSGCID,
 		LiveSessionByConfig: liveSessionByConfig,
 	}
 
@@ -272,17 +278,24 @@ func (app *App) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	force := r.FormValue("force") == "true"
+
 	ctx := context.Background()
-	session, err := app.grpc.StartSession(ctx, serverGameConfigID, nil)
+	session, err := app.grpc.StartSession(ctx, serverGameConfigID, nil, force)
 	if err != nil {
 		log.Printf("Error starting session: %v", err)
 
 		errMsg := err.Error()
+		showForceOption := false
 		if strings.Contains(errMsg, "active session") {
-			errMsg = "Session is already active. Please stop existing session first."
+			errMsg = "Session is already active. You can attempt to force start a new session, which will attempt to stop the existing one first."
+			showForceOption = true
 		}
 
 		redirectURL := "/sessions?start_error=" + url.QueryEscape(errMsg)
+		if showForceOption {
+			redirectURL += "&show_force=1&sgc_id=" + serverGameConfigIDStr
+		}
 		if selectedServerIDStr != "" {
 			redirectURL += "&server_id=" + selectedServerIDStr
 		}

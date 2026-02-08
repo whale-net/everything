@@ -39,6 +39,7 @@ type StartSessionCommand struct {
 	Command      []string
 	Env          []string
 	PortBindings map[string]string // containerPort -> hostPort
+	Force        bool
 }
 
 // StartSession starts a new game server session
@@ -51,6 +52,29 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 		return &rmq.PermanentError{Err: fmt.Errorf("session %d already exists", sessionID)}
 	}
 
+	// If force is requested, clean up any existing container for this SGC
+	if cmd.Force {
+		containerName := fmt.Sprintf("game-%d-%d", cmd.ServerID, cmd.SGCID)
+		log.Printf("[session %d] force start requested, cleaning up existing container %s", sessionID, containerName)
+
+		// 1. Attempt graceful shutdown first
+		log.Printf("[session %d] attempting graceful shutdown of %s...", sessionID, containerName)
+		shutdownTimeout := 10 * time.Second // TODO: make configurable in far future iteration
+		if err := sm.dockerClient.StopContainer(ctx, containerName, &shutdownTimeout); err != nil {
+			log.Printf("[session %d] graceful shutdown failed or container not found: %v", sessionID, err)
+		} else {
+			log.Printf("[session %d] graceful shutdown of %s succeeded", sessionID, containerName)
+		}
+
+		// 2. Force stop and remove
+		log.Printf("[session %d] removing container %s...", sessionID, containerName)
+		if err := sm.dockerClient.RemoveContainer(ctx, containerName, true); err != nil {
+			log.Printf("[session %d] warning: removal failed: %v", sessionID, err)
+		} else {
+			log.Printf("[session %d] removal of %s succeeded", sessionID, containerName)
+		}
+	}
+
 	// Create session state
 	state := &State{
 		SessionID: sessionID,
@@ -58,10 +82,12 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 		Status:    manman.SessionStatusPending,
 	}
 	sm.stateManager.AddSession(state)
+	log.Printf("[session %d] added to state manager, status: starting", sessionID)
 	state.UpdateStatus(manman.SessionStatusStarting)
 
 	// 1. Create Docker network
 	networkName := fmt.Sprintf("session-%d", sessionID)
+	log.Printf("[session %d] creating network %s...", sessionID, networkName)
 	networkLabels := map[string]string{
 		"manman.type":       "network",
 		"manman.session_id": fmt.Sprintf("%d", sessionID),
@@ -69,61 +95,112 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	}
 	networkID, err := sm.dockerClient.CreateNetwork(ctx, networkName, networkLabels)
 	if err != nil {
-		state.UpdateStatus(manman.SessionStatusCrashed)
-		sm.stateManager.RemoveSession(sessionID)
-		return fmt.Errorf("failed to create network: %w", err)
+		if strings.Contains(err.Error(), "already exists") {
+			log.Printf("[session %d] network %s already exists, attempting to reuse", sessionID, networkName)
+			id, netErr := sm.dockerClient.GetNetworkIDByName(ctx, networkName)
+			if netErr != nil {
+				log.Printf("[session %d] error: failed to get existing network ID: %v", sessionID, netErr)
+				state.UpdateStatus(manman.SessionStatusCrashed)
+				sm.stateManager.RemoveSession(sessionID)
+				return fmt.Errorf("failed to get existing network ID: %w", netErr)
+			}
+			networkID = id
+			log.Printf("[session %d] reused network ID: %s", sessionID, networkID)
+		} else {
+			log.Printf("[session %d] error: failed to create network: %v", sessionID, err)
+			state.UpdateStatus(manman.SessionStatusCrashed)
+			sm.stateManager.RemoveSession(sessionID)
+			return fmt.Errorf("failed to create network: %w", err)
+		}
 	}
+	log.Printf("[session %d] network created/resolved: %s", sessionID, networkID)
 	state.NetworkID = networkID
 	state.NetworkName = networkName
 
 	// 2. Create game container
+	log.Printf("[session %d] creating container for image %s...", sessionID, cmd.Image)
 	containerID, err := sm.createGameContainer(ctx, state, cmd)
 	if err != nil {
 		if isNameConflictError(err) {
 			// Handle idempotent start: container with this name already exists
+			log.Printf("[session %d] container name conflict, attempting to handle...", sessionID)
 			containerID, err = sm.handleNameConflict(ctx, cmd)
 			if err != nil {
+				log.Printf("[session %d] error: failed to handle name conflict: %v", sessionID, err)
 				sm.cleanupSession(ctx, state)
 				state.UpdateStatus(manman.SessionStatusCrashed)
 				sm.stateManager.RemoveSession(sessionID)
 				return fmt.Errorf("failed to handle name conflict: %w", err)
 			}
+			log.Printf("[session %d] resolved name conflict, container ID: %s", sessionID, containerID)
+		} else if strings.Contains(err.Error(), "No such image") {
+			// Try to pull the image and retry creation once
+			log.Printf("[session %d] image %s not found, attempting to pull...", sessionID, cmd.Image)
+			if pullErr := sm.dockerClient.PullImage(ctx, cmd.Image); pullErr != nil {
+				log.Printf("[session %d] error: failed to pull image %s: %v", sessionID, cmd.Image, pullErr)
+				sm.cleanupSession(ctx, state)
+				state.UpdateStatus(manman.SessionStatusCrashed)
+				sm.stateManager.RemoveSession(sessionID)
+				return &rmq.PermanentError{Err: fmt.Errorf("failed to pull image %s: %w", cmd.Image, pullErr)}
+			}
+
+			// Retry creation
+			log.Printf("[session %d] retrying container creation after pull...", sessionID)
+			containerID, err = sm.createGameContainer(ctx, state, cmd)
+			if err != nil {
+				log.Printf("[session %d] error: failed to create container after pull: %v", sessionID, err)
+				sm.cleanupSession(ctx, state)
+				state.UpdateStatus(manman.SessionStatusCrashed)
+				sm.stateManager.RemoveSession(sessionID)
+				return &rmq.PermanentError{Err: fmt.Errorf("failed to create game container after pull: %w", err)}
+			}
 		} else {
+			log.Printf("[session %d] error: failed to create container: %v", sessionID, err)
 			sm.cleanupSession(ctx, state)
 			state.UpdateStatus(manman.SessionStatusCrashed)
 			sm.stateManager.RemoveSession(sessionID)
 			return fmt.Errorf("failed to create game container: %w", err)
 		}
 	}
+	log.Printf("[session %d] container created: %s", sessionID, containerID)
 	state.GameContainerID = containerID
 
 	// 3. Start game container
+	log.Printf("[session %d] starting container %s...", sessionID, containerID)
 	if err := sm.dockerClient.StartContainer(ctx, containerID); err != nil {
 		// If already running (from name conflict recovery), that's fine
 		if !strings.Contains(err.Error(), "already started") {
+			log.Printf("[session %d] error: failed to start container: %v", sessionID, err)
 			sm.cleanupSession(ctx, state)
 			state.UpdateStatus(manman.SessionStatusCrashed)
 			sm.stateManager.RemoveSession(sessionID)
 			return fmt.Errorf("failed to start game container: %w", err)
 		}
+		log.Printf("[session %d] container was already started", sessionID)
 	}
+	log.Printf("[session %d] container %s started", sessionID, containerID)
 
 	// 4. Attach to container for stdin/stdout
+	log.Printf("[session %d] attaching to container for logging...", sessionID)
 	attachResp, err := sm.dockerClient.AttachToContainer(ctx, containerID)
 	if err != nil {
+		log.Printf("[session %d] error: failed to attach to container: %v", sessionID, err)
 		sm.cleanupSession(ctx, state)
 		state.UpdateStatus(manman.SessionStatusCrashed)
 		sm.stateManager.RemoveSession(sessionID)
 		return fmt.Errorf("failed to attach to game container: %w", err)
 	}
 	state.AttachResp = &attachResp
+	log.Printf("[session %d] successfully attached to container", sessionID)
 
 	// 5. Start output reader goroutine
+	log.Printf("[session %d] spawning output reader goroutine", sessionID)
 	sm.startOutputReader(state)
 
 	now := time.Now()
 	state.StartedAt = &now
 	state.UpdateStatus(manman.SessionStatusRunning)
+	log.Printf("[session %d] startup complete, status: running", sessionID)
 
 	return nil
 }
