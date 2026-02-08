@@ -65,8 +65,14 @@ func run() error {
 	}
 	defer rmqConn.Close()
 
-	// Initialize session manager
-	sessionManager := session.NewSessionManager(dockerClient, environment, hostDataDir)
+	// Initialize gRPC client for control API
+	grpcClient, err := initializeGRPCClient(ctx, apiAddress)
+	if err != nil {
+		return fmt.Errorf("failed to initialize gRPC client: %w", err)
+	}
+
+	// Initialize session manager with gRPC client for configuration fetching
+	sessionManager := session.NewSessionManager(dockerClient, environment, hostDataDir, grpcClient)
 
 	// Recover orphaned sessions on startup
 	log.Println("Recovering orphaned sessions...")
@@ -307,26 +313,8 @@ func (h *CommandHandlerImpl) HandleSendInput(ctx context.Context, cmd *rmq.SendI
 }
 
 // selfRegister generates a server name (if not provided) and registers with the control plane
-func selfRegister(ctx context.Context, apiAddress, serverName, environment, dockerSocket string) (int64, error) {
-	// Generate server name if not provided
-	if serverName == "" {
-		hostname, err := os.Hostname()
-		if err != nil {
-			hostname = "unknown-host"
-		}
-
-		// Use stable naming based on hostname and environment
-		// This ensures same server record is reused across restarts
-		if environment != "" {
-			serverName = fmt.Sprintf("%s-%s", hostname, environment)
-		} else {
-			// No environment specified - use hostname only
-			// If multiple managers on same host without environment, add UUID
-			serverName = fmt.Sprintf("%s-%s", hostname, uuid.New().String()[:8])
-			log.Printf("Warning: No ENVIRONMENT set. Consider setting it to avoid duplicate servers on restart.")
-		}
-	}
-
+// initializeGRPCClient creates a gRPC client connection to the control API
+func initializeGRPCClient(ctx context.Context, apiAddress string) (pb.ManManAPIClient, error) {
 	// Build TLS config based on environment and auto-detection
 	var tlsConfig *grpcclient.TLSConfig
 	apiTLSEnabled := shouldUseAPITLS(apiAddress)
@@ -360,12 +348,37 @@ func selfRegister(ctx context.Context, apiAddress, serverName, environment, dock
 			backoff *= 2
 		}
 		if err != nil {
-			return 0, fmt.Errorf("failed to connect to API after retries: %w", err)
+			return nil, fmt.Errorf("failed to connect to API after retries: %w", err)
 		}
 	}
-	defer client.Close()
 
-	grpcClient := pb.NewManManAPIClient(client.GetConnection())
+	return pb.NewManManAPIClient(client.GetConnection()), nil
+}
+
+func selfRegister(ctx context.Context, apiAddress, serverName, environment, dockerSocket string) (int64, error) {
+	// Generate server name if not provided
+	if serverName == "" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			hostname = "unknown-host"
+		}
+
+		// Use stable naming based on hostname and environment
+		// This ensures same server record is reused across restarts
+		if environment != "" {
+			serverName = fmt.Sprintf("%s-%s", hostname, environment)
+		} else {
+			// No environment specified - use hostname only
+			// If multiple managers on same host without environment, add UUID
+			serverName = fmt.Sprintf("%s-%s", hostname, uuid.New().String()[:8])
+			log.Printf("Warning: No ENVIRONMENT set. Consider setting it to avoid duplicate servers on restart.")
+		}
+	}
+
+	grpcClient, err := initializeGRPCClient(ctx, apiAddress)
+	if err != nil {
+		return 0, err
+	}
 
 	// Get Docker info for capabilities
 	dockerClient, err := docker.NewClient(dockerSocket)

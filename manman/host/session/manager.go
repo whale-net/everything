@@ -14,6 +14,8 @@ import (
 	"github.com/whale-net/everything/libs/go/docker"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/manman"
+	"github.com/whale-net/everything/manman/host/config"
+	pb "github.com/whale-net/everything/manman/protos"
 )
 
 // SessionManager manages the lifecycle of game server sessions
@@ -22,15 +24,19 @@ type SessionManager struct {
 	stateManager *Manager
 	environment  string
 	hostDataDir  string // Path as seen by the Docker daemon (host-side)
+	grpcClient   pb.ManManAPIClient
+	renderer     *config.Renderer
 }
 
 // NewSessionManager creates a new session manager
-func NewSessionManager(dockerClient *docker.Client, environment string, hostDataDir string) *SessionManager {
+func NewSessionManager(dockerClient *docker.Client, environment string, hostDataDir string, grpcClient pb.ManManAPIClient) *SessionManager {
 	return &SessionManager{
 		dockerClient: dockerClient,
 		stateManager: NewManager(),
 		environment:  environment,
 		hostDataDir:  hostDataDir,
+		grpcClient:   grpcClient,
+		renderer:     config.NewRenderer(nil),
 	}
 }
 
@@ -166,7 +172,46 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	state.NetworkID = networkID
 	state.NetworkName = networkName
 
-	// 2. Create game container
+	// 2. Fetch and render configurations
+	log.Printf("[session %d] fetching configuration strategies...", sessionID)
+	configResp, err := sm.grpcClient.GetSessionConfiguration(ctx, &pb.GetSessionConfigurationRequest{
+		SessionId: sessionID,
+	})
+	if err != nil {
+		log.Printf("[session %d] warning: failed to fetch configurations: %v", sessionID, err)
+		// Don't fail the session start - configurations are optional
+		configResp = &pb.GetSessionConfigurationResponse{Configurations: nil}
+	} else {
+		log.Printf("[session %d] fetched %d configuration strategies", sessionID, len(configResp.Configurations))
+
+		// Render configurations
+		if len(configResp.Configurations) > 0 {
+			gscHostDataDir := sm.getGSCHostDataDir(cmd.SGCID)
+			renderedFiles, err := sm.renderer.RenderConfigurations(configResp.Configurations, gscHostDataDir)
+			if err != nil {
+				log.Printf("[session %d] error: failed to render configurations: %v", sessionID, err)
+				sm.cleanupSession(ctx, state)
+				state.UpdateStatus(manman.SessionStatusCrashed)
+				sm.stateManager.RemoveSession(sessionID)
+				return fmt.Errorf("failed to render configurations: %w", err)
+			}
+
+			// Write rendered files to disk
+			if len(renderedFiles) > 0 {
+				log.Printf("[session %d] writing %d configuration files...", sessionID, len(renderedFiles))
+				if err := sm.renderer.WriteRenderedFiles(renderedFiles); err != nil {
+					log.Printf("[session %d] error: failed to write configuration files: %v", sessionID, err)
+					sm.cleanupSession(ctx, state)
+					state.UpdateStatus(manman.SessionStatusCrashed)
+					sm.stateManager.RemoveSession(sessionID)
+					return fmt.Errorf("failed to write configuration files: %w", err)
+				}
+				log.Printf("[session %d] successfully wrote configuration files", sessionID)
+			}
+		}
+	}
+
+	// 3. Create game container
 	log.Printf("[session %d] creating container for image %s...", sessionID, cmd.Image)
 	containerID, err := sm.createGameContainer(ctx, state, cmd)
 	if err != nil {

@@ -13,6 +13,8 @@ go_library(
         "//libs/go/docker",
         "//libs/go/rmq",
         "//manman:models",
+        "//manman/host/config",
+        "//manman/protos:manmanpb",
         "@com_github_docker_docker//api/types",
     ],
 )
