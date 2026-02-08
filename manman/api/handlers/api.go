@@ -711,8 +711,18 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 	// Allocate ports for this session
 	// Port bindings are defined at SGC level, but allocated per active session.
 	// This allows multiple SGCs to use the same ports, as long as only one session uses them at a time.
-	portBindings := jsonbToPortBindings(sgc.PortBindings)
-	if len(portBindings) > 0 {
+	pbPortBindings := jsonbToPortBindings(sgc.PortBindings)
+	if len(pbPortBindings) > 0 {
+		// Convert protobuf PortBindings to model PortBindings
+		portBindings := make([]*manman.PortBinding, len(pbPortBindings))
+		for i, pb := range pbPortBindings {
+			portBindings[i] = &manman.PortBinding{
+				ContainerPort: pb.ContainerPort,
+				HostPort:      pb.HostPort,
+				Protocol:      pb.Protocol,
+			}
+		}
+
 		// Attempt to allocate ports - will fail if already in use by another SGC's active session
 		if err := h.repo.ServerPorts.AllocateMultiplePorts(ctx, sgc.ServerID, portBindings, sgc.SGCID); err != nil {
 			// Rollback: mark session as failed
