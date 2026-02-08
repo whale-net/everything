@@ -283,6 +283,21 @@ fi
 
 echo ""
 echo "Creating server.properties configuration strategy..."
+
+# First, check if strategy already exists and delete it
+existing_strategies="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/ListConfigurationStrategies" "{\"game_id\": ${game_id}}")"
+existing_id="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); strategies=data.get("strategies", []);
+for s in strategies:
+    if s.get("name") == "server.properties":
+        print(s.get("strategyId") or "")
+        break' <<< "${existing_strategies}")"
+
+if [[ -n "${existing_id}" && "${existing_id}" != "null" ]]; then
+  echo "  Deleting existing server.properties strategy (ID: ${existing_id})..."
+  grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/DeleteConfigurationStrategy" "{\"strategy_id\": ${existing_id}}" >/dev/null
+fi
+
+# Create new strategy with empty base_template (merge mode)
 server_props_strategy_payload="$(cat <<EOF
 {
   "game_id": ${game_id},
@@ -290,7 +305,6 @@ server_props_strategy_payload="$(cat <<EOF
   "description": "Minecraft server configuration file (merge mode - patches existing file)",
   "strategy_type": "file_properties",
   "target_path": "/data/server.properties",
-  "base_template": "",
   "apply_order": 2
 }
 EOF
@@ -300,9 +314,10 @@ strategy_resp="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateConf
 strategy_id="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); strategy=data.get("strategy", {}); print(strategy.get("strategyId") or "")' <<< "${strategy_resp}")"
 
 if [[ -n "${strategy_id}" && "${strategy_id}" != "null" ]]; then
-  echo "✔ Created server.properties strategy (ID: ${strategy_id})"
+  echo "✔ Created server.properties strategy with empty base_template (ID: ${strategy_id})"
 else
-  echo "⚠ Failed to create server.properties strategy (may already exist)"
+  echo "❌ Failed to create server.properties strategy"
+  exit 1
 fi
 
 echo ""
