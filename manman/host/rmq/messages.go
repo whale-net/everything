@@ -25,14 +25,25 @@ type ParameterMessage struct {
 	DefaultValue string `json:"default_value"`
 }
 
+// VolumeMountMessage represents a persistent volume mount
+type VolumeMountMessage struct {
+	Name          string            `json:"name"`
+	ContainerPath string            `json:"container_path"`
+	HostSubpath   string            `json:"host_subpath,omitempty"`
+	Options       map[string]string `json:"options,omitempty"`
+}
+
 // GameConfigMessage represents game configuration details
 type GameConfigMessage struct {
-	ConfigID     int64                  `json:"config_id"`
-	Image        string                 `json:"image"`
-	ArgsTemplate string                 `json:"args_template"`
-	EnvTemplate  map[string]string      `json:"env_template"`
-	Files        []FileTemplateMessage  `json:"files"`
-	Parameters   []ParameterMessage     `json:"parameters"`
+	ConfigID      int64                  `json:"config_id"`
+	Image         string                 `json:"image"`
+	ArgsTemplate  string                 `json:"args_template"`
+	EnvTemplate   map[string]string      `json:"env_template"`
+	Files         []FileTemplateMessage  `json:"files"`
+	Parameters    []ParameterMessage     `json:"parameters"`
+	Entrypoint    []string               `json:"entrypoint"`
+	Command       []string               `json:"command"`
+	Volumes       []VolumeMountMessage   `json:"volumes"`
 }
 
 // ServerGameConfigMessage represents server-specific game configuration

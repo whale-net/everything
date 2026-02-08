@@ -22,14 +22,15 @@ func NewRepository(ctx context.Context, connString string) (*repository.Reposito
 	}
 
 	return &repository.Repository{
-		Servers:            NewServerRepository(pool),
-		Games:              NewGameRepository(pool),
-		GameConfigs:        NewGameConfigRepository(pool),
-		ServerGameConfigs:  NewServerGameConfigRepository(pool),
-		Sessions:           NewSessionRepository(pool),
-		ServerCapabilities: NewServerCapabilityRepository(pool),
-		LogReferences:      NewLogReferenceRepository(pool),
-		Backups:            NewBackupRepository(pool),
-		ServerPorts:        NewServerPortRepository(pool),
+		Servers:                 NewServerRepository(pool),
+		Games:                   NewGameRepository(pool),
+		GameConfigs:             NewGameConfigRepository(pool),
+		ServerGameConfigs:       NewServerGameConfigRepository(pool),
+		Sessions:                NewSessionRepository(pool),
+		ServerCapabilities:      NewServerCapabilityRepository(pool),
+		LogReferences:           NewLogReferenceRepository(pool),
+		Backups:                 NewBackupRepository(pool),
+		ServerPorts:             NewServerPortRepository(pool),
+		ConfigurationStrategies: NewConfigurationStrategyRepository(pool),
 	}, nil
 }

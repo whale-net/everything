@@ -28,6 +28,7 @@ type APIServer struct {
 	validationHandler       *ValidationHandler
 	logsHandler             *LogsHandler
 	backupHandler           *BackupHandler
+	strategyHandler         *ConfigurationStrategyHandler
 }
 
 func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq.Connection) *APIServer {
@@ -56,6 +57,7 @@ func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq
 		validationHandler:       NewValidationHandler(repo.Servers, repo.GameConfigs),
 		logsHandler:             NewLogsHandler(repo.LogReferences, s3Client),
 		backupHandler:           NewBackupHandler(repo.Backups, repo.Sessions, s3Client),
+		strategyHandler:         NewConfigurationStrategyHandler(repo.ConfigurationStrategies),
 	}
 }
 
@@ -534,6 +536,7 @@ func serverGameConfigToProto(sgc *manman.ServerGameConfig) *pb.ServerGameConfig 
 
 // SessionHandler handles Session-related RPCs
 type SessionHandler struct {
+	repo        *repository.Repository
 	sessionRepo repository.SessionRepository
 	sgcRepo     repository.ServerGameConfigRepository
 	gcRepo      repository.GameConfigRepository
@@ -542,6 +545,7 @@ type SessionHandler struct {
 
 func NewSessionHandler(repo *repository.Repository, publisher *CommandPublisher) *SessionHandler {
 	return &SessionHandler{
+		repo:        repo,
 		sessionRepo: repo.Sessions,
 		sgcRepo:     repo.ServerGameConfigs,
 		gcRepo:      repo.GameConfigs,
@@ -628,7 +632,7 @@ func (h *SessionHandler) GetSession(ctx context.Context, req *pb.GetSessionReque
 
 func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionRequest) (*pb.StartSessionResponse, error) {
 	// Check for existing active sessions
-	activeStatuses := []string{
+	allActiveStatuses := []string{
 		manman.SessionStatusPending,
 		manman.SessionStatusStarting,
 		manman.SessionStatusRunning,
@@ -639,27 +643,38 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 
 	filters := &repository.SessionFilters{
 		SGCID:        &req.ServerGameConfigId,
-		StatusFilter: activeStatuses,
+		StatusFilter: allActiveStatuses,
 	}
 
-	activeSessions, err := h.sessionRepo.ListWithFilters(ctx, filters, 1, 0)
+	activeSessions, err := h.sessionRepo.ListWithFilters(ctx, filters, 10, 0) // Fetch a few to check statuses
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to check active sessions: %v", err)
 	}
 
-	if len(activeSessions) > 0 && !req.Force {
-		active := activeSessions[0]
-		return nil, status.Errorf(codes.FailedPrecondition,
-			"active session %d already exists with status %s. Use force=true to override.", active.SessionID, active.Status)
+	// Only block if there's a TRULY active session (running, pending, etc.)
+	// Crashed or Lost sessions don't block, but they trigger an implicit force cleanup on the host
+	var trulyActive *manman.Session
+	var terminalActive *manman.Session
+
+	for _, s := range activeSessions {
+		if s.Status == manman.SessionStatusCrashed || s.Status == manman.SessionStatusLost {
+			terminalActive = s
+		} else {
+			trulyActive = s
+		}
 	}
 
-	if len(activeSessions) > 0 && req.Force {
+	if trulyActive != nil && !req.Force {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"active session %d already exists with status %s. Use force=true to override.", trulyActive.SessionID, trulyActive.Status)
+	}
+
+	// Internal force flag to ensure host cleanup if we have terminal but "active" sessions
+	internalForce := req.Force || (terminalActive != nil)
+
+	if internalForce {
 		// Invalidate prior to start: mark other sessions as stopped
 		log.Printf("Force start requested for SGC %d, invalidating %d active sessions", req.ServerGameConfigId, len(activeSessions))
-		// We use a temporary dummy session ID 0 to mean "all sessions for this SGC except the one I'm about to create"
-		// Actually, we haven't created the new session yet, so we can just stop all active ones.
-		// Let's add a helper to repository for this.
-		// For now, let's just create the session first and then stop others.
 	}
 
 	// Create session in database
@@ -674,7 +689,7 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 		return nil, status.Errorf(codes.Internal, "failed to create session: %v", err)
 	}
 
-	if req.Force {
+	if internalForce {
 		// Mark other sessions as stopped in DB immediately
 		if err := h.sessionRepo.StopOtherSessionsForSGC(ctx, session.SessionID, req.ServerGameConfigId); err != nil {
 			log.Printf("Warning: Failed to invalidate other sessions for SGC %d: %v", req.ServerGameConfigId, err)
@@ -693,9 +708,16 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 		return nil, status.Errorf(codes.Internal, "failed to fetch game config: %v", err)
 	}
 
+	// Fetch Configuration Strategies for the game to get volume mounts
+	strategies, err := h.repo.ConfigurationStrategies.ListByGame(ctx, gc.GameID)
+	if err != nil {
+		log.Printf("Warning: Failed to fetch configuration strategies for game %d: %v", gc.GameID, err)
+		// Continue anyway, volumes might not be defined as strategies yet
+	}
+
 	// Publish start session command to RabbitMQ
 	if h.publisher != nil {
-		cmd := buildStartSessionCommand(session, sgc, gc, req.Parameters, req.Force)
+		cmd := buildStartSessionCommand(session, sgc, gc, req.Parameters, internalForce, strategies)
 		// Increased timeout to allow for image pulling
 		if err := h.publisher.PublishStartSession(ctx, sgc.ServerID, cmd, 2*time.Minute); err != nil {
 			log.Printf("Warning: Failed to publish start session command: %v", err)
@@ -743,16 +765,37 @@ func (h *SessionHandler) StopSession(ctx context.Context, req *pb.StopSessionReq
 }
 
 // buildStartSessionCommand converts database models to RabbitMQ message format
-func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameConfig, gc *manman.GameConfig, sessionParams map[string]string, force bool) map[string]interface{} {
+func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameConfig, gc *manman.GameConfig, sessionParams map[string]string, force bool, strategies []*manman.ConfigurationStrategy) map[string]interface{} {
 	// Build game config message
 	gameConfig := map[string]interface{}{
-		"config_id":     gc.ConfigID,
-		"image":         gc.Image,
-		"args_template": gc.ArgsTemplate,
-		"env_template":  jsonbToMap(gc.EnvTemplate),
-		"files":         convertFilesToMessage(gc.Files),
-		"parameters":    convertParametersToMessage(gc.Parameters),
+		"config_id":       gc.ConfigID,
+		"image":           gc.Image,
+		"args_template":   gc.ArgsTemplate,
+		"env_template":    jsonbToMap(gc.EnvTemplate),
+		"files":           convertFilesToMessage(gc.Files),
+		"parameters":      convertParametersToMessage(gc.Parameters),
+		"entrypoint":      jsonbToStringArray(gc.Entrypoint),
+		"command":         jsonbToStringArray(gc.Command),
 	}
+
+	// Add volume mounts from strategies
+	var volumes []map[string]interface{}
+	for _, s := range strategies {
+		if s.StrategyType == manman.StrategyTypeVolume {
+			vol := map[string]interface{}{
+				"name":           s.Name,
+				"container_path": s.TargetPath,
+			}
+			if s.BaseTemplate != nil {
+				vol["host_subpath"] = *s.BaseTemplate
+			}
+			if s.RenderOptions != nil {
+				vol["options"] = s.RenderOptions
+			}
+			volumes = append(volumes, vol)
+		}
+	}
+	gameConfig["volumes"] = volumes
 
 	// Build server game config message
 	serverGameConfig := map[string]interface{}{
@@ -867,6 +910,156 @@ func (s *APIServer) GetBackup(ctx context.Context, req *pb.GetBackupRequest) (*p
 	return s.backupHandler.GetBackup(ctx, req)
 }
 
-func (s *APIServer) DeleteBackup(ctx context.Context, req *pb.DeleteBackupRequest) (*pb.DeleteBackupResponse, error) {
-	return s.backupHandler.DeleteBackup(ctx, req)
+// ConfigurationStrategyHandler handles ConfigurationStrategy-related RPCs
+type ConfigurationStrategyHandler struct {
+	repo repository.ConfigurationStrategyRepository
+}
+
+func NewConfigurationStrategyHandler(repo repository.ConfigurationStrategyRepository) *ConfigurationStrategyHandler {
+	return &ConfigurationStrategyHandler{repo: repo}
+}
+
+func (h *ConfigurationStrategyHandler) CreateConfigurationStrategy(ctx context.Context, req *pb.CreateConfigurationStrategyRequest) (*pb.CreateConfigurationStrategyResponse, error) {
+	strategy := &manman.ConfigurationStrategy{
+		GameID:        req.GameId,
+		Name:          req.Name,
+		Description:   stringPtr(req.Description),
+		StrategyType:  req.StrategyType,
+		TargetPath:    stringPtr(req.TargetPath),
+		BaseTemplate:  stringPtr(req.BaseTemplate),
+		RenderOptions: mapToJSONB(req.RenderOptions),
+		ApplyOrder:    int(req.ApplyOrder),
+	}
+
+	strategy, err := h.repo.Create(ctx, strategy)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create configuration strategy: %v", err)
+	}
+
+	return &pb.CreateConfigurationStrategyResponse{
+		Strategy: strategyToProto(strategy),
+	}, nil
+}
+
+func (h *ConfigurationStrategyHandler) ListConfigurationStrategies(ctx context.Context, req *pb.ListConfigurationStrategiesRequest) (*pb.ListConfigurationStrategiesResponse, error) {
+	strategies, err := h.repo.ListByGame(ctx, req.GameId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list configuration strategies: %v", err)
+	}
+
+	pbStrategies := make([]*pb.ConfigurationStrategy, len(strategies))
+	for i, s := range strategies {
+		pbStrategies[i] = strategyToProto(s)
+	}
+
+	return &pb.ListConfigurationStrategiesResponse{
+		Strategies: pbStrategies,
+	}, nil
+}
+
+func (h *ConfigurationStrategyHandler) UpdateConfigurationStrategy(ctx context.Context, req *pb.UpdateConfigurationStrategyRequest) (*pb.UpdateConfigurationStrategyResponse, error) {
+	strategy, err := h.repo.Get(ctx, req.StrategyId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "configuration strategy not found: %v", err)
+	}
+
+	// Apply field paths
+	if len(req.UpdatePaths) == 0 {
+		if req.Name != "" {
+			strategy.Name = req.Name
+		}
+		if req.Description != "" {
+			strategy.Description = stringPtr(req.Description)
+		}
+		if req.StrategyType != "" {
+			strategy.StrategyType = req.StrategyType
+		}
+		if req.TargetPath != "" {
+			strategy.TargetPath = stringPtr(req.TargetPath)
+		}
+		if req.BaseTemplate != "" {
+			strategy.BaseTemplate = stringPtr(req.BaseTemplate)
+		}
+		if req.RenderOptions != nil {
+			strategy.RenderOptions = mapToJSONB(req.RenderOptions)
+		}
+		if req.ApplyOrder != 0 {
+			strategy.ApplyOrder = int(req.ApplyOrder)
+		}
+	} else {
+		for _, path := range req.UpdatePaths {
+			switch path {
+			case "name":
+				strategy.Name = req.Name
+			case "description":
+				strategy.Description = stringPtr(req.Description)
+			case "strategy_type":
+				strategy.StrategyType = req.StrategyType
+			case "target_path":
+				strategy.TargetPath = stringPtr(req.TargetPath)
+			case "base_template":
+				strategy.BaseTemplate = stringPtr(req.BaseTemplate)
+			case "render_options":
+				strategy.RenderOptions = mapToJSONB(req.RenderOptions)
+			case "apply_order":
+				strategy.ApplyOrder = int(req.ApplyOrder)
+			}
+		}
+	}
+
+	if err := h.repo.Update(ctx, strategy); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update configuration strategy: %v", err)
+	}
+
+	return &pb.UpdateConfigurationStrategyResponse{
+		Strategy: strategyToProto(strategy),
+	}, nil
+}
+
+func (h *ConfigurationStrategyHandler) DeleteConfigurationStrategy(ctx context.Context, req *pb.DeleteConfigurationStrategyRequest) (*pb.DeleteConfigurationStrategyResponse, error) {
+	if err := h.repo.Delete(ctx, req.StrategyId); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete configuration strategy: %v", err)
+	}
+
+	return &pb.DeleteConfigurationStrategyResponse{}, nil
+}
+
+func strategyToProto(s *manman.ConfigurationStrategy) *pb.ConfigurationStrategy {
+	proto := &pb.ConfigurationStrategy{
+		StrategyId:    s.StrategyID,
+		GameId:        s.GameID,
+		Name:          s.Name,
+		StrategyType:  s.StrategyType,
+		RenderOptions: jsonbToMap(s.RenderOptions),
+		ApplyOrder:    int32(s.ApplyOrder),
+	}
+
+	if s.Description != nil {
+		proto.Description = *s.Description
+	}
+	if s.TargetPath != nil {
+		proto.TargetPath = *s.TargetPath
+	}
+	if s.BaseTemplate != nil {
+		proto.BaseTemplate = *s.BaseTemplate
+	}
+
+	return proto
+}
+
+// Configuration Strategy RPCs
+func (s *APIServer) CreateConfigurationStrategy(ctx context.Context, req *pb.CreateConfigurationStrategyRequest) (*pb.CreateConfigurationStrategyResponse, error) {
+	return s.strategyHandler.CreateConfigurationStrategy(ctx, req)
+}
+
+func (s *APIServer) ListConfigurationStrategies(ctx context.Context, req *pb.ListConfigurationStrategiesRequest) (*pb.ListConfigurationStrategiesResponse, error) {
+	return s.strategyHandler.ListConfigurationStrategies(ctx, req)
+}
+
+func (s *APIServer) UpdateConfigurationStrategy(ctx context.Context, req *pb.UpdateConfigurationStrategyRequest) (*pb.UpdateConfigurationStrategyResponse, error) {
+	return s.strategyHandler.UpdateConfigurationStrategy(ctx, req)
+}
+
+func (s *APIServer) DeleteConfigurationStrategy(ctx context.Context, req *pb.DeleteConfigurationStrategyRequest) (*pb.DeleteConfigurationStrategyResponse, error) {
+	return s.strategyHandler.DeleteConfigurationStrategy(ctx, req)
 }

@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/whale-net/everything/libs/go/grpcclient"
-	"github.com/whale-net/everything/manman/protos"
+	manmanpb "github.com/whale-net/everything/manman/protos"
 )
 
 // ControlClient wraps the ManManAPI gRPC client
@@ -221,6 +221,11 @@ func (c *ControlClient) StartSession(ctx context.Context, serverGameConfigID int
 		return nil, fmt.Errorf("failed to start session: %w", err)
 	}
 	return resp.Session, nil
+}
+
+// ListConfigurationStrategies retrieves all strategies for a game.
+func (c *ControlClient) ListConfigurationStrategies(ctx context.Context, req *manmanpb.ListConfigurationStrategiesRequest) (*manmanpb.ListConfigurationStrategiesResponse, error) {
+	return c.api.ListConfigurationStrategies(ctx, req)
 }
 
 // ListServerGameConfigs retrieves server game configs for a server.

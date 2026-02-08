@@ -105,15 +105,25 @@ type ServerPortRepository interface {
 	GetAvailablePortsInRange(ctx context.Context, serverID int64, protocol string, startPort, endPort, limit int) ([]int, error)
 }
 
+// ConfigurationStrategyRepository defines operations for ConfigurationStrategy entities
+type ConfigurationStrategyRepository interface {
+	Create(ctx context.Context, strategy *manman.ConfigurationStrategy) (*manman.ConfigurationStrategy, error)
+	Get(ctx context.Context, strategyID int64) (*manman.ConfigurationStrategy, error)
+	ListByGame(ctx context.Context, gameID int64) ([]*manman.ConfigurationStrategy, error)
+	Update(ctx context.Context, strategy *manman.ConfigurationStrategy) error
+	Delete(ctx context.Context, strategyID int64) error
+}
+
 // Repository aggregates all repository interfaces
 type Repository struct {
-	Servers            ServerRepository
-	Games              GameRepository
-	GameConfigs        GameConfigRepository
-	ServerGameConfigs  ServerGameConfigRepository
-	Sessions           SessionRepository
-	ServerCapabilities ServerCapabilityRepository
-	LogReferences      LogReferenceRepository
-	Backups            BackupRepository
-	ServerPorts        ServerPortRepository
+	Servers                ServerRepository
+	Games                  GameRepository
+	GameConfigs            GameConfigRepository
+	ServerGameConfigs      ServerGameConfigRepository
+	Sessions               SessionRepository
+	ServerCapabilities     ServerCapabilityRepository
+	LogReferences          LogReferenceRepository
+	Backups                BackupRepository
+	ServerPorts            ServerPortRepository
+	ConfigurationStrategies ConfigurationStrategyRepository
 }

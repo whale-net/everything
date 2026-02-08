@@ -34,14 +34,22 @@ func NewSessionManager(dockerClient *docker.Client, environment string) *Session
 
 // StartSessionCommand represents a command to start a session
 type StartSessionCommand struct {
-	SessionID    int64
-	SGCID        int64
-	ServerID     int64
-	Image        string
-	Command      []string
+	SessionID     int64
+	SGCID         int64
+	ServerID      int64
+	Image         string
+	Command       []string
 	Env          []string
 	PortBindings map[string]string // containerPort -> hostPort
+	Volumes      []VolumeMount     // many volumes
 	Force        bool
+}
+
+type VolumeMount struct {
+	Name          string
+	ContainerPath string
+	HostSubpath   string
+	Options       map[string]string
 }
 
 func (sm *SessionManager) getContainerName(serverID, sgcID int64) string {
@@ -329,13 +337,37 @@ func (sm *SessionManager) createGameContainer(ctx context.Context, state *State,
 		return "", fmt.Errorf("failed to create GSC data directory: %w", err)
 	}
 
+	// Prepare volume mounts
+	var volumes []string
+
+	if len(cmd.Volumes) == 0 {
+		// Default mount if no volumes defined at all
+		volumes = append(volumes, fmt.Sprintf("%s:/data/game", gscDataDir))
+	}
+
+	// Add many volumes from strategies
+	for _, vol := range cmd.Volumes {
+		hostPath := gscDataDir
+		if vol.HostSubpath != "" {
+			hostPath = fmt.Sprintf("%s/%s", gscDataDir, strings.TrimPrefix(vol.HostSubpath, "/"))
+			// Ensure host subpath exists
+			if err := os.MkdirAll(hostPath, 0755); err != nil {
+				return "", fmt.Errorf("failed to create host subpath %s: %w", hostPath, err)
+			}
+		}
+
+		mountStr := fmt.Sprintf("%s:%s", hostPath, vol.ContainerPath)
+		// TODO: handle options (readonly etc)
+		volumes = append(volumes, mountStr)
+	}
+
 	config := docker.ContainerConfig{
 		Image:     cmd.Image,
 		Name:      sm.getContainerName(cmd.ServerID, cmd.SGCID),
 		Command:   cmd.Command,
 		Env:       cmd.Env,
 		NetworkID: state.NetworkID,
-		Volumes:   []string{fmt.Sprintf("%s:/data/game", gscDataDir)},
+		Volumes:   volumes,
 		Ports:     cmd.PortBindings,
 		Labels: map[string]string{
 			"manman.type":        "game",

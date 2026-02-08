@@ -165,12 +165,12 @@ message ServerPort {
 message ConfigurationStrategy {
   int64 strategy_id = 1;
   int64 game_id = 2;
-  string name = 3;  // "Server Properties", "CLI Args", "Environment Variables"
+  string name = 3;  // "Server Properties", "CLI Args", "Environment Variables", "Data Volume"
   string description = 4;
-  string strategy_type = 5;  // "cli_args", "env_vars", "file_json", "file_properties", etc.
-  string target_path = 6;  // File path or null for CLI/env
-  string base_template = 7;  // Base configuration template
-  map<string, string> render_options = 8;  // Format-specific rendering options
+  string strategy_type = 5;  // "cli_args", "env_vars", "file_json", "file_properties", "volume", etc.
+  string target_path = 6;  // File path like "/data/server.properties" or mount path for volumes
+  string base_template = 7;  // Base configuration template or host-side subpath for volumes
+  map<string, string> render_options = 8;  // Format-specific rendering options (e.g. read_only: true)
   int32 apply_order = 9;  // Order to apply strategies (lower first)
 }
 

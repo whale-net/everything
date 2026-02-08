@@ -48,6 +48,15 @@ func (m *MockSessionRepo) Create(ctx context.Context, s *manman.Session) (*manma
 	return s, nil
 }
 
+func (m *MockSessionRepo) StopOtherSessionsForSGC(ctx context.Context, sessionID int64, sgcID int64) error {
+	for _, s := range m.sessions {
+		if s.SGCID == sgcID && s.SessionID != sessionID {
+			s.Status = manman.SessionStatusStopped
+		}
+	}
+	return nil
+}
+
 // MockSGCRepo
 type MockSGCRepo struct {
 	repository.ServerGameConfigRepository
@@ -128,31 +137,14 @@ func TestStartSessionLifecycle(t *testing.T) {
 		}
 	})
 
-	t.Run("Sad path: crashed session is still active, force=false", func(t *testing.T) {
-		// Existing crashed session
-		sessionRepo.sessions = []*manman.Session{
-			{SessionID: 1, SGCID: sgcID, Status: manman.SessionStatusCrashed},
-		}
-
-		req := &pb.StartSessionRequest{ServerGameConfigId: sgcID, Force: false}
-		_, err := h.StartSession(context.Background(), req)
-		if err == nil {
-			t.Fatal("Expected error, got nil")
-		}
-		st, ok := status.FromError(err)
-		if !ok || st.Code() != codes.FailedPrecondition {
-			t.Errorf("Expected FailedPrecondition error, got %v", err)
-		}
-	})
-
-	t.Run("Happy path: crashed session exists, force=true", func(t *testing.T) {
+	t.Run("Happy path: crashed session exists, force=false", func(t *testing.T) {
 		// Existing crashed session
 		sessionRepo.sessions = []*manman.Session{
 			{SessionID: 1, SGCID: sgcID, Status: manman.SessionStatusCrashed},
 		}
 		sessionRepo.created = nil
 
-		req := &pb.StartSessionRequest{ServerGameConfigId: sgcID, Force: true}
+		req := &pb.StartSessionRequest{ServerGameConfigId: sgcID, Force: false}
 		resp, err := h.StartSession(context.Background(), req)
 		if err != nil {
 			t.Fatalf("Expected no error, got %v", err)

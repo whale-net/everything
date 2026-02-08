@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
-	"github.com/whale-net/everything/manman/protos"
+	manmanpb "github.com/whale-net/everything/manman/protos"
 )
 
 // GamesPageData holds data for the games list page
@@ -303,14 +303,15 @@ func (app *App) handleGameDelete(w http.ResponseWriter, r *http.Request, gameIDS
 
 // GameConfigDetailPageData holds data for config detail page
 type GameConfigDetailPageData struct {
-	Title  string
-	Active string
-	User   *htmxauth.UserInfo
-	Game   *manmanpb.Game
-	Config *manmanpb.GameConfig
-	Servers []*manmanpb.Server
+	Title       string
+	Active      string
+	User        *htmxauth.UserInfo
+	Game        *manmanpb.Game
+	Config      *manmanpb.GameConfig
+	Servers     []*manmanpb.Server
 	Deployments []ServerGameConfigView
 	DeployError string
+	Volumes     []*manmanpb.ConfigurationStrategy
 }
 
 type ServerGameConfigView struct {
@@ -388,6 +389,23 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 		return
 	}
 
+	// Fetch volume strategies
+	strategies, err := app.grpc.ListConfigurationStrategies(ctx, &manmanpb.ListConfigurationStrategiesRequest{
+		GameId: gameID,
+	})
+	if err != nil {
+		log.Printf("Warning: Failed to fetch configuration strategies: %v", err)
+	}
+
+	var volumeMounts []*manmanpb.ConfigurationStrategy
+	if strategies != nil {
+		for _, s := range strategies.Strategies {
+			if s.StrategyType == "volume" {
+				volumeMounts = append(volumeMounts, s)
+			}
+		}
+	}
+
 	servers, err := app.grpc.ListServers(ctx)
 	if err != nil {
 		log.Printf("Error fetching servers: %v", err)
@@ -414,14 +432,15 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 	deployError := strings.TrimSpace(r.URL.Query().Get("deploy_error"))
 	
 	data := GameConfigDetailPageData{
-		Title:  config.Name + " - " + game.Name,
-		Active: "games",
-		User:   user,
-		Game:   game,
-		Config: config,
-		Servers: servers,
+		Title:       config.Name + " - " + game.Name,
+		Active:      "games",
+		User:        user,
+		Game:        game,
+		Config:      config,
+		Servers:     servers,
 		Deployments: deployments,
 		DeployError: deployError,
+		Volumes:     volumeMounts,
 	}
 	
 	layout, err := renderWithLayout("config_detail_content", data, LayoutData{
@@ -565,13 +584,13 @@ func (app *App) handleGameConfigCreate(w http.ResponseWriter, r *http.Request, g
 	argsTemplate := r.FormValue("args_template")
 	
 	req := &manmanpb.CreateGameConfigRequest{
-		GameId:       gameID,
-		Name:         name,
-		Image:        image,
-		ArgsTemplate: argsTemplate,
-		EnvTemplate:  make(map[string]string),
-		Files:        []*manmanpb.FileTemplate{},
-		Parameters:   []*manmanpb.Parameter{},
+		GameId:        gameID,
+		Name:          name,
+		Image:         image,
+		ArgsTemplate:  argsTemplate,
+		EnvTemplate:   make(map[string]string),
+		Files:         []*manmanpb.FileTemplate{},
+		Parameters:    []*manmanpb.Parameter{},
 	}
 	
 	config, err := app.grpc.CreateGameConfig(ctx, req)
@@ -611,10 +630,10 @@ func (app *App) handleGameConfigEdit(w http.ResponseWriter, r *http.Request, gam
 	argsTemplate := r.FormValue("args_template")
 	
 	req := &manmanpb.UpdateGameConfigRequest{
-		ConfigId:     configID,
-		Name:         name,
-		Image:        image,
-		ArgsTemplate: argsTemplate,
+		ConfigId:      configID,
+		Name:          name,
+		Image:         image,
+		ArgsTemplate:  argsTemplate,
 	}
 	
 	_, err = app.grpc.UpdateGameConfig(ctx, req)

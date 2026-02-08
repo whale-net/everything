@@ -194,6 +194,20 @@ EOF
   config_id="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); config=data.get("config", {}); print(config.get("config_id") or config.get("configId") or "")' <<< "${create_config_json}")"
 fi
 
+echo "Ensuring Minecraft volume strategy exists..."
+create_strategy_payload="$(cat <<EOF
+{
+  "game_id": ${game_id},
+  "name": "data",
+  "description": "Persistent game data volume",
+  "strategy_type": "volume",
+  "target_path": "/data",
+  "base_template": ""
+}
+EOF
+)"
+grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateConfigurationStrategy" "${create_strategy_payload}" || true
+
 if [[ -z "${config_id}" ]]; then
   echo "Config already exists or create failed; re-listing..."
   config_id="$(find_config_id)"

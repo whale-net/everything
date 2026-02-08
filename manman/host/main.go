@@ -191,6 +191,16 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 		ports[fmt.Sprintf("%d", pb.ContainerPort)] = fmt.Sprintf("%d", pb.HostPort)
 	}
 
+	volumes := make([]session.VolumeMount, 0, len(cmd.GameConfig.Volumes))
+	for _, v := range cmd.GameConfig.Volumes {
+		volumes = append(volumes, session.VolumeMount{
+			Name:          v.Name,
+			ContainerPath: v.ContainerPath,
+			HostSubpath:   v.HostSubpath,
+			Options:       v.Options,
+		})
+	}
+
 	sessionCmd := &session.StartSessionCommand{
 		SessionID:    cmd.SessionID,
 		SGCID:        cmd.SGCID,
@@ -199,6 +209,7 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 		Command:      command,
 		Env:          env,
 		PortBindings: ports,
+		Volumes:      volumes,
 		Force:        cmd.Force,
 	}
 

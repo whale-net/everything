@@ -96,6 +96,46 @@
     {{end}}
 </div>
 
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Volume Mounts</div>
+    </div>
+    <div class="card-content">
+        <p style="color: #666; margin-bottom: 1rem;">
+            Persistent volumes defined at the game level. These are automatically mapped to subdirectories in the game server's data directory.
+        </p>
+        {{if .Volumes}}
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Container Path</th>
+                    <th>Host Subpath</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Volumes}}
+                <tr>
+                    <td><strong>{{.Name}}</strong></td>
+                    <td><code>{{.TargetPath}}</code></td>
+                    <td><code>{{if .BaseTemplate}}{{.BaseTemplate}}{{else}}<em>(default)</em>{{end}}</code></td>
+                    <td>{{.Description}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+        {{else}}
+        <div class="empty-state">
+            <p>No volume mounts defined for this game.</p>
+        </div>
+        {{end}}
+        <div style="margin-top: 1rem;">
+            <a href="/games/{{.Game.GameId}}" class="btn btn-secondary btn-sm">Manage Volumes in Game Settings</a>
+        </div>
+    </div>
+</div>
+
 <!-- Edit form (hidden by default) -->
 <div id="edit-form" style="display: none;">
     <div class="card">
@@ -117,7 +157,7 @@
                 <label for="args_template">Args Template</label>
                 <textarea id="args_template" name="args_template" placeholder="Optional command line arguments">{{.Config.ArgsTemplate}}</textarea>
             </div>
-            
+
             <div style="display: flex; gap: 0.5rem;">
                 <button type="submit" class="btn btn-success">Save Changes</button>
                 <button type="button" class="btn btn-secondary" onclick="document.getElementById('edit-form').style.display='none'">Cancel</button>

@@ -58,6 +58,12 @@ service ManManAPI {
   // Validation (new)
   rpc ValidateDeployment(ValidateDeploymentRequest) returns (ValidateDeploymentResponse);
 
+  // Configuration strategy management
+  rpc CreateConfigurationStrategy(CreateConfigurationStrategyRequest) returns (CreateConfigurationStrategyResponse);
+  rpc ListConfigurationStrategies(ListConfigurationStrategiesRequest) returns (ListConfigurationStrategiesResponse);
+  rpc UpdateConfigurationStrategy(UpdateConfigurationStrategyRequest) returns (UpdateConfigurationStrategyResponse);
+  rpc DeleteConfigurationStrategy(DeleteConfigurationStrategyRequest) returns (DeleteConfigurationStrategyResponse);
+
   // Configuration preview (new)
   rpc PreviewConfiguration(PreviewConfigurationRequest) returns (PreviewConfigurationResponse);
 }
@@ -456,6 +462,55 @@ message DeploymentEstimate {
   int32 estimated_cpu_millicores = 2;
   repeated int32 allocated_ports = 3;
 }
+
+// ============================================================================
+// Configuration Strategy RPCs
+// ============================================================================
+
+message CreateConfigurationStrategyRequest {
+  int64 game_id = 1;
+  string name = 2;
+  string description = 3;
+  string strategy_type = 4;
+  string target_path = 5;
+  string base_template = 6;
+  map<string, string> render_options = 7;
+  int32 apply_order = 8;
+}
+
+message CreateConfigurationStrategyResponse {
+  ConfigurationStrategy strategy = 1;
+}
+
+message ListConfigurationStrategiesRequest {
+  int64 game_id = 1;
+}
+
+message ListConfigurationStrategiesResponse {
+  repeated ConfigurationStrategy strategies = 1;
+}
+
+message UpdateConfigurationStrategyRequest {
+  int64 strategy_id = 1;
+  string name = 2;
+  string description = 3;
+  string strategy_type = 4;
+  string target_path = 5;
+  string base_template = 6;
+  map<string, string> render_options = 7;
+  int32 apply_order = 8;
+  repeated string update_paths = 9;
+}
+
+message UpdateConfigurationStrategyResponse {
+  ConfigurationStrategy strategy = 1;
+}
+
+message DeleteConfigurationStrategyRequest {
+  int64 strategy_id = 1;
+}
+
+message DeleteConfigurationStrategyResponse {}
 
 // ============================================================================
 // Configuration Preview RPCs

@@ -58,8 +58,8 @@ type GameConfig struct {
 	EnvTemplate  JSONB   `db:"env_template"`
 	Files        JSONB   `db:"files"`
 	Parameters   JSONB   `db:"parameters"`
-	Entrypoint   JSONB   `db:"entrypoint"` // []string stored as JSONB
-	Command      JSONB   `db:"command"`    // []string stored as JSONB
+	Entrypoint     JSONB   `db:"entrypoint"` // []string stored as JSONB
+	Command        JSONB   `db:"command"`    // []string stored as JSONB
 }
 
 // ServerGameConfig represents a game configuration deployed on a specific server
@@ -265,6 +265,7 @@ const (
 	StrategyTypeFileXML        = "file_xml"
 	StrategyTypeFileLua        = "file_lua"
 	StrategyTypeFileCustom     = "file_custom"
+	StrategyTypeVolume         = "volume"
 
 	// Binding types
 	BindingTypeDirect     = "direct"
