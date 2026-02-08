@@ -220,4 +220,66 @@ fi
 
 echo "✔ Game ID: ${game_id}"
 echo "✔ Config ID: ${config_id}"
-echo "You can now deploy this config to a server and start sessions."
+
+# Deploy or update ServerGameConfig with port bindings
+echo "Checking if config is deployed to default server..."
+find_sgc_id() {
+  local resp
+  resp="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/ListServerGameConfigs" '{"page_size":100}')"
+  local result
+  result="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); configs=data.get("configs", []);
+found="";
+for c in configs:
+    cid=str(c.get("gameConfigId") or c.get("game_config_id") or "")
+    if cid==sys.argv[1]:
+        found=str(c.get("serverGameConfigId") or c.get("sgc_id") or "")
+        break
+print(found)' "${config_id}" <<< "${resp}")"
+  echo "${result}"
+}
+
+sgc_id="$(find_sgc_id)"
+
+if [[ -z "${sgc_id}" ]]; then
+  echo "Deploying config to default server with port bindings..."
+  deploy_payload="$(cat <<EOF
+{
+  "server_id": 1,
+  "game_config_id": ${config_id},
+  "port_bindings": [
+    {
+      "container_port": 25565,
+      "host_port": 25565,
+      "protocol": "TCP"
+    }
+  ],
+  "parameters": {}
+}
+EOF
+)"
+  deploy_json="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/DeployGameConfig" "${deploy_payload}")"
+  sgc_id="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); config=data.get("config", {}); print(config.get("serverGameConfigId") or config.get("sgc_id") or "")' <<< "${deploy_json}")"
+  echo "✔ Deployed to server as SGC ID: ${sgc_id}"
+else
+  echo "Config already deployed as SGC ID: ${sgc_id}"
+  echo "Updating port bindings..."
+  update_payload="$(cat <<EOF
+{
+  "server_game_config_id": ${sgc_id},
+  "port_bindings": [
+    {
+      "container_port": 25565,
+      "host_port": 25565,
+      "protocol": "TCP"
+    }
+  ],
+  "update_paths": ["port_bindings"]
+}
+EOF
+)"
+  grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/UpdateServerGameConfig" "${update_payload}" >/dev/null
+  echo "✔ Port bindings updated"
+fi
+
+echo ""
+echo "✔ Setup complete! You can now start sessions."

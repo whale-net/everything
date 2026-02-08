@@ -94,6 +94,24 @@ func (h *SessionStatusHandler) Handle(ctx context.Context, routingKey string, bo
 		}
 	case manman.SessionStatusStopped, manman.SessionStatusCrashed, manman.SessionStatusLost:
 		err = h.repo.Sessions.UpdateSessionEnd(ctx, msg.SessionID, msg.Status, now, msg.ExitCode)
+		// Deallocate ports when session enters terminal state
+		if err == nil {
+			if deallocErr := h.repo.ServerPorts.DeallocatePortsBySGCID(ctx, msg.SGCID); deallocErr != nil {
+				h.logger.Error("failed to deallocate ports for stopped/crashed session",
+					"error", deallocErr,
+					"session_id", msg.SessionID,
+					"sgc_id", msg.SGCID,
+					"status", msg.Status,
+				)
+				// Don't fail the message - ports can be cleaned up later
+			} else {
+				h.logger.Info("deallocated ports for terminal session",
+					"session_id", msg.SessionID,
+					"sgc_id", msg.SGCID,
+					"status", msg.Status,
+				)
+			}
+		}
 	default:
 		err = h.repo.Sessions.UpdateStatus(ctx, msg.SessionID, msg.Status)
 	}

@@ -708,6 +708,21 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 		return nil, status.Errorf(codes.Internal, "failed to fetch game config: %v", err)
 	}
 
+	// Allocate ports for this session
+	// Port bindings are defined at SGC level, but allocated per active session.
+	// This allows multiple SGCs to use the same ports, as long as only one session uses them at a time.
+	portBindings := jsonbToPortBindings(sgc.PortBindings)
+	if len(portBindings) > 0 {
+		// Attempt to allocate ports - will fail if already in use by another SGC's active session
+		if err := h.repo.ServerPorts.AllocateMultiplePorts(ctx, sgc.ServerID, portBindings, sgc.SGCID); err != nil {
+			// Rollback: mark session as failed
+			session.Status = manman.SessionStatusCrashed
+			h.sessionRepo.Update(ctx, session)
+			return nil, status.Errorf(codes.ResourceExhausted, "failed to allocate ports (ports may be in use by another session): %v", err)
+		}
+		log.Printf("[session %d] allocated %d ports for SGC %d on server %d", session.SessionID, len(portBindings), sgc.SGCID, sgc.ServerID)
+	}
+
 	// Fetch Configuration Strategies for the game to get volume mounts
 	strategies, err := h.repo.ConfigurationStrategies.ListByGame(ctx, gc.GameID)
 	if err != nil {
@@ -757,6 +772,14 @@ func (h *SessionHandler) StopSession(ctx context.Context, req *pb.StopSessionReq
 	session.Status = manman.SessionStatusStopping
 	if err := h.sessionRepo.Update(ctx, session); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update session: %v", err)
+	}
+
+	// Deallocate ports for this SGC to allow other sessions to use them
+	if err := h.repo.ServerPorts.DeallocatePortsBySGCID(ctx, sgc.SGCID); err != nil {
+		log.Printf("Warning: Failed to deallocate ports for SGC %d: %v", sgc.SGCID, err)
+		// Don't fail the stop request - ports can be cleaned up later
+	} else {
+		log.Printf("[session %d] deallocated ports for SGC %d", session.SessionID, sgc.SGCID)
 	}
 
 	return &pb.StopSessionResponse{
