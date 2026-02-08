@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -21,14 +21,16 @@ type SessionManager struct {
 	dockerClient *docker.Client
 	stateManager *Manager
 	environment  string
+	hostDataDir  string // Path as seen by the Docker daemon (host-side)
 }
 
 // NewSessionManager creates a new session manager
-func NewSessionManager(dockerClient *docker.Client, environment string) *SessionManager {
+func NewSessionManager(dockerClient *docker.Client, environment string, hostDataDir string) *SessionManager {
 	return &SessionManager{
 		dockerClient: dockerClient,
 		stateManager: NewManager(),
 		environment:  environment,
+		hostDataDir:  hostDataDir,
 	}
 }
 
@@ -66,11 +68,12 @@ func (sm *SessionManager) getNetworkName(sessionID int64) string {
 	return fmt.Sprintf("session-%d", sessionID)
 }
 
-func (sm *SessionManager) getGSCDataDir(sgcID int64) string {
+func (sm *SessionManager) getGSCHostDataDir(sgcID int64) string {
+	dirName := fmt.Sprintf("sgc-%d", sgcID)
 	if sm.environment != "" {
-		return fmt.Sprintf("/data/gsc-%s-%d", sm.environment, sgcID)
+		dirName = fmt.Sprintf("sgc-%s-%d", sm.environment, sgcID)
 	}
-	return fmt.Sprintf("/data/gsc-%d", sgcID)
+	return filepath.Join(sm.hostDataDir, dirName)
 }
 
 // StartSession starts a new game server session
@@ -331,31 +334,24 @@ func (sm *SessionManager) SendInput(ctx context.Context, sessionID int64, input 
 
 // createGameContainer creates the game container directly
 func (sm *SessionManager) createGameContainer(ctx context.Context, state *State, cmd *StartSessionCommand) (string, error) {
-	// Create GSC data directory if it doesn't exist
-	gscDataDir := sm.getGSCDataDir(state.SGCID)
-	if err := os.MkdirAll(gscDataDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create GSC data directory: %w", err)
-	}
+	// Host-side root for this GSC (as seen by Docker)
+	gscHostDataDir := sm.getGSCHostDataDir(state.SGCID)
 
-	// Prepare volume mounts
+	// Prepare volume mounts from configuration strategies
+	// Each volume creates a subdirectory under the SGC data dir (e.g., sgc-dev-1/data, sgc-dev-1/config)
+	// and mounts it to the specified container path (e.g., /data, /config)
+	// No hardcoded defaults - all volumes must be explicitly configured in the database
 	var volumes []string
 
-	if len(cmd.Volumes) == 0 {
-		// Default mount if no volumes defined at all
-		volumes = append(volumes, fmt.Sprintf("%s:/data/game", gscDataDir))
-	}
-
-	// Add many volumes from strategies
 	for _, vol := range cmd.Volumes {
-		hostPath := gscDataDir
-		if vol.HostSubpath != "" {
-			hostPath = fmt.Sprintf("%s/%s", gscDataDir, strings.TrimPrefix(vol.HostSubpath, "/"))
-			// Ensure host subpath exists
-			if err := os.MkdirAll(hostPath, 0755); err != nil {
-				return "", fmt.Errorf("failed to create host subpath %s: %w", hostPath, err)
-			}
+		subDir := vol.HostSubpath
+		if subDir == "" {
+			// Use volume name as default subdirectory to avoid clashing
+			subDir = vol.Name
 		}
 
+		// Host-side path for Docker
+		hostPath := filepath.Join(gscHostDataDir, strings.TrimPrefix(subDir, "/"))
 		mountStr := fmt.Sprintf("%s:%s", hostPath, vol.ContainerPath)
 		// TODO: handle options (readonly etc)
 		volumes = append(volumes, mountStr)

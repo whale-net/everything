@@ -72,15 +72,33 @@ type MockGCRepo struct {
 }
 
 func (m *MockGCRepo) Get(ctx context.Context, id int64) (*manman.GameConfig, error) {
-	return &manman.GameConfig{ConfigID: id}, nil
+	return &manman.GameConfig{ConfigID: id, GameID: 1}, nil
+}
+
+// MockStrategyRepo
+type MockStrategyRepo struct {
+	repository.ConfigurationStrategyRepository
+}
+
+func (m *MockStrategyRepo) ListByGame(ctx context.Context, gameID int64) ([]*manman.ConfigurationStrategy, error) {
+	return []*manman.ConfigurationStrategy{}, nil
 }
 
 func TestStartSessionLifecycle(t *testing.T) {
 	sessionRepo := &MockSessionRepo{}
 	sgcRepo := &MockSGCRepo{}
 	gcRepo := &MockGCRepo{}
+	strategyRepo := &MockStrategyRepo{}
+
+	repo := &repository.Repository{
+		Sessions:                sessionRepo,
+		ServerGameConfigs:       sgcRepo,
+		GameConfigs:             gcRepo,
+		ConfigurationStrategies: strategyRepo,
+	}
 
 	h := &SessionHandler{
+		repo:        repo,
 		sessionRepo: sessionRepo,
 		sgcRepo:     sgcRepo,
 		gcRepo:      gcRepo,

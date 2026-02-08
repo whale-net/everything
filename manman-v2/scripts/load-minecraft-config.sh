@@ -199,14 +199,15 @@ create_strategy_payload="$(cat <<EOF
 {
   "game_id": ${game_id},
   "name": "data",
-  "description": "Persistent game data volume",
+  "description": "Persistent game data volume mounted to /data in container",
   "strategy_type": "volume",
   "target_path": "/data",
-  "base_template": ""
+  "base_template": "data"
 }
 EOF
 )"
-grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateConfigurationStrategy" "${create_strategy_payload}" || true
+echo "Creating volume strategy..."
+grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateConfigurationStrategy" "${create_strategy_payload}" 2>&1 | grep -v "already exists" || true
 
 if [[ -z "${config_id}" ]]; then
   echo "Config already exists or create failed; re-listing..."

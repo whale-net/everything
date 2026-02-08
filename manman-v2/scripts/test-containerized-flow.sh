@@ -139,6 +139,8 @@ docker run -d \
   -e DOCKER_SOCKET=/var/run/docker.sock \
   -e API_ADDRESS="$API_ENDPOINT" \
   -e ENVIRONMENT=test \
+  -e DATA_DIR="/data" \
+  -e HOST_DATA_DIR="$DATA_DIR" \
   manmanv2-host-manager:latest
 
 echo -e "${GREEN}✓ Host manager container started${NC}"

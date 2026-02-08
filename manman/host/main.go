@@ -35,6 +35,11 @@ func run() error {
 	apiAddress := getEnv("API_ADDRESS", "localhost:50051")
 	serverName := getEnv("SERVER_NAME", "")
 	environment := getEnv("ENVIRONMENT", "")
+	hostDataDir := os.Getenv("HOST_DATA_DIR") // Path as seen by Docker daemon (host side)
+
+	if hostDataDir == "" {
+		return fmt.Errorf("HOST_DATA_DIR must be provided (absolute path on host for game data)")
+	}
 
 	// Self-registration mode: Register with API and get server_id
 	log.Println("Starting ManManV2 Host Manager (self-registration mode)")
@@ -61,7 +66,7 @@ func run() error {
 	defer rmqConn.Close()
 
 	// Initialize session manager
-	sessionManager := session.NewSessionManager(dockerClient, environment)
+	sessionManager := session.NewSessionManager(dockerClient, environment, hostDataDir)
 
 	// Recover orphaned sessions on startup
 	log.Println("Recovering orphaned sessions...")

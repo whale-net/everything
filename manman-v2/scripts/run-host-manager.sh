@@ -4,7 +4,7 @@ set -e
 # Configuration
 IMAGE_NAME="manmanv2-host-manager:latest"
 CONTAINER_NAME="local-host-manager"
-DATA_DIR="$(pwd)/tmp/manman-data"
+SGC_HOST_DATA_PATH="$(pwd)/tmp/manman-data"
 
 # Parse arguments
 DETACH_MODE=""
@@ -15,8 +15,9 @@ else
     DETACH_MODE="-it"
 fi
 
-# Ensure data directory exists
-mkdir -p "$DATA_DIR"
+# Ensure host data directory exists
+mkdir -p "$SGC_HOST_DATA_PATH"
+chmod 777 "$SGC_HOST_DATA_PATH"
 
 # Cleanup previous container if it exists
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
@@ -43,8 +44,8 @@ if [[ "$DETACH_MODE" == "-d" ]]; then
       -e API_ADDRESS="host.docker.internal:50052" \
       -e API_USE_TLS="false" \
       -e DOCKER_SOCKET="/var/run/docker.sock" \
+      -e HOST_DATA_DIR="$SGC_HOST_DATA_PATH" \
       -v /var/run/docker.sock:/var/run/docker.sock \
-      -v "$DATA_DIR:/data" \
       "$IMAGE_NAME"
 
     echo "Host manager started in background!"
@@ -61,7 +62,7 @@ else
       -e API_ADDRESS="host.docker.internal:50052" \
       -e API_USE_TLS="false" \
       -e DOCKER_SOCKET="/var/run/docker.sock" \
+      -e HOST_DATA_DIR="$SGC_HOST_DATA_PATH" \
       -v /var/run/docker.sock:/var/run/docker.sock \
-      -v "$DATA_DIR:/data" \
       "$IMAGE_NAME"
 fi

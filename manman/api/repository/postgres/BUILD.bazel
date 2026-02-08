@@ -13,6 +13,7 @@ go_library(
         "server_port.go",
         "servergameconfig.go",
         "session.go",
+        "strategy.go",
     ],
     importpath = "github.com/whale-net/everything/manman/api/repository/postgres",
     visibility = ["//manman:__subpackages__"],

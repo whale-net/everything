@@ -218,6 +218,18 @@ func (m *MockSessionRepository) GetStaleSessions(ctx context.Context, threshold 
 	return stale, nil
 }
 
+func (m *MockSessionRepository) StopOtherSessionsForSGC(ctx context.Context, sessionID int64, sgcID int64) error {
+	for id, session := range m.sessions {
+		if session.SGCID == sgcID && id != sessionID {
+			session.Status = manman.SessionStatusStopped
+			now := time.Now()
+			session.EndedAt = &now
+			session.UpdatedAt = now
+		}
+	}
+	return nil
+}
+
 // NotFoundError represents an entity not found error
 type NotFoundError struct {
 	ID   int64

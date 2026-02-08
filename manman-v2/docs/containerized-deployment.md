@@ -26,7 +26,11 @@ The containerized host manager requires two critical volume mounts:
 ```yaml
 volumes:
   - /var/run/docker.sock:/var/run/docker.sock  # Docker API access
-  - ./data:/data                                 # GSC data persistence
+  - /home/user/manmanv2/data:/data             # GSC data persistence
+
+environment:
+  - DATA_DIR=/data                             # Path inside this container
+  - HOST_DATA_DIR=/home/user/manmanv2/data     # Path on the host machine
 ```
 
 #### Docker Socket (`/var/run/docker.sock`)
