@@ -156,6 +156,7 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 
 	// Protected routes - Home/Dashboard
 	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.handleHome))
+	mux.HandleFunc("/sessions", app.auth.RequireAuthFunc(app.handleSessions))
 
 	// Protected routes - Games
 	mux.HandleFunc("/games", app.auth.RequireAuthFunc(app.handleGames))

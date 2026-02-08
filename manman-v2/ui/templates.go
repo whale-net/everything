@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"embed"
 	"html/template"
 	"log"
@@ -11,6 +12,14 @@ import (
 var templateFS embed.FS
 
 var templates *template.Template
+
+// LayoutData is the shared layout context for all pages.
+type LayoutData struct {
+	Title   string
+	Active  string
+	User    any
+	Content template.HTML
+}
 
 func init() {
 	var err error
@@ -29,6 +38,16 @@ func init() {
 }
 
 // Template helper functions
+
+func renderWithLayout(contentTemplate string, contentData any, layout LayoutData) (LayoutData, error) {
+	var buf bytes.Buffer
+	if err := templates.ExecuteTemplate(&buf, contentTemplate, contentData); err != nil {
+		return layout, err
+	}
+
+	layout.Content = template.HTML(buf.String())
+	return layout, nil
+}
 
 func formatTime(timestamp int64) string {
 	if timestamp == 0 {

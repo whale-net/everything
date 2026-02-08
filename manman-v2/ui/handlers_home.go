@@ -31,8 +31,45 @@ func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
 		Active: "home",
 		User:   user,
 	}
-	
-	if err := templates.ExecuteTemplate(w, "layout.html", data); err != nil {
+
+	layout, err := renderWithLayout("home_content", data, LayoutData{
+		Title:  data.Title,
+		Active: data.Active,
+		User:   data.User,
+	})
+	if err != nil {
+		log.Printf("Error rendering template: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := templates.ExecuteTemplate(w, "layout.html", layout); err != nil {
+		log.Printf("Error rendering template: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+
+	data := HomePageData{
+		Title:  "Sessions",
+		Active: "sessions",
+		User:   user,
+	}
+
+	layout, err := renderWithLayout("sessions_content", data, LayoutData{
+		Title:  data.Title,
+		Active: data.Active,
+		User:   data.User,
+	})
+	if err != nil {
+		log.Printf("Error rendering template: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := templates.ExecuteTemplate(w, "layout.html", layout); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}

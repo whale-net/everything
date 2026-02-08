@@ -32,6 +32,9 @@ type GameDetailPageData struct {
 type GameFormData struct {
 	Game *manmanpb.Game
 	Edit bool
+	Title string
+	Active string
+	User *htmxauth.UserInfo
 }
 
 func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
@@ -51,22 +54,49 @@ func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 		User:   user,
 		Games:  games,
 	}
-	
-	if err := templates.ExecuteTemplate(w, "layout.html", data); err != nil {
+
+	layout, err := renderWithLayout("games_content", data, LayoutData{
+		Title:  data.Title,
+		Active: data.Active,
+		User:   data.User,
+	})
+	if err != nil {
+		log.Printf("Error rendering template: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := templates.ExecuteTemplate(w, "layout.html", layout); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
 
 func (app *App) handleGameNew(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+
 	data := GameFormData{
 		Game: &manmanpb.Game{
 			Metadata: &manmanpb.GameMetadata{},
 		},
 		Edit: false,
+		Title: "Create Game",
+		Active: "games",
+		User: user,
 	}
 	
-	if err := templates.ExecuteTemplate(w, "game_form.html", data); err != nil {
+	layout, err := renderWithLayout("game_form_content", data, LayoutData{
+		Title:  data.Title,
+		Active: data.Active,
+		User:   data.User,
+	})
+	if err != nil {
+		log.Printf("Error rendering template: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := templates.ExecuteTemplate(w, "layout.html", layout); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
@@ -175,7 +205,18 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 		Configs: configs,
 	}
 	
-	if err := templates.ExecuteTemplate(w, "layout.html", data); err != nil {
+	layout, err := renderWithLayout("game_detail_content", data, LayoutData{
+		Title:  data.Title,
+		Active: data.Active,
+		User:   data.User,
+	})
+	if err != nil {
+		log.Printf("Error rendering template: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := templates.ExecuteTemplate(w, "layout.html", layout); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
@@ -273,6 +314,9 @@ type GameConfigFormData struct {
 	Game   *manmanpb.Game
 	Config *manmanpb.GameConfig
 	Edit   bool
+	Title  string
+	Active string
+	User   *htmxauth.UserInfo
 }
 
 func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, gameIDStr, configIDStr string) {
@@ -334,7 +378,18 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 		Config: config,
 	}
 	
-	if err := templates.ExecuteTemplate(w, "layout.html", data); err != nil {
+	layout, err := renderWithLayout("config_detail_content", data, LayoutData{
+		Title:  data.Title,
+		Active: data.Active,
+		User:   data.User,
+	})
+	if err != nil {
+		log.Printf("Error rendering template: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := templates.ExecuteTemplate(w, "layout.html", layout); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
@@ -356,15 +411,31 @@ func (app *App) handleGameConfigNew(w http.ResponseWriter, r *http.Request, game
 		return
 	}
 	
+	user := htmxauth.GetUser(r.Context())
+
 	data := GameConfigFormData{
 		Game: game,
 		Config: &manmanpb.GameConfig{
 			GameId: gameID,
 		},
 		Edit: false,
+		Title: "Create Configuration",
+		Active: "games",
+		User: user,
 	}
 	
-	if err := templates.ExecuteTemplate(w, "config_form.html", data); err != nil {
+	layout, err := renderWithLayout("config_form_content", data, LayoutData{
+		Title:  data.Title,
+		Active: data.Active,
+		User:   data.User,
+	})
+	if err != nil {
+		log.Printf("Error rendering template: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := templates.ExecuteTemplate(w, "layout.html", layout); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
