@@ -37,6 +37,7 @@ type Server struct {
 	Status      string     `db:"status"`
 	Environment *string    `db:"environment"`
 	LastSeen    *time.Time `db:"last_seen"`
+	IsDefault   bool       `db:"is_default"`
 }
 
 // Game represents a game definition (e.g., Minecraft, Valheim)

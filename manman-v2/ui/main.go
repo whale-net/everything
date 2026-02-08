@@ -6,10 +6,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/manman/protos"
 )
 
 // Config holds the application configuration
@@ -154,6 +156,9 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/auth/callback", app.auth.HandleCallback)
 	mux.HandleFunc("/auth/logout", app.auth.HandleLogout)
 
+	// Server selection endpoint
+	mux.HandleFunc("/select-server", app.auth.RequireAuthFunc(app.handleSelectServer))
+
 	// Protected routes - Home/Dashboard
 	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.handleHome))
 	mux.HandleFunc("/sessions", app.auth.RequireAuthFunc(app.handleSessions))
@@ -180,4 +185,120 @@ func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, `{"status":"ok"}`)
+}
+
+func (app *App) handleSelectServer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	serverIDStr := strings.TrimSpace(r.FormValue("server_id"))
+	if serverIDStr == "" {
+		http.Error(w, "Missing server_id", http.StatusBadRequest)
+		return
+	}
+
+	_, err := strconv.ParseInt(serverIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid server_id", http.StatusBadRequest)
+		return
+	}
+
+	// Set cookie for selected server (expires in 30 days)
+	http.SetCookie(w, &http.Cookie{
+		Name:     "selected_server_id",
+		Value:    serverIDStr,
+		Path:     "/",
+		MaxAge:   30 * 24 * 60 * 60,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	// Redirect back to referer or home
+	referer := r.Header.Get("Referer")
+	if referer == "" {
+		referer = "/"
+	}
+
+	// Handle HTMX redirect
+	if r.Header.Get("HX-Request") != "" {
+		w.Header().Set("HX-Redirect", referer)
+		w.WriteHeader(http.StatusOK)
+	} else {
+		http.Redirect(w, r, referer, http.StatusSeeOther)
+	}
+}
+
+// getSelectedServerID retrieves the selected server ID from cookie, falling back to default
+func (app *App) getSelectedServerID(r *http.Request, servers []*manmanpb.Server) int64 {
+	// Try cookie first
+	if cookie, err := r.Cookie("selected_server_id"); err == nil {
+		if serverID, err := strconv.ParseInt(cookie.Value, 10, 64); err == nil {
+			// Verify server exists
+			for _, s := range servers {
+				if s.ServerId == serverID {
+					return serverID
+				}
+			}
+		}
+	}
+
+	// Fall back to default server
+	for _, s := range servers {
+		if s.IsDefault {
+			return s.ServerId
+		}
+	}
+
+	// Last resort: first server
+	if len(servers) > 0 {
+		return servers[0].ServerId
+	}
+
+	return 0
+}
+
+// getSelectedServer returns the selected server object
+func (app *App) getSelectedServer(r *http.Request, servers []*manmanpb.Server) *manmanpb.Server {
+	selectedID := app.getSelectedServerID(r, servers)
+	for _, s := range servers {
+		if s.ServerId == selectedID {
+			return s
+		}
+	}
+	return nil
+}
+
+// buildLayoutData populates common layout data with servers and selection
+func (app *App) buildLayoutData(r *http.Request, title, active string, user *htmxauth.UserInfo) (LayoutData, error) {
+	ctx := context.Background()
+	servers, err := app.grpc.ListServers(ctx)
+	if err != nil {
+		log.Printf("Error fetching servers for layout: %v", err)
+		servers = []*manmanpb.Server{}
+	}
+
+	selectedServer := app.getSelectedServer(r, servers)
+	var defaultServerID int64
+	for _, s := range servers {
+		if s.IsDefault {
+			defaultServerID = s.ServerId
+			break
+		}
+	}
+
+	return LayoutData{
+		Title:           title,
+		Active:          active,
+		User:            user,
+		Servers:         servers,
+		SelectedServer:  selectedServer,
+		DefaultServerID: defaultServerID,
+	}, nil
 }

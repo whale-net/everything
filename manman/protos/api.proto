@@ -114,7 +114,8 @@ message UpdateServerRequest {
   int64 server_id = 1;
   string name = 2;
   string status = 3;
-  repeated string update_paths = 4;  // Field paths to update (empty = update all)
+  bool is_default = 4;
+  repeated string update_paths = 5;  // Field paths to update (empty = update all)
 }
 
 message UpdateServerResponse {

@@ -32,11 +32,14 @@ func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
 		User:   user,
 	}
 
-	layout, err := renderWithLayout("home_content", data, LayoutData{
-		Title:  data.Title,
-		Active: data.Active,
-		User:   data.User,
-	})
+	layoutData, err := app.buildLayoutData(r, data.Title, data.Active, user)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	layout, err := renderWithLayout("home_content", data, layoutData)
 	if err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)

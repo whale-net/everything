@@ -47,6 +47,27 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 	selectedServerIDStr := strings.TrimSpace(r.URL.Query().Get("server_id"))
 	startError := strings.TrimSpace(r.URL.Query().Get("start_error"))
 
+	ctx := context.Background()
+
+	// Fetch all servers to build layout data
+	servers, err := app.grpc.ListServers(ctx)
+	if err != nil {
+		log.Printf("Error fetching servers: %v", err)
+		servers = []*manmanpb.Server{}
+	}
+
+	// Determine selected server: query param > cookie > default
+	var selectedServerID int64
+	if selectedServerIDStr != "" {
+		if id, err := strconv.ParseInt(selectedServerIDStr, 10, 64); err == nil {
+			selectedServerID = id
+		}
+	}
+	if selectedServerID == 0 {
+		selectedServerID = app.getSelectedServerID(r, servers)
+	}
+
+	// Build session list request
 	req := &manmanpb.ListSessionsRequest{
 		PageSize: 100,
 		LiveOnly: liveOnly,
@@ -65,16 +86,11 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 		req.ServerGameConfigId = serverGameConfigID
 	}
 
-	if selectedServerIDStr != "" {
-		serverID, err := strconv.ParseInt(selectedServerIDStr, 10, 64)
-		if err != nil {
-			http.Error(w, "Invalid server_id", http.StatusBadRequest)
-			return
-		}
-		req.ServerId = serverID
+	// Always scope to selected server
+	if selectedServerID > 0 {
+		req.ServerId = selectedServerID
 	}
 
-	ctx := context.Background()
 	sessions, err := app.grpc.ListSessionsWithFilters(ctx, req)
 	if err != nil {
 		log.Printf("Error fetching sessions: %v", err)
@@ -82,23 +98,12 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	servers, err := app.grpc.ListServers(ctx)
-	if err != nil {
-		log.Printf("Error fetching servers: %v", err)
-		servers = []*manmanpb.Server{}
-	}
-
 	var serverConfigs []*manmanpb.ServerGameConfig
 	var selectedServerStatus string
 	var liveSessionByConfig map[int64]*manmanpb.Session
-	if selectedServerIDStr != "" {
-		serverID, err := strconv.ParseInt(selectedServerIDStr, 10, 64)
-		if err != nil {
-			http.Error(w, "Invalid server_id", http.StatusBadRequest)
-			return
-		}
+	if selectedServerID > 0 {
 		configsResp, err := app.grpc.GetAPI().ListServerGameConfigs(ctx, &manmanpb.ListServerGameConfigsRequest{
-			ServerId: serverID,
+			ServerId: selectedServerID,
 			PageSize: 100,
 		})
 		if err != nil {
@@ -108,14 +113,14 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 		}
 
 		for _, server := range servers {
-			if server.ServerId == serverID {
+			if server.ServerId == selectedServerID {
 				selectedServerStatus = server.Status
 				break
 			}
 		}
 
 		liveReq := &manmanpb.ListSessionsRequest{
-			ServerId: serverID,
+			ServerId: selectedServerID,
 			LiveOnly: true,
 			PageSize: 100,
 		}
@@ -131,7 +136,7 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var startWarning string
-	if selectedServerIDStr != "" && selectedServerStatus != "" && selectedServerStatus != "online" {
+	if selectedServerID > 0 && selectedServerStatus != "" && selectedServerStatus != "online" {
 		startWarning = "Selected server is offline. Starting a session may fail."
 	}
 
@@ -145,18 +150,21 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 		ServerGameConfigID: serverGameConfigIDStr,
 		Servers:      servers,
 		ServerConfigs: serverConfigs,
-		SelectedServerID: selectedServerIDStr,
+		SelectedServerID: strconv.FormatInt(selectedServerID, 10),
 		SelectedServerStatus: selectedServerStatus,
 		StartWarning: startWarning,
 		StartError: startError,
 		LiveSessionByConfig: liveSessionByConfig,
 	}
 
-	layout, err := renderWithLayout("sessions_content", data, LayoutData{
-		Title:  data.Title,
-		Active: data.Active,
-		User:   data.User,
-	})
+	layoutData, err := app.buildLayoutData(r, data.Title, data.Active, user)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	layout, err := renderWithLayout("sessions_content", data, layoutData)
 	if err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)

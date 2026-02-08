@@ -102,6 +102,10 @@ func (h *ServerHandler) UpdateServer(ctx context.Context, req *pb.UpdateServerRe
 		if req.Status != "" {
 			server.Status = req.Status
 		}
+		// Only update is_default if explicitly provided
+		if req.IsDefault {
+			server.IsDefault = req.IsDefault
+		}
 	} else {
 		// Update only specified fields
 		for _, path := range req.UpdatePaths {
@@ -110,6 +114,8 @@ func (h *ServerHandler) UpdateServer(ctx context.Context, req *pb.UpdateServerRe
 				server.Name = req.Name
 			case "status":
 				server.Status = req.Status
+			case "is_default":
+				server.IsDefault = req.IsDefault
 			}
 		}
 	}
@@ -133,9 +139,10 @@ func (h *ServerHandler) DeleteServer(ctx context.Context, req *pb.DeleteServerRe
 
 func serverToProto(s *manman.Server) *pb.Server {
 	pbServer := &pb.Server{
-		ServerId: s.ServerID,
-		Name:     s.Name,
-		Status:   s.Status,
+		ServerId:  s.ServerID,
+		Name:      s.Name,
+		Status:    s.Status,
+		IsDefault: s.IsDefault,
 	}
 
 	if s.LastSeen != nil {

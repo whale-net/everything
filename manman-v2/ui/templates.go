@@ -7,6 +7,8 @@ import (
 	"html/template"
 	"log"
 	"time"
+
+	"github.com/whale-net/everything/manman/protos"
 )
 
 //go:embed templates/*.html templates/partials/*.html
@@ -16,10 +18,13 @@ var templates *template.Template
 
 // LayoutData is the shared layout context for all pages.
 type LayoutData struct {
-	Title   string
-	Active  string
-	User    any
-	Content template.HTML
+	Title           string
+	Active          string
+	User            any
+	Content         template.HTML
+	Servers         []*manmanpb.Server
+	SelectedServer  *manmanpb.Server
+	DefaultServerID int64
 }
 
 func init() {

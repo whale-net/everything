@@ -2,9 +2,7 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"os"
 	"time"
 
 	"github.com/whale-net/everything/libs/go/rmq"
@@ -353,8 +351,8 @@ func gameConfigToProto(c *manman.GameConfig) *pb.GameConfig {
 
 // ServerGameConfigHandler handles ServerGameConfig-related RPCs
 type ServerGameConfigHandler struct {
-	repo      repository.ServerGameConfigRepository
-	portRepo  repository.ServerPortRepository
+	repo     repository.ServerGameConfigRepository
+	portRepo repository.ServerPortRepository
 }
 
 func NewServerGameConfigHandler(repo repository.ServerGameConfigRepository, portRepo repository.ServerPortRepository) *ServerGameConfigHandler {
@@ -636,19 +634,6 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 	}
 
 	// Create session in database
-	// #region agent log
-	func() {
-		f, err := os.OpenFile("/home/alex/whale_net/everything/.cursor/debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err == nil {
-			defer f.Close()
-			sessions, _ := h.sessionRepo.List(ctx, &req.ServerGameConfigId, 10, 0)
-			timestamp := time.Now().UnixMilli()
-			logEntry := fmt.Sprintf(`{"id":"log_%d_startsession","timestamp":%d,"location":"manman/api/handlers/api.go:612","message":"StartSession called","data":{"sgc_id":%d, "existing_sessions_count": %d},"runId":"run1","hypothesisId":"hyp1"}`+"\n", timestamp, timestamp, req.ServerGameConfigId, len(sessions))
-			f.WriteString(logEntry)
-		}
-	}()
-	// #endregion
-
 	session := &manman.Session{
 		SGCID:      req.ServerGameConfigId,
 		Status:     manman.SessionStatusPending,
@@ -746,10 +731,10 @@ func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameCon
 
 	return map[string]interface{}{
 		"session_id":         session.SessionID,
-		"sgc_id":            sgc.SGCID,
-		"game_config":       gameConfig,
+		"sgc_id":             sgc.SGCID,
+		"game_config":        gameConfig,
 		"server_game_config": serverGameConfig,
-		"parameters":        sessionParams,
+		"parameters":         sessionParams,
 	}
 }
 

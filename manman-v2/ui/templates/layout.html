@@ -348,9 +348,9 @@
 </head>
 <body>
     <nav>
-        <div class="container">
+        <div class="container" style="display: flex; align-items: center;">
             <div class="logo">ManManV2</div>
-            <ul>
+            <ul style="flex: 1;">
                 <li><a href="/" class="{{if eq .Active "home"}}active{{end}}">Dashboard</a></li>
                 <li><a href="/servers" class="{{if eq .Active "servers"}}active{{end}}">Servers</a></li>
                 <li><a href="/games" class="{{if eq .Active "games"}}active{{end}}">Games</a></li>
@@ -359,6 +359,18 @@
                 <li><a href="/auth/logout">Logout ({{.User.Name}})</a></li>
                 {{end}}
             </ul>
+            {{if .Servers}}
+            <form method="POST" action="/select-server" style="margin-left: 1rem;">
+                <select name="server_id" onchange="this.form.submit()" style="padding: 0.5rem; border-radius: 4px; border: 1px solid #ccc; background: white; color: #333;">
+                    <option value="">Select Server</option>
+                    {{range .Servers}}
+                    <option value="{{.ServerId}}" {{if and $.SelectedServer (eq $.SelectedServer.ServerId .ServerId)}}selected{{end}}>
+                        {{.Name}}{{if .IsDefault}} (default){{end}}
+                    </option>
+                    {{end}}
+                </select>
+            </form>
+            {{end}}
         </div>
     </nav>
     
