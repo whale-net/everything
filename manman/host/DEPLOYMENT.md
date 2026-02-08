@@ -104,11 +104,68 @@ bazel run //manman/host:host
 
 The host manager accepts these configuration options:
 
-| Environment Variable | CLI Flag | Default | Description |
-|---------------------|----------|---------|-------------|
-| `SERVER_ID` | `--server-id` | *(required)* | Unique identifier for this host |
-| `RABBITMQ_URL` | `--rabbitmq-url` | `amqp://...` | RabbitMQ connection URL with vhost |
-| `DOCKER_SOCKET` | `--docker-socket` | `/var/run/docker.sock` | Path to Docker socket |
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `API_ADDRESS` | `localhost:50051` | API server address for self-registration |
+| `API_USE_TLS` | *(auto-detect)* | Force TLS enable (`true`/`false`); auto-detects from address if omitted |
+| `API_TLS_SKIP_VERIFY` | `false` | Skip certificate verification (INSECURE - dev only) |
+| `API_CA_CERT_PATH` | *(system CA)* | Path to custom CA certificate file |
+| `API_TLS_SERVER_NAME` | *(from address)* | Server name for certificate verification (SNI) |
+| `SERVER_NAME` | *(auto-generated)* | Override server name (default: `hostname-environment`) |
+| `ENVIRONMENT` | *(none)* | Environment label for server grouping (e.g., `dev`, `prod`) |
+| `RABBITMQ_URL` | *(required)* | RabbitMQ connection URL with vhost |
+| `DOCKER_SOCKET` | `/var/run/docker.sock` | Path to Docker socket |
+
+### TLS Configuration
+
+The host manager supports TLS connections to the API server for production deployments. TLS is automatically enabled when the API address contains `:443` or starts with `https://`.
+
+**Auto-detection examples:**
+- `API_ADDRESS=localhost:50051` → Plaintext (local development)
+- `API_ADDRESS=dev-api.manmanv2.whalenet.dev:443` → TLS enabled
+- `API_ADDRESS=https://api.example.com` → TLS enabled
+
+**Usage scenarios:**
+
+1. **Local development (plaintext):**
+   ```bash
+   export API_ADDRESS=localhost:50051
+   bazel run //manman/host:host-manager
+   ```
+
+2. **Production with TLS (auto-detected):**
+   ```bash
+   export API_ADDRESS=dev-api.manmanv2.whalenet.dev:443
+   bazel run //manman/host:host-manager
+   ```
+
+3. **Development with TLS but skip verification (INSECURE):**
+   ```bash
+   export API_ADDRESS=dev-api.manmanv2.whalenet.dev:443
+   export API_TLS_SKIP_VERIFY=true
+   bazel run //manman/host:host-manager
+   ```
+
+4. **Kubernetes internal service with external certificate:**
+   ```bash
+   # Connect to k8s service but verify against external domain cert
+   export API_ADDRESS=manmanv2-api.namespace.svc.cluster.local:50051
+   export API_USE_TLS=true
+   export API_TLS_SERVER_NAME=dev-api.manmanv2.whalenet.dev
+   bazel run //manman/host:host-manager
+   ```
+
+5. **Custom CA certificate:**
+   ```bash
+   export API_ADDRESS=api.example.com:443
+   export API_CA_CERT_PATH=/etc/ssl/certs/custom-ca.crt
+   bazel run //manman/host:host-manager
+   ```
+
+**Security warnings:**
+- **NEVER** use `API_TLS_SKIP_VERIFY=true` in production environments
+- This setting disables certificate verification and is vulnerable to man-in-the-middle attacks
+- Only use for local development with self-signed certificates
 
 ### RabbitMQ URL Format
 
