@@ -13,9 +13,10 @@ import (
 func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID int64) error {
 	fmt.Printf("Starting orphan recovery for server %d (env=%s)\n", serverID, sm.environment)
 
-	// 1. Find all game containers. Filter by server_id and environment if the label is present
+	// 1. Find all game containers. Filter by server_id and environment
 	gameFilters := map[string]string{
-		"manman.type": "game",
+		"manman.type":      "game",
+		"manman.server_id": fmt.Sprintf("%d", serverID),
 	}
 	if sm.environment != "" {
 		gameFilters["manman.environment"] = sm.environment
@@ -34,16 +35,18 @@ func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID 
 			continue
 		}
 
-		// Double check environment label
+		// Double check labels
+		if svrID, ok := status.Labels["manman.server_id"]; !ok || svrID != fmt.Sprintf("%d", serverID) {
+			continue
+		}
+
 		if sm.environment != "" {
 			if env, ok := status.Labels["manman.environment"]; !ok || env != sm.environment {
 				continue
 			}
-		}
-
-		// If server_id label is present and doesn't match, skip
-		if svrID, ok := status.Labels["manman.server_id"]; ok {
-			if svrID != fmt.Sprintf("%d", serverID) {
+		} else {
+			// If we don't have an environment set, skip containers that DO have one set
+			if env, ok := status.Labels["manman.environment"]; ok && env != "" {
 				continue
 			}
 		}

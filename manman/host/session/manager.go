@@ -70,12 +70,26 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	sessionID := cmd.SessionID
 	sgcID := cmd.SGCID
 
-	// Check if session already exists to prevent orphaned containers
+	// 1. Check if the exact same session already exists
 	if _, exists := sm.stateManager.GetSession(sessionID); exists {
 		return &rmq.PermanentError{Err: fmt.Errorf("session %d already exists", sessionID)}
 	}
 
-	// If force is requested, clean up any existing container for this SGC
+	// 2. Check if any session is already active for this SGC
+	if existingSession, exists := sm.stateManager.GetSessionBySGCID(sgcID); exists {
+		if !cmd.Force {
+			return &rmq.PermanentError{Err: fmt.Errorf("GSC %d already has an active session %d", sgcID, existingSession.SessionID)}
+		}
+
+		// Force start: stop the existing session first
+		log.Printf("[session %d] force start: stopping existing active session %d for GSC %d", sessionID, existingSession.SessionID, sgcID)
+		if err := sm.StopSession(ctx, existingSession.SessionID, true); err != nil {
+			log.Printf("[session %d] warning: failed to stop existing session %d: %v", sessionID, existingSession.SessionID, err)
+			// Continue anyway, we'll attempt container cleanup below
+		}
+	}
+
+	// 3. If force is requested (or even if not, as a safety measure), clean up any existing container for this SGC
 	if cmd.Force {
 		containerName := sm.getContainerName(cmd.ServerID, cmd.SGCID)
 		log.Printf("[session %d] force start requested, cleaning up existing container %s", sessionID, containerName)
@@ -146,6 +160,14 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	containerID, err := sm.createGameContainer(ctx, state, cmd)
 	if err != nil {
 		if isNameConflictError(err) {
+			if !cmd.Force {
+				log.Printf("[session %d] container name conflict but force=false, failing", sessionID)
+				sm.cleanupSession(ctx, state)
+				state.UpdateStatus(manman.SessionStatusCrashed)
+				sm.stateManager.RemoveSession(sessionID)
+				return &rmq.PermanentError{Err: fmt.Errorf("container name conflict for GSC %d", sgcID)}
+			}
+
 			// Handle idempotent start: container with this name already exists
 			log.Printf("[session %d] container name conflict, attempting to handle...", sessionID)
 			containerID, err = sm.handleNameConflict(ctx, cmd)
@@ -422,7 +444,8 @@ func (sm *SessionManager) CleanupOrphans(ctx context.Context, serverID int64) er
 	activeSGCs := sm.stateManager.GetActiveSGCIDs()
 
 	gameFilters := map[string]string{
-		"manman.type": "game",
+		"manman.type":      "game",
+		"manman.server_id": fmt.Sprintf("%d", serverID),
 	}
 	if sm.environment != "" {
 		gameFilters["manman.environment"] = sm.environment
@@ -441,9 +464,18 @@ func (sm *SessionManager) CleanupOrphans(ctx context.Context, serverID int64) er
 			continue
 		}
 
-		// Double check environment label if it wasn't filtered by Docker API
+		// Double check labels if they weren't filtered by Docker API
+		if svrID, ok := status.Labels["manman.server_id"]; !ok || svrID != fmt.Sprintf("%d", serverID) {
+			continue
+		}
+
 		if sm.environment != "" {
 			if env, ok := status.Labels["manman.environment"]; !ok || env != sm.environment {
+				continue
+			}
+		} else {
+			// If we don't have an environment set, skip containers that DO have one set
+			if env, ok := status.Labels["manman.environment"]; ok && env != "" {
 				continue
 			}
 		}

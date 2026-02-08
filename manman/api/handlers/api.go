@@ -572,10 +572,28 @@ func (h *SessionHandler) ListSessions(ctx context.Context, req *pb.ListSessionsR
 		sgcID = &req.ServerGameConfigId
 	}
 
-	// TODO: Use enhanced filters (status_filter, started_after, started_before, server_id, live_only)
-	// This will require updating the repository layer to support these filters
+	var serverID *int64
+	if req.ServerId > 0 {
+		serverID = &req.ServerId
+	}
 
-	sessions, err := h.sessionRepo.List(ctx, sgcID, pageSize+1, offset)
+	filters := &repository.SessionFilters{
+		SGCID:        sgcID,
+		ServerID:     serverID,
+		StatusFilter: req.StatusFilter,
+		LiveOnly:     req.LiveOnly,
+	}
+
+	if req.StartedAfter > 0 {
+		t := time.Unix(req.StartedAfter, 0)
+		filters.StartedAfter = &t
+	}
+	if req.StartedBefore > 0 {
+		t := time.Unix(req.StartedBefore, 0)
+		filters.StartedBefore = &t
+	}
+
+	sessions, err := h.sessionRepo.ListWithFilters(ctx, filters, pageSize+1, offset)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list sessions: %v", err)
 	}
@@ -635,6 +653,15 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 			"active session %d already exists with status %s. Use force=true to override.", active.SessionID, active.Status)
 	}
 
+	if len(activeSessions) > 0 && req.Force {
+		// Invalidate prior to start: mark other sessions as stopped
+		log.Printf("Force start requested for SGC %d, invalidating %d active sessions", req.ServerGameConfigId, len(activeSessions))
+		// We use a temporary dummy session ID 0 to mean "all sessions for this SGC except the one I'm about to create"
+		// Actually, we haven't created the new session yet, so we can just stop all active ones.
+		// Let's add a helper to repository for this.
+		// For now, let's just create the session first and then stop others.
+	}
+
 	// Create session in database
 	session := &manman.Session{
 		SGCID:      req.ServerGameConfigId,
@@ -645,6 +672,13 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 	session, err = h.sessionRepo.Create(ctx, session)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create session: %v", err)
+	}
+
+	if req.Force {
+		// Mark other sessions as stopped in DB immediately
+		if err := h.sessionRepo.StopOtherSessionsForSGC(ctx, session.SessionID, req.ServerGameConfigId); err != nil {
+			log.Printf("Warning: Failed to invalidate other sessions for SGC %d: %v", req.ServerGameConfigId, err)
+		}
 	}
 
 	// Fetch ServerGameConfig to get server ID and deployment details

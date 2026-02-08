@@ -80,6 +80,18 @@ func (h *SessionStatusHandler) Handle(ctx context.Context, routingKey string, bo
 	switch msg.Status {
 	case manman.SessionStatusRunning:
 		err = h.repo.Sessions.UpdateSessionStart(ctx, msg.SessionID, now)
+		if err == nil {
+			// If a session becomes running, mark all other active sessions for this SGC as stopped.
+			// This handles "force start" scenarios and prevents multiple "running" sessions in DB.
+			if stopErr := h.repo.Sessions.StopOtherSessionsForSGC(ctx, msg.SessionID, msg.SGCID); stopErr != nil {
+				h.logger.Error("failed to stop other sessions for SGC",
+					"error", stopErr,
+					"session_id", msg.SessionID,
+					"sgc_id", msg.SGCID,
+				)
+				// Don't fail the update if this cleanup fails, but log it.
+			}
+		}
 	case manman.SessionStatusStopped, manman.SessionStatusCrashed, manman.SessionStatusLost:
 		err = h.repo.Sessions.UpdateSessionEnd(ctx, msg.SessionID, msg.Status, now, msg.ExitCode)
 	default:

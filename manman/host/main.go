@@ -231,7 +231,8 @@ func (h *CommandHandlerImpl) HandleStopSession(ctx context.Context, cmd *rmq.Sto
 	// Get session state to retrieve SGCID before stopping
 	state, exists := h.sessionManager.GetSessionState(cmd.SessionID)
 	if !exists {
-		return fmt.Errorf("session %d not found", cmd.SessionID)
+		log.Printf("[host] session %d not found for stop command, marking as permanent error", cmd.SessionID)
+		return &rmqlib.PermanentError{Err: fmt.Errorf("session %d not found", cmd.SessionID)}
 	}
 	sgcID := state.SGCID
 
@@ -264,6 +265,9 @@ func (h *CommandHandlerImpl) HandleStopSession(ctx context.Context, cmd *rmq.Sto
 // HandleKillSession handles a kill session command
 func (h *CommandHandlerImpl) HandleKillSession(ctx context.Context, cmd *rmq.KillSessionCommand) error {
 	if err := h.sessionManager.KillSession(ctx, cmd.SessionID); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return &rmqlib.PermanentError{Err: err}
+		}
 		return fmt.Errorf("failed to kill session: %w", err)
 	}
 
@@ -278,6 +282,9 @@ func (h *CommandHandlerImpl) HandleKillSession(ctx context.Context, cmd *rmq.Kil
 // HandleSendInput handles a send input command
 func (h *CommandHandlerImpl) HandleSendInput(ctx context.Context, cmd *rmq.SendInputCommand) error {
 	if err := h.sessionManager.SendInput(ctx, cmd.SessionID, cmd.Input); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return &rmqlib.PermanentError{Err: err}
+		}
 		return fmt.Errorf("failed to send input to session %d: %w", cmd.SessionID, err)
 	}
 	return nil

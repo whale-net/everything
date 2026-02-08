@@ -4,7 +4,7 @@
     <div>
         <a href="/sessions" class="btn btn-secondary btn-sm">Back to Sessions</a>
         {{if eq .Session.Status "running"}}
-        <form method="POST" action="/sessions/{{.Session.SessionId}}/stop" style="display: inline;">
+        <form hx-post="/sessions/{{.Session.SessionId}}/stop" hx-target="body" style="display: inline;">
             <button type="submit" class="btn btn-danger btn-sm">Stop Session</button>
         </form>
         {{end}}

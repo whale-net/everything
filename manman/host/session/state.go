@@ -104,6 +104,18 @@ func (m *Manager) GetActiveSGCIDs() map[int64]bool {
 	return activeSGCs
 }
 
+// GetSessionBySGCID returns the first active session found for a given SGC ID
+func (m *Manager) GetSessionBySGCID(sgcID int64) (*State, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, session := range m.sessions {
+		if session.SGCID == sgcID {
+			return session, true
+		}
+	}
+	return nil, false
+}
+
 // SessionStats represents session statistics
 type SessionStats struct {
 	Total    int

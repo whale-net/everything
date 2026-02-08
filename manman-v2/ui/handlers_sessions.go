@@ -250,8 +250,14 @@ func (app *App) handleSessionStop(w http.ResponseWriter, r *http.Request, sessio
 		return
 	}
 
-	w.Header().Set("HX-Redirect", "/sessions/"+strconv.FormatInt(sessionID, 10))
-	w.WriteHeader(http.StatusOK)
+	redirectURL := "/sessions"
+	if r.Header.Get("HX-Request") != "" {
+		w.Header().Set("HX-Redirect", redirectURL)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
 
 func (app *App) handleSessionStart(w http.ResponseWriter, r *http.Request) {

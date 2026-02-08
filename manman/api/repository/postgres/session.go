@@ -121,7 +121,15 @@ func (r *SessionRepository) List(ctx context.Context, sgcID *int64, limit, offse
 	return sessions, rows.Err()
 }
 
-func (r *SessionRepository) Update(ctx context.Context, session *manman.Session) error {
+func (r *SessionRepository) StopOtherSessionsForSGC(ctx context.Context, sessionID int64, sgcID int64) error {
+	query := `
+		UPDATE sessions
+		SET status = 'stopped', ended_at = $3
+		WHERE sgc_id = $1 AND session_id != $2 AND status IN ('pending', 'starting', 'running')
+	`
+	_, err := r.db.Exec(ctx, query, sgcID, sessionID, time.Now())
+	return err
+}
 	query := `
 		UPDATE sessions
 		SET started_at = $2, ended_at = $3, exit_code = $4, status = $5, parameters = $6
@@ -199,7 +207,7 @@ func (r *SessionRepository) ListWithFilters(ctx context.Context, filters *reposi
 
 	// Filter for live_only
 	if filters.LiveOnly {
-		whereClauses = append(whereClauses, "s.status IN ('pending', 'starting', 'running')")
+		whereClauses = append(whereClauses, "s.status IN ('pending', 'starting', 'running', 'stopping')")
 	}
 
 	// Build WHERE clause
