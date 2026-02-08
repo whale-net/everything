@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -267,7 +268,13 @@ func (app *App) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 	session, err := app.grpc.StartSession(ctx, serverGameConfigID, nil)
 	if err != nil {
 		log.Printf("Error starting session: %v", err)
-		redirectURL := "/sessions?start_error=Failed+to+start+session"
+
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "active session") {
+			errMsg = "Session is already active. Please stop existing session first."
+		}
+
+		redirectURL := "/sessions?start_error=" + url.QueryEscape(errMsg)
 		if selectedServerIDStr != "" {
 			redirectURL += "&server_id=" + selectedServerIDStr
 		}

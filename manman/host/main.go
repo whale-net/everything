@@ -311,12 +311,25 @@ func selfRegister(ctx context.Context, apiAddress, serverName, environment, dock
 		}
 	}
 
-	connCtx, connCancel := context.WithTimeout(ctx, 10*time.Second)
+	connCtx, connCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer connCancel()
 
 	client, err := grpcclient.NewClientWithTLS(connCtx, apiAddress, tlsConfig)
 	if err != nil {
-		return 0, fmt.Errorf("failed to connect to API: %w", err)
+		// Retry connection with exponential backoff
+		backoff := 1 * time.Second
+		for i := 0; i < 5; i++ {
+			log.Printf("Failed to connect to API: %v. Retrying in %v...", err, backoff)
+			time.Sleep(backoff)
+			client, err = grpcclient.NewClientWithTLS(connCtx, apiAddress, tlsConfig)
+			if err == nil {
+				break
+			}
+			backoff *= 2
+		}
+		if err != nil {
+			return 0, fmt.Errorf("failed to connect to API after retries: %w", err)
+		}
 	}
 	defer client.Close()
 

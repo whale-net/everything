@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"strconv"
@@ -307,6 +308,14 @@ type GameConfigDetailPageData struct {
 	User   *htmxauth.UserInfo
 	Game   *manmanpb.Game
 	Config *manmanpb.GameConfig
+	Servers []*manmanpb.Server
+	Deployments []ServerGameConfigView
+	DeployError string
+}
+
+type ServerGameConfigView struct {
+	Server *manmanpb.Server
+	Config *manmanpb.ServerGameConfig
 }
 
 // GameConfigFormData holds data for create/edit config form
@@ -329,6 +338,15 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 		switch subPath {
 		case "edit":
 			app.handleGameConfigEdit(w, r, gameIDStr, configIDStr)
+			return
+		case "deploy":
+			app.handleGameConfigDeploy(w, r, gameIDStr, configIDStr)
+			return
+		case "update-env":
+			app.handleGameConfigUpdateEnv(w, r, gameIDStr, configIDStr)
+			return
+		case "update-parameters":
+			app.handleGameConfigUpdateParameters(w, r, gameIDStr, configIDStr)
 			return
 		case "delete":
 			app.handleGameConfigDelete(w, r, gameIDStr, configIDStr)
@@ -369,6 +387,31 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 		http.Error(w, "Config not found", http.StatusNotFound)
 		return
 	}
+
+	servers, err := app.grpc.ListServers(ctx)
+	if err != nil {
+		log.Printf("Error fetching servers: %v", err)
+		servers = []*manmanpb.Server{}
+	}
+
+	var deployments []ServerGameConfigView
+	for _, server := range servers {
+		serverConfigs, err := app.grpc.ListServerGameConfigs(ctx, server.ServerId)
+		if err != nil {
+			log.Printf("Error fetching server configs for server %d: %v", server.ServerId, err)
+			continue
+		}
+		for _, sgc := range serverConfigs {
+			if sgc.GameConfigId == config.ConfigId {
+				deployments = append(deployments, ServerGameConfigView{
+					Server: server,
+					Config: sgc,
+				})
+			}
+		}
+	}
+
+	deployError := strings.TrimSpace(r.URL.Query().Get("deploy_error"))
 	
 	data := GameConfigDetailPageData{
 		Title:  config.Name + " - " + game.Name,
@@ -376,6 +419,9 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 		User:   user,
 		Game:   game,
 		Config: config,
+		Servers: servers,
+		Deployments: deployments,
+		DeployError: deployError,
 	}
 	
 	layout, err := renderWithLayout("config_detail_content", data, LayoutData{
@@ -392,6 +438,64 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 	if err := templates.ExecuteTemplate(w, "layout.html", layout); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+func (app *App) handleGameConfigDeploy(w http.ResponseWriter, r *http.Request, gameIDStr, configIDStr string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	gameID, err := strconv.ParseInt(gameIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid game ID", http.StatusBadRequest)
+		return
+	}
+
+	configID, err := strconv.ParseInt(configIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid config ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	serverIDStr := strings.TrimSpace(r.FormValue("server_id"))
+	if serverIDStr == "" {
+		http.Error(w, "Missing server_id", http.StatusBadRequest)
+		return
+	}
+
+	serverID, err := strconv.ParseInt(serverIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid server_id", http.StatusBadRequest)
+		return
+	}
+
+	ctx := context.Background()
+	_, err = app.grpc.DeployGameConfig(ctx, serverID, configID, map[string]string{})
+	if err != nil {
+		log.Printf("Error deploying game config: %v", err)
+		redirectURL := "/games/" + gameIDStr + "/configs/" + configIDStr + "?deploy_error=Failed%20to%20deploy%20config"
+		if r.Header.Get("HX-Request") != "" {
+			w.Header().Set("HX-Redirect", redirectURL)
+			w.WriteHeader(http.StatusOK)
+		} else {
+			http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+		}
+		return
+	}
+
+	redirectURL := "/games/" + strconv.FormatInt(gameID, 10) + "/configs/" + strconv.FormatInt(configID, 10)
+	if r.Header.Get("HX-Request") != "" {
+		w.Header().Set("HX-Redirect", redirectURL)
+		w.WriteHeader(http.StatusOK)
+	} else {
+		http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 	}
 }
 
@@ -548,5 +652,93 @@ func (app *App) handleGameConfigDelete(w http.ResponseWriter, r *http.Request, g
 	
 	// Redirect to game detail
 	w.Header().Set("HX-Redirect", "/games/"+gameIDStr)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (app *App) handleGameConfigUpdateEnv(w http.ResponseWriter, r *http.Request, gameIDStr, configIDStr string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	configID, err := strconv.ParseInt(configIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid config ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	envJSON := strings.TrimSpace(r.FormValue("env_template_json"))
+	envTemplate := map[string]string{}
+	if envJSON != "" {
+		if err := json.Unmarshal([]byte(envJSON), &envTemplate); err != nil {
+			http.Error(w, "Invalid env template JSON", http.StatusBadRequest)
+			return
+		}
+	}
+
+	ctx := context.Background()
+	req := &manmanpb.UpdateGameConfigRequest{
+		ConfigId:    configID,
+		EnvTemplate: envTemplate,
+		UpdatePaths: []string{"env_template"},
+	}
+
+	_, err = app.grpc.UpdateGameConfig(ctx, req)
+	if err != nil {
+		log.Printf("Error updating env template: %v", err)
+		http.Error(w, "Failed to update env template", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("HX-Redirect", "/games/"+gameIDStr+"/configs/"+configIDStr)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (app *App) handleGameConfigUpdateParameters(w http.ResponseWriter, r *http.Request, gameIDStr, configIDStr string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	configID, err := strconv.ParseInt(configIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid config ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	paramsJSON := strings.TrimSpace(r.FormValue("parameters_json"))
+	var parameters []*manmanpb.Parameter
+	if paramsJSON != "" {
+		if err := json.Unmarshal([]byte(paramsJSON), &parameters); err != nil {
+			http.Error(w, "Invalid parameters JSON", http.StatusBadRequest)
+			return
+		}
+	}
+
+	ctx := context.Background()
+	req := &manmanpb.UpdateGameConfigRequest{
+		ConfigId:   configID,
+		Parameters: parameters,
+		UpdatePaths: []string{"parameters"},
+	}
+
+	_, err = app.grpc.UpdateGameConfig(ctx, req)
+	if err != nil {
+		log.Printf("Error updating parameters: %v", err)
+		http.Error(w, "Failed to update parameters", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("HX-Redirect", "/games/"+gameIDStr+"/configs/"+configIDStr)
 	w.WriteHeader(http.StatusOK)
 }

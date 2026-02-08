@@ -221,3 +221,28 @@ func (c *ControlClient) StartSession(ctx context.Context, serverGameConfigID int
 	}
 	return resp.Session, nil
 }
+
+// ListServerGameConfigs retrieves server game configs for a server.
+func (c *ControlClient) ListServerGameConfigs(ctx context.Context, serverID int64) ([]*manmanpb.ServerGameConfig, error) {
+	resp, err := c.api.ListServerGameConfigs(ctx, &manmanpb.ListServerGameConfigsRequest{
+		ServerId: serverID,
+		PageSize: 100,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list server game configs: %w", err)
+	}
+	return resp.Configs, nil
+}
+
+// DeployGameConfig deploys a game config to a server.
+func (c *ControlClient) DeployGameConfig(ctx context.Context, serverID, gameConfigID int64, parameters map[string]string) (*manmanpb.ServerGameConfig, error) {
+	resp, err := c.api.DeployGameConfig(ctx, &manmanpb.DeployGameConfigRequest{
+		ServerId:     serverID,
+		GameConfigId: gameConfigID,
+		Parameters:  parameters,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to deploy game config: %w", err)
+	}
+	return resp.Config, nil
+}

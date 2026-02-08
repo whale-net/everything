@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/whale-net/everything/libs/go/rmq"
@@ -609,14 +611,51 @@ func (h *SessionHandler) GetSession(ctx context.Context, req *pb.GetSessionReque
 }
 
 func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionRequest) (*pb.StartSessionResponse, error) {
+	// Check for existing active sessions
+	activeStatuses := []string{
+		manman.SessionStatusPending,
+		manman.SessionStatusStarting,
+		manman.SessionStatusRunning,
+		manman.SessionStatusStopping,
+	}
+
+	filters := &repository.SessionFilters{
+		SGCID:        &req.ServerGameConfigId,
+		StatusFilter: activeStatuses,
+	}
+
+	activeSessions, err := h.sessionRepo.ListWithFilters(ctx, filters, 1, 0)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to check active sessions: %v", err)
+	}
+
+	if len(activeSessions) > 0 {
+		active := activeSessions[0]
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"active session %d already exists with status %s", active.SessionID, active.Status)
+	}
+
 	// Create session in database
+	// #region agent log
+	func() {
+		f, err := os.OpenFile("/home/alex/whale_net/everything/.cursor/debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err == nil {
+			defer f.Close()
+			sessions, _ := h.sessionRepo.List(ctx, &req.ServerGameConfigId, 10, 0)
+			timestamp := time.Now().UnixMilli()
+			logEntry := fmt.Sprintf(`{"id":"log_%d_startsession","timestamp":%d,"location":"manman/api/handlers/api.go:612","message":"StartSession called","data":{"sgc_id":%d, "existing_sessions_count": %d},"runId":"run1","hypothesisId":"hyp1"}`+"\n", timestamp, timestamp, req.ServerGameConfigId, len(sessions))
+			f.WriteString(logEntry)
+		}
+	}()
+	// #endregion
+
 	session := &manman.Session{
 		SGCID:      req.ServerGameConfigId,
 		Status:     manman.SessionStatusPending,
 		Parameters: mapToJSONB(req.Parameters),
 	}
 
-	session, err := h.sessionRepo.Create(ctx, session)
+	session, err = h.sessionRepo.Create(ctx, session)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create session: %v", err)
 	}

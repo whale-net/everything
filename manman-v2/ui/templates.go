@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"embed"
+	"encoding/json"
 	"html/template"
 	"log"
 	"time"
@@ -29,6 +30,8 @@ func init() {
 		"formatTime": formatTime,
 		"timeAgo":    timeAgo,
 		"statusBadge": statusBadge,
+		"toJSON":     toJSON,
+		"toJSONEmpty": toJSONEmpty,
 	}
 	
 	templates, err = template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/*.html", "templates/partials/*.html")
@@ -47,6 +50,21 @@ func renderWithLayout(contentTemplate string, contentData any, layout LayoutData
 
 	layout.Content = template.HTML(buf.String())
 	return layout, nil
+}
+
+func toJSON(value any) string {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func toJSONEmpty(value any) string {
+	if value == nil {
+		return ""
+	}
+	return toJSON(value)
 }
 
 func formatTime(timestamp int64) string {

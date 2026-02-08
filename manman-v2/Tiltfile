@@ -202,6 +202,7 @@ spec:
 
     k8s_resource(
         'manmanv2-migration',
+        resource_deps=['postgres-dev'],
         labels=['manmanv2-infrastructure']
     )
     print("🔄 Migration job configured")
@@ -278,10 +279,15 @@ spec:
         s3_bucket=os.environ.get('S3_BUCKET', 'manmanv2-dev'),
     )))
 
+    # Build dependency list for API
+    api_deps = ['rabbitmq-vhost-setup']
+    if get_env_bool('ENABLE_MANMANV2_MIGRATION', default='true'):
+        api_deps.append('manmanv2-migration')
+
     # Port forward API to localhost
     k8s_resource(
         'manmanv2-api',
-        resource_deps=['manmanv2-migration'] if get_env_bool('ENABLE_MANMANV2_MIGRATION', default='true') else [],
+        resource_deps=api_deps,
         port_forwards=['50052:50051'],
         labels=['manmanv2-control-plane']
     )
