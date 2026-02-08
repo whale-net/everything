@@ -170,8 +170,11 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/games/new", app.auth.RequireAuthFunc(app.handleGameNew))
 	mux.HandleFunc("/games/create", app.auth.RequireAuthFunc(app.handleGameCreate))
 	mux.HandleFunc("/games/", app.auth.RequireAuthFunc(app.handleGameDetail))
-	
+
 	// Note: Config routes are handled within handleGameDetail based on URL parsing
+
+	// Documentation routes
+	mux.HandleFunc("/docs/config-strategies", app.auth.RequireAuthFunc(app.handleConfigStrategiesDocs))
 
 	// Protected routes - Servers
 	mux.HandleFunc("/servers", app.auth.RequireAuthFunc(app.handleServers))

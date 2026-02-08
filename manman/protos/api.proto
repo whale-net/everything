@@ -66,6 +66,9 @@ service ManManAPI {
 
   // Configuration preview (new)
   rpc PreviewConfiguration(PreviewConfigurationRequest) returns (PreviewConfigurationResponse);
+
+  // Get rendered configurations for a session (for host-manager)
+  rpc GetSessionConfiguration(GetSessionConfigurationRequest) returns (GetSessionConfigurationResponse);
 }
 
 // ============================================================================
@@ -523,4 +526,15 @@ message PreviewConfigurationRequest {
 
 message PreviewConfigurationResponse {
   repeated RenderedConfiguration configurations = 1;
+}
+
+message GetSessionConfigurationRequest {
+  int64 session_id = 1;
+}
+
+message GetSessionConfigurationResponse {
+  repeated RenderedConfiguration configurations = 1;
+  int64 game_id = 2;
+  int64 game_config_id = 3;
+  int64 server_game_config_id = 4;
 }

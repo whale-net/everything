@@ -1080,6 +1080,84 @@ func (h *ConfigurationStrategyHandler) DeleteConfigurationStrategy(ctx context.C
 	return &pb.DeleteConfigurationStrategyResponse{}, nil
 }
 
+func (h *ConfigurationStrategyHandler) GetSessionConfiguration(ctx context.Context, req *pb.GetSessionConfigurationRequest, fullRepo *repository.Repository) (*pb.GetSessionConfigurationResponse, error) {
+	// Get session to find game/config IDs
+	session, err := fullRepo.Sessions.Get(ctx, req.SessionId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "session not found: %v", err)
+	}
+
+	// Get SGC to find game_config_id and server_id
+	sgc, err := fullRepo.ServerGameConfigs.Get(ctx, session.SGCID)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "server game config not found: %v", err)
+	}
+
+	// Get game config to find game_id
+	gc, err := fullRepo.GameConfigs.Get(ctx, sgc.GameConfigID)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "game config not found: %v", err)
+	}
+
+	// Fetch all strategies for this game
+	strategies, err := h.repo.ListByGame(ctx, gc.GameID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to fetch strategies: %v", err)
+	}
+
+	// Render each strategy
+	var renderedConfigs []*pb.RenderedConfiguration
+	for _, strategy := range strategies {
+		// Skip volume strategies - host-manager handles those separately
+		if strategy.StrategyType == manman.StrategyTypeVolume {
+			continue
+		}
+
+		rendered := &pb.RenderedConfiguration{
+			StrategyName:    strategy.Name,
+			StrategyType:    strategy.StrategyType,
+			RenderedContent: "",
+			BaseContent:     "",
+		}
+
+		if strategy.TargetPath != nil {
+			rendered.TargetPath = *strategy.TargetPath
+		}
+
+		if strategy.BaseTemplate != nil {
+			rendered.BaseContent = *strategy.BaseTemplate
+			// For now, just use base template as rendered content
+			// TODO: Apply parameter bindings and patches
+			rendered.RenderedContent = *strategy.BaseTemplate
+		}
+
+		renderedConfigs = append(renderedConfigs, rendered)
+	}
+
+	return &pb.GetSessionConfigurationResponse{
+		Configurations:     renderedConfigs,
+		GameId:             gc.GameID,
+		GameConfigId:       gc.ConfigID,
+		ServerGameConfigId: sgc.SGCID,
+	}, nil
+}
+
+func (h *ConfigurationStrategyHandler) PreviewConfiguration(ctx context.Context, req *pb.PreviewConfigurationRequest, fullRepo *repository.Repository) (*pb.PreviewConfigurationResponse, error) {
+	// Get session configuration (same as GetSessionConfiguration for now)
+	sessionResp, err := h.GetSessionConfiguration(ctx, &pb.GetSessionConfigurationRequest{
+		SessionId: req.SessionId,
+	}, fullRepo)
+	if err != nil {
+		return nil, err
+	}
+
+	// TODO: Apply parameter overrides from req.ParameterOverrides
+
+	return &pb.PreviewConfigurationResponse{
+		Configurations: sessionResp.Configurations,
+	}, nil
+}
+
 func strategyToProto(s *manman.ConfigurationStrategy) *pb.ConfigurationStrategy {
 	proto := &pb.ConfigurationStrategy{
 		StrategyId:    s.StrategyID,
@@ -1118,4 +1196,12 @@ func (s *APIServer) UpdateConfigurationStrategy(ctx context.Context, req *pb.Upd
 
 func (s *APIServer) DeleteConfigurationStrategy(ctx context.Context, req *pb.DeleteConfigurationStrategyRequest) (*pb.DeleteConfigurationStrategyResponse, error) {
 	return s.strategyHandler.DeleteConfigurationStrategy(ctx, req)
+}
+
+func (s *APIServer) GetSessionConfiguration(ctx context.Context, req *pb.GetSessionConfigurationRequest) (*pb.GetSessionConfigurationResponse, error) {
+	return s.strategyHandler.GetSessionConfiguration(ctx, req, s.repo)
+}
+
+func (s *APIServer) PreviewConfiguration(ctx context.Context, req *pb.PreviewConfigurationRequest) (*pb.PreviewConfigurationResponse, error) {
+	return s.strategyHandler.PreviewConfiguration(ctx, req, s.repo)
 }
