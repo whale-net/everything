@@ -512,10 +512,7 @@ func (h *ServerGameConfigHandler) UpdateServerGameConfig(ctx context.Context, re
 }
 
 func (h *ServerGameConfigHandler) DeleteServerGameConfig(ctx context.Context, req *pb.DeleteServerGameConfigRequest) (*pb.DeleteServerGameConfigResponse, error) {
-	// Deallocate ports before deleting the ServerGameConfig
-	if err := h.portRepo.DeallocatePortsBySGCID(ctx, req.ServerGameConfigId); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to deallocate ports: %v", err)
-	}
+	// Port deallocation is handled automatically via database CASCADE when sessions are deleted
 
 	// Delete the ServerGameConfig
 	if err := h.repo.Delete(ctx, req.ServerGameConfigId); err != nil {
