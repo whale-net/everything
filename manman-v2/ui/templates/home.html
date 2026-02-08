@@ -1,0 +1,33 @@
+{{define "content"}}
+<h1>Dashboard</h1>
+
+<div class="grid grid-4" hx-get="/api/dashboard-summary" hx-trigger="load, every 30s" hx-swap="innerHTML">
+    <div class="stat-card">
+        <div class="stat-value">-</div>
+        <div class="stat-label">Total Servers</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">-</div>
+        <div class="stat-label">Online Servers</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">-</div>
+        <div class="stat-label">Total Games</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">-</div>
+        <div class="stat-label">Active Sessions</div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Quick Actions</div>
+    </div>
+    <div style="display: flex; gap: 1rem;">
+        <a href="/games/new" class="btn btn-primary">Create New Game</a>
+        <a href="/servers" class="btn btn-secondary">View Servers</a>
+        <a href="/sessions" class="btn btn-secondary">View Sessions</a>
+    </div>
+</div>
+{{end}}

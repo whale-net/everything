@@ -168,6 +168,7 @@ MANMAN_V2_APPS = [
     "//manman/api:control-api_metadata",
     "//manman/migrate:control-migration_metadata",
     "//manman/processor:event-processor_metadata",
+    "//manman-v2/ui:manmanv2-ui_metadata",
 ]
 
 # ManMan V1 Helm chart - Python-based legacy services

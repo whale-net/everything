@@ -1,0 +1,37 @@
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">{{if .Edit}}Edit Game{{else}}Create New Game{{end}}</div>
+    </div>
+    
+    <form hx-post="/games/create" hx-swap="none">
+        <div class="form-group">
+            <label for="name">Name *</label>
+            <input type="text" id="name" name="name" value="{{if .Game}}{{.Game.Name}}{{end}}" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="steam_app_id">Steam App ID</label>
+            <input type="text" id="steam_app_id" name="steam_app_id" value="{{if .Game}}{{.Game.SteamAppId}}{{end}}" placeholder="Optional">
+        </div>
+        
+        <div class="form-group">
+            <label for="genre">Genre</label>
+            <input type="text" id="genre" name="genre" value="{{if .Game.Metadata}}{{.Game.Metadata.Genre}}{{end}}" placeholder="e.g., Survival, RPG, FPS">
+        </div>
+        
+        <div class="form-group">
+            <label for="publisher">Publisher</label>
+            <input type="text" id="publisher" name="publisher" value="{{if .Game.Metadata}}{{.Game.Metadata.Publisher}}{{end}}">
+        </div>
+        
+        <div class="form-group">
+            <label for="tags">Tags (comma-separated)</label>
+            <input type="text" id="tags" name="tags" value="{{if .Game.Metadata}}{{range $i, $tag := .Game.Metadata.Tags}}{{if $i}}, {{end}}{{$tag}}{{end}}{{end}}" placeholder="e.g., multiplayer, sandbox, open-world">
+        </div>
+        
+        <div style="display: flex; gap: 0.5rem;">
+            <button type="submit" class="btn btn-success">{{if .Edit}}Update{{else}}Create{{end}} Game</button>
+            <a href="/games" class="btn btn-secondary">Cancel</a>
+        </div>
+    </form>
+</div>

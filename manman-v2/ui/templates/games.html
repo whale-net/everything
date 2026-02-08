@@ -1,0 +1,48 @@
+{{define "content"}}
+<div class="action-bar">
+    <h1>Games</h1>
+    <a href="/games/new" class="btn btn-primary">Create New Game</a>
+</div>
+
+{{if .Games}}
+<div class="card">
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Steam App ID</th>
+                <th>Genre</th>
+                <th>Publisher</th>
+                <th>Tags</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Games}}
+            <tr>
+                <td><a href="/games/{{.GameId}}">{{.Name}}</a></td>
+                <td>{{.SteamAppId}}</td>
+                <td>{{if .Metadata}}{{.Metadata.Genre}}{{end}}</td>
+                <td>{{if .Metadata}}{{.Metadata.Publisher}}{{end}}</td>
+                <td>
+                    {{if .Metadata}}
+                        {{range .Metadata.Tags}}
+                        <span class="badge badge-secondary">{{.}}</span>
+                        {{end}}
+                    {{end}}
+                </td>
+                <td>
+                    <a href="/games/{{.GameId}}" class="btn btn-sm btn-primary">View</a>
+                </td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+</div>
+{{else}}
+<div class="empty-state">
+    <p>No games found. Create your first game to get started!</p>
+    <a href="/games/new" class="btn btn-primary">Create Game</a>
+</div>
+{{end}}
+{{end}}

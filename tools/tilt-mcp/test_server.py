@@ -130,6 +130,98 @@ class TestTiltStatus:
         assert result['targets'] == ['api', 'postgres']
 
     @patch('server.run_tilt_command')
+    def test_tilt_status_with_resource(self, mock_run):
+        """Test status retrieval with specific resource included."""
+        # First call: session status
+        mock_run.side_effect = [
+            {
+                'success': True,
+                'output': json.dumps({
+                    'items': [{
+                        'metadata': {
+                            'name': 'Tiltfile',
+                            'creationTimestamp': '2024-01-01T00:00:00Z'
+                        },
+                        'status': {
+                            'ready': True,
+                            'targets': ['api', 'postgres']
+                        }
+                    }]
+                }),
+                'error': ''
+            },
+            # Second call: uiresources
+            {
+                'success': True,
+                'output': json.dumps({
+                    'items': [
+                        {
+                            'metadata': {'name': 'postgres-dev'},
+                            'status': {
+                                'runtimeStatus': 'ok',
+                                'updateStatus': 'ready',
+                                'conditions': []
+                            }
+                        }
+                    ]
+                }),
+                'error': ''
+            }
+        ]
+
+        result = tilt_status(resource='postgres-dev')
+
+        assert 'error' not in result
+        assert result['name'] == 'Tiltfile'
+        assert result['resource'] == 'postgres-dev'
+        assert result['resourceStatus']['name'] == 'postgres-dev'
+        assert result['resourceStatus']['runtimeStatus'] == 'ok'
+
+    @patch('server.run_tilt_command')
+    def test_tilt_status_with_missing_resource(self, mock_run):
+        """Test status retrieval when requested resource is not found."""
+        mock_run.side_effect = [
+            {
+                'success': True,
+                'output': json.dumps({
+                    'items': [{
+                        'metadata': {
+                            'name': 'Tiltfile',
+                            'creationTimestamp': '2024-01-01T00:00:00Z'
+                        },
+                        'status': {
+                            'ready': True,
+                            'targets': ['api', 'postgres']
+                        }
+                    }]
+                }),
+                'error': ''
+            },
+            {
+                'success': True,
+                'output': json.dumps({
+                    'items': [
+                        {
+                            'metadata': {'name': 'postgres-dev'},
+                            'status': {
+                                'runtimeStatus': 'ok',
+                                'updateStatus': 'ready',
+                                'conditions': []
+                            }
+                        }
+                    ]
+                }),
+                'error': ''
+            }
+        ]
+
+        result = tilt_status(resource='missing-resource')
+
+        assert 'error' not in result
+        assert result['resource'] == 'missing-resource'
+        assert result['resourceStatus'] is None
+
+    @patch('server.run_tilt_command')
     def test_tilt_status_no_session(self, mock_run):
         """Test status when no session exists."""
         mock_run.return_value = {

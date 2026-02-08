@@ -1,0 +1,78 @@
+{{define "content"}}
+<div class="action-bar">
+    <h1>{{.Server.Name}}</h1>
+    <div>
+        <a href="/servers" class="btn btn-secondary btn-sm">Back to Servers</a>
+        <span class="badge {{statusBadge .Server.Status}}" style="font-size: 1rem; padding: 0.5rem 1rem;">
+            {{.Server.Status}}
+        </span>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Server Information</div>
+    </div>
+    <dl style="display: grid; grid-template-columns: 200px 1fr; gap: 0.5rem;">
+        <dt><strong>Server ID:</strong></dt>
+        <dd>{{.Server.ServerId}}</dd>
+        
+        <dt><strong>Name:</strong></dt>
+        <dd>{{.Server.Name}}</dd>
+        
+        <dt><strong>Status:</strong></dt>
+        <dd><span class="badge {{statusBadge .Server.Status}}">{{.Server.Status}}</span></dd>
+        
+        <dt><strong>Environment:</strong></dt>
+        <dd>{{if .Server.Environment}}{{.Server.Environment}}{{else}}-{{end}}</dd>
+        
+        <dt><strong>Last Seen:</strong></dt>
+        <dd>{{timeAgo .Server.LastSeen}} ({{formatTime .Server.LastSeen}})</dd>
+    </dl>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Deployments</div>
+        <a href="/games" class="btn btn-sm btn-primary">Deploy New Config</a>
+    </div>
+    
+    {{if .Configs}}
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Game Config</th>
+                <th>Status</th>
+                <th>Port Bindings</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Configs}}
+            <tr>
+                <td>{{.ServerGameConfigId}}</td>
+                <td>Config #{{.GameConfigId}}</td>
+                <td><span class="badge {{statusBadge .Status}}">{{.Status}}</span></td>
+                <td>
+                    {{if .PortBindings}}
+                        {{range .PortBindings}}
+                        <code>{{.ContainerPort}}:{{.HostPort}}/{{.Protocol}}</code>
+                        {{end}}
+                    {{else}}-{{end}}
+                </td>
+                <td>
+                    <button class="btn btn-sm btn-secondary">View Sessions</button>
+                </td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else}}
+    <div class="empty-state">
+        <p>No deployments on this server yet.</p>
+        <a href="/games" class="btn btn-primary">Browse Games to Deploy</a>
+    </div>
+    {{end}}
+</div>
+{{end}}
