@@ -3,10 +3,23 @@
 
 <div class="card">
     <form method="GET" action="/sessions">
-        <div class="grid grid-3">
+        <div class="grid grid-4">
             <div class="form-group">
                 <label for="status">Status Filter (comma-separated)</label>
                 <input type="text" id="status" name="status" value="{{.StatusFilter}}" placeholder="running, stopped, crashed">
+            </div>
+            <div class="form-group">
+                <label for="server_game_config_id">Server Game Config ID</label>
+                <input type="text" id="server_game_config_id" name="server_game_config_id" value="{{.ServerGameConfigID}}" placeholder="Optional">
+            </div>
+            <div class="form-group">
+                <label for="server_id">Server</label>
+                <select id="server_id" name="server_id" onchange="this.form.submit()">
+                    <option value="">All servers</option>
+                    {{range .Servers}}
+                    <option value="{{.ServerId}}" {{if eq $.SelectedServerID (printf "%d" .ServerId)}}selected{{end}}>{{.Name}}</option>
+                    {{end}}
+                </select>
             </div>
             <div class="form-group" style="display: flex; align-items: center;">
                 <label style="margin-right: 0.5rem;">
@@ -19,6 +32,97 @@
             </div>
         </div>
     </form>
+</div>
+
+<div id="start-session-panel">
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title">Start Session</div>
+        </div>
+        {{if .StartWarning}}
+        <div style="margin-bottom: 1rem; padding: 0.75rem; border-left: 4px solid #f39c12; background: #fff8e1;">
+            <strong>Warning:</strong> {{.StartWarning}}
+        </div>
+        {{end}}
+
+        {{if .StartError}}
+        <div style="margin-bottom: 1rem; padding: 0.75rem; border-left: 4px solid #e74c3c; background: #fdecea;">
+            <strong>Start failed:</strong> {{.StartError}}
+        </div>
+        {{end}}
+        <form method="GET" action="/sessions" style="margin-bottom: 1rem;">
+            <div class="form-group">
+                <label for="start_server_id">Server</label>
+                <select id="start_server_id" name="server_id"
+                        hx-get="/sessions"
+                        hx-include="this"
+                        hx-target="#start-session-panel"
+                        hx-select="#start-session-panel"
+                        hx-swap="outerHTML"
+                        hx-push-url="true">
+                    <option value="">Select a server</option>
+                    {{range .Servers}}
+                    <option value="{{.ServerId}}" {{if eq $.SelectedServerID (printf "%d" .ServerId)}}selected{{end}}>{{.Name}}</option>
+                    {{end}}
+                </select>
+                <small style="color: #666;">Select a server to load its configs</small>
+            </div>
+        </form>
+        <form method="POST" action="/sessions/start">
+            <div class="grid grid-2">
+                <div class="form-group">
+                    <label for="start_server_game_config_id">Server Game Config</label>
+                    <select id="start_server_game_config_id" name="server_game_config_id" required>
+                        <option value="">Select a config</option>
+                        {{range .ServerConfigs}}
+                        <option value="{{.ServerGameConfigId}}">Config #{{.GameConfigId}} (SGC {{.ServerGameConfigId}})</option>
+                        {{end}}
+                    </select>
+                    <small style="color: #666;">Only configs for the selected server</small>
+                </div>
+            </div>
+            <input type="hidden" name="server_id" value="{{.SelectedServerID}}">
+            <div style="margin-top: 0.5rem;">
+                <button type="submit" class="btn btn-success">Start Session</button>
+            </div>
+        </form>
+    </div>
+
+    {{if .ServerConfigs}}
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title">Server Config Status</div>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Server Game Config</th>
+                    <th>Status</th>
+                    <th>Live Session</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .ServerConfigs}}
+                <tr>
+                    <td>SGC {{.ServerGameConfigId}} (GameConfig {{.GameConfigId}})</td>
+                    <td>{{.Status}}</td>
+                    <td>
+                        {{if $.LiveSessionByConfig}}
+                            {{with index $.LiveSessionByConfig .ServerGameConfigId}}
+                                <a href="/sessions/{{.SessionId}}" class="btn btn-sm btn-primary">View Live Session</a>
+                            {{else}}
+                                <span class="badge badge-secondary">None</span>
+                            {{end}}
+                        {{else}}
+                            <span class="badge badge-secondary">None</span>
+                        {{end}}
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+    {{end}}
 </div>
 
 {{if .Sessions}}

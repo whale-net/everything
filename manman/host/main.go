@@ -234,7 +234,13 @@ func (h *CommandHandlerImpl) HandleStopSession(ctx context.Context, cmd *rmq.Sto
 	}
 
 	if err := h.sessionManager.StopSession(ctx, cmd.SessionID, cmd.Force); err != nil {
-		return fmt.Errorf("failed to stop session: %w", err)
+		// If session is not found, it means it's already stopped/removed (e.g. by StartSession failure)
+		// We should still publish "stopped" status to ensure lifecycle completion
+		if strings.Contains(err.Error(), "not found") {
+			log.Printf("Session %d not found during stop (race condition handled), proceeding to mark as stopped", cmd.SessionID)
+		} else {
+			return fmt.Errorf("failed to stop session: %w", err)
+		}
 	}
 
 	// Publish stopped status after container is stopped

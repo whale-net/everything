@@ -81,6 +81,8 @@ type Session struct {
 	Status               string     `db:"status"`
 	Parameters           JSONB      `db:"parameters"`
 	RestoredFromBackupID *int64     `db:"restored_from_backup_id"`
+	CreatedAt            time.Time  `db:"created_at"`
+	UpdatedAt            time.Time  `db:"updated_at"`
 }
 
 // ServerPort represents port allocation tracking at server level
@@ -240,6 +242,7 @@ const (
 	SessionStatusStopping  = "stopping"
 	SessionStatusStopped   = "stopped"
 	SessionStatusCrashed   = "crashed"
+	SessionStatusLost      = "lost"
 	SessionStatusCompleted = "completed"
 
 	ProtocolTCP = "TCP"

@@ -68,6 +68,7 @@ type SessionRepository interface {
 	UpdateStatus(ctx context.Context, sessionID int64, status string) error
 	UpdateSessionStart(ctx context.Context, sessionID int64, startedAt time.Time) error
 	UpdateSessionEnd(ctx context.Context, sessionID int64, status string, endedAt time.Time, exitCode *int) error
+	GetStaleSessions(ctx context.Context, threshold time.Duration) ([]*manman.Session, error)
 }
 
 // ServerCapabilityRepository defines operations for ServerCapability entities

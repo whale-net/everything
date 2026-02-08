@@ -62,7 +62,11 @@
                     {{else}}-{{end}}
                 </td>
                 <td>
-                    <button class="btn btn-sm btn-secondary">View Sessions</button>
+                    <a href="/sessions?server_game_config_id={{.ServerGameConfigId}}" class="btn btn-sm btn-secondary">View Sessions</a>
+                    <form method="POST" action="/sessions/start" style="display: inline;">
+                        <input type="hidden" name="server_game_config_id" value="{{.ServerGameConfigId}}">
+                        <button type="submit" class="btn btn-sm btn-success">Start Session</button>
+                    </form>
                 </td>
             </tr>
             {{end}}

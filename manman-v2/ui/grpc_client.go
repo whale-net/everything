@@ -209,3 +209,15 @@ func (c *ControlClient) StopSession(ctx context.Context, sessionID int64) (*manm
 	}
 	return resp.Session, nil
 }
+
+// StartSession starts a new session for a server game config.
+func (c *ControlClient) StartSession(ctx context.Context, serverGameConfigID int64, parameters map[string]string) (*manmanpb.Session, error) {
+	resp, err := c.api.StartSession(ctx, &manmanpb.StartSessionRequest{
+		ServerGameConfigId: serverGameConfigID,
+		Parameters:         parameters,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to start session: %w", err)
+	}
+	return resp.Session, nil
+}
