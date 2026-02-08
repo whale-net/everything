@@ -61,7 +61,7 @@ func run() error {
 	defer rmqConn.Close()
 
 	// Initialize session manager
-	sessionManager := session.NewSessionManager(dockerClient)
+	sessionManager := session.NewSessionManager(dockerClient, environment)
 
 	// Recover orphaned sessions on startup
 	log.Println("Recovering orphaned sessions...")

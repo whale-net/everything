@@ -330,15 +330,15 @@ The host manager will use these credentials automatically.
 
 ### Volume Mounts
 
-ManManV2 mounts `/data/{session_id}/game` to the container. Map this to the image's expected path:
+ManManV2 mounts `/data/gsc-{env}-{sgc_id}` to the container. Map this to the image's expected path:
 
 **Minecraft (`itzg/minecraft-server`):**
 - Image expects: `/data`
-- Mount: `/data/{session_id}/game:/data`
+- Mount: `/data/gsc-{env}-{sgc_id}:/data`
 
 **Valheim (`lloesche/valheim-server`):**
 - Image expects: `/config`
-- Mount: `/data/{session_id}/game:/config`
+- Mount: `/data/gsc-{env}-{sgc_id}:/config`
 
 ### File Templates
 
@@ -433,7 +433,7 @@ docker logs manmanv2-wrapper-{session_id}
 Some images run as specific users. Ensure data directory permissions match:
 
 ```bash
-chown -R 1000:1000 /data/{session_id}/game
+chown -R 1000:1000 /data/gsc-{sgc_id}
 ```
 
 ### Port Conflicts

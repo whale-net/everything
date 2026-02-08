@@ -11,13 +11,14 @@ import (
 // RecoverOrphanedSessions recovers sessions from existing game containers.
 // It looks for game containers directly — no wrapper involved.
 func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID int64) error {
-	fmt.Printf("Starting orphan recovery for server %d\n", serverID)
+	fmt.Printf("Starting orphan recovery for server %d (env=%s)\n", serverID, sm.environment)
 
-	// 1. Find all game containers. Filter by server_id if the label is present
-	// (containers created after this change); fall back to scanning all game
-	// containers and skipping those belonging to other servers.
+	// 1. Find all game containers. Filter by server_id and environment if the label is present
 	gameFilters := map[string]string{
 		"manman.type": "game",
+	}
+	if sm.environment != "" {
+		gameFilters["manman.environment"] = sm.environment
 	}
 	games, err := sm.dockerClient.ListContainers(ctx, gameFilters)
 	if err != nil {
@@ -31,6 +32,13 @@ func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID 
 		if err != nil {
 			fmt.Printf("Warning: Failed to get status for game container %s: %v\n", game.ID, err)
 			continue
+		}
+
+		// Double check environment label
+		if sm.environment != "" {
+			if env, ok := status.Labels["manman.environment"]; !ok || env != sm.environment {
+				continue
+			}
 		}
 
 		// If server_id label is present and doesn't match, skip
@@ -64,7 +72,7 @@ func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID 
 				continue
 			}
 
-			networkName := fmt.Sprintf("session-%d", sessionID)
+			networkName := sm.getNetworkName(sessionID)
 			state := &State{
 				SessionID:       sessionID,
 				SGCID:           sgcID,
