@@ -35,3 +35,28 @@ release_app(
     app_type = "worker",
     replicas = 1,
 )
+
+# ==============================================================================
+# Integration Tests
+# ==============================================================================
+
+# Containerized deployment integration test
+# Tests the full host manager lifecycle when running in a Docker container
+sh_test(
+    name = "containerized_deployment_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["//manman-v2/scripts:test-containerized-flow.sh"],
+    data = [
+        ":host-manager_image",
+        "//manman/wrapper:manmanv2-wrapper_image",
+    ],
+    tags = [
+        "containerized",  # Requires containerized environment
+        "docker",  # Requires Docker daemon
+        "integration",  # Integration test, not unit test
+        "manual",  # Don't run with bazel test //... (requires infra)
+        "no-cache",  # Always run, never cache results
+        "requires-network",  # Needs network access for RabbitMQ/API
+    ],
+)
