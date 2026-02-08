@@ -89,6 +89,7 @@ go.work.sum
 # IDEs and editors
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 *~
