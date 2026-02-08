@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -199,6 +200,12 @@ func (sm *SessionManager) SendInput(ctx context.Context, sessionID int64, input 
 
 // createGameContainer creates the game container directly
 func (sm *SessionManager) createGameContainer(ctx context.Context, state *State, cmd *StartSessionCommand) (string, error) {
+	// Create session data directory if it doesn't exist
+	sessionDataDir := fmt.Sprintf("/data/session-%d", state.SessionID)
+	if err := os.MkdirAll(sessionDataDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create session data directory: %w", err)
+	}
+
 	config := docker.ContainerConfig{
 		Image:     cmd.Image,
 		Name:      fmt.Sprintf("game-%d-%d", cmd.ServerID, cmd.SGCID),
