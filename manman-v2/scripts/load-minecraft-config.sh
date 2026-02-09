@@ -3,20 +3,93 @@ set -euo pipefail
 
 # Load an itzg/minecraft-server GameConfig with defaults for local testing.
 # Requires: grpcurl, python3
+#
+# Usage: ./scripts/load-minecraft-config.sh [OPTIONS]
+#
+# Options:
+#   --grpc-url=HOST:PORT      GRPC API endpoint (default: localhost:50052)
+#   --api-endpoint=HOST:PORT  Alias for --grpc-url
+#   --game-name=NAME          Game name (default: Minecraft)
+#   --config-name=NAME        Config name (default: Vanilla)
+#   --image=IMAGE             Docker image (default: itzg/minecraft-server:latest)
+#   --tls                     Use TLS for GRPC connection (auto-detected for port 443)
+#   --insecure                Use insecure TLS (skip certificate verification)
+#   --help                    Show this help message
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+# Default values (can be overridden by env vars or CLI args)
 CONTROL_API_ADDR="${CONTROL_API_ADDR:-localhost:50052}"
-GAME_NAME="Minecraft"
-GAME_CONFIG_NAME="Vanilla"
-IMAGE="itzg/minecraft-server:latest"
+GAME_NAME="${GAME_NAME:-Minecraft}"
+GAME_CONFIG_NAME="${GAME_CONFIG_NAME:-Vanilla}"
+IMAGE="${IMAGE:-itzg/minecraft-server:latest}"
+USE_TLS="${USE_TLS:-auto}"
+INSECURE_TLS="${INSECURE_TLS:-false}"
+
+# Parse arguments
+for arg in "$@"; do
+  case $arg in
+    --grpc-url=*|--api-endpoint=*)
+      CONTROL_API_ADDR="${arg#*=}"
+      shift
+      ;;
+    --game-name=*)
+      GAME_NAME="${arg#*=}"
+      shift
+      ;;
+    --config-name=*)
+      GAME_CONFIG_NAME="${arg#*=}"
+      shift
+      ;;
+    --image=*)
+      IMAGE="${arg#*=}"
+      shift
+      ;;
+    --tls)
+      USE_TLS="true"
+      shift
+      ;;
+    --insecure)
+      INSECURE_TLS="true"
+      shift
+      ;;
+    --help)
+      head -n 17 "$0" | tail -n +4 | sed 's/^# //' | sed 's/^#$//'
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $arg"
+      echo "Run with --help for usage information"
+      exit 1
+      ;;
+  esac
+done
+
+# Auto-detect TLS based on port (443 = TLS)
+if [[ "${USE_TLS}" == "auto" ]]; then
+  if [[ "${CONTROL_API_ADDR}" =~ :443$ ]]; then
+    USE_TLS="true"
+  else
+    USE_TLS="false"
+  fi
+fi
 
 grpc_call() {
   local addr="$1"
   local method="$2"
   local data="$3"
-  grpcurl -plaintext \
+
+  local tls_flags=""
+  if [[ "${USE_TLS}" == "true" ]]; then
+    if [[ "${INSECURE_TLS}" == "true" ]]; then
+      tls_flags="-insecure"
+    fi
+  else
+    tls_flags="-plaintext"
+  fi
+
+  grpcurl ${tls_flags} \
     -import-path "${REPO_ROOT}" \
     -proto "${REPO_ROOT}/manman/protos/api.proto" \
     -proto "${REPO_ROOT}/manman/protos/messages.proto" \
@@ -24,10 +97,45 @@ grpc_call() {
     "${addr}" "${method}"
 }
 
-echo "Using control API: ${CONTROL_API_ADDR}"
-echo "Game: ${GAME_NAME}"
-echo "Config: ${GAME_CONFIG_NAME}"
-echo "Image: ${IMAGE}"
+echo ""
+echo "════════════════════════════════════════════════════"
+echo "  Loading Minecraft Configuration"
+echo "════════════════════════════════════════════════════"
+echo "GRPC API:  ${CONTROL_API_ADDR}"
+echo "TLS:       ${USE_TLS}"
+echo "Game:      ${GAME_NAME}"
+echo "Config:    ${GAME_CONFIG_NAME}"
+echo "Image:     ${IMAGE}"
+echo ""
+
+# Check for grpcurl
+if ! command -v grpcurl &> /dev/null; then
+  echo "Error: grpcurl is not installed"
+  echo "Install with: brew install grpcurl (macOS) or go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest"
+  exit 1
+fi
+
+# Test API connectivity
+echo "Testing API connectivity..."
+TLS_FLAGS=""
+if [[ "${USE_TLS}" == "true" ]]; then
+  if [[ "${INSECURE_TLS}" == "true" ]]; then
+    TLS_FLAGS="-insecure"
+  fi
+else
+  TLS_FLAGS="-plaintext"
+fi
+
+if ! grpcurl ${TLS_FLAGS} "${CONTROL_API_ADDR}" list manman.v1.ManManAPI &> /dev/null; then
+  echo "✗ Cannot connect to API at ${CONTROL_API_ADDR}"
+  echo "Make sure the control plane is running and accessible"
+  if [[ "${USE_TLS}" == "false" ]]; then
+    echo "Hint: If the endpoint uses TLS, try adding --tls flag"
+  fi
+  exit 1
+fi
+echo "✓ API is reachable"
+echo ""
 
 find_game_id_by_name() {
   local target_name="${1}"
@@ -206,8 +314,14 @@ create_strategy_payload="$(cat <<EOF
 }
 EOF
 )"
-echo "Creating volume strategy..."
-grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateConfigurationStrategy" "${create_strategy_payload}" 2>&1 | grep -v "already exists" || true
+strategy_result="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateConfigurationStrategy" "${create_strategy_payload}" 2>&1 || true)"
+if echo "${strategy_result}" | grep -q "duplicate key\|already exists"; then
+  echo "  Volume strategy 'data' already exists (skipped)"
+elif echo "${strategy_result}" | grep -q "strategy"; then
+  echo "  ✔ Created volume strategy 'data'"
+else
+  echo "  Warning: Unexpected response from volume strategy creation"
+fi
 
 if [[ -z "${config_id}" ]]; then
   echo "Config already exists or create failed; re-listing..."
@@ -257,9 +371,22 @@ if [[ -z "${sgc_id}" ]]; then
 }
 EOF
 )"
-  deploy_json="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/DeployGameConfig" "${deploy_payload}")"
-  sgc_id="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); config=data.get("config", {}); print(config.get("serverGameConfigId") or config.get("sgc_id") or "")' <<< "${deploy_json}")"
-  echo "✔ Deployed to server as SGC ID: ${sgc_id}"
+  deploy_json="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/DeployGameConfig" "${deploy_payload}" 2>&1 || true)"
+
+  if echo "${deploy_json}" | grep -qi "error\|failed"; then
+    echo "  ⚠️  Deploy failed (may already exist or port conflict)"
+    echo "  Checking if SGC was created..."
+    sgc_id="$(find_sgc_id)"
+    if [[ -n "${sgc_id}" ]]; then
+      echo "  ✔ Found existing SGC ID: ${sgc_id}"
+    else
+      echo "  ✗ Could not find or create SGC"
+      echo "  Error details: $(echo "${deploy_json}" | head -5)"
+    fi
+  else
+    sgc_id="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); config=data.get("config", {}); print(config.get("serverGameConfigId") or config.get("sgc_id") or "")' <<< "${deploy_json}")"
+    echo "  ✔ Deployed to server as SGC ID: ${sgc_id}"
+  fi
 else
   echo "Config already deployed as SGC ID: ${sgc_id}"
   echo "Updating port bindings..."
@@ -277,28 +404,31 @@ else
 }
 EOF
 )"
-  grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/UpdateServerGameConfig" "${update_payload}" >/dev/null
-  echo "✔ Port bindings updated"
+  update_result="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/UpdateServerGameConfig" "${update_payload}" 2>&1 || true)"
+  if echo "${update_result}" | grep -qi "error"; then
+    echo "  ⚠️  Update failed (SGC may be unchanged)"
+  else
+    echo "  ✔ Port bindings updated"
+  fi
 fi
 
 echo ""
-echo "Creating server.properties configuration strategy..."
+echo "Ensuring server.properties configuration strategy exists..."
 
-# First, check if strategy already exists and delete it
-existing_strategies="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/ListConfigurationStrategies" "{\"game_id\": ${game_id}}")"
+# First, check if strategy already exists
+existing_strategies="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/ListConfigurationStrategies" "{\"game_id\": ${game_id}}" 2>&1 || true)"
 existing_id="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); strategies=data.get("strategies", []);
 for s in strategies:
     if s.get("name") == "server.properties":
         print(s.get("strategyId") or "")
-        break' <<< "${existing_strategies}")"
+        break' <<< "${existing_strategies}" 2>/dev/null || true)"
 
 if [[ -n "${existing_id}" && "${existing_id}" != "null" ]]; then
-  echo "  Deleting existing server.properties strategy (ID: ${existing_id})..."
-  grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/DeleteConfigurationStrategy" "{\"strategy_id\": ${existing_id}}" >/dev/null
-fi
-
-# Create new strategy with empty base_template (merge mode)
-server_props_strategy_payload="$(cat <<EOF
+  echo "  Found existing server.properties strategy (ID: ${existing_id})"
+  strategy_id="${existing_id}"
+else
+  # Create new strategy with empty base_template (merge mode)
+  server_props_strategy_payload="$(cat <<EOF
 {
   "game_id": ${game_id},
   "name": "server.properties",
@@ -310,27 +440,40 @@ server_props_strategy_payload="$(cat <<EOF
 EOF
 )"
 
-strategy_resp="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateConfigurationStrategy" "${server_props_strategy_payload}")"
-strategy_id="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); strategy=data.get("strategy", {}); print(strategy.get("strategyId") or "")' <<< "${strategy_resp}")"
+  strategy_resp="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateConfigurationStrategy" "${server_props_strategy_payload}" 2>&1 || true)"
 
-if [[ -n "${strategy_id}" && "${strategy_id}" != "null" ]]; then
-  echo "✔ Created server.properties strategy with empty base_template (ID: ${strategy_id})"
-else
-  echo "❌ Failed to create server.properties strategy"
-  exit 1
+  if echo "${strategy_resp}" | grep -qi "duplicate key\|already exists"; then
+    echo "  Strategy already exists, fetching ID..."
+    existing_strategies="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/ListConfigurationStrategies" "{\"game_id\": ${game_id}}" 2>&1 || true)"
+    strategy_id="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); strategies=data.get("strategies", []);
+for s in strategies:
+    if s.get("name") == "server.properties":
+        print(s.get("strategyId") or "")
+        break' <<< "${existing_strategies}" 2>/dev/null || true)"
+  else
+    strategy_id="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); strategy=data.get("strategy", {}); print(strategy.get("strategyId") or "")' <<< "${strategy_resp}" 2>/dev/null || true)"
+  fi
+
+  if [[ -n "${strategy_id}" && "${strategy_id}" != "null" ]]; then
+    echo "  ✔ Server.properties strategy ready (ID: ${strategy_id})"
+  else
+    echo "  ⚠️  Could not create or find server.properties strategy (skipping patches)"
+    strategy_id=""
+  fi
 fi
 
-echo ""
-echo "Creating configuration patches for GameConfig..."
+if [[ -n "${strategy_id}" && "${strategy_id}" != "null" ]]; then
+  echo ""
+  echo "Creating configuration patches..."
 
-# Create patch at game_config level with base Minecraft settings
-patch_content="online-mode=true
+  # Create patch at game_config level with base Minecraft settings
+  patch_content="online-mode=true
 max-players=20
 difficulty=normal
 pvp=true
 motd=ManManV2 Minecraft Server"
 
-create_patch_payload="$(cat <<EOF
+  create_patch_payload="$(cat <<EOF
 {
   "strategy_id": ${strategy_id},
   "patch_level": "game_config",
@@ -341,22 +484,21 @@ create_patch_payload="$(cat <<EOF
 EOF
 )"
 
-patch_resp="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateConfigurationPatch" "${create_patch_payload}" 2>&1 || true)"
+  patch_resp="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateConfigurationPatch" "${create_patch_payload}" 2>&1 || true)"
 
-if echo "${patch_resp}" | grep -q "patch"; then
-  echo "✔ Created game_config patch with base Minecraft settings"
-else
-  # Patch might already exist, try to get existing one
-  echo "  Patch may already exist or create failed"
-fi
+  if echo "${patch_resp}" | grep -q "patch"; then
+    echo "  ✔ Created game_config patch with base Minecraft settings"
+  elif echo "${patch_resp}" | grep -qi "duplicate\|already exists"; then
+    echo "  Game_config patch already exists (skipped)"
+  else
+    echo "  ⚠️  Could not create game_config patch"
+  fi
 
-echo ""
-echo "Creating ServerGameConfig override patch..."
+  # Create patch at server_game_config level to override MOTD (only if SGC exists)
+  if [[ -n "${sgc_id}" && "${sgc_id}" != "null" ]]; then
+    sgc_patch_content="motd=ManManV2 Dev Server - SGC Override"
 
-# Create patch at server_game_config level to override MOTD
-sgc_patch_content="motd=ManManV2 Dev Server - SGC Override"
-
-create_sgc_patch_payload="$(cat <<EOF
+    create_sgc_patch_payload="$(cat <<EOF
 {
   "strategy_id": ${strategy_id},
   "patch_level": "server_game_config",
@@ -367,21 +509,38 @@ create_sgc_patch_payload="$(cat <<EOF
 EOF
 )"
 
-sgc_patch_resp="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateConfigurationPatch" "${create_sgc_patch_payload}" 2>&1 || true)"
+    sgc_patch_resp="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateConfigurationPatch" "${create_sgc_patch_payload}" 2>&1 || true)"
 
-if echo "${sgc_patch_resp}" | grep -q "patch"; then
-  echo "✔ Created server_game_config patch to override MOTD"
+    if echo "${sgc_patch_resp}" | grep -q "patch"; then
+      echo "  ✔ Created server_game_config patch to override MOTD"
+    elif echo "${sgc_patch_resp}" | grep -qi "duplicate\|already exists"; then
+      echo "  Server_game_config patch already exists (skipped)"
+    else
+      echo "  ⚠️  Could not create server_game_config patch"
+    fi
+  else
+    echo "  ⚠️  No SGC ID available, skipping SGC patch"
+  fi
 else
-  echo "  SGC patch may already exist or create failed"
+  echo "  ⚠️  No strategy ID available, skipping all patches"
 fi
 
 echo ""
-echo "✔ Setup complete! You can now start sessions."
+echo "✔ Setup complete!"
 echo ""
-echo "Configuration cascade:"
-echo "  Game: Defines strategy (server.properties at /data/server.properties)"
-echo "  GameConfig: Sets base values (online-mode=true, max-players=20, motd=ManManV2 Minecraft Server)"
-echo "  ServerGameConfig #${sgc_id}: Overrides motd (motd=ManManV2 Dev Server - SGC Override)"
+echo "Summary:"
+echo "  Game ID:   ${game_id}"
+echo "  Config ID: ${config_id}"
+if [[ -n "${sgc_id}" && "${sgc_id}" != "null" ]]; then
+  echo "  SGC ID:    ${sgc_id}"
+  echo ""
+  echo "Configuration cascade:"
+  echo "  Game: Defines strategies (volume, server.properties)"
+  echo "  GameConfig: Sets base values (online-mode, max-players, motd)"
+  echo "  ServerGameConfig #${sgc_id}: Overrides motd (if patches created)"
+else
+  echo "  SGC ID:    (not created - may already exist or port conflict)"
+fi
 echo ""
 echo "⚠️  Note: The itzg/minecraft-server image regenerates server.properties on startup,"
 echo "   which overwrites file patches. Consider using environment variable strategy instead."
