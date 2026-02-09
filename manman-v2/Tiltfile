@@ -144,6 +144,11 @@ APPS = {
         'bazel_target': '//manman/processor:event-processor_image_load',
         'image_name': 'manmanv2-event-processor',
     },
+    'log-processor': {
+        'enabled_env': 'ENABLE_MANMANV2_LOG_PROCESSOR',
+        'bazel_target': '//manman/log-processor:log-processor_image_load',
+        'image_name': 'manmanv2-log-processor',
+    },
     'ui': {
         'enabled_env': 'ENABLE_MANMANV2_UI',
         'bazel_target': '//manman-v2/ui:manmanv2-ui_image_load',
@@ -367,6 +372,67 @@ spec:
         labels=['manmanv2-control-plane']
     )
 
+# Log Processor (Real-time log streaming)
+if get_env_bool('ENABLE_MANMANV2_LOG_PROCESSOR', default='true'):
+    k8s_yaml(blob("""
+apiVersion: v1
+kind: Service
+metadata:
+  name: manmanv2-log-processor
+  namespace: {namespace}
+spec:
+  selector:
+    app: manmanv2-log-processor
+  ports:
+    - name: grpc
+      port: 50053
+      targetPort: 50053
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: manmanv2-log-processor
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: manmanv2-log-processor
+  template:
+    metadata:
+      labels:
+        app: manmanv2-log-processor
+    spec:
+      containers:
+      - name: log-processor
+        image: manmanv2-log-processor
+        ports:
+        - containerPort: 50053
+          name: grpc
+        env:
+        - name: RABBITMQ_URL
+          value: "{rabbitmq_url}"
+        - name: GRPC_PORT
+          value: "50053"
+        - name: LOG_BUFFER_TTL
+          value: "180"
+        - name: LOG_BUFFER_MAX_MESSAGES
+          value: "500"
+        - name: DEBUG_LOG_OUTPUT
+          value: "false"
+""".format(
+        namespace=namespace,
+        rabbitmq_url=rabbitmq_url,
+    )))
+
+    k8s_resource(
+        'manmanv2-log-processor',
+        resource_deps=['rabbitmq-vhost-setup'],
+        port_forwards=['50053:50053'],
+        labels=['manmanv2-control-plane']
+    )
+    print("📡 Log-processor forwarded to localhost:50053 (gRPC)")
+
 # Management UI (HTMX + gRPC)
 if get_env_bool('ENABLE_MANMANV2_UI', default='true'):
     k8s_yaml(blob("""
@@ -415,11 +481,18 @@ spec:
           value: "dev-secret-key"
         - name: CONTROL_API_URL
           value: "manmanv2-api.{namespace}.svc.cluster.local:50051"
+        - name: LOG_PROCESSOR_URL
+          value: "manmanv2-log-processor.{namespace}.svc.cluster.local:50053"
 """.format(namespace=namespace)))
+
+    # Build dependency list for UI
+    ui_deps = ['manmanv2-api']
+    if get_env_bool('ENABLE_MANMANV2_LOG_PROCESSOR', default='true'):
+        ui_deps.append('manmanv2-log-processor')
 
     k8s_resource(
         'manmanv2-ui',
-        resource_deps=['manmanv2-api'],
+        resource_deps=ui_deps,
         port_forwards=['8080:8000'],
         labels=['manmanv2-control-plane']
     )
@@ -432,13 +505,14 @@ spec:
 print("\n" + "="*60)
 print("📡 Access Information")
 print("="*60)
-print("  PostgreSQL:    localhost:5432 (user: postgres, pass: password)")
-print("  RabbitMQ:      localhost:5672 (user: rabbit, pass: password)")
-print("  RabbitMQ Mgmt: http://localhost:15672")
-print("  MinIO API:     http://localhost:9000 (access: minioadmin, secret: minioadmin)")
-print("  MinIO Console: http://localhost:9001")
-print("  API (gRPC):    localhost:50052")
-print("  UI (Web):      http://localhost:8080")
+print("  PostgreSQL:      localhost:5432 (user: postgres, pass: password)")
+print("  RabbitMQ:        localhost:5672 (user: rabbit, pass: password)")
+print("  RabbitMQ Mgmt:   http://localhost:15672")
+print("  MinIO API:       http://localhost:9000 (access: minioadmin, secret: minioadmin)")
+print("  MinIO Console:   http://localhost:9001")
+print("  API (gRPC):      localhost:50052")
+print("  Log-Processor:   localhost:50053 (gRPC)")
+print("  UI (Web):        http://localhost:8080")
 print("")
 print("🏃 Host Manager:")
 print("  Run separately on bare metal - see README-HOST.md")
