@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -397,6 +398,14 @@ func (sm *SessionManager) createGameContainer(ctx context.Context, state *State,
 
 		// Host-side path for Docker
 		hostPath := filepath.Join(gscHostDataDir, strings.TrimPrefix(subDir, "/"))
+
+		// Create the directory if it doesn't exist
+		// This works because HOST_DATA_DIR is mounted from the host at the same path,
+		// so directories created here exist on the host filesystem for Docker bind mounts
+		if err := os.MkdirAll(hostPath, 0755); err != nil {
+			return "", fmt.Errorf("failed to create volume directory %s: %w", hostPath, err)
+		}
+
 		mountStr := fmt.Sprintf("%s:%s", hostPath, vol.ContainerPath)
 		// TODO: handle options (readonly etc)
 		volumes = append(volumes, mountStr)
