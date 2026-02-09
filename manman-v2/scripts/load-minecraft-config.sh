@@ -12,6 +12,8 @@ set -euo pipefail
 #   --game-name=NAME          Game name (default: Minecraft)
 #   --config-name=NAME        Config name (default: Vanilla)
 #   --image=IMAGE             Docker image (default: itzg/minecraft-server:latest)
+#   --tls                     Use TLS for GRPC connection (auto-detected for port 443)
+#   --insecure                Use insecure TLS (skip certificate verification)
 #   --help                    Show this help message
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,6 +24,8 @@ CONTROL_API_ADDR="${CONTROL_API_ADDR:-localhost:50052}"
 GAME_NAME="${GAME_NAME:-Minecraft}"
 GAME_CONFIG_NAME="${GAME_CONFIG_NAME:-Vanilla}"
 IMAGE="${IMAGE:-itzg/minecraft-server:latest}"
+USE_TLS="${USE_TLS:-auto}"
+INSECURE_TLS="${INSECURE_TLS:-false}"
 
 # Parse arguments
 for arg in "$@"; do
@@ -42,8 +46,16 @@ for arg in "$@"; do
       IMAGE="${arg#*=}"
       shift
       ;;
+    --tls)
+      USE_TLS="true"
+      shift
+      ;;
+    --insecure)
+      INSECURE_TLS="true"
+      shift
+      ;;
     --help)
-      head -n 15 "$0" | tail -n +4 | sed 's/^# //' | sed 's/^#$//'
+      head -n 17 "$0" | tail -n +4 | sed 's/^# //' | sed 's/^#$//'
       exit 0
       ;;
     *)
@@ -54,11 +66,30 @@ for arg in "$@"; do
   esac
 done
 
+# Auto-detect TLS based on port (443 = TLS)
+if [[ "${USE_TLS}" == "auto" ]]; then
+  if [[ "${CONTROL_API_ADDR}" =~ :443$ ]]; then
+    USE_TLS="true"
+  else
+    USE_TLS="false"
+  fi
+fi
+
 grpc_call() {
   local addr="$1"
   local method="$2"
   local data="$3"
-  grpcurl -plaintext \
+
+  local tls_flags=""
+  if [[ "${USE_TLS}" == "true" ]]; then
+    if [[ "${INSECURE_TLS}" == "true" ]]; then
+      tls_flags="-insecure"
+    fi
+  else
+    tls_flags="-plaintext"
+  fi
+
+  grpcurl ${tls_flags} \
     -import-path "${REPO_ROOT}" \
     -proto "${REPO_ROOT}/manman/protos/api.proto" \
     -proto "${REPO_ROOT}/manman/protos/messages.proto" \
@@ -71,6 +102,7 @@ echo "════════════════════════�
 echo "  Loading Minecraft Configuration"
 echo "════════════════════════════════════════════════════"
 echo "GRPC API:  ${CONTROL_API_ADDR}"
+echo "TLS:       ${USE_TLS}"
 echo "Game:      ${GAME_NAME}"
 echo "Config:    ${GAME_CONFIG_NAME}"
 echo "Image:     ${IMAGE}"
@@ -85,9 +117,21 @@ fi
 
 # Test API connectivity
 echo "Testing API connectivity..."
-if ! grpcurl -plaintext "${CONTROL_API_ADDR}" list manman.v1.ManManAPI &> /dev/null; then
+TLS_FLAGS=""
+if [[ "${USE_TLS}" == "true" ]]; then
+  if [[ "${INSECURE_TLS}" == "true" ]]; then
+    TLS_FLAGS="-insecure"
+  fi
+else
+  TLS_FLAGS="-plaintext"
+fi
+
+if ! grpcurl ${TLS_FLAGS} "${CONTROL_API_ADDR}" list manman.v1.ManManAPI &> /dev/null; then
   echo "✗ Cannot connect to API at ${CONTROL_API_ADDR}"
   echo "Make sure the control plane is running and accessible"
+  if [[ "${USE_TLS}" == "false" ]]; then
+    echo "Hint: If the endpoint uses TLS, try adding --tls flag"
+  fi
   exit 1
 fi
 echo "✓ API is reachable"
