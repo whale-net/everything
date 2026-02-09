@@ -313,6 +313,10 @@ apps:
     ingress:
       host: my-api.example.com
       tlsSecretName: my-api-tls  # Will become my-api-tls-prod
+      annotations:
+        # Per-app annotations (merged with ingressDefaults.annotations)
+        nginx.ingress.kubernetes.io/backend-protocol: "GRPC"
+        nginx.ingress.kubernetes.io/grpc-backend: "true"
 
 # Default settings applied to all ingresses (one ingress per external-api)
 ingressDefaults:
@@ -323,6 +327,51 @@ ingressDefaults:
 ```
 
 **Note**: Each external-api app gets its own dedicated Ingress resource. TLS secret names automatically include the environment suffix (e.g., `my-api-tls-prod`).
+
+### Per-App Ingress Annotations
+
+You can specify annotations at two levels:
+
+1. **Global annotations** (`ingressDefaults.annotations`) - Applied to all ingresses
+2. **Per-app annotations** (`apps.{app_name}.ingress.annotations`) - Applied to specific app's ingress
+
+Per-app annotations are merged with global annotations. If the same annotation key appears in both, the per-app value takes precedence.
+
+**Example Use Case: Mixed gRPC and HTTP Services**
+
+```yaml
+# Global annotations for all services
+ingressDefaults:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    external-dns.alpha.kubernetes.io/ttl: "120"
+
+apps:
+  # gRPC API - needs gRPC protocol annotation
+  my_grpc_api:
+    type: external-api
+    port: 8080
+    ingress:
+      host: grpc-api.example.com
+      annotations:
+        nginx.ingress.kubernetes.io/backend-protocol: "GRPC"
+        nginx.ingress.kubernetes.io/grpc-backend: "true"
+
+  # HTTP Web UI - needs HTTP protocol (or no protocol annotation)
+  my_web_ui:
+    type: external-api
+    port: 3000
+    ingress:
+      host: ui.example.com
+      annotations:
+        nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+```
+
+This configuration results in:
+- **my_grpc_api** ingress gets: cert-manager, external-dns, AND gRPC-specific annotations
+- **my_web_ui** ingress gets: cert-manager, external-dns, AND HTTP-specific annotations
 
 ---
 
