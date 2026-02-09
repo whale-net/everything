@@ -19,12 +19,18 @@ import (
 	pb "github.com/whale-net/everything/manman/protos"
 )
 
+const (
+	// internalDataDir is the well-known path inside this container where session data is stored
+	// The host's data directory should be mounted here
+	internalDataDir = "/var/lib/manman/sessions"
+)
+
 // SessionManager manages the lifecycle of game server sessions
 type SessionManager struct {
 	dockerClient *docker.Client
 	stateManager *Manager
 	environment  string
-	hostDataDir  string // Path as seen by the Docker daemon (host-side)
+	hostDataDir  string // Path on the host where session data lives (for Docker bind mounts)
 	grpcClient   pb.ManManAPIClient
 	renderer     *config.Renderer
 }
@@ -75,7 +81,17 @@ func (sm *SessionManager) getNetworkName(sessionID int64) string {
 	return fmt.Sprintf("session-%d", sessionID)
 }
 
-func (sm *SessionManager) getGSCHostDataDir(sgcID int64) string {
+// getSGCInternalDir returns the path to SGC data inside this container
+func (sm *SessionManager) getSGCInternalDir(sgcID int64) string {
+	dirName := fmt.Sprintf("sgc-%d", sgcID)
+	if sm.environment != "" {
+		dirName = fmt.Sprintf("sgc-%s-%d", sm.environment, sgcID)
+	}
+	return filepath.Join(internalDataDir, dirName)
+}
+
+// getSGCHostDir returns the path to SGC data on the host (for Docker bind mounts)
+func (sm *SessionManager) getSGCHostDir(sgcID int64) string {
 	dirName := fmt.Sprintf("sgc-%d", sgcID)
 	if sm.environment != "" {
 		dirName = fmt.Sprintf("sgc-%s-%d", sm.environment, sgcID)
@@ -187,8 +203,8 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 
 		// Render configurations
 		if len(configResp.Configurations) > 0 {
-			gscHostDataDir := sm.getGSCHostDataDir(cmd.SGCID)
-			renderedFiles, err := sm.renderer.RenderConfigurations(configResp.Configurations, gscHostDataDir)
+			sgcInternalDir := sm.getSGCInternalDir(cmd.SGCID)
+			renderedFiles, err := sm.renderer.RenderConfigurations(configResp.Configurations, sgcInternalDir)
 			if err != nil {
 				log.Printf("[session %d] error: failed to render configurations: %v", sessionID, err)
 				sm.cleanupSession(ctx, state)
@@ -380,8 +396,9 @@ func (sm *SessionManager) SendInput(ctx context.Context, sessionID int64, input 
 
 // createGameContainer creates the game container directly
 func (sm *SessionManager) createGameContainer(ctx context.Context, state *State, cmd *StartSessionCommand) (string, error) {
-	// Host-side root for this GSC (as seen by Docker)
-	gscHostDataDir := sm.getGSCHostDataDir(state.SGCID)
+	// Get paths for this SGC
+	sgcInternalDir := sm.getSGCInternalDir(state.SGCID) // Where to create dirs (inside this container)
+	sgcHostDir := sm.getSGCHostDir(state.SGCID)         // What to tell Docker (host path)
 
 	// Prepare volume mounts from configuration strategies
 	// Each volume creates a subdirectory under the SGC data dir (e.g., sgc-dev-1/data, sgc-dev-1/config)
@@ -396,16 +413,14 @@ func (sm *SessionManager) createGameContainer(ctx context.Context, state *State,
 			subDir = vol.Name
 		}
 
-		// Host-side path for Docker
-		hostPath := filepath.Join(gscHostDataDir, strings.TrimPrefix(subDir, "/"))
-
-		// Create the directory if it doesn't exist
-		// This works because HOST_DATA_DIR is mounted from the host at the same path,
-		// so directories created here exist on the host filesystem for Docker bind mounts
-		if err := os.MkdirAll(hostPath, 0755); err != nil {
-			return "", fmt.Errorf("failed to create volume directory %s: %w", hostPath, err)
+		// Create directory at internal path (mounted from host)
+		internalPath := filepath.Join(sgcInternalDir, strings.TrimPrefix(subDir, "/"))
+		if err := os.MkdirAll(internalPath, 0755); err != nil {
+			return "", fmt.Errorf("failed to create volume directory %s: %w", internalPath, err)
 		}
 
+		// Tell Docker to bind mount from host path
+		hostPath := filepath.Join(sgcHostDir, strings.TrimPrefix(subDir, "/"))
 		mountStr := fmt.Sprintf("%s:%s", hostPath, vol.ContainerPath)
 		// TODO: handle options (readonly etc)
 		volumes = append(volumes, mountStr)

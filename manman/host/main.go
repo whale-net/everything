@@ -35,10 +35,19 @@ func run() error {
 	apiAddress := getEnv("API_ADDRESS", "localhost:50051")
 	serverName := getEnv("SERVER_NAME", "")
 	environment := getEnv("ENVIRONMENT", "")
-	hostDataDir := os.Getenv("HOST_DATA_DIR") // Path as seen by Docker daemon (host side)
+
+	// HOST_DATA_DIR is the path on the host where session data is stored
+	// This container must have that path mounted at /var/lib/manman/sessions:
+	//   -v ${HOST_DATA_DIR}:/var/lib/manman/sessions
+	// Example: -v /home/manman_dev/manman-v2/manager-data:/var/lib/manman/sessions
+	//
+	// Why both paths are needed:
+	// - Internal path (/var/lib/manman/sessions): Where we create directories
+	// - Host path (HOST_DATA_DIR): What we tell Docker for game container bind mounts
+	hostDataDir := os.Getenv("HOST_DATA_DIR")
 
 	if hostDataDir == "" {
-		return fmt.Errorf("HOST_DATA_DIR must be provided (absolute path on host for game data)")
+		return fmt.Errorf("HOST_DATA_DIR must be provided (path on host where session data is stored, e.g., /home/manman_dev/manman-v2/manager-data)")
 	}
 
 	// Self-registration mode: Register with API and get server_id
