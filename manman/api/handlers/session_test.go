@@ -84,17 +84,28 @@ func (m *MockStrategyRepo) ListByGame(ctx context.Context, gameID int64) ([]*man
 	return []*manman.ConfigurationStrategy{}, nil
 }
 
+// MockServerPortRepo
+type MockServerPortRepo struct {
+	repository.ServerPortRepository
+}
+
+func (m *MockServerPortRepo) DeallocatePortsBySessionID(ctx context.Context, sessionID int64) error {
+	return nil
+}
+
 func TestStartSessionLifecycle(t *testing.T) {
 	sessionRepo := &MockSessionRepo{}
 	sgcRepo := &MockSGCRepo{}
 	gcRepo := &MockGCRepo{}
 	strategyRepo := &MockStrategyRepo{}
+	serverPortRepo := &MockServerPortRepo{}
 
 	repo := &repository.Repository{
 		Sessions:                sessionRepo,
 		ServerGameConfigs:       sgcRepo,
 		GameConfigs:             gcRepo,
 		ConfigurationStrategies: strategyRepo,
+		ServerPorts:             serverPortRepo,
 	}
 
 	h := &SessionHandler{

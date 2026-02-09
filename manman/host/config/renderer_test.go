@@ -421,3 +421,81 @@ motd=ManManV2 Minecraft Server`
 	t.Logf("   SGC Override: motd=ManManV2 Dev Server - SGC Override")
 	t.Logf("   Final: motd=%s", properties["motd"])
 }
+
+func TestServerGameConfigOverridesGameConfig(t *testing.T) {
+	// Focused test: When both GC and SGC set the same property, SGC MUST win
+	// This is the core requirement for the cascade system
+
+	// Scenario: Both patches set "server-name" property
+	gcPatch := "server-name=Production Server"
+	sgcPatch := "server-name=Dev Override"
+
+	// API concatenates: GC first, then SGC
+	cascaded := gcPatch + "\n" + sgcPatch
+
+	// Parse like the renderer does
+	properties := parsePropertiesFile(cascaded)
+
+	// CRITICAL: SGC value MUST override GC value
+	if properties["server-name"] != "Dev Override" {
+		t.Fatalf("SGC did NOT override GC! Expected 'Dev Override', got '%s'", properties["server-name"])
+	}
+
+	// Verify only one entry (deduplication)
+	lines := strings.Split(cascaded, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("Expected 2 input lines, got %d", len(lines))
+	}
+
+	// But map should have only 1 entry
+	if len(properties) != 1 {
+		t.Fatalf("Expected 1 deduplicated property, got %d", len(properties))
+	}
+
+	t.Logf("✅ SGC override test passed!")
+	t.Logf("   Input: %s", cascaded)
+	t.Logf("   Result: server-name=%s (SGC wins)", properties["server-name"])
+}
+
+func TestMultipleDuplicateKeysInCascade(t *testing.T) {
+	// Test multiple properties being overridden at different levels
+	// GC sets base values, SGC overrides some (not all)
+
+	gcPatch := `motd=Base MOTD
+max-players=10
+difficulty=easy
+pvp=false`
+
+	sgcPatch := `motd=Override MOTD
+max-players=50`
+
+	cascaded := gcPatch + "\n" + sgcPatch
+	properties := parsePropertiesFile(cascaded)
+
+	// SGC overrides should win
+	if properties["motd"] != "Override MOTD" {
+		t.Errorf("motd: expected 'Override MOTD', got '%s'", properties["motd"])
+	}
+	if properties["max-players"] != "50" {
+		t.Errorf("max-players: expected '50', got '%s'", properties["max-players"])
+	}
+
+	// GC values without SGC override should remain
+	if properties["difficulty"] != "easy" {
+		t.Errorf("difficulty: expected 'easy', got '%s'", properties["difficulty"])
+	}
+	if properties["pvp"] != "false" {
+		t.Errorf("pvp: expected 'false', got '%s'", properties["pvp"])
+	}
+
+	// Verify total count (4 unique keys despite duplicates)
+	if len(properties) != 4 {
+		t.Errorf("Expected 4 unique properties, got %d: %v", len(properties), properties)
+	}
+
+	t.Logf("✅ Multiple duplicate keys test passed!")
+	t.Logf("   GC sets: motd, max-players, difficulty, pvp")
+	t.Logf("   SGC overrides: motd, max-players")
+	t.Logf("   Final: motd=%s, max-players=%s, difficulty=%s, pvp=%s",
+		properties["motd"], properties["max-players"], properties["difficulty"], properties["pvp"])
+}
