@@ -510,6 +510,50 @@ func (sm *SessionManager) startOutputReader(state *State) {
 		ticker := time.NewTicker(flushInterval)
 		defer ticker.Stop()
 
+		// Channel to receive log messages from reader goroutine
+		logChan := make(chan struct {
+			message string
+			source  string
+		}, 10)
+
+		// Start a separate goroutine to read from Docker stream
+		go func() {
+			defer close(logChan)
+			for {
+				// Read 8-byte header: [streamType, 0, 0, 0, size(4 bytes big-endian)]
+				header := make([]byte, 8)
+				if _, err := io.ReadFull(state.AttachResp.Reader, header); err != nil {
+					// EOF or closed — container exited or attach was closed
+					return
+				}
+				size := binary.BigEndian.Uint32(header[4:8])
+				data := make([]byte, size)
+				if _, err := io.ReadFull(state.AttachResp.Reader, data); err != nil {
+					return
+				}
+
+				message := string(data)
+				var source string
+				if header[0] == 2 {
+					source = "stderr"
+					log.Printf("[session %d stderr] %s", state.SessionID, message)
+				} else {
+					source = "stdout"
+					log.Printf("[session %d stdout] %s", state.SessionID, message)
+				}
+
+				// Send to channel (non-blocking to avoid deadlock)
+				select {
+				case logChan <- struct {
+					message string
+					source  string
+				}{message, source}:
+				default:
+					log.Printf("[session %d] warning: log channel full, dropping message", state.SessionID)
+				}
+			}
+		}()
+
 		flushLogs := func() {
 			if len(logBuffer) == 0 {
 				return
@@ -536,41 +580,23 @@ func (sm *SessionManager) startOutputReader(state *State) {
 		// Flush logs on exit
 		defer flushLogs()
 
+		// Main event loop
 		for {
 			select {
 			case <-ticker.C:
-				// Periodic flush
+				// Periodic flush every second
 				flushLogs()
-			default:
-				// Read 8-byte header: [streamType, 0, 0, 0, size(4 bytes big-endian)]
-				header := make([]byte, 8)
-				if _, err := io.ReadFull(state.AttachResp.Reader, header); err != nil {
-					// EOF or closed — container exited or attach was closed
-					flushLogs() // Flush any remaining logs
-					sm.handleContainerExit(state)
-					return
-				}
-				size := binary.BigEndian.Uint32(header[4:8])
-				data := make([]byte, size)
-				if _, err := io.ReadFull(state.AttachResp.Reader, data); err != nil {
-					flushLogs() // Flush any remaining logs
-					sm.handleContainerExit(state)
-					return
-				}
 
-				message := string(data)
-				var source string
-				if header[0] == 2 {
-					source = "stderr"
-					log.Printf("[session %d stderr] %s", state.SessionID, message)
-				} else {
-					source = "stdout"
-					log.Printf("[session %d stdout] %s", state.SessionID, message)
+			case logMsg, ok := <-logChan:
+				if !ok {
+					// Channel closed - container exited
+					sm.handleContainerExit(state)
+					return
 				}
 
 				// Add to buffer
-				logBuffer = append(logBuffer, message)
-				sourceBuffer = append(sourceBuffer, source)
+				logBuffer = append(logBuffer, logMsg.message)
+				sourceBuffer = append(sourceBuffer, logMsg.source)
 
 				// Flush if buffer is full
 				if len(logBuffer) >= bufferSize {
