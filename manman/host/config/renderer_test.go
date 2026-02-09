@@ -317,3 +317,107 @@ func TestMergeModeNoExistingFile(t *testing.T) {
 		t.Errorf("max-players incorrect: expected '30', got '%s'", properties["max-players"])
 	}
 }
+
+func TestPatchCascadeWithDuplicateKeys(t *testing.T) {
+	// This test verifies the critical patch cascade behavior:
+	// GameConfig patches set base values, ServerGameConfig patches override them
+	// When both set the same property (like motd), SGC value should win
+	renderer := NewRenderer(nil)
+
+	testDir := t.TempDir()
+	testFile := filepath.Join(testDir, "data", "server.properties")
+
+	// Create parent directory
+	if err := os.MkdirAll(filepath.Dir(testFile), 0755); err != nil {
+		t.Fatalf("Failed to create test directory: %v", err)
+	}
+
+	// Simulate existing Minecraft-generated file with defaults
+	existingContent := `# Minecraft server properties
+motd=A Minecraft Server
+max-players=20
+difficulty=easy
+online-mode=true
+pvp=true
+whitelist-enabled=false`
+
+	if err := os.WriteFile(testFile, []byte(existingContent), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	// Simulate API cascade: GameConfig patch + ServerGameConfig patch
+	// This is exactly what GetSessionConfiguration returns
+	gameConfigPatch := `online-mode=true
+max-players=20
+difficulty=normal
+pvp=true
+motd=ManManV2 Minecraft Server`
+
+	sgcPatch := `motd=ManManV2 Dev Server - SGC Override`
+
+	// API concatenates patches: GameConfig + "\n" + SGC
+	cascadedPatches := gameConfigPatch + "\n" + sgcPatch
+
+	// Configuration with cascaded patches in rendered_content
+	config := &pb.RenderedConfiguration{
+		StrategyName:    "Server Properties",
+		StrategyType:    "file_properties",
+		TargetPath:      "/data/server.properties",
+		BaseContent:     "", // Empty = merge mode
+		RenderedContent: cascadedPatches,
+	}
+
+	files, err := renderer.RenderConfigurations([]*pb.RenderedConfiguration{config}, testDir)
+	if err != nil {
+		t.Fatalf("Failed to render configurations: %v", err)
+	}
+
+	if len(files) != 1 {
+		t.Fatalf("Expected 1 file, got %d", len(files))
+	}
+
+	// Parse rendered content
+	properties := parsePropertiesFile(files[0].Content)
+
+	// CRITICAL: Verify SGC patch overrides GameConfig patch
+	if properties["motd"] != "ManManV2 Dev Server - SGC Override" {
+		t.Errorf("motd NOT overridden by SGC patch: expected 'ManManV2 Dev Server - SGC Override', got '%s'", properties["motd"])
+		t.Errorf("This means the patch cascade is broken!")
+	}
+
+	// Verify GameConfig patch values are applied
+	if properties["online-mode"] != "true" {
+		t.Errorf("online-mode from GameConfig patch not applied: expected 'true', got '%s'", properties["online-mode"])
+	}
+	if properties["max-players"] != "20" {
+		t.Errorf("max-players from GameConfig patch not applied: expected '20', got '%s'", properties["max-players"])
+	}
+	if properties["difficulty"] != "normal" {
+		t.Errorf("difficulty override from GameConfig patch not applied: expected 'normal', got '%s'", properties["difficulty"])
+	}
+
+	// Verify existing properties not in patches are preserved
+	if properties["pvp"] != "true" {
+		t.Errorf("pvp not preserved: expected 'true', got '%s'", properties["pvp"])
+	}
+	if properties["whitelist-enabled"] != "false" {
+		t.Errorf("whitelist-enabled not preserved: expected 'false', got '%s'", properties["whitelist-enabled"])
+	}
+
+	// Verify the final rendered content doesn't have duplicate motd entries
+	motdCount := 0
+	for _, line := range strings.Split(files[0].Content, "\n") {
+		if strings.HasPrefix(line, "motd=") {
+			motdCount++
+		}
+	}
+	if motdCount != 1 {
+		t.Errorf("Final rendered content has %d motd entries, expected 1 (deduplication failed)", motdCount)
+		t.Errorf("Content:\n%s", files[0].Content)
+	}
+
+	t.Logf("✅ Patch cascade test passed!")
+	t.Logf("   GameConfig: motd=ManManV2 Minecraft Server")
+	t.Logf("   SGC Override: motd=ManManV2 Dev Server - SGC Override")
+	t.Logf("   Final: motd=%s", properties["motd"])
+}
