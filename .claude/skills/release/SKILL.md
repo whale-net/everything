@@ -7,62 +7,76 @@ description: Interactive release builder for apps and helm charts
 
 This skill guides you through creating a release for apps and/or helm charts in the Everything monorepo.
 
+## Quick Start Examples
+
+**Release ManManV2 apps and chart with patch bump:**
+```bash
+gh workflow run release.yml --ref "main" \
+  -f apps="manmanv2" \
+  -f helm_charts="manmanv2-control-services" \
+  -f increment_patch=true \
+  -f dry_run=false \
+  -f include_demo=false
+```
+
+**Release only ManManV2 apps with minor bump:**
+```bash
+gh workflow run release.yml --ref "main" \
+  -f apps="manmanv2" \
+  -f increment_minor=true \
+  -f dry_run=false \
+  -f include_demo=false
+```
+
+**Release only a helm chart:**
+```bash
+gh workflow run release.yml --ref "main" \
+  -f helm_charts="manmanv2-control-services" \
+  -f increment_patch=true \
+  -f dry_run=false \
+  -f include_demo=false
+```
+
+## CRITICAL: GitHub Workflow Parameter Format
+
+The release workflow (`release.yml`) expects specific parameter formats:
+
+### Apps Parameter (`-f apps="..."`)
+Accepts one of:
+- **Domain/namespace name**: `"manmanv2"`, `"demo"`, `"friendly_computing_machine"`
+- **Comma-separated app names**: `"hello-python,hello-go"`
+- **"all"**: Release all apps (excludes demo unless include_demo=true)
+
+### Helm Charts Parameter (`-f helm_charts="..."`)
+**CRITICAL**: Chart names should be WITHOUT the "helm-" prefix!
+- ✅ CORRECT: `"manmanv2-control-services"`
+- ❌ WRONG: `"helm-manmanv2-control-services"`
+
+Accepts one of:
+- **Chart name without helm- prefix**: `"manmanv2-control-services"`, `"demo-hello-fastapi"`
+- **Domain name**: `"demo"`, `"manmanv2"`
+- **Comma-separated chart names**: `"manmanv2-control-services,demo-hello-fastapi"`
+- **"all"**: Release all charts (excludes demo unless include_demo=true)
+
 ## Process
 
-You will:
+**If user provides all parameters upfront** (e.g., "release manmanv2 namespace, image and helm chart, patch, no extra"):
+- Skip all interactive prompts
+- Directly trigger the workflow with the specified parameters
+- Provide a simple confirmation message
+
+**If user doesn't provide all parameters** (e.g., just "release"), follow the interactive process:
 1. **Select release targets** - Choose which apps/charts to release
 2. **Choose version strategy** - Specify version or auto-increment
 3. **Review release plan** - See exactly what will be released
 4. **Confirm** - Final approval before execution
-5. **Execute** - Trigger the release (GitHub workflow or local)
+5. **Execute** - Trigger the release via GitHub workflow
 
-## Discovery Phase
-
-First, discover available apps and helm charts:
-
-```bash
-# Find all helm charts
-bazel query 'kind("helm_chart", //...)' 2>/dev/null | grep -v "_chart_metadata" | grep -v "_chart$" | sort
-
-# Find all release apps (optional - usually release charts which include apps)
-bazel query 'attr("tags", "release-metadata", //...)' 2>/dev/null | sort
-```
-
-Parse the output to extract:
-- **Domains**: demo, manman, friendly_computing_machine, etc.
-- **Chart names**: Extract from targets like `//manman:manmanv2_chart`
-- **Chart metadata**: Read chart metadata files to get details
+**IMPORTANT**: The GitHub workflow handles all discovery and planning. Do NOT run bazel commands locally to discover apps or plan releases - just trigger the workflow with the appropriate parameters.
 
 ## User Interaction
 
-### Step 0: Branch Verification
-
-**IMPORTANT**: You should be on the main branch locally to ensure accurate discovery of apps and charts.
-
-```bash
-# Check current branch
-CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-
-if [[ "$CURRENT_BRANCH" != "main" ]]; then
-  echo "⚠️  WARNING: Not on main branch (currently on: $CURRENT_BRANCH)"
-  echo ""
-  echo "It's recommended to switch to main to ensure app/chart names are correct:"
-  echo "  git checkout main"
-  echo "  git pull origin main"
-  echo ""
-  echo "The workflow will run on main regardless, but local discovery should match."
-
-  # Ask user if they want to continue anyway
-  read -p "Continue anyway? (y/N) " -n 1 -r
-  echo
-  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Release cancelled. Please switch to main and try again."
-    exit 1
-  fi
-else
-  echo "✅ On main branch - proceeding with release"
-fi
-```
+**IMPORTANT**: The workflow always runs on main branch (via `--ref "main"`), regardless of your local branch. You can trigger releases from any branch.
 
 ### Step 1: Select Release Type
 
@@ -83,40 +97,32 @@ Options:
 Based on the user's selection, present available options:
 
 **For Helm Charts (or Both):**
-First discover available helm charts:
-```bash
-# Use the release helper to list available charts
-bazel run --config=ci //tools:release -- plan-helm-release --charts "all" --version "v0.1.0" --include-demo --format github 2>&1 | grep -E "charts="
-```
-
-Then ask:
+Ask which chart(s) to release:
 ```
 Question: "Which helm chart(s) would you like to release?"
 Header: "Charts"
 Options: (multiSelect: true)
-  - "helm-manman-host-services" - ManMan host services chart
-  - "helm-manmanv2-control-services" - ManManV2 control services chart
-  - "helm-fcm" - FCM chart
+  - "manmanv2-control-services" - ManManV2 control services chart
+  - "manman-host-services" - ManMan host services chart
+  - "friendly-computing-machine-bot-services" - FCM bot services chart
+  - "demo" - All demo charts
   - "all" - All production charts (excludes demo by default)
 ```
+**NOTE**: Chart names in the workflow are WITHOUT the "helm-" prefix!
 
 **For Apps (when "Apps Only" or "Both" is selected):**
-Discover available apps:
-```bash
-# Use the release helper to list available apps
-bazel run --config=ci //tools:release -- plan --event-type "workflow_dispatch" --apps "all" --include-demo --increment-patch --format github 2>&1 | grep -E "apps="
-```
-
-Then ask:
+Ask which app(s) to release:
 ```
 Question: "Which app(s) would you like to release?"
 Header: "Apps"
 Options: (multiSelect: true)
-  - List discovered apps in domain-app format (e.g., "manman-control-api")
-  - "all" - All apps (excludes demo by default)
+  - "manmanv2" - All ManManV2 apps (recommended)
   - "demo" - All demo domain apps
-  - "manman" - All manman domain apps
+  - "friendly_computing_machine" - All FCM apps
+  - "all" - All apps (excludes demo by default)
+  - "Specify individual apps" - Provide comma-separated app names
 ```
+**NOTE**: Using domain names (like "manmanv2") is recommended over individual app names.
 
 ### Step 3: Version Strategy
 
@@ -157,10 +163,9 @@ Display a clear summary based on what's being released:
 # Release Plan Summary
 
 ## Helm Charts
-- **Chart**: helm-manmanv2-control-services
+- **Chart**: manmanv2-control-services
   - **Namespace**: manmanv2
-  - **Current Version**: v0.2.1
-  - **New Version**: v0.3.0 (minor increment)
+  - **New Version**: (auto-incremented minor)
 
 ## Version Strategy
 - Auto-increment minor version
@@ -170,8 +175,8 @@ Display a clear summary based on what's being released:
 - Include demo: No
 
 ## Actions That Will Be Taken
-1. Build helm chart with referenced apps
-2. Create git tag: helm-manmanv2-control-services.v0.3.0
+1. GitHub workflow will build helm chart with referenced apps
+2. Create git tag: helm-manmanv2-control-services.v<new-version>
 3. Push chart to https://charts.whalenet.dev/
 4. Create GitHub release with chart artifacts
 
@@ -183,11 +188,10 @@ Display a clear summary based on what's being released:
 # Release Plan Summary
 
 ## Apps
-- manman-control-api (v0.3.0)
-- manman-event-processor (v0.3.0)
+- manmanv2 (all apps in namespace)
 
 ## Helm Charts
-- helm-manmanv2-control-services (v0.3.0)
+- manmanv2-control-services
 
 ## Version Strategy
 - Auto-increment minor version (applies to both apps and charts)
@@ -198,9 +202,9 @@ Display a clear summary based on what's being released:
 
 ## Actions That Will Be Taken
 1. Build and push app images to ghcr.io/whale-net
-2. Create git tags for each app: manman-control-api.v0.3.0, manman-event-processor.v0.3.0
+2. Create git tags for each app
 3. Build helm chart with versioned app references
-4. Create git tag for chart: helm-manmanv2-control-services.v0.3.0
+4. Create git tag for chart
 5. Push chart to https://charts.whalenet.dev/
 6. Create GitHub releases with artifacts
 
@@ -227,38 +231,36 @@ Once confirmed, trigger the release via GitHub workflow.
 ```bash
 gh workflow run release.yml \
   --ref "main" \
-  -f helm_charts="helm-manmanv2-control-services" \
+  -f helm_charts="manmanv2-control-services" \
   -f increment_minor=true \
   -f dry_run=false \
   -f include_demo=false
 ```
+**NOTE**: Chart name is WITHOUT "helm-" prefix!
 
-**For Apps Only:**
+**For Apps Only (using domain name):**
 ```bash
 gh workflow run release.yml \
   --ref "main" \
-  -f apps="manman-control-api,manman-event-processor" \
+  -f apps="manmanv2" \
   -f increment_patch=true \
   -f dry_run=false \
   -f include_demo=false
 ```
+**NOTE**: Using domain name "manmanv2" releases all apps in that namespace!
 
 **For Both Apps and Helm Charts:**
 ```bash
 gh workflow run release.yml \
   --ref "main" \
-  -f apps="manman-control-api,manman-event-processor" \
-  -f helm_charts="helm-manmanv2-control-services" \
+  -f apps="manmanv2" \
+  -f helm_charts="manmanv2-control-services" \
   -f increment_minor=true \
   -f dry_run=false \
   -f include_demo=false
 ```
 
-**Monitor the workflow:**
-```bash
-echo "Release triggered! Monitor progress at:"
-gh run list --workflow=release.yml --limit 1 --json url --jq '.[0].url'
-```
+**After triggering, DO NOT run additional commands.** The user can monitor the workflow themselves if they want to.
 
 **Version flags (use exactly one):**
 - `-f increment_patch=true` - Bump patch version (v1.2.3 → v1.2.4)
@@ -269,10 +271,10 @@ gh run list --workflow=release.yml --limit 1 --json url --jq '.[0].url'
 
 **ALWAYS perform these checks before execution:**
 
-1. ✅ **On main branch locally** - Ensures app/chart discovery matches what will be released
+1. ✅ **Correct parameter format** - Chart names WITHOUT "helm-" prefix, apps use domain names
 2. ✅ **Version intentionality verified** - User explicitly confirmed version bump type
 3. ✅ **Impact explained** - User understands what will be published
-4. ✅ **Final confirmation** - User gave explicit approval
+4. ✅ **Final confirmation** - User gave explicit approval (unless user provides all params upfront)
 5. ✅ **Workflow runs on main** - Always use `--ref "main"` to execute workflow on main branch
 
 ## Error Handling
@@ -285,28 +287,32 @@ If user seems unsure, offer to:
 
 ## Response Format
 
-After triggering:
+After triggering, provide a simple confirmation:
 ```markdown
-✅ Release initiated!
+✅ Release workflow triggered!
 
-**Workflow**: https://github.com/whale-net/everything/actions/runs/12345
-**Chart**: helm-manman-control-services
-**Version**: v0.3.0
+**Apps**: manmanv2 (all apps in namespace)
+**Charts**: manmanv2-control-services
+**Version**: Auto-increment patch
 
-Monitor the workflow for:
-- ✓ Build completion
-- ✓ Image pushes
-- ✓ GitHub release creation
-- ✓ Helm chart publication
-
-The release will be available at:
-https://github.com/whale-net/everything/releases/tag/helm-manman-control-services.v0.3.0
+The GitHub Actions workflow will handle the rest.
 ```
+
+**DO NOT** automatically fetch the workflow URL or monitor it - let the user do that if they want.
 
 ## Notes
 
-- Release builds happen in GitHub Actions, not locally
+- **Everything happens in GitHub Actions** - No local bazel commands needed
+- The workflow handles all discovery, planning, building, and publishing
 - Images are pushed to ghcr.io/whale-net
-- Helm charts are published to GitHub Pages
-- Use `gh run watch` to monitor progress
+- Helm charts are published to https://charts.whalenet.dev/
+- Chart names in workflow parameters are WITHOUT "helm-" prefix
+- Use domain names for apps (like "manmanv2") rather than individual app names
 - Dry runs are recommended for first-time releases
+
+## Quick Reference: Available Domains
+
+- **manmanv2** - ManManV2 apps and control services chart
+- **manman** - ManMan v1 host services
+- **friendly_computing_machine** - FCM bot services
+- **demo** - Demo/example apps and charts
