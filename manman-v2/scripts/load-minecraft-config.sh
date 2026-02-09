@@ -321,4 +321,67 @@ else
 fi
 
 echo ""
+echo "Creating configuration patches for GameConfig..."
+
+# Create patch at game_config level with base Minecraft settings
+patch_content="online-mode=true
+max-players=20
+difficulty=normal
+pvp=true
+motd=ManManV2 Minecraft Server"
+
+create_patch_payload="$(cat <<EOF
+{
+  "strategy_id": ${strategy_id},
+  "patch_level": "game_config",
+  "entity_id": ${config_id},
+  "patch_content": "${patch_content}",
+  "patch_format": "properties"
+}
+EOF
+)"
+
+patch_resp="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateConfigurationPatch" "${create_patch_payload}" 2>&1 || true)"
+
+if echo "${patch_resp}" | grep -q "patch"; then
+  echo "✔ Created game_config patch with base Minecraft settings"
+else
+  # Patch might already exist, try to get existing one
+  echo "  Patch may already exist or create failed"
+fi
+
+echo ""
+echo "Creating ServerGameConfig override patch..."
+
+# Create patch at server_game_config level to override MOTD
+sgc_patch_content="motd=ManManV2 Dev Server - SGC Override"
+
+create_sgc_patch_payload="$(cat <<EOF
+{
+  "strategy_id": ${strategy_id},
+  "patch_level": "server_game_config",
+  "entity_id": ${sgc_id},
+  "patch_content": "${sgc_patch_content}",
+  "patch_format": "properties"
+}
+EOF
+)"
+
+sgc_patch_resp="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateConfigurationPatch" "${create_sgc_patch_payload}" 2>&1 || true)"
+
+if echo "${sgc_patch_resp}" | grep -q "patch"; then
+  echo "✔ Created server_game_config patch to override MOTD"
+else
+  echo "  SGC patch may already exist or create failed"
+fi
+
+echo ""
 echo "✔ Setup complete! You can now start sessions."
+echo ""
+echo "Configuration cascade:"
+echo "  Game: Defines strategy (server.properties at /data/server.properties)"
+echo "  GameConfig: Sets base values (online-mode=true, max-players=20, motd=ManManV2 Minecraft Server)"
+echo "  ServerGameConfig #${sgc_id}: Overrides motd (motd=ManManV2 Dev Server - SGC Override)"
+echo ""
+echo "⚠️  Note: The itzg/minecraft-server image regenerates server.properties on startup,"
+echo "   which overwrites file patches. Consider using environment variable strategy instead."

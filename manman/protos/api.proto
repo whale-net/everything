@@ -64,6 +64,12 @@ service ManManAPI {
   rpc UpdateConfigurationStrategy(UpdateConfigurationStrategyRequest) returns (UpdateConfigurationStrategyResponse);
   rpc DeleteConfigurationStrategy(DeleteConfigurationStrategyRequest) returns (DeleteConfigurationStrategyResponse);
 
+  // Configuration patch management
+  rpc CreateConfigurationPatch(CreateConfigurationPatchRequest) returns (CreateConfigurationPatchResponse);
+  rpc UpdateConfigurationPatch(UpdateConfigurationPatchRequest) returns (UpdateConfigurationPatchResponse);
+  rpc DeleteConfigurationPatch(DeleteConfigurationPatchRequest) returns (DeleteConfigurationPatchResponse);
+  rpc ListConfigurationPatches(ListConfigurationPatchesRequest) returns (ListConfigurationPatchesResponse);
+
   // Configuration preview (new)
   rpc PreviewConfiguration(PreviewConfigurationRequest) returns (PreviewConfigurationResponse);
 
@@ -514,6 +520,48 @@ message DeleteConfigurationStrategyRequest {
 }
 
 message DeleteConfigurationStrategyResponse {}
+
+// ============================================================================
+// Configuration Patch RPCs
+// ============================================================================
+
+message CreateConfigurationPatchRequest {
+  int64 strategy_id = 1;
+  string patch_level = 2;  // "game_config", "server_game_config", "session"
+  int64 entity_id = 3;     // game_config_id, server_game_config_id, or session_id
+  string patch_content = 4;
+  string patch_format = 5;  // "properties", "json_merge_patch", etc.
+}
+
+message CreateConfigurationPatchResponse {
+  ConfigurationPatch patch = 1;
+}
+
+message UpdateConfigurationPatchRequest {
+  int64 patch_id = 1;
+  string patch_content = 2;
+  string patch_format = 3;
+}
+
+message UpdateConfigurationPatchResponse {
+  ConfigurationPatch patch = 1;
+}
+
+message DeleteConfigurationPatchRequest {
+  int64 patch_id = 1;
+}
+
+message DeleteConfigurationPatchResponse {}
+
+message ListConfigurationPatchesRequest {
+  optional int64 strategy_id = 1;   // Filter by strategy
+  optional string patch_level = 2;   // Filter by level
+  optional int64 entity_id = 3;      // Filter by entity
+}
+
+message ListConfigurationPatchesResponse {
+  repeated ConfigurationPatch patches = 1;
+}
 
 // ============================================================================
 // Configuration Preview RPCs

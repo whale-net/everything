@@ -63,14 +63,22 @@
                 </td>
                 <td>
                     <a href="/sessions?server_game_config_id={{.ServerGameConfigId}}" class="btn btn-sm btn-secondary">View Sessions</a>
-                    <form method="POST" action="/sessions/start" style="display: inline-flex; align-items: center; gap: 0.5rem;">
-                        <input type="hidden" name="server_game_config_id" value="{{.ServerGameConfigId}}">
-                        <label style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.85rem; margin: 0;">
-                            <input type="checkbox" name="force" value="true" style="margin: 0;">
-                            Force
-                        </label>
-                        <button type="submit" class="btn btn-sm btn-success">Start Session</button>
-                    </form>
+                    <div style="display: inline-flex; align-items: center; gap: 0.5rem; position: relative;">
+                        <form method="POST" action="/sessions/start" style="display: inline-flex; align-items: center; gap: 0.5rem;">
+                            <input type="hidden" name="server_game_config_id" value="{{.ServerGameConfigId}}">
+                            <label style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.85rem; margin: 0;">
+                                <input type="checkbox" name="force" value="true" style="margin: 0;">
+                                Force
+                            </label>
+                            <button type="submit"
+                                    class="btn btn-sm btn-success"
+                                    hx-get="/api/sessions/check-active?server_game_config_id={{.ServerGameConfigId}}"
+                                    hx-trigger="mouseenter once"
+                                    hx-target="#sgc-warning-{{.ServerGameConfigId}}"
+                                    hx-swap="innerHTML">Start Session</button>
+                        </form>
+                        <div id="sgc-warning-{{.ServerGameConfigId}}" style="position: absolute; top: 100%; left: 0; margin-top: 0.25rem; min-width: 300px; z-index: 10;"></div>
+                    </div>
                 </td>
             </tr>
             {{end}}

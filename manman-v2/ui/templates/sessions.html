@@ -69,7 +69,13 @@
             <div class="grid grid-2">
                 <div class="form-group">
                     <label for="start_server_game_config_id">Server Game Config</label>
-                    <select id="start_server_game_config_id" name="server_game_config_id" required>
+                    <select id="start_server_game_config_id"
+                            name="server_game_config_id"
+                            required
+                            hx-get="/api/sessions/check-active"
+                            hx-trigger="change"
+                            hx-target="#session-start-warning"
+                            hx-include="[name='server_id']">
                         <option value="">Select a config</option>
                         {{range .ServerConfigs}}
                         <option value="{{.ServerGameConfigId}}">Config #{{.GameConfigId}} (SGC {{.ServerGameConfigId}})</option>
@@ -79,6 +85,7 @@
                     <div style="margin-top: 0.25rem; font-size: 0.9rem; color: #666;">
                         Need a Server Game Config first? Deploy a GameConfig to a server from the GameConfig detail page.
                     </div>
+                    <div id="session-start-warning"></div>
                 </div>
             </div>
             <input type="hidden" name="server_id" value="{{.SelectedServerID}}">

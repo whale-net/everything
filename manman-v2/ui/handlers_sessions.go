@@ -328,6 +328,58 @@ func (app *App) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
 
+// handleCheckActiveSession returns an HTML fragment indicating if there's an active session for the given SGC.
+func (app *App) handleCheckActiveSession(w http.ResponseWriter, r *http.Request) {
+	sgcIDStr := strings.TrimSpace(r.URL.Query().Get("server_game_config_id"))
+
+	if sgcIDStr == "" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	sgcID, err := strconv.ParseInt(sgcIDStr, 10, 64)
+	if err != nil {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	ctx := context.Background()
+
+	// Check for active sessions on this SGC
+	req := &manmanpb.ListSessionsRequest{
+		PageSize:           10,
+		ServerGameConfigId: sgcID,
+		LiveOnly:           true,
+	}
+	sessions, err := app.grpc.ListSessionsWithFilters(ctx, req)
+	if err != nil {
+		log.Printf("Error checking active sessions: %v", err)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if len(sessions) == 0 {
+		// No active sessions - return empty (clears the warning div)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Found active session(s) - return warning HTML
+	session := sessions[0]
+	w.Header().Set("Content-Type", "text/html")
+	w.WriteHeader(http.StatusOK)
+
+	warningHTML := `<div style="margin-top: 0.75rem; padding: 0.75rem; border-left: 4px solid #f39c12; background: #fff8e1;">
+    <strong>⚠️ Active Session Detected</strong>
+    <p style="margin: 0.5rem 0 0 0;">Session ` + strconv.FormatInt(session.SessionId, 10) + ` is currently ` + session.Status + ` for this config.</p>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #666;">
+        You may need to check the <strong>Force start</strong> option below to stop the existing session and start a new one.
+    </p>
+</div>`
+
+	w.Write([]byte(warningHTML))
+}
+
 func splitCSV(value string) []string {
 	parts := strings.Split(value, ",")
 	var result []string

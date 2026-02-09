@@ -31,6 +31,7 @@ type APIServer struct {
 	logsHandler             *LogsHandler
 	backupHandler           *BackupHandler
 	strategyHandler         *ConfigurationStrategyHandler
+	patchHandler            *ConfigurationPatchHandler
 }
 
 func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq.Connection) *APIServer {
@@ -60,6 +61,7 @@ func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq
 		logsHandler:             NewLogsHandler(repo.LogReferences, s3Client),
 		backupHandler:           NewBackupHandler(repo.Backups, repo.Sessions, s3Client),
 		strategyHandler:         NewConfigurationStrategyHandler(repo.ConfigurationStrategies),
+		patchHandler:            NewConfigurationPatchHandler(repo.ConfigurationPatches),
 	}
 }
 
@@ -651,14 +653,11 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 	}
 
 	// Only block if there's a TRULY active session (running, pending, etc.)
-	// Crashed or Lost sessions don't block, but they trigger an implicit force cleanup on the host
+	// Crashed or Lost sessions don't block start attempts
 	var trulyActive *manman.Session
-	var terminalActive *manman.Session
 
 	for _, s := range activeSessions {
-		if s.Status == manman.SessionStatusCrashed || s.Status == manman.SessionStatusLost {
-			terminalActive = s
-		} else {
+		if s.Status != manman.SessionStatusCrashed && s.Status != manman.SessionStatusLost {
 			trulyActive = s
 		}
 	}
@@ -668,12 +667,13 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 			"active session %d already exists with status %s. Use force=true to override.", trulyActive.SessionID, trulyActive.Status)
 	}
 
-	// Internal force flag to ensure host cleanup if we have terminal but "active" sessions
-	internalForce := req.Force || (terminalActive != nil)
+	// Force flag - user must explicitly opt-in via force checkbox
+	// Never auto-force based on terminal sessions to prevent data loss
+	internalForce := req.Force
 
 	if internalForce {
-		// Invalidate prior to start: mark other sessions as stopped
-		log.Printf("Force start requested for SGC %d, invalidating %d active sessions", req.ServerGameConfigId, len(activeSessions))
+		// User requested force start: mark other sessions as stopped and deallocate ports
+		log.Printf("Force start requested by user for SGC %d, will invalidate %d active sessions", req.ServerGameConfigId, len(activeSessions))
 	}
 
 	// Create session in database
@@ -705,6 +705,26 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 	gc, err := h.gcRepo.Get(ctx, sgc.GameConfigID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to fetch game config: %v", err)
+	}
+
+	// If force=true, deallocate ports held by crashed/stopped sessions for this SGC
+	if internalForce {
+		// Find all terminal sessions (crashed, stopped, lost) for this SGC
+		filters := &repository.SessionFilters{
+			SGCID:        &sgc.SGCID,
+			StatusFilter: []string{manman.SessionStatusCrashed, manman.SessionStatusStopped, manman.SessionStatusLost},
+		}
+		terminalSessions, err := h.sessionRepo.ListWithFilters(ctx, filters, 100, 0)
+		if err != nil {
+			log.Printf("Warning: Failed to list terminal sessions for SGC %d: %v", sgc.SGCID, err)
+		} else {
+			for _, ts := range terminalSessions {
+				log.Printf("[session %d] force=true: deallocating ports for terminal session %d (status: %s)", session.SessionID, ts.SessionID, ts.Status)
+				if err := h.repo.ServerPorts.DeallocatePortsBySessionID(ctx, ts.SessionID); err != nil {
+					log.Printf("Warning: Failed to deallocate ports for session %d: %v", ts.SessionID, err)
+				}
+			}
+		}
 	}
 
 	// Allocate ports for this session
@@ -1129,10 +1149,31 @@ func (h *ConfigurationStrategyHandler) GetSessionConfiguration(ctx context.Conte
 			rendered.BaseContent = *strategy.BaseTemplate
 		}
 
-		// For now, rendered content is same as base content
-		// Host-manager will handle merging with existing files if base is empty
-		// TODO: Implement parameter binding resolution and apply here
-		rendered.RenderedContent = rendered.BaseContent
+		// Cascade patches: GameConfig → ServerGameConfig
+		patchContent := ""
+
+		// 1. Get game_config level patch
+		gcPatch, err := fullRepo.ConfigurationPatches.GetByStrategyAndEntity(ctx, strategy.StrategyID, "game_config", gc.ConfigID)
+		if err == nil && gcPatch.PatchContent != nil {
+			patchContent = *gcPatch.PatchContent
+		}
+
+		// 2. Get server_game_config level patch (overrides game_config)
+		sgcPatch, err := fullRepo.ConfigurationPatches.GetByStrategyAndEntity(ctx, strategy.StrategyID, "server_game_config", sgc.SGCID)
+		if err == nil && sgcPatch.PatchContent != nil {
+			// For properties files, we need to merge the patches
+			// For now, SGC patch completely overrides GC patch
+			// TODO: Implement smarter merging for properties files
+			if patchContent != "" {
+				patchContent = patchContent + "\n" + *sgcPatch.PatchContent
+			} else {
+				patchContent = *sgcPatch.PatchContent
+			}
+		}
+
+		// Set rendered content to the cascaded patches
+		// Host-manager will merge this with existing file if base is empty (merge mode)
+		rendered.RenderedContent = patchContent
 
 		renderedConfigs = append(renderedConfigs, rendered)
 	}
@@ -1184,6 +1225,22 @@ func strategyToProto(s *manman.ConfigurationStrategy) *pb.ConfigurationStrategy 
 	return proto
 }
 
+func patchToProto(p *manman.ConfigurationPatch) *pb.ConfigurationPatch {
+	proto := &pb.ConfigurationPatch{
+		PatchId:     p.PatchID,
+		StrategyId:  p.StrategyID,
+		PatchLevel:  p.PatchLevel,
+		EntityId:    p.EntityID,
+		PatchFormat: p.PatchFormat,
+	}
+
+	if p.PatchContent != nil {
+		proto.PatchContent = *p.PatchContent
+	}
+
+	return proto
+}
+
 // Configuration Strategy RPCs
 func (s *APIServer) CreateConfigurationStrategy(ctx context.Context, req *pb.CreateConfigurationStrategyRequest) (*pb.CreateConfigurationStrategyResponse, error) {
 	return s.strategyHandler.CreateConfigurationStrategy(ctx, req)
@@ -1207,4 +1264,105 @@ func (s *APIServer) GetSessionConfiguration(ctx context.Context, req *pb.GetSess
 
 func (s *APIServer) PreviewConfiguration(ctx context.Context, req *pb.PreviewConfigurationRequest) (*pb.PreviewConfigurationResponse, error) {
 	return s.strategyHandler.PreviewConfiguration(ctx, req, s.repo)
+}
+
+// ConfigurationPatchHandler handles ConfigurationPatch-related RPCs
+type ConfigurationPatchHandler struct {
+	repo repository.ConfigurationPatchRepository
+}
+
+func NewConfigurationPatchHandler(repo repository.ConfigurationPatchRepository) *ConfigurationPatchHandler {
+	return &ConfigurationPatchHandler{repo: repo}
+}
+
+func (h *ConfigurationPatchHandler) CreateConfigurationPatch(ctx context.Context, req *pb.CreateConfigurationPatchRequest) (*pb.CreateConfigurationPatchResponse, error) {
+	patch := &manman.ConfigurationPatch{
+		StrategyID:   req.StrategyId,
+		PatchLevel:   req.PatchLevel,
+		EntityID:     req.EntityId,
+		PatchContent: stringPtr(req.PatchContent),
+		PatchFormat:  req.PatchFormat,
+	}
+
+	patch, err := h.repo.Create(ctx, patch)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create configuration patch: %v", err)
+	}
+
+	return &pb.CreateConfigurationPatchResponse{
+		Patch: patchToProto(patch),
+	}, nil
+}
+
+func (h *ConfigurationPatchHandler) UpdateConfigurationPatch(ctx context.Context, req *pb.UpdateConfigurationPatchRequest) (*pb.UpdateConfigurationPatchResponse, error) {
+	patch, err := h.repo.Get(ctx, req.PatchId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "configuration patch not found: %v", err)
+	}
+
+	patch.PatchContent = stringPtr(req.PatchContent)
+	patch.PatchFormat = req.PatchFormat
+
+	if err := h.repo.Update(ctx, patch); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update configuration patch: %v", err)
+	}
+
+	return &pb.UpdateConfigurationPatchResponse{
+		Patch: patchToProto(patch),
+	}, nil
+}
+
+func (h *ConfigurationPatchHandler) DeleteConfigurationPatch(ctx context.Context, req *pb.DeleteConfigurationPatchRequest) (*pb.DeleteConfigurationPatchResponse, error) {
+	if err := h.repo.Delete(ctx, req.PatchId); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete configuration patch: %v", err)
+	}
+
+	return &pb.DeleteConfigurationPatchResponse{}, nil
+}
+
+func (h *ConfigurationPatchHandler) ListConfigurationPatches(ctx context.Context, req *pb.ListConfigurationPatchesRequest) (*pb.ListConfigurationPatchesResponse, error) {
+	var strategyID *int64
+	var patchLevel *string
+	var entityID *int64
+
+	if req.StrategyId != nil {
+		strategyID = req.StrategyId
+	}
+	if req.PatchLevel != nil {
+		patchLevel = req.PatchLevel
+	}
+	if req.EntityId != nil {
+		entityID = req.EntityId
+	}
+
+	patches, err := h.repo.List(ctx, strategyID, patchLevel, entityID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list configuration patches: %v", err)
+	}
+
+	pbPatches := make([]*pb.ConfigurationPatch, len(patches))
+	for i, p := range patches {
+		pbPatches[i] = patchToProto(p)
+	}
+
+	return &pb.ListConfigurationPatchesResponse{
+		Patches: pbPatches,
+	}, nil
+}
+
+// APIServer wrapper methods for ConfigurationPatch
+func (s *APIServer) CreateConfigurationPatch(ctx context.Context, req *pb.CreateConfigurationPatchRequest) (*pb.CreateConfigurationPatchResponse, error) {
+	return s.patchHandler.CreateConfigurationPatch(ctx, req)
+}
+
+func (s *APIServer) UpdateConfigurationPatch(ctx context.Context, req *pb.UpdateConfigurationPatchRequest) (*pb.UpdateConfigurationPatchResponse, error) {
+	return s.patchHandler.UpdateConfigurationPatch(ctx, req)
+}
+
+func (s *APIServer) DeleteConfigurationPatch(ctx context.Context, req *pb.DeleteConfigurationPatchRequest) (*pb.DeleteConfigurationPatchResponse, error) {
+	return s.patchHandler.DeleteConfigurationPatch(ctx, req)
+}
+
+func (s *APIServer) ListConfigurationPatches(ctx context.Context, req *pb.ListConfigurationPatchesRequest) (*pb.ListConfigurationPatchesResponse, error) {
+	return s.patchHandler.ListConfigurationPatches(ctx, req)
 }

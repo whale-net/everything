@@ -164,6 +164,7 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/sessions", app.auth.RequireAuthFunc(app.handleSessions))
 	mux.HandleFunc("/sessions/", app.auth.RequireAuthFunc(app.handleSessionDetail))
 	mux.HandleFunc("/sessions/start", app.auth.RequireAuthFunc(app.handleSessionStart))
+	mux.HandleFunc("/api/sessions/check-active", app.auth.RequireAuthFunc(app.handleCheckActiveSession))
 
 	// Protected routes - Games
 	mux.HandleFunc("/games", app.auth.RequireAuthFunc(app.handleGames))
