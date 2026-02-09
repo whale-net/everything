@@ -206,17 +206,60 @@ psql postgresql://postgres:password@localhost:5432/manmanv2 \
 
 See [README-HOST.md](./README-HOST.md) for detailed testing instructions.
 
+## Loading Game Configurations
+
+### Minecraft Configuration Seeder
+
+The `load-minecraft-config.sh` script creates a complete Minecraft game configuration with sensible defaults for testing. It supports both local and remote GRPC endpoints:
+
+```bash
+# Load to local control plane (default)
+./scripts/load-minecraft-config.sh
+
+# Load to remote control plane
+./scripts/load-minecraft-config.sh --grpc-url=remote-api.example.com:50052
+
+# Customize configuration
+./scripts/load-minecraft-config.sh \
+  --grpc-url=staging.example.com:50052 \
+  --game-name="Minecraft" \
+  --config-name="Modded Vanilla" \
+  --image="itzg/minecraft-server:java17"
+
+# View help
+./scripts/load-minecraft-config.sh --help
+```
+
+**What it creates:**
+- Game entry for Minecraft
+- GameConfig with itzg/minecraft-server image
+- Volume strategy for persistent /data
+- File strategy for server.properties (with patches)
+- ServerGameConfig with port 25565 exposed
+- Example configuration patches at multiple levels
+
+**Environment Variables (alternative to CLI flags):**
+```bash
+export CONTROL_API_ADDR=remote-api.example.com:50052
+export GAME_NAME="Minecraft"
+export GAME_CONFIG_NAME="Vanilla"
+export IMAGE="itzg/minecraft-server:latest"
+./scripts/load-minecraft-config.sh
+```
+
 ## Directory Structure
 
 ```
 manman-v2/
-├── Tiltfile              # Control plane services (K8s)
-├── README.md             # This file
-├── README-HOST.md        # Host manager setup guide
-├── .env.example          # Example configuration
+├── Tiltfile                      # Control plane services (K8s)
+├── README.md                     # This file
+├── README-HOST.md                # Host manager setup guide
+├── .env.example                  # Example configuration
 └── scripts/
-    ├── build-images.sh   # Build all required images
-    └── test-flow.sh      # End-to-end test script
+    ├── build-images.sh           # Build all required images
+    ├── test-flow.sh              # End-to-end test script
+    ├── test-containerized-flow.sh # Containerized host test
+    └── load-minecraft-config.sh  # Seed Minecraft configuration
 
 ../manman/                # Source code (parent directory)
 ├── api/                  # Control plane API (gRPC)

@@ -3,14 +3,56 @@ set -euo pipefail
 
 # Load an itzg/minecraft-server GameConfig with defaults for local testing.
 # Requires: grpcurl, python3
+#
+# Usage: ./scripts/load-minecraft-config.sh [OPTIONS]
+#
+# Options:
+#   --grpc-url=HOST:PORT      GRPC API endpoint (default: localhost:50052)
+#   --api-endpoint=HOST:PORT  Alias for --grpc-url
+#   --game-name=NAME          Game name (default: Minecraft)
+#   --config-name=NAME        Config name (default: Vanilla)
+#   --image=IMAGE             Docker image (default: itzg/minecraft-server:latest)
+#   --help                    Show this help message
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+# Default values (can be overridden by env vars or CLI args)
 CONTROL_API_ADDR="${CONTROL_API_ADDR:-localhost:50052}"
-GAME_NAME="Minecraft"
-GAME_CONFIG_NAME="Vanilla"
-IMAGE="itzg/minecraft-server:latest"
+GAME_NAME="${GAME_NAME:-Minecraft}"
+GAME_CONFIG_NAME="${GAME_CONFIG_NAME:-Vanilla}"
+IMAGE="${IMAGE:-itzg/minecraft-server:latest}"
+
+# Parse arguments
+for arg in "$@"; do
+  case $arg in
+    --grpc-url=*|--api-endpoint=*)
+      CONTROL_API_ADDR="${arg#*=}"
+      shift
+      ;;
+    --game-name=*)
+      GAME_NAME="${arg#*=}"
+      shift
+      ;;
+    --config-name=*)
+      GAME_CONFIG_NAME="${arg#*=}"
+      shift
+      ;;
+    --image=*)
+      IMAGE="${arg#*=}"
+      shift
+      ;;
+    --help)
+      head -n 15 "$0" | tail -n +4 | sed 's/^# //' | sed 's/^#$//'
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $arg"
+      echo "Run with --help for usage information"
+      exit 1
+      ;;
+  esac
+done
 
 grpc_call() {
   local addr="$1"
@@ -24,10 +66,32 @@ grpc_call() {
     "${addr}" "${method}"
 }
 
-echo "Using control API: ${CONTROL_API_ADDR}"
-echo "Game: ${GAME_NAME}"
-echo "Config: ${GAME_CONFIG_NAME}"
-echo "Image: ${IMAGE}"
+echo ""
+echo "════════════════════════════════════════════════════"
+echo "  Loading Minecraft Configuration"
+echo "════════════════════════════════════════════════════"
+echo "GRPC API:  ${CONTROL_API_ADDR}"
+echo "Game:      ${GAME_NAME}"
+echo "Config:    ${GAME_CONFIG_NAME}"
+echo "Image:     ${IMAGE}"
+echo ""
+
+# Check for grpcurl
+if ! command -v grpcurl &> /dev/null; then
+  echo "Error: grpcurl is not installed"
+  echo "Install with: brew install grpcurl (macOS) or go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest"
+  exit 1
+fi
+
+# Test API connectivity
+echo "Testing API connectivity..."
+if ! grpcurl -plaintext "${CONTROL_API_ADDR}" list manman.v1.ManManAPI &> /dev/null; then
+  echo "✗ Cannot connect to API at ${CONTROL_API_ADDR}"
+  echo "Make sure the control plane is running and accessible"
+  exit 1
+fi
+echo "✓ API is reachable"
+echo ""
 
 find_game_id_by_name() {
   local target_name="${1}"
