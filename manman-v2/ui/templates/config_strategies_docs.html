@@ -1,0 +1,220 @@
+{{define "content"}}
+<div class="card">
+    <div class="card-header">
+        <h1 class="card-title">Configuration Strategy System</h1>
+    </div>
+
+    <h2 style="margin-top: 1.5rem;">Overview</h2>
+    <p>The configuration strategy system provides a flexible, database-driven approach to generating game server configurations. It allows you to define how configuration files are created, what parameters can be customized, and how those parameters map to actual configuration values.</p>
+
+    <div style="background: #f8f9fa; padding: 1rem; border-radius: 4px; margin: 1rem 0;">
+        <strong>Current Status:</strong>
+        <ul style="margin: 0.5rem 0 0 1.5rem;">
+            <li>✅ Database schema and CRUD operations</li>
+            <li>✅ Volume mounting (volume strategy type)</li>
+            <li>🚧 File rendering system (in development)</li>
+            <li>⏳ Parameter resolution and binding</li>
+            <li>⏳ Configuration patches</li>
+        </ul>
+    </div>
+
+    <h2 style="margin-top: 2rem;">System Architecture</h2>
+
+    <h3 style="margin-top: 1.5rem;">1. Configuration Strategies</h3>
+    <p>Defines <strong>HOW</strong> to generate a configuration artifact.</p>
+    <table style="margin: 1rem 0;">
+        <thead>
+            <tr>
+                <th>Field</th>
+                <th>Description</th>
+                <th>Example</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>strategy_type</code></td>
+                <td>Format of the configuration</td>
+                <td>file_properties, file_json, file_yaml, volume, env_vars, cli_args</td>
+            </tr>
+            <tr>
+                <td><code>target_path</code></td>
+                <td>Where to put the rendered output</td>
+                <td>/data/server.properties, /config/settings.json</td>
+            </tr>
+            <tr>
+                <td><code>base_template</code></td>
+                <td>Base content or template</td>
+                <td>motd=Default Server\nmax-players=20</td>
+            </tr>
+            <tr>
+                <td><code>apply_order</code></td>
+                <td>Execution order for multiple strategies</td>
+                <td>1, 2, 3...</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3 style="margin-top: 1.5rem;">2. Parameters & Bindings</h3>
+    <p>Defines <strong>WHAT</strong> can be configured and how it maps to strategies.</p>
+
+    <h4 style="margin-top: 1rem;">Parameter Definitions (game-level)</h4>
+    <p>Defines available parameters with type, constraints, and defaults:</p>
+    <pre style="background: #f8f9fa; padding: 1rem; border-radius: 4px; overflow-x: auto;"><code>Parameter: "server_name"
+├─ key: "server_name"
+├─ param_type: "string"
+├─ description: "Server MOTD displayed to players"
+├─ required: false
+└─ default_value: "My Minecraft Server"</code></pre>
+
+    <h4 style="margin-top: 1rem;">Strategy Parameter Bindings</h4>
+    <p>Links parameters to strategies and defines how values are applied:</p>
+    <pre style="background: #f8f9fa; padding: 1rem; border-radius: 4px; overflow-x: auto;"><code>Binding:
+├─ strategy_id: &lt;server.properties strategy&gt;
+├─ param_id: &lt;server_name param&gt;
+├─ binding_type: "direct"
+├─ target_key: "motd"
+└─ value_template: NULL  (or "{{"{{"}}value{{"}}"}}" for templating)</code></pre>
+
+    <h3 style="margin-top: 1.5rem;">3. Parameter Values & Patches</h3>
+    <p>Defines the <strong>ACTUAL VALUES</strong> used at runtime.</p>
+
+    <h4 style="margin-top: 1rem;">Value Cascade</h4>
+    <p>Parameter values cascade through three levels, with later levels overriding earlier ones:</p>
+    <pre style="background: #f8f9fa; padding: 1rem; border-radius: 4px; overflow-x: auto;"><code>GameConfig:             "server_name" = "Default Minecraft"
+  ↓ (overrides)
+ServerGameConfig:       "server_name" = "Production Server"
+  ↓ (overrides)
+Session:                "server_name" = "Alex's Test Server"
+
+Final value: "Alex's Test Server"</code></pre>
+
+    <h4 style="margin-top: 1rem;">Configuration Patches</h4>
+    <p>For complex overrides that don't fit into simple parameter values:</p>
+    <pre style="background: #f8f9fa; padding: 1rem; border-radius: 4px; overflow-x: auto;"><code>Patch:
+├─ strategy_id: &lt;server.properties strategy&gt;
+├─ patch_level: "session"
+├─ entity_id: &lt;session_id&gt;
+├─ patch_format: "json_merge_patch"
+└─ patch_content: {"max-players": "50", "pvp": "true"}</code></pre>
+
+    <h2 style="margin-top: 2rem;">Example: server.properties</h2>
+
+    <h3 style="margin-top: 1rem;">Setup</h3>
+    <ol style="margin-left: 2rem;">
+        <li>
+            <strong>Create Strategy:</strong>
+            <pre style="background: #f8f9fa; padding: 1rem; border-radius: 4px; margin: 0.5rem 0;"><code>strategy_type: "file_properties"
+target_path: "/data/server.properties"
+base_template: "motd=Default Server\nmax-players=20\ndifficulty=normal"</code></pre>
+        </li>
+        <li>
+            <strong>Define Parameters:</strong>
+            <ul style="margin: 0.5rem 0 0 1.5rem;">
+                <li>server_name (string): Server name/MOTD</li>
+                <li>max_players (int, 1-100): Maximum player count</li>
+                <li>difficulty (string, enum): Game difficulty</li>
+            </ul>
+        </li>
+        <li>
+            <strong>Create Bindings:</strong>
+            <ul style="margin: 0.5rem 0 0 1.5rem;">
+                <li>server_name → motd (direct binding)</li>
+                <li>max_players → max-players (direct binding)</li>
+                <li>difficulty → difficulty (direct binding)</li>
+            </ul>
+        </li>
+        <li>
+            <strong>Set Values:</strong> Define values at GameConfig, SGC, or Session level
+        </li>
+    </ol>
+
+    <h3 style="margin-top: 1.5rem;">Rendering Flow</h3>
+    <p>When a session starts, the host-manager will:</p>
+    <ol style="margin-left: 2rem;">
+        <li>Fetch all strategies for the game (ordered by apply_order)</li>
+        <li>For each strategy, fetch parameter bindings</li>
+        <li>Resolve parameter values (GameConfig → SGC → Session cascade)</li>
+        <li>Apply bindings to generate configuration content</li>
+        <li>Apply patches at each level</li>
+        <li>Render final configuration and write to volume mount</li>
+        <li>Start container with pre-rendered configs</li>
+    </ol>
+
+    <h3 style="margin-top: 1.5rem;">Expected Result</h3>
+    <pre style="background: #f8f9fa; padding: 1rem; border-radius: 4px; overflow-x: auto;"><code>Base Template:           motd=Default Server
+                         max-players=20
+                         difficulty=normal
+
++ Parameter Bindings:    server_name → motd = "Alex's Server"
+                         max_players → max-players = 30
+
++ Session Patch:         {"pvp": "false", "difficulty": "hard"}
+
+= Final File:            motd=Alex's Server
+                         max-players=30
+                         difficulty=hard
+                         pvp=false</code></pre>
+
+    <h2 style="margin-top: 2rem;">Supported Strategy Types</h2>
+    <table style="margin: 1rem 0;">
+        <thead>
+            <tr>
+                <th>Type</th>
+                <th>Description</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>volume</code></td>
+                <td>Mount directories from host to container</td>
+                <td>✅ Working</td>
+            </tr>
+            <tr>
+                <td><code>file_properties</code></td>
+                <td>Java properties files (key=value)</td>
+                <td>🚧 In Development</td>
+            </tr>
+            <tr>
+                <td><code>file_json</code></td>
+                <td>JSON configuration files</td>
+                <td>⏳ Planned</td>
+            </tr>
+            <tr>
+                <td><code>file_yaml</code></td>
+                <td>YAML configuration files</td>
+                <td>⏳ Planned</td>
+            </tr>
+            <tr>
+                <td><code>file_ini</code></td>
+                <td>INI configuration files</td>
+                <td>⏳ Planned</td>
+            </tr>
+            <tr>
+                <td><code>file_xml</code></td>
+                <td>XML configuration files</td>
+                <td>⏳ Planned</td>
+            </tr>
+            <tr>
+                <td><code>env_vars</code></td>
+                <td>Environment variables</td>
+                <td>⏳ Planned</td>
+            </tr>
+            <tr>
+                <td><code>cli_args</code></td>
+                <td>Command-line arguments</td>
+                <td>⏳ Planned</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div style="background: #d1ecf1; border: 1px solid #bee5eb; padding: 1rem; border-radius: 4px; margin: 2rem 0;">
+        <strong>💡 Implementation Note:</strong>
+        <p style="margin: 0.5rem 0 0 0;">The rendering system is currently being implemented. Volume mounting works today. File-based strategies (properties, json, yaml) are in active development and will be available soon.</p>
+    </div>
+
+    <div class="action-bar" style="margin-top: 2rem;">
+        <a href="/games" class="btn btn-secondary">Back to Games</a>
+    </div>
+</div>
+{{end}}

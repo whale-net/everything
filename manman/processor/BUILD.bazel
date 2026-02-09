@@ -42,5 +42,6 @@ go_test(
         "//manman:models",
         "//manman/api/repository",
         "//manman/host/rmq",
+        "//manman/processor/handlers",
     ],
 )

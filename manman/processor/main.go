@@ -161,6 +161,9 @@ func run() error {
 	// Start stale host checker
 	healthHandler.StartStaleHostChecker(appCtx)
 
+	// Start stale session checker
+	sessionStatusHandler.StartStaleSessionChecker(appCtx, 1*time.Minute, time.Duration(cfg.StaleSessionThreshold)*time.Second)
+
 	// Start consumer in background
 	consumerErrChan := make(chan error, 1)
 	go func() {

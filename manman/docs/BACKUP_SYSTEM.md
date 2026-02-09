@@ -2,7 +2,7 @@
 
 ## Overview
 
-The ManManV2 backup system provides S3-based backup and restore functionality for game save data. Backups are created from session data directories and stored as compressed tarballs in S3.
+The ManManV2 backup system provides S3-based backup and restore functionality for game save data. Backups are created from GSC data directories and stored as compressed tarballs in S3.
 
 ## Architecture
 
@@ -19,7 +19,7 @@ The backup API infrastructure is complete:
 
 Actual backup creation/restoration requires host manager integration:
 - ⏳ Backup creation: Host manager creates tarball and uploads to S3
-- ⏳ Restore: Host manager downloads and extracts tarball to session directory
+- ⏳ Restore: Host manager downloads and extracts tarball to GSC directory
 - ⏳ RabbitMQ command/response flow for backup operations
 
 ## Database Schema
@@ -129,7 +129,7 @@ The wrapper's state and logs are NOT included (those are ephemeral).
    }
    ```
 4. **Host Manager**:
-   - Creates tarball of `/data/{session_id}/game`
+   - Creates tarball of `/data/gsc-{env}-{sgc_id}`
    - Uploads to S3 using provided key
    - Reports success/failure + size via RabbitMQ
 5. **API**: Updates backup record with S3 URL and size
@@ -152,8 +152,8 @@ The wrapper's state and logs are NOT included (those are ephemeral).
    ```
 5. **Host Manager**:
    - Downloads backup tarball from S3
-   - Extracts to `/data/{session_id}/game`
-   - Starts wrapper and game server normally
+   - Extracts to `/data/gsc-{env}-{sgc_id}`
+   - Starts game server normally
 
 ## Error Handling
 

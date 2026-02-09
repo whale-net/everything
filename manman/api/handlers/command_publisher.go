@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -33,9 +34,9 @@ func NewCommandPublisher(conn *rmq.Connection) (*CommandPublisher, error) {
 		return nil, fmt.Errorf("failed to create publisher: %w", err)
 	}
 
-	// Create unique reply queue for this API instance
+	// Create unique reply queue for this API instance (non-durable, auto-delete)
 	replyQueue := fmt.Sprintf("api-replies-%s", uuid.New().String())
-	consumer, err := rmq.NewConsumer(conn, replyQueue)
+	consumer, err := rmq.NewConsumerWithOpts(conn, replyQueue, false, true)
 	if err != nil {
 		publisher.Close()
 		return nil, fmt.Errorf("failed to create reply consumer: %w", err)
@@ -73,6 +74,7 @@ func (p *CommandPublisher) PublishStopSession(ctx context.Context, serverID int6
 func (p *CommandPublisher) publishAndWait(ctx context.Context, routingKey string, data interface{}, timeout time.Duration) error {
 	// Generate correlation ID
 	correlationID := uuid.New().String()
+	log.Printf("[rpc] publishing command to %s (correlation_id=%s, timeout=%v)...", routingKey, correlationID, timeout)
 
 	// Create response channel
 	respChan := make(chan CommandResponse, 1)
@@ -87,19 +89,24 @@ func (p *CommandPublisher) publishAndWait(ctx context.Context, routingKey string
 
 	// Publish with reply_to and correlation_id
 	if err := p.publisher.PublishWithReply(ctx, "manman", routingKey, body, p.replyQueue, correlationID); err != nil {
+		log.Printf("[rpc] error: failed to publish command %s: %v", correlationID, err)
 		return fmt.Errorf("failed to publish command: %w", err)
 	}
 
 	// Wait for response with timeout
 	select {
 	case <-ctx.Done():
+		log.Printf("[rpc] context cancelled while waiting for response %s", correlationID)
 		return ctx.Err()
 	case <-time.After(timeout):
+		log.Printf("[rpc] command %s timed out after %v", correlationID, timeout)
 		return fmt.Errorf("command timeout after %v", timeout)
 	case resp := <-respChan:
 		if !resp.Success {
+			log.Printf("[rpc] command %s failed: %s", correlationID, resp.Error)
 			return fmt.Errorf("command failed: %s", resp.Error)
 		}
+		log.Printf("[rpc] command %s succeeded", correlationID)
 		return nil
 	}
 }

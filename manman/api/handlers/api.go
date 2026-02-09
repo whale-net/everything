@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 	"log"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/whale-net/everything/libs/go/rmq"
@@ -28,6 +30,8 @@ type APIServer struct {
 	validationHandler       *ValidationHandler
 	logsHandler             *LogsHandler
 	backupHandler           *BackupHandler
+	strategyHandler         *ConfigurationStrategyHandler
+	patchHandler            *ConfigurationPatchHandler
 }
 
 func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq.Connection) *APIServer {
@@ -56,6 +60,8 @@ func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq
 		validationHandler:       NewValidationHandler(repo.Servers, repo.GameConfigs),
 		logsHandler:             NewLogsHandler(repo.LogReferences, s3Client),
 		backupHandler:           NewBackupHandler(repo.Backups, repo.Sessions, s3Client),
+		strategyHandler:         NewConfigurationStrategyHandler(repo.ConfigurationStrategies),
+		patchHandler:            NewConfigurationPatchHandler(repo.ConfigurationPatches),
 	}
 }
 
@@ -351,8 +357,8 @@ func gameConfigToProto(c *manman.GameConfig) *pb.GameConfig {
 
 // ServerGameConfigHandler handles ServerGameConfig-related RPCs
 type ServerGameConfigHandler struct {
-	repo      repository.ServerGameConfigRepository
-	portRepo  repository.ServerPortRepository
+	repo     repository.ServerGameConfigRepository
+	portRepo repository.ServerPortRepository
 }
 
 func NewServerGameConfigHandler(repo repository.ServerGameConfigRepository, portRepo repository.ServerPortRepository) *ServerGameConfigHandler {
@@ -508,10 +514,7 @@ func (h *ServerGameConfigHandler) UpdateServerGameConfig(ctx context.Context, re
 }
 
 func (h *ServerGameConfigHandler) DeleteServerGameConfig(ctx context.Context, req *pb.DeleteServerGameConfigRequest) (*pb.DeleteServerGameConfigResponse, error) {
-	// Deallocate ports before deleting the ServerGameConfig
-	if err := h.portRepo.DeallocatePortsBySGCID(ctx, req.ServerGameConfigId); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to deallocate ports: %v", err)
-	}
+	// Port deallocation is handled automatically via database CASCADE when sessions are deleted
 
 	// Delete the ServerGameConfig
 	if err := h.repo.Delete(ctx, req.ServerGameConfigId); err != nil {
@@ -534,6 +537,7 @@ func serverGameConfigToProto(sgc *manman.ServerGameConfig) *pb.ServerGameConfig 
 
 // SessionHandler handles Session-related RPCs
 type SessionHandler struct {
+	repo        *repository.Repository
 	sessionRepo repository.SessionRepository
 	sgcRepo     repository.ServerGameConfigRepository
 	gcRepo      repository.GameConfigRepository
@@ -542,6 +546,7 @@ type SessionHandler struct {
 
 func NewSessionHandler(repo *repository.Repository, publisher *CommandPublisher) *SessionHandler {
 	return &SessionHandler{
+		repo:        repo,
 		sessionRepo: repo.Sessions,
 		sgcRepo:     repo.ServerGameConfigs,
 		gcRepo:      repo.GameConfigs,
@@ -572,10 +577,28 @@ func (h *SessionHandler) ListSessions(ctx context.Context, req *pb.ListSessionsR
 		sgcID = &req.ServerGameConfigId
 	}
 
-	// TODO: Use enhanced filters (status_filter, started_after, started_before, server_id, live_only)
-	// This will require updating the repository layer to support these filters
+	var serverID *int64
+	if req.ServerId > 0 {
+		serverID = &req.ServerId
+	}
 
-	sessions, err := h.sessionRepo.List(ctx, sgcID, pageSize+1, offset)
+	filters := &repository.SessionFilters{
+		SGCID:        sgcID,
+		ServerID:     serverID,
+		StatusFilter: req.StatusFilter,
+		LiveOnly:     req.LiveOnly,
+	}
+
+	if req.StartedAfter > 0 {
+		t := time.Unix(req.StartedAfter, 0)
+		filters.StartedAfter = &t
+	}
+	if req.StartedBefore > 0 {
+		t := time.Unix(req.StartedBefore, 0)
+		filters.StartedBefore = &t
+	}
+
+	sessions, err := h.sessionRepo.ListWithFilters(ctx, filters, pageSize+1, offset)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list sessions: %v", err)
 	}
@@ -609,6 +632,50 @@ func (h *SessionHandler) GetSession(ctx context.Context, req *pb.GetSessionReque
 }
 
 func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionRequest) (*pb.StartSessionResponse, error) {
+	// Check for existing active sessions
+	allActiveStatuses := []string{
+		manman.SessionStatusPending,
+		manman.SessionStatusStarting,
+		manman.SessionStatusRunning,
+		manman.SessionStatusStopping,
+		manman.SessionStatusCrashed,
+		manman.SessionStatusLost,
+	}
+
+	filters := &repository.SessionFilters{
+		SGCID:        &req.ServerGameConfigId,
+		StatusFilter: allActiveStatuses,
+	}
+
+	activeSessions, err := h.sessionRepo.ListWithFilters(ctx, filters, 10, 0) // Fetch a few to check statuses
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to check active sessions: %v", err)
+	}
+
+	// Only block if there's a TRULY active session (running, pending, etc.)
+	// Crashed or Lost sessions don't block start attempts
+	var trulyActive *manman.Session
+
+	for _, s := range activeSessions {
+		if s.Status != manman.SessionStatusCrashed && s.Status != manman.SessionStatusLost {
+			trulyActive = s
+		}
+	}
+
+	if trulyActive != nil && !req.Force {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"active session %d already exists with status %s. Use force=true to override.", trulyActive.SessionID, trulyActive.Status)
+	}
+
+	// Force flag - user must explicitly opt-in via force checkbox
+	// Never auto-force based on terminal sessions to prevent data loss
+	internalForce := req.Force
+
+	if internalForce {
+		// User requested force start: mark other sessions as stopped and deallocate ports
+		log.Printf("Force start requested by user for SGC %d, will invalidate %d active sessions", req.ServerGameConfigId, len(activeSessions))
+	}
+
 	// Create session in database
 	session := &manman.Session{
 		SGCID:      req.ServerGameConfigId,
@@ -616,9 +683,16 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 		Parameters: mapToJSONB(req.Parameters),
 	}
 
-	session, err := h.sessionRepo.Create(ctx, session)
+	session, err = h.sessionRepo.Create(ctx, session)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create session: %v", err)
+	}
+
+	if internalForce {
+		// Mark other sessions as stopped in DB immediately
+		if err := h.sessionRepo.StopOtherSessionsForSGC(ctx, session.SessionID, req.ServerGameConfigId); err != nil {
+			log.Printf("Warning: Failed to invalidate other sessions for SGC %d: %v", req.ServerGameConfigId, err)
+		}
 	}
 
 	// Fetch ServerGameConfig to get server ID and deployment details
@@ -633,10 +707,63 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 		return nil, status.Errorf(codes.Internal, "failed to fetch game config: %v", err)
 	}
 
+	// If force=true, deallocate ports held by crashed/stopped sessions for this SGC
+	if internalForce {
+		// Find all terminal sessions (crashed, stopped, lost) for this SGC
+		filters := &repository.SessionFilters{
+			SGCID:        &sgc.SGCID,
+			StatusFilter: []string{manman.SessionStatusCrashed, manman.SessionStatusStopped, manman.SessionStatusLost},
+		}
+		terminalSessions, err := h.sessionRepo.ListWithFilters(ctx, filters, 100, 0)
+		if err != nil {
+			log.Printf("Warning: Failed to list terminal sessions for SGC %d: %v", sgc.SGCID, err)
+		} else {
+			for _, ts := range terminalSessions {
+				log.Printf("[session %d] force=true: deallocating ports for terminal session %d (status: %s)", session.SessionID, ts.SessionID, ts.Status)
+				if err := h.repo.ServerPorts.DeallocatePortsBySessionID(ctx, ts.SessionID); err != nil {
+					log.Printf("Warning: Failed to deallocate ports for session %d: %v", ts.SessionID, err)
+				}
+			}
+		}
+	}
+
+	// Allocate ports for this session
+	// Port bindings are defined at SGC level, but allocated per active session.
+	// This allows multiple SGCs to use the same ports, as long as only one session uses them at a time.
+	pbPortBindings := jsonbToPortBindings(sgc.PortBindings)
+	if len(pbPortBindings) > 0 {
+		// Convert protobuf PortBindings to model PortBindings
+		portBindings := make([]*manman.PortBinding, len(pbPortBindings))
+		for i, pb := range pbPortBindings {
+			portBindings[i] = &manman.PortBinding{
+				ContainerPort: pb.ContainerPort,
+				HostPort:      pb.HostPort,
+				Protocol:      pb.Protocol,
+			}
+		}
+
+		// Attempt to allocate ports - will fail if already in use by another session
+		if err := h.repo.ServerPorts.AllocateMultiplePorts(ctx, sgc.ServerID, portBindings, session.SessionID); err != nil {
+			// Rollback: mark session as failed
+			session.Status = manman.SessionStatusCrashed
+			h.sessionRepo.Update(ctx, session)
+			return nil, status.Errorf(codes.ResourceExhausted, "failed to allocate ports (ports may be in use by another session): %v", err)
+		}
+		log.Printf("[session %d] allocated %d ports on server %d", session.SessionID, len(portBindings), sgc.ServerID)
+	}
+
+	// Fetch Configuration Strategies for the game to get volume mounts
+	strategies, err := h.repo.ConfigurationStrategies.ListByGame(ctx, gc.GameID)
+	if err != nil {
+		log.Printf("Warning: Failed to fetch configuration strategies for game %d: %v", gc.GameID, err)
+		// Continue anyway, volumes might not be defined as strategies yet
+	}
+
 	// Publish start session command to RabbitMQ
 	if h.publisher != nil {
-		cmd := buildStartSessionCommand(session, sgc, gc, req.Parameters)
-		if err := h.publisher.PublishStartSession(ctx, sgc.ServerID, cmd, 30*time.Second); err != nil {
+		cmd := buildStartSessionCommand(session, sgc, gc, req.Parameters, internalForce, strategies)
+		// Increased timeout to allow for image pulling
+		if err := h.publisher.PublishStartSession(ctx, sgc.ServerID, cmd, 2*time.Minute); err != nil {
 			log.Printf("Warning: Failed to publish start session command: %v", err)
 			// Don't fail the request - the session is created, operator can manually trigger
 		}
@@ -665,7 +792,7 @@ func (h *SessionHandler) StopSession(ctx context.Context, req *pb.StopSessionReq
 			"session_id": session.SessionID,
 			"force":      false,
 		}
-		if err := h.publisher.PublishStopSession(ctx, sgc.ServerID, cmd, 30*time.Second); err != nil {
+		if err := h.publisher.PublishStopSession(ctx, sgc.ServerID, cmd, 1*time.Minute); err != nil {
 			log.Printf("Warning: Failed to publish stop session command: %v", err)
 		}
 	}
@@ -676,22 +803,51 @@ func (h *SessionHandler) StopSession(ctx context.Context, req *pb.StopSessionReq
 		return nil, status.Errorf(codes.Internal, "failed to update session: %v", err)
 	}
 
+	// Deallocate ports for this session to allow other sessions to use them
+	if err := h.repo.ServerPorts.DeallocatePortsBySessionID(ctx, session.SessionID); err != nil {
+		log.Printf("Warning: Failed to deallocate ports for session %d: %v", session.SessionID, err)
+		// Don't fail the stop request - ports can be cleaned up later
+	} else {
+		log.Printf("[session %d] deallocated ports", session.SessionID)
+	}
+
 	return &pb.StopSessionResponse{
 		Session: sessionToProto(session),
 	}, nil
 }
 
 // buildStartSessionCommand converts database models to RabbitMQ message format
-func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameConfig, gc *manman.GameConfig, sessionParams map[string]string) map[string]interface{} {
+func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameConfig, gc *manman.GameConfig, sessionParams map[string]string, force bool, strategies []*manman.ConfigurationStrategy) map[string]interface{} {
 	// Build game config message
 	gameConfig := map[string]interface{}{
-		"config_id":     gc.ConfigID,
-		"image":         gc.Image,
-		"args_template": gc.ArgsTemplate,
-		"env_template":  jsonbToMap(gc.EnvTemplate),
-		"files":         convertFilesToMessage(gc.Files),
-		"parameters":    convertParametersToMessage(gc.Parameters),
+		"config_id":       gc.ConfigID,
+		"image":           gc.Image,
+		"args_template":   gc.ArgsTemplate,
+		"env_template":    jsonbToMap(gc.EnvTemplate),
+		"files":           convertFilesToMessage(gc.Files),
+		"parameters":      convertParametersToMessage(gc.Parameters),
+		"entrypoint":      jsonbToStringArray(gc.Entrypoint),
+		"command":         jsonbToStringArray(gc.Command),
 	}
+
+	// Add volume mounts from strategies
+	var volumes []map[string]interface{}
+	for _, s := range strategies {
+		if s.StrategyType == manman.StrategyTypeVolume {
+			vol := map[string]interface{}{
+				"name":           s.Name,
+				"container_path": s.TargetPath,
+			}
+			if s.BaseTemplate != nil {
+				vol["host_subpath"] = *s.BaseTemplate
+			}
+			if s.RenderOptions != nil {
+				vol["options"] = s.RenderOptions
+			}
+			volumes = append(volumes, vol)
+		}
+	}
+	gameConfig["volumes"] = volumes
 
 	// Build server game config message
 	serverGameConfig := map[string]interface{}{
@@ -707,10 +863,11 @@ func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameCon
 
 	return map[string]interface{}{
 		"session_id":         session.SessionID,
-		"sgc_id":            sgc.SGCID,
-		"game_config":       gameConfig,
+		"sgc_id":             sgc.SGCID,
+		"game_config":        gameConfig,
 		"server_game_config": serverGameConfig,
-		"parameters":        sessionParams,
+		"parameters":         sessionParams,
+		"force":              force,
 	}
 }
 
@@ -743,11 +900,35 @@ func convertPortBindingsToMessage(bindingsJSON manman.JSONB) []interface{} {
 	if bindingsJSON == nil {
 		return []interface{}{}
 	}
-	// Port bindings are stored as array in JSONB
-	if bindings, ok := bindingsJSON["port_bindings"].([]interface{}); ok {
-		return bindings
+	// Port bindings are stored as map: "25565/TCP" -> 25565
+	// Convert to array of port binding messages for RMQ
+	var result []interface{}
+	for key, value := range bindingsJSON {
+		parts := strings.Split(key, "/")
+		if len(parts) != 2 {
+			continue
+		}
+		containerPort, err := strconv.Atoi(parts[0])
+		if err != nil {
+			continue
+		}
+		hostPort := int32(0)
+		switch v := value.(type) {
+		case float64:
+			hostPort = int32(v)
+		case int:
+			hostPort = int32(v)
+		case int32:
+			hostPort = v
+		}
+
+		result = append(result, map[string]interface{}{
+			"container_port": containerPort,
+			"host_port":      hostPort,
+			"protocol":       parts[1],
+		})
 	}
-	return []interface{}{}
+	return result
 }
 
 func sessionToProto(s *manman.Session) *pb.Session {
@@ -805,6 +986,383 @@ func (s *APIServer) GetBackup(ctx context.Context, req *pb.GetBackupRequest) (*p
 	return s.backupHandler.GetBackup(ctx, req)
 }
 
-func (s *APIServer) DeleteBackup(ctx context.Context, req *pb.DeleteBackupRequest) (*pb.DeleteBackupResponse, error) {
-	return s.backupHandler.DeleteBackup(ctx, req)
+// ConfigurationStrategyHandler handles ConfigurationStrategy-related RPCs
+type ConfigurationStrategyHandler struct {
+	repo repository.ConfigurationStrategyRepository
+}
+
+func NewConfigurationStrategyHandler(repo repository.ConfigurationStrategyRepository) *ConfigurationStrategyHandler {
+	return &ConfigurationStrategyHandler{repo: repo}
+}
+
+func (h *ConfigurationStrategyHandler) CreateConfigurationStrategy(ctx context.Context, req *pb.CreateConfigurationStrategyRequest) (*pb.CreateConfigurationStrategyResponse, error) {
+	strategy := &manman.ConfigurationStrategy{
+		GameID:        req.GameId,
+		Name:          req.Name,
+		Description:   stringPtr(req.Description),
+		StrategyType:  req.StrategyType,
+		TargetPath:    stringPtr(req.TargetPath),
+		BaseTemplate:  stringPtr(req.BaseTemplate),
+		RenderOptions: mapToJSONB(req.RenderOptions),
+		ApplyOrder:    int(req.ApplyOrder),
+	}
+
+	strategy, err := h.repo.Create(ctx, strategy)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create configuration strategy: %v", err)
+	}
+
+	return &pb.CreateConfigurationStrategyResponse{
+		Strategy: strategyToProto(strategy),
+	}, nil
+}
+
+func (h *ConfigurationStrategyHandler) ListConfigurationStrategies(ctx context.Context, req *pb.ListConfigurationStrategiesRequest) (*pb.ListConfigurationStrategiesResponse, error) {
+	strategies, err := h.repo.ListByGame(ctx, req.GameId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list configuration strategies: %v", err)
+	}
+
+	pbStrategies := make([]*pb.ConfigurationStrategy, len(strategies))
+	for i, s := range strategies {
+		pbStrategies[i] = strategyToProto(s)
+	}
+
+	return &pb.ListConfigurationStrategiesResponse{
+		Strategies: pbStrategies,
+	}, nil
+}
+
+func (h *ConfigurationStrategyHandler) UpdateConfigurationStrategy(ctx context.Context, req *pb.UpdateConfigurationStrategyRequest) (*pb.UpdateConfigurationStrategyResponse, error) {
+	strategy, err := h.repo.Get(ctx, req.StrategyId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "configuration strategy not found: %v", err)
+	}
+
+	// Apply field paths
+	if len(req.UpdatePaths) == 0 {
+		if req.Name != "" {
+			strategy.Name = req.Name
+		}
+		if req.Description != "" {
+			strategy.Description = stringPtr(req.Description)
+		}
+		if req.StrategyType != "" {
+			strategy.StrategyType = req.StrategyType
+		}
+		if req.TargetPath != "" {
+			strategy.TargetPath = stringPtr(req.TargetPath)
+		}
+		if req.BaseTemplate != "" {
+			strategy.BaseTemplate = stringPtr(req.BaseTemplate)
+		}
+		if req.RenderOptions != nil {
+			strategy.RenderOptions = mapToJSONB(req.RenderOptions)
+		}
+		if req.ApplyOrder != 0 {
+			strategy.ApplyOrder = int(req.ApplyOrder)
+		}
+	} else {
+		for _, path := range req.UpdatePaths {
+			switch path {
+			case "name":
+				strategy.Name = req.Name
+			case "description":
+				strategy.Description = stringPtr(req.Description)
+			case "strategy_type":
+				strategy.StrategyType = req.StrategyType
+			case "target_path":
+				strategy.TargetPath = stringPtr(req.TargetPath)
+			case "base_template":
+				strategy.BaseTemplate = stringPtr(req.BaseTemplate)
+			case "render_options":
+				strategy.RenderOptions = mapToJSONB(req.RenderOptions)
+			case "apply_order":
+				strategy.ApplyOrder = int(req.ApplyOrder)
+			}
+		}
+	}
+
+	if err := h.repo.Update(ctx, strategy); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update configuration strategy: %v", err)
+	}
+
+	return &pb.UpdateConfigurationStrategyResponse{
+		Strategy: strategyToProto(strategy),
+	}, nil
+}
+
+func (h *ConfigurationStrategyHandler) DeleteConfigurationStrategy(ctx context.Context, req *pb.DeleteConfigurationStrategyRequest) (*pb.DeleteConfigurationStrategyResponse, error) {
+	if err := h.repo.Delete(ctx, req.StrategyId); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete configuration strategy: %v", err)
+	}
+
+	return &pb.DeleteConfigurationStrategyResponse{}, nil
+}
+
+func (h *ConfigurationStrategyHandler) GetSessionConfiguration(ctx context.Context, req *pb.GetSessionConfigurationRequest, fullRepo *repository.Repository) (*pb.GetSessionConfigurationResponse, error) {
+	// Get session to find game/config IDs
+	session, err := fullRepo.Sessions.Get(ctx, req.SessionId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "session not found: %v", err)
+	}
+
+	// Get SGC to find game_config_id and server_id
+	sgc, err := fullRepo.ServerGameConfigs.Get(ctx, session.SGCID)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "server game config not found: %v", err)
+	}
+
+	// Get game config to find game_id
+	gc, err := fullRepo.GameConfigs.Get(ctx, sgc.GameConfigID)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "game config not found: %v", err)
+	}
+
+	// Fetch all strategies for this game
+	strategies, err := h.repo.ListByGame(ctx, gc.GameID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to fetch strategies: %v", err)
+	}
+
+	// Render each strategy
+	var renderedConfigs []*pb.RenderedConfiguration
+	for _, strategy := range strategies {
+		// Skip volume strategies - host-manager handles those separately
+		if strategy.StrategyType == manman.StrategyTypeVolume {
+			continue
+		}
+
+		rendered := &pb.RenderedConfiguration{
+			StrategyName:    strategy.Name,
+			StrategyType:    strategy.StrategyType,
+			RenderedContent: "",
+			BaseContent:     "",
+		}
+
+		if strategy.TargetPath != nil {
+			rendered.TargetPath = *strategy.TargetPath
+		}
+
+		// Set base content (may be empty for merge mode)
+		if strategy.BaseTemplate != nil {
+			rendered.BaseContent = *strategy.BaseTemplate
+		}
+
+		// Cascade patches: GameConfig → ServerGameConfig
+		patchContent := ""
+
+		// 1. Get game_config level patch
+		gcPatch, err := fullRepo.ConfigurationPatches.GetByStrategyAndEntity(ctx, strategy.StrategyID, "game_config", gc.ConfigID)
+		if err == nil && gcPatch.PatchContent != nil {
+			patchContent = *gcPatch.PatchContent
+		}
+
+		// 2. Get server_game_config level patch (overrides game_config)
+		sgcPatch, err := fullRepo.ConfigurationPatches.GetByStrategyAndEntity(ctx, strategy.StrategyID, "server_game_config", sgc.SGCID)
+		if err == nil && sgcPatch.PatchContent != nil {
+			// For properties files, we need to merge the patches
+			// For now, SGC patch completely overrides GC patch
+			// TODO: Implement smarter merging for properties files
+			if patchContent != "" {
+				patchContent = patchContent + "\n" + *sgcPatch.PatchContent
+			} else {
+				patchContent = *sgcPatch.PatchContent
+			}
+		}
+
+		// Set rendered content to the cascaded patches
+		// Host-manager will merge this with existing file if base is empty (merge mode)
+		rendered.RenderedContent = patchContent
+
+		renderedConfigs = append(renderedConfigs, rendered)
+	}
+
+	return &pb.GetSessionConfigurationResponse{
+		Configurations:     renderedConfigs,
+		GameId:             gc.GameID,
+		GameConfigId:       gc.ConfigID,
+		ServerGameConfigId: sgc.SGCID,
+	}, nil
+}
+
+func (h *ConfigurationStrategyHandler) PreviewConfiguration(ctx context.Context, req *pb.PreviewConfigurationRequest, fullRepo *repository.Repository) (*pb.PreviewConfigurationResponse, error) {
+	// Get session configuration (same as GetSessionConfiguration for now)
+	sessionResp, err := h.GetSessionConfiguration(ctx, &pb.GetSessionConfigurationRequest{
+		SessionId: req.SessionId,
+	}, fullRepo)
+	if err != nil {
+		return nil, err
+	}
+
+	// TODO: Apply parameter overrides from req.ParameterOverrides
+
+	return &pb.PreviewConfigurationResponse{
+		Configurations: sessionResp.Configurations,
+	}, nil
+}
+
+func strategyToProto(s *manman.ConfigurationStrategy) *pb.ConfigurationStrategy {
+	proto := &pb.ConfigurationStrategy{
+		StrategyId:    s.StrategyID,
+		GameId:        s.GameID,
+		Name:          s.Name,
+		StrategyType:  s.StrategyType,
+		RenderOptions: jsonbToMap(s.RenderOptions),
+		ApplyOrder:    int32(s.ApplyOrder),
+	}
+
+	if s.Description != nil {
+		proto.Description = *s.Description
+	}
+	if s.TargetPath != nil {
+		proto.TargetPath = *s.TargetPath
+	}
+	if s.BaseTemplate != nil {
+		proto.BaseTemplate = *s.BaseTemplate
+	}
+
+	return proto
+}
+
+func patchToProto(p *manman.ConfigurationPatch) *pb.ConfigurationPatch {
+	proto := &pb.ConfigurationPatch{
+		PatchId:     p.PatchID,
+		StrategyId:  p.StrategyID,
+		PatchLevel:  p.PatchLevel,
+		EntityId:    p.EntityID,
+		PatchFormat: p.PatchFormat,
+	}
+
+	if p.PatchContent != nil {
+		proto.PatchContent = *p.PatchContent
+	}
+
+	return proto
+}
+
+// Configuration Strategy RPCs
+func (s *APIServer) CreateConfigurationStrategy(ctx context.Context, req *pb.CreateConfigurationStrategyRequest) (*pb.CreateConfigurationStrategyResponse, error) {
+	return s.strategyHandler.CreateConfigurationStrategy(ctx, req)
+}
+
+func (s *APIServer) ListConfigurationStrategies(ctx context.Context, req *pb.ListConfigurationStrategiesRequest) (*pb.ListConfigurationStrategiesResponse, error) {
+	return s.strategyHandler.ListConfigurationStrategies(ctx, req)
+}
+
+func (s *APIServer) UpdateConfigurationStrategy(ctx context.Context, req *pb.UpdateConfigurationStrategyRequest) (*pb.UpdateConfigurationStrategyResponse, error) {
+	return s.strategyHandler.UpdateConfigurationStrategy(ctx, req)
+}
+
+func (s *APIServer) DeleteConfigurationStrategy(ctx context.Context, req *pb.DeleteConfigurationStrategyRequest) (*pb.DeleteConfigurationStrategyResponse, error) {
+	return s.strategyHandler.DeleteConfigurationStrategy(ctx, req)
+}
+
+func (s *APIServer) GetSessionConfiguration(ctx context.Context, req *pb.GetSessionConfigurationRequest) (*pb.GetSessionConfigurationResponse, error) {
+	return s.strategyHandler.GetSessionConfiguration(ctx, req, s.repo)
+}
+
+func (s *APIServer) PreviewConfiguration(ctx context.Context, req *pb.PreviewConfigurationRequest) (*pb.PreviewConfigurationResponse, error) {
+	return s.strategyHandler.PreviewConfiguration(ctx, req, s.repo)
+}
+
+// ConfigurationPatchHandler handles ConfigurationPatch-related RPCs
+type ConfigurationPatchHandler struct {
+	repo repository.ConfigurationPatchRepository
+}
+
+func NewConfigurationPatchHandler(repo repository.ConfigurationPatchRepository) *ConfigurationPatchHandler {
+	return &ConfigurationPatchHandler{repo: repo}
+}
+
+func (h *ConfigurationPatchHandler) CreateConfigurationPatch(ctx context.Context, req *pb.CreateConfigurationPatchRequest) (*pb.CreateConfigurationPatchResponse, error) {
+	patch := &manman.ConfigurationPatch{
+		StrategyID:   req.StrategyId,
+		PatchLevel:   req.PatchLevel,
+		EntityID:     req.EntityId,
+		PatchContent: stringPtr(req.PatchContent),
+		PatchFormat:  req.PatchFormat,
+	}
+
+	patch, err := h.repo.Create(ctx, patch)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create configuration patch: %v", err)
+	}
+
+	return &pb.CreateConfigurationPatchResponse{
+		Patch: patchToProto(patch),
+	}, nil
+}
+
+func (h *ConfigurationPatchHandler) UpdateConfigurationPatch(ctx context.Context, req *pb.UpdateConfigurationPatchRequest) (*pb.UpdateConfigurationPatchResponse, error) {
+	patch, err := h.repo.Get(ctx, req.PatchId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "configuration patch not found: %v", err)
+	}
+
+	patch.PatchContent = stringPtr(req.PatchContent)
+	patch.PatchFormat = req.PatchFormat
+
+	if err := h.repo.Update(ctx, patch); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update configuration patch: %v", err)
+	}
+
+	return &pb.UpdateConfigurationPatchResponse{
+		Patch: patchToProto(patch),
+	}, nil
+}
+
+func (h *ConfigurationPatchHandler) DeleteConfigurationPatch(ctx context.Context, req *pb.DeleteConfigurationPatchRequest) (*pb.DeleteConfigurationPatchResponse, error) {
+	if err := h.repo.Delete(ctx, req.PatchId); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete configuration patch: %v", err)
+	}
+
+	return &pb.DeleteConfigurationPatchResponse{}, nil
+}
+
+func (h *ConfigurationPatchHandler) ListConfigurationPatches(ctx context.Context, req *pb.ListConfigurationPatchesRequest) (*pb.ListConfigurationPatchesResponse, error) {
+	var strategyID *int64
+	var patchLevel *string
+	var entityID *int64
+
+	if req.StrategyId != nil {
+		strategyID = req.StrategyId
+	}
+	if req.PatchLevel != nil {
+		patchLevel = req.PatchLevel
+	}
+	if req.EntityId != nil {
+		entityID = req.EntityId
+	}
+
+	patches, err := h.repo.List(ctx, strategyID, patchLevel, entityID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list configuration patches: %v", err)
+	}
+
+	pbPatches := make([]*pb.ConfigurationPatch, len(patches))
+	for i, p := range patches {
+		pbPatches[i] = patchToProto(p)
+	}
+
+	return &pb.ListConfigurationPatchesResponse{
+		Patches: pbPatches,
+	}, nil
+}
+
+// APIServer wrapper methods for ConfigurationPatch
+func (s *APIServer) CreateConfigurationPatch(ctx context.Context, req *pb.CreateConfigurationPatchRequest) (*pb.CreateConfigurationPatchResponse, error) {
+	return s.patchHandler.CreateConfigurationPatch(ctx, req)
+}
+
+func (s *APIServer) UpdateConfigurationPatch(ctx context.Context, req *pb.UpdateConfigurationPatchRequest) (*pb.UpdateConfigurationPatchResponse, error) {
+	return s.patchHandler.UpdateConfigurationPatch(ctx, req)
+}
+
+func (s *APIServer) DeleteConfigurationPatch(ctx context.Context, req *pb.DeleteConfigurationPatchRequest) (*pb.DeleteConfigurationPatchResponse, error) {
+	return s.patchHandler.DeleteConfigurationPatch(ctx, req)
+}
+
+func (s *APIServer) ListConfigurationPatches(ctx context.Context, req *pb.ListConfigurationPatchesRequest) (*pb.ListConfigurationPatchesResponse, error) {
+	return s.patchHandler.ListConfigurationPatches(ctx, req)
 }

@@ -35,6 +35,11 @@ func run() error {
 	apiAddress := getEnv("API_ADDRESS", "localhost:50051")
 	serverName := getEnv("SERVER_NAME", "")
 	environment := getEnv("ENVIRONMENT", "")
+	hostDataDir := os.Getenv("HOST_DATA_DIR") // Path as seen by Docker daemon (host side)
+
+	if hostDataDir == "" {
+		return fmt.Errorf("HOST_DATA_DIR must be provided (absolute path on host for game data)")
+	}
 
 	// Self-registration mode: Register with API and get server_id
 	log.Println("Starting ManManV2 Host Manager (self-registration mode)")
@@ -60,8 +65,14 @@ func run() error {
 	}
 	defer rmqConn.Close()
 
-	// Initialize session manager
-	sessionManager := session.NewSessionManager(dockerClient)
+	// Initialize gRPC client for control API
+	grpcClient, err := initializeGRPCClient(ctx, apiAddress)
+	if err != nil {
+		return fmt.Errorf("failed to initialize gRPC client: %w", err)
+	}
+
+	// Initialize session manager with gRPC client for configuration fetching
+	sessionManager := session.NewSessionManager(dockerClient, environment, hostDataDir, grpcClient)
 
 	// Recover orphaned sessions on startup
 	log.Println("Recovering orphaned sessions...")
@@ -174,6 +185,8 @@ type CommandHandlerImpl struct {
 
 // HandleStartSession handles a start session command
 func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.StartSessionCommand) error {
+	log.Printf("[host] processing start session command for session %d (sgc %d)...", cmd.SessionID, cmd.SGCID)
+	
 	env := make([]string, 0, len(cmd.GameConfig.EnvTemplate))
 	for k, v := range cmd.GameConfig.EnvTemplate {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
@@ -189,6 +202,16 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 		ports[fmt.Sprintf("%d", pb.ContainerPort)] = fmt.Sprintf("%d", pb.HostPort)
 	}
 
+	volumes := make([]session.VolumeMount, 0, len(cmd.GameConfig.Volumes))
+	for _, v := range cmd.GameConfig.Volumes {
+		volumes = append(volumes, session.VolumeMount{
+			Name:          v.Name,
+			ContainerPath: v.ContainerPath,
+			HostSubpath:   v.HostSubpath,
+			Options:       v.Options,
+		})
+	}
+
 	sessionCmd := &session.StartSessionCommand{
 		SessionID:    cmd.SessionID,
 		SGCID:        cmd.SGCID,
@@ -197,21 +220,29 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 		Command:      command,
 		Env:          env,
 		PortBindings: ports,
+		Volumes:      volumes,
+		Force:        cmd.Force,
 	}
 
 	// Publish starting status before attempting container creation
+	log.Printf("[host] publishing status: starting for session %d", cmd.SessionID)
 	if err := h.publisher.PublishSessionStatus(ctx, &rmq.SessionStatusUpdate{
 		SessionID: cmd.SessionID, SGCID: cmd.SGCID, Status: "starting",
 	}); err != nil {
+		log.Printf("[host] error: failed to publish starting status for session %d: %v", cmd.SessionID, err)
 		return fmt.Errorf("failed to publish starting status: %w", err)
 	}
 
 	if err := h.sessionManager.StartSession(ctx, sessionCmd); err != nil {
+		log.Printf("[host] error: failed to start session %d: %v", cmd.SessionID, err)
 		_ = h.publisher.PublishSessionStatus(ctx, &rmq.SessionStatusUpdate{
 			SessionID: cmd.SessionID, SGCID: cmd.SGCID, Status: "crashed",
 		})
-		return fmt.Errorf("failed to start session: %w", err)
+		// Wrap in PermanentError to avoid infinite RMQ retries
+		return &rmqlib.PermanentError{Err: fmt.Errorf("failed to start session: %w", err)}
 	}
+	
+	log.Printf("[host] publishing status: running for session %d", cmd.SessionID)
 	return h.publisher.PublishSessionStatus(ctx, &rmq.SessionStatusUpdate{
 		SessionID: cmd.SessionID, SGCID: cmd.SGCID, Status: "running",
 	})
@@ -222,7 +253,8 @@ func (h *CommandHandlerImpl) HandleStopSession(ctx context.Context, cmd *rmq.Sto
 	// Get session state to retrieve SGCID before stopping
 	state, exists := h.sessionManager.GetSessionState(cmd.SessionID)
 	if !exists {
-		return fmt.Errorf("session %d not found", cmd.SessionID)
+		log.Printf("[host] session %d not found for stop command, marking as permanent error", cmd.SessionID)
+		return &rmqlib.PermanentError{Err: fmt.Errorf("session %d not found", cmd.SessionID)}
 	}
 	sgcID := state.SGCID
 
@@ -234,7 +266,13 @@ func (h *CommandHandlerImpl) HandleStopSession(ctx context.Context, cmd *rmq.Sto
 	}
 
 	if err := h.sessionManager.StopSession(ctx, cmd.SessionID, cmd.Force); err != nil {
-		return fmt.Errorf("failed to stop session: %w", err)
+		// If session is not found, it means it's already stopped/removed (e.g. by StartSession failure)
+		// We should still publish "stopped" status to ensure lifecycle completion
+		if strings.Contains(err.Error(), "not found") {
+			log.Printf("Session %d not found during stop (race condition handled), proceeding to mark as stopped", cmd.SessionID)
+		} else {
+			return fmt.Errorf("failed to stop session: %w", err)
+		}
 	}
 
 	// Publish stopped status after container is stopped
@@ -249,6 +287,9 @@ func (h *CommandHandlerImpl) HandleStopSession(ctx context.Context, cmd *rmq.Sto
 // HandleKillSession handles a kill session command
 func (h *CommandHandlerImpl) HandleKillSession(ctx context.Context, cmd *rmq.KillSessionCommand) error {
 	if err := h.sessionManager.KillSession(ctx, cmd.SessionID); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return &rmqlib.PermanentError{Err: err}
+		}
 		return fmt.Errorf("failed to kill session: %w", err)
 	}
 
@@ -263,12 +304,57 @@ func (h *CommandHandlerImpl) HandleKillSession(ctx context.Context, cmd *rmq.Kil
 // HandleSendInput handles a send input command
 func (h *CommandHandlerImpl) HandleSendInput(ctx context.Context, cmd *rmq.SendInputCommand) error {
 	if err := h.sessionManager.SendInput(ctx, cmd.SessionID, cmd.Input); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return &rmqlib.PermanentError{Err: err}
+		}
 		return fmt.Errorf("failed to send input to session %d: %w", cmd.SessionID, err)
 	}
 	return nil
 }
 
 // selfRegister generates a server name (if not provided) and registers with the control plane
+// initializeGRPCClient creates a gRPC client connection to the control API
+func initializeGRPCClient(ctx context.Context, apiAddress string) (pb.ManManAPIClient, error) {
+	// Build TLS config based on environment and auto-detection
+	var tlsConfig *grpcclient.TLSConfig
+	apiTLSEnabled := shouldUseAPITLS(apiAddress)
+	if useTLS := os.Getenv("API_USE_TLS"); useTLS != "" {
+		apiTLSEnabled = useTLS == "true"
+	}
+
+	if apiTLSEnabled {
+		tlsConfig = &grpcclient.TLSConfig{
+			Enabled:            true,
+			InsecureSkipVerify: getEnv("API_TLS_SKIP_VERIFY", "false") == "true",
+			CACertPath:         getEnv("API_CA_CERT_PATH", ""),
+			ServerName:         getEnv("API_TLS_SERVER_NAME", ""),
+		}
+	}
+
+	connCtx, connCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer connCancel()
+
+	client, err := grpcclient.NewClientWithTLS(connCtx, apiAddress, tlsConfig)
+	if err != nil {
+		// Retry connection with exponential backoff
+		backoff := 1 * time.Second
+		for i := 0; i < 5; i++ {
+			log.Printf("Failed to connect to API: %v. Retrying in %v...", err, backoff)
+			time.Sleep(backoff)
+			client, err = grpcclient.NewClientWithTLS(connCtx, apiAddress, tlsConfig)
+			if err == nil {
+				break
+			}
+			backoff *= 2
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to API after retries: %w", err)
+		}
+	}
+
+	return pb.NewManManAPIClient(client.GetConnection()), nil
+}
+
 func selfRegister(ctx context.Context, apiAddress, serverName, environment, dockerSocket string) (int64, error) {
 	// Generate server name if not provided
 	if serverName == "" {
@@ -289,32 +375,10 @@ func selfRegister(ctx context.Context, apiAddress, serverName, environment, dock
 		}
 	}
 
-	// Build TLS config based on environment and auto-detection
-	var tlsConfig *grpcclient.TLSConfig
-	apiTLSEnabled := shouldUseAPITLS(apiAddress)
-	if useTLS := os.Getenv("API_USE_TLS"); useTLS != "" {
-		apiTLSEnabled = useTLS == "true"
-	}
-
-	if apiTLSEnabled {
-		tlsConfig = &grpcclient.TLSConfig{
-			Enabled:            true,
-			InsecureSkipVerify: getEnv("API_TLS_SKIP_VERIFY", "false") == "true",
-			CACertPath:         getEnv("API_CA_CERT_PATH", ""),
-			ServerName:         getEnv("API_TLS_SERVER_NAME", ""),
-		}
-	}
-
-	connCtx, connCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer connCancel()
-
-	client, err := grpcclient.NewClientWithTLS(connCtx, apiAddress, tlsConfig)
+	grpcClient, err := initializeGRPCClient(ctx, apiAddress)
 	if err != nil {
-		return 0, fmt.Errorf("failed to connect to API: %w", err)
+		return 0, err
 	}
-	defer client.Close()
-
-	grpcClient := pb.NewManManAPIClient(client.GetConnection())
 
 	// Get Docker info for capabilities
 	dockerClient, err := docker.NewClient(dockerSocket)

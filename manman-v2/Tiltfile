@@ -69,16 +69,41 @@ print("  OTEL:      {}".format(otel_endpoint))
 local_resource(
     'rabbitmq-vhost-setup',
     cmd='''
-    # Wait for RabbitMQ to be ready
-    kubectl wait --for=condition=ready pod -l app=rabbitmq -n {namespace} --timeout=60s
-
-    # Create vhost if it doesn't exist (idempotent)
-    kubectl exec -n {namespace} rabbitmq-dev-0 -- rabbitmqctl add_vhost manmanv2-dev 2>/dev/null || true
-
-    # Set permissions for rabbit user
+    set -e
+    
+    echo "Waiting for RabbitMQ pod to be ready..."
+    kubectl wait --for=condition=ready pod -l app=rabbitmq-dev -n {namespace} --timeout=60s
+    
+    echo "Waiting for RabbitMQ app to be fully started..."
+    # Wait for RabbitMQ app to actually be running (not just pod ready)
+    for i in {{1..30}}; do
+        if kubectl exec -n {namespace} rabbitmq-dev-0 -- rabbitmqctl status >/dev/null 2>&1; then
+            echo "✓ RabbitMQ app is running"
+            break
+        fi
+        echo "  Attempt $i/30: RabbitMQ app not ready yet, waiting..."
+        sleep 2
+    done
+    
+    echo "Creating vhost 'manmanv2-dev'..."
+    # Create vhost (idempotent - ignore if already exists)
+    kubectl exec -n {namespace} rabbitmq-dev-0 -- rabbitmqctl add_vhost manmanv2-dev 2>/dev/null || {{
+        # Check if it already exists
+        if kubectl exec -n {namespace} rabbitmq-dev-0 -- rabbitmqctl list_vhosts | grep -q "^manmanv2-dev$"; then
+            echo "  ✓ vhost already exists"
+        else
+            echo "  ✗ Failed to create vhost"
+            exit 1
+        fi
+    }}
+    
+    echo "Setting permissions for 'rabbit' user on vhost 'manmanv2-dev'..."
     kubectl exec -n {namespace} rabbitmq-dev-0 -- rabbitmqctl set_permissions -p manmanv2-dev rabbit ".*" ".*" ".*"
-
-    echo "✓ RabbitMQ vhost 'manmanv2-dev' configured"
+    
+    echo ""
+    echo "✓ RabbitMQ vhost 'manmanv2-dev' configured successfully"
+    echo "  - Vhost: manmanv2-dev"
+    echo "  - User: rabbit (full permissions)"
     '''.format(namespace=namespace),
     resource_deps=['rabbitmq-dev'],
     labels=['manmanv2-infrastructure'],
@@ -89,7 +114,7 @@ local_resource(
 # ===========================
 
 # Get watch paths for manman apps
-watch_paths = get_watch_paths('manman')
+watch_paths = get_watch_paths('manman') + ['manman-v2/ui']
 
 # Define ManManV2 apps (control plane services only)
 # Host manager runs on bare metal with Docker socket - see README-HOST.md
@@ -108,6 +133,11 @@ APPS = {
         'enabled_env': 'ENABLE_MANMANV2_PROCESSOR',
         'bazel_target': '//manman/processor:event-processor_image_load',
         'image_name': 'manmanv2-event-processor',
+    },
+    'ui': {
+        'enabled_env': 'ENABLE_MANMANV2_UI',
+        'bazel_target': '//manman-v2/ui:manmanv2-ui_image_load',
+        'image_name': 'manmanv2-manmanv2-ui',
     },
 }
 
@@ -172,6 +202,7 @@ spec:
 
     k8s_resource(
         'manmanv2-migration',
+        resource_deps=['postgres-dev'],
         labels=['manmanv2-infrastructure']
     )
     print("🔄 Migration job configured")
@@ -248,10 +279,15 @@ spec:
         s3_bucket=os.environ.get('S3_BUCKET', 'manmanv2-dev'),
     )))
 
+    # Build dependency list for API
+    api_deps = ['rabbitmq-vhost-setup']
+    if get_env_bool('ENABLE_MANMANV2_MIGRATION', default='true'):
+        api_deps.append('manmanv2-migration')
+
     # Port forward API to localhost
     k8s_resource(
         'manmanv2-api',
-        resource_deps=['manmanv2-migration'] if get_env_bool('ENABLE_MANMANV2_MIGRATION', default='true') else [],
+        resource_deps=api_deps,
         port_forwards=['50052:50051'],
         labels=['manmanv2-control-plane']
     )
@@ -321,6 +357,64 @@ spec:
         labels=['manmanv2-control-plane']
     )
 
+# Management UI (HTMX + gRPC)
+if get_env_bool('ENABLE_MANMANV2_UI', default='true'):
+    k8s_yaml(blob("""
+apiVersion: v1
+kind: Service
+metadata:
+  name: manmanv2-ui
+  namespace: {namespace}
+spec:
+  selector:
+    app: manmanv2-ui
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: manmanv2-ui
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: manmanv2-ui
+  template:
+    metadata:
+      labels:
+        app: manmanv2-ui
+    spec:
+      containers:
+      - name: ui
+        image: manmanv2-manmanv2-ui
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: HOST
+          value: "0.0.0.0"
+        - name: PORT
+          value: "8000"
+        - name: AUTH_MODE
+          value: "none"
+        - name: SECRET_KEY
+          value: "dev-secret-key"
+        - name: CONTROL_API_URL
+          value: "manmanv2-api.{namespace}.svc.cluster.local:50051"
+""".format(namespace=namespace)))
+
+    k8s_resource(
+        'manmanv2-ui',
+        resource_deps=['manmanv2-api'],
+        port_forwards=['8080:8000'],
+        labels=['manmanv2-control-plane']
+    )
+    print("🌐 UI forwarded to http://localhost:8080")
+
 # ===========================
 # Access Information
 # ===========================
@@ -332,6 +426,7 @@ print("  PostgreSQL:    localhost:5432 (user: postgres, pass: password)")
 print("  RabbitMQ:      localhost:5672 (user: rabbit, pass: password)")
 print("  RabbitMQ Mgmt: http://localhost:15672")
 print("  API (gRPC):    localhost:50052")
+print("  UI (Web):      http://localhost:8080")
 print("")
 print("🏃 Host Manager:")
 print("  Run separately on bare metal - see README-HOST.md")

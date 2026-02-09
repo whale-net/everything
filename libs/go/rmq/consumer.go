@@ -30,6 +30,11 @@ type Consumer struct {
 
 // NewConsumer creates a new consumer
 func NewConsumer(conn *Connection, queueName string) (*Consumer, error) {
+	return NewConsumerWithOpts(conn, queueName, true, false)
+}
+
+// NewConsumerWithOpts creates a new consumer with custom queue options
+func NewConsumerWithOpts(conn *Connection, queueName string, durable, autoDelete bool) (*Consumer, error) {
 	ch, err := conn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open channel: %w", err)
@@ -41,32 +46,37 @@ func NewConsumer(conn *Connection, queueName string) (*Consumer, error) {
 		return nil, fmt.Errorf("failed to set QoS: %w", err)
 	}
 
-	// Declare dead letter queue first
-	dlqName := queueName + "-dlq"
-	_, err = ch.QueueDeclare(
-		dlqName, // name
-		true,    // durable
-		false,   // delete when unused
-		false,   // exclusive
-		false,   // no-wait
-		nil,     // arguments
-	)
-	if err != nil {
-		ch.Close()
-		return nil, fmt.Errorf("failed to declare DLQ: %w", err)
-	}
+	var arguments amqp.Table
+	if durable {
+		// Declare dead letter queue first
+		dlqName := queueName + "-dlq"
+		_, err = ch.QueueDeclare(
+			dlqName, // name
+			true,    // durable
+			false,   // delete when unused
+			false,   // exclusive
+			false,   // no-wait
+			nil,     // arguments
+		)
+		if err != nil {
+			ch.Close()
+			return nil, fmt.Errorf("failed to declare DLQ: %w", err)
+		}
 
-	// Declare main queue with DLQ configuration
-	queue, err := ch.QueueDeclare(
-		queueName, // name
-		true,      // durable
-		false,     // delete when unused
-		false,     // exclusive
-		false,     // no-wait
-		amqp.Table{
+		arguments = amqp.Table{
 			"x-dead-letter-exchange":    "", // Use default exchange
 			"x-dead-letter-routing-key": dlqName,
-		},
+		}
+	}
+
+	// Declare main queue
+	queue, err := ch.QueueDeclare(
+		queueName,  // name
+		durable,    // durable
+		autoDelete, // delete when unused
+		false,      // exclusive
+		false,      // no-wait
+		arguments,  // arguments
 	)
 	if err != nil {
 		ch.Close()
@@ -232,6 +242,7 @@ func (c *Consumer) sendReply(ctx context.Context, replyTo, correlationID string,
 	}
 
 	// Publish reply using the channel directly (no exchange, direct to queue)
+	log.Printf("Sending reply to %s (correlation_id=%s, success=%v)", replyTo, correlationID, err == nil)
 	publishErr := c.channel.PublishWithContext(
 		ctx,
 		"",      // exchange (empty for direct queue publish)
@@ -246,7 +257,9 @@ func (c *Consumer) sendReply(ctx context.Context, replyTo, correlationID string,
 	)
 
 	if publishErr != nil {
-		log.Printf("Failed to send reply: %v", publishErr)
+		log.Printf("Failed to send reply to %s: %v", replyTo, publishErr)
+	} else {
+		log.Printf("Successfully sent reply to %s", replyTo)
 	}
 }
 

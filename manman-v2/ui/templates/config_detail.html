@@ -1,0 +1,285 @@
+{{define "config_detail_content"}}
+<div class="action-bar">
+    <h1>{{.Config.Name}}</h1>
+    <div>
+        <a href="/games/{{.Game.GameId}}" class="btn btn-secondary btn-sm">Back to Game</a>
+        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('edit-form').style.display='block'">Edit</button>
+        <button class="btn btn-danger btn-sm" 
+                hx-delete="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/delete"
+                hx-confirm="Are you sure you want to delete this configuration?">Delete</button>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Configuration Details</div>
+    </div>
+    <dl style="display: grid; grid-template-columns: 200px 1fr; gap: 0.5rem;">
+        <dt><strong>Config ID:</strong></dt>
+        <dd>{{.Config.ConfigId}}</dd>
+        
+        <dt><strong>Game:</strong></dt>
+        <dd><a href="/games/{{.Game.GameId}}">{{.Game.Name}}</a></dd>
+        
+        <dt><strong>Name:</strong></dt>
+        <dd>{{.Config.Name}}</dd>
+        
+        <dt><strong>Docker Image:</strong></dt>
+        <dd><code>{{.Config.Image}}</code></dd>
+        
+        <dt><strong>Entrypoint:</strong></dt>
+        <dd>
+            {{if .Config.Entrypoint}}
+            <code>{{range $i, $val := .Config.Entrypoint}}{{if $i}} {{end}}{{$val}}{{end}}</code>
+            {{else}}-{{end}}
+        </dd>
+        
+        <dt><strong>Command:</strong></dt>
+        <dd>
+            {{if .Config.Command}}
+            <code>{{range $i, $val := .Config.Command}}{{if $i}} {{end}}{{$val}}{{end}}</code>
+            {{else}}-{{end}}
+        </dd>
+        
+        <dt><strong>Args Template:</strong></dt>
+        <dd>{{if .Config.ArgsTemplate}}<pre style="background: #f5f5f5; padding: 0.5rem;">{{.Config.ArgsTemplate}}</pre>{{else}}-{{end}}</dd>
+    </dl>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Deploy to Server</div>
+    </div>
+    {{if .DeployError}}
+    <div class="alert alert-warning" style="margin-bottom: 1rem;">{{.DeployError}}</div>
+    {{end}}
+    <form method="POST" action="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/deploy" style="display: flex; gap: 0.75rem; align-items: end; flex-wrap: wrap;">
+        <div class="form-group" style="min-width: 240px;">
+            <label for="server_id">Server</label>
+            <select id="server_id" name="server_id" required>
+                <option value="">Select a server</option>
+                {{range .Servers}}
+                <option value="{{.ServerId}}">{{.Name}} ({{.Status}})</option>
+                {{end}}
+            </select>
+        </div>
+        <button type="submit" class="btn btn-success">Deploy GameConfig</button>
+    </form>
+    {{if .Deployments}}
+    <div style="margin-top: 1rem;">
+        <strong>Existing deployments</strong>
+        <table style="margin-top: 0.5rem;">
+            <thead>
+                <tr>
+                    <th>Server</th>
+                    <th>Server Game Config</th>
+                    <th>Status</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Deployments}}
+                <tr>
+                    <td><a href="/servers/{{.Server.ServerId}}">{{.Server.Name}}</a></td>
+                    <td><code>{{.Config.ServerGameConfigId}}</code></td>
+                    <td>{{.Config.Status}}</td>
+                    <td><a class="btn btn-secondary btn-sm" href="/sessions?server_game_config_id={{.Config.ServerGameConfigId}}">View Sessions</a></td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+    {{else}}
+    <div class="empty-state" style="margin-top: 1rem;">
+        <p>No deployments yet. Deploy this config to a server to create a Server Game Config.</p>
+    </div>
+    {{end}}
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Volume Mounts</div>
+    </div>
+    <div class="card-content">
+        <p style="color: #666; margin-bottom: 1rem;">
+            Persistent volumes defined at the game level. These are automatically mapped to subdirectories in the game server's data directory.
+        </p>
+        {{if .Volumes}}
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Container Path</th>
+                    <th>Host Subpath</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Volumes}}
+                <tr>
+                    <td><strong>{{.Name}}</strong></td>
+                    <td><code>{{.TargetPath}}</code></td>
+                    <td><code>{{if .BaseTemplate}}{{.BaseTemplate}}{{else}}<em>(default)</em>{{end}}</code></td>
+                    <td>{{.Description}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+        {{else}}
+        <div class="empty-state">
+            <p>No volume mounts defined for this game.</p>
+        </div>
+        {{end}}
+        <div style="margin-top: 1rem;">
+            <a href="/games/{{.Game.GameId}}" class="btn btn-secondary btn-sm">Manage Volumes in Game Settings</a>
+        </div>
+    </div>
+</div>
+
+<!-- Edit form (hidden by default) -->
+<div id="edit-form" style="display: none;">
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title">Edit Configuration</div>
+        </div>
+        <form hx-post="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/edit" hx-swap="none">
+            <div class="form-group">
+                <label for="name">Name *</label>
+                <input type="text" id="name" name="name" value="{{.Config.Name}}" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="image">Docker Image *</label>
+                <input type="text" id="image" name="image" value="{{.Config.Image}}" required placeholder="e.g., itzg/minecraft-server:latest">
+            </div>
+            
+            <div class="form-group">
+                <label for="args_template">Args Template</label>
+                <textarea id="args_template" name="args_template" placeholder="Optional command line arguments">{{.Config.ArgsTemplate}}</textarea>
+            </div>
+
+            <div style="display: flex; gap: 0.5rem;">
+                <button type="submit" class="btn btn-success">Save Changes</button>
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('edit-form').style.display='none'">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Parameters</div>
+    </div>
+    <div style="margin-bottom: 1rem; padding: 0.75rem; background: #f8f9fa; border-left: 4px solid #3498db;">
+        <strong>Parameter resolution order:</strong> Session overrides → Server Game Config overrides → GameConfig defaults.
+        Use this GameConfig to define the base knobs, then override per-server and per-session.
+    </div>
+    <form method="POST" action="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/update-parameters" style="margin-bottom: 1rem;">
+        <div class="form-group">
+            <label for="parameters_json">Edit Parameters (JSON)</label>
+            <textarea id="parameters_json" name="parameters_json" rows="8">{{toJSONEmpty .Config.Parameters}}</textarea>
+            <small style="color: #666;">Array of objects: key, type, required, default_value, description, value</small>
+        </div>
+        <button type="submit" class="btn btn-success">Save Parameters</button>
+    </form>
+    
+    {{if .Config.Parameters}}
+    <table>
+        <thead>
+            <tr>
+                <th>Key</th>
+                <th>Type</th>
+                <th>Required</th>
+                <th>Default</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Config.Parameters}}
+            <tr>
+                <td><code>{{.Key}}</code></td>
+                <td><span class="badge badge-secondary">{{.Type}}</span></td>
+                <td>{{if .Required}}Yes{{else}}No{{end}}</td>
+                <td>{{if .DefaultValue}}<code>{{.DefaultValue}}</code>{{else}}-{{end}}</td>
+                <td>{{.Description}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else}}
+    <div class="empty-state">
+        <p>No parameters defined.</p>
+    </div>
+    {{end}}
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Environment Variables</div>
+    </div>
+    <form method="POST" action="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/update-env" style="margin-bottom: 1rem;">
+        <div class="form-group">
+            <label for="env_template_json">Edit Env Template (JSON)</label>
+            <textarea id="env_template_json" name="env_template_json" rows="6">{{toJSONEmpty .Config.EnvTemplate}}</textarea>
+            <small style="color: #666;">JSON object of key/value pairs</small>
+        </div>
+        <button type="submit" class="btn btn-success">Save Env Template</button>
+    </form>
+    
+    {{if .Config.EnvTemplate}}
+    <table>
+        <thead>
+            <tr>
+                <th>Key</th>
+                <th>Value</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range $key, $value := .Config.EnvTemplate}}
+            <tr>
+                <td><code>{{$key}}</code></td>
+                <td><code>{{$value}}</code></td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else}}
+    <div class="empty-state">
+        <p>No environment variables defined.</p>
+    </div>
+    {{end}}
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">File Templates</div>
+    </div>
+    
+    {{if .Config.Files}}
+    <table>
+        <thead>
+            <tr>
+                <th>Path</th>
+                <th>Mode</th>
+                <th>Template</th>
+                <th>Preview</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Config.Files}}
+            <tr>
+                <td><code>{{.Path}}</code></td>
+                <td><code>{{.Mode}}</code></td>
+                <td>{{if .IsTemplate}}Yes{{else}}No{{end}}</td>
+                <td><pre style="max-height: 100px; overflow: auto; background: #f5f5f5; padding: 0.5rem;">{{.Content}}</pre></td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else}}
+    <div class="empty-state">
+        <p>No file templates defined.</p>
+    </div>
+    {{end}}
+</div>
+{{end}}

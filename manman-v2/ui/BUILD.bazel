@@ -1,0 +1,43 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "ui_lib",
+    srcs = [
+        "grpc_client.go",
+        "handlers_games.go",
+        "handlers_home.go",
+        "handlers_sessions.go",
+        "handlers_servers.go",
+        "main.go",
+        "templates.go",
+    ],
+    embedsrcs = glob(["templates/**/*.html"]),
+    importpath = "github.com/whale-net/everything/manman-v2/ui",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/grpcclient",
+        "//libs/go/htmxauth",
+        "//manman/protos:manmanpb",
+        "@org_golang_google_grpc//:grpc",
+    ],
+)
+
+go_binary(
+    name = "manmanv2-ui",
+    embed = [":ui_lib"],
+    visibility = ["//visibility:public"],
+)
+
+release_app(
+    name = "manmanv2-ui",
+    app_type = "external-api",
+    binary_name = ":manmanv2-ui",
+    description = "HTMX-based management interface for ManManV2 control plane (gRPC client)",
+    domain = "manmanv2",
+    ingress_host = "manman.whalenet.dev",
+    ingress_tls_secret = "manmanv2-tls",
+    language = "go",
+    port = 8000,
+    replicas = 1,  # Single replica for development
+)

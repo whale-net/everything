@@ -76,7 +76,7 @@ def run_tilt_command(args: list[str], timeout: int = 10) -> dict[str, Any]:
         }
 
 
-def _tilt_status() -> dict[str, Any]:
+def _tilt_status(resource: str | None = None) -> dict[str, Any]:
     """Get overall Tilt session status.
 
     Returns session information including name, creation time, status, and targets.
@@ -98,12 +98,22 @@ def _tilt_status() -> dict[str, Any]:
         # Tilt returns {"items": [...]} format
         if 'items' in data and len(data['items']) > 0:
             session = data['items'][0]
-            return {
+            status_payload = {
                 'name': session.get('metadata', {}).get('name', 'unknown'),
                 'creationTimestamp': session.get('metadata', {}).get('creationTimestamp'),
                 'status': session.get('status', {}),
                 'targets': session.get('status', {}).get('targets', [])
             }
+            if resource:
+                # Provide a focused view for a specific resource, if requested.
+                resources = _tilt_get_resources().get('resources', [])
+                resource_status = next(
+                    (item for item in resources if item.get('name') == resource),
+                    None
+                )
+                status_payload['resource'] = resource
+                status_payload['resourceStatus'] = resource_status
+            return status_payload
         else:
             return {
                 'error': 'No Tilt session found',
@@ -117,16 +127,19 @@ def _tilt_status() -> dict[str, Any]:
 
 
 @mcp.tool()
-def tilt_status() -> dict[str, Any]:
+def tilt_status(resource: str | None = None) -> dict[str, Any]:
     """Get overall Tilt session status.
 
     Returns session information including name, creation time, status, and targets.
     If Tilt is not running, returns an error message.
 
+    Args:
+        resource: Optional resource name to include status for (e.g., 'postgres-dev')
+
     Returns:
         Dictionary containing session details or error information
     """
-    return _tilt_status()
+    return _tilt_status(resource)
 
 
 def _tilt_get_resources() -> dict[str, Any]:
@@ -199,10 +212,8 @@ def _tilt_logs(resource: str, lines: int = 100) -> dict[str, Any]:
     Returns:
         Dictionary with 'logs' text or error information
     """
-    result = run_tilt_command(
-        ['logs', resource, f'--tail={lines}'],
-        timeout=30
-    )
+    # Tilt CLI doesn't support --tail; fetch logs and trim locally.
+    result = run_tilt_command(['logs', resource], timeout=30)
 
     if not result['success']:
         return {
@@ -210,8 +221,11 @@ def _tilt_logs(resource: str, lines: int = 100) -> dict[str, Any]:
             'details': result['error']
         }
 
-    # Strip ANSI codes from logs
+    # Strip ANSI codes from logs and trim to last N lines
     clean_logs = strip_ansi(result['output'])
+    if lines is not None and lines > 0:
+        log_lines = clean_logs.splitlines()
+        clean_logs = '\n'.join(log_lines[-lines:])
 
     return {
         'resource': resource,

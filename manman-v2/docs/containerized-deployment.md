@@ -26,7 +26,11 @@ The containerized host manager requires two critical volume mounts:
 ```yaml
 volumes:
   - /var/run/docker.sock:/var/run/docker.sock  # Docker API access
-  - ./data:/data                                 # Session data persistence
+  - /home/user/manmanv2/data:/data             # GSC data persistence
+
+environment:
+  - DATA_DIR=/data                             # Path inside this container
+  - HOST_DATA_DIR=/home/user/manmanv2/data     # Path on the host machine
 ```
 
 #### Docker Socket (`/var/run/docker.sock`)
@@ -34,13 +38,13 @@ Allows the host manager to control Docker on the host machine to create game ser
 
 #### Data Directory (`./data:/data`)
 **Critical for proper operation.** This mount allows the host manager to:
-1. Create session directories (`/data/session-{id}`) that persist game server data
+1. Create GSC directories (`/data/gsc-{env}-{sgc_id}`) that persist game server data
 2. Bind mount these directories into game containers
-3. Enable data persistence across container restarts
+3. Enable data persistence across container restarts AND sessions for the same GSC
 
 **Without this mount**, session starts will fail with:
 ```
-Error: invalid mount config for type "bind": bind source path does not exist: /data/session-1
+Error: invalid mount config for type "bind": bind source path does not exist: /data/gsc-prod-1
 ```
 
 ## Docker Compose Configuration
@@ -74,21 +78,21 @@ services:
 | `ENVIRONMENT` | No | `production` | Deployment environment (dev/staging/production) |
 | `DOCKER_SOCKET` | No | `/var/run/docker.sock` | Docker socket path |
 
-## Session Data Directory Structure
+## GSC Data Directory Structure
 
 When sessions are started, the host manager creates directories in the mounted `/data` volume:
 
 ```
 ./data/
-├── session-1/      # Session 1 game data
-├── session-2/      # Session 2 game data
-└── session-n/      # Session N game data
+├── gsc-prod-1/      # GSC 1 game data in production
+├── gsc-dev-1/       # GSC 1 game data in development
+└── gsc-prod-n/      # GSC N game data in production
 ```
 
-Each session directory is bind-mounted into its game container at `/data/game`, allowing:
-- Game servers to persist world data, configs, and save files
-- Backups to be created from session data
-- Session restoration from backups
+Each GSC directory is bind-mounted into its game container at `/data/game`, allowing:
+- Game servers to persist world data, configs, and save files across sessions
+- Backups to be created from GSC data
+- Restoration of game state for a specific GSC
 
 ## Testing Containerized Deployment
 
@@ -120,7 +124,7 @@ This test validates:
 **Symptom:**
 ```
 Error: failed to create game container: Error response from daemon:
-invalid mount config for type "bind": bind source path does not exist: /data/session-1
+invalid mount config for type "bind": bind source path does not exist: /data/gsc-1
 ```
 
 **Solution:**
@@ -134,7 +138,7 @@ volumes:
 
 **Symptom:**
 ```
-Error: failed to create session data directory: permission denied
+Error: failed to create GSC data directory: permission denied
 ```
 
 **Solution:**
@@ -150,15 +154,15 @@ chmod 755 ./data
 Game server logs show permission errors when writing to `/data/game`
 
 **Solution:**
-The session directory may have restrictive permissions. The host manager creates directories with `0755` by default, which should work for most game servers.
+The GSC directory may have restrictive permissions. The host manager creates directories with `0755` by default, which should work for most game servers.
 
 If your game server runs as a specific UID, you may need to adjust permissions:
 ```bash
-# Find the session directory
+# Find the GSC directory
 ls -la ./data/
 
-# Adjust permissions for the specific session
-chmod 777 ./data/session-{id}
+# Adjust permissions for the specific GSC
+chmod 777 ./data/gsc-{sgc_id}
 ```
 
 ## Deployment Checklist

@@ -139,6 +139,8 @@ docker run -d \
   -e DOCKER_SOCKET=/var/run/docker.sock \
   -e API_ADDRESS="$API_ENDPOINT" \
   -e ENVIRONMENT=test \
+  -e DATA_DIR="/data" \
+  -e HOST_DATA_DIR="$DATA_DIR" \
   manmanv2-host-manager:latest
 
 echo -e "${GREEN}✓ Host manager container started${NC}"
@@ -297,12 +299,12 @@ fi
 echo ""
 
 # Step 6: Verify data directory was created
-echo -e "${BLUE}━━━ Step 6: Verify Session Data Directory ━━━${NC}"
-SESSION_DATA_DIR="$DATA_DIR/session-$SESSION_ID"
-if [ -d "$SESSION_DATA_DIR" ]; then
-  echo -e "${GREEN}✓ Session data directory created: $SESSION_DATA_DIR${NC}"
+echo -e "${BLUE}━━━ Step 6: Verify GSC Data Directory ━━━${NC}"
+GSC_DATA_DIR="$DATA_DIR/gsc-test-$SGC_ID"
+if [ -d "$GSC_DATA_DIR" ]; then
+  echo -e "${GREEN}✓ GSC data directory created: $GSC_DATA_DIR${NC}"
 else
-  echo -e "${RED}✗ Session data directory not found: $SESSION_DATA_DIR${NC}"
+  echo -e "${RED}✗ GSC data directory not found: $GSC_DATA_DIR${NC}"
   exit 1
 fi
 echo ""
@@ -381,7 +383,7 @@ echo -e "${GREEN}✓ All containerized deployment tests passed!${NC}"
 echo ""
 echo -e "${BLUE}Key achievements:${NC}"
 echo "  ✓ Host manager ran successfully in container"
-echo "  ✓ Session data directory created at: $SESSION_DATA_DIR"
+echo "  ✓ GSC data directory created at: $GSC_DATA_DIR"
 echo "  ✓ Game container started with bind mount"
 echo "  ✓ Session lifecycle completed successfully"
 echo ""

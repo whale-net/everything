@@ -94,7 +94,7 @@ ManManV2 is a game server management platform with a split-plane architecture:
 │  │  stdin/stdout via Docker attach             │       │
 │  └─────────────────────────────────────────────┘       │
 │                     │                                   │
-│          Volume: /data/session-{session_id}:/data/game  │
+│          Volume: /data/gsc-{env}-{sgc_id}:/data/game   │
 └─────────────────────────────────────────────────────────┘
 ```
 

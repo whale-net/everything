@@ -19,7 +19,7 @@ func NewServerPortRepository(db *pgxpool.Pool) *ServerPortRepository {
 }
 
 // AllocatePort allocates a port on a server for a specific ServerGameConfig
-func (r *ServerPortRepository) AllocatePort(ctx context.Context, serverID int64, port int, protocol string, sgcID int64) error {
+func (r *ServerPortRepository) AllocatePort(ctx context.Context, serverID int64, port int, protocol string, sessionID int64) error {
 	// Validate inputs
 	if err := validatePort(port); err != nil {
 		return err
@@ -27,31 +27,31 @@ func (r *ServerPortRepository) AllocatePort(ctx context.Context, serverID int64,
 	if err := validateProtocol(protocol); err != nil {
 		return err
 	}
-	if sgcID <= 0 {
-		return &InvalidSGCIDError{SGCID: sgcID}
+	if sessionID <= 0 {
+		return &InvalidSessionIDError{SessionID: sessionID}
 	}
 
 	query := `
-		INSERT INTO server_ports (server_id, port, protocol, sgc_id, allocated_at)
+		INSERT INTO server_ports (server_id, port, protocol, session_id, allocated_at)
 		VALUES ($1, $2, $3, $4, $5)
 	`
 
-	_, err := r.db.Exec(ctx, query, serverID, port, protocol, sgcID, time.Now())
+	_, err := r.db.Exec(ctx, query, serverID, port, protocol, sessionID, time.Now())
 	if err != nil {
 		// Check for unique constraint violation (port conflict)
 		if isPgUniqueViolation(err) {
 			// Get existing allocation to provide better error message
 			existing, _ := r.GetPortAllocation(ctx, serverID, port, protocol)
 			existingSGC := int64(0)
-			if existing != nil && existing.SGCID != nil {
-				existingSGC = *existing.SGCID
+			if existing != nil && existing.SessionID != nil {
+				existingSGC = *existing.SessionID
 			}
 			return &PortConflictError{
 				ServerID:     serverID,
 				Port:         port,
 				Protocol:     protocol,
 				ExistingSGC:  existingSGC,
-				RequestedSGC: sgcID,
+				RequestedSGC: sessionID,
 			}
 		}
 		return fmt.Errorf("failed to allocate port: %w", err)
@@ -92,7 +92,7 @@ func (r *ServerPortRepository) IsPortAvailable(ctx context.Context, serverID int
 // GetPortAllocation retrieves the allocation details for a specific port
 func (r *ServerPortRepository) GetPortAllocation(ctx context.Context, serverID int64, port int, protocol string) (*manman.ServerPort, error) {
 	query := `
-		SELECT server_id, port, protocol, sgc_id, allocated_at
+		SELECT server_id, port, protocol, sgc_id, session_id, allocated_at
 		FROM server_ports
 		WHERE server_id = $1 AND port = $2 AND protocol = $3
 	`
@@ -103,6 +103,7 @@ func (r *ServerPortRepository) GetPortAllocation(ctx context.Context, serverID i
 		&allocation.Port,
 		&allocation.Protocol,
 		&allocation.SGCID,
+		&allocation.SessionID,
 		&allocation.AllocatedAt,
 	)
 
@@ -123,7 +124,7 @@ func (r *ServerPortRepository) GetPortAllocation(ctx context.Context, serverID i
 // ListAllocatedPorts lists all port allocations for a server
 func (r *ServerPortRepository) ListAllocatedPorts(ctx context.Context, serverID int64) ([]*manman.ServerPort, error) {
 	query := `
-		SELECT server_id, port, protocol, sgc_id, allocated_at
+		SELECT server_id, port, protocol, sgc_id, session_id, allocated_at
 		FROM server_ports
 		WHERE server_id = $1
 		ORDER BY port, protocol
@@ -143,6 +144,7 @@ func (r *ServerPortRepository) ListAllocatedPorts(ctx context.Context, serverID 
 			&port.Port,
 			&port.Protocol,
 			&port.SGCID,
+			&port.SessionID,
 			&port.AllocatedAt,
 		)
 		if err != nil {
@@ -154,16 +156,16 @@ func (r *ServerPortRepository) ListAllocatedPorts(ctx context.Context, serverID 
 	return ports, rows.Err()
 }
 
-// ListPortsBySGCID lists all port allocations for a specific ServerGameConfig
-func (r *ServerPortRepository) ListPortsBySGCID(ctx context.Context, sgcID int64) ([]*manman.ServerPort, error) {
+// ListPortsBySessionID lists all port allocations for a specific ServerGameConfig
+func (r *ServerPortRepository) ListPortsBySessionID(ctx context.Context, sessionID int64) ([]*manman.ServerPort, error) {
 	query := `
-		SELECT server_id, port, protocol, sgc_id, allocated_at
+		SELECT server_id, port, protocol, sgc_id, session_id, allocated_at
 		FROM server_ports
-		WHERE sgc_id = $1
+		WHERE session_id = $1
 		ORDER BY server_id, port, protocol
 	`
 
-	rows, err := r.db.Query(ctx, query, sgcID)
+	rows, err := r.db.Query(ctx, query, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -177,6 +179,7 @@ func (r *ServerPortRepository) ListPortsBySGCID(ctx context.Context, sgcID int64
 			&port.Port,
 			&port.Protocol,
 			&port.SGCID,
+			&port.SessionID,
 			&port.AllocatedAt,
 		)
 		if err != nil {
@@ -188,19 +191,19 @@ func (r *ServerPortRepository) ListPortsBySGCID(ctx context.Context, sgcID int64
 	return ports, rows.Err()
 }
 
-// DeallocatePortsBySGCID deallocates all ports for a ServerGameConfig
-func (r *ServerPortRepository) DeallocatePortsBySGCID(ctx context.Context, sgcID int64) error {
+// DeallocatePortsBySessionID deallocates all ports for a ServerGameConfig
+func (r *ServerPortRepository) DeallocatePortsBySessionID(ctx context.Context, sessionID int64) error {
 	query := `
 		DELETE FROM server_ports
-		WHERE sgc_id = $1
+		WHERE session_id = $1
 	`
 
-	_, err := r.db.Exec(ctx, query, sgcID)
+	_, err := r.db.Exec(ctx, query, sessionID)
 	return err
 }
 
 // AllocateMultiplePorts allocates multiple ports in a transaction
-func (r *ServerPortRepository) AllocateMultiplePorts(ctx context.Context, serverID int64, portBindings []*manman.PortBinding, sgcID int64) error {
+func (r *ServerPortRepository) AllocateMultiplePorts(ctx context.Context, serverID int64, portBindings []*manman.PortBinding, sessionID int64) error {
 	// Start transaction
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
@@ -232,7 +235,7 @@ func (r *ServerPortRepository) AllocateMultiplePorts(ctx context.Context, server
 
 	// Allocate all ports
 	insertQuery := `
-		INSERT INTO server_ports (server_id, port, protocol, sgc_id, allocated_at)
+		INSERT INTO server_ports (server_id, port, protocol, session_id, allocated_at)
 		VALUES ($1, $2, $3, $4, $5)
 	`
 
@@ -245,7 +248,7 @@ func (r *ServerPortRepository) AllocateMultiplePorts(ctx context.Context, server
 			return err
 		}
 
-		_, err := tx.Exec(ctx, insertQuery, serverID, binding.HostPort, binding.Protocol, sgcID, time.Now())
+		_, err := tx.Exec(ctx, insertQuery, serverID, binding.HostPort, binding.Protocol, sessionID, time.Now())
 		if err != nil {
 			return err
 		}
@@ -369,6 +372,14 @@ type InvalidProtocolError struct {
 
 func (e *InvalidProtocolError) Error() string {
 	return fmt.Sprintf("invalid protocol: %s (must be TCP or UDP)", e.Protocol)
+}
+
+type InvalidSessionIDError struct {
+	SessionID int64
+}
+
+func (e *InvalidSessionIDError) Error() string {
+	return fmt.Sprintf("invalid SessionID: %d (must be > 0)", e.SessionID)
 }
 
 type InvalidSGCIDError struct {

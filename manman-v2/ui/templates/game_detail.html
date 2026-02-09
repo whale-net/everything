@@ -1,0 +1,120 @@
+{{define "game_detail_content"}}
+<div class="action-bar">
+    <h1>{{.Game.Name}}</h1>
+    <div>
+        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('edit-form').style.display='block'">Edit</button>
+        <button class="btn btn-danger btn-sm" 
+                hx-delete="/games/{{.Game.GameId}}/delete"
+                hx-confirm="Are you sure you want to delete this game?">Delete</button>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Game Information</div>
+    </div>
+    <dl style="display: grid; grid-template-columns: 200px 1fr; gap: 0.5rem;">
+        <dt><strong>Game ID:</strong></dt>
+        <dd>{{.Game.GameId}}</dd>
+        
+        <dt><strong>Name:</strong></dt>
+        <dd>{{.Game.Name}}</dd>
+        
+        <dt><strong>Steam App ID:</strong></dt>
+        <dd>{{if .Game.SteamAppId}}{{.Game.SteamAppId}}{{else}}-{{end}}</dd>
+        
+        {{if .Game.Metadata}}
+        <dt><strong>Genre:</strong></dt>
+        <dd>{{if .Game.Metadata.Genre}}{{.Game.Metadata.Genre}}{{else}}-{{end}}</dd>
+        
+        <dt><strong>Publisher:</strong></dt>
+        <dd>{{if .Game.Metadata.Publisher}}{{.Game.Metadata.Publisher}}{{else}}-{{end}}</dd>
+        
+        <dt><strong>Tags:</strong></dt>
+        <dd>
+            {{if .Game.Metadata.Tags}}
+                {{range .Game.Metadata.Tags}}
+                <span class="badge badge-secondary">{{.}}</span>
+                {{end}}
+            {{else}}-{{end}}
+        </dd>
+        {{end}}
+    </dl>
+</div>
+
+<!-- Edit form (hidden by default) -->
+<div id="edit-form" style="display: none;">
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title">Edit Game</div>
+        </div>
+        <form hx-post="/games/{{.Game.GameId}}/edit" hx-swap="none">
+            <div class="form-group">
+                <label for="name">Name *</label>
+                <input type="text" id="name" name="name" value="{{.Game.Name}}" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="steam_app_id">Steam App ID</label>
+                <input type="text" id="steam_app_id" name="steam_app_id" value="{{.Game.SteamAppId}}">
+            </div>
+            
+            <div class="form-group">
+                <label for="genre">Genre</label>
+                <input type="text" id="genre" name="genre" value="{{if .Game.Metadata}}{{.Game.Metadata.Genre}}{{end}}">
+            </div>
+            
+            <div class="form-group">
+                <label for="publisher">Publisher</label>
+                <input type="text" id="publisher" name="publisher" value="{{if .Game.Metadata}}{{.Game.Metadata.Publisher}}{{end}}">
+            </div>
+            
+            <div class="form-group">
+                <label for="tags">Tags (comma-separated)</label>
+                <input type="text" id="tags" name="tags" value="{{if .Game.Metadata}}{{range $i, $tag := .Game.Metadata.Tags}}{{if $i}}, {{end}}{{$tag}}{{end}}{{end}}">
+            </div>
+            
+            <div style="display: flex; gap: 0.5rem;">
+                <button type="submit" class="btn btn-success">Save Changes</button>
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('edit-form').style.display='none'">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Game Configurations</div>
+        <a href="/games/{{.Game.GameId}}/configs/new" class="btn btn-sm btn-primary">Create Config</a>
+    </div>
+    
+    {{if .Configs}}
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Docker Image</th>
+                <th>Parameters</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Configs}}
+            <tr>
+                <td><a href="/games/{{$.Game.GameId}}/configs/{{.ConfigId}}">{{.Name}}</a></td>
+                <td><code>{{.Image}}</code></td>
+                <td>{{len .Parameters}} parameters</td>
+                <td>
+                    <a href="/games/{{$.Game.GameId}}/configs/{{.ConfigId}}" class="btn btn-sm btn-primary">View</a>
+                </td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else}}
+    <div class="empty-state">
+        <p>No configurations yet. Create a configuration to deploy this game.</p>
+    </div>
+    {{end}}
+</div>
+{{end}}

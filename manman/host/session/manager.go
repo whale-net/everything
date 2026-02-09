@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -14,31 +14,72 @@ import (
 	"github.com/whale-net/everything/libs/go/docker"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/manman"
+	"github.com/whale-net/everything/manman/host/config"
+	pb "github.com/whale-net/everything/manman/protos"
 )
 
 // SessionManager manages the lifecycle of game server sessions
 type SessionManager struct {
 	dockerClient *docker.Client
 	stateManager *Manager
+	environment  string
+	hostDataDir  string // Path as seen by the Docker daemon (host-side)
+	grpcClient   pb.ManManAPIClient
+	renderer     *config.Renderer
 }
 
 // NewSessionManager creates a new session manager
-func NewSessionManager(dockerClient *docker.Client) *SessionManager {
+func NewSessionManager(dockerClient *docker.Client, environment string, hostDataDir string, grpcClient pb.ManManAPIClient) *SessionManager {
 	return &SessionManager{
 		dockerClient: dockerClient,
 		stateManager: NewManager(),
+		environment:  environment,
+		hostDataDir:  hostDataDir,
+		grpcClient:   grpcClient,
+		renderer:     config.NewRenderer(nil),
 	}
 }
 
 // StartSessionCommand represents a command to start a session
 type StartSessionCommand struct {
-	SessionID    int64
-	SGCID        int64
-	ServerID     int64
-	Image        string
-	Command      []string
+	SessionID     int64
+	SGCID         int64
+	ServerID      int64
+	Image         string
+	Command       []string
 	Env          []string
 	PortBindings map[string]string // containerPort -> hostPort
+	Volumes      []VolumeMount     // many volumes
+	Force        bool
+}
+
+type VolumeMount struct {
+	Name          string
+	ContainerPath string
+	HostSubpath   string
+	Options       map[string]string
+}
+
+func (sm *SessionManager) getContainerName(serverID, sgcID int64) string {
+	if sm.environment != "" {
+		return fmt.Sprintf("game-%s-%d-%d", sm.environment, serverID, sgcID)
+	}
+	return fmt.Sprintf("game-%d-%d", serverID, sgcID)
+}
+
+func (sm *SessionManager) getNetworkName(sessionID int64) string {
+	if sm.environment != "" {
+		return fmt.Sprintf("session-%s-%d", sm.environment, sessionID)
+	}
+	return fmt.Sprintf("session-%d", sessionID)
+}
+
+func (sm *SessionManager) getGSCHostDataDir(sgcID int64) string {
+	dirName := fmt.Sprintf("sgc-%d", sgcID)
+	if sm.environment != "" {
+		dirName = fmt.Sprintf("sgc-%s-%d", sm.environment, sgcID)
+	}
+	return filepath.Join(sm.hostDataDir, dirName)
 }
 
 // StartSession starts a new game server session
@@ -46,9 +87,46 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	sessionID := cmd.SessionID
 	sgcID := cmd.SGCID
 
-	// Check if session already exists to prevent orphaned containers
+	// 1. Check if the exact same session already exists
 	if _, exists := sm.stateManager.GetSession(sessionID); exists {
 		return &rmq.PermanentError{Err: fmt.Errorf("session %d already exists", sessionID)}
+	}
+
+	// 2. Check if any session is already active for this SGC
+	if existingSession, exists := sm.stateManager.GetSessionBySGCID(sgcID); exists {
+		if !cmd.Force {
+			return &rmq.PermanentError{Err: fmt.Errorf("GSC %d already has an active session %d", sgcID, existingSession.SessionID)}
+		}
+
+		// Force start: stop the existing session first
+		log.Printf("[session %d] force start: stopping existing active session %d for GSC %d", sessionID, existingSession.SessionID, sgcID)
+		if err := sm.StopSession(ctx, existingSession.SessionID, true); err != nil {
+			log.Printf("[session %d] warning: failed to stop existing session %d: %v", sessionID, existingSession.SessionID, err)
+			// Continue anyway, we'll attempt container cleanup below
+		}
+	}
+
+	// 3. If force is requested (or even if not, as a safety measure), clean up any existing container for this SGC
+	if cmd.Force {
+		containerName := sm.getContainerName(cmd.ServerID, cmd.SGCID)
+		log.Printf("[session %d] force start requested, cleaning up existing container %s", sessionID, containerName)
+
+		// 1. Attempt graceful shutdown first
+		log.Printf("[session %d] attempting graceful shutdown of %s...", sessionID, containerName)
+		shutdownTimeout := 10 * time.Second // TODO: make configurable in far future iteration
+		if err := sm.dockerClient.StopContainer(ctx, containerName, &shutdownTimeout); err != nil {
+			log.Printf("[session %d] graceful shutdown failed or container not found: %v", sessionID, err)
+		} else {
+			log.Printf("[session %d] graceful shutdown of %s succeeded", sessionID, containerName)
+		}
+
+		// 2. Force stop and remove
+		log.Printf("[session %d] removing container %s...", sessionID, containerName)
+		if err := sm.dockerClient.RemoveContainer(ctx, containerName, true); err != nil {
+			log.Printf("[session %d] warning: removal failed: %v", sessionID, err)
+		} else {
+			log.Printf("[session %d] removal of %s succeeded", sessionID, containerName)
+		}
 	}
 
 	// Create session state
@@ -58,72 +136,173 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 		Status:    manman.SessionStatusPending,
 	}
 	sm.stateManager.AddSession(state)
+	log.Printf("[session %d] added to state manager, status: starting", sessionID)
 	state.UpdateStatus(manman.SessionStatusStarting)
 
 	// 1. Create Docker network
-	networkName := fmt.Sprintf("session-%d", sessionID)
+	networkName := sm.getNetworkName(sessionID)
+	log.Printf("[session %d] creating network %s...", sessionID, networkName)
 	networkLabels := map[string]string{
-		"manman.type":       "network",
-		"manman.session_id": fmt.Sprintf("%d", sessionID),
-		"manman.server_id":  fmt.Sprintf("%d", cmd.ServerID),
+		"manman.type":        "network",
+		"manman.session_id":  fmt.Sprintf("%d", sessionID),
+		"manman.server_id":   fmt.Sprintf("%d", cmd.ServerID),
+		"manman.environment": sm.environment,
 	}
 	networkID, err := sm.dockerClient.CreateNetwork(ctx, networkName, networkLabels)
 	if err != nil {
-		state.UpdateStatus(manman.SessionStatusCrashed)
-		sm.stateManager.RemoveSession(sessionID)
-		return fmt.Errorf("failed to create network: %w", err)
+		if strings.Contains(err.Error(), "already exists") {
+			log.Printf("[session %d] network %s already exists, attempting to reuse", sessionID, networkName)
+			id, netErr := sm.dockerClient.GetNetworkIDByName(ctx, networkName)
+			if netErr != nil {
+				log.Printf("[session %d] error: failed to get existing network ID: %v", sessionID, netErr)
+				state.UpdateStatus(manman.SessionStatusCrashed)
+				sm.stateManager.RemoveSession(sessionID)
+				return fmt.Errorf("failed to get existing network ID: %w", netErr)
+			}
+			networkID = id
+			log.Printf("[session %d] reused network ID: %s", sessionID, networkID)
+		} else {
+			log.Printf("[session %d] error: failed to create network: %v", sessionID, err)
+			state.UpdateStatus(manman.SessionStatusCrashed)
+			sm.stateManager.RemoveSession(sessionID)
+			return fmt.Errorf("failed to create network: %w", err)
+		}
 	}
+	log.Printf("[session %d] network created/resolved: %s", sessionID, networkID)
 	state.NetworkID = networkID
 	state.NetworkName = networkName
 
-	// 2. Create game container
+	// 2. Fetch and render configurations
+	log.Printf("[session %d] fetching configuration strategies...", sessionID)
+	configResp, err := sm.grpcClient.GetSessionConfiguration(ctx, &pb.GetSessionConfigurationRequest{
+		SessionId: sessionID,
+	})
+	if err != nil {
+		log.Printf("[session %d] warning: failed to fetch configurations: %v", sessionID, err)
+		// Don't fail the session start - configurations are optional
+		configResp = &pb.GetSessionConfigurationResponse{Configurations: nil}
+	} else {
+		log.Printf("[session %d] fetched %d configuration strategies", sessionID, len(configResp.Configurations))
+
+		// Render configurations
+		if len(configResp.Configurations) > 0 {
+			gscHostDataDir := sm.getGSCHostDataDir(cmd.SGCID)
+			renderedFiles, err := sm.renderer.RenderConfigurations(configResp.Configurations, gscHostDataDir)
+			if err != nil {
+				log.Printf("[session %d] error: failed to render configurations: %v", sessionID, err)
+				sm.cleanupSession(ctx, state)
+				state.UpdateStatus(manman.SessionStatusCrashed)
+				sm.stateManager.RemoveSession(sessionID)
+				return fmt.Errorf("failed to render configurations: %w", err)
+			}
+
+			// Write rendered files to disk
+			if len(renderedFiles) > 0 {
+				log.Printf("[session %d] writing %d configuration files...", sessionID, len(renderedFiles))
+				if err := sm.renderer.WriteRenderedFiles(renderedFiles); err != nil {
+					log.Printf("[session %d] error: failed to write configuration files: %v", sessionID, err)
+					sm.cleanupSession(ctx, state)
+					state.UpdateStatus(manman.SessionStatusCrashed)
+					sm.stateManager.RemoveSession(sessionID)
+					return fmt.Errorf("failed to write configuration files: %w", err)
+				}
+				log.Printf("[session %d] successfully wrote configuration files", sessionID)
+			}
+		}
+	}
+
+	// 3. Create game container
+	log.Printf("[session %d] creating container for image %s...", sessionID, cmd.Image)
 	containerID, err := sm.createGameContainer(ctx, state, cmd)
 	if err != nil {
 		if isNameConflictError(err) {
+			if !cmd.Force {
+				log.Printf("[session %d] container name conflict but force=false, failing", sessionID)
+				sm.cleanupSession(ctx, state)
+				state.UpdateStatus(manman.SessionStatusCrashed)
+				sm.stateManager.RemoveSession(sessionID)
+				return &rmq.PermanentError{Err: fmt.Errorf("container name conflict for GSC %d", sgcID)}
+			}
+
 			// Handle idempotent start: container with this name already exists
+			log.Printf("[session %d] container name conflict, attempting to handle...", sessionID)
 			containerID, err = sm.handleNameConflict(ctx, cmd)
 			if err != nil {
+				log.Printf("[session %d] error: failed to handle name conflict: %v", sessionID, err)
 				sm.cleanupSession(ctx, state)
 				state.UpdateStatus(manman.SessionStatusCrashed)
 				sm.stateManager.RemoveSession(sessionID)
 				return fmt.Errorf("failed to handle name conflict: %w", err)
 			}
+			log.Printf("[session %d] resolved name conflict, container ID: %s", sessionID, containerID)
+		} else if strings.Contains(err.Error(), "No such image") {
+			// Try to pull the image and retry creation once
+			log.Printf("[session %d] image %s not found, attempting to pull...", sessionID, cmd.Image)
+			if pullErr := sm.dockerClient.PullImage(ctx, cmd.Image); pullErr != nil {
+				log.Printf("[session %d] error: failed to pull image %s: %v", sessionID, cmd.Image, pullErr)
+				sm.cleanupSession(ctx, state)
+				state.UpdateStatus(manman.SessionStatusCrashed)
+				sm.stateManager.RemoveSession(sessionID)
+				return &rmq.PermanentError{Err: fmt.Errorf("failed to pull image %s: %w", cmd.Image, pullErr)}
+			}
+
+			// Retry creation
+			log.Printf("[session %d] retrying container creation after pull...", sessionID)
+			containerID, err = sm.createGameContainer(ctx, state, cmd)
+			if err != nil {
+				log.Printf("[session %d] error: failed to create container after pull: %v", sessionID, err)
+				sm.cleanupSession(ctx, state)
+				state.UpdateStatus(manman.SessionStatusCrashed)
+				sm.stateManager.RemoveSession(sessionID)
+				return &rmq.PermanentError{Err: fmt.Errorf("failed to create game container after pull: %w", err)}
+			}
 		} else {
+			log.Printf("[session %d] error: failed to create container: %v", sessionID, err)
 			sm.cleanupSession(ctx, state)
 			state.UpdateStatus(manman.SessionStatusCrashed)
 			sm.stateManager.RemoveSession(sessionID)
 			return fmt.Errorf("failed to create game container: %w", err)
 		}
 	}
+	log.Printf("[session %d] container created: %s", sessionID, containerID)
 	state.GameContainerID = containerID
 
 	// 3. Start game container
+	log.Printf("[session %d] starting container %s...", sessionID, containerID)
 	if err := sm.dockerClient.StartContainer(ctx, containerID); err != nil {
 		// If already running (from name conflict recovery), that's fine
 		if !strings.Contains(err.Error(), "already started") {
+			log.Printf("[session %d] error: failed to start container: %v", sessionID, err)
 			sm.cleanupSession(ctx, state)
 			state.UpdateStatus(manman.SessionStatusCrashed)
 			sm.stateManager.RemoveSession(sessionID)
 			return fmt.Errorf("failed to start game container: %w", err)
 		}
+		log.Printf("[session %d] container was already started", sessionID)
 	}
+	log.Printf("[session %d] container %s started", sessionID, containerID)
 
 	// 4. Attach to container for stdin/stdout
+	log.Printf("[session %d] attaching to container for logging...", sessionID)
 	attachResp, err := sm.dockerClient.AttachToContainer(ctx, containerID)
 	if err != nil {
+		log.Printf("[session %d] error: failed to attach to container: %v", sessionID, err)
 		sm.cleanupSession(ctx, state)
 		state.UpdateStatus(manman.SessionStatusCrashed)
 		sm.stateManager.RemoveSession(sessionID)
 		return fmt.Errorf("failed to attach to game container: %w", err)
 	}
 	state.AttachResp = &attachResp
+	log.Printf("[session %d] successfully attached to container", sessionID)
 
 	// 5. Start output reader goroutine
+	log.Printf("[session %d] spawning output reader goroutine", sessionID)
 	sm.startOutputReader(state)
 
 	now := time.Now()
 	state.StartedAt = &now
 	state.UpdateStatus(manman.SessionStatusRunning)
+	log.Printf("[session %d] startup complete, status: running", sessionID)
 
 	return nil
 }
@@ -200,26 +379,44 @@ func (sm *SessionManager) SendInput(ctx context.Context, sessionID int64, input 
 
 // createGameContainer creates the game container directly
 func (sm *SessionManager) createGameContainer(ctx context.Context, state *State, cmd *StartSessionCommand) (string, error) {
-	// Create session data directory if it doesn't exist
-	sessionDataDir := fmt.Sprintf("/data/session-%d", state.SessionID)
-	if err := os.MkdirAll(sessionDataDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create session data directory: %w", err)
+	// Host-side root for this GSC (as seen by Docker)
+	gscHostDataDir := sm.getGSCHostDataDir(state.SGCID)
+
+	// Prepare volume mounts from configuration strategies
+	// Each volume creates a subdirectory under the SGC data dir (e.g., sgc-dev-1/data, sgc-dev-1/config)
+	// and mounts it to the specified container path (e.g., /data, /config)
+	// No hardcoded defaults - all volumes must be explicitly configured in the database
+	var volumes []string
+
+	for _, vol := range cmd.Volumes {
+		subDir := vol.HostSubpath
+		if subDir == "" {
+			// Use volume name as default subdirectory to avoid clashing
+			subDir = vol.Name
+		}
+
+		// Host-side path for Docker
+		hostPath := filepath.Join(gscHostDataDir, strings.TrimPrefix(subDir, "/"))
+		mountStr := fmt.Sprintf("%s:%s", hostPath, vol.ContainerPath)
+		// TODO: handle options (readonly etc)
+		volumes = append(volumes, mountStr)
 	}
 
 	config := docker.ContainerConfig{
 		Image:     cmd.Image,
-		Name:      fmt.Sprintf("game-%d-%d", cmd.ServerID, cmd.SGCID),
+		Name:      sm.getContainerName(cmd.ServerID, cmd.SGCID),
 		Command:   cmd.Command,
 		Env:       cmd.Env,
 		NetworkID: state.NetworkID,
-		Volumes:   []string{fmt.Sprintf("/data/session-%d:/data/game", state.SessionID)},
+		Volumes:   volumes,
 		Ports:     cmd.PortBindings,
 		Labels: map[string]string{
-			"manman.type":       "game",
-			"manman.session_id": fmt.Sprintf("%d", state.SessionID),
-			"manman.sgc_id":     fmt.Sprintf("%d", state.SGCID),
-			"manman.server_id":  fmt.Sprintf("%d", cmd.ServerID),
-			"manman.created_at": time.Now().Format(time.RFC3339),
+			"manman.type":        "game",
+			"manman.session_id":  fmt.Sprintf("%d", state.SessionID),
+			"manman.sgc_id":      fmt.Sprintf("%d", state.SGCID),
+			"manman.server_id":   fmt.Sprintf("%d", cmd.ServerID),
+			"manman.environment": sm.environment,
+			"manman.created_at":  time.Now().Format(time.RFC3339),
 		},
 		OpenStdin:  true,
 		AutoRemove: false,
@@ -230,7 +427,7 @@ func (sm *SessionManager) createGameContainer(ctx context.Context, state *State,
 
 // handleNameConflict handles an idempotent start when a container with the same name already exists
 func (sm *SessionManager) handleNameConflict(ctx context.Context, cmd *StartSessionCommand) (string, error) {
-	containerName := fmt.Sprintf("game-%d-%d", cmd.ServerID, cmd.SGCID)
+	containerName := sm.getContainerName(cmd.ServerID, cmd.SGCID)
 	status, err := sm.dockerClient.GetContainerStatus(ctx, containerName)
 	if err != nil {
 		return "", fmt.Errorf("failed to inspect existing container %s: %w", containerName, err)
@@ -315,12 +512,16 @@ func (sm *SessionManager) handleContainerExit(state *State) {
 
 // CleanupOrphans performs a single pass of orphan game container cleanup
 func (sm *SessionManager) CleanupOrphans(ctx context.Context, serverID int64) error {
-	fmt.Printf("Starting orphan cleanup for server %d\n", serverID)
+	fmt.Printf("Starting orphan cleanup for server %d (env=%s)\n", serverID, sm.environment)
 
 	activeSGCs := sm.stateManager.GetActiveSGCIDs()
 
 	gameFilters := map[string]string{
-		"manman.type": "game",
+		"manman.type":      "game",
+		"manman.server_id": fmt.Sprintf("%d", serverID),
+	}
+	if sm.environment != "" {
+		gameFilters["manman.environment"] = sm.environment
 	}
 	games, err := sm.dockerClient.ListContainers(ctx, gameFilters)
 	if err != nil {
@@ -334,6 +535,22 @@ func (sm *SessionManager) CleanupOrphans(ctx context.Context, serverID int64) er
 		status, err := sm.dockerClient.GetContainerStatus(ctx, game.ID)
 		if err != nil {
 			continue
+		}
+
+		// Double check labels if they weren't filtered by Docker API
+		if svrID, ok := status.Labels["manman.server_id"]; !ok || svrID != fmt.Sprintf("%d", serverID) {
+			continue
+		}
+
+		if sm.environment != "" {
+			if env, ok := status.Labels["manman.environment"]; !ok || env != sm.environment {
+				continue
+			}
+		} else {
+			// If we don't have an environment set, skip containers that DO have one set
+			if env, ok := status.Labels["manman.environment"]; ok && env != "" {
+				continue
+			}
 		}
 
 		sgcIDStr, ok := status.Labels["manman.sgc_id"]

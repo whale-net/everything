@@ -19,6 +19,12 @@ func TestIsValidTransition(t *testing.T) {
 		{"running to stopping", manman.SessionStatusRunning, manman.SessionStatusStopping, true},
 		{"stopping to stopped", manman.SessionStatusStopping, manman.SessionStatusStopped, true},
 
+		// Lost from any non-terminal state
+		{"pending to lost", manman.SessionStatusPending, manman.SessionStatusLost, true},
+		{"starting to lost", manman.SessionStatusStarting, manman.SessionStatusLost, true},
+		{"running to lost", manman.SessionStatusRunning, manman.SessionStatusLost, true},
+		{"stopping to lost", manman.SessionStatusStopping, manman.SessionStatusLost, true},
+
 		// Crash from any non-terminal state
 		{"pending to crashed", manman.SessionStatusPending, manman.SessionStatusCrashed, true},
 		{"starting to crashed", manman.SessionStatusStarting, manman.SessionStatusCrashed, true},

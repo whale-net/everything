@@ -9,6 +9,9 @@ import (
 	"github.com/whale-net/everything/manman"
 	"github.com/whale-net/everything/manman/api/repository"
 	"github.com/whale-net/everything/manman/host/rmq"
+	"github.com/whale-net/everything/manman/processor/handlers"
+	"log/slog"
+	"os"
 )
 
 // MockServerRepository implements repository.ServerRepository for testing
@@ -129,6 +132,9 @@ func NewMockSessionRepository() *MockSessionRepository {
 
 func (m *MockSessionRepository) Create(ctx context.Context, session *manman.Session) (*manman.Session, error) {
 	session.SessionID = int64(len(m.sessions) + 1)
+	if session.UpdatedAt.IsZero() {
+		session.UpdatedAt = time.Now()
+	}
 	m.sessions[session.SessionID] = session
 	return session, nil
 }
@@ -154,6 +160,7 @@ func (m *MockSessionRepository) ListWithFilters(ctx context.Context, filters *re
 }
 
 func (m *MockSessionRepository) Update(ctx context.Context, session *manman.Session) error {
+	session.UpdatedAt = time.Now()
 	m.sessions[session.SessionID] = session
 	return nil
 }
@@ -164,6 +171,7 @@ func (m *MockSessionRepository) UpdateStatus(ctx context.Context, sessionID int6
 		return &NotFoundError{ID: sessionID}
 	}
 	session.Status = status
+	session.UpdatedAt = time.Now()
 	return nil
 }
 
@@ -174,6 +182,7 @@ func (m *MockSessionRepository) UpdateSessionStart(ctx context.Context, sessionI
 	}
 	session.Status = manman.SessionStatusRunning
 	session.StartedAt = &startedAt
+	session.UpdatedAt = time.Now()
 	return nil
 }
 
@@ -185,6 +194,39 @@ func (m *MockSessionRepository) UpdateSessionEnd(ctx context.Context, sessionID 
 	session.Status = status
 	session.EndedAt = &endedAt
 	session.ExitCode = exitCode
+	session.UpdatedAt = time.Now()
+	return nil
+}
+
+func (m *MockSessionRepository) GetStaleSessions(ctx context.Context, threshold time.Duration) ([]*manman.Session, error) {
+	stale := make([]*manman.Session, 0)
+	cutoff := time.Now().Add(-threshold)
+
+	for _, session := range m.sessions {
+		// Check status is one of pending, starting, stopping
+		if session.Status != manman.SessionStatusPending &&
+			session.Status != manman.SessionStatusStarting &&
+			session.Status != manman.SessionStatusStopping {
+			continue
+		}
+
+		// Check if updated_at is before cutoff
+		if session.UpdatedAt.Before(cutoff) {
+			stale = append(stale, session)
+		}
+	}
+	return stale, nil
+}
+
+func (m *MockSessionRepository) StopOtherSessionsForSGC(ctx context.Context, sessionID int64, sgcID int64) error {
+	for id, session := range m.sessions {
+		if session.SGCID == sgcID && id != sessionID {
+			session.Status = manman.SessionStatusStopped
+			now := time.Now()
+			session.EndedAt = &now
+			session.UpdatedAt = now
+		}
+	}
 	return nil
 }
 
@@ -455,6 +497,56 @@ func TestStaleHostDetection(t *testing.T) {
 	}
 	if publisher.PublishedEvents[0].RoutingKey != "manman.host.stale" {
 		t.Errorf("Expected routing key %q, got %q", "manman.host.stale", publisher.PublishedEvents[0].RoutingKey)
+	}
+}
+
+func TestStaleSessionDetection(t *testing.T) {
+	// Setup
+	sessionRepo := NewMockSessionRepository()
+	publisher := NewMockPublisher()
+
+	// Create a "stale" session (updated long ago)
+	oldTime := time.Now().Add(-10 * time.Minute)
+	session, _ := sessionRepo.Create(context.Background(), &manman.Session{
+		SGCID:     1,
+		Status:    manman.SessionStatusStarting,
+		UpdatedAt: oldTime,
+	})
+
+	// Create repository wrapper
+	repo := &repository.Repository{
+		Sessions: sessionRepo,
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	handler := handlers.NewSessionStatusHandler(repo, publisher, logger)
+
+	// Start checker with short interval and threshold
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 5 minute threshold matches our oldTime (-10m)
+	// 1ms check interval so it runs immediately
+	handler.StartStaleSessionChecker(ctx, 1*time.Millisecond, 5*time.Minute)
+
+	// Wait for checker to run
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify session marked as lost
+	updated, _ := sessionRepo.Get(ctx, session.SessionID)
+	if updated.Status != manman.SessionStatusLost {
+		t.Errorf("Expected status %q, got %q", manman.SessionStatusLost, updated.Status)
+	}
+	if updated.EndedAt == nil {
+		t.Error("Expected EndedAt to be set")
+	}
+
+	// Verify "lost" event published
+	if len(publisher.PublishedEvents) != 1 {
+		t.Fatalf("Expected 1 published event, got %d", len(publisher.PublishedEvents))
+	}
+	if publisher.PublishedEvents[0].RoutingKey != "manman.session.lost" {
+		t.Errorf("Expected routing key %q, got %q", "manman.session.lost", publisher.PublishedEvents[0].RoutingKey)
 	}
 }
 

@@ -37,6 +37,7 @@ type Server struct {
 	Status      string     `db:"status"`
 	Environment *string    `db:"environment"`
 	LastSeen    *time.Time `db:"last_seen"`
+	IsDefault   bool       `db:"is_default"`
 }
 
 // Game represents a game definition (e.g., Minecraft, Valheim)
@@ -57,8 +58,8 @@ type GameConfig struct {
 	EnvTemplate  JSONB   `db:"env_template"`
 	Files        JSONB   `db:"files"`
 	Parameters   JSONB   `db:"parameters"`
-	Entrypoint   JSONB   `db:"entrypoint"` // []string stored as JSONB
-	Command      JSONB   `db:"command"`    // []string stored as JSONB
+	Entrypoint     JSONB   `db:"entrypoint"` // []string stored as JSONB
+	Command        JSONB   `db:"command"`    // []string stored as JSONB
 }
 
 // ServerGameConfig represents a game configuration deployed on a specific server
@@ -81,6 +82,8 @@ type Session struct {
 	Status               string     `db:"status"`
 	Parameters           JSONB      `db:"parameters"`
 	RestoredFromBackupID *int64     `db:"restored_from_backup_id"`
+	CreatedAt            time.Time  `db:"created_at"`
+	UpdatedAt            time.Time  `db:"updated_at"`
 }
 
 // ServerPort represents port allocation tracking at server level
@@ -89,6 +92,7 @@ type ServerPort struct {
 	Port        int       `db:"port"`
 	Protocol    string    `db:"protocol"`
 	SGCID       *int64    `db:"sgc_id"`
+	SessionID   *int64    `db:"session_id"`
 	AllocatedAt time.Time `db:"allocated_at"`
 }
 
@@ -240,6 +244,7 @@ const (
 	SessionStatusStopping  = "stopping"
 	SessionStatusStopped   = "stopped"
 	SessionStatusCrashed   = "crashed"
+	SessionStatusLost      = "lost"
 	SessionStatusCompleted = "completed"
 
 	ProtocolTCP = "TCP"
@@ -261,6 +266,7 @@ const (
 	StrategyTypeFileXML        = "file_xml"
 	StrategyTypeFileLua        = "file_lua"
 	StrategyTypeFileCustom     = "file_custom"
+	StrategyTypeVolume         = "volume"
 
 	// Binding types
 	BindingTypeDirect     = "direct"
@@ -280,3 +286,20 @@ const (
 	PatchFormatJSONPatch      = "json_patch"
 	PatchFormatYAMLMerge      = "yaml_merge"
 )
+
+// IsActive returns true if the session is in an active state (not completed or stopped)
+// Note: crashed and lost are still considered active for management purposes
+func (s Session) IsActive() bool {
+	switch s.Status {
+	case SessionStatusPending, SessionStatusStarting, SessionStatusRunning,
+		SessionStatusStopping, SessionStatusCrashed, SessionStatusLost:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsAvailable returns true if the session is running and ready for connections
+func (s Session) IsAvailable() bool {
+	return s.Status == SessionStatusRunning
+}

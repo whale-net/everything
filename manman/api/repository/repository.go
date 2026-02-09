@@ -68,6 +68,8 @@ type SessionRepository interface {
 	UpdateStatus(ctx context.Context, sessionID int64, status string) error
 	UpdateSessionStart(ctx context.Context, sessionID int64, startedAt time.Time) error
 	UpdateSessionEnd(ctx context.Context, sessionID int64, status string, endedAt time.Time, exitCode *int) error
+	GetStaleSessions(ctx context.Context, threshold time.Duration) ([]*manman.Session, error)
+	StopOtherSessionsForSGC(ctx context.Context, sessionID int64, sgcID int64) error
 }
 
 // ServerCapabilityRepository defines operations for ServerCapability entities
@@ -92,26 +94,47 @@ type BackupRepository interface {
 
 // ServerPortRepository defines operations for port allocation management
 type ServerPortRepository interface {
-	AllocatePort(ctx context.Context, serverID int64, port int, protocol string, sgcID int64) error
+	AllocatePort(ctx context.Context, serverID int64, port int, protocol string, sessionID int64) error
 	DeallocatePort(ctx context.Context, serverID int64, port int, protocol string) error
 	IsPortAvailable(ctx context.Context, serverID int64, port int, protocol string) (bool, error)
 	GetPortAllocation(ctx context.Context, serverID int64, port int, protocol string) (*manman.ServerPort, error)
 	ListAllocatedPorts(ctx context.Context, serverID int64) ([]*manman.ServerPort, error)
-	ListPortsBySGCID(ctx context.Context, sgcID int64) ([]*manman.ServerPort, error)
-	DeallocatePortsBySGCID(ctx context.Context, sgcID int64) error
-	AllocateMultiplePorts(ctx context.Context, serverID int64, portBindings []*manman.PortBinding, sgcID int64) error
+	ListPortsBySessionID(ctx context.Context, sessionID int64) ([]*manman.ServerPort, error)
+	DeallocatePortsBySessionID(ctx context.Context, sessionID int64) error
+	AllocateMultiplePorts(ctx context.Context, serverID int64, portBindings []*manman.PortBinding, sessionID int64) error
 	GetAvailablePortsInRange(ctx context.Context, serverID int64, protocol string, startPort, endPort, limit int) ([]int, error)
+}
+
+// ConfigurationStrategyRepository defines operations for ConfigurationStrategy entities
+type ConfigurationStrategyRepository interface {
+	Create(ctx context.Context, strategy *manman.ConfigurationStrategy) (*manman.ConfigurationStrategy, error)
+	Get(ctx context.Context, strategyID int64) (*manman.ConfigurationStrategy, error)
+	ListByGame(ctx context.Context, gameID int64) ([]*manman.ConfigurationStrategy, error)
+	Update(ctx context.Context, strategy *manman.ConfigurationStrategy) error
+	Delete(ctx context.Context, strategyID int64) error
+}
+
+// ConfigurationPatchRepository defines operations for ConfigurationPatch entities
+type ConfigurationPatchRepository interface {
+	Create(ctx context.Context, patch *manman.ConfigurationPatch) (*manman.ConfigurationPatch, error)
+	Get(ctx context.Context, patchID int64) (*manman.ConfigurationPatch, error)
+	GetByStrategyAndEntity(ctx context.Context, strategyID int64, patchLevel string, entityID int64) (*manman.ConfigurationPatch, error)
+	List(ctx context.Context, strategyID *int64, patchLevel *string, entityID *int64) ([]*manman.ConfigurationPatch, error)
+	Update(ctx context.Context, patch *manman.ConfigurationPatch) error
+	Delete(ctx context.Context, patchID int64) error
 }
 
 // Repository aggregates all repository interfaces
 type Repository struct {
-	Servers            ServerRepository
-	Games              GameRepository
-	GameConfigs        GameConfigRepository
-	ServerGameConfigs  ServerGameConfigRepository
-	Sessions           SessionRepository
-	ServerCapabilities ServerCapabilityRepository
-	LogReferences      LogReferenceRepository
-	Backups            BackupRepository
-	ServerPorts        ServerPortRepository
+	Servers                ServerRepository
+	Games                  GameRepository
+	GameConfigs            GameConfigRepository
+	ServerGameConfigs      ServerGameConfigRepository
+	Sessions               SessionRepository
+	ServerCapabilities     ServerCapabilityRepository
+	LogReferences          LogReferenceRepository
+	Backups                BackupRepository
+	ServerPorts            ServerPortRepository
+	ConfigurationStrategies ConfigurationStrategyRepository
+	ConfigurationPatches   ConfigurationPatchRepository
 }

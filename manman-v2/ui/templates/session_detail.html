@@ -1,0 +1,80 @@
+{{define "session_detail_content"}}
+<div class="action-bar">
+    <h1>Session {{.Session.SessionId}}</h1>
+    <div>
+        <a href="/sessions" class="btn btn-secondary btn-sm">Back to Sessions</a>
+        {{if eq .Session.Status "running"}}
+        <form hx-post="/sessions/{{.Session.SessionId}}/stop" hx-target="body" style="display: inline;">
+            <button type="submit" class="btn btn-danger btn-sm">Stop Session</button>
+        </form>
+        {{end}}
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Session Details</div>
+    </div>
+    <dl style="display: grid; grid-template-columns: 200px 1fr; gap: 0.5rem;">
+        <dt><strong>Session ID:</strong></dt>
+        <dd>{{.Session.SessionId}}</dd>
+
+        <dt><strong>Status:</strong></dt>
+        <dd><span class="badge {{statusBadge .Session.Status}}">{{.Session.Status}}</span></dd>
+
+        <dt><strong>Available:</strong></dt>
+        <dd>
+            {{if eq .Session.Status "running"}}
+            <span class="badge badge-success">Yes (Ready for connections)</span>
+            {{else if or (eq .Session.Status "starting") (eq .Session.Status "pending")}}
+            <span class="badge badge-warning">Starting (Wait for it to be ready)</span>
+            {{else}}
+            <span class="badge badge-danger">No (Server is not running)</span>
+            {{end}}
+        </dd>
+
+        <dt><strong>Server Game Config ID:</strong></dt>
+        <dd>{{.Session.ServerGameConfigId}}</dd>
+
+        <dt><strong>Started:</strong></dt>
+        <dd>{{timeAgo .Session.StartedAt}} ({{formatTime .Session.StartedAt}})</dd>
+
+        <dt><strong>Ended:</strong></dt>
+        <dd>{{timeAgo .Session.EndedAt}} ({{formatTime .Session.EndedAt}})</dd>
+
+        <dt><strong>Exit Code:</strong></dt>
+        <dd>{{.Session.ExitCode}}</dd>
+    </dl>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Parameters</div>
+    </div>
+    <div style="margin-bottom: 1rem; padding: 0.75rem; background: #f8f9fa; border-left: 4px solid #3498db;">
+        <strong>Parameter resolution:</strong> Session parameters override Server Game Config, which overrides GameConfig defaults.
+    </div>
+    {{if .Session.Parameters}}
+    <table>
+        <thead>
+            <tr>
+                <th>Key</th>
+                <th>Value</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range $key, $value := .Session.Parameters}}
+            <tr>
+                <td><code>{{$key}}</code></td>
+                <td><code>{{$value}}</code></td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else}}
+    <div class="empty-state">
+        <p>No session parameters.</p>
+    </div>
+    {{end}}
+</div>
+{{end}}

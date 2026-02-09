@@ -1,0 +1,50 @@
+{{define "servers_content"}}
+<h1>Servers</h1>
+
+<div class="card" style="margin-bottom: 1rem;">
+    <p style="color: #666;">
+        Servers self-register via the host manager. They appear here automatically when they come online.
+        <a href="/games">Configure game deployments</a> to run on these servers.
+    </p>
+</div>
+
+{{if .Servers}}
+<div class="card">
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Environment</th>
+                <th>Last Seen</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Servers}}
+            <tr>
+                <td><a href="/servers/{{.ServerId}}">{{.Name}}</a></td>
+                <td>
+                    <span class="badge {{statusBadge .Status}}">
+                        {{.Status}}
+                    </span>
+                </td>
+                <td>{{if .Environment}}{{.Environment}}{{else}}-{{end}}</td>
+                <td>{{timeAgo .LastSeen}}</td>
+                <td>
+                    <a href="/servers/{{.ServerId}}" class="btn btn-sm btn-primary">View</a>
+                </td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+</div>
+{{else}}
+<div class="empty-state">
+    <p>No servers found. Servers will appear here when they register with the control plane.</p>
+    <p style="color: #666; margin-top: 1rem;">
+        To add a server, run the host manager on your server hardware with the control API URL configured.
+    </p>
+</div>
+{{end}}
+{{end}}

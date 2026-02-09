@@ -2,14 +2,17 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/go-connections/nat"
@@ -104,6 +107,43 @@ func (c *Client) CreateContainer(ctx context.Context, config ContainerConfig) (s
 // StartContainer starts a container
 func (c *Client) StartContainer(ctx context.Context, containerID string) error {
 	return c.cli.ContainerStart(ctx, containerID, container.StartOptions{})
+}
+
+// PullImage pulls a Docker image with progress logging
+func (c *Client) PullImage(ctx context.Context, imageRef string) error {
+	log.Printf("Pulling image %s...", imageRef)
+	reader, err := c.cli.ImagePull(ctx, imageRef, image.PullOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to pull image %s: %w", imageRef, err)
+	}
+	defer reader.Close()
+
+	// Use a simple decoder to show progress every few seconds
+	dec := json.NewDecoder(reader)
+	lastLog := time.Now()
+	for {
+		var msg map[string]interface{}
+		if err := dec.Decode(&msg); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return err
+		}
+
+		if time.Since(lastLog) > 5*time.Second {
+			if status, ok := msg["status"].(string); ok {
+				progress := ""
+				if p, ok := msg["progress"].(string); ok {
+					progress = " " + p
+				}
+				log.Printf("[docker] %s: %s%s", imageRef, status, progress)
+			}
+			lastLog = time.Now()
+		}
+	}
+
+	log.Printf("Successfully pulled image %s", imageRef)
+	return nil
 }
 
 // StopContainer stops a container gracefully
@@ -219,6 +259,24 @@ func (c *Client) CreateNetwork(ctx context.Context, name string, labels map[stri
 		return "", fmt.Errorf("failed to create network: %w", err)
 	}
 	return resp.ID, nil
+}
+
+// GetNetworkIDByName returns the ID of a network by its name
+func (c *Client) GetNetworkIDByName(ctx context.Context, name string) (string, error) {
+	networks, err := c.cli.NetworkList(ctx, network.ListOptions{
+		Filters: filters.NewArgs(filters.Arg("name", name)),
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to list networks: %w", err)
+	}
+
+	for _, n := range networks {
+		if n.Name == name {
+			return n.ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("network %s not found", name)
 }
 
 // RemoveNetwork removes a Docker network

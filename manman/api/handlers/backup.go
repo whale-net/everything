@@ -35,7 +35,7 @@ func (h *BackupHandler) CreateBackup(ctx context.Context, req *pb.CreateBackupRe
 
 	// TODO: Phase 4 - Trigger backup via RabbitMQ to host manager
 	// The host manager will:
-	// 1. Create tarball of /data/{session_id}/game directory
+	// 1. Create tarball of /data/gsc-{env}-{sgc_id} directory
 	// 2. Upload tarball to S3
 	// 3. Report back S3 URL and size via RabbitMQ
 	//
