@@ -47,6 +47,137 @@
     </dl>
 </div>
 
+{{if eq .Session.Status "running"}}
+<div class="card">
+    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+        <div class="card-title">Live Logs</div>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <button id="toggle-logs" class="btn btn-sm btn-secondary">Hide</button>
+            <button id="clear-logs" class="btn btn-sm btn-secondary">Clear</button>
+            <span id="log-status" style="font-size: 0.85rem; color: #888;">Connecting...</span>
+        </div>
+    </div>
+    <div id="log-viewer" class="log-viewer">
+        <pre id="log-output" class="log-output"></pre>
+    </div>
+</div>
+
+<style>
+.log-viewer {
+    background: #1e1e1e;
+    border-radius: 4px;
+    max-height: 600px;
+    overflow: hidden;
+    display: block;
+}
+.log-output {
+    margin: 0;
+    padding: 1rem;
+    color: #d4d4d4;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.875rem;
+    overflow-y: auto;
+    max-height: 600px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+.log-line {
+    display: block;
+}
+.log-stdout {
+    color: #d4d4d4;
+}
+.log-stderr {
+    color: #f48771;
+}
+.log-host {
+    color: #4fc1ff;
+}
+.log-viewer.collapsed .log-output {
+    display: none;
+}
+</style>
+
+<script>
+(function() {
+    const logOutput = document.getElementById('log-output');
+    const logStatus = document.getElementById('log-status');
+    const logViewer = document.getElementById('log-viewer');
+    const toggleBtn = document.getElementById('toggle-logs');
+    const clearBtn = document.getElementById('clear-logs');
+
+    let autoScroll = true;
+    let evtSource = null;
+
+    function connect() {
+        evtSource = new EventSource('/sessions/{{.Session.SessionId}}/logs/stream');
+
+        evtSource.onopen = () => {
+            logStatus.textContent = '● Connected';
+            logStatus.style.color = '#4fc1ff';
+        };
+
+        evtSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+
+            if (data.type === 'connected') return;
+
+            // Format timestamp
+            const date = new Date(data.timestamp);
+            const time = date.toLocaleTimeString('en-US', { hour12: false });
+
+            // Create log line with color coding
+            const line = document.createElement('span');
+            line.className = `log-line log-${data.source}`;
+            line.textContent = `[${time}] [${data.source}] ${data.message}\n`;
+            logOutput.appendChild(line);
+
+            // Auto-scroll to bottom if enabled
+            if (autoScroll) {
+                logOutput.scrollTop = logOutput.scrollHeight;
+            }
+
+            // Limit to last 1000 lines (prevent memory bloat)
+            const lines = logOutput.children;
+            if (lines.length > 1000) {
+                logOutput.removeChild(lines[0]);
+            }
+        };
+
+        evtSource.onerror = () => {
+            logStatus.textContent = '● Disconnected';
+            logStatus.style.color = '#f48771';
+            evtSource.close();
+            setTimeout(connect, 2000);  // Auto-reconnect after 2s
+        };
+    }
+
+    toggleBtn.onclick = () => {
+        logViewer.classList.toggle('collapsed');
+        toggleBtn.textContent = logViewer.classList.contains('collapsed') ? 'Show' : 'Hide';
+    };
+
+    clearBtn.onclick = () => {
+        logOutput.textContent = '';
+    };
+
+    // Detect manual scroll (disable auto-scroll)
+    logOutput.onscroll = () => {
+        const atBottom = logOutput.scrollHeight - logOutput.clientHeight <= logOutput.scrollTop + 50;
+        autoScroll = atBottom;
+    };
+
+    // Start streaming
+    connect();
+
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', () => {
+        if (evtSource) evtSource.close();
+    });
+})();
+</script>
+{{end}}
+
 <div class="card">
     <div class="card-header">
         <div class="card-title">Parameters</div>

@@ -1,0 +1,36 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "log-processor_lib",
+    srcs = [
+        "main.go",
+        "config.go",
+    ],
+    importpath = "github.com/whale-net/everything/manman/log-processor",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/rmq",
+        "//manman/log-processor/consumer",
+        "//manman/log-processor/server",
+        "//manman/protos:manmanpb",
+        "@org_golang_google_grpc//:grpc",
+    ],
+)
+
+go_binary(
+    name = "log-processor",
+    embed = [":log-processor_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata for log-processor
+release_app(
+    name = "log-processor",
+    binary_name = ":log-processor",
+    language = "go",
+    domain = "manmanv2",
+    description = "ManMan log processor (real-time log streaming service)",
+    app_type = "service",
+    replicas = 1,
+)

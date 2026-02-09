@@ -17,6 +17,7 @@ proto_library(
     srcs = [
         "api.proto",
         "messages.proto",
+        "log_processor.proto",
     ],
     visibility = ["//visibility:public"],
 )

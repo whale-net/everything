@@ -4,6 +4,7 @@ go_library(
     name = "rmq",
     srcs = [
         "consumer.go",
+        "log_publisher.go",
         "messages.go",
         "publisher.go",
     ],

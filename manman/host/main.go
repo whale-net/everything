@@ -80,21 +80,21 @@ func run() error {
 		return fmt.Errorf("failed to initialize gRPC client: %w", err)
 	}
 
-	// Initialize session manager with gRPC client for configuration fetching
-	sessionManager := session.NewSessionManager(dockerClient, environment, hostDataDir, grpcClient)
-
-	// Recover orphaned sessions on startup
-	log.Println("Recovering orphaned sessions...")
-	if err := sessionManager.RecoverOrphanedSessions(ctx, serverID); err != nil {
-		log.Printf("Warning: Failed to recover some sessions: %v", err)
-	}
-
 	// Initialize RabbitMQ publisher
 	rmqPublisher, err := rmq.NewPublisher(rmqConn, serverID)
 	if err != nil {
 		return fmt.Errorf("failed to create RabbitMQ publisher: %w", err)
 	}
 	defer rmqPublisher.Close()
+
+	// Initialize session manager with gRPC client for configuration fetching and RMQ publisher for logs
+	sessionManager := session.NewSessionManager(dockerClient, environment, hostDataDir, grpcClient, rmqPublisher)
+
+	// Recover orphaned sessions on startup
+	log.Println("Recovering orphaned sessions...")
+	if err := sessionManager.RecoverOrphanedSessions(ctx, serverID); err != nil {
+		log.Printf("Warning: Failed to recover some sessions: %v", err)
+	}
 
 	// Publish initial host status and health
 	if err := rmqPublisher.PublishHostStatus(ctx, "online"); err != nil {
