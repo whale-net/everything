@@ -1,0 +1,171 @@
+# MinIO S3-compatible storage for local development
+#
+# Provides a minimal MinIO deployment for S3 testing
+
+def deploy_minio(namespace, resource_name='minio-dev', port_forward=True):
+    """
+    Deploy MinIO for local S3-compatible storage.
+
+    Args:
+        namespace: Kubernetes namespace
+        resource_name: K8s resource name
+        port_forward: Whether to forward ports 9000 (API) and 9001 (Console)
+
+    Returns:
+        Dict with connection info:
+        {
+            'endpoint': 'http://minio-dev.namespace.svc.cluster.local:9000',
+            'console_endpoint': 'http://minio-dev.namespace.svc.cluster.local:9001',
+            'access_key': 'minioadmin',
+            'secret_key': 'minioadmin',
+            'service_info': 'localhost:9000 (API), localhost:9001 (Console)',
+        }
+    """
+
+    # Deploy MinIO StatefulSet and Service
+    k8s_yaml(blob("""
+apiVersion: v1
+kind: Service
+metadata:
+  name: {resource_name}
+  namespace: {namespace}
+  labels:
+    app: {resource_name}
+spec:
+  ports:
+  - name: api
+    port: 9000
+    targetPort: 9000
+  - name: console
+    port: 9001
+    targetPort: 9001
+  selector:
+    app: {resource_name}
+  clusterIP: None
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {resource_name}
+  namespace: {namespace}
+spec:
+  serviceName: {resource_name}
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {resource_name}
+  template:
+    metadata:
+      labels:
+        app: {resource_name}
+    spec:
+      containers:
+      - name: minio
+        image: minio/minio:latest
+        args:
+        - server
+        - /data
+        - --console-address
+        - :9001
+        env:
+        - name: MINIO_ROOT_USER
+          value: minioadmin
+        - name: MINIO_ROOT_PASSWORD
+          value: minioadmin
+        ports:
+        - containerPort: 9000
+          name: api
+        - containerPort: 9001
+          name: console
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        readinessProbe:
+          httpGet:
+            path: /minio/health/ready
+            port: 9000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /minio/health/live
+            port: 9000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 1Gi
+""".format(namespace=namespace, resource_name=resource_name)))
+
+    # Configure k8s resource
+    k8s_resource(
+        resource_name,
+        labels=['infrastructure']
+    )
+
+    # Port forward if requested
+    if port_forward:
+        k8s_resource(workload=resource_name, port_forwards='9000:9000')
+        k8s_resource(workload=resource_name, port_forwards='9001:9001')
+
+    # Setup default bucket
+    # This runs after MinIO is ready to create the default bucket
+    local_resource(
+        'minio-bucket-setup',
+        cmd='''
+set -e
+
+echo "Waiting for MinIO pod to be ready..."
+kubectl wait --for=condition=ready pod -l app={resource_name} -n {namespace} --timeout=60s
+
+echo "Setting up MinIO client (mc)..."
+# Use kubectl exec to run mc commands inside the minio pod
+kubectl exec -n {namespace} {resource_name}-0 -- sh -c '
+  # Install mc (MinIO Client) if not present
+  if ! command -v mc >/dev/null 2>&1; then
+    wget -q https://dl.min.io/client/mc/release/linux-amd64/mc -O /usr/local/bin/mc
+    chmod +x /usr/local/bin/mc
+  fi
+
+  # Configure mc alias
+  mc alias set local http://localhost:9000 minioadmin minioadmin
+
+  # Create bucket if it does not exist
+  if ! mc ls local/manmanv2-dev >/dev/null 2>&1; then
+    echo "Creating bucket manmanv2-dev..."
+    mc mb local/manmanv2-dev
+    echo "✓ Bucket created"
+  else
+    echo "✓ Bucket already exists"
+  fi
+
+  # Set anonymous download policy for easier testing (optional)
+  mc anonymous set download local/manmanv2-dev
+'
+
+echo ""
+echo "✓ MinIO bucket 'manmanv2-dev' configured successfully"
+echo "  - Endpoint: http://localhost:9000"
+echo "  - Console:  http://localhost:9001"
+echo "  - Access Key: minioadmin"
+echo "  - Secret Key: minioadmin"
+        '''.format(namespace=namespace, resource_name=resource_name),
+        resource_deps=[resource_name],
+        labels=['infrastructure'],
+    )
+
+    host = '{}.{}.svc.cluster.local'.format(resource_name, namespace)
+
+    return {
+        'endpoint': 'http://{}:9000'.format(host),
+        'console_endpoint': 'http://{}:9001'.format(host),
+        'access_key': 'minioadmin',
+        'secret_key': 'minioadmin',
+        'service_info': 'localhost:9000 (API), localhost:9001 (Console)',
+    }

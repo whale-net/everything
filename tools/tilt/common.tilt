@@ -322,23 +322,23 @@ def setup_rabbitmq(namespace, resource_name='rabbitmq-dev', port_forward=True):
 def setup_otelcollector(namespace, resource_name='otelcollector-dev'):
     """
     Setup OpenTelemetry Collector using dev-util helm chart.
-    
+
     Args:
         namespace: Kubernetes namespace
         resource_name: K8s resource name
-        
+
     Returns:
         OTLP endpoint URL
-        
+
     Example:
         otlp_endpoint = setup_otelcollector('my-domain-dev')
     """
-    
+
     helm_resource(resource_name, 'dev-util/otelcollector-dev',
         resource_deps=['dev-util'],
         flags=['--set=namespace={}'.format(namespace)]
     )
-    
+
     return 'http://otel-collector.{}.svc.cluster.local:4317'.format(namespace)
 
 def setup_nginx_ingress(ingress_class='nginx', http_port=30080, https_port=30443):
