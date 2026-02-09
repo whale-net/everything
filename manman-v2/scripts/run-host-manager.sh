@@ -46,6 +46,7 @@ if [[ "$DETACH_MODE" == "-d" ]]; then
       -e DOCKER_SOCKET="/var/run/docker.sock" \
       -e HOST_DATA_DIR="$SGC_HOST_DATA_PATH" \
       -v /var/run/docker.sock:/var/run/docker.sock \
+      -v "$SGC_HOST_DATA_PATH:/var/lib/manman/sessions" \
       "$IMAGE_NAME"
 
     echo "Host manager started in background!"
@@ -64,5 +65,6 @@ else
       -e DOCKER_SOCKET="/var/run/docker.sock" \
       -e HOST_DATA_DIR="$SGC_HOST_DATA_PATH" \
       -v /var/run/docker.sock:/var/run/docker.sock \
+      -v "$SGC_HOST_DATA_PATH:/var/lib/manman/sessions" \
       "$IMAGE_NAME"
 fi
