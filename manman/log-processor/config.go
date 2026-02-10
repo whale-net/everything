@@ -15,6 +15,8 @@ type Config struct {
 	S3Bucket          string
 	S3Region          string
 	S3Endpoint        string
+	S3AccessKey       string
+	S3SecretKey       string
 	DatabaseURL       string
 	APIAddress        string
 }
@@ -30,6 +32,8 @@ func LoadConfig() *Config {
 		S3Bucket:         getEnv("S3_BUCKET", "manman-logs"),
 		S3Region:         getEnv("S3_REGION", "us-east-1"),
 		S3Endpoint:       getEnv("S3_ENDPOINT", ""),
+		S3AccessKey:      getEnv("S3_ACCESS_KEY", ""),
+		S3SecretKey:      getEnv("S3_SECRET_KEY", ""),
 		DatabaseURL:      getEnv("DATABASE_URL", ""),
 		APIAddress:       getEnv("API_ADDRESS", "localhost:50051"),
 	}

@@ -37,9 +37,11 @@ func main() {
 	if config.S3Bucket != "" && config.DatabaseURL != "" {
 		log.Println("Initializing S3 client for log archival...")
 		s3Client, err := s3.NewClient(ctx, s3.Config{
-			Bucket:   config.S3Bucket,
-			Region:   config.S3Region,
-			Endpoint: config.S3Endpoint,
+			Bucket:    config.S3Bucket,
+			Region:    config.S3Region,
+			Endpoint:  config.S3Endpoint,
+			AccessKey: config.S3AccessKey,
+			SecretKey: config.S3SecretKey,
 		})
 		if err != nil {
 			log.Fatalf("Failed to create S3 client: %v", err)
