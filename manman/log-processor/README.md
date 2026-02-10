@@ -4,9 +4,18 @@ Real-time log streaming service for ManManV2. Consumes logs from RabbitMQ and pr
 
 ## Architecture
 
+The log-processor provides two main features:
+
+### 1. Real-Time Streaming
 - **Consumer Manager**: Creates on-demand RabbitMQ consumers for each session
 - **gRPC Server**: Streams logs to clients via `StreamSessionLogs` RPC
 - **Fan-out**: Supports multiple concurrent clients streaming the same session's logs
+
+### 2. Historical Log Archival (Optional)
+- **Archiver**: Periodically archives logs to S3 for long-term storage
+- **Database**: Stores log references for querying historical logs
+- **API Integration**: Retrieves session metadata from ManManV2 API
+- **Minute-level granularity**: Logs are archived per minute for efficient retrieval
 
 ## Environment Variables
 
@@ -17,13 +26,29 @@ Real-time log streaming service for ManManV2. Consumes logs from RabbitMQ and pr
 | `RABBITMQ_URL` | RabbitMQ connection string | `amqp://guest:guest@localhost:5672/` | `amqp://user:pass@rabbitmq:5672/manmanv2-dev` |
 | `GRPC_PORT` | gRPC server port | `50053` | `50053` |
 
-### Optional
+### Optional (Streaming)
 
 | Variable | Description | Default | Example |
 |----------|-------------|---------|---------|
 | `LOG_BUFFER_TTL` | Queue message TTL in seconds | `180` (3 minutes) | `300` |
 | `LOG_BUFFER_MAX_MESSAGES` | Maximum messages per queue | `500` | `1000` |
 | `DEBUG_LOG_OUTPUT` | Enable debug logging to stdout | `false` | `true` |
+
+### Optional (Archival)
+
+For historical log storage and retrieval:
+
+| Variable | Description | Default | Example |
+|----------|-------------|---------|---------|
+| `DATABASE_URL` | PostgreSQL connection string | `` (disabled) | `postgres://user:pass@db:5432/manmanv2` |
+| `S3_BUCKET` | S3 bucket for log storage | `manman-logs` | `my-logs-bucket` |
+| `S3_REGION` | S3 region | `us-east-1` | `us-west-2` |
+| `S3_ENDPOINT` | Custom S3 endpoint (MinIO, etc.) | `` (AWS S3) | `http://minio:9000` |
+| `S3_ACCESS_KEY` | S3 access key | `` | `minioadmin` |
+| `S3_SECRET_KEY` | S3 secret key | `` | `minioadmin` |
+| `API_ADDRESS` | ManManV2 API address | `localhost:50051` | `api:50051` |
+
+**Note:** Archival is only enabled when both `DATABASE_URL` and `S3_BUCKET` are configured. If either is missing, the log-processor will only provide real-time streaming.
 
 ### Configuration Notes
 
