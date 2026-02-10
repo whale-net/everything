@@ -38,17 +38,26 @@ The log-processor provides two main features:
 
 For historical log storage and retrieval:
 
-| Variable | Description | Default | Example |
-|----------|-------------|---------|---------|
-| `DATABASE_URL` | PostgreSQL connection string | `` (disabled) | `postgres://user:pass@db:5432/manmanv2` |
-| `S3_BUCKET` | S3 bucket for log storage | `manman-logs` | `my-logs-bucket` |
-| `S3_REGION` | S3 region | `us-east-1` | `us-west-2` |
-| `S3_ENDPOINT` | Custom S3 endpoint (MinIO, etc.) | `` (AWS S3) | `http://minio:9000` |
-| `S3_ACCESS_KEY` | S3 access key | `` | `minioadmin` |
-| `S3_SECRET_KEY` | S3 secret key | `` | `minioadmin` |
-| `API_ADDRESS` | ManManV2 API address | `localhost:50051` | `api:50051` |
+| Variable | Description | Required | Default | Example |
+|----------|-------------|----------|---------|---------|
+| `DATABASE_URL` | PostgreSQL connection string (stores log metadata) | **Yes** | `` (disabled) | `postgres://user:pass@db:5432/manmanv2` |
+| `S3_BUCKET` | S3 bucket for log storage | **Yes** | `manman-logs` | `my-logs-bucket` |
+| `S3_REGION` | S3 region | No | `us-east-1` | `us-west-2` |
+| `S3_ENDPOINT` | Custom S3 endpoint (MinIO, etc.) | No | `` (AWS S3) | `http://minio:9000` |
+| `S3_ACCESS_KEY` | S3 access key (required for MinIO) | **Yes*** | `` | `minioadmin` |
+| `S3_SECRET_KEY` | S3 secret key (required for MinIO) | **Yes*** | `` | `minioadmin` |
+| `API_ADDRESS` | ManManV2 API address (fetches session SGC ID) | **Yes** | `localhost:50051` | `api:50051` |
 
-**Note:** Archival is only enabled when both `DATABASE_URL` and `S3_BUCKET` are configured. If either is missing, the log-processor will only provide real-time streaming.
+**\*Required when using MinIO or non-AWS S3. For AWS S3, IAM roles can be used instead.**
+
+**Archival Requirements:**
+- `DATABASE_URL` **AND** `S3_BUCKET` must both be configured to enable archival
+- `API_ADDRESS` must be reachable to fetch session metadata
+- Appropriate S3 credentials must be provided (access key/secret or IAM role)
+- If any requirement is missing, log-processor runs in streaming-only mode
+
+**Why API_ADDRESS is needed:**
+The archiver needs to fetch the ServerGameConfigId (SGC ID) from each session to properly organize and index logs in S3. This allows querying logs by both session ID and server configuration.
 
 ### Configuration Notes
 
