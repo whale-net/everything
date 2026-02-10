@@ -32,10 +32,11 @@ go_binary(
 # Release metadata for log-processor
 release_app(
     name = "log-processor",
+    app_type = "internal-api",
     binary_name = ":log-processor",
-    language = "go",
+    description = "Real-time log streaming and S3 archival service with gRPC API",
     domain = "manmanv2",
-    description = "ManMan log processor (real-time log streaming service)",
-    app_type = "service",
+    language = "go",
+    port = 50053,
     replicas = 1,
 )
