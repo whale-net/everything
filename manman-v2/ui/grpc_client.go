@@ -189,14 +189,21 @@ func (c *ControlClient) ListSessionsWithFilters(ctx context.Context, req *manman
 }
 
 // GetSession retrieves a single session by ID.
-func (c *ControlClient) GetSession(ctx context.Context, sessionID int64) (*manmanpb.Session, error) {
-	resp, err := c.api.GetSession(ctx, &manmanpb.GetSessionRequest{
-		SessionId: sessionID,
-	})
+func (c *ControlClient) GetSession(ctx context.Context, req *manmanpb.GetSessionRequest) (*manmanpb.GetSessionResponse, error) {
+	resp, err := c.api.GetSession(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session: %w", err)
 	}
-	return resp.Session, nil
+	return resp, nil
+}
+
+// GetHistoricalLogs retrieves historical logs for a Server Game Config.
+func (c *ControlClient) GetHistoricalLogs(ctx context.Context, req *manmanpb.GetHistoricalLogsRequest) (*manmanpb.GetHistoricalLogsResponse, error) {
+	resp, err := c.api.GetHistoricalLogs(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get historical logs: %w", err)
+	}
+	return resp, nil
 }
 
 // StopSession stops a running session by ID.

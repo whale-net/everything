@@ -12,6 +12,11 @@ type Config struct {
 	LogBufferTTL      int // seconds
 	LogBufferMaxMsgs  int
 	DebugLogOutput    bool
+	S3Bucket          string
+	S3Region          string
+	S3Endpoint        string
+	DatabaseURL       string
+	APIAddress        string
 }
 
 // LoadConfig loads configuration from environment variables
@@ -22,6 +27,11 @@ func LoadConfig() *Config {
 		LogBufferTTL:     getEnvInt("LOG_BUFFER_TTL", 180),         // 3 minutes
 		LogBufferMaxMsgs: getEnvInt("LOG_BUFFER_MAX_MESSAGES", 500),
 		DebugLogOutput:   getEnvBool("DEBUG_LOG_OUTPUT", false),
+		S3Bucket:         getEnv("S3_BUCKET", "manman-logs"),
+		S3Region:         getEnv("S3_REGION", "us-east-1"),
+		S3Endpoint:       getEnv("S3_ENDPOINT", ""),
+		DatabaseURL:      getEnv("DATABASE_URL", ""),
+		APIAddress:       getEnv("API_ADDRESS", "localhost:50051"),
 	}
 }
 

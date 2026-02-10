@@ -410,6 +410,8 @@ spec:
         - containerPort: 50053
           name: grpc
         env:
+        - name: TZ
+          value: "UTC"
         - name: RABBITMQ_URL
           value: "{rabbitmq_url}"
         - name: GRPC_PORT
@@ -420,14 +422,37 @@ spec:
           value: "500"
         - name: DEBUG_LOG_OUTPUT
           value: "false"
+        - name: S3_BUCKET
+          value: "{s3_bucket}"
+        - name: S3_REGION
+          value: "us-east-1"
+        - name: S3_ENDPOINT
+          value: "{s3_endpoint}"
+        - name: AWS_ACCESS_KEY_ID
+          value: "{s3_access_key}"
+        - name: AWS_SECRET_ACCESS_KEY
+          value: "{s3_secret_key}"
+        - name: DATABASE_URL
+          value: "postgres://postgres:password@postgres-dev.{namespace}.svc.cluster.local:5432/manmanv2?sslmode=disable"
+        - name: API_ADDRESS
+          value: "manmanv2-api.{namespace}.svc.cluster.local:50051"
 """.format(
         namespace=namespace,
         rabbitmq_url=rabbitmq_url,
+        s3_endpoint=s3_endpoint,
+        s3_access_key=s3_access_key,
+        s3_secret_key=s3_secret_key,
+        s3_bucket=s3_bucket,
     )))
+
+    # Build dependency list for log-processor
+    log_processor_deps = ['rabbitmq-vhost-setup', 'postgres-dev', 'minio-bucket-setup', 'manmanv2-api']
+    if get_env_bool('ENABLE_MANMANV2_MIGRATION', default='true'):
+        log_processor_deps.append('manmanv2-migration')
 
     k8s_resource(
         'manmanv2-log-processor',
-        resource_deps=['rabbitmq-vhost-setup'],
+        resource_deps=log_processor_deps,
         port_forwards=['50053:50053'],
         labels=['manmanv2-control-plane']
     )

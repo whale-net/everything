@@ -117,14 +117,18 @@ type ServerCapability struct {
 
 // LogReference represents a reference to a log file for a session
 type LogReference struct {
-	LogID     int64     `db:"log_id"`
-	SessionID int64     `db:"session_id"`
-	FilePath  string    `db:"file_path"`
-	StartTime time.Time `db:"start_time"`
-	EndTime   time.Time `db:"end_time"`
-	LineCount int32     `db:"line_count"`
-	Source    string    `db:"source"`
-	CreatedAt time.Time `db:"created_at"`
+	LogID            int64      `db:"log_id"`
+	SessionID        int64      `db:"session_id"`
+	SGCID            *int64     `db:"sgc_id"`
+	FilePath         string     `db:"file_path"`
+	StartTime        time.Time  `db:"start_time"`
+	EndTime          time.Time  `db:"end_time"`
+	LineCount        int32      `db:"line_count"`
+	Source           string     `db:"source"`
+	MinuteTimestamp  *time.Time `db:"minute_timestamp"`
+	State            string     `db:"state"`
+	AppendedAt       *time.Time `db:"appended_at"`
+	CreatedAt        time.Time  `db:"created_at"`
 }
 
 // Backup represents a backup of game save data for a session
@@ -285,6 +289,10 @@ const (
 	PatchFormatJSONMergePatch = "json_merge_patch"
 	PatchFormatJSONPatch      = "json_patch"
 	PatchFormatYAMLMerge      = "yaml_merge"
+
+	// Log archival states
+	LogStateComplete = "complete"
+	LogStatePending  = "pending"
 )
 
 // IsActive returns true if the session is in an active state (not completed or stopped)

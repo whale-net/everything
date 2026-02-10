@@ -11,10 +11,15 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//libs/go/rmq",
+        "//libs/go/s3",
+        "//manman/api/repository/postgres",
+        "//manman/log-processor/archiver",
         "//manman/log-processor/consumer",
         "//manman/log-processor/server",
         "//manman/protos:manmanpb",
+        "@com_github_jackc_pgx_v5//pgxpool",
         "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//credentials/insecure",
     ],
 )
 

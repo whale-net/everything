@@ -213,7 +213,9 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := context.Background()
-	session, err := app.grpc.GetSession(ctx, sessionID)
+	sessionResp, err := app.grpc.GetSession(ctx, &manmanpb.GetSessionRequest{
+		SessionId: sessionID,
+	})
 	if err != nil {
 		log.Printf("Error fetching session: %v", err)
 		http.Error(w, "Session not found", http.StatusNotFound)
@@ -224,7 +226,7 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		Title:   "Session " + sessionIDStr,
 		Active:  "sessions",
 		User:    user,
-		Session: session,
+		Session: sessionResp.Session,
 	}
 
 	layout, err := renderWithLayout("session_detail_content", data, LayoutData{
@@ -469,5 +471,68 @@ func (app *App) handleSessionLogsStream(w http.ResponseWriter, r *http.Request) 
 
 		fmt.Fprintf(w, "data: %s\n\n", jsonData)
 		flusher.Flush()
+	}
+}
+
+// handleHistoricalLogs handles API requests for historical logs
+func (app *App) handleHistoricalLogs(w http.ResponseWriter, r *http.Request) {
+	// Parse query parameters
+	sessionIDStr := r.URL.Query().Get("session_id")
+	startStr := r.URL.Query().Get("start")
+	endStr := r.URL.Query().Get("end")
+
+	if sessionIDStr == "" || startStr == "" || endStr == "" {
+		http.Error(w, "Missing required parameters: session_id, start, end", http.StatusBadRequest)
+		return
+	}
+
+	sessionID, err := strconv.ParseInt(sessionIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid session_id", http.StatusBadRequest)
+		return
+	}
+
+	startTimestamp, err := strconv.ParseInt(startStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid start timestamp", http.StatusBadRequest)
+		return
+	}
+
+	endTimestamp, err := strconv.ParseInt(endStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid end timestamp", http.StatusBadRequest)
+		return
+	}
+
+	ctx := context.Background()
+
+	// Get session details to find SGC ID
+	sessionResp, err := app.grpc.GetSession(ctx, &manmanpb.GetSessionRequest{
+		SessionId: sessionID,
+	})
+	if err != nil {
+		log.Printf("Error fetching session %d: %v", sessionID, err)
+		http.Error(w, "Failed to fetch session", http.StatusInternalServerError)
+		return
+	}
+
+	// Call gRPC GetHistoricalLogs
+	resp, err := app.grpc.GetHistoricalLogs(ctx, &manmanpb.GetHistoricalLogsRequest{
+		SgcId:          sessionResp.Session.ServerGameConfigId,
+		StartTimestamp: startTimestamp,
+		EndTimestamp:   endTimestamp,
+	})
+	if err != nil {
+		log.Printf("Error fetching historical logs for session %d: %v", sessionID, err)
+		http.Error(w, "Failed to fetch historical logs", http.StatusInternalServerError)
+		return
+	}
+
+	// Return JSON response
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("Error encoding response: %v", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
 	}
 }

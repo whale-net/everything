@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/whale-net/everything/libs/go/rmq"
 	manmanpb "github.com/whale-net/everything/manman/protos"
@@ -21,21 +23,34 @@ type LogMessage struct {
 
 // SessionConsumer manages RabbitMQ consumer and broadcasts to multiple gRPC streams
 type SessionConsumer struct {
-	sessionID  int64
-	queueName  string
-	consumer   *rmq.Consumer
-	subscribers map[chan *manmanpb.LogMessage]struct{}
-	mu         sync.RWMutex
-	cancel     context.CancelFunc
-	done       chan struct{}
+	sessionID     int64
+	sgcID         int64
+	queueName     string
+	consumer      *rmq.Consumer
+	subscribers   map[chan *manmanpb.LogMessage]struct{}
+	mu            sync.RWMutex
+	cancel        context.CancelFunc
+	done          chan struct{}
+	logsProcessed *int64 // Pointer to manager's counter for atomic increment
 }
 
 // Manager manages consumers for multiple sessions
 type Manager struct {
-	conn      *rmq.Connection
-	consumers map[int64]*SessionConsumer
-	mu        sync.RWMutex
-	config    *ConsumerConfig
+	conn          *rmq.Connection
+	consumers     map[int64]*SessionConsumer
+	mu            sync.RWMutex
+	config        *ConsumerConfig
+	grpcClient    manmanpb.ManManAPIClient
+	archiver      Archiver
+	logsProcessed int64      // Total logs processed (atomic)
+	statsCtx      context.Context
+	statsCancel   context.CancelFunc
+	statsWg       sync.WaitGroup
+}
+
+// Archiver is the interface for log archival
+type Archiver interface {
+	AddLog(sgcID, sessionID int64, timestamp time.Time, source, message string)
 }
 
 // ConsumerConfig holds configuration for consumers
@@ -46,12 +61,25 @@ type ConsumerConfig struct {
 }
 
 // NewManager creates a new consumer manager
-func NewManager(conn *rmq.Connection, config *ConsumerConfig) *Manager {
-	return &Manager{
-		conn:      conn,
-		consumers: make(map[int64]*SessionConsumer),
-		config:    config,
+func NewManager(conn *rmq.Connection, config *ConsumerConfig, grpcClient manmanpb.ManManAPIClient, archiver Archiver) *Manager {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	m := &Manager{
+		conn:          conn,
+		consumers:     make(map[int64]*SessionConsumer),
+		config:        config,
+		grpcClient:    grpcClient,
+		archiver:      archiver,
+		logsProcessed: 0,
+		statsCtx:      ctx,
+		statsCancel:   cancel,
 	}
+
+	// Start stats logger
+	m.statsWg.Add(1)
+	go m.logStats()
+
+	return m
 }
 
 // Subscription represents a subscription to session logs
@@ -121,6 +149,14 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 	queueName := fmt.Sprintf("logs.session.%d", sessionID)
 	routingKey := fmt.Sprintf("logs.session.%d", sessionID)
 
+	// Query session to get SGC ID
+	sessionResp, err := m.grpcClient.GetSession(ctx, &manmanpb.GetSessionRequest{
+		SessionId: sessionID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get session info: %w", err)
+	}
+
 	// Create consumer with auto-delete queue (will be removed when last consumer disconnects)
 	consumer, err := rmq.NewConsumerWithOpts(m.conn, queueName, false, true)
 	if err != nil {
@@ -135,16 +171,18 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 
 	ctx, cancel := context.WithCancel(ctx)
 	sc := &SessionConsumer{
-		sessionID:   sessionID,
-		queueName:   queueName,
-		consumer:    consumer,
-		subscribers: make(map[chan *manmanpb.LogMessage]struct{}),
-		cancel:      cancel,
-		done:        make(chan struct{}),
+		sessionID:     sessionID,
+		sgcID:         sessionResp.Session.ServerGameConfigId,
+		queueName:     queueName,
+		consumer:      consumer,
+		subscribers:   make(map[chan *manmanpb.LogMessage]struct{}),
+		cancel:        cancel,
+		done:          make(chan struct{}),
+		logsProcessed: &m.logsProcessed,
 	}
 
 	// Start consuming in background
-	go sc.consumeLoop(ctx, m.config.DebugLogOutput)
+	go sc.consumeLoop(ctx, m.config.DebugLogOutput, m.archiver)
 
 	return sc, nil
 }
@@ -192,7 +230,7 @@ func (sc *SessionConsumer) close() {
 }
 
 // consumeLoop consumes messages from RabbitMQ and broadcasts to subscribers
-func (sc *SessionConsumer) consumeLoop(ctx context.Context, debugOutput bool) {
+func (sc *SessionConsumer) consumeLoop(ctx context.Context, debugOutput bool, archiver Archiver) {
 	defer close(sc.done)
 
 	// Register message handler
@@ -207,6 +245,19 @@ func (sc *SessionConsumer) consumeLoop(ctx context.Context, debugOutput bool) {
 		// Debug output
 		if debugOutput {
 			log.Printf("[session %d] [%s] %s", logMsg.SessionID, logMsg.Source, logMsg.Message)
+		}
+
+		// Increment processed counter
+		if sc.logsProcessed != nil {
+			atomic.AddInt64(sc.logsProcessed, 1)
+		}
+
+		// Convert timestamp to time.Time (timestamp is in milliseconds, explicitly UTC)
+		timestamp := time.UnixMilli(logMsg.Timestamp).UTC()
+
+		// Archive log if archiver is provided
+		if archiver != nil {
+			archiver.AddLog(sc.sgcID, logMsg.SessionID, timestamp, logMsg.Source, logMsg.Message)
 		}
 
 		// Convert to protobuf message
@@ -242,8 +293,34 @@ func (sc *SessionConsumer) consumeLoop(ctx context.Context, debugOutput bool) {
 	<-ctx.Done()
 }
 
+// logStats logs processing statistics every 30 seconds
+func (m *Manager) logStats() {
+	defer m.statsWg.Done()
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.statsCtx.Done():
+			return
+		case <-ticker.C:
+			m.mu.RLock()
+			activeSources := len(m.consumers)
+			m.mu.RUnlock()
+
+			logsProcessed := atomic.LoadInt64(&m.logsProcessed)
+			log.Printf("[log-processor] Stats: %d logs processed from %d active source(s)", logsProcessed, activeSources)
+		}
+	}
+}
+
 // Close closes all consumers
 func (m *Manager) Close() {
+	// Stop stats logger
+	m.statsCancel()
+	m.statsWg.Wait()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

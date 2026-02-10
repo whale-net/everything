@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -8,9 +9,14 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/whale-net/everything/libs/go/rmq"
+	"github.com/whale-net/everything/libs/go/s3"
+	"github.com/whale-net/everything/manman/api/repository/postgres"
+	"github.com/whale-net/everything/manman/log-processor/archiver"
 	"github.com/whale-net/everything/manman/log-processor/consumer"
 	"github.com/whale-net/everything/manman/log-processor/server"
 	manmanpb "github.com/whale-net/everything/manman/protos"
@@ -23,6 +29,56 @@ func main() {
 	config := LoadConfig()
 	log.Printf("Configuration: RabbitMQ=%s, gRPC Port=%s, Buffer TTL=%ds, Max Messages=%d",
 		config.RabbitMQURL, config.GRPCPort, config.LogBufferTTL, config.LogBufferMaxMsgs)
+
+	ctx := context.Background()
+
+	// Initialize S3 client (if configured)
+	var logArchiver *archiver.Archiver
+	if config.S3Bucket != "" && config.DatabaseURL != "" {
+		log.Println("Initializing S3 client for log archival...")
+		s3Client, err := s3.NewClient(ctx, s3.Config{
+			Bucket:   config.S3Bucket,
+			Region:   config.S3Region,
+			Endpoint: config.S3Endpoint,
+		})
+		if err != nil {
+			log.Fatalf("Failed to create S3 client: %v", err)
+		}
+		log.Printf("S3 client initialized: bucket=%s, region=%s", config.S3Bucket, config.S3Region)
+
+		// Connect to database
+		log.Println("Connecting to database...")
+		dbPool, err := pgxpool.New(ctx, config.DatabaseURL)
+		if err != nil {
+			log.Fatalf("Failed to connect to database: %v", err)
+		}
+		defer dbPool.Close()
+
+		// Verify database connection
+		if err := dbPool.Ping(ctx); err != nil {
+			log.Fatalf("Failed to ping database: %v", err)
+		}
+		log.Println("Connected to database")
+
+		// Create log reference repository
+		logRepo := postgres.NewLogReferenceRepository(dbPool)
+
+		// Create archiver
+		logArchiver = archiver.NewArchiver(s3Client, logRepo)
+		log.Println("Log archiver initialized")
+	} else {
+		log.Println("S3 archival not configured (missing S3_BUCKET or DATABASE_URL)")
+	}
+
+	// Connect to API server for session queries
+	log.Printf("Connecting to API server at %s...", config.APIAddress)
+	apiConn, err := grpc.NewClient(config.APIAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Fatalf("Failed to connect to API server: %v", err)
+	}
+	defer apiConn.Close()
+	apiClient := manmanpb.NewManManAPIClient(apiConn)
+	log.Println("Connected to API server")
 
 	// Connect to RabbitMQ
 	log.Println("Connecting to RabbitMQ...")
@@ -39,7 +95,7 @@ func main() {
 		LogBufferMaxMsgs: config.LogBufferMaxMsgs,
 		DebugLogOutput:   config.DebugLogOutput,
 	}
-	consumerManager := consumer.NewManager(rmqConn, consumerConfig)
+	consumerManager := consumer.NewManager(rmqConn, consumerConfig, apiClient, logArchiver)
 	defer consumerManager.Close()
 
 	// Create gRPC server
@@ -60,16 +116,30 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
+	serverErrChan := make(chan error, 1)
 	go func() {
-		<-sigChan
-		log.Println("Received shutdown signal, stopping server...")
-		grpcServer.GracefulStop()
+		if err := grpcServer.Serve(listener); err != nil {
+			serverErrChan <- err
+		}
 	}()
 
-	// Start serving
-	if err := grpcServer.Serve(listener); err != nil {
+	select {
+	case <-sigChan:
+		log.Println("Received shutdown signal, stopping server...")
+	case err := <-serverErrChan:
 		log.Fatalf("Failed to serve: %v", err)
 	}
+
+	// Graceful shutdown
+	if logArchiver != nil {
+		log.Println("Flushing log archiver...")
+		if err := logArchiver.Close(); err != nil {
+			log.Printf("Error closing archiver: %v", err)
+		}
+	}
+
+	log.Println("Stopping gRPC server...")
+	grpcServer.GracefulStop()
 
 	log.Println("Log-processor service stopped")
 }

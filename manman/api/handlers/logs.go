@@ -80,6 +80,93 @@ func (h *LogsHandler) SendBatchedLogs(ctx context.Context, req *pb.SendBatchedLo
 	}, nil
 }
 
+func (h *LogsHandler) GetHistoricalLogs(ctx context.Context, req *pb.GetHistoricalLogsRequest) (*pb.GetHistoricalLogsResponse, error) {
+	// Validate time range (max 30 minutes)
+	maxDuration := int64(30 * 60) // 30 minutes in seconds
+	if req.EndTimestamp-req.StartTimestamp > maxDuration {
+		return nil, fmt.Errorf("time range too large: maximum 30 minutes allowed")
+	}
+
+	startTime := time.Unix(req.StartTimestamp, 0)
+	endTime := time.Unix(req.EndTimestamp, 0)
+
+	// Query database for log references in range
+	logRefs, err := h.logRefRepo.ListByTimeRange(ctx, req.SgcId, startTime, endTime)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query log references: %w", err)
+	}
+
+	// Download S3 objects and build batches
+	batches := make([]*pb.HistoricalLogBatch, 0, len(logRefs))
+	for _, logRef := range logRefs {
+		// Parse S3 URL to extract key (format: s3://bucket/key)
+		s3Key, err := parseS3Key(logRef.FilePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse S3 URL %s: %w", logRef.FilePath, err)
+		}
+
+		// Download content from S3
+		content, err := h.s3Client.Download(ctx, s3Key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to download log from S3: %w", err)
+		}
+
+		batch := &pb.HistoricalLogBatch{
+			MinuteTimestamp: logRef.MinuteTimestamp.Unix(),
+			Content:         string(content),
+			LineCount:       logRef.LineCount,
+		}
+		batches = append(batches, batch)
+	}
+
+	// Get min/max available times for time picker
+	minTime, maxTime, err := h.logRefRepo.GetMinMaxTimes(ctx, req.SgcId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get min/max times: %w", err)
+	}
+
+	resp := &pb.GetHistoricalLogsResponse{
+		Batches: batches,
+	}
+
+	if minTime != nil {
+		resp.EarliestAvailableTimestamp = minTime.Unix()
+	}
+	if maxTime != nil {
+		resp.LatestAvailableTimestamp = maxTime.Unix()
+	}
+
+	return resp, nil
+}
+
+func parseS3Key(s3URL string) (string, error) {
+	// Expected format: s3://bucket/key
+	const prefix = "s3://"
+	if len(s3URL) <= len(prefix) {
+		return "", fmt.Errorf("invalid S3 URL: too short")
+	}
+	if s3URL[:len(prefix)] != prefix {
+		return "", fmt.Errorf("invalid S3 URL: missing s3:// prefix")
+	}
+
+	// Remove prefix and find first slash after bucket name
+	remainder := s3URL[len(prefix):]
+	slashIdx := -1
+	for i, c := range remainder {
+		if c == '/' {
+			slashIdx = i
+			break
+		}
+	}
+
+	if slashIdx == -1 {
+		return "", fmt.Errorf("invalid S3 URL: no key found")
+	}
+
+	// Return everything after bucket name
+	return remainder[slashIdx+1:], nil
+}
+
 func decompressLogs(compressed []byte) ([]byte, error) {
 	reader, err := gzip.NewReader(bytes.NewReader(compressed))
 	if err != nil {

@@ -82,6 +82,10 @@ type ServerCapabilityRepository interface {
 type LogReferenceRepository interface {
 	Create(ctx context.Context, logRef *manman.LogReference) error
 	ListBySession(ctx context.Context, sessionID int64) ([]*manman.LogReference, error)
+	GetByMinute(ctx context.Context, sgcID int64, minuteTimestamp time.Time) (*manman.LogReference, error)
+	UpdateState(ctx context.Context, logID int64, state string) error
+	ListByTimeRange(ctx context.Context, sgcID int64, startTime, endTime time.Time) ([]*manman.LogReference, error)
+	GetMinMaxTimes(ctx context.Context, sgcID int64) (minTime, maxTime *time.Time, err error)
 }
 
 // BackupRepository defines operations for Backup entities
