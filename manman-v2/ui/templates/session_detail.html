@@ -187,14 +187,13 @@
         </div>
     </div>
     <div style="padding: 1rem;">
-        <div style="display: flex; gap: 1rem; margin-bottom: 1rem;">
+        <div style="display: flex; gap: 1rem; margin-bottom: 1rem; align-items: flex-end;">
             <div>
-                <label for="start-time" style="display: block; margin-bottom: 0.25rem; font-size: 0.875rem; font-weight: 500;">Start Time:</label>
-                <input type="datetime-local" id="start-time" style="padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.875rem;">
+                <label for="center-time" style="display: block; margin-bottom: 0.25rem; font-size: 0.875rem; font-weight: 500;">Time UTC (±10 minutes):</label>
+                <input type="datetime-local" id="center-time" style="padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.875rem;">
             </div>
-            <div>
-                <label for="end-time" style="display: block; margin-bottom: 0.25rem; font-size: 0.875rem; font-weight: 500;">End Time:</label>
-                <input type="datetime-local" id="end-time" style="padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.875rem;">
+            <div style="font-size: 0.875rem; color: #666; padding-bottom: 0.5rem;">
+                Enter time in UTC. Loads logs from 10 minutes before to 10 minutes after.
             </div>
         </div>
         <div id="historical-status" style="font-size: 0.875rem; color: #888; margin-bottom: 1rem;"></div>
@@ -209,39 +208,39 @@
     const loadBtn = document.getElementById('load-historical');
     const downloadBtn = document.getElementById('download-historical');
     const clearBtn = document.getElementById('clear-historical');
-    const startTimeInput = document.getElementById('start-time');
-    const endTimeInput = document.getElementById('end-time');
+    const centerTimeInput = document.getElementById('center-time');
     const statusDiv = document.getElementById('historical-status');
     const logViewer = document.getElementById('historical-log-viewer');
     const logOutput = document.getElementById('historical-log-output');
 
     let currentLogData = null; // Store current log data for download
 
-    // Set default time range (last 5 minutes before session end)
+    // Set default time to session end time
     {{if .Session.EndedAt}}
-    const endTime = new Date({{.Session.EndedAt}} * 1000);
-    const startTime = new Date(endTime.getTime() - (5 * 60 * 1000));  // 5 minutes before
-    startTimeInput.value = startTime.toISOString().slice(0, 16);
-    endTimeInput.value = endTime.toISOString().slice(0, 16);
+    const centerTime = new Date({{.Session.EndedAt}} * 1000);
+    centerTimeInput.value = centerTime.toISOString().slice(0, 16);
     {{end}}
 
     loadBtn.onclick = async () => {
-        const start = new Date(startTimeInput.value);
-        const end = new Date(endTimeInput.value);
-
-        if (!start || !end) {
-            statusDiv.textContent = 'Please select both start and end times';
+        // Parse as UTC (datetime-local gives us a string like "2026-02-10T04:09")
+        const centerStr = centerTimeInput.value;
+        if (!centerStr) {
+            statusDiv.textContent = 'Please select a valid time';
             statusDiv.style.color = '#f48771';
             return;
         }
 
-        // Validate 30-minute limit
-        const diffMinutes = (end - start) / (1000 * 60);
-        if (diffMinutes > 30) {
-            statusDiv.textContent = 'Time range too large (max 30 minutes)';
+        // Create UTC date by appending 'Z' to force UTC interpretation
+        const center = new Date(centerStr + 'Z');
+        if (isNaN(center.getTime())) {
+            statusDiv.textContent = 'Please select a valid time';
             statusDiv.style.color = '#f48771';
             return;
         }
+
+        // Calculate ±10 minutes
+        const start = new Date(center.getTime() - (10 * 60 * 1000));  // 10 minutes before
+        const end = new Date(center.getTime() + (10 * 60 * 1000));    // 10 minutes after
 
         statusDiv.textContent = 'Loading logs...';
         statusDiv.style.color = '#4fc1ff';
@@ -323,10 +322,9 @@
         const a = document.createElement('a');
         a.href = url;
 
-        // Generate filename with timestamp range
-        const startDate = new Date(startTimeInput.value);
-        const endDate = new Date(endTimeInput.value);
-        const filename = `session-{{.Session.SessionId}}-logs-${startDate.toISOString().replace(/[:.]/g, '-')}_${endDate.toISOString().replace(/[:.]/g, '-')}.log`;
+        // Generate filename with center timestamp
+        const centerDate = new Date(centerTimeInput.value);
+        const filename = `session-{{.Session.SessionId}}-logs-${centerDate.toISOString().replace(/[:.]/g, '-')}.log`;
         a.download = filename;
 
         document.body.appendChild(a);

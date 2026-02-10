@@ -190,3 +190,62 @@ func (r *LogReferenceRepository) GetMinMaxTimes(ctx context.Context, sgcID int64
 
 	return minTime, maxTime, nil
 }
+
+func (r *LogReferenceRepository) ListBySessionAndTimeRange(ctx context.Context, sessionID int64, startTime, endTime time.Time) ([]*manman.LogReference, error) {
+	query := `
+		SELECT log_id, session_id, sgc_id, file_path, start_time, end_time,
+		       line_count, source, minute_timestamp, state, appended_at, created_at
+		FROM log_references
+		WHERE session_id = $1
+		  AND start_time <= $3
+		  AND end_time >= $2
+		  AND state = 'complete'
+		ORDER BY start_time ASC
+	`
+
+	rows, err := r.db.Query(ctx, query, sessionID, startTime, endTime)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var logRefs []*manman.LogReference
+	for rows.Next() {
+		logRef := &manman.LogReference{}
+		err := rows.Scan(
+			&logRef.LogID,
+			&logRef.SessionID,
+			&logRef.SGCID,
+			&logRef.FilePath,
+			&logRef.StartTime,
+			&logRef.EndTime,
+			&logRef.LineCount,
+			&logRef.Source,
+			&logRef.MinuteTimestamp,
+			&logRef.State,
+			&logRef.AppendedAt,
+			&logRef.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		logRefs = append(logRefs, logRef)
+	}
+
+	return logRefs, rows.Err()
+}
+
+func (r *LogReferenceRepository) GetMinMaxTimesBySession(ctx context.Context, sessionID int64) (minTime, maxTime *time.Time, err error) {
+	query := `
+		SELECT MIN(start_time), MAX(end_time)
+		FROM log_references
+		WHERE session_id = $1
+	`
+
+	err = r.db.QueryRow(ctx, query, sessionID).Scan(&minTime, &maxTime)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return minTime, maxTime, nil
+}

@@ -506,19 +506,9 @@ func (app *App) handleHistoricalLogs(w http.ResponseWriter, r *http.Request) {
 
 	ctx := context.Background()
 
-	// Get session details to find SGC ID
-	sessionResp, err := app.grpc.GetSession(ctx, &manmanpb.GetSessionRequest{
-		SessionId: sessionID,
-	})
-	if err != nil {
-		log.Printf("Error fetching session %d: %v", sessionID, err)
-		http.Error(w, "Failed to fetch session", http.StatusInternalServerError)
-		return
-	}
-
-	// Call gRPC GetHistoricalLogs
+	// Call gRPC GetHistoricalLogs directly with session ID
 	resp, err := app.grpc.GetHistoricalLogs(ctx, &manmanpb.GetHistoricalLogsRequest{
-		SgcId:          sessionResp.Session.ServerGameConfigId,
+		SessionId:      sessionID,
 		StartTimestamp: startTimestamp,
 		EndTimestamp:   endTimestamp,
 	})

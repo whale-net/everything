@@ -22,15 +22,33 @@ type Client struct {
 
 // Config holds S3 client configuration
 type Config struct {
-	Bucket   string
-	Region   string
-	Endpoint string // Optional: Custom S3 endpoint (e.g., for OVH, MinIO, DigitalOcean Spaces)
+	Bucket    string
+	Region    string
+	Endpoint  string // Optional: Custom S3 endpoint (e.g., for OVH, MinIO, DigitalOcean Spaces)
+	AccessKey string // Optional: Static access key (for MinIO, etc.)
+	SecretKey string // Optional: Static secret key (for MinIO, etc.)
 }
 
 // NewClient creates a new S3 client
 // Supports both AWS S3 and S3-compatible storage (OVH, MinIO, DigitalOcean Spaces, etc.)
 func NewClient(ctx context.Context, cfg Config) (*Client, error) {
-	awsCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(cfg.Region))
+	configOpts := []func(*config.LoadOptions) error{
+		config.WithRegion(cfg.Region),
+	}
+
+	// If static credentials are provided, use them instead of default credential chain
+	if cfg.AccessKey != "" && cfg.SecretKey != "" {
+		configOpts = append(configOpts, config.WithCredentialsProvider(
+			aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
+				return aws.Credentials{
+					AccessKeyID:     cfg.AccessKey,
+					SecretAccessKey: cfg.SecretKey,
+				}, nil
+			}),
+		))
+	}
+
+	awsCfg, err := config.LoadDefaultConfig(ctx, configOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}

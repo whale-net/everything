@@ -90,8 +90,8 @@ func (h *LogsHandler) GetHistoricalLogs(ctx context.Context, req *pb.GetHistoric
 	startTime := time.Unix(req.StartTimestamp, 0)
 	endTime := time.Unix(req.EndTimestamp, 0)
 
-	// Query database for log references in range
-	logRefs, err := h.logRefRepo.ListByTimeRange(ctx, req.SgcId, startTime, endTime)
+	// Query database for log references in range by session ID
+	logRefs, err := h.logRefRepo.ListBySessionAndTimeRange(ctx, req.SessionId, startTime, endTime)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query log references: %w", err)
 	}
@@ -125,8 +125,8 @@ func (h *LogsHandler) GetHistoricalLogs(ctx context.Context, req *pb.GetHistoric
 		batches = append(batches, batch)
 	}
 
-	// Get min/max available times for time picker
-	minTime, maxTime, err := h.logRefRepo.GetMinMaxTimes(ctx, req.SgcId)
+	// Get min/max available times for time picker (by session)
+	minTime, maxTime, err := h.logRefRepo.GetMinMaxTimesBySession(ctx, req.SessionId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get min/max times: %w", err)
 	}

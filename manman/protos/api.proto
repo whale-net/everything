@@ -437,9 +437,10 @@ message SendBatchedLogsResponse {
 }
 
 message GetHistoricalLogsRequest {
-  int64 sgc_id = 1;
+  int64 sgc_id = 1;  // DEPRECATED: Use session_id instead
   int64 start_timestamp = 2;  // Unix timestamp
   int64 end_timestamp = 3;    // Unix timestamp (max 30 minutes from start)
+  int64 session_id = 4;  // Session ID to query logs for
 }
 
 message GetHistoricalLogsResponse {

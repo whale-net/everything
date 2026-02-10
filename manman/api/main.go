@@ -39,7 +39,9 @@ func run() error {
 	rabbitmqURL := getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 	s3Bucket := getEnv("S3_BUCKET", "manman-logs")
 	s3Region := getEnv("S3_REGION", "us-east-1")
-	s3Endpoint := getEnv("S3_ENDPOINT", "") // Optional: for S3-compatible storage (OVH, MinIO, etc.)
+	s3Endpoint := getEnv("S3_ENDPOINT", "")     // Optional: for S3-compatible storage (OVH, MinIO, etc.)
+	s3AccessKey := getEnv("S3_ACCESS_KEY", "")   // Optional: for static credentials (MinIO, etc.)
+	s3SecretKey := getEnv("S3_SECRET_KEY", "")   // Optional: for static credentials (MinIO, etc.)
 
 	// Build connection string
 	connString := fmt.Sprintf(
@@ -58,9 +60,11 @@ func run() error {
 	// Initialize S3 client
 	log.Println("Initializing S3 client...")
 	s3Client, err := s3.NewClient(ctx, s3.Config{
-		Bucket:   s3Bucket,
-		Region:   s3Region,
-		Endpoint: s3Endpoint,
+		Bucket:    s3Bucket,
+		Region:    s3Region,
+		Endpoint:  s3Endpoint,
+		AccessKey: s3AccessKey,
+		SecretKey: s3SecretKey,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to initialize S3 client: %w", err)
