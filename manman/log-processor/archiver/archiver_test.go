@@ -1,8 +1,11 @@
 package archiver
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -148,7 +151,7 @@ func TestAppendPreservesData(t *testing.T) {
 	sgcID := int64(1)
 	sessionID := int64(42)
 	minuteTimestamp := time.Date(2026, 2, 10, 15, 30, 0, 0, time.UTC)
-	s3Key := fmt.Sprintf("logs/sgc-%d/session-%d/2026/02/10/15/30.log", sgcID, sessionID)
+	s3Key := fmt.Sprintf("logs/sgc-%d/session-%d/2026/02/10/15/30.log.gz", sgcID, sessionID)
 
 	// First upload - create initial window
 	window1 := &MinuteWindow{
@@ -179,17 +182,28 @@ func TestAppendPreservesData(t *testing.T) {
 		t.Fatal("File should not exist before first upload")
 	}
 
-	// Simulate first upload
-	if _, err := a.s3Client.Upload(ctx, s3Key, window1.Buffer.Bytes(), &s3.UploadOptions{
-		ContentType: "text/plain",
+	// Compress and simulate first upload
+	compressedData1, err := compressTestData(window1.Buffer.Bytes())
+	if err != nil {
+		t.Fatalf("Failed to compress window1: %v", err)
+	}
+
+	if _, err := a.s3Client.Upload(ctx, s3Key, compressedData1, &s3.UploadOptions{
+		ContentType:     "application/gzip",
+		ContentEncoding: "gzip",
 	}); err != nil {
 		t.Fatalf("Failed to upload window1: %v", err)
 	}
 
-	// Verify first upload
-	data1, err := a.s3Client.Download(ctx, s3Key)
+	// Verify first upload (download and decompress)
+	compressedData1Downloaded, err := a.s3Client.Download(ctx, s3Key)
 	if err != nil {
 		t.Fatalf("Failed to download after first upload: %v", err)
+	}
+
+	data1, err := decompressTestData(compressedData1Downloaded)
+	if err != nil {
+		t.Fatalf("Failed to decompress downloaded data: %v", err)
 	}
 
 	data1Str := string(data1)
@@ -227,21 +241,48 @@ func TestAppendPreservesData(t *testing.T) {
 		t.Fatal("File should exist before append")
 	}
 
-	// Simulate append with separator
+	// Simulate append with separator (decompress, append, recompress)
 	now := time.Now().UTC()
 	separator := fmt.Sprintf("\n--- APPENDED AT %s ---\n", now.Format(time.RFC3339))
-	appendData := append([]byte(separator), window2.Buffer.Bytes()...)
 
-	if err := a.s3Client.Append(ctx, s3Key, appendData, &s3.UploadOptions{
-		ContentType: "text/plain",
-	}); err != nil {
-		t.Fatalf("Failed to append window2: %v", err)
+	// Download and decompress existing data
+	existingCompressed, err := a.s3Client.Download(ctx, s3Key)
+	if err != nil {
+		t.Fatalf("Failed to download existing data for append: %v", err)
 	}
 
-	// Verify combined data
-	finalData, err := a.s3Client.Download(ctx, s3Key)
+	existingData, err := decompressTestData(existingCompressed)
+	if err != nil {
+		t.Fatalf("Failed to decompress existing data: %v", err)
+	}
+
+	// Combine existing + separator + new data
+	combinedData := append(existingData, []byte(separator)...)
+	combinedData = append(combinedData, window2.Buffer.Bytes()...)
+
+	// Compress combined data
+	compressedCombined, err := compressTestData(combinedData)
+	if err != nil {
+		t.Fatalf("Failed to compress combined data: %v", err)
+	}
+
+	// Re-upload with combined compressed data
+	if _, err := a.s3Client.Upload(ctx, s3Key, compressedCombined, &s3.UploadOptions{
+		ContentType:     "application/gzip",
+		ContentEncoding: "gzip",
+	}); err != nil {
+		t.Fatalf("Failed to upload appended data: %v", err)
+	}
+
+	// Verify combined data (download and decompress)
+	finalCompressed, err := a.s3Client.Download(ctx, s3Key)
 	if err != nil {
 		t.Fatalf("Failed to download final data: %v", err)
+	}
+
+	finalData, err := decompressTestData(finalCompressed)
+	if err != nil {
+		t.Fatalf("Failed to decompress final data: %v", err)
 	}
 
 	finalDataStr := string(finalData)
@@ -390,4 +431,33 @@ func TestAppendConcurrency(t *testing.T) {
 	}
 
 	t.Logf("✓ Concurrent append test passed - all %d appends present", numAppends)
+}
+
+// compressTestData compresses data using gzip for testing
+func compressTestData(data []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	gzWriter := gzip.NewWriter(&buf)
+
+	if _, err := gzWriter.Write(data); err != nil {
+		gzWriter.Close()
+		return nil, err
+	}
+
+	if err := gzWriter.Close(); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
+
+// decompressTestData decompresses gzipped data for testing
+func decompressTestData(data []byte) ([]byte, error) {
+	reader := bytes.NewReader(data)
+	gzReader, err := gzip.NewReader(reader)
+	if err != nil {
+		return nil, err
+	}
+	defer gzReader.Close()
+
+	return io.ReadAll(gzReader)
 }

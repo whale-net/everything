@@ -105,10 +105,16 @@ func (h *LogsHandler) GetHistoricalLogs(ctx context.Context, req *pb.GetHistoric
 			return nil, fmt.Errorf("failed to parse S3 URL %s: %w", logRef.FilePath, err)
 		}
 
-		// Download content from S3
-		content, err := h.s3Client.Download(ctx, s3Key)
+		// Download gzipped content from S3
+		compressedContent, err := h.s3Client.Download(ctx, s3Key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to download log from S3: %w", err)
+		}
+
+		// Decompress gzipped data
+		content, err := decompressLogs(compressedContent)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decompress log content: %w", err)
 		}
 
 		batch := &pb.HistoricalLogBatch{

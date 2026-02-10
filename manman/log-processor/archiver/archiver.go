@@ -2,6 +2,7 @@ package archiver
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"log"
@@ -214,8 +215,8 @@ func (a *Archiver) uploadWindow(ctx context.Context, window *MinuteWindow) error
 		// If it's complete or old pending, we'll append
 	}
 
-	// Generate S3 key: logs/sgc-{sgc_id}/session-{session_id}/YYYY/MM/DD/HH/mm.log
-	s3Key := fmt.Sprintf("logs/sgc-%d/session-%d/%04d/%02d/%02d/%02d/%02d.log",
+	// Generate S3 key: logs/sgc-{sgc_id}/session-{session_id}/YYYY/MM/DD/HH/mm.log.gz
+	s3Key := fmt.Sprintf("logs/sgc-%d/session-%d/%04d/%02d/%02d/%02d/%02d.log.gz",
 		window.SGCID,
 		window.SessionID,
 		window.MinuteTimestamp.Year(),
@@ -253,29 +254,58 @@ func (a *Archiver) uploadWindow(ctx context.Context, window *MinuteWindow) error
 	logData := window.Buffer.Bytes()
 
 	if exists {
-		// Append to existing object with separator
+		// Append to existing gzipped object
 		now := time.Now().UTC()
 		separator := fmt.Sprintf("\n--- APPENDED AT %s ---\n", now.Format(time.RFC3339))
 
-		// Combine separator and new log data
-		appendData := append([]byte(separator), logData...)
+		// Download and decompress existing data
+		existingCompressed, err := a.s3Client.Download(ctx, s3Key)
+		if err != nil {
+			return fmt.Errorf("failed to download existing object for append: %w", err)
+		}
+
+		existingData, err := decompressGzip(existingCompressed)
+		if err != nil {
+			return fmt.Errorf("failed to decompress existing object: %w", err)
+		}
+
+		// Combine existing + separator + new data
+		combinedData := append(existingData, []byte(separator)...)
+		combinedData = append(combinedData, logData...)
+
+		// Compress combined data
+		compressedData, err := compressGzip(combinedData)
+		if err != nil {
+			return fmt.Errorf("failed to compress appended data: %w", err)
+		}
 
 		log.Printf("Appending to existing S3 object: %s", s3Key)
-		if err := a.s3Client.Append(ctx, s3Key, appendData, &s3.UploadOptions{
-			ContentType: "text/plain",
+		if _, err := a.s3Client.Upload(ctx, s3Key, compressedData, &s3.UploadOptions{
+			ContentType:     "application/gzip",
+			ContentEncoding: "gzip",
 		}); err != nil {
-			return fmt.Errorf("failed to append to S3: %w", err)
+			return fmt.Errorf("failed to upload appended data: %w", err)
 		}
 
 		// Update appended_at timestamp
 		logRef.AppendedAt = &now
 	} else {
-		// Upload new object
-		if _, err := a.s3Client.Upload(ctx, s3Key, logData, &s3.UploadOptions{
-			ContentType: "text/plain",
+		// Compress log data
+		compressedData, err := compressGzip(logData)
+		if err != nil {
+			return fmt.Errorf("failed to compress log data: %w", err)
+		}
+
+		// Upload new gzipped object
+		if _, err := a.s3Client.Upload(ctx, s3Key, compressedData, &s3.UploadOptions{
+			ContentType:     "application/gzip",
+			ContentEncoding: "gzip",
 		}); err != nil {
 			return fmt.Errorf("failed to upload to S3: %w", err)
 		}
+
+		log.Printf("Uploaded compressed log: %d bytes → %d bytes (%.1f%% reduction)",
+			len(logData), len(compressedData), 100.0*(1-float64(len(compressedData))/float64(len(logData))))
 	}
 
 	// Mark as complete
@@ -334,4 +364,38 @@ func (a *Archiver) Close() error {
 
 	log.Println("Archiver shutdown complete")
 	return nil
+}
+
+// compressGzip compresses data using gzip
+func compressGzip(data []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	gzWriter := gzip.NewWriter(&buf)
+
+	if _, err := gzWriter.Write(data); err != nil {
+		gzWriter.Close()
+		return nil, fmt.Errorf("failed to write to gzip: %w", err)
+	}
+
+	if err := gzWriter.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close gzip writer: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// decompressGzip decompresses gzipped data
+func decompressGzip(data []byte) ([]byte, error) {
+	reader := bytes.NewReader(data)
+	gzReader, err := gzip.NewReader(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer gzReader.Close()
+
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(gzReader); err != nil {
+		return nil, fmt.Errorf("failed to read from gzip: %w", err)
+	}
+
+	return buf.Bytes(), nil
 }
