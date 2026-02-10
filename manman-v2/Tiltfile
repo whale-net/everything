@@ -4,6 +4,7 @@
 # This Tiltfile sets up the cloud/K8s components of ManManV2:
 # - PostgreSQL database
 # - RabbitMQ message queue
+# - MinIO (S3-compatible storage)
 # - Control Plane API (gRPC)
 # - Event Processor (RabbitMQ consumer)
 #
@@ -17,6 +18,7 @@ load('../tools/tilt/common.tilt',
      'setup_dev_util', 'setup_postgres', 'setup_rabbitmq', 'setup_otelcollector',
      'get_env_bool', 'get_custom_or_default',
      'print_startup_banner', 'print_footer_info')
+load('../tools/tilt/minio.tilt', 'deploy_minio')
 
 # ===========================
 # Configuration
@@ -56,12 +58,20 @@ rabbitmq_url = 'amqp://{}:{}@{}:{}/manmanv2-dev'.format(
     rabbitmq_port
 )
 
+# MinIO (S3-compatible storage)
+minio_info = deploy_minio(namespace)
+s3_endpoint = get_custom_or_default('BUILD_MINIO_ENV', 'S3_ENDPOINT', minio_info['endpoint'])
+s3_access_key = get_custom_or_default('BUILD_MINIO_ENV', 'S3_ACCESS_KEY', minio_info['access_key'])
+s3_secret_key = get_custom_or_default('BUILD_MINIO_ENV', 'S3_SECRET_KEY', minio_info['secret_key'])
+s3_bucket = os.environ.get('S3_BUCKET', 'manmanv2-dev')
+
 # OpenTelemetry Collector
 otel_endpoint = setup_otelcollector(namespace)
 
 print("📊 Infrastructure configured:")
 print("  Postgres:  {}".format("custom" if os.environ.get('BUILD_POSTGRES_ENV') == 'custom' else "local"))
 print("  RabbitMQ:  {}".format("custom" if os.environ.get('BUILD_RABBITMQ_ENV') == 'custom' else "local"))
+print("  MinIO:     {}".format("custom" if os.environ.get('BUILD_MINIO_ENV') == 'custom' else "local"))
 print("  OTEL:      {}".format(otel_endpoint))
 
 # Setup RabbitMQ vhost for ManManV2
@@ -133,6 +143,11 @@ APPS = {
         'enabled_env': 'ENABLE_MANMANV2_PROCESSOR',
         'bazel_target': '//manman/processor:event-processor_image_load',
         'image_name': 'manmanv2-event-processor',
+    },
+    'log-processor': {
+        'enabled_env': 'ENABLE_MANMANV2_LOG_PROCESSOR',
+        'bazel_target': '//manman/log-processor:log-processor_image_load',
+        'image_name': 'manmanv2-log-processor',
     },
     'ui': {
         'enabled_env': 'ENABLE_MANMANV2_UI',
@@ -273,14 +288,14 @@ spec:
         namespace=namespace,
         db_url=db_url,
         rabbitmq_url=rabbitmq_url,
-        s3_endpoint=os.environ.get('S3_ENDPOINT', 'http://minio:9000'),
-        s3_access_key=os.environ.get('S3_ACCESS_KEY', 'minioadmin'),
-        s3_secret_key=os.environ.get('S3_SECRET_KEY', 'minioadmin'),
-        s3_bucket=os.environ.get('S3_BUCKET', 'manmanv2-dev'),
+        s3_endpoint=s3_endpoint,
+        s3_access_key=s3_access_key,
+        s3_secret_key=s3_secret_key,
+        s3_bucket=s3_bucket,
     )))
 
     # Build dependency list for API
-    api_deps = ['rabbitmq-vhost-setup']
+    api_deps = ['rabbitmq-vhost-setup', 'minio-bucket-setup']
     if get_env_bool('ENABLE_MANMANV2_MIGRATION', default='true'):
         api_deps.append('manmanv2-migration')
 
@@ -357,6 +372,92 @@ spec:
         labels=['manmanv2-control-plane']
     )
 
+# Log Processor (Real-time log streaming)
+if get_env_bool('ENABLE_MANMANV2_LOG_PROCESSOR', default='true'):
+    k8s_yaml(blob("""
+apiVersion: v1
+kind: Service
+metadata:
+  name: manmanv2-log-processor
+  namespace: {namespace}
+spec:
+  selector:
+    app: manmanv2-log-processor
+  ports:
+    - name: grpc
+      port: 50053
+      targetPort: 50053
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: manmanv2-log-processor
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: manmanv2-log-processor
+  template:
+    metadata:
+      labels:
+        app: manmanv2-log-processor
+    spec:
+      containers:
+      - name: log-processor
+        image: manmanv2-log-processor
+        ports:
+        - containerPort: 50053
+          name: grpc
+        env:
+        - name: TZ
+          value: "UTC"
+        - name: RABBITMQ_URL
+          value: "{rabbitmq_url}"
+        - name: GRPC_PORT
+          value: "50053"
+        - name: LOG_BUFFER_TTL
+          value: "180"
+        - name: LOG_BUFFER_MAX_MESSAGES
+          value: "500"
+        - name: DEBUG_LOG_OUTPUT
+          value: "false"
+        - name: S3_BUCKET
+          value: "{s3_bucket}"
+        - name: S3_REGION
+          value: "us-east-1"
+        - name: S3_ENDPOINT
+          value: "{s3_endpoint}"
+        - name: S3_ACCESS_KEY
+          value: "{s3_access_key}"
+        - name: S3_SECRET_KEY
+          value: "{s3_secret_key}"
+        - name: DATABASE_URL
+          value: "postgres://postgres:password@postgres-dev.{namespace}.svc.cluster.local:5432/manmanv2?sslmode=disable"
+        - name: API_ADDRESS
+          value: "manmanv2-api.{namespace}.svc.cluster.local:50051"
+""".format(
+        namespace=namespace,
+        rabbitmq_url=rabbitmq_url,
+        s3_endpoint=s3_endpoint,
+        s3_access_key=s3_access_key,
+        s3_secret_key=s3_secret_key,
+        s3_bucket=s3_bucket,
+    )))
+
+    # Build dependency list for log-processor
+    log_processor_deps = ['rabbitmq-vhost-setup', 'postgres-dev', 'minio-bucket-setup', 'manmanv2-api']
+    if get_env_bool('ENABLE_MANMANV2_MIGRATION', default='true'):
+        log_processor_deps.append('manmanv2-migration')
+
+    k8s_resource(
+        'manmanv2-log-processor',
+        resource_deps=log_processor_deps,
+        port_forwards=['50053:50053'],
+        labels=['manmanv2-control-plane']
+    )
+    print("📡 Log-processor forwarded to localhost:50053 (gRPC)")
+
 # Management UI (HTMX + gRPC)
 if get_env_bool('ENABLE_MANMANV2_UI', default='true'):
     k8s_yaml(blob("""
@@ -405,11 +506,18 @@ spec:
           value: "dev-secret-key"
         - name: CONTROL_API_URL
           value: "manmanv2-api.{namespace}.svc.cluster.local:50051"
+        - name: LOG_PROCESSOR_URL
+          value: "manmanv2-log-processor.{namespace}.svc.cluster.local:50053"
 """.format(namespace=namespace)))
+
+    # Build dependency list for UI
+    ui_deps = ['manmanv2-api']
+    if get_env_bool('ENABLE_MANMANV2_LOG_PROCESSOR', default='true'):
+        ui_deps.append('manmanv2-log-processor')
 
     k8s_resource(
         'manmanv2-ui',
-        resource_deps=['manmanv2-api'],
+        resource_deps=ui_deps,
         port_forwards=['8080:8000'],
         labels=['manmanv2-control-plane']
     )
@@ -422,11 +530,14 @@ spec:
 print("\n" + "="*60)
 print("📡 Access Information")
 print("="*60)
-print("  PostgreSQL:    localhost:5432 (user: postgres, pass: password)")
-print("  RabbitMQ:      localhost:5672 (user: rabbit, pass: password)")
-print("  RabbitMQ Mgmt: http://localhost:15672")
-print("  API (gRPC):    localhost:50052")
-print("  UI (Web):      http://localhost:8080")
+print("  PostgreSQL:      localhost:5432 (user: postgres, pass: password)")
+print("  RabbitMQ:        localhost:5672 (user: rabbit, pass: password)")
+print("  RabbitMQ Mgmt:   http://localhost:15672")
+print("  MinIO API:       http://localhost:9000 (access: minioadmin, secret: minioadmin)")
+print("  MinIO Console:   http://localhost:9001")
+print("  API (gRPC):      localhost:50052")
+print("  Log-Processor:   localhost:50053 (gRPC)")
+print("  UI (Web):        http://localhost:8080")
 print("")
 print("🏃 Host Manager:")
 print("  Run separately on bare metal - see README-HOST.md")

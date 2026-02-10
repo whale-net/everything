@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -9,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
-	"github.com/whale-net/everything/manman/protos"
+	manmanpb "github.com/whale-net/everything/manman/protos"
 )
 
 // SessionsPageData holds data for the sessions list page.
@@ -204,8 +207,15 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(pathParts) > 3 && pathParts[2] == "logs" && pathParts[3] == "stream" {
+		app.handleSessionLogsStream(w, r)
+		return
+	}
+
 	ctx := context.Background()
-	session, err := app.grpc.GetSession(ctx, sessionID)
+	sessionResp, err := app.grpc.GetSession(ctx, &manmanpb.GetSessionRequest{
+		SessionId: sessionID,
+	})
 	if err != nil {
 		log.Printf("Error fetching session: %v", err)
 		http.Error(w, "Session not found", http.StatusNotFound)
@@ -216,7 +226,7 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		Title:   "Session " + sessionIDStr,
 		Active:  "sessions",
 		User:    user,
-		Session: session,
+		Session: sessionResp.Session,
 	}
 
 	layout, err := renderWithLayout("session_detail_content", data, LayoutData{
@@ -390,4 +400,129 @@ func splitCSV(value string) []string {
 		}
 	}
 	return result
+}
+
+// handleSessionLogsStream streams logs for a session via Server-Sent Events (SSE)
+func (app *App) handleSessionLogsStream(w http.ResponseWriter, r *http.Request) {
+	// Extract session ID from URL path
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(pathParts) < 4 || pathParts[2] != "logs" || pathParts[3] != "stream" {
+		http.Error(w, "Invalid URL", http.StatusBadRequest)
+		return
+	}
+
+	sessionIDStr := pathParts[1]
+	sessionID, err := strconv.ParseInt(sessionIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid session ID", http.StatusBadRequest)
+		return
+	}
+
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	// Create gRPC stream directly to log-processor
+	stream, err := app.logProcessor.StreamSessionLogs(r.Context(), &manmanpb.StreamSessionLogsRequest{
+		SessionId: sessionID,
+	})
+	if err != nil {
+		log.Printf("Failed to create log stream for session %d: %v", sessionID, err)
+		http.Error(w, "Failed to start log stream", http.StatusInternalServerError)
+		return
+	}
+
+	// Send connection acknowledgment
+	fmt.Fprintf(w, "data: {\"type\":\"connected\"}\n\n")
+	flusher.Flush()
+
+	// Stream logs as SSE events
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				// Stream closed normally
+				log.Printf("Log stream closed for session %d", sessionID)
+			} else {
+				log.Printf("Error receiving log for session %d: %v", sessionID, err)
+			}
+			return
+		}
+
+		// Format as JSON for easier client parsing
+		data := map[string]interface{}{
+			"timestamp": msg.Timestamp,
+			"source":    msg.Source,
+			"message":   msg.Message,
+		}
+		jsonData, err := json.Marshal(data)
+		if err != nil {
+			log.Printf("Failed to marshal log message: %v", err)
+			continue
+		}
+
+		fmt.Fprintf(w, "data: %s\n\n", jsonData)
+		flusher.Flush()
+	}
+}
+
+// handleHistoricalLogs handles API requests for historical logs
+func (app *App) handleHistoricalLogs(w http.ResponseWriter, r *http.Request) {
+	// Parse query parameters
+	sessionIDStr := r.URL.Query().Get("session_id")
+	startStr := r.URL.Query().Get("start")
+	endStr := r.URL.Query().Get("end")
+
+	if sessionIDStr == "" || startStr == "" || endStr == "" {
+		http.Error(w, "Missing required parameters: session_id, start, end", http.StatusBadRequest)
+		return
+	}
+
+	sessionID, err := strconv.ParseInt(sessionIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid session_id", http.StatusBadRequest)
+		return
+	}
+
+	startTimestamp, err := strconv.ParseInt(startStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid start timestamp", http.StatusBadRequest)
+		return
+	}
+
+	endTimestamp, err := strconv.ParseInt(endStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid end timestamp", http.StatusBadRequest)
+		return
+	}
+
+	ctx := context.Background()
+
+	// Call gRPC GetHistoricalLogs directly with session ID
+	resp, err := app.grpc.GetHistoricalLogs(ctx, &manmanpb.GetHistoricalLogsRequest{
+		SessionId:      sessionID,
+		StartTimestamp: startTimestamp,
+		EndTimestamp:   endTimestamp,
+	})
+	if err != nil {
+		log.Printf("Error fetching historical logs for session %d: %v", sessionID, err)
+		http.Error(w, "Failed to fetch historical logs", http.StatusInternalServerError)
+		return
+	}
+
+	// Return JSON response
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("Error encoding response: %v", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
 }

@@ -47,6 +47,308 @@
     </dl>
 </div>
 
+{{if eq .Session.Status "running"}}
+<div class="card">
+    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+        <div class="card-title">Live Logs</div>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <button id="toggle-logs" class="btn btn-sm btn-secondary">Hide</button>
+            <button id="clear-logs" class="btn btn-sm btn-secondary">Clear</button>
+            <span id="log-status" style="font-size: 0.85rem; color: #888;">Connecting...</span>
+        </div>
+    </div>
+    <div id="log-viewer" class="log-viewer">
+        <pre id="log-output" class="log-output"></pre>
+    </div>
+</div>
+
+<style>
+.log-viewer {
+    background: #1e1e1e;
+    border-radius: 4px;
+    max-height: 600px;
+    overflow: hidden;
+    display: block;
+}
+.log-output {
+    margin: 0;
+    padding: 1rem;
+    color: #d4d4d4;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.875rem;
+    overflow-y: auto;
+    max-height: 600px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+.log-line {
+    display: block;
+}
+.log-stdout {
+    color: #d4d4d4;
+}
+.log-stderr {
+    color: #f48771;
+}
+.log-host {
+    color: #4fc1ff;
+}
+.log-viewer.collapsed .log-output {
+    display: none;
+}
+</style>
+
+<script>
+(function() {
+    const logOutput = document.getElementById('log-output');
+    const logStatus = document.getElementById('log-status');
+    const logViewer = document.getElementById('log-viewer');
+    const toggleBtn = document.getElementById('toggle-logs');
+    const clearBtn = document.getElementById('clear-logs');
+
+    let autoScroll = true;
+    let evtSource = null;
+
+    function connect() {
+        evtSource = new EventSource('/sessions/{{.Session.SessionId}}/logs/stream');
+
+        evtSource.onopen = () => {
+            logStatus.textContent = '● Connected';
+            logStatus.style.color = '#4fc1ff';
+        };
+
+        evtSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+
+            if (data.type === 'connected') return;
+
+            // Format timestamp
+            const date = new Date(data.timestamp);
+            const time = date.toLocaleTimeString('en-US', { hour12: false });
+
+            // Create log line with color coding
+            const line = document.createElement('span');
+            line.className = `log-line log-${data.source}`;
+            line.textContent = `[${time}] [${data.source}] ${data.message}\n`;
+            logOutput.appendChild(line);
+
+            // Auto-scroll to bottom if enabled
+            if (autoScroll) {
+                logOutput.scrollTop = logOutput.scrollHeight;
+            }
+
+            // Limit to last 1000 lines (prevent memory bloat)
+            const lines = logOutput.children;
+            if (lines.length > 1000) {
+                logOutput.removeChild(lines[0]);
+            }
+        };
+
+        evtSource.onerror = () => {
+            logStatus.textContent = '● Disconnected';
+            logStatus.style.color = '#f48771';
+            evtSource.close();
+            setTimeout(connect, 2000);  // Auto-reconnect after 2s
+        };
+    }
+
+    toggleBtn.onclick = () => {
+        logViewer.classList.toggle('collapsed');
+        toggleBtn.textContent = logViewer.classList.contains('collapsed') ? 'Show' : 'Hide';
+    };
+
+    clearBtn.onclick = () => {
+        logOutput.textContent = '';
+    };
+
+    // Detect manual scroll (disable auto-scroll)
+    logOutput.onscroll = () => {
+        const atBottom = logOutput.scrollHeight - logOutput.clientHeight <= logOutput.scrollTop + 50;
+        autoScroll = atBottom;
+    };
+
+    // Start streaming
+    connect();
+
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', () => {
+        if (evtSource) evtSource.close();
+    });
+})();
+</script>
+{{else}}
+<div class="card">
+    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+        <div class="card-title">Historical Logs</div>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <button id="load-historical" class="btn btn-sm btn-primary">Load Logs</button>
+            <button id="download-historical" class="btn btn-sm btn-secondary" style="display: none;">Download</button>
+            <button id="clear-historical" class="btn btn-sm btn-secondary">Clear</button>
+        </div>
+    </div>
+    <div style="padding: 1rem;">
+        <div style="display: flex; gap: 1rem; margin-bottom: 1rem; align-items: flex-end;">
+            <div>
+                <label for="center-time" style="display: block; margin-bottom: 0.25rem; font-size: 0.875rem; font-weight: 500;">Time UTC (±10 minutes):</label>
+                <input type="datetime-local" id="center-time" style="padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.875rem;">
+            </div>
+            <div style="font-size: 0.875rem; color: #666; padding-bottom: 0.5rem;">
+                Enter time in UTC. Loads logs from 10 minutes before to 10 minutes after.
+            </div>
+        </div>
+        <div id="historical-status" style="font-size: 0.875rem; color: #888; margin-bottom: 1rem;"></div>
+    </div>
+    <div id="historical-log-viewer" class="log-viewer" style="display: none;">
+        <pre id="historical-log-output" class="log-output"></pre>
+    </div>
+</div>
+
+<script>
+(function() {
+    const loadBtn = document.getElementById('load-historical');
+    const downloadBtn = document.getElementById('download-historical');
+    const clearBtn = document.getElementById('clear-historical');
+    const centerTimeInput = document.getElementById('center-time');
+    const statusDiv = document.getElementById('historical-status');
+    const logViewer = document.getElementById('historical-log-viewer');
+    const logOutput = document.getElementById('historical-log-output');
+
+    let currentLogData = null; // Store current log data for download
+
+    // Set default time to session end time
+    {{if .Session.EndedAt}}
+    const centerTime = new Date({{.Session.EndedAt}} * 1000);
+    centerTimeInput.value = centerTime.toISOString().slice(0, 16);
+    {{end}}
+
+    loadBtn.onclick = async () => {
+        // Parse as UTC (datetime-local gives us a string like "2026-02-10T04:09")
+        const centerStr = centerTimeInput.value;
+        if (!centerStr) {
+            statusDiv.textContent = 'Please select a valid time';
+            statusDiv.style.color = '#f48771';
+            return;
+        }
+
+        // Create UTC date by appending 'Z' to force UTC interpretation
+        const center = new Date(centerStr + 'Z');
+        if (isNaN(center.getTime())) {
+            statusDiv.textContent = 'Please select a valid time';
+            statusDiv.style.color = '#f48771';
+            return;
+        }
+
+        // Calculate ±10 minutes
+        const start = new Date(center.getTime() - (10 * 60 * 1000));  // 10 minutes before
+        const end = new Date(center.getTime() + (10 * 60 * 1000));    // 10 minutes after
+
+        statusDiv.textContent = 'Loading logs...';
+        statusDiv.style.color = '#4fc1ff';
+        loadBtn.disabled = true;
+
+        try {
+            const url = `/api/sessions/historical-logs?session_id={{.Session.SessionId}}&start=${Math.floor(start.getTime() / 1000)}&end=${Math.floor(end.getTime() / 1000)}`;
+            const response = await fetch(url);
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+            }
+
+            const data = await response.json();
+            logOutput.textContent = '';
+
+            if (!data.batches || data.batches.length === 0) {
+                statusDiv.textContent = 'No logs found for this time range';
+                statusDiv.style.color = '#888';
+                logViewer.style.display = 'none';
+                downloadBtn.style.display = 'none';
+                currentLogData = null;
+                return;
+            }
+
+            // Store data for download
+            currentLogData = data;
+
+            // Display batches in order
+            for (const batch of data.batches) {
+                const lines = batch.content.split('\n');
+                for (const lineText of lines) {
+                    if (!lineText.trim()) continue;
+
+                    // Parse log format: [timestamp] [source] message
+                    const match = lineText.match(/\[([^\]]+)\] \[([^\]]+)\] (.+)/);
+                    if (match) {
+                        const [, timestamp, source, message] = match;
+                        const line = document.createElement('span');
+                        line.className = `log-line log-${source}`;
+                        line.textContent = `[${timestamp}] [${source}] ${message}\n`;
+                        logOutput.appendChild(line);
+                    } else {
+                        // Fallback for lines that don't match format
+                        const line = document.createElement('span');
+                        line.className = 'log-line';
+                        line.textContent = lineText + '\n';
+                        logOutput.appendChild(line);
+                    }
+                }
+            }
+
+            logViewer.style.display = 'block';
+            downloadBtn.style.display = 'inline-block';
+            statusDiv.textContent = `Loaded ${data.batches.length} log batch(es)`;
+            statusDiv.style.color = '#4fc1ff';
+        } catch (err) {
+            statusDiv.textContent = `Error: ${err.message}`;
+            statusDiv.style.color = '#f48771';
+        } finally {
+            loadBtn.disabled = false;
+        }
+    };
+
+    downloadBtn.onclick = () => {
+        if (!currentLogData || !currentLogData.batches) {
+            return;
+        }
+
+        // Combine all batches into a single text file
+        let combinedLogs = '';
+        for (const batch of currentLogData.batches) {
+            combinedLogs += batch.content;
+        }
+
+        // Create download link
+        const blob = new Blob([combinedLogs], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+
+        // Generate filename with center timestamp
+        const centerDate = new Date(centerTimeInput.value);
+        const filename = `session-{{.Session.SessionId}}-logs-${centerDate.toISOString().replace(/[:.]/g, '-')}.log`;
+        a.download = filename;
+
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+
+    clearBtn.onclick = () => {
+        logOutput.textContent = '';
+        logViewer.style.display = 'none';
+        downloadBtn.style.display = 'none';
+        statusDiv.textContent = '';
+        currentLogData = null;
+    };
+
+    // Auto-load logs on page load
+    {{if .Session.EndedAt}}
+    setTimeout(() => loadBtn.click(), 500);
+    {{end}}
+})();
+</script>
+{{end}}
+
 <div class="card">
     <div class="card-header">
         <div class="card-title">Parameters</div>

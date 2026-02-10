@@ -10,8 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/grpc"
+
 	"github.com/whale-net/everything/libs/go/htmxauth"
-	"github.com/whale-net/everything/manman/protos"
+	manmanpb "github.com/whale-net/everything/manman/protos"
 )
 
 // Config holds the application configuration
@@ -31,6 +33,9 @@ type Config struct {
 
 	// Control API (gRPC)
 	ControlAPIURL string
+
+	// Log Processor (gRPC)
+	LogProcessorURL string
 }
 
 // LoadConfig loads configuration from environment variables
@@ -45,6 +50,7 @@ func LoadConfig() *Config {
 		OIDCRedirectURL:  getEnv("OIDC_REDIRECT_URI", "http://localhost:8000/auth/callback"),
 		SessionSecret:    getEnv("SECRET_KEY", "dev-secret-key-change-in-production"),
 		ControlAPIURL:    getEnv("CONTROL_API_URL", "control-api-dev-service:50051"),
+		LogProcessorURL:  getEnv("LOG_PROCESSOR_URL", "log-processor:50053"),
 	}
 }
 
@@ -57,9 +63,10 @@ func getEnv(key, defaultValue string) string {
 
 // App holds the application state
 type App struct {
-	config *Config
-	auth   *htmxauth.Authenticator
-	grpc   *ControlClient
+	config       *Config
+	auth         *htmxauth.Authenticator
+	grpc         *ControlClient
+	logProcessor manmanpb.LogProcessorClient
 }
 
 // NewApp creates a new application instance
@@ -99,10 +106,18 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 		return nil, fmt.Errorf("failed to initialize gRPC client: %w", err)
 	}
 
+	// Initialize log-processor gRPC client
+	logProcessorConn, err := grpc.Dial(config.LogProcessorURL, grpc.WithInsecure())
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to log-processor: %w", err)
+	}
+	logProcessorClient := manmanpb.NewLogProcessorClient(logProcessorConn)
+
 	return &App{
-		config: config,
-		auth:   auth,
-		grpc:   grpcClient,
+		config:       config,
+		auth:         auth,
+		grpc:         grpcClient,
+		logProcessor: logProcessorClient,
 	}, nil
 }
 
@@ -165,6 +180,9 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/sessions/", app.auth.RequireAuthFunc(app.handleSessionDetail))
 	mux.HandleFunc("/sessions/start", app.auth.RequireAuthFunc(app.handleSessionStart))
 	mux.HandleFunc("/api/sessions/check-active", app.auth.RequireAuthFunc(app.handleCheckActiveSession))
+	mux.HandleFunc("/api/sessions/historical-logs", app.auth.RequireAuthFunc(app.handleHistoricalLogs))
+
+	// Note: Log streaming endpoint is handled by handleSessionDetail which routes to handleSessionLogsStream
 
 	// Protected routes - Games
 	mux.HandleFunc("/games", app.auth.RequireAuthFunc(app.handleGames))

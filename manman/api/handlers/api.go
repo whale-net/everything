@@ -968,6 +968,10 @@ func (s *APIServer) SendBatchedLogs(ctx context.Context, req *pb.SendBatchedLogs
 	return s.logsHandler.SendBatchedLogs(ctx, req)
 }
 
+func (s *APIServer) GetHistoricalLogs(ctx context.Context, req *pb.GetHistoricalLogsRequest) (*pb.GetHistoricalLogsResponse, error) {
+	return s.logsHandler.GetHistoricalLogs(ctx, req)
+}
+
 // Validation RPCs
 func (s *APIServer) ValidateDeployment(ctx context.Context, req *pb.ValidateDeploymentRequest) (*pb.ValidateDeploymentResponse, error) {
 	return s.validationHandler.ValidateDeployment(ctx, req)

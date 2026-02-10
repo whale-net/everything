@@ -54,6 +54,7 @@ service ManManAPI {
 
   // Log management (new)
   rpc SendBatchedLogs(SendBatchedLogsRequest) returns (SendBatchedLogsResponse);
+  rpc GetHistoricalLogs(GetHistoricalLogsRequest) returns (GetHistoricalLogsResponse);
 
   // Validation (new)
   rpc ValidateDeployment(ValidateDeploymentRequest) returns (ValidateDeploymentResponse);
@@ -433,6 +434,25 @@ message SendBatchedLogsRequest {
 message SendBatchedLogsResponse {
   int32 accepted_batches = 1;
   repeated string failed_batch_ids = 2;
+}
+
+message GetHistoricalLogsRequest {
+  int64 sgc_id = 1;  // DEPRECATED: Use session_id instead
+  int64 start_timestamp = 2;  // Unix timestamp
+  int64 end_timestamp = 3;    // Unix timestamp (max 30 minutes from start)
+  int64 session_id = 4;  // Session ID to query logs for
+}
+
+message GetHistoricalLogsResponse {
+  repeated HistoricalLogBatch batches = 1;
+  int64 earliest_available_timestamp = 2;  // Unix timestamp
+  int64 latest_available_timestamp = 3;    // Unix timestamp
+}
+
+message HistoricalLogBatch {
+  int64 minute_timestamp = 1;  // Unix timestamp
+  string content = 2;          // Raw log text
+  int32 line_count = 3;
 }
 
 // ============================================================================
