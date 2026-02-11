@@ -127,17 +127,29 @@ func (a *Archiver) AddLog(sgcID, sessionID int64, timestamp time.Time, source, m
 }
 
 // windowCloser periodically checks for windows that should be closed and uploaded
+// Uses a drift-free approach by calculating the next check time based on wall clock
 func (a *Archiver) windowCloser() {
 	defer a.closerWg.Done()
 
-	ticker := time.NewTicker(windowCheckInterval)
-	defer ticker.Stop()
+	// Calculate next check time aligned to windowCheckInterval boundaries
+	// This prevents drift and ensures consistent timing
+	nextCheck := func() time.Time {
+		now := time.Now().UTC()
+		// Round up to next interval boundary
+		intervalNanos := windowCheckInterval.Nanoseconds()
+		currentNanos := now.UnixNano()
+		nextNanos := ((currentNanos / intervalNanos) + 1) * intervalNanos
+		return time.Unix(0, nextNanos)
+	}
 
 	for {
+		next := nextCheck()
+		sleepDuration := time.Until(next)
+
 		select {
 		case <-a.ctx.Done():
 			return
-		case <-ticker.C:
+		case <-time.After(sleepDuration):
 			a.closeStaleWindows()
 		}
 	}
