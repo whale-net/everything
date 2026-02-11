@@ -69,6 +69,15 @@ func NewConsumerWithOpts(conn *Connection, queueName string, durable, autoDelete
 		}
 	}
 
+	// Add x-expires as safety net for non-auto-delete queues
+	// This ensures orphaned queues are automatically cleaned up after 5 minutes
+	if !autoDelete {
+		if arguments == nil {
+			arguments = amqp.Table{}
+		}
+		arguments["x-expires"] = 300000 // 5 minutes in milliseconds
+	}
+
 	// Declare main queue
 	queue, err := ch.QueueDeclare(
 		queueName,  // name
@@ -288,6 +297,27 @@ func matchesRoutingKey(key, pattern string) bool {
 // UnmarshalMessage unmarshals a JSON message body into a struct
 func UnmarshalMessage(body []byte, v interface{}) error {
 	return json.Unmarshal(body, v)
+}
+
+// DeleteQueue deletes the queue associated with this consumer
+// This should be called before Close() to remove the queue from RabbitMQ
+func (c *Consumer) DeleteQueue() error {
+	if c.channel == nil {
+		return fmt.Errorf("channel is nil")
+	}
+
+	_, err := c.channel.QueueDelete(
+		c.queue, // queue name
+		false,   // ifUnused - delete even if there are consumers
+		false,   // ifEmpty - delete even if there are messages
+		false,   // noWait
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete queue %s: %w", c.queue, err)
+	}
+
+	log.Printf("Deleted queue: %s", c.queue)
+	return nil
 }
 
 // Close closes the consumer channel

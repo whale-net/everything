@@ -157,8 +157,8 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 		return nil, fmt.Errorf("failed to get session info: %w", err)
 	}
 
-	// Create consumer with auto-delete queue (will be removed when last consumer disconnects)
-	consumer, err := rmq.NewConsumerWithOpts(m.conn, queueName, false, true)
+	// Create consumer with persistent queue (lifecycle-managed, not auto-deleted)
+	consumer, err := rmq.NewConsumerWithOpts(m.conn, queueName, false, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create RabbitMQ consumer: %w", err)
 	}
@@ -185,6 +185,54 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 	go sc.consumeLoop(ctx, m.config.DebugLogOutput, m.archiver)
 
 	return sc, nil
+}
+
+// CreateConsumerForSession creates a consumer for a session (called by lifecycle handler)
+func (m *Manager) CreateConsumerForSession(ctx context.Context, sessionID int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check if consumer already exists
+	if _, exists := m.consumers[sessionID]; exists {
+		log.Printf("[consumer-manager] consumer already exists for session %d", sessionID)
+		return nil // Idempotent
+	}
+
+	// Create new consumer
+	consumer, err := m.createConsumer(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to create consumer: %w", err)
+	}
+
+	m.consumers[sessionID] = consumer
+	log.Printf("[consumer-manager] created consumer for session %d (lifecycle-driven)", sessionID)
+	return nil
+}
+
+// DeleteConsumerForSession deletes a consumer for a session (called by lifecycle handler)
+func (m *Manager) DeleteConsumerForSession(sessionID int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	consumer, exists := m.consumers[sessionID]
+	if !exists {
+		log.Printf("[consumer-manager] no consumer exists for session %d", sessionID)
+		return nil // Idempotent
+	}
+
+	// Close consumer (stops consuming, closes channels)
+	consumer.close()
+
+	// Explicitly delete the queue
+	if err := consumer.consumer.DeleteQueue(); err != nil {
+		log.Printf("[consumer-manager] failed to delete queue for session %d: %v", sessionID, err)
+		// Continue anyway to clean up the consumer
+	}
+
+	// Remove from map
+	delete(m.consumers, sessionID)
+	log.Printf("[consumer-manager] deleted consumer for session %d", sessionID)
+	return nil
 }
 
 // addSubscriber adds a subscriber channel
