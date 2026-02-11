@@ -35,8 +35,9 @@ func NewCommandPublisher(conn *rmq.Connection) (*CommandPublisher, error) {
 	}
 
 	// Create unique reply queue for this API instance (non-durable, auto-delete)
+	// No message limits needed for reply queue (transient, low volume)
 	replyQueue := fmt.Sprintf("api-replies-%s", uuid.New().String())
-	consumer, err := rmq.NewConsumerWithOpts(conn, replyQueue, false, true)
+	consumer, err := rmq.NewConsumerWithOpts(conn, replyQueue, false, true, 0, 0)
 	if err != nil {
 		publisher.Close()
 		return nil, fmt.Errorf("failed to create reply consumer: %w", err)

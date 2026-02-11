@@ -30,11 +30,13 @@ type Consumer struct {
 
 // NewConsumer creates a new consumer
 func NewConsumer(conn *Connection, queueName string) (*Consumer, error) {
-	return NewConsumerWithOpts(conn, queueName, true, false)
+	return NewConsumerWithOpts(conn, queueName, true, false, 0, 0)
 }
 
 // NewConsumerWithOpts creates a new consumer with custom queue options
-func NewConsumerWithOpts(conn *Connection, queueName string, durable, autoDelete bool) (*Consumer, error) {
+// messageTTL is in milliseconds (0 = no limit)
+// maxMessages is the maximum number of messages in the queue (0 = no limit)
+func NewConsumerWithOpts(conn *Connection, queueName string, durable, autoDelete bool, messageTTL, maxMessages int) (*Consumer, error) {
 	ch, err := conn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open channel: %w", err)
@@ -76,6 +78,23 @@ func NewConsumerWithOpts(conn *Connection, queueName string, durable, autoDelete
 			arguments = amqp.Table{}
 		}
 		arguments["x-expires"] = 300000 // 5 minutes in milliseconds
+	}
+
+	// Add message TTL if specified (prevents unbounded memory growth)
+	if messageTTL > 0 {
+		if arguments == nil {
+			arguments = amqp.Table{}
+		}
+		arguments["x-message-ttl"] = messageTTL
+	}
+
+	// Add max messages limit if specified (prevents unbounded queue growth)
+	if maxMessages > 0 {
+		if arguments == nil {
+			arguments = amqp.Table{}
+		}
+		arguments["x-max-length"] = maxMessages
+		arguments["x-overflow"] = "drop-head" // Drop oldest messages when limit is reached
 	}
 
 	// Declare main queue

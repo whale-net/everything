@@ -31,7 +31,8 @@ type Handler struct {
 // NewHandler creates a new lifecycle handler
 func NewHandler(conn *rmq.Connection, consumerManager ConsumerManager) (*Handler, error) {
 	// Create consumer for lifecycle events from external exchange
-	consumer, err := rmq.NewConsumerWithOpts(conn, "log-processor-lifecycle", true, false)
+	// No message limits needed for lifecycle events (low volume)
+	consumer, err := rmq.NewConsumerWithOpts(conn, "log-processor-lifecycle", true, false, 0, 0)
 	if err != nil {
 		return nil, err
 	}
