@@ -510,6 +510,9 @@ func (sm *SessionManager) startOutputReader(state *State) {
 		ticker := time.NewTicker(flushInterval)
 		defer ticker.Stop()
 
+		// Metrics for aggregate logging
+		var stdoutCount, stderrCount, errorCount, warnCount int
+
 		// Channel to receive log messages from reader goroutine
 		logChan := make(chan struct {
 			message string
@@ -536,10 +539,16 @@ func (sm *SessionManager) startOutputReader(state *State) {
 				var source string
 				if header[0] == 2 {
 					source = "stderr"
-					log.Printf("[session %d stderr] %s", state.SessionID, message)
 				} else {
 					source = "stdout"
-					log.Printf("[session %d stdout] %s", state.SessionID, message)
+				}
+
+				// Check for interesting log patterns and log samples
+				msgLower := strings.ToLower(message)
+				if strings.Contains(msgLower, "error") || strings.Contains(msgLower, "exception") || strings.Contains(msgLower, "fatal") {
+					log.Printf("[session %d] ERROR: %s", state.SessionID, strings.TrimSpace(message))
+				} else if strings.Contains(msgLower, "warn") {
+					log.Printf("[session %d] WARN: %s", state.SessionID, strings.TrimSpace(message))
 				}
 
 				// Send to channel (non-blocking to avoid deadlock)
@@ -559,6 +568,20 @@ func (sm *SessionManager) startOutputReader(state *State) {
 				return
 			}
 
+			// Log aggregate metrics
+			if stdoutCount > 0 || stderrCount > 0 {
+				metrics := fmt.Sprintf("[session %d] logs: %d total (%d stdout, %d stderr",
+					state.SessionID, stdoutCount+stderrCount, stdoutCount, stderrCount)
+				if errorCount > 0 {
+					metrics += fmt.Sprintf(", %d errors", errorCount)
+				}
+				if warnCount > 0 {
+					metrics += fmt.Sprintf(", %d warnings", warnCount)
+				}
+				metrics += ")"
+				log.Println(metrics)
+			}
+
 			// Publish logs to RabbitMQ in background
 			if sm.rmqPublisher != nil {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -572,9 +595,13 @@ func (sm *SessionManager) startOutputReader(state *State) {
 				}
 			}
 
-			// Clear buffers
+			// Clear buffers and reset metrics
 			logBuffer = logBuffer[:0]
 			sourceBuffer = sourceBuffer[:0]
+			stdoutCount = 0
+			stderrCount = 0
+			errorCount = 0
+			warnCount = 0
 		}
 
 		// Flush logs on exit
@@ -597,6 +624,21 @@ func (sm *SessionManager) startOutputReader(state *State) {
 				// Add to buffer
 				logBuffer = append(logBuffer, logMsg.message)
 				sourceBuffer = append(sourceBuffer, logMsg.source)
+
+				// Track metrics
+				if logMsg.source == "stderr" {
+					stderrCount++
+				} else {
+					stdoutCount++
+				}
+
+				msgLower := strings.ToLower(logMsg.message)
+				if strings.Contains(msgLower, "error") || strings.Contains(msgLower, "exception") || strings.Contains(msgLower, "fatal") {
+					errorCount++
+				}
+				if strings.Contains(msgLower, "warn") {
+					warnCount++
+				}
 
 				// Flush if buffer is full
 				if len(logBuffer) >= bufferSize {
