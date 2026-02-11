@@ -41,6 +41,7 @@ service ManManAPI {
   rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
   rpc StartSession(StartSessionRequest) returns (StartSessionResponse);
   rpc StopSession(StopSessionRequest) returns (StopSessionResponse);
+  rpc SendInput(SendInputRequest) returns (SendInputResponse);
 
   // Backup management
   rpc CreateBackup(CreateBackupRequest) returns (CreateBackupResponse);
@@ -354,6 +355,15 @@ message StopSessionRequest {
 
 message StopSessionResponse {
   Session session = 1;
+}
+
+message SendInputRequest {
+  int64 session_id = 1;
+  bytes input = 2;
+}
+
+message SendInputResponse {
+  // Empty response on success
 }
 
 // ============================================================================

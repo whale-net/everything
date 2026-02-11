@@ -72,6 +72,11 @@ func (p *CommandPublisher) PublishStopSession(ctx context.Context, serverID int6
 	return p.publishAndWait(ctx, routingKey, cmd, timeout)
 }
 
+func (p *CommandPublisher) PublishSendInput(ctx context.Context, serverID int64, cmd interface{}, timeout time.Duration) error {
+	routingKey := fmt.Sprintf("command.host.%d.session.send_input", serverID)
+	return p.publishAndWait(ctx, routingKey, cmd, timeout)
+}
+
 func (p *CommandPublisher) publishAndWait(ctx context.Context, routingKey string, data interface{}, timeout time.Duration) error {
 	// Generate correlation ID
 	correlationID := uuid.New().String()
