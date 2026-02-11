@@ -51,6 +51,7 @@ type Manager struct {
 // Archiver is the interface for log archival
 type Archiver interface {
 	AddLog(sgcID, sessionID int64, timestamp time.Time, source, message string)
+	FlushSession(ctx context.Context, sessionID int64) error
 }
 
 // ConsumerConfig holds configuration for consumers
@@ -220,6 +221,15 @@ func (m *Manager) DeleteConsumerForSession(sessionID int64) error {
 	if !exists {
 		log.Printf("[consumer-manager] no consumer exists for session %d", sessionID)
 		return nil // Idempotent
+	}
+
+	// Flush pending logs to S3 before closing consumer
+	if m.archiver != nil {
+		log.Printf("[consumer-manager] flushing logs for session %d before deletion", sessionID)
+		if err := m.archiver.FlushSession(context.Background(), sessionID); err != nil {
+			log.Printf("[consumer-manager] failed to flush logs for session %d: %v", sessionID, err)
+			// Continue anyway - we don't want to block consumer deletion
+		}
 	}
 
 	// Close consumer (stops consuming, closes channels)

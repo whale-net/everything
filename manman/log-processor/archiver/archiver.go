@@ -317,6 +317,41 @@ func (a *Archiver) uploadWindow(ctx context.Context, window *MinuteWindow) error
 	return nil
 }
 
+// FlushSession uploads all pending windows for a specific session (called on session stop)
+func (a *Archiver) FlushSession(ctx context.Context, sessionID int64) error {
+	log.Printf("[archiver] Flushing pending log windows for session %d...", sessionID)
+
+	a.windowsMu.Lock()
+	sessionWindows := make([]*MinuteWindow, 0)
+	for key, window := range a.windows {
+		if window.SessionID == sessionID {
+			sessionWindows = append(sessionWindows, window)
+			delete(a.windows, key)
+		}
+	}
+	a.windowsMu.Unlock()
+
+	if len(sessionWindows) == 0 {
+		log.Printf("[archiver] No pending windows for session %d", sessionID)
+		return nil
+	}
+
+	// Upload all session windows synchronously
+	var errs []error
+	for _, window := range sessionWindows {
+		if err := a.uploadWindow(ctx, window); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to flush %d windows for session %d: %v", len(errs), sessionID, errs)
+	}
+
+	log.Printf("[archiver] Successfully flushed %d window(s) for session %d", len(sessionWindows), sessionID)
+	return nil
+}
+
 // FlushAll uploads all pending windows synchronously (for graceful shutdown)
 func (a *Archiver) FlushAll(ctx context.Context) error {
 	log.Println("Flushing all pending log windows...")
