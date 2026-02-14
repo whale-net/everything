@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "migrate",
@@ -15,5 +15,48 @@ go_library(
         "@com_github_golang_migrate_migrate_v4//database/postgres",
         "@com_github_golang_migrate_migrate_v4//source/iofs",
         "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
+go_test(
+    name = "migrate_test",
+    size = "small",
+    srcs = [
+        "cli_test.go",
+        "history_repo_test.go",
+        "history_test.go",
+        "migrate_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":migrate"],
+    deps = [
+        "@com_github_data_dog_go_sqlmock//:go-sqlmock",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+go_test(
+    name = "migrate_integration_test",
+    size = "medium",
+    srcs = ["integration_test.go"],
+    data = glob(["testdata/**"]),
+    embed = [":migrate"],
+    env = {
+        "TEST_DB_HOST": "localhost",
+        "TEST_DB_PORT": "5432",
+        "TEST_DB_USER": "postgres",
+        "TEST_DB_PASSWORD": "postgres",
+        "TEST_DB_NAME": "postgres",
+        "TEST_DB_SSL_MODE": "disable",
+    },
+    tags = [
+        "integration",
+        "requires-postgres",
+    ],
+    deps = [
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )
