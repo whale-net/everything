@@ -26,7 +26,10 @@ require (
 	google.golang.org/protobuf v1.36.11
 )
 
-require github.com/containerd/errdefs/pkg v0.3.0 // indirect
+require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/containerd/errdefs/pkg v0.3.0 // indirect
+)
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.1
