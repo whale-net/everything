@@ -51,6 +51,7 @@ type SessionDetailPageData struct {
 	Active  string
 	User    *htmxauth.UserInfo
 	Session *manmanpb.Session
+	Actions []*manmanpb.ActionDefinition
 }
 
 func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
@@ -240,6 +241,11 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(pathParts) > 3 && pathParts[2] == "actions" && pathParts[3] == "execute" {
+		app.handleExecuteAction(w, r)
+		return
+	}
+
 	if len(pathParts) > 3 && pathParts[2] == "logs" && pathParts[3] == "stream" {
 		app.handleSessionLogsStream(w, r)
 		return
@@ -255,11 +261,20 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fetch available actions for this session
+	actions, err := app.grpc.GetSessionActions(ctx, sessionID)
+	if err != nil {
+		log.Printf("Error fetching session actions: %v", err)
+		// Don't fail the request if actions can't be loaded
+		actions = []*manmanpb.ActionDefinition{}
+	}
+
 	data := SessionDetailPageData{
 		Title:   "Session " + sessionIDStr,
 		Active:  "sessions",
 		User:    user,
 		Session: sessionResp.Session,
+		Actions: actions,
 	}
 
 	layout, err := renderWithLayout("session_detail_content", data, LayoutData{
@@ -301,6 +316,97 @@ func (app *App) handleSessionStop(w http.ResponseWriter, r *http.Request, sessio
 	}
 
 	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+}
+
+func (app *App) handleExecuteAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse form data
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Failed to parse form", http.StatusBadRequest)
+		return
+	}
+
+	// Extract session ID from URL path: /sessions/{id}/actions/execute
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(pathParts) < 2 {
+		http.Error(w, "Invalid session ID", http.StatusBadRequest)
+		return
+	}
+
+	sessionID, err := strconv.ParseInt(pathParts[1], 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid session ID", http.StatusBadRequest)
+		return
+	}
+
+	// Get action ID
+	actionIDStr := r.FormValue("action_id")
+	if actionIDStr == "" {
+		http.Error(w, "Missing action_id", http.StatusBadRequest)
+		return
+	}
+
+	actionID, err := strconv.ParseInt(actionIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid action_id", http.StatusBadRequest)
+		return
+	}
+
+	// Collect input values (all form fields except action_id)
+	inputValues := make(map[string]string)
+	for key, values := range r.Form {
+		if key != "action_id" && len(values) > 0 {
+			inputValues[key] = values[0]
+		}
+	}
+
+	// Execute the action
+	ctx := context.Background()
+	resp, err := app.grpc.ExecuteAction(ctx, sessionID, actionID, inputValues)
+	if err != nil {
+		log.Printf("Error executing action: %v", err)
+
+		// Return error message for HTMX
+		if r.Header.Get("HX-Request") != "" {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `<div class="alert alert-danger" role="alert">Error: %s</div>`, err.Error())
+			return
+		}
+
+		http.Error(w, fmt.Sprintf("Failed to execute action: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Check if action execution succeeded
+	if !resp.Success {
+		log.Printf("Action execution failed: %s", resp.ErrorMessage)
+
+		if r.Header.Get("HX-Request") != "" {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `<div class="alert alert-warning" role="alert">%s</div>`, resp.ErrorMessage)
+			return
+		}
+
+		http.Error(w, resp.ErrorMessage, http.StatusBadRequest)
+		return
+	}
+
+	// Success response
+	if r.Header.Get("HX-Request") != "" {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `<div class="alert alert-success" role="alert">Command sent: <code>%s</code></div>`, resp.RenderedCommand)
+		return
+	}
+
+	// Non-HTMX redirect back to session detail
+	http.Redirect(w, r, fmt.Sprintf("/sessions/%d", sessionID), http.StatusSeeOther)
 }
 
 func (app *App) handleSessionStart(w http.ResponseWriter, r *http.Request) {

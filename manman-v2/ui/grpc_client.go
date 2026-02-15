@@ -271,3 +271,27 @@ func (c *ControlClient) SendInput(ctx context.Context, sessionID int64, input []
 	}
 	return resp, nil
 }
+
+// GetSessionActions retrieves available actions for a session
+func (c *ControlClient) GetSessionActions(ctx context.Context, sessionID int64) ([]*manmanpb.ActionDefinition, error) {
+	resp, err := c.api.GetSessionActions(ctx, &manmanpb.GetSessionActionsRequest{
+		SessionId: sessionID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get session actions: %w", err)
+	}
+	return resp.Actions, nil
+}
+
+// ExecuteAction executes an action on a session
+func (c *ControlClient) ExecuteAction(ctx context.Context, sessionID, actionID int64, inputValues map[string]string) (*manmanpb.ExecuteActionResponse, error) {
+	resp, err := c.api.ExecuteAction(ctx, &manmanpb.ExecuteActionRequest{
+		SessionId:   sessionID,
+		ActionId:    actionID,
+		InputValues: inputValues,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute action: %w", err)
+	}
+	return resp, nil
+}
