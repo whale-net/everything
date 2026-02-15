@@ -47,6 +47,29 @@
     </dl>
 </div>
 
+<script>
+// Shared log line rendering used by both live and historical views.
+function appendLogLine(container, timestamp, source, message) {
+    const line = document.createElement('span');
+    line.className = 'log-line log-' + source;
+    line.textContent = '[' + timestamp + '] [' + source + '] ' + message;
+    container.appendChild(line);
+}
+
+function parseAndAppendRawLine(container, lineText) {
+    if (!lineText.trim()) return;
+    const match = lineText.match(/\[([^\]]+)\] \[([^\]]+)\] (.+)/);
+    if (match) {
+        appendLogLine(container, match[1], match[2], match[3]);
+    } else {
+        const line = document.createElement('span');
+        line.className = 'log-line';
+        line.textContent = lineText;
+        container.appendChild(line);
+    }
+}
+</script>
+
 {{if eq .Session.Status "running"}}
 <div class="card">
     <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
@@ -129,15 +152,10 @@
 
             if (data.type === 'connected') return;
 
-            // Format timestamp
+            // Format timestamp and append log line
             const date = new Date(data.timestamp);
             const time = date.toLocaleTimeString('en-US', { hour12: false });
-
-            // Create log line with color coding
-            const line = document.createElement('span');
-            line.className = `log-line log-${data.source}`;
-            line.textContent = `[${time}] [${data.source}] ${data.message}`;
-            logOutput.appendChild(line);
+            appendLogLine(logOutput, time, data.source, data.message);
 
             // Auto-scroll to bottom if enabled
             if (autoScroll) {
@@ -324,23 +342,7 @@
             for (const batch of data.batches) {
                 const lines = batch.content.split('\n');
                 for (const lineText of lines) {
-                    if (!lineText.trim()) continue;
-
-                    // Parse log format: [timestamp] [source] message
-                    const match = lineText.match(/\[([^\]]+)\] \[([^\]]+)\] (.+)/);
-                    if (match) {
-                        const [, timestamp, source, message] = match;
-                        const line = document.createElement('span');
-                        line.className = `log-line log-${source}`;
-                        line.textContent = `[${timestamp}] [${source}] ${message}`;
-                        logOutput.appendChild(line);
-                    } else {
-                        // Fallback for lines that don't match format
-                        const line = document.createElement('span');
-                        line.className = 'log-line';
-                        line.textContent = lineText;
-                        logOutput.appendChild(line);
-                    }
+                    parseAndAppendRawLine(logOutput, lineText);
                 }
             }
 
