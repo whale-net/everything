@@ -1,322 +1,219 @@
-#!/bin/bash
-# Seed script for Minecraft game actions
-# Creates common Minecraft server actions for testing and server management
+#!/usr/bin/env bash
+set -euo pipefail
 
-set -e
+# Seed Minecraft action definitions using the API
+# Requires: grpcurl, python3
 
-# Check if DATABASE_URL is set
-if [ -z "$DATABASE_URL" ]; then
-    echo "Error: DATABASE_URL environment variable is not set"
-    exit 1
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
+# Default values
+CONTROL_API_ADDR="${CONTROL_API_ADDR:-localhost:50052}"
+
+grpc_call() {
+  local addr="$1"
+  local method="$2"
+  local data="$3"
+
+  grpcurl -plaintext \
+    -import-path "${REPO_ROOT}" \
+    -proto "${REPO_ROOT}/manman/protos/api.proto" \
+    -proto "${REPO_ROOT}/manman/protos/messages.proto" \
+    -d "${data}" \
+    "${addr}" "${method}"
+}
+
+echo "════════════════════════════════════════════════════"
+echo "  Seeding Minecraft Game Actions"
+echo "════════════════════════════════════════════════════"
+echo "GRPC API:  ${CONTROL_API_ADDR}"
+echo ""
+
+# Check for grpcurl
+if ! command -v grpcurl &> /dev/null; then
+  echo "Error: grpcurl is not installed"
+  echo "Install with: brew install grpcurl (macOS) or go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest"
+  exit 1
 fi
 
-echo "Seeding game actions for Minecraft..."
+# Test API connectivity
+echo "Testing API connectivity..."
+if ! grpcurl -plaintext "${CONTROL_API_ADDR}" list manman.v1.ManManAPI &> /dev/null; then
+  echo "✗ Cannot connect to API at ${CONTROL_API_ADDR}"
+  echo "Make sure the control plane is running and accessible"
+  exit 1
+fi
+echo "✓ API is reachable"
+echo ""
 
-# Run SQL seed commands
-psql "$DATABASE_URL" <<'EOF'
+# Find Minecraft game ID
+echo "Finding Minecraft game..."
+games_resp="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/ListGames" '{"page_size":100}')"
+game_id="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); games=data.get("games", []);
+found="";
+for g in games:
+    name=(g.get("name") or "").strip()
+    if name=="Minecraft":
+        found=(g.get("gameId") or g.get("game_id") or "")
+        break
+print(found)' <<< "${games_resp}")"
 
--- Minecraft Actions
--- Demonstrates simple buttons, select with presets, and parameterized input
+if [[ -z "${game_id}" ]]; then
+  echo "✗ Minecraft game not found"
+  echo "Please create the Minecraft game first"
+  exit 1
+fi
 
--- Simple button: Save All
-INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style, icon)
-VALUES (
-    'game',
-    (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1),
-    'save_all',
-    'Save World',
-    'Save all chunks to disk',
-    'save-all',
-    0,
-    'World Management',
-    'success',
-    'fa-save'
-)
-ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
+echo "✓ Found Minecraft game (ID: ${game_id})"
+echo ""
 
--- Simple button: Stop server
-INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style, requires_confirmation, confirmation_message)
-VALUES (
-    'game',
-    (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1),
-    'stop_server',
-    'Stop Server',
-    'Gracefully stop the Minecraft server',
-    'stop',
-    1,
-    'Server Control',
-    'danger',
-    true,
-    'This will stop the server and disconnect all players. Continue?'
-)
-ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
+# Create actions
+echo "Creating actions..."
 
--- Select button: Say (preset messages for testing)
-INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style)
-VALUES (
-    'game',
-    (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1),
-    'say_preset',
-    'Broadcast Message',
-    'Send a preset message to all players',
-    'say {{.message}}',
-    2,
-    'Communication',
-    'info'
-)
-ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
-
--- Add message selection input field for presets
-INSERT INTO action_input_fields (action_id, name, label, field_type, required, display_order, help_text)
-SELECT action_id, 'message', 'Select Message', 'select', true, 0, 'Choose a message to broadcast'
-FROM action_definitions
-WHERE name = 'say_preset'
-  AND definition_level = 'game' AND entity_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
-ON CONFLICT (action_id, name) DO NOTHING;
-
--- Add preset message options
-INSERT INTO action_input_options (field_id, value, label, display_order, is_default)
-SELECT
-    (SELECT field_id FROM action_input_fields aif
-     JOIN action_definitions ad ON aif.action_id = ad.action_id
-     WHERE ad.name = 'say_preset' AND aif.name = 'message'
-       AND ad.game_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
-     LIMIT 1),
-    value,
-    label,
-    display_order,
-    is_default
-FROM (VALUES
-    ('Server will restart in 5 minutes!', 'Restart Warning (5 min)', 0, true),
-    ('Server will restart in 1 minute. Please find a safe place!', 'Restart Warning (1 min)', 1, false),
-    ('Server restart complete. Welcome back!', 'Restart Complete', 2, false),
-    ('Backup in progress. Minor lag expected.', 'Backup Notice', 3, false),
-    ('Event starting at spawn in 10 minutes!', 'Event Announcement', 4, false),
-    ('Please report any bugs or issues to the admin.', 'Bug Report Reminder', 5, false)
-) AS messages(value, label, display_order, is_default)
-ON CONFLICT (field_id, value) DO NOTHING;
-
--- Parameterized button: Say (custom message)
-INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style)
-VALUES (
-    'game',
-    (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1),
-    'say_custom',
-    'Custom Message',
-    'Send a custom message to all players',
-    'say {{.custom_message}}',
-    3,
-    'Communication',
-    'primary'
-)
-ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
-
--- Add custom message input field
-INSERT INTO action_input_fields (action_id, name, label, field_type, required, placeholder, display_order, help_text, min_length, max_length)
-SELECT
-    action_id,
-    'custom_message',
-    'Your Message',
-    'text',
-    true,
-    'e.g., Welcome to the server!',
-    0,
-    'Enter a message to broadcast to all players',
-    1,
-    256
-FROM action_definitions
-WHERE name = 'say_custom'
-  AND definition_level = 'game' AND entity_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
-ON CONFLICT (action_id, name) DO NOTHING;
-
--- Additional useful Minecraft commands
-
--- Simple button: List players
-INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style)
-VALUES (
-    'game',
-    (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1),
-    'list_players',
-    'List Players',
-    'Show all online players',
-    'list',
-    4,
-    'Server Info',
-    'secondary'
-)
-ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
-
--- Select button: Change gamemode
-INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style)
-VALUES (
-    'game',
-    (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1),
-    'default_gamemode',
-    'Set Default Gamemode',
-    'Change the default gamemode for new players',
-    'defaultgamemode {{.gamemode}}',
-    5,
-    'World Settings',
-    'warning'
-)
-ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
-
--- Add gamemode selection input field
-INSERT INTO action_input_fields (action_id, name, label, field_type, required, display_order, help_text)
-SELECT action_id, 'gamemode', 'Gamemode', 'select', true, 0, 'Select the default gamemode'
-FROM action_definitions
-WHERE name = 'default_gamemode'
-  AND definition_level = 'game' AND entity_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
-ON CONFLICT (action_id, name) DO NOTHING;
-
--- Add gamemode options
-INSERT INTO action_input_options (field_id, value, label, display_order, is_default)
-SELECT
-    (SELECT field_id FROM action_input_fields aif
-     JOIN action_definitions ad ON aif.action_id = ad.action_id
-     WHERE ad.name = 'default_gamemode' AND aif.name = 'gamemode'
-       AND ad.game_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
-     LIMIT 1),
-    value,
-    label,
-    display_order,
-    is_default
-FROM (VALUES
-    ('survival', 'Survival', 0, true),
-    ('creative', 'Creative', 1, false),
-    ('adventure', 'Adventure', 2, false),
-    ('spectator', 'Spectator', 3, false)
-) AS gamemodes(value, label, display_order, is_default)
-ON CONFLICT (field_id, value) DO NOTHING;
-
--- Select button: Change difficulty
-INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style)
-VALUES (
-    'game',
-    (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1),
-    'difficulty',
-    'Set Difficulty',
-    'Change the world difficulty',
-    'difficulty {{.level}}',
-    6,
-    'World Settings',
-    'warning'
-)
-ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
-
--- Add difficulty selection input field
-INSERT INTO action_input_fields (action_id, name, label, field_type, required, display_order, help_text)
-SELECT action_id, 'level', 'Difficulty Level', 'select', true, 0, 'Select the difficulty level'
-FROM action_definitions
-WHERE name = 'difficulty'
-  AND definition_level = 'game' AND entity_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
-ON CONFLICT (action_id, name) DO NOTHING;
-
--- Add difficulty options
-INSERT INTO action_input_options (field_id, value, label, display_order, is_default)
-SELECT
-    (SELECT field_id FROM action_input_fields aif
-     JOIN action_definitions ad ON aif.action_id = ad.action_id
-     WHERE ad.name = 'difficulty' AND aif.name = 'level'
-       AND ad.game_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
-     LIMIT 1),
-    value,
-    label,
-    display_order,
-    is_default
-FROM (VALUES
-    ('peaceful', 'Peaceful', 0, false),
-    ('easy', 'Easy', 1, false),
-    ('normal', 'Normal', 2, true),
-    ('hard', 'Hard', 3, false)
-) AS difficulties(value, label, display_order, is_default)
-ON CONFLICT (field_id, value) DO NOTHING;
-
--- Parameterized button: Set time
-INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style)
-VALUES (
-    'game',
-    (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1),
-    'time_set',
-    'Set Time',
-    'Set the world time',
-    'time set {{.time}}',
-    7,
-    'World Settings',
-    'primary'
-)
-ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
-
--- Add time selection input field
-INSERT INTO action_input_fields (action_id, name, label, field_type, required, display_order, help_text)
-SELECT action_id, 'time', 'Time', 'select', true, 0, 'Select the time of day'
-FROM action_definitions
-WHERE name = 'time_set'
-  AND definition_level = 'game' AND entity_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
-ON CONFLICT (action_id, name) DO NOTHING;
-
--- Add time options
-INSERT INTO action_input_options (field_id, value, label, display_order, is_default)
-SELECT
-    (SELECT field_id FROM action_input_fields aif
-     JOIN action_definitions ad ON aif.action_id = ad.action_id
-     WHERE ad.name = 'time_set' AND aif.name = 'time'
-       AND ad.game_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
-     LIMIT 1),
-    value,
-    label,
-    display_order,
-    is_default
-FROM (VALUES
-    ('day', 'Day (1000)', 0, true),
-    ('noon', 'Noon (6000)', 1, false),
-    ('night', 'Night (13000)', 2, false),
-    ('midnight', 'Midnight (18000)', 3, false)
-) AS times(value, label, display_order, is_default)
-ON CONFLICT (field_id, value) DO NOTHING;
-
--- Select button: Weather
-INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style)
-VALUES (
-    'game',
-    (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1),
-    'weather',
-    'Set Weather',
-    'Change the weather',
-    'weather {{.type}}',
-    8,
-    'World Settings',
-    'info'
-)
-ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
-
--- Add weather selection input field
-INSERT INTO action_input_fields (action_id, name, label, field_type, required, display_order, help_text)
-SELECT action_id, 'type', 'Weather Type', 'select', true, 0, 'Select the weather'
-FROM action_definitions
-WHERE name = 'weather'
-  AND definition_level = 'game' AND entity_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
-ON CONFLICT (action_id, name) DO NOTHING;
-
--- Add weather options
-INSERT INTO action_input_options (field_id, value, label, display_order, is_default)
-SELECT
-    (SELECT field_id FROM action_input_fields aif
-     JOIN action_definitions ad ON aif.action_id = ad.action_id
-     WHERE ad.name = 'weather' AND aif.name = 'type'
-       AND ad.game_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
-     LIMIT 1),
-    value,
-    label,
-    display_order,
-    is_default
-FROM (VALUES
-    ('clear', 'Clear', 0, true),
-    ('rain', 'Rain', 1, false),
-    ('thunder', 'Thunder', 2, false)
-) AS weather_types(value, label, display_order, is_default)
-ON CONFLICT (field_id, value) DO NOTHING;
-
+# 1. Save World
+echo "  Creating 'Save World' action..."
+grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(cat <<EOF
+{
+  "action": {
+    "definition_level": "game",
+    "entity_id": ${game_id},
+    "name": "save_all",
+    "label": "Save World",
+    "description": "Save all chunks to disk",
+    "command_template": "save-all",
+    "display_order": 0,
+    "group_name": "World Management",
+    "button_style": "success",
+    "icon": "fa-save",
+    "enabled": true
+  }
+}
 EOF
+)" > /dev/null 2>&1 && echo "    ✓ Created" || echo "    ⚠ Already exists or failed"
 
-echo "Minecraft actions seeded successfully!"
+# 2. Stop Server
+echo "  Creating 'Stop Server' action..."
+grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(cat <<EOF
+{
+  "action": {
+    "definition_level": "game",
+    "entity_id": ${game_id},
+    "name": "stop_server",
+    "label": "Stop Server",
+    "description": "Gracefully stop the Minecraft server",
+    "command_template": "stop",
+    "display_order": 1,
+    "group_name": "Server Control",
+    "button_style": "danger",
+    "requires_confirmation": true,
+    "confirmation_message": "This will stop the server and disconnect all players. Continue?",
+    "enabled": true
+  }
+}
+EOF
+)" > /dev/null 2>&1 && echo "    ✓ Created" || echo "    ⚠ Already exists or failed"
+
+# 3. Broadcast Preset Message (with select field and options)
+echo "  Creating 'Broadcast Message' action..."
+action_resp="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(cat <<EOF
+{
+  "action": {
+    "definition_level": "game",
+    "entity_id": ${game_id},
+    "name": "say_preset",
+    "label": "Broadcast Message",
+    "description": "Send a preset message to all players",
+    "command_template": "say {{.message}}",
+    "display_order": 2,
+    "group_name": "Communication",
+    "button_style": "info",
+    "enabled": true
+  },
+  "input_fields": [
+    {
+      "name": "message",
+      "label": "Select Message",
+      "field_type": "select",
+      "required": true,
+      "display_order": 0,
+      "help_text": "Choose a message to broadcast"
+    }
+  ],
+  "input_options": [
+    {
+      "value": "Server will restart in 5 minutes!",
+      "label": "Restart Warning (5 min)",
+      "display_order": 0,
+      "is_default": true
+    },
+    {
+      "value": "Server will restart in 1 minute. Please find a safe place!",
+      "label": "Restart Warning (1 min)",
+      "display_order": 1
+    },
+    {
+      "value": "Server restart complete. Welcome back!",
+      "label": "Restart Complete",
+      "display_order": 2
+    },
+    {
+      "value": "Backup in progress. Minor lag expected.",
+      "label": "Backup Notice",
+      "display_order": 3
+    },
+    {
+      "value": "Event starting at spawn in 10 minutes!",
+      "label": "Event Announcement",
+      "display_order": 4
+    },
+    {
+      "value": "Please report any bugs or issues to the admin.",
+      "label": "Bug Report Reminder",
+      "display_order": 5
+    }
+  ]
+}
+EOF
+)" 2>&1)" && echo "    ✓ Created" || echo "    ⚠ Already exists or failed"
+
+# 4. Custom Message (with text input)
+echo "  Creating 'Custom Message' action..."
+grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(cat <<EOF
+{
+  "action": {
+    "definition_level": "game",
+    "entity_id": ${game_id},
+    "name": "say_custom",
+    "label": "Custom Message",
+    "description": "Send a custom message to all players",
+    "command_template": "say {{.custom_message}}",
+    "display_order": 3,
+    "group_name": "Communication",
+    "button_style": "primary",
+    "enabled": true
+  },
+  "input_fields": [
+    {
+      "name": "custom_message",
+      "label": "Your Message",
+      "field_type": "text",
+      "required": true,
+      "placeholder": "e.g., Welcome to the server!",
+      "display_order": 0,
+      "help_text": "Enter a message to broadcast to all players",
+      "min_length": 1,
+      "max_length": 256
+    }
+  ]
+}
+EOF
+)" > /dev/null 2>&1 && echo "    ✓ Created" || echo "    ⚠ Already exists or failed"
+
+echo ""
+echo "✔ Minecraft actions seeded successfully!"
+echo ""
+echo "Summary:"
+echo "  - Save World (simple button)"
+echo "  - Stop Server (with confirmation)"
+echo "  - Broadcast Message (select dropdown with 6 options)"
+echo "  - Custom Message (text input)"

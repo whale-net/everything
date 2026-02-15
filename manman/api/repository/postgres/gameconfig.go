@@ -110,7 +110,6 @@ func (r *GameConfigRepository) List(ctx context.Context, gameID *int64, limit, o
 			&config.ArgsTemplate,
 			&config.EnvTemplate,
 			&config.Files,
-			&config.Parameters,
 			&config.Entrypoint,
 			&config.Command,
 		)

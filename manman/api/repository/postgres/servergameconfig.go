@@ -99,7 +99,6 @@ func (r *ServerGameConfigRepository) List(ctx context.Context, serverID *int64, 
 			&sgc.ServerID,
 			&sgc.GameConfigID,
 			&sgc.PortBindings,
-			&sgc.Parameters,
 			&sgc.Status,
 		)
 		if err != nil {

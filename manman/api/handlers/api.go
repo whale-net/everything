@@ -350,7 +350,6 @@ func gameConfigToProto(c *manman.GameConfig) *pb.GameConfig {
 		Image:       c.Image,
 		EnvTemplate: jsonbToMap(c.EnvTemplate),
 		Files:       jsonbToFiles(c.Files),
-		Parameters:  jsonbToParameters(c.Parameters),
 		Entrypoint:  jsonbToStringArray(c.Entrypoint),
 		Command:     jsonbToStringArray(c.Command),
 	}
@@ -537,7 +536,6 @@ func serverGameConfigToProto(sgc *manman.ServerGameConfig) *pb.ServerGameConfig 
 		ServerId:           sgc.ServerID,
 		GameConfigId:       sgc.GameConfigID,
 		PortBindings:       jsonbToPortBindings(sgc.PortBindings),
-		Parameters:         jsonbToMap(sgc.Parameters),
 		Status:             sgc.Status,
 	}
 }
@@ -1418,4 +1416,24 @@ func (s *APIServer) GetSessionActions(ctx context.Context, req *pb.GetSessionAct
 
 func (s *APIServer) ExecuteAction(ctx context.Context, req *pb.ExecuteActionRequest) (*pb.ExecuteActionResponse, error) {
 	return s.actionHandler.ExecuteAction(ctx, req)
+}
+
+func (s *APIServer) CreateActionDefinition(ctx context.Context, req *pb.CreateActionDefinitionRequest) (*pb.CreateActionDefinitionResponse, error) {
+	return s.actionHandler.CreateActionDefinition(ctx, req)
+}
+
+func (s *APIServer) UpdateActionDefinition(ctx context.Context, req *pb.UpdateActionDefinitionRequest) (*pb.UpdateActionDefinitionResponse, error) {
+	return s.actionHandler.UpdateActionDefinition(ctx, req)
+}
+
+func (s *APIServer) DeleteActionDefinition(ctx context.Context, req *pb.DeleteActionDefinitionRequest) (*pb.DeleteActionDefinitionResponse, error) {
+	return s.actionHandler.DeleteActionDefinition(ctx, req)
+}
+
+func (s *APIServer) ListActionDefinitions(ctx context.Context, req *pb.ListActionDefinitionsRequest) (*pb.ListActionDefinitionsResponse, error) {
+	return s.actionHandler.ListActionDefinitions(ctx, req)
+}
+
+func (s *APIServer) GetActionDefinition(ctx context.Context, req *pb.GetActionDefinitionRequest) (*pb.GetActionDefinitionResponse, error) {
+	return s.actionHandler.GetActionDefinition(ctx, req)
 }

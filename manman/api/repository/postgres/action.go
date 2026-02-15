@@ -354,3 +354,168 @@ func (r *ActionRepository) GetExecutionHistory(ctx context.Context, sessionID in
 
 	return executions, rows.Err()
 }
+
+// Create creates a new action definition with its input fields and options
+func (r *ActionRepository) Create(ctx context.Context, action *manman.ActionDefinition, fields []*manman.ActionInputField, options []*manman.ActionInputOption) (int64, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Insert action definition
+	query := `
+		INSERT INTO action_definitions (
+			definition_level, entity_id, name, label, description,
+			command_template, display_order, group_name, button_style,
+			icon, requires_confirmation, confirmation_message, enabled
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		RETURNING action_id
+	`
+
+	var actionID int64
+	err = tx.QueryRow(ctx, query,
+		action.DefinitionLevel,
+		action.EntityID,
+		action.Name,
+		action.Label,
+		action.Description,
+		action.CommandTemplate,
+		action.DisplayOrder,
+		action.GroupName,
+		action.ButtonStyle,
+		action.Icon,
+		action.RequiresConfirmation,
+		action.ConfirmationMessage,
+		action.Enabled,
+	).Scan(&actionID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to insert action definition: %w", err)
+	}
+
+	// Insert input fields and options
+	for _, field := range fields {
+		fieldQuery := `
+			INSERT INTO action_input_fields (
+				action_id, name, label, field_type, required, placeholder,
+				help_text, default_value, display_order, pattern,
+				min_value, max_value, min_length, max_length
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			RETURNING field_id
+		`
+
+		var fieldID int64
+		err = tx.QueryRow(ctx, fieldQuery,
+			actionID,
+			field.Name,
+			field.Label,
+			field.FieldType,
+			field.Required,
+			field.Placeholder,
+			field.HelpText,
+			field.DefaultValue,
+			field.DisplayOrder,
+			field.Pattern,
+			field.MinValue,
+			field.MaxValue,
+			field.MinLength,
+			field.MaxLength,
+		).Scan(&fieldID)
+		if err != nil {
+			return 0, fmt.Errorf("failed to insert input field: %w", err)
+		}
+
+		// Insert options for this field
+		for _, option := range options {
+			// Only insert options that belong to this field (matched by name)
+			if option.FieldID == field.FieldID || option.FieldID == 0 {
+				optionQuery := `
+					INSERT INTO action_input_options (
+						field_id, value, label, display_order, is_default
+					)
+					VALUES ($1, $2, $3, $4, $5)
+				`
+				_, err = tx.Exec(ctx, optionQuery,
+					fieldID,
+					option.Value,
+					option.Label,
+					option.DisplayOrder,
+					option.IsDefault,
+				)
+				if err != nil {
+					return 0, fmt.Errorf("failed to insert input option: %w", err)
+				}
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return actionID, nil
+}
+
+// Update updates an action definition (not implemented yet - future work)
+func (r *ActionRepository) Update(ctx context.Context, action *manman.ActionDefinition) error {
+	return fmt.Errorf("update not implemented yet")
+}
+
+// Delete deletes an action definition
+func (r *ActionRepository) Delete(ctx context.Context, actionID int64) error {
+	query := `DELETE FROM action_definitions WHERE action_id = $1`
+	_, err := r.db.Exec(ctx, query, actionID)
+	if err != nil {
+		return fmt.Errorf("failed to delete action: %w", err)
+	}
+	return nil
+}
+
+// ListByLevel retrieves all actions at a specific level and entity
+func (r *ActionRepository) ListByLevel(ctx context.Context, level string, entityID int64) ([]*manman.ActionDefinition, error) {
+	query := `
+		SELECT action_id, definition_level, entity_id, name, label, description, command_template,
+		       display_order, group_name, button_style, icon, requires_confirmation,
+		       confirmation_message, enabled, created_at, updated_at
+		FROM action_definitions
+		WHERE definition_level = $1 AND entity_id = $2
+		ORDER BY display_order, action_id
+	`
+
+	rows, err := r.db.Query(ctx, query, level, entityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var actions []*manman.ActionDefinition
+	for rows.Next() {
+		action := &manman.ActionDefinition{}
+		err := rows.Scan(
+			&action.ActionID,
+			&action.DefinitionLevel,
+			&action.EntityID,
+			&action.Name,
+			&action.Label,
+			&action.Description,
+			&action.CommandTemplate,
+			&action.DisplayOrder,
+			&action.GroupName,
+			&action.ButtonStyle,
+			&action.Icon,
+			&action.RequiresConfirmation,
+			&action.ConfirmationMessage,
+			&action.Enabled,
+			&action.CreatedAt,
+			&action.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		actions = append(actions, action)
+	}
+
+	return actions, rows.Err()
+}

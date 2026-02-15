@@ -18,17 +18,28 @@ ALTER TABLE action_definitions
     ADD CONSTRAINT check_action_definition_level
     CHECK (definition_level IN ('game', 'game_config', 'server_game_config'));
 
--- Step 5: Drop dependencies on game_id column before dropping it
--- Drop the foreign key constraint first
-ALTER TABLE action_definitions DROP CONSTRAINT IF EXISTS action_definitions_game_id_fkey;
+-- Step 5: Drop all dependencies on game_id column before dropping it
+-- Drop views first (they reference the column)
+DROP VIEW IF EXISTS action_summary;
+DROP VIEW IF EXISTS action_with_inputs;
+DROP VIEW IF EXISTS action_counts_by_game;
 
--- Step 6: Drop the old game_id column (entity_id replaces it)
-ALTER TABLE action_definitions DROP COLUMN game_id;
+-- Drop indexes
+DROP INDEX IF EXISTS idx_action_definitions_game;
+DROP INDEX IF EXISTS idx_action_definitions_enabled;
+DROP INDEX IF EXISTS idx_action_definitions_order;
 
--- Step 7: Update unique constraint to use new columns
+-- Drop the unique constraint that includes game_id
 ALTER TABLE action_definitions
     DROP CONSTRAINT action_definitions_game_id_name_key;
 
+-- Drop the foreign key constraint
+ALTER TABLE action_definitions DROP CONSTRAINT IF EXISTS action_definitions_game_id_fkey;
+
+-- Step 6: Now we can safely drop the game_id column
+ALTER TABLE action_definitions DROP COLUMN game_id;
+
+-- Step 7: Create new unique constraint with new columns
 ALTER TABLE action_definitions
     ADD CONSTRAINT action_definitions_level_entity_name_key
     UNIQUE (definition_level, entity_id, name);
@@ -36,19 +47,12 @@ ALTER TABLE action_definitions
 -- Step 8: Drop the visibility overrides table (no longer needed)
 DROP TABLE IF EXISTS action_visibility_overrides;
 
--- Step 9: Update indexes
-DROP INDEX IF EXISTS idx_action_definitions_game;
-DROP INDEX IF EXISTS idx_action_definitions_enabled;
-DROP INDEX IF EXISTS idx_action_definitions_order;
-
+-- Step 9: Create new indexes
 CREATE INDEX idx_action_definitions_level_entity ON action_definitions(definition_level, entity_id);
 CREATE INDEX idx_action_definitions_level_entity_enabled ON action_definitions(definition_level, entity_id, enabled);
 CREATE INDEX idx_action_definitions_display_order ON action_definitions(definition_level, entity_id, display_order);
 
--- Step 10: Update views to use new schema
-DROP VIEW IF EXISTS action_summary;
-DROP VIEW IF EXISTS action_with_inputs;
-DROP VIEW IF EXISTS action_counts_by_game;
+-- Step 10: Recreate views with new schema
 
 -- View: Actions with input field counts
 CREATE VIEW action_summary AS
