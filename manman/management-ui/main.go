@@ -30,6 +30,9 @@ type Config struct {
 
 	// Experience API
 	ExperienceAPIURL string
+
+	// ManMan gRPC API (for actions management)
+	ManManAPIAddr string
 }
 
 // LoadConfig loads configuration from environment variables
@@ -44,6 +47,7 @@ func LoadConfig() *Config {
 		OIDCRedirectURL:  getEnv("OIDC_REDIRECT_URI", "http://localhost:8000/auth/callback"),
 		SessionSecret:    getEnv("SECRET_KEY", "dev-secret-key-change-in-production"),
 		ExperienceAPIURL: getEnv("EXPERIENCE_API_URL", "http://experience-api-dev-service:8000"),
+		ManManAPIAddr:    getEnv("MANMAN_API_ADDR", ""),
 	}
 }
 
@@ -58,6 +62,7 @@ func getEnv(key, defaultValue string) string {
 type App struct {
 	config *Config
 	auth   *htmxauth.Authenticator
+	grpc   *GRPCClient
 }
 
 // NewApp creates a new application instance
@@ -91,10 +96,25 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 		return nil, fmt.Errorf("failed to initialize authenticator: %w", err)
 	}
 
-	return &App{
+	app := &App{
 		config: config,
 		auth:   auth,
-	}, nil
+	}
+
+	// Initialize gRPC client for ManMan API (optional - actions management)
+	if config.ManManAPIAddr != "" {
+		grpcClient, err := NewGRPCClient(config.ManManAPIAddr)
+		if err != nil {
+			slog.Warn("failed to connect to ManMan gRPC API, actions management disabled", "error", err, "addr", config.ManManAPIAddr)
+		} else {
+			app.grpc = grpcClient
+			slog.Info("connected to ManMan gRPC API", "addr", config.ManManAPIAddr)
+		}
+	} else {
+		slog.Info("ManMan gRPC API not configured, actions management disabled")
+	}
+
+	return app, nil
 }
 
 func main() {
@@ -192,4 +212,9 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/gameserver/", app.auth.RequireAuthFunc(app.handleGameServerPage))
 	mux.HandleFunc("/api/add-gameserver-command-modal", app.auth.RequireAuthFunc(app.handleAddGameServerCommandModal))
 	mux.HandleFunc("/api/create-gameserver-command", app.auth.RequireAuthFunc(app.handleCreateGameServerCommand))
+
+	// Actions management routes (requires ManMan gRPC API)
+	mux.HandleFunc("/actions/", app.auth.RequireAuthFunc(app.handleActionsPage))
+	mux.HandleFunc("/api/actions/create", app.auth.RequireAuthFunc(app.handleCreateAction))
+	mux.HandleFunc("/api/actions/", app.auth.RequireAuthFunc(app.handleDeleteAction))
 }

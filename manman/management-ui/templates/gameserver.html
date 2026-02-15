@@ -359,6 +359,11 @@
                         <a href="/">Home</a> / <a href="/gameservers">Game Server Types</a> / {{.GameServer.Name}}
                     </div>
                 </div>
+                <div>
+                    <a href="/actions/game/{{.GameServer.GameServerId}}" class="btn btn-primary" style="text-decoration: none;">
+                        Manage Actions
+                    </a>
+                </div>
             </div>
         </header>
 
@@ -391,9 +396,12 @@
                         {{range .Configs}}
                         <div class="config-item {{if not .IsVisible}}disabled{{end}}">
                             <div class="config-name">{{.Name}}</div>
-                            <span class="config-badge {{if .IsVisible}}enabled{{else}}disabled{{end}}">
-                                {{if .IsVisible}}Enabled{{else}}Disabled{{end}}
-                            </span>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <a href="/actions/config/{{.GameServerConfigId}}" style="font-size: 13px; color: #2563eb; text-decoration: none;">Actions</a>
+                                <span class="config-badge {{if .IsVisible}}enabled{{else}}disabled{{end}}">
+                                    {{if .IsVisible}}Enabled{{else}}Disabled{{end}}
+                                </span>
+                            </div>
                         </div>
                         {{end}}
                     {{else}}

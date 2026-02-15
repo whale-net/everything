@@ -4,7 +4,9 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "management_ui_lib",
     srcs = [
+        "action_handlers.go",
         "api_client.go",
+        "grpc_client.go",
         "handlers.go",
         "main.go",
         "templates.go",
@@ -16,6 +18,9 @@ go_library(
         "//generated/go/manman:experience_api",
         "//libs/go/htmxauth",
         "//libs/go/logging",
+        "//manman/protos:manmanpb",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//credentials/insecure",
     ],
 )
 

@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Actions - {{.EntityName}} - ManMan</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        header {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        h1 {
+            color: #2563eb;
+            margin-bottom: 5px;
+        }
+        .breadcrumb {
+            color: #666;
+            font-size: 14px;
+        }
+        .breadcrumb a {
+            color: #2563eb;
+            text-decoration: none;
+        }
+        .breadcrumb a:hover {
+            text-decoration: underline;
+        }
+        .back-link {
+            display: inline-block;
+            color: #2563eb;
+            text-decoration: none;
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+
+        /* Level tabs */
+        .level-tabs {
+            display: flex;
+            gap: 0;
+            margin-bottom: 20px;
+        }
+        .level-tab {
+            padding: 12px 24px;
+            background: white;
+            border: 1px solid #e5e7eb;
+            text-decoration: none;
+            color: #4b5563;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .level-tab:first-child {
+            border-radius: 8px 0 0 8px;
+        }
+        .level-tab:last-child {
+            border-radius: 0 8px 8px 0;
+        }
+        .level-tab.active {
+            background: #2563eb;
+            color: white;
+            border-color: #2563eb;
+        }
+        .level-tab.disabled {
+            background: #f3f4f6;
+            color: #9ca3af;
+            cursor: default;
+            pointer-events: none;
+        }
+        .level-tab:not(.active):not(.disabled):hover {
+            background: #f9fafb;
+        }
+
+        /* Action sections */
+        .action-section {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .action-section.inherited {
+            opacity: 0.6;
+            border-left: 4px solid #9ca3af;
+        }
+        .action-section.current-level {
+            border-left: 4px solid #2563eb;
+        }
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .section-header h2 {
+            color: #1f2937;
+            font-size: 18px;
+        }
+        .section-badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .section-badge.game {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+        .section-badge.game_config {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        .section-badge.server_game_config {
+            background: #fef3c7;
+            color: #92400e;
+        }
+        .inherited-label {
+            font-size: 12px;
+            color: #9ca3af;
+            font-style: italic;
+        }
+
+        /* Action cards */
+        .action-list {
+            display: grid;
+            gap: 12px;
+        }
+        .action-card {
+            padding: 16px;
+            background: #f9fafb;
+            border-radius: 6px;
+            border-left: 4px solid #10b981;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+        .action-card.disabled-action {
+            border-left-color: #9ca3af;
+            opacity: 0.7;
+        }
+        .action-info {
+            flex: 1;
+        }
+        .action-name {
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 4px;
+        }
+        .action-label {
+            color: #6b7280;
+            font-size: 14px;
+            margin-bottom: 4px;
+        }
+        .action-command {
+            font-family: monospace;
+            font-size: 13px;
+            color: #4b5563;
+            background: #e5e7eb;
+            padding: 2px 6px;
+            border-radius: 3px;
+            display: inline-block;
+            margin-top: 4px;
+        }
+        .action-meta {
+            display: flex;
+            gap: 10px;
+            margin-top: 6px;
+            font-size: 12px;
+            color: #9ca3af;
+        }
+        .action-meta span {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .action-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        .btn-primary {
+            background: #2563eb;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #1d4ed8;
+        }
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+        .btn-sm {
+            padding: 4px 10px;
+            font-size: 13px;
+        }
+        .empty-state {
+            text-align: center;
+            color: #9ca3af;
+            padding: 20px;
+        }
+
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.show {
+            display: flex;
+        }
+        .modal {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            max-width: 700px;
+            width: 90%;
+            max-height: 85vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+        .modal h2 {
+            margin-bottom: 20px;
+            color: #1f2937;
+        }
+        .modal-close {
+            float: right;
+            font-size: 24px;
+            font-weight: bold;
+            color: #6b7280;
+            cursor: pointer;
+            background: none;
+            border: none;
+            padding: 0;
+            margin: -10px -10px 0 0;
+        }
+        .modal-close:hover {
+            color: #1f2937;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #4b5563;
+        }
+        .form-group input[type="text"],
+        .form-group input[type="number"],
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            font-family: inherit;
+        }
+        .form-group textarea {
+            resize: vertical;
+            min-height: 60px;
+        }
+        .form-group input[type="checkbox"] {
+            margin-right: 8px;
+        }
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            font-weight: normal;
+        }
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        .form-help {
+            font-size: 12px;
+            color: #9ca3af;
+            margin-top: 4px;
+        }
+        .btn-secondary {
+            background: #6b7280;
+            color: white;
+            margin-top: 10px;
+        }
+        .btn-secondary:hover {
+            background: #4b5563;
+        }
+        .success-message {
+            background: #d1fae5;
+            color: #065f46;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+        .error-message {
+            background: #fee2e2;
+            color: #991b1b;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+
+        /* Input fields section in create form */
+        .fields-section {
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 10px;
+        }
+        .fields-section h3 {
+            font-size: 15px;
+            color: #4b5563;
+            margin-bottom: 10px;
+        }
+        .field-entry {
+            background: #f9fafb;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 8px;
+        }
+        .field-entry .form-row {
+            grid-template-columns: 1fr 1fr 1fr;
+        }
+        .add-field-btn {
+            width: 100%;
+            margin-top: 8px;
+            background: #f3f4f6;
+            color: #4b5563;
+            border: 1px dashed #d1d5db;
+        }
+        .add-field-btn:hover {
+            background: #e5e7eb;
+        }
+        .remove-field-btn {
+            background: none;
+            border: none;
+            color: #ef4444;
+            cursor: pointer;
+            font-size: 18px;
+            float: right;
+        }
+    </style>
+    <script>
+        function openCreateModal() {
+            document.getElementById('createActionModal').classList.add('show');
+        }
+        function closeCreateModal() {
+            document.getElementById('createActionModal').classList.remove('show');
+        }
+        document.addEventListener('click', function(e) {
+            if (e.target.id === 'createActionModal') {
+                closeCreateModal();
+            }
+        });
+        document.body.addEventListener('actionCreated', function() {
+            closeCreateModal();
+            location.reload();
+        });
+        document.body.addEventListener('actionDeleted', function() {
+            location.reload();
+        });
+
+        // Dynamic input field management
+        var fieldCount = 0;
+        function addInputField() {
+            fieldCount++;
+            var container = document.getElementById('inputFieldsContainer');
+            var fieldHTML = `
+                <div class="field-entry" id="field-${fieldCount}">
+                    <button type="button" class="remove-field-btn" onclick="removeField(${fieldCount})">&times;</button>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Field Name</label>
+                            <input type="text" name="field_name_${fieldCount}" placeholder="e.g., map" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Label</label>
+                            <input type="text" name="field_label_${fieldCount}" placeholder="e.g., Select Map" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Type</label>
+                            <select name="field_type_${fieldCount}">
+                                <option value="text">Text</option>
+                                <option value="number">Number</option>
+                                <option value="select">Select</option>
+                                <option value="textarea">Textarea</option>
+                                <option value="checkbox">Checkbox</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row" style="grid-template-columns: 1fr 1fr;">
+                        <div class="form-group">
+                            <label>Placeholder</label>
+                            <input type="text" name="field_placeholder_${fieldCount}" placeholder="Optional">
+                        </div>
+                        <div class="form-group">
+                            <label>Default Value</label>
+                            <input type="text" name="field_default_${fieldCount}" placeholder="Optional">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="field_required_${fieldCount}" checked>
+                            Required
+                        </label>
+                    </div>
+                </div>
+            `;
+            container.insertAdjacentHTML('beforeend', fieldHTML);
+            document.getElementById('field_count').value = fieldCount;
+        }
+        function removeField(id) {
+            var el = document.getElementById('field-' + id);
+            if (el) el.remove();
+        }
+    </script>
+</head>
+<body>
+    <div class="container">
+        <a href="{{.BackLink}}" class="back-link">← Back to {{.BackLinkLabel}}</a>
+
+        <header>
+            <div class="header-content">
+                <div>
+                    <h1>Actions: {{.EntityName}}</h1>
+                    <div class="breadcrumb">
+                        <a href="/">Home</a> /
+                        {{if eq .Level "game"}}
+                            <a href="/gameservers">Game Server Types</a> / {{.EntityName}} / Actions
+                        {{else if eq .Level "game_config"}}
+                            <a href="/gameservers">Game Server Types</a> /
+                            {{if .GameName}}<a href="/gameserver/{{.GameID}}">{{.GameName}}</a> / {{end}}
+                            {{.EntityName}} / Actions
+                        {{else}}
+                            <a href="/gameservers">Game Server Types</a> /
+                            {{if .GameName}}<a href="/gameserver/{{.GameID}}">{{.GameName}}</a> / {{end}}
+                            {{.EntityName}} / Actions
+                        {{end}}
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Level tabs -->
+        <div class="level-tabs">
+            {{if .GameID}}
+            <a href="/actions/game/{{.GameID}}"
+               class="level-tab {{if eq .Level "game"}}active{{end}}">
+                Game
+            </a>
+            {{else}}
+            <span class="level-tab disabled">Game</span>
+            {{end}}
+
+            {{if .ConfigID}}
+            <a href="/actions/config/{{.ConfigID}}"
+               class="level-tab {{if eq .Level "game_config"}}active{{end}}">
+                Config
+            </a>
+            {{else}}
+            <span class="level-tab disabled">Config</span>
+            {{end}}
+
+            {{if .SGCID}}
+            <a href="/actions/sgc/{{.SGCID}}"
+               class="level-tab {{if eq .Level "server_game_config"}}active{{end}}">
+                Server Config
+            </a>
+            {{else}}
+            <span class="level-tab disabled">Server Config</span>
+            {{end}}
+        </div>
+
+        <!-- Inherited actions from higher levels (greyed out) -->
+        {{range .InheritedSections}}
+        <div class="action-section inherited">
+            <div class="section-header">
+                <div>
+                    <h2>{{.Title}}</h2>
+                    <span class="inherited-label">Inherited - read only</span>
+                </div>
+                <span class="section-badge {{.Level}}">{{.LevelLabel}}</span>
+            </div>
+            <div class="action-list">
+                {{if .Actions}}
+                    {{range .Actions}}
+                    <div class="action-card {{if not .Enabled}}disabled-action{{end}}">
+                        <div class="action-info">
+                            <div class="action-name">{{.Label}}</div>
+                            <div class="action-label">{{.Name}}</div>
+                            {{if .Description}}<div class="action-label">{{.Description}}</div>{{end}}
+                            <div class="action-command">{{.CommandTemplate}}</div>
+                            <div class="action-meta">
+                                <span>Style: {{.ButtonStyle}}</span>
+                                {{if .GroupName}}<span>Group: {{.GroupName}}</span>{{end}}
+                                {{if .RequiresConfirmation}}<span>Requires confirmation</span>{{end}}
+                                {{if not .Enabled}}<span>Disabled</span>{{end}}
+                            </div>
+                        </div>
+                    </div>
+                    {{end}}
+                {{else}}
+                    <div class="empty-state">No actions at this level.</div>
+                {{end}}
+            </div>
+        </div>
+        {{end}}
+
+        <!-- Current level actions (editable) -->
+        <div class="action-section current-level">
+            <div class="section-header">
+                <div>
+                    <h2>{{.CurrentLevelLabel}} Actions</h2>
+                </div>
+                <div>
+                    <span class="section-badge {{.Level}}">{{.CurrentLevelLabel}}</span>
+                    <button class="btn btn-primary btn-sm" onclick="openCreateModal()" style="margin-left: 10px;">
+                        + Add Action
+                    </button>
+                </div>
+            </div>
+            <div id="action-feedback"></div>
+            <div class="action-list">
+                {{if .CurrentActions}}
+                    {{range .CurrentActions}}
+                    <div class="action-card {{if not .Enabled}}disabled-action{{end}}">
+                        <div class="action-info">
+                            <div class="action-name">{{.Label}}</div>
+                            <div class="action-label">{{.Name}}</div>
+                            {{if .Description}}<div class="action-label">{{.Description}}</div>{{end}}
+                            <div class="action-command">{{.CommandTemplate}}</div>
+                            <div class="action-meta">
+                                <span>Style: {{.ButtonStyle}}</span>
+                                <span>Order: {{.DisplayOrder}}</span>
+                                {{if .GroupName}}<span>Group: {{.GroupName}}</span>{{end}}
+                                {{if .RequiresConfirmation}}<span>Requires confirmation</span>{{end}}
+                                {{if not .Enabled}}<span>Disabled</span>{{end}}
+                                {{if .InputFields}}<span>{{len .InputFields}} input field(s)</span>{{end}}
+                            </div>
+                        </div>
+                        <div class="action-actions">
+                            <button class="btn btn-danger btn-sm"
+                                    hx-delete="/api/actions/{{.ActionId}}"
+                                    hx-confirm="Delete action '{{.Label}}'? This cannot be undone."
+                                    hx-target="#action-feedback"
+                                    hx-swap="innerHTML">
+                                Delete
+                            </button>
+                        </div>
+                    </div>
+                    {{end}}
+                {{else}}
+                    <div class="empty-state">No actions defined at this level yet.</div>
+                {{end}}
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Action Modal -->
+    <div id="createActionModal" class="modal-overlay">
+        <div class="modal">
+            <button class="modal-close" onclick="closeCreateModal()">&times;</button>
+            <h2>Create Action</h2>
+            <form hx-post="/api/actions/create" hx-swap="none">
+                <input type="hidden" name="level" value="{{.Level}}">
+                <input type="hidden" name="entity_id" value="{{.EntityID}}">
+                <input type="hidden" id="field_count" name="field_count" value="0">
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="action_name">Name*</label>
+                        <input type="text" id="action_name" name="name" required
+                               placeholder="e.g., change_map">
+                        <div class="form-help">Unique identifier (snake_case)</div>
+                    </div>
+                    <div class="form-group">
+                        <label for="action_label">Label*</label>
+                        <input type="text" id="action_label" name="label" required
+                               placeholder="e.g., Change Map">
+                        <div class="form-help">Display name shown to users</div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="action_description">Description</label>
+                    <input type="text" id="action_description" name="description"
+                           placeholder="Optional description">
+                </div>
+
+                <div class="form-group">
+                    <label for="action_command">Command Template*</label>
+                    <textarea id="action_command" name="command_template" required
+                              placeholder="e.g., changelevel {{.map}}"></textarea>
+                    <div class="form-help">Go template syntax. Use {{.field_name}} for input fields.</div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="action_order">Display Order</label>
+                        <input type="number" id="action_order" name="display_order" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label for="action_group">Group Name</label>
+                        <input type="text" id="action_group" name="group_name"
+                               placeholder="e.g., Game Control">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="action_style">Button Style</label>
+                        <select id="action_style" name="button_style">
+                            <option value="primary">Primary</option>
+                            <option value="secondary">Secondary</option>
+                            <option value="success">Success</option>
+                            <option value="danger">Danger</option>
+                            <option value="warning">Warning</option>
+                            <option value="info">Info</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="action_icon">Icon</label>
+                        <input type="text" id="action_icon" name="icon"
+                               placeholder="Optional icon class">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="requires_confirmation">
+                        Requires Confirmation
+                    </label>
+                </div>
+
+                <div class="form-group">
+                    <label for="action_confirm_msg">Confirmation Message</label>
+                    <input type="text" id="action_confirm_msg" name="confirmation_message"
+                           placeholder="Are you sure?">
+                </div>
+
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="enabled" checked>
+                        Enabled
+                    </label>
+                </div>
+
+                <!-- Input Fields -->
+                <div class="fields-section">
+                    <h3>Input Fields</h3>
+                    <div id="inputFieldsContainer"></div>
+                    <button type="button" class="btn add-field-btn" onclick="addInputField()">
+                        + Add Input Field
+                    </button>
+                </div>
+
+                <div style="margin-top: 20px; display: flex; gap: 10px;">
+                    <button type="submit" class="btn btn-primary">Create Action</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeCreateModal()">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</body>
+</html>
