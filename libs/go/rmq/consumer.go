@@ -48,7 +48,6 @@ func NewConsumerWithOpts(conn *Connection, queueName string, durable, autoDelete
 		return nil, fmt.Errorf("failed to set QoS: %w", err)
 	}
 
-	var arguments amqp.Table
 	if durable {
 		// Declare dead letter queue first
 		dlqName := queueName + "-dlq"
@@ -64,16 +63,50 @@ func NewConsumerWithOpts(conn *Connection, queueName string, durable, autoDelete
 			ch.Close()
 			return nil, fmt.Errorf("failed to declare DLQ: %w", err)
 		}
+	}
 
+	arguments := buildQueueArguments(queueName, durable, autoDelete, messageTTL, maxMessages)
+
+	// Declare main queue
+	queue, err := ch.QueueDeclare(
+		queueName,  // name
+		durable,    // durable
+		autoDelete, // delete when unused
+		false,      // exclusive
+		false,      // no-wait
+		arguments,  // arguments
+	)
+	if err != nil {
+		ch.Close()
+		return nil, fmt.Errorf("failed to declare queue: %w", err)
+	}
+
+	return &Consumer{
+		channel:  ch,
+		queue:    queue.Name,
+		handlers: make(map[string]MessageHandler),
+		conn:     conn,
+	}, nil
+}
+
+// buildQueueArguments constructs the amqp.Table of arguments for queue declaration.
+// Durable queues get DLQ routing. Non-durable, non-auto-delete queues get x-expires
+// as a safety net for orphan cleanup. Durable queues must NOT get x-expires because
+// they are long-lived and would be incorrectly deleted during brief consumer absence.
+func buildQueueArguments(queueName string, durable, autoDelete bool, messageTTL, maxMessages int) amqp.Table {
+	var arguments amqp.Table
+
+	if durable {
+		dlqName := queueName + "-dlq"
 		arguments = amqp.Table{
 			"x-dead-letter-exchange":    "", // Use default exchange
 			"x-dead-letter-routing-key": dlqName,
 		}
 	}
 
-	// Add x-expires as safety net for non-auto-delete queues
-	// This ensures orphaned queues are automatically cleaned up after 5 minutes
-	if !autoDelete {
+	// Add x-expires only for non-durable, non-auto-delete queues as a safety net
+	// for orphaned queues. Durable queues are long-lived and should not expire.
+	if !durable && !autoDelete {
 		if arguments == nil {
 			arguments = amqp.Table{}
 		}
@@ -97,26 +130,7 @@ func NewConsumerWithOpts(conn *Connection, queueName string, durable, autoDelete
 		arguments["x-overflow"] = "drop-head" // Drop oldest messages when limit is reached
 	}
 
-	// Declare main queue
-	queue, err := ch.QueueDeclare(
-		queueName,  // name
-		durable,    // durable
-		autoDelete, // delete when unused
-		false,      // exclusive
-		false,      // no-wait
-		arguments,  // arguments
-	)
-	if err != nil {
-		ch.Close()
-		return nil, fmt.Errorf("failed to declare queue: %w", err)
-	}
-
-	return &Consumer{
-		channel:  ch,
-		queue:    queue.Name,
-		handlers: make(map[string]MessageHandler),
-		conn:     conn,
-	}, nil
+	return arguments
 }
 
 // BindExchange binds the consumer's queue to an exchange with routing keys
