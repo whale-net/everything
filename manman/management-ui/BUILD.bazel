@@ -16,11 +16,10 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//generated/go/manman:experience_api",
+        "//libs/go/grpcclient",
         "//libs/go/htmxauth",
         "//libs/go/logging",
         "//manman/protos:manmanpb",
-        "@org_golang_google_grpc//:grpc",
-        "@org_golang_google_grpc//credentials/insecure",
     ],
 )
 

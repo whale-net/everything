@@ -6,29 +6,30 @@ import (
 	"log/slog"
 	"time"
 
+	grpcclient "github.com/whale-net/everything/libs/go/grpcclient"
 	pb "github.com/whale-net/everything/manman/protos"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // GRPCClient wraps the manman gRPC API client
 type GRPCClient struct {
-	conn   *grpc.ClientConn
+	conn   *grpcclient.Client
 	client pb.ManManAPIClient
 }
 
-// NewGRPCClient creates a new gRPC client connection
-func NewGRPCClient(addr string) (*GRPCClient, error) {
-	conn, err := grpc.NewClient(addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+// NewGRPCClient creates a new gRPC client connection using the shared grpcclient library.
+// TLS is auto-configured from GRPC_* environment variables.
+func NewGRPCClient(ctx context.Context, addr string) (*GRPCClient, error) {
+	connCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	conn, err := grpcclient.NewClient(connCtx, addr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to gRPC server: %w", err)
+		return nil, fmt.Errorf("failed to connect to gRPC server at %s: %w", addr, err)
 	}
 
 	return &GRPCClient{
 		conn:   conn,
-		client: pb.NewManManAPIClient(conn),
+		client: pb.NewManManAPIClient(conn.GetConnection()),
 	}, nil
 }
 

@@ -103,7 +103,7 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 
 	// Initialize gRPC client for ManMan API (optional - actions management)
 	if config.ManManAPIAddr != "" {
-		grpcClient, err := NewGRPCClient(config.ManManAPIAddr)
+		grpcClient, err := NewGRPCClient(ctx, config.ManManAPIAddr)
 		if err != nil {
 			slog.Warn("failed to connect to ManMan gRPC API, actions management disabled", "error", err, "addr", config.ManManAPIAddr)
 		} else {
