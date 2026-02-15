@@ -100,6 +100,10 @@ def build_images_from_apps(apps_dict, watch_paths, platform='linux/arm64'):
             # Custom build command that uses Bazel to build and load image
             # Bazel loads as image_name:latest, then we tag it with Tilt's expected ref
             # $EXPECTED_REF is set by Tilt to the tag it expects
+            #
+            # disable_push=False allows Tilt to push to a local registry when one
+            # is detected (e.g. k3d with --registry-create). On Docker Desktop
+            # where no registry exists, Tilt skips the push automatically.
             custom_build(
                 config['image_name'],
                 'bazel run {} --platforms={} && docker tag {}:latest $EXPECTED_REF'.format(
@@ -107,7 +111,7 @@ def build_images_from_apps(apps_dict, watch_paths, platform='linux/arm64'):
                 ),
                 deps=watch_paths,
                 skips_local_docker=False,
-                disable_push=True,
+                disable_push=False,
             )
         else:
             print("  ✗ {} (disabled)".format(config['image_name']))
@@ -153,7 +157,7 @@ def bazel_build_image(app_name, watch_paths, bazel_target, platform='linux/arm64
         ),
         watch_paths,
         skips_local_docker=False,
-        disable_push=True,
+        disable_push=False,
     )
 
 def detect_platform():
