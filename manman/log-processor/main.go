@@ -18,6 +18,7 @@ import (
 	"github.com/whale-net/everything/manman/api/repository/postgres"
 	"github.com/whale-net/everything/manman/log-processor/archiver"
 	"github.com/whale-net/everything/manman/log-processor/consumer"
+	"github.com/whale-net/everything/manman/log-processor/lifecycle"
 	"github.com/whale-net/everything/manman/log-processor/server"
 	manmanpb "github.com/whale-net/everything/manman/protos"
 )
@@ -100,6 +101,23 @@ func main() {
 	consumerManager := consumer.NewManager(rmqConn, consumerConfig, apiClient, logArchiver)
 	defer consumerManager.Close()
 
+	// Create lifecycle handler for session events
+	log.Println("Initializing session lifecycle handler...")
+	lifecycleHandler, err := lifecycle.NewHandler(rmqConn, consumerManager)
+	if err != nil {
+		log.Fatalf("Failed to create lifecycle handler: %v", err)
+	}
+
+	// Start lifecycle handler
+	lifecycleCtx, lifecycleCancel := context.WithCancel(ctx)
+	defer lifecycleCancel()
+
+	if err := lifecycleHandler.Start(lifecycleCtx); err != nil {
+		log.Fatalf("Failed to start lifecycle handler: %v", err)
+	}
+	defer lifecycleHandler.Close()
+	log.Println("Session lifecycle handler started")
+
 	// Create gRPC server
 	grpcServer := grpc.NewServer()
 	logProcessorServer := server.NewServer(consumerManager)
@@ -133,6 +151,13 @@ func main() {
 	}
 
 	// Graceful shutdown
+	log.Println("Shutting down...")
+
+	// 1. Stop accepting new lifecycle events
+	lifecycleCancel()
+	lifecycleHandler.Close()
+
+	// 2. Flush pending logs to S3
 	if logArchiver != nil {
 		log.Println("Flushing log archiver...")
 		if err := logArchiver.Close(); err != nil {
@@ -140,8 +165,12 @@ func main() {
 		}
 	}
 
+	// 3. Stop gRPC server (browser connections)
 	log.Println("Stopping gRPC server...")
 	grpcServer.GracefulStop()
+
+	// 4. Close consumer manager (closes all consumers)
+	consumerManager.Close()
 
 	log.Println("Log-processor service stopped")
 }

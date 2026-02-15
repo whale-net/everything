@@ -30,11 +30,13 @@ type Consumer struct {
 
 // NewConsumer creates a new consumer
 func NewConsumer(conn *Connection, queueName string) (*Consumer, error) {
-	return NewConsumerWithOpts(conn, queueName, true, false)
+	return NewConsumerWithOpts(conn, queueName, true, false, 0, 0)
 }
 
 // NewConsumerWithOpts creates a new consumer with custom queue options
-func NewConsumerWithOpts(conn *Connection, queueName string, durable, autoDelete bool) (*Consumer, error) {
+// messageTTL is in milliseconds (0 = no limit)
+// maxMessages is the maximum number of messages in the queue (0 = no limit)
+func NewConsumerWithOpts(conn *Connection, queueName string, durable, autoDelete bool, messageTTL, maxMessages int) (*Consumer, error) {
 	ch, err := conn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open channel: %w", err)
@@ -67,6 +69,32 @@ func NewConsumerWithOpts(conn *Connection, queueName string, durable, autoDelete
 			"x-dead-letter-exchange":    "", // Use default exchange
 			"x-dead-letter-routing-key": dlqName,
 		}
+	}
+
+	// Add x-expires as safety net for non-auto-delete queues
+	// This ensures orphaned queues are automatically cleaned up after 5 minutes
+	if !autoDelete {
+		if arguments == nil {
+			arguments = amqp.Table{}
+		}
+		arguments["x-expires"] = 300000 // 5 minutes in milliseconds
+	}
+
+	// Add message TTL if specified (prevents unbounded memory growth)
+	if messageTTL > 0 {
+		if arguments == nil {
+			arguments = amqp.Table{}
+		}
+		arguments["x-message-ttl"] = messageTTL
+	}
+
+	// Add max messages limit if specified (prevents unbounded queue growth)
+	if maxMessages > 0 {
+		if arguments == nil {
+			arguments = amqp.Table{}
+		}
+		arguments["x-max-length"] = maxMessages
+		arguments["x-overflow"] = "drop-head" // Drop oldest messages when limit is reached
 	}
 
 	// Declare main queue
@@ -288,6 +316,27 @@ func matchesRoutingKey(key, pattern string) bool {
 // UnmarshalMessage unmarshals a JSON message body into a struct
 func UnmarshalMessage(body []byte, v interface{}) error {
 	return json.Unmarshal(body, v)
+}
+
+// DeleteQueue deletes the queue associated with this consumer
+// This should be called before Close() to remove the queue from RabbitMQ
+func (c *Consumer) DeleteQueue() error {
+	if c.channel == nil {
+		return fmt.Errorf("channel is nil")
+	}
+
+	_, err := c.channel.QueueDelete(
+		c.queue, // queue name
+		false,   // ifUnused - delete even if there are consumers
+		false,   // ifEmpty - delete even if there are messages
+		false,   // noWait
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete queue %s: %w", c.queue, err)
+	}
+
+	log.Printf("Deleted queue: %s", c.queue)
+	return nil
 }
 
 // Close closes the consumer channel

@@ -166,6 +166,10 @@ func (s *APIServer) StopSession(ctx context.Context, req *pb.StopSessionRequest)
 	return s.sessionHandler.StopSession(ctx, req)
 }
 
+func (s *APIServer) SendInput(ctx context.Context, req *pb.SendInputRequest) (*pb.SendInputResponse, error) {
+	return s.sessionHandler.SendInput(ctx, req)
+}
+
 // GameConfigHandler handles GameConfig-related RPCs
 type GameConfigHandler struct {
 	repo repository.GameConfigRepository
@@ -814,6 +818,39 @@ func (h *SessionHandler) StopSession(ctx context.Context, req *pb.StopSessionReq
 	return &pb.StopSessionResponse{
 		Session: sessionToProto(session),
 	}, nil
+}
+
+func (h *SessionHandler) SendInput(ctx context.Context, req *pb.SendInputRequest) (*pb.SendInputResponse, error) {
+	session, err := h.sessionRepo.Get(ctx, req.SessionId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "session not found: %v", err)
+	}
+
+	// Only allow sending input to running sessions
+	if session.Status != manman.SessionStatusRunning {
+		return nil, status.Errorf(codes.FailedPrecondition, "session is not running (status: %s)", session.Status)
+	}
+
+	// Fetch ServerGameConfig to get server ID
+	sgc, err := h.sgcRepo.Get(ctx, session.SGCID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to fetch server game config: %v", err)
+	}
+
+	// Publish send input command to RabbitMQ with 10s timeout
+	if h.publisher != nil {
+		cmd := map[string]interface{}{
+			"session_id": session.SessionID,
+			"input":      req.Input,
+		}
+		if err := h.publisher.PublishSendInput(ctx, sgc.ServerID, cmd, 10*time.Second); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to send input: %v", err)
+		}
+	} else {
+		return nil, status.Errorf(codes.Internal, "publisher not configured")
+	}
+
+	return &pb.SendInputResponse{}, nil
 }
 
 // buildStartSessionCommand converts database models to RabbitMQ message format

@@ -16,6 +16,7 @@ import (
 	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/manman"
 	"github.com/whale-net/everything/manman/host/config"
+	hostrmq "github.com/whale-net/everything/manman/host/rmq"
 	pb "github.com/whale-net/everything/manman/protos"
 )
 
@@ -35,12 +36,14 @@ type SessionManager struct {
 	renderer     *config.Renderer
 	rmqPublisher interface {
 		PublishLog(ctx context.Context, sessionID int64, source string, message string) error
+		PublishSessionStatus(ctx context.Context, update *hostrmq.SessionStatusUpdate) error
 	}
 }
 
 // NewSessionManager creates a new session manager
 func NewSessionManager(dockerClient *docker.Client, environment string, hostDataDir string, grpcClient pb.ManManAPIClient, rmqPublisher interface {
 	PublishLog(ctx context.Context, sessionID int64, source string, message string) error
+	PublishSessionStatus(ctx context.Context, update *hostrmq.SessionStatusUpdate) error
 }) *SessionManager {
 	return &SessionManager{
 		dockerClient: dockerClient,
@@ -510,6 +513,9 @@ func (sm *SessionManager) startOutputReader(state *State) {
 		ticker := time.NewTicker(flushInterval)
 		defer ticker.Stop()
 
+		// Metrics for aggregate logging
+		var stdoutCount, stderrCount, errorCount, warnCount int
+
 		// Channel to receive log messages from reader goroutine
 		logChan := make(chan struct {
 			message string
@@ -536,10 +542,16 @@ func (sm *SessionManager) startOutputReader(state *State) {
 				var source string
 				if header[0] == 2 {
 					source = "stderr"
-					log.Printf("[session %d stderr] %s", state.SessionID, message)
 				} else {
 					source = "stdout"
-					log.Printf("[session %d stdout] %s", state.SessionID, message)
+				}
+
+				// Check for interesting log patterns and log samples
+				msgLower := strings.ToLower(message)
+				if strings.Contains(msgLower, "error") || strings.Contains(msgLower, "exception") || strings.Contains(msgLower, "fatal") {
+					log.Printf("[session %d] ERROR: %s", state.SessionID, strings.TrimSpace(message))
+				} else if strings.Contains(msgLower, "warn") {
+					log.Printf("[session %d] WARN: %s", state.SessionID, strings.TrimSpace(message))
 				}
 
 				// Send to channel (non-blocking to avoid deadlock)
@@ -559,6 +571,20 @@ func (sm *SessionManager) startOutputReader(state *State) {
 				return
 			}
 
+			// Log aggregate metrics
+			if stdoutCount > 0 || stderrCount > 0 {
+				metrics := fmt.Sprintf("[session %d] logs: %d total (%d stdout, %d stderr",
+					state.SessionID, stdoutCount+stderrCount, stdoutCount, stderrCount)
+				if errorCount > 0 {
+					metrics += fmt.Sprintf(", %d errors", errorCount)
+				}
+				if warnCount > 0 {
+					metrics += fmt.Sprintf(", %d warnings", warnCount)
+				}
+				metrics += ")"
+				log.Println(metrics)
+			}
+
 			// Publish logs to RabbitMQ in background
 			if sm.rmqPublisher != nil {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -572,9 +598,13 @@ func (sm *SessionManager) startOutputReader(state *State) {
 				}
 			}
 
-			// Clear buffers
+			// Clear buffers and reset metrics
 			logBuffer = logBuffer[:0]
 			sourceBuffer = sourceBuffer[:0]
+			stdoutCount = 0
+			stderrCount = 0
+			errorCount = 0
+			warnCount = 0
 		}
 
 		// Flush logs on exit
@@ -597,6 +627,21 @@ func (sm *SessionManager) startOutputReader(state *State) {
 				// Add to buffer
 				logBuffer = append(logBuffer, logMsg.message)
 				sourceBuffer = append(sourceBuffer, logMsg.source)
+
+				// Track metrics
+				if logMsg.source == "stderr" {
+					stderrCount++
+				} else {
+					stdoutCount++
+				}
+
+				msgLower := strings.ToLower(logMsg.message)
+				if strings.Contains(msgLower, "error") || strings.Contains(msgLower, "exception") || strings.Contains(msgLower, "fatal") {
+					errorCount++
+				}
+				if strings.Contains(msgLower, "warn") {
+					warnCount++
+				}
 
 				// Flush if buffer is full
 				if len(logBuffer) >= bufferSize {
@@ -621,6 +666,28 @@ func (sm *SessionManager) handleContainerExit(state *State) {
 	state.ExitCode = &exitCode
 	state.UpdateStatus("crashed")
 	log.Printf("[session %d] container exited with code %d — marked crashed", state.SessionID, exitCode)
+
+	// Publish crashed status to RabbitMQ
+	statusUpdate := &hostrmq.SessionStatusUpdate{
+		SessionID: state.SessionID,
+		SGCID:     state.SGCID,
+		Status:    "crashed",
+		ExitCode:  &exitCode,
+	}
+	if err := sm.rmqPublisher.PublishSessionStatus(ctx, statusUpdate); err != nil {
+		log.Printf("[session %d] failed to publish crashed status: %v", state.SessionID, err)
+	}
+
+	// Clean up the crashed container
+	log.Printf("[session %d] removing crashed container %s", state.SessionID, state.GameContainerID)
+	if err := sm.dockerClient.RemoveContainer(ctx, state.GameContainerID, true); err != nil {
+		log.Printf("[session %d] warning: failed to remove crashed container: %v", state.SessionID, err)
+		// Continue anyway - container cleanup can happen later
+	}
+
+	// Remove session from state manager to allow new sessions for this SGC
+	sm.stateManager.RemoveSession(state.SessionID)
+	log.Printf("[session %d] removed from state manager after crash", state.SessionID)
 }
 
 // CleanupOrphans performs a single pass of orphan game container cleanup

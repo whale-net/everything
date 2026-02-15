@@ -194,7 +194,8 @@ type CommandHandlerImpl struct {
 
 // HandleStartSession handles a start session command
 func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.StartSessionCommand) error {
-	log.Printf("[host] processing start session command for session %d (sgc %d)...", cmd.SessionID, cmd.SGCID)
+	log.Printf("[COMMAND] start_session: session_id=%d sgc_id=%d image=%s ports=%d volumes=%d force=%v",
+		cmd.SessionID, cmd.SGCID, cmd.GameConfig.Image, len(cmd.ServerGameConfig.PortBindings), len(cmd.GameConfig.Volumes), cmd.Force)
 	
 	env := make([]string, 0, len(cmd.GameConfig.EnvTemplate))
 	for k, v := range cmd.GameConfig.EnvTemplate {
@@ -234,24 +235,23 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 	}
 
 	// Publish starting status before attempting container creation
-	log.Printf("[host] publishing status: starting for session %d", cmd.SessionID)
 	if err := h.publisher.PublishSessionStatus(ctx, &rmq.SessionStatusUpdate{
 		SessionID: cmd.SessionID, SGCID: cmd.SGCID, Status: "starting",
 	}); err != nil {
-		log.Printf("[host] error: failed to publish starting status for session %d: %v", cmd.SessionID, err)
+		log.Printf("[ERROR] failed to publish starting status for session %d: %v", cmd.SessionID, err)
 		return fmt.Errorf("failed to publish starting status: %w", err)
 	}
 
 	if err := h.sessionManager.StartSession(ctx, sessionCmd); err != nil {
-		log.Printf("[host] error: failed to start session %d: %v", cmd.SessionID, err)
+		log.Printf("[ERROR] failed to start session %d: %v", cmd.SessionID, err)
 		_ = h.publisher.PublishSessionStatus(ctx, &rmq.SessionStatusUpdate{
 			SessionID: cmd.SessionID, SGCID: cmd.SGCID, Status: "crashed",
 		})
 		// Wrap in PermanentError to avoid infinite RMQ retries
 		return &rmqlib.PermanentError{Err: fmt.Errorf("failed to start session: %w", err)}
 	}
-	
-	log.Printf("[host] publishing status: running for session %d", cmd.SessionID)
+
+	log.Printf("[STATUS] session %d: starting → running", cmd.SessionID)
 	return h.publisher.PublishSessionStatus(ctx, &rmq.SessionStatusUpdate{
 		SessionID: cmd.SessionID, SGCID: cmd.SGCID, Status: "running",
 	})
@@ -259,6 +259,8 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 
 // HandleStopSession handles a stop session command
 func (h *CommandHandlerImpl) HandleStopSession(ctx context.Context, cmd *rmq.StopSessionCommand) error {
+	log.Printf("[COMMAND] stop_session: session_id=%d force=%v", cmd.SessionID, cmd.Force)
+
 	// Get session state to retrieve SGCID before stopping
 	state, exists := h.sessionManager.GetSessionState(cmd.SessionID)
 	if !exists {
@@ -295,6 +297,8 @@ func (h *CommandHandlerImpl) HandleStopSession(ctx context.Context, cmd *rmq.Sto
 
 // HandleKillSession handles a kill session command
 func (h *CommandHandlerImpl) HandleKillSession(ctx context.Context, cmd *rmq.KillSessionCommand) error {
+	log.Printf("[COMMAND] kill_session: session_id=%d", cmd.SessionID)
+
 	if err := h.sessionManager.KillSession(ctx, cmd.SessionID); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			return &rmqlib.PermanentError{Err: err}
@@ -312,6 +316,13 @@ func (h *CommandHandlerImpl) HandleKillSession(ctx context.Context, cmd *rmq.Kil
 
 // HandleSendInput handles a send input command
 func (h *CommandHandlerImpl) HandleSendInput(ctx context.Context, cmd *rmq.SendInputCommand) error {
+	// Truncate input for logging if too long
+	inputPreview := string(cmd.Input)
+	if len(inputPreview) > 50 {
+		inputPreview = inputPreview[:50] + "..."
+	}
+	log.Printf("[COMMAND] send_input: session_id=%d input=%q", cmd.SessionID, inputPreview)
+
 	if err := h.sessionManager.SendInput(ctx, cmd.SessionID, cmd.Input); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			return &rmqlib.PermanentError{Err: err}

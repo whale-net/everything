@@ -32,6 +32,13 @@ type SessionConsumer struct {
 	cancel        context.CancelFunc
 	done          chan struct{}
 	logsProcessed *int64 // Pointer to manager's counter for atomic increment
+
+	// Ring buffer for recent logs
+	logBuffer     []*manmanpb.LogMessage
+	bufferSize    int
+	bufferIndex   int
+	bufferFull    bool
+	bufferMu      sync.RWMutex
 }
 
 // Manager manages consumers for multiple sessions
@@ -51,6 +58,7 @@ type Manager struct {
 // Archiver is the interface for log archival
 type Archiver interface {
 	AddLog(sgcID, sessionID int64, timestamp time.Time, source, message string)
+	FlushSession(ctx context.Context, sessionID int64) error
 }
 
 // ConsumerConfig holds configuration for consumers
@@ -157,8 +165,10 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 		return nil, fmt.Errorf("failed to get session info: %w", err)
 	}
 
-	// Create consumer with auto-delete queue (will be removed when last consumer disconnects)
-	consumer, err := rmq.NewConsumerWithOpts(m.conn, queueName, false, true)
+	// Create consumer with persistent queue (lifecycle-managed, not auto-deleted)
+	// Apply message TTL and max messages to prevent unbounded growth
+	messageTTL := m.config.LogBufferTTL * 1000 // Convert seconds to milliseconds
+	consumer, err := rmq.NewConsumerWithOpts(m.conn, queueName, false, false, messageTTL, m.config.LogBufferMaxMsgs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create RabbitMQ consumer: %w", err)
 	}
@@ -170,6 +180,7 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
+	bufferSize := 500 // Keep last 500 log messages in memory
 	sc := &SessionConsumer{
 		sessionID:     sessionID,
 		sgcID:         sessionResp.Session.ServerGameConfigId,
@@ -179,6 +190,10 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 		cancel:        cancel,
 		done:          make(chan struct{}),
 		logsProcessed: &m.logsProcessed,
+		logBuffer:     make([]*manmanpb.LogMessage, bufferSize),
+		bufferSize:    bufferSize,
+		bufferIndex:   0,
+		bufferFull:    false,
 	}
 
 	// Start consuming in background
@@ -187,11 +202,114 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 	return sc, nil
 }
 
-// addSubscriber adds a subscriber channel
+// CreateConsumerForSession creates a consumer for a session (called by lifecycle handler)
+func (m *Manager) CreateConsumerForSession(ctx context.Context, sessionID int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check if consumer already exists
+	if _, exists := m.consumers[sessionID]; exists {
+		log.Printf("[consumer-manager] consumer already exists for session %d", sessionID)
+		return nil // Idempotent
+	}
+
+	// Create new consumer
+	consumer, err := m.createConsumer(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to create consumer: %w", err)
+	}
+
+	m.consumers[sessionID] = consumer
+	log.Printf("[consumer-manager] created consumer for session %d (lifecycle-driven)", sessionID)
+	return nil
+}
+
+// DeleteConsumerForSession deletes a consumer for a session (called by lifecycle handler)
+func (m *Manager) DeleteConsumerForSession(sessionID int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	consumer, exists := m.consumers[sessionID]
+	if !exists {
+		log.Printf("[consumer-manager] no consumer exists for session %d", sessionID)
+		return nil // Idempotent
+	}
+
+	// Flush pending logs to S3 before closing consumer
+	if m.archiver != nil {
+		log.Printf("[consumer-manager] flushing logs for session %d before deletion", sessionID)
+		if err := m.archiver.FlushSession(context.Background(), sessionID); err != nil {
+			log.Printf("[consumer-manager] failed to flush logs for session %d: %v", sessionID, err)
+			// Continue anyway - we don't want to block consumer deletion
+		}
+	}
+
+	// Close consumer (stops consuming, closes channels)
+	consumer.close()
+
+	// Explicitly delete the queue
+	if err := consumer.consumer.DeleteQueue(); err != nil {
+		log.Printf("[consumer-manager] failed to delete queue for session %d: %v", sessionID, err)
+		// Continue anyway to clean up the consumer
+	}
+
+	// Remove from map
+	delete(m.consumers, sessionID)
+	log.Printf("[consumer-manager] deleted consumer for session %d", sessionID)
+	return nil
+}
+
+// addLogToBuffer adds a log message to the ring buffer
+func (sc *SessionConsumer) addLogToBuffer(msg *manmanpb.LogMessage) {
+	sc.bufferMu.Lock()
+	defer sc.bufferMu.Unlock()
+
+	sc.logBuffer[sc.bufferIndex] = msg
+	sc.bufferIndex++
+	if sc.bufferIndex >= sc.bufferSize {
+		sc.bufferIndex = 0
+		sc.bufferFull = true
+	}
+}
+
+// getBufferedLogs returns all buffered logs in chronological order
+func (sc *SessionConsumer) getBufferedLogs() []*manmanpb.LogMessage {
+	sc.bufferMu.RLock()
+	defer sc.bufferMu.RUnlock()
+
+	if !sc.bufferFull {
+		// Buffer not full yet, return logs from 0 to bufferIndex
+		result := make([]*manmanpb.LogMessage, sc.bufferIndex)
+		copy(result, sc.logBuffer[:sc.bufferIndex])
+		return result
+	}
+
+	// Buffer is full, return logs from bufferIndex to end, then 0 to bufferIndex-1
+	result := make([]*manmanpb.LogMessage, sc.bufferSize)
+	copy(result, sc.logBuffer[sc.bufferIndex:])
+	copy(result[sc.bufferSize-sc.bufferIndex:], sc.logBuffer[:sc.bufferIndex])
+	return result
+}
+
+// addSubscriber adds a subscriber channel and sends buffered logs
 func (sc *SessionConsumer) addSubscriber(ch chan *manmanpb.LogMessage) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	sc.subscribers[ch] = struct{}{}
+
+	// Send buffered logs to new subscriber in a goroutine to avoid blocking
+	go func() {
+		bufferedLogs := sc.getBufferedLogs()
+		for _, msg := range bufferedLogs {
+			select {
+			case ch <- msg:
+			default:
+				// Channel full, skip
+				log.Printf("[log-processor] subscriber channel full while sending buffered logs for session %d", sc.sessionID)
+				return
+			}
+		}
+	}()
 }
 
 // removeSubscriber removes a subscriber channel
@@ -267,6 +385,9 @@ func (sc *SessionConsumer) consumeLoop(ctx context.Context, debugOutput bool, ar
 			Source:    logMsg.Source,
 			Message:   logMsg.Message,
 		}
+
+		// Add to ring buffer for new subscribers
+		sc.addLogToBuffer(pbMsg)
 
 		// Broadcast to all subscribers
 		sc.mu.RLock()

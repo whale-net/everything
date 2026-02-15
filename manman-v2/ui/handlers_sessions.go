@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	manmanpb "github.com/whale-net/everything/manman/protos"
@@ -525,4 +526,61 @@ func (app *App) handleHistoricalLogs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 		return
 	}
+}
+
+// handleSessionStdin handles API requests to send stdin to a session
+func (app *App) handleSessionStdin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract session ID from URL path
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(pathParts) < 3 || pathParts[0] != "api" || pathParts[1] != "sessions" {
+		http.Error(w, "Invalid URL", http.StatusBadRequest)
+		return
+	}
+
+	sessionIDStr := pathParts[2]
+	sessionID, err := strconv.ParseInt(sessionIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid session ID", http.StatusBadRequest)
+		return
+	}
+
+	// Parse JSON body
+	var req struct {
+		Input string `json:"input"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Input == "" {
+		http.Error(w, "Input cannot be empty", http.StatusBadRequest)
+		return
+	}
+
+	// Add newline to input if not present (common for stdin)
+	input := req.Input
+	if !strings.HasSuffix(input, "\n") {
+		input += "\n"
+	}
+
+	// Call gRPC SendInput with 10s timeout
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	_, err = app.grpc.SendInput(ctx, sessionID, []byte(input))
+	if err != nil {
+		log.Printf("Error sending input to session %d: %v", sessionID, err)
+		http.Error(w, fmt.Sprintf("Failed to send input: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }

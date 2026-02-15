@@ -15,6 +15,7 @@ go_library(
         "//manman/api/repository/postgres",
         "//manman/log-processor/archiver",
         "//manman/log-processor/consumer",
+        "//manman/log-processor/lifecycle",
         "//manman/log-processor/server",
         "//manman/protos:manmanpb",
         "@com_github_jackc_pgx_v5//pgxpool",

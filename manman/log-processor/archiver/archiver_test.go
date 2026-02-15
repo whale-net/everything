@@ -127,6 +127,10 @@ func (m *mockLogRepo) GetMinMaxTimes(ctx context.Context, sgcID int64) (minTime,
 	return nil, nil, nil
 }
 
+func (m *mockLogRepo) GetMinMaxTimesBySession(ctx context.Context, sessionID int64) (minTime, maxTime *time.Time, err error) {
+	return nil, nil, nil
+}
+
 // TestAppendPreservesData tests that appending to an existing log file preserves all data
 func TestAppendPreservesData(t *testing.T) {
 	// Create mock dependencies
@@ -460,4 +464,37 @@ func decompressTestData(data []byte) ([]byte, error) {
 	defer gzReader.Close()
 
 	return io.ReadAll(gzReader)
+}
+
+// TestFlushSession tests that FlushSession only flushes windows for a specific session
+// TODO: This test requires refactoring the Archiver to accept interfaces instead of concrete types
+// For now, these tests serve as documentation of expected behavior
+func TestFlushSession(t *testing.T) {
+	t.Skip("TODO: Refactor Archiver to accept s3 and repo interfaces for better testability")
+
+	// Expected behavior:
+	// 1. Given an archiver with logs for multiple sessions in pending windows
+	// 2. When FlushSession(sessionID) is called
+	// 3. Then only windows for that sessionID are uploaded to S3
+	// 4. And other session windows remain in the archiver
+}
+
+// TestFlushSessionIdempotent tests that flushing a non-existent session doesn't error
+func TestFlushSessionIdempotent(t *testing.T) {
+	t.Skip("TODO: Refactor Archiver to accept interfaces for testability")
+
+	// Expected behavior:
+	// 1. FlushSession on non-existent session should return nil (idempotent)
+	// 2. FlushSession on already-flushed session should return nil (idempotent)
+}
+
+// TestFlushSessionMultipleWindows tests flushing a session with multiple minute windows
+func TestFlushSessionMultipleWindows(t *testing.T) {
+	t.Skip("TODO: Refactor Archiver to accept interfaces for testability")
+
+	// Expected behavior:
+	// 1. Given a session with logs across multiple minute boundaries
+	// 2. When FlushSession is called
+	// 3. Then all minute windows for that session are uploaded to S3
+	// 4. And each minute gets its own S3 object
 }

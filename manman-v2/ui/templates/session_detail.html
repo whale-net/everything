@@ -60,6 +60,13 @@
     <div id="log-viewer" class="log-viewer">
         <pre id="log-output" class="log-output"></pre>
     </div>
+    <div class="stdin-input">
+        <form id="stdin-form" style="display: flex; gap: 0.5rem; padding: 0.75rem; background: #2d2d2d; border-top: 1px solid #3e3e3e;">
+            <input type="text" id="stdin-input" placeholder="Send command to server..." style="flex: 1; padding: 0.5rem; background: #1e1e1e; border: 1px solid #3e3e3e; color: #d4d4d4; font-family: 'Consolas', 'Monaco', 'Courier New', monospace; border-radius: 4px;">
+            <button type="submit" id="stdin-submit" class="btn btn-sm btn-primary" style="min-width: 80px;">Send</button>
+        </form>
+        <div id="stdin-status" style="padding: 0 0.75rem 0.5rem; font-size: 0.75rem; color: #888; min-height: 1.25rem;"></div>
+    </div>
 </div>
 
 <style>
@@ -174,6 +181,50 @@
     window.addEventListener('beforeunload', () => {
         if (evtSource) evtSource.close();
     });
+
+    // Handle stdin input
+    const stdinForm = document.getElementById('stdin-form');
+    const stdinInput = document.getElementById('stdin-input');
+    const stdinSubmit = document.getElementById('stdin-submit');
+    const stdinStatus = document.getElementById('stdin-status');
+
+    stdinForm.onsubmit = async (e) => {
+        e.preventDefault();
+        const input = stdinInput.value;
+        if (!input.trim()) return;
+
+        // Disable input while processing
+        stdinInput.disabled = true;
+        stdinSubmit.disabled = true;
+        stdinStatus.textContent = 'Sending...';
+        stdinStatus.style.color = '#4fc1ff';
+
+        try {
+            const response = await fetch('/api/sessions/{{.Session.SessionId}}/stdin', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ input: input }),
+                signal: AbortSignal.timeout(10000)  // 10s timeout
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+            }
+
+            // Clear input on success
+            stdinInput.value = '';
+            stdinStatus.textContent = '✓ Sent';
+            stdinStatus.style.color = '#4fc1ff';
+            setTimeout(() => { stdinStatus.textContent = ''; }, 2000);
+        } catch (err) {
+            stdinStatus.textContent = `✗ Error: ${err.message}`;
+            stdinStatus.style.color = '#f48771';
+        } finally {
+            stdinInput.disabled = false;
+            stdinSubmit.disabled = false;
+            stdinInput.focus();
+        }
+    };
 })();
 </script>
 {{else}}

@@ -35,8 +35,9 @@ func NewCommandPublisher(conn *rmq.Connection) (*CommandPublisher, error) {
 	}
 
 	// Create unique reply queue for this API instance (non-durable, auto-delete)
+	// No message limits needed for reply queue (transient, low volume)
 	replyQueue := fmt.Sprintf("api-replies-%s", uuid.New().String())
-	consumer, err := rmq.NewConsumerWithOpts(conn, replyQueue, false, true)
+	consumer, err := rmq.NewConsumerWithOpts(conn, replyQueue, false, true, 0, 0)
 	if err != nil {
 		publisher.Close()
 		return nil, fmt.Errorf("failed to create reply consumer: %w", err)
@@ -68,6 +69,11 @@ func (p *CommandPublisher) PublishStartSession(ctx context.Context, serverID int
 // PublishStopSession publishes a stop session command and waits for response
 func (p *CommandPublisher) PublishStopSession(ctx context.Context, serverID int64, cmd interface{}, timeout time.Duration) error {
 	routingKey := fmt.Sprintf("command.host.%d.session.stop", serverID)
+	return p.publishAndWait(ctx, routingKey, cmd, timeout)
+}
+
+func (p *CommandPublisher) PublishSendInput(ctx context.Context, serverID int64, cmd interface{}, timeout time.Duration) error {
+	routingKey := fmt.Sprintf("command.host.%d.session.send_input", serverID)
 	return p.publishAndWait(ctx, routingKey, cmd, timeout)
 }
 

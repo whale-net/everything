@@ -259,3 +259,15 @@ func (c *ControlClient) DeployGameConfig(ctx context.Context, serverID, gameConf
 	}
 	return resp.Config, nil
 }
+
+// SendInput sends stdin input to a running session
+func (c *ControlClient) SendInput(ctx context.Context, sessionID int64, input []byte) (*manmanpb.SendInputResponse, error) {
+	resp, err := c.api.SendInput(ctx, &manmanpb.SendInputRequest{
+		SessionId: sessionID,
+		Input:     input,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to send input: %w", err)
+	}
+	return resp, nil
+}

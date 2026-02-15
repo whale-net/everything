@@ -1,0 +1,9 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "lifecycle",
+    srcs = ["handler.go"],
+    importpath = "github.com/whale-net/everything/manman/log-processor/lifecycle",
+    visibility = ["//manman/log-processor:__pkg__"],
+    deps = ["//libs/go/rmq"],
+)

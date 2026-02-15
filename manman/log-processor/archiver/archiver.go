@@ -127,17 +127,29 @@ func (a *Archiver) AddLog(sgcID, sessionID int64, timestamp time.Time, source, m
 }
 
 // windowCloser periodically checks for windows that should be closed and uploaded
+// Uses a drift-free approach by calculating the next check time based on wall clock
 func (a *Archiver) windowCloser() {
 	defer a.closerWg.Done()
 
-	ticker := time.NewTicker(windowCheckInterval)
-	defer ticker.Stop()
+	// Calculate next check time aligned to windowCheckInterval boundaries
+	// This prevents drift and ensures consistent timing
+	nextCheck := func() time.Time {
+		now := time.Now().UTC()
+		// Round up to next interval boundary
+		intervalNanos := windowCheckInterval.Nanoseconds()
+		currentNanos := now.UnixNano()
+		nextNanos := ((currentNanos / intervalNanos) + 1) * intervalNanos
+		return time.Unix(0, nextNanos)
+	}
 
 	for {
+		next := nextCheck()
+		sleepDuration := time.Until(next)
+
 		select {
 		case <-a.ctx.Done():
 			return
-		case <-ticker.C:
+		case <-time.After(sleepDuration):
 			a.closeStaleWindows()
 		}
 	}
@@ -314,6 +326,41 @@ func (a *Archiver) uploadWindow(ctx context.Context, window *MinuteWindow) error
 	}
 
 	log.Printf("Successfully uploaded window %s: %d lines to %s", window.GetKey(), window.LineCount, s3Key)
+	return nil
+}
+
+// FlushSession uploads all pending windows for a specific session (called on session stop)
+func (a *Archiver) FlushSession(ctx context.Context, sessionID int64) error {
+	log.Printf("[archiver] Flushing pending log windows for session %d...", sessionID)
+
+	a.windowsMu.Lock()
+	sessionWindows := make([]*MinuteWindow, 0)
+	for key, window := range a.windows {
+		if window.SessionID == sessionID {
+			sessionWindows = append(sessionWindows, window)
+			delete(a.windows, key)
+		}
+	}
+	a.windowsMu.Unlock()
+
+	if len(sessionWindows) == 0 {
+		log.Printf("[archiver] No pending windows for session %d", sessionID)
+		return nil
+	}
+
+	// Upload all session windows synchronously
+	var errs []error
+	for _, window := range sessionWindows {
+		if err := a.uploadWindow(ctx, window); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to flush %d windows for session %d: %v", len(errs), sessionID, errs)
+	}
+
+	log.Printf("[archiver] Successfully flushed %d window(s) for session %d", len(sessionWindows), sessionID)
 	return nil
 }
 
