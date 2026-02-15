@@ -156,7 +156,7 @@ SELECT
     ad.confirmation_message,
     ad.enabled,
     json_agg(
-        DISTINCT jsonb_build_object(
+        jsonb_build_object(
             'field_id', aif.field_id,
             'name', aif.name,
             'label', aif.label,
