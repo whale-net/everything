@@ -166,6 +166,7 @@ use_repo(
     "com_github_aws_aws_sdk_go_v2_service_s3",
     "com_github_containerd_errdefs",
     "com_github_coreos_go_oidc_v3",
+    "com_github_data_dog_go_sqlmock",
     "com_github_distribution_reference",
     "com_github_docker_docker",
     "com_github_docker_go_connections",
