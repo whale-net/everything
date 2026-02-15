@@ -46,18 +46,13 @@ func (app *App) handleServers(w http.ResponseWriter, r *http.Request) {
 		Servers: servers,
 	}
 
-	layout, err := renderWithLayout("servers_content", data, LayoutData{
+	layoutData := LayoutData{
 		Title:  data.Title,
 		Active: data.Active,
 		User:   data.User,
-	})
-	if err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
 	}
 
-	if err := templates.ExecuteTemplate(w, "layout.html", layout); err != nil {
+	if err := renderPage(w, "servers_content", data, layoutData); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
@@ -109,19 +104,14 @@ func (app *App) handleServerDetail(w http.ResponseWriter, r *http.Request) {
 		Server:  resp.Server,
 		Configs: configsResp.Configs,
 	}
-	
-	layout, err := renderWithLayout("server_detail_content", data, LayoutData{
+
+	layoutData := LayoutData{
 		Title:  data.Title,
 		Active: data.Active,
 		User:   data.User,
-	})
-	if err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
 	}
 
-	if err := templates.ExecuteTemplate(w, "layout.html", layout); err != nil {
+	if err := renderPage(w, "server_detail_content", data, layoutData); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}

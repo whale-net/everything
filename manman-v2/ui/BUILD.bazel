@@ -18,6 +18,7 @@ go_library(
     deps = [
         "//libs/go/grpcclient",
         "//libs/go/htmxauth",
+        "//libs/go/htmxbase",
         "//manman/protos:manmanpb",
         "@org_golang_google_grpc//:grpc",
     ],

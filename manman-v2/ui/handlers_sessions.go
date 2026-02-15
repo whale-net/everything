@@ -207,14 +207,7 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	layout, err := renderWithLayout("sessions_content", data, layoutData)
-	if err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := templates.ExecuteTemplate(w, "layout.html", layout); err != nil {
+	if err := renderPage(w, "sessions_content", data, layoutData); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
@@ -277,18 +270,13 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		Actions: actions,
 	}
 
-	layout, err := renderWithLayout("session_detail_content", data, LayoutData{
+	layoutData := LayoutData{
 		Title:  data.Title,
 		Active: data.Active,
 		User:   data.User,
-	})
-	if err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
 	}
 
-	if err := templates.ExecuteTemplate(w, "layout.html", layout); err != nil {
+	if err := renderPage(w, "session_detail_content", data, layoutData); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}

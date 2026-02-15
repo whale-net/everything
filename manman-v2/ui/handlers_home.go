@@ -28,7 +28,7 @@ type DashboardSummaryData struct {
 
 func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
-	
+
 	data := HomePageData{
 		Title:  "Dashboard",
 		Active: "home",
@@ -42,14 +42,7 @@ func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	layout, err := renderWithLayout("home_content", data, layoutData)
-	if err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := templates.ExecuteTemplate(w, "layout.html", layout); err != nil {
+	if err := renderPage(w, "home_content", data, layoutData); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
@@ -263,14 +256,7 @@ func (app *App) handleConfigStrategiesDocs(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	layout, err := renderWithLayout("content", data, layoutData)
-	if err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := templates.ExecuteTemplate(w, "config_strategies_docs.html", layout); err != nil {
+	if err := renderPage(w, "content", data, layoutData); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
