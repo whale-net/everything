@@ -1,0 +1,13 @@
+{
+  "name": "everything",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/go": {},
+    "ghcr.io/devcontainers/features/python": {
+      "installUv": true
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker": {
+      "moby": false
+    }
+  }
+}
