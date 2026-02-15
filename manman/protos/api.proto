@@ -77,6 +77,10 @@ service ManManAPI {
 
   // Get rendered configurations for a session (for host-manager)
   rpc GetSessionConfiguration(GetSessionConfigurationRequest) returns (GetSessionConfigurationResponse);
+
+  // Game actions
+  rpc GetSessionActions(GetSessionActionsRequest) returns (GetSessionActionsResponse);
+  rpc ExecuteAction(ExecuteActionRequest) returns (ExecuteActionResponse);
 }
 
 // ============================================================================
@@ -615,4 +619,29 @@ message GetSessionConfigurationResponse {
   int64 game_id = 2;
   int64 game_config_id = 3;
   int64 server_game_config_id = 4;
+}
+
+// ============================================================================
+// Game Actions RPCs
+// ============================================================================
+
+message GetSessionActionsRequest {
+  int64 session_id = 1;
+}
+
+message GetSessionActionsResponse {
+  repeated ActionDefinition actions = 1;
+}
+
+message ExecuteActionRequest {
+  int64 session_id = 1;
+  int64 action_id = 2;
+  map<string, string> input_values = 3;  // Field name -> user input
+}
+
+message ExecuteActionResponse {
+  string rendered_command = 1;
+  bool success = 2;
+  int64 execution_id = 3;
+  string error_message = 4;
 }

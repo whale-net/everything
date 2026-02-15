@@ -210,3 +210,75 @@ message RenderedConfiguration {
   string base_content = 5;  // Base template before patches
   repeated PatchLayer patches = 6;  // Show the layering
 }
+
+// ============================================================================
+// Game Actions System
+// ============================================================================
+
+// ActionDefinition defines an action that can be executed on a game session
+message ActionDefinition {
+  int64 action_id = 1;
+  int64 game_id = 2;
+  string name = 3;  // Unique identifier (e.g., "save_game", "change_map")
+  string label = 4;  // Display name (e.g., "Save Game", "Change Map")
+  string description = 5;
+  string command_template = 6;  // Go template syntax: "changelevel {{.map}}"
+  int32 display_order = 7;
+  string group_name = 8;  // Group actions together (e.g., "Game Control", "Admin")
+  string button_style = 9;  // CSS class hint (primary, success, danger, etc.)
+  string icon = 10;  // Optional icon class
+  bool requires_confirmation = 11;
+  string confirmation_message = 12;
+  bool enabled = 13;
+  repeated ActionInputField input_fields = 14;  // Input fields for this action
+  int64 created_at = 15;  // Unix timestamp
+  int64 updated_at = 16;  // Unix timestamp
+}
+
+// ActionInputField defines an input field for a parameterized action
+message ActionInputField {
+  int64 field_id = 1;
+  int64 action_id = 2;
+  string name = 3;  // Field identifier (e.g., "map", "workshop_id")
+  string label = 4;  // Display label (e.g., "Select Map", "Workshop ID")
+  string placeholder = 5;
+  string help_text = 6;
+  string field_type = 7;  // "text", "number", "select", "textarea", "checkbox", "radio"
+  bool required = 8;
+  string default_value = 9;
+  int32 display_order = 10;
+  // Validation fields
+  string pattern = 11;  // Regex pattern
+  double min_value = 12;
+  double max_value = 13;
+  int32 min_length = 14;
+  int32 max_length = 15;
+  int64 created_at = 16;  // Unix timestamp
+  int64 updated_at = 17;  // Unix timestamp
+  repeated ActionInputOption options = 18;  // Options for select/radio fields
+}
+
+// ActionInputOption defines an option for select/radio input fields
+message ActionInputOption {
+  int64 option_id = 1;
+  int64 field_id = 2;
+  string value = 3;  // Actual value used in template (e.g., "de_dust2")
+  string label = 4;  // Display label (e.g., "Dust 2")
+  int32 display_order = 5;
+  bool is_default = 6;
+  int64 created_at = 7;  // Unix timestamp
+  int64 updated_at = 8;  // Unix timestamp
+}
+
+// ActionExecution records the execution of an action
+message ActionExecution {
+  int64 execution_id = 1;
+  int64 action_id = 2;
+  int64 session_id = 3;
+  map<string, string> input_values = 4;  // User-provided input values
+  string rendered_command = 5;  // Final command sent to stdin
+  string status = 6;  // "success", "failed", "validation_error"
+  string error_message = 7;
+  string triggered_by = 8;  // Username or system identifier
+  int64 executed_at = 9;  // Unix timestamp
+}

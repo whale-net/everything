@@ -11,6 +11,7 @@ import (
 	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manman"
 	"github.com/whale-net/everything/manman/api/repository"
+	"github.com/whale-net/everything/manman/api/repository/postgres"
 	pb "github.com/whale-net/everything/manman/protos"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -32,6 +33,7 @@ type APIServer struct {
 	backupHandler           *BackupHandler
 	strategyHandler         *ConfigurationStrategyHandler
 	patchHandler            *ConfigurationPatchHandler
+	actionHandler           *ActionHandler
 }
 
 func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq.Connection) *APIServer {
@@ -62,6 +64,7 @@ func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq
 		backupHandler:           NewBackupHandler(repo.Backups, repo.Sessions, s3Client),
 		strategyHandler:         NewConfigurationStrategyHandler(repo.ConfigurationStrategies),
 		patchHandler:            NewConfigurationPatchHandler(repo.ConfigurationPatches),
+		actionHandler:           NewActionHandler(repo.Actions.(*postgres.ActionRepository), repo.Sessions, repo.ServerGameConfigs, repo.GameConfigs, commandPublisher),
 	}
 }
 
@@ -1406,4 +1409,13 @@ func (s *APIServer) DeleteConfigurationPatch(ctx context.Context, req *pb.Delete
 
 func (s *APIServer) ListConfigurationPatches(ctx context.Context, req *pb.ListConfigurationPatchesRequest) (*pb.ListConfigurationPatchesResponse, error) {
 	return s.patchHandler.ListConfigurationPatches(ctx, req)
+}
+
+// Game Actions RPCs
+func (s *APIServer) GetSessionActions(ctx context.Context, req *pb.GetSessionActionsRequest) (*pb.GetSessionActionsResponse, error) {
+	return s.actionHandler.GetSessionActions(ctx, req)
+}
+
+func (s *APIServer) ExecuteAction(ctx context.Context, req *pb.ExecuteActionRequest) (*pb.ExecuteActionResponse, error) {
+	return s.actionHandler.ExecuteAction(ctx, req)
 }
