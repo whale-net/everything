@@ -1,0 +1,23 @@
+{
+	"name": "Everything Monorepo",
+	"image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+	"features": {
+		"ghcr.io/devcontainers/features/docker-in-docker": {
+			"moby": false
+		},
+		"ghcr.io/devcontainers/features/python": {
+			"version": "3.13",
+			"installTools": true,
+			"toolsToInstall": ["uv"]
+		},
+		"ghcr.io/devcontainers/features/go": {
+			"version": "1.25"
+		},
+		"ghcr.io/devcontainers-community/features/bazel": {},
+		"ghcr.io/devcontainers/features/kubectl-helm-minikube": {
+			"minikube": "none"
+		},
+		"ghcr.io/rio/features/k3d": {},
+		"ghcr.io/audacioustux/devcontainers/tilt": {}
+	}
+}
