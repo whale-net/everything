@@ -59,6 +59,13 @@ alias(
     visibility = ["//visibility:public"],
 )
 
+# Kraken - Go rewrite of the release helper
+alias(
+    name = "kraken",
+    actual = "//tools/kraken/cmd/kraken",
+    visibility = ["//visibility:public"],
+)
+
 # Test suite for cross-compilation (now in scripts/)
 # Use test_suite instead of alias so 'bazel test' works correctly
 # Has 'manual' tag to prevent running with //... in regular test job
