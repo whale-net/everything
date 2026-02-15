@@ -27,12 +27,14 @@ class CleanupPlan:
         tags_to_keep: List of Git tag names to keep
         packages_to_delete: Dict mapping package names to list of version IDs to delete
         releases_to_delete: Dict mapping tag names to release IDs to delete
+        hash_tags_to_delete: Dict mapping package names to list of hash-tagged version IDs to delete
         retention_policy: Dict containing the retention policy parameters
     """
     tags_to_delete: List[str]
     tags_to_keep: List[str]
     packages_to_delete: Dict[str, List[int]] = field(default_factory=dict)
     releases_to_delete: Dict[str, int] = field(default_factory=dict)
+    hash_tags_to_delete: Dict[str, List[int]] = field(default_factory=dict)
     retention_policy: Dict = field(default_factory=dict)
 
     def total_tag_deletions(self) -> int:
@@ -51,6 +53,16 @@ class CleanupPlan:
             total += len(versions)
         return total
     
+    def total_hash_tag_deletions(self) -> int:
+        """Get total number of hash-tagged versions to delete."""
+        total = 0
+        for package_name, versions in self.hash_tags_to_delete.items():
+            if versions is None:
+                print(f"ERROR: versions is None for package {package_name} - this indicates a bug!", file=sys.stderr)
+                continue
+            total += len(versions)
+        return total
+    
     def total_release_deletions(self) -> int:
         """Get total number of releases to delete."""
         return len(self.releases_to_delete)
@@ -59,6 +71,7 @@ class CleanupPlan:
         """Check if cleanup plan is empty."""
         return (len(self.tags_to_delete) == 0 and 
                 len(self.packages_to_delete) == 0 and
+                len(self.hash_tags_to_delete) == 0 and
                 len(self.releases_to_delete) == 0)
 
 
@@ -69,12 +82,14 @@ class CleanupResult:
     Attributes:
         tags_deleted: List of successfully deleted tag names
         packages_deleted: Dict mapping package names to deleted version IDs
+        hash_tags_deleted: Dict mapping package names to deleted hash-tagged version IDs
         releases_deleted: List of successfully deleted tag names (with releases)
         errors: List of error messages
         dry_run: Whether this was a dry run
     """
     tags_deleted: List[str] = field(default_factory=list)
     packages_deleted: Dict[str, List[int]] = field(default_factory=dict)
+    hash_tags_deleted: Dict[str, List[int]] = field(default_factory=dict)
     releases_deleted: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     dry_run: bool = True
@@ -91,6 +106,10 @@ class CleanupResult:
         
         total_packages = sum(len(versions) for versions in self.packages_deleted.values())
         lines.append(f"Package versions deleted: {total_packages}")
+        
+        total_hash_tags = sum(len(versions) for versions in self.hash_tags_deleted.values())
+        if total_hash_tags > 0:
+            lines.append(f"Hash-tagged versions deleted: {total_hash_tags}")
         
         if self.errors:
             lines.append(f"Errors encountered: {len(self.errors)}")
@@ -128,16 +147,20 @@ class ReleaseCleanup:
     def plan_cleanup(
         self,
         keep_minor_versions: int = 2,
-        min_age_days: int = 14
+        min_age_days: int = 14,
+        cleanup_hash_tags: bool = False,
+        hash_tag_age_days: float = 3.0,
     ) -> CleanupPlan:
         """Plan what tags, releases, and packages to delete.
         
         Args:
             keep_minor_versions: Number of minor versions to keep
             min_age_days: Minimum age in days for deletion
+            cleanup_hash_tags: Whether to also clean up hash-tagged versions
+            hash_tag_age_days: Minimum age in days for hash tag deletion
             
         Returns:
-            CleanupPlan with tags, releases, and packages to delete
+            CleanupPlan with tags, releases, packages, and optionally hash tags to delete
         """
         # Get all tags
         all_tags = get_all_tags()
@@ -203,14 +226,41 @@ class ReleaseCleanup:
             except Exception as e:
                 print(f"⚠️  Error finding GHCR versions for {package_name}: {e}", file=sys.stderr)
         
+        # Clean up hash-tagged versions if requested
+        hash_tags_to_delete: Dict[str, List[int]] = {}
+        if cleanup_hash_tags:
+            print(f"\n🔍 Finding hash-tagged versions older than {hash_tag_age_days} days...")
+            try:
+                # Get all packages
+                all_packages = self.ghcr_client.list_all_packages()
+                print(f"  Scanning {len(all_packages)} packages for hash tags...")
+                
+                for package_name in all_packages:
+                    try:
+                        old_hash_versions = self.ghcr_client.find_hash_tagged_versions(
+                            package_name,
+                            min_age_days=hash_tag_age_days
+                        )
+                        
+                        if old_hash_versions:
+                            hash_tags_to_delete[package_name] = [v.version_id for v in old_hash_versions]
+                            print(f"  Found {len(old_hash_versions)} old hash-tagged versions in {package_name}")
+                    except Exception as e:
+                        print(f"⚠️  Error scanning {package_name} for hash tags: {e}", file=sys.stderr)
+            except Exception as e:
+                print(f"⚠️  Error listing packages for hash tag cleanup: {e}", file=sys.stderr)
+        
         return CleanupPlan(
             tags_to_delete=tags_to_delete,
             tags_to_keep=tags_to_keep,
             packages_to_delete=packages_to_delete,
             releases_to_delete=releases_to_delete,
+            hash_tags_to_delete=hash_tags_to_delete,
             retention_policy={
                 "keep_minor_versions": keep_minor_versions,
-                "min_age_days": min_age_days
+                "min_age_days": min_age_days,
+                "cleanup_hash_tags": cleanup_hash_tags,
+                "hash_tag_age_days": hash_tag_age_days,
             }
         )
 
@@ -306,6 +356,34 @@ class ReleaseCleanup:
                                 print(f"  ❌ {error_msg}", file=sys.stderr)
                     except Exception as e:
                         error_msg = f"Error deleting {package_name} version {version_id}: {e}"
+                        result.errors.append(error_msg)
+                        print(f"  ❌ {error_msg}", file=sys.stderr)
+        
+        # Phase 4: Delete hash-tagged GHCR versions
+        total_hash_tags = sum(len(versions) for versions in plan.hash_tags_to_delete.values())
+        if total_hash_tags > 0:
+            print(f"\n🔖 Deleting {total_hash_tags} hash-tagged GHCR package versions...")
+            
+            for package_name, version_ids in plan.hash_tags_to_delete.items():
+                if package_name not in result.hash_tags_deleted:
+                    result.hash_tags_deleted[package_name] = []
+                
+                for version_id in version_ids:
+                    try:
+                        if dry_run:
+                            print(f"  [DRY RUN] Would delete {package_name} hash-tagged version {version_id}")
+                            result.hash_tags_deleted[package_name].append(version_id)
+                        else:
+                            success = self.ghcr_client.delete_package_version(package_name, version_id)
+                            if success:
+                                result.hash_tags_deleted[package_name].append(version_id)
+                                print(f"  ✅ Deleted {package_name} hash-tagged version {version_id}")
+                            else:
+                                error_msg = f"Failed to delete {package_name} hash-tagged version {version_id}"
+                                result.errors.append(error_msg)
+                                print(f"  ❌ {error_msg}", file=sys.stderr)
+                    except Exception as e:
+                        error_msg = f"Error deleting {package_name} hash-tagged version {version_id}: {e}"
                         result.errors.append(error_msg)
                         print(f"  ❌ {error_msg}", file=sys.stderr)
         
