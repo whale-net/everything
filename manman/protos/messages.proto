@@ -218,21 +218,22 @@ message RenderedConfiguration {
 // ActionDefinition defines an action that can be executed on a game session
 message ActionDefinition {
   int64 action_id = 1;
-  int64 game_id = 2;
-  string name = 3;  // Unique identifier (e.g., "save_game", "change_map")
-  string label = 4;  // Display name (e.g., "Save Game", "Change Map")
-  string description = 5;
-  string command_template = 6;  // Go template syntax: "changelevel {{.map}}"
-  int32 display_order = 7;
-  string group_name = 8;  // Group actions together (e.g., "Game Control", "Admin")
-  string button_style = 9;  // CSS class hint (primary, success, danger, etc.)
-  string icon = 10;  // Optional icon class
-  bool requires_confirmation = 11;
-  string confirmation_message = 12;
-  bool enabled = 13;
-  repeated ActionInputField input_fields = 14;  // Input fields for this action
-  int64 created_at = 15;  // Unix timestamp
-  int64 updated_at = 16;  // Unix timestamp
+  string definition_level = 2;  // "game", "game_config", or "server_game_config"
+  int64 entity_id = 3;  // game_id, config_id, or sgc_id depending on definition_level
+  string name = 4;  // Unique identifier (e.g., "save_game", "change_map")
+  string label = 5;  // Display name (e.g., "Save Game", "Change Map")
+  string description = 6;
+  string command_template = 7;  // Go template syntax: "changelevel {{.map}}"
+  int32 display_order = 8;
+  string group_name = 9;  // Group actions together (e.g., "Game Control", "Admin")
+  string button_style = 10;  // CSS class hint (primary, success, danger, etc.)
+  string icon = 11;  // Optional icon class
+  bool requires_confirmation = 12;
+  string confirmation_message = 13;
+  bool enabled = 14;
+  repeated ActionInputField input_fields = 15;  // Input fields for this action
+  int64 created_at = 16;  // Unix timestamp
+  int64 updated_at = 17;  // Unix timestamp
 }
 
 // ActionInputField defines an input field for a parameterized action

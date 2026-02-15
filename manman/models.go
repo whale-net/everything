@@ -237,7 +237,8 @@ type ConfigurationPatch struct {
 // ActionDefinition defines an action that can be executed on a game session
 type ActionDefinition struct {
 	ActionID             int64      `db:"action_id"`
-	GameID               int64      `db:"game_id"`
+	DefinitionLevel      string     `db:"definition_level"` // 'game', 'game_config', 'server_game_config'
+	EntityID             int64      `db:"entity_id"`        // game_id, config_id, or sgc_id
 	Name                 string     `db:"name"`
 	Label                string     `db:"label"`
 	Description          *string    `db:"description"`
@@ -284,17 +285,6 @@ type ActionInputOption struct {
 	IsDefault    bool      `db:"is_default"`
 	CreatedAt    time.Time `db:"created_at"`
 	UpdatedAt    time.Time `db:"updated_at"`
-}
-
-// ActionVisibilityOverride controls action visibility at different configuration levels
-type ActionVisibilityOverride struct {
-	OverrideID    int64     `db:"override_id"`
-	ActionID      int64     `db:"action_id"`
-	OverrideLevel string    `db:"override_level"`
-	EntityID      int64     `db:"entity_id"`
-	Enabled       bool      `db:"enabled"`
-	CreatedAt     time.Time `db:"created_at"`
-	UpdatedAt     time.Time `db:"updated_at"`
 }
 
 // ActionExecution records the execution of an action
@@ -395,10 +385,10 @@ const (
 	ActionStatusFailed          = "failed"
 	ActionStatusValidationError = "validation_error"
 
-	// Action visibility override levels
-	OverrideLevelGameConfig       = "game_config"
-	OverrideLevelServerGameConfig = "server_game_config"
-	OverrideLevelSession          = "session"
+	// Action definition levels (like patches)
+	ActionLevelGame              = "game"
+	ActionLevelGameConfig        = "game_config"
+	ActionLevelServerGameConfig  = "server_game_config"
 )
 
 // IsActive returns true if the session is in an active state (not completed or stopped)

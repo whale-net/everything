@@ -21,15 +21,14 @@ func NewSessionRepository(db *pgxpool.Pool) *SessionRepository {
 
 func (r *SessionRepository) Create(ctx context.Context, session *manman.Session) (*manman.Session, error) {
 	query := `
-		INSERT INTO sessions (sgc_id, status, parameters)
-		VALUES ($1, $2, $3)
+		INSERT INTO sessions (sgc_id, status)
+		VALUES ($1, $2)
 		RETURNING session_id
 	`
 
 	err := r.db.QueryRow(ctx, query,
 		session.SGCID,
 		session.Status,
-		session.Parameters,
 	).Scan(&session.SessionID)
 	if err != nil {
 		return nil, err
@@ -42,7 +41,7 @@ func (r *SessionRepository) Get(ctx context.Context, sessionID int64) (*manman.S
 	session := &manman.Session{}
 
 	query := `
-		SELECT session_id, sgc_id, started_at, ended_at, exit_code, status, parameters, created_at, updated_at
+		SELECT session_id, sgc_id, started_at, ended_at, exit_code, status, created_at, updated_at
 		FROM sessions
 		WHERE session_id = $1
 	`
@@ -54,7 +53,6 @@ func (r *SessionRepository) Get(ctx context.Context, sessionID int64) (*manman.S
 		&session.EndedAt,
 		&session.ExitCode,
 		&session.Status,
-		&session.Parameters,
 		&session.CreatedAt,
 		&session.UpdatedAt,
 	)
@@ -75,7 +73,7 @@ func (r *SessionRepository) List(ctx context.Context, sgcID *int64, limit, offse
 
 	if sgcID != nil {
 		query = `
-			SELECT session_id, sgc_id, started_at, ended_at, exit_code, status, parameters, created_at, updated_at
+			SELECT session_id, sgc_id, started_at, ended_at, exit_code, status, created_at, updated_at
 			FROM sessions
 			WHERE sgc_id = $1
 			ORDER BY session_id DESC
@@ -84,7 +82,7 @@ func (r *SessionRepository) List(ctx context.Context, sgcID *int64, limit, offse
 		args = []interface{}{*sgcID, limit, offset}
 	} else {
 		query = `
-			SELECT session_id, sgc_id, started_at, ended_at, exit_code, status, parameters, created_at, updated_at
+			SELECT session_id, sgc_id, started_at, ended_at, exit_code, status, created_at, updated_at
 			FROM sessions
 			ORDER BY session_id DESC
 			LIMIT $1 OFFSET $2
@@ -108,7 +106,6 @@ func (r *SessionRepository) List(ctx context.Context, sgcID *int64, limit, offse
 			&session.EndedAt,
 			&session.ExitCode,
 			&session.Status,
-			&session.Parameters,
 			&session.CreatedAt,
 			&session.UpdatedAt,
 		)
@@ -133,7 +130,7 @@ func (r *SessionRepository) StopOtherSessionsForSGC(ctx context.Context, session
 func (r *SessionRepository) Update(ctx context.Context, session *manman.Session) error {
 	query := `
 		UPDATE sessions
-		SET started_at = $2, ended_at = $3, exit_code = $4, status = $5, parameters = $6
+		SET started_at = $2, ended_at = $3, exit_code = $4, status = $5
 		WHERE session_id = $1
 	`
 
@@ -143,7 +140,6 @@ func (r *SessionRepository) Update(ctx context.Context, session *manman.Session)
 		session.EndedAt,
 		session.ExitCode,
 		session.Status,
-		session.Parameters,
 	)
 	return err
 }
@@ -154,7 +150,7 @@ func (r *SessionRepository) ListWithFilters(ctx context.Context, filters *reposi
 	}
 
 	baseQuery := `
-		SELECT s.session_id, s.sgc_id, s.started_at, s.ended_at, s.exit_code, s.status, s.parameters, s.created_at, s.updated_at
+		SELECT s.session_id, s.sgc_id, s.started_at, s.ended_at, s.exit_code, s.status, s.created_at, s.updated_at
 		FROM sessions s
 	`
 
@@ -172,7 +168,7 @@ func (r *SessionRepository) ListWithFilters(ctx context.Context, filters *reposi
 	// Filter by ServerID (requires join)
 	if filters.ServerID != nil {
 		baseQuery = `
-			SELECT s.session_id, s.sgc_id, s.started_at, s.ended_at, s.exit_code, s.status, s.parameters, s.created_at, s.updated_at
+			SELECT s.session_id, s.sgc_id, s.started_at, s.ended_at, s.exit_code, s.status, s.created_at, s.updated_at
 			FROM sessions s
 			JOIN server_game_configs sgc ON s.sgc_id = sgc.sgc_id
 		`
@@ -236,7 +232,6 @@ func (r *SessionRepository) ListWithFilters(ctx context.Context, filters *reposi
 			&session.EndedAt,
 			&session.ExitCode,
 			&session.Status,
-			&session.Parameters,
 			&session.CreatedAt,
 			&session.UpdatedAt,
 		)
@@ -290,7 +285,7 @@ func (r *SessionRepository) UpdateSessionEnd(ctx context.Context, sessionID int6
 
 func (r *SessionRepository) GetStaleSessions(ctx context.Context, threshold time.Duration) ([]*manman.Session, error) {
 	query := `
-		SELECT session_id, sgc_id, started_at, ended_at, exit_code, status, parameters, created_at, updated_at
+		SELECT session_id, sgc_id, started_at, ended_at, exit_code, status, created_at, updated_at
 		FROM sessions
 		WHERE status IN ('pending', 'starting', 'stopping')
 		AND updated_at < $1
@@ -313,7 +308,6 @@ func (r *SessionRepository) GetStaleSessions(ctx context.Context, threshold time
 			&session.EndedAt,
 			&session.ExitCode,
 			&session.Status,
-			&session.Parameters,
 			&session.CreatedAt,
 			&session.UpdatedAt,
 		)

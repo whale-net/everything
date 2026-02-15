@@ -54,6 +54,7 @@ function appendLogLine(container, timestamp, source, message) {
     line.className = 'log-line log-' + source;
     line.textContent = '[' + timestamp + '] [' + source + '] ' + message;
     container.appendChild(line);
+    container.appendChild(document.createTextNode('\n'));
 }
 
 function parseAndAppendRawLine(container, lineText) {
@@ -66,6 +67,7 @@ function parseAndAppendRawLine(container, lineText) {
         line.className = 'log-line';
         line.textContent = lineText;
         container.appendChild(line);
+        container.appendChild(document.createTextNode('\n'));
     }
 }
 </script>
@@ -91,6 +93,108 @@ function parseAndAppendRawLine(container, lineText) {
         <div id="stdin-status" style="padding: 0 0.75rem 0.5rem; font-size: 0.75rem; color: #888; min-height: 1.25rem;"></div>
     </div>
 </div>
+
+{{if .Actions}}
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Quick Actions</div>
+    </div>
+    <div style="padding: 1rem;">
+        <div id="action-status" style="margin-bottom: 1rem;"></div>
+
+        {{range .Actions}}
+        <div class="action-item" style="margin-bottom: 1.5rem; padding-bottom: 1.5rem; border-bottom: 1px solid #e0e0e0;">
+            {{if .GroupName}}
+            <h4 style="margin-top: 0; margin-bottom: 0.75rem; font-size: 0.9rem; color: #666; text-transform: uppercase;">{{.GroupName}}</h4>
+            {{end}}
+
+            {{if .Description}}
+            <p style="margin: 0 0 0.75rem; color: #666; font-size: 0.9rem;">{{.Description}}</p>
+            {{end}}
+
+            {{if eq (len .InputFields) 0}}
+            <!-- Simple button (no inputs) -->
+            <button class="btn btn-{{.ButtonStyle}}"
+                    hx-post="/sessions/{{$.Session.SessionId}}/actions/execute"
+                    hx-vals='{"action_id": "{{.ActionId}}"}'
+                    hx-target="#action-status"
+                    hx-swap="innerHTML"
+                    {{if .RequiresConfirmation}}
+                    hx-confirm="{{.ConfirmationMessage}}"
+                    {{end}}>
+                {{if .Icon}}<i class="{{.Icon}}"></i> {{end}}{{.Label}}
+            </button>
+
+            {{else}}
+            <!-- Parameterized button (with inputs) -->
+            <form hx-post="/sessions/{{$.Session.SessionId}}/actions/execute"
+                  hx-target="#action-status"
+                  hx-swap="innerHTML"
+                  style="display: flex; flex-direction: column; gap: 0.75rem; max-width: 500px;">
+                <input type="hidden" name="action_id" value="{{.ActionId}}">
+
+                {{range .InputFields}}
+                <div class="form-group" style="margin: 0;">
+                    <label style="display: block; margin-bottom: 0.25rem; font-weight: 500;">
+                        {{.Label}}{{if .Required}}<span style="color: red;">*</span>{{end}}
+                    </label>
+
+                    {{if eq .FieldType "select"}}
+                    <select name="{{.Name}}"
+                            {{if .Required}}required{{end}}
+                            style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;">
+                        {{range .Options}}
+                        <option value="{{.Value}}" {{if .IsDefault}}selected{{end}}>
+                            {{.Label}}
+                        </option>
+                        {{end}}
+                    </select>
+
+                    {{else if eq .FieldType "textarea"}}
+                    <textarea name="{{.Name}}"
+                              placeholder="{{.Placeholder}}"
+                              {{if .Required}}required{{end}}
+                              style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; min-height: 80px;"></textarea>
+
+                    {{else if eq .FieldType "number"}}
+                    <input type="number"
+                           name="{{.Name}}"
+                           placeholder="{{.Placeholder}}"
+                           {{if .Required}}required{{end}}
+                           {{if ne .MinValue 0.0}}min="{{.MinValue}}"{{end}}
+                           {{if ne .MaxValue 0.0}}max="{{.MaxValue}}"{{end}}
+                           style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;">
+
+                    {{else}}
+                    <input type="{{.FieldType}}"
+                           name="{{.Name}}"
+                           placeholder="{{.Placeholder}}"
+                           {{if .Required}}required{{end}}
+                           {{if .Pattern}}pattern="{{.Pattern}}"{{end}}
+                           {{if ne .MinLength 0}}minlength="{{.MinLength}}"{{end}}
+                           {{if ne .MaxLength 0}}maxlength="{{.MaxLength}}"{{end}}
+                           style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;">
+                    {{end}}
+
+                    {{if .HelpText}}
+                    <small style="display: block; margin-top: 0.25rem; color: #666;">{{.HelpText}}</small>
+                    {{end}}
+                </div>
+                {{end}}
+
+                <button type="submit" class="btn btn-{{.ButtonStyle}}"
+                        {{if .RequiresConfirmation}}
+                        hx-confirm="{{.ConfirmationMessage}}"
+                        {{end}}>
+                    {{if .Icon}}<i class="{{.Icon}}"></i> {{end}}{{.Label}}
+                </button>
+            </form>
+            {{end}}
+        </div>
+        {{end}}
+    </div>
+</div>
+{{end}}
 
 <style>
 .log-viewer {
@@ -401,35 +505,4 @@ function parseAndAppendRawLine(container, lineText) {
 })();
 </script>
 {{end}}
-
-<div class="card">
-    <div class="card-header">
-        <div class="card-title">Parameters</div>
-    </div>
-    <div style="margin-bottom: 1rem; padding: 0.75rem; background: #f8f9fa; border-left: 4px solid #3498db;">
-        <strong>Parameter resolution:</strong> Session parameters override Server Game Config, which overrides GameConfig defaults.
-    </div>
-    {{if .Session.Parameters}}
-    <table>
-        <thead>
-            <tr>
-                <th>Key</th>
-                <th>Value</th>
-            </tr>
-        </thead>
-        <tbody>
-            {{range $key, $value := .Session.Parameters}}
-            <tr>
-                <td><code>{{$key}}</code></td>
-                <td><code>{{$value}}</code></td>
-            </tr>
-            {{end}}
-        </tbody>
-    </table>
-    {{else}}
-    <div class="empty-state">
-        <p>No session parameters.</p>
-    </div>
-    {{end}}
-</div>
 {{end}}

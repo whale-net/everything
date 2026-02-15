@@ -155,18 +155,19 @@ func (h *ActionHandler) convertActionToProto(ctx context.Context, action *manman
 
 	// Convert action definition
 	pbAction := &pb.ActionDefinition{
-		ActionId:        action.ActionID,
-		GameId:          action.GameID,
-		Name:            action.Name,
-		Label:           action.Label,
-		CommandTemplate: action.CommandTemplate,
-		DisplayOrder:    int32(action.DisplayOrder),
-		ButtonStyle:     action.ButtonStyle,
+		ActionId:             action.ActionID,
+		DefinitionLevel:      action.DefinitionLevel,
+		EntityId:             action.EntityID,
+		Name:                 action.Name,
+		Label:                action.Label,
+		CommandTemplate:      action.CommandTemplate,
+		DisplayOrder:         int32(action.DisplayOrder),
+		ButtonStyle:          action.ButtonStyle,
 		RequiresConfirmation: action.RequiresConfirmation,
-		Enabled:         action.Enabled,
-		InputFields:     pbFields,
-		CreatedAt:       action.CreatedAt.Unix(),
-		UpdatedAt:       action.UpdatedAt.Unix(),
+		Enabled:              action.Enabled,
+		InputFields:          pbFields,
+		CreatedAt:            action.CreatedAt.Unix(),
+		UpdatedAt:            action.UpdatedAt.Unix(),
 	}
 
 	// Set optional fields
@@ -213,6 +214,32 @@ func (h *ActionHandler) ExecuteAction(ctx context.Context, req *pb.ExecuteAction
 	}
 
 	// Validate that action belongs to the session's game
+	// Derive action's game_id from definition_level and entity_id
+	var actionGameID int64
+	switch action.DefinitionLevel {
+	case "game":
+		actionGameID = action.EntityID
+	case "game_config":
+		gc, err := h.gcRepo.Get(ctx, action.EntityID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to get game config: %v", err)
+		}
+		actionGameID = gc.GameID
+	case "server_game_config":
+		sgcAction, err := h.sgcRepo.Get(ctx, action.EntityID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to get server game config: %v", err)
+		}
+		gc, err := h.gcRepo.Get(ctx, sgcAction.GameConfigID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to get game config: %v", err)
+		}
+		actionGameID = gc.GameID
+	default:
+		return nil, status.Errorf(codes.Internal, "unknown definition level: %s", action.DefinitionLevel)
+	}
+
+	// Get session's game_id
 	sgc, err := h.sgcRepo.Get(ctx, session.SGCID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get server game config: %v", err)
@@ -223,7 +250,7 @@ func (h *ActionHandler) ExecuteAction(ctx context.Context, req *pb.ExecuteAction
 		return nil, status.Errorf(codes.Internal, "failed to get game config: %v", err)
 	}
 
-	if action.GameID != gc.GameID {
+	if actionGameID != gc.GameID {
 		return nil, status.Errorf(codes.InvalidArgument, "action does not belong to session's game")
 	}
 
@@ -419,4 +446,251 @@ func convertToJSONB(m map[string]string) manman.JSONB {
 		result[k] = v
 	}
 	return result
+}
+
+// Helper functions for proto conversion
+
+func (h *ActionHandler) actionToProto(a *manman.ActionDefinition) *pb.ActionDefinition {
+	pb := &pb.ActionDefinition{
+		ActionId:             a.ActionID,
+		DefinitionLevel:      a.DefinitionLevel,
+		EntityId:             a.EntityID,
+		Name:                 a.Name,
+		Label:                a.Label,
+		CommandTemplate:      a.CommandTemplate,
+		DisplayOrder:         int32(a.DisplayOrder),
+		ButtonStyle:          a.ButtonStyle,
+		RequiresConfirmation: a.RequiresConfirmation,
+		Enabled:              a.Enabled,
+		CreatedAt:            a.CreatedAt.Unix(),
+		UpdatedAt:            a.UpdatedAt.Unix(),
+	}
+	if a.Description != nil {
+		pb.Description = *a.Description
+	}
+	if a.GroupName != nil {
+		pb.GroupName = *a.GroupName
+	}
+	if a.Icon != nil {
+		pb.Icon = *a.Icon
+	}
+	if a.ConfirmationMessage != nil {
+		pb.ConfirmationMessage = *a.ConfirmationMessage
+	}
+	return pb
+}
+
+func (h *ActionHandler) inputFieldToProto(f *manman.ActionInputField) *pb.ActionInputField {
+	pb := &pb.ActionInputField{
+		FieldId:      f.FieldID,
+		ActionId:     f.ActionID,
+		Name:         f.Name,
+		Label:        f.Label,
+		FieldType:    f.FieldType,
+		Required:     f.Required,
+		DisplayOrder: int32(f.DisplayOrder),
+		CreatedAt:    f.CreatedAt.Unix(),
+		UpdatedAt:    f.UpdatedAt.Unix(),
+	}
+	if f.Placeholder != nil {
+		pb.Placeholder = *f.Placeholder
+	}
+	if f.HelpText != nil {
+		pb.HelpText = *f.HelpText
+	}
+	if f.DefaultValue != nil {
+		pb.DefaultValue = *f.DefaultValue
+	}
+	if f.Pattern != nil {
+		pb.Pattern = *f.Pattern
+	}
+	if f.MinValue != nil {
+		pb.MinValue = *f.MinValue
+	}
+	if f.MaxValue != nil {
+		pb.MaxValue = *f.MaxValue
+	}
+	if f.MinLength != nil {
+		pb.MinLength = int32(*f.MinLength)
+	}
+	if f.MaxLength != nil {
+		pb.MaxLength = int32(*f.MaxLength)
+	}
+	return pb
+}
+
+func (h *ActionHandler) inputOptionToProto(o *manman.ActionInputOption) *pb.ActionInputOption {
+	return &pb.ActionInputOption{
+		OptionId:     o.OptionID,
+		FieldId:      o.FieldID,
+		Value:        o.Value,
+		Label:        o.Label,
+		DisplayOrder: int32(o.DisplayOrder),
+		IsDefault:    o.IsDefault,
+		CreatedAt:    o.CreatedAt.Unix(),
+		UpdatedAt:    o.UpdatedAt.Unix(),
+	}
+}
+
+// CreateActionDefinition creates a new action definition
+func (h *ActionHandler) CreateActionDefinition(ctx context.Context, req *pb.CreateActionDefinitionRequest) (*pb.CreateActionDefinitionResponse, error) {
+	if req.Action == nil {
+		return nil, status.Error(codes.InvalidArgument, "action is required")
+	}
+
+	// Convert proto to domain model
+	action := &manman.ActionDefinition{
+		DefinitionLevel:      req.Action.DefinitionLevel,
+		EntityID:             req.Action.EntityId,
+		Name:                 req.Action.Name,
+		Label:                req.Action.Label,
+		Description:          strPtr(req.Action.Description),
+		CommandTemplate:      req.Action.CommandTemplate,
+		DisplayOrder:         int(req.Action.DisplayOrder),
+		GroupName:            strPtr(req.Action.GroupName),
+		ButtonStyle:          req.Action.ButtonStyle,
+		Icon:                 strPtr(req.Action.Icon),
+		RequiresConfirmation: req.Action.RequiresConfirmation,
+		ConfirmationMessage:  strPtr(req.Action.ConfirmationMessage),
+		Enabled:              req.Action.Enabled,
+	}
+
+	// Convert input fields
+	var fields []*manman.ActionInputField
+	for _, f := range req.InputFields {
+		field := &manman.ActionInputField{
+			Name:         f.Name,
+			Label:        f.Label,
+			FieldType:    f.FieldType,
+			Required:     f.Required,
+			Placeholder:  strPtr(f.Placeholder),
+			HelpText:     strPtr(f.HelpText),
+			DefaultValue: strPtr(f.DefaultValue),
+			DisplayOrder: int(f.DisplayOrder),
+			Pattern:      strPtr(f.Pattern),
+		}
+		if f.MinValue != 0 {
+			field.MinValue = &f.MinValue
+		}
+		if f.MaxValue != 0 {
+			field.MaxValue = &f.MaxValue
+		}
+		if f.MinLength != 0 {
+			minLen := int(f.MinLength)
+			field.MinLength = &minLen
+		}
+		if f.MaxLength != 0 {
+			maxLen := int(f.MaxLength)
+			field.MaxLength = &maxLen
+		}
+		fields = append(fields, field)
+	}
+
+	// Convert options
+	var options []*manman.ActionInputOption
+	for _, o := range req.InputOptions {
+		option := &manman.ActionInputOption{
+			Value:        o.Value,
+			Label:        o.Label,
+			DisplayOrder: int(o.DisplayOrder),
+			IsDefault:    o.IsDefault,
+		}
+		options = append(options, option)
+	}
+
+	// Create the action
+	actionID, err := h.actionRepo.Create(ctx, action, fields, options)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create action: %v", err)
+	}
+
+	return &pb.CreateActionDefinitionResponse{
+		ActionId: actionID,
+	}, nil
+}
+
+// UpdateActionDefinition updates an existing action definition
+func (h *ActionHandler) UpdateActionDefinition(ctx context.Context, req *pb.UpdateActionDefinitionRequest) (*pb.UpdateActionDefinitionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "update action not implemented yet")
+}
+
+// DeleteActionDefinition deletes an action definition
+func (h *ActionHandler) DeleteActionDefinition(ctx context.Context, req *pb.DeleteActionDefinitionRequest) (*pb.DeleteActionDefinitionResponse, error) {
+	if req.ActionId <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "action_id is required")
+	}
+
+	err := h.actionRepo.Delete(ctx, req.ActionId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete action: %v", err)
+	}
+
+	return &pb.DeleteActionDefinitionResponse{
+		Success: true,
+	}, nil
+}
+
+// ListActionDefinitions lists actions filtered by game/config/sgc
+func (h *ActionHandler) ListActionDefinitions(ctx context.Context, req *pb.ListActionDefinitionsRequest) (*pb.ListActionDefinitionsResponse, error) {
+	var actions []*manman.ActionDefinition
+	var err error
+
+	// Determine which level to query
+	if req.GameId != nil {
+		actions, err = h.actionRepo.ListByLevel(ctx, manman.ActionLevelGame, *req.GameId)
+	} else if req.ConfigId != nil {
+		actions, err = h.actionRepo.ListByLevel(ctx, manman.ActionLevelGameConfig, *req.ConfigId)
+	} else if req.SgcId != nil {
+		actions, err = h.actionRepo.ListByLevel(ctx, manman.ActionLevelServerGameConfig, *req.SgcId)
+	} else {
+		return nil, status.Error(codes.InvalidArgument, "must specify game_id, config_id, or sgc_id")
+	}
+
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list actions: %v", err)
+	}
+
+	// Convert to proto
+	var pbActions []*pb.ActionDefinition
+	for _, a := range actions {
+		pbActions = append(pbActions, h.actionToProto(a))
+	}
+
+	return &pb.ListActionDefinitionsResponse{
+		Actions: pbActions,
+	}, nil
+}
+
+// GetActionDefinition gets a single action with its input fields
+func (h *ActionHandler) GetActionDefinition(ctx context.Context, req *pb.GetActionDefinitionRequest) (*pb.GetActionDefinitionResponse, error) {
+	if req.ActionId <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "action_id is required")
+	}
+
+	action, fieldsWithOptions, err := h.actionRepo.Get(ctx, req.ActionId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get action: %v", err)
+	}
+
+	// Convert to proto
+	pbAction := h.actionToProto(action)
+
+	var pbFields []*pb.ActionInputField
+	for _, fwo := range fieldsWithOptions {
+		pbField := h.inputFieldToProto(fwo.Field)
+
+		// Add options
+		for _, opt := range fwo.Options {
+			pbField.Options = append(pbField.Options, h.inputOptionToProto(opt))
+		}
+
+		pbFields = append(pbFields, pbField)
+	}
+
+	pbAction.InputFields = pbFields
+
+	return &pb.GetActionDefinitionResponse{
+		Action:      pbAction,
+		InputFields: pbFields,
+	}, nil
 }
