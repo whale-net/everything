@@ -20,4 +20,11 @@
     </div>
 </div>
 
+<h2 style="margin-top: 2rem;">Active Sessions</h2>
+<div id="active-sessions"
+     hx-get="/api/dashboard-sessions"
+     hx-trigger="load, every 10s"
+     hx-swap="innerHTML">
+    <div class="empty-state">Loading...</div>
+</div>
 {{end}}
