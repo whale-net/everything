@@ -345,6 +345,8 @@ jobs:
         VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
         DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        # Propagate CI config to inner Bazel calls from the release helper
+        BAZEL_CONFIG: ci-images
       run: |
         # Use full domain-app format to avoid ambiguity
         FULL_APP_NAME="${DOMAIN}-${APP}"
@@ -693,6 +695,7 @@ jobs:
         DRY_RUN: ${{ github.event.inputs.dry_run }}
         INCREMENT_MINOR: ${{ github.event.inputs.increment_minor }}
         INCREMENT_PATCH: ${{ github.event.inputs.increment_patch }}
+        BAZEL_CONFIG: ci
       run: |
         echo "Building helm charts with version $VERSION"
         
