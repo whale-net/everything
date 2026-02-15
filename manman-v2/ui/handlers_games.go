@@ -157,6 +157,9 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 		case "delete":
 			app.handleGameDelete(w, r, gameIDStr)
 			return
+		case "actions":
+			app.handleGameActions(w, r)
+			return
 		case "configs":
 			// Handle config routes
 			if len(pathParts) > 3 {
@@ -336,6 +339,9 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 			return
 		case "delete":
 			app.handleGameConfigDelete(w, r, gameIDStr, configIDStr)
+			return
+		case "actions":
+			app.handleConfigActions(w, r)
 			return
 		}
 	}

@@ -611,7 +611,85 @@ func (h *ActionHandler) CreateActionDefinition(ctx context.Context, req *pb.Crea
 
 // UpdateActionDefinition updates an existing action definition
 func (h *ActionHandler) UpdateActionDefinition(ctx context.Context, req *pb.UpdateActionDefinitionRequest) (*pb.UpdateActionDefinitionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "update action not implemented yet")
+	if req.Action == nil {
+		return nil, status.Error(codes.InvalidArgument, "action is required")
+	}
+
+	if req.Action.ActionId <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "action_id is required")
+	}
+
+	// Convert proto to domain model
+	action := &manman.ActionDefinition{
+		ActionID:             req.Action.ActionId,
+		DefinitionLevel:      req.Action.DefinitionLevel,
+		EntityID:             req.Action.EntityId,
+		Name:                 req.Action.Name,
+		Label:                req.Action.Label,
+		Description:          strPtr(req.Action.Description),
+		CommandTemplate:      req.Action.CommandTemplate,
+		DisplayOrder:         int(req.Action.DisplayOrder),
+		GroupName:            strPtr(req.Action.GroupName),
+		ButtonStyle:          req.Action.ButtonStyle,
+		Icon:                 strPtr(req.Action.Icon),
+		RequiresConfirmation: req.Action.RequiresConfirmation,
+		ConfirmationMessage:  strPtr(req.Action.ConfirmationMessage),
+		Enabled:              req.Action.Enabled,
+	}
+
+	// Convert input fields
+	var fields []*manman.ActionInputField
+	for _, f := range req.InputFields {
+		field := &manman.ActionInputField{
+			Name:         f.Name,
+			Label:        f.Label,
+			FieldType:    f.FieldType,
+			Required:     f.Required,
+			Placeholder:  strPtr(f.Placeholder),
+			HelpText:     strPtr(f.HelpText),
+			DefaultValue: strPtr(f.DefaultValue),
+			DisplayOrder: int(f.DisplayOrder),
+			Pattern:      strPtr(f.Pattern),
+		}
+		if f.MinValue != 0 {
+			field.MinValue = &f.MinValue
+		}
+		if f.MaxValue != 0 {
+			field.MaxValue = &f.MaxValue
+		}
+		if f.MinLength != 0 {
+			minLen := int(f.MinLength)
+			field.MinLength = &minLen
+		}
+		if f.MaxLength != 0 {
+			maxLen := int(f.MaxLength)
+			field.MaxLength = &maxLen
+		}
+		fields = append(fields, field)
+	}
+
+	// Convert options
+	var options []*manman.ActionInputOption
+	for _, o := range req.InputOptions {
+		option := &manman.ActionInputOption{
+			FieldID:      o.FieldId,
+			Value:        o.Value,
+			Label:        o.Label,
+			DisplayOrder: int(o.DisplayOrder),
+			IsDefault:    o.IsDefault,
+		}
+		options = append(options, option)
+	}
+
+	// Update the action
+	err := h.actionRepo.Update(ctx, action, fields, options)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update action: %v", err)
+	}
+
+	return &pb.UpdateActionDefinitionResponse{
+		Success: true,
+	}, nil
 }
 
 // DeleteActionDefinition deletes an action definition
