@@ -21,7 +21,7 @@ func (r *ActionRepository) Get(ctx context.Context, actionID int64) (*manman.Act
 	// Get the action definition
 	action := &manman.ActionDefinition{}
 	query := `
-		SELECT action_id, game_id, name, label, description, command_template,
+		SELECT action_id, definition_level, entity_id, name, label, description, command_template,
 		       display_order, group_name, button_style, icon, requires_confirmation,
 		       confirmation_message, enabled, created_at, updated_at
 		FROM action_definitions
@@ -30,7 +30,8 @@ func (r *ActionRepository) Get(ctx context.Context, actionID int64) (*manman.Act
 
 	err := r.db.QueryRow(ctx, query, actionID).Scan(
 		&action.ActionID,
-		&action.GameID,
+		&action.DefinitionLevel,
+		&action.EntityID,
 		&action.Name,
 		&action.Label,
 		&action.Description,
@@ -162,14 +163,14 @@ func (r *ActionRepository) getFieldOptions(ctx context.Context, fieldID int64) (
 	return options, rows.Err()
 }
 
-// ListByGame retrieves all enabled actions for a game
+// ListByGame retrieves all enabled actions for a game (only game-level actions)
 func (r *ActionRepository) ListByGame(ctx context.Context, gameID int64) ([]*manman.ActionDefinition, error) {
 	query := `
-		SELECT action_id, game_id, name, label, description, command_template,
+		SELECT action_id, definition_level, entity_id, name, label, description, command_template,
 		       display_order, group_name, button_style, icon, requires_confirmation,
 		       confirmation_message, enabled, created_at, updated_at
 		FROM action_definitions
-		WHERE game_id = $1 AND enabled = true
+		WHERE definition_level = 'game' AND entity_id = $1 AND enabled = true
 		ORDER BY display_order, action_id
 	`
 
@@ -184,7 +185,8 @@ func (r *ActionRepository) ListByGame(ctx context.Context, gameID int64) ([]*man
 		action := &manman.ActionDefinition{}
 		err := rows.Scan(
 			&action.ActionID,
-			&action.GameID,
+			&action.DefinitionLevel,
+			&action.EntityID,
 			&action.Name,
 			&action.Label,
 			&action.Description,
@@ -208,7 +210,8 @@ func (r *ActionRepository) ListByGame(ctx context.Context, gameID int64) ([]*man
 	return actions, rows.Err()
 }
 
-// GetSessionActions retrieves visible actions for a session (with visibility overrides applied)
+// GetSessionActions retrieves actions for a session from all levels (game, config, sgc)
+// Similar to how patches are merged: game baseline + config additions + sgc additions
 func (r *ActionRepository) GetSessionActions(ctx context.Context, sessionID int64) ([]*manman.ActionDefinition, error) {
 	query := `
 		WITH session_info AS (
@@ -218,52 +221,30 @@ func (r *ActionRepository) GetSessionActions(ctx context.Context, sessionID int6
 			JOIN game_configs gc ON sgc.game_config_id = gc.config_id
 			WHERE s.session_id = $1
 		)
-		SELECT DISTINCT
-			ad.action_id, ad.game_id, ad.name, ad.label, ad.description,
+		SELECT
+			ad.action_id, ad.definition_level, ad.entity_id, ad.name, ad.label, ad.description,
 			ad.command_template, ad.display_order, ad.group_name,
 			ad.button_style, ad.icon, ad.requires_confirmation,
 			ad.confirmation_message, ad.enabled, ad.created_at, ad.updated_at
 		FROM action_definitions ad
-		JOIN session_info si ON ad.game_id = si.game_id
+		JOIN session_info si ON (
+			-- Game-level actions
+			(ad.definition_level = 'game' AND ad.entity_id = si.game_id)
+			-- GameConfig-level actions
+			OR (ad.definition_level = 'game_config' AND ad.entity_id = si.game_config_id)
+			-- ServerGameConfig-level actions
+			OR (ad.definition_level = 'server_game_config' AND ad.entity_id = si.sgc_id)
+		)
 		WHERE ad.enabled = true
-		  -- Apply visibility overrides (session level takes precedence)
-		  AND NOT EXISTS (
-		      SELECT 1 FROM action_visibility_overrides avo
-		      WHERE avo.action_id = ad.action_id
-		        AND avo.override_level = 'session'
-		        AND avo.entity_id = si.session_id
-		        AND avo.enabled = false
-		  )
-		  AND NOT EXISTS (
-		      SELECT 1 FROM action_visibility_overrides avo
-		      WHERE avo.action_id = ad.action_id
-		        AND avo.override_level = 'server_game_config'
-		        AND avo.entity_id = si.sgc_id
-		        AND avo.enabled = false
-		        AND NOT EXISTS (
-		            SELECT 1 FROM action_visibility_overrides avo2
-		            WHERE avo2.action_id = ad.action_id
-		              AND avo2.override_level = 'session'
-		              AND avo2.entity_id = si.session_id
-		        )
-		  )
-		  AND NOT EXISTS (
-		      SELECT 1 FROM action_visibility_overrides avo
-		      WHERE avo.action_id = ad.action_id
-		        AND avo.override_level = 'game_config'
-		        AND avo.entity_id = si.game_config_id
-		        AND avo.enabled = false
-		        AND NOT EXISTS (
-		            SELECT 1 FROM action_visibility_overrides avo2
-		            WHERE avo2.action_id = ad.action_id
-		              AND avo2.override_level IN ('session', 'server_game_config')
-		              AND (
-		                  (avo2.override_level = 'session' AND avo2.entity_id = si.session_id)
-		                  OR (avo2.override_level = 'server_game_config' AND avo2.entity_id = si.sgc_id)
-		              )
-		        )
-		  )
-		ORDER BY ad.display_order, ad.action_id
+		ORDER BY
+			-- Order by level (game first, then config, then sgc)
+			CASE ad.definition_level
+				WHEN 'game' THEN 1
+				WHEN 'game_config' THEN 2
+				WHEN 'server_game_config' THEN 3
+			END,
+			ad.display_order,
+			ad.action_id
 	`
 
 	rows, err := r.db.Query(ctx, query, sessionID)
@@ -277,7 +258,8 @@ func (r *ActionRepository) GetSessionActions(ctx context.Context, sessionID int6
 		action := &manman.ActionDefinition{}
 		err := rows.Scan(
 			&action.ActionID,
-			&action.GameID,
+			&action.DefinitionLevel,
+			&action.EntityID,
 			&action.Name,
 			&action.Label,
 			&action.Description,

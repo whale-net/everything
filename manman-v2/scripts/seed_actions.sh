@@ -19,8 +19,9 @@ psql "$DATABASE_URL" <<'EOF'
 -- These actions demonstrate the three types: simple, select, and parameterized
 
 -- Simple button: Save game
-INSERT INTO action_definitions (game_id, name, label, description, command_template, display_order, group_name, button_style, icon)
+INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style, icon)
 VALUES (
+    'game',
     (SELECT game_id FROM games WHERE name = 'Counter-Strike 2' LIMIT 1),
     'save_game',
     'Save Game',
@@ -31,11 +32,12 @@ VALUES (
     'success',
     'fa-save'
 )
-ON CONFLICT (game_id, name) DO NOTHING;
+ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
 
 -- Simple button: Kick all bots
-INSERT INTO action_definitions (game_id, name, label, description, command_template, display_order, group_name, button_style, requires_confirmation, confirmation_message)
+INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style, requires_confirmation, confirmation_message)
 VALUES (
+    'game',
     (SELECT game_id FROM games WHERE name = 'Counter-Strike 2' LIMIT 1),
     'kick_bots',
     'Kick All Bots',
@@ -47,11 +49,12 @@ VALUES (
     true,
     'Are you sure you want to kick all bots?'
 )
-ON CONFLICT (game_id, name) DO NOTHING;
+ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
 
 -- Select button: Change map
-INSERT INTO action_definitions (game_id, name, label, description, command_template, display_order, group_name, button_style)
+INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style)
 VALUES (
+    'game',
     (SELECT game_id FROM games WHERE name = 'Counter-Strike 2' LIMIT 1),
     'change_map',
     'Change Map',
@@ -61,14 +64,14 @@ VALUES (
     'Map Selection',
     'primary'
 )
-ON CONFLICT (game_id, name) DO NOTHING;
+ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
 
 -- Add map selection input field
 INSERT INTO action_input_fields (action_id, name, label, field_type, required, display_order, help_text)
 SELECT action_id, 'map', 'Select Map', 'select', true, 0, 'Choose a map to load'
 FROM action_definitions
 WHERE name = 'change_map'
-  AND game_id = (SELECT game_id FROM games WHERE name = 'Counter-Strike 2' LIMIT 1)
+  AND definition_level = 'game' AND entity_id = (SELECT game_id FROM games WHERE name = 'Counter-Strike 2' LIMIT 1)
 ON CONFLICT (action_id, name) DO NOTHING;
 
 -- Add map options
@@ -96,8 +99,9 @@ FROM (VALUES
 ON CONFLICT (field_id, value) DO NOTHING;
 
 -- Parameterized button: Host workshop map
-INSERT INTO action_definitions (game_id, name, label, description, command_template, display_order, group_name, button_style)
+INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style)
 VALUES (
+    'game',
     (SELECT game_id FROM games WHERE name = 'Counter-Strike 2' LIMIT 1),
     'host_workshop',
     'Host Workshop Map',
@@ -107,7 +111,7 @@ VALUES (
     'Workshop',
     'info'
 )
-ON CONFLICT (game_id, name) DO NOTHING;
+ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
 
 -- Add workshop ID input field
 INSERT INTO action_input_fields (action_id, name, label, field_type, required, placeholder, pattern, display_order, help_text)
@@ -123,12 +127,13 @@ SELECT
     'Enter the Steam Workshop collection ID'
 FROM action_definitions
 WHERE name = 'host_workshop'
-  AND game_id = (SELECT game_id FROM games WHERE name = 'Counter-Strike 2' LIMIT 1)
+  AND definition_level = 'game' AND entity_id = (SELECT game_id FROM games WHERE name = 'Counter-Strike 2' LIMIT 1)
 ON CONFLICT (action_id, name) DO NOTHING;
 
 -- Parameterized button: Execute server command
-INSERT INTO action_definitions (game_id, name, label, description, command_template, display_order, group_name, button_style, requires_confirmation, confirmation_message)
+INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style, requires_confirmation, confirmation_message)
 VALUES (
+    'game',
     (SELECT game_id FROM games WHERE name = 'Counter-Strike 2' LIMIT 1),
     'exec_config',
     'Execute Config',
@@ -140,7 +145,7 @@ VALUES (
     true,
     'This will execute a server config file. Continue?'
 )
-ON CONFLICT (game_id, name) DO NOTHING;
+ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
 
 INSERT INTO action_input_fields (action_id, name, label, field_type, required, placeholder, display_order, help_text)
 SELECT
@@ -154,7 +159,7 @@ SELECT
     'Name of the config file (without path)'
 FROM action_definitions
 WHERE name = 'exec_config'
-  AND game_id = (SELECT game_id FROM games WHERE name = 'Counter-Strike 2' LIMIT 1)
+  AND definition_level = 'game' AND entity_id = (SELECT game_id FROM games WHERE name = 'Counter-Strike 2' LIMIT 1)
 ON CONFLICT (action_id, name) DO NOTHING;
 
 EOF

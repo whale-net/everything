@@ -17,8 +17,8 @@ func NewServerGameConfigRepository(db *pgxpool.Pool) *ServerGameConfigRepository
 
 func (r *ServerGameConfigRepository) Create(ctx context.Context, sgc *manman.ServerGameConfig) (*manman.ServerGameConfig, error) {
 	query := `
-		INSERT INTO server_game_configs (server_id, game_config_id, port_bindings, parameters, status)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO server_game_configs (server_id, game_config_id, port_bindings, status)
+		VALUES ($1, $2, $3, $4)
 		RETURNING sgc_id
 	`
 
@@ -26,7 +26,6 @@ func (r *ServerGameConfigRepository) Create(ctx context.Context, sgc *manman.Ser
 		sgc.ServerID,
 		sgc.GameConfigID,
 		sgc.PortBindings,
-		sgc.Parameters,
 		sgc.Status,
 	).Scan(&sgc.SGCID)
 	if err != nil {
@@ -40,7 +39,7 @@ func (r *ServerGameConfigRepository) Get(ctx context.Context, sgcID int64) (*man
 	sgc := &manman.ServerGameConfig{}
 
 	query := `
-		SELECT sgc_id, server_id, game_config_id, port_bindings, parameters, status
+		SELECT sgc_id, server_id, game_config_id, port_bindings, status
 		FROM server_game_configs
 		WHERE sgc_id = $1
 	`
@@ -50,7 +49,6 @@ func (r *ServerGameConfigRepository) Get(ctx context.Context, sgcID int64) (*man
 		&sgc.ServerID,
 		&sgc.GameConfigID,
 		&sgc.PortBindings,
-		&sgc.Parameters,
 		&sgc.Status,
 	)
 	if err != nil {
@@ -70,7 +68,7 @@ func (r *ServerGameConfigRepository) List(ctx context.Context, serverID *int64, 
 
 	if serverID != nil {
 		query = `
-			SELECT sgc_id, server_id, game_config_id, port_bindings, parameters, status
+			SELECT sgc_id, server_id, game_config_id, port_bindings, status
 			FROM server_game_configs
 			WHERE server_id = $1
 			ORDER BY sgc_id
@@ -79,7 +77,7 @@ func (r *ServerGameConfigRepository) List(ctx context.Context, serverID *int64, 
 		args = []interface{}{*serverID, limit, offset}
 	} else {
 		query = `
-			SELECT sgc_id, server_id, game_config_id, port_bindings, parameters, status
+			SELECT sgc_id, server_id, game_config_id, port_bindings, status
 			FROM server_game_configs
 			ORDER BY sgc_id
 			LIMIT $1 OFFSET $2
@@ -116,14 +114,13 @@ func (r *ServerGameConfigRepository) List(ctx context.Context, serverID *int64, 
 func (r *ServerGameConfigRepository) Update(ctx context.Context, sgc *manman.ServerGameConfig) error {
 	query := `
 		UPDATE server_game_configs
-		SET port_bindings = $2, parameters = $3, status = $4
+		SET port_bindings = $2, status = $3
 		WHERE sgc_id = $1
 	`
 
 	_, err := r.db.Exec(ctx, query,
 		sgc.SGCID,
 		sgc.PortBindings,
-		sgc.Parameters,
 		sgc.Status,
 	)
 	return err

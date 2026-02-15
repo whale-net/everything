@@ -19,8 +19,9 @@ psql "$DATABASE_URL" <<'EOF'
 -- Demonstrates simple buttons, select with presets, and parameterized input
 
 -- Simple button: Save All
-INSERT INTO action_definitions (game_id, name, label, description, command_template, display_order, group_name, button_style, icon)
+INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style, icon)
 VALUES (
+    'game',
     (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1),
     'save_all',
     'Save World',
@@ -31,11 +32,12 @@ VALUES (
     'success',
     'fa-save'
 )
-ON CONFLICT (game_id, name) DO NOTHING;
+ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
 
 -- Simple button: Stop server
-INSERT INTO action_definitions (game_id, name, label, description, command_template, display_order, group_name, button_style, requires_confirmation, confirmation_message)
+INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style, requires_confirmation, confirmation_message)
 VALUES (
+    'game',
     (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1),
     'stop_server',
     'Stop Server',
@@ -47,11 +49,12 @@ VALUES (
     true,
     'This will stop the server and disconnect all players. Continue?'
 )
-ON CONFLICT (game_id, name) DO NOTHING;
+ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
 
 -- Select button: Say (preset messages for testing)
-INSERT INTO action_definitions (game_id, name, label, description, command_template, display_order, group_name, button_style)
+INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style)
 VALUES (
+    'game',
     (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1),
     'say_preset',
     'Broadcast Message',
@@ -61,14 +64,14 @@ VALUES (
     'Communication',
     'info'
 )
-ON CONFLICT (game_id, name) DO NOTHING;
+ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
 
 -- Add message selection input field for presets
 INSERT INTO action_input_fields (action_id, name, label, field_type, required, display_order, help_text)
 SELECT action_id, 'message', 'Select Message', 'select', true, 0, 'Choose a message to broadcast'
 FROM action_definitions
 WHERE name = 'say_preset'
-  AND game_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
+  AND definition_level = 'game' AND entity_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
 ON CONFLICT (action_id, name) DO NOTHING;
 
 -- Add preset message options
@@ -94,8 +97,9 @@ FROM (VALUES
 ON CONFLICT (field_id, value) DO NOTHING;
 
 -- Parameterized button: Say (custom message)
-INSERT INTO action_definitions (game_id, name, label, description, command_template, display_order, group_name, button_style)
+INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style)
 VALUES (
+    'game',
     (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1),
     'say_custom',
     'Custom Message',
@@ -105,7 +109,7 @@ VALUES (
     'Communication',
     'primary'
 )
-ON CONFLICT (game_id, name) DO NOTHING;
+ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
 
 -- Add custom message input field
 INSERT INTO action_input_fields (action_id, name, label, field_type, required, placeholder, display_order, help_text, min_length, max_length)
@@ -122,14 +126,15 @@ SELECT
     256
 FROM action_definitions
 WHERE name = 'say_custom'
-  AND game_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
+  AND definition_level = 'game' AND entity_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
 ON CONFLICT (action_id, name) DO NOTHING;
 
 -- Additional useful Minecraft commands
 
 -- Simple button: List players
-INSERT INTO action_definitions (game_id, name, label, description, command_template, display_order, group_name, button_style)
+INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style)
 VALUES (
+    'game',
     (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1),
     'list_players',
     'List Players',
@@ -139,11 +144,12 @@ VALUES (
     'Server Info',
     'secondary'
 )
-ON CONFLICT (game_id, name) DO NOTHING;
+ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
 
 -- Select button: Change gamemode
-INSERT INTO action_definitions (game_id, name, label, description, command_template, display_order, group_name, button_style)
+INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style)
 VALUES (
+    'game',
     (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1),
     'default_gamemode',
     'Set Default Gamemode',
@@ -153,14 +159,14 @@ VALUES (
     'World Settings',
     'warning'
 )
-ON CONFLICT (game_id, name) DO NOTHING;
+ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
 
 -- Add gamemode selection input field
 INSERT INTO action_input_fields (action_id, name, label, field_type, required, display_order, help_text)
 SELECT action_id, 'gamemode', 'Gamemode', 'select', true, 0, 'Select the default gamemode'
 FROM action_definitions
 WHERE name = 'default_gamemode'
-  AND game_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
+  AND definition_level = 'game' AND entity_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
 ON CONFLICT (action_id, name) DO NOTHING;
 
 -- Add gamemode options
@@ -184,8 +190,9 @@ FROM (VALUES
 ON CONFLICT (field_id, value) DO NOTHING;
 
 -- Select button: Change difficulty
-INSERT INTO action_definitions (game_id, name, label, description, command_template, display_order, group_name, button_style)
+INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style)
 VALUES (
+    'game',
     (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1),
     'difficulty',
     'Set Difficulty',
@@ -195,14 +202,14 @@ VALUES (
     'World Settings',
     'warning'
 )
-ON CONFLICT (game_id, name) DO NOTHING;
+ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
 
 -- Add difficulty selection input field
 INSERT INTO action_input_fields (action_id, name, label, field_type, required, display_order, help_text)
 SELECT action_id, 'level', 'Difficulty Level', 'select', true, 0, 'Select the difficulty level'
 FROM action_definitions
 WHERE name = 'difficulty'
-  AND game_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
+  AND definition_level = 'game' AND entity_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
 ON CONFLICT (action_id, name) DO NOTHING;
 
 -- Add difficulty options
@@ -226,8 +233,9 @@ FROM (VALUES
 ON CONFLICT (field_id, value) DO NOTHING;
 
 -- Parameterized button: Set time
-INSERT INTO action_definitions (game_id, name, label, description, command_template, display_order, group_name, button_style)
+INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style)
 VALUES (
+    'game',
     (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1),
     'time_set',
     'Set Time',
@@ -237,14 +245,14 @@ VALUES (
     'World Settings',
     'primary'
 )
-ON CONFLICT (game_id, name) DO NOTHING;
+ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
 
 -- Add time selection input field
 INSERT INTO action_input_fields (action_id, name, label, field_type, required, display_order, help_text)
 SELECT action_id, 'time', 'Time', 'select', true, 0, 'Select the time of day'
 FROM action_definitions
 WHERE name = 'time_set'
-  AND game_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
+  AND definition_level = 'game' AND entity_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
 ON CONFLICT (action_id, name) DO NOTHING;
 
 -- Add time options
@@ -268,8 +276,9 @@ FROM (VALUES
 ON CONFLICT (field_id, value) DO NOTHING;
 
 -- Select button: Weather
-INSERT INTO action_definitions (game_id, name, label, description, command_template, display_order, group_name, button_style)
+INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style)
 VALUES (
+    'game',
     (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1),
     'weather',
     'Set Weather',
@@ -279,14 +288,14 @@ VALUES (
     'World Settings',
     'info'
 )
-ON CONFLICT (game_id, name) DO NOTHING;
+ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
 
 -- Add weather selection input field
 INSERT INTO action_input_fields (action_id, name, label, field_type, required, display_order, help_text)
 SELECT action_id, 'type', 'Weather Type', 'select', true, 0, 'Select the weather'
 FROM action_definitions
 WHERE name = 'weather'
-  AND game_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
+  AND definition_level = 'game' AND entity_id = (SELECT game_id FROM games WHERE name = 'Minecraft' LIMIT 1)
 ON CONFLICT (action_id, name) DO NOTHING;
 
 -- Add weather options
