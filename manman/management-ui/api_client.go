@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -12,7 +12,7 @@ import (
 
 // getActiveWorkerID fetches the active worker ID for a user from Experience API
 func (app *App) getActiveWorkerID(ctx context.Context, userID string) (string, error) {
-	log.Printf("Getting active worker ID for user: %s", userID)
+	slog.Debug("getting active worker ID", "user_id", userID)
 
 	cfg := experience_api.NewConfiguration()
 	cfg.Servers = experience_api.ServerConfigurations{
@@ -29,10 +29,10 @@ func (app *App) getActiveWorkerID(ctx context.Context, userID string) (string, e
 	worker, httpResp, err := client.DefaultAPI.WorkerCurrentWorkerCurrentGet(apiCtx).Execute()
 	if err != nil {
 		if httpResp != nil {
-			log.Printf("API error: status=%d", httpResp.StatusCode)
+			slog.Error("API error", "status", httpResp.StatusCode)
 			// Log response body for debugging datetime parsing issues
 			if httpResp.StatusCode == 200 {
-				log.Printf("Response succeeded but unmarsh failed - possible datetime format issue")
+				slog.Warn("response succeeded but unmarshal failed, possible datetime format issue")
 			}
 		}
 		return "", fmt.Errorf("failed to get worker: %w", err)
@@ -47,7 +47,7 @@ func (app *App) getActiveWorkerID(ctx context.Context, userID string) (string, e
 
 // getWorkerStatus fetches the status information for the current worker
 func (app *App) getWorkerStatus(ctx context.Context, userID string) (*experience_api.ExternalStatusInfo, error) {
-	log.Printf("Getting worker status for user: %s", userID)
+	slog.Debug("getting worker status", "user_id", userID)
 
 	cfg := experience_api.NewConfiguration()
 	cfg.Servers = experience_api.ServerConfigurations{
@@ -64,11 +64,11 @@ func (app *App) getWorkerStatus(ctx context.Context, userID string) (*experience
 	status, httpResp, err := client.DefaultAPI.GetWorkerStatusWorkerStatusGet(apiCtx).Execute()
 	if err != nil {
 		if httpResp != nil && httpResp.StatusCode == 404 {
-			log.Printf("No worker status found (404)")
+			slog.Debug("no worker status found")
 			return nil, nil
 		}
 		if httpResp != nil {
-			log.Printf("API error: status=%d", httpResp.StatusCode)
+			slog.Error("API error", "status", httpResp.StatusCode)
 		}
 		return nil, fmt.Errorf("failed to get worker status: %w", err)
 	}
@@ -78,7 +78,7 @@ func (app *App) getWorkerStatus(ctx context.Context, userID string) (*experience
 
 // getCurrentServersWithConfigs fetches the full response including instances and configs
 func (app *App) getCurrentServersWithConfigs(ctx context.Context, userID string) (*experience_api.CurrentInstanceResponse, error) {
-	log.Printf("Getting current servers with configs for user: %s", userID)
+	slog.Debug("getting current servers with configs", "user_id", userID)
 
 	cfg := experience_api.NewConfiguration()
 	cfg.Servers = experience_api.ServerConfigurations{
@@ -99,7 +99,7 @@ func (app *App) getCurrentServersWithConfigs(ctx context.Context, userID string)
 		Execute()
 	if err != nil {
 		if httpResp != nil {
-			log.Printf("API error: status=%d", httpResp.StatusCode)
+			slog.Error("API error", "status", httpResp.StatusCode)
 		}
 		return nil, fmt.Errorf("failed to get current servers: %w", err)
 	}
@@ -119,7 +119,7 @@ func (app *App) getCurrentServers(ctx context.Context, userID string) ([]experie
 
 // getServerStatus fetches the status information for a specific game server by config ID
 func (app *App) getServerStatus(ctx context.Context, serverConfigID int32) (*experience_api.ExternalStatusInfo, error) {
-	log.Printf("Getting status for server config ID: %d", serverConfigID)
+	slog.Debug("getting status for server config", "server_config_id", serverConfigID)
 
 	cfg := experience_api.NewConfiguration()
 	cfg.Servers = experience_api.ServerConfigurations{
@@ -136,11 +136,11 @@ func (app *App) getServerStatus(ctx context.Context, serverConfigID int32) (*exp
 	status, httpResp, err := client.DefaultAPI.GetGameServerStatusGameserverIdStatusGet(apiCtx, serverConfigID).Execute()
 	if err != nil {
 		if httpResp != nil && httpResp.StatusCode == 404 {
-			log.Printf("No status found for server config %d (404)", serverConfigID)
+			slog.Debug("no status found for server config", "server_config_id", serverConfigID)
 			return nil, nil
 		}
 		if httpResp != nil {
-			log.Printf("API error: status=%d", httpResp.StatusCode)
+			slog.Error("API error", "status", httpResp.StatusCode)
 		}
 		return nil, fmt.Errorf("failed to get server status: %w", err)
 	}
@@ -151,7 +151,7 @@ func (app *App) getServerStatus(ctx context.Context, serverConfigID int32) (*exp
 // getRunningServers fetches the list of running servers for a user from Experience API
 // This is kept for backwards compatibility but now uses the current servers endpoint
 func (app *App) getRunningServers(ctx context.Context, userID string) ([]Server, error) {
-	log.Printf("Getting running servers for user: %s", userID)
+	slog.Debug("getting running servers", "user_id", userID)
 
 	resp, err := app.getCurrentServersWithConfigs(ctx, userID)
 	if err != nil {
@@ -213,7 +213,7 @@ func (app *App) getRunningServers(ctx context.Context, userID string) ([]Server,
 
 // getAllGameServerConfigs fetches all available game server configurations
 func (app *App) getAllGameServerConfigs(ctx context.Context) ([]experience_api.GameServerConfig, error) {
-	log.Printf("Getting all game server configs")
+	slog.Debug("getting all game server configs")
 
 	cfg := experience_api.NewConfiguration()
 	cfg.Servers = experience_api.ServerConfigurations{
@@ -230,7 +230,7 @@ func (app *App) getAllGameServerConfigs(ctx context.Context) ([]experience_api.G
 	configs, httpResp, err := client.DefaultAPI.GetGameServersGameserverGet(apiCtx).Execute()
 	if err != nil {
 		if httpResp != nil {
-			log.Printf("API error: status=%d", httpResp.StatusCode)
+			slog.Error("API error", "status", httpResp.StatusCode)
 		}
 		return nil, fmt.Errorf("failed to get game server configs: %w", err)
 	}
@@ -240,7 +240,7 @@ func (app *App) getAllGameServerConfigs(ctx context.Context) ([]experience_api.G
 
 // getAllGameServers fetches all game server types
 func (app *App) getAllGameServers(ctx context.Context) ([]experience_api.GameServer, error) {
-	log.Printf("Getting all game server types")
+	slog.Debug("getting all game server types")
 
 	cfg := experience_api.NewConfiguration()
 	cfg.Servers = experience_api.ServerConfigurations{
@@ -257,7 +257,7 @@ func (app *App) getAllGameServers(ctx context.Context) ([]experience_api.GameSer
 	servers, httpResp, err := client.DefaultAPI.ListGameServersGameserverTypesGet(apiCtx).Execute()
 	if err != nil {
 		if httpResp != nil {
-			log.Printf("API error: status=%d", httpResp.StatusCode)
+			slog.Error("API error", "status", httpResp.StatusCode)
 		}
 		return nil, fmt.Errorf("failed to get game server types: %w", err)
 	}
@@ -267,7 +267,7 @@ func (app *App) getAllGameServers(ctx context.Context) ([]experience_api.GameSer
 
 // startGameServer starts a game server by config ID
 func (app *App) startGameServer(ctx context.Context, configID int32) error {
-	log.Printf("Starting game server with config ID: %d", configID)
+	slog.Info("starting game server", "config_id", configID)
 
 	cfg := experience_api.NewConfiguration()
 	cfg.Servers = experience_api.ServerConfigurations{
@@ -284,7 +284,7 @@ func (app *App) startGameServer(ctx context.Context, configID int32) error {
 	_, httpResp, err := client.DefaultAPI.StartGameServerGameserverIdStartPost(apiCtx, configID).Execute()
 	if err != nil {
 		if httpResp != nil {
-			log.Printf("API error: status=%d", httpResp.StatusCode)
+			slog.Error("API error", "status", httpResp.StatusCode)
 		}
 		return fmt.Errorf("failed to start game server: %w", err)
 	}
@@ -294,7 +294,7 @@ func (app *App) startGameServer(ctx context.Context, configID int32) error {
 
 // getInstanceDetails fetches instance details with commands
 func (app *App) getInstanceDetails(ctx context.Context, instanceID int) (*experience_api.InstanceDetailsResponseWithCommands, error) {
-	log.Printf("Getting instance details for instance ID: %d", instanceID)
+	slog.Debug("getting instance details", "instance_id", instanceID)
 
 	cfg := experience_api.NewConfiguration()
 	cfg.Servers = experience_api.ServerConfigurations{
@@ -310,7 +310,7 @@ func (app *App) getInstanceDetails(ctx context.Context, instanceID int) (*experi
 	details, httpResp, err := client.DefaultAPI.GetInstanceDetailsGameserverInstanceInstanceIdGet(apiCtx, int32(instanceID)).Execute()
 	if err != nil {
 		if httpResp != nil {
-			log.Printf("API error: status=%d", httpResp.StatusCode)
+			slog.Error("API error", "status", httpResp.StatusCode)
 		}
 		return nil, fmt.Errorf("failed to get instance details: %w", err)
 	}
@@ -320,7 +320,7 @@ func (app *App) getInstanceDetails(ctx context.Context, instanceID int) (*experi
 
 // executeInstanceCommand executes a command on an instance
 func (app *App) executeInstanceCommand(ctx context.Context, instanceID int, request experience_api.ExecuteCommandRequest) (*experience_api.ExecuteCommandResponse, error) {
-	log.Printf("Executing command on instance %d: type=%s, id=%d", instanceID, request.CommandType, request.CommandId)
+	slog.Info("executing command on instance", "instance_id", instanceID, "command_type", request.CommandType, "command_id", request.CommandId)
 
 	cfg := experience_api.NewConfiguration()
 	cfg.Servers = experience_api.ServerConfigurations{
@@ -336,7 +336,7 @@ func (app *App) executeInstanceCommand(ctx context.Context, instanceID int, requ
 	response, httpResp, err := client.DefaultAPI.ExecuteInstanceCommandGameserverInstanceInstanceIdCommandPost(apiCtx, int32(instanceID)).ExecuteCommandRequest(request).Execute()
 	if err != nil {
 		if httpResp != nil {
-			log.Printf("API error: status=%d", httpResp.StatusCode)
+			slog.Error("API error", "status", httpResp.StatusCode)
 		}
 		return nil, fmt.Errorf("failed to execute command: %w", err)
 	}
@@ -346,7 +346,7 @@ func (app *App) executeInstanceCommand(ctx context.Context, instanceID int, requ
 
 // getAvailableCommands fetches available commands for a game server
 func (app *App) getAvailableCommands(ctx context.Context, gameServerID int) ([]experience_api.GameServerCommand, error) {
-	log.Printf("Getting available commands for game server ID: %d", gameServerID)
+	slog.Debug("getting available commands", "game_server_id", gameServerID)
 
 	cfg := experience_api.NewConfiguration()
 	cfg.Servers = experience_api.ServerConfigurations{
@@ -362,7 +362,7 @@ func (app *App) getAvailableCommands(ctx context.Context, gameServerID int) ([]e
 	commands, httpResp, err := client.DefaultAPI.GetAvailableCommandsGameserverGameServerIdCommandsGet(apiCtx, int32(gameServerID)).Execute()
 	if err != nil {
 		if httpResp != nil {
-			log.Printf("API error: status=%d", httpResp.StatusCode)
+			slog.Error("API error", "status", httpResp.StatusCode)
 		}
 		return nil, fmt.Errorf("failed to get available commands: %w", err)
 	}
@@ -372,7 +372,7 @@ func (app *App) getAvailableCommands(ctx context.Context, gameServerID int) ([]e
 
 // getGameServerCommands fetches commands for a game server type
 func (app *App) getGameServerCommands(ctx context.Context, gameServerID int32) ([]experience_api.GameServerCommand, error) {
-	log.Printf("Getting commands for game server type ID: %d", gameServerID)
+	slog.Debug("getting commands for game server type", "game_server_id", gameServerID)
 
 	cfg := experience_api.NewConfiguration()
 	cfg.Servers = experience_api.ServerConfigurations{
@@ -388,7 +388,7 @@ func (app *App) getGameServerCommands(ctx context.Context, gameServerID int32) (
 	commands, httpResp, err := client.DefaultAPI.GetAvailableCommandsGameserverGameServerIdCommandsGet(apiCtx, gameServerID).Execute()
 	if err != nil {
 		if httpResp != nil {
-			log.Printf("API error: status=%d", httpResp.StatusCode)
+			slog.Error("API error", "status", httpResp.StatusCode)
 		}
 		return nil, fmt.Errorf("failed to get game server commands: %w", err)
 	}
@@ -398,7 +398,7 @@ func (app *App) getGameServerCommands(ctx context.Context, gameServerID int32) (
 
 // getGameServerInstanceHistory fetches instance history for a game server
 func (app *App) getGameServerInstanceHistory(ctx context.Context, gameServerID int32, limit int) ([]InstanceHistoryItem, error) {
-	log.Printf("Getting instance history for game server ID: %d", gameServerID)
+	slog.Debug("getting instance history", "game_server_id", gameServerID)
 
 	cfg := experience_api.NewConfiguration()
 	cfg.Servers = experience_api.ServerConfigurations{
@@ -414,7 +414,7 @@ func (app *App) getGameServerInstanceHistory(ctx context.Context, gameServerID i
 	historyResp, httpResp, err := client.DefaultAPI.GetGameServerInstanceHistoryGameserverGameServerIdInstancesGet(apiCtx, gameServerID).Limit(int32(limit)).Execute()
 	if err != nil {
 		if httpResp != nil {
-			log.Printf("API error: status=%d", httpResp.StatusCode)
+			slog.Error("API error", "status", httpResp.StatusCode)
 		}
 		return nil, fmt.Errorf("failed to get instance history: %w", err)
 	}
@@ -446,7 +446,7 @@ func (app *App) getGameServerInstanceHistory(ctx context.Context, gameServerID i
 
 // createGameServerCommand creates a new command for a game server type
 func (app *App) createGameServerCommand(ctx context.Context, gameServerID int32, name, command, description string, isVisible bool) (*experience_api.GameServerCommand, error) {
-	log.Printf("Creating command for game server type ID: %d", gameServerID)
+	slog.Info("creating command for game server type", "game_server_id", gameServerID)
 
 	cfg := experience_api.NewConfiguration()
 	cfg.Servers = experience_api.ServerConfigurations{
@@ -472,7 +472,7 @@ func (app *App) createGameServerCommand(ctx context.Context, gameServerID int32,
 	cmd, httpResp, err := client.DefaultAPI.CreateGameServerCommandGameserverTypesGameServerIdCommandPost(apiCtx, gameServerID).CreateGameServerCommandRequest(request).Execute()
 	if err != nil {
 		if httpResp != nil {
-			log.Printf("API error: status=%d", httpResp.StatusCode)
+			slog.Error("API error", "status", httpResp.StatusCode)
 		}
 		return nil, fmt.Errorf("failed to create game server command: %w", err)
 	}
@@ -482,7 +482,7 @@ func (app *App) createGameServerCommand(ctx context.Context, gameServerID int32,
 
 // createConfigCommand creates a new config-specific command
 func (app *App) createConfigCommand(ctx context.Context, configID int, request experience_api.CreateConfigCommandRequest) (*experience_api.GameServerConfigCommands, error) {
-	log.Printf("Creating config command for config ID: %d", configID)
+	slog.Info("creating config command", "config_id", configID)
 
 	cfg := experience_api.NewConfiguration()
 	cfg.Servers = experience_api.ServerConfigurations{
@@ -498,7 +498,7 @@ func (app *App) createConfigCommand(ctx context.Context, configID int, request e
 	command, httpResp, err := client.DefaultAPI.CreateConfigCommandGameserverConfigConfigIdCommandPost(apiCtx, int32(configID)).CreateConfigCommandRequest(request).Execute()
 	if err != nil {
 		if httpResp != nil {
-			log.Printf("API error: status=%d", httpResp.StatusCode)
+			slog.Error("API error", "status", httpResp.StatusCode)
 		}
 		return nil, fmt.Errorf("failed to create config command: %w", err)
 	}

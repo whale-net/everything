@@ -9,6 +9,7 @@ go_library(
     deps = [
         "//libs/go/docker",
         "//libs/go/grpcclient",
+        "//libs/go/logging",
         "//libs/go/rmq",
         "//manman/host/rmq",
         "//manman/host/session",

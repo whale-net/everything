@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -125,9 +125,9 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 		}
 
 		// Force start: stop the existing session first
-		log.Printf("[session %d] force start: stopping existing active session %d for GSC %d", sessionID, existingSession.SessionID, sgcID)
+		slog.Info("force start: stopping existing active session", "session_id", sessionID, "existing_session_id", existingSession.SessionID, "sgc_id", sgcID)
 		if err := sm.StopSession(ctx, existingSession.SessionID, true); err != nil {
-			log.Printf("[session %d] warning: failed to stop existing session %d: %v", sessionID, existingSession.SessionID, err)
+			slog.Warn("failed to stop existing session", "session_id", sessionID, "existing_session_id", existingSession.SessionID, "error", err)
 			// Continue anyway, we'll attempt container cleanup below
 		}
 	}
@@ -135,23 +135,19 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	// 3. If force is requested (or even if not, as a safety measure), clean up any existing container for this SGC
 	if cmd.Force {
 		containerName := sm.getContainerName(cmd.ServerID, cmd.SGCID)
-		log.Printf("[session %d] force start requested, cleaning up existing container %s", sessionID, containerName)
+		slog.Info("force start requested, cleaning up existing container", "session_id", sessionID, "container", containerName)
 
-		// 1. Attempt graceful shutdown first
-		log.Printf("[session %d] attempting graceful shutdown of %s...", sessionID, containerName)
-		shutdownTimeout := 10 * time.Second // TODO: make configurable in far future iteration
+		shutdownTimeout := 10 * time.Second
 		if err := sm.dockerClient.StopContainer(ctx, containerName, &shutdownTimeout); err != nil {
-			log.Printf("[session %d] graceful shutdown failed or container not found: %v", sessionID, err)
+			slog.Debug("graceful shutdown failed or container not found", "session_id", sessionID, "error", err)
 		} else {
-			log.Printf("[session %d] graceful shutdown of %s succeeded", sessionID, containerName)
+			slog.Info("graceful shutdown succeeded", "session_id", sessionID, "container", containerName)
 		}
 
-		// 2. Force stop and remove
-		log.Printf("[session %d] removing container %s...", sessionID, containerName)
 		if err := sm.dockerClient.RemoveContainer(ctx, containerName, true); err != nil {
-			log.Printf("[session %d] warning: removal failed: %v", sessionID, err)
+			slog.Warn("container removal failed", "session_id", sessionID, "error", err)
 		} else {
-			log.Printf("[session %d] removal of %s succeeded", sessionID, containerName)
+			slog.Info("container removed", "session_id", sessionID, "container", containerName)
 		}
 	}
 
@@ -162,12 +158,12 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 		Status:    manman.SessionStatusPending,
 	}
 	sm.stateManager.AddSession(state)
-	log.Printf("[session %d] added to state manager, status: starting", sessionID)
+	slog.Debug("session added to state manager", "session_id", sessionID)
 	state.UpdateStatus(manman.SessionStatusStarting)
 
 	// 1. Create Docker network
 	networkName := sm.getNetworkName(sessionID)
-	log.Printf("[session %d] creating network %s...", sessionID, networkName)
+	slog.Info("creating network", "session_id", sessionID, "network", networkName)
 	networkLabels := map[string]string{
 		"manman.type":        "network",
 		"manman.session_id":  fmt.Sprintf("%d", sessionID),
@@ -177,45 +173,44 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	networkID, err := sm.dockerClient.CreateNetwork(ctx, networkName, networkLabels)
 	if err != nil {
 		if strings.Contains(err.Error(), "already exists") {
-			log.Printf("[session %d] network %s already exists, attempting to reuse", sessionID, networkName)
+			slog.Info("network already exists, reusing", "session_id", sessionID, "network", networkName)
 			id, netErr := sm.dockerClient.GetNetworkIDByName(ctx, networkName)
 			if netErr != nil {
-				log.Printf("[session %d] error: failed to get existing network ID: %v", sessionID, netErr)
+				slog.Error("failed to get existing network ID", "session_id", sessionID, "error", netErr)
 				state.UpdateStatus(manman.SessionStatusCrashed)
 				sm.stateManager.RemoveSession(sessionID)
 				return fmt.Errorf("failed to get existing network ID: %w", netErr)
 			}
 			networkID = id
-			log.Printf("[session %d] reused network ID: %s", sessionID, networkID)
 		} else {
-			log.Printf("[session %d] error: failed to create network: %v", sessionID, err)
+			slog.Error("failed to create network", "session_id", sessionID, "error", err)
 			state.UpdateStatus(manman.SessionStatusCrashed)
 			sm.stateManager.RemoveSession(sessionID)
 			return fmt.Errorf("failed to create network: %w", err)
 		}
 	}
-	log.Printf("[session %d] network created/resolved: %s", sessionID, networkID)
+	slog.Info("network ready", "session_id", sessionID, "network_id", networkID)
 	state.NetworkID = networkID
 	state.NetworkName = networkName
 
 	// 2. Fetch and render configurations
-	log.Printf("[session %d] fetching configuration strategies...", sessionID)
+	slog.Info("fetching configuration strategies", "session_id", sessionID)
 	configResp, err := sm.grpcClient.GetSessionConfiguration(ctx, &pb.GetSessionConfigurationRequest{
 		SessionId: sessionID,
 	})
 	if err != nil {
-		log.Printf("[session %d] warning: failed to fetch configurations: %v", sessionID, err)
+		slog.Warn("failed to fetch configurations", "session_id", sessionID, "error", err)
 		// Don't fail the session start - configurations are optional
 		configResp = &pb.GetSessionConfigurationResponse{Configurations: nil}
 	} else {
-		log.Printf("[session %d] fetched %d configuration strategies", sessionID, len(configResp.Configurations))
+		slog.Info("fetched configuration strategies", "session_id", sessionID, "count", len(configResp.Configurations))
 
 		// Render configurations
 		if len(configResp.Configurations) > 0 {
 			sgcInternalDir := sm.getSGCInternalDir(cmd.SGCID)
 			renderedFiles, err := sm.renderer.RenderConfigurations(configResp.Configurations, sgcInternalDir)
 			if err != nil {
-				log.Printf("[session %d] error: failed to render configurations: %v", sessionID, err)
+				slog.Error("failed to render configurations", "session_id", sessionID, "error", err)
 				sm.cleanupSession(ctx, state)
 				state.UpdateStatus(manman.SessionStatusCrashed)
 				sm.stateManager.RemoveSession(sessionID)
@@ -224,111 +219,106 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 
 			// Write rendered files to disk
 			if len(renderedFiles) > 0 {
-				log.Printf("[session %d] writing %d configuration files...", sessionID, len(renderedFiles))
+				slog.Info("writing configuration files", "session_id", sessionID, "count", len(renderedFiles))
 				if err := sm.renderer.WriteRenderedFiles(renderedFiles); err != nil {
-					log.Printf("[session %d] error: failed to write configuration files: %v", sessionID, err)
+					slog.Error("failed to write configuration files", "session_id", sessionID, "error", err)
 					sm.cleanupSession(ctx, state)
 					state.UpdateStatus(manman.SessionStatusCrashed)
 					sm.stateManager.RemoveSession(sessionID)
 					return fmt.Errorf("failed to write configuration files: %w", err)
 				}
-				log.Printf("[session %d] successfully wrote configuration files", sessionID)
+				slog.Debug("configuration files written", "session_id", sessionID)
 			}
 		}
 	}
 
 	// 3. Create game container
-	log.Printf("[session %d] creating container for image %s...", sessionID, cmd.Image)
+	slog.Info("creating container", "session_id", sessionID, "image", cmd.Image)
 	containerID, err := sm.createGameContainer(ctx, state, cmd)
 	if err != nil {
 		if isNameConflictError(err) {
 			if !cmd.Force {
-				log.Printf("[session %d] container name conflict but force=false, failing", sessionID)
+				slog.Error("container name conflict, force=false", "session_id", sessionID, "sgc_id", sgcID)
 				sm.cleanupSession(ctx, state)
 				state.UpdateStatus(manman.SessionStatusCrashed)
 				sm.stateManager.RemoveSession(sessionID)
 				return &rmq.PermanentError{Err: fmt.Errorf("container name conflict for GSC %d", sgcID)}
 			}
 
-			// Handle idempotent start: container with this name already exists
-			log.Printf("[session %d] container name conflict, attempting to handle...", sessionID)
+			slog.Info("container name conflict, handling", "session_id", sessionID)
 			containerID, err = sm.handleNameConflict(ctx, cmd)
 			if err != nil {
-				log.Printf("[session %d] error: failed to handle name conflict: %v", sessionID, err)
+				slog.Error("failed to handle name conflict", "session_id", sessionID, "error", err)
 				sm.cleanupSession(ctx, state)
 				state.UpdateStatus(manman.SessionStatusCrashed)
 				sm.stateManager.RemoveSession(sessionID)
 				return fmt.Errorf("failed to handle name conflict: %w", err)
 			}
-			log.Printf("[session %d] resolved name conflict, container ID: %s", sessionID, containerID)
+			slog.Info("resolved name conflict", "session_id", sessionID, "container_id", containerID)
 		} else if strings.Contains(err.Error(), "No such image") {
-			// Try to pull the image and retry creation once
-			log.Printf("[session %d] image %s not found, attempting to pull...", sessionID, cmd.Image)
+			slog.Info("image not found, pulling", "session_id", sessionID, "image", cmd.Image)
 			if pullErr := sm.dockerClient.PullImage(ctx, cmd.Image); pullErr != nil {
-				log.Printf("[session %d] error: failed to pull image %s: %v", sessionID, cmd.Image, pullErr)
+				slog.Error("failed to pull image", "session_id", sessionID, "image", cmd.Image, "error", pullErr)
 				sm.cleanupSession(ctx, state)
 				state.UpdateStatus(manman.SessionStatusCrashed)
 				sm.stateManager.RemoveSession(sessionID)
 				return &rmq.PermanentError{Err: fmt.Errorf("failed to pull image %s: %w", cmd.Image, pullErr)}
 			}
 
-			// Retry creation
-			log.Printf("[session %d] retrying container creation after pull...", sessionID)
+			slog.Info("retrying container creation after pull", "session_id", sessionID)
 			containerID, err = sm.createGameContainer(ctx, state, cmd)
 			if err != nil {
-				log.Printf("[session %d] error: failed to create container after pull: %v", sessionID, err)
+				slog.Error("failed to create container after pull", "session_id", sessionID, "error", err)
 				sm.cleanupSession(ctx, state)
 				state.UpdateStatus(manman.SessionStatusCrashed)
 				sm.stateManager.RemoveSession(sessionID)
 				return &rmq.PermanentError{Err: fmt.Errorf("failed to create game container after pull: %w", err)}
 			}
 		} else {
-			log.Printf("[session %d] error: failed to create container: %v", sessionID, err)
+			slog.Error("failed to create container", "session_id", sessionID, "error", err)
 			sm.cleanupSession(ctx, state)
 			state.UpdateStatus(manman.SessionStatusCrashed)
 			sm.stateManager.RemoveSession(sessionID)
 			return fmt.Errorf("failed to create game container: %w", err)
 		}
 	}
-	log.Printf("[session %d] container created: %s", sessionID, containerID)
+	slog.Info("container created", "session_id", sessionID, "container_id", containerID)
 	state.GameContainerID = containerID
 
 	// 3. Start game container
-	log.Printf("[session %d] starting container %s...", sessionID, containerID)
+	slog.Info("starting container", "session_id", sessionID, "container_id", containerID)
 	if err := sm.dockerClient.StartContainer(ctx, containerID); err != nil {
-		// If already running (from name conflict recovery), that's fine
 		if !strings.Contains(err.Error(), "already started") {
-			log.Printf("[session %d] error: failed to start container: %v", sessionID, err)
+			slog.Error("failed to start container", "session_id", sessionID, "error", err)
 			sm.cleanupSession(ctx, state)
 			state.UpdateStatus(manman.SessionStatusCrashed)
 			sm.stateManager.RemoveSession(sessionID)
 			return fmt.Errorf("failed to start game container: %w", err)
 		}
-		log.Printf("[session %d] container was already started", sessionID)
+		slog.Info("container was already started", "session_id", sessionID)
 	}
-	log.Printf("[session %d] container %s started", sessionID, containerID)
+	slog.Info("container started", "session_id", sessionID, "container_id", containerID)
 
 	// 4. Attach to container for stdin/stdout
-	log.Printf("[session %d] attaching to container for logging...", sessionID)
+	slog.Info("attaching to container", "session_id", sessionID)
 	attachResp, err := sm.dockerClient.AttachToContainer(ctx, containerID)
 	if err != nil {
-		log.Printf("[session %d] error: failed to attach to container: %v", sessionID, err)
+		slog.Error("failed to attach to container", "session_id", sessionID, "error", err)
 		sm.cleanupSession(ctx, state)
 		state.UpdateStatus(manman.SessionStatusCrashed)
 		sm.stateManager.RemoveSession(sessionID)
 		return fmt.Errorf("failed to attach to game container: %w", err)
 	}
 	state.AttachResp = &attachResp
-	log.Printf("[session %d] successfully attached to container", sessionID)
 
 	// 5. Start output reader goroutine
-	log.Printf("[session %d] spawning output reader goroutine", sessionID)
+	slog.Debug("spawning output reader", "session_id", sessionID)
 	sm.startOutputReader(state)
 
 	now := time.Now()
 	state.StartedAt = &now
 	state.UpdateStatus(manman.SessionStatusRunning)
-	log.Printf("[session %d] startup complete, status: running", sessionID)
+	slog.Info("session startup complete", "session_id", sessionID)
 
 	return nil
 }
@@ -356,7 +346,7 @@ func (sm *SessionManager) StopSession(ctx context.Context, sessionID int64, forc
 			timeout = &t
 		}
 		if err := sm.dockerClient.StopContainer(ctx, state.GameContainerID, timeout); err != nil {
-			log.Printf("[session %d] warning: error stopping container: %v", sessionID, err)
+			slog.Warn("error stopping container", "session_id", sessionID, "error", err)
 		}
 
 		// 3. Get exit code
@@ -467,13 +457,11 @@ func (sm *SessionManager) handleNameConflict(ctx context.Context, cmd *StartSess
 	}
 
 	if status.Running {
-		// Already running — idempotent success
-		log.Printf("[session %d] container %s already running, reusing", cmd.SessionID, containerName)
+		slog.Info("container already running, reusing", "session_id", cmd.SessionID, "container", containerName)
 		return status.ContainerID, nil
 	}
 
-	// Stopped — restart it
-	log.Printf("[session %d] container %s stopped, restarting", cmd.SessionID, containerName)
+	slog.Info("container stopped, restarting", "session_id", cmd.SessionID, "container", containerName)
 	if err := sm.dockerClient.StartContainer(ctx, status.ContainerID); err != nil {
 		return "", fmt.Errorf("failed to restart existing container %s: %w", containerName, err)
 	}
@@ -546,22 +534,14 @@ func (sm *SessionManager) startOutputReader(state *State) {
 					source = "stdout"
 				}
 
-				// Check for interesting log patterns and log samples
-				msgLower := strings.ToLower(message)
-				if strings.Contains(msgLower, "error") || strings.Contains(msgLower, "exception") || strings.Contains(msgLower, "fatal") {
-					log.Printf("[session %d] ERROR: %s", state.SessionID, strings.TrimSpace(message))
-				} else if strings.Contains(msgLower, "warn") {
-					log.Printf("[session %d] WARN: %s", state.SessionID, strings.TrimSpace(message))
-				}
-
-				// Send to channel (non-blocking to avoid deadlock)
+				// Game server output is published to RMQ only, not to host logs
 				select {
 				case logChan <- struct {
 					message string
 					source  string
 				}{message, source}:
 				default:
-					log.Printf("[session %d] warning: log channel full, dropping message", state.SessionID)
+					slog.Warn("log channel full, dropping message", "session_id", state.SessionID)
 				}
 			}
 		}()
@@ -573,16 +553,13 @@ func (sm *SessionManager) startOutputReader(state *State) {
 
 			// Log aggregate metrics
 			if stdoutCount > 0 || stderrCount > 0 {
-				metrics := fmt.Sprintf("[session %d] logs: %d total (%d stdout, %d stderr",
-					state.SessionID, stdoutCount+stderrCount, stdoutCount, stderrCount)
-				if errorCount > 0 {
-					metrics += fmt.Sprintf(", %d errors", errorCount)
-				}
-				if warnCount > 0 {
-					metrics += fmt.Sprintf(", %d warnings", warnCount)
-				}
-				metrics += ")"
-				log.Println(metrics)
+				slog.Info("session log metrics",
+					"session_id", state.SessionID,
+					"total", stdoutCount+stderrCount,
+					"stdout", stdoutCount,
+					"stderr", stderrCount,
+					"errors", errorCount,
+					"warnings", warnCount)
 			}
 
 			// Publish logs to RabbitMQ in background
@@ -593,7 +570,7 @@ func (sm *SessionManager) startOutputReader(state *State) {
 				for i := 0; i < len(logBuffer); i++ {
 					// Fire-and-forget publish, don't block on errors
 					if err := sm.rmqPublisher.PublishLog(ctx, state.SessionID, sourceBuffer[i], logBuffer[i]); err != nil {
-						log.Printf("[session %d] warning: failed to publish log to RabbitMQ: %v", state.SessionID, err)
+						slog.Warn("failed to publish log to RabbitMQ", "session_id", state.SessionID, "error", err)
 					}
 				}
 			}
@@ -665,7 +642,7 @@ func (sm *SessionManager) handleContainerExit(state *State) {
 	exitCode := status.ExitCode
 	state.ExitCode = &exitCode
 	state.UpdateStatus("crashed")
-	log.Printf("[session %d] container exited with code %d — marked crashed", state.SessionID, exitCode)
+	slog.Warn("container exited, marked crashed", "session_id", state.SessionID, "exit_code", exitCode)
 
 	// Publish crashed status to RabbitMQ
 	statusUpdate := &hostrmq.SessionStatusUpdate{
@@ -675,24 +652,23 @@ func (sm *SessionManager) handleContainerExit(state *State) {
 		ExitCode:  &exitCode,
 	}
 	if err := sm.rmqPublisher.PublishSessionStatus(ctx, statusUpdate); err != nil {
-		log.Printf("[session %d] failed to publish crashed status: %v", state.SessionID, err)
+		slog.Error("failed to publish crashed status", "session_id", state.SessionID, "error", err)
 	}
 
 	// Clean up the crashed container
-	log.Printf("[session %d] removing crashed container %s", state.SessionID, state.GameContainerID)
+	slog.Info("removing crashed container", "session_id", state.SessionID, "container_id", state.GameContainerID)
 	if err := sm.dockerClient.RemoveContainer(ctx, state.GameContainerID, true); err != nil {
-		log.Printf("[session %d] warning: failed to remove crashed container: %v", state.SessionID, err)
-		// Continue anyway - container cleanup can happen later
+		slog.Warn("failed to remove crashed container", "session_id", state.SessionID, "error", err)
 	}
 
 	// Remove session from state manager to allow new sessions for this SGC
 	sm.stateManager.RemoveSession(state.SessionID)
-	log.Printf("[session %d] removed from state manager after crash", state.SessionID)
+	slog.Info("removed session from state manager after crash", "session_id", state.SessionID)
 }
 
 // CleanupOrphans performs a single pass of orphan game container cleanup
 func (sm *SessionManager) CleanupOrphans(ctx context.Context, serverID int64) error {
-	fmt.Printf("Starting orphan cleanup for server %d (env=%s)\n", serverID, sm.environment)
+	slog.Info("starting orphan cleanup", "server_id", serverID, "environment", sm.environment)
 
 	activeSGCs := sm.stateManager.GetActiveSGCIDs()
 
@@ -760,14 +736,14 @@ func (sm *SessionManager) CleanupOrphans(ctx context.Context, serverID int64) er
 			continue
 		}
 
-		fmt.Printf("Cleaning up orphaned game container %s (sgc_id=%d, age=%v)\n", game.ID, sgcID, age)
+		slog.Info("cleaning up orphaned game container", "container_id", game.ID, "sgc_id", sgcID, "age", age)
 		if status.Running {
 			_ = sm.dockerClient.StopContainer(ctx, game.ID, nil)
 		}
 		_ = sm.dockerClient.RemoveContainer(ctx, game.ID, true)
 	}
 
-	fmt.Println("Orphan cleanup completed")
+	slog.Info("orphan cleanup completed")
 	return nil
 }
 

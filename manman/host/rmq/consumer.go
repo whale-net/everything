@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/whale-net/everything/libs/go/rmq"
 )
@@ -83,7 +83,7 @@ func (c *Consumer) handleStartSession(ctx context.Context, msg rmq.Message) erro
 	if err := json.Unmarshal(msg.Body, &cmd); err != nil {
 		return fmt.Errorf("failed to unmarshal start session command: %w", err)
 	}
-	log.Printf("Received start session command: session_id=%d, sgc_id=%d", cmd.SessionID, cmd.SGCID)
+	slog.Info("received start session command", "session_id", cmd.SessionID, "sgc_id", cmd.SGCID)
 	return c.handler.HandleStartSession(ctx, &cmd)
 }
 
@@ -92,7 +92,7 @@ func (c *Consumer) handleStopSession(ctx context.Context, msg rmq.Message) error
 	if err := json.Unmarshal(msg.Body, &cmd); err != nil {
 		return fmt.Errorf("failed to unmarshal stop session command: %w", err)
 	}
-	log.Printf("Received stop session command: session_id=%d, force=%v", cmd.SessionID, cmd.Force)
+	slog.Info("received stop session command", "session_id", cmd.SessionID, "force", cmd.Force)
 	return c.handler.HandleStopSession(ctx, &cmd)
 }
 
@@ -101,7 +101,7 @@ func (c *Consumer) handleKillSession(ctx context.Context, msg rmq.Message) error
 	if err := json.Unmarshal(msg.Body, &cmd); err != nil {
 		return fmt.Errorf("failed to unmarshal kill session command: %w", err)
 	}
-	log.Printf("Received kill session command: session_id=%d", cmd.SessionID)
+	slog.Info("received kill session command", "session_id", cmd.SessionID)
 	return c.handler.HandleKillSession(ctx, &cmd)
 }
 
@@ -110,6 +110,6 @@ func (c *Consumer) handleSendInput(ctx context.Context, msg rmq.Message) error {
 	if err := json.Unmarshal(msg.Body, &cmd); err != nil {
 		return fmt.Errorf("failed to unmarshal send input command: %w", err)
 	}
-	log.Printf("Received send input command: session_id=%d, input_length=%d", cmd.SessionID, len(cmd.Input))
+	slog.Info("received send input command", "session_id", cmd.SessionID, "input_length", len(cmd.Input))
 	return c.handler.HandleSendInput(ctx, &cmd)
 }

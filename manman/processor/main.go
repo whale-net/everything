@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/manman/api/repository"
 	"github.com/whale-net/everything/manman/api/repository/postgres"
@@ -32,7 +33,7 @@ func run() error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Setup logger
+	// Setup structured logging
 	logLevel := slog.LevelInfo
 	switch cfg.LogLevel {
 	case "debug":
@@ -43,10 +44,15 @@ func run() error {
 		logLevel = slog.LevelError
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: logLevel,
-	}))
-	slog.SetDefault(logger)
+	logging.Configure(logging.Config{
+		ServiceName: "event-processor",
+		Domain:      "manmanv2",
+		Level:       logLevel,
+		JSONFormat:  true,
+	})
+	defer logging.Shutdown(context.Background())
+
+	logger := logging.Get("main")
 
 	logger.Info("starting event-processor",
 		"queue", cfg.QueueName,

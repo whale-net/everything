@@ -15,6 +15,7 @@ go_library(
     deps = [
         "//generated/go/manman:experience_api",
         "//libs/go/htmxauth",
+        "//libs/go/logging",
     ],
 )
 

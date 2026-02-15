@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/whale-net/everything/libs/go/docker"
 	grpcclient "github.com/whale-net/everything/libs/go/grpcclient"
+	"github.com/whale-net/everything/libs/go/logging"
 	rmqlib "github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/manman/host/rmq"
 	"github.com/whale-net/everything/manman/host/session"
@@ -21,13 +22,24 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		log.Fatalf("Fatal error: %v", err)
+		slog.Error("fatal error", "error", err)
+		os.Exit(1)
 	}
 }
 
 func run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Configure structured logging
+	logging.Configure(logging.Config{
+		ServiceName: "host-manager",
+		Domain:      "manmanv2",
+		JSONFormat:  getEnv("LOG_FORMAT", "json") == "json",
+	})
+	defer logging.Shutdown(ctx)
+
+	logger := logging.Get("main")
 
 	// Get configuration from environment
 	rabbitMQURL := getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
@@ -51,15 +63,15 @@ func run() error {
 	}
 
 	// Self-registration mode: Register with API and get server_id
-	log.Println("Starting ManManV2 Host Manager (self-registration mode)")
+	logger.Info("starting host manager (self-registration mode)")
 	serverID, err := selfRegister(ctx, apiAddress, serverName, environment, dockerSocket)
 	if err != nil {
 		return fmt.Errorf("failed to self-register: %w", err)
 	}
-	log.Printf("Successfully registered with control plane (server_id=%d)", serverID)
+	logger.Info("registered with control plane", "server_id", serverID)
 
 	// Initialize Docker client
-	log.Println("Connecting to Docker...")
+	logger.Info("connecting to Docker")
 	dockerClient, err := docker.NewClient(dockerSocket)
 	if err != nil {
 		return fmt.Errorf("failed to initialize Docker client: %w", err)
@@ -67,7 +79,7 @@ func run() error {
 	defer dockerClient.Close()
 
 	// Initialize RabbitMQ connection
-	log.Println("Connecting to RabbitMQ...")
+	logger.Info("connecting to RabbitMQ")
 	rmqConn, err := rmqlib.NewConnectionFromURL(rabbitMQURL)
 	if err != nil {
 		return fmt.Errorf("failed to connect to RabbitMQ: %w", err)
@@ -91,20 +103,20 @@ func run() error {
 	sessionManager := session.NewSessionManager(dockerClient, environment, hostDataDir, grpcClient, rmqPublisher)
 
 	// Recover orphaned sessions on startup
-	log.Println("Recovering orphaned sessions...")
+	logger.Info("recovering orphaned sessions")
 	if err := sessionManager.RecoverOrphanedSessions(ctx, serverID); err != nil {
-		log.Printf("Warning: Failed to recover some sessions: %v", err)
+		logger.Warn("failed to recover some sessions", "error", err)
 	}
 
 	// Publish initial host status and health
 	if err := rmqPublisher.PublishHostStatus(ctx, "online"); err != nil {
-		log.Printf("Warning: Failed to publish host status: %v", err)
+		logger.Warn("failed to publish host status", "error", err)
 	}
 
 	// Publish initial health with session stats
 	stats := sessionManager.GetSessionStats()
 	if err := rmqPublisher.PublishHealth(ctx, convertSessionStats(&stats)); err != nil {
-		log.Printf("Warning: Failed to publish initial health: %v", err)
+		logger.Warn("failed to publish initial health", "error", err)
 	}
 
 	// Initialize command handler
@@ -122,7 +134,7 @@ func run() error {
 	defer rmqConsumer.Close()
 
 	// Start consuming commands
-	log.Println("Starting command consumer...")
+	logger.Info("starting command consumer")
 	if err := rmqConsumer.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start consumer: %w", err)
 	}
@@ -140,7 +152,7 @@ func run() error {
 				// Get current session statistics
 				stats := sessionManager.GetSessionStats()
 				if err := rmqPublisher.PublishHealth(ctx, convertSessionStats(&stats)); err != nil {
-					log.Printf("Warning: Failed to publish health: %v", err)
+					logger.Warn("failed to publish health", "error", err)
 				}
 			}
 		}
@@ -157,7 +169,7 @@ func run() error {
 				return
 			case <-orphanCleanupTicker.C:
 				if err := sessionManager.CleanupOrphans(ctx, serverID); err != nil {
-					log.Printf("Warning: Orphan cleanup failed: %v", err)
+					logger.Warn("orphan cleanup failed", "error", err)
 				}
 			}
 		}
@@ -167,11 +179,11 @@ func run() error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	log.Println("ManManV2 Host Manager is running. Press Ctrl+C to stop.")
+	logger.Info("host manager is running")
 
 	// Wait for shutdown signal
 	<-sigCh
-	log.Println("Shutting down...")
+	logger.Info("shutting down")
 
 	// Publish offline status
 	_ = rmqPublisher.PublishHostStatus(ctx, "offline")
@@ -194,8 +206,12 @@ type CommandHandlerImpl struct {
 
 // HandleStartSession handles a start session command
 func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.StartSessionCommand) error {
-	log.Printf("[COMMAND] start_session: session_id=%d sgc_id=%d image=%s ports=%d volumes=%d force=%v",
-		cmd.SessionID, cmd.SGCID, cmd.GameConfig.Image, len(cmd.ServerGameConfig.PortBindings), len(cmd.GameConfig.Volumes), cmd.Force)
+	slog.Info("processing start session command",
+		"session_id", cmd.SessionID, "sgc_id", cmd.SGCID,
+		"image", cmd.GameConfig.Image,
+		"ports", len(cmd.ServerGameConfig.PortBindings),
+		"volumes", len(cmd.GameConfig.Volumes),
+		"force", cmd.Force)
 	
 	env := make([]string, 0, len(cmd.GameConfig.EnvTemplate))
 	for k, v := range cmd.GameConfig.EnvTemplate {
@@ -235,15 +251,16 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 	}
 
 	// Publish starting status before attempting container creation
+	slog.Info("publishing session status", "session_id", cmd.SessionID, "status", "starting")
 	if err := h.publisher.PublishSessionStatus(ctx, &rmq.SessionStatusUpdate{
 		SessionID: cmd.SessionID, SGCID: cmd.SGCID, Status: "starting",
 	}); err != nil {
-		log.Printf("[ERROR] failed to publish starting status for session %d: %v", cmd.SessionID, err)
+		slog.Error("failed to publish starting status", "session_id", cmd.SessionID, "error", err)
 		return fmt.Errorf("failed to publish starting status: %w", err)
 	}
 
 	if err := h.sessionManager.StartSession(ctx, sessionCmd); err != nil {
-		log.Printf("[ERROR] failed to start session %d: %v", cmd.SessionID, err)
+		slog.Error("failed to start session", "session_id", cmd.SessionID, "error", err)
 		_ = h.publisher.PublishSessionStatus(ctx, &rmq.SessionStatusUpdate{
 			SessionID: cmd.SessionID, SGCID: cmd.SGCID, Status: "crashed",
 		})
@@ -251,7 +268,7 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 		return &rmqlib.PermanentError{Err: fmt.Errorf("failed to start session: %w", err)}
 	}
 
-	log.Printf("[STATUS] session %d: starting → running", cmd.SessionID)
+	slog.Info("publishing session status", "session_id", cmd.SessionID, "status", "running")
 	return h.publisher.PublishSessionStatus(ctx, &rmq.SessionStatusUpdate{
 		SessionID: cmd.SessionID, SGCID: cmd.SGCID, Status: "running",
 	})
@@ -259,12 +276,12 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 
 // HandleStopSession handles a stop session command
 func (h *CommandHandlerImpl) HandleStopSession(ctx context.Context, cmd *rmq.StopSessionCommand) error {
-	log.Printf("[COMMAND] stop_session: session_id=%d force=%v", cmd.SessionID, cmd.Force)
+	slog.Info("processing stop session command", "session_id", cmd.SessionID, "force", cmd.Force)
 
 	// Get session state to retrieve SGCID before stopping
 	state, exists := h.sessionManager.GetSessionState(cmd.SessionID)
 	if !exists {
-		log.Printf("[host] session %d not found for stop command, marking as permanent error", cmd.SessionID)
+		slog.Warn("session not found for stop command", "session_id", cmd.SessionID)
 		return &rmqlib.PermanentError{Err: fmt.Errorf("session %d not found", cmd.SessionID)}
 	}
 	sgcID := state.SGCID
@@ -280,7 +297,7 @@ func (h *CommandHandlerImpl) HandleStopSession(ctx context.Context, cmd *rmq.Sto
 		// If session is not found, it means it's already stopped/removed (e.g. by StartSession failure)
 		// We should still publish "stopped" status to ensure lifecycle completion
 		if strings.Contains(err.Error(), "not found") {
-			log.Printf("Session %d not found during stop (race condition handled), proceeding to mark as stopped", cmd.SessionID)
+			slog.Info("session not found during stop, proceeding to mark as stopped", "session_id", cmd.SessionID)
 		} else {
 			return fmt.Errorf("failed to stop session: %w", err)
 		}
@@ -297,7 +314,7 @@ func (h *CommandHandlerImpl) HandleStopSession(ctx context.Context, cmd *rmq.Sto
 
 // HandleKillSession handles a kill session command
 func (h *CommandHandlerImpl) HandleKillSession(ctx context.Context, cmd *rmq.KillSessionCommand) error {
-	log.Printf("[COMMAND] kill_session: session_id=%d", cmd.SessionID)
+	slog.Info("processing kill session command", "session_id", cmd.SessionID)
 
 	if err := h.sessionManager.KillSession(ctx, cmd.SessionID); err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -321,7 +338,7 @@ func (h *CommandHandlerImpl) HandleSendInput(ctx context.Context, cmd *rmq.SendI
 	if len(inputPreview) > 50 {
 		inputPreview = inputPreview[:50] + "..."
 	}
-	log.Printf("[COMMAND] send_input: session_id=%d input=%q", cmd.SessionID, inputPreview)
+	slog.Info("processing send input command", "session_id", cmd.SessionID, "input_preview", inputPreview)
 
 	if err := h.sessionManager.SendInput(ctx, cmd.SessionID, cmd.Input); err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -359,7 +376,7 @@ func initializeGRPCClient(ctx context.Context, apiAddress string) (pb.ManManAPIC
 		// Retry connection with exponential backoff
 		backoff := 1 * time.Second
 		for i := 0; i < 5; i++ {
-			log.Printf("Failed to connect to API: %v. Retrying in %v...", err, backoff)
+			slog.Warn("failed to connect to API, retrying", "error", err, "backoff", backoff)
 			time.Sleep(backoff)
 			client, err = grpcclient.NewClientWithTLS(connCtx, apiAddress, tlsConfig)
 			if err == nil {
@@ -391,7 +408,7 @@ func selfRegister(ctx context.Context, apiAddress, serverName, environment, dock
 			// No environment specified - use hostname only
 			// If multiple managers on same host without environment, add UUID
 			serverName = fmt.Sprintf("%s-%s", hostname, uuid.New().String()[:8])
-			log.Printf("Warning: No ENVIRONMENT set. Consider setting it to avoid duplicate servers on restart.")
+			slog.Warn("no ENVIRONMENT set, consider setting it to avoid duplicate servers on restart")
 		}
 	}
 
@@ -433,7 +450,7 @@ func selfRegister(ctx context.Context, apiAddress, serverName, environment, dock
 		return 0, fmt.Errorf("registration failed: %w", err)
 	}
 
-	log.Printf("Registered as server '%s'", serverName)
+	slog.Info("registered as server", "server_name", serverName)
 	return resp.ServerId, nil
 }
 

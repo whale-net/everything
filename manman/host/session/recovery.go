@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
 
 	"github.com/whale-net/everything/manman"
@@ -11,7 +12,7 @@ import (
 // RecoverOrphanedSessions recovers sessions from existing game containers.
 // It looks for game containers directly — no wrapper involved.
 func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID int64) error {
-	fmt.Printf("Starting orphan recovery for server %d (env=%s)\n", serverID, sm.environment)
+	slog.Info("starting orphan recovery", "server_id", serverID, "environment", sm.environment)
 
 	// 1. Find all game containers. Filter by server_id and environment
 	gameFilters := map[string]string{
@@ -26,12 +27,12 @@ func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID 
 		return fmt.Errorf("failed to list game containers: %w", err)
 	}
 
-	fmt.Printf("Found %d game containers\n", len(games))
+	slog.Info("found game containers", "count", len(games))
 
 	for _, game := range games {
 		status, err := sm.dockerClient.GetContainerStatus(ctx, game.ID)
 		if err != nil {
-			fmt.Printf("Warning: Failed to get status for game container %s: %v\n", game.ID, err)
+			slog.Warn("failed to get status for game container", "container_id", game.ID, "error", err)
 			continue
 		}
 
@@ -54,14 +55,14 @@ func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID 
 		// Extract session ID and SGC ID from labels
 		sessionID, sgcID, err := extractIDsFromLabels(status.Labels)
 		if err != nil {
-			fmt.Printf("Warning: Could not extract IDs from game container %s: %v, removing\n", game.ID, err)
+			slog.Warn("could not extract IDs from game container, removing", "container_id", game.ID, "error", err)
 			_ = sm.dockerClient.RemoveContainer(ctx, game.ID, true)
 			continue
 		}
 
 		// Skip if already tracked in state manager
 		if _, exists := sm.stateManager.GetSession(sessionID); exists {
-			fmt.Printf("Session %d (SGC %d) already tracked, skipping\n", sessionID, sgcID)
+			slog.Debug("session already tracked, skipping", "session_id", sessionID, "sgc_id", sgcID)
 			continue
 		}
 
@@ -69,7 +70,7 @@ func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID 
 			// Re-attach to running game container
 			attachResp, err := sm.dockerClient.AttachToContainer(ctx, game.ID)
 			if err != nil {
-				fmt.Printf("Session %d: Failed to attach to running container %s: %v, removing\n", sessionID, game.ID, err)
+				slog.Warn("failed to attach to running container, removing", "session_id", sessionID, "container_id", game.ID, "error", err)
 				_ = sm.dockerClient.StopContainer(ctx, game.ID, nil)
 				_ = sm.dockerClient.RemoveContainer(ctx, game.ID, true)
 				continue
@@ -87,10 +88,10 @@ func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID 
 
 			sm.stateManager.AddSession(state)
 			sm.startOutputReader(state)
-			fmt.Printf("Session %d (SGC %d): Successfully recovered, re-attached\n", sessionID, sgcID)
+			slog.Info("session recovered", "session_id", sessionID, "sgc_id", sgcID)
 		} else {
 			// Not running — nothing to recover, remove it
-			fmt.Printf("Session %d (SGC %d): game container not running, removing\n", sessionID, sgcID)
+			slog.Info("game container not running, removing", "session_id", sessionID, "sgc_id", sgcID)
 			_ = sm.dockerClient.RemoveContainer(ctx, game.ID, true)
 		}
 	}
@@ -98,7 +99,7 @@ func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID 
 	// 2. Clean up orphaned networks
 	sm.cleanupOrphanedNetworks(ctx, serverID)
 
-	fmt.Println("Orphan recovery completed")
+	slog.Info("orphan recovery completed")
 	return nil
 }
 
@@ -129,5 +130,5 @@ func (sm *SessionManager) cleanupOrphanedNetworks(ctx context.Context, serverID 
 	// Note: Docker client may not support filtering networks by labels
 	// This is a placeholder - implementing network cleanup requires
 	// listing all networks and checking container membership
-	fmt.Printf("TODO: Implement network cleanup for server %d\n", serverID)
+	slog.Debug("TODO: implement network cleanup", "server_id", serverID)
 }
