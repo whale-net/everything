@@ -2,6 +2,23 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 package(default_visibility = ["//visibility:public"])
 
+# Integration test comparing kraken output against release_helper.
+# Requires both tools to be buildable and invokes bazel internally,
+# so it is tagged "integration" and excluded from normal test runs.
+sh_test(
+    name = "integration_test",
+    srcs = ["integration_test.sh"],
+    data = [
+        "//tools/kraken/cmd/kraken",
+        "//tools/release_helper:release_helper",
+    ],
+    tags = [
+        "integration",
+        "no-sandbox",
+    ],
+    size = "large",
+)
+
 go_library(
     name = "kraken_lib",
     srcs = [
