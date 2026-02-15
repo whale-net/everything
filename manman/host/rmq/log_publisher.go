@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -36,9 +37,8 @@ func (p *Publisher) PublishLogBatch(ctx context.Context, messages []LogMessage) 
 		// Use routing key specific to each session
 		routingKey := fmt.Sprintf("logs.session.%d", msg.SessionID)
 		if err := p.publisher.Publish(ctx, "manman", routingKey, msg); err != nil {
-			// Log the error but continue with other messages
-			// This is fire-and-forget, so we don't fail the entire batch
-			fmt.Printf("[log-publisher] failed to publish log for session %d: %v\n", msg.SessionID, err)
+			// Fire-and-forget: log the error but continue with other messages
+			slog.Warn("failed to publish log", "session_id", msg.SessionID, "error", err)
 		}
 	}
 	return nil

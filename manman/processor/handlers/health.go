@@ -129,9 +129,9 @@ func (h *HealthHandler) Handle(ctx context.Context, routingKey string, body []by
 		"routing_key", routingKey,
 	)
 
-	// Log session statistics if provided
+	// Log session statistics if provided (debug level — heartbeats are frequent)
 	if msg.SessionStats != nil {
-		h.logger.Info("session statistics",
+		h.logger.Debug("session statistics",
 			"server_id", msg.ServerID,
 			"total", msg.SessionStats.Total,
 			"running", msg.SessionStats.Running,

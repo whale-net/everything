@@ -3,6 +3,7 @@ package rmq
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/whale-net/everything/libs/go/rmq"
 )
@@ -33,12 +34,16 @@ func (p *Publisher) PublishHostStatus(ctx context.Context, status string) error 
 		Status:   status,
 	}
 	routingKey := fmt.Sprintf("status.host.%d", p.serverID)
+	slog.Info("publishing host status event", "server_id", p.serverID, "status", status, "routing_key", routingKey)
 	return p.publisher.Publish(ctx, "manman", routingKey, update)
 }
 
 // PublishSessionStatus publishes a session status update
 func (p *Publisher) PublishSessionStatus(ctx context.Context, update *SessionStatusUpdate) error {
 	routingKey := fmt.Sprintf("status.session.%d", update.SessionID)
+	slog.Info("publishing session status event",
+		"session_id", update.SessionID, "sgc_id", update.SGCID,
+		"status", update.Status, "routing_key", routingKey)
 	return p.publisher.Publish(ctx, "manman", routingKey, update)
 }
 
@@ -49,6 +54,7 @@ func (p *Publisher) PublishHealth(ctx context.Context, stats *SessionStats) erro
 		SessionStats: stats,
 	}
 	routingKey := fmt.Sprintf("health.host.%d", p.serverID)
+	slog.Debug("publishing health heartbeat", "server_id", p.serverID, "routing_key", routingKey)
 	return p.publisher.Publish(ctx, "manman", routingKey, update)
 }
 

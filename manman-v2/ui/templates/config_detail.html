@@ -217,38 +217,104 @@
     <div class="card-header">
         <div class="card-title">Environment Variables</div>
     </div>
-    <form method="POST" action="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/update-env" style="margin-bottom: 1rem;">
-        <div class="form-group">
-            <label for="env_template_json">Edit Env Template (JSON)</label>
-            <textarea id="env_template_json" name="env_template_json" rows="6">{{toJSONEmpty .Config.EnvTemplate}}</textarea>
-            <small style="color: #666;">JSON object of key/value pairs</small>
+    <form id="env-form" method="POST" action="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/update-env">
+        <input type="hidden" id="env_template_json" name="env_template_json" value="">
+        <table id="env-table" style="margin-bottom: 0.75rem;">
+            <thead>
+                <tr>
+                    <th>Key</th>
+                    <th>Value</th>
+                    <th style="width: 40px;"></th>
+                </tr>
+            </thead>
+            <tbody id="env-rows">
+                {{range $key, $value := .Config.EnvTemplate}}
+                <tr class="env-row">
+                    <td><input type="text" class="env-key" value="{{$key}}" placeholder="KEY" style="font-family: monospace; font-size: 0.85rem;"></td>
+                    <td><input type="text" class="env-val" value="{{$value}}" placeholder="value" style="font-family: monospace; font-size: 0.85rem;"></td>
+                    <td><button type="button" class="btn btn-danger btn-sm env-remove" title="Remove">&times;</button></td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+        <div style="display: flex; gap: 0.5rem;">
+            <button type="button" id="env-add-row" class="btn btn-secondary btn-sm">+ Add Variable</button>
+            <button type="submit" class="btn btn-success btn-sm">Save</button>
         </div>
-        <button type="submit" class="btn btn-success">Save Env Template</button>
     </form>
-    
-    {{if .Config.EnvTemplate}}
-    <table>
-        <thead>
-            <tr>
-                <th>Key</th>
-                <th>Value</th>
-            </tr>
-        </thead>
-        <tbody>
-            {{range $key, $value := .Config.EnvTemplate}}
-            <tr>
-                <td><code>{{$key}}</code></td>
-                <td><code>{{$value}}</code></td>
-            </tr>
-            {{end}}
-        </tbody>
-    </table>
-    {{else}}
-    <div class="empty-state">
-        <p>No environment variables defined.</p>
-    </div>
-    {{end}}
 </div>
+
+<script>
+(function() {
+    const tbody = document.getElementById('env-rows');
+    const form = document.getElementById('env-form');
+    const hiddenInput = document.getElementById('env_template_json');
+
+    function createRow(key, val) {
+        const tr = document.createElement('tr');
+        tr.className = 'env-row';
+
+        const tdKey = document.createElement('td');
+        const inputKey = document.createElement('input');
+        inputKey.type = 'text';
+        inputKey.className = 'env-key';
+        inputKey.placeholder = 'KEY';
+        inputKey.style.cssText = 'font-family: monospace; font-size: 0.85rem;';
+        inputKey.value = key || '';
+        tdKey.appendChild(inputKey);
+
+        const tdVal = document.createElement('td');
+        const inputVal = document.createElement('input');
+        inputVal.type = 'text';
+        inputVal.className = 'env-val';
+        inputVal.placeholder = 'value';
+        inputVal.style.cssText = 'font-family: monospace; font-size: 0.85rem;';
+        inputVal.value = val || '';
+        tdVal.appendChild(inputVal);
+
+        const tdBtn = document.createElement('td');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-danger btn-sm env-remove';
+        btn.title = 'Remove';
+        btn.textContent = '\u00d7';
+        tdBtn.appendChild(btn);
+
+        tr.appendChild(tdKey);
+        tr.appendChild(tdVal);
+        tr.appendChild(tdBtn);
+        tbody.appendChild(tr);
+    }
+
+    document.getElementById('env-add-row').onclick = function() {
+        createRow('', '');
+        // Focus the new key input
+        const rows = tbody.querySelectorAll('.env-row');
+        rows[rows.length - 1].querySelector('.env-key').focus();
+    };
+
+    tbody.addEventListener('click', function(e) {
+        if (e.target.classList.contains('env-remove')) {
+            e.target.closest('tr').remove();
+        }
+    });
+
+    form.addEventListener('submit', function() {
+        const obj = {};
+        tbody.querySelectorAll('.env-row').forEach(function(row) {
+            const key = row.querySelector('.env-key').value.trim();
+            const val = row.querySelector('.env-val').value;
+            if (key) obj[key] = val;
+        });
+        hiddenInput.value = JSON.stringify(obj);
+    });
+
+    // If no rows exist, show an empty row to hint at the UI
+    if (tbody.children.length === 0) {
+        createRow('', '');
+    }
+})();
+</script>
 
 <div class="card">
     <div class="card-header">

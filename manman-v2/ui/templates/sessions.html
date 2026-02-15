@@ -15,8 +15,13 @@
                 <input type="text" id="status" name="status" value="{{.StatusFilter}}" placeholder="running, stopped, crashed">
             </div>
             <div class="form-group">
-                <label for="server_game_config_id">Server Game Config ID</label>
-                <input type="text" id="server_game_config_id" name="server_game_config_id" value="{{.ServerGameConfigID}}" placeholder="Optional">
+                <label for="server_game_config_id">Server Game Config</label>
+                <select id="server_game_config_id" name="server_game_config_id">
+                    <option value="">All configs</option>
+                    {{range .SGCOptions}}
+                    <option value="{{.ServerGameConfigId}}" {{if eq (printf "%d" .ServerGameConfigId) $.ServerGameConfigID}}selected{{end}}>{{.DisplayName}}</option>
+                    {{end}}
+                </select>
             </div>
             <div class="form-group" style="display: flex; align-items: center;">
                 <label style="margin-right: 0.5rem;">
@@ -77,8 +82,8 @@
                             hx-target="#session-start-warning"
                             hx-include="[name='server_id']">
                         <option value="">Select a config</option>
-                        {{range .ServerConfigs}}
-                        <option value="{{.ServerGameConfigId}}">Config #{{.GameConfigId}} (SGC {{.ServerGameConfigId}})</option>
+                        {{range .SGCOptions}}
+                        <option value="{{.ServerGameConfigId}}">{{.DisplayName}}</option>
                         {{end}}
                     </select>
                     <small style="color: #666;">Only configs for the selected server</small>
@@ -116,7 +121,7 @@
             <tbody>
                 {{range .ServerConfigs}}
                 <tr>
-                    <td>SGC {{.ServerGameConfigId}} (GameConfig {{.GameConfigId}})</td>
+                    <td>{{sgcName $.SGCDisplayNames .ServerGameConfigId}}</td>
                     <td>{{.Status}}</td>
                     <td>
                         {{if $.LiveSessionByConfig}}
@@ -138,16 +143,15 @@
 </div>
 
 {{if .Sessions}}
-<div class="card">
+<div class="card" style="padding: 0;">
     <table>
         <thead>
             <tr>
-                <th>Session ID</th>
+                <th>ID</th>
                 <th>Status</th>
-                <th>Server Game Config</th>
+                <th>Config</th>
                 <th>Started</th>
                 <th>Ended</th>
-                <th>Actions</th>
             </tr>
         </thead>
         <tbody>
@@ -155,12 +159,9 @@
             <tr>
                 <td><a href="/sessions/{{.SessionId}}">{{.SessionId}}</a></td>
                 <td><span class="badge {{statusBadge .Status}}">{{.Status}}</span></td>
-                <td>{{.ServerGameConfigId}}</td>
+                <td>{{sgcName $.SGCDisplayNames .ServerGameConfigId}}</td>
                 <td>{{timeAgo .StartedAt}}</td>
                 <td>{{timeAgo .EndedAt}}</td>
-                <td>
-                    <a href="/sessions/{{.SessionId}}" class="btn btn-sm btn-primary">View</a>
-                </td>
             </tr>
             {{end}}
         </tbody>

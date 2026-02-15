@@ -2,7 +2,7 @@ package config
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,13 +12,13 @@ import (
 
 // Renderer handles configuration strategy rendering
 type Renderer struct {
-	logger *log.Logger
+	logger *slog.Logger
 }
 
 // NewRenderer creates a new configuration renderer
-func NewRenderer(logger *log.Logger) *Renderer {
+func NewRenderer(logger *slog.Logger) *Renderer {
 	if logger == nil {
-		logger = log.Default()
+		logger = slog.Default()
 	}
 	return &Renderer{
 		logger: logger,
@@ -43,17 +43,17 @@ type RenderedFile struct {
 
 // RenderConfigurations renders all configuration strategies from API response
 func (r *Renderer) RenderConfigurations(configurations []*pb.RenderedConfiguration, baseDataDir string) ([]*RenderedFile, error) {
-	r.logger.Printf("[config-renderer] Starting configuration rendering for %d configurations", len(configurations))
+	r.logger.Info("starting configuration rendering", "count", len(configurations))
 
 	if len(configurations) == 0 {
-		r.logger.Printf("[config-renderer] No configurations to render")
+		r.logger.Debug("no configurations to render")
 		return nil, nil
 	}
 
 	var renderedFiles []*RenderedFile
 
 	for _, config := range configurations {
-		r.logger.Printf("[config-renderer] Processing configuration: %s (type: %s)", config.StrategyName, config.StrategyType)
+		r.logger.Info("processing configuration", "strategy_name", config.StrategyName, "strategy_type", config.StrategyType)
 
 		// Render based on strategy type
 		switch config.StrategyType {
@@ -67,34 +67,30 @@ func (r *Renderer) RenderConfigurations(configurations []*pb.RenderedConfigurati
 			}
 
 		case "env_vars":
-			// TODO: Implement env vars rendering
-			r.logger.Printf("[config-renderer] Env vars rendering not yet implemented for: %s", config.StrategyName)
+			r.logger.Warn("env vars rendering not yet implemented", "strategy_name", config.StrategyName)
 
 		case "cli_args":
-			// TODO: Implement CLI args rendering
-			r.logger.Printf("[config-renderer] CLI args rendering not yet implemented for: %s", config.StrategyName)
+			r.logger.Warn("CLI args rendering not yet implemented", "strategy_name", config.StrategyName)
 
 		case "file_json":
-			// TODO: Implement JSON file rendering
-			r.logger.Printf("[config-renderer] JSON file rendering not yet implemented for: %s", config.StrategyName)
+			r.logger.Warn("JSON file rendering not yet implemented", "strategy_name", config.StrategyName)
 
 		case "file_yaml":
-			// TODO: Implement YAML file rendering
-			r.logger.Printf("[config-renderer] YAML file rendering not yet implemented for: %s", config.StrategyName)
+			r.logger.Warn("YAML file rendering not yet implemented", "strategy_name", config.StrategyName)
 
 		default:
-			r.logger.Printf("[config-renderer] Unknown strategy type: %s for: %s", config.StrategyType, config.StrategyName)
+			r.logger.Warn("unknown strategy type", "strategy_type", config.StrategyType, "strategy_name", config.StrategyName)
 		}
 	}
 
-	r.logger.Printf("[config-renderer] Rendered %d configuration files", len(renderedFiles))
+	r.logger.Info("rendered configuration files", "count", len(renderedFiles))
 	return renderedFiles, nil
 }
 
 // WriteRenderedFiles writes all rendered files to disk
 func (r *Renderer) WriteRenderedFiles(files []*RenderedFile) error {
 	for _, file := range files {
-		r.logger.Printf("[config-renderer] Writing file: %s", file.HostPath)
+		r.logger.Info("writing file", "path", file.HostPath)
 
 		// Ensure parent directory exists
 		dir := filepath.Dir(file.HostPath)
@@ -107,7 +103,7 @@ func (r *Renderer) WriteRenderedFiles(files []*RenderedFile) error {
 			return fmt.Errorf("failed to write file %s: %w", file.HostPath, err)
 		}
 
-		r.logger.Printf("[config-renderer] Successfully wrote file: %s (%d bytes)", file.HostPath, len(file.Content))
+		r.logger.Debug("wrote file", "path", file.HostPath, "bytes", len(file.Content))
 	}
 
 	return nil
@@ -130,29 +126,26 @@ func (r *Renderer) renderPropertiesFileFromConfig(config *pb.RenderedConfigurati
 	// 1. base_template provided (BaseContent non-empty): Use it as starting point
 	// 2. base_template empty: Read existing file and merge (for auto-generating games)
 	if config.BaseContent != "" {
-		r.logger.Printf("[config-renderer] Using base template for %s", config.StrategyName)
+		r.logger.Debug("using base template", "strategy_name", config.StrategyName)
 		properties = parsePropertiesFile(config.BaseContent)
 	} else {
-		r.logger.Printf("[config-renderer] Base template empty, checking for existing file: %s", hostPath)
-		// Try to read existing file
+		r.logger.Debug("base template empty, checking for existing file", "path", hostPath)
 		existingContent, err := os.ReadFile(hostPath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				r.logger.Printf("[config-renderer] No existing file found, starting with empty properties")
+				r.logger.Debug("no existing file found, starting with empty properties")
 				properties = make(map[string]string)
 			} else {
 				return nil, fmt.Errorf("failed to read existing file %s: %w", hostPath, err)
 			}
 		} else {
-			r.logger.Printf("[config-renderer] Read existing file (%d bytes), merging changes", len(existingContent))
+			r.logger.Debug("read existing file, merging changes", "bytes", len(existingContent))
 			properties = parsePropertiesFile(string(existingContent))
 		}
 	}
 
-	// Apply overrides from rendered content (parameter bindings, patches)
-	// If RenderedContent has values, they override the base/existing
 	if config.RenderedContent != "" && config.RenderedContent != config.BaseContent {
-		r.logger.Printf("[config-renderer] Applying overrides from rendered content")
+		r.logger.Debug("applying overrides from rendered content")
 		overrides := parsePropertiesFile(config.RenderedContent)
 		for key, value := range overrides {
 			properties[key] = value

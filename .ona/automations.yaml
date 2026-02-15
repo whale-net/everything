@@ -1,4 +1,18 @@
 tasks:
+  setup-bazel:
+    name: Install Bazel
+    description: Install Bazelisk which manages the correct Bazel version from .bazelversion.
+    command: |
+      if command -v bazel &> /dev/null; then
+        echo "Bazel already installed"
+      else
+        sudo curl -fsSL -o /usr/local/bin/bazel https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
+        sudo chmod +x /usr/local/bin/bazel
+      fi
+      bazel --version
+    triggeredBy:
+      - postDevcontainerStart
+
   setup-python:
     name: Setup Python venv
     description: Create Python virtual environment with uv and sync dependencies. Also symlinks python3 to /usr/bin for Bazel sandbox compatibility.
