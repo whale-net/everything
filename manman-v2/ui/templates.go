@@ -114,7 +114,7 @@ func timeAgo(timestamp int64) string {
 }
 
 func formatDuration(value int, unit string) string {
-	return time.Duration(value).String() + " " + unit + "s ago"
+	return fmt.Sprintf("%d %ss ago", value, unit)
 }
 
 func statusBadge(status string) string {
