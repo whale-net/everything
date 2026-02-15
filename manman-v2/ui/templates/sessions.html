@@ -121,7 +121,7 @@
             <tbody>
                 {{range .ServerConfigs}}
                 <tr>
-                    <td>{{if $.SGCDisplayNames}}{{index $.SGCDisplayNames .ServerGameConfigId}}{{else}}SGC {{.ServerGameConfigId}}{{end}}</td>
+                    <td>{{sgcName $.SGCDisplayNames .ServerGameConfigId}}</td>
                     <td>{{.Status}}</td>
                     <td>
                         {{if $.LiveSessionByConfig}}
@@ -143,16 +143,15 @@
 </div>
 
 {{if .Sessions}}
-<div class="card">
+<div class="card" style="padding: 0;">
     <table>
         <thead>
             <tr>
-                <th>Session ID</th>
+                <th>ID</th>
                 <th>Status</th>
-                <th>Server Game Config</th>
+                <th>Config</th>
                 <th>Started</th>
                 <th>Ended</th>
-                <th>Actions</th>
             </tr>
         </thead>
         <tbody>
@@ -160,12 +159,9 @@
             <tr>
                 <td><a href="/sessions/{{.SessionId}}">{{.SessionId}}</a></td>
                 <td><span class="badge {{statusBadge .Status}}">{{.Status}}</span></td>
-                <td>{{if $.SGCDisplayNames}}{{index $.SGCDisplayNames .ServerGameConfigId}}{{else}}{{.ServerGameConfigId}}{{end}}</td>
+                <td>{{sgcName $.SGCDisplayNames .ServerGameConfigId}}</td>
                 <td>{{timeAgo .StartedAt}}</td>
                 <td>{{timeAgo .EndedAt}}</td>
-                <td>
-                    <a href="/sessions/{{.SessionId}}" class="btn btn-sm btn-primary">View</a>
-                </td>
             </tr>
             {{end}}
         </tbody>

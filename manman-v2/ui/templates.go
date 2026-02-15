@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"log"
 	"time"
@@ -32,11 +33,12 @@ func init() {
 	
 	// Create function map for template helpers
 	funcMap := template.FuncMap{
-		"formatTime": formatTime,
-		"timeAgo":    timeAgo,
+		"formatTime":  formatTime,
+		"timeAgo":     timeAgo,
 		"statusBadge": statusBadge,
-		"toJSON":     toJSON,
+		"toJSON":      toJSON,
 		"toJSONEmpty": toJSONEmpty,
+		"sgcName":     sgcName,
 	}
 	
 	templates, err = template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/*.html", "templates/partials/*.html")
@@ -128,4 +130,14 @@ func statusBadge(status string) string {
 	default:
 		return "badge-secondary"
 	}
+}
+
+// sgcName looks up a display name from the map, falling back to "SGC {id}".
+func sgcName(names map[int64]string, id int64) string {
+	if names != nil {
+		if name, ok := names[id]; ok && name != "" {
+			return name
+		}
+	}
+	return fmt.Sprintf("SGC %d", id)
 }
