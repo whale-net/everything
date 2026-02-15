@@ -1,130 +1,32 @@
 {{define "actions_manage_content"}}
-<div class="action-bar">
-    <h1>Manage Actions - {{.EntityName}}</h1>
-    <div>
-        <button class="btn btn-primary btn-sm" @click="showCreateForm = true" x-data="{showCreateForm: false}">
-            <i class="fa fa-plus"></i> New Action
-        </button>
-    </div>
-</div>
-
 <!-- Alpine.js Action Management App -->
 <div x-data="actionManager()" x-init="init()">
 
-    <!-- Local Actions (Defined at this level) -->
-    <div class="card">
-        <div class="card-header">
-            <div class="card-title">Actions Defined at This Level</div>
-        </div>
-        <div class="card-body">
-            {{if .LocalActions}}
-            <div class="table-container">
-                <table class="table">
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Label</th>
-                            <th>Group</th>
-                            <th>Command Template</th>
-                            <th>Enabled</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {{range .LocalActions}}
-                        <tr>
-                            <td><code>{{.Action.Name}}</code></td>
-                            <td>
-                                {{if .Action.Icon}}<i class="{{.Action.Icon}}"></i> {{end}}
-                                {{.Action.Label}}
-                            </td>
-                            <td>{{if .Action.GroupName}}{{.Action.GroupName}}{{else}}-{{end}}</td>
-                            <td><code style="font-size: 0.85em;">{{.Action.CommandTemplate}}</code></td>
-                            <td>
-                                {{if .Action.Enabled}}
-                                <span class="badge badge-success">Yes</span>
-                                {{else}}
-                                <span class="badge badge-secondary">No</span>
-                                {{end}}
-                            </td>
-                            <td>
-                                <button class="btn btn-sm btn-secondary"
-                                        @click="editAction({{.Action.ActionId}})">
-                                    Edit
-                                </button>
-                                <button class="btn btn-sm btn-danger"
-                                        @click="deleteAction({{.Action.ActionId}}, '{{.Action.Label}}')">
-                                    Delete
-                                </button>
-                            </td>
-                        </tr>
-                        {{end}}
-                    </tbody>
-                </table>
-            </div>
-            {{else}}
-            <p class="text-muted">No actions defined at this level yet. Click "New Action" to create one.</p>
-            {{end}}
+    <div class="action-bar">
+        <h1>Manage Actions - {{.EntityName}}</h1>
+        <div>
+            <button class="btn btn-primary btn-sm" @click="showForm = true; editMode = false; resetForm()">
+                <i class="fa fa-plus"></i> New Action
+            </button>
         </div>
     </div>
 
-    <!-- Inherited Actions (From parent levels) -->
-    {{if .InheritedActions}}
-    <div class="card" style="margin-top: 2rem;">
-        <div class="card-header">
-            <div class="card-title">Inherited Actions (Read-Only)</div>
-        </div>
-        <div class="card-body">
-            <p class="text-muted" style="margin-bottom: 1rem;">
-                <i class="fa fa-info-circle"></i> These actions are defined at parent levels (game or config) and cannot be edited here.
-            </p>
-            <div class="table-container">
-                <table class="table">
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Label</th>
-                            <th>Level</th>
-                            <th>Group</th>
-                            <th>Command Template</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {{range .InheritedActions}}
-                        <tr style="opacity: 0.6;">
-                            <td><code>{{.Action.Name}}</code></td>
-                            <td>
-                                {{if .Action.Icon}}<i class="{{.Action.Icon}}"></i> {{end}}
-                                {{.Action.Label}}
-                            </td>
-                            <td>
-                                <span class="badge badge-info">
-                                    {{if eq .Action.DefinitionLevel "game"}}Game{{end}}
-                                    {{if eq .Action.DefinitionLevel "game_config"}}Config{{end}}
-                                    {{if eq .Action.DefinitionLevel "server_game_config"}}SGC{{end}}
-                                </span>
-                            </td>
-                            <td>{{if .Action.GroupName}}{{.Action.GroupName}}{{else}}-{{end}}</td>
-                            <td><code style="font-size: 0.85em;">{{.Action.CommandTemplate}}</code></td>
-                        </tr>
-                        {{end}}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-    {{end}}
-
-    <!-- Create/Edit Action Modal -->
+    <!-- Create/Edit Form (Inline, Expandable) -->
     <div x-show="showForm"
-         x-transition
-         @click.away="closeForm()"
-         style="position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000;">
-        <div @click.stop class="card" style="width: 90%; max-width: 900px; max-height: 90vh; overflow-y: auto;">
-            <div class="card-header">
-                <div class="card-title" x-text="editMode ? 'Edit Action' : 'Create Action'"></div>
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0 transform scale-95"
+         x-transition:enter-end="opacity-100 transform scale-100"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100 transform scale-100"
+         x-transition:leave-end="opacity-0 transform scale-95"
+         style="margin-bottom: 2rem;"
+         x-cloak>
+
+        <div class="card" style="border: 2px solid #4CAF50;">
+            <div class="card-header" style="background: #f0f9ff; display: flex; justify-content: space-between; align-items: center;">
+                <div class="card-title" x-text="editMode ? 'Edit Action' : 'Create New Action'" style="margin: 0;"></div>
                 <button @click="closeForm()" class="btn btn-sm btn-secondary">
-                    <i class="fa fa-times"></i>
+                    <i class="fa fa-times"></i> Cancel
                 </button>
             </div>
             <form @submit.prevent="submitForm()" class="card-body">
@@ -430,7 +332,111 @@
             </form>
         </div>
     </div>
-</div>
+
+    <!-- Local Actions (Defined at this level) -->
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title">Actions Defined at This Level</div>
+        </div>
+        <div class="card-body">
+            {{if .LocalActions}}
+            <div class="table-container">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Label</th>
+                            <th>Group</th>
+                            <th>Command Template</th>
+                            <th>Enabled</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .LocalActions}}
+                        <tr>
+                            <td><code>{{.Action.Name}}</code></td>
+                            <td>
+                                {{if .Action.Icon}}<i class="{{.Action.Icon}}"></i> {{end}}
+                                {{.Action.Label}}
+                            </td>
+                            <td>{{if .Action.GroupName}}{{.Action.GroupName}}{{else}}-{{end}}</td>
+                            <td><code style="font-size: 0.85em;">{{.Action.CommandTemplate}}</code></td>
+                            <td>
+                                {{if .Action.Enabled}}
+                                <span class="badge badge-success">Yes</span>
+                                {{else}}
+                                <span class="badge badge-secondary">No</span>
+                                {{end}}
+                            </td>
+                            <td>
+                                <button class="btn btn-sm btn-secondary"
+                                        @click="editAction({{.Action.ActionId}})">
+                                    Edit
+                                </button>
+                                <button class="btn btn-sm btn-danger"
+                                        @click="deleteAction({{.Action.ActionId}}, '{{.Action.Label}}')">
+                                    Delete
+                                </button>
+                            </td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{else}}
+            <p class="text-muted">No actions defined at this level yet. Click "New Action" to create one.</p>
+            {{end}}
+        </div>
+    </div>
+
+    <!-- Inherited Actions (From parent levels) -->
+    {{if .InheritedActions}}
+    <div class="card" style="margin-top: 2rem;">
+        <div class="card-header">
+            <div class="card-title">Inherited Actions (Read-Only)</div>
+        </div>
+        <div class="card-body">
+            <p class="text-muted" style="margin-bottom: 1rem;">
+                <i class="fa fa-info-circle"></i> These actions are defined at parent levels (game or config) and cannot be edited here.
+            </p>
+            <div class="table-container">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Label</th>
+                            <th>Level</th>
+                            <th>Group</th>
+                            <th>Command Template</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .InheritedActions}}
+                        <tr style="opacity: 0.6;">
+                            <td><code>{{.Action.Name}}</code></td>
+                            <td>
+                                {{if .Action.Icon}}<i class="{{.Action.Icon}}"></i> {{end}}
+                                {{.Action.Label}}
+                            </td>
+                            <td>
+                                <span class="badge badge-info">
+                                    {{if eq .Action.DefinitionLevel "game"}}Game{{end}}
+                                    {{if eq .Action.DefinitionLevel "game_config"}}Config{{end}}
+                                    {{if eq .Action.DefinitionLevel "server_game_config"}}SGC{{end}}
+                                </span>
+                            </td>
+                            <td>{{if .Action.GroupName}}{{.Action.GroupName}}{{else}}-{{end}}</td>
+                            <td><code style="font-size: 0.85em;">{{.Action.CommandTemplate}}</code></td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {{end}}
+
 
 <!-- Alpine.js Component -->
 <script>
@@ -615,6 +621,11 @@ function actionManager() {
 </script>
 
 <style>
+/* Alpine.js cloak - hide elements before initialization */
+[x-cloak] {
+    display: none !important;
+}
+
 .form-section {
     margin-bottom: 2rem;
     padding-bottom: 2rem;
