@@ -1,0 +1,28 @@
+{{if .Sessions}}
+<div class="session-panels">
+    {{range .Sessions}}
+    <a href="/sessions/{{.SessionID}}" class="session-panel">
+        <div class="session-panel-header">
+            <span class="badge {{statusBadge .Status}}">{{.Status}}</span>
+            <span class="session-uptime">{{.Uptime}}</span>
+        </div>
+        <div class="session-panel-game">{{.GameName}}</div>
+        <div class="session-panel-config">{{.ConfigName}}</div>
+        <div class="session-panel-meta">
+            <span class="session-panel-server">{{.ServerName}}</span>
+        </div>
+        {{if .Ports}}
+        <div class="session-panel-ports">
+            {{range .Ports}}
+            <span class="session-port">{{.HostPort}}/{{.Protocol}}</span>
+            {{end}}
+        </div>
+        {{end}}
+    </a>
+    {{end}}
+</div>
+{{else}}
+<div class="empty-state">
+    <p>No active sessions.</p>
+</div>
+{{end}}

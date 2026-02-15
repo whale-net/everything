@@ -202,6 +202,7 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 
 	// API endpoints for HTMX partial updates
 	mux.HandleFunc("/api/dashboard-summary", app.auth.RequireAuthFunc(app.handleDashboardSummary))
+	mux.HandleFunc("/api/dashboard-sessions", app.auth.RequireAuthFunc(app.handleDashboardSessions))
 }
 
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {

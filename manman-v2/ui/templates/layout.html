@@ -150,9 +150,9 @@
         /* Badges */
         .badge {
             display: inline-block;
-            padding: 0.25rem 0.75rem;
-            border-radius: 12px;
-            font-size: 0.85rem;
+            padding: 0.15rem 0.5rem;
+            border-radius: 10px;
+            font-size: 0.75rem;
             font-weight: 500;
         }
         
@@ -180,10 +180,11 @@
         table {
             width: 100%;
             border-collapse: collapse;
+            font-size: 0.875rem;
         }
         
         th, td {
-            padding: 0.75rem;
+            padding: 0.4rem 0.6rem;
             text-align: left;
             border-bottom: 1px solid #eee;
         }
@@ -191,6 +192,10 @@
         th {
             background: #f8f9fa;
             font-weight: 600;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            color: #6b7280;
+            letter-spacing: 0.03em;
         }
         
         tr:hover {
@@ -344,18 +349,95 @@
             align-items: center;
             margin-bottom: 1.5rem;
         }
+        
+        /* Session panels */
+        .session-panels {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        
+        .session-panel {
+            background: white;
+            border-radius: 8px;
+            padding: 1rem 1.25rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            width: calc(50% - 0.5rem);
+            text-decoration: none;
+            color: inherit;
+            transition: box-shadow 0.2s, transform 0.15s;
+            display: block;
+        }
+        
+        .session-panel:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            transform: translateY(-1px);
+        }
+        
+        .session-panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+        
+        .session-uptime {
+            font-size: 0.8rem;
+            color: #7f8c8d;
+        }
+        
+        .session-panel-game {
+            font-weight: 600;
+            font-size: 1.05rem;
+            color: #1f2937;
+            margin-bottom: 0.15rem;
+        }
+        
+        .session-panel-config {
+            font-size: 0.85rem;
+            color: #6b7280;
+            margin-bottom: 0.5rem;
+        }
+        
+        .session-panel-meta {
+            font-size: 0.8rem;
+            color: #7f8c8d;
+        }
+        
+        .session-panel-ports {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+            margin-top: 0.5rem;
+        }
+        
+        .session-port {
+            display: inline-block;
+            background: #eef2ff;
+            color: #4338ca;
+            padding: 0.1rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-family: monospace;
+        }
+        
+        @media (max-width: 768px) {
+            .session-panel {
+                width: 100%;
+            }
+        }
     </style>
 </head>
 <body>
     <nav>
-        <div class="container" style="display: flex; align-items: center;">
+        <div class="container">
             <div class="logo">ManManV2</div>
-            <ul style="flex: 1;">
+            <ul>
                 <li><a href="/" class="{{if eq .Active "home"}}active{{end}}">Dashboard</a></li>
                 <li><a href="/servers" class="{{if eq .Active "servers"}}active{{end}}">Servers</a></li>
                 <li><a href="/games" class="{{if eq .Active "games"}}active{{end}}">Games</a></li>
                 <li><a href="/sessions" class="{{if eq .Active "sessions"}}active{{end}}">Sessions</a></li>
-                <li><a href="/docs/config-strategies" class="{{if eq .Active "docs"}}active{{end}}">Docs</a></li>
                 {{if .User}}
                 <li><a href="/auth/logout">Logout ({{.User.Name}})</a></li>
                 {{end}}

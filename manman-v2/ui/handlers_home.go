@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	manmanpb "github.com/whale-net/everything/manman/protos"
 )
 
 // HomePageData holds data for the home page
@@ -96,6 +99,152 @@ func (app *App) handleDashboardSummary(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
+}
+
+// PortInfo holds resolved port binding data for templates.
+type PortInfo struct {
+	HostPort int32
+	Protocol string
+}
+
+// ActiveSessionInfo holds enriched session data for the dashboard.
+type ActiveSessionInfo struct {
+	SessionID  int64
+	Status     string
+	Uptime     string
+	ServerName string
+	GameName   string
+	ConfigName string
+	Ports      []PortInfo
+}
+
+// DashboardSessionsData holds the list of active sessions for the dashboard partial.
+type DashboardSessionsData struct {
+	Sessions []ActiveSessionInfo
+}
+
+func (app *App) handleDashboardSessions(w http.ResponseWriter, r *http.Request) {
+	ctx := context.Background()
+
+	sessions, err := app.grpc.ListSessions(ctx, true) // live only
+	if err != nil {
+		log.Printf("Error fetching sessions: %v", err)
+		http.Error(w, "Failed to fetch sessions", http.StatusInternalServerError)
+		return
+	}
+
+	// Build lookup maps for related entities
+	servers, err := app.grpc.ListServers(ctx)
+	if err != nil {
+		log.Printf("Error fetching servers: %v", err)
+		servers = []*manmanpb.Server{}
+	}
+	serverByID := make(map[int64]*manmanpb.Server, len(servers))
+	for _, s := range servers {
+		serverByID[s.ServerId] = s
+	}
+
+	// Resolve SGCs by fetching configs per server
+	sgcByID := make(map[int64]*manmanpb.ServerGameConfig)
+	for _, server := range servers {
+		sgcs, err := app.grpc.ListServerGameConfigs(ctx, server.ServerId)
+		if err != nil {
+			log.Printf("Error fetching SGCs for server %d: %v", server.ServerId, err)
+			continue
+		}
+		for _, sgc := range sgcs {
+			sgcByID[sgc.ServerGameConfigId] = sgc
+		}
+	}
+
+	// Resolve game configs and games
+	gameConfigByID := make(map[int64]*manmanpb.GameConfig)
+	gameByID := make(map[int64]*manmanpb.Game)
+	for _, sgc := range sgcByID {
+		if _, ok := gameConfigByID[sgc.GameConfigId]; !ok {
+			gc, err := app.grpc.GetGameConfig(ctx, sgc.GameConfigId)
+			if err != nil {
+				log.Printf("Error fetching game config %d: %v", sgc.GameConfigId, err)
+				continue
+			}
+			gameConfigByID[gc.ConfigId] = gc
+			if _, ok := gameByID[gc.GameId]; !ok {
+				game, err := app.grpc.GetGame(ctx, gc.GameId)
+				if err != nil {
+					log.Printf("Error fetching game %d: %v", gc.GameId, err)
+					continue
+				}
+				gameByID[game.GameId] = game
+			}
+		}
+	}
+
+	// Build enriched session list
+	var enriched []ActiveSessionInfo
+	for _, s := range sessions {
+		info := ActiveSessionInfo{
+			SessionID: s.SessionId,
+			Status:    s.Status,
+			Uptime:    computeUptime(s.StartedAt),
+		}
+
+		if sgc, ok := sgcByID[s.ServerGameConfigId]; ok {
+			if server, ok := serverByID[sgc.ServerId]; ok {
+				info.ServerName = server.Name
+			}
+			if gc, ok := gameConfigByID[sgc.GameConfigId]; ok {
+				info.ConfigName = gc.Name
+				if game, ok := gameByID[gc.GameId]; ok {
+					info.GameName = game.Name
+				}
+			}
+			for _, pb := range sgc.PortBindings {
+				info.Ports = append(info.Ports, PortInfo{
+					HostPort: pb.HostPort,
+					Protocol: pb.Protocol,
+				})
+			}
+		}
+
+		if info.ServerName == "" {
+			info.ServerName = fmt.Sprintf("SGC %d", s.ServerGameConfigId)
+		}
+		if info.GameName == "" {
+			info.GameName = "Unknown Game"
+		}
+		if info.ConfigName == "" {
+			info.ConfigName = fmt.Sprintf("Config %d", s.ServerGameConfigId)
+		}
+
+		enriched = append(enriched, info)
+	}
+
+	data := DashboardSessionsData{Sessions: enriched}
+	if err := templates.ExecuteTemplate(w, "dashboard_sessions.html", data); err != nil {
+		log.Printf("Error rendering dashboard sessions: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+func computeUptime(startedAt int64) string {
+	if startedAt == 0 {
+		return "—"
+	}
+	d := time.Since(time.Unix(startedAt, 0))
+	if d < time.Minute {
+		return "< 1m"
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	hours := int(d.Hours())
+	mins := int(d.Minutes()) % 60
+	if hours < 24 {
+		return fmt.Sprintf("%dh %dm", hours, mins)
+	}
+	days := hours / 24
+	hours = hours % 24
+	return fmt.Sprintf("%dd %dh", days, hours)
 }
 
 func (app *App) handleConfigStrategiesDocs(w http.ResponseWriter, r *http.Request) {

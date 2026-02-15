@@ -16,6 +16,12 @@ import (
 	manmanpb "github.com/whale-net/everything/manman/protos"
 )
 
+// SGCDisplayInfo holds a server game config ID and a human-readable label for dropdowns.
+type SGCDisplayInfo struct {
+	ServerGameConfigId int64
+	DisplayName        string
+}
+
 // SessionsPageData holds data for the sessions list page.
 type SessionsPageData struct {
 	Title        string
@@ -27,6 +33,9 @@ type SessionsPageData struct {
 	ServerGameConfigID string
 	Servers      []*manmanpb.Server
 	ServerConfigs []*manmanpb.ServerGameConfig
+	SGCOptions   []SGCDisplayInfo
+	// SGCDisplayNames maps SGC ID -> display name for use in the session table
+	SGCDisplayNames map[int64]string
 	SelectedServerID string
 	SelectedServerStatus string
 	StartWarning string
@@ -143,6 +152,27 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Resolve display names for SGCs: "ConfigName (GameName)"
+	var sgcOptions []SGCDisplayInfo
+	sgcDisplayNames := make(map[int64]string)
+	for _, sgc := range serverConfigs {
+		displayName := fmt.Sprintf("SGC %d", sgc.ServerGameConfigId)
+		gc, err := app.grpc.GetGameConfig(ctx, sgc.GameConfigId)
+		if err == nil {
+			game, err := app.grpc.GetGame(ctx, gc.GameId)
+			if err == nil {
+				displayName = fmt.Sprintf("%s (%s)", gc.Name, game.Name)
+			} else {
+				displayName = gc.Name
+			}
+		}
+		sgcOptions = append(sgcOptions, SGCDisplayInfo{
+			ServerGameConfigId: sgc.ServerGameConfigId,
+			DisplayName:        displayName,
+		})
+		sgcDisplayNames[sgc.ServerGameConfigId] = displayName
+	}
+
 	var startWarning string
 	if selectedServerID > 0 && selectedServerStatus != "" && selectedServerStatus != "online" {
 		startWarning = "Selected server is offline. Starting a session may fail."
@@ -158,6 +188,8 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 		ServerGameConfigID: serverGameConfigIDStr,
 		Servers:      servers,
 		ServerConfigs: serverConfigs,
+		SGCOptions:   sgcOptions,
+		SGCDisplayNames: sgcDisplayNames,
 		SelectedServerID: strconv.FormatInt(selectedServerID, 10),
 		SelectedServerStatus: selectedServerStatus,
 		StartWarning: startWarning,
