@@ -136,7 +136,7 @@
             // Create log line with color coding
             const line = document.createElement('span');
             line.className = `log-line log-${data.source}`;
-            line.textContent = `[${time}] [${data.source}] ${data.message}\n`;
+            line.textContent = `[${time}] [${data.source}] ${data.message}`;
             logOutput.appendChild(line);
 
             // Auto-scroll to bottom if enabled
@@ -332,13 +332,13 @@
                         const [, timestamp, source, message] = match;
                         const line = document.createElement('span');
                         line.className = `log-line log-${source}`;
-                        line.textContent = `[${timestamp}] [${source}] ${message}\n`;
+                        line.textContent = `[${timestamp}] [${source}] ${message}`;
                         logOutput.appendChild(line);
                     } else {
                         // Fallback for lines that don't match format
                         const line = document.createElement('span');
                         line.className = 'log-line';
-                        line.textContent = lineText + '\n';
+                        line.textContent = lineText;
                         logOutput.appendChild(line);
                     }
                 }
