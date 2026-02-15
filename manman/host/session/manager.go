@@ -16,6 +16,7 @@ import (
 	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/manman"
 	"github.com/whale-net/everything/manman/host/config"
+	hostrmq "github.com/whale-net/everything/manman/host/rmq"
 	pb "github.com/whale-net/everything/manman/protos"
 )
 
@@ -35,12 +36,14 @@ type SessionManager struct {
 	renderer     *config.Renderer
 	rmqPublisher interface {
 		PublishLog(ctx context.Context, sessionID int64, source string, message string) error
+		PublishSessionStatus(ctx context.Context, update *hostrmq.SessionStatusUpdate) error
 	}
 }
 
 // NewSessionManager creates a new session manager
 func NewSessionManager(dockerClient *docker.Client, environment string, hostDataDir string, grpcClient pb.ManManAPIClient, rmqPublisher interface {
 	PublishLog(ctx context.Context, sessionID int64, source string, message string) error
+	PublishSessionStatus(ctx context.Context, update *hostrmq.SessionStatusUpdate) error
 }) *SessionManager {
 	return &SessionManager{
 		dockerClient: dockerClient,
@@ -663,6 +666,28 @@ func (sm *SessionManager) handleContainerExit(state *State) {
 	state.ExitCode = &exitCode
 	state.UpdateStatus("crashed")
 	log.Printf("[session %d] container exited with code %d — marked crashed", state.SessionID, exitCode)
+
+	// Publish crashed status to RabbitMQ
+	statusUpdate := &hostrmq.SessionStatusUpdate{
+		SessionID: state.SessionID,
+		SGCID:     state.SGCID,
+		Status:    "crashed",
+		ExitCode:  &exitCode,
+	}
+	if err := sm.rmqPublisher.PublishSessionStatus(ctx, statusUpdate); err != nil {
+		log.Printf("[session %d] failed to publish crashed status: %v", state.SessionID, err)
+	}
+
+	// Clean up the crashed container
+	log.Printf("[session %d] removing crashed container %s", state.SessionID, state.GameContainerID)
+	if err := sm.dockerClient.RemoveContainer(ctx, state.GameContainerID, true); err != nil {
+		log.Printf("[session %d] warning: failed to remove crashed container: %v", state.SessionID, err)
+		// Continue anyway - container cleanup can happen later
+	}
+
+	// Remove session from state manager to allow new sessions for this SGC
+	sm.stateManager.RemoveSession(state.SessionID)
+	log.Printf("[session %d] removed from state manager after crash", state.SessionID)
 }
 
 // CleanupOrphans performs a single pass of orphan game container cleanup

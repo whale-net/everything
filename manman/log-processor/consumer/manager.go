@@ -32,6 +32,13 @@ type SessionConsumer struct {
 	cancel        context.CancelFunc
 	done          chan struct{}
 	logsProcessed *int64 // Pointer to manager's counter for atomic increment
+
+	// Ring buffer for recent logs
+	logBuffer     []*manmanpb.LogMessage
+	bufferSize    int
+	bufferIndex   int
+	bufferFull    bool
+	bufferMu      sync.RWMutex
 }
 
 // Manager manages consumers for multiple sessions
@@ -173,6 +180,7 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
+	bufferSize := 500 // Keep last 500 log messages in memory
 	sc := &SessionConsumer{
 		sessionID:     sessionID,
 		sgcID:         sessionResp.Session.ServerGameConfigId,
@@ -182,6 +190,10 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 		cancel:        cancel,
 		done:          make(chan struct{}),
 		logsProcessed: &m.logsProcessed,
+		logBuffer:     make([]*manmanpb.LogMessage, bufferSize),
+		bufferSize:    bufferSize,
+		bufferIndex:   0,
+		bufferFull:    false,
 	}
 
 	// Start consuming in background
@@ -247,11 +259,57 @@ func (m *Manager) DeleteConsumerForSession(sessionID int64) error {
 	return nil
 }
 
-// addSubscriber adds a subscriber channel
+// addLogToBuffer adds a log message to the ring buffer
+func (sc *SessionConsumer) addLogToBuffer(msg *manmanpb.LogMessage) {
+	sc.bufferMu.Lock()
+	defer sc.bufferMu.Unlock()
+
+	sc.logBuffer[sc.bufferIndex] = msg
+	sc.bufferIndex++
+	if sc.bufferIndex >= sc.bufferSize {
+		sc.bufferIndex = 0
+		sc.bufferFull = true
+	}
+}
+
+// getBufferedLogs returns all buffered logs in chronological order
+func (sc *SessionConsumer) getBufferedLogs() []*manmanpb.LogMessage {
+	sc.bufferMu.RLock()
+	defer sc.bufferMu.RUnlock()
+
+	if !sc.bufferFull {
+		// Buffer not full yet, return logs from 0 to bufferIndex
+		result := make([]*manmanpb.LogMessage, sc.bufferIndex)
+		copy(result, sc.logBuffer[:sc.bufferIndex])
+		return result
+	}
+
+	// Buffer is full, return logs from bufferIndex to end, then 0 to bufferIndex-1
+	result := make([]*manmanpb.LogMessage, sc.bufferSize)
+	copy(result, sc.logBuffer[sc.bufferIndex:])
+	copy(result[sc.bufferSize-sc.bufferIndex:], sc.logBuffer[:sc.bufferIndex])
+	return result
+}
+
+// addSubscriber adds a subscriber channel and sends buffered logs
 func (sc *SessionConsumer) addSubscriber(ch chan *manmanpb.LogMessage) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	sc.subscribers[ch] = struct{}{}
+
+	// Send buffered logs to new subscriber in a goroutine to avoid blocking
+	go func() {
+		bufferedLogs := sc.getBufferedLogs()
+		for _, msg := range bufferedLogs {
+			select {
+			case ch <- msg:
+			default:
+				// Channel full, skip
+				log.Printf("[log-processor] subscriber channel full while sending buffered logs for session %d", sc.sessionID)
+				return
+			}
+		}
+	}()
 }
 
 // removeSubscriber removes a subscriber channel
@@ -327,6 +385,9 @@ func (sc *SessionConsumer) consumeLoop(ctx context.Context, debugOutput bool, ar
 			Source:    logMsg.Source,
 			Message:   logMsg.Message,
 		}
+
+		// Add to ring buffer for new subscribers
+		sc.addLogToBuffer(pbMsg)
 
 		// Broadcast to all subscribers
 		sc.mu.RLock()

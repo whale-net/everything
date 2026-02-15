@@ -80,5 +80,66 @@ func TestGetSessionStats(t *testing.T) {
 	}
 }
 
+// Test: GetSessionBySGCID should not return crashed sessions
+func TestGetSessionBySGCID_IgnoresCrashedSessions(t *testing.T) {
+	manager := session.NewManager()
+
+	// Add a crashed session for SGC 100
+	crashedSession := &session.State{
+		SessionID: 1,
+		SGCID:     100,
+		Status:    "crashed",
+	}
+	manager.AddSession(crashedSession)
+
+	// Try to get a session for SGC 100
+	// Should return nothing because the crashed session is not active
+	session, exists := manager.GetSessionBySGCID(100)
+	if exists {
+		t.Errorf("GetSessionBySGCID returned a crashed session %d, but should have returned nothing", session.SessionID)
+	}
+}
+
+// Test: GetSessionBySGCID should not return stopped sessions
+func TestGetSessionBySGCID_IgnoresStoppedSessions(t *testing.T) {
+	manager := session.NewManager()
+
+	// Add a stopped session for SGC 100
+	stoppedSession := &session.State{
+		SessionID: 2,
+		SGCID:     100,
+		Status:    "stopped",
+	}
+	manager.AddSession(stoppedSession)
+
+	// Try to get a session for SGC 100
+	session, exists := manager.GetSessionBySGCID(100)
+	if exists {
+		t.Errorf("GetSessionBySGCID returned a stopped session %d, but should have returned nothing", session.SessionID)
+	}
+}
+
+// Test: GetSessionBySGCID should return running sessions
+func TestGetSessionBySGCID_ReturnsRunningSessions(t *testing.T) {
+	manager := session.NewManager()
+
+	// Add a running session for SGC 100
+	runningSession := &session.State{
+		SessionID: 3,
+		SGCID:     100,
+		Status:    "running",
+	}
+	manager.AddSession(runningSession)
+
+	// Should find the running session
+	session, exists := manager.GetSessionBySGCID(100)
+	if !exists {
+		t.Fatal("GetSessionBySGCID should have returned the running session")
+	}
+	if session.SessionID != 3 {
+		t.Errorf("Expected session ID 3, got %d", session.SessionID)
+	}
+}
+
 // Note: extractIDsFromLabels is not exported, so we can't test it directly from external test package
 // These tests would need to be internal tests or we'd need to export the function for testing

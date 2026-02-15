@@ -105,12 +105,17 @@ func (m *Manager) GetActiveSGCIDs() map[int64]bool {
 }
 
 // GetSessionBySGCID returns the first active session found for a given SGC ID
+// Only returns sessions that are not in terminal states (crashed, stopped, lost)
 func (m *Manager) GetSessionBySGCID(sgcID int64) (*State, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for _, session := range m.sessions {
 		if session.SGCID == sgcID {
-			return session, true
+			// Only return sessions that are not in terminal states
+			status := session.GetStatus()
+			if status != "crashed" && status != "stopped" && status != "lost" {
+				return session, true
+			}
 		}
 	}
 	return nil, false
