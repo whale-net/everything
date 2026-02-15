@@ -348,14 +348,13 @@
 </head>
 <body>
     <nav>
-        <div class="container" style="display: flex; align-items: center;">
+        <div class="container">
             <div class="logo">ManManV2</div>
-            <ul style="flex: 1;">
+            <ul>
                 <li><a href="/" class="{{if eq .Active "home"}}active{{end}}">Dashboard</a></li>
                 <li><a href="/servers" class="{{if eq .Active "servers"}}active{{end}}">Servers</a></li>
                 <li><a href="/games" class="{{if eq .Active "games"}}active{{end}}">Games</a></li>
                 <li><a href="/sessions" class="{{if eq .Active "sessions"}}active{{end}}">Sessions</a></li>
-                <li><a href="/docs/config-strategies" class="{{if eq .Active "docs"}}active{{end}}">Docs</a></li>
                 {{if .User}}
                 <li><a href="/auth/logout">Logout ({{.User.Name}})</a></li>
                 {{end}}
