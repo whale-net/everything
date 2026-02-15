@@ -124,11 +124,11 @@ func main() {
 	mux := http.NewServeMux()
 	app.setupRoutes(mux)
 
-	// Create server
+	// Create server with request logging middleware
 	addr := fmt.Sprintf("%s:%s", config.Host, config.Port)
 	server := &http.Server{
 		Addr:         addr,
-		Handler:      mux,
+		Handler:      requestLoggingMiddleware(mux),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -139,6 +139,34 @@ func main() {
 		logger.Error("server failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+// statusRecorder wraps http.ResponseWriter to capture the status code
+type statusRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.statusCode = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// requestLoggingMiddleware logs method, path, status, and duration for each request.
+// Health checks are logged at Debug to reduce noise.
+func requestLoggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		duration := time.Since(start)
+
+		if r.URL.Path == "/health" {
+			slog.Debug("http request", "method", r.Method, "path", r.URL.Path, "status", rec.statusCode, "duration", duration)
+		} else {
+			slog.Info("http request", "method", r.Method, "path", r.URL.Path, "status", rec.statusCode, "duration", duration)
+		}
+	})
 }
 
 func (app *App) setupRoutes(mux *http.ServeMux) {

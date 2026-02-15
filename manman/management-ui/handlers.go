@@ -210,13 +210,14 @@ func (app *App) handleStartServer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Start the server
+	slog.Info("user requesting server start", "user", user.Email, "config_id", configID)
 	if err := app.startGameServer(r.Context(), int32(configID)); err != nil {
-		slog.Error("failed to start server", "error", err)
+		slog.Error("failed to start server", "error", err, "config_id", configID, "user", user.Email)
 		http.Error(w, fmt.Sprintf("Failed to start server: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Return success - HTMX will handle the response
+	slog.Info("server start command sent", "config_id", configID, "user", user.Email)
 	w.Header().Set("HX-Trigger", "serverStarted")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "Server start command sent successfully")
@@ -350,14 +351,15 @@ func (app *App) handleExecuteCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Execute command
+	slog.Info("user executing command", "user", user.Email, "instance_id", instanceID, "command_type", commandType, "command_id", commandID)
 	response, err := app.executeInstanceCommand(r.Context(), instanceID, request)
 	if err != nil {
-		slog.Error("failed to execute command", "error", err)
+		slog.Error("failed to execute command", "error", err, "instance_id", instanceID, "command_type", commandType, "user", user.Email)
 		http.Error(w, fmt.Sprintf("Failed to execute command: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Return success message
+	slog.Info("command executed", "instance_id", instanceID, "command_type", commandType, "command_id", commandID, "user", user.Email)
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, `<div class="success-message">%s</div>`, response.Message)
 }
@@ -451,14 +453,15 @@ func (app *App) handleCreateCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create command
+	slog.Info("user creating config command", "user", user.Email, "config_id", configID, "command_id", commandID)
 	_, err = app.createConfigCommand(r.Context(), configID, request)
 	if err != nil {
-		slog.Error("failed to create command", "error", err)
+		slog.Error("failed to create command", "error", err, "config_id", configID, "command_id", commandID, "user", user.Email)
 		http.Error(w, fmt.Sprintf("Failed to create command: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Trigger page refresh
+	slog.Info("config command created", "config_id", configID, "command_id", commandID, "user", user.Email)
 	w.Header().Set("HX-Trigger", "commandCreated")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "Command created successfully")
@@ -644,14 +647,15 @@ func (app *App) handleCreateGameServerCommand(w http.ResponseWriter, r *http.Req
 	}
 
 	// Create command
+	slog.Info("user creating game server command", "user", user.Email, "game_server_id", gameServerID, "name", name)
 	_, err = app.createGameServerCommand(r.Context(), int32(gameServerID), name, command, description, isVisible)
 	if err != nil {
-		slog.Error("failed to create command", "error", err)
+		slog.Error("failed to create game server command", "error", err, "game_server_id", gameServerID, "name", name, "user", user.Email)
 		http.Error(w, fmt.Sprintf("Failed to create command: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Set trigger header and respond
+	slog.Info("game server command created", "game_server_id", gameServerID, "name", name, "user", user.Email)
 	w.Header().Set("HX-Trigger", "commandCreated")
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)

@@ -330,6 +330,7 @@ func (sm *SessionManager) StopSession(ctx context.Context, sessionID int64, forc
 		return fmt.Errorf("session %d not found", sessionID)
 	}
 
+	slog.Info("stopping session", "session_id", sessionID, "sgc_id", state.SGCID, "force", force, "container_id", state.GameContainerID)
 	state.UpdateStatus(manman.SessionStatusStopping)
 
 	// 1. Close attach connection
@@ -354,6 +355,7 @@ func (sm *SessionManager) StopSession(ctx context.Context, sessionID int64, forc
 		if err == nil {
 			exitCode := status.ExitCode
 			state.ExitCode = &exitCode
+			slog.Info("container stopped", "session_id", sessionID, "exit_code", exitCode)
 		}
 
 		// 4. Remove game container
@@ -371,6 +373,7 @@ func (sm *SessionManager) StopSession(ctx context.Context, sessionID int64, forc
 
 	// 6. Remove from state manager
 	sm.stateManager.RemoveSession(sessionID)
+	slog.Info("session stopped and removed from state", "session_id", sessionID, "sgc_id", state.SGCID)
 
 	return nil
 }
@@ -390,6 +393,11 @@ func (sm *SessionManager) SendInput(ctx context.Context, sessionID int64, input 
 		return fmt.Errorf("session %d: no active stdin connection", sessionID)
 	}
 	_, err := state.AttachResp.Conn.Write(input)
+	if err != nil {
+		slog.Error("failed to write stdin", "session_id", sessionID, "error", err)
+	} else {
+		slog.Debug("sent stdin input", "session_id", sessionID, "bytes", len(input))
+	}
 	return err
 }
 
