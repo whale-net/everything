@@ -8,18 +8,19 @@ from typing import Dict, List
 
 from tools.release_helper.core import run_bazel, find_workspace_root
 
+# In-process cache for app metadata to avoid redundant Bazel builds
+_metadata_cache: Dict[str, Dict] = {}
 
-def get_app_metadata(bazel_target: str) -> Dict:
-    """Get release metadata for an app by building and reading its metadata target.
+
+def _read_metadata_file(bazel_target: str) -> Dict:
+    """Read a metadata JSON file from bazel-bin without building.
     
     Args:
         bazel_target: Full bazel target path (e.g., "//path/to/app:app_metadata")
+        
+    Returns:
+        Parsed metadata dict, or None if file doesn't exist
     """
-    # Build the metadata target
-    run_bazel(["build", bazel_target])
-
-    # Extract path from target for finding the generated file
-    # Target format: //path/to/app:target_name
     if not bazel_target.startswith("//"):
         raise ValueError(f"Invalid bazel target format: {bazel_target}")
     
@@ -30,18 +31,46 @@ def get_app_metadata(bazel_target: str) -> Dict:
     package_path = target_parts[0]
     target_name = target_parts[1]
 
-    # Read the generated JSON file
     workspace_root = find_workspace_root()
     metadata_file = workspace_root / f"bazel-bin/{package_path}/{target_name}_metadata.json"
     if not metadata_file.exists():
-        raise FileNotFoundError(f"Metadata file not found: {metadata_file}")
+        return None
 
     with open(metadata_file) as f:
         return json.load(f)
 
 
+def get_app_metadata(bazel_target: str) -> Dict:
+    """Get release metadata for an app by building and reading its metadata target.
+    
+    Results are cached in-process to avoid redundant Bazel invocations.
+    If the metadata file already exists on disk (e.g., from a batch build),
+    it is read directly without invoking Bazel.
+    
+    Args:
+        bazel_target: Full bazel target path (e.g., "//path/to/app:app_metadata")
+    """
+    if bazel_target in _metadata_cache:
+        return _metadata_cache[bazel_target]
+
+    # Try reading from disk first (may already be built by a batch build)
+    metadata = _read_metadata_file(bazel_target)
+    if metadata is None:
+        # Build the metadata target
+        run_bazel(["build", bazel_target])
+        metadata = _read_metadata_file(bazel_target)
+        if metadata is None:
+            raise FileNotFoundError(f"Metadata file not found after building {bazel_target}")
+    
+    _metadata_cache[bazel_target] = metadata
+    return metadata
+
+
 def list_all_apps() -> List[Dict[str, str]]:
     """List all apps in the monorepo that have release metadata.
+    
+    Batch-builds all metadata targets in a single Bazel invocation to avoid
+    repeated analysis overhead.
     
     Returns:
         List of dicts with full metadata for each app
@@ -49,18 +78,25 @@ def list_all_apps() -> List[Dict[str, str]]:
     # Query for all metadata targets
     result = run_bazel(["query", "kind(app_metadata, //...)", "--output=label"])
 
+    targets = [line for line in result.stdout.strip().split('\n') if line and '_metadata' in line]
+    
+    if not targets:
+        return []
+    
+    # Batch-build all metadata targets in a single Bazel invocation
+    # This avoids N separate Bazel analysis phases
+    run_bazel(["build"] + targets)
+
     apps = []
-    for line in result.stdout.strip().split('\n'):
-        if line and '_metadata' in line:
-            # Get metadata to extract app info
-            try:
-                metadata = get_app_metadata(line)
-                # Add the bazel_target to the metadata
-                metadata['bazel_target'] = line
-                apps.append(metadata)
-            except Exception as e:
-                print(f"Warning: Could not get metadata for {line}: {e}")
-                continue
+    for target in targets:
+        try:
+            # get_app_metadata will read from disk (already built) and cache the result
+            metadata = get_app_metadata(target)
+            metadata['bazel_target'] = target
+            apps.append(metadata)
+        except Exception as e:
+            print(f"Warning: Could not get metadata for {target}: {e}")
+            continue
 
     return sorted(apps, key=lambda x: x['name'])
 
