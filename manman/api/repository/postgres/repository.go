@@ -33,5 +33,6 @@ func NewRepository(ctx context.Context, connString string) (*repository.Reposito
 		ServerPorts:             NewServerPortRepository(pool),
 		ConfigurationStrategies: NewConfigurationStrategyRepository(pool),
 		ConfigurationPatches:    NewConfigurationPatchRepository(pool),
+		Actions:                 NewActionRepository(pool),
 	}, nil
 }

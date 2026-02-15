@@ -143,4 +143,5 @@ type Repository struct {
 	ServerPorts            ServerPortRepository
 	ConfigurationStrategies ConfigurationStrategyRepository
 	ConfigurationPatches   ConfigurationPatchRepository
+	Actions                interface{} // ActionRepository from postgres package
 }

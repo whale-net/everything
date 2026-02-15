@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "handlers",
     srcs = [
+        "action.go",
         "api.go",
         "backup.go",
         "command_publisher.go",
@@ -22,6 +23,7 @@ go_library(
         "//libs/go/s3",
         "//manman:models",
         "//manman/api/repository",
+        "//manman/api/repository/postgres",
         "//manman/protos:manmanpb",
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//:pgx",
