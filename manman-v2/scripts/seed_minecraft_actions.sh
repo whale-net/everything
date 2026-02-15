@@ -9,13 +9,33 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # Default values
 CONTROL_API_ADDR="${CONTROL_API_ADDR:-localhost:50052}"
+USE_TLS="${USE_TLS:-auto}"
+INSECURE_TLS="${INSECURE_TLS:-false}"
+
+# Auto-detect TLS based on port (443 = TLS)
+if [[ "${USE_TLS}" == "auto" ]]; then
+  if [[ "${CONTROL_API_ADDR}" =~ :443$ ]]; then
+    USE_TLS="true"
+  else
+    USE_TLS="false"
+  fi
+fi
 
 grpc_call() {
   local addr="$1"
   local method="$2"
   local data="$3"
 
-  grpcurl -plaintext \
+  local tls_flags=""
+  if [[ "${USE_TLS}" == "true" ]]; then
+    if [[ "${INSECURE_TLS}" == "true" ]]; then
+      tls_flags="-insecure"
+    fi
+  else
+    tls_flags="-plaintext"
+  fi
+
+  grpcurl ${tls_flags} \
     -import-path "${REPO_ROOT}" \
     -proto "${REPO_ROOT}/manman/protos/api.proto" \
     -proto "${REPO_ROOT}/manman/protos/messages.proto" \
@@ -38,9 +58,21 @@ fi
 
 # Test API connectivity
 echo "Testing API connectivity..."
-if ! grpcurl -plaintext "${CONTROL_API_ADDR}" list manman.v1.ManManAPI &> /dev/null; then
+TLS_FLAGS=""
+if [[ "${USE_TLS}" == "true" ]]; then
+  if [[ "${INSECURE_TLS}" == "true" ]]; then
+    TLS_FLAGS="-insecure"
+  fi
+else
+  TLS_FLAGS="-plaintext"
+fi
+
+if ! grpcurl ${TLS_FLAGS} "${CONTROL_API_ADDR}" list manman.v1.ManManAPI &> /dev/null; then
   echo "✗ Cannot connect to API at ${CONTROL_API_ADDR}"
   echo "Make sure the control plane is running and accessible"
+  if [[ "${USE_TLS}" == "false" ]]; then
+    echo "Hint: If the endpoint uses TLS, set USE_TLS=true"
+  fi
   exit 1
 fi
 echo "✓ API is reachable"
