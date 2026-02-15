@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -32,7 +32,7 @@ func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := templates.ExecuteTemplate(w, "home.html", data); err != nil {
-		log.Printf("Template error: %v", err)
+		slog.Error("template error", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
@@ -57,7 +57,7 @@ func (app *App) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
 	lastHeartbeat := ""
 
 	if err != nil {
-		log.Printf("Failed to get worker ID: %v", err)
+		slog.Error("failed to get worker ID", "error", err)
 		workerID = "Error"
 		status = "error"
 	} else if workerID != "" {
@@ -66,7 +66,7 @@ func (app *App) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
 		// Try to get detailed status information
 		workerStatus, statusErr := app.getWorkerStatus(r.Context(), userID)
 		if statusErr != nil {
-			log.Printf("Failed to get worker status: %v", statusErr)
+			slog.Error("failed to get worker status", "error", statusErr)
 		} else if workerStatus != nil {
 			statusType = string(workerStatus.StatusType)
 			if workerStatus.AsOf != nil {
@@ -85,7 +85,7 @@ func (app *App) handleWorkerStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := templates.ExecuteTemplate(w, "worker_status.html", data); err != nil {
-		log.Printf("Template error: %v", err)
+		slog.Error("template error", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
@@ -106,7 +106,7 @@ func (app *App) handleServers(w http.ResponseWriter, r *http.Request) {
 
 	servers, err := app.getRunningServers(r.Context(), userID)
 	if err != nil {
-		log.Printf("Failed to get servers: %v", err)
+		slog.Error("failed to get servers", "error", err)
 		servers = []Server{}
 	}
 
@@ -115,7 +115,7 @@ func (app *App) handleServers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := templates.ExecuteTemplate(w, "servers.html", data); err != nil {
-		log.Printf("Template error: %v", err)
+		slog.Error("template error", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
@@ -131,14 +131,14 @@ func (app *App) handleAvailableServers(w http.ResponseWriter, r *http.Request) {
 	// Get all server configs
 	configs, err := app.getAllGameServerConfigs(r.Context())
 	if err != nil {
-		log.Printf("Failed to get game server configs: %v", err)
+		slog.Error("failed to get game server configs", "error", err)
 		configs = []experience_api.GameServerConfig{}
 	}
 
 	// Get currently running servers with full response (includes crashed servers)
 	resp, err := app.getCurrentServersWithConfigs(r.Context(), user.Sub)
 	if err != nil {
-		log.Printf("Failed to get current servers: %v", err)
+		slog.Error("failed to get current servers", "error", err)
 		resp = &experience_api.CurrentInstanceResponse{
 			GameServerInstances: []experience_api.GameServerInstance{},
 			Workers:             []experience_api.Worker{},
@@ -173,7 +173,7 @@ func (app *App) handleAvailableServers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := templates.ExecuteTemplate(w, "available_servers.html", data); err != nil {
-		log.Printf("Template error: %v", err)
+		slog.Error("template error", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
@@ -210,13 +210,14 @@ func (app *App) handleStartServer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Start the server
+	slog.Info("user requesting server start", "user", user.Email, "config_id", configID)
 	if err := app.startGameServer(r.Context(), int32(configID)); err != nil {
-		log.Printf("Failed to start server: %v", err)
+		slog.Error("failed to start server", "error", err, "config_id", configID, "user", user.Email)
 		http.Error(w, fmt.Sprintf("Failed to start server: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Return success - HTMX will handle the response
+	slog.Info("server start command sent", "config_id", configID, "user", user.Email)
 	w.Header().Set("HX-Trigger", "serverStarted")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "Server start command sent successfully")
@@ -287,7 +288,7 @@ func (app *App) handleInstancePage(w http.ResponseWriter, r *http.Request) {
 	// Get instance details
 	details, err := app.getInstanceDetails(r.Context(), instanceID)
 	if err != nil {
-		log.Printf("Failed to get instance details: %v", err)
+		slog.Error("failed to get instance details", "error", err)
 		http.Error(w, "Failed to load instance details", http.StatusInternalServerError)
 		return
 	}
@@ -299,7 +300,7 @@ func (app *App) handleInstancePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := templates.ExecuteTemplate(w, "instance.html", data); err != nil {
-		log.Printf("Template error: %v", err)
+		slog.Error("template error", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
@@ -350,14 +351,15 @@ func (app *App) handleExecuteCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Execute command
+	slog.Info("user executing command", "user", user.Email, "instance_id", instanceID, "command_type", commandType, "command_id", commandID)
 	response, err := app.executeInstanceCommand(r.Context(), instanceID, request)
 	if err != nil {
-		log.Printf("Failed to execute command: %v", err)
+		slog.Error("failed to execute command", "error", err, "instance_id", instanceID, "command_type", commandType, "user", user.Email)
 		http.Error(w, fmt.Sprintf("Failed to execute command: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Return success message
+	slog.Info("command executed", "instance_id", instanceID, "command_type", commandType, "command_id", commandID, "user", user.Email)
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, `<div class="success-message">%s</div>`, response.Message)
 }
@@ -389,7 +391,7 @@ func (app *App) handleAddCommandModal(w http.ResponseWriter, r *http.Request) {
 	// Get available commands
 	commands, err := app.getAvailableCommands(r.Context(), gameServerID)
 	if err != nil {
-		log.Printf("Failed to get available commands: %v", err)
+		slog.Error("failed to get available commands", "error", err)
 		http.Error(w, "Failed to load commands", http.StatusInternalServerError)
 		return
 	}
@@ -400,7 +402,7 @@ func (app *App) handleAddCommandModal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := templates.ExecuteTemplate(w, "add_command_modal.html", data); err != nil {
-		log.Printf("Template error: %v", err)
+		slog.Error("template error", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
@@ -451,14 +453,15 @@ func (app *App) handleCreateCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create command
+	slog.Info("user creating config command", "user", user.Email, "config_id", configID, "command_id", commandID)
 	_, err = app.createConfigCommand(r.Context(), configID, request)
 	if err != nil {
-		log.Printf("Failed to create command: %v", err)
+		slog.Error("failed to create command", "error", err, "config_id", configID, "command_id", commandID, "user", user.Email)
 		http.Error(w, fmt.Sprintf("Failed to create command: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Trigger page refresh
+	slog.Info("config command created", "config_id", configID, "command_id", commandID, "user", user.Email)
 	w.Header().Set("HX-Trigger", "commandCreated")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "Command created successfully")
@@ -500,7 +503,7 @@ func (app *App) handleGameServerPage(w http.ResponseWriter, r *http.Request) {
 	// Get game server details (from the list, since we don't have a get endpoint yet)
 	servers, err := app.getAllGameServers(r.Context())
 	if err != nil {
-		log.Printf("Failed to get game servers: %v", err)
+		slog.Error("failed to get game servers", "error", err)
 		http.Error(w, "Failed to load game server", http.StatusInternalServerError)
 		return
 	}
@@ -521,14 +524,14 @@ func (app *App) handleGameServerPage(w http.ResponseWriter, r *http.Request) {
 	// Get commands for this game server
 	commands, err := app.getGameServerCommands(r.Context(), int32(gameServerID))
 	if err != nil {
-		log.Printf("Failed to get commands: %v", err)
+		slog.Error("failed to get commands", "error", err)
 		commands = []experience_api.GameServerCommand{}
 	}
 
 	// Get all configs and filter by this game server ID
 	allConfigs, err := app.getAllGameServerConfigs(r.Context())
 	if err != nil {
-		log.Printf("Failed to get configs: %v", err)
+		slog.Error("failed to get configs", "error", err)
 		allConfigs = []experience_api.GameServerConfig{}
 	}
 
@@ -542,7 +545,7 @@ func (app *App) handleGameServerPage(w http.ResponseWriter, r *http.Request) {
 	// Get instance history
 	history, err := app.getGameServerInstanceHistory(r.Context(), int32(gameServerID), 10)
 	if err != nil {
-		log.Printf("Failed to get instance history: %v", err)
+		slog.Error("failed to get instance history", "error", err)
 		history = []InstanceHistoryItem{}
 	}
 
@@ -556,7 +559,7 @@ func (app *App) handleGameServerPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := templates.ExecuteTemplate(w, "gameserver.html", data); err != nil {
-		log.Printf("Template error: %v", err)
+		slog.Error("template error", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
@@ -572,7 +575,7 @@ func (app *App) handleGameServersList(w http.ResponseWriter, r *http.Request) {
 	// Get all game servers
 	servers, err := app.getAllGameServers(r.Context())
 	if err != nil {
-		log.Printf("Failed to get game servers: %v", err)
+		slog.Error("failed to get game servers", "error", err)
 		servers = []experience_api.GameServer{}
 	}
 
@@ -582,7 +585,7 @@ func (app *App) handleGameServersList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := templates.ExecuteTemplate(w, "gameservers_list.html", data); err != nil {
-		log.Printf("Template error: %v", err)
+		slog.Error("template error", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
@@ -607,7 +610,7 @@ func (app *App) handleAddGameServerCommandModal(w http.ResponseWriter, r *http.R
 	}
 
 	if err := templates.ExecuteTemplate(w, "add_gameserver_command_modal.html", data); err != nil {
-		log.Printf("Template error: %v", err)
+		slog.Error("template error", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
@@ -644,14 +647,15 @@ func (app *App) handleCreateGameServerCommand(w http.ResponseWriter, r *http.Req
 	}
 
 	// Create command
+	slog.Info("user creating game server command", "user", user.Email, "game_server_id", gameServerID, "name", name)
 	_, err = app.createGameServerCommand(r.Context(), int32(gameServerID), name, command, description, isVisible)
 	if err != nil {
-		log.Printf("Failed to create command: %v", err)
+		slog.Error("failed to create game server command", "error", err, "game_server_id", gameServerID, "name", name, "user", user.Email)
 		http.Error(w, fmt.Sprintf("Failed to create command: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Set trigger header and respond
+	slog.Info("game server command created", "game_server_id", gameServerID, "name", name, "user", user.Email)
 	w.Header().Set("HX-Trigger", "commandCreated")
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)

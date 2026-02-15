@@ -10,6 +10,7 @@ go_library(
     importpath = "github.com/whale-net/everything/manman/processor",
     visibility = ["//visibility:private"],
     deps = [
+        "//libs/go/logging",
         "//libs/go/rmq",
         "//manman/api/repository",
         "//manman/api/repository/postgres",

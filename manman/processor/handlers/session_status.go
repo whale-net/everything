@@ -75,6 +75,13 @@ func (h *SessionStatusHandler) Handle(ctx context.Context, routingKey string, bo
 		return &PermanentError{Err: fmt.Errorf("invalid transition from %s to %s", currentSession.Status, msg.Status)}
 	}
 
+	h.logger.Info("session state transition",
+		"session_id", msg.SessionID,
+		"sgc_id", msg.SGCID,
+		"from", currentSession.Status,
+		"to", msg.Status,
+	)
+
 	// Update session based on new status
 	now := time.Now()
 	switch msg.Status {

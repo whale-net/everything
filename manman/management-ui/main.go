@@ -3,13 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/logging"
 )
 
 // Config holds the application configuration
@@ -66,10 +67,10 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 	switch config.AuthMode {
 	case "none", "":
 		authMode = htmxauth.AuthModeNone
-		log.Println("⚠️  Running in NO-AUTH mode (development only)")
+		slog.Warn("running in NO-AUTH mode (development only)")
 	case "oidc":
 		authMode = htmxauth.AuthModeOIDC
-		log.Println("Running in OIDC mode")
+		slog.Info("running in OIDC mode")
 	default:
 		return nil, fmt.Errorf("invalid AUTH_MODE: %s (must be 'none' or 'oidc')", config.AuthMode)
 	}
@@ -97,7 +98,16 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 }
 
 func main() {
-	log.Println("Starting ManMan Management UI...")
+	// Configure structured logging
+	logging.Configure(logging.Config{
+		ServiceName: "management-ui",
+		Domain:      "manmanv2",
+		JSONFormat:  getEnv("LOG_FORMAT", "json") == "json",
+	})
+	defer logging.Shutdown(context.Background())
+
+	logger := logging.Get("main")
+	logger.Info("starting management UI")
 
 	// Load configuration
 	config := LoadConfig()
@@ -106,27 +116,57 @@ func main() {
 	ctx := context.Background()
 	app, err := NewApp(ctx, config)
 	if err != nil {
-		log.Fatalf("Failed to initialize application: %v", err)
+		logger.Error("failed to initialize application", "error", err)
+		os.Exit(1)
 	}
 
 	// Setup HTTP server
 	mux := http.NewServeMux()
 	app.setupRoutes(mux)
 
-	// Create server
+	// Create server with request logging middleware
 	addr := fmt.Sprintf("%s:%s", config.Host, config.Port)
 	server := &http.Server{
 		Addr:         addr,
-		Handler:      mux,
+		Handler:      requestLoggingMiddleware(mux),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
-	log.Printf("Server listening on %s", addr)
+	logger.Info("server listening", "addr", addr)
 	if err := server.ListenAndServe(); err != nil {
-		log.Fatalf("Server failed: %v", err)
+		logger.Error("server failed", "error", err)
+		os.Exit(1)
 	}
+}
+
+// statusRecorder wraps http.ResponseWriter to capture the status code
+type statusRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.statusCode = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// requestLoggingMiddleware logs method, path, status, and duration for each request.
+// Health checks are logged at Debug to reduce noise.
+func requestLoggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		duration := time.Since(start)
+
+		if r.URL.Path == "/health" {
+			slog.Debug("http request", "method", r.Method, "path", r.URL.Path, "status", rec.statusCode, "duration", duration)
+		} else {
+			slog.Info("http request", "method", r.Method, "path", r.URL.Path, "status", rec.statusCode, "duration", duration)
+		}
+	})
 }
 
 func (app *App) setupRoutes(mux *http.ServeMux) {

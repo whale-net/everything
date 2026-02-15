@@ -3,6 +3,7 @@ package consumer
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/manman/processor/handlers"
@@ -60,7 +61,12 @@ func NewProcessorConsumer(
 
 // handleMessage processes incoming messages and routes to appropriate handlers
 func (c *ProcessorConsumer) handleMessage(ctx context.Context, msg rmq.Message) error {
-	c.logger.Info("received message", "routing_key", msg.RoutingKey)
+	// Health heartbeats are frequent — log at Debug to reduce noise
+	if strings.HasPrefix(msg.RoutingKey, "health.") {
+		c.logger.Debug("received message", "routing_key", msg.RoutingKey)
+	} else {
+		c.logger.Info("received message", "routing_key", msg.RoutingKey)
+	}
 
 	err := c.registry.Route(ctx, msg.RoutingKey, msg.Body)
 	if err != nil {
@@ -82,7 +88,11 @@ func (c *ProcessorConsumer) handleMessage(ctx context.Context, msg rmq.Message) 
 		return err
 	}
 
-	c.logger.Info("message processed successfully", "routing_key", msg.RoutingKey)
+	if strings.HasPrefix(msg.RoutingKey, "health.") {
+		c.logger.Debug("message processed", "routing_key", msg.RoutingKey)
+	} else {
+		c.logger.Info("message processed", "routing_key", msg.RoutingKey)
+	}
 	return nil
 }
 
