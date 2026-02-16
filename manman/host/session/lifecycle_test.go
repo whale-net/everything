@@ -3,7 +3,7 @@ package session_test
 import (
 	"testing"
 
-	"github.com/whale-net/everything/manman/host/session"
+	"github.com/whale-net/everything/manmanv2/host/session"
 )
 
 // Test: GetActiveSGCIDs returns unique SGC IDs

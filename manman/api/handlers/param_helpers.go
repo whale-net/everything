@@ -5,7 +5,7 @@ import (
 
 	"github.com/whale-net/everything/libs/go/params"
 	"github.com/whale-net/everything/manman"
-	pb "github.com/whale-net/everything/manman/protos"
+	pb "github.com/whale-net/everything/manmanv2/protos"
 )
 
 // MergeAndValidateParameters merges parameters from GameConfig, ServerGameConfig, and Session

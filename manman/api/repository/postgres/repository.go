@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/whale-net/everything/manman/api/repository"
+	"github.com/whale-net/everything/manmanv2/api/repository"
 )
 
 // NewRepository creates a new repository with PostgreSQL implementations

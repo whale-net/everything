@@ -10,8 +10,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/whale-net/everything/manman"
-	"github.com/whale-net/everything/manman/api/repository"
-	"github.com/whale-net/everything/manman/host/rmq"
+	"github.com/whale-net/everything/manmanv2/api/repository"
+	"github.com/whale-net/everything/manmanv2/host/rmq"
 )
 
 // SessionStatusHandler handles status.session.* messages

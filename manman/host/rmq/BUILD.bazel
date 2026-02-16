@@ -8,7 +8,7 @@ go_library(
         "messages.go",
         "publisher.go",
     ],
-    importpath = "github.com/whale-net/everything/manman/host/rmq",
+    importpath = "github.com/whale-net/everything/manmanv2/host/rmq",
     visibility = ["//visibility:public"],
     deps = [
         "//libs/go/rmq",

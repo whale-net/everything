@@ -11,7 +11,7 @@ import (
 
 	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manman"
-	"github.com/whale-net/everything/manman/api/repository"
+	"github.com/whale-net/everything/manmanv2/api/repository"
 )
 
 // MinuteWindow represents a batch of logs within a specific minute for a session

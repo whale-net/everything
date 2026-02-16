@@ -4,16 +4,16 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "host_lib",
     srcs = ["main.go"],
-    importpath = "github.com/whale-net/everything/manman/host",
+    importpath = "github.com/whale-net/everything/manmanv2/host",
     visibility = ["//visibility:private"],
     deps = [
         "//libs/go/docker",
         "//libs/go/grpcclient",
         "//libs/go/logging",
         "//libs/go/rmq",
-        "//manman/host/rmq",
-        "//manman/host/session",
-        "//manman/protos:manmanpb",
+        "//manmanv2/host/rmq",
+        "//manmanv2/host/session",
+        "//manmanv2/protos:manmanpb",
         "@com_github_google_uuid//:uuid",
     ],
 )

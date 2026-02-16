@@ -29,11 +29,11 @@ py_library(
     name = "manman",
     visibility = ["//visibility:public"],
     deps = [
-        "//manman/src:manman_core",
-        "//manman/src/host:manman_host",
-        "//manman/src/migrations:manman_migrations",
-        "//manman/src/repository:manman_repository",
-        "//manman/src/worker:manman_worker",
+        "//manmanv2/src:manman_core",
+        "//manmanv2/src/host:manman_host",
+        "//manmanv2/src/migrations:manman_migrations",
+        "//manmanv2/src/repository:manman_repository",
+        "//manmanv2/src/worker:manman_worker",
     ],
 )
 
@@ -42,7 +42,7 @@ release_app(
     name = "experience-api",
     app_type = "external-api",
     args = ["start-experience-api"],
-    binary_name = "//manman/src/host/api/experience:experience_api",
+    binary_name = "//manmanv2/src/host/api/experience:experience_api",
     description = "Experience API service for managing user experiences and workflows",
     domain = "manman",
     fastapi_app = "manman.src.host.api.experience:create_app",
@@ -57,7 +57,7 @@ release_app(
     name = "status-api",
     app_type = "internal-api",
     args = ["start-status-api"],
-    binary_name = "//manman/src/host/api/status:status_api",
+    binary_name = "//manmanv2/src/host/api/status:status_api",
     description = "Status API service for monitoring and health checks",
     domain = "manman",
     fastapi_app = "manman.src.host.api.status:create_app",
@@ -70,7 +70,7 @@ release_app(
     name = "worker-dal-api",
     app_type = "external-api",
     args = ["start-worker-dal-api"],
-    binary_name = "//manman/src/host/api/worker_dal:worker_dal_api",
+    binary_name = "//manmanv2/src/host/api/worker_dal:worker_dal_api",
     description = "Worker DAL API service for data access layer operations",
     domain = "manman",
     fastapi_app = "manman.src.host.api.worker_dal:create_app",
@@ -85,7 +85,7 @@ release_app(
     name = "status-processor",
     app_type = "internal-api",
     args = ["start-status-processor"],
-    binary_name = "//manman/src/host:status_processor",
+    binary_name = "//manmanv2/src/host:status_processor",
     description = "Status processor service for background status processing",
     domain = "manman",
     language = "python",
@@ -98,7 +98,7 @@ release_app(
     additional_tars = ["//tools/steamcmd:steamcmd_layers"],
     app_type = "worker",
     args = ["start"],
-    binary_name = "//manman/src/worker:worker",
+    binary_name = "//manmanv2/src/worker:worker",
     description = "Background worker service for processing tasks and messages",
     domain = "manman",
     language = "python",
@@ -109,7 +109,7 @@ release_app(
     name = "migration",
     app_type = "job",
     args = ["run-migration"],  # Pass the migration command as container args
-    binary_name = "//manman/src/host:migration",
+    binary_name = "//manmanv2/src/host:migration",
     description = "Database migration job for schema updates",
     domain = "manman",
     language = "python",
@@ -119,7 +119,7 @@ release_app(
 release_app(
     name = "management-ui",
     app_type = "external-api",
-    binary_name = "//manman/management-ui:management-ui",
+    binary_name = "//manmanv2/management-ui:management-ui",
     description = "HTMX-based web interface for managing ManMan services with OIDC authentication",
     domain = "manman",
     ingress_host = "manage.manman.local",
@@ -171,11 +171,11 @@ MANMAN_V1_APPS = [
 
 # List of ManManV2 (Go) app metadata targets for chart composition
 MANMAN_V2_APPS = [
-    "//manman/api:control-api_metadata",
-    "//manman/migrate:control-migration_metadata",
-    "//manman/processor:event-processor_metadata",
-    "//manman/log-processor:log-processor_metadata",
-    "//manman-v2/ui:manmanv2-ui_metadata",
+    "//manmanv2/api:control-api_metadata",
+    "//manmanv2/migrate:control-migration_metadata",
+    "//manmanv2/processor:event-processor_metadata",
+    "//manmanv2/log-processor:log-processor_metadata",
+    "//manmanv2/ui:manmanv2-ui_metadata",
 ]
 
 # ManMan V1 Helm chart - Python-based legacy services

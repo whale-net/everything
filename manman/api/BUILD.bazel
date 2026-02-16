@@ -7,9 +7,9 @@ go_binary(
     deps = [
         "//libs/go/rmq",
         "//libs/go/s3",
-        "//manman/api/handlers",
-        "//manman/api/repository/postgres",
-        "//manman/protos:manmanpb",
+        "//manmanv2/api/handlers",
+        "//manmanv2/api/repository/postgres",
+        "//manmanv2/protos:manmanpb",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//reflection",
     ],

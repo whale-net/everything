@@ -3,12 +3,12 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "archiver",
     srcs = ["archiver.go"],
-    importpath = "github.com/whale-net/everything/manman/log-processor/archiver",
+    importpath = "github.com/whale-net/everything/manmanv2/log-processor/archiver",
     visibility = ["//visibility:public"],
     deps = [
         "//libs/go/s3",
         "//manman:models",
-        "//manman/api/repository",
+        "//manmanv2/api/repository",
     ],
 )
 

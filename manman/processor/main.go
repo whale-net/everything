@@ -13,10 +13,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
-	"github.com/whale-net/everything/manman/api/repository"
-	"github.com/whale-net/everything/manman/api/repository/postgres"
-	"github.com/whale-net/everything/manman/processor/consumer"
-	"github.com/whale-net/everything/manman/processor/handlers"
+	"github.com/whale-net/everything/manmanv2/api/repository"
+	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
+	"github.com/whale-net/everything/manmanv2/processor/consumer"
+	"github.com/whale-net/everything/manmanv2/processor/handlers"
 )
 
 func main() {

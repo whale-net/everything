@@ -13,7 +13,7 @@
 #
 # Prerequisites:
 #   - Control plane running (tilt up)
-#   - Host manager image built (bazel run //manman/host:host-manager_image_load)
+#   - Host manager image built (bazel run //manmanv2/host:host-manager_image_load)
 #   - grpcurl installed (brew install grpcurl)
 #
 # Usage: ./scripts/test-containerized-flow.sh [OPTIONS]

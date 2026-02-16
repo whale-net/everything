@@ -14,13 +14,13 @@ go_library(
         "templates.go",
     ],
     embedsrcs = glob(["templates/**/*.html"]),
-    importpath = "github.com/whale-net/everything/manman-v2/ui",
+    importpath = "github.com/whale-net/everything/manmanv2/ui",
     visibility = ["//visibility:private"],
     deps = [
         "//libs/go/grpcclient",
         "//libs/go/htmxauth",
         "//libs/go/htmxbase",
-        "//manman/protos:manmanpb",
+        "//manmanv2/protos:manmanpb",
         "@org_golang_google_grpc//:grpc",
     ],
 )

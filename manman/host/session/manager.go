@@ -15,9 +15,9 @@ import (
 	"github.com/whale-net/everything/libs/go/docker"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/manman"
-	"github.com/whale-net/everything/manman/host/config"
-	hostrmq "github.com/whale-net/everything/manman/host/rmq"
-	pb "github.com/whale-net/everything/manman/protos"
+	"github.com/whale-net/everything/manmanv2/host/config"
+	hostrmq "github.com/whale-net/everything/manmanv2/host/rmq"
+	pb "github.com/whale-net/everything/manmanv2/protos"
 )
 
 const (

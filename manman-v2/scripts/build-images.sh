@@ -80,7 +80,7 @@ echo -e "${BLUE}Platform:${NC} $PLATFORM"
 echo -e "${BLUE}Bazel Platform:${NC} $BAZEL_PLATFORM"
 echo ""
 
-# Change to repo root (script is in manman-v2/scripts/)
+# Change to repo root (script is in manmanv2/scripts/)
 cd "$(dirname "$0")/../.."
 
 # Build function with error handling
@@ -104,21 +104,21 @@ FAILED_BUILDS=()
 # Build wrapper image (required for host manager)
 echo ""
 echo -e "${BLUE}━━━ Building Wrapper Image ━━━${NC}"
-if ! build_image "manmanv2-wrapper" "//manman/wrapper:manmanv2-wrapper_image_load"; then
+if ! build_image "manmanv2-wrapper" "//manmanv2/wrapper:manmanv2-wrapper_image_load"; then
   FAILED_BUILDS+=("wrapper")
 fi
 
 # Build API image (for control plane)
 echo ""
 echo -e "${BLUE}━━━ Building API Image ━━━${NC}"
-if ! build_image "manmanv2-api" "//manman/api:manmanv2-api_image_load"; then
+if ! build_image "manmanv2-api" "//manmanv2/api:manmanv2-api_image_load"; then
   FAILED_BUILDS+=("api")
 fi
 
 # Build processor image (for control plane)
 echo ""
 echo -e "${BLUE}━━━ Building Processor Image ━━━${NC}"
-if ! build_image "manmanv2-processor" "//manman/processor:manmanv2-processor_image_load"; then
+if ! build_image "manmanv2-processor" "//manmanv2/processor:manmanv2-processor_image_load"; then
   FAILED_BUILDS+=("processor")
 fi
 
@@ -154,7 +154,7 @@ if [ ${#FAILED_BUILDS[@]} -eq 0 ]; then
   echo ""
   echo -e "${BLUE}Next steps:${NC}"
   echo "  1. tilt up                        # Start control plane"
-  echo "  2. bazel run //manman/host:host   # Run host manager"
+  echo "  2. bazel run //manmanv2/host:host   # Run host manager"
   exit 0
 else
   echo -e "${RED}Failed to build: ${FAILED_BUILDS[*]}${NC}"

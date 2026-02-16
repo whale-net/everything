@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/whale-net/everything/manman"
-	pb "github.com/whale-net/everything/manman/protos"
+	pb "github.com/whale-net/everything/manmanv2/protos"
 )
 
 // ============================================================================

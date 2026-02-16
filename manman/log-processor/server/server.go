@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/whale-net/everything/manman/log-processor/consumer"
-	manmanpb "github.com/whale-net/everything/manman/protos"
+	"github.com/whale-net/everything/manmanv2/log-processor/consumer"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
 // Server implements the LogProcessor gRPC service

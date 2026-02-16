@@ -28,7 +28,7 @@ fi
 
 # Build image
 echo "Building host manager image..."
-bazel run //manman/host:host-manager_image_load
+bazel run //manmanv2/host:host-manager_image_load
 
 # Run container
 # We use host.docker.internal to access services running on the host (Tilt/K8s port-forwards)

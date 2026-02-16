@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	pb "github.com/whale-net/everything/manman/protos"
+	pb "github.com/whale-net/everything/manmanv2/protos"
 )
 
 func TestRenderPropertiesFilePreservesUnchangedProperties(t *testing.T) {

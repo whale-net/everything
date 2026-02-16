@@ -37,8 +37,8 @@ grpc_call() {
 
   grpcurl ${tls_flags} \
     -import-path "${REPO_ROOT}" \
-    -proto "${REPO_ROOT}/manman/protos/api.proto" \
-    -proto "${REPO_ROOT}/manman/protos/messages.proto" \
+    -proto "${REPO_ROOT}/manmanv2/protos/api.proto" \
+    -proto "${REPO_ROOT}/manmanv2/protos/messages.proto" \
     -d "${data}" \
     "${addr}" "${method}"
 }

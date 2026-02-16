@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/whale-net/everything/libs/go/rmq"
-	manmanpb "github.com/whale-net/everything/manman/protos"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
 // LogMessage represents a log message from RabbitMQ

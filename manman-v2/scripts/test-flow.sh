@@ -11,7 +11,7 @@
 #
 # Prerequisites:
 #   - Control plane running (tilt up)
-#   - Host manager running (bazel run //manman/host:host)
+#   - Host manager running (bazel run //manmanv2/host:host)
 #   - grpcurl installed (brew install grpcurl)
 #
 # Usage: ./scripts/test-flow.sh [OPTIONS]

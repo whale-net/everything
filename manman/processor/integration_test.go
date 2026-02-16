@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/whale-net/everything/manman"
-	"github.com/whale-net/everything/manman/api/repository"
-	"github.com/whale-net/everything/manman/host/rmq"
-	"github.com/whale-net/everything/manman/processor/handlers"
+	"github.com/whale-net/everything/manmanv2/api/repository"
+	"github.com/whale-net/everything/manmanv2/host/rmq"
+	"github.com/whale-net/everything/manmanv2/processor/handlers"
 	"log/slog"
 	"os"
 )

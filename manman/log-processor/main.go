@@ -15,12 +15,12 @@ import (
 
 	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/libs/go/s3"
-	"github.com/whale-net/everything/manman/api/repository/postgres"
-	"github.com/whale-net/everything/manman/log-processor/archiver"
-	"github.com/whale-net/everything/manman/log-processor/consumer"
-	"github.com/whale-net/everything/manman/log-processor/lifecycle"
-	"github.com/whale-net/everything/manman/log-processor/server"
-	manmanpb "github.com/whale-net/everything/manman/protos"
+	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
+	"github.com/whale-net/everything/manmanv2/log-processor/archiver"
+	"github.com/whale-net/everything/manmanv2/log-processor/consumer"
+	"github.com/whale-net/everything/manmanv2/log-processor/lifecycle"
+	"github.com/whale-net/everything/manmanv2/log-processor/server"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
 func main() {

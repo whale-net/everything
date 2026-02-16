@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/whale-net/everything/manman"
-	"github.com/whale-net/everything/manman/api/repository"
-	"github.com/whale-net/everything/manman/api/repository/postgres"
-	pb "github.com/whale-net/everything/manman/protos"
+	"github.com/whale-net/everything/manmanv2/api/repository"
+	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
+	pb "github.com/whale-net/everything/manmanv2/protos"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

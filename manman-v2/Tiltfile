@@ -123,35 +123,35 @@ local_resource(
 # Application Configuration
 # ===========================
 
-# Get watch paths for manman apps
-watch_paths = get_watch_paths('manman') + ['manman-v2/ui']
+# Get watch paths for manmanv2 apps
+watch_paths = get_watch_paths('manmanv2')
 
 # Define ManManV2 apps (control plane services only)
 # Host manager runs on bare metal with Docker socket - see README-HOST.md
 APPS = {
     'migration': {
         'enabled_env': 'ENABLE_MANMANV2_MIGRATION',
-        'bazel_target': '//manman/migrate:control-migration_image_load',
+        'bazel_target': '//manmanv2/migrate:control-migration_image_load',
         'image_name': 'manmanv2-control-migration',
     },
     'api': {
         'enabled_env': 'ENABLE_MANMANV2_API',
-        'bazel_target': '//manman/api:control-api_image_load',
+        'bazel_target': '//manmanv2/api:control-api_image_load',
         'image_name': 'manmanv2-control-api',
     },
     'processor': {
         'enabled_env': 'ENABLE_MANMANV2_PROCESSOR',
-        'bazel_target': '//manman/processor:event-processor_image_load',
+        'bazel_target': '//manmanv2/processor:event-processor_image_load',
         'image_name': 'manmanv2-event-processor',
     },
     'log-processor': {
         'enabled_env': 'ENABLE_MANMANV2_LOG_PROCESSOR',
-        'bazel_target': '//manman/log-processor:log-processor_image_load',
+        'bazel_target': '//manmanv2/log-processor:log-processor_image_load',
         'image_name': 'manmanv2-log-processor',
     },
     'ui': {
         'enabled_env': 'ENABLE_MANMANV2_UI',
-        'bazel_target': '//manman-v2/ui:manmanv2-ui_image_load',
+        'bazel_target': '//manmanv2/ui:manmanv2-ui_image_load',
         'image_name': 'manmanv2-manmanv2-ui',
     },
 }
@@ -168,8 +168,8 @@ if get_env_bool('BUILD_TEST_GAME_SERVER', default='true'):
     print("🎮 Building test game server image...")
     docker_build(
         'manmanv2-test-game-server',
-        context='../manman/testdata',
-        dockerfile='../manman/testdata/Dockerfile',
+        context='../manmanv2/testdata',
+        dockerfile='../manmanv2/testdata/Dockerfile',
     )
     print("  ✓ manmanv2-test-game-server")
 

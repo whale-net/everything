@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	pb "github.com/whale-net/everything/manman/protos"
+	pb "github.com/whale-net/everything/manmanv2/protos"
 )
 
 // Renderer handles configuration strategy rendering

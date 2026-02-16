@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/whale-net/everything/manman/api/repository"
+	"github.com/whale-net/everything/manmanv2/api/repository"
 )
 
 // EventHandler processes a single event type

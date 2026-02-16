@@ -15,9 +15,9 @@ import (
 	grpcclient "github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/logging"
 	rmqlib "github.com/whale-net/everything/libs/go/rmq"
-	"github.com/whale-net/everything/manman/host/rmq"
-	"github.com/whale-net/everything/manman/host/session"
-	pb "github.com/whale-net/everything/manman/protos"
+	"github.com/whale-net/everything/manmanv2/host/rmq"
+	"github.com/whale-net/everything/manmanv2/host/session"
+	pb "github.com/whale-net/everything/manmanv2/protos"
 )
 
 func main() {

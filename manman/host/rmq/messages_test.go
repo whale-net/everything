@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/whale-net/everything/manman/host/rmq"
+	"github.com/whale-net/everything/manmanv2/host/rmq"
 )
 
 func TestStartSessionCommand_MarshalUnmarshal(t *testing.T) {

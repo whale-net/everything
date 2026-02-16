@@ -11,9 +11,9 @@ import (
 
 	rmqlib "github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/libs/go/s3"
-	"github.com/whale-net/everything/manman/api/handlers"
-	"github.com/whale-net/everything/manman/api/repository/postgres"
-	pb "github.com/whale-net/everything/manman/protos"
+	"github.com/whale-net/everything/manmanv2/api/handlers"
+	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
+	pb "github.com/whale-net/everything/manmanv2/protos"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )

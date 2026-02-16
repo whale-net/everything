@@ -10,8 +10,8 @@ import (
 
 	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manman"
-	"github.com/whale-net/everything/manman/api/repository"
-	pb "github.com/whale-net/everything/manman/protos"
+	"github.com/whale-net/everything/manmanv2/api/repository"
+	pb "github.com/whale-net/everything/manmanv2/protos"
 )
 
 type LogsHandler struct {

@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/whale-net/everything/manman"
-	pb "github.com/whale-net/everything/manman/protos"
+	pb "github.com/whale-net/everything/manmanv2/protos"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

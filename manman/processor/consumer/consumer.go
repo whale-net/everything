@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/whale-net/everything/libs/go/rmq"
-	"github.com/whale-net/everything/manman/processor/handlers"
+	"github.com/whale-net/everything/manmanv2/processor/handlers"
 )
 
 const (

@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/whale-net/everything/manman"
-	"github.com/whale-net/everything/manman/host/session"
+	"github.com/whale-net/everything/manmanv2/host/session"
 )
 
 func TestManager_AddGetRemoveSession(t *testing.T) {

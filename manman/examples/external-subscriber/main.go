@@ -10,7 +10,7 @@ import (
 	"syscall"
 
 	"github.com/whale-net/everything/libs/go/rmq"
-	hostrmq "github.com/whale-net/everything/manman/host/rmq"
+	hostrmq "github.com/whale-net/everything/manmanv2/host/rmq"
 )
 
 // ExternalEventSubscriber demonstrates how to consume events from the external exchange
