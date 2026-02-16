@@ -150,14 +150,14 @@ func (app *App) handleConfigActions(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
 	ctx := context.Background()
 
-	// Extract config ID from URL
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/configs/"), "/")
-	if len(parts) < 2 || parts[1] != "actions" {
+	// Extract config ID from URL: /games/{gameID}/configs/{configID}/actions
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 5 || parts[0] != "games" || parts[2] != "configs" || parts[4] != "actions" {
 		http.Error(w, "Invalid URL", http.StatusBadRequest)
 		return
 	}
 
-	configID, err := strconv.ParseInt(parts[0], 10, 64)
+	configID, err := strconv.ParseInt(parts[3], 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid config ID", http.StatusBadRequest)
 		return
