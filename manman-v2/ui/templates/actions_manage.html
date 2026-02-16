@@ -372,17 +372,17 @@
                         </tr>
                     </thead>
                     <tbody>
-                        {{range .LocalActions}}
+                        {{range $action := .LocalActions}}
                         <tr>
-                            <td><code>{{.Action.Name}}</code></td>
+                            <td><code>{{$action.Action.Name}}</code></td>
                             <td>
-                                {{if .Action.Icon}}<i class="{{.Action.Icon}}"></i> {{end}}
-                                {{.Action.Label}}
+                                {{if $action.Action.Icon}}<i class="{{$action.Action.Icon}}"></i> {{end}}
+                                {{$action.Action.Label}}
                             </td>
-                            <td>{{if .Action.GroupName}}{{.Action.GroupName}}{{else}}-{{end}}</td>
-                            <td><code style="font-size: 0.85em;">{{.Action.CommandTemplate}}</code></td>
+                            <td>{{if $action.Action.GroupName}}{{$action.Action.GroupName}}{{else}}-{{end}}</td>
+                            <td><code style="font-size: 0.85em;">{{$action.Action.CommandTemplate}}</code></td>
                             <td>
-                                {{if .Action.Enabled}}
+                                {{if $action.Action.Enabled}}
                                 <span class="badge badge-success">Yes</span>
                                 {{else}}
                                 <span class="badge badge-secondary">No</span>
@@ -390,11 +390,24 @@
                             </td>
                             <td>
                                 <button class="btn btn-sm btn-secondary"
-                                        @click="editAction({{.Action.ActionId}})">
+                                        @click='editAction({
+                                            actionId: {{$action.Action.ActionId}},
+                                            name: "{{$action.Action.Name}}",
+                                            label: "{{$action.Action.Label}}",
+                                            description: "{{$action.Action.Description}}",
+                                            commandTemplate: `{{$action.Action.CommandTemplate}}`,
+                                            displayOrder: {{$action.Action.DisplayOrder}},
+                                            groupName: "{{$action.Action.GroupName}}",
+                                            buttonStyle: "{{$action.Action.ButtonStyle}}",
+                                            icon: "{{$action.Action.Icon}}",
+                                            requiresConfirmation: {{$action.Action.RequiresConfirmation}},
+                                            confirmationMessage: "{{$action.Action.ConfirmationMessage}}",
+                                            enabled: {{$action.Action.Enabled}}
+                                        })'>
                                     Edit
                                 </button>
                                 <button class="btn btn-sm btn-danger"
-                                        @click="deleteAction({{.Action.ActionId}}, '{{.Action.Label}}')">
+                                        @click="deleteAction({{$action.Action.ActionId}}, '{{$action.Action.Label}}')">
                                     Delete
                                 </button>
                             </td>
@@ -548,13 +561,30 @@ function actionManager() {
             this.resetForm();
         },
 
-        async editAction(actionId) {
-            // For now, just show the form
-            // TODO: Fetch action details and populate form
+        editAction(actionData) {
             this.editMode = true;
-            this.formData.action_id = actionId;
+            this.formData = {
+                action_id: actionData.actionId,
+                name: actionData.name,
+                label: actionData.label,
+                description: actionData.description || '',
+                command_template: actionData.commandTemplate,
+                display_order: actionData.displayOrder,
+                group_name: actionData.groupName || '',
+                button_style: actionData.buttonStyle,
+                icon: actionData.icon || '',
+                requires_confirmation: actionData.requiresConfirmation,
+                confirmation_message: actionData.confirmationMessage || '',
+                enabled: actionData.enabled,
+                input_fields: [], // TODO: Fetch and populate input fields
+            };
             this.showForm = true;
-            alert('Edit functionality will fetch and populate action data. For now, please manually fill the form.');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+
+            // Note: Input fields are not populated yet - they require API fetch
+            if (actionData.hasInputFields) {
+                this.errorMessage = 'Note: Input fields are not loaded in edit mode yet. Please verify them after saving.';
+            }
         },
 
         async deleteAction(actionId, actionLabel) {
