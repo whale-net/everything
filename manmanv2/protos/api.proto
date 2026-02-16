@@ -2,9 +2,9 @@ syntax = "proto3";
 
 package manman.v1;
 
-option go_package = "github.com/whale-net/everything/manman/protos;manmanpb";
+option go_package = "github.com/whale-net/everything/manmanv2/protos;manmanpb";
 
-import "manman/protos/messages.proto";
+import "manmanv2/protos/messages.proto";
 
 // ManManAPI is the main control plane API for managing game servers
 service ManManAPI {

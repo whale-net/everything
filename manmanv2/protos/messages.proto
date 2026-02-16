@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package manman.v1;
 
-option go_package = "github.com/whale-net/everything/manman/protos;manmanpb";
+option go_package = "github.com/whale-net/everything/manmanv2/protos;manmanpb";
 
 // ============================================================================
 // Structured Data Types
