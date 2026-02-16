@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/whale-net/everything/manman"
+	"github.com/whale-net/everything/manmanv2"
 	pb "github.com/whale-net/everything/manmanv2/protos"
 )
 

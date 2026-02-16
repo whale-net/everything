@@ -3,7 +3,7 @@ package handlers
 import (
 	"testing"
 
-	"github.com/whale-net/everything/manman"
+	"github.com/whale-net/everything/manmanv2"
 )
 
 func TestIsValidTransition(t *testing.T) {

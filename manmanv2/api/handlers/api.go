@@ -9,7 +9,7 @@ import (
 
 	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/libs/go/s3"
-	"github.com/whale-net/everything/manman"
+	"github.com/whale-net/everything/manmanv2"
 	"github.com/whale-net/everything/manmanv2/api/repository"
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
 	pb "github.com/whale-net/everything/manmanv2/protos"

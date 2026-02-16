@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"strconv"
 
-	"github.com/whale-net/everything/manman"
+	"github.com/whale-net/everything/manmanv2"
 )
 
 // RecoverOrphanedSessions recovers sessions from existing game containers.

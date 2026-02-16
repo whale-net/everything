@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/whale-net/everything/manman"
+	"github.com/whale-net/everything/manmanv2"
 	"github.com/whale-net/everything/manmanv2/api/repository"
 	"github.com/whale-net/everything/manmanv2/host/rmq"
 	"github.com/whale-net/everything/manmanv2/processor/handlers"

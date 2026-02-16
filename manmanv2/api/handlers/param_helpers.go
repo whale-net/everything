@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/whale-net/everything/libs/go/params"
-	"github.com/whale-net/everything/manman"
+	"github.com/whale-net/everything/manmanv2"
 	pb "github.com/whale-net/everything/manmanv2/protos"
 )
 

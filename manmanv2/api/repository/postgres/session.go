@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/whale-net/everything/manman"
+	"github.com/whale-net/everything/manmanv2"
 	"github.com/whale-net/everything/manmanv2/api/repository"
 )
 

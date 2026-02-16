@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/whale-net/everything/libs/go/s3"
-	"github.com/whale-net/everything/manman"
+	"github.com/whale-net/everything/manmanv2"
 )
 
 // mockS3Client implements a simple in-memory S3 for testing

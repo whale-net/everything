@@ -14,7 +14,7 @@ import (
 
 	"github.com/whale-net/everything/libs/go/docker"
 	"github.com/whale-net/everything/libs/go/rmq"
-	"github.com/whale-net/everything/manman"
+	"github.com/whale-net/everything/manmanv2"
 	"github.com/whale-net/everything/manmanv2/host/config"
 	hostrmq "github.com/whale-net/everything/manmanv2/host/rmq"
 	pb "github.com/whale-net/everything/manmanv2/protos"
