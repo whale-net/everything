@@ -14,7 +14,7 @@ go_library(
     visibility = ["//manmanv2/processor:__subpackages__"],
     deps = [
         "//libs/go/rmq",
-        "//manman:models",
+        "//manmanv2:models",
         "//manmanv2/api/repository",
         "//manmanv2/host/rmq",
         "@com_github_jackc_pgx_v5//:pgx",
@@ -30,6 +30,6 @@ go_test(
     ],
     embed = [":handlers"],
     deps = [
-        "//manman:models",
+        "//manmanv2:models",
     ],
 )
