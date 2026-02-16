@@ -906,3 +906,146 @@ func TestAddLibraryReference(t *testing.T) {
 		})
 	}
 }
+
+// TestFetchAddonMetadata tests the FetchAddonMetadata RPC
+func TestFetchAddonMetadata(t *testing.T) {
+	tests := []struct {
+		name          string
+		request       *pb.FetchAddonMetadataRequest
+		mockSetup     func(*MockWorkshopManager)
+		expectedError codes.Code
+		checkResponse func(*testing.T, *pb.FetchAddonMetadataResponse)
+	}{
+		{
+			name: "successful metadata fetch",
+			request: &pb.FetchAddonMetadataRequest{
+				GameId:     1,
+				WorkshopId: "123456",
+			},
+			mockSetup: func(m *MockWorkshopManager) {
+				description := "Test addon description"
+				fileSize := int64(1024000)
+				m.On("FetchMetadata", mock.Anything, int64(1), "123456").
+					Return(&manman.WorkshopAddon{
+						GameID:        1,
+						WorkshopID:    "123456",
+						PlatformType:  manman.PlatformTypeSteamWorkshop,
+						Name:          "Test Addon",
+						Description:   &description,
+						FileSizeBytes: &fileSize,
+						IsCollection:  false,
+					}, nil)
+			},
+			expectedError: codes.OK,
+			checkResponse: func(t *testing.T, resp *pb.FetchAddonMetadataResponse) {
+				assert.NotNil(t, resp)
+				assert.NotNil(t, resp.Addon)
+				assert.Equal(t, int64(1), resp.Addon.GameId)
+				assert.Equal(t, "123456", resp.Addon.WorkshopId)
+				assert.Equal(t, "Test Addon", resp.Addon.Name)
+				assert.Equal(t, "Test addon description", resp.Addon.Description)
+				assert.Equal(t, int64(1024000), resp.Addon.FileSizeBytes)
+				assert.False(t, resp.Addon.IsCollection)
+			},
+		},
+		{
+			name: "successful collection metadata fetch",
+			request: &pb.FetchAddonMetadataRequest{
+				GameId:     1,
+				WorkshopId: "789012",
+			},
+			mockSetup: func(m *MockWorkshopManager) {
+				description := "Test collection"
+				fileSize := int64(2048000)
+				m.On("FetchMetadata", mock.Anything, int64(1), "789012").
+					Return(&manman.WorkshopAddon{
+						GameID:        1,
+						WorkshopID:    "789012",
+						PlatformType:  manman.PlatformTypeSteamWorkshop,
+						Name:          "Test Collection",
+						Description:   &description,
+						FileSizeBytes: &fileSize,
+						IsCollection:  true,
+						Metadata: map[string]interface{}{
+							"collection_items": []map[string]interface{}{
+								{"workshop_id": "111", "title": "Item 1"},
+								{"workshop_id": "222", "title": "Item 2"},
+							},
+						},
+					}, nil)
+			},
+			expectedError: codes.OK,
+			checkResponse: func(t *testing.T, resp *pb.FetchAddonMetadataResponse) {
+				assert.NotNil(t, resp)
+				assert.NotNil(t, resp.Addon)
+				assert.Equal(t, "Test Collection", resp.Addon.Name)
+				assert.True(t, resp.Addon.IsCollection)
+			},
+		},
+		{
+			name: "missing game_id",
+			request: &pb.FetchAddonMetadataRequest{
+				WorkshopId: "123456",
+			},
+			mockSetup:     func(m *MockWorkshopManager) {},
+			expectedError: codes.InvalidArgument,
+		},
+		{
+			name: "missing workshop_id",
+			request: &pb.FetchAddonMetadataRequest{
+				GameId: 1,
+			},
+			mockSetup:     func(m *MockWorkshopManager) {},
+			expectedError: codes.InvalidArgument,
+		},
+		{
+			name: "unsupported platform type",
+			request: &pb.FetchAddonMetadataRequest{
+				GameId:       1,
+				WorkshopId:   "123456",
+				PlatformType: "unsupported_platform",
+			},
+			mockSetup:     func(m *MockWorkshopManager) {},
+			expectedError: codes.InvalidArgument,
+		},
+		{
+			name: "steam API failure",
+			request: &pb.FetchAddonMetadataRequest{
+				GameId:     1,
+				WorkshopId: "999999",
+			},
+			mockSetup: func(m *MockWorkshopManager) {
+				m.On("FetchMetadata", mock.Anything, int64(1), "999999").
+					Return(nil, assert.AnError)
+			},
+			expectedError: codes.Unavailable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockManager := new(MockWorkshopManager)
+			tt.mockSetup(mockManager)
+
+			handler := &WorkshopServiceHandler{
+				workshopManager: mockManager,
+			}
+
+			resp, err := handler.FetchAddonMetadata(context.Background(), tt.request)
+
+			if tt.expectedError != codes.OK {
+				assert.Error(t, err)
+				st, ok := status.FromError(err)
+				assert.True(t, ok)
+				assert.Equal(t, tt.expectedError, st.Code())
+			} else {
+				assert.NoError(t, err)
+				if tt.checkResponse != nil {
+					tt.checkResponse(t, resp)
+				}
+			}
+
+			mockManager.AssertExpectations(t)
+		})
+	}
+}

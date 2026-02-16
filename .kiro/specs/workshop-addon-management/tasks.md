@@ -292,76 +292,76 @@ This implementation plan breaks down the workshop addon management feature into 
     - Implement AddLibraryReference RPC with circular reference detection
     - _Requirements: 14.4, 14.5, 14.6_
   
-  - [-] 10.8 Implement FetchAddonMetadata RPC
+  - [x] 10.8 Implement FetchAddonMetadata RPC
     - Call SteamWorkshopClient to fetch metadata
     - Return metadata without creating addon record
     - Handle API failures gracefully
     - _Requirements: 9.1, 9.2, 9.3_
   
-  - [ ] 10.9 Add authentication and authorization to all RPCs
+  - [x] 10.9 Add authentication and authorization to all RPCs
     - Require authentication for all workshop RPCs
     - Add audit logging for all operations
     - _Requirements: 16.1, 16.6_
   
-  - [ ] 10.10 Write property test for audit logging
+  - [x] 10.10 Write property test for audit logging
     - **Property 44: Audit Log Completeness**
     - **Validates: Requirements 16.6, 10.7**
 
 - [ ] 11. Input validation and security
-  - [ ] 11.1 Implement workshop ID validation
+  - [x] 11.1 Implement workshop ID validation
     - Validate Steam Workshop IDs are numeric strings
     - Prevent path traversal in workshop IDs
     - _Requirements: 11.3, 16.2_
   
-  - [ ] 11.2 Write property test for path traversal prevention
+  - [x] 11.2 Write property test for path traversal prevention
     - **Property 41: Path Traversal Prevention**
     - **Validates: Requirements 16.2**
   
-  - [ ] 11.3 Implement metadata sanitization
+  - [x] 11.3 Implement metadata sanitization
     - Sanitize HTML/JavaScript in addon names and descriptions
     - Prevent XSS attacks in UI
     - _Requirements: 16.3_
   
-  - [ ] 11.4 Write property test for sanitization
+  - [x] 11.4 Write property test for sanitization
     - **Property 42: Metadata Sanitization**
     - **Validates: Requirements 16.3**
   
-  - [ ] 11.5 Implement installation path validation
+  - [x] 11.5 Implement installation path validation
     - Validate paths remain within volume boundaries
     - Prevent directory traversal in installation paths
     - _Requirements: 16.5_
   
-  - [ ] 11.6 Write property test for path boundary validation
+  - [x] 11.6 Write property test for path boundary validation
     - **Property 43: Installation Path Boundary Validation**
     - **Validates: Requirements 16.5**
 
 - [ ] 12. Action system integration
-  - [ ] 12.1 Create action helper for workshop addon actions
+  - [x] 12.1 Create action helper for workshop addon actions
     - Create `manmanv2/api/workshop/actions.go`
     - Implement function to generate action input options from installed addons
     - Implement template variable substitution for addon metadata
     - _Requirements: 7.1, 7.2, 7.3, 7.6_
   
-  - [ ] 12.2 Write property tests for action integration
+  - [x] 12.2 Write property tests for action integration
     - **Property 19: Action Addon Reference Validity**
     - **Property 20: Action Template Rendering**
     - **Property 21: Dynamic Action Options Synchronization**
     - **Validates: Requirements 7.2, 7.3, 7.4, 7.5, 7.6**
   
-  - [ ] 12.3 Add workshop addon support to action execution
+  - [x] 12.3 Add workshop addon support to action execution
     - Verify addon is installed before executing action
     - Substitute addon metadata in command templates
     - _Requirements: 7.4, 7.6_
 
 - [ ] 13. Management UI components
-  - [ ] 13.1 Create workshop addon library page template
+  - [x] 13.1 Create workshop addon library page template
     - Create `manmanv2/ui/templates/workshop_library.html`
     - Display addons per game with search and filter
     - Add buttons for create, edit, delete addon
     - Add button to fetch metadata from Steam
     - _Requirements: 6.6_
   
-  - [ ] 13.2 Create workshop addon installation page template
+  - [x] 13.2 Create workshop addon installation page template
     - Create `manmanv2/ui/templates/workshop_installations.html`
     - Display installed addons for SGC with status
     - Show progress bars for in-progress downloads
@@ -369,82 +369,82 @@ This implementation plan breaks down the workshop addon management feature into 
     - Display error messages for failed installations
     - _Requirements: 6.7, 6.8, 6.9, 6.10_
   
-  - [ ] 13.3 Implement UI handlers in manmanv2/ui/handlers_workshop.go
+  - [x] 13.3 Implement UI handlers in manmanv2/ui/handlers_workshop.go
     - Implement WorkshopLibraryPage handler
     - Implement WorkshopInstallationsPage handler
     - Implement HTMX endpoints for install/remove actions
     - Implement HTMX endpoint for progress polling
     - _Requirements: 6.6, 6.7, 6.8, 6.9_
   
-  - [ ] 13.4 Add workshop addon management to SGC detail page
+  - [x] 13.4 Add workshop addon management to SGC detail page
     - Add workshop addons section to gameserver.html template
     - Display installed addons with status
     - Add install button that opens addon selection modal
     - _Requirements: 6.7, 6.8_
 
 - [ ] 14. Resource management and performance
-  - [ ] 14.1 Implement disk space validation
+  - [x] 14.1 Implement disk space validation
     - Check available disk space before downloads
     - Reject downloads if insufficient space
     - _Requirements: 17.3_
   
-  - [ ] 14.2 Write property test for disk space validation
+  - [x] 14.2 Write property test for disk space validation
     - **Property 46: Disk Space Validation**
     - **Validates: Requirements 17.3**
   
-  - [ ] 14.3 Implement temporary file cleanup
+  - [x] 14.3 Implement temporary file cleanup
     - Clean up temp files after successful downloads
     - Clean up temp files after failed downloads
     - _Requirements: 17.4_
   
-  - [ ] 14.4 Write property test for cleanup
+  - [x] 14.4 Write property test for cleanup
     - **Property 47: Temporary File Cleanup**
     - **Validates: Requirements 17.4**
   
-  - [ ] 14.5 Implement download priority queue
+  - [x] 14.5 Implement download priority queue
     - Add priority field to download commands
     - Process downloads in priority order
     - _Requirements: 17.6_
   
-  - [ ] 14.6 Write property test for priority ordering
+  - [x] 14.6 Write property test for priority ordering
     - **Property 48: Download Priority Ordering**
     - **Validates: Requirements 17.6**
 
 - [ ] 15. Integration and end-to-end testing
-  - [ ] 15.1 Write integration test for complete addon installation workflow
+  - [x] 15.1 Write integration test for complete addon installation workflow
     - Test: Create addon → Install to SGC → Verify files downloaded → Verify status updated
     - Use test Docker daemon and test database
     - _Requirements: All installation requirements_
   
-  - [ ] 15.2 Write integration test for collection expansion
+  - [x] 15.2 Write integration test for collection expansion
     - Test: Fetch collection metadata → Create library entries for all items → Install collection
     - _Requirements: 14.1, 14.2, 14.3_
   
-  - [ ] 15.3 Write integration test for addon removal
+  - [x] 15.3 Write integration test for addon removal
     - Test: Install addon → Remove addon → Verify files deleted → Verify status updated
     - _Requirements: 10.1, 10.2, 10.3_
   
-  - [ ] 15.4 Write integration test for concurrent downloads
+  - [x] 15.4 Write integration test for concurrent downloads
     - Test: Trigger multiple downloads → Verify concurrency limit enforced → Verify all complete
     - _Requirements: 3.7, 17.1_
 
-- [ ] 16. Final checkpoint - Ensure all tests pass
+- [x] 16. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 17. Documentation and deployment
-  - [ ] 17.1 Update API documentation
+  - [x] 17.1 Update API documentation
     - Document all workshop service RPCs
     - Add examples for common workflows
     - Document error codes and messages
     - _Requirements: All API requirements_
   
-  - [ ] 17.2 Update deployment documentation
+  - [x] 17.2 Update deployment documentation
     - Document SteamCMD container requirements
     - Document RabbitMQ queue configuration
     - Document environment variables for configuration
     - _Requirements: All deployment requirements_
   
-  - [ ] 17.3 Create migration guide
+  - [x] 17.3 Create migration guide
     - Document how to migrate existing game configs to use workshop addons
     - Provide examples for L4D2 and CS2
     - _Requirements: All requirements_

@@ -1187,3 +1187,161 @@ func containsHelper(s, substr string) bool {
 	}
 	return false
 }
+
+// TestFetchMetadata tests the FetchMetadata method
+func TestFetchMetadata(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name          string
+		gameID        int64
+		workshopID    string
+		setupClient   func() *mockSteamClient
+		expectError   bool
+		validateAddon func(*testing.T, *manman.WorkshopAddon)
+	}{
+		{
+			name:       "successful metadata fetch for regular item",
+			gameID:     1,
+			workshopID: "123456",
+			setupClient: func() *mockSteamClient {
+				description := "Test addon description"
+				return &mockSteamClient{
+					items: map[string]*steam.WorkshopItemMetadata{
+						"123456": {
+							WorkshopID:   "123456",
+							Title:        "Test Addon",
+							Description:  description,
+							FileSize:     1024000,
+							TimeUpdated:  time.Now(),
+							IsCollection: false,
+						},
+					},
+					collections: make(map[string][]steam.CollectionItem),
+				}
+			},
+			expectError: false,
+			validateAddon: func(t *testing.T, addon *manman.WorkshopAddon) {
+				if addon.GameID != 1 {
+					t.Errorf("expected GameID 1, got %d", addon.GameID)
+				}
+				if addon.WorkshopID != "123456" {
+					t.Errorf("expected WorkshopID 123456, got %s", addon.WorkshopID)
+				}
+				if addon.Name != "Test Addon" {
+					t.Errorf("expected Name 'Test Addon', got %s", addon.Name)
+				}
+				if addon.PlatformType != manman.PlatformTypeSteamWorkshop {
+					t.Errorf("expected PlatformType steam_workshop, got %s", addon.PlatformType)
+				}
+				if addon.IsCollection {
+					t.Error("expected IsCollection to be false")
+				}
+				if addon.Description == nil || *addon.Description != "Test addon description" {
+					t.Errorf("expected Description 'Test addon description', got %v", addon.Description)
+				}
+				if addon.FileSizeBytes == nil || *addon.FileSizeBytes != 1024000 {
+					t.Errorf("expected FileSizeBytes 1024000, got %v", addon.FileSizeBytes)
+				}
+			},
+		},
+		{
+			name:       "successful metadata fetch for collection",
+			gameID:     1,
+			workshopID: "789012",
+			setupClient: func() *mockSteamClient {
+				description := "Test collection"
+				return &mockSteamClient{
+					items: map[string]*steam.WorkshopItemMetadata{
+						"789012": {
+							WorkshopID:   "789012",
+							Title:        "Test Collection",
+							Description:  description,
+							FileSize:     2048000,
+							TimeUpdated:  time.Now(),
+							IsCollection: true,
+						},
+					},
+					collections: map[string][]steam.CollectionItem{
+						"789012": {
+							{WorkshopID: "111", Title: "Item 1"},
+							{WorkshopID: "222", Title: "Item 2"},
+						},
+					},
+				}
+			},
+			expectError: false,
+			validateAddon: func(t *testing.T, addon *manman.WorkshopAddon) {
+				if !addon.IsCollection {
+					t.Error("expected IsCollection to be true")
+				}
+				if addon.Metadata == nil {
+					t.Fatal("expected Metadata to be populated")
+				}
+				collectionItems, ok := addon.Metadata["collection_items"]
+				if !ok {
+					t.Error("expected collection_items in metadata")
+				}
+				items, ok := collectionItems.([]map[string]interface{})
+				if !ok {
+					t.Error("expected collection_items to be []map[string]interface{}")
+				}
+				if len(items) != 2 {
+					t.Errorf("expected 2 collection items, got %d", len(items))
+				}
+			},
+		},
+		{
+			name:       "steam API failure",
+			gameID:     1,
+			workshopID: "999999",
+			setupClient: func() *mockSteamClient {
+				return &mockSteamClient{
+					items:       make(map[string]*steam.WorkshopItemMetadata),
+					collections: make(map[string][]steam.CollectionItem),
+					shouldError: true,
+				}
+			},
+			expectError: true,
+		},
+		{
+			name:       "workshop item not found",
+			gameID:     1,
+			workshopID: "nonexistent",
+			setupClient: func() *mockSteamClient {
+				return &mockSteamClient{
+					items:       make(map[string]*steam.WorkshopItemMetadata),
+					collections: make(map[string][]steam.CollectionItem),
+				}
+			},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			steamClient := tt.setupClient()
+			manager := &WorkshopManager{
+				steamClient: steamClient,
+			}
+
+			addon, err := manager.FetchMetadata(ctx, tt.gameID, tt.workshopID)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("expected error but got none")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				if addon == nil {
+					t.Fatal("expected addon to be non-nil")
+				}
+				if tt.validateAddon != nil {
+					tt.validateAddon(t, addon)
+				}
+			}
+		})
+	}
+}
