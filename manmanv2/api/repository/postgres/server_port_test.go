@@ -34,8 +34,8 @@ func TestPortAllocationBasic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get port allocation: %v", err)
 	}
-	if allocation.SGCID == nil || *allocation.SGCID != 100 {
-		t.Errorf("Expected SGCID 100, got %v", allocation.SGCID)
+	if allocation.SessionID == nil || *allocation.SessionID != 100 {
+		t.Errorf("Expected SessionID 100, got %v", allocation.SessionID)
 	}
 
 	// Test: Deallocate port
@@ -59,7 +59,7 @@ func TestPortConflictDetection(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockServerPortRepository()
 
-	// Allocate port for SGCID 100
+	// Allocate port for SessionID 100
 	err := repo.AllocatePort(ctx, 1, 8080, "TCP", 100)
 	if err != nil {
 		t.Fatalf("Failed to allocate port: %v", err)
@@ -176,13 +176,13 @@ func TestListAllocatedPorts(t *testing.T) {
 		t.Errorf("Expected 4 allocated ports, got %d", len(ports))
 	}
 
-	// Test: List ports for SGCID 100
-	ports, err = repo.ListPortsBySGCID(ctx, 100)
+	// Test: List ports for SessionID 100
+	ports, err = repo.ListPortsBySessionID(ctx, 100)
 	if err != nil {
 		t.Fatalf("Failed to list ports by SGCID: %v", err)
 	}
 	if len(ports) != 2 {
-		t.Errorf("Expected 2 ports for SGCID 100, got %d", len(ports))
+		t.Errorf("Expected 2 ports for SessionID 100, got %d", len(ports))
 	}
 }
 
@@ -191,7 +191,7 @@ func TestDeallocateBySGCID(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMockServerPortRepository()
 
-	// Allocate ports for SGCID 100
+	// Allocate ports for SessionID 100
 	repo.AllocatePort(ctx, 1, 8080, "TCP", 100)
 	repo.AllocatePort(ctx, 1, 8081, "TCP", 100)
 	repo.AllocatePort(ctx, 1, 8082, "UDP", 100)
@@ -199,22 +199,22 @@ func TestDeallocateBySGCID(t *testing.T) {
 	// Allocate port for different SGCID
 	repo.AllocatePort(ctx, 1, 9000, "TCP", 200)
 
-	// Test: Deallocate all ports for SGCID 100
-	err := repo.DeallocatePortsBySGCID(ctx, 100)
+	// Test: Deallocate all ports for SessionID 100
+	err := repo.DeallocatePortsBySessionID(ctx, 100)
 	if err != nil {
 		t.Fatalf("Failed to deallocate ports by SGCID: %v", err)
 	}
 
-	// Verify SGCID 100 ports are deallocated
-	ports, _ := repo.ListPortsBySGCID(ctx, 100)
+	// Verify SessionID 100 ports are deallocated
+	ports, _ := repo.ListPortsBySessionID(ctx, 100)
 	if len(ports) != 0 {
-		t.Errorf("Expected 0 ports for SGCID 100 after deallocation, got %d", len(ports))
+		t.Errorf("Expected 0 ports for SessionID 100 after deallocation, got %d", len(ports))
 	}
 
-	// Verify SGCID 200 port is still allocated
-	ports, _ = repo.ListPortsBySGCID(ctx, 200)
+	// Verify SessionID 200 port is still allocated
+	ports, _ = repo.ListPortsBySessionID(ctx, 200)
 	if len(ports) != 1 {
-		t.Errorf("Expected 1 port for SGCID 200, got %d", len(ports))
+		t.Errorf("Expected 1 port for SessionID 200, got %d", len(ports))
 	}
 }
 
@@ -264,15 +264,15 @@ func TestAllocateMultiplePortsConflict(t *testing.T) {
 		t.Error("Expected error due to port conflict")
 	}
 
-	// Verify NO ports were allocated for SGCID 100 (transaction rollback)
-	ports, _ := repo.ListPortsBySGCID(ctx, 100)
+	// Verify NO ports were allocated for SessionID 100 (transaction rollback)
+	ports, _ := repo.ListPortsBySessionID(ctx, 100)
 	if len(ports) != 0 {
 		t.Errorf("Expected 0 ports allocated after failed batch, got %d", len(ports))
 	}
 
 	// Verify original allocation still exists
 	allocation, _ := repo.GetPortAllocation(ctx, 1, 8080, "TCP")
-	if allocation.SGCID == nil || *allocation.SGCID != 999 {
+	if allocation.SessionID == nil || *allocation.SessionID != 999 {
 		t.Error("Original port allocation should remain after failed batch")
 	}
 }
@@ -388,6 +388,198 @@ func TestPortAllocationTimestamp(t *testing.T) {
 	}
 }
 
+// TestTCPandUDPSamePort tests that TCP and UDP can use the same port number
+// This is the core requirement for games like L4D2 that need both 27015/TCP and 27015/UDP
+func TestTCPandUDPSamePort(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockServerPortRepository()
+
+	// Allocate port 27015/TCP for session 100
+	err := repo.AllocatePort(ctx, 1, 27015, "TCP", 100)
+	if err != nil {
+		t.Fatalf("Failed to allocate 27015/TCP: %v", err)
+	}
+
+	// Allocate port 27015/UDP for the same session - should succeed
+	err = repo.AllocatePort(ctx, 1, 27015, "UDP", 100)
+	if err != nil {
+		t.Fatalf("Should allow 27015/UDP when 27015/TCP is allocated: %v", err)
+	}
+
+	// Verify both are allocated
+	tcpAllocation, err := repo.GetPortAllocation(ctx, 1, 27015, "TCP")
+	if err != nil {
+		t.Errorf("Failed to get TCP allocation: %v", err)
+	}
+	if tcpAllocation.Protocol != "TCP" {
+		t.Errorf("Expected TCP protocol, got %s", tcpAllocation.Protocol)
+	}
+
+	udpAllocation, err := repo.GetPortAllocation(ctx, 1, 27015, "UDP")
+	if err != nil {
+		t.Errorf("Failed to get UDP allocation: %v", err)
+	}
+	if udpAllocation.Protocol != "UDP" {
+		t.Errorf("Expected UDP protocol, got %s", udpAllocation.Protocol)
+	}
+
+	// Verify both show as unavailable for other sessions
+	tcpAvailable, _ := repo.IsPortAvailable(ctx, 1, 27015, "TCP")
+	if tcpAvailable {
+		t.Error("27015/TCP should not be available")
+	}
+
+	udpAvailable, _ := repo.IsPortAvailable(ctx, 1, 27015, "UDP")
+	if udpAvailable {
+		t.Error("27015/UDP should not be available")
+	}
+}
+
+// TestAllocateMultiplePortsBothProtocols tests allocating multiple ports with both TCP and UDP
+// This simulates the L4D2 deployment scenario where we need 27015/TCP and 27015/UDP
+func TestAllocateMultiplePortsBothProtocols(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockServerPortRepository()
+
+	// Simulate L4D2 port requirements
+	portBindings := []*manman.PortBinding{
+		{ContainerPort: 27015, HostPort: 27015, Protocol: "TCP"},
+		{ContainerPort: 27015, HostPort: 27015, Protocol: "UDP"},
+	}
+
+	// Allocate both ports for session 100
+	err := repo.AllocateMultiplePorts(ctx, 1, portBindings, 100)
+	if err != nil {
+		t.Fatalf("Failed to allocate L4D2 ports: %v", err)
+	}
+
+	// Verify both are allocated
+	ports, err := repo.ListPortsBySessionID(ctx, 100)
+	if err != nil {
+		t.Fatalf("Failed to list ports: %v", err)
+	}
+
+	if len(ports) != 2 {
+		t.Fatalf("Expected 2 ports allocated, got %d", len(ports))
+	}
+
+	// Verify we have one TCP and one UDP
+	protocolCount := make(map[string]int)
+	for _, port := range ports {
+		protocolCount[port.Protocol]++
+		if port.Port != 27015 {
+			t.Errorf("Expected port 27015, got %d", port.Port)
+		}
+	}
+
+	if protocolCount["TCP"] != 1 {
+		t.Errorf("Expected 1 TCP allocation, got %d", protocolCount["TCP"])
+	}
+	if protocolCount["UDP"] != 1 {
+		t.Errorf("Expected 1 UDP allocation, got %d", protocolCount["UDP"])
+	}
+}
+
+// TestPortConflictWithSameProtocolOnly tests that port conflicts only occur with same protocol
+func TestPortConflictWithSameProtocolOnly(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockServerPortRepository()
+
+	// Session 1 allocates 27015/TCP
+	err := repo.AllocatePort(ctx, 1, 27015, "TCP", 100)
+	if err != nil {
+		t.Fatalf("Failed to allocate 27015/TCP for session 100: %v", err)
+	}
+
+	// Session 2 tries to allocate 27015/TCP - should fail
+	err = repo.AllocatePort(ctx, 1, 27015, "TCP", 200)
+	if err == nil {
+		t.Error("Expected conflict when allocating 27015/TCP for different session")
+	}
+	if !IsPortConflictError(err) {
+		t.Errorf("Expected PortConflictError, got %v", err)
+	}
+
+	// Session 2 tries to allocate 27015/UDP - should succeed
+	err = repo.AllocatePort(ctx, 1, 27015, "UDP", 200)
+	if err != nil {
+		t.Errorf("Should allow 27015/UDP for session 200 when only TCP is taken: %v", err)
+	}
+
+	// Session 3 tries to allocate 27015/UDP - should fail (already taken by session 2)
+	err = repo.AllocatePort(ctx, 1, 27015, "UDP", 300)
+	if err == nil {
+		t.Error("Expected conflict when allocating 27015/UDP for different session")
+	}
+	if !IsPortConflictError(err) {
+		t.Errorf("Expected PortConflictError, got %v", err)
+	}
+}
+
+// TestMultipleSessionsWithMixedProtocols tests realistic multi-session scenario
+func TestMultipleSessionsWithMixedProtocols(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockServerPortRepository()
+
+	// Session 1: L4D2 server using ports 27015 TCP/UDP
+	l4d2Ports := []*manman.PortBinding{
+		{ContainerPort: 27015, HostPort: 27015, Protocol: "TCP"},
+		{ContainerPort: 27015, HostPort: 27015, Protocol: "UDP"},
+	}
+	err := repo.AllocateMultiplePorts(ctx, 1, l4d2Ports, 100)
+	if err != nil {
+		t.Fatalf("Failed to allocate L4D2 ports: %v", err)
+	}
+
+	// Session 2: CS2 server using different ports 27016 TCP/UDP - should succeed
+	cs2Ports := []*manman.PortBinding{
+		{ContainerPort: 27015, HostPort: 27016, Protocol: "TCP"},
+		{ContainerPort: 27015, HostPort: 27016, Protocol: "UDP"},
+		{ContainerPort: 27020, HostPort: 27020, Protocol: "UDP"},
+	}
+	err = repo.AllocateMultiplePorts(ctx, 1, cs2Ports, 200)
+	if err != nil {
+		t.Fatalf("Failed to allocate CS2 ports: %v", err)
+	}
+
+	// Session 3: Tries to use 27015/TCP - should fail
+	minecraftPorts := []*manman.PortBinding{
+		{ContainerPort: 25565, HostPort: 27015, Protocol: "TCP"},
+	}
+	err = repo.AllocateMultiplePorts(ctx, 1, minecraftPorts, 300)
+	if err == nil {
+		t.Error("Expected conflict when trying to allocate already-used port 27015/TCP")
+	}
+
+	// Verify total allocations
+	allPorts, err := repo.ListAllocatedPorts(ctx, 1)
+	if err != nil {
+		t.Fatalf("Failed to list all ports: %v", err)
+	}
+	if len(allPorts) != 5 {
+		t.Errorf("Expected 5 total port allocations (2 L4D2 + 3 CS2), got %d", len(allPorts))
+	}
+
+	// Deallocate L4D2 session
+	err = repo.DeallocatePortsBySessionID(ctx, 100)
+	if err != nil {
+		t.Fatalf("Failed to deallocate L4D2 ports: %v", err)
+	}
+
+	// Now Session 3 should be able to allocate 27015/TCP
+	err = repo.AllocateMultiplePorts(ctx, 1, minecraftPorts, 300)
+	if err != nil {
+		t.Errorf("Should be able to allocate 27015/TCP after L4D2 session ended: %v", err)
+	}
+
+	// But 27015/UDP should still be blocked (CS2 doesn't use it, so it should be free)
+	// Actually, L4D2 had both TCP and UDP, and we deallocated both, so UDP should be free too
+	udpAvailable, _ := repo.IsPortAvailable(ctx, 1, 27015, "UDP")
+	if !udpAvailable {
+		t.Error("27015/UDP should be available after L4D2 session ended")
+	}
+}
+
 // Mock implementation for testing (to be replaced with real PostgreSQL implementation)
 type MockServerPortRepository struct {
 	allocations map[string]*manman.ServerPort
@@ -399,7 +591,7 @@ func NewMockServerPortRepository() *MockServerPortRepository {
 	}
 }
 
-func (r *MockServerPortRepository) AllocatePort(ctx context.Context, serverID int64, port int, protocol string, sgcID int64) error {
+func (r *MockServerPortRepository) AllocatePort(ctx context.Context, serverID int64, port int, protocol string, sessionID int64) error {
 	// Validate port range
 	if port < 1 || port > 65535 {
 		return &InvalidPortError{Port: port}
@@ -410,21 +602,25 @@ func (r *MockServerPortRepository) AllocatePort(ctx context.Context, serverID in
 		return &InvalidProtocolError{Protocol: protocol}
 	}
 
-	// Validate SGCID
-	if sgcID <= 0 {
-		return &InvalidSGCIDError{SGCID: sgcID}
+	// Validate SessionID
+	if sessionID <= 0 {
+		return &InvalidSessionIDError{SessionID: sessionID}
 	}
 
 	key := portKey(serverID, port, protocol)
 
 	// Check for conflict
 	if existing, exists := r.allocations[key]; exists {
+		existingID := int64(0)
+		if existing.SessionID != nil {
+			existingID = *existing.SessionID
+		}
 		return &PortConflictError{
 			ServerID:     serverID,
 			Port:         port,
 			Protocol:     protocol,
-			ExistingSGC: *existing.SGCID,
-			RequestedSGC: sgcID,
+			ExistingSGC:  existingID,
+			RequestedSGC: sessionID,
 		}
 	}
 
@@ -433,7 +629,7 @@ func (r *MockServerPortRepository) AllocatePort(ctx context.Context, serverID in
 		ServerID:    serverID,
 		Port:        port,
 		Protocol:    protocol,
-		SGCID:       &sgcID,
+		SessionID:   &sessionID,
 		AllocatedAt: time.Now(),
 	}
 
@@ -471,20 +667,20 @@ func (r *MockServerPortRepository) ListAllocatedPorts(ctx context.Context, serve
 	return ports, nil
 }
 
-func (r *MockServerPortRepository) ListPortsBySGCID(ctx context.Context, sgcID int64) ([]*manman.ServerPort, error) {
+func (r *MockServerPortRepository) ListPortsBySessionID(ctx context.Context, sessionID int64) ([]*manman.ServerPort, error) {
 	var ports []*manman.ServerPort
 	for _, allocation := range r.allocations {
-		if allocation.SGCID != nil && *allocation.SGCID == sgcID {
+		if allocation.SessionID != nil && *allocation.SessionID == sessionID {
 			ports = append(ports, allocation)
 		}
 	}
 	return ports, nil
 }
 
-func (r *MockServerPortRepository) DeallocatePortsBySGCID(ctx context.Context, sgcID int64) error {
+func (r *MockServerPortRepository) DeallocatePortsBySessionID(ctx context.Context, sessionID int64) error {
 	keysToDelete := []string{}
 	for key, allocation := range r.allocations {
-		if allocation.SGCID != nil && *allocation.SGCID == sgcID {
+		if allocation.SessionID != nil && *allocation.SessionID == sessionID {
 			keysToDelete = append(keysToDelete, key)
 		}
 	}
@@ -494,7 +690,7 @@ func (r *MockServerPortRepository) DeallocatePortsBySGCID(ctx context.Context, s
 	return nil
 }
 
-func (r *MockServerPortRepository) AllocateMultiplePorts(ctx context.Context, serverID int64, portBindings []*manman.PortBinding, sgcID int64) error {
+func (r *MockServerPortRepository) AllocateMultiplePorts(ctx context.Context, serverID int64, portBindings []*manman.PortBinding, sessionID int64) error {
 	// Check all ports for conflicts first
 	for _, binding := range portBindings {
 		key := portKey(serverID, int(binding.HostPort), binding.Protocol)
@@ -509,9 +705,9 @@ func (r *MockServerPortRepository) AllocateMultiplePorts(ctx context.Context, se
 
 	// Allocate all ports
 	for _, binding := range portBindings {
-		if err := r.AllocatePort(ctx, serverID, int(binding.HostPort), binding.Protocol, sgcID); err != nil {
+		if err := r.AllocatePort(ctx, serverID, int(binding.HostPort), binding.Protocol, sessionID); err != nil {
 			// Rollback on error
-			r.DeallocatePortsBySGCID(ctx, sgcID)
+			r.DeallocatePortsBySessionID(ctx, sessionID)
 			return err
 		}
 	}
