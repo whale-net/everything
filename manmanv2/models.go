@@ -300,6 +300,67 @@ type ActionExecution struct {
 	ExecutedAt      time.Time  `db:"executed_at"`
 }
 
+// ============================================================================
+// Workshop Addon Management Models
+// ============================================================================
+
+// WorkshopAddon represents a workshop addon in the library
+type WorkshopAddon struct {
+	AddonID          int64      `db:"addon_id"`
+	GameID           int64      `db:"game_id"`
+	WorkshopID       string     `db:"workshop_id"`
+	PlatformType     string     `db:"platform_type"`
+	Name             string     `db:"name"`
+	Description      *string    `db:"description"`
+	FileSizeBytes    *int64     `db:"file_size_bytes"`
+	InstallationPath *string    `db:"installation_path"`
+	IsCollection     bool       `db:"is_collection"`
+	IsDeprecated     bool       `db:"is_deprecated"`
+	Metadata         JSONB      `db:"metadata"`
+	LastUpdated      *time.Time `db:"last_updated"`
+	CreatedAt        time.Time  `db:"created_at"`
+	UpdatedAt        time.Time  `db:"updated_at"`
+}
+// WorkshopInstallation represents an addon installed on a ServerGameConfig
+type WorkshopInstallation struct {
+	InstallationID      int64      `db:"installation_id"`
+	SGCID               int64      `db:"sgc_id"`
+	AddonID             int64      `db:"addon_id"`
+	Status              string     `db:"status"`
+	InstallationPath    string     `db:"installation_path"`
+	ProgressPercent     int        `db:"progress_percent"`
+	ErrorMessage        *string    `db:"error_message"`
+	DownloadStartedAt   *time.Time `db:"download_started_at"`
+	DownloadCompletedAt *time.Time `db:"download_completed_at"`
+	CreatedAt           time.Time  `db:"created_at"`
+	UpdatedAt           time.Time  `db:"updated_at"`
+}
+
+// WorkshopLibrary represents a collection of workshop addons
+type WorkshopLibrary struct {
+	LibraryID   int64     `db:"library_id"`
+	GameID      int64     `db:"game_id"`
+	Name        string    `db:"name"`
+	Description *string   `db:"description"`
+	CreatedAt   time.Time `db:"created_at"`
+	UpdatedAt   time.Time `db:"updated_at"`
+}
+
+// WorkshopLibraryAddon represents the junction between libraries and addons
+type WorkshopLibraryAddon struct {
+	LibraryID    int64     `db:"library_id"`
+	AddonID      int64     `db:"addon_id"`
+	DisplayOrder int       `db:"display_order"`
+	CreatedAt    time.Time `db:"created_at"`
+}
+
+// WorkshopLibraryReference represents library-to-library references for hierarchies
+type WorkshopLibraryReference struct {
+	ParentLibraryID int64     `db:"parent_library_id"`
+	ChildLibraryID  int64     `db:"child_library_id"`
+	CreatedAt       time.Time `db:"created_at"`
+}
+
 // Status constants
 const (
 	ServerStatusOnline  = "online"
@@ -389,6 +450,16 @@ const (
 	ActionLevelGame              = "game"
 	ActionLevelGameConfig        = "game_config"
 	ActionLevelServerGameConfig  = "server_game_config"
+
+	// Workshop installation statuses
+	InstallationStatusPending     = "pending"
+	InstallationStatusDownloading = "downloading"
+	InstallationStatusInstalled   = "installed"
+	InstallationStatusFailed      = "failed"
+	InstallationStatusRemoved     = "removed"
+
+	// Workshop platform types
+	PlatformTypeSteamWorkshop = "steam_workshop"
 )
 
 // IsActive returns true if the session is in an active state (not completed or stopped)
