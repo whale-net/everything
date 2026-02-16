@@ -56,3 +56,12 @@ go_test(
         "//manmanv2:models",
     ],
 )
+
+go_test(
+    name = "workshop_library_property_test",
+    srcs = ["workshop_library_property_test.go"],
+    embed = [":postgres"],
+    deps = [
+        "//manmanv2:models",
+    ],
+)

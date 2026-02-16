@@ -88,14 +88,14 @@ This implementation plan breaks down the workshop addon management feature into 
     - Implement CRUD methods plus AddAddon, RemoveAddon, AddReference, RemoveReference, DetectCircularReference
     - _Requirements: 14.4, 14.5, 14.6_
   
-  - [~] 3.7 Write property tests for library operations
+  - [x] 3.7 Write property tests for library operations
     - **Property 35: Library Addon Association**
     - **Property 36: Library Reference Acyclicity**
     - **Property 37: Library Reference Resolution**
     - **Validates: Requirements 14.4, 14.5, 14.6, 14.7**
 
 - [ ] 4. Steam Workshop API client
-  - [~] 4.1 Create SteamWorkshopClient in manmanv2/api/steam/client.go
+  - [x] 4.1 Create SteamWorkshopClient in manmanv2/api/steam/client.go
     - Implement GetWorkshopItemDetails method
     - Implement GetCollectionDetails method
     - Add HTTP client with timeout and retry logic

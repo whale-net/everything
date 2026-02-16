@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "steam",
+    srcs = ["client.go"],
+    importpath = "github.com/chand1012/everything/manmanv2/api/steam",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "steam_test",
+    srcs = ["client_test.go"],
+    embed = [":steam"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
