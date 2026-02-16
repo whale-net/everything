@@ -15,17 +15,18 @@ import (
 
 // ActionsPageData holds data for the actions management page
 type ActionsPageData struct {
-	Title           string
-	Active          string
-	User            *htmxauth.UserInfo
-	DefinitionLevel string // "game", "game_config", or "server_game_config"
-	EntityID        int64
-	EntityName      string // Name of the game/config/sgc for display
-	LocalActions    []*ActionWithFields
+	Title            string
+	Active           string
+	User             *htmxauth.UserInfo
+	DefinitionLevel  string // "game", "game_config", or "server_game_config"
+	EntityID         int64
+	EntityName       string // Name of the game/config/sgc for display
+	CurrentPath      string // Current URL path for building edit links
+	LocalActions     []*ActionWithFields
 	InheritedActions []*ActionWithFields
-	FieldTypes      []string
-	ButtonStyles    []string
-	IconOptions     []IconOption
+	FieldTypes       []string
+	ButtonStyles     []string
+	IconOptions      []IconOption
 }
 
 // ActionWithFields combines action with its input fields
@@ -96,6 +97,17 @@ func (app *App) handleGameActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Handle edit form request: /games/{id}/actions/edit/{action_id}
+	if len(parts) >= 4 && parts[2] == "edit" {
+		actionID, err := strconv.ParseInt(parts[3], 10, 64)
+		if err != nil {
+			http.Error(w, "Invalid action ID", http.StatusBadRequest)
+			return
+		}
+		app.handleActionEditForm(w, r, actionID, "game", gameID)
+		return
+	}
+
 	// Handle POST requests for create/update/delete
 	if r.Method == http.MethodPost {
 		app.handleActionMutation(w, r, "game", gameID)
@@ -127,6 +139,7 @@ func (app *App) handleGameActions(w http.ResponseWriter, r *http.Request) {
 		DefinitionLevel:  "game",
 		EntityID:         gameID,
 		EntityName:       game.Name,
+		CurrentPath:      fmt.Sprintf("/games/%d/actions", gameID),
 		LocalActions:     localActions,
 		InheritedActions: inheritedActions,
 		FieldTypes:       []string{"text", "number", "select", "textarea", "checkbox", "radio", "email", "url"},
@@ -158,9 +171,26 @@ func (app *App) handleConfigActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	gameID, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid game ID", http.StatusBadRequest)
+		return
+	}
+
 	configID, err := strconv.ParseInt(parts[3], 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid config ID", http.StatusBadRequest)
+		return
+	}
+
+	// Handle edit form request: /games/{gid}/configs/{cid}/actions/edit/{action_id}
+	if len(parts) >= 7 && parts[5] == "edit" {
+		actionID, err := strconv.ParseInt(parts[6], 10, 64)
+		if err != nil {
+			http.Error(w, "Invalid action ID", http.StatusBadRequest)
+			return
+		}
+		app.handleActionEditForm(w, r, actionID, "game_config", configID)
 		return
 	}
 
@@ -199,6 +229,7 @@ func (app *App) handleConfigActions(w http.ResponseWriter, r *http.Request) {
 		DefinitionLevel:  "game_config",
 		EntityID:         configID,
 		EntityName:       fmt.Sprintf("%s / %s", game.Name, config.Name),
+		CurrentPath:      fmt.Sprintf("/games/%d/configs/%d/actions", gameID, configID),
 		LocalActions:     localActions,
 		InheritedActions: inheritedActions,
 		FieldTypes:       []string{"text", "number", "select", "textarea", "checkbox", "radio", "email", "url"},
@@ -233,6 +264,17 @@ func (app *App) handleSGCActions(w http.ResponseWriter, r *http.Request) {
 	sgcID, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid SGC ID", http.StatusBadRequest)
+		return
+	}
+
+	// Handle edit form request: /sgcs/{id}/actions/edit/{action_id}
+	if len(parts) >= 4 && parts[2] == "edit" {
+		actionID, err := strconv.ParseInt(parts[3], 10, 64)
+		if err != nil {
+			http.Error(w, "Invalid action ID", http.StatusBadRequest)
+			return
+		}
+		app.handleActionEditForm(w, r, actionID, "server_game_config", sgcID)
 		return
 	}
 
@@ -282,6 +324,7 @@ func (app *App) handleSGCActions(w http.ResponseWriter, r *http.Request) {
 		DefinitionLevel:  "server_game_config",
 		EntityID:         sgcID,
 		EntityName:       fmt.Sprintf("%s / %s / SGC #%d", game.Name, config.Name, sgcID),
+		CurrentPath:      fmt.Sprintf("/sgcs/%d/actions", sgcID),
 		LocalActions:     localActions,
 		InheritedActions: inheritedActions,
 		FieldTypes:       []string{"text", "number", "select", "textarea", "checkbox", "radio", "email", "url"},
@@ -529,6 +572,44 @@ func (app *App) handleActionDelete(w http.ResponseWriter, r *http.Request) {
 		"success":   true,
 		"action_id": actionID,
 	})
+}
+
+// handleActionEditForm renders a pre-populated edit form for an action
+func (app *App) handleActionEditForm(w http.ResponseWriter, r *http.Request, actionID int64, level string, entityID int64) {
+	ctx := context.Background()
+
+	// Fetch the action details
+	action, fields, err := app.grpc.GetActionDefinition(ctx, actionID)
+	if err != nil {
+		log.Printf("Error fetching action: %v", err)
+		http.Error(w, "Action not found", http.StatusNotFound)
+		return
+	}
+
+	// Convert to JSON for Alpine.js
+	actionJSON, _ := json.Marshal(map[string]interface{}{
+		"action_id":             action.ActionId,
+		"name":                  action.Name,
+		"label":                 action.Label,
+		"description":           action.Description,
+		"command_template":      action.CommandTemplate,
+		"display_order":         action.DisplayOrder,
+		"group_name":            action.GroupName,
+		"button_style":          action.ButtonStyle,
+		"icon":                  action.Icon,
+		"requires_confirmation": action.RequiresConfirmation,
+		"confirmation_message":  action.ConfirmationMessage,
+		"enabled":               action.Enabled,
+		"input_fields":          fields,
+	})
+
+	// Return a small HTML snippet that triggers Alpine.js to populate the form
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, `<script>
+		// Trigger Alpine.js to open and populate the edit form
+		const data = %s;
+		window.dispatchEvent(new CustomEvent('edit-action', { detail: data }));
+	</script>`, actionJSON)
 }
 
 // parseIntOrZero parses a string to int, returning 0 on error

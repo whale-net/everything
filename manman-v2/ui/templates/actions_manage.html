@@ -390,20 +390,8 @@
                             </td>
                             <td>
                                 <button class="btn btn-sm btn-secondary"
-                                        @click='editAction({
-                                            actionId: {{$action.Action.ActionId}},
-                                            name: "{{$action.Action.Name}}",
-                                            label: "{{$action.Action.Label}}",
-                                            description: "{{$action.Action.Description}}",
-                                            commandTemplate: `{{$action.Action.CommandTemplate}}`,
-                                            displayOrder: {{$action.Action.DisplayOrder}},
-                                            groupName: "{{$action.Action.GroupName}}",
-                                            buttonStyle: "{{$action.Action.ButtonStyle}}",
-                                            icon: "{{$action.Action.Icon}}",
-                                            requiresConfirmation: {{$action.Action.RequiresConfirmation}},
-                                            confirmationMessage: "{{$action.Action.ConfirmationMessage}}",
-                                            enabled: {{$action.Action.Enabled}}
-                                        })'>
+                                        hx-get="{{$.CurrentPath}}/edit/{{$action.Action.ActionId}}"
+                                        hx-swap="none">
                                     Edit
                                 </button>
                                 <button class="btn btn-sm btn-danger"
@@ -489,6 +477,11 @@ function actionManager() {
 
         init() {
             this.resetForm();
+
+            // Listen for edit-action events from HTMX edit requests
+            window.addEventListener('edit-action', (event) => {
+                this.populateEditForm(event.detail);
+            });
         },
 
         resetForm() {
@@ -561,30 +554,50 @@ function actionManager() {
             this.resetForm();
         },
 
-        editAction(actionData) {
+        populateEditForm(actionData) {
             this.editMode = true;
-            this.formData = {
-                action_id: actionData.actionId,
-                name: actionData.name,
-                label: actionData.label,
-                description: actionData.description || '',
-                command_template: actionData.commandTemplate,
-                display_order: actionData.displayOrder,
-                group_name: actionData.groupName || '',
-                button_style: actionData.buttonStyle,
-                icon: actionData.icon || '',
-                requires_confirmation: actionData.requiresConfirmation,
-                confirmation_message: actionData.confirmationMessage || '',
-                enabled: actionData.enabled,
-                input_fields: [], // TODO: Fetch and populate input fields
-            };
-            this.showForm = true;
-            window.scrollTo({ top: 0, behavior: 'smooth' });
 
-            // Note: Input fields are not populated yet - they require API fetch
-            if (actionData.hasInputFields) {
-                this.errorMessage = 'Note: Input fields are not loaded in edit mode yet. Please verify them after saving.';
+            // Populate basic fields
+            this.formData = {
+                action_id: actionData.action_id || 0,
+                name: actionData.name || '',
+                label: actionData.label || '',
+                description: actionData.description || '',
+                command_template: actionData.command_template || '',
+                display_order: actionData.display_order || 0,
+                group_name: actionData.group_name || '',
+                button_style: actionData.button_style || 'primary',
+                icon: actionData.icon || '',
+                requires_confirmation: actionData.requires_confirmation || false,
+                confirmation_message: actionData.confirmation_message || '',
+                enabled: actionData.enabled !== undefined ? actionData.enabled : true,
+                input_fields: []
+            };
+
+            // Populate input fields if available
+            if (actionData.input_fields && Array.isArray(actionData.input_fields)) {
+                this.formData.input_fields = actionData.input_fields.map(field => ({
+                    name: field.name || '',
+                    label: field.label || '',
+                    field_type: field.field_type || 'text',
+                    required: field.required || false,
+                    placeholder: field.placeholder || '',
+                    help_text: field.help_text || '',
+                    default_value: field.default_value || '',
+                    display_order: field.display_order || 0,
+                    pattern: field.pattern || '',
+                    min_value: field.min_value || null,
+                    max_value: field.max_value || null,
+                    min_length: field.min_length || null,
+                    max_length: field.max_length || null,
+                    _options: [] // Options would need to be fetched separately
+                }));
             }
+
+            this.showForm = true;
+            this.errorMessage = '';
+            this.successMessage = '';
+            window.scrollTo({ top: 0, behavior: 'smooth' });
         },
 
         async deleteAction(actionId, actionLabel) {
