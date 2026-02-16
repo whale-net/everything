@@ -70,19 +70,19 @@ This implementation plan breaks down the workshop addon management feature into 
     - **Property 3: Game Filtering Correctness**
     - **Validates: Requirements 1.2, 1.4**
   
-  - [~] 3.4 Create WorkshopInstallationRepository interface and implementation
+  - [x] 3.4 Create WorkshopInstallationRepository interface and implementation
     - Define interface in repository.go
     - Implement in `manmanv2/api/repository/postgres/workshop_installation.go`
     - Implement Create, Get, GetBySGCAndAddon, ListBySGC, ListByAddon, UpdateStatus, UpdateProgress, Delete
     - _Requirements: 2.1, 2.2, 2.5, 2.6_
   
-  - [~] 3.5 Write property tests for WorkshopInstallationRepository
+  - [x] 3.5 Write property tests for WorkshopInstallationRepository
     - **Property 7: Installation Record Completeness**
     - **Property 8: SGC Installation Query Completeness**
     - **Property 9: Addon Installation Query Completeness**
     - **Validates: Requirements 2.1, 2.3, 2.5, 2.6**
   
-  - [~] 3.6 Create WorkshopLibraryRepository interface and implementation
+  - [x] 3.6 Create WorkshopLibraryRepository interface and implementation
     - Define interface in repository.go
     - Implement in `manmanv2/api/repository/postgres/workshop_library.go`
     - Implement CRUD methods plus AddAddon, RemoveAddon, AddReference, RemoveReference, DetectCircularReference

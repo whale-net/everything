@@ -34,6 +34,8 @@ func NewRepository(ctx context.Context, connString string) (*repository.Reposito
 		ConfigurationStrategies: NewConfigurationStrategyRepository(pool),
 		ConfigurationPatches:    NewConfigurationPatchRepository(pool),
 		WorkshopAddons:          NewWorkshopAddonRepository(pool),
+		WorkshopInstallations:   NewWorkshopInstallationRepository(pool),
+		WorkshopLibraries:       NewWorkshopLibraryRepository(pool),
 		Actions:                 NewActionRepository(pool),
 	}, nil
 }

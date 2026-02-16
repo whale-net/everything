@@ -17,6 +17,8 @@ go_library(
         "session.go",
         "strategy.go",
         "workshop_addon.go",
+        "workshop_installation.go",
+        "workshop_library.go",
     ],
     importpath = "github.com/whale-net/everything/manmanv2/api/repository/postgres",
     visibility = ["//manmanv2:__subpackages__"],
@@ -40,6 +42,15 @@ go_test(
 go_test(
     name = "workshop_addon_property_test",
     srcs = ["workshop_addon_property_test.go"],
+    embed = [":postgres"],
+    deps = [
+        "//manmanv2:models",
+    ],
+)
+
+go_test(
+    name = "workshop_installation_property_test",
+    srcs = ["workshop_installation_property_test.go"],
     embed = [":postgres"],
     deps = [
         "//manmanv2:models",

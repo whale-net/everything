@@ -140,6 +140,36 @@ type WorkshopAddonRepository interface {
 	Delete(ctx context.Context, addonID int64) error
 }
 
+// WorkshopInstallationRepository defines operations for installation tracking
+type WorkshopInstallationRepository interface {
+	Create(ctx context.Context, installation *manman.WorkshopInstallation) (*manman.WorkshopInstallation, error)
+	Get(ctx context.Context, installationID int64) (*manman.WorkshopInstallation, error)
+	GetBySGCAndAddon(ctx context.Context, sgcID, addonID int64) (*manman.WorkshopInstallation, error)
+	ListBySGC(ctx context.Context, sgcID int64, limit, offset int) ([]*manman.WorkshopInstallation, error)
+	ListByAddon(ctx context.Context, addonID int64, limit, offset int) ([]*manman.WorkshopInstallation, error)
+	UpdateStatus(ctx context.Context, installationID int64, status string, errorMsg *string) error
+	UpdateProgress(ctx context.Context, installationID int64, percent int) error
+	Delete(ctx context.Context, installationID int64) error
+}
+
+// WorkshopLibraryRepository defines operations for library management
+type WorkshopLibraryRepository interface {
+	Create(ctx context.Context, library *manman.WorkshopLibrary) (*manman.WorkshopLibrary, error)
+	Get(ctx context.Context, libraryID int64) (*manman.WorkshopLibrary, error)
+	List(ctx context.Context, gameID *int64, limit, offset int) ([]*manman.WorkshopLibrary, error)
+	Update(ctx context.Context, library *manman.WorkshopLibrary) error
+	Delete(ctx context.Context, libraryID int64) error
+
+	AddAddon(ctx context.Context, libraryID, addonID int64, displayOrder int) error
+	RemoveAddon(ctx context.Context, libraryID, addonID int64) error
+	ListAddons(ctx context.Context, libraryID int64) ([]*manman.WorkshopAddon, error)
+
+	AddReference(ctx context.Context, parentLibraryID, childLibraryID int64) error
+	RemoveReference(ctx context.Context, parentLibraryID, childLibraryID int64) error
+	ListReferences(ctx context.Context, libraryID int64) ([]*manman.WorkshopLibrary, error)
+	DetectCircularReference(ctx context.Context, parentLibraryID, childLibraryID int64) (bool, error)
+}
+
 // Repository aggregates all repository interfaces
 type Repository struct {
 	Servers                ServerRepository
@@ -154,5 +184,7 @@ type Repository struct {
 	ConfigurationStrategies ConfigurationStrategyRepository
 	ConfigurationPatches   ConfigurationPatchRepository
 	WorkshopAddons         WorkshopAddonRepository
+	WorkshopInstallations  WorkshopInstallationRepository
+	WorkshopLibraries      WorkshopLibraryRepository
 	Actions                interface{} // ActionRepository from postgres package
 }
