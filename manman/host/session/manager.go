@@ -413,6 +413,22 @@ func (sm *SessionManager) createGameContainer(ctx context.Context, state *State,
 	// No hardcoded defaults - all volumes must be explicitly configured in the database
 	var volumes []string
 
+	// Volume Permission Strategy:
+	// We use 0777 (world-writable) permissions for all volume directories to support:
+	// 1. Host process (runs as root) - needs to create/modify files
+	// 2. Game containers (e.g., CS2 runs as steam user, UID 1000) - need to write game data
+	// 3. Auxiliary containers (e.g., steam workshop downloader) - may run as different UIDs
+	// 4. Multi-container scenarios - multiple containers accessing the same volumes
+	//
+	// This is appropriate for our use case because:
+	// - The host environment is trusted
+	// - Containers are isolated via Docker
+	// - We always run Docker as root for simplicity
+	// - Complex UID mapping would be harder to maintain across different game server images
+	//
+	// Alternative approaches considered:
+	// - chown to specific UID (e.g., 1000): Doesn't work for multi-container scenarios
+	// - User namespaces: Adds complexity and may not be compatible with all game server images
 	for _, vol := range cmd.Volumes {
 		subDir := vol.HostSubpath
 		if subDir == "" {
@@ -422,7 +438,7 @@ func (sm *SessionManager) createGameContainer(ctx context.Context, state *State,
 
 		// Create directory at internal path (mounted from host)
 		internalPath := filepath.Join(sgcInternalDir, strings.TrimPrefix(subDir, "/"))
-		if err := os.MkdirAll(internalPath, 0755); err != nil {
+		if err := os.MkdirAll(internalPath, 0777); err != nil {
 			return "", fmt.Errorf("failed to create volume directory %s: %w", internalPath, err)
 		}
 
