@@ -401,11 +401,12 @@ func (app *App) categorizeActions(ctx context.Context, actions []*manmanpb.Actio
 // handleActionMutation handles create/update/delete operations for actions
 func (app *App) handleActionMutation(w http.ResponseWriter, r *http.Request, level string, entityID int64) {
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Failed to parse form", http.StatusBadRequest)
+		writeJSONError(w, "Failed to parse form", http.StatusBadRequest)
 		return
 	}
 
 	operation := r.FormValue("operation")
+	log.Printf("handleActionMutation: operation=%q, level=%s, entityID=%d", operation, level, entityID)
 
 	switch operation {
 	case "create":
@@ -415,7 +416,8 @@ func (app *App) handleActionMutation(w http.ResponseWriter, r *http.Request, lev
 	case "delete":
 		app.handleActionDelete(w, r)
 	default:
-		http.Error(w, "Invalid operation", http.StatusBadRequest)
+		log.Printf("Invalid operation received: %q", operation)
+		writeJSONError(w, fmt.Sprintf("Invalid operation: %s", operation), http.StatusBadRequest)
 	}
 }
 
