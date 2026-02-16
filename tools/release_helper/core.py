@@ -26,20 +26,27 @@ def find_workspace_root() -> Path:
 
 def run_bazel(args: list[str], capture_output: bool = True, env: dict = None) -> subprocess.CompletedProcess:
     """Run a bazel command with consistent configuration.
-    
+
     Respects BAZEL_CONFIG env var to inject --config flags into build/run/test commands.
     This ensures inner Bazel calls from the release helper use the same config as the
     outer CI invocation (e.g., --config=ci-images for remote cache and download settings).
     """
     workspace_root = find_workspace_root()
-    
+
+    # Explicitly point Bazel to the workspace .bazelrc to ensure config is found
+    # This is needed when the release helper is run as a standalone binary
+    bazelrc_path = workspace_root / ".bazelrc"
+    startup_opts = []
+    if bazelrc_path.exists():
+        startup_opts = [f"--bazelrc={bazelrc_path}"]
+
     # Inject --config flag for build/run/test commands if BAZEL_CONFIG is set
     bazel_config = os.environ.get("BAZEL_CONFIG", "")
     if bazel_config and len(args) > 0 and args[0] in ("build", "run", "test", "query"):
         config_flags = [f"--config={c.strip()}" for c in bazel_config.split(",") if c.strip()]
-        cmd = ["bazel", args[0]] + config_flags + args[1:]
+        cmd = ["bazel"] + startup_opts + [args[0]] + config_flags + args[1:]
     else:
-        cmd = ["bazel"] + args
+        cmd = ["bazel"] + startup_opts + args
     
     # Use provided environment or current environment
     run_env = env if env is not None else os.environ.copy()
