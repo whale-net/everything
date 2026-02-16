@@ -4,23 +4,6 @@ load("//tools/bazel:release.bzl", "release_app", "release_helm_chart")
 load("//tools/openapi:openapi_client.bzl", "openapi_client")
 
 # ==============================================================================
-# ManManV2 (Go) - Database Models
-# ==============================================================================
-
-go_library(
-    name = "models",
-    srcs = ["models.go"],
-    importpath = "github.com/whale-net/everything/manman",
-    visibility = ["//visibility:public"],
-)
-
-go_test(
-    name = "models_test",
-    srcs = ["models_test.go"],
-    embed = [":models"],
-)
-
-# ==============================================================================
 # ManMan V1 (Python) - Legacy Services
 # ==============================================================================
 
@@ -29,11 +12,11 @@ py_library(
     name = "manman",
     visibility = ["//visibility:public"],
     deps = [
-        "//manmanv2/src:manman_core",
-        "//manmanv2/src/host:manman_host",
-        "//manmanv2/src/migrations:manman_migrations",
-        "//manmanv2/src/repository:manman_repository",
-        "//manmanv2/src/worker:manman_worker",
+        "//manman/src:manman_core",
+        "//manman/src/host:manman_host",
+        "//manman/src/migrations:manman_migrations",
+        "//manman/src/repository:manman_repository",
+        "//manman/src/worker:manman_worker",
     ],
 )
 
@@ -42,7 +25,7 @@ release_app(
     name = "experience-api",
     app_type = "external-api",
     args = ["start-experience-api"],
-    binary_name = "//manmanv2/src/host/api/experience:experience_api",
+    binary_name = "//manman/src/host/api/experience:experience_api",
     description = "Experience API service for managing user experiences and workflows",
     domain = "manman",
     fastapi_app = "manman.src.host.api.experience:create_app",
@@ -57,7 +40,7 @@ release_app(
     name = "status-api",
     app_type = "internal-api",
     args = ["start-status-api"],
-    binary_name = "//manmanv2/src/host/api/status:status_api",
+    binary_name = "//manman/src/host/api/status:status_api",
     description = "Status API service for monitoring and health checks",
     domain = "manman",
     fastapi_app = "manman.src.host.api.status:create_app",
@@ -70,7 +53,7 @@ release_app(
     name = "worker-dal-api",
     app_type = "external-api",
     args = ["start-worker-dal-api"],
-    binary_name = "//manmanv2/src/host/api/worker_dal:worker_dal_api",
+    binary_name = "//manman/src/host/api/worker_dal:worker_dal_api",
     description = "Worker DAL API service for data access layer operations",
     domain = "manman",
     fastapi_app = "manman.src.host.api.worker_dal:create_app",
@@ -85,7 +68,7 @@ release_app(
     name = "status-processor",
     app_type = "internal-api",
     args = ["start-status-processor"],
-    binary_name = "//manmanv2/src/host:status_processor",
+    binary_name = "//manman/src/host:status_processor",
     description = "Status processor service for background status processing",
     domain = "manman",
     language = "python",
@@ -98,7 +81,7 @@ release_app(
     additional_tars = ["//tools/steamcmd:steamcmd_layers"],
     app_type = "worker",
     args = ["start"],
-    binary_name = "//manmanv2/src/worker:worker",
+    binary_name = "//manman/src/worker:worker",
     description = "Background worker service for processing tasks and messages",
     domain = "manman",
     language = "python",
@@ -109,7 +92,7 @@ release_app(
     name = "migration",
     app_type = "job",
     args = ["run-migration"],  # Pass the migration command as container args
-    binary_name = "//manmanv2/src/host:migration",
+    binary_name = "//manman/src/host:migration",
     description = "Database migration job for schema updates",
     domain = "manman",
     language = "python",
@@ -119,7 +102,7 @@ release_app(
 release_app(
     name = "management-ui",
     app_type = "external-api",
-    binary_name = "//manmanv2/management-ui:management-ui",
+    binary_name = "//manman/management-ui:management-ui",
     description = "HTMX-based web interface for managing ManMan services with OIDC authentication",
     domain = "manman",
     ingress_host = "manage.manman.local",
@@ -169,15 +152,6 @@ MANMAN_V1_APPS = [
     ":management-ui_metadata",
 ]
 
-# List of ManManV2 (Go) app metadata targets for chart composition
-MANMAN_V2_APPS = [
-    "//manmanv2/api:control-api_metadata",
-    "//manmanv2/migrate:control-migration_metadata",
-    "//manmanv2/processor:event-processor_metadata",
-    "//manmanv2/log-processor:log-processor_metadata",
-    "//manmanv2/ui:manmanv2-ui_metadata",
-]
-
 # ManMan V1 Helm chart - Python-based legacy services
 # Chart tags will use the format: helm-manman-host-services.vX.Y.Z
 release_helm_chart(
@@ -192,23 +166,10 @@ release_helm_chart(
     visibility = ["//visibility:public"],
 )
 
-# ManManV2 Helm chart - Go-based control plane services
-# This is a separate chart for the V2 rewrite with distinct deployment lifecycle
-# Chart tags will use the format: helm-manman-control-services.vX.Y.Z
-release_helm_chart(
-    name = "manmanv2_chart",
-    apps = MANMAN_V2_APPS,
-    chart_name = "control-services",
-    domain = "manmanv2",
-    environment = "dev",
-    namespace = "manmanv2",
-    # chart_version omitted - uses default "0.0.0-dev" for local builds
-    # Release system auto-versions from git tags (helm-manmanv2-control-services.v*)
-    visibility = ["//visibility:public"],
-)
-
 # Note: Manual helm charts are provided in manman/charts/manman-host/
 # Those charts offer more sophisticated configuration for production deployments
+#
+# ManManV2 Helm chart is now in //manmanv2/BUILD.bazel
 
 filegroup(
     name = "tiltfile",
