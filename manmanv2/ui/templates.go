@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/whale-net/everything/libs/go/htmxbase"
-	"github.com/whale-net/everything/manman/protos"
+	"github.com/whale-net/everything/manmanv2/protos"
 )
 
 //go:embed templates/*.html templates/partials/*.html

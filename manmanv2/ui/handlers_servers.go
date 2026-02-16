@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
-	"github.com/whale-net/everything/manman/protos"
+	"github.com/whale-net/everything/manmanv2/protos"
 )
 
 // ServersPageData holds data for the servers list page

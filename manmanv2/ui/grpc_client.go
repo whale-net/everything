@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/whale-net/everything/libs/go/grpcclient"
-	manmanpb "github.com/whale-net/everything/manman/protos"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
 // ControlClient wraps the ManManAPI gRPC client

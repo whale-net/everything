@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
-	manmanpb "github.com/whale-net/everything/manman/protos"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
 // ActionsPageData holds data for the actions management page
