@@ -398,7 +398,7 @@
         </div>
         <div class="card-body">
             <p class="text-muted" style="margin-bottom: 1rem;">
-                <i class="fa fa-info-circle"></i> These actions are defined at parent levels (game or config) and cannot be edited here.
+                <i class="fa fa-info-circle"></i> These actions are defined at parent levels and cannot be edited here. Click a row to edit at its definition level.
             </p>
             <div class="table-container">
                 <table class="table">
@@ -409,11 +409,12 @@
                             <th>Level</th>
                             <th>Group</th>
                             <th>Command Template</th>
+                            <th>Action</th>
                         </tr>
                     </thead>
                     <tbody>
                         {{range .InheritedActions}}
-                        <tr style="opacity: 0.6;">
+                        <tr style="opacity: 0.6;" class="inherited-action-row">
                             <td><code>{{.Action.Name}}</code></td>
                             <td>
                                 {{if .Action.Icon}}<i class="{{.Action.Icon}}"></i> {{end}}
@@ -428,6 +429,11 @@
                             </td>
                             <td>{{if .Action.GroupName}}{{.Action.GroupName}}{{else}}-{{end}}</td>
                             <td><code style="font-size: 0.85em;">{{.Action.CommandTemplate}}</code></td>
+                            <td>
+                                <a href="{{.EditURL}}" class="btn btn-sm btn-secondary">
+                                    <i class="fa fa-external-link"></i> Edit at Source
+                                </a>
+                            </td>
                         </tr>
                         {{end}}
                     </tbody>
@@ -624,6 +630,16 @@ function actionManager() {
 /* Alpine.js cloak - hide elements before initialization */
 [x-cloak] {
     display: none !important;
+}
+
+/* Inherited action row styling */
+.inherited-action-row {
+    transition: opacity 0.2s ease;
+}
+
+.inherited-action-row:hover {
+    opacity: 1 !important;
+    background-color: #f8f9fa;
 }
 
 .form-section {

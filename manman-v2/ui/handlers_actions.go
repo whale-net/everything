@@ -30,8 +30,9 @@ type ActionsPageData struct {
 
 // ActionWithFields combines action with its input fields
 type ActionWithFields struct {
-	Action *manmanpb.ActionDefinition
-	Fields []*FieldWithOptions
+	Action  *manmanpb.ActionDefinition
+	Fields  []*FieldWithOptions
+	EditURL string // URL to edit this action at its definition level
 }
 
 // FieldWithOptions combines input field with its options
@@ -117,7 +118,7 @@ func (app *App) handleGameActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	localActions, inheritedActions := app.categorizeActions(ctx, actions, "game", gameID)
+	localActions, inheritedActions := app.categorizeActions(ctx, actions, "game", gameID, gameID, 0)
 
 	data := ActionsPageData{
 		Title:            "Manage Actions - " + game.Name,
@@ -189,7 +190,7 @@ func (app *App) handleConfigActions(w http.ResponseWriter, r *http.Request) {
 	configActions, _ := app.grpc.ListActionDefinitions(ctx, nil, &configID, nil)
 
 	allActions := append(gameActions, configActions...)
-	localActions, inheritedActions := app.categorizeActions(ctx, allActions, "game_config", configID)
+	localActions, inheritedActions := app.categorizeActions(ctx, allActions, "game_config", configID, config.GameId, configID)
 
 	data := ActionsPageData{
 		Title:            "Manage Actions - " + config.Name,
@@ -272,7 +273,7 @@ func (app *App) handleSGCActions(w http.ResponseWriter, r *http.Request) {
 	sgcActions, _ := app.grpc.ListActionDefinitions(ctx, nil, nil, &sgcID)
 
 	allActions := append(append(gameActions, configActions...), sgcActions...)
-	localActions, inheritedActions := app.categorizeActions(ctx, allActions, "server_game_config", sgcID)
+	localActions, inheritedActions := app.categorizeActions(ctx, allActions, "server_game_config", sgcID, config.GameId, sgc.GameConfigId)
 
 	data := ActionsPageData{
 		Title:            "Manage Actions - SGC",
@@ -301,7 +302,7 @@ func (app *App) handleSGCActions(w http.ResponseWriter, r *http.Request) {
 }
 
 // categorizeActions separates actions into local (defined at this level) and inherited (from parent levels)
-func (app *App) categorizeActions(ctx context.Context, actions []*manmanpb.ActionDefinition, currentLevel string, currentEntityID int64) ([]*ActionWithFields, []*ActionWithFields) {
+func (app *App) categorizeActions(ctx context.Context, actions []*manmanpb.ActionDefinition, currentLevel string, currentEntityID int64, gameID int64, configID int64) ([]*ActionWithFields, []*ActionWithFields) {
 	var local, inherited []*ActionWithFields
 
 	for _, action := range actions {
@@ -326,9 +327,21 @@ func (app *App) categorizeActions(ctx context.Context, actions []*manmanpb.Actio
 			})
 		}
 
+		// Build edit URL based on the action's definition level
+		var editURL string
+		switch action.DefinitionLevel {
+		case "game":
+			editURL = fmt.Sprintf("/games/%d/actions", action.EntityId)
+		case "game_config":
+			editURL = fmt.Sprintf("/games/%d/configs/%d/actions", gameID, action.EntityId)
+		case "server_game_config":
+			editURL = fmt.Sprintf("/games/%d/configs/%d/sgcs/%d/actions", gameID, configID, action.EntityId)
+		}
+
 		actionWithFields := &ActionWithFields{
-			Action: actionDetail,
-			Fields: fieldsWithOptions,
+			Action:  actionDetail,
+			Fields:  fieldsWithOptions,
+			EditURL: editURL,
 		}
 
 		// Check if this action is defined at the current level
