@@ -1,0 +1,43 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "log-processor_lib",
+    srcs = [
+        "main.go",
+        "config.go",
+    ],
+    importpath = "github.com/whale-net/everything/manmanv2/log-processor",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/rmq",
+        "//libs/go/s3",
+        "//manmanv2/api/repository/postgres",
+        "//manmanv2/log-processor/archiver",
+        "//manmanv2/log-processor/consumer",
+        "//manmanv2/log-processor/lifecycle",
+        "//manmanv2/log-processor/server",
+        "//manmanv2/protos:manmanpb",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//credentials/insecure",
+    ],
+)
+
+go_binary(
+    name = "log-processor",
+    embed = [":log-processor_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata for log-processor
+release_app(
+    name = "log-processor",
+    app_type = "internal-api",
+    binary_name = ":log-processor",
+    description = "Real-time log streaming and S3 archival service with gRPC API",
+    domain = "manmanv2",
+    language = "go",
+    port = 50053,
+    replicas = 1,
+)

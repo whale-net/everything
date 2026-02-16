@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_binary")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_binary(
+    name = "control-api",
+    srcs = ["main.go"],
+    deps = [
+        "//libs/go/rmq",
+        "//libs/go/s3",
+        "//manmanv2/api/handlers",
+        "//manmanv2/api/repository/postgres",
+        "//manmanv2/protos:manmanpb",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//reflection",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata for API service
+release_app(
+    name = "control-api",
+    binary_name = ":control-api",
+    language = "go",
+    domain = "manmanv2",
+    description = "ManMan control plane API (gRPC)",
+    app_type = "external-api",
+    port = 50051,
+    replicas = 2,
+)

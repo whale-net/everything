@@ -1,0 +1,706 @@
+syntax = "proto3";
+
+package manman.v1;
+
+option go_package = "github.com/whale-net/everything/manmanv2/protos;manmanpb";
+
+import "manmanv2/protos/messages.proto";
+
+// ManManAPI is the main control plane API for managing game servers
+service ManManAPI {
+  // Server management
+  rpc ListServers(ListServersRequest) returns (ListServersResponse);
+  rpc GetServer(GetServerRequest) returns (GetServerResponse);
+  rpc CreateServer(CreateServerRequest) returns (CreateServerResponse);
+  rpc UpdateServer(UpdateServerRequest) returns (UpdateServerResponse);
+  rpc DeleteServer(DeleteServerRequest) returns (DeleteServerResponse);
+
+  // Game management
+  rpc ListGames(ListGamesRequest) returns (ListGamesResponse);
+  rpc GetGame(GetGameRequest) returns (GetGameResponse);
+  rpc CreateGame(CreateGameRequest) returns (CreateGameResponse);
+  rpc UpdateGame(UpdateGameRequest) returns (UpdateGameResponse);
+  rpc DeleteGame(DeleteGameRequest) returns (DeleteGameResponse);
+
+  // GameConfig management
+  rpc ListGameConfigs(ListGameConfigsRequest) returns (ListGameConfigsResponse);
+  rpc GetGameConfig(GetGameConfigRequest) returns (GetGameConfigResponse);
+  rpc CreateGameConfig(CreateGameConfigRequest) returns (CreateGameConfigResponse);
+  rpc UpdateGameConfig(UpdateGameConfigRequest) returns (UpdateGameConfigResponse);
+  rpc DeleteGameConfig(DeleteGameConfigRequest) returns (DeleteGameConfigResponse);
+
+  // ServerGameConfig management (deployment)
+  rpc ListServerGameConfigs(ListServerGameConfigsRequest) returns (ListServerGameConfigsResponse);
+  rpc GetServerGameConfig(GetServerGameConfigRequest) returns (GetServerGameConfigResponse);
+  rpc DeployGameConfig(DeployGameConfigRequest) returns (DeployGameConfigResponse);
+  rpc UpdateServerGameConfig(UpdateServerGameConfigRequest) returns (UpdateServerGameConfigResponse);
+  rpc DeleteServerGameConfig(DeleteServerGameConfigRequest) returns (DeleteServerGameConfigResponse);
+
+  // Session management
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  rpc StartSession(StartSessionRequest) returns (StartSessionResponse);
+  rpc StopSession(StopSessionRequest) returns (StopSessionResponse);
+  rpc SendInput(SendInputRequest) returns (SendInputResponse);
+
+  // Backup management
+  rpc CreateBackup(CreateBackupRequest) returns (CreateBackupResponse);
+  rpc ListBackups(ListBackupsRequest) returns (ListBackupsResponse);
+  rpc GetBackup(GetBackupRequest) returns (GetBackupResponse);
+  rpc DeleteBackup(DeleteBackupRequest) returns (DeleteBackupResponse);
+
+  // Server registration (new)
+  rpc RegisterServer(RegisterServerRequest) returns (RegisterServerResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // Log management (new)
+  rpc SendBatchedLogs(SendBatchedLogsRequest) returns (SendBatchedLogsResponse);
+  rpc GetHistoricalLogs(GetHistoricalLogsRequest) returns (GetHistoricalLogsResponse);
+
+  // Validation (new)
+  rpc ValidateDeployment(ValidateDeploymentRequest) returns (ValidateDeploymentResponse);
+
+  // Configuration strategy management
+  rpc CreateConfigurationStrategy(CreateConfigurationStrategyRequest) returns (CreateConfigurationStrategyResponse);
+  rpc ListConfigurationStrategies(ListConfigurationStrategiesRequest) returns (ListConfigurationStrategiesResponse);
+  rpc UpdateConfigurationStrategy(UpdateConfigurationStrategyRequest) returns (UpdateConfigurationStrategyResponse);
+  rpc DeleteConfigurationStrategy(DeleteConfigurationStrategyRequest) returns (DeleteConfigurationStrategyResponse);
+
+  // Configuration patch management
+  rpc CreateConfigurationPatch(CreateConfigurationPatchRequest) returns (CreateConfigurationPatchResponse);
+  rpc UpdateConfigurationPatch(UpdateConfigurationPatchRequest) returns (UpdateConfigurationPatchResponse);
+  rpc DeleteConfigurationPatch(DeleteConfigurationPatchRequest) returns (DeleteConfigurationPatchResponse);
+  rpc ListConfigurationPatches(ListConfigurationPatchesRequest) returns (ListConfigurationPatchesResponse);
+
+  // Configuration preview (new)
+  rpc PreviewConfiguration(PreviewConfigurationRequest) returns (PreviewConfigurationResponse);
+
+  // Get rendered configurations for a session (for host-manager)
+  rpc GetSessionConfiguration(GetSessionConfigurationRequest) returns (GetSessionConfigurationResponse);
+
+  // Game actions - execution
+  rpc GetSessionActions(GetSessionActionsRequest) returns (GetSessionActionsResponse);
+  rpc ExecuteAction(ExecuteActionRequest) returns (ExecuteActionResponse);
+
+  // Game actions - management
+  rpc CreateActionDefinition(CreateActionDefinitionRequest) returns (CreateActionDefinitionResponse);
+  rpc UpdateActionDefinition(UpdateActionDefinitionRequest) returns (UpdateActionDefinitionResponse);
+  rpc DeleteActionDefinition(DeleteActionDefinitionRequest) returns (DeleteActionDefinitionResponse);
+  rpc ListActionDefinitions(ListActionDefinitionsRequest) returns (ListActionDefinitionsResponse);
+  rpc GetActionDefinition(GetActionDefinitionRequest) returns (GetActionDefinitionResponse);
+}
+
+// ============================================================================
+// Future Work TODOs
+// ============================================================================
+
+// TODO: Add batch update RPC for multiple ServerGameConfigs
+// Use case: Bulk port reassignment, mass parameter updates
+// Design: BatchUpdateServerGameConfigsRequest with repeated updates
+// rpc BatchUpdateServerGameConfigs(BatchUpdateServerGameConfigsRequest) returns (BatchUpdateServerGameConfigsResponse);
+
+// TODO: Add diagnostics/events system for debugging deployment failures
+// Design considerations:
+// - Event stream per session (gRPC streaming)
+// - Structured event types (container_created, port_bound, process_started)
+// - Searchable event log with filters (session_id, event_type, severity)
+// - Integration with log batching for complete observability
+// Example:
+// rpc StreamSessionEvents(StreamSessionEventsRequest) returns (stream SessionEvent);
+
+// ============================================================================
+// Server RPCs
+// ============================================================================
+
+message ListServersRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListServersResponse {
+  repeated Server servers = 1;
+  string next_page_token = 2;
+}
+
+message GetServerRequest {
+  int64 server_id = 1;
+}
+
+message GetServerResponse {
+  Server server = 1;
+}
+
+message CreateServerRequest {
+  string name = 1;
+}
+
+message CreateServerResponse {
+  Server server = 1;
+}
+
+message UpdateServerRequest {
+  int64 server_id = 1;
+  string name = 2;
+  string status = 3;
+  bool is_default = 4;
+  repeated string update_paths = 5;  // Field paths to update (empty = update all)
+}
+
+message UpdateServerResponse {
+  Server server = 1;
+}
+
+message DeleteServerRequest {
+  int64 server_id = 1;
+}
+
+message DeleteServerResponse {}
+
+// ============================================================================
+// Game RPCs
+// ============================================================================
+
+message ListGamesRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListGamesResponse {
+  repeated Game games = 1;
+  string next_page_token = 2;
+}
+
+message GetGameRequest {
+  int64 game_id = 1;
+}
+
+message GetGameResponse {
+  Game game = 1;
+}
+
+message CreateGameRequest {
+  string name = 1;
+  string steam_app_id = 2;  // optional
+  GameMetadata metadata = 3;
+}
+
+message CreateGameResponse {
+  Game game = 1;
+}
+
+message UpdateGameRequest {
+  int64 game_id = 1;
+  string name = 2;
+  string steam_app_id = 3;
+  GameMetadata metadata = 4;
+  repeated string update_paths = 5;  // Field paths to update (empty = update all)
+}
+
+message UpdateGameResponse {
+  Game game = 1;
+}
+
+message DeleteGameRequest {
+  int64 game_id = 1;
+}
+
+message DeleteGameResponse {}
+
+// ============================================================================
+// GameConfig RPCs
+// ============================================================================
+
+message ListGameConfigsRequest {
+  int64 game_id = 1;  // optional filter
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListGameConfigsResponse {
+  repeated GameConfig configs = 1;
+  string next_page_token = 2;
+}
+
+message GetGameConfigRequest {
+  int64 config_id = 1;
+}
+
+message GetGameConfigResponse {
+  GameConfig config = 1;
+}
+
+message CreateGameConfigRequest {
+  int64 game_id = 1;
+  string name = 2;
+  string image = 3;
+  string args_template = 4;
+  map<string, string> env_template = 5;
+  repeated FileTemplate files = 6;
+  repeated Parameter parameters = 7;
+  repeated string entrypoint = 8;
+  repeated string command = 9;
+}
+
+message CreateGameConfigResponse {
+  GameConfig config = 1;
+}
+
+message UpdateGameConfigRequest {
+  int64 config_id = 1;
+  string name = 2;
+  string image = 3;
+  string args_template = 4;
+  map<string, string> env_template = 5;
+  repeated FileTemplate files = 6;
+  repeated Parameter parameters = 7;
+  repeated string update_paths = 8;  // Field paths to update (empty = update all)
+  repeated string entrypoint = 9;
+  repeated string command = 10;
+}
+
+message UpdateGameConfigResponse {
+  GameConfig config = 1;
+}
+
+message DeleteGameConfigRequest {
+  int64 config_id = 1;
+}
+
+message DeleteGameConfigResponse {}
+
+// ============================================================================
+// ServerGameConfig RPCs
+// ============================================================================
+
+message ListServerGameConfigsRequest {
+  int64 server_id = 1;  // optional filter
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListServerGameConfigsResponse {
+  repeated ServerGameConfig configs = 1;
+  string next_page_token = 2;
+}
+
+message GetServerGameConfigRequest {
+  int64 server_game_config_id = 1;
+}
+
+message GetServerGameConfigResponse {
+  ServerGameConfig config = 1;
+}
+
+message DeployGameConfigRequest {
+  int64 server_id = 1;
+  int64 game_config_id = 2;
+  repeated PortBinding port_bindings = 3;
+  map<string, string> parameters = 4;
+}
+
+message DeployGameConfigResponse {
+  ServerGameConfig config = 1;
+}
+
+message UpdateServerGameConfigRequest {
+  int64 server_game_config_id = 1;
+  repeated PortBinding port_bindings = 2;
+  map<string, string> parameters = 3;
+  string status = 4;
+  repeated string update_paths = 5;  // Field paths to update (empty = update all)
+}
+
+message UpdateServerGameConfigResponse {
+  ServerGameConfig config = 1;
+}
+
+message DeleteServerGameConfigRequest {
+  int64 server_game_config_id = 1;
+}
+
+message DeleteServerGameConfigResponse {}
+
+// ============================================================================
+// Session RPCs
+// ============================================================================
+
+message ListSessionsRequest {
+  int64 server_game_config_id = 1;  // optional filter
+  int32 page_size = 2;
+  string page_token = 3;
+
+  // Enhanced filters
+  repeated string status_filter = 4;
+  int64 started_after = 5;
+  int64 started_before = 6;
+  int64 server_id = 7;
+  bool live_only = 8;
+}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+  string next_page_token = 2;
+}
+
+message GetSessionRequest {
+  int64 session_id = 1;
+}
+
+message GetSessionResponse {
+  Session session = 1;
+}
+
+message StartSessionRequest {
+  int64 server_game_config_id = 1;
+  map<string, string> parameters = 2;  // optional session-level overrides
+  bool force = 3;
+}
+
+message StartSessionResponse {
+  Session session = 1;
+}
+
+message StopSessionRequest {
+  int64 session_id = 1;
+}
+
+message StopSessionResponse {
+  Session session = 1;
+}
+
+message SendInputRequest {
+  int64 session_id = 1;
+  bytes input = 2;
+}
+
+message SendInputResponse {
+  // Empty response on success
+}
+
+// ============================================================================
+// Backup RPCs
+// ============================================================================
+
+message CreateBackupRequest {
+  int64 session_id = 1;  // Session to backup
+  string description = 2;  // Optional description
+}
+
+message CreateBackupResponse {
+  Backup backup = 1;
+}
+
+message ListBackupsRequest {
+  int64 server_game_config_id = 1;  // Filter by SGC (optional)
+  int64 session_id = 2;  // Filter by session (optional)
+  int32 page_size = 3;
+  string page_token = 4;
+}
+
+message ListBackupsResponse {
+  repeated Backup backups = 1;
+  string next_page_token = 2;
+}
+
+message GetBackupRequest {
+  int64 backup_id = 1;
+}
+
+message GetBackupResponse {
+  Backup backup = 1;
+}
+
+message DeleteBackupRequest {
+  int64 backup_id = 1;
+}
+
+message DeleteBackupResponse {
+  // Empty - success indicated by no error
+}
+
+// ============================================================================
+// Server Registration RPCs
+// ============================================================================
+
+message RegisterServerRequest {
+  string name = 1;
+  ServerCapabilities capabilities = 2;
+  string environment = 3;  // Optional: deployment environment (dev, staging, prod, etc.)
+}
+
+message RegisterServerResponse {
+  int64 server_id = 1;
+  Server server = 2;
+}
+
+message HeartbeatRequest {
+  int64 server_id = 1;
+  ServerCapabilities capabilities = 2;
+}
+
+message HeartbeatResponse {
+  bool acknowledged = 1;
+  int64 next_heartbeat_seconds = 2;
+}
+
+// ============================================================================
+// Log Management RPCs
+// ============================================================================
+
+message SendBatchedLogsRequest {
+  int64 server_id = 1;
+  repeated LogBatch batches = 2;
+}
+
+message SendBatchedLogsResponse {
+  int32 accepted_batches = 1;
+  repeated string failed_batch_ids = 2;
+}
+
+message GetHistoricalLogsRequest {
+  int64 sgc_id = 1;  // DEPRECATED: Use session_id instead
+  int64 start_timestamp = 2;  // Unix timestamp
+  int64 end_timestamp = 3;    // Unix timestamp (max 30 minutes from start)
+  int64 session_id = 4;  // Session ID to query logs for
+}
+
+message GetHistoricalLogsResponse {
+  repeated HistoricalLogBatch batches = 1;
+  int64 earliest_available_timestamp = 2;  // Unix timestamp
+  int64 latest_available_timestamp = 3;    // Unix timestamp
+}
+
+message HistoricalLogBatch {
+  int64 minute_timestamp = 1;  // Unix timestamp
+  string content = 2;          // Raw log text
+  int32 line_count = 3;
+}
+
+// ============================================================================
+// Validation RPCs
+// ============================================================================
+
+message ValidateDeploymentRequest {
+  int64 server_id = 1;
+  int64 game_config_id = 2;
+  repeated PortBinding port_bindings = 3;
+  map<string, string> parameters = 4;
+}
+
+message ValidateDeploymentResponse {
+  bool valid = 1;
+  repeated ValidationIssue issues = 2;
+  DeploymentEstimate estimate = 3;
+}
+
+message ValidationIssue {
+  ValidationSeverity severity = 1;
+  string field = 2;
+  string message = 3;
+  string suggestion = 4;
+}
+
+enum ValidationSeverity {
+  VALIDATION_SEVERITY_UNSPECIFIED = 0;
+  VALIDATION_SEVERITY_ERROR = 1;
+  VALIDATION_SEVERITY_WARNING = 2;
+  VALIDATION_SEVERITY_INFO = 3;
+}
+
+message DeploymentEstimate {
+  int32 estimated_memory_mb = 1;
+  int32 estimated_cpu_millicores = 2;
+  repeated int32 allocated_ports = 3;
+}
+
+// ============================================================================
+// Configuration Strategy RPCs
+// ============================================================================
+
+message CreateConfigurationStrategyRequest {
+  int64 game_id = 1;
+  string name = 2;
+  string description = 3;
+  string strategy_type = 4;
+  string target_path = 5;
+  string base_template = 6;
+  map<string, string> render_options = 7;
+  int32 apply_order = 8;
+}
+
+message CreateConfigurationStrategyResponse {
+  ConfigurationStrategy strategy = 1;
+}
+
+message ListConfigurationStrategiesRequest {
+  int64 game_id = 1;
+}
+
+message ListConfigurationStrategiesResponse {
+  repeated ConfigurationStrategy strategies = 1;
+}
+
+message UpdateConfigurationStrategyRequest {
+  int64 strategy_id = 1;
+  string name = 2;
+  string description = 3;
+  string strategy_type = 4;
+  string target_path = 5;
+  string base_template = 6;
+  map<string, string> render_options = 7;
+  int32 apply_order = 8;
+  repeated string update_paths = 9;
+}
+
+message UpdateConfigurationStrategyResponse {
+  ConfigurationStrategy strategy = 1;
+}
+
+message DeleteConfigurationStrategyRequest {
+  int64 strategy_id = 1;
+}
+
+message DeleteConfigurationStrategyResponse {}
+
+// ============================================================================
+// Configuration Patch RPCs
+// ============================================================================
+
+message CreateConfigurationPatchRequest {
+  int64 strategy_id = 1;
+  string patch_level = 2;  // "game_config", "server_game_config", "session"
+  int64 entity_id = 3;     // game_config_id, server_game_config_id, or session_id
+  string patch_content = 4;
+  string patch_format = 5;  // "properties", "json_merge_patch", etc.
+}
+
+message CreateConfigurationPatchResponse {
+  ConfigurationPatch patch = 1;
+}
+
+message UpdateConfigurationPatchRequest {
+  int64 patch_id = 1;
+  string patch_content = 2;
+  string patch_format = 3;
+}
+
+message UpdateConfigurationPatchResponse {
+  ConfigurationPatch patch = 1;
+}
+
+message DeleteConfigurationPatchRequest {
+  int64 patch_id = 1;
+}
+
+message DeleteConfigurationPatchResponse {}
+
+message ListConfigurationPatchesRequest {
+  optional int64 strategy_id = 1;   // Filter by strategy
+  optional string patch_level = 2;   // Filter by level
+  optional int64 entity_id = 3;      // Filter by entity
+}
+
+message ListConfigurationPatchesResponse {
+  repeated ConfigurationPatch patches = 1;
+}
+
+// ============================================================================
+// Configuration Preview RPCs
+// ============================================================================
+
+message PreviewConfigurationRequest {
+  int64 session_id = 1;  // Preview for this session
+  map<string, string> parameter_overrides = 2;  // Try different values
+}
+
+message PreviewConfigurationResponse {
+  repeated RenderedConfiguration configurations = 1;
+}
+
+message GetSessionConfigurationRequest {
+  int64 session_id = 1;
+}
+
+message GetSessionConfigurationResponse {
+  repeated RenderedConfiguration configurations = 1;
+  int64 game_id = 2;
+  int64 game_config_id = 3;
+  int64 server_game_config_id = 4;
+}
+
+// ============================================================================
+// Game Actions RPCs
+// ============================================================================
+
+message GetSessionActionsRequest {
+  int64 session_id = 1;
+}
+
+message GetSessionActionsResponse {
+  repeated ActionDefinition actions = 1;
+}
+
+message ExecuteActionRequest {
+  int64 session_id = 1;
+  int64 action_id = 2;
+  map<string, string> input_values = 3;  // Field name -> user input
+}
+
+message ExecuteActionResponse {
+  string rendered_command = 1;
+  bool success = 2;
+  int64 execution_id = 3;
+  string error_message = 4;
+}
+
+// Action management messages
+
+message CreateActionDefinitionRequest {
+  ActionDefinition action = 1;
+  repeated ActionInputField input_fields = 2;
+  repeated ActionInputOption input_options = 3;
+}
+
+message CreateActionDefinitionResponse {
+  int64 action_id = 1;
+}
+
+message UpdateActionDefinitionRequest {
+  ActionDefinition action = 1;
+  repeated ActionInputField input_fields = 2;
+  repeated ActionInputOption input_options = 3;
+}
+
+message UpdateActionDefinitionResponse {
+  bool success = 1;
+}
+
+message DeleteActionDefinitionRequest {
+  int64 action_id = 1;
+}
+
+message DeleteActionDefinitionResponse {
+  bool success = 1;
+}
+
+message ListActionDefinitionsRequest {
+  // Filter by one of these (mutually exclusive)
+  optional int64 game_id = 1;
+  optional int64 config_id = 2;
+  optional int64 sgc_id = 3;
+
+  // If all are empty, list all actions
+}
+
+message ListActionDefinitionsResponse {
+  repeated ActionDefinition actions = 1;
+}
+
+message GetActionDefinitionRequest {
+  int64 action_id = 1;
+}
+
+message GetActionDefinitionResponse {
+  ActionDefinition action = 1;
+  repeated ActionInputField input_fields = 2;
+}

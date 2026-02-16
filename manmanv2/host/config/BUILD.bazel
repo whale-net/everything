@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "config",
+    srcs = ["renderer.go"],
+    importpath = "github.com/whale-net/everything/manmanv2/host/config",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//manmanv2/protos:manmanpb",
+    ],
+)
+
+go_test(
+    name = "config_test",
+    srcs = ["renderer_test.go"],
+    embed = [":config"],
+    deps = [
+        "//manmanv2/protos:manmanpb",
+    ],
+)

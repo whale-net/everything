@@ -1,0 +1,56 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+load("//tools/bazel:release.bzl", "release_helm_chart")
+
+# ==============================================================================
+# ManManV2 (Go) - Database Models
+# ==============================================================================
+
+go_library(
+    name = "models",
+    srcs = ["models.go"],
+    importpath = "github.com/whale-net/everything/manmanv2",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "models_test",
+    srcs = ["models_test.go"],
+    embed = [":models"],
+)
+
+# ==============================================================================
+# ManManV2 Helm Chart
+# ==============================================================================
+
+# List of ManManV2 app metadata targets for chart composition
+MANMAN_V2_APPS = [
+    "//manmanv2/api:control-api_metadata",
+    "//manmanv2/migrate:control-migration_metadata",
+    "//manmanv2/processor:event-processor_metadata",
+    "//manmanv2/log-processor:log-processor_metadata",
+    "//manmanv2/ui:manmanv2-ui_metadata",
+]
+
+# ManManV2 Helm chart - Go-based control plane services
+# Chart tags will use the format: helm-manmanv2-control-services.vX.Y.Z
+release_helm_chart(
+    name = "manmanv2_chart",
+    apps = MANMAN_V2_APPS,
+    chart_name = "control-services",
+    domain = "manmanv2",
+    environment = "dev",
+    namespace = "manmanv2",
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "tiltfile",
+    srcs = ["Tiltfile"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "docs",
+    srcs = glob(["docs/**/*"]),
+    visibility = ["//visibility:public"],
+)

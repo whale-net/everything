@@ -1,0 +1,49 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "handlers",
+    srcs = [
+        "action.go",
+        "api.go",
+        "backup.go",
+        "command_publisher.go",
+        "converters.go",
+        "game.go",
+        "logs.go",
+        "param_helpers.go",
+        "registration.go",
+        "server.go",
+        "validation.go",
+    ],
+    importpath = "github.com/whale-net/everything/manmanv2/api/handlers",
+    visibility = ["//manmanv2/api:__subpackages__"],
+    deps = [
+        "//libs/go/params",
+        "//libs/go/rmq",
+        "//libs/go/s3",
+        "//manmanv2:models",
+        "//manmanv2/api/repository",
+        "//manmanv2/api/repository/postgres",
+        "//manmanv2/protos:manmanpb",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
+go_test(
+    name = "handlers_test",
+    srcs = [
+        "registration_test.go",
+        "session_test.go",
+    ],
+    embed = [":handlers"],
+    deps = [
+        "//manmanv2:models",
+        "//manmanv2/protos:manmanpb",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)

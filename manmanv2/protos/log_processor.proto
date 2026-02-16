@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package manman.v1;
+
+option go_package = "github.com/whale-net/everything/manmanv2/protos;manmanpb";
+
+// LogProcessor provides real-time log streaming from RabbitMQ to clients
+service LogProcessor {
+  // StreamSessionLogs streams logs for a specific session in real-time
+  rpc StreamSessionLogs(StreamSessionLogsRequest) returns (stream LogMessage);
+}
+
+// StreamSessionLogsRequest requests log streaming for a session
+message StreamSessionLogsRequest {
+  int64 session_id = 1;
+}
+
+// LogMessage represents a single log message from a session
+message LogMessage {
+  int64 session_id = 1;
+  int64 timestamp = 2;      // Unix milliseconds
+  string source = 3;        // "stdout", "stderr", "host"
+  string message = 4;
+}

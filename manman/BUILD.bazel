@@ -4,23 +4,6 @@ load("//tools/bazel:release.bzl", "release_app", "release_helm_chart")
 load("//tools/openapi:openapi_client.bzl", "openapi_client")
 
 # ==============================================================================
-# ManManV2 (Go) - Database Models
-# ==============================================================================
-
-go_library(
-    name = "models",
-    srcs = ["models.go"],
-    importpath = "github.com/whale-net/everything/manman",
-    visibility = ["//visibility:public"],
-)
-
-go_test(
-    name = "models_test",
-    srcs = ["models_test.go"],
-    embed = [":models"],
-)
-
-# ==============================================================================
 # ManMan V1 (Python) - Legacy Services
 # ==============================================================================
 
@@ -169,15 +152,6 @@ MANMAN_V1_APPS = [
     ":management-ui_metadata",
 ]
 
-# List of ManManV2 (Go) app metadata targets for chart composition
-MANMAN_V2_APPS = [
-    "//manman/api:control-api_metadata",
-    "//manman/migrate:control-migration_metadata",
-    "//manman/processor:event-processor_metadata",
-    "//manman/log-processor:log-processor_metadata",
-    "//manman-v2/ui:manmanv2-ui_metadata",
-]
-
 # ManMan V1 Helm chart - Python-based legacy services
 # Chart tags will use the format: helm-manman-host-services.vX.Y.Z
 release_helm_chart(
@@ -192,23 +166,10 @@ release_helm_chart(
     visibility = ["//visibility:public"],
 )
 
-# ManManV2 Helm chart - Go-based control plane services
-# This is a separate chart for the V2 rewrite with distinct deployment lifecycle
-# Chart tags will use the format: helm-manman-control-services.vX.Y.Z
-release_helm_chart(
-    name = "manmanv2_chart",
-    apps = MANMAN_V2_APPS,
-    chart_name = "control-services",
-    domain = "manmanv2",
-    environment = "dev",
-    namespace = "manmanv2",
-    # chart_version omitted - uses default "0.0.0-dev" for local builds
-    # Release system auto-versions from git tags (helm-manmanv2-control-services.v*)
-    visibility = ["//visibility:public"],
-)
-
 # Note: Manual helm charts are provided in manman/charts/manman-host/
 # Those charts offer more sophisticated configuration for production deployments
+#
+# ManManV2 Helm chart is now in //manmanv2/BUILD.bazel
 
 filegroup(
     name = "tiltfile",

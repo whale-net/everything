@@ -1,0 +1,37 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "postgres",
+    srcs = [
+        "action.go",
+        "backup.go",
+        "game.go",
+        "gameconfig.go",
+        "log_reference.go",
+        "patch.go",
+        "repository.go",
+        "server.go",
+        "server_capability.go",
+        "server_port.go",
+        "servergameconfig.go",
+        "session.go",
+        "strategy.go",
+    ],
+    importpath = "github.com/whale-net/everything/manmanv2/api/repository/postgres",
+    visibility = ["//manmanv2:__subpackages__"],
+    deps = [
+        "//manmanv2:models",
+        "//manmanv2/api/repository",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+go_test(
+    name = "server_port_test",
+    srcs = ["server_port_test.go"],
+    embed = [":postgres"],
+    deps = [
+        "//manmanv2:models",
+    ],
+)

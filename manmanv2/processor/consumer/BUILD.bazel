@@ -1,0 +1,12 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "consumer",
+    srcs = ["consumer.go"],
+    importpath = "github.com/whale-net/everything/manmanv2/processor/consumer",
+    visibility = ["//manmanv2/processor:__subpackages__"],
+    deps = [
+        "//libs/go/rmq",
+        "//manmanv2/processor/handlers",
+    ],
+)

@@ -1,0 +1,48 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "processor_lib",
+    srcs = [
+        "config.go",
+        "main.go",
+    ],
+    importpath = "github.com/whale-net/everything/manmanv2/processor",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/logging",
+        "//libs/go/rmq",
+        "//manmanv2/api/repository",
+        "//manmanv2/api/repository/postgres",
+        "//manmanv2/processor/consumer",
+        "//manmanv2/processor/handlers",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+go_binary(
+    name = "event-processor",
+    embed = [":processor_lib"],
+    visibility = ["//visibility:public"],
+)
+
+release_app(
+    name = "event-processor",
+    binary_name = ":event-processor",
+    language = "go",
+    domain = "manmanv2",
+    description = "ManMan event processor (RabbitMQ consumer, DB sync)",
+    app_type = "worker",
+    replicas = 1,
+)
+
+go_test(
+    name = "integration_test",
+    srcs = ["integration_test.go"],
+    deps = [
+        "//manmanv2:models",
+        "//manmanv2/api/repository",
+        "//manmanv2/host/rmq",
+        "//manmanv2/processor/handlers",
+    ],
+)
