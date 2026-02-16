@@ -402,7 +402,7 @@ func (app *App) handleActionCreate(w http.ResponseWriter, r *http.Request, level
 	if fieldsJSON := r.FormValue("input_fields"); fieldsJSON != "" {
 		if err := json.Unmarshal([]byte(fieldsJSON), &fields); err != nil {
 			log.Printf("Error parsing input fields: %v", err)
-			http.Error(w, "Invalid input fields format", http.StatusBadRequest)
+			writeJSONError(w, fmt.Sprintf("Invalid input fields format: %v", err), http.StatusBadRequest)
 			return
 		}
 	}
@@ -412,7 +412,7 @@ func (app *App) handleActionCreate(w http.ResponseWriter, r *http.Request, level
 	if optionsJSON := r.FormValue("input_options"); optionsJSON != "" {
 		if err := json.Unmarshal([]byte(optionsJSON), &options); err != nil {
 			log.Printf("Error parsing options: %v", err)
-			http.Error(w, "Invalid options format", http.StatusBadRequest)
+			writeJSONError(w, fmt.Sprintf("Invalid options format: %v", err), http.StatusBadRequest)
 			return
 		}
 	}
@@ -421,15 +421,19 @@ func (app *App) handleActionCreate(w http.ResponseWriter, r *http.Request, level
 	actionID, err := app.grpc.CreateActionDefinition(ctx, action, fields, options)
 	if err != nil {
 		log.Printf("Error creating action: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to create action: %v", err), http.StatusInternalServerError)
+		writeJSONError(w, fmt.Sprintf("Failed to create action: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	log.Printf("Created action #%d: %s", actionID, action.Name)
 
-	// Return success (HTMX will handle redirect/refresh)
-	w.Header().Set("HX-Refresh", "true")
+	// Return success
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":   true,
+		"action_id": actionID,
+	})
 }
 
 // handleActionUpdate updates an existing action
@@ -438,7 +442,7 @@ func (app *App) handleActionUpdate(w http.ResponseWriter, r *http.Request, level
 
 	actionID := parseIntOrZero(r.FormValue("action_id"))
 	if actionID == 0 {
-		http.Error(w, "Missing action_id", http.StatusBadRequest)
+		writeJSONError(w, "Missing action_id", http.StatusBadRequest)
 		return
 	}
 
@@ -465,7 +469,7 @@ func (app *App) handleActionUpdate(w http.ResponseWriter, r *http.Request, level
 	if fieldsJSON := r.FormValue("input_fields"); fieldsJSON != "" {
 		if err := json.Unmarshal([]byte(fieldsJSON), &fields); err != nil {
 			log.Printf("Error parsing input fields: %v", err)
-			http.Error(w, "Invalid input fields format", http.StatusBadRequest)
+			writeJSONError(w, fmt.Sprintf("Invalid input fields format: %v", err), http.StatusBadRequest)
 			return
 		}
 	}
@@ -475,7 +479,7 @@ func (app *App) handleActionUpdate(w http.ResponseWriter, r *http.Request, level
 	if optionsJSON := r.FormValue("input_options"); optionsJSON != "" {
 		if err := json.Unmarshal([]byte(optionsJSON), &options); err != nil {
 			log.Printf("Error parsing options: %v", err)
-			http.Error(w, "Invalid options format", http.StatusBadRequest)
+			writeJSONError(w, fmt.Sprintf("Invalid options format: %v", err), http.StatusBadRequest)
 			return
 		}
 	}
@@ -484,15 +488,19 @@ func (app *App) handleActionUpdate(w http.ResponseWriter, r *http.Request, level
 	err := app.grpc.UpdateActionDefinition(ctx, action, fields, options)
 	if err != nil {
 		log.Printf("Error updating action: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to update action: %v", err), http.StatusInternalServerError)
+		writeJSONError(w, fmt.Sprintf("Failed to update action: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	log.Printf("Updated action #%d: %s", actionID, action.Name)
 
-	// Return success (HTMX will handle redirect/refresh)
-	w.Header().Set("HX-Refresh", "true")
+	// Return success
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":   true,
+		"action_id": actionID,
+	})
 }
 
 // handleActionDelete deletes an action
@@ -501,22 +509,26 @@ func (app *App) handleActionDelete(w http.ResponseWriter, r *http.Request) {
 
 	actionID := parseIntOrZero(r.FormValue("action_id"))
 	if actionID == 0 {
-		http.Error(w, "Missing action_id", http.StatusBadRequest)
+		writeJSONError(w, "Missing action_id", http.StatusBadRequest)
 		return
 	}
 
 	err := app.grpc.DeleteActionDefinition(ctx, int64(actionID))
 	if err != nil {
 		log.Printf("Error deleting action: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to delete action: %v", err), http.StatusInternalServerError)
+		writeJSONError(w, fmt.Sprintf("Failed to delete action: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	log.Printf("Deleted action #%d", actionID)
 
-	// Return success (HTMX will handle redirect/refresh)
-	w.Header().Set("HX-Refresh", "true")
+	// Return success
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":   true,
+		"action_id": actionID,
+	})
 }
 
 // parseIntOrZero parses a string to int, returning 0 on error
@@ -526,4 +538,13 @@ func parseIntOrZero(s string) int {
 		return 0
 	}
 	return val
+}
+
+// writeJSONError writes a JSON error response
+func writeJSONError(w http.ResponseWriter, message string, statusCode int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(map[string]string{
+		"error": message,
+	})
 }

@@ -11,6 +11,25 @@
         </div>
     </div>
 
+    <!-- Error/Success Messages -->
+    <div x-show="errorMessage"
+         x-transition
+         class="alert alert-danger"
+         style="margin-top: 1rem;"
+         x-cloak>
+        <strong>Error:</strong> <span x-text="errorMessage"></span>
+        <button @click="errorMessage = ''" style="float: right; background: none; border: none; font-size: 1.2em; cursor: pointer;">&times;</button>
+    </div>
+
+    <div x-show="successMessage"
+         x-transition
+         class="alert alert-success"
+         style="margin-top: 1rem;"
+         x-cloak>
+        <strong>Success:</strong> <span x-text="successMessage"></span>
+        <button @click="successMessage = ''" style="float: right; background: none; border: none; font-size: 1.2em; cursor: pointer;">&times;</button>
+    </div>
+
     <!-- Create/Edit Form (Inline, Expandable) -->
     <div x-show="showForm"
          x-transition:enter="transition ease-out duration-200"
@@ -452,6 +471,8 @@ function actionManager() {
         editMode: false,
         submitting: false,
         formData: {},
+        errorMessage: '',
+        successMessage: '',
 
         init() {
             this.resetForm();
@@ -541,6 +562,9 @@ function actionManager() {
                 return;
             }
 
+            this.errorMessage = '';
+            this.successMessage = '';
+
             const formData = new FormData();
             formData.append('operation', 'delete');
             formData.append('action_id', actionId);
@@ -551,13 +575,22 @@ function actionManager() {
                     body: formData
                 });
 
+                const data = await response.json();
+
                 if (!response.ok) {
-                    throw new Error('Failed to delete action');
+                    this.errorMessage = data.error || 'Failed to delete action';
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                    return;
                 }
 
-                window.location.reload();
+                this.successMessage = `Action "${actionLabel}" deleted successfully!`;
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+
+                // Reload after a brief delay to show success message
+                setTimeout(() => window.location.reload(), 1500);
             } catch (error) {
-                alert('Error deleting action: ' + error.message);
+                this.errorMessage = 'Error deleting action: ' + error.message;
+                window.scrollTo({ top: 0, behavior: 'smooth' });
             }
         },
 
@@ -606,19 +639,32 @@ function actionManager() {
                 formData.append('input_fields', JSON.stringify(cleanFields));
                 formData.append('input_options', JSON.stringify(inputOptions));
 
+                this.errorMessage = '';
+                this.successMessage = '';
+
                 const response = await fetch(window.location.pathname, {
                     method: 'POST',
                     body: formData
                 });
 
+                const data = await response.json();
+
                 if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(errorText || 'Failed to save action');
+                    this.errorMessage = data.error || 'Failed to save action';
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                    this.submitting = false;
+                    return;
                 }
 
-                window.location.reload();
+                this.successMessage = this.editMode ? 'Action updated successfully!' : 'Action created successfully!';
+                this.closeForm();
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+
+                // Reload after a brief delay to show success message
+                setTimeout(() => window.location.reload(), 1500);
             } catch (error) {
-                alert('Error saving action: ' + error.message);
+                this.errorMessage = 'Error saving action: ' + error.message;
+                window.scrollTo({ top: 0, behavior: 'smooth' });
                 this.submitting = false;
             }
         }
