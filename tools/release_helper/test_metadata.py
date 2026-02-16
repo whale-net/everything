@@ -17,16 +17,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch, mock_open, MagicMock
 from subprocess import CompletedProcess
 
-import tools.release_helper.metadata as metadata_module
 from tools.release_helper.metadata import get_app_metadata, list_all_apps, get_image_targets
-
-
-@pytest.fixture(autouse=True)
-def clear_metadata_cache():
-    """Clear the metadata cache before each test."""
-    metadata_module._metadata_cache.clear()
-    yield
-    metadata_module._metadata_cache.clear()
 
 
 @pytest.fixture
@@ -95,89 +86,71 @@ class TestGetAppMetadata:
     """Test cases for get_app_metadata function."""
 
     def test_get_app_metadata_success(self, mock_run_bazel, mock_find_workspace_root, 
-                                      sample_metadata):
+                                      mock_path_exists, mock_file_open, sample_metadata):
         """Test successful metadata retrieval."""
         bazel_target = "//demo/hello_fastapi:hello_fastapi_metadata"
         
-        # _read_metadata_file is called twice: once before build (returns None), once after
-        with patch('builtins.open', mock_open(read_data=json.dumps(sample_metadata))):
-            with patch('pathlib.Path.exists', side_effect=[False, True]):
-                result = get_app_metadata(bazel_target)
+        with patch('builtins.open', mock_file_open(json.dumps(sample_metadata))) as mock_file:
+            result = get_app_metadata(bazel_target)
             
-                # Verify bazel build was called (file didn't exist on first check)
-                mock_run_bazel.assert_called_once_with(["build", bazel_target])
-                
-                assert result == sample_metadata
+            # Verify bazel build was called
+            mock_run_bazel.assert_called_once_with(["build", bazel_target])
+            
+            # Verify correct file path was used
+            expected_file_path = Path("/workspace/bazel-bin/demo/hello_fastapi/hello_fastapi_metadata_metadata.json")
+            mock_file.assert_called_once_with(expected_file_path)
+            
+            assert result == sample_metadata
 
-    def test_get_app_metadata_cached(self, mock_run_bazel, mock_find_workspace_root,
-                                     sample_metadata):
-        """Test that repeated calls return cached result without rebuilding."""
-        bazel_target = "//demo/hello_fastapi:hello_fastapi_metadata"
-        
-        with patch('builtins.open', mock_open(read_data=json.dumps(sample_metadata))):
-            with patch('pathlib.Path.exists', side_effect=[False, True]):
-                result1 = get_app_metadata(bazel_target)
-        
-        # Second call should use cache, no additional bazel build
-        result2 = get_app_metadata(bazel_target)
-        
-        assert result1 == result2
-        mock_run_bazel.assert_called_once()  # Only one build call
-
-    def test_get_app_metadata_reads_from_disk_without_building(self, mock_run_bazel, 
-                                                                mock_find_workspace_root,
-                                                                sample_metadata):
-        """Test that if metadata file already exists on disk, no build is triggered."""
-        bazel_target = "//demo/hello_fastapi:hello_fastapi_metadata"
-        
-        with patch('builtins.open', mock_open(read_data=json.dumps(sample_metadata))):
-            with patch('pathlib.Path.exists', return_value=True):
-                result = get_app_metadata(bazel_target)
-        
-        # No bazel build should be called since file exists
-        mock_run_bazel.assert_not_called()
-        assert result == sample_metadata
-
-    def test_get_app_metadata_invalid_target_format_no_slashes(self):
+    def test_get_app_metadata_invalid_target_format_no_slashes(self, mock_run_bazel):
         """Test error handling for invalid target format without double slashes."""
         bazel_target = "demo/hello_fastapi:hello_fastapi_metadata"
         
         with pytest.raises(ValueError, match="Invalid bazel target format"):
             get_app_metadata(bazel_target)
+        
+        # Verify run_bazel was called before validation
+        mock_run_bazel.assert_called_once_with(["build", bazel_target])
 
-    def test_get_app_metadata_invalid_target_format_no_colon(self):
+    def test_get_app_metadata_invalid_target_format_no_colon(self, mock_run_bazel):
         """Test error handling for invalid target format without colon."""
         bazel_target = "//demo/hello_fastapi/hello_fastapi_metadata"
         
         with pytest.raises(ValueError, match="Invalid bazel target format"):
             get_app_metadata(bazel_target)
+        
+        # Verify run_bazel was called before validation
+        mock_run_bazel.assert_called_once_with(["build", bazel_target])
 
-    def test_get_app_metadata_invalid_target_format_multiple_colons(self):
+    def test_get_app_metadata_invalid_target_format_multiple_colons(self, mock_run_bazel):
         """Test error handling for invalid target format with multiple colons."""
         bazel_target = "//demo/hello_fastapi:hello:fastapi_metadata"
         
         with pytest.raises(ValueError, match="Invalid bazel target format"):
             get_app_metadata(bazel_target)
+        
+        # Verify run_bazel was called before validation
+        mock_run_bazel.assert_called_once_with(["build", bazel_target])
 
     def test_get_app_metadata_file_not_found(self, mock_run_bazel, mock_find_workspace_root):
-        """Test error handling when metadata file doesn't exist even after build."""
+        """Test error handling when metadata file doesn't exist."""
         bazel_target = "//demo/hello_fastapi:hello_fastapi_metadata"
         
         with patch('pathlib.Path.exists', return_value=False):
             with pytest.raises(FileNotFoundError, match="Metadata file not found"):
                 get_app_metadata(bazel_target)
         
-        # Verify bazel build was called (first read returned None)
+        # Verify bazel build was still called
         mock_run_bazel.assert_called_once_with(["build", bazel_target])
 
-    def test_get_app_metadata_json_parse_error(self, mock_run_bazel, mock_find_workspace_root):
+    def test_get_app_metadata_json_parse_error(self, mock_run_bazel, mock_find_workspace_root, 
+                                               mock_path_exists, mock_file_open):
         """Test error handling when JSON parsing fails."""
         bazel_target = "//demo/hello_fastapi:hello_fastapi_metadata"
         
-        with patch('builtins.open', mock_open(read_data="invalid json")):
-            with patch('pathlib.Path.exists', return_value=True):
-                with pytest.raises(json.JSONDecodeError):
-                    get_app_metadata(bazel_target)
+        with patch('builtins.open', mock_file_open("invalid json")):
+            with pytest.raises(json.JSONDecodeError):
+                get_app_metadata(bazel_target)
 
 
 class TestListAllApps:
@@ -197,7 +170,7 @@ class TestListAllApps:
             {"name": "api", "domain": "services", "language": "go"}
         ]
         
-        # Mock the bazel query and batch build results
+        # Mock the bazel query result
         mock_run_bazel.return_value = Mock(stdout=bazel_query_output)
         
         # Mock get_app_metadata calls
@@ -205,16 +178,9 @@ class TestListAllApps:
         
         result = list_all_apps()
         
-        # Verify bazel query was called, then batch build
-        assert mock_run_bazel.call_count == 2
-        mock_run_bazel.assert_any_call([
+        # Verify bazel query was called correctly
+        mock_run_bazel.assert_called_once_with([
             "query", "kind(app_metadata, //...)", "--output=label"
-        ])
-        mock_run_bazel.assert_any_call([
-            "build",
-            "//demo/hello_fastapi:hello_fastapi_metadata",
-            "//demo/hello_python:hello_python_metadata",
-            "//services/api:api_metadata"
         ])
         
         # Verify get_app_metadata was called for each target
