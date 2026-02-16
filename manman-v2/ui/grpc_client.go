@@ -295,3 +295,71 @@ func (c *ControlClient) ExecuteAction(ctx context.Context, sessionID, actionID i
 	}
 	return resp, nil
 }
+
+// CreateActionDefinition creates a new action definition
+func (c *ControlClient) CreateActionDefinition(ctx context.Context, action *manmanpb.ActionDefinition, fields []*manmanpb.ActionInputField, options []*manmanpb.ActionInputOption) (int64, error) {
+	resp, err := c.api.CreateActionDefinition(ctx, &manmanpb.CreateActionDefinitionRequest{
+		Action:       action,
+		InputFields:  fields,
+		InputOptions: options,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("failed to create action definition: %w", err)
+	}
+	return resp.ActionId, nil
+}
+
+// UpdateActionDefinition updates an existing action definition
+func (c *ControlClient) UpdateActionDefinition(ctx context.Context, action *manmanpb.ActionDefinition, fields []*manmanpb.ActionInputField, options []*manmanpb.ActionInputOption) error {
+	_, err := c.api.UpdateActionDefinition(ctx, &manmanpb.UpdateActionDefinitionRequest{
+		Action:       action,
+		InputFields:  fields,
+		InputOptions: options,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update action definition: %w", err)
+	}
+	return nil
+}
+
+// DeleteActionDefinition deletes an action definition
+func (c *ControlClient) DeleteActionDefinition(ctx context.Context, actionID int64) error {
+	_, err := c.api.DeleteActionDefinition(ctx, &manmanpb.DeleteActionDefinitionRequest{
+		ActionId: actionID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete action definition: %w", err)
+	}
+	return nil
+}
+
+// ListActionDefinitions lists action definitions filtered by level
+func (c *ControlClient) ListActionDefinitions(ctx context.Context, gameID, configID, sgcID *int64) ([]*manmanpb.ActionDefinition, error) {
+	req := &manmanpb.ListActionDefinitionsRequest{}
+	if gameID != nil {
+		req.GameId = gameID
+	}
+	if configID != nil {
+		req.ConfigId = configID
+	}
+	if sgcID != nil {
+		req.SgcId = sgcID
+	}
+
+	resp, err := c.api.ListActionDefinitions(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list action definitions: %w", err)
+	}
+	return resp.Actions, nil
+}
+
+// GetActionDefinition gets a single action definition with its input fields
+func (c *ControlClient) GetActionDefinition(ctx context.Context, actionID int64) (*manmanpb.ActionDefinition, []*manmanpb.ActionInputField, error) {
+	resp, err := c.api.GetActionDefinition(ctx, &manmanpb.GetActionDefinitionRequest{
+		ActionId: actionID,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get action definition: %w", err)
+	}
+	return resp.Action, resp.InputFields, nil
+}

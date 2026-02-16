@@ -458,9 +458,127 @@ func (r *ActionRepository) Create(ctx context.Context, action *manman.ActionDefi
 	return actionID, nil
 }
 
-// Update updates an action definition (not implemented yet - future work)
-func (r *ActionRepository) Update(ctx context.Context, action *manman.ActionDefinition) error {
-	return fmt.Errorf("update not implemented yet")
+// Update updates an action definition with its input fields and options
+func (r *ActionRepository) Update(ctx context.Context, action *manman.ActionDefinition, fields []*manman.ActionInputField, options []*manman.ActionInputOption) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Update action definition
+	updateQuery := `
+		UPDATE action_definitions
+		SET definition_level = $2,
+		    entity_id = $3,
+		    name = $4,
+		    label = $5,
+		    description = $6,
+		    command_template = $7,
+		    display_order = $8,
+		    group_name = $9,
+		    button_style = $10,
+		    icon = $11,
+		    requires_confirmation = $12,
+		    confirmation_message = $13,
+		    enabled = $14
+		WHERE action_id = $1
+	`
+
+	result, err := tx.Exec(ctx, updateQuery,
+		action.ActionID,
+		action.DefinitionLevel,
+		action.EntityID,
+		action.Name,
+		action.Label,
+		action.Description,
+		action.CommandTemplate,
+		action.DisplayOrder,
+		action.GroupName,
+		action.ButtonStyle,
+		action.Icon,
+		action.RequiresConfirmation,
+		action.ConfirmationMessage,
+		action.Enabled,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update action definition: %w", err)
+	}
+
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("action not found: %d", action.ActionID)
+	}
+
+	// Delete existing input fields (CASCADE will delete options)
+	deleteFieldsQuery := `DELETE FROM action_input_fields WHERE action_id = $1`
+	_, err = tx.Exec(ctx, deleteFieldsQuery, action.ActionID)
+	if err != nil {
+		return fmt.Errorf("failed to delete existing input fields: %w", err)
+	}
+
+	// Insert new input fields and options
+	for _, field := range fields {
+		fieldQuery := `
+			INSERT INTO action_input_fields (
+				action_id, name, label, field_type, required, placeholder,
+				help_text, default_value, display_order, pattern,
+				min_value, max_value, min_length, max_length
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			RETURNING field_id
+		`
+
+		var fieldID int64
+		err = tx.QueryRow(ctx, fieldQuery,
+			action.ActionID,
+			field.Name,
+			field.Label,
+			field.FieldType,
+			field.Required,
+			field.Placeholder,
+			field.HelpText,
+			field.DefaultValue,
+			field.DisplayOrder,
+			field.Pattern,
+			field.MinValue,
+			field.MaxValue,
+			field.MinLength,
+			field.MaxLength,
+		).Scan(&fieldID)
+		if err != nil {
+			return fmt.Errorf("failed to insert input field: %w", err)
+		}
+
+		// Insert options for this field
+		for _, option := range options {
+			// Only insert options that belong to this field (matched by field_id or name)
+			if option.FieldID == field.FieldID || option.FieldID == 0 {
+				optionQuery := `
+					INSERT INTO action_input_options (
+						field_id, value, label, display_order, is_default
+					)
+					VALUES ($1, $2, $3, $4, $5)
+				`
+				_, err = tx.Exec(ctx, optionQuery,
+					fieldID,
+					option.Value,
+					option.Label,
+					option.DisplayOrder,
+					option.IsDefault,
+				)
+				if err != nil {
+					return fmt.Errorf("failed to insert input option: %w", err)
+				}
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
 }
 
 // Delete deletes an action definition

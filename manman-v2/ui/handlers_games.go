@@ -56,18 +56,13 @@ func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 		Games:  games,
 	}
 
-	layout, err := renderWithLayout("games_content", data, LayoutData{
+	layoutData := LayoutData{
 		Title:  data.Title,
 		Active: data.Active,
 		User:   data.User,
-	})
-	if err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
 	}
 
-	if err := templates.ExecuteTemplate(w, "layout.html", layout); err != nil {
+	if err := renderPage(w, "games_content", data, layoutData); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
@@ -85,19 +80,14 @@ func (app *App) handleGameNew(w http.ResponseWriter, r *http.Request) {
 		Active: "games",
 		User: user,
 	}
-	
-	layout, err := renderWithLayout("game_form_content", data, LayoutData{
+
+	layoutData := LayoutData{
 		Title:  data.Title,
 		Active: data.Active,
 		User:   data.User,
-	})
-	if err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
 	}
 
-	if err := templates.ExecuteTemplate(w, "layout.html", layout); err != nil {
+	if err := renderPage(w, "game_form_content", data, layoutData); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
@@ -167,6 +157,9 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 		case "delete":
 			app.handleGameDelete(w, r, gameIDStr)
 			return
+		case "actions":
+			app.handleGameActions(w, r)
+			return
 		case "configs":
 			// Handle config routes
 			if len(pathParts) > 3 {
@@ -205,19 +198,14 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 		Game:    game,
 		Configs: configs,
 	}
-	
-	layout, err := renderWithLayout("game_detail_content", data, LayoutData{
+
+	layoutData := LayoutData{
 		Title:  data.Title,
 		Active: data.Active,
 		User:   data.User,
-	})
-	if err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
 	}
 
-	if err := templates.ExecuteTemplate(w, "layout.html", layout); err != nil {
+	if err := renderPage(w, "game_detail_content", data, layoutData); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
@@ -352,6 +340,9 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 		case "delete":
 			app.handleGameConfigDelete(w, r, gameIDStr, configIDStr)
 			return
+		case "actions":
+			app.handleConfigActions(w, r)
+			return
 		}
 	}
 	
@@ -442,19 +433,14 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 		DeployError: deployError,
 		Volumes:     volumeMounts,
 	}
-	
-	layout, err := renderWithLayout("config_detail_content", data, LayoutData{
+
+	layoutData := LayoutData{
 		Title:  data.Title,
 		Active: data.Active,
 		User:   data.User,
-	})
-	if err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
 	}
 
-	if err := templates.ExecuteTemplate(w, "layout.html", layout); err != nil {
+	if err := renderPage(w, "config_detail_content", data, layoutData); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
@@ -546,19 +532,14 @@ func (app *App) handleGameConfigNew(w http.ResponseWriter, r *http.Request, game
 		Active: "games",
 		User: user,
 	}
-	
-	layout, err := renderWithLayout("config_form_content", data, LayoutData{
+
+	layoutData := LayoutData{
 		Title:  data.Title,
 		Active: data.Active,
 		User:   data.User,
-	})
-	if err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
 	}
 
-	if err := templates.ExecuteTemplate(w, "layout.html", layout); err != nil {
+	if err := renderPage(w, "config_form_content", data, layoutData); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}

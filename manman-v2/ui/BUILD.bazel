@@ -5,6 +5,7 @@ go_library(
     name = "ui_lib",
     srcs = [
         "grpc_client.go",
+        "handlers_actions.go",
         "handlers_games.go",
         "handlers_home.go",
         "handlers_sessions.go",
@@ -18,6 +19,7 @@ go_library(
     deps = [
         "//libs/go/grpcclient",
         "//libs/go/htmxauth",
+        "//libs/go/htmxbase",
         "//manman/protos:manmanpb",
         "@org_golang_google_grpc//:grpc",
     ],

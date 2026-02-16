@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "htmxbase",
+    srcs = ["layout.go"],
+    importpath = "github.com/whale-net/everything/libs/go/htmxbase",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "htmxbase_test",
+    srcs = ["layout_test.go"],
+    embed = [":htmxbase"],
+)

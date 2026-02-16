@@ -1,0 +1,809 @@
+{{define "actions_manage_content"}}
+<!-- Alpine.js Action Management App -->
+<div x-data="actionManager()" x-init="init()">
+
+    <div class="action-bar">
+        <h1>Manage Actions - {{.EntityName}}</h1>
+        <div>
+            <button class="btn btn-primary btn-sm" @click="showForm = true; editMode = false; resetForm()">
+                <i class="fa fa-plus"></i> New Action
+            </button>
+        </div>
+    </div>
+
+    <!-- Error/Success Messages -->
+    <div x-show="errorMessage"
+         x-transition
+         class="alert alert-danger"
+         style="margin-top: 1rem;"
+         x-cloak>
+        <strong>Error:</strong> <span x-text="errorMessage"></span>
+        <button @click="errorMessage = ''" style="float: right; background: none; border: none; font-size: 1.2em; cursor: pointer;">&times;</button>
+    </div>
+
+    <div x-show="successMessage"
+         x-transition
+         class="alert alert-success"
+         style="margin-top: 1rem;"
+         x-cloak>
+        <strong>Success:</strong> <span x-text="successMessage"></span>
+        <button @click="successMessage = ''" style="float: right; background: none; border: none; font-size: 1.2em; cursor: pointer;">&times;</button>
+    </div>
+
+    <!-- Hidden target for HTMX script responses -->
+    <div id="htmx-script-target" style="display: none;"></div>
+
+    <!-- Create/Edit Form (Inline, Expandable) -->
+    <div x-show="showForm"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0 transform scale-95"
+         x-transition:enter-end="opacity-100 transform scale-100"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100 transform scale-100"
+         x-transition:leave-end="opacity-0 transform scale-95"
+         style="margin-bottom: 2rem;"
+         x-cloak>
+
+        <div class="card" style="border: 2px solid #4CAF50;">
+            <div class="card-header" style="background: #f0f9ff; display: flex; justify-content: space-between; align-items: center;">
+                <div class="card-title" x-text="editMode ? 'Edit Action' : 'Create New Action'" style="margin: 0;"></div>
+                <button @click="closeForm()" class="btn btn-sm btn-secondary">
+                    <i class="fa fa-times"></i> Cancel
+                </button>
+            </div>
+            <form @submit.prevent="submitForm()" class="card-body">
+
+                <!-- Basic Information -->
+                <div class="form-section">
+                    <h3>Basic Information</h3>
+
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Name (unique identifier) *</label>
+                            <input type="text"
+                                   x-model="formData.name"
+                                   pattern="[a-z0-9_]+"
+                                   placeholder="e.g., save_world"
+                                   required
+                                   class="form-control">
+                            <small class="form-text text-muted">Lowercase letters, numbers, and underscores only</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Label (display name) *</label>
+                            <input type="text"
+                                   x-model="formData.label"
+                                   placeholder="e.g., Save World"
+                                   required
+                                   class="form-control">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Description</label>
+                        <textarea x-model="formData.description"
+                                  rows="2"
+                                  placeholder="Optional description of what this action does"
+                                  class="form-control"></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Command Template *</label>
+                        <textarea x-model="formData.command_template"
+                                  rows="3"
+                                  placeholder="e.g., say {{"{{"}} .message {{"}}"}} or changelevel {{"{{"}} .map {{"}}"}}"
+                                  required
+                                  class="form-control"></textarea>
+                        <small class="form-text text-muted">Use Go template syntax: <code>{{"{{"}} .field_name {{"}}"}}</code> for input fields</small>
+                    </div>
+                </div>
+
+                <!-- Display Settings -->
+                <div class="form-section">
+                    <h3>Display Settings</h3>
+
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Group Name</label>
+                            <input type="text"
+                                   x-model="formData.group_name"
+                                   placeholder="e.g., Server Control"
+                                   class="form-control">
+                            <small class="form-text text-muted">Groups related actions together</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Display Order</label>
+                            <input type="number"
+                                   x-model.number="formData.display_order"
+                                   min="0"
+                                   placeholder="0"
+                                   class="form-control">
+                        </div>
+                    </div>
+
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Button Style</label>
+                            <select x-model="formData.button_style" class="form-control">
+                                {{range .ButtonStyles}}
+                                <option value="{{.}}">{{.}}</option>
+                                {{end}}
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Icon</label>
+                            <select x-model="formData.icon" class="form-control">
+                                {{range .IconOptions}}
+                                <option value="{{.Class}}">
+                                    {{if .Class}}<i class="{{.Class}}"></i> {{end}}{{.Label}}
+                                </option>
+                                {{end}}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" x-model="formData.enabled">
+                            Enabled
+                        </label>
+                        <small class="form-text text-muted">Disabled actions won't appear in session quick actions</small>
+                    </div>
+                </div>
+
+                <!-- Confirmation Settings -->
+                <div class="form-section">
+                    <h3>Confirmation Settings</h3>
+
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" x-model="formData.requires_confirmation">
+                            Require Confirmation
+                        </label>
+                        <small class="form-text text-muted">Show a confirmation dialog before executing</small>
+                    </div>
+
+                    <div class="form-group" x-show="formData.requires_confirmation">
+                        <label>Confirmation Message</label>
+                        <input type="text"
+                               x-model="formData.confirmation_message"
+                               placeholder="Are you sure you want to perform this action?"
+                               class="form-control">
+                    </div>
+                </div>
+
+                <!-- Input Fields Builder -->
+                <div class="form-section">
+                    <h3>Input Fields</h3>
+                    <p class="text-muted">Define input parameters that users must provide when executing this action.</p>
+
+                    <template x-for="(field, index) in formData.input_fields" :key="index">
+                        <div class="input-field-builder" style="border: 1px solid #ddd; padding: 1rem; margin-bottom: 1rem; border-radius: 4px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                                <h4 style="margin: 0;">Field <span x-text="index + 1"></span></h4>
+                                <button type="button" @click="removeField(index)" class="btn btn-sm btn-danger">
+                                    <i class="fa fa-trash"></i> Remove
+                                </button>
+                            </div>
+
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label>Field Name (identifier) *</label>
+                                    <input type="text"
+                                           x-model="field.name"
+                                           pattern="[a-z0-9_]+"
+                                           placeholder="e.g., message"
+                                           required
+                                           class="form-control">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Label *</label>
+                                    <input type="text"
+                                           x-model="field.label"
+                                           placeholder="e.g., Message"
+                                           required
+                                           class="form-control">
+                                </div>
+                            </div>
+
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label>Field Type *</label>
+                                    <select x-model="field.field_type" class="form-control">
+                                        {{range .FieldTypes}}
+                                        <option value="{{.}}">{{.}}</option>
+                                        {{end}}
+                                    </select>
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Display Order</label>
+                                    <input type="number"
+                                           x-model.number="field.display_order"
+                                           min="0"
+                                           class="form-control">
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" x-model="field.required">
+                                    Required
+                                </label>
+                            </div>
+
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label>Placeholder</label>
+                                    <input type="text"
+                                           x-model="field.placeholder"
+                                           class="form-control">
+                                </div>
+
+                                <div class="form-group">
+                                    <label>Default Value</label>
+                                    <input type="text"
+                                           x-model="field.default_value"
+                                           class="form-control">
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label>Help Text</label>
+                                <input type="text"
+                                       x-model="field.help_text"
+                                       placeholder="Optional help text shown below the field"
+                                       class="form-control">
+                            </div>
+
+                            <!-- Type-specific fields -->
+                            <div x-show="field.field_type === 'number'">
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label>Min Value</label>
+                                        <input type="number"
+                                               x-model.number="field.min_value"
+                                               class="form-control">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Max Value</label>
+                                        <input type="number"
+                                               x-model.number="field.max_value"
+                                               class="form-control">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div x-show="field.field_type === 'text' || field.field_type === 'textarea'">
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label>Min Length</label>
+                                        <input type="number"
+                                               x-model.number="field.min_length"
+                                               min="0"
+                                               class="form-control">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Max Length</label>
+                                        <input type="number"
+                                               x-model.number="field.max_length"
+                                               min="0"
+                                               class="form-control">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label>Pattern (regex)</label>
+                                    <input type="text"
+                                           x-model="field.pattern"
+                                           placeholder="e.g., ^[A-Za-z0-9]+$"
+                                           class="form-control">
+                                </div>
+                            </div>
+
+                            <!-- Options for select/radio -->
+                            <div x-show="field.field_type === 'select' || field.field_type === 'radio'">
+                                <h5 style="margin-top: 1rem;">Options</h5>
+                                <template x-for="(option, optIndex) in getOptionsForField(index)" :key="optIndex">
+                                    <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
+                                        <input type="text"
+                                               x-model="option.value"
+                                               placeholder="Value (for template)"
+                                               class="form-control"
+                                               style="flex: 1;">
+                                        <input type="text"
+                                               x-model="option.label"
+                                               placeholder="Label (display)"
+                                               class="form-control"
+                                               style="flex: 1;">
+                                        <label style="white-space: nowrap; display: flex; align-items: center;">
+                                            <input type="checkbox" x-model="option.is_default">
+                                            Default
+                                        </label>
+                                        <button type="button"
+                                                @click="removeOption(index, optIndex)"
+                                                class="btn btn-sm btn-danger">
+                                            <i class="fa fa-times"></i>
+                                        </button>
+                                    </div>
+                                </template>
+                                <button type="button" @click="addOption(index)" class="btn btn-sm btn-secondary">
+                                    <i class="fa fa-plus"></i> Add Option
+                                </button>
+                            </div>
+                        </div>
+                    </template>
+
+                    <button type="button" @click="addField()" class="btn btn-secondary">
+                        <i class="fa fa-plus"></i> Add Input Field
+                    </button>
+                </div>
+
+                <!-- Form Actions -->
+                <div class="form-actions" style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #ddd;">
+                    <button type="button" @click="closeForm()" class="btn btn-secondary">
+                        Cancel
+                    </button>
+                    <button type="submit" class="btn btn-primary" :disabled="submitting">
+                        <span x-show="!submitting" x-text="editMode ? 'Update Action' : 'Create Action'"></span>
+                        <span x-show="submitting">Saving...</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Local Actions (Defined at this level) -->
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title">Actions Defined at This Level</div>
+        </div>
+        <div class="card-body">
+            {{if .LocalActions}}
+            <div class="table-container">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Label</th>
+                            <th>Group</th>
+                            <th>Command Template</th>
+                            <th>Enabled</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range $action := .LocalActions}}
+                        <tr>
+                            <td><code>{{$action.Action.Name}}</code></td>
+                            <td>
+                                {{if $action.Action.Icon}}<i class="{{$action.Action.Icon}}"></i> {{end}}
+                                {{$action.Action.Label}}
+                            </td>
+                            <td>{{if $action.Action.GroupName}}{{$action.Action.GroupName}}{{else}}-{{end}}</td>
+                            <td><code style="font-size: 0.85em;">{{$action.Action.CommandTemplate}}</code></td>
+                            <td>
+                                {{if $action.Action.Enabled}}
+                                <span class="badge badge-success">Yes</span>
+                                {{else}}
+                                <span class="badge badge-secondary">No</span>
+                                {{end}}
+                            </td>
+                            <td>
+                                <button class="btn btn-sm btn-secondary"
+                                        hx-get="{{$.CurrentPath}}/edit/{{$action.Action.ActionId}}"
+                                        hx-target="#htmx-script-target"
+                                        hx-swap="innerHTML">
+                                    Edit
+                                </button>
+                                <button class="btn btn-sm btn-danger"
+                                        @click="deleteAction({{$action.Action.ActionId}}, '{{$action.Action.Label}}')">
+                                    Delete
+                                </button>
+                            </td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{else}}
+            <p class="text-muted">No actions defined at this level yet. Click "New Action" to create one.</p>
+            {{end}}
+        </div>
+    </div>
+
+    <!-- Inherited Actions (From parent levels) -->
+    {{if .InheritedActions}}
+    <div class="card" style="margin-top: 2rem;">
+        <div class="card-header">
+            <div class="card-title">Inherited Actions (Read-Only)</div>
+        </div>
+        <div class="card-body">
+            <p class="text-muted" style="margin-bottom: 1rem;">
+                <i class="fa fa-info-circle"></i> These actions are defined at parent levels and cannot be edited here. Click a row to edit at its definition level.
+            </p>
+            <div class="table-container">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Label</th>
+                            <th>Level</th>
+                            <th>Group</th>
+                            <th>Command Template</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .InheritedActions}}
+                        <tr style="opacity: 0.6;" class="inherited-action-row">
+                            <td><code>{{.Action.Name}}</code></td>
+                            <td>
+                                {{if .Action.Icon}}<i class="{{.Action.Icon}}"></i> {{end}}
+                                {{.Action.Label}}
+                            </td>
+                            <td>
+                                <span class="badge badge-info">
+                                    {{if eq .Action.DefinitionLevel "game"}}Game{{end}}
+                                    {{if eq .Action.DefinitionLevel "game_config"}}Config{{end}}
+                                    {{if eq .Action.DefinitionLevel "server_game_config"}}SGC{{end}}
+                                </span>
+                            </td>
+                            <td>{{if .Action.GroupName}}{{.Action.GroupName}}{{else}}-{{end}}</td>
+                            <td><code style="font-size: 0.85em;">{{.Action.CommandTemplate}}</code></td>
+                            <td>
+                                <a href="{{.EditURL}}" class="btn btn-sm btn-secondary">
+                                    <i class="fa fa-external-link"></i> Edit at Source
+                                </a>
+                            </td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {{end}}
+
+
+<!-- Alpine.js Component -->
+<script>
+function actionManager() {
+    return {
+        showForm: false,
+        editMode: false,
+        submitting: false,
+        formData: {},
+        errorMessage: '',
+        successMessage: '',
+
+        init() {
+            this.resetForm();
+
+            // Listen for edit-action events from HTMX edit requests
+            window.addEventListener('edit-action', (event) => {
+                this.populateEditForm(event.detail);
+            });
+        },
+
+        resetForm() {
+            this.formData = {
+                action_id: 0,
+                name: '',
+                label: '',
+                description: '',
+                command_template: '',
+                display_order: 0,
+                group_name: '',
+                button_style: 'primary',
+                icon: '',
+                requires_confirmation: false,
+                confirmation_message: '',
+                enabled: true,
+                input_fields: [],
+            };
+        },
+
+        addField() {
+            this.formData.input_fields.push({
+                name: '',
+                label: '',
+                field_type: 'text',
+                required: false,
+                placeholder: '',
+                help_text: '',
+                default_value: '',
+                display_order: this.formData.input_fields.length,
+                pattern: '',
+                min_value: null,
+                max_value: null,
+                min_length: null,
+                max_length: null,
+                _options: [] // Local options array for this field
+            });
+        },
+
+        removeField(index) {
+            this.formData.input_fields.splice(index, 1);
+        },
+
+        getOptionsForField(fieldIndex) {
+            if (!this.formData.input_fields[fieldIndex]._options) {
+                this.formData.input_fields[fieldIndex]._options = [];
+            }
+            return this.formData.input_fields[fieldIndex]._options;
+        },
+
+        addOption(fieldIndex) {
+            if (!this.formData.input_fields[fieldIndex]._options) {
+                this.formData.input_fields[fieldIndex]._options = [];
+            }
+            this.formData.input_fields[fieldIndex]._options.push({
+                value: '',
+                label: '',
+                display_order: this.formData.input_fields[fieldIndex]._options.length,
+                is_default: false
+            });
+        },
+
+        removeOption(fieldIndex, optionIndex) {
+            this.formData.input_fields[fieldIndex]._options.splice(optionIndex, 1);
+        },
+
+        closeForm() {
+            this.showForm = false;
+            this.editMode = false;
+            this.resetForm();
+        },
+
+        populateEditForm(actionData) {
+            console.log('Populating edit form with:', actionData);
+            this.editMode = true;
+
+            // Populate basic fields
+            this.formData = {
+                action_id: actionData.action_id || 0,
+                name: actionData.name || '',
+                label: actionData.label || '',
+                description: actionData.description || '',
+                command_template: actionData.command_template || '',
+                display_order: actionData.display_order || 0,
+                group_name: actionData.group_name || '',
+                button_style: actionData.button_style || 'primary',
+                icon: actionData.icon || '',
+                requires_confirmation: actionData.requires_confirmation || false,
+                confirmation_message: actionData.confirmation_message || '',
+                enabled: actionData.enabled !== undefined ? actionData.enabled : true,
+                input_fields: []
+            };
+
+            // Populate input fields if available
+            if (actionData.input_fields && Array.isArray(actionData.input_fields)) {
+                this.formData.input_fields = actionData.input_fields.map(field => ({
+                    name: field.name || '',
+                    label: field.label || '',
+                    field_type: field.field_type || 'text',
+                    required: field.required || false,
+                    placeholder: field.placeholder || '',
+                    help_text: field.help_text || '',
+                    default_value: field.default_value || '',
+                    display_order: field.display_order || 0,
+                    pattern: field.pattern || '',
+                    min_value: field.min_value || null,
+                    max_value: field.max_value || null,
+                    min_length: field.min_length || null,
+                    max_length: field.max_length || null,
+                    _options: [] // Options would need to be fetched separately
+                }));
+            }
+
+            this.showForm = true;
+            this.errorMessage = '';
+            this.successMessage = '';
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        },
+
+        async deleteAction(actionId, actionLabel) {
+            if (!confirm(`Are you sure you want to delete the action "${actionLabel}"?`)) {
+                return;
+            }
+
+            this.errorMessage = '';
+            this.successMessage = '';
+
+            const formData = new FormData();
+            formData.append('operation', 'delete');
+            formData.append('action_id', actionId);
+
+            try {
+                const response = await fetch(window.location.pathname, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    this.errorMessage = data.error || 'Failed to delete action';
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                    return;
+                }
+
+                this.successMessage = `Action "${actionLabel}" deleted successfully!`;
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+
+                // Reload after a brief delay to show success message
+                setTimeout(() => window.location.reload(), 1500);
+            } catch (error) {
+                this.errorMessage = 'Error deleting action: ' + error.message;
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            }
+        },
+
+        async submitForm() {
+            this.submitting = true;
+
+            try {
+                // Build input_options array from field._options
+                const inputOptions = [];
+                this.formData.input_fields.forEach((field, fieldIndex) => {
+                    if (field._options) {
+                        field._options.forEach(option => {
+                            inputOptions.push({
+                                field_id: fieldIndex, // Temporary ID to link options to fields
+                                value: option.value,
+                                label: option.label,
+                                display_order: option.display_order,
+                                is_default: option.is_default
+                            });
+                        });
+                    }
+                });
+
+                // Clean up fields (remove _options before sending)
+                const cleanFields = this.formData.input_fields.map(field => {
+                    const { _options, ...cleanField } = field;
+                    return cleanField;
+                });
+
+                const formData = new FormData();
+                formData.append('operation', this.editMode ? 'update' : 'create');
+                if (this.editMode) {
+                    console.log('Submitting update with action_id:', this.formData.action_id);
+                    formData.append('action_id', this.formData.action_id);
+                }
+                formData.append('name', this.formData.name);
+                formData.append('label', this.formData.label);
+                formData.append('description', this.formData.description);
+                formData.append('command_template', this.formData.command_template);
+                formData.append('display_order', this.formData.display_order);
+                formData.append('group_name', this.formData.group_name);
+                formData.append('button_style', this.formData.button_style);
+                formData.append('icon', this.formData.icon);
+                formData.append('requires_confirmation', this.formData.requires_confirmation);
+                formData.append('confirmation_message', this.formData.confirmation_message);
+                formData.append('enabled', this.formData.enabled);
+                formData.append('input_fields', JSON.stringify(cleanFields));
+                formData.append('input_options', JSON.stringify(inputOptions));
+
+                this.errorMessage = '';
+                this.successMessage = '';
+
+                const response = await fetch(window.location.pathname, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    this.errorMessage = data.error || 'Failed to save action';
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                    this.submitting = false;
+                    return;
+                }
+
+                this.successMessage = this.editMode ? 'Action updated successfully!' : 'Action created successfully!';
+                this.closeForm();
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+
+                // Reload after a brief delay to show success message
+                setTimeout(() => window.location.reload(), 1500);
+            } catch (error) {
+                this.errorMessage = 'Error saving action: ' + error.message;
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+                this.submitting = false;
+            }
+        }
+    };
+}
+</script>
+
+<style>
+/* Alpine.js cloak - hide elements before initialization */
+[x-cloak] {
+    display: none !important;
+}
+
+/* Inherited action row styling */
+.inherited-action-row {
+    transition: opacity 0.2s ease;
+}
+
+.inherited-action-row:hover {
+    opacity: 1 !important;
+    background-color: #f8f9fa;
+}
+
+.form-section {
+    margin-bottom: 2rem;
+    padding-bottom: 2rem;
+    border-bottom: 1px solid #eee;
+}
+
+.form-section:last-child {
+    border-bottom: none;
+}
+
+.form-section h3 {
+    margin-bottom: 1rem;
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+.form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+
+@media (max-width: 768px) {
+    .form-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.table-container {
+    overflow-x: auto;
+}
+
+.input-field-builder {
+    background: #f9f9f9;
+}
+
+.form-control {
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 0.95rem;
+}
+
+.form-control:focus {
+    outline: none;
+    border-color: #4CAF50;
+}
+
+.form-group {
+    margin-bottom: 1rem;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 0.25rem;
+    font-weight: 500;
+}
+
+.form-text {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.875rem;
+}
+
+.text-muted {
+    color: #6c757d;
+}
+</style>
+{{end}}
