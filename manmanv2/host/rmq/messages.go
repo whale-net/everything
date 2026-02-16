@@ -110,3 +110,20 @@ type SessionStats struct {
 	Stopped  int `json:"stopped"`
 	Crashed  int `json:"crashed"`
 }
+// DownloadAddonCommand represents a command to download a workshop addon
+type DownloadAddonCommand struct {
+	InstallationID int64  `json:"installation_id"`
+	SGCID          int64  `json:"sgc_id"`
+	AddonID        int64  `json:"addon_id"`
+	WorkshopID     string `json:"workshop_id"`
+	SteamAppID     string `json:"steam_app_id"`
+	InstallPath    string `json:"install_path"`
+}
+
+// InstallationStatusUpdate represents a status update for a workshop addon installation
+type InstallationStatusUpdate struct {
+	InstallationID  int64   `json:"installation_id"`
+	Status          string  `json:"status"` // "pending" | "downloading" | "installed" | "failed" | "removed"
+	ProgressPercent int     `json:"progress_percent"`
+	ErrorMessage    *string `json:"error_message,omitempty"`
+}

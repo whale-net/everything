@@ -1,0 +1,299 @@
+package workshop
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"log/slog"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/whale-net/everything/libs/go/docker"
+	pb "github.com/whale-net/everything/manmanv2/protos"
+)
+
+// DownloadOrchestrator manages workshop addon download container lifecycle within host manager
+type DownloadOrchestrator struct {
+	dockerClient *docker.Client
+	grpcClient   pb.ManManAPIClient
+	serverID     int64
+	environment  string
+	hostDataDir  string
+	maxConcurrent int
+	semaphore    chan struct{}
+	rmqPublisher InstallationStatusPublisher
+	
+	// In-progress download tracking to prevent duplicates
+	inProgressMutex sync.RWMutex
+	inProgressDownloads map[int64]bool
+}
+
+// InstallationStatusPublisher defines the interface for publishing installation status updates
+type InstallationStatusPublisher interface {
+	PublishInstallationStatus(ctx context.Context, update *InstallationStatusUpdate) error
+}
+
+// InstallationStatusUpdate is published back to control plane
+type InstallationStatusUpdate struct {
+	InstallationID  int64   `json:"installation_id"`
+	Status          string  `json:"status"`
+	ProgressPercent int     `json:"progress_percent"`
+	ErrorMessage    *string `json:"error_message"`
+}
+
+// DownloadAddonCommand is received via RabbitMQ from control plane
+type DownloadAddonCommand struct {
+	InstallationID int64  `json:"installation_id"`
+	SGCID          int64  `json:"sgc_id"`
+	AddonID        int64  `json:"addon_id"`
+	WorkshopID     string `json:"workshop_id"`
+	SteamAppID     string `json:"steam_app_id"`
+	InstallPath    string `json:"install_path"`
+}
+
+// Installation status constants
+const (
+	InstallationStatusPending     = "pending"
+	InstallationStatusDownloading = "downloading"
+	InstallationStatusInstalled   = "installed"
+	InstallationStatusFailed      = "failed"
+	InstallationStatusRemoved     = "removed"
+)
+
+// NewDownloadOrchestrator creates a new download orchestrator
+func NewDownloadOrchestrator(
+	dockerClient *docker.Client,
+	grpcClient pb.ManManAPIClient,
+	serverID int64,
+	environment string,
+	hostDataDir string,
+	maxConcurrent int,
+	rmqPublisher InstallationStatusPublisher,
+) *DownloadOrchestrator {
+	return &DownloadOrchestrator{
+		dockerClient:        dockerClient,
+		grpcClient:          grpcClient,
+		serverID:            serverID,
+		environment:         environment,
+		hostDataDir:         hostDataDir,
+		maxConcurrent:       maxConcurrent,
+		semaphore:           make(chan struct{}, maxConcurrent),
+		rmqPublisher:        rmqPublisher,
+		inProgressDownloads: make(map[int64]bool),
+	}
+}
+
+// HandleDownloadCommand processes download commands from RabbitMQ
+func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *DownloadAddonCommand) {
+	logger := slog.With(
+		"installation_id", cmd.InstallationID,
+		"sgc_id", cmd.SGCID,
+		"addon_id", cmd.AddonID,
+		"workshop_id", cmd.WorkshopID,
+	)
+
+	// Check for duplicate in-progress downloads for this installation
+	if do.isDownloadInProgress(cmd.InstallationID) {
+		logger.Info("download already in progress, skipping duplicate")
+		return
+	}
+
+	// Mark download as in progress
+	do.markDownloadInProgress(cmd.InstallationID)
+	defer do.markDownloadComplete(cmd.InstallationID)
+
+	// Acquire semaphore for concurrency control
+	do.semaphore <- struct{}{}
+	defer func() { <-do.semaphore }()
+
+	logger.Info("starting workshop addon download")
+
+	// Update status to downloading
+	do.publishStatus(ctx, cmd.InstallationID, InstallationStatusDownloading, 0, nil)
+
+	// Build download container configuration with environment-aware naming
+	containerName := do.getDownloadContainerName(cmd.SGCID, cmd.AddonID)
+
+	// Check if container already exists (cleanup from previous failed attempt)
+	existing, err := do.dockerClient.GetContainerStatus(ctx, containerName)
+	if err == nil && existing != nil {
+		logger.Info("cleaning up existing download container", "container_name", containerName)
+		_ = do.dockerClient.RemoveContainer(ctx, existing.ContainerID, true)
+	}
+
+	// Resolve volume mounts from SGC
+	volumeMounts, err := do.resolveVolumeMounts(ctx, cmd.SGCID)
+	if err != nil {
+		logger.Error("failed to resolve volume mounts", "error", err)
+		do.handleDownloadError(ctx, cmd.InstallationID, err)
+		return
+	}
+
+	// Build SteamCMD command
+	steamCmd := do.buildSteamCMDCommand(cmd.SteamAppID, cmd.WorkshopID)
+
+	// Create container
+	containerID, err := do.dockerClient.CreateContainer(ctx, docker.ContainerConfig{
+		Name:    containerName,
+		Image:   "steamcmd/steamcmd:latest",
+		Command: steamCmd,
+		Volumes: volumeMounts,
+		Env:     []string{},
+	})
+	if err != nil {
+		logger.Error("failed to create download container", "error", err)
+		do.handleDownloadError(ctx, cmd.InstallationID, err)
+		return
+	}
+
+	// Start container
+	err = do.dockerClient.StartContainer(ctx, containerID)
+	if err != nil {
+		logger.Error("failed to start download container", "error", err)
+		do.handleDownloadError(ctx, cmd.InstallationID, err)
+		return
+	}
+
+	// Monitor container logs for progress
+	logReader, err := do.dockerClient.GetContainerLogs(ctx, containerID, true, "all")
+	if err != nil {
+		logger.Error("failed to get container logs", "error", err)
+		do.handleDownloadError(ctx, cmd.InstallationID, err)
+		return
+	}
+	defer logReader.Close()
+
+	// Parse logs and update progress
+	scanner := bufio.NewScanner(logReader)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if progress := do.parseProgress(line); progress > 0 {
+			do.publishStatus(ctx, cmd.InstallationID, InstallationStatusDownloading, progress, nil)
+		}
+	}
+
+	// Wait for container to complete by checking status
+	var exitCode int
+	for {
+		status, err := do.dockerClient.GetContainerStatus(ctx, containerID)
+		if err != nil {
+			logger.Error("failed to get container status", "error", err)
+			break
+		}
+		if !status.Running {
+			exitCode = status.ExitCode
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+	// Clean up container
+	_ = do.dockerClient.RemoveContainer(ctx, containerID, true)
+
+	// Update installation status
+	if exitCode != 0 {
+		errMsg := fmt.Sprintf("download failed with exit code %d", exitCode)
+		logger.Error("download failed", "exit_code", exitCode)
+		do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, &errMsg)
+	} else {
+		logger.Info("download completed successfully")
+		do.publishStatus(ctx, cmd.InstallationID, InstallationStatusInstalled, 100, nil)
+	}
+}
+
+// getDownloadContainerName generates environment-aware container name
+func (do *DownloadOrchestrator) getDownloadContainerName(sgcID, addonID int64) string {
+	if do.environment != "" {
+		return fmt.Sprintf("workshop-download-%s-%d-%d", do.environment, sgcID, addonID)
+	}
+	return fmt.Sprintf("workshop-download-%d-%d", sgcID, addonID)
+}
+
+// isDownloadInProgress checks if a download is already in progress
+func (do *DownloadOrchestrator) isDownloadInProgress(installationID int64) bool {
+	do.inProgressMutex.RLock()
+	defer do.inProgressMutex.RUnlock()
+	return do.inProgressDownloads[installationID]
+}
+
+// markDownloadInProgress marks a download as in progress
+func (do *DownloadOrchestrator) markDownloadInProgress(installationID int64) {
+	do.inProgressMutex.Lock()
+	defer do.inProgressMutex.Unlock()
+	do.inProgressDownloads[installationID] = true
+}
+
+// markDownloadComplete marks a download as complete
+func (do *DownloadOrchestrator) markDownloadComplete(installationID int64) {
+	do.inProgressMutex.Lock()
+	defer do.inProgressMutex.Unlock()
+	delete(do.inProgressDownloads, installationID)
+}
+
+// publishStatus sends status updates back to control plane via RabbitMQ
+func (do *DownloadOrchestrator) publishStatus(ctx context.Context, installationID int64, status string, progress int, errorMsg *string) {
+	update := &InstallationStatusUpdate{
+		InstallationID:  installationID,
+		Status:          status,
+		ProgressPercent: progress,
+		ErrorMessage:    errorMsg,
+	}
+	if err := do.rmqPublisher.PublishInstallationStatus(ctx, update); err != nil {
+		slog.Error("failed to publish installation status", "installation_id", installationID, "error", err)
+	}
+}
+
+// resolveVolumeMounts gets volume mounts from SGC configuration
+func (do *DownloadOrchestrator) resolveVolumeMounts(ctx context.Context, sgcID int64) ([]string, error) {
+	// Get SGC data directory on host
+	sgcDataDir := do.getSGCHostDir(sgcID)
+
+	// Mount the SGC data directory to the download container
+	// This allows the download container to write to the same volumes as the game container
+	return []string{
+		fmt.Sprintf("%s:/data", sgcDataDir),
+	}, nil
+}
+
+// buildSteamCMDCommand constructs the SteamCMD command for downloading
+func (do *DownloadOrchestrator) buildSteamCMDCommand(steamAppID, workshopID string) []string {
+	return []string{
+		"/bin/bash",
+		"-c",
+		fmt.Sprintf(
+			"steamcmd +login anonymous +workshop_download_item %s %s +quit",
+			steamAppID,
+			workshopID,
+		),
+	}
+}
+
+// parseProgress extracts download progress from SteamCMD output
+func (do *DownloadOrchestrator) parseProgress(logLine string) int {
+	// SteamCMD outputs progress like: "Downloading item 123456 ... 45%"
+	re := regexp.MustCompile(`(\d+)%`)
+	matches := re.FindStringSubmatch(logLine)
+	if len(matches) > 1 {
+		percent, _ := strconv.Atoi(matches[1])
+		return percent
+	}
+	return 0
+}
+
+// getSGCHostDir returns the host path for SGC data
+func (do *DownloadOrchestrator) getSGCHostDir(sgcID int64) string {
+	dirName := fmt.Sprintf("sgc-%d", sgcID)
+	if do.environment != "" {
+		dirName = fmt.Sprintf("sgc-%s-%d", do.environment, sgcID)
+	}
+	return filepath.Join(do.hostDataDir, dirName)
+}
+
+// handleDownloadError handles download errors
+func (do *DownloadOrchestrator) handleDownloadError(ctx context.Context, installationID int64, err error) {
+	errMsg := err.Error()
+	do.publishStatus(ctx, installationID, InstallationStatusFailed, 0, &errMsg)
+}

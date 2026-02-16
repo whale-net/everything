@@ -17,6 +17,7 @@ import (
 	rmqlib "github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/manmanv2/host/rmq"
 	"github.com/whale-net/everything/manmanv2/host/session"
+	"github.com/whale-net/everything/manmanv2/host/workshop"
 	pb "github.com/whale-net/everything/manmanv2/protos"
 )
 
@@ -102,6 +103,17 @@ func run() error {
 	// Initialize session manager with gRPC client for configuration fetching and RMQ publisher for logs
 	sessionManager := session.NewSessionManager(dockerClient, environment, hostDataDir, grpcClient, rmqPublisher)
 
+	// Initialize download orchestrator for workshop addon downloads
+	downloadOrchestrator := workshop.NewDownloadOrchestrator(
+		dockerClient,
+		grpcClient,
+		serverID,
+		environment,
+		hostDataDir,
+		5, // max concurrent downloads
+		rmqPublisher,
+	)
+
 	// Recover orphaned sessions on startup
 	logger.Info("recovering orphaned sessions")
 	if err := sessionManager.RecoverOrphanedSessions(ctx, serverID); err != nil {
@@ -121,9 +133,10 @@ func run() error {
 
 	// Initialize command handler
 	commandHandler := &CommandHandlerImpl{
-		sessionManager: sessionManager,
-		publisher:      rmqPublisher,
-		serverID:       serverID,
+		sessionManager:       sessionManager,
+		publisher:            rmqPublisher,
+		serverID:             serverID,
+		downloadOrchestrator: downloadOrchestrator,
 	}
 
 	// Initialize RabbitMQ consumer
@@ -199,9 +212,10 @@ func run() error {
 
 // CommandHandlerImpl implements the CommandHandler interface
 type CommandHandlerImpl struct {
-	sessionManager *session.SessionManager
-	publisher      *rmq.Publisher
-	serverID       int64
+	sessionManager      *session.SessionManager
+	publisher           *rmq.Publisher
+	serverID            int64
+	downloadOrchestrator *workshop.DownloadOrchestrator
 }
 
 // HandleStartSession handles a start session command
@@ -346,6 +360,31 @@ func (h *CommandHandlerImpl) HandleSendInput(ctx context.Context, cmd *rmq.SendI
 		}
 		return fmt.Errorf("failed to send input to session %d: %w", cmd.SessionID, err)
 	}
+	return nil
+}
+
+// HandleDownloadAddon handles a workshop addon download command
+func (h *CommandHandlerImpl) HandleDownloadAddon(ctx context.Context, cmd *rmq.DownloadAddonCommand) error {
+	slog.Info("processing download addon command",
+		"installation_id", cmd.InstallationID,
+		"sgc_id", cmd.SGCID,
+		"addon_id", cmd.AddonID,
+		"workshop_id", cmd.WorkshopID,
+		"steam_app_id", cmd.SteamAppID)
+
+	// Convert rmq.DownloadAddonCommand to workshop.DownloadAddonCommand
+	workshopCmd := &workshop.DownloadAddonCommand{
+		InstallationID: cmd.InstallationID,
+		SGCID:          cmd.SGCID,
+		AddonID:        cmd.AddonID,
+		WorkshopID:     cmd.WorkshopID,
+		SteamAppID:     cmd.SteamAppID,
+		InstallPath:    cmd.InstallPath,
+	}
+
+	// Call download orchestrator in a goroutine to avoid blocking RabbitMQ consumer
+	go h.downloadOrchestrator.HandleDownloadCommand(ctx, workshopCmd)
+
 	return nil
 }
 

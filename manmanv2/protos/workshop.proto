@@ -1,0 +1,262 @@
+syntax = "proto3";
+
+package manman.v1;
+
+option go_package = "github.com/whale-net/everything/manmanv2/protos;manmanpb";
+
+// WorkshopService provides management for workshop addons, installations, and libraries
+service WorkshopService {
+  // Addon Library Management
+  rpc CreateAddon(CreateAddonRequest) returns (CreateAddonResponse);
+  rpc GetAddon(GetAddonRequest) returns (GetAddonResponse);
+  rpc ListAddons(ListAddonsRequest) returns (ListAddonsResponse);
+  rpc UpdateAddon(UpdateAddonRequest) returns (UpdateAddonResponse);
+  rpc DeleteAddon(DeleteAddonRequest) returns (DeleteAddonResponse);
+  rpc FetchAddonMetadata(FetchAddonMetadataRequest) returns (FetchAddonMetadataResponse);
+  
+  // Installation Management
+  rpc InstallAddon(InstallAddonRequest) returns (InstallAddonResponse);
+  rpc GetInstallation(GetInstallationRequest) returns (GetInstallationResponse);
+  rpc ListInstallations(ListInstallationsRequest) returns (ListInstallationsResponse);
+  rpc RemoveInstallation(RemoveInstallationRequest) returns (RemoveInstallationResponse);
+  
+  // Library Management
+  rpc CreateLibrary(CreateLibraryRequest) returns (CreateLibraryResponse);
+  rpc GetLibrary(GetLibraryRequest) returns (GetLibraryResponse);
+  rpc ListLibraries(ListLibrariesRequest) returns (ListLibrariesResponse);
+  rpc UpdateLibrary(UpdateLibraryRequest) returns (UpdateLibraryResponse);
+  rpc DeleteLibrary(DeleteLibraryRequest) returns (DeleteLibraryResponse);
+  rpc AddAddonToLibrary(AddAddonToLibraryRequest) returns (AddAddonToLibraryResponse);
+  rpc RemoveAddonFromLibrary(RemoveAddonFromLibraryRequest) returns (RemoveAddonFromLibraryResponse);
+  rpc AddLibraryReference(AddLibraryReferenceRequest) returns (AddLibraryReferenceResponse);
+}
+
+// ============================================================================
+// Domain Models
+// ============================================================================
+
+// WorkshopAddon represents a workshop addon in the library
+message WorkshopAddon {
+  int64 addon_id = 1;
+  int64 game_id = 2;
+  string workshop_id = 3;
+  string platform_type = 4;
+  string name = 5;
+  string description = 6;
+  int64 file_size_bytes = 7;
+  string installation_path = 8;
+  bool is_collection = 9;
+  bool is_deprecated = 10;
+  string metadata = 11;  // JSON-encoded metadata
+  int64 last_updated = 12;  // Unix timestamp
+  int64 created_at = 13;  // Unix timestamp
+  int64 updated_at = 14;  // Unix timestamp
+}
+
+// WorkshopInstallation represents an addon installed on a ServerGameConfig
+message WorkshopInstallation {
+  int64 installation_id = 1;
+  int64 sgc_id = 2;
+  int64 addon_id = 3;
+  string status = 4;
+  string installation_path = 5;
+  int32 progress_percent = 6;
+  string error_message = 7;
+  int64 download_started_at = 8;  // Unix timestamp, 0 if not started
+  int64 download_completed_at = 9;  // Unix timestamp, 0 if not completed
+  int64 created_at = 10;  // Unix timestamp
+  int64 updated_at = 11;  // Unix timestamp
+}
+
+// WorkshopLibrary represents a collection of workshop addons
+message WorkshopLibrary {
+  int64 library_id = 1;
+  int64 game_id = 2;
+  string name = 3;
+  string description = 4;
+  int64 created_at = 5;  // Unix timestamp
+  int64 updated_at = 6;  // Unix timestamp
+}
+
+// ============================================================================
+// Addon Library Management RPCs
+// ============================================================================
+
+message CreateAddonRequest {
+  int64 game_id = 1;
+  string workshop_id = 2;
+  string platform_type = 3;
+  string name = 4;
+  string description = 5;
+  int64 file_size_bytes = 6;
+  string installation_path = 7;
+  bool is_collection = 8;
+  string metadata = 9;  // JSON-encoded metadata
+}
+
+message CreateAddonResponse {
+  WorkshopAddon addon = 1;
+}
+
+message GetAddonRequest {
+  int64 addon_id = 1;
+}
+
+message GetAddonResponse {
+  WorkshopAddon addon = 1;
+}
+
+message ListAddonsRequest {
+  int64 game_id = 1;  // optional filter
+  bool include_deprecated = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message ListAddonsResponse {
+  repeated WorkshopAddon addons = 1;
+  int32 total_count = 2;
+}
+
+message UpdateAddonRequest {
+  int64 addon_id = 1;
+  string name = 2;
+  string description = 3;
+  int64 file_size_bytes = 4;
+  string installation_path = 5;
+  bool is_deprecated = 6;
+  string metadata = 7;  // JSON-encoded metadata
+  repeated string update_paths = 8;  // Field paths to update (empty = update all)
+}
+
+message UpdateAddonResponse {
+  WorkshopAddon addon = 1;
+}
+
+message DeleteAddonRequest {
+  int64 addon_id = 1;
+}
+
+message DeleteAddonResponse {}
+
+message FetchAddonMetadataRequest {
+  int64 game_id = 1;
+  string workshop_id = 2;
+  string platform_type = 3;
+}
+
+message FetchAddonMetadataResponse {
+  WorkshopAddon addon = 1;
+}
+
+// ============================================================================
+// Installation Management RPCs
+// ============================================================================
+
+message InstallAddonRequest {
+  int64 sgc_id = 1;
+  int64 addon_id = 2;
+  bool force_reinstall = 3;
+}
+
+message InstallAddonResponse {
+  WorkshopInstallation installation = 1;
+}
+
+message GetInstallationRequest {
+  int64 installation_id = 1;
+}
+
+message GetInstallationResponse {
+  WorkshopInstallation installation = 1;
+}
+
+message ListInstallationsRequest {
+  int64 sgc_id = 1;  // optional filter
+  int64 addon_id = 2;  // optional filter
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message ListInstallationsResponse {
+  repeated WorkshopInstallation installations = 1;
+  int32 total_count = 2;
+}
+
+message RemoveInstallationRequest {
+  int64 installation_id = 1;
+}
+
+message RemoveInstallationResponse {}
+
+// ============================================================================
+// Library Management RPCs
+// ============================================================================
+
+message CreateLibraryRequest {
+  int64 game_id = 1;
+  string name = 2;
+  string description = 3;
+}
+
+message CreateLibraryResponse {
+  WorkshopLibrary library = 1;
+}
+
+message GetLibraryRequest {
+  int64 library_id = 1;
+}
+
+message GetLibraryResponse {
+  WorkshopLibrary library = 1;
+}
+
+message ListLibrariesRequest {
+  int64 game_id = 1;  // optional filter
+  int32 limit = 2;
+  int32 offset = 3;
+}
+
+message ListLibrariesResponse {
+  repeated WorkshopLibrary libraries = 1;
+  int32 total_count = 2;
+}
+
+message UpdateLibraryRequest {
+  int64 library_id = 1;
+  string name = 2;
+  string description = 3;
+  repeated string update_paths = 4;  // Field paths to update (empty = update all)
+}
+
+message UpdateLibraryResponse {
+  WorkshopLibrary library = 1;
+}
+
+message DeleteLibraryRequest {
+  int64 library_id = 1;
+}
+
+message DeleteLibraryResponse {}
+
+message AddAddonToLibraryRequest {
+  int64 library_id = 1;
+  int64 addon_id = 2;
+  int32 display_order = 3;
+}
+
+message AddAddonToLibraryResponse {}
+
+message RemoveAddonFromLibraryRequest {
+  int64 library_id = 1;
+  int64 addon_id = 2;
+}
+
+message RemoveAddonFromLibraryResponse {}
+
+message AddLibraryReferenceRequest {
+  int64 parent_library_id = 1;
+  int64 child_library_id = 2;
+}
+
+message AddLibraryReferenceResponse {}

@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "workshop",
+    srcs = ["orchestrator.go"],
+    importpath = "github.com/whale-net/everything/manmanv2/host/workshop",
+    visibility = ["//manmanv2/host:__subpackages__"],
+    deps = [
+        "//libs/go/docker",
+        "//manmanv2/protos:manmanpb",
+    ],
+)
+
+go_test(
+    name = "workshop_test",
+    srcs = ["orchestrator_test.go"],
+    embed = [":workshop"],
+    deps = [
+        "//libs/go/docker",
+        "//manmanv2/protos:manmanpb",
+        "@com_github_stretchr_testify//assert",
+    ],
+)

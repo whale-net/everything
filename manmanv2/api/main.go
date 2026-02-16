@@ -95,6 +95,22 @@ func run() error {
 	apiServer := handlers.NewAPIServer(repo, s3Client, rmqConn)
 	pb.RegisterManManAPIServer(grpcServer, apiServer)
 
+	// Initialize workshop status handler for installation status updates
+	log.Println("Setting up workshop status handler...")
+	workshopStatusHandler, err := handlers.NewWorkshopStatusHandler(repo.WorkshopInstallations, rmqConn)
+	if err != nil {
+		return fmt.Errorf("failed to create workshop status handler: %w", err)
+	}
+	defer workshopStatusHandler.Close()
+
+	// Start workshop status consumer in background
+	go func() {
+		if err := workshopStatusHandler.Start(ctx); err != nil {
+			log.Printf("Warning: Workshop status handler stopped: %v", err)
+		}
+	}()
+	log.Println("Workshop status handler started")
+
 	// Register reflection service (for grpcurl, debugging)
 	reflection.Register(grpcServer)
 

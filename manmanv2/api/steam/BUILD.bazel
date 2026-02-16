@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "steam",
     srcs = ["client.go"],
-    importpath = "github.com/chand1012/everything/manmanv2/api/steam",
+    importpath = "github.com/whale-net/everything/manmanv2/api/steam",
     visibility = ["//visibility:public"],
 )
 

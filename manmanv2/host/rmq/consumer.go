@@ -15,6 +15,7 @@ type CommandHandler interface {
 	HandleStopSession(ctx context.Context, cmd *StopSessionCommand) error
 	HandleKillSession(ctx context.Context, cmd *KillSessionCommand) error
 	HandleSendInput(ctx context.Context, cmd *SendInputCommand) error
+	HandleDownloadAddon(ctx context.Context, cmd *DownloadAddonCommand) error
 }
 
 // Consumer consumes commands from RabbitMQ
@@ -40,6 +41,7 @@ func NewConsumer(conn *rmq.Connection, serverID int64, handler CommandHandler) (
 		fmt.Sprintf("command.host.%d.session.stop", serverID),
 		fmt.Sprintf("command.host.%d.session.kill", serverID),
 		fmt.Sprintf("command.host.%d.session.send_input", serverID),
+		fmt.Sprintf("command.host.%d.workshop.download", serverID),
 	}
 
 	if err := consumer.BindExchange(exchange, routingKeys); err != nil {
@@ -59,11 +61,13 @@ func NewConsumer(conn *rmq.Connection, serverID int64, handler CommandHandler) (
 	stopKey := fmt.Sprintf("command.host.%d.session.stop", serverID)
 	killKey := fmt.Sprintf("command.host.%d.session.kill", serverID)
 	sendInputKey := fmt.Sprintf("command.host.%d.session.send_input", serverID)
+	downloadAddonKey := fmt.Sprintf("command.host.%d.workshop.download", serverID)
 
 	consumer.RegisterHandler(startKey, c.handleStartSession)
 	consumer.RegisterHandler(stopKey, c.handleStopSession)
 	consumer.RegisterHandler(killKey, c.handleKillSession)
 	consumer.RegisterHandler(sendInputKey, c.handleSendInput)
+	consumer.RegisterHandler(downloadAddonKey, c.handleDownloadAddon)
 
 	return c, nil
 }
@@ -127,5 +131,18 @@ func (c *Consumer) handleSendInput(ctx context.Context, msg rmq.Message) error {
 		return err
 	}
 	slog.Debug("command completed", "command", "send_input", "session_id", cmd.SessionID)
+	return nil
+}
+
+func (c *Consumer) handleDownloadAddon(ctx context.Context, msg rmq.Message) error {
+	var cmd DownloadAddonCommand
+	if err := json.Unmarshal(msg.Body, &cmd); err != nil {
+		return fmt.Errorf("failed to unmarshal download addon command: %w", err)
+	}
+	slog.Info("received command", "command", "download_addon", "installation_id", cmd.InstallationID, "sgc_id", cmd.SGCID, "addon_id", cmd.AddonID, "workshop_id", cmd.WorkshopID, "routing_key", msg.RoutingKey)
+	if err := c.handler.HandleDownloadAddon(ctx, &cmd); err != nil {
+		return err
+	}
+	slog.Info("command completed", "command", "download_addon", "installation_id", cmd.InstallationID)
 	return nil
 }
