@@ -431,26 +431,9 @@ func (h *ServerGameConfigHandler) GetServerGameConfig(ctx context.Context, req *
 }
 
 func (h *ServerGameConfigHandler) DeployGameConfig(ctx context.Context, req *pb.DeployGameConfigRequest) (*pb.DeployGameConfigResponse, error) {
-	// Convert protobuf port bindings to manman models
-	portBindings := make([]*manman.PortBinding, len(req.PortBindings))
-	for i, pb := range req.PortBindings {
-		portBindings[i] = &manman.PortBinding{
-			ContainerPort: pb.ContainerPort,
-			HostPort:      pb.HostPort,
-			Protocol:      pb.Protocol,
-		}
-	}
-
-	// Check port availability before creating the ServerGameConfig
-	for _, binding := range portBindings {
-		available, err := h.portRepo.IsPortAvailable(ctx, req.ServerId, int(binding.HostPort), binding.Protocol)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to check port availability: %v", err)
-		}
-		if !available {
-			return nil, status.Errorf(codes.ResourceExhausted, "port %d/%s is already allocated on server %d", binding.HostPort, binding.Protocol, req.ServerId)
-		}
-	}
+	// Port availability is checked when starting a session, not at deployment time.
+	// This allows multiple SGCs to define the same ports, with actual allocation
+	// and conflict detection happening only when sessions start.
 
 	// Create the ServerGameConfig
 	sgc := &manman.ServerGameConfig{
@@ -466,12 +449,9 @@ func (h *ServerGameConfigHandler) DeployGameConfig(ctx context.Context, req *pb.
 		return nil, status.Errorf(codes.Internal, "failed to deploy game config: %v", err)
 	}
 
-	// Allocate ports for the ServerGameConfig
-	if err := h.portRepo.AllocateMultiplePorts(ctx, req.ServerId, portBindings, sgc.SGCID); err != nil {
-		// Rollback: delete the created ServerGameConfig
-		h.repo.Delete(ctx, sgc.SGCID)
-		return nil, status.Errorf(codes.ResourceExhausted, "failed to allocate ports: %v", err)
-	}
+	// Port allocation is now handled at session start time (not deployment time)
+	// This allows multiple SGCs to share port definitions, with actual allocation
+	// happening only when a session starts.
 
 	return &pb.DeployGameConfigResponse{
 		Config: serverGameConfigToProto(sgc),
