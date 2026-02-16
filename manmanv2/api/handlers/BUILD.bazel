@@ -41,12 +41,15 @@ go_test(
     srcs = [
         "registration_test.go",
         "session_test.go",
+        "workshop_test.go",
     ],
     embed = [":handlers"],
     deps = [
         "//manmanv2:models",
         "//manmanv2/protos:manmanpb",
         "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//mock",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
     ],

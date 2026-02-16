@@ -145,6 +145,7 @@ type WorkshopInstallationRepository interface {
 	Create(ctx context.Context, installation *manman.WorkshopInstallation) (*manman.WorkshopInstallation, error)
 	Get(ctx context.Context, installationID int64) (*manman.WorkshopInstallation, error)
 	GetBySGCAndAddon(ctx context.Context, sgcID, addonID int64) (*manman.WorkshopInstallation, error)
+	List(ctx context.Context, limit, offset int) ([]*manman.WorkshopInstallation, error)
 	ListBySGC(ctx context.Context, sgcID int64, limit, offset int) ([]*manman.WorkshopInstallation, error)
 	ListByAddon(ctx context.Context, addonID int64, limit, offset int) ([]*manman.WorkshopInstallation, error)
 	UpdateStatus(ctx context.Context, installationID int64, status string, errorMsg *string) error

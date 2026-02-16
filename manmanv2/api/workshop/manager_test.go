@@ -99,6 +99,10 @@ func (m *mockInstallationRepo) UpdateProgress(ctx context.Context, installationI
 	return fmt.Errorf("not implemented")
 }
 
+func (m *mockInstallationRepo) List(ctx context.Context, limit, offset int) ([]*manman.WorkshopInstallation, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
 func (m *mockInstallationRepo) Delete(ctx context.Context, installationID int64) error {
 	return fmt.Errorf("not implemented")
 }

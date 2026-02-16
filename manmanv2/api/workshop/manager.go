@@ -196,8 +196,8 @@ func (wm *WorkshopManager) resolveInstallationPath(ctx context.Context, sgc *man
 	return fullPath, nil
 }
 
-// FetchAndCreateAddon fetches metadata from Steam Workshop and creates addon
-func (wm *WorkshopManager) FetchAndCreateAddon(ctx context.Context, gameID int64, workshopID string) (*manman.WorkshopAddon, error) {
+// FetchMetadata fetches metadata from Steam Workshop without creating a database record
+func (wm *WorkshopManager) FetchMetadata(ctx context.Context, gameID int64, workshopID string) (*manman.WorkshopAddon, error) {
 	// Fetch metadata from Steam Workshop API
 	metadata, err := wm.steamClient.GetWorkshopItemDetails(ctx, workshopID)
 	if err != nil {
@@ -235,6 +235,19 @@ func (wm *WorkshopManager) FetchAndCreateAddon(ctx context.Context, gameID int64
 		}
 	}
 
+	// Return addon without persisting to database
+	return addon, nil
+}
+
+// FetchAndCreateAddon fetches metadata from Steam Workshop and creates addon
+func (wm *WorkshopManager) FetchAndCreateAddon(ctx context.Context, gameID int64, workshopID string) (*manman.WorkshopAddon, error) {
+	// Fetch metadata using FetchMetadata
+	addon, err := wm.FetchMetadata(ctx, gameID, workshopID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create addon in database
 	return wm.addonRepo.Create(ctx, addon)
 }
 

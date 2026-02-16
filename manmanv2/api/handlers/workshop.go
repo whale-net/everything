@@ -227,6 +227,362 @@ func (h *WorkshopServiceHandler) DeleteAddon(ctx context.Context, req *pb.Delete
 	return &pb.DeleteAddonResponse{}, nil
 }
 
+// FetchAddonMetadata fetches metadata from Steam Workshop API without creating a database record
+func (h *WorkshopServiceHandler) FetchAddonMetadata(ctx context.Context, req *pb.FetchAddonMetadataRequest) (*pb.FetchAddonMetadataResponse, error) {
+	// Validate required fields
+	if req.GameId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "game_id is required")
+	}
+	if req.WorkshopId == "" {
+		return nil, status.Error(codes.InvalidArgument, "workshop_id is required")
+	}
+
+	// Set default platform type if not provided
+	platformType := req.PlatformType
+	if platformType == "" {
+		platformType = manman.PlatformTypeSteamWorkshop
+	}
+
+	// Only support Steam Workshop for now
+	if platformType != manman.PlatformTypeSteamWorkshop {
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported platform_type: %s", platformType)
+	}
+
+	// Fetch metadata from Steam Workshop API using the workshop manager's steam client
+	// We use FetchAndCreateAddon but don't persist - just get the metadata
+	metadata, err := h.workshopManager.FetchMetadata(ctx, req.GameId, req.WorkshopId)
+	if err != nil {
+		// Handle API failures gracefully with appropriate error codes
+		return nil, status.Errorf(codes.Unavailable, "failed to fetch addon metadata from Steam Workshop: %v", err)
+	}
+
+	// Convert to protobuf and return without creating database record
+	return &pb.FetchAddonMetadataResponse{
+		Addon: addonToProto(metadata),
+	}, nil
+}
+
+// ============================================================================
+// Installation Management RPCs
+// ============================================================================
+
+// InstallAddon installs a workshop addon to a ServerGameConfig
+func (h *WorkshopServiceHandler) InstallAddon(ctx context.Context, req *pb.InstallAddonRequest) (*pb.InstallAddonResponse, error) {
+	if req.SgcId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "sgc_id is required")
+	}
+	if req.AddonId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "addon_id is required")
+	}
+
+	installation, err := h.workshopManager.InstallAddon(ctx, req.SgcId, req.AddonId, req.ForceReinstall)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to install addon: %v", err)
+	}
+
+	return &pb.InstallAddonResponse{
+		Installation: installationToProto(installation),
+	}, nil
+}
+
+// GetInstallation retrieves a workshop installation by ID
+func (h *WorkshopServiceHandler) GetInstallation(ctx context.Context, req *pb.GetInstallationRequest) (*pb.GetInstallationResponse, error) {
+	if req.InstallationId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "installation_id is required")
+	}
+
+	installation, err := h.installationRepo.Get(ctx, req.InstallationId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "installation not found: %v", err)
+	}
+
+	return &pb.GetInstallationResponse{
+		Installation: installationToProto(installation),
+	}, nil
+}
+
+// ListInstallations lists workshop installations with optional filtering
+func (h *WorkshopServiceHandler) ListInstallations(ctx context.Context, req *pb.ListInstallationsRequest) (*pb.ListInstallationsResponse, error) {
+	// Set default pagination values
+	limit := int(req.Limit)
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	offset := int(req.Offset)
+	if offset < 0 {
+		offset = 0
+	}
+
+	var installations []*manman.WorkshopInstallation
+	var err error
+
+	// Apply filters based on request
+	if req.SgcId > 0 && req.AddonId > 0 {
+		// Filter by both SGC and addon
+		installation, err := h.installationRepo.GetBySGCAndAddon(ctx, req.SgcId, req.AddonId)
+		if err != nil {
+			// Not found is not an error for list operations
+			installations = []*manman.WorkshopInstallation{}
+		} else {
+			installations = []*manman.WorkshopInstallation{installation}
+		}
+	} else if req.SgcId > 0 {
+		// Filter by SGC only
+		installations, err = h.installationRepo.ListBySGC(ctx, req.SgcId, limit, offset)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to list installations: %v", err)
+		}
+	} else if req.AddonId > 0 {
+		// Filter by addon only
+		installations, err = h.installationRepo.ListByAddon(ctx, req.AddonId, limit, offset)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to list installations: %v", err)
+		}
+	} else {
+		// No filters - list all (with pagination)
+		installations, err = h.installationRepo.List(ctx, limit, offset)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to list installations: %v", err)
+		}
+	}
+
+	// Convert to protobuf
+	pbInstallations := make([]*pb.WorkshopInstallation, len(installations))
+	for i, installation := range installations {
+		pbInstallations[i] = installationToProto(installation)
+	}
+
+	return &pb.ListInstallationsResponse{
+		Installations: pbInstallations,
+		TotalCount:    int32(len(installations)),
+	}, nil
+}
+
+// RemoveInstallation removes an installed addon from a ServerGameConfig
+func (h *WorkshopServiceHandler) RemoveInstallation(ctx context.Context, req *pb.RemoveInstallationRequest) (*pb.RemoveInstallationResponse, error) {
+	if req.InstallationId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "installation_id is required")
+	}
+
+	if err := h.workshopManager.RemoveInstallation(ctx, req.InstallationId); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to remove installation: %v", err)
+	}
+
+	return &pb.RemoveInstallationResponse{}, nil
+}
+
+// ============================================================================
+// Library Management RPCs
+// ============================================================================
+
+// CreateLibrary creates a new workshop library
+func (h *WorkshopServiceHandler) CreateLibrary(ctx context.Context, req *pb.CreateLibraryRequest) (*pb.CreateLibraryResponse, error) {
+	if req.GameId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "game_id is required")
+	}
+	if req.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+
+	library := &manman.WorkshopLibrary{
+		GameID: req.GameId,
+		Name:   req.Name,
+	}
+
+	if req.Description != "" {
+		library.Description = &req.Description
+	}
+
+	library, err := h.libraryRepo.Create(ctx, library)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create library: %v", err)
+	}
+
+	return &pb.CreateLibraryResponse{
+		Library: libraryToProto(library),
+	}, nil
+}
+
+// GetLibrary retrieves a workshop library by ID
+func (h *WorkshopServiceHandler) GetLibrary(ctx context.Context, req *pb.GetLibraryRequest) (*pb.GetLibraryResponse, error) {
+	if req.LibraryId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "library_id is required")
+	}
+
+	library, err := h.libraryRepo.Get(ctx, req.LibraryId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "library not found: %v", err)
+	}
+
+	return &pb.GetLibraryResponse{
+		Library: libraryToProto(library),
+	}, nil
+}
+
+// ListLibraries lists workshop libraries with optional filtering
+func (h *WorkshopServiceHandler) ListLibraries(ctx context.Context, req *pb.ListLibrariesRequest) (*pb.ListLibrariesResponse, error) {
+	// Set default pagination values
+	limit := int(req.Limit)
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	offset := int(req.Offset)
+	if offset < 0 {
+		offset = 0
+	}
+
+	// Apply game filter if provided
+	var gameID *int64
+	if req.GameId > 0 {
+		gameID = &req.GameId
+	}
+
+	libraries, err := h.libraryRepo.List(ctx, gameID, limit, offset)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list libraries: %v", err)
+	}
+
+	// Convert to protobuf
+	pbLibraries := make([]*pb.WorkshopLibrary, len(libraries))
+	for i, library := range libraries {
+		pbLibraries[i] = libraryToProto(library)
+	}
+
+	return &pb.ListLibrariesResponse{
+		Libraries:  pbLibraries,
+		TotalCount: int32(len(libraries)),
+	}, nil
+}
+
+// UpdateLibrary updates an existing workshop library
+func (h *WorkshopServiceHandler) UpdateLibrary(ctx context.Context, req *pb.UpdateLibraryRequest) (*pb.UpdateLibraryResponse, error) {
+	if req.LibraryId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "library_id is required")
+	}
+
+	// Get existing library
+	library, err := h.libraryRepo.Get(ctx, req.LibraryId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "library not found: %v", err)
+	}
+
+	// Apply field updates
+	if len(req.UpdatePaths) == 0 {
+		// Update all provided fields
+		if req.Name != "" {
+			library.Name = req.Name
+		}
+		if req.Description != "" {
+			library.Description = &req.Description
+		}
+	} else {
+		// Update only specified fields
+		for _, path := range req.UpdatePaths {
+			switch path {
+			case "name":
+				library.Name = req.Name
+			case "description":
+				library.Description = &req.Description
+			}
+		}
+	}
+
+	// Update in database
+	if err := h.libraryRepo.Update(ctx, library); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update library: %v", err)
+	}
+
+	return &pb.UpdateLibraryResponse{
+		Library: libraryToProto(library),
+	}, nil
+}
+
+// DeleteLibrary deletes a workshop library
+func (h *WorkshopServiceHandler) DeleteLibrary(ctx context.Context, req *pb.DeleteLibraryRequest) (*pb.DeleteLibraryResponse, error) {
+	if req.LibraryId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "library_id is required")
+	}
+
+	if err := h.libraryRepo.Delete(ctx, req.LibraryId); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete library: %v", err)
+	}
+
+	return &pb.DeleteLibraryResponse{}, nil
+}
+
+// AddAddonToLibrary adds an addon to a library
+func (h *WorkshopServiceHandler) AddAddonToLibrary(ctx context.Context, req *pb.AddAddonToLibraryRequest) (*pb.AddAddonToLibraryResponse, error) {
+	if req.LibraryId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "library_id is required")
+	}
+	if req.AddonId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "addon_id is required")
+	}
+
+	displayOrder := int(req.DisplayOrder)
+	if displayOrder < 0 {
+		displayOrder = 0
+	}
+
+	if err := h.libraryRepo.AddAddon(ctx, req.LibraryId, req.AddonId, displayOrder); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to add addon to library: %v", err)
+	}
+
+	return &pb.AddAddonToLibraryResponse{}, nil
+}
+
+// RemoveAddonFromLibrary removes an addon from a library
+func (h *WorkshopServiceHandler) RemoveAddonFromLibrary(ctx context.Context, req *pb.RemoveAddonFromLibraryRequest) (*pb.RemoveAddonFromLibraryResponse, error) {
+	if req.LibraryId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "library_id is required")
+	}
+	if req.AddonId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "addon_id is required")
+	}
+
+	if err := h.libraryRepo.RemoveAddon(ctx, req.LibraryId, req.AddonId); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to remove addon from library: %v", err)
+	}
+
+	return &pb.RemoveAddonFromLibraryResponse{}, nil
+}
+
+// AddLibraryReference adds a reference from one library to another with circular reference detection
+func (h *WorkshopServiceHandler) AddLibraryReference(ctx context.Context, req *pb.AddLibraryReferenceRequest) (*pb.AddLibraryReferenceResponse, error) {
+	if req.ParentLibraryId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "parent_library_id is required")
+	}
+	if req.ChildLibraryId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "child_library_id is required")
+	}
+	if req.ParentLibraryId == req.ChildLibraryId {
+		return nil, status.Error(codes.InvalidArgument, "cannot reference library to itself")
+	}
+
+	// Check for circular reference before adding
+	hasCircular, err := h.libraryRepo.DetectCircularReference(ctx, req.ParentLibraryId, req.ChildLibraryId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to check for circular reference: %v", err)
+	}
+	if hasCircular {
+		return nil, status.Error(codes.InvalidArgument, "adding this reference would create a circular dependency")
+	}
+
+	if err := h.libraryRepo.AddReference(ctx, req.ParentLibraryId, req.ChildLibraryId); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to add library reference: %v", err)
+	}
+
+	return &pb.AddLibraryReferenceResponse{}, nil
+}
+
 // ============================================================================
 // Conversion Helpers
 // ============================================================================

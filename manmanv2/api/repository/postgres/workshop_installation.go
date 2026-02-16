@@ -152,6 +152,51 @@ func (r *WorkshopInstallationRepository) ListBySGC(ctx context.Context, sgcID in
 	return installations, rows.Err()
 }
 
+func (r *WorkshopInstallationRepository) List(ctx context.Context, limit, offset int) ([]*manman.WorkshopInstallation, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	query := `
+		SELECT installation_id, sgc_id, addon_id, status, installation_path,
+			   progress_percent, error_message, download_started_at,
+			   download_completed_at, created_at, updated_at
+		FROM workshop_installations
+		ORDER BY installation_id
+		LIMIT $1 OFFSET $2
+	`
+
+	rows, err := r.db.Query(ctx, query, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var installations []*manman.WorkshopInstallation
+	for rows.Next() {
+		installation := &manman.WorkshopInstallation{}
+		err := rows.Scan(
+			&installation.InstallationID,
+			&installation.SGCID,
+			&installation.AddonID,
+			&installation.Status,
+			&installation.InstallationPath,
+			&installation.ProgressPercent,
+			&installation.ErrorMessage,
+			&installation.DownloadStartedAt,
+			&installation.DownloadCompletedAt,
+			&installation.CreatedAt,
+			&installation.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		installations = append(installations, installation)
+	}
+
+	return installations, rows.Err()
+}
+
 func (r *WorkshopInstallationRepository) ListByAddon(ctx context.Context, addonID int64, limit, offset int) ([]*manman.WorkshopInstallation, error) {
 	if limit <= 0 {
 		limit = 50

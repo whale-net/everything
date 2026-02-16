@@ -275,24 +275,24 @@ This implementation plan breaks down the workshop addon management feature into 
     - **Property 17: API CRUD Completeness**
     - **Validates: Requirements 6.1**
   
-  - [-] 10.5 Implement installation management RPCs
+  - [x] 10.5 Implement installation management RPCs
     - Implement InstallAddon RPC (calls WorkshopManager.InstallAddon)
     - Implement GetInstallation RPC
     - Implement ListInstallations RPC with filtering by SGC
     - Implement RemoveInstallation RPC
     - _Requirements: 6.3, 6.4, 6.5_
   
-  - [ ] 10.6 Write property test for installation listing
+  - [x] 10.6 Write property test for installation listing
     - **Property 18: Installation List Filtering**
     - **Validates: Requirements 6.4**
   
-  - [ ] 10.7 Implement library management RPCs
+  - [x] 10.7 Implement library management RPCs
     - Implement CreateLibrary, GetLibrary, ListLibraries RPCs
     - Implement AddAddonToLibrary, RemoveAddonFromLibrary RPCs
     - Implement AddLibraryReference RPC with circular reference detection
     - _Requirements: 14.4, 14.5, 14.6_
   
-  - [ ] 10.8 Implement FetchAddonMetadata RPC
+  - [-] 10.8 Implement FetchAddonMetadata RPC
     - Call SteamWorkshopClient to fetch metadata
     - Return metadata without creating addon record
     - Handle API failures gracefully
