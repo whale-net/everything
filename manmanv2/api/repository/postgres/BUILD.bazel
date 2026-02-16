@@ -18,9 +18,9 @@ go_library(
         "strategy.go",
     ],
     importpath = "github.com/whale-net/everything/manmanv2/api/repository/postgres",
-    visibility = ["//manman:__subpackages__"],
+    visibility = ["//manmanv2:__subpackages__"],
     deps = [
-        "//manman:models",
+        "//manmanv2:models",
         "//manmanv2/api/repository",
         "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgxpool",
@@ -32,6 +32,6 @@ go_test(
     srcs = ["server_port_test.go"],
     embed = [":postgres"],
     deps = [
-        "//manman:models",
+        "//manmanv2:models",
     ],
 )

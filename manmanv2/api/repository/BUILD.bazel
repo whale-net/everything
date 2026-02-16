@@ -4,8 +4,8 @@ go_library(
     name = "repository",
     srcs = ["repository.go"],
     importpath = "github.com/whale-net/everything/manmanv2/api/repository",
-    visibility = ["//manman:__subpackages__"],
+    visibility = ["//manmanv2:__subpackages__"],
     deps = [
-        "//manman:models",
+        "//manmanv2:models",
     ],
 )

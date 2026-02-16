@@ -12,7 +12,7 @@ go_library(
     deps = [
         "//libs/go/docker",
         "//libs/go/rmq",
-        "//manman:models",
+        "//manmanv2:models",
         "//manmanv2/host/config",
         "//manmanv2/host/rmq",
         "//manmanv2/protos:manmanpb",
@@ -28,6 +28,6 @@ go_test(
     ],
     deps = [
         ":session",
-        "//manman:models",
+        "//manmanv2:models",
     ],
 )

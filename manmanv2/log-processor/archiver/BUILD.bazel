@@ -7,7 +7,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//libs/go/s3",
-        "//manman:models",
+        "//manmanv2:models",
         "//manmanv2/api/repository",
     ],
 )
@@ -18,6 +18,6 @@ go_test(
     embed = [":archiver"],
     deps = [
         "//libs/go/s3",
-        "//manman:models",
+        "//manmanv2:models",
     ],
 )
