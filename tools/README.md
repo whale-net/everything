@@ -162,6 +162,28 @@ bazel run //tools:release -- plan --event-type tag_push --version <version>
 
 The release helper ensures consistent handling of container images, version validation, and integration with CI/CD workflows.
 
+### Cleanup Commands
+
+The release helper provides cleanup commands for managing old releases and container images:
+
+```bash
+# Clean up old Git tags and GitHub releases (with intelligent retention policies)
+bazel run //tools:release -- cleanup-releases --dry-run
+
+# Actually delete old releases (prompts for confirmation)
+bazel run //tools:release -- cleanup-releases --no-dry-run
+
+# Also clean up hash (commit SHA) tags from GHCR packages
+# Hash tags like "abc123d" accumulate during releases and can be cleaned up automatically
+bazel run //tools:release -- cleanup-releases --cleanup-hash-tags --no-dry-run
+
+# Clean up hash tags with custom age threshold (default: 3 days)
+bazel run //tools:release -- cleanup-releases --cleanup-hash-tags --hash-tag-age-days 7
+
+# Standalone hash tag cleanup (deprecated - use --cleanup-hash-tags option instead)
+bazel run //tools:release -- cleanup-hash-tags --dry-run
+```
+
 ## Migration Notes
 
 For backward compatibility, aliases are provided at the top level:

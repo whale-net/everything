@@ -505,6 +505,121 @@ class TestGHCRClient:
         # Should only call API once
         assert mock_client.get.call_count == 1
 
+    def test_find_hash_tagged_versions(self, client, mock_httpx_client):
+        """Test finding hash-tagged versions older than specified age."""
+        from datetime import datetime, timedelta, timezone
+        
+        with patch.object(client, '_detect_owner_type', return_value='orgs'):
+            mock_client, mock_response = mock_httpx_client
+            mock_response.status_code = 200
+            mock_response.headers = {}
+            
+            # Create versions with different ages
+            five_days_ago = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+            two_days_ago = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+            
+            mock_response.json.return_value = [
+                {
+                    "id": 12345,
+                    "name": "sha256:abc123",
+                    "metadata": {"container": {"tags": ["abc123d"]}},
+                    "created_at": five_days_ago
+                },
+                {
+                    "id": 12346,
+                    "name": "sha256:def456",
+                    "metadata": {"container": {"tags": ["def456e"]}},
+                    "created_at": two_days_ago
+                },
+                {
+                    "id": 12347,
+                    "name": "sha256:ghi789",
+                    "metadata": {"container": {"tags": ["v1.0.0"]}},
+                    "created_at": five_days_ago
+                }
+            ]
+            
+            with patch("httpx.Client", return_value=mock_client):
+                versions = client.find_hash_tagged_versions("demo-hello-python", min_age_days=3.0)
+            
+            # Should only return hash-tagged versions older than 3 days
+            assert len(versions) == 1
+            assert versions[0].version_id == 12345
+            assert "abc123d" in versions[0].tags
+
+    def test_find_hash_tagged_versions_no_old_hashes(self, client, mock_httpx_client):
+        """Test finding hash-tagged versions when none are old enough."""
+        from datetime import datetime, timedelta, timezone
+        
+        with patch.object(client, '_detect_owner_type', return_value='orgs'):
+            mock_client, mock_response = mock_httpx_client
+            mock_response.status_code = 200
+            mock_response.headers = {}
+            
+            # Recent hash-tagged version
+            one_day_ago = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+            
+            mock_response.json.return_value = [
+                {
+                    "id": 12345,
+                    "name": "sha256:abc123",
+                    "metadata": {"container": {"tags": ["abc123d"]}},
+                    "created_at": one_day_ago
+                }
+            ]
+            
+            with patch("httpx.Client", return_value=mock_client):
+                versions = client.find_hash_tagged_versions("demo-hello-python", min_age_days=3.0)
+            
+            assert len(versions) == 0
+
+    def test_list_all_packages(self, client, mock_httpx_client):
+        """Test listing all packages for owner."""
+        with patch.object(client, '_detect_owner_type', return_value='orgs'):
+            mock_client, mock_response = mock_httpx_client
+            mock_response.status_code = 200
+            mock_response.headers = {}
+            mock_response.json.return_value = [
+                {"name": "demo-hello-python", "package_type": "container"},
+                {"name": "demo-hello-go", "package_type": "container"},
+                {"name": "helm-demo-fastapi", "package_type": "container"}
+            ]
+            
+            with patch("httpx.Client", return_value=mock_client):
+                packages = client.list_all_packages()
+            
+            assert len(packages) == 3
+            assert "demo-hello-python" in packages
+            assert "demo-hello-go" in packages
+            assert "helm-demo-fastapi" in packages
+
+    def test_list_all_packages_pagination(self, client, mock_httpx_client):
+        """Test pagination when listing all packages."""
+        with patch.object(client, '_detect_owner_type', return_value='orgs'):
+            page1_data = [{"name": f"package-{i}", "package_type": "container"} for i in range(100)]
+            page2_data = [{"name": f"package-{i}", "package_type": "container"} for i in range(100, 150)]
+            
+            mock_response1 = MagicMock()
+            mock_response1.status_code = 200
+            mock_response1.json.return_value = page1_data
+            mock_response1.headers = {"Link": '<https://api.github.com/next>; rel="next"'}
+            
+            mock_response2 = MagicMock()
+            mock_response2.status_code = 200
+            mock_response2.json.return_value = page2_data
+            mock_response2.headers = {}
+            
+            mock_http_client = MagicMock()
+            mock_http_client.__enter__.return_value = mock_http_client
+            mock_http_client.__exit__.return_value = None
+            mock_http_client.get.side_effect = [mock_response1, mock_response2]
+            
+            with patch("httpx.Client", return_value=mock_http_client):
+                packages = client.list_all_packages()
+            
+            assert len(packages) == 150
+            assert mock_http_client.get.call_count == 2
+
 
 class TestGHCRPackageVersion:
     """Test cases for GHCRPackageVersion dataclass."""
@@ -546,6 +661,68 @@ class TestGHCRPackageVersion:
 
         assert not tagged_version.is_untagged()
         assert untagged_version.is_untagged()
+
+    def test_version_has_hash_tag(self):
+        """Test detecting hash tags in version."""
+        # Version with hash tag
+        hash_version = GHCRPackageVersion(
+            version_id=12345,
+            tags=["abc123d", "v1.0.0"]
+        )
+        
+        # Version without hash tag
+        no_hash_version = GHCRPackageVersion(
+            version_id=12346,
+            tags=["v1.0.0", "latest"]
+        )
+        
+        # Version with longer hash
+        long_hash_version = GHCRPackageVersion(
+            version_id=12347,
+            tags=["1234567890abcdef"]
+        )
+
+        assert hash_version.has_hash_tag()
+        assert not no_hash_version.has_hash_tag()
+        assert long_hash_version.has_hash_tag()
+
+    def test_version_get_hash_tags(self):
+        """Test extracting hash tags from version."""
+        version = GHCRPackageVersion(
+            version_id=12345,
+            tags=["abc123d", "v1.0.0", "1234567890abcdef", "latest"]
+        )
+        
+        hash_tags = version.get_hash_tags()
+        assert len(hash_tags) == 2
+        assert "abc123d" in hash_tags
+        assert "1234567890abcdef" in hash_tags
+        assert "v1.0.0" not in hash_tags
+        assert "latest" not in hash_tags
+
+    def test_version_age_days(self):
+        """Test calculating version age in days."""
+        from datetime import datetime, timedelta, timezone
+        
+        # Version created 5 days ago
+        five_days_ago = datetime.now(timezone.utc) - timedelta(days=5)
+        version = GHCRPackageVersion(
+            version_id=12345,
+            tags=["abc123d"],
+            created_at=five_days_ago.isoformat()
+        )
+        
+        age = version.age_days()
+        assert age is not None
+        assert 4.9 < age < 5.1  # Allow small tolerance
+        
+        # Version without creation date
+        no_date_version = GHCRPackageVersion(
+            version_id=12346,
+            tags=["def456"]
+        )
+        
+        assert no_date_version.age_days() is None
 
     def test_version_repr(self):
         """Test string representation of version."""
