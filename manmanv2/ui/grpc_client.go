@@ -10,8 +10,9 @@ import (
 
 // ControlClient wraps the ManManAPI gRPC client
 type ControlClient struct {
-	conn *grpcclient.Client
-	api  manmanpb.ManManAPIClient
+	conn     *grpcclient.Client
+	api      manmanpb.ManManAPIClient
+	workshop manmanpb.WorkshopServiceClient
 }
 
 // NewControlClient creates a new control API client
@@ -22,10 +23,12 @@ func NewControlClient(ctx context.Context, addr string) (*ControlClient, error) 
 	}
 
 	api := manmanpb.NewManManAPIClient(conn.GetConnection())
+	workshop := manmanpb.NewWorkshopServiceClient(conn.GetConnection())
 
 	return &ControlClient{
-		conn: conn,
-		api:  api,
+		conn:     conn,
+		api:      api,
+		workshop: workshop,
 	}, nil
 }
 
@@ -362,4 +365,69 @@ func (c *ControlClient) GetActionDefinition(ctx context.Context, actionID int64)
 		return nil, nil, fmt.Errorf("failed to get action definition: %w", err)
 	}
 	return resp.Action, resp.InputFields, nil
+}
+
+// Workshop addon methods
+
+func (c *ControlClient) ListWorkshopAddons(ctx context.Context, offset, limit int32, gameID int64) ([]*manmanpb.WorkshopAddon, error) {
+	resp, err := c.workshop.ListAddons(ctx, &manmanpb.ListAddonsRequest{
+		Offset: offset,
+		Limit:  limit,
+		GameId: gameID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Addons, nil
+}
+
+func (c *ControlClient) GetWorkshopAddon(ctx context.Context, addonID int64) (*manmanpb.WorkshopAddon, error) {
+	resp, err := c.workshop.GetAddon(ctx, &manmanpb.GetAddonRequest{
+		AddonId: addonID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Addon, nil
+}
+
+func (c *ControlClient) ListWorkshopInstallations(ctx context.Context, sgcID int64) ([]*manmanpb.WorkshopInstallation, error) {
+	resp, err := c.workshop.ListInstallations(ctx, &manmanpb.ListInstallationsRequest{
+		SgcId: sgcID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Installations, nil
+}
+
+func (c *ControlClient) InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall bool) (*manmanpb.WorkshopInstallation, error) {
+	resp, err := c.workshop.InstallAddon(ctx, &manmanpb.InstallAddonRequest{
+		SgcId:          sgcID,
+		AddonId:        addonID,
+		ForceReinstall: forceReinstall,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Installation, nil
+}
+
+func (c *ControlClient) RemoveInstallation(ctx context.Context, installationID int64) error {
+	_, err := c.workshop.RemoveInstallation(ctx, &manmanpb.RemoveInstallationRequest{
+		InstallationId: installationID,
+	})
+	return err
+}
+
+func (c *ControlClient) FetchAddonMetadata(ctx context.Context, gameID int64, workshopID, platformType string) (*manmanpb.WorkshopAddon, error) {
+	resp, err := c.workshop.FetchAddonMetadata(ctx, &manmanpb.FetchAddonMetadataRequest{
+		GameId:       gameID,
+		WorkshopId:   workshopID,
+		PlatformType: platformType,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Addon, nil
 }

@@ -201,6 +201,13 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/servers", app.auth.RequireAuthFunc(app.handleServers))
 	mux.HandleFunc("/servers/", app.auth.RequireAuthFunc(app.handleServerDetail))
 
+	// Protected routes - Workshop
+	mux.HandleFunc("/workshop/library", app.auth.RequireAuthFunc(app.handleWorkshopLibrary))
+	mux.HandleFunc("/workshop/installations", app.auth.RequireAuthFunc(app.handleWorkshopInstallations))
+	mux.HandleFunc("/workshop/install", app.auth.RequireAuthFunc(app.handleInstallAddon))
+	mux.HandleFunc("/workshop/remove", app.auth.RequireAuthFunc(app.handleRemoveInstallation))
+	mux.HandleFunc("/workshop/fetch-metadata", app.auth.RequireAuthFunc(app.handleFetchAddonMetadata))
+
 	// API endpoints for HTMX partial updates
 	mux.HandleFunc("/api/dashboard-summary", app.auth.RequireAuthFunc(app.handleDashboardSummary))
 	mux.HandleFunc("/api/dashboard-sessions", app.auth.RequireAuthFunc(app.handleDashboardSessions))

@@ -12,8 +12,7 @@ import (
 
 // RMQPublisher defines the interface for publishing messages to RabbitMQ
 type RMQPublisher interface {
-	PublishDownloadCommand(ctx context.Context, serverID int64, cmd *DownloadAddonCommand) error
-	PublishRemoveCommand(ctx context.Context, serverID int64, cmd *RemoveAddonCommand) error
+	Publish(ctx context.Context, exchange, routingKey string, body interface{}) error
 }
 
 // SteamClient defines the interface for Steam Workshop API operations
@@ -152,7 +151,8 @@ func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int6
 		InstallPath:    installPath,
 	}
 
-	err = wm.rmqPublisher.PublishDownloadCommand(ctx, sgc.ServerID, downloadCmd)
+	routingKey := fmt.Sprintf("command.host.%d.workshop.download", sgc.ServerID)
+	err = wm.rmqPublisher.Publish(ctx, "manman.commands", routingKey, downloadCmd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to publish download command: %w", err)
 	}
@@ -299,7 +299,8 @@ func (wm *WorkshopManager) RemoveInstallation(ctx context.Context, installationI
 		InstallationPath: installation.InstallationPath,
 	}
 
-	err = wm.rmqPublisher.PublishRemoveCommand(ctx, sgc.ServerID, removeCmd)
+	routingKey := fmt.Sprintf("command.host.%d.workshop.remove", sgc.ServerID)
+	err = wm.rmqPublisher.Publish(ctx, "manman.commands", routingKey, removeCmd)
 	if err != nil {
 		return fmt.Errorf("failed to publish remove command: %w", err)
 	}

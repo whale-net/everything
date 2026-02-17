@@ -6,6 +6,7 @@
             <li><a href="/servers" class="{{if eq .Active "servers"}}active{{end}}">Servers</a></li>
             <li><a href="/games" class="{{if eq .Active "games"}}active{{end}}">Games</a></li>
             <li><a href="/sessions" class="{{if eq .Active "sessions"}}active{{end}}">Sessions</a></li>
+            <li><a href="/workshop/library" class="{{if eq .Active "workshop"}}active{{end}}">Workshop</a></li>
             {{if .User}}
             <li><a href="/auth/logout">Logout ({{.User.Name}})</a></li>
             {{end}}

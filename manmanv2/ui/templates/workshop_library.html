@@ -1,0 +1,122 @@
+{{define "workshop_library_content"}}
+<div class="action-bar">
+    <h1>Workshop Library</h1>
+    <button onclick="showModal('addAddonModal')" class="btn btn-primary">Add Addon</button>
+</div>
+
+<div class="card" style="margin-bottom: 1rem;">
+    <label>Filter by Game:</label>
+    <select id="gameFilter" onchange="filterAddons()" style="padding: 0.5rem; border-radius: 4px; border: 1px solid #ccc;">
+        <option value="">All Games</option>
+        {{range .Games}}
+        <option value="{{.GameId}}">{{.Name}}</option>
+        {{end}}
+    </select>
+</div>
+
+{{if .Addons}}
+<div class="card">
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Workshop ID</th>
+                <th>Game</th>
+                <th>Size</th>
+                <th>Type</th>
+            </tr>
+        </thead>
+        <tbody id="addonsList">
+            {{range .Addons}}
+            <tr data-game-id="{{.GameId}}">
+                <td><strong>{{.Name}}</strong></td>
+                <td>{{.WorkshopId}}</td>
+                <td>
+                    {{range $.Games}}
+                        {{if eq .GameId $.GameId}}{{.Name}}{{end}}
+                    {{end}}
+                </td>
+                <td>
+                    {{if .FileSizeBytes}}
+                        {{printf "%.2f" (divf .FileSizeBytes 1048576)}} MB
+                    {{else}}
+                        -
+                    {{end}}
+                </td>
+                <td>
+                    {{if .IsCollection}}
+                        <span class="badge badge-secondary">Collection</span>
+                    {{else}}
+                        <span class="badge">Addon</span>
+                    {{end}}
+                </td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+</div>
+{{else}}
+<div class="empty-state">
+    <p>No addons found. Add one to get started!</p>
+    <button onclick="showModal('addAddonModal')" class="btn btn-primary">Add Addon</button>
+</div>
+{{end}}
+
+<!-- Add Addon Modal -->
+<div id="addAddonModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Fetch Addon from Steam</h2>
+            <button onclick="hideModal('addAddonModal')" class="btn-close">&times;</button>
+        </div>
+        <form hx-post="/workshop/fetch-metadata" hx-target="#fetchResult">
+            <div class="form-group">
+                <label>Game:</label>
+                <select name="game_id" required>
+                    {{range .Games}}
+                    <option value="{{.GameId}}">{{.Name}}</option>
+                    {{end}}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Workshop ID:</label>
+                <input type="text" name="workshop_id" required placeholder="e.g., 2938285337">
+            </div>
+            <div class="form-group">
+                <label>Platform:</label>
+                <select name="platform_type" required>
+                    <option value="steam_workshop">Steam Workshop</option>
+                </select>
+            </div>
+            <div id="fetchResult"></div>
+            <div class="modal-footer">
+                <button type="button" onclick="hideModal('addAddonModal')" class="btn btn-secondary">Cancel</button>
+                <button type="submit" class="btn btn-primary">Fetch Metadata</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function showModal(id) {
+    document.getElementById(id).style.display = 'flex';
+}
+
+function hideModal(id) {
+    document.getElementById(id).style.display = 'none';
+}
+
+function filterAddons() {
+    const gameId = document.getElementById('gameFilter').value;
+    const rows = document.querySelectorAll('#addonsList tr');
+    
+    rows.forEach(row => {
+        if (!gameId || row.dataset.gameId === gameId) {
+            row.style.display = '';
+        } else {
+            row.style.display = 'none';
+        }
+    });
+}
+</script>
+{{end}}

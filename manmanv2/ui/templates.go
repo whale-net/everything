@@ -466,6 +466,7 @@ func init() {
 		"toJSON":      toJSON,
 		"toJSONEmpty": toJSONEmpty,
 		"sgcName":     sgcName,
+		"divf":        func(a, b float64) float64 { return a / b },
 	}
 	
 	templates, err = template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/*.html", "templates/partials/*.html")

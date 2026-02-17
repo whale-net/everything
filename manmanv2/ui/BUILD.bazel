@@ -10,6 +10,7 @@ go_library(
         "handlers_home.go",
         "handlers_sessions.go",
         "handlers_servers.go",
+        "handlers_workshop.go",
         "main.go",
         "templates.go",
     ],

@@ -8,11 +8,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	rmqlib "github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manmanv2/api/handlers"
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
+	"github.com/whale-net/everything/manmanv2/api/steam"
+	"github.com/whale-net/everything/manmanv2/api/workshop"
 	pb "github.com/whale-net/everything/manmanv2/protos"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -94,6 +97,34 @@ func run() error {
 	// Register API server
 	apiServer := handlers.NewAPIServer(repo, s3Client, rmqConn)
 	pb.RegisterManManAPIServer(grpcServer, apiServer)
+
+	// Register Workshop service
+	steamAPIKey := getEnv("STEAM_API_KEY", "")
+	steamClient := steam.NewSteamWorkshopClient(steamAPIKey, 30*time.Second)
+	rmqPublisher, err := rmqlib.NewPublisher(rmqConn)
+	if err != nil {
+		return fmt.Errorf("failed to create RMQ publisher: %w", err)
+	}
+	defer rmqPublisher.Close()
+	
+	workshopManager := workshop.NewWorkshopManager(
+		repo.WorkshopAddons,
+		repo.WorkshopInstallations,
+		repo.WorkshopLibraries,
+		repo.ServerGameConfigs,
+		repo.GameConfigs,
+		repo.ConfigurationStrategies,
+		repo.Sessions,
+		steamClient,
+		rmqPublisher,
+	)
+	workshopHandler := handlers.NewWorkshopServiceHandler(
+		repo.WorkshopAddons,
+		repo.WorkshopInstallations,
+		repo.WorkshopLibraries,
+		workshopManager,
+	)
+	pb.RegisterWorkshopServiceServer(grpcServer, workshopHandler)
 
 	// Initialize workshop status handler for installation status updates
 	log.Println("Setting up workshop status handler...")
