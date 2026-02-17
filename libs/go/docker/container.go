@@ -39,15 +39,28 @@ func (c *Client) CreateContainer(ctx context.Context, config ContainerConfig) (s
 	portBindings := nat.PortMap{}
 	exposedPorts := nat.PortSet{}
 	for containerPort, hostPort := range config.Ports {
-		port, err := nat.NewPort("tcp", containerPort)
+		// Parse port and protocol from containerPort (format: "port/protocol" or "port")
+		// Parse host port and protocol from hostPort (format: "port/protocol" or "port")
+		containerParts := strings.Split(containerPort, "/")
+		hostParts := strings.Split(hostPort, "/")
+
+		containerPortNum := containerParts[0]
+		protocol := "tcp" // default
+		if len(containerParts) > 1 {
+			protocol = strings.ToLower(containerParts[1])
+		}
+
+		hostPortNum := hostParts[0]
+
+		port, err := nat.NewPort(protocol, containerPortNum)
 		if err != nil {
-			return "", fmt.Errorf("invalid port %s: %w", containerPort, err)
+			return "", fmt.Errorf("invalid port %s/%s: %w", containerPortNum, protocol, err)
 		}
 		exposedPorts[port] = struct{}{}
 		portBindings[port] = []nat.PortBinding{
 			{
 				HostIP:   "0.0.0.0",
-				HostPort: hostPort,
+				HostPort: hostPortNum,
 			},
 		}
 	}

@@ -239,7 +239,8 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 
 	ports := make(map[string]string, len(cmd.ServerGameConfig.PortBindings))
 	for _, pb := range cmd.ServerGameConfig.PortBindings {
-		ports[fmt.Sprintf("%d", pb.ContainerPort)] = fmt.Sprintf("%d", pb.HostPort)
+		// Include protocol in key to support both TCP and UDP on same port
+		ports[fmt.Sprintf("%d/%s", pb.ContainerPort, pb.Protocol)] = fmt.Sprintf("%d/%s", pb.HostPort, pb.Protocol)
 	}
 
 	volumes := make([]session.VolumeMount, 0, len(cmd.GameConfig.Volumes))
