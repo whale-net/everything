@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -55,12 +57,11 @@ func (swc *SteamWorkshopClient) GetWorkshopItemDetails(ctx context.Context, work
 	maxRetries := 3
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		// Create a new request for each retry with the form data
-		formReq, reqErr := http.NewRequestWithContext(ctx, "POST", apiURL, nil)
+		formReq, reqErr := http.NewRequestWithContext(ctx, "POST", apiURL, strings.NewReader(data.Encode()))
 		if reqErr != nil {
 			return nil, fmt.Errorf("failed to create request: %w", reqErr)
 		}
 		formReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		formReq.PostForm = data
 		
 		resp, err = swc.httpClient.Do(formReq)
 		if err == nil && resp != nil && resp.StatusCode == http.StatusOK {
@@ -97,7 +98,7 @@ func (swc *SteamWorkshopClient) GetWorkshopItemDetails(ctx context.Context, work
 				PublishedFileID string `json:"publishedfileid"`
 				Title           string `json:"title"`
 				Description     string `json:"file_description"`
-				FileSize        int64  `json:"file_size"`
+				FileSize        string `json:"file_size"`
 				TimeUpdated     int64  `json:"time_updated"`
 				FileType        int    `json:"file_type"` // 2 = collection
 			} `json:"publishedfiledetails"`
@@ -113,11 +114,20 @@ func (swc *SteamWorkshopClient) GetWorkshopItemDetails(ctx context.Context, work
 	}
 
 	item := result.Response.PublishedFileDetails[0]
+	
+	// Parse file size from string
+	var fileSize int64
+	if item.FileSize != "" {
+		if parsed, err := strconv.ParseInt(item.FileSize, 10, 64); err == nil {
+			fileSize = parsed
+		}
+	}
+	
 	return &WorkshopItemMetadata{
 		WorkshopID:   item.PublishedFileID,
 		Title:        item.Title,
 		Description:  item.Description,
-		FileSize:     item.FileSize,
+		FileSize:     fileSize,
 		TimeUpdated:  time.Unix(item.TimeUpdated, 0),
 		IsCollection: item.FileType == 2,
 	}, nil

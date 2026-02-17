@@ -1,0 +1,136 @@
+{{define "workshop_library_detail_content"}}
+<div class="action-bar">
+    <a href="/workshop/library" class="btn btn-secondary">← Back to Workshop</a>
+    <h1>{{.Library.Name}}</h1>
+    <form method="POST" action="/workshop/delete-library" style="display: inline;">
+        <input type="hidden" name="library_id" value="{{.Library.LibraryId}}">
+        <button type="submit" class="btn btn-danger" onclick="return confirm('Delete this library?')">Delete Library</button>
+    </form>
+</div>
+
+{{if .Library.Description}}
+<div class="card">
+    <p>{{.Library.Description}}</p>
+</div>
+{{end}}
+
+<h2>Addons in Library</h2>
+{{if .Addons}}
+<div class="card">
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Workshop ID</th>
+                <th>Size</th>
+                <th>Type</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Addons}}
+            <tr>
+                <td><strong>{{.Name}}</strong></td>
+                <td>{{.WorkshopId}}</td>
+                <td>
+                    {{if .FileSizeBytes}}
+                        {{printf "%.2f" (divf .FileSizeBytes 1048576)}} MB
+                    {{else}}
+                        -
+                    {{end}}
+                </td>
+                <td>
+                    {{if .IsCollection}}
+                        <span class="badge badge-secondary">Collection</span>
+                    {{else}}
+                        <span class="badge">Addon</span>
+                    {{end}}
+                </td>
+                <td>
+                    <form method="POST" action="/workshop/remove-addon-from-library" style="display: inline;">
+                        <input type="hidden" name="library_id" value="{{$.Library.LibraryId}}">
+                        <input type="hidden" name="addon_id" value="{{.AddonId}}">
+                        <button type="submit" class="btn btn-sm btn-danger">Remove</button>
+                    </form>
+                </td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+</div>
+{{else}}
+<div class="empty-state">
+    <p>No addons in this library yet.</p>
+</div>
+{{end}}
+
+<div class="card">
+    <h3>Add Addon to Library</h3>
+    <form method="POST" action="/workshop/add-addon-to-library">
+        <input type="hidden" name="library_id" value="{{.Library.LibraryId}}">
+        <div class="form-group">
+            <label>Select Addon:</label>
+            <select name="addon_id" required>
+                <option value="">Choose an addon...</option>
+                {{range .AvailableAddons}}
+                <option value="{{.AddonId}}">{{.Name}} ({{.WorkshopId}})</option>
+                {{end}}
+            </select>
+        </div>
+        <button type="submit" class="btn btn-primary">Add Addon</button>
+    </form>
+</div>
+
+<h2>Nested Libraries</h2>
+{{if .ChildLibraries}}
+<div class="card">
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Description</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .ChildLibraries}}
+            <tr>
+                <td><a href="/workshop/library-detail?library_id={{.LibraryId}}">{{.Name}}</a></td>
+                <td>{{.Description}}</td>
+                <td>
+                    <form method="POST" action="/workshop/remove-library-reference" style="display: inline;">
+                        <input type="hidden" name="parent_library_id" value="{{$.Library.LibraryId}}">
+                        <input type="hidden" name="child_library_id" value="{{.LibraryId}}">
+                        <button type="submit" class="btn btn-sm btn-danger">Remove</button>
+                    </form>
+                </td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+</div>
+{{else}}
+<div class="empty-state">
+    <p>No nested libraries.</p>
+</div>
+{{end}}
+
+<div class="card">
+    <h3>Add Nested Library</h3>
+    <form method="POST" action="/workshop/add-library-reference">
+        <input type="hidden" name="parent_library_id" value="{{.Library.LibraryId}}">
+        <div class="form-group">
+            <label>Select Library:</label>
+            <select name="child_library_id" required>
+                <option value="">Choose a library...</option>
+                {{range .AvailableLibraries}}
+                    {{if ne .LibraryId $.Library.LibraryId}}
+                    <option value="{{.LibraryId}}">{{.Name}}</option>
+                    {{end}}
+                {{end}}
+            </select>
+        </div>
+        <button type="submit" class="btn btn-primary">Add Library</button>
+    </form>
+</div>
+{{end}}

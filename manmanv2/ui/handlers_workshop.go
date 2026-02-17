@@ -17,6 +17,21 @@ type WorkshopLibraryPageData struct {
 	User           *htmxauth.UserInfo
 	Games          []*manmanpb.Game
 	Addons         []*manmanpb.WorkshopAddon
+	Libraries      []*manmanpb.WorkshopLibrary
+	Servers        []*manmanpb.Server
+	SelectedServer *manmanpb.Server
+}
+
+// WorkshopLibraryDetailPageData holds data for library detail page
+type WorkshopLibraryDetailPageData struct {
+	Title          string
+	Active         string
+	User           *htmxauth.UserInfo
+	Library        *manmanpb.WorkshopLibrary
+	Addons         []*manmanpb.WorkshopAddon
+	AvailableAddons []*manmanpb.WorkshopAddon
+	ChildLibraries []*manmanpb.WorkshopLibrary
+	AvailableLibraries []*manmanpb.WorkshopLibrary
 	Servers        []*manmanpb.Server
 	SelectedServer *manmanpb.Server
 }
@@ -50,6 +65,14 @@ func (app *App) handleWorkshopLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get all libraries
+	libraries, err := app.grpc.ListLibraries(ctx, 0, 100, 0)
+	if err != nil {
+		log.Printf("Error fetching libraries: %v", err)
+		http.Error(w, "Failed to fetch libraries", http.StatusInternalServerError)
+		return
+	}
+
 	// Get servers for navigation
 	servers, err := app.grpc.ListServers(ctx)
 	if err != nil {
@@ -67,6 +90,7 @@ func (app *App) handleWorkshopLibrary(w http.ResponseWriter, r *http.Request) {
 		User:           user,
 		Games:          games,
 		Addons:         addons,
+		Libraries:      libraries,
 		Servers:        servers,
 		SelectedServer: selectedServer,
 	}
@@ -236,13 +260,274 @@ func (app *App) handleFetchAddonMetadata(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	metadata, err := app.grpc.FetchAddonMetadata(ctx, gameID, workshopID, platformType)
+	addon, err := app.grpc.FetchAddonMetadata(ctx, gameID, workshopID, platformType)
 	if err != nil {
 		log.Printf("Error fetching metadata: %v", err)
-		http.Error(w, "Failed to fetch metadata", http.StatusInternalServerError)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`<div class="alert alert-error">Failed to fetch metadata</div>`))
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(metadata.Name))
+	// Return success message with addon details
+	w.Header().Set("Content-Type", "text/html")
+	w.Header().Set("HX-Trigger", "addonCreated")
+	w.Write([]byte(`<div class="alert alert-success">Successfully added: ` + addon.Name + `</div>`))
+}
+
+func (app *App) handleDeleteAddon(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := context.Background()
+
+	addonIDStr := r.FormValue("addon_id")
+	addonID, err := strconv.ParseInt(addonIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid addon_id", http.StatusBadRequest)
+		return
+	}
+
+	err = app.grpc.DeleteAddon(ctx, addonID)
+	if err != nil {
+		log.Printf("Error deleting addon: %v", err)
+		http.Error(w, "Failed to delete addon", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/workshop/library", http.StatusSeeOther)
+}
+
+func (app *App) handleLibraryDetail(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+	ctx := context.Background()
+
+	libraryIDStr := r.URL.Query().Get("library_id")
+	if libraryIDStr == "" {
+		http.Error(w, "library_id required", http.StatusBadRequest)
+		return
+	}
+
+	libraryID, err := strconv.ParseInt(libraryIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid library_id", http.StatusBadRequest)
+		return
+	}
+
+	library, err := app.grpc.GetLibrary(ctx, libraryID)
+	if err != nil {
+		log.Printf("Error fetching library: %v", err)
+		http.Error(w, "Failed to fetch library", http.StatusInternalServerError)
+		return
+	}
+
+	// Get addons in this library
+	addons, err := app.grpc.GetLibraryAddons(ctx, libraryID)
+	if err != nil {
+		log.Printf("Error fetching library addons: %v", err)
+		addons = []*manmanpb.WorkshopAddon{}
+	}
+
+	// Get available addons for this game
+	availableAddons, err := app.grpc.ListWorkshopAddons(ctx, 0, 100, library.GameId)
+	if err != nil {
+		log.Printf("Error fetching available addons: %v", err)
+		availableAddons = []*manmanpb.WorkshopAddon{}
+	}
+
+	// Get child libraries
+	childLibraries, err := app.grpc.GetChildLibraries(ctx, libraryID)
+	if err != nil {
+		log.Printf("Error fetching child libraries: %v", err)
+		childLibraries = []*manmanpb.WorkshopLibrary{}
+	}
+
+	// Get available libraries for nesting
+	availableLibraries, err := app.grpc.ListLibraries(ctx, 0, 100, library.GameId)
+	if err != nil {
+		log.Printf("Error fetching available libraries: %v", err)
+		availableLibraries = []*manmanpb.WorkshopLibrary{}
+	}
+
+	servers, _ := app.grpc.ListServers(ctx)
+	selectedServer := app.getSelectedServer(r, servers)
+
+	data := WorkshopLibraryDetailPageData{
+		Title:              library.Name,
+		Active:             "workshop",
+		User:               user,
+		Library:            library,
+		Addons:             addons,
+		AvailableAddons:    availableAddons,
+		ChildLibraries:     childLibraries,
+		AvailableLibraries: availableLibraries,
+		Servers:            servers,
+		SelectedServer:     selectedServer,
+	}
+
+	layoutData := LayoutData{
+		Title:          data.Title,
+		Active:         data.Active,
+		User:           data.User,
+		Servers:        servers,
+		SelectedServer: selectedServer,
+	}
+
+	if err := renderPage(w, "workshop_library_detail_content", data, layoutData); err != nil {
+		log.Printf("Error rendering template: %v", err)
+		http.Error(w, "Failed to render page", http.StatusInternalServerError)
+	}
+}
+
+func (app *App) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := context.Background()
+
+	gameIDStr := r.FormValue("game_id")
+	name := r.FormValue("name")
+	description := r.FormValue("description")
+
+	gameID, err := strconv.ParseInt(gameIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid game_id", http.StatusBadRequest)
+		return
+	}
+
+	library, err := app.grpc.CreateLibrary(ctx, gameID, name, description)
+	if err != nil {
+		log.Printf("Error creating library: %v", err)
+		http.Error(w, "Failed to create library", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/workshop/library-detail?library_id="+strconv.FormatInt(library.LibraryId, 10), http.StatusSeeOther)
+}
+
+func (app *App) handleDeleteLibrary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := context.Background()
+
+	libraryIDStr := r.FormValue("library_id")
+	libraryID, err := strconv.ParseInt(libraryIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid library_id", http.StatusBadRequest)
+		return
+	}
+
+	err = app.grpc.DeleteLibrary(ctx, libraryID)
+	if err != nil {
+		log.Printf("Error deleting library: %v", err)
+		http.Error(w, "Failed to delete library", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/workshop/library", http.StatusSeeOther)
+}
+
+func (app *App) handleAddAddonToLibrary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := context.Background()
+
+	libraryIDStr := r.FormValue("library_id")
+	addonIDStr := r.FormValue("addon_id")
+
+	libraryID, err := strconv.ParseInt(libraryIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid library_id", http.StatusBadRequest)
+		return
+	}
+
+	addonID, err := strconv.ParseInt(addonIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid addon_id", http.StatusBadRequest)
+		return
+	}
+
+	err = app.grpc.AddAddonToLibrary(ctx, libraryID, addonID)
+	if err != nil {
+		log.Printf("Error adding addon to library: %v", err)
+		http.Error(w, "Failed to add addon", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/workshop/library-detail?library_id="+libraryIDStr, http.StatusSeeOther)
+}
+
+func (app *App) handleRemoveAddonFromLibrary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := context.Background()
+
+	libraryIDStr := r.FormValue("library_id")
+	addonIDStr := r.FormValue("addon_id")
+
+	libraryID, err := strconv.ParseInt(libraryIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid library_id", http.StatusBadRequest)
+		return
+	}
+
+	addonID, err := strconv.ParseInt(addonIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid addon_id", http.StatusBadRequest)
+		return
+	}
+
+	err = app.grpc.RemoveAddonFromLibrary(ctx, libraryID, addonID)
+	if err != nil {
+		log.Printf("Error removing addon from library: %v", err)
+		http.Error(w, "Failed to remove addon", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/workshop/library-detail?library_id="+libraryIDStr, http.StatusSeeOther)
+}
+
+func (app *App) handleAddLibraryReference(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := context.Background()
+
+	parentIDStr := r.FormValue("parent_library_id")
+	childIDStr := r.FormValue("child_library_id")
+
+	parentID, err := strconv.ParseInt(parentIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid parent_library_id", http.StatusBadRequest)
+		return
+	}
+
+	childID, err := strconv.ParseInt(childIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid child_library_id", http.StatusBadRequest)
+		return
+	}
+
+	err = app.grpc.AddLibraryReference(ctx, parentID, childID)
+	if err != nil {
+		log.Printf("Error adding library reference: %v", err)
+		http.Error(w, "Failed to add library reference", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/workshop/library-detail?library_id="+parentIDStr, http.StatusSeeOther)
 }

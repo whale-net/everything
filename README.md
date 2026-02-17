@@ -44,7 +44,7 @@ everything/
 
 | Project | Description | Documentation |
 |---------|-------------|---------------|
-| **ManMan** | Game server orchestration with APIs, workers, and HTMX UI | [manman/README.md](manman/README.md) |
+| **ManMan** | Game server orchestration (V2 Go + V1 Python legacy) | [MANMAN_STRUCTURE.md](MANMAN_STRUCTURE.md), [manmanv2/README.md](manmanv2/README.md) |
 | **Friendly Computing Machine** | Slack bot with Temporal workflow support | [friendly_computing_machine/README.md](friendly_computing_machine/README.md) |
 
 ## 🚀 Quick Start

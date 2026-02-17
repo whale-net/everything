@@ -1,101 +1,71 @@
-# ManMan Documentation Index
+# ManMan V1 Documentation
 
-This directory contains feature documentation, guides, and reports for ManMan V2.
+**Note:** V1 is in maintenance mode. For new development, see [ManManV2](../../manmanv2).
+
+This directory contains feature documentation and deployment guides for ManMan V1 services.
+
+## Documentation Structure
+
+```
+docs/
+├── README.md                    ← You are here
+├── PRODUCTION_DEPLOYMENT.md     ← Production deployment and configuration
+├── PARAMETER_SYSTEM.md          ← Game server parameter configuration
+├── BACKUP_SYSTEM.md             ← Game save backup and restore
+└── THIRD_PARTY_IMAGES.md        ← Running custom Docker images
+```
 
 ## Quick Navigation
 
-### For Developers
-- **[Architecture Overview](../ARCHITECTURE.md)** - System design, split-plane model, component overview
-- **[Local Development Setup](../../manman-v2/README.md)** - Run ManManV2 locally with Tilt
-- **[Quick Start Guide](../../manman-v2/QUICK-START.md)** - 5-minute getting started
-
-### For Operators & Deployment
-- **[Production Deployment Guide](./PRODUCTION_DEPLOYMENT.md)** - Secrets, configuration, security best practices
-- **[Host Manager Deployment](../host/DEPLOYMENT.md)** - Bare metal host setup for game servers
+### For Operators
+- **[PRODUCTION_DEPLOYMENT.md](./PRODUCTION_DEPLOYMENT.md)** - Deploy V1 to production
+  - Kubernetes configuration
+  - Environment variables and secrets
+  - Security best practices
 
 ### Feature Documentation
-- **[Parameter System](./PARAMETER_SYSTEM.md)** - Configure game servers with parameters
-- **[Backup & Restore System](./BACKUP_SYSTEM.md)** - Game save management and S3 integration
-- **[Third-Party Images](./THIRD_PARTY_IMAGES.md)** - Running any Docker image as a game server
-- **[Event Processing](./PHASE_6_COMPLETE.md)** - External event subscribers and monitoring
+- **[PARAMETER_SYSTEM.md](./PARAMETER_SYSTEM.md)** - Configure game servers
+  - Parameter types and validation
+  - Template rendering
+  - Configuration merging
 
-### Project Status & History
-- **[Phase 6 Status](./PHASE_6_STATUS.md)** - Event processor roadmap and implementation plan
-- **[Phase 6 Complete](./PHASE_6_COMPLETE.md)** - Event processor completion report
+- **[BACKUP_SYSTEM.md](./BACKUP_SYSTEM.md)** - Backup game saves
+  - S3 integration
+  - Backup scheduling
+  - Restore workflows
 
-### Design Documents
-- **[Design Directory](../design/)** - Detailed design documents and architectural decision records
+- **[THIRD_PARTY_IMAGES.md](./THIRD_PARTY_IMAGES.md)** - Use custom Docker images
+  - Port mapping
+  - Volume mounting
+  - Image requirements
 
----
+## Architecture
 
-## Documentation Organization
+For architecture questions, see [../README.md](../README.md) or the V2 documentation:
+- [../../manmanv2/ARCHITECTURE.md](../../manmanv2/ARCHITECTURE.md)
 
-```
-manman/
-├── ARCHITECTURE.md              # V2 system architecture
-├── README.md                    # Project overview (V1 + V2)
-├── docs/                        # This directory - feature docs and guides
-│   ├── README.md               # You are here
-│   ├── PRODUCTION_DEPLOYMENT.md # Deployment guide (secrets, config, security)
-│   ├── PARAMETER_SYSTEM.md     # Feature: Parameters
-│   ├── BACKUP_SYSTEM.md        # Feature: Backups
-│   ├── THIRD_PARTY_IMAGES.md   # Feature: Custom images
-│   ├── PHASE_6_COMPLETE.md     # Report: Event processing
-│   └── PHASE_6_STATUS.md       # Roadmap: Event processing
-├── design/                      # Design documents
-├── api/                         # V2 gRPC API service
-├── processor/                   # V2 event processor service
-├── host/                        # V2 host manager (bare metal)
-│   └── DEPLOYMENT.md           # Host deployment guide
-├── migrate/                     # Database migrations
-└── src/                         # V1 services (legacy Python)
+## Development
 
-manman-v2/                       # Local development environment
-├── README.md                    # Development setup with Tilt
-├── QUICK-START.md              # 5-minute guide
-├── ABOUT.md                    # Design decisions & Tiltfile overview
-├── Tiltfile                    # Development orchestration
-└── .env.example                # Configuration template
+To work on V1 services locally:
+
+```bash
+# Build V1 services
+bazel build //manman/...
+
+# Run individual services
+bazel run //manman/src/host:experience_api
+bazel run //manman/src/host:status_api
+bazel run //manman/src/host:worker_dal_api
 ```
 
----
+See [../README.md](../README.md) for more details.
 
-## Getting Started
+## Migrating to V2
 
-### I want to...
+V2 provides significant improvements:
+- Go services (better performance)
+- Split-plane architecture
+- Modern tooling (gRPC, Protocol Buffers)
+- Better documentation
 
-#### Run ManManV2 locally for development
-→ Go to [manman-v2/README.md](../../manman-v2/README.md)
-
-#### Deploy ManManV2 to production
-→ Read [PRODUCTION_DEPLOYMENT.md](./PRODUCTION_DEPLOYMENT.md) and [Architecture](../ARCHITECTURE.md)
-
-#### Deploy the host manager on bare metal
-→ Follow [host/DEPLOYMENT.md](../host/DEPLOYMENT.md)
-
-#### Understand the V2 architecture
-→ Read [ARCHITECTURE.md](../ARCHITECTURE.md)
-
-#### Configure game servers with parameters
-→ See [PARAMETER_SYSTEM.md](./PARAMETER_SYSTEM.md)
-
-#### Set up backups for game saves
-→ See [BACKUP_SYSTEM.md](./BACKUP_SYSTEM.md)
-
-#### Run custom Docker images as game servers
-→ See [THIRD_PARTY_IMAGES.md](./THIRD_PARTY_IMAGES.md)
-
-#### Integrate with external monitoring/events
-→ See [PHASE_6_COMPLETE.md](./PHASE_6_COMPLETE.md)
-
----
-
-## Related Documentation
-
-- **[API Proto Definitions](../protos/api.proto)** - gRPC service definitions
-- **[Helm Charts](../BUILD.bazel)** - Kubernetes deployment via Helm
-- **[Design Documents](../design/)** - Architectural decision records
-
----
-
-Last Updated: 2026-02-07
+Start here: [../../manmanv2/README.md](../../manmanv2/README.md)

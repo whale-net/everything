@@ -583,6 +583,48 @@ func (h *WorkshopServiceHandler) AddLibraryReference(ctx context.Context, req *p
 	return &pb.AddLibraryReferenceResponse{}, nil
 }
 
+// GetLibraryAddons returns all addons in a library
+func (h *WorkshopServiceHandler) GetLibraryAddons(ctx context.Context, req *pb.GetLibraryAddonsRequest) (*pb.GetLibraryAddonsResponse, error) {
+	if req.LibraryId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "library_id is required")
+	}
+
+	addons, err := h.libraryRepo.ListAddons(ctx, req.LibraryId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get library addons: %v", err)
+	}
+
+	pbAddons := make([]*pb.WorkshopAddon, len(addons))
+	for i, addon := range addons {
+		pbAddons[i] = addonToProto(addon)
+	}
+
+	return &pb.GetLibraryAddonsResponse{
+		Addons: pbAddons,
+	}, nil
+}
+
+// GetChildLibraries returns all child libraries of a library
+func (h *WorkshopServiceHandler) GetChildLibraries(ctx context.Context, req *pb.GetChildLibrariesRequest) (*pb.GetChildLibrariesResponse, error) {
+	if req.LibraryId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "library_id is required")
+	}
+
+	libraries, err := h.libraryRepo.ListReferences(ctx, req.LibraryId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get child libraries: %v", err)
+	}
+
+	pbLibraries := make([]*pb.WorkshopLibrary, len(libraries))
+	for i, lib := range libraries {
+		pbLibraries[i] = libraryToProto(lib)
+	}
+
+	return &pb.GetChildLibrariesResponse{
+		Libraries: pbLibraries,
+	}, nil
+}
+
 // ============================================================================
 // Conversion Helpers
 // ============================================================================

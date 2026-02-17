@@ -330,6 +330,6 @@ Each host will:
 
 ## Related Documentation
 
-- [ManManV2 Architecture](../manman/manman-v2.md)
-- [Event Processor](../manman/PHASE_6_COMPLETE.md)
-- [Integration Tests](../manman/processor/integration_test.go)
+- [ManManV2 Architecture](../ARCHITECTURE.md)
+- [Event Processor](../processor/README.md)
+- [Integration Tests](../processor/integration_test.go)

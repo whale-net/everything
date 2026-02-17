@@ -29,6 +29,8 @@ service WorkshopService {
   rpc AddAddonToLibrary(AddAddonToLibraryRequest) returns (AddAddonToLibraryResponse);
   rpc RemoveAddonFromLibrary(RemoveAddonFromLibraryRequest) returns (RemoveAddonFromLibraryResponse);
   rpc AddLibraryReference(AddLibraryReferenceRequest) returns (AddLibraryReferenceResponse);
+  rpc GetLibraryAddons(GetLibraryAddonsRequest) returns (GetLibraryAddonsResponse);
+  rpc GetChildLibraries(GetChildLibrariesRequest) returns (GetChildLibrariesResponse);
 }
 
 // ============================================================================
@@ -260,3 +262,19 @@ message AddLibraryReferenceRequest {
 }
 
 message AddLibraryReferenceResponse {}
+
+message GetLibraryAddonsRequest {
+  int64 library_id = 1;
+}
+
+message GetLibraryAddonsResponse {
+  repeated WorkshopAddon addons = 1;
+}
+
+message GetChildLibrariesRequest {
+  int64 library_id = 1;
+}
+
+message GetChildLibrariesResponse {
+  repeated WorkshopLibrary libraries = 1;
+}

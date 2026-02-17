@@ -431,3 +431,99 @@ func (c *ControlClient) FetchAddonMetadata(ctx context.Context, gameID int64, wo
 	}
 	return resp.Addon, nil
 }
+
+// Library management methods
+
+func (c *ControlClient) ListLibraries(ctx context.Context, limit, offset int32, gameID int64) ([]*manmanpb.WorkshopLibrary, error) {
+	resp, err := c.workshop.ListLibraries(ctx, &manmanpb.ListLibrariesRequest{
+		GameId: gameID,
+		Limit:  limit,
+		Offset: offset,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Libraries, nil
+}
+
+func (c *ControlClient) GetLibrary(ctx context.Context, libraryID int64) (*manmanpb.WorkshopLibrary, error) {
+	resp, err := c.workshop.GetLibrary(ctx, &manmanpb.GetLibraryRequest{
+		LibraryId: libraryID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Library, nil
+}
+
+func (c *ControlClient) CreateLibrary(ctx context.Context, gameID int64, name, description string) (*manmanpb.WorkshopLibrary, error) {
+	resp, err := c.workshop.CreateLibrary(ctx, &manmanpb.CreateLibraryRequest{
+		GameId:      gameID,
+		Name:        name,
+		Description: description,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Library, nil
+}
+
+func (c *ControlClient) DeleteLibrary(ctx context.Context, libraryID int64) error {
+	_, err := c.workshop.DeleteLibrary(ctx, &manmanpb.DeleteLibraryRequest{
+		LibraryId: libraryID,
+	})
+	return err
+}
+
+func (c *ControlClient) DeleteAddon(ctx context.Context, addonID int64) error {
+	_, err := c.workshop.DeleteAddon(ctx, &manmanpb.DeleteAddonRequest{
+		AddonId: addonID,
+	})
+	return err
+}
+
+func (c *ControlClient) AddAddonToLibrary(ctx context.Context, libraryID, addonID int64) error {
+	_, err := c.workshop.AddAddonToLibrary(ctx, &manmanpb.AddAddonToLibraryRequest{
+		LibraryId: libraryID,
+		AddonId:   addonID,
+	})
+	return err
+}
+
+func (c *ControlClient) RemoveAddonFromLibrary(ctx context.Context, libraryID, addonID int64) error {
+	_, err := c.workshop.RemoveAddonFromLibrary(ctx, &manmanpb.RemoveAddonFromLibraryRequest{
+		LibraryId: libraryID,
+		AddonId:   addonID,
+	})
+	return err
+}
+
+func (c *ControlClient) AddLibraryReference(ctx context.Context, parentID, childID int64) error {
+	_, err := c.workshop.AddLibraryReference(ctx, &manmanpb.AddLibraryReferenceRequest{
+		ParentLibraryId: parentID,
+		ChildLibraryId:  childID,
+	})
+	return err
+}
+
+// GetLibraryAddons returns addons in a library
+func (c *ControlClient) GetLibraryAddons(ctx context.Context, libraryID int64) ([]*manmanpb.WorkshopAddon, error) {
+	resp, err := c.workshop.GetLibraryAddons(ctx, &manmanpb.GetLibraryAddonsRequest{
+		LibraryId: libraryID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Addons, nil
+}
+
+// GetChildLibraries returns child libraries
+func (c *ControlClient) GetChildLibraries(ctx context.Context, libraryID int64) ([]*manmanpb.WorkshopLibrary, error) {
+	resp, err := c.workshop.GetChildLibraries(ctx, &manmanpb.GetChildLibrariesRequest{
+		LibraryId: libraryID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Libraries, nil
+}
