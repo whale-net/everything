@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/whale-net/everything/libs/go/docker"
+	"github.com/whale-net/everything/manmanv2/host/rmq"
 	pb "github.com/whale-net/everything/manmanv2/protos"
 )
 
@@ -33,15 +34,7 @@ type DownloadOrchestrator struct {
 
 // InstallationStatusPublisher defines the interface for publishing installation status updates
 type InstallationStatusPublisher interface {
-	PublishInstallationStatus(ctx context.Context, update *InstallationStatusUpdate) error
-}
-
-// InstallationStatusUpdate is published back to control plane
-type InstallationStatusUpdate struct {
-	InstallationID  int64   `json:"installation_id"`
-	Status          string  `json:"status"`
-	ProgressPercent int     `json:"progress_percent"`
-	ErrorMessage    *string `json:"error_message"`
+	PublishInstallationStatus(ctx context.Context, update *rmq.InstallationStatusUpdate) error
 }
 
 // DownloadAddonCommand is received via RabbitMQ from control plane
@@ -235,7 +228,7 @@ func (do *DownloadOrchestrator) markDownloadComplete(installationID int64) {
 
 // publishStatus sends status updates back to control plane via RabbitMQ
 func (do *DownloadOrchestrator) publishStatus(ctx context.Context, installationID int64, status string, progress int, errorMsg *string) {
-	update := &InstallationStatusUpdate{
+	update := &rmq.InstallationStatusUpdate{
 		InstallationID:  installationID,
 		Status:          status,
 		ProgressPercent: progress,

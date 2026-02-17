@@ -5,14 +5,15 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/whale-net/everything/manmanv2/host/rmq"
 )
 
 // MockInstallationStatusPublisher is a mock implementation for testing
 type MockInstallationStatusPublisher struct {
-	updates []*InstallationStatusUpdate
+	updates []*rmq.InstallationStatusUpdate
 }
 
-func (m *MockInstallationStatusPublisher) PublishInstallationStatus(ctx context.Context, update *InstallationStatusUpdate) error {
+func (m *MockInstallationStatusPublisher) PublishInstallationStatus(ctx context.Context, update *rmq.InstallationStatusUpdate) error {
 	m.updates = append(m.updates, update)
 	return nil
 }

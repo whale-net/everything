@@ -17,7 +17,7 @@ type WorkshopServiceHandler struct {
 	addonRepo        repository.WorkshopAddonRepository
 	installationRepo repository.WorkshopInstallationRepository
 	libraryRepo      repository.WorkshopLibraryRepository
-	workshopManager  *workshop.WorkshopManager
+	workshopManager  workshop.WorkshopManagerInterface
 }
 
 // NewWorkshopServiceHandler creates a new WorkshopServiceHandler

@@ -40,6 +40,13 @@ type RemoveAddonCommand struct {
 	InstallationPath string `json:"installation_path"`
 }
 
+// WorkshopManagerInterface defines the interface for workshop addon operations
+type WorkshopManagerInterface interface {
+	InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall bool) (*manman.WorkshopInstallation, error)
+	RemoveInstallation(ctx context.Context, installationID int64) error
+	FetchMetadata(ctx context.Context, gameID int64, workshopID string) (*manman.WorkshopAddon, error)
+}
+
 // WorkshopManager orchestrates workshop addon operations
 type WorkshopManager struct {
 	addonRepo        repository.WorkshopAddonRepository
