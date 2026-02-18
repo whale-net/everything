@@ -44,7 +44,58 @@
 
         <dt><strong>Exit Code:</strong></dt>
         <dd>{{.Session.ExitCode}}</dd>
+
+        <dt><strong>SGC:</strong></dt>
+        <dd><a href="/sgc/{{.Session.ServerGameConfigId}}">Manage SGC {{.Session.ServerGameConfigId}}</a></dd>
     </dl>
+</div>
+
+<!-- Workshop Addons Card -->
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Workshop Addons</div>
+    </div>
+    {{if eq (len .Libraries) 0}}
+    <div class="empty-state" style="padding: 1rem;">
+        <p>No libraries configured for this SGC. <a href="/sgc/{{.Session.ServerGameConfigId}}">Manage SGC</a> to add libraries.</p>
+    </div>
+    {{else if eq (len .Installations) 0}}
+    <div class="empty-state" style="padding: 1rem;">
+        <p>Libraries attached but no addons installed yet.</p>
+    </div>
+    {{else}}
+    {{if or (eq .Session.Status "pending") (eq .Session.Status "starting")}}
+    <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 0.75rem; margin-bottom: 1rem; color: #856404;">
+        Installing addons before launch...
+    </div>
+    {{end}}
+    <table>
+        <thead>
+            <tr>
+                <th>Addon ID</th>
+                <th>Status</th>
+                <th>Progress</th>
+                <th>Path</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Installations}}
+            <tr>
+                <td>{{.AddonId}}</td>
+                <td><span class="badge {{statusBadge .Status}}">{{.Status}}</span></td>
+                <td>
+                    {{if eq .Status "downloading"}}
+                    {{.ProgressPercent}}%
+                    {{else}}
+                    —
+                    {{end}}
+                </td>
+                <td><code style="font-size: 0.75rem;">{{.InstallationPath}}</code></td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{end}}
 </div>
 
 <script>

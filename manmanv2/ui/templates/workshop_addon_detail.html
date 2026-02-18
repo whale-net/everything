@@ -107,12 +107,6 @@
                 <a href="/workshop/library-detail?library_id={{.LibraryId}}" class="lib-row-name">{{.Name}}</a>
                 {{if .Description}}<div class="lib-row-meta">{{.Description}}</div>{{end}}
             </div>
-            <form method="POST" action="/workshop/remove-addon-from-library">
-                <input type="hidden" name="library_id" value="{{.LibraryId}}">
-                <input type="hidden" name="addon_id" value="{{$.Addon.AddonId}}">
-                <input type="hidden" name="return_url" value="/workshop/addon?addon_id={{$.Addon.AddonId}}">
-                <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Remove from {{.Name}}?')">Remove</button>
-            </form>
         </div>
         {{end}}
     </div>

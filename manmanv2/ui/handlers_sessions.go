@@ -47,11 +47,13 @@ type SessionsPageData struct {
 
 // SessionDetailPageData holds data for a single session.
 type SessionDetailPageData struct {
-	Title   string
-	Active  string
-	User    *htmxauth.UserInfo
-	Session *manmanpb.Session
-	Actions []*manmanpb.ActionDefinition
+	Title         string
+	Active        string
+	User          *htmxauth.UserInfo
+	Session       *manmanpb.Session
+	Actions       []*manmanpb.ActionDefinition
+	Libraries     []*manmanpb.WorkshopLibrary
+	Installations []*manmanpb.WorkshopInstallation
 }
 
 func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
@@ -262,12 +264,30 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		actions = []*manmanpb.ActionDefinition{}
 	}
 
+	// Fetch workshop libraries and installations for this session's SGC
+	var libraries []*manmanpb.WorkshopLibrary
+	var installations []*manmanpb.WorkshopInstallation
+	if sessionResp.Session.ServerGameConfigId != 0 {
+		libraries, err = app.grpc.ListSGCLibraries(ctx, sessionResp.Session.ServerGameConfigId)
+		if err != nil {
+			log.Printf("Warning: failed to list SGC libraries for session detail: %v", err)
+			libraries = []*manmanpb.WorkshopLibrary{}
+		}
+		installations, err = app.grpc.ListWorkshopInstallations(ctx, sessionResp.Session.ServerGameConfigId)
+		if err != nil {
+			log.Printf("Warning: failed to list workshop installations for session detail: %v", err)
+			installations = []*manmanpb.WorkshopInstallation{}
+		}
+	}
+
 	data := SessionDetailPageData{
-		Title:   "Session " + sessionIDStr,
-		Active:  "sessions",
-		User:    user,
-		Session: sessionResp.Session,
-		Actions: actions,
+		Title:         "Session " + sessionIDStr,
+		Active:        "sessions",
+		User:          user,
+		Session:       sessionResp.Session,
+		Actions:       actions,
+		Libraries:     libraries,
+		Installations: installations,
 	}
 
 	layoutData := LayoutData{

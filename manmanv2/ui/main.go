@@ -223,6 +223,11 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/workshop/api/available-addons", app.auth.RequireAuthFunc(app.handleAvailableAddons))
 	mux.HandleFunc("/workshop/api/available-libraries", app.auth.RequireAuthFunc(app.handleAvailableLibraries))
 
+	// Protected routes - SGC detail
+	mux.HandleFunc("/sgc/", app.auth.RequireAuthFunc(app.handleSGCDetail))
+	mux.HandleFunc("/sgc/add-library", app.auth.RequireAuthFunc(app.handleAddLibraryToSGC))
+	mux.HandleFunc("/sgc/api/available-libraries", app.auth.RequireAuthFunc(app.handleSGCAvailableLibraries))
+
 	// API endpoints for HTMX partial updates
 	mux.HandleFunc("/api/dashboard-summary", app.auth.RequireAuthFunc(app.handleDashboardSummary))
 	mux.HandleFunc("/api/dashboard-sessions", app.auth.RequireAuthFunc(app.handleDashboardSessions))

@@ -86,7 +86,10 @@
                     <td><a href="/servers/{{.Server.ServerId}}">{{.Server.Name}}</a></td>
                     <td><code>{{.Config.ServerGameConfigId}}</code></td>
                     <td>{{.Config.Status}}</td>
-                    <td><a class="btn btn-secondary btn-sm" href="/sessions?server_game_config_id={{.Config.ServerGameConfigId}}">View Sessions</a></td>
+                    <td>
+                        <a class="btn btn-secondary btn-sm" href="/sgc/{{.Config.ServerGameConfigId}}">Manage SGC</a>
+                        <a class="btn btn-secondary btn-sm" href="/sessions?server_game_config_id={{.Config.ServerGameConfigId}}">View Sessions</a>
+                    </td>
                 </tr>
                 {{end}}
             </tbody>

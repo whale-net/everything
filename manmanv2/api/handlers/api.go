@@ -12,6 +12,7 @@ import (
 	"github.com/whale-net/everything/manmanv2"
 	"github.com/whale-net/everything/manmanv2/api/repository"
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
+	"github.com/whale-net/everything/manmanv2/api/workshop"
 	pb "github.com/whale-net/everything/manmanv2/protos"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -36,7 +37,7 @@ type APIServer struct {
 	actionHandler           *ActionHandler
 }
 
-func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq.Connection) *APIServer {
+func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq.Connection, workshopManager workshop.WorkshopManagerInterface) *APIServer {
 	// Create command publisher with RPC support
 	commandPublisher, err := NewCommandPublisher(rmqConn)
 	if err != nil {
@@ -57,7 +58,7 @@ func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq
 		gameHandler:             NewGameHandler(repo.Games),
 		gameConfigHandler:       NewGameConfigHandler(repo.GameConfigs),
 		serverGameConfigHandler: NewServerGameConfigHandler(repo.ServerGameConfigs, repo.ServerPorts),
-		sessionHandler:          NewSessionHandler(repo, commandPublisher),
+		sessionHandler:          NewSessionHandler(repo, commandPublisher, workshopManager),
 		registrationHandler:     NewRegistrationHandler(repo.Servers, repo.ServerCapabilities),
 		validationHandler:       NewValidationHandler(repo.Servers, repo.GameConfigs),
 		logsHandler:             NewLogsHandler(repo.LogReferences, s3Client),
@@ -522,20 +523,22 @@ func serverGameConfigToProto(sgc *manman.ServerGameConfig) *pb.ServerGameConfig 
 
 // SessionHandler handles Session-related RPCs
 type SessionHandler struct {
-	repo        *repository.Repository
-	sessionRepo repository.SessionRepository
-	sgcRepo     repository.ServerGameConfigRepository
-	gcRepo      repository.GameConfigRepository
-	publisher   *CommandPublisher
+	repo            *repository.Repository
+	sessionRepo     repository.SessionRepository
+	sgcRepo         repository.ServerGameConfigRepository
+	gcRepo          repository.GameConfigRepository
+	publisher       *CommandPublisher
+	workshopManager workshop.WorkshopManagerInterface
 }
 
-func NewSessionHandler(repo *repository.Repository, publisher *CommandPublisher) *SessionHandler {
+func NewSessionHandler(repo *repository.Repository, publisher *CommandPublisher, workshopManager workshop.WorkshopManagerInterface) *SessionHandler {
 	return &SessionHandler{
-		repo:        repo,
-		sessionRepo: repo.Sessions,
-		sgcRepo:     repo.ServerGameConfigs,
-		gcRepo:      repo.GameConfigs,
-		publisher:   publisher,
+		repo:            repo,
+		sessionRepo:     repo.Sessions,
+		sgcRepo:         repo.ServerGameConfigs,
+		gcRepo:          repo.GameConfigs,
+		publisher:       publisher,
+		workshopManager: workshopManager,
 	}
 }
 
@@ -742,6 +745,14 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 	if err != nil {
 		log.Printf("Warning: Failed to fetch configuration strategies for game %d: %v", gc.GameID, err)
 		// Continue anyway, volumes might not be defined as strategies yet
+	}
+
+	// Pre-flight: ensure all addons from attached libraries are installed
+	if h.workshopManager != nil {
+		if err := h.workshopManager.EnsureLibraryAddonsInstalled(ctx, sgc.SGCID); err != nil {
+			log.Printf("Warning: pre-flight addon install incomplete for SGC %d: %v", sgc.SGCID, err)
+			// Do not block session start - installs may still complete during startup
+		}
 	}
 
 	// Publish start session command to RabbitMQ

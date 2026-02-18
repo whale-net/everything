@@ -17,6 +17,7 @@ type WorkshopServiceHandler struct {
 	addonRepo        repository.WorkshopAddonRepository
 	installationRepo repository.WorkshopInstallationRepository
 	libraryRepo      repository.WorkshopLibraryRepository
+	sgcRepo          repository.ServerGameConfigRepository
 	workshopManager  workshop.WorkshopManagerInterface
 }
 
@@ -25,12 +26,14 @@ func NewWorkshopServiceHandler(
 	addonRepo repository.WorkshopAddonRepository,
 	installationRepo repository.WorkshopInstallationRepository,
 	libraryRepo repository.WorkshopLibraryRepository,
+	sgcRepo repository.ServerGameConfigRepository,
 	workshopManager *workshop.WorkshopManager,
 ) *WorkshopServiceHandler {
 	return &WorkshopServiceHandler{
 		addonRepo:        addonRepo,
 		installationRepo: installationRepo,
 		libraryRepo:      libraryRepo,
+		sgcRepo:          sgcRepo,
 		workshopManager:  workshopManager,
 	}
 }
@@ -704,6 +707,47 @@ func installationToProto(installation *manman.WorkshopInstallation) *pb.Workshop
 	}
 
 	return pbInstallation
+}
+
+// ============================================================================
+// SGC-Library Management RPCs
+// ============================================================================
+
+// AddLibraryToSGC attaches a workshop library to a ServerGameConfig
+func (h *WorkshopServiceHandler) AddLibraryToSGC(ctx context.Context, req *pb.AddLibraryToSGCRequest) (*pb.AddLibraryToSGCResponse, error) {
+	if req.SgcId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "sgc_id is required")
+	}
+	if req.LibraryId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "library_id is required")
+	}
+
+	if err := h.sgcRepo.AddLibrary(ctx, req.SgcId, req.LibraryId); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to add library to SGC: %v", err)
+	}
+
+	return &pb.AddLibraryToSGCResponse{}, nil
+}
+
+// ListSGCLibraries lists all libraries attached to a ServerGameConfig
+func (h *WorkshopServiceHandler) ListSGCLibraries(ctx context.Context, req *pb.ListSGCLibrariesRequest) (*pb.ListSGCLibrariesResponse, error) {
+	if req.SgcId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "sgc_id is required")
+	}
+
+	libraries, err := h.sgcRepo.ListLibraries(ctx, req.SgcId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list SGC libraries: %v", err)
+	}
+
+	pbLibraries := make([]*pb.WorkshopLibrary, len(libraries))
+	for i, lib := range libraries {
+		pbLibraries[i] = libraryToProto(lib)
+	}
+
+	return &pb.ListSGCLibrariesResponse{
+		Libraries: pbLibraries,
+	}, nil
 }
 
 // libraryToProto converts a WorkshopLibrary model to protobuf

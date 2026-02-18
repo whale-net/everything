@@ -3,7 +3,9 @@ package workshop
 import (
 	"context"
 	"fmt"
+	"log"
 	"path/filepath"
+	"time"
 
 	"github.com/whale-net/everything/manmanv2"
 	"github.com/whale-net/everything/manmanv2/api/repository"
@@ -44,6 +46,7 @@ type WorkshopManagerInterface interface {
 	InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall bool) (*manman.WorkshopInstallation, error)
 	RemoveInstallation(ctx context.Context, installationID int64) error
 	FetchMetadata(ctx context.Context, gameID int64, workshopID string) (*manman.WorkshopAddon, error)
+	EnsureLibraryAddonsInstalled(ctx context.Context, sgcID int64) error
 }
 
 // WorkshopManager orchestrates workshop addon operations
@@ -244,6 +247,106 @@ func (wm *WorkshopManager) FetchMetadata(ctx context.Context, gameID int64, work
 
 	// Return addon without persisting to database
 	return addon, nil
+}
+
+// EnsureLibraryAddonsInstalled pre-installs all addons from libraries attached to an SGC.
+// It collects all unique addon IDs (recursively via library references), triggers installs
+// for any not yet installed, and polls until they complete or timeout.
+// Returns nil even if some installs fail — failures are visible in the UI.
+func (wm *WorkshopManager) EnsureLibraryAddonsInstalled(ctx context.Context, sgcID int64) error {
+	// 1. List libraries attached to this SGC
+	libraries, err := wm.sgcRepo.ListLibraries(ctx, sgcID)
+	if err != nil {
+		return fmt.Errorf("failed to list SGC libraries: %w", err)
+	}
+	if len(libraries) == 0 {
+		return nil
+	}
+
+	// 2. BFS collect all unique addon IDs from all libraries (including nested references)
+	addonIDs := make(map[int64]struct{})
+	visited := make(map[int64]struct{})
+	queue := make([]int64, 0, len(libraries))
+	for _, lib := range libraries {
+		queue = append(queue, lib.LibraryID)
+	}
+
+	for len(queue) > 0 {
+		libID := queue[0]
+		queue = queue[1:]
+
+		if _, seen := visited[libID]; seen {
+			continue
+		}
+		visited[libID] = struct{}{}
+
+		// Collect direct addons
+		addons, err := wm.libraryRepo.ListAddons(ctx, libID)
+		if err != nil {
+			log.Printf("Warning: failed to list addons for library %d: %v", libID, err)
+		} else {
+			for _, a := range addons {
+				addonIDs[a.AddonID] = struct{}{}
+			}
+		}
+
+		// Enqueue child libraries
+		children, err := wm.libraryRepo.ListReferences(ctx, libID)
+		if err != nil {
+			log.Printf("Warning: failed to list child libraries for library %d: %v", libID, err)
+		} else {
+			for _, child := range children {
+				queue = append(queue, child.LibraryID)
+			}
+		}
+	}
+
+	if len(addonIDs) == 0 {
+		return nil
+	}
+
+	// 3. Trigger installs for addons not yet installed
+	var triggered []int64
+	for addonID := range addonIDs {
+		existing, err := wm.installationRepo.GetBySGCAndAddon(ctx, sgcID, addonID)
+		if err == nil && existing.Status == manman.InstallationStatusInstalled {
+			continue // already installed
+		}
+
+		if _, err := wm.InstallAddon(ctx, sgcID, addonID, false); err != nil {
+			log.Printf("Warning: failed to trigger install for SGC %d addon %d: %v", sgcID, addonID, err)
+			continue
+		}
+		triggered = append(triggered, addonID)
+	}
+
+	if len(triggered) == 0 {
+		return nil
+	}
+
+	// 4. Poll until all triggered addons are installed or failed (up to 90s)
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(2 * time.Second)
+
+		allDone := true
+		for _, addonID := range triggered {
+			inst, err := wm.installationRepo.GetBySGCAndAddon(ctx, sgcID, addonID)
+			if err != nil {
+				allDone = false
+				continue
+			}
+			if inst.Status != manman.InstallationStatusInstalled && inst.Status != manman.InstallationStatusFailed && inst.Status != manman.InstallationStatusRemoved {
+				allDone = false
+			}
+		}
+
+		if allDone {
+			break
+		}
+	}
+
+	return nil
 }
 
 // FetchAndCreateAddon fetches metadata from Steam Workshop and creates addon

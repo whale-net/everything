@@ -46,6 +46,9 @@ type ServerGameConfigRepository interface {
 	List(ctx context.Context, serverID *int64, limit, offset int) ([]*manman.ServerGameConfig, error)
 	Update(ctx context.Context, sgc *manman.ServerGameConfig) error
 	Delete(ctx context.Context, sgcID int64) error
+
+	AddLibrary(ctx context.Context, sgcID, libraryID int64) error
+	ListLibraries(ctx context.Context, sgcID int64) ([]*manman.WorkshopLibrary, error)
 }
 
 // SessionFilters defines filters for session queries

@@ -1,0 +1,194 @@
+{{define "sgc_detail_content"}}
+<div class="action-bar">
+    <div>
+        <nav style="font-size: 0.85rem; color: #6b7280; margin-bottom: 0.5rem;">
+            {{if .GameConfig}}
+            <a href="/games/{{.GameConfig.GameId}}/config/{{.GameConfig.ConfigId}}">{{.GameConfig.Name}}</a> &rsaquo;
+            {{end}}
+            SGC {{.SGC.ServerGameConfigId}}
+        </nav>
+        <h1 style="margin: 0;">SGC {{.SGC.ServerGameConfigId}}</h1>
+    </div>
+    <div>
+        <form method="post" action="/sessions/start" style="display: inline;">
+            <input type="hidden" name="server_game_config_id" value="{{.SGC.ServerGameConfigId}}">
+            <button type="submit" class="btn btn-success">Start Session</button>
+        </form>
+    </div>
+</div>
+
+<!-- SGC Info -->
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Deployment Info</div>
+    </div>
+    <dl style="display: grid; grid-template-columns: 200px 1fr; gap: 0.5rem;">
+        <dt><strong>SGC ID:</strong></dt>
+        <dd>{{.SGC.ServerGameConfigId}}</dd>
+
+        <dt><strong>Server:</strong></dt>
+        <dd>
+            {{if .Server}}
+            <a href="/servers/{{.Server.ServerId}}">{{.Server.Name}}</a>
+            {{else}}
+            Server {{.SGC.ServerId}}
+            {{end}}
+        </dd>
+
+        <dt><strong>Game Config:</strong></dt>
+        <dd>
+            {{if .GameConfig}}
+            <a href="/games/{{.GameConfig.GameId}}/config/{{.GameConfig.ConfigId}}">{{.GameConfig.Name}}</a>
+            {{else}}
+            Config {{.SGC.GameConfigId}}
+            {{end}}
+        </dd>
+
+        <dt><strong>Status:</strong></dt>
+        <dd><span class="badge {{statusBadge .SGC.Status}}">{{.SGC.Status}}</span></dd>
+    </dl>
+</div>
+
+<!-- Libraries -->
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Workshop Libraries</div>
+        <button class="btn btn-primary btn-sm" onclick="toggleAddLibraryPanel()">Add Library</button>
+    </div>
+
+    {{if .PendingCount}}
+    <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 0.75rem; margin-bottom: 1rem; color: #856404;">
+        {{.PendingCount}} addon(s) pending installation — will be installed before the next session starts.
+    </div>
+    {{end}}
+
+    {{if .Libraries}}
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Library ID</th>
+                <th>Game ID</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Libraries}}
+            <tr>
+                <td><a href="/workshop/library-detail?library_id={{.LibraryId}}">{{.Name}}</a></td>
+                <td><code>{{.LibraryId}}</code></td>
+                <td>{{.GameId}}</td>
+                <td><small style="color: #6b7280;">Added {{formatTime .CreatedAt}}</small></td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else}}
+    <div class="empty-state" style="padding: 1.5rem;">
+        <p>No libraries attached. Add a library to automatically install its addons before sessions start.</p>
+    </div>
+    {{end}}
+
+    <!-- Add Library Panel -->
+    <div id="add-library-panel" style="display: none; margin-top: 1rem; border-top: 1px solid #eee; padding-top: 1rem;">
+        <h3 style="margin-bottom: 0.75rem;">Add Library</h3>
+        <input
+            type="text"
+            placeholder="Search libraries..."
+            style="margin-bottom: 0.5rem;"
+            hx-get="/sgc/api/available-libraries?sgc_id={{.SGC.ServerGameConfigId}}"
+            hx-trigger="keyup changed delay:300ms"
+            hx-target="#sgc-available-libraries"
+            name="q"
+        >
+        <div id="sgc-available-libraries"
+             hx-get="/sgc/api/available-libraries?sgc_id={{.SGC.ServerGameConfigId}}"
+             hx-trigger="load">
+        </div>
+    </div>
+</div>
+
+<!-- Sessions -->
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Sessions</div>
+        <a href="/sessions?server_game_config_id={{.SGC.ServerGameConfigId}}" class="btn btn-secondary btn-sm">View All</a>
+    </div>
+
+    {{if .Sessions}}
+    <table>
+        <thead>
+            <tr>
+                <th>Session ID</th>
+                <th>Status</th>
+                <th>Started</th>
+                <th>Ended</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Sessions}}
+            <tr>
+                <td>{{.SessionId}}</td>
+                <td><span class="badge {{statusBadge .Status}}">{{.Status}}</span></td>
+                <td>{{timeAgo .StartedAt}}</td>
+                <td>{{timeAgo .EndedAt}}</td>
+                <td><a href="/sessions/{{.SessionId}}" class="btn btn-secondary btn-sm">View</a></td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else}}
+    <div class="empty-state" style="padding: 1.5rem;">
+        <p>No sessions yet for this SGC.</p>
+    </div>
+    {{end}}
+</div>
+
+<script>
+function toggleAddLibraryPanel() {
+    var panel = document.getElementById('add-library-panel');
+    if (panel.style.display === 'none') {
+        panel.style.display = 'block';
+    } else {
+        panel.style.display = 'none';
+    }
+}
+</script>
+{{end}}
+
+{{define "sgc_available_libraries_partial"}}
+{{if .Libraries}}
+<table style="margin-top: 0.5rem;">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Game ID</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range .Libraries}}
+        <tr>
+            <td>{{.Name}}</td>
+            <td>{{.GameId}}</td>
+            <td>
+                <form method="post" action="/sgc/add-library" style="display: inline;">
+                    <input type="hidden" name="sgc_id" value="{{$.SGCID}}">
+                    <input type="hidden" name="library_id" value="{{.LibraryId}}">
+                    <button type="submit" class="btn btn-primary btn-sm"
+                            hx-post="/sgc/add-library"
+                            hx-vals='{"sgc_id": "{{$.SGCID}}", "library_id": "{{.LibraryId}}"}'
+                            hx-target="body">
+                        Add
+                    </button>
+                </form>
+            </td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+{{else}}
+<p style="color: #6b7280; margin-top: 0.5rem;">No libraries available to add.</p>
+{{end}}
+{{end}}

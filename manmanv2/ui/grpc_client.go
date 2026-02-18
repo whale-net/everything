@@ -577,3 +577,26 @@ func (c *ControlClient) UpdateAddon(ctx context.Context, addonID int64, name, de
 	}
 	return resp.Addon, nil
 }
+
+// SGC-Library management methods
+
+func (c *ControlClient) AddLibraryToSGC(ctx context.Context, sgcID, libraryID int64) error {
+	_, err := c.workshop.AddLibraryToSGC(ctx, &manmanpb.AddLibraryToSGCRequest{
+		SgcId:     sgcID,
+		LibraryId: libraryID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to add library to SGC: %w", err)
+	}
+	return nil
+}
+
+func (c *ControlClient) ListSGCLibraries(ctx context.Context, sgcID int64) ([]*manmanpb.WorkshopLibrary, error) {
+	resp, err := c.workshop.ListSGCLibraries(ctx, &manmanpb.ListSGCLibrariesRequest{
+		SgcId: sgcID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list SGC libraries: %w", err)
+	}
+	return resp.Libraries, nil
+}

@@ -94,11 +94,7 @@ func run() error {
 		grpc.MaxSendMsgSize(10 * 1024 * 1024), // 10 MB
 	)
 
-	// Register API server
-	apiServer := handlers.NewAPIServer(repo, s3Client, rmqConn)
-	pb.RegisterManManAPIServer(grpcServer, apiServer)
-
-	// Register Workshop service
+	// Register Workshop service early so workshopManager is available for APIServer
 	steamAPIKey := getEnv("STEAM_API_KEY", "")
 	steamClient := steam.NewSteamWorkshopClient(steamAPIKey, 30*time.Second)
 	rmqPublisher, err := rmqlib.NewPublisher(rmqConn)
@@ -106,7 +102,7 @@ func run() error {
 		return fmt.Errorf("failed to create RMQ publisher: %w", err)
 	}
 	defer rmqPublisher.Close()
-	
+
 	workshopManager := workshop.NewWorkshopManager(
 		repo.WorkshopAddons,
 		repo.WorkshopInstallations,
@@ -118,10 +114,17 @@ func run() error {
 		steamClient,
 		rmqPublisher,
 	)
+
+	// Register API server
+	apiServer := handlers.NewAPIServer(repo, s3Client, rmqConn, workshopManager)
+	pb.RegisterManManAPIServer(grpcServer, apiServer)
+
+	// Register Workshop service
 	workshopHandler := handlers.NewWorkshopServiceHandler(
 		repo.WorkshopAddons,
 		repo.WorkshopInstallations,
 		repo.WorkshopLibraries,
+		repo.ServerGameConfigs,
 		workshopManager,
 	)
 	pb.RegisterWorkshopServiceServer(grpcServer, workshopHandler)
