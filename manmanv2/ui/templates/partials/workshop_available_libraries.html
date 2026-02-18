@@ -1,0 +1,19 @@
+{{define "workshop_available_libraries_partial"}}
+{{if .Libraries}}
+{{range .Libraries}}
+<div class="available-row">
+    <div style="min-width:0;flex:1;">
+        <div class="available-row-name">{{.Name}}</div>
+        {{if .Description}}<div class="available-row-sub">{{.Description}}</div>{{end}}
+    </div>
+    <form method="POST" action="/workshop/add-library-reference" style="flex-shrink:0;margin-left:10px;">
+        <input type="hidden" name="parent_library_id" value="{{$.LibraryID}}">
+        <input type="hidden" name="child_library_id" value="{{.LibraryId}}">
+        <button type="submit" class="btn btn-sm btn-primary">Include</button>
+    </form>
+</div>
+{{end}}
+{{else}}
+<div style="text-align:center;padding:20px;color:#9ca3af;font-size:13px;">No other libraries available.</div>
+{{end}}
+{{end}}

@@ -1,136 +1,202 @@
 {{define "workshop_library_detail_content"}}
-<div class="action-bar">
-    <a href="/workshop/library" class="btn btn-secondary">← Back to Workshop</a>
-    <h1>{{.Library.Name}}</h1>
-    <form method="POST" action="/workshop/delete-library" style="display: inline;">
-        <input type="hidden" name="library_id" value="{{.Library.LibraryId}}">
-        <button type="submit" class="btn btn-danger" onclick="return confirm('Delete this library?')">Delete Library</button>
-    </form>
+<style>
+[x-cloak] { display: none !important; }
+.lib-detail-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; gap: 16px; }
+.lib-detail-title { font-size: 22px; font-weight: 700; color: #1f2937; }
+.lib-detail-meta { display: flex; align-items: center; gap: 10px; margin-top: 4px; flex-wrap: wrap; }
+.game-tag { font-size: 12px; background: #e0e7ff; color: #3730a3; padding: 3px 10px; border-radius: 10px; font-weight: 600; }
+.section-card { background: white; border-radius: 8px; border: 1px solid #e5e7eb; padding: 20px; margin-bottom: 16px; }
+.section-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.section-card-header h2 { font-size: 16px; font-weight: 700; color: #1f2937; margin: 0; }
+.addon-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-bottom: 1px solid #f3f4f6; }
+.addon-row:last-child { border-bottom: none; }
+.addon-row:hover { background: #f9fafb; }
+.addon-row-info { flex: 1; min-width: 0; }
+.addon-row-name { font-weight: 600; font-size: 14px; color: #1f2937; text-decoration: none; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.addon-row-name:hover { color: #3498db; }
+.addon-row-sub { font-size: 12px; color: #9ca3af; margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; }
+.type-pill { padding: 2px 7px; border-radius: 8px; font-size: 11px; font-weight: 600; }
+.type-addon { background: #dbeafe; color: #1e40af; }
+.type-collection { background: #e0e7ff; color: #3730a3; }
+.search-input { width: 100%; padding: 8px 11px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px; }
+.search-input:focus { outline: none; border-color: #3498db; box-shadow: 0 0 0 2px rgba(52,152,219,0.15); }
+.available-list { display: flex; flex-direction: column; gap: 5px; max-height: 320px; overflow-y: auto; margin-top: 10px; padding-right: 2px; }
+.available-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border-radius: 6px; border: 1px solid transparent; transition: border-color 0.15s; }
+.available-row:hover { border-color: #d1d5db; background: white; }
+.available-row-name { font-size: 13px; color: #374151; font-weight: 500; }
+.available-row-sub { font-size: 11px; color: #9ca3af; margin-top: 2px; }
+.lib-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-bottom: 1px solid #f3f4f6; }
+.lib-row:last-child { border-bottom: none; }
+.lib-row:hover { background: #f9fafb; }
+.lib-row-name { font-weight: 600; font-size: 14px; color: #1f2937; text-decoration: none; }
+.lib-row-name:hover { color: #3498db; }
+.lib-row-desc { font-size: 12px; color: #9ca3af; margin-top: 2px; }
+.empty-note { text-align: center; padding: 24px; color: #9ca3af; font-size: 14px; }
+.edit-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 2px; }
+.htmx-indicator { display: none; }
+.htmx-request .htmx-indicator { display: inline; }
+</style>
+
+<div x-data="{ confirmDelete: false, editLib: false }">
+
+<div class="lib-detail-header">
+    <div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:13px;color:#6b7280;">
+            <a href="/workshop/library" style="color:#6b7280;text-decoration:none;">Workshop</a>
+            <span style="color:#d1d5db;">›</span>
+            <span>{{.Library.Name}}</span>
+        </div>
+        <div class="lib-detail-title">{{.Library.Name}}</div>
+        <div class="lib-detail-meta">
+            {{if .Game}}<span class="game-tag">{{.Game.Name}}</span>{{end}}
+            <span style="font-size:12px;color:#9ca3af;">Updated {{timeAgo .Library.UpdatedAt}}</span>
+        </div>
+    </div>
+    <div style="display:flex;gap:8px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;">
+        <button @click="editLib = !editLib" class="btn btn-secondary" x-text="editLib ? 'Cancel Edit' : 'Edit'">Edit</button>
+        <form method="POST" action="/workshop/delete-library" x-show="!confirmDelete" x-cloak>
+            <input type="hidden" name="library_id" value="{{.Library.LibraryId}}">
+            <button type="button" @click="confirmDelete = true" class="btn btn-danger">Delete</button>
+        </form>
+        <div x-show="confirmDelete" x-cloak style="display:flex;gap:6px;align-items:center;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:8px 12px;">
+            <span style="font-size:13px;color:#991b1b;">Delete permanently?</span>
+            <form method="POST" action="/workshop/delete-library" style="display:inline;">
+                <input type="hidden" name="library_id" value="{{.Library.LibraryId}}">
+                <button type="submit" class="btn btn-sm btn-danger">Yes, Delete</button>
+            </form>
+            <button @click="confirmDelete = false" class="btn btn-sm btn-secondary">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Library Form -->
+<div x-show="editLib" x-cloak x-transition style="margin-bottom:16px;">
+    <div style="background:white;border:2px solid #667eea;border-radius:8px;padding:18px;">
+        <h3 style="font-size:15px;font-weight:600;color:#1f2937;margin:0 0 12px;">Edit Library</h3>
+        <form method="POST" action="/workshop/update-library">
+            <input type="hidden" name="library_id" value="{{.Library.LibraryId}}">
+            <div class="edit-form-grid">
+                <div class="form-group" style="margin:0;">
+                    <label style="font-size:12px;font-weight:600;">Name</label>
+                    <input type="text" name="name" value="{{.Library.Name}}" required>
+                </div>
+                <div class="form-group" style="margin:0;">
+                    <label style="font-size:12px;font-weight:600;">Description</label>
+                    <input type="text" name="description" value="{{.Library.Description}}">
+                </div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:10px;">
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+                <button type="button" @click="editLib = false" class="btn btn-secondary">Cancel</button>
+            </div>
+        </form>
+    </div>
 </div>
 
 {{if .Library.Description}}
-<div class="card">
-    <p>{{.Library.Description}}</p>
-</div>
+<div style="background:white;border-radius:8px;border:1px solid #e5e7eb;padding:14px 18px;margin-bottom:16px;font-size:14px;color:#374151;line-height:1.6;" x-show="!editLib">{{.Library.Description}}</div>
 {{end}}
 
-<h2>Addons in Library</h2>
-{{if .Addons}}
-<div class="card">
-    <table>
-        <thead>
-            <tr>
-                <th>Name</th>
-                <th>Workshop ID</th>
-                <th>Size</th>
-                <th>Type</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            {{range .Addons}}
-            <tr>
-                <td><strong>{{.Name}}</strong></td>
-                <td>{{.WorkshopId}}</td>
-                <td>
-                    {{if .FileSizeBytes}}
-                        {{printf "%.2f" (divf .FileSizeBytes 1048576)}} MB
-                    {{else}}
-                        -
-                    {{end}}
-                </td>
-                <td>
-                    {{if .IsCollection}}
-                        <span class="badge badge-secondary">Collection</span>
-                    {{else}}
-                        <span class="badge">Addon</span>
-                    {{end}}
-                </td>
-                <td>
-                    <form method="POST" action="/workshop/remove-addon-from-library" style="display: inline;">
-                        <input type="hidden" name="library_id" value="{{$.Library.LibraryId}}">
-                        <input type="hidden" name="addon_id" value="{{.AddonId}}">
-                        <button type="submit" class="btn btn-sm btn-danger">Remove</button>
-                    </form>
-                </td>
-            </tr>
-            {{end}}
-        </tbody>
-    </table>
-</div>
-{{else}}
-<div class="empty-state">
-    <p>No addons in this library yet.</p>
-</div>
-{{end}}
-
-<div class="card">
-    <h3>Add Addon to Library</h3>
-    <form method="POST" action="/workshop/add-addon-to-library">
-        <input type="hidden" name="library_id" value="{{.Library.LibraryId}}">
-        <div class="form-group">
-            <label>Select Addon:</label>
-            <select name="addon_id" required>
-                <option value="">Choose an addon...</option>
-                {{range .AvailableAddons}}
-                <option value="{{.AddonId}}">{{.Name}} ({{.WorkshopId}})</option>
-                {{end}}
-            </select>
+<!-- Addons in Library -->
+<div class="section-card">
+    <div class="section-card-header">
+        <h2>Addons <span style="font-weight:400;color:#9ca3af;font-size:14px;">({{len .Addons}})</span></h2>
+    </div>
+    {{if .Addons}}
+    <div>
+        {{range .Addons}}
+        <div class="addon-row">
+            <div class="addon-row-info">
+                <a href="/workshop/addon?addon_id={{.AddonId}}" class="addon-row-name">{{.Name}}</a>
+                <div class="addon-row-sub">
+                    <span style="font-family:monospace;">{{.WorkshopId}}</span>
+                    {{if .IsCollection}}<span class="type-pill type-collection">Collection</span>{{else}}<span class="type-pill type-addon">Addon</span>{{end}}
+                    {{if .FileSizeBytes}}<span>{{printf "%.1f" (divf .FileSizeBytes 1048576)}} MB</span>{{end}}
+                </div>
+            </div>
+            <form method="POST" action="/workshop/remove-addon-from-library" style="flex-shrink:0;margin-left:12px;">
+                <input type="hidden" name="library_id" value="{{$.Library.LibraryId}}">
+                <input type="hidden" name="addon_id" value="{{.AddonId}}">
+                <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Remove from library?')">Remove</button>
+            </form>
         </div>
-        <button type="submit" class="btn btn-primary">Add Addon</button>
-    </form>
+        {{end}}
+    </div>
+    {{else}}
+    <div class="empty-note">No addons in this library yet.</div>
+    {{end}}
 </div>
 
-<h2>Nested Libraries</h2>
-{{if .ChildLibraries}}
-<div class="card">
-    <table>
-        <thead>
-            <tr>
-                <th>Name</th>
-                <th>Description</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            {{range .ChildLibraries}}
-            <tr>
-                <td><a href="/workshop/library-detail?library_id={{.LibraryId}}">{{.Name}}</a></td>
-                <td>{{.Description}}</td>
-                <td>
-                    <form method="POST" action="/workshop/remove-library-reference" style="display: inline;">
-                        <input type="hidden" name="parent_library_id" value="{{$.Library.LibraryId}}">
-                        <input type="hidden" name="child_library_id" value="{{.LibraryId}}">
-                        <button type="submit" class="btn btn-sm btn-danger">Remove</button>
-                    </form>
-                </td>
-            </tr>
-            {{end}}
-        </tbody>
-    </table>
-</div>
-{{else}}
-<div class="empty-state">
-    <p>No nested libraries.</p>
-</div>
-{{end}}
-
-<div class="card">
-    <h3>Add Nested Library</h3>
-    <form method="POST" action="/workshop/add-library-reference">
-        <input type="hidden" name="parent_library_id" value="{{.Library.LibraryId}}">
-        <div class="form-group">
-            <label>Select Library:</label>
-            <select name="child_library_id" required>
-                <option value="">Choose a library...</option>
-                {{range .AvailableLibraries}}
-                    {{if ne .LibraryId $.Library.LibraryId}}
-                    <option value="{{.LibraryId}}">{{.Name}}</option>
-                    {{end}}
-                {{end}}
-            </select>
+<!-- Add Addon — HTMX search -->
+<div class="section-card" x-data="{ show: false }">
+    <div class="section-card-header">
+        <h2>Add Addon</h2>
+        <button @click="show = !show" class="btn btn-sm btn-primary" x-text="show ? 'Close' : 'Add Addons'">Add Addons</button>
+    </div>
+    <div x-show="show" x-cloak x-transition>
+        <input type="text"
+               class="search-input"
+               name="q"
+               placeholder="Search available addons by name or Workshop ID..."
+               hx-get="/workshop/api/available-addons?library_id={{.Library.LibraryId}}"
+               hx-trigger="input changed delay:250ms, load"
+               hx-target="#available-addons-list"
+               hx-swap="innerHTML">
+        <div id="available-addons-list" class="available-list">
+            <div style="text-align:center;padding:16px;color:#9ca3af;font-size:13px;">Loading...</div>
         </div>
-        <button type="submit" class="btn btn-primary">Add Library</button>
-    </form>
+    </div>
 </div>
+
+<!-- Nested Libraries -->
+<div class="section-card">
+    <div class="section-card-header">
+        <h2>Included Libraries <span style="font-weight:400;color:#9ca3af;font-size:14px;">({{len .ChildLibraries}})</span></h2>
+    </div>
+    {{if .ChildLibraries}}
+    <div>
+        {{range .ChildLibraries}}
+        <div class="addon-row">
+            <div class="addon-row-info">
+                <a href="/workshop/library-detail?library_id={{.LibraryId}}" class="addon-row-name">{{.Name}}</a>
+                <div class="addon-row-sub">
+                    {{if .Description}}<span>{{.Description}}</span>{{end}}
+                    <span>{{timeAgo .UpdatedAt}}</span>
+                </div>
+            </div>
+            <form method="POST" action="/workshop/remove-library-reference" style="flex-shrink:0;margin-left:12px;">
+                <input type="hidden" name="parent_library_id" value="{{$.Library.LibraryId}}">
+                <input type="hidden" name="child_library_id" value="{{.LibraryId}}">
+                <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Remove this library?')">Remove</button>
+            </form>
+        </div>
+        {{end}}
+    </div>
+    {{else}}
+    <div class="empty-note">No nested libraries. Include another library below to compose.</div>
+    {{end}}
+</div>
+
+<!-- Include Library — HTMX search -->
+<div class="section-card" x-data="{ show: false }">
+    <div class="section-card-header">
+        <h2>Include Library</h2>
+        <button @click="show = !show" class="btn btn-sm btn-primary" x-text="show ? 'Close' : 'Add Libraries'">Add Libraries</button>
+    </div>
+    <div x-show="show" x-cloak x-transition>
+        <input type="text"
+               class="search-input"
+               name="q"
+               placeholder="Search libraries to include..."
+               hx-get="/workshop/api/available-libraries?library_id={{.Library.LibraryId}}"
+               hx-trigger="input changed delay:250ms, load"
+               hx-target="#available-libraries-list"
+               hx-swap="innerHTML">
+        <div id="available-libraries-list" class="available-list">
+            <div style="text-align:center;padding:16px;color:#9ca3af;font-size:13px;">Loading...</div>
+        </div>
+    </div>
+</div>
+
+</div>{{/* end x-data */}}
 {{end}}

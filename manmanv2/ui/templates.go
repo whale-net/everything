@@ -466,7 +466,7 @@ func init() {
 		"toJSON":      toJSON,
 		"toJSONEmpty": toJSONEmpty,
 		"sgcName":     sgcName,
-		"divf":        func(a, b float64) float64 { return a / b },
+		"divf":        func(a int64, b float64) float64 { return float64(a) / b },
 	}
 	
 	templates, err = template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/*.html", "templates/partials/*.html")
@@ -510,6 +510,11 @@ func renderPage(w http.ResponseWriter, contentTemplate string, contentData any, 
 			});
 		`),
 	})
+}
+
+// renderTemplate renders a named template directly to the response (for HTMX partials)
+func renderTemplate(w http.ResponseWriter, name string, data any) error {
+	return templates.ExecuteTemplate(w, name, data)
 }
 
 func toJSON(value any) string {

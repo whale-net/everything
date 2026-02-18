@@ -420,6 +420,22 @@ func (c *ControlClient) RemoveInstallation(ctx context.Context, installationID i
 	return err
 }
 
+func (c *ControlClient) CreateAddon(ctx context.Context, gameID int64, workshopID, platformType, name, description string, fileSizeBytes int64, isCollection bool) (*manmanpb.WorkshopAddon, error) {
+	resp, err := c.workshop.CreateAddon(ctx, &manmanpb.CreateAddonRequest{
+		GameId:        gameID,
+		WorkshopId:    workshopID,
+		PlatformType:  platformType,
+		Name:          name,
+		Description:   description,
+		FileSizeBytes: fileSizeBytes,
+		IsCollection:  isCollection,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create addon: %w", err)
+	}
+	return resp.Addon, nil
+}
+
 func (c *ControlClient) FetchAddonMetadata(ctx context.Context, gameID int64, workshopID, platformType string) (*manmanpb.WorkshopAddon, error) {
 	resp, err := c.workshop.FetchAddonMetadata(ctx, &manmanpb.FetchAddonMetadataRequest{
 		GameId:       gameID,
@@ -506,6 +522,14 @@ func (c *ControlClient) AddLibraryReference(ctx context.Context, parentID, child
 	return err
 }
 
+func (c *ControlClient) RemoveLibraryReference(ctx context.Context, parentID, childID int64) error {
+	_, err := c.workshop.RemoveLibraryReference(ctx, &manmanpb.RemoveLibraryReferenceRequest{
+		ParentLibraryId: parentID,
+		ChildLibraryId:  childID,
+	})
+	return err
+}
+
 // GetLibraryAddons returns addons in a library
 func (c *ControlClient) GetLibraryAddons(ctx context.Context, libraryID int64) ([]*manmanpb.WorkshopAddon, error) {
 	resp, err := c.workshop.GetLibraryAddons(ctx, &manmanpb.GetLibraryAddonsRequest{
@@ -526,4 +550,30 @@ func (c *ControlClient) GetChildLibraries(ctx context.Context, libraryID int64) 
 		return nil, err
 	}
 	return resp.Libraries, nil
+}
+
+// UpdateLibrary updates a library's name and description
+func (c *ControlClient) UpdateLibrary(ctx context.Context, libraryID int64, name, description string) (*manmanpb.WorkshopLibrary, error) {
+	resp, err := c.workshop.UpdateLibrary(ctx, &manmanpb.UpdateLibraryRequest{
+		LibraryId:   libraryID,
+		Name:        name,
+		Description: description,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update library: %w", err)
+	}
+	return resp.Library, nil
+}
+
+// UpdateAddon updates an addon's name and description
+func (c *ControlClient) UpdateAddon(ctx context.Context, addonID int64, name, description string) (*manmanpb.WorkshopAddon, error) {
+	resp, err := c.workshop.UpdateAddon(ctx, &manmanpb.UpdateAddonRequest{
+		AddonId:     addonID,
+		Name:        name,
+		Description: description,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update addon: %w", err)
+	}
+	return resp.Addon, nil
 }

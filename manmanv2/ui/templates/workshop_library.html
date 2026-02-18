@@ -1,212 +1,189 @@
 {{define "workshop_library_content"}}
 <style>
-.hero { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 60px 40px; border-radius: 12px; margin-bottom: 30px; text-align: center; }
-.hero h2 { font-size: 36px; margin-bottom: 15px; }
-.hero p { font-size: 18px; opacity: 0.9; }
-.quick-links { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 30px; }
-.quick-link { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); text-align: center; cursor: pointer; transition: transform 0.2s; }
-.quick-link:hover { transform: translateY(-4px); box-shadow: 0 4px 8px rgba(0,0,0,0.15); }
-.quick-link-icon { font-size: 48px; margin-bottom: 15px; }
-.library-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; margin-top: 20px; }
-.library-card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: transform 0.2s; }
-.library-card:hover { transform: translateY(-4px); box-shadow: 0 4px 8px rgba(0,0,0,0.15); }
-.library-header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px; }
-.library-title { font-size: 20px; font-weight: 600; color: #1f2937; }
-.library-count { background: #e0e7ff; color: #3730a3; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
-.addon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; margin-top: 20px; }
-.addon-card { background: #f9fafb; padding: 20px; border-radius: 6px; border-left: 4px solid #2563eb; }
-.addon-title { font-weight: 600; color: #1f2937; margin-bottom: 8px; }
-.addon-meta { display: flex; justify-content: space-between; font-size: 12px; color: #9ca3af; margin-top: 10px; }
+[x-cloak] { display: none !important; }
+.ws-hero { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 36px 40px; border-radius: 12px; margin-bottom: 28px; display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+.ws-hero-text h2 { font-size: 26px; margin-bottom: 6px; }
+.ws-hero-text p { font-size: 14px; opacity: 0.85; }
+.ws-hero-actions { display: flex; gap: 8px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+.ws-btn-ghost { background: rgba(255,255,255,0.15); color: white; border: 1px solid rgba(255,255,255,0.35); padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; text-decoration: none; transition: background 0.2s; display: inline-flex; align-items: center; gap: 6px; }
+.ws-btn-ghost:hover { background: rgba(255,255,255,0.28); }
+.ws-btn-solid { background: white; color: #667eea; font-weight: 600; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; border: none; transition: background 0.2s; display: inline-flex; align-items: center; gap: 6px; }
+.ws-btn-solid:hover { background: #f0f0ff; }
+.section-header { display: flex; justify-content: space-between; align-items: center; margin: 28px 0 14px; }
+.section-header h2 { font-size: 18px; font-weight: 700; color: #1f2937; }
+.section-header a { font-size: 13px; color: #3498db; text-decoration: none; }
+.section-header a:hover { text-decoration: underline; }
+.count-badge { font-size: 13px; font-weight: 400; color: #9ca3af; margin-left: 4px; }
+.library-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.library-card { background: white; padding: 18px 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); text-decoration: none; color: inherit; display: block; transition: box-shadow 0.2s, transform 0.15s; border: 1px solid #e5e7eb; }
+.library-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); transform: translateY(-2px); }
+.library-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; gap: 8px; }
+.library-card-name { font-size: 15px; font-weight: 600; color: #1f2937; }
+.game-tag { font-size: 11px; background: #e0e7ff; color: #3730a3; padding: 2px 8px; border-radius: 10px; font-weight: 600; white-space: nowrap; }
+.library-card-desc { font-size: 13px; color: #6b7280; margin-bottom: 10px; line-height: 1.4; }
+.library-card-footer { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #9ca3af; }
+.addon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 12px; }
+.addon-card { background: white; border-radius: 8px; border: 1px solid #e5e7eb; padding: 14px 16px; transition: box-shadow 0.2s; }
+.addon-card:hover { box-shadow: 0 3px 8px rgba(0,0,0,0.07); }
+.addon-card-name { font-weight: 600; color: #1f2937; font-size: 14px; margin-bottom: 4px; }
+.addon-card-id { font-size: 11px; font-family: monospace; color: #6b7280; background: #f3f4f6; padding: 2px 6px; border-radius: 3px; display: inline-block; margin-bottom: 8px; }
+.addon-card-meta { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: #9ca3af; }
+.addon-type-badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.addon-type-addon { background: #dbeafe; color: #1e40af; }
+.addon-type-collection { background: #e0e7ff; color: #3730a3; }
+.inline-form-card { border: 2px solid #667eea; border-radius: 8px; background: white; padding: 20px; margin-bottom: 20px; }
+.inline-form-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #e5e7eb; }
+.inline-form-header h3 { font-size: 16px; font-weight: 600; color: #1f2937; margin: 0; }
 </style>
 
-<div class="hero">
-    <h2>🎮 Workshop Library</h2>
-    <p>Discover & Manage Workshop Content</p>
-</div>
+<div x-data="{ showAddAddon: false, showCreateLibrary: false }">
 
-<div class="quick-links">
-    <div class="quick-link" onclick="document.getElementById('createLibraryModal').style.display='flex'">
-        <div class="quick-link-icon">📚</div>
-        <h3>Create Library</h3>
-        <p>Curated collections</p>
+<div class="ws-hero">
+    <div class="ws-hero-text">
+        <h2>Workshop Library</h2>
+        <p>Manage addon libraries and workshop content for your game servers</p>
     </div>
-    <div class="quick-link" onclick="document.getElementById('addAddonModal').style.display='flex'">
-        <div class="quick-link-icon">🧩</div>
-        <h3>Add Addon</h3>
-        <p>From Steam Workshop</p>
-    </div>
-    <div class="quick-link" onclick="document.getElementById('gameFilter').focus()">
-        <div class="quick-link-icon">🎯</div>
-        <h3>Filter by Game</h3>
-        <p>Find game-specific content</p>
+    <div class="ws-hero-actions">
+        <a href="/workshop/search" class="ws-btn-ghost">Search</a>
+        <button @click="showAddAddon = !showAddAddon; showCreateLibrary = false" class="ws-btn-ghost">
+            <span x-text="showAddAddon ? '✕ Cancel' : '+ Add Addon'">+ Add Addon</span>
+        </button>
+        <button @click="showCreateLibrary = !showCreateLibrary; showAddAddon = false" class="ws-btn-solid">
+            <span x-text="showCreateLibrary ? '✕ Cancel' : '+ New Library'">+ New Library</span>
+        </button>
     </div>
 </div>
 
-<h2>Libraries</h2>
+<!-- Add Addon Inline Form -->
+<div x-show="showAddAddon" x-cloak x-transition>
+    <div class="inline-form-card">
+        <div class="inline-form-header">
+            <h3>Fetch Addon from Steam Workshop</h3>
+            <button @click="showAddAddon = false" class="btn btn-sm btn-secondary">Cancel</button>
+        </div>
+        <form hx-post="/workshop/fetch-metadata" hx-target="#addAddonResult" hx-swap="innerHTML" style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:12px;align-items:end;">
+            <div class="form-group" style="margin:0;">
+                <label>Game</label>
+                <select name="game_id" required>
+                    {{range .Games}}
+                    <option value="{{.GameId}}">{{.Name}}</option>
+                    {{end}}
+                </select>
+            </div>
+            <div class="form-group" style="margin:0;">
+                <label>Workshop ID</label>
+                <input type="text" name="workshop_id" required placeholder="e.g., 2938285337">
+            </div>
+            <div class="form-group" style="margin:0;">
+                <label>Platform</label>
+                <select name="platform_type" required>
+                    <option value="steam_workshop">Steam Workshop</option>
+                </select>
+            </div>
+            <button type="submit" class="btn btn-primary">Fetch</button>
+        </form>
+        <div id="addAddonResult" style="margin-top:10px;"></div>
+    </div>
+</div>
+
+<!-- Create Library Inline Form -->
+<div x-show="showCreateLibrary" x-cloak x-transition>
+    <div class="inline-form-card">
+        <div class="inline-form-header">
+            <h3>Create New Library</h3>
+            <button @click="showCreateLibrary = false" class="btn btn-sm btn-secondary">Cancel</button>
+        </div>
+        <form method="POST" action="/workshop/create-library" style="display:grid;grid-template-columns:1fr 2fr 2fr auto;gap:12px;align-items:end;">
+            <div class="form-group" style="margin:0;">
+                <label>Game</label>
+                <select name="game_id" required>
+                    {{range .Games}}
+                    <option value="{{.GameId}}">{{.Name}}</option>
+                    {{end}}
+                </select>
+            </div>
+            <div class="form-group" style="margin:0;">
+                <label>Name</label>
+                <input type="text" name="name" required placeholder="e.g., Essential Mods">
+            </div>
+            <div class="form-group" style="margin:0;">
+                <label>Description</label>
+                <input type="text" name="description" placeholder="Optional">
+            </div>
+            <button type="submit" class="btn btn-primary">Create</button>
+        </form>
+    </div>
+</div>
+
+<div class="section-header">
+    <h2>Libraries <span class="count-badge">({{len .Libraries}})</span></h2>
+    <a href="/workshop/search?type=library">Browse all →</a>
+</div>
+
 {{if .Libraries}}
 <div class="library-grid">
     {{range .Libraries}}
-    <a href="/workshop/library-detail?library_id={{.LibraryId}}" class="library-card" style="text-decoration: none; color: inherit;">
-        <div class="library-header">
-            <h3 class="library-title">{{.Name}}</h3>
-            <span class="library-count">{{len .AddonIds}} addons</span>
+    <a href="/workshop/library-detail?library_id={{.LibraryId}}" class="library-card">
+        <div class="library-card-header">
+            <span class="library-card-name">{{.Name}}</span>
+            {{$gameId := .GameId}}
+            {{range $.Games}}{{if eq .GameId $gameId}}<span class="game-tag">{{.Name}}</span>{{end}}{{end}}
         </div>
-        <p style="color: #6b7280; font-size: 14px; margin-bottom: 15px;">{{.Description}}</p>
-        <div class="addon-meta">
-            <span>{{range $.Games}}{{if eq .GameId $.GameId}}{{.Name}}{{end}}{{end}}</span>
-            <form method="POST" action="/workshop/delete-library" style="display: inline;" onclick="event.stopPropagation();">
+        <div class="library-card-desc">{{if .Description}}{{.Description}}{{else}}<em style="color:#d1d5db;">No description</em>{{end}}</div>
+        <div class="library-card-footer">
+            <span>{{timeAgo .UpdatedAt}}</span>
+            <form method="POST" action="/workshop/delete-library" onclick="event.stopPropagation(); event.preventDefault(); if(confirm('Delete this library?')) this.submit();" style="display:inline;">
                 <input type="hidden" name="library_id" value="{{.LibraryId}}">
-                <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Delete this library?')">Delete</button>
+                <button type="submit" class="btn btn-sm btn-danger">Delete</button>
             </form>
         </div>
     </a>
     {{end}}
 </div>
 {{else}}
-<div class="empty-state" style="text-align: center; padding: 60px 20px; color: #9ca3af;">
-    <div style="font-size: 64px; margin-bottom: 20px;">📚</div>
+<div class="empty-state">
+    <div style="font-size:48px;margin-bottom:12px;">📚</div>
     <h3>No libraries yet</h3>
-    <p>Create one to organize your addons!</p>
-    <button onclick="showModal('createLibraryModal')" class="btn btn-primary" style="margin-top: 15px;">Create Library</button>
+    <p>Create a library to organize your addons into reusable collections.</p>
+    <button @click="showCreateLibrary = true" class="btn btn-primary" style="margin-top:12px;">Create Library</button>
 </div>
 {{end}}
 
-<h2>All Addons</h2>
-
-<div style="background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-    <label style="font-weight: 600; margin-right: 10px;">Filter by Game:</label>
-    <select id="gameFilter" onchange="filterAddons()" style="padding: 8px 12px; border-radius: 4px; border: 1px solid #d1d5db;">
-        <option value="">All Games</option>
-        {{range .Games}}
-        <option value="{{.GameId}}">{{.Name}}</option>
-        {{end}}
-    </select>
+<div class="section-header">
+    <h2>Recent Addons <span class="count-badge">({{len .Addons}} total)</span></h2>
+    <a href="/workshop/search?type=addon">Browse all →</a>
 </div>
 
-{{if .Addons}}
+{{if .RecentAddons}}
 <div class="addon-grid">
-    {{range .Addons}}
-    <div class="addon-card" data-game-id="{{.GameId}}">
-        <h4 class="addon-title">{{.Name}}</h4>
-        <div style="background: #f3f4f6; padding: 8px 12px; border-radius: 4px; font-size: 12px; color: #4b5563; margin: 10px 0;">
-            Workshop ID: {{.WorkshopId}}
+    {{range .RecentAddons}}
+    <a href="/workshop/addon?addon_id={{.AddonId}}" style="text-decoration:none;color:inherit;">
+        <div class="addon-card">
+            <div class="addon-card-name">{{.Name}}</div>
+            <div class="addon-card-id">{{.WorkshopId}}</div>
+            <div class="addon-card-meta">
+                <span>{{$gameId := .GameId}}{{range $.Games}}{{if eq .GameId $gameId}}{{.Name}}{{end}}{{end}}</span>
+                <span style="display:flex;align-items:center;gap:5px;">
+                    {{if .FileSizeBytes}}<span>{{printf "%.1f" (divf .FileSizeBytes 1048576)}} MB</span>{{end}}
+                    {{if .IsCollection}}
+                    <span class="addon-type-badge addon-type-collection">Collection</span>
+                    {{else}}
+                    <span class="addon-type-badge addon-type-addon">Addon</span>
+                    {{end}}
+                </span>
+            </div>
         </div>
-        <div class="addon-meta">
-            <span>{{range $.Games}}{{if eq .GameId $.GameId}}{{.Name}}{{end}}{{end}}</span>
-            <span>
-                {{if .FileSizeBytes}}{{printf "%.1f" (divf .FileSizeBytes 1048576)}} MB{{else}}-{{end}}
-            </span>
-        </div>
-        <div style="margin-top: 12px;">
-            {{if .IsCollection}}
-            <span style="background: #e0e7ff; color: #3730a3; padding: 4px 8px; border-radius: 4px; font-size: 11px;">Collection</span>
-            {{else}}
-            <span style="background: #dbeafe; color: #1e40af; padding: 4px 8px; border-radius: 4px; font-size: 11px;">Addon</span>
-            {{end}}
-        </div>
-        <form method="POST" action="/workshop/delete-addon" style="margin-top: 12px;">
-            <input type="hidden" name="addon_id" value="{{.AddonId}}">
-            <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Delete this addon?')">Delete</button>
-        </form>
-    </div>
+    </a>
     {{end}}
 </div>
 {{else}}
-<div class="empty-state" style="text-align: center; padding: 60px 20px; color: #9ca3af;">
-    <div style="font-size: 64px; margin-bottom: 20px;">🧩</div>
-    <h3>No addons found</h3>
-    <p>Add one to get started!</p>
-    <button onclick="showModal('addAddonModal')" class="btn btn-primary" style="margin-top: 15px;">Add Addon</button>
+<div class="empty-state">
+    <div style="font-size:48px;margin-bottom:12px;">🧩</div>
+    <h3>No addons yet</h3>
+    <p>Fetch addon metadata from Steam Workshop to get started.</p>
+    <button @click="showAddAddon = true" class="btn btn-primary" style="margin-top:12px;">Add Addon</button>
 </div>
 {{end}}
 
-<!-- Add Addon Modal -->
-<div id="addAddonModal" class="modal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h2>Fetch Addon from Steam</h2>
-            <button onclick="hideModal('addAddonModal')" class="btn-close">&times;</button>
-        </div>
-        <form hx-post="/workshop/fetch-metadata" hx-target="#fetchResult">
-            <div class="form-group">
-                <label>Game:</label>
-                <select name="game_id" required>
-                    {{range .Games}}
-                    <option value="{{.GameId}}">{{.Name}}</option>
-                    {{end}}
-                </select>
-            </div>
-            <div class="form-group">
-                <label>Workshop ID:</label>
-                <input type="text" name="workshop_id" required placeholder="e.g., 2938285337">
-            </div>
-            <div class="form-group">
-                <label>Platform:</label>
-                <select name="platform_type" required>
-                    <option value="steam_workshop">Steam Workshop</option>
-                </select>
-            </div>
-            <div id="fetchResult"></div>
-            <div class="modal-footer">
-                <button type="button" onclick="hideModal('addAddonModal')" class="btn btn-secondary">Cancel</button>
-                <button type="submit" class="btn btn-primary">Fetch Metadata</button>
-            </div>
-        </form>
-    </div>
-</div>
-
-<!-- Create Library Modal -->
-<div id="createLibraryModal" class="modal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h2>Create Library</h2>
-            <button onclick="hideModal('createLibraryModal')" class="btn-close">&times;</button>
-        </div>
-        <form method="POST" action="/workshop/create-library">
-            <div class="form-group">
-                <label>Game:</label>
-                <select name="game_id" required>
-                    {{range .Games}}
-                    <option value="{{.GameId}}">{{.Name}}</option>
-                    {{end}}
-                </select>
-            </div>
-            <div class="form-group">
-                <label>Name:</label>
-                <input type="text" name="name" required placeholder="e.g., Essential Mods">
-            </div>
-            <div class="form-group">
-                <label>Description:</label>
-                <textarea name="description" rows="3" placeholder="Optional description"></textarea>
-            </div>
-            <div class="modal-footer">
-                <button type="button" onclick="hideModal('createLibraryModal')" class="btn btn-secondary">Cancel</button>
-                <button type="submit" class="btn btn-primary">Create Library</button>
-            </div>
-        </form>
-    </div>
-</div>
-
-<script>
-function showModal(id) {
-    document.getElementById(id).style.display = 'flex';
-}
-
-function hideModal(id) {
-    document.getElementById(id).style.display = 'none';
-}
-
-function filterAddons() {
-    const gameId = document.getElementById('gameFilter').value;
-    const cards = document.querySelectorAll('.addon-card');
-    
-    cards.forEach(card => {
-        if (!gameId || card.dataset.gameId === gameId) {
-            card.style.display = '';
-        } else {
-            card.style.display = 'none';
-        }
-    });
-}
-</script>
+</div>{{/* end x-data */}}
 {{end}}

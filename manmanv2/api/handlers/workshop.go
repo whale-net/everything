@@ -583,6 +583,22 @@ func (h *WorkshopServiceHandler) AddLibraryReference(ctx context.Context, req *p
 	return &pb.AddLibraryReferenceResponse{}, nil
 }
 
+// RemoveLibraryReference removes a reference from one library to another
+func (h *WorkshopServiceHandler) RemoveLibraryReference(ctx context.Context, req *pb.RemoveLibraryReferenceRequest) (*pb.RemoveLibraryReferenceResponse, error) {
+	if req.ParentLibraryId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "parent_library_id is required")
+	}
+	if req.ChildLibraryId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "child_library_id is required")
+	}
+
+	if err := h.libraryRepo.RemoveReference(ctx, req.ParentLibraryId, req.ChildLibraryId); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to remove library reference: %v", err)
+	}
+
+	return &pb.RemoveLibraryReferenceResponse{}, nil
+}
+
 // GetLibraryAddons returns all addons in a library
 func (h *WorkshopServiceHandler) GetLibraryAddons(ctx context.Context, req *pb.GetLibraryAddonsRequest) (*pb.GetLibraryAddonsResponse, error) {
 	if req.LibraryId == 0 {

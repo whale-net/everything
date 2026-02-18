@@ -203,17 +203,25 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 
 	// Protected routes - Workshop
 	mux.HandleFunc("/workshop/library", app.auth.RequireAuthFunc(app.handleWorkshopLibrary))
+	mux.HandleFunc("/workshop/search", app.auth.RequireAuthFunc(app.handleWorkshopSearch))
+	mux.HandleFunc("/workshop/addon", app.auth.RequireAuthFunc(app.handleWorkshopAddonDetail))
 	mux.HandleFunc("/workshop/library-detail", app.auth.RequireAuthFunc(app.handleLibraryDetail))
 	mux.HandleFunc("/workshop/create-library", app.auth.RequireAuthFunc(app.handleCreateLibrary))
 	mux.HandleFunc("/workshop/delete-library", app.auth.RequireAuthFunc(app.handleDeleteLibrary))
 	mux.HandleFunc("/workshop/add-addon-to-library", app.auth.RequireAuthFunc(app.handleAddAddonToLibrary))
 	mux.HandleFunc("/workshop/remove-addon-from-library", app.auth.RequireAuthFunc(app.handleRemoveAddonFromLibrary))
 	mux.HandleFunc("/workshop/add-library-reference", app.auth.RequireAuthFunc(app.handleAddLibraryReference))
+	mux.HandleFunc("/workshop/remove-library-reference", app.auth.RequireAuthFunc(app.handleRemoveLibraryReference))
 	mux.HandleFunc("/workshop/installations", app.auth.RequireAuthFunc(app.handleWorkshopInstallations))
 	mux.HandleFunc("/workshop/install", app.auth.RequireAuthFunc(app.handleInstallAddon))
 	mux.HandleFunc("/workshop/remove", app.auth.RequireAuthFunc(app.handleRemoveInstallation))
 	mux.HandleFunc("/workshop/fetch-metadata", app.auth.RequireAuthFunc(app.handleFetchAddonMetadata))
+	mux.HandleFunc("/workshop/create-addon", app.auth.RequireAuthFunc(app.handleCreateAddon))
+	mux.HandleFunc("/workshop/update-addon-details", app.auth.RequireAuthFunc(app.handleUpdateAddonDetails))
+	mux.HandleFunc("/workshop/update-library", app.auth.RequireAuthFunc(app.handleUpdateLibrary))
 	mux.HandleFunc("/workshop/delete-addon", app.auth.RequireAuthFunc(app.handleDeleteAddon))
+	mux.HandleFunc("/workshop/api/available-addons", app.auth.RequireAuthFunc(app.handleAvailableAddons))
+	mux.HandleFunc("/workshop/api/available-libraries", app.auth.RequireAuthFunc(app.handleAvailableLibraries))
 
 	// API endpoints for HTMX partial updates
 	mux.HandleFunc("/api/dashboard-summary", app.auth.RequireAuthFunc(app.handleDashboardSummary))
