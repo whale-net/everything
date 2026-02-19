@@ -37,6 +37,7 @@ service WorkshopService {
   rpc AddLibraryToSGC(AddLibraryToSGCRequest) returns (AddLibraryToSGCResponse);
   rpc RemoveLibraryFromSGC(RemoveLibraryFromSGCRequest) returns (RemoveLibraryFromSGCResponse);
   rpc ListSGCLibraries(ListSGCLibrariesRequest) returns (ListSGCLibrariesResponse);
+  rpc GetSGCLibraryAttachments(GetSGCLibraryAttachmentsRequest) returns (GetSGCLibraryAttachmentsResponse);
 
   // Path Preset Management
   rpc CreateAddonPathPreset(CreateAddonPathPresetRequest) returns (CreateAddonPathPresetResponse);
@@ -104,6 +105,16 @@ message WorkshopLibrary {
   int64 preset_id = 5;  // Default path preset for this library
   int64 created_at = 6;  // Unix timestamp
   int64 updated_at = 7;  // Unix timestamp
+}
+
+// SGCWorkshopLibrary represents the attachment of a library to an SGC with overrides
+message SGCWorkshopLibrary {
+  int64 sgc_id = 1;
+  int64 library_id = 2;
+  int64 preset_id = 3;  // Optional: override library's default preset
+  int64 volume_id = 4;  // Optional: specify which volume to install to
+  string installation_path_override = 5;  // Optional: completely custom path
+  int64 created_at = 6;  // Unix timestamp
 }
 
 // ============================================================================
@@ -341,6 +352,14 @@ message ListSGCLibrariesRequest {
 
 message ListSGCLibrariesResponse {
   repeated WorkshopLibrary libraries = 1;
+}
+
+message GetSGCLibraryAttachmentsRequest {
+  int64 sgc_id = 1;
+}
+
+message GetSGCLibraryAttachmentsResponse {
+  repeated SGCWorkshopLibrary attachments = 1;
 }
 
 // ============================================================================

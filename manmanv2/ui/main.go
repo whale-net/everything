@@ -222,10 +222,12 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/workshop/delete-addon", app.auth.RequireAuthFunc(app.handleDeleteAddon))
 	mux.HandleFunc("/workshop/api/available-addons", app.auth.RequireAuthFunc(app.handleAvailableAddons))
 	mux.HandleFunc("/workshop/api/available-libraries", app.auth.RequireAuthFunc(app.handleAvailableLibraries))
+	mux.HandleFunc("/workshop/api/presets-for-game", app.auth.RequireAuthFunc(app.handlePresetsForGame))
 
 	// Protected routes - SGC detail
 	mux.HandleFunc("/sgc/", app.auth.RequireAuthFunc(app.handleSGCDetail))
 	mux.HandleFunc("/sgc/add-library", app.auth.RequireAuthFunc(app.handleAddLibraryToSGC))
+	mux.HandleFunc("/sgc/remove-library", app.auth.RequireAuthFunc(app.handleSGCRemoveLibrary))
 	mux.HandleFunc("/sgc/api/available-libraries", app.auth.RequireAuthFunc(app.handleSGCAvailableLibraries))
 
 	// API endpoints for HTMX partial updates

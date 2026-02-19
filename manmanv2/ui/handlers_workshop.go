@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -66,6 +67,7 @@ type WorkshopLibraryDetailPageData struct {
 	AvailableAddons    []*manmanpb.WorkshopAddon
 	ChildLibraries     []*manmanpb.WorkshopLibrary
 	AvailableLibraries []*manmanpb.WorkshopLibrary
+	Presets            []*manmanpb.GameAddonPathPreset
 	Servers            []*manmanpb.Server
 	SelectedServer     *manmanpb.Server
 }
@@ -822,6 +824,13 @@ func (app *App) handleLibraryDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Fetch presets for this game
+	presets, err := app.grpc.ListAddonPathPresets(ctx, library.GameId)
+	if err != nil {
+		log.Printf("Warning: failed to fetch presets: %v", err)
+		presets = []*manmanpb.GameAddonPathPreset{}
+	}
+
 	servers, _ := app.grpc.ListServers(ctx)
 	selectedServer := app.getSelectedServer(r, servers)
 
@@ -836,6 +845,7 @@ func (app *App) handleLibraryDetail(w http.ResponseWriter, r *http.Request) {
 		AvailableAddons:    availableAddons,
 		ChildLibraries:     childLibraries,
 		AvailableLibraries: availableLibraries,
+		Presets:            presets,
 		Servers:            servers,
 		SelectedServer:     selectedServer,
 	}
@@ -1057,4 +1067,34 @@ func (app *App) handleRemoveLibraryReference(w http.ResponseWriter, r *http.Requ
 	}
 
 	http.Redirect(w, r, "/workshop/library-detail?library_id="+parentIDStr, http.StatusSeeOther)
+}
+
+func (app *App) handlePresetsForGame(w http.ResponseWriter, r *http.Request) {
+	ctx := context.Background()
+	gameIDStr := r.URL.Query().Get("game_id")
+
+	gameID, err := strconv.ParseInt(gameIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid game_id", http.StatusBadRequest)
+		return
+	}
+
+	presets, err := app.grpc.ListAddonPathPresets(ctx, gameID)
+	if err != nil {
+		log.Printf("Error fetching presets: %v", err)
+		presets = []*manmanpb.GameAddonPathPreset{}
+	}
+
+	// Return HTML for preset selector
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, `<label>Default Path Preset <small style="color:#9ca3af;">(Optional)</small></label>
+<select name="preset_id">
+    <option value="">-- No preset --</option>`)
+
+	for _, preset := range presets {
+		fmt.Fprintf(w, `<option value="%d">%s (%s)</option>`,
+			preset.PresetId, preset.Name, preset.InstallationPath)
+	}
+
+	fmt.Fprintf(w, `</select>`)
 }

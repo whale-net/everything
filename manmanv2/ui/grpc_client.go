@@ -636,10 +636,13 @@ func (c *ControlClient) UpdateAddon(ctx context.Context, addonID int64, name, de
 
 // SGC-Library management methods
 
-func (c *ControlClient) AddLibraryToSGC(ctx context.Context, sgcID, libraryID int64) error {
+func (c *ControlClient) AddLibraryToSGC(ctx context.Context, sgcID, libraryID, presetID, volumeID int64, pathOverride string) error {
 	_, err := c.workshop.AddLibraryToSGC(ctx, &manmanpb.AddLibraryToSGCRequest{
-		SgcId:     sgcID,
-		LibraryId: libraryID,
+		SgcId:                    sgcID,
+		LibraryId:                libraryID,
+		PresetId:                 presetID,
+		VolumeId:                 volumeID,
+		InstallationPathOverride: pathOverride,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to add library to SGC: %w", err)
@@ -655,6 +658,27 @@ func (c *ControlClient) ListSGCLibraries(ctx context.Context, sgcID int64) ([]*m
 		return nil, fmt.Errorf("failed to list SGC libraries: %w", err)
 	}
 	return resp.Libraries, nil
+}
+
+func (c *ControlClient) RemoveLibraryFromSGC(ctx context.Context, sgcID, libraryID int64) error {
+	_, err := c.workshop.RemoveLibraryFromSGC(ctx, &manmanpb.RemoveLibraryFromSGCRequest{
+		SgcId:     sgcID,
+		LibraryId: libraryID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to remove library from SGC: %w", err)
+	}
+	return nil
+}
+
+func (c *ControlClient) GetSGCLibraryAttachments(ctx context.Context, sgcID int64) ([]*manmanpb.SGCWorkshopLibrary, error) {
+	resp, err := c.workshop.GetSGCLibraryAttachments(ctx, &manmanpb.GetSGCLibraryAttachmentsRequest{
+		SgcId: sgcID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get SGC library attachments: %w", err)
+	}
+	return resp.Attachments, nil
 }
 
 // Path Preset Management

@@ -792,6 +792,43 @@ func (h *WorkshopServiceHandler) ListSGCLibraries(ctx context.Context, req *pb.L
 	}, nil
 }
 
+// GetSGCLibraryAttachments gets attachment details for all libraries on an SGC
+func (h *WorkshopServiceHandler) GetSGCLibraryAttachments(ctx context.Context, req *pb.GetSGCLibraryAttachmentsRequest) (*pb.GetSGCLibraryAttachmentsResponse, error) {
+	if req.SgcId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "sgc_id is required")
+	}
+
+	attachments, err := h.sgcRepo.GetSGCLibraryAttachments(ctx, req.SgcId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get SGC library attachments: %v", err)
+	}
+
+	pbAttachments := make([]*pb.SGCWorkshopLibrary, len(attachments))
+	for i, a := range attachments {
+		attachment := &pb.SGCWorkshopLibrary{
+			SgcId:     a.SGCID,
+			LibraryId: a.LibraryID,
+			CreatedAt: a.CreatedAt.Unix(),
+		}
+
+		if a.PresetID != nil {
+			attachment.PresetId = *a.PresetID
+		}
+		if a.VolumeID != nil {
+			attachment.VolumeId = *a.VolumeID
+		}
+		if a.InstallationPathOverride != nil {
+			attachment.InstallationPathOverride = *a.InstallationPathOverride
+		}
+
+		pbAttachments[i] = attachment
+	}
+
+	return &pb.GetSGCLibraryAttachmentsResponse{
+		Attachments: pbAttachments,
+	}, nil
+}
+
 // libraryToProto converts a WorkshopLibrary model to protobuf
 func libraryToProto(library *manman.WorkshopLibrary) *pb.WorkshopLibrary {
 	pbLibrary := &pb.WorkshopLibrary{
