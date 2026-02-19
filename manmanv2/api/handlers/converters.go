@@ -126,62 +126,6 @@ func jsonbToFiles(j manman.JSONB) []*pb.FileTemplate {
 }
 
 // ============================================================================
-// Parameter conversions
-// ============================================================================
-
-func parametersToJSONB(params []*pb.Parameter) manman.JSONB {
-	if len(params) == 0 {
-		return nil
-	}
-	paramList := make([]map[string]interface{}, 0, len(params))
-	for _, p := range params {
-		paramList = append(paramList, map[string]interface{}{
-			"key":           p.Key,
-			"value":         p.Value,
-			"type":          p.Type,
-			"description":   p.Description,
-			"required":      p.Required,
-			"default_value": p.DefaultValue,
-		})
-	}
-	return map[string]interface{}{"parameters": paramList}
-}
-
-func jsonbToParameters(j manman.JSONB) []*pb.Parameter {
-	if j == nil {
-		return nil
-	}
-	paramList, ok := j["parameters"].([]interface{})
-	if !ok {
-		return nil
-	}
-
-	result := make([]*pb.Parameter, 0, len(paramList))
-	for _, item := range paramList {
-		pMap, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		key, _ := pMap["key"].(string)
-		value, _ := pMap["value"].(string)
-		ptype, _ := pMap["type"].(string)
-		description, _ := pMap["description"].(string)
-		required, _ := pMap["required"].(bool)
-		defaultValue, _ := pMap["default_value"].(string)
-
-		result = append(result, &pb.Parameter{
-			Key:          key,
-			Value:        value,
-			Type:         ptype,
-			Description:  description,
-			Required:     required,
-			DefaultValue: defaultValue,
-		})
-	}
-	return result
-}
-
-// ============================================================================
 // GameMetadata conversions
 // ============================================================================
 

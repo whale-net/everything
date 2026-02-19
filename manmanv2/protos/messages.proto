@@ -23,16 +23,6 @@ message FileTemplate {
   bool is_template = 4;
 }
 
-// Parameter represents a configurable parameter for a game
-message Parameter {
-  string key = 1;
-  string value = 2;
-  string type = 3;  // "string" | "int" | "bool" | "secret"
-  string description = 4;
-  bool required = 5;
-  string default_value = 6;
-}
-
 // GameMetadata represents additional information about a game
 message GameMetadata {
   string genre = 1;
@@ -110,7 +100,6 @@ message GameConfig {
   string args_template = 5;  // optional - rendered command arguments
   map<string, string> env_template = 6;
   repeated FileTemplate files = 7;
-  repeated Parameter parameters = 8;
   repeated string entrypoint = 9;  // optional - override Docker ENTRYPOINT
   repeated string command = 10;  // optional - override Docker CMD (alternative to args_template)
 }
@@ -121,7 +110,6 @@ message ServerGameConfig {
   int64 server_id = 2;
   int64 game_config_id = 3;
   repeated PortBinding port_bindings = 4;
-  map<string, string> parameters = 5;
   string status = 6;  // "active" | "inactive"
 }
 
@@ -133,7 +121,6 @@ message Session {
   int64 ended_at = 4;  // Unix timestamp, 0 if not ended
   int32 exit_code = 5;
   string status = 6;  // "pending" | "starting" | "running" | "stopping" | "stopped" | "crashed" | "completed"
-  map<string, string> parameters = 7;
   int64 restored_from_backup_id = 8;  // Backup ID used to restore this session (0 if not restored)
 }
 
@@ -172,17 +159,6 @@ message ConfigurationStrategy {
   string base_template = 7;  // Base configuration template or host-side subpath for volumes
   map<string, string> render_options = 8;  // Format-specific rendering options (e.g. read_only: true)
   int32 apply_order = 9;  // Order to apply strategies (lower first)
-}
-
-// StrategyParameterBinding links parameters to configuration strategies
-message StrategyParameterBinding {
-  int64 binding_id = 1;
-  int64 strategy_id = 2;
-  int64 param_id = 3;
-  string binding_type = 4;  // "direct", "template", "json_path", "xpath", "ini_section"
-  string target_key = 5;  // Where to apply in the config
-  string value_template = 6;  // Optional transformation template
-  string condition_expr = 7;  // Optional conditional logic
 }
 
 // ConfigurationPatch represents configuration overrides at different levels

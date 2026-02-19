@@ -444,7 +444,7 @@ func (app *App) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 	force := r.FormValue("force") == "true"
 
 	ctx := context.Background()
-	session, err := app.grpc.StartSession(ctx, serverGameConfigID, nil, force)
+	session, err := app.grpc.StartSession(ctx, serverGameConfigID, force)
 	if err != nil {
 		log.Printf("Error starting session: %v", err)
 

@@ -254,7 +254,6 @@ func (h *GameConfigHandler) CreateGameConfig(ctx context.Context, req *pb.Create
 		ArgsTemplate: stringPtr(req.ArgsTemplate),
 		EnvTemplate:  mapToJSONB(req.EnvTemplate),
 		Files:        filesToJSONB(req.Files),
-		Parameters:   parametersToJSONB(req.Parameters),
 		Entrypoint:   stringArrayToJSONB(req.Entrypoint),
 		Command:      stringArrayToJSONB(req.Command),
 	}
@@ -293,9 +292,6 @@ func (h *GameConfigHandler) UpdateGameConfig(ctx context.Context, req *pb.Update
 		if req.Files != nil {
 			config.Files = filesToJSONB(req.Files)
 		}
-		if req.Parameters != nil {
-			config.Parameters = parametersToJSONB(req.Parameters)
-		}
 		if req.Entrypoint != nil {
 			config.Entrypoint = stringArrayToJSONB(req.Entrypoint)
 		}
@@ -316,8 +312,6 @@ func (h *GameConfigHandler) UpdateGameConfig(ctx context.Context, req *pb.Update
 				config.EnvTemplate = mapToJSONB(req.EnvTemplate)
 			case "files":
 				config.Files = filesToJSONB(req.Files)
-			case "parameters":
-				config.Parameters = parametersToJSONB(req.Parameters)
 			case "entrypoint":
 				config.Entrypoint = stringArrayToJSONB(req.Entrypoint)
 			case "command":
@@ -442,7 +436,6 @@ func (h *ServerGameConfigHandler) DeployGameConfig(ctx context.Context, req *pb.
 		GameConfigID: req.GameConfigId,
 		Status:       manman.SGCStatusInactive,
 		PortBindings: portBindingsToJSONB(req.PortBindings),
-		Parameters:   mapToJSONB(req.Parameters),
 	}
 
 	sgc, err := h.repo.Create(ctx, sgc)
@@ -471,9 +464,6 @@ func (h *ServerGameConfigHandler) UpdateServerGameConfig(ctx context.Context, re
 		if req.PortBindings != nil {
 			sgc.PortBindings = portBindingsToJSONB(req.PortBindings)
 		}
-		if req.Parameters != nil {
-			sgc.Parameters = mapToJSONB(req.Parameters)
-		}
 		if req.Status != "" {
 			sgc.Status = req.Status
 		}
@@ -483,8 +473,6 @@ func (h *ServerGameConfigHandler) UpdateServerGameConfig(ctx context.Context, re
 			switch path {
 			case "port_bindings":
 				sgc.PortBindings = portBindingsToJSONB(req.PortBindings)
-			case "parameters":
-				sgc.Parameters = mapToJSONB(req.Parameters)
 			case "status":
 				sgc.Status = req.Status
 			}
@@ -666,9 +654,8 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 
 	// Create session in database
 	session := &manman.Session{
-		SGCID:      req.ServerGameConfigId,
-		Status:     manman.SessionStatusPending,
-		Parameters: mapToJSONB(req.Parameters),
+		SGCID:  req.ServerGameConfigId,
+		Status: manman.SessionStatusPending,
 	}
 
 	session, err = h.sessionRepo.Create(ctx, session)
@@ -757,7 +744,7 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 
 	// Publish start session command to RabbitMQ
 	if h.publisher != nil {
-		cmd := buildStartSessionCommand(session, sgc, gc, req.Parameters, internalForce, strategies)
+		cmd := buildStartSessionCommand(session, sgc, gc, internalForce, strategies)
 		// Increased timeout to allow for image pulling
 		if err := h.publisher.PublishStartSession(ctx, sgc.ServerID, cmd, 2*time.Minute); err != nil {
 			log.Printf("Warning: Failed to publish start session command: %v", err)
@@ -846,17 +833,16 @@ func (h *SessionHandler) SendInput(ctx context.Context, req *pb.SendInputRequest
 }
 
 // buildStartSessionCommand converts database models to RabbitMQ message format
-func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameConfig, gc *manman.GameConfig, sessionParams map[string]string, force bool, strategies []*manman.ConfigurationStrategy) map[string]interface{} {
+func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameConfig, gc *manman.GameConfig, force bool, strategies []*manman.ConfigurationStrategy) map[string]interface{} {
 	// Build game config message
 	gameConfig := map[string]interface{}{
-		"config_id":       gc.ConfigID,
-		"image":           gc.Image,
-		"args_template":   gc.ArgsTemplate,
-		"env_template":    jsonbToMap(gc.EnvTemplate),
-		"files":           convertFilesToMessage(gc.Files),
-		"parameters":      convertParametersToMessage(gc.Parameters),
-		"entrypoint":      jsonbToStringArray(gc.Entrypoint),
-		"command":         jsonbToStringArray(gc.Command),
+		"config_id":     gc.ConfigID,
+		"image":         gc.Image,
+		"args_template": gc.ArgsTemplate,
+		"env_template":  jsonbToMap(gc.EnvTemplate),
+		"files":         convertFilesToMessage(gc.Files),
+		"entrypoint":    jsonbToStringArray(gc.Entrypoint),
+		"command":       jsonbToStringArray(gc.Command),
 	}
 
 	// Add volume mounts from strategies
@@ -882,12 +868,6 @@ func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameCon
 	serverGameConfig := map[string]interface{}{
 		"sgc_id":        sgc.SGCID,
 		"port_bindings": convertPortBindingsToMessage(sgc.PortBindings),
-		"parameters":    jsonbToMap(sgc.Parameters),
-	}
-
-	// Merge session-level parameters
-	if sessionParams == nil {
-		sessionParams = make(map[string]string)
 	}
 
 	return map[string]interface{}{
@@ -895,7 +875,6 @@ func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameCon
 		"sgc_id":             sgc.SGCID,
 		"game_config":        gameConfig,
 		"server_game_config": serverGameConfig,
-		"parameters":         sessionParams,
 		"force":              force,
 	}
 }
@@ -909,18 +888,6 @@ func convertFilesToMessage(filesJSON manman.JSONB) []interface{} {
 	// Return as-is since it's already in the right format
 	if files, ok := filesJSON["files"].([]interface{}); ok {
 		return files
-	}
-	return []interface{}{}
-}
-
-func convertParametersToMessage(paramsJSON manman.JSONB) []interface{} {
-	// Parameters are stored as array of objects in JSONB
-	if paramsJSON == nil {
-		return []interface{}{}
-	}
-	// Return as-is since it's already in the right format
-	if params, ok := paramsJSON["parameters"].([]interface{}); ok {
-		return params
 	}
 	return []interface{}{}
 }
@@ -965,7 +932,6 @@ func sessionToProto(s *manman.Session) *pb.Session {
 		SessionId:          s.SessionID,
 		ServerGameConfigId: s.SGCID,
 		Status:             s.Status,
-		Parameters:         jsonbToMap(s.Parameters),
 	}
 
 	if s.StartedAt != nil {

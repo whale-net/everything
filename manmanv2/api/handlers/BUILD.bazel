@@ -10,7 +10,6 @@ go_library(
         "converters.go",
         "game.go",
         "logs.go",
-        "param_helpers.go",
         "registration.go",
         "server.go",
         "validation.go",
@@ -20,7 +19,6 @@ go_library(
     importpath = "github.com/whale-net/everything/manmanv2/api/handlers",
     visibility = ["//manmanv2/api:__subpackages__"],
     deps = [
-        "//libs/go/params",
         "//libs/go/rmq",
         "//libs/go/s3",
         "//manmanv2:models",

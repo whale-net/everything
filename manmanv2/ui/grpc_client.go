@@ -221,10 +221,9 @@ func (c *ControlClient) StopSession(ctx context.Context, sessionID int64) (*manm
 }
 
 // StartSession starts a new session for a server game config.
-func (c *ControlClient) StartSession(ctx context.Context, serverGameConfigID int64, parameters map[string]string, force bool) (*manmanpb.Session, error) {
+func (c *ControlClient) StartSession(ctx context.Context, serverGameConfigID int64, force bool) (*manmanpb.Session, error) {
 	resp, err := c.api.StartSession(ctx, &manmanpb.StartSessionRequest{
 		ServerGameConfigId: serverGameConfigID,
-		Parameters:         parameters,
 		Force:              force,
 	})
 	if err != nil {
@@ -251,11 +250,10 @@ func (c *ControlClient) ListServerGameConfigs(ctx context.Context, serverID int6
 }
 
 // DeployGameConfig deploys a game config to a server.
-func (c *ControlClient) DeployGameConfig(ctx context.Context, serverID, gameConfigID int64, parameters map[string]string) (*manmanpb.ServerGameConfig, error) {
+func (c *ControlClient) DeployGameConfig(ctx context.Context, serverID, gameConfigID int64) (*manmanpb.ServerGameConfig, error) {
 	resp, err := c.api.DeployGameConfig(ctx, &manmanpb.DeployGameConfigRequest{
 		ServerId:     serverID,
 		GameConfigId: gameConfigID,
-		Parameters:  parameters,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to deploy game config: %w", err)

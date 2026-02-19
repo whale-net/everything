@@ -97,7 +97,7 @@
             <tr>
                 <th>Name</th>
                 <th>Docker Image</th>
-                <th>Parameters</th>
+                <th>SGCs</th>
                 <th>Actions</th>
             </tr>
         </thead>
@@ -106,7 +106,7 @@
             <tr>
                 <td><a href="/games/{{$.Game.GameId}}/configs/{{.ConfigId}}">{{.Name}}</a></td>
                 <td><code>{{.Image}}</code></td>
-                <td>{{len .Parameters}} parameters</td>
+                <td>{{index $.SgcCounts .ConfigId}}</td>
                 <td>
                     <a href="/games/{{$.Game.GameId}}/configs/{{.ConfigId}}" class="btn btn-sm btn-primary">View</a>
                 </td>

@@ -57,7 +57,6 @@ type GameConfig struct {
 	ArgsTemplate *string `db:"args_template"`
 	EnvTemplate  JSONB   `db:"env_template"`
 	Files        JSONB   `db:"files"`
-	Parameters   JSONB   `db:"parameters"`
 	Entrypoint     JSONB   `db:"entrypoint"` // []string stored as JSONB
 	Command        JSONB   `db:"command"`    // []string stored as JSONB
 }
@@ -68,7 +67,6 @@ type ServerGameConfig struct {
 	ServerID     int64  `db:"server_id"`
 	GameConfigID int64  `db:"game_config_id"`
 	PortBindings JSONB  `db:"port_bindings"`
-	Parameters   JSONB  `db:"parameters"`
 	Status       string `db:"status"`
 }
 
@@ -80,7 +78,6 @@ type Session struct {
 	EndedAt              *time.Time `db:"ended_at"`
 	ExitCode             *int       `db:"exit_code"`
 	Status               string     `db:"status"`
-	Parameters           JSONB      `db:"parameters"`
 	RestoredFromBackupID *int64     `db:"restored_from_backup_id"`
 	CreatedAt            time.Time  `db:"created_at"`
 	UpdatedAt            time.Time  `db:"updated_at"`
@@ -143,55 +140,6 @@ type Backup struct {
 }
 
 // ============================================================================
-// Normalized Parameter Schema Models
-// ============================================================================
-
-// ParameterDefinition defines a parameter for a game
-type ParameterDefinition struct {
-	ParamID       int64     `db:"param_id"`
-	GameID        int64     `db:"game_id"`
-	Key           string    `db:"key"`
-	ParamType     string    `db:"param_type"`
-	Description   *string   `db:"description"`
-	Required      bool      `db:"required"`
-	DefaultValue  *string   `db:"default_value"`
-	MinValue      *int64    `db:"min_value"`
-	MaxValue      *int64    `db:"max_value"`
-	AllowedValues *[]string `db:"allowed_values"` // PostgreSQL text[] array
-	CreatedAt     time.Time `db:"created_at"`
-	UpdatedAt     time.Time `db:"updated_at"`
-}
-
-// GameConfigParameterValue stores a parameter value for a GameConfig
-type GameConfigParameterValue struct {
-	ValueID   int64     `db:"value_id"`
-	ConfigID  int64     `db:"config_id"`
-	ParamID   int64     `db:"param_id"`
-	Value     string    `db:"value"`
-	CreatedAt time.Time `db:"created_at"`
-	UpdatedAt time.Time `db:"updated_at"`
-}
-
-// ServerGameConfigParameterValue stores a parameter value override for a ServerGameConfig
-type ServerGameConfigParameterValue struct {
-	ValueID   int64     `db:"value_id"`
-	SGCID     int64     `db:"sgc_id"`
-	ParamID   int64     `db:"param_id"`
-	Value     string    `db:"value"`
-	CreatedAt time.Time `db:"created_at"`
-	UpdatedAt time.Time `db:"updated_at"`
-}
-
-// SessionParameterValue stores a parameter value override for a Session
-type SessionParameterValue struct {
-	ValueID   int64     `db:"value_id"`
-	SessionID int64     `db:"session_id"`
-	ParamID   int64     `db:"param_id"`
-	Value     string    `db:"value"`
-	CreatedAt time.Time `db:"created_at"`
-}
-
-// ============================================================================
 // Configuration Strategy System Models
 // ============================================================================
 
@@ -208,18 +156,6 @@ type ConfigurationStrategy struct {
 	ApplyOrder    int       `db:"apply_order"`
 	CreatedAt     time.Time `db:"created_at"`
 	UpdatedAt     time.Time `db:"updated_at"`
-}
-
-// StrategyParameterBinding links parameters to configuration strategies
-type StrategyParameterBinding struct {
-	BindingID      int64     `db:"binding_id"`
-	StrategyID     int64     `db:"strategy_id"`
-	ParamID        int64     `db:"param_id"`
-	BindingType    string    `db:"binding_type"`
-	TargetKey      string    `db:"target_key"`
-	ValueTemplate  *string   `db:"value_template"`
-	ConditionExpr  *string   `db:"condition_expr"`
-	CreatedAt      time.Time `db:"created_at"`
 }
 
 // ConfigurationPatch stores configuration overrides at different levels
@@ -380,12 +316,6 @@ const (
 
 	ProtocolTCP = "TCP"
 	ProtocolUDP = "UDP"
-
-	// Parameter types
-	ParamTypeString = "string"
-	ParamTypeInt    = "int"
-	ParamTypeBool   = "bool"
-	ParamTypeSecret = "secret"
 
 	// Configuration strategy types
 	StrategyTypeCLIArgs        = "cli_args"

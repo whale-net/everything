@@ -22,11 +22,12 @@ type GamesPageData struct {
 
 // GameDetailPageData holds data for game detail page
 type GameDetailPageData struct {
-	Title   string
-	Active  string
-	User    *htmxauth.UserInfo
-	Game    *manmanpb.Game
-	Configs []*manmanpb.GameConfig
+	Title     string
+	Active    string
+	User      *htmxauth.UserInfo
+	Game      *manmanpb.Game
+	Configs   []*manmanpb.GameConfig
+	SgcCounts map[int64]int
 }
 
 // GameFormData holds data for create/edit game form
@@ -190,13 +191,25 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Error fetching game configs: %v", err)
 		configs = []*manmanpb.GameConfig{} // Continue with empty list
 	}
-	
+
+	// Build SGC count map: configID → number of SGCs deployed
+	sgcCounts := make(map[int64]int)
+	allSGCs, err := app.grpc.ListServerGameConfigs(ctx, 0)
+	if err != nil {
+		log.Printf("Warning: failed to fetch SGC counts: %v", err)
+	} else {
+		for _, sgc := range allSGCs {
+			sgcCounts[sgc.GameConfigId]++
+		}
+	}
+
 	data := GameDetailPageData{
-		Title:   game.Name,
-		Active:  "games",
-		User:    user,
-		Game:    game,
-		Configs: configs,
+		Title:     game.Name,
+		Active:    "games",
+		User:      user,
+		Game:      game,
+		Configs:   configs,
+		SgcCounts: sgcCounts,
 	}
 
 	layoutData := LayoutData{
@@ -333,9 +346,6 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 			return
 		case "update-env":
 			app.handleGameConfigUpdateEnv(w, r, gameIDStr, configIDStr)
-			return
-		case "update-parameters":
-			app.handleGameConfigUpdateParameters(w, r, gameIDStr, configIDStr)
 			return
 		case "delete":
 			app.handleGameConfigDelete(w, r, gameIDStr, configIDStr)
@@ -482,7 +492,7 @@ func (app *App) handleGameConfigDeploy(w http.ResponseWriter, r *http.Request, g
 	}
 
 	ctx := context.Background()
-	_, err = app.grpc.DeployGameConfig(ctx, serverID, configID, map[string]string{})
+	_, err = app.grpc.DeployGameConfig(ctx, serverID, configID)
 	if err != nil {
 		log.Printf("Error deploying game config: %v", err)
 		redirectURL := "/games/" + gameIDStr + "/configs/" + configIDStr + "?deploy_error=Failed%20to%20deploy%20config"
@@ -568,10 +578,9 @@ func (app *App) handleGameConfigCreate(w http.ResponseWriter, r *http.Request, g
 		GameId:        gameID,
 		Name:          name,
 		Image:         image,
-		ArgsTemplate:  argsTemplate,
-		EnvTemplate:   make(map[string]string),
-		Files:         []*manmanpb.FileTemplate{},
-		Parameters:    []*manmanpb.Parameter{},
+		ArgsTemplate: argsTemplate,
+		EnvTemplate:  make(map[string]string),
+		Files:        []*manmanpb.FileTemplate{},
 	}
 	
 	config, err := app.grpc.CreateGameConfig(ctx, req)
@@ -699,46 +708,3 @@ func (app *App) handleGameConfigUpdateEnv(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusOK)
 }
 
-func (app *App) handleGameConfigUpdateParameters(w http.ResponseWriter, r *http.Request, gameIDStr, configIDStr string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	configID, err := strconv.ParseInt(configIDStr, 10, 64)
-	if err != nil {
-		http.Error(w, "Invalid config ID", http.StatusBadRequest)
-		return
-	}
-
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Invalid form data", http.StatusBadRequest)
-		return
-	}
-
-	paramsJSON := strings.TrimSpace(r.FormValue("parameters_json"))
-	var parameters []*manmanpb.Parameter
-	if paramsJSON != "" {
-		if err := json.Unmarshal([]byte(paramsJSON), &parameters); err != nil {
-			http.Error(w, "Invalid parameters JSON", http.StatusBadRequest)
-			return
-		}
-	}
-
-	ctx := context.Background()
-	req := &manmanpb.UpdateGameConfigRequest{
-		ConfigId:   configID,
-		Parameters: parameters,
-		UpdatePaths: []string{"parameters"},
-	}
-
-	_, err = app.grpc.UpdateGameConfig(ctx, req)
-	if err != nil {
-		log.Printf("Error updating parameters: %v", err)
-		http.Error(w, "Failed to update parameters", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("HX-Redirect", "/games/"+gameIDStr+"/configs/"+configIDStr)
-	w.WriteHeader(http.StatusOK)
-}
