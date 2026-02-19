@@ -22,12 +22,14 @@ type GamesPageData struct {
 
 // GameDetailPageData holds data for game detail page
 type GameDetailPageData struct {
-	Title     string
-	Active    string
-	User      *htmxauth.UserInfo
-	Game      *manmanpb.Game
-	Configs   []*manmanpb.GameConfig
-	SgcCounts map[int64]int
+	Title       string
+	Active      string
+	User        *htmxauth.UserInfo
+	Game        *manmanpb.Game
+	Configs     []*manmanpb.GameConfig
+	SgcCounts   map[int64]int
+	PathPresets []*manmanpb.GameAddonPathPreset
+	Volumes     map[int64]*manmanpb.GameConfigVolume // volumeID -> Volume for preset lookup
 }
 
 // GameFormData holds data for create/edit game form
@@ -161,6 +163,17 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 		case "actions":
 			app.handleGameActions(w, r)
 			return
+		case "presets":
+			// Handle preset routes: /games/{id}/presets/create or /games/{id}/presets/{preset_id}/delete
+			if len(pathParts) > 3 {
+				if pathParts[3] == "create" {
+					app.handleCreateAddonPathPreset(w, r)
+					return
+				} else if len(pathParts) > 4 && pathParts[4] == "delete" {
+					app.handleDeleteAddonPathPreset(w, r)
+					return
+				}
+			}
 		case "configs":
 			// Handle config routes
 			if len(pathParts) > 3 {
@@ -203,13 +216,35 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Fetch path presets for this game
+	pathPresets, err := app.grpc.ListAddonPathPresets(ctx, gameID)
+	if err != nil {
+		log.Printf("Warning: failed to fetch path presets: %v", err)
+		pathPresets = []*manmanpb.GameAddonPathPreset{}
+	}
+
+	// Fetch all volumes for all configs of this game (for preset dropdown)
+	volumeMap := make(map[int64]*manmanpb.GameConfigVolume)
+	for _, config := range configs {
+		volumes, err := app.grpc.ListGameConfigVolumes(ctx, config.ConfigId)
+		if err != nil {
+			log.Printf("Warning: failed to fetch volumes for config %d: %v", config.ConfigId, err)
+			continue
+		}
+		for _, vol := range volumes {
+			volumeMap[vol.VolumeId] = vol
+		}
+	}
+
 	data := GameDetailPageData{
-		Title:     game.Name,
-		Active:    "games",
-		User:      user,
-		Game:      game,
-		Configs:   configs,
-		SgcCounts: sgcCounts,
+		Title:       game.Name,
+		Active:      "games",
+		User:        user,
+		Game:        game,
+		Configs:     configs,
+		SgcCounts:   sgcCounts,
+		PathPresets: pathPresets,
+		Volumes:     volumeMap,
 	}
 
 	layoutData := LayoutData{
@@ -777,3 +812,67 @@ func (app *App) handleGameConfigVolumeDelete(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusOK)
 }
 
+
+// Addon Path Preset handlers
+
+func (app *App) handleCreateAddonPathPreset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := context.Background()
+
+	gameIDStr := r.FormValue("game_id")
+	name := r.FormValue("name")
+	description := r.FormValue("description")
+	volumeIDStr := r.FormValue("volume_id")
+	installationPath := r.FormValue("installation_path")
+
+	gameID, err := strconv.ParseInt(gameIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid game_id", http.StatusBadRequest)
+		return
+	}
+
+	var volumeID int64
+	if volumeIDStr != "" {
+		volumeID, _ = strconv.ParseInt(volumeIDStr, 10, 64)
+	}
+
+	_, err = app.grpc.CreateAddonPathPreset(ctx, gameID, name, description, installationPath, volumeID)
+	if err != nil {
+		log.Printf("Error creating preset: %v", err)
+		http.Error(w, "Failed to create preset", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/games/"+gameIDStr, http.StatusSeeOther)
+}
+
+func (app *App) handleDeleteAddonPathPreset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := context.Background()
+
+	presetIDStr := r.FormValue("preset_id")
+	gameIDStr := r.FormValue("game_id")
+
+	presetID, err := strconv.ParseInt(presetIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid preset_id", http.StatusBadRequest)
+		return
+	}
+
+	err = app.grpc.DeleteAddonPathPreset(ctx, presetID)
+	if err != nil {
+		log.Printf("Error deleting preset: %v", err)
+		http.Error(w, "Failed to delete preset", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/games/"+gameIDStr, http.StatusSeeOther)
+}

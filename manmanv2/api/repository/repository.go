@@ -183,6 +183,15 @@ type WorkshopLibraryRepository interface {
 	DetectCircularReference(ctx context.Context, parentLibraryID, childLibraryID int64) (bool, error)
 }
 
+// AddonPathPresetRepository defines operations for game addon path presets
+type AddonPathPresetRepository interface {
+	Create(ctx context.Context, preset *manman.GameAddonPathPreset) (*manman.GameAddonPathPreset, error)
+	Get(ctx context.Context, presetID int64) (*manman.GameAddonPathPreset, error)
+	ListByGame(ctx context.Context, gameID int64) ([]*manman.GameAddonPathPreset, error)
+	Update(ctx context.Context, preset *manman.GameAddonPathPreset) error
+	Delete(ctx context.Context, presetID int64) error
+}
+
 // Repository aggregates all repository interfaces
 type Repository struct {
 	Servers                ServerRepository
@@ -200,5 +209,6 @@ type Repository struct {
 	WorkshopAddons         WorkshopAddonRepository
 	WorkshopInstallations  WorkshopInstallationRepository
 	WorkshopLibraries      WorkshopLibraryRepository
+	AddonPathPresets       AddonPathPresetRepository
 	Actions                interface{} // ActionRepository from postgres package
 }

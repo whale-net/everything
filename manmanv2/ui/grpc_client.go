@@ -654,3 +654,47 @@ func (c *ControlClient) ListSGCLibraries(ctx context.Context, sgcID int64) ([]*m
 	}
 	return resp.Libraries, nil
 }
+
+// Path Preset Management
+
+func (c *ControlClient) CreateAddonPathPreset(ctx context.Context, gameID int64, name, description, installationPath string, volumeID int64) (*manmanpb.GameAddonPathPreset, error) {
+	resp, err := c.workshop.CreateAddonPathPreset(ctx, &manmanpb.CreateAddonPathPresetRequest{
+		GameId:           gameID,
+		Name:             name,
+		Description:      description,
+		VolumeId:         volumeID,
+		InstallationPath: installationPath,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Preset, nil
+}
+
+func (c *ControlClient) ListAddonPathPresets(ctx context.Context, gameID int64) ([]*manmanpb.GameAddonPathPreset, error) {
+	resp, err := c.workshop.ListAddonPathPresets(ctx, &manmanpb.ListAddonPathPresetsRequest{
+		GameId: gameID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Presets, nil
+}
+
+func (c *ControlClient) UpdateAddonPathPreset(ctx context.Context, presetID int64, name, description, installationPath string, volumeID int64) error {
+	_, err := c.workshop.UpdateAddonPathPreset(ctx, &manmanpb.UpdateAddonPathPresetRequest{
+		PresetId:         presetID,
+		Name:             name,
+		Description:      description,
+		VolumeId:         volumeID,
+		InstallationPath: installationPath,
+	})
+	return err
+}
+
+func (c *ControlClient) DeleteAddonPathPreset(ctx context.Context, presetID int64) error {
+	_, err := c.workshop.DeleteAddonPathPreset(ctx, &manmanpb.DeleteAddonPathPresetRequest{
+		PresetId: presetID,
+	})
+	return err
+}

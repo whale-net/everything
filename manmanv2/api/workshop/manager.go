@@ -57,6 +57,7 @@ type WorkshopManager struct {
 	sgcRepo          repository.ServerGameConfigRepository
 	gameConfigRepo   repository.GameConfigRepository
 	volumeRepo       repository.GameConfigVolumeRepository
+	presetRepo       repository.AddonPathPresetRepository
 	sessionRepo      repository.SessionRepository
 	steamClient      SteamClient
 	rmqPublisher     RMQPublisher
@@ -70,6 +71,7 @@ func NewWorkshopManager(
 	sgcRepo repository.ServerGameConfigRepository,
 	gameConfigRepo repository.GameConfigRepository,
 	volumeRepo repository.GameConfigVolumeRepository,
+	presetRepo repository.AddonPathPresetRepository,
 	sessionRepo repository.SessionRepository,
 	steamClient SteamClient,
 	rmqPublisher RMQPublisher,
@@ -81,6 +83,7 @@ func NewWorkshopManager(
 		sgcRepo:          sgcRepo,
 		gameConfigRepo:   gameConfigRepo,
 		volumeRepo:       volumeRepo,
+		presetRepo:       presetRepo,
 		sessionRepo:      sessionRepo,
 		steamClient:      steamClient,
 		rmqPublisher:     rmqPublisher,
@@ -165,26 +168,60 @@ func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int6
 
 // resolveInstallationPath determines the target path for addon installation
 func (wm *WorkshopManager) resolveInstallationPath(ctx context.Context, sgc *manman.ServerGameConfig, addon *manman.WorkshopAddon) (string, error) {
-	// Get volumes for this GameConfig
-	volumes, err := wm.volumeRepo.ListByGameConfig(ctx, sgc.GameConfigID)
-	if err != nil {
-		return "", fmt.Errorf("failed to get volumes: %w", err)
+	var volume *manman.GameConfigVolume
+	var relativePath string
+
+	// Option 1: Addon uses a preset
+	if addon.PresetID != nil {
+		preset, err := wm.presetRepo.Get(ctx, *addon.PresetID)
+		if err != nil {
+			return "", fmt.Errorf("failed to get preset: %w", err)
+		}
+
+		// Use preset's volume if specified
+		if preset.VolumeID != nil {
+			vol, err := wm.volumeRepo.Get(ctx, *preset.VolumeID)
+			if err != nil {
+				return "", fmt.Errorf("failed to get preset volume: %w", err)
+			}
+			volume = vol
+		}
+		relativePath = preset.InstallationPath
 	}
 
-	if len(volumes) == 0 {
-		return "", fmt.Errorf("no volumes configured for GameConfig %d", sgc.GameConfigID)
+	// Option 2: Addon has custom volume + path
+	if volume == nil && addon.VolumeID != nil {
+		vol, err := wm.volumeRepo.Get(ctx, *addon.VolumeID)
+		if err != nil {
+			return "", fmt.Errorf("failed to get addon volume: %w", err)
+		}
+		volume = vol
 	}
 
-	// Use first volume's container_path as base (or could match by name if addon specifies)
-	basePath := volumes[0].ContainerPath
+	// Use addon's custom path if no preset was used
+	if relativePath == "" && addon.InstallationPath != nil && *addon.InstallationPath != "" {
+		relativePath = *addon.InstallationPath
+	}
 
-	addonPath := addon.InstallationPath
-	if addonPath == nil || *addonPath == "" {
-		return "", fmt.Errorf("addon missing installation_path")
+	// Option 3: Fallback to first volume (legacy behavior)
+	if volume == nil {
+		volumes, err := wm.volumeRepo.ListByGameConfig(ctx, sgc.GameConfigID)
+		if err != nil {
+			return "", fmt.Errorf("failed to get volumes: %w", err)
+		}
+		if len(volumes) == 0 {
+			return "", fmt.Errorf("no volumes configured for GameConfig %d", sgc.GameConfigID)
+		}
+		volume = volumes[0]
+	}
+
+	if relativePath == "" {
+		return "", fmt.Errorf("addon missing installation_path (preset_id=%v, installation_path=%v)",
+			addon.PresetID, addon.InstallationPath)
 	}
 
 	// Resolve to absolute path
-	fullPath := filepath.Join(basePath, *addonPath)
+	fullPath := filepath.Join(volume.ContainerPath, relativePath)
 	return fullPath, nil
 }
 

@@ -36,6 +36,13 @@ service WorkshopService {
   // SGC-Library Management
   rpc AddLibraryToSGC(AddLibraryToSGCRequest) returns (AddLibraryToSGCResponse);
   rpc ListSGCLibraries(ListSGCLibrariesRequest) returns (ListSGCLibrariesResponse);
+
+  // Path Preset Management
+  rpc CreateAddonPathPreset(CreateAddonPathPresetRequest) returns (CreateAddonPathPresetResponse);
+  rpc GetAddonPathPreset(GetAddonPathPresetRequest) returns (GetAddonPathPresetResponse);
+  rpc ListAddonPathPresets(ListAddonPathPresetsRequest) returns (ListAddonPathPresetsResponse);
+  rpc UpdateAddonPathPreset(UpdateAddonPathPresetRequest) returns (UpdateAddonPathPresetResponse);
+  rpc DeleteAddonPathPreset(DeleteAddonPathPresetRequest) returns (DeleteAddonPathPresetResponse);
 }
 
 // ============================================================================
@@ -52,12 +59,25 @@ message WorkshopAddon {
   string description = 6;
   int64 file_size_bytes = 7;
   string installation_path = 8;
+  int64 preset_id = 15;  // Optional: reference to path preset
+  int64 volume_id = 16;  // Optional: custom volume override
   bool is_collection = 9;
   bool is_deprecated = 10;
   string metadata = 11;  // JSON-encoded metadata
   int64 last_updated = 12;  // Unix timestamp
   int64 created_at = 13;  // Unix timestamp
   int64 updated_at = 14;  // Unix timestamp
+}
+
+// GameAddonPathPreset represents a reusable installation path template
+message GameAddonPathPreset {
+  int64 preset_id = 1;
+  int64 game_id = 2;
+  string name = 3;
+  string description = 4;
+  int64 volume_id = 5;  // Optional: reference to GameConfigVolume
+  string installation_path = 6;
+  int64 created_at = 7;  // Unix timestamp
 }
 
 // WorkshopInstallation represents an addon installed on a ServerGameConfig
@@ -309,3 +329,53 @@ message ListSGCLibrariesRequest {
 message ListSGCLibrariesResponse {
   repeated WorkshopLibrary libraries = 1;
 }
+
+// ============================================================================
+// Path Preset Management RPCs
+// ============================================================================
+
+message CreateAddonPathPresetRequest {
+  int64 game_id = 1;
+  string name = 2;
+  string description = 3;
+  int64 volume_id = 4;  // Optional
+  string installation_path = 5;
+}
+
+message CreateAddonPathPresetResponse {
+  GameAddonPathPreset preset = 1;
+}
+
+message GetAddonPathPresetRequest {
+  int64 preset_id = 1;
+}
+
+message GetAddonPathPresetResponse {
+  GameAddonPathPreset preset = 1;
+}
+
+message ListAddonPathPresetsRequest {
+  int64 game_id = 1;
+}
+
+message ListAddonPathPresetsResponse {
+  repeated GameAddonPathPreset presets = 1;
+}
+
+message UpdateAddonPathPresetRequest {
+  int64 preset_id = 1;
+  string name = 2;
+  string description = 3;
+  int64 volume_id = 4;  // Optional
+  string installation_path = 5;
+}
+
+message UpdateAddonPathPresetResponse {
+  GameAddonPathPreset preset = 1;
+}
+
+message DeleteAddonPathPresetRequest {
+  int64 preset_id = 1;
+}
+
+message DeleteAddonPathPresetResponse {}

@@ -263,12 +263,25 @@ type WorkshopAddon struct {
 	Description      *string    `db:"description"`
 	FileSizeBytes    *int64     `db:"file_size_bytes"`
 	InstallationPath *string    `db:"installation_path"`
+	PresetID         *int64     `db:"preset_id"`
+	VolumeID         *int64     `db:"volume_id"`
 	IsCollection     bool       `db:"is_collection"`
 	IsDeprecated     bool       `db:"is_deprecated"`
 	Metadata         JSONB      `db:"metadata"`
 	LastUpdated      *time.Time `db:"last_updated"`
 	CreatedAt        time.Time  `db:"created_at"`
 	UpdatedAt        time.Time  `db:"updated_at"`
+}
+
+// GameAddonPathPreset represents a reusable installation path template for workshop addons
+type GameAddonPathPreset struct {
+	PresetID         int64     `db:"preset_id"`
+	GameID           int64     `db:"game_id"`
+	Name             string    `db:"name"`
+	Description      *string   `db:"description"`
+	VolumeID         *int64    `db:"volume_id"`
+	InstallationPath string    `db:"installation_path"`
+	CreatedAt        time.Time `db:"created_at"`
 }
 // WorkshopInstallation represents an addon installed on a ServerGameConfig
 type WorkshopInstallation struct {

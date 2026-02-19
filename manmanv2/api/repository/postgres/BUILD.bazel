@@ -4,6 +4,7 @@ go_library(
     name = "postgres",
     srcs = [
         "action.go",
+        "addonpathpreset.go",
         "backup.go",
         "game.go",
         "gameconfig.go",

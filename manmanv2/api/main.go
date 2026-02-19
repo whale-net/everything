@@ -110,6 +110,7 @@ func run() error {
 		repo.ServerGameConfigs,
 		repo.GameConfigs,
 		repo.GameConfigVolumes,
+		repo.AddonPathPresets,
 		repo.Sessions,
 		steamClient,
 		rmqPublisher,
@@ -125,6 +126,7 @@ func run() error {
 		repo.WorkshopInstallations,
 		repo.WorkshopLibraries,
 		repo.ServerGameConfigs,
+		repo.AddonPathPresets,
 		workshopManager,
 	)
 	pb.RegisterWorkshopServiceServer(grpcServer, workshopHandler)
