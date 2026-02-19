@@ -33,8 +33,21 @@
             {{end}}
         </dd>
 
-        <dt><strong>Server Game Config ID:</strong></dt>
-        <dd>{{.Session.ServerGameConfigId}}</dd>
+        {{if .Game}}
+        <dt><strong>Game:</strong></dt>
+        <dd><a href="/games/{{.Game.GameId}}">{{.Game.Name}}</a></dd>
+        {{end}}
+
+        {{if .GameConfig}}
+        <dt><strong>GameConfig:</strong></dt>
+        <dd><a href="/games/{{.Game.GameId}}/configs/{{.GameConfig.ConfigId}}">{{.GameConfig.Name}}</a> <small style="color: #666;">({{.GameConfig.Image}})</small></dd>
+        {{end}}
+
+        <dt><strong>Server Game Config:</strong></dt>
+        <dd>
+            <a href="/sgc/{{.Session.ServerGameConfigId}}">SGC #{{.Session.ServerGameConfigId}}</a>
+            {{if .SGC}}<small style="color: #666;">(Server #{{.SGC.ServerId}})</small>{{end}}
+        </dd>
 
         <dt><strong>Started:</strong></dt>
         <dd>{{timeAgo .Session.StartedAt}} ({{formatTime .Session.StartedAt}})</dd>
@@ -44,9 +57,6 @@
 
         <dt><strong>Exit Code:</strong></dt>
         <dd>{{.Session.ExitCode}}</dd>
-
-        <dt><strong>SGC:</strong></dt>
-        <dd><a href="/sgc/{{.Session.ServerGameConfigId}}">Manage SGC {{.Session.ServerGameConfigId}}</a></dd>
     </dl>
 </div>
 

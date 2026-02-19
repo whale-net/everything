@@ -51,6 +51,9 @@ type SessionDetailPageData struct {
 	Active        string
 	User          *htmxauth.UserInfo
 	Session       *manmanpb.Session
+	SGC           *manmanpb.ServerGameConfig
+	GameConfig    *manmanpb.GameConfig
+	Game          *manmanpb.Game
 	Actions       []*manmanpb.ActionDefinition
 	Libraries     []*manmanpb.WorkshopLibrary
 	Installations []*manmanpb.WorkshopInstallation
@@ -264,10 +267,42 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		actions = []*manmanpb.ActionDefinition{}
 	}
 
-	// Fetch workshop libraries and installations for this session's SGC
+	// Fetch SGC, GameConfig, and Game details
+	var sgc *manmanpb.ServerGameConfig
+	var gameConfig *manmanpb.GameConfig
+	var game *manmanpb.Game
 	var libraries []*manmanpb.WorkshopLibrary
 	var installations []*manmanpb.WorkshopInstallation
+
 	if sessionResp.Session.ServerGameConfigId != 0 {
+		sgcResp, err := app.grpc.GetAPI().GetServerGameConfig(ctx, &manmanpb.GetServerGameConfigRequest{
+			ServerGameConfigId: sessionResp.Session.ServerGameConfigId,
+		})
+		if err != nil {
+			log.Printf("Warning: failed to get SGC for session detail: %v", err)
+		} else {
+			sgc = sgcResp.Config
+
+			// Fetch GameConfig
+			if sgc.GameConfigId != 0 {
+				gcResp, err := app.grpc.GetGameConfig(ctx, sgc.GameConfigId)
+				if err != nil {
+					log.Printf("Warning: failed to get GameConfig for session detail: %v", err)
+				} else {
+					gameConfig = gcResp
+
+					// Fetch Game
+					if gameConfig.GameId != 0 {
+						game, err = app.grpc.GetGame(ctx, gameConfig.GameId)
+						if err != nil {
+							log.Printf("Warning: failed to get Game for session detail: %v", err)
+						}
+					}
+				}
+			}
+		}
+
+		// Fetch workshop libraries and installations
 		libraries, err = app.grpc.ListSGCLibraries(ctx, sessionResp.Session.ServerGameConfigId)
 		if err != nil {
 			log.Printf("Warning: failed to list SGC libraries for session detail: %v", err)
@@ -285,6 +320,9 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		Active:        "sessions",
 		User:          user,
 		Session:       sessionResp.Session,
+		SGC:           sgc,
+		GameConfig:    gameConfig,
+		Game:          game,
 		Actions:       actions,
 		Libraries:     libraries,
 		Installations: installations,
