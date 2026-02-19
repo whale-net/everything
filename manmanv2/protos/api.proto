@@ -235,7 +235,6 @@ message CreateGameConfigRequest {
   string image = 3;
   string args_template = 4;
   map<string, string> env_template = 5;
-  repeated FileTemplate files = 6;
   repeated string entrypoint = 8;
   repeated string command = 9;
 }
@@ -250,7 +249,6 @@ message UpdateGameConfigRequest {
   string image = 3;
   string args_template = 4;
   map<string, string> env_template = 5;
-  repeated FileTemplate files = 6;
   repeated string update_paths = 8;  // Field paths to update (empty = update all)
   repeated string entrypoint = 9;
   repeated string command = 10;

@@ -15,14 +15,6 @@ message PortBinding {
   string protocol = 3;  // "TCP" | "UDP"
 }
 
-// FileTemplate represents a file to be created in the container
-message FileTemplate {
-  string path = 1;
-  string content = 2;
-  string mode = 3;  // e.g., "0644"
-  bool is_template = 4;
-}
-
 // GameMetadata represents additional information about a game
 message GameMetadata {
   string genre = 1;
@@ -99,7 +91,6 @@ message GameConfig {
   string image = 4;  // Docker image (e.g., "minecraft:latest", "itzg/minecraft-server:latest")
   string args_template = 5;  // optional - rendered command arguments
   map<string, string> env_template = 6;
-  repeated FileTemplate files = 7;
   repeated string entrypoint = 9;  // optional - override Docker ENTRYPOINT
   repeated string command = 10;  // optional - override Docker CMD (alternative to args_template)
 }

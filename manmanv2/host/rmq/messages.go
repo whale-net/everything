@@ -7,24 +7,6 @@ type PortBindingMessage struct {
 	Protocol      string `json:"protocol"` // "TCP" | "UDP"
 }
 
-// FileTemplateMessage represents a file to be created in the container
-type FileTemplateMessage struct {
-	Path       string `json:"path"`
-	Content    string `json:"content"`
-	Mode       string `json:"mode"`
-	IsTemplate bool   `json:"is_template"`
-}
-
-// ParameterMessage represents a configurable parameter
-type ParameterMessage struct {
-	Key          string `json:"key"`
-	Value        string `json:"value"`
-	Type         string `json:"type"`
-	Description  string `json:"description"`
-	Required     bool   `json:"required"`
-	DefaultValue string `json:"default_value"`
-}
-
 // VolumeMountMessage represents a persistent volume mount
 type VolumeMountMessage struct {
 	Name          string            `json:"name"`
@@ -38,19 +20,16 @@ type GameConfigMessage struct {
 	ConfigID      int64                  `json:"config_id"`
 	Image         string                 `json:"image"`
 	ArgsTemplate  string                 `json:"args_template"`
-	EnvTemplate   map[string]string      `json:"env_template"`
-	Files         []FileTemplateMessage  `json:"files"`
-	Parameters    []ParameterMessage     `json:"parameters"`
-	Entrypoint    []string               `json:"entrypoint"`
+	EnvTemplate  map[string]string    `json:"env_template"`
+	Entrypoint   []string             `json:"entrypoint"`
 	Command       []string               `json:"command"`
 	Volumes       []VolumeMountMessage   `json:"volumes"`
 }
 
 // ServerGameConfigMessage represents server-specific game configuration
 type ServerGameConfigMessage struct {
-	SGCID        int64                  `json:"sgc_id"`
-	PortBindings []PortBindingMessage   `json:"port_bindings"`
-	Parameters   map[string]string      `json:"parameters"`
+	SGCID        int64                `json:"sgc_id"`
+	PortBindings []PortBindingMessage `json:"port_bindings"`
 }
 
 // StartSessionCommand represents a command to start a session
@@ -59,8 +38,7 @@ type StartSessionCommand struct {
 	SGCID            int64                   `json:"sgc_id"`
 	GameConfig       GameConfigMessage       `json:"game_config"`
 	ServerGameConfig ServerGameConfigMessage `json:"server_game_config"`
-	Parameters       map[string]string       `json:"parameters"`
-	Force            bool                    `json:"force"`
+	Force            bool                   `json:"force"`
 }
 
 // StopSessionCommand represents a command to stop a session

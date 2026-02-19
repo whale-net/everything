@@ -56,7 +56,6 @@ type GameConfig struct {
 	Image        string  `db:"image"`
 	ArgsTemplate *string `db:"args_template"`
 	EnvTemplate  JSONB   `db:"env_template"`
-	Files        JSONB   `db:"files"`
 	Entrypoint     JSONB   `db:"entrypoint"` // []string stored as JSONB
 	Command        JSONB   `db:"command"`    // []string stored as JSONB
 }

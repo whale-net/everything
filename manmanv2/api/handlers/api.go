@@ -252,8 +252,7 @@ func (h *GameConfigHandler) CreateGameConfig(ctx context.Context, req *pb.Create
 		Name:         req.Name,
 		Image:        req.Image,
 		ArgsTemplate: stringPtr(req.ArgsTemplate),
-		EnvTemplate:  mapToJSONB(req.EnvTemplate),
-		Files:        filesToJSONB(req.Files),
+		EnvTemplate: mapToJSONB(req.EnvTemplate),
 		Entrypoint:   stringArrayToJSONB(req.Entrypoint),
 		Command:      stringArrayToJSONB(req.Command),
 	}
@@ -289,9 +288,6 @@ func (h *GameConfigHandler) UpdateGameConfig(ctx context.Context, req *pb.Update
 		if req.EnvTemplate != nil {
 			config.EnvTemplate = mapToJSONB(req.EnvTemplate)
 		}
-		if req.Files != nil {
-			config.Files = filesToJSONB(req.Files)
-		}
 		if req.Entrypoint != nil {
 			config.Entrypoint = stringArrayToJSONB(req.Entrypoint)
 		}
@@ -310,8 +306,6 @@ func (h *GameConfigHandler) UpdateGameConfig(ctx context.Context, req *pb.Update
 				config.ArgsTemplate = stringPtr(req.ArgsTemplate)
 			case "env_template":
 				config.EnvTemplate = mapToJSONB(req.EnvTemplate)
-			case "files":
-				config.Files = filesToJSONB(req.Files)
 			case "entrypoint":
 				config.Entrypoint = stringArrayToJSONB(req.Entrypoint)
 			case "command":
@@ -344,7 +338,6 @@ func gameConfigToProto(c *manman.GameConfig) *pb.GameConfig {
 		Name:        c.Name,
 		Image:       c.Image,
 		EnvTemplate: jsonbToMap(c.EnvTemplate),
-		Files:       jsonbToFiles(c.Files),
 		Entrypoint:  jsonbToStringArray(c.Entrypoint),
 		Command:     jsonbToStringArray(c.Command),
 	}
@@ -839,8 +832,7 @@ func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameCon
 		"config_id":     gc.ConfigID,
 		"image":         gc.Image,
 		"args_template": gc.ArgsTemplate,
-		"env_template":  jsonbToMap(gc.EnvTemplate),
-		"files":         convertFilesToMessage(gc.Files),
+		"env_template": jsonbToMap(gc.EnvTemplate),
 		"entrypoint":    jsonbToStringArray(gc.Entrypoint),
 		"command":       jsonbToStringArray(gc.Command),
 	}
@@ -880,18 +872,6 @@ func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameCon
 }
 
 // Helper functions to convert JSONB to message format
-func convertFilesToMessage(filesJSON manman.JSONB) []interface{} {
-	// Files are stored as array of objects in JSONB
-	if filesJSON == nil {
-		return []interface{}{}
-	}
-	// Return as-is since it's already in the right format
-	if files, ok := filesJSON["files"].([]interface{}); ok {
-		return files
-	}
-	return []interface{}{}
-}
-
 func convertPortBindingsToMessage(bindingsJSON manman.JSONB) []interface{} {
 	if bindingsJSON == nil {
 		return []interface{}{}

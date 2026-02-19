@@ -76,56 +76,6 @@ func jsonbToMap(j manman.JSONB) map[string]string {
 }
 
 // ============================================================================
-// FileTemplate conversions
-// ============================================================================
-
-func filesToJSONB(files []*pb.FileTemplate) manman.JSONB {
-	if len(files) == 0 {
-		return nil
-	}
-	fileList := make([]map[string]interface{}, 0, len(files))
-	for _, f := range files {
-		fileList = append(fileList, map[string]interface{}{
-			"path":        f.Path,
-			"content":     f.Content,
-			"mode":        f.Mode,
-			"is_template": f.IsTemplate,
-		})
-	}
-	return map[string]interface{}{"files": fileList}
-}
-
-func jsonbToFiles(j manman.JSONB) []*pb.FileTemplate {
-	if j == nil {
-		return nil
-	}
-	fileList, ok := j["files"].([]interface{})
-	if !ok {
-		return nil
-	}
-
-	result := make([]*pb.FileTemplate, 0, len(fileList))
-	for _, item := range fileList {
-		fileMap, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		path, _ := fileMap["path"].(string)
-		content, _ := fileMap["content"].(string)
-		mode, _ := fileMap["mode"].(string)
-		isTemplate, _ := fileMap["is_template"].(bool)
-
-		result = append(result, &pb.FileTemplate{
-			Path:       path,
-			Content:    content,
-			Mode:       mode,
-			IsTemplate: isTemplate,
-		})
-	}
-	return result
-}
-
-// ============================================================================
 // GameMetadata conversions
 // ============================================================================
 

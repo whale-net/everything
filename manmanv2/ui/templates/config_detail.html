@@ -275,36 +275,4 @@
 })();
 </script>
 
-<div class="card">
-    <div class="card-header">
-        <div class="card-title">File Templates</div>
-    </div>
-    
-    {{if .Config.Files}}
-    <table>
-        <thead>
-            <tr>
-                <th>Path</th>
-                <th>Mode</th>
-                <th>Template</th>
-                <th>Preview</th>
-            </tr>
-        </thead>
-        <tbody>
-            {{range .Config.Files}}
-            <tr>
-                <td><code>{{.Path}}</code></td>
-                <td><code>{{.Mode}}</code></td>
-                <td>{{if .IsTemplate}}Yes{{else}}No{{end}}</td>
-                <td><pre style="max-height: 100px; overflow: auto; background: #f5f5f5; padding: 0.5rem;">{{.Content}}</pre></td>
-            </tr>
-            {{end}}
-        </tbody>
-    </table>
-    {{else}}
-    <div class="empty-state">
-        <p>No file templates defined.</p>
-    </div>
-    {{end}}
-</div>
 {{end}}

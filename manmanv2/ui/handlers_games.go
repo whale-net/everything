@@ -580,7 +580,6 @@ func (app *App) handleGameConfigCreate(w http.ResponseWriter, r *http.Request, g
 		Image:         image,
 		ArgsTemplate: argsTemplate,
 		EnvTemplate:  make(map[string]string),
-		Files:        []*manmanpb.FileTemplate{},
 	}
 	
 	config, err := app.grpc.CreateGameConfig(ctx, req)
