@@ -18,8 +18,8 @@ func NewAddonPathPresetRepository(db *pgxpool.Pool) *AddonPathPresetRepository {
 
 func (r *AddonPathPresetRepository) Create(ctx context.Context, preset *manman.GameAddonPathPreset) (*manman.GameAddonPathPreset, error) {
 	query := `
-		INSERT INTO game_addon_path_presets (game_id, name, description, volume_id, installation_path)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO game_addon_path_presets (game_id, name, description, installation_path)
+		VALUES ($1, $2, $3, $4)
 		RETURNING preset_id, created_at
 	`
 
@@ -27,7 +27,6 @@ func (r *AddonPathPresetRepository) Create(ctx context.Context, preset *manman.G
 		preset.GameID,
 		preset.Name,
 		preset.Description,
-		preset.VolumeID,
 		preset.InstallationPath,
 	).Scan(&preset.PresetID, &preset.CreatedAt)
 
@@ -40,7 +39,7 @@ func (r *AddonPathPresetRepository) Create(ctx context.Context, preset *manman.G
 
 func (r *AddonPathPresetRepository) Get(ctx context.Context, presetID int64) (*manman.GameAddonPathPreset, error) {
 	query := `
-		SELECT preset_id, game_id, name, description, volume_id, installation_path, created_at
+		SELECT preset_id, game_id, name, description, installation_path, created_at
 		FROM game_addon_path_presets
 		WHERE preset_id = $1
 	`
@@ -51,7 +50,6 @@ func (r *AddonPathPresetRepository) Get(ctx context.Context, presetID int64) (*m
 		&preset.GameID,
 		&preset.Name,
 		&preset.Description,
-		&preset.VolumeID,
 		&preset.InstallationPath,
 		&preset.CreatedAt,
 	)
@@ -65,7 +63,7 @@ func (r *AddonPathPresetRepository) Get(ctx context.Context, presetID int64) (*m
 
 func (r *AddonPathPresetRepository) ListByGame(ctx context.Context, gameID int64) ([]*manman.GameAddonPathPreset, error) {
 	query := `
-		SELECT preset_id, game_id, name, description, volume_id, installation_path, created_at
+		SELECT preset_id, game_id, name, description, installation_path, created_at
 		FROM game_addon_path_presets
 		WHERE game_id = $1
 		ORDER BY name
@@ -85,7 +83,6 @@ func (r *AddonPathPresetRepository) ListByGame(ctx context.Context, gameID int64
 			&preset.GameID,
 			&preset.Name,
 			&preset.Description,
-			&preset.VolumeID,
 			&preset.InstallationPath,
 			&preset.CreatedAt,
 		)
@@ -101,7 +98,7 @@ func (r *AddonPathPresetRepository) ListByGame(ctx context.Context, gameID int64
 func (r *AddonPathPresetRepository) Update(ctx context.Context, preset *manman.GameAddonPathPreset) error {
 	query := `
 		UPDATE game_addon_path_presets
-		SET name = $2, description = $3, volume_id = $4, installation_path = $5
+		SET name = $2, description = $3, installation_path = $4
 		WHERE preset_id = $1
 	`
 
@@ -109,7 +106,6 @@ func (r *AddonPathPresetRepository) Update(ctx context.Context, preset *manman.G
 		preset.PresetID,
 		preset.Name,
 		preset.Description,
-		preset.VolumeID,
 		preset.InstallationPath,
 	)
 

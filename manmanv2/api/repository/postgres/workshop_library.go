@@ -19,8 +19,8 @@ func NewWorkshopLibraryRepository(db *pgxpool.Pool) *WorkshopLibraryRepository {
 // Create creates a new workshop library
 func (r *WorkshopLibraryRepository) Create(ctx context.Context, library *manman.WorkshopLibrary) (*manman.WorkshopLibrary, error) {
 	query := `
-		INSERT INTO workshop_libraries (game_id, name, description)
-		VALUES ($1, $2, $3)
+		INSERT INTO workshop_libraries (game_id, name, description, preset_id)
+		VALUES ($1, $2, $3, $4)
 		RETURNING library_id, created_at, updated_at
 	`
 
@@ -29,6 +29,7 @@ func (r *WorkshopLibraryRepository) Create(ctx context.Context, library *manman.
 		library.GameID,
 		library.Name,
 		library.Description,
+		library.PresetID,
 	).Scan(&library.LibraryID, &library.CreatedAt, &library.UpdatedAt)
 
 	if err != nil {
@@ -43,7 +44,7 @@ func (r *WorkshopLibraryRepository) Get(ctx context.Context, libraryID int64) (*
 	library := &manman.WorkshopLibrary{}
 
 	query := `
-		SELECT library_id, game_id, name, description, created_at, updated_at
+		SELECT library_id, game_id, name, description, preset_id, created_at, updated_at
 		FROM workshop_libraries
 		WHERE library_id = $1
 	`
@@ -53,6 +54,7 @@ func (r *WorkshopLibraryRepository) Get(ctx context.Context, libraryID int64) (*
 		&library.GameID,
 		&library.Name,
 		&library.Description,
+		&library.PresetID,
 		&library.CreatedAt,
 		&library.UpdatedAt,
 	)
@@ -70,7 +72,7 @@ func (r *WorkshopLibraryRepository) List(ctx context.Context, gameID *int64, lim
 	}
 
 	query := `
-		SELECT library_id, game_id, name, description, created_at, updated_at
+		SELECT library_id, game_id, name, description, preset_id, created_at, updated_at
 		FROM workshop_libraries
 		WHERE ($1::bigint IS NULL OR game_id = $1)
 		ORDER BY library_id
@@ -91,6 +93,7 @@ func (r *WorkshopLibraryRepository) List(ctx context.Context, gameID *int64, lim
 			&library.GameID,
 			&library.Name,
 			&library.Description,
+			&library.PresetID,
 			&library.CreatedAt,
 			&library.UpdatedAt,
 		)
@@ -107,7 +110,7 @@ func (r *WorkshopLibraryRepository) List(ctx context.Context, gameID *int64, lim
 func (r *WorkshopLibraryRepository) Update(ctx context.Context, library *manman.WorkshopLibrary) error {
 	query := `
 		UPDATE workshop_libraries
-		SET name = $2, description = $3, updated_at = CURRENT_TIMESTAMP
+		SET name = $2, description = $3, preset_id = $4, updated_at = CURRENT_TIMESTAMP
 		WHERE library_id = $1
 	`
 
@@ -116,6 +119,7 @@ func (r *WorkshopLibraryRepository) Update(ctx context.Context, library *manman.
 		library.LibraryID,
 		library.Name,
 		library.Description,
+		library.PresetID,
 	)
 	return err
 }
@@ -232,7 +236,7 @@ func (r *WorkshopLibraryRepository) RemoveReference(ctx context.Context, parentL
 // ListReferences retrieves all child libraries referenced by a parent library
 func (r *WorkshopLibraryRepository) ListReferences(ctx context.Context, libraryID int64) ([]*manman.WorkshopLibrary, error) {
 	query := `
-		SELECT wl.library_id, wl.game_id, wl.name, wl.description, wl.created_at, wl.updated_at
+		SELECT wl.library_id, wl.game_id, wl.name, wl.description, wl.preset_id, wl.created_at, wl.updated_at
 		FROM workshop_libraries wl
 		INNER JOIN workshop_library_references wlr ON wl.library_id = wlr.child_library_id
 		WHERE wlr.parent_library_id = $1
@@ -253,6 +257,7 @@ func (r *WorkshopLibraryRepository) ListReferences(ctx context.Context, libraryI
 			&library.GameID,
 			&library.Name,
 			&library.Description,
+			&library.PresetID,
 			&library.CreatedAt,
 			&library.UpdatedAt,
 		)

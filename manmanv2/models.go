@@ -279,7 +279,6 @@ type GameAddonPathPreset struct {
 	GameID           int64     `db:"game_id"`
 	Name             string    `db:"name"`
 	Description      *string   `db:"description"`
-	VolumeID         *int64    `db:"volume_id"`
 	InstallationPath string    `db:"installation_path"`
 	CreatedAt        time.Time `db:"created_at"`
 }
@@ -304,8 +303,19 @@ type WorkshopLibrary struct {
 	GameID      int64     `db:"game_id"`
 	Name        string    `db:"name"`
 	Description *string   `db:"description"`
+	PresetID    *int64    `db:"preset_id"`
 	CreatedAt   time.Time `db:"created_at"`
 	UpdatedAt   time.Time `db:"updated_at"`
+}
+
+// SGCWorkshopLibrary represents a library attached to an SGC with optional overrides
+type SGCWorkshopLibrary struct {
+	SGCID                    int64     `db:"sgc_id"`
+	LibraryID                int64     `db:"library_id"`
+	PresetID                 *int64    `db:"preset_id"`
+	VolumeID                 *int64    `db:"volume_id"`
+	InstallationPathOverride *string   `db:"installation_path_override"`
+	CreatedAt                time.Time `db:"created_at"`
 }
 
 // WorkshopLibraryAddon represents the junction between libraries and addons

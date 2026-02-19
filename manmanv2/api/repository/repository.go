@@ -47,8 +47,10 @@ type ServerGameConfigRepository interface {
 	Update(ctx context.Context, sgc *manman.ServerGameConfig) error
 	Delete(ctx context.Context, sgcID int64) error
 
-	AddLibrary(ctx context.Context, sgcID, libraryID int64) error
+	AddLibrary(ctx context.Context, sgcID, libraryID int64, presetID, volumeID *int64, installationPathOverride *string) error
+	RemoveLibrary(ctx context.Context, sgcID, libraryID int64) error
 	ListLibraries(ctx context.Context, sgcID int64) ([]*manman.WorkshopLibrary, error)
+	GetSGCLibraryAttachments(ctx context.Context, sgcID int64) ([]*manman.SGCWorkshopLibrary, error)
 }
 
 // SessionFilters defines filters for session queries

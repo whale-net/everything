@@ -402,6 +402,9 @@ func (h *WorkshopServiceHandler) CreateLibrary(ctx context.Context, req *pb.Crea
 	if req.Description != "" {
 		library.Description = &req.Description
 	}
+	if req.PresetId != 0 {
+		library.PresetID = &req.PresetId
+	}
 
 	library, err := h.libraryRepo.Create(ctx, library)
 	if err != nil {
@@ -489,6 +492,9 @@ func (h *WorkshopServiceHandler) UpdateLibrary(ctx context.Context, req *pb.Upda
 		if req.Description != "" {
 			library.Description = &req.Description
 		}
+		if req.PresetId != 0 {
+			library.PresetID = &req.PresetId
+		}
 	} else {
 		// Update only specified fields
 		for _, path := range req.UpdatePaths {
@@ -497,6 +503,10 @@ func (h *WorkshopServiceHandler) UpdateLibrary(ctx context.Context, req *pb.Upda
 				library.Name = req.Name
 			case "description":
 				library.Description = &req.Description
+			case "preset_id":
+				if req.PresetId != 0 {
+					library.PresetID = &req.PresetId
+				}
 			}
 		}
 	}
@@ -725,11 +735,40 @@ func (h *WorkshopServiceHandler) AddLibraryToSGC(ctx context.Context, req *pb.Ad
 		return nil, status.Error(codes.InvalidArgument, "library_id is required")
 	}
 
-	if err := h.sgcRepo.AddLibrary(ctx, req.SgcId, req.LibraryId); err != nil {
+	var presetID, volumeID *int64
+	var installationPathOverride *string
+
+	if req.PresetId != 0 {
+		presetID = &req.PresetId
+	}
+	if req.VolumeId != 0 {
+		volumeID = &req.VolumeId
+	}
+	if req.InstallationPathOverride != "" {
+		installationPathOverride = &req.InstallationPathOverride
+	}
+
+	if err := h.sgcRepo.AddLibrary(ctx, req.SgcId, req.LibraryId, presetID, volumeID, installationPathOverride); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to add library to SGC: %v", err)
 	}
 
 	return &pb.AddLibraryToSGCResponse{}, nil
+}
+
+// RemoveLibraryFromSGC detaches a workshop library from a ServerGameConfig
+func (h *WorkshopServiceHandler) RemoveLibraryFromSGC(ctx context.Context, req *pb.RemoveLibraryFromSGCRequest) (*pb.RemoveLibraryFromSGCResponse, error) {
+	if req.SgcId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "sgc_id is required")
+	}
+	if req.LibraryId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "library_id is required")
+	}
+
+	if err := h.sgcRepo.RemoveLibrary(ctx, req.SgcId, req.LibraryId); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to remove library from SGC: %v", err)
+	}
+
+	return &pb.RemoveLibraryFromSGCResponse{}, nil
 }
 
 // ListSGCLibraries lists all libraries attached to a ServerGameConfig
@@ -766,6 +805,9 @@ func libraryToProto(library *manman.WorkshopLibrary) *pb.WorkshopLibrary {
 	if library.Description != nil {
 		pbLibrary.Description = *library.Description
 	}
+	if library.PresetID != nil {
+		pbLibrary.PresetId = *library.PresetID
+	}
 
 	return pbLibrary
 }
@@ -793,9 +835,6 @@ func (h *WorkshopServiceHandler) CreateAddonPathPreset(ctx context.Context, req 
 
 	if req.Description != "" {
 		preset.Description = &req.Description
-	}
-	if req.VolumeId != 0 {
-		preset.VolumeID = &req.VolumeId
 	}
 
 	created, err := h.presetRepo.Create(ctx, preset)
@@ -870,9 +909,6 @@ func (h *WorkshopServiceHandler) UpdateAddonPathPreset(ctx context.Context, req 
 	if req.Description != "" {
 		preset.Description = &req.Description
 	}
-	if req.VolumeId != 0 {
-		preset.VolumeID = &req.VolumeId
-	}
 
 	err = h.presetRepo.Update(ctx, preset)
 	if err != nil {
@@ -915,9 +951,6 @@ func presetToProto(preset *manman.GameAddonPathPreset) *pb.GameAddonPathPreset {
 
 	if preset.Description != nil {
 		pbPreset.Description = *preset.Description
-	}
-	if preset.VolumeID != nil {
-		pbPreset.VolumeId = *preset.VolumeID
 	}
 
 	return pbPreset

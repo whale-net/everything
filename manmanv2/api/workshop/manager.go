@@ -177,20 +177,12 @@ func (wm *WorkshopManager) resolveInstallationPath(ctx context.Context, sgc *man
 		if err != nil {
 			return "", fmt.Errorf("failed to get preset: %w", err)
 		}
-
-		// Use preset's volume if specified
-		if preset.VolumeID != nil {
-			vol, err := wm.volumeRepo.Get(ctx, *preset.VolumeID)
-			if err != nil {
-				return "", fmt.Errorf("failed to get preset volume: %w", err)
-			}
-			volume = vol
-		}
+		// Preset provides the installation path
 		relativePath = preset.InstallationPath
 	}
 
-	// Option 2: Addon has custom volume + path
-	if volume == nil && addon.VolumeID != nil {
+	// Option 2: Addon specifies a custom volume
+	if addon.VolumeID != nil {
 		vol, err := wm.volumeRepo.Get(ctx, *addon.VolumeID)
 		if err != nil {
 			return "", fmt.Errorf("failed to get addon volume: %w", err)
