@@ -225,6 +225,11 @@ func (m *MockWorkshopManager) FetchMetadata(ctx context.Context, gameID int64, w
 	return args.Get(0).(*manman.WorkshopAddon), args.Error(1)
 }
 
+func (m *MockWorkshopManager) EnsureLibraryAddonsInstalled(ctx context.Context, sgcID int64) error {
+	args := m.Called(ctx, sgcID)
+	return args.Error(0)
+}
+
 // TestInstallAddon tests the InstallAddon RPC
 func TestInstallAddon(t *testing.T) {
 	tests := []struct {

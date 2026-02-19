@@ -135,6 +135,14 @@ func (m *mockSGCRepo) Delete(ctx context.Context, sgcID int64) error {
 	return fmt.Errorf("not implemented")
 }
 
+func (m *mockSGCRepo) AddLibrary(ctx context.Context, sgcID, libraryID int64) error {
+	return fmt.Errorf("not implemented")
+}
+
+func (m *mockSGCRepo) ListLibraries(ctx context.Context, sgcID int64) ([]*manman.WorkshopLibrary, error) {
+	return nil, nil
+}
+
 type mockGameConfigRepo struct {
 	gameConfigs map[int64]*manman.GameConfig
 }
@@ -200,13 +208,13 @@ type mockRMQPublisher struct {
 	publishedRemovals []*RemoveAddonCommand
 }
 
-func (m *mockRMQPublisher) PublishDownloadCommand(ctx context.Context, serverID int64, cmd *DownloadAddonCommand) error {
-	m.publishedCommands = append(m.publishedCommands, cmd)
-	return nil
-}
-
-func (m *mockRMQPublisher) PublishRemoveCommand(ctx context.Context, serverID int64, cmd *RemoveAddonCommand) error {
-	m.publishedRemovals = append(m.publishedRemovals, cmd)
+func (m *mockRMQPublisher) Publish(ctx context.Context, exchange, routingKey string, body interface{}) error {
+	switch v := body.(type) {
+	case *DownloadAddonCommand:
+		m.publishedCommands = append(m.publishedCommands, v)
+	case *RemoveAddonCommand:
+		m.publishedRemovals = append(m.publishedRemovals, v)
+	}
 	return nil
 }
 
