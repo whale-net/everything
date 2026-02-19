@@ -586,6 +586,7 @@ func (app *App) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 	libraryIDStr := r.FormValue("library_id")
 	name := r.FormValue("name")
 	description := r.FormValue("description")
+	presetIDStr := r.FormValue("preset_id")
 
 	libraryID, err := strconv.ParseInt(libraryIDStr, 10, 64)
 	if err != nil {
@@ -593,7 +594,16 @@ func (app *App) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = app.grpc.UpdateLibrary(ctx, libraryID, name, description)
+	var presetID int64
+	if presetIDStr != "" {
+		presetID, err = strconv.ParseInt(presetIDStr, 10, 64)
+		if err != nil {
+			http.Error(w, "Invalid preset_id", http.StatusBadRequest)
+			return
+		}
+	}
+
+	_, err = app.grpc.UpdateLibrary(ctx, libraryID, name, description, presetID)
 	if err != nil {
 		log.Printf("Error updating library: %v", err)
 		http.Error(w, "Failed to update library", http.StatusInternalServerError)
@@ -855,6 +865,7 @@ func (app *App) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 	gameIDStr := r.FormValue("game_id")
 	name := r.FormValue("name")
 	description := r.FormValue("description")
+	presetIDStr := r.FormValue("preset_id")
 
 	gameID, err := strconv.ParseInt(gameIDStr, 10, 64)
 	if err != nil {
@@ -862,7 +873,16 @@ func (app *App) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	library, err := app.grpc.CreateLibrary(ctx, gameID, name, description)
+	var presetID int64
+	if presetIDStr != "" {
+		presetID, err = strconv.ParseInt(presetIDStr, 10, 64)
+		if err != nil {
+			http.Error(w, "Invalid preset_id", http.StatusBadRequest)
+			return
+		}
+	}
+
+	library, err := app.grpc.CreateLibrary(ctx, gameID, name, description, presetID)
 	if err != nil {
 		log.Printf("Error creating library: %v", err)
 		http.Error(w, "Failed to create library", http.StatusInternalServerError)

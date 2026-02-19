@@ -85,6 +85,17 @@
                     <input type="text" name="description" value="{{.Library.Description}}">
                 </div>
             </div>
+            <div class="form-group" style="margin-top:10px;">
+                <label style="font-size:12px;font-weight:600;">Default Path Preset <small style="color:#9ca3af;">(Optional)</small></label>
+                <select name="preset_id">
+                    <option value="">-- No preset --</option>
+                    {{range .Presets}}
+                    <option value="{{.PresetId}}" {{if eq .PresetId $.Library.PresetId}}selected{{end}}>
+                        {{.Name}} ({{.InstallationPath}})
+                    </option>
+                    {{end}}
+                </select>
+            </div>
             <div style="display:flex;gap:8px;margin-top:10px;">
                 <button type="submit" class="btn btn-primary">Save Changes</button>
                 <button type="button" @click="editLib = false" class="btn btn-secondary">Cancel</button>

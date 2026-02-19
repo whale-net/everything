@@ -526,11 +526,12 @@ func (c *ControlClient) GetLibrary(ctx context.Context, libraryID int64) (*manma
 	return resp.Library, nil
 }
 
-func (c *ControlClient) CreateLibrary(ctx context.Context, gameID int64, name, description string) (*manmanpb.WorkshopLibrary, error) {
+func (c *ControlClient) CreateLibrary(ctx context.Context, gameID int64, name, description string, presetID int64) (*manmanpb.WorkshopLibrary, error) {
 	resp, err := c.workshop.CreateLibrary(ctx, &manmanpb.CreateLibraryRequest{
 		GameId:      gameID,
 		Name:        name,
 		Description: description,
+		PresetId:    presetID,
 	})
 	if err != nil {
 		return nil, err
@@ -606,12 +607,13 @@ func (c *ControlClient) GetChildLibraries(ctx context.Context, libraryID int64) 
 	return resp.Libraries, nil
 }
 
-// UpdateLibrary updates a library's name and description
-func (c *ControlClient) UpdateLibrary(ctx context.Context, libraryID int64, name, description string) (*manmanpb.WorkshopLibrary, error) {
+// UpdateLibrary updates a library's name, description, and preset
+func (c *ControlClient) UpdateLibrary(ctx context.Context, libraryID int64, name, description string, presetID int64) (*manmanpb.WorkshopLibrary, error) {
 	resp, err := c.workshop.UpdateLibrary(ctx, &manmanpb.UpdateLibraryRequest{
 		LibraryId:   libraryID,
 		Name:        name,
 		Description: description,
+		PresetId:    presetID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to update library: %w", err)
@@ -657,12 +659,11 @@ func (c *ControlClient) ListSGCLibraries(ctx context.Context, sgcID int64) ([]*m
 
 // Path Preset Management
 
-func (c *ControlClient) CreateAddonPathPreset(ctx context.Context, gameID int64, name, description, installationPath string, volumeID int64) (*manmanpb.GameAddonPathPreset, error) {
+func (c *ControlClient) CreateAddonPathPreset(ctx context.Context, gameID int64, name, description, installationPath string) (*manmanpb.GameAddonPathPreset, error) {
 	resp, err := c.workshop.CreateAddonPathPreset(ctx, &manmanpb.CreateAddonPathPresetRequest{
 		GameId:           gameID,
 		Name:             name,
 		Description:      description,
-		VolumeId:         volumeID,
 		InstallationPath: installationPath,
 	})
 	if err != nil {
@@ -681,12 +682,11 @@ func (c *ControlClient) ListAddonPathPresets(ctx context.Context, gameID int64) 
 	return resp.Presets, nil
 }
 
-func (c *ControlClient) UpdateAddonPathPreset(ctx context.Context, presetID int64, name, description, installationPath string, volumeID int64) error {
+func (c *ControlClient) UpdateAddonPathPreset(ctx context.Context, presetID int64, name, description, installationPath string) error {
 	_, err := c.workshop.UpdateAddonPathPreset(ctx, &manmanpb.UpdateAddonPathPresetRequest{
 		PresetId:         presetID,
 		Name:             name,
 		Description:      description,
-		VolumeId:         volumeID,
 		InstallationPath: installationPath,
 	})
 	return err

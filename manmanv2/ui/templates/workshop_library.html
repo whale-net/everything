@@ -93,24 +93,38 @@
             <h3>Create New Library</h3>
             <button @click="showCreateLibrary = false" class="btn btn-sm btn-secondary">Cancel</button>
         </div>
-        <form method="POST" action="/workshop/create-library" style="display:grid;grid-template-columns:1fr 2fr 2fr auto;gap:12px;align-items:end;">
-            <div class="form-group" style="margin:0;">
-                <label>Game</label>
-                <select name="game_id" required>
-                    {{range .Games}}
-                    <option value="{{.GameId}}">{{.Name}}</option>
-                    {{end}}
-                </select>
+        <form method="POST" action="/workshop/create-library">
+            <div style="display:grid;grid-template-columns:1fr 2fr;gap:12px;margin-bottom:12px;">
+                <div class="form-group" style="margin:0;">
+                    <label>Game</label>
+                    <select name="game_id" required
+                            hx-get="/workshop/api/presets-for-game"
+                            hx-target="#preset-selector"
+                            hx-trigger="change"
+                            hx-include="this">
+                        {{range .Games}}
+                        <option value="{{.GameId}}">{{.Name}}</option>
+                        {{end}}
+                    </select>
+                </div>
+                <div class="form-group" style="margin:0;">
+                    <label>Name</label>
+                    <input type="text" name="name" required placeholder="e.g., Essential Mods">
+                </div>
             </div>
-            <div class="form-group" style="margin:0;">
-                <label>Name</label>
-                <input type="text" name="name" required placeholder="e.g., Essential Mods">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+                <div class="form-group" style="margin:0;">
+                    <label>Description</label>
+                    <input type="text" name="description" placeholder="Optional">
+                </div>
+                <div class="form-group" style="margin:0;" id="preset-selector">
+                    <label>Default Path Preset <small style="color:#9ca3af;">(Optional)</small></label>
+                    <select name="preset_id">
+                        <option value="">-- No preset --</option>
+                    </select>
+                </div>
             </div>
-            <div class="form-group" style="margin:0;">
-                <label>Description</label>
-                <input type="text" name="description" placeholder="Optional">
-            </div>
-            <button type="submit" class="btn btn-primary">Create</button>
+            <button type="submit" class="btn btn-primary">Create Library</button>
         </form>
     </div>
 </div>

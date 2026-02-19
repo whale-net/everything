@@ -62,23 +62,41 @@
     </div>
     {{end}}
 
-    {{if .Libraries}}
+    {{if .LibraryAttachments}}
     <table>
         <thead>
             <tr>
-                <th>Name</th>
-                <th>Library ID</th>
-                <th>Game ID</th>
+                <th>Library</th>
+                <th>Install Path</th>
+                <th>Volume</th>
                 <th></th>
             </tr>
         </thead>
         <tbody>
-            {{range .Libraries}}
+            {{range .LibraryAttachments}}
             <tr>
-                <td><a href="/workshop/library-detail?library_id={{.LibraryId}}">{{.Name}}</a></td>
-                <td><code>{{.LibraryId}}</code></td>
-                <td>{{.GameId}}</td>
-                <td><small style="color: #6b7280;">Added {{formatTime .CreatedAt}}</small></td>
+                <td>
+                    <a href="/workshop/library-detail?library_id={{.Library.LibraryId}}">{{.Library.Name}}</a>
+                    {{if .Library.PresetId}}<br><small style="color:#9ca3af;">Preset: {{.PresetName}}</small>{{end}}
+                </td>
+                <td>
+                    <code style="font-size:12px;">{{.ComputedPath}}</code>
+                    {{if .PathOverride}}<br><small style="color:#f59e0b;">⚠ Override</small>{{end}}
+                </td>
+                <td>
+                    {{if .VolumeName}}
+                        <span style="font-size:13px;">{{.VolumeName}}</span>
+                    {{else}}
+                        <small style="color:#9ca3af;">First available</small>
+                    {{end}}
+                </td>
+                <td>
+                    <form method="POST" action="/sgc/remove-library" style="display:inline;">
+                        <input type="hidden" name="sgc_id" value="{{$.SGC.ServerGameConfigId}}">
+                        <input type="hidden" name="library_id" value="{{.Library.LibraryId}}">
+                        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Remove this library?')">Remove</button>
+                    </form>
+                </td>
             </tr>
             {{end}}
         </tbody>
@@ -159,35 +177,55 @@ function toggleAddLibraryPanel() {
 
 {{define "sgc_available_libraries_partial"}}
 {{if .Libraries}}
-<table style="margin-top: 0.5rem;">
-    <thead>
-        <tr>
-            <th>Name</th>
-            <th>Game ID</th>
-            <th></th>
-        </tr>
-    </thead>
-    <tbody>
-        {{range .Libraries}}
-        <tr>
-            <td>{{.Name}}</td>
-            <td>{{.GameId}}</td>
-            <td>
-                <form method="post" action="/sgc/add-library" style="display: inline;">
-                    <input type="hidden" name="sgc_id" value="{{$.SGCID}}">
-                    <input type="hidden" name="library_id" value="{{.LibraryId}}">
-                    <button type="submit" class="btn btn-primary btn-sm"
-                            hx-post="/sgc/add-library"
-                            hx-vals='{"sgc_id": "{{$.SGCID}}", "library_id": "{{.LibraryId}}"}'
-                            hx-target="body">
-                        Add
-                    </button>
-                </form>
-            </td>
-        </tr>
-        {{end}}
-    </tbody>
-</table>
+<div style="margin-top: 0.5rem;">
+    {{range .Libraries}}
+    <div x-data="{ expanded: false }" style="border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 0.75rem; padding: 0.75rem; background: white;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <strong>{{.Name}}</strong>
+                {{if .Description}}<br><small style="color: #6b7280;">{{.Description}}</small>{{end}}
+                {{if .PresetId}}<br><small style="color: #3498db;">Default: {{.PresetName}} ({{.PresetPath}})</small>{{end}}
+            </div>
+            <button @click="expanded = !expanded" class="btn btn-primary btn-sm" x-text="expanded ? 'Cancel' : 'Add'">Add</button>
+        </div>
+
+        <div x-show="expanded" x-cloak x-transition style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #e5e7eb;">
+            <form method="POST" action="/sgc/add-library">
+                <input type="hidden" name="sgc_id" value="{{$.SGCID}}">
+                <input type="hidden" name="library_id" value="{{.LibraryId}}">
+
+                <div class="form-group">
+                    <label>Path Preset <small style="color: #9ca3af;">(Optional override)</small></label>
+                    <select name="preset_id">
+                        <option value="">-- Use library default {{if .PresetName}}({{.PresetName}}){{end}} --</option>
+                        {{range $.Presets}}
+                        <option value="{{.PresetId}}">{{.Name}} ({{.InstallationPath}})</option>
+                        {{end}}
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Volume <small style="color: #9ca3af;">(Optional)</small></label>
+                    <select name="volume_id">
+                        <option value="">-- Use first available volume --</option>
+                        {{range $.Volumes}}
+                        <option value="{{.VolumeId}}">{{.Name}} ({{.ContainerPath}})</option>
+                        {{end}}
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Custom Path Override <small style="color: #9ca3af;">(Advanced)</small></label>
+                    <input type="text" name="installation_path_override" placeholder="e.g., custom/path/here">
+                    <small style="color: #9ca3af;">Leave empty to use preset. If set, completely overrides preset path.</small>
+                </div>
+
+                <button type="submit" class="btn btn-success">Attach Library</button>
+            </form>
+        </div>
+    </div>
+    {{end}}
+</div>
 {{else}}
 <p style="color: #6b7280; margin-top: 0.5rem;">No libraries available to add.</p>
 {{end}}

@@ -826,7 +826,6 @@ func (app *App) handleCreateAddonPathPreset(w http.ResponseWriter, r *http.Reque
 	gameIDStr := r.FormValue("game_id")
 	name := r.FormValue("name")
 	description := r.FormValue("description")
-	volumeIDStr := r.FormValue("volume_id")
 	installationPath := r.FormValue("installation_path")
 
 	gameID, err := strconv.ParseInt(gameIDStr, 10, 64)
@@ -835,12 +834,7 @@ func (app *App) handleCreateAddonPathPreset(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	var volumeID int64
-	if volumeIDStr != "" {
-		volumeID, _ = strconv.ParseInt(volumeIDStr, 10, 64)
-	}
-
-	_, err = app.grpc.CreateAddonPathPreset(ctx, gameID, name, description, installationPath, volumeID)
+	_, err = app.grpc.CreateAddonPathPreset(ctx, gameID, name, description, installationPath)
 	if err != nil {
 		log.Printf("Error creating preset: %v", err)
 		http.Error(w, "Failed to create preset", http.StatusInternalServerError)
