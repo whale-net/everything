@@ -131,6 +131,7 @@ message CreateAddonRequest {
   string installation_path = 7;
   bool is_collection = 8;
   string metadata = 9;  // JSON-encoded metadata
+  int64 preset_id = 10;  // Optional: reference to path preset
 }
 
 message CreateAddonResponse {
@@ -166,6 +167,7 @@ message UpdateAddonRequest {
   bool is_deprecated = 6;
   string metadata = 7;  // JSON-encoded metadata
   repeated string update_paths = 8;  // Field paths to update (empty = update all)
+  int64 preset_id = 9;  // Optional: reference to path preset
 }
 
 message UpdateAddonResponse {

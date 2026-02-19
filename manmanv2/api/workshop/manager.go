@@ -208,8 +208,10 @@ func (wm *WorkshopManager) resolveInstallationPath(ctx context.Context, sgc *man
 	}
 
 	if relativePath == "" {
-		return "", fmt.Errorf("addon missing installation_path (preset_id=%v, installation_path=%v)",
-			addon.PresetID, addon.InstallationPath)
+		return "", fmt.Errorf("addon %d (%s) is missing installation path configuration. "+
+			"Please set either preset_id or installation_path on the addon. "+
+			"Current state: preset_id=%v, installation_path=%v",
+			addon.AddonID, addon.Name, addon.PresetID, addon.InstallationPath)
 	}
 
 	// Resolve to absolute path

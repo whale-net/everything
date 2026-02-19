@@ -64,6 +64,17 @@ func (h *WorkshopServiceHandler) CreateAddon(ctx context.Context, req *pb.Create
 		platformType = manman.PlatformTypeSteamWorkshop
 	}
 
+	// VALIDATION: Addon must have a way to determine installation path
+	// Either preset_id OR installation_path must be provided
+	hasPresetID := req.PresetId != 0
+	hasInstallPath := req.InstallationPath != ""
+
+	if !hasPresetID && !hasInstallPath {
+		return nil, status.Error(codes.InvalidArgument,
+			"addon must have either preset_id or installation_path set. "+
+			"Use preset_id to reference a path preset, or provide a custom installation_path.")
+	}
+
 	// Build addon model
 	addon := &manman.WorkshopAddon{
 		GameID:       req.GameId,
@@ -78,6 +89,9 @@ func (h *WorkshopServiceHandler) CreateAddon(ctx context.Context, req *pb.Create
 	}
 	if req.FileSizeBytes > 0 {
 		addon.FileSizeBytes = &req.FileSizeBytes
+	}
+	if req.PresetId != 0 {
+		addon.PresetID = &req.PresetId
 	}
 	if req.InstallationPath != "" {
 		addon.InstallationPath = &req.InstallationPath
@@ -180,6 +194,9 @@ func (h *WorkshopServiceHandler) UpdateAddon(ctx context.Context, req *pb.Update
 		if req.FileSizeBytes > 0 {
 			addon.FileSizeBytes = &req.FileSizeBytes
 		}
+		if req.PresetId != 0 {
+			addon.PresetID = &req.PresetId
+		}
 		if req.InstallationPath != "" {
 			addon.InstallationPath = &req.InstallationPath
 		}
@@ -199,8 +216,18 @@ func (h *WorkshopServiceHandler) UpdateAddon(ctx context.Context, req *pb.Update
 				addon.Description = &req.Description
 			case "file_size_bytes":
 				addon.FileSizeBytes = &req.FileSizeBytes
+			case "preset_id":
+				if req.PresetId != 0 {
+					addon.PresetID = &req.PresetId
+				} else {
+					addon.PresetID = nil
+				}
 			case "installation_path":
-				addon.InstallationPath = &req.InstallationPath
+				if req.InstallationPath != "" {
+					addon.InstallationPath = &req.InstallationPath
+				} else {
+					addon.InstallationPath = nil
+				}
 			case "is_deprecated":
 				addon.IsDeprecated = req.IsDeprecated
 			case "metadata":
@@ -208,6 +235,16 @@ func (h *WorkshopServiceHandler) UpdateAddon(ctx context.Context, req *pb.Update
 				addon.Metadata = metadata
 			}
 		}
+	}
+
+	// VALIDATION: After update, addon must still have a way to determine installation path
+	hasPresetID := addon.PresetID != nil && *addon.PresetID != 0
+	hasInstallPath := addon.InstallationPath != nil && *addon.InstallationPath != ""
+
+	if !hasPresetID && !hasInstallPath {
+		return nil, status.Error(codes.FailedPrecondition,
+			"addon must have either preset_id or installation_path set after update. "+
+			"Cannot clear both values as the addon would not be installable.")
 	}
 
 	// Update in database
