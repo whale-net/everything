@@ -109,7 +109,7 @@ func run() error {
 		repo.WorkshopLibraries,
 		repo.ServerGameConfigs,
 		repo.GameConfigs,
-		repo.ConfigurationStrategies,
+		repo.GameConfigVolumes,
 		repo.Sessions,
 		steamClient,
 		rmqPublisher,

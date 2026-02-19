@@ -95,6 +95,17 @@ message GameConfig {
   repeated string command = 10;  // optional - override Docker CMD (alternative to args_template)
 }
 
+// GameConfigVolume represents a volume mount configuration specific to a GameConfig
+message GameConfigVolume {
+  int64 volume_id = 1;
+  int64 config_id = 2;
+  string name = 3;
+  string description = 4;
+  string container_path = 5;
+  string host_subpath = 6;
+  bool read_only = 7;
+}
+
 // ServerGameConfig represents a game configuration deployed on a specific server
 message ServerGameConfig {
   int64 server_game_config_id = 1;
@@ -160,6 +171,8 @@ message ConfigurationPatch {
   int64 entity_id = 4;  // ID of the config/sgc/session
   string patch_content = 5;  // The patch content
   string patch_format = 6;  // "template", "json_merge_patch", "json_patch", "yaml_merge"
+  int64 volume_id = 7;  // Optional FK to game_config_volumes
+  string path_override = 8;  // Optional relative path override
 }
 
 // PatchLayer shows one layer of configuration patches

@@ -312,7 +312,7 @@ type GameConfigDetailPageData struct {
 	Servers     []*manmanpb.Server
 	Deployments []ServerGameConfigView
 	DeployError string
-	Volumes     []*manmanpb.ConfigurationStrategy
+	Volumes     []*manmanpb.GameConfigVolume
 }
 
 type ServerGameConfigView struct {
@@ -353,9 +353,23 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 		case "actions":
 			app.handleConfigActions(w, r)
 			return
+		case "volumes":
+			// Handle volume routes
+			if len(pathParts) > 5 {
+				// /games/{id}/configs/{config_id}/volumes/{action_or_volume_id}
+				actionOrVolumeID := pathParts[5]
+				if actionOrVolumeID == "create" {
+					app.handleGameConfigVolumeCreate(w, r, gameIDStr, configIDStr)
+					return
+				} else {
+					// Assume it's a volume_id for delete
+					app.handleGameConfigVolumeDelete(w, r, gameIDStr, configIDStr, actionOrVolumeID)
+					return
+				}
+			}
 		}
 	}
-	
+
 	// Special handling for "new" config
 	if configIDStr == "new" {
 		app.handleGameConfigNew(w, r, gameIDStr)
@@ -390,21 +404,11 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 		return
 	}
 
-	// Fetch volume strategies
-	strategies, err := app.grpc.ListConfigurationStrategies(ctx, &manmanpb.ListConfigurationStrategiesRequest{
-		GameId: gameID,
-	})
+	// Fetch volumes for this GameConfig
+	volumes, err := app.grpc.ListGameConfigVolumes(ctx, configID)
 	if err != nil {
-		log.Printf("Warning: Failed to fetch configuration strategies: %v", err)
-	}
-
-	var volumeMounts []*manmanpb.ConfigurationStrategy
-	if strategies != nil {
-		for _, s := range strategies.Strategies {
-			if s.StrategyType == "volume" {
-				volumeMounts = append(volumeMounts, s)
-			}
-		}
+		log.Printf("Warning: Failed to fetch volumes for config %d: %v", configID, err)
+		volumes = []*manmanpb.GameConfigVolume{}
 	}
 
 	servers, err := app.grpc.ListServers(ctx)
@@ -441,7 +445,7 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 		Servers:     servers,
 		Deployments: deployments,
 		DeployError: deployError,
-		Volumes:     volumeMounts,
+		Volumes:     volumes,
 	}
 
 	layoutData := LayoutData{
@@ -700,6 +704,72 @@ func (app *App) handleGameConfigUpdateEnv(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		log.Printf("Error updating env template: %v", err)
 		http.Error(w, "Failed to update env template", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("HX-Redirect", "/games/"+gameIDStr+"/configs/"+configIDStr)
+	w.WriteHeader(http.StatusOK)
+}
+
+// Volume CRUD handlers
+
+func (app *App) handleGameConfigVolumeCreate(w http.ResponseWriter, r *http.Request, gameIDStr, configIDStr string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	configID, err := strconv.ParseInt(configIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid config ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	name := strings.TrimSpace(r.FormValue("name"))
+	description := strings.TrimSpace(r.FormValue("description"))
+	containerPath := strings.TrimSpace(r.FormValue("container_path"))
+	hostSubpath := strings.TrimSpace(r.FormValue("host_subpath"))
+	readOnly := r.FormValue("read_only") == "on"
+
+	if name == "" || containerPath == "" {
+		http.Error(w, "Name and container path are required", http.StatusBadRequest)
+		return
+	}
+
+	ctx := context.Background()
+	_, err = app.grpc.CreateGameConfigVolume(ctx, configID, name, description, containerPath, hostSubpath, readOnly)
+	if err != nil {
+		log.Printf("Error creating volume: %v", err)
+		http.Error(w, "Failed to create volume", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("HX-Redirect", "/games/"+gameIDStr+"/configs/"+configIDStr)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (app *App) handleGameConfigVolumeDelete(w http.ResponseWriter, r *http.Request, gameIDStr, configIDStr, volumeIDStr string) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	volumeID, err := strconv.ParseInt(volumeIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid volume ID", http.StatusBadRequest)
+		return
+	}
+
+	ctx := context.Background()
+	err = app.grpc.DeleteGameConfigVolume(ctx, volumeID)
+	if err != nil {
+		log.Printf("Error deleting volume: %v", err)
+		http.Error(w, "Failed to delete volume", http.StatusInternalServerError)
 		return
 	}
 

@@ -56,7 +56,7 @@ type WorkshopManager struct {
 	libraryRepo      repository.WorkshopLibraryRepository
 	sgcRepo          repository.ServerGameConfigRepository
 	gameConfigRepo   repository.GameConfigRepository
-	strategyRepo     repository.ConfigurationStrategyRepository
+	volumeRepo       repository.GameConfigVolumeRepository
 	sessionRepo      repository.SessionRepository
 	steamClient      SteamClient
 	rmqPublisher     RMQPublisher
@@ -69,7 +69,7 @@ func NewWorkshopManager(
 	libraryRepo repository.WorkshopLibraryRepository,
 	sgcRepo repository.ServerGameConfigRepository,
 	gameConfigRepo repository.GameConfigRepository,
-	strategyRepo repository.ConfigurationStrategyRepository,
+	volumeRepo repository.GameConfigVolumeRepository,
 	sessionRepo repository.SessionRepository,
 	steamClient SteamClient,
 	rmqPublisher RMQPublisher,
@@ -80,7 +80,7 @@ func NewWorkshopManager(
 		libraryRepo:      libraryRepo,
 		sgcRepo:          sgcRepo,
 		gameConfigRepo:   gameConfigRepo,
-		strategyRepo:     strategyRepo,
+		volumeRepo:       volumeRepo,
 		sessionRepo:      sessionRepo,
 		steamClient:      steamClient,
 		rmqPublisher:     rmqPublisher,
@@ -165,36 +165,18 @@ func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int6
 
 // resolveInstallationPath determines the target path for addon installation
 func (wm *WorkshopManager) resolveInstallationPath(ctx context.Context, sgc *manman.ServerGameConfig, addon *manman.WorkshopAddon) (string, error) {
-	// Get game config to access game ID
-	gameConfig, err := wm.gameConfigRepo.Get(ctx, sgc.GameConfigID)
+	// Get volumes for this GameConfig
+	volumes, err := wm.volumeRepo.ListByGameConfig(ctx, sgc.GameConfigID)
 	if err != nil {
-		return "", fmt.Errorf("failed to get game config: %w", err)
+		return "", fmt.Errorf("failed to get volumes: %w", err)
 	}
 
-	// Get volume strategies for the game
-	strategies, err := wm.strategyRepo.ListByGame(ctx, gameConfig.GameID)
-	if err != nil {
-		return "", fmt.Errorf("failed to list strategies: %w", err)
+	if len(volumes) == 0 {
+		return "", fmt.Errorf("no volumes configured for GameConfig %d", sgc.GameConfigID)
 	}
 
-	// Find volume strategy (should be only one or use apply_order)
-	var volumeStrategy *manman.ConfigurationStrategy
-	for _, s := range strategies {
-		if s.StrategyType == manman.StrategyTypeVolume {
-			volumeStrategy = s
-			break
-		}
-	}
-
-	if volumeStrategy == nil {
-		return "", fmt.Errorf("no volume strategy found for game")
-	}
-
-	// Combine volume target path with addon installation path
-	basePath := volumeStrategy.TargetPath
-	if basePath == nil {
-		return "", fmt.Errorf("volume strategy missing target_path")
-	}
+	// Use first volume's container_path as base (or could match by name if addon specifies)
+	basePath := volumes[0].ContainerPath
 
 	addonPath := addon.InstallationPath
 	if addonPath == nil || *addonPath == "" {
@@ -202,7 +184,7 @@ func (wm *WorkshopManager) resolveInstallationPath(ctx context.Context, sgc *man
 	}
 
 	// Resolve to absolute path
-	fullPath := filepath.Join(*basePath, *addonPath)
+	fullPath := filepath.Join(basePath, *addonPath)
 	return fullPath, nil
 }
 

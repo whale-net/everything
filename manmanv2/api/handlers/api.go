@@ -34,6 +34,7 @@ type APIServer struct {
 	backupHandler           *BackupHandler
 	strategyHandler         *ConfigurationStrategyHandler
 	patchHandler            *ConfigurationPatchHandler
+	volumeHandler           *GameConfigVolumeHandler
 	actionHandler           *ActionHandler
 }
 
@@ -65,6 +66,7 @@ func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq
 		backupHandler:           NewBackupHandler(repo.Backups, repo.Sessions, s3Client),
 		strategyHandler:         NewConfigurationStrategyHandler(repo.ConfigurationStrategies),
 		patchHandler:            NewConfigurationPatchHandler(repo.ConfigurationPatches),
+		volumeHandler:           NewGameConfigVolumeHandler(repo.GameConfigVolumes),
 		actionHandler:           NewActionHandler(repo.Actions.(*postgres.ActionRepository), repo.Sessions, repo.ServerGameConfigs, repo.GameConfigs, commandPublisher),
 	}
 }
@@ -720,11 +722,11 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 		log.Printf("[session %d] allocated %d ports on server %d", session.SessionID, len(portBindings), sgc.ServerID)
 	}
 
-	// Fetch Configuration Strategies for the game to get volume mounts
-	strategies, err := h.repo.ConfigurationStrategies.ListByGame(ctx, gc.GameID)
+	// Fetch volumes for this GameConfig
+	volumes, err := h.repo.GameConfigVolumes.ListByGameConfig(ctx, gc.ConfigID)
 	if err != nil {
-		log.Printf("Warning: Failed to fetch configuration strategies for game %d: %v", gc.GameID, err)
-		// Continue anyway, volumes might not be defined as strategies yet
+		log.Printf("Warning: Failed to fetch volumes for config %d: %v", gc.ConfigID, err)
+		volumes = []*manman.GameConfigVolume{}
 	}
 
 	// Pre-flight: ensure all addons from attached libraries are installed
@@ -737,7 +739,7 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 
 	// Publish start session command to RabbitMQ
 	if h.publisher != nil {
-		cmd := buildStartSessionCommand(session, sgc, gc, internalForce, strategies)
+		cmd := buildStartSessionCommand(session, sgc, gc, internalForce, volumes)
 		// Increased timeout to allow for image pulling
 		if err := h.publisher.PublishStartSession(ctx, sgc.ServerID, cmd, 2*time.Minute); err != nil {
 			log.Printf("Warning: Failed to publish start session command: %v", err)
@@ -826,7 +828,7 @@ func (h *SessionHandler) SendInput(ctx context.Context, req *pb.SendInputRequest
 }
 
 // buildStartSessionCommand converts database models to RabbitMQ message format
-func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameConfig, gc *manman.GameConfig, force bool, strategies []*manman.ConfigurationStrategy) map[string]interface{} {
+func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameConfig, gc *manman.GameConfig, force bool, volumes []*manman.GameConfigVolume) map[string]interface{} {
 	// Build game config message
 	gameConfig := map[string]interface{}{
 		"config_id":     gc.ConfigID,
@@ -837,24 +839,22 @@ func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameCon
 		"command":       jsonbToStringArray(gc.Command),
 	}
 
-	// Add volume mounts from strategies
-	var volumes []map[string]interface{}
-	for _, s := range strategies {
-		if s.StrategyType == manman.StrategyTypeVolume {
-			vol := map[string]interface{}{
-				"name":           s.Name,
-				"container_path": s.TargetPath,
-			}
-			if s.BaseTemplate != nil {
-				vol["host_subpath"] = *s.BaseTemplate
-			}
-			if s.RenderOptions != nil {
-				vol["options"] = s.RenderOptions
-			}
-			volumes = append(volumes, vol)
+	// Add volume mounts from game_config_volumes
+	var volumeMsgs []map[string]interface{}
+	for _, vol := range volumes {
+		volMsg := map[string]interface{}{
+			"name":           vol.Name,
+			"container_path": vol.ContainerPath,
 		}
+		if vol.HostSubpath != nil {
+			volMsg["host_subpath"] = *vol.HostSubpath
+		}
+		if vol.ReadOnly {
+			volMsg["options"] = map[string]interface{}{"read_only": true}
+		}
+		volumeMsgs = append(volumeMsgs, volMsg)
 	}
-	gameConfig["volumes"] = volumes
+	gameConfig["volumes"] = volumeMsgs
 
 	// Build server game config message
 	serverGameConfig := map[string]interface{}{
@@ -1216,6 +1216,116 @@ func patchToProto(p *manman.ConfigurationPatch) *pb.ConfigurationPatch {
 	if p.PatchContent != nil {
 		proto.PatchContent = *p.PatchContent
 	}
+	if p.VolumeID != nil {
+		proto.VolumeId = *p.VolumeID
+	}
+	if p.PathOverride != nil {
+		proto.PathOverride = *p.PathOverride
+	}
+
+	return proto
+}
+
+// GameConfigVolumeHandler handles GameConfigVolume-related RPCs
+type GameConfigVolumeHandler struct {
+	repo repository.GameConfigVolumeRepository
+}
+
+func NewGameConfigVolumeHandler(repo repository.GameConfigVolumeRepository) *GameConfigVolumeHandler {
+	return &GameConfigVolumeHandler{repo: repo}
+}
+
+func (h *GameConfigVolumeHandler) CreateGameConfigVolume(ctx context.Context, req *pb.CreateGameConfigVolumeRequest) (*pb.CreateGameConfigVolumeResponse, error) {
+	volume := &manman.GameConfigVolume{
+		ConfigID:      req.ConfigId,
+		Name:          req.Name,
+		Description:   stringPtr(req.Description),
+		ContainerPath: req.ContainerPath,
+		HostSubpath:   stringPtr(req.HostSubpath),
+		ReadOnly:      req.ReadOnly,
+	}
+
+	created, err := h.repo.Create(ctx, volume)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create game config volume: %v", err)
+	}
+
+	return &pb.CreateGameConfigVolumeResponse{
+		Volume: gameConfigVolumeToProto(created),
+	}, nil
+}
+
+func (h *GameConfigVolumeHandler) GetGameConfigVolume(ctx context.Context, req *pb.GetGameConfigVolumeRequest) (*pb.GetGameConfigVolumeResponse, error) {
+	volume, err := h.repo.Get(ctx, req.VolumeId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "game config volume not found: %v", err)
+	}
+
+	return &pb.GetGameConfigVolumeResponse{
+		Volume: gameConfigVolumeToProto(volume),
+	}, nil
+}
+
+func (h *GameConfigVolumeHandler) ListGameConfigVolumes(ctx context.Context, req *pb.ListGameConfigVolumesRequest) (*pb.ListGameConfigVolumesResponse, error) {
+	volumes, err := h.repo.ListByGameConfig(ctx, req.ConfigId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list game config volumes: %v", err)
+	}
+
+	pbVolumes := make([]*pb.GameConfigVolume, len(volumes))
+	for i, v := range volumes {
+		pbVolumes[i] = gameConfigVolumeToProto(v)
+	}
+
+	return &pb.ListGameConfigVolumesResponse{
+		Volumes: pbVolumes,
+	}, nil
+}
+
+func (h *GameConfigVolumeHandler) UpdateGameConfigVolume(ctx context.Context, req *pb.UpdateGameConfigVolumeRequest) (*pb.UpdateGameConfigVolumeResponse, error) {
+	volume, err := h.repo.Get(ctx, req.VolumeId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "game config volume not found: %v", err)
+	}
+
+	volume.Name = req.Name
+	volume.Description = stringPtr(req.Description)
+	volume.ContainerPath = req.ContainerPath
+	volume.HostSubpath = stringPtr(req.HostSubpath)
+	volume.ReadOnly = req.ReadOnly
+
+	if err := h.repo.Update(ctx, volume); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update game config volume: %v", err)
+	}
+
+	return &pb.UpdateGameConfigVolumeResponse{
+		Volume: gameConfigVolumeToProto(volume),
+	}, nil
+}
+
+func (h *GameConfigVolumeHandler) DeleteGameConfigVolume(ctx context.Context, req *pb.DeleteGameConfigVolumeRequest) (*pb.DeleteGameConfigVolumeResponse, error) {
+	if err := h.repo.Delete(ctx, req.VolumeId); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete game config volume: %v", err)
+	}
+
+	return &pb.DeleteGameConfigVolumeResponse{}, nil
+}
+
+func gameConfigVolumeToProto(v *manman.GameConfigVolume) *pb.GameConfigVolume {
+	proto := &pb.GameConfigVolume{
+		VolumeId:      v.VolumeID,
+		ConfigId:      v.ConfigID,
+		Name:          v.Name,
+		ContainerPath: v.ContainerPath,
+		ReadOnly:      v.ReadOnly,
+	}
+
+	if v.Description != nil {
+		proto.Description = *v.Description
+	}
+	if v.HostSubpath != nil {
+		proto.HostSubpath = *v.HostSubpath
+	}
 
 	return proto
 }
@@ -1344,6 +1454,27 @@ func (s *APIServer) DeleteConfigurationPatch(ctx context.Context, req *pb.Delete
 
 func (s *APIServer) ListConfigurationPatches(ctx context.Context, req *pb.ListConfigurationPatchesRequest) (*pb.ListConfigurationPatchesResponse, error) {
 	return s.patchHandler.ListConfigurationPatches(ctx, req)
+}
+
+// APIServer wrapper methods for GameConfigVolume
+func (s *APIServer) CreateGameConfigVolume(ctx context.Context, req *pb.CreateGameConfigVolumeRequest) (*pb.CreateGameConfigVolumeResponse, error) {
+	return s.volumeHandler.CreateGameConfigVolume(ctx, req)
+}
+
+func (s *APIServer) GetGameConfigVolume(ctx context.Context, req *pb.GetGameConfigVolumeRequest) (*pb.GetGameConfigVolumeResponse, error) {
+	return s.volumeHandler.GetGameConfigVolume(ctx, req)
+}
+
+func (s *APIServer) ListGameConfigVolumes(ctx context.Context, req *pb.ListGameConfigVolumesRequest) (*pb.ListGameConfigVolumesResponse, error) {
+	return s.volumeHandler.ListGameConfigVolumes(ctx, req)
+}
+
+func (s *APIServer) UpdateGameConfigVolume(ctx context.Context, req *pb.UpdateGameConfigVolumeRequest) (*pb.UpdateGameConfigVolumeResponse, error) {
+	return s.volumeHandler.UpdateGameConfigVolume(ctx, req)
+}
+
+func (s *APIServer) DeleteGameConfigVolume(ctx context.Context, req *pb.DeleteGameConfigVolumeRequest) (*pb.DeleteGameConfigVolumeResponse, error) {
+	return s.volumeHandler.DeleteGameConfigVolume(ctx, req)
 }
 
 // Game Actions RPCs

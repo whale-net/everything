@@ -60,6 +60,18 @@ type GameConfig struct {
 	Command        JSONB   `db:"command"`    // []string stored as JSONB
 }
 
+// GameConfigVolume represents a volume mount configuration specific to a GameConfig
+type GameConfigVolume struct {
+	VolumeID      int64     `db:"volume_id"`
+	ConfigID      int64     `db:"config_id"`
+	Name          string    `db:"name"`
+	Description   *string   `db:"description"`
+	ContainerPath string    `db:"container_path"`
+	HostSubpath   *string   `db:"host_subpath"`
+	ReadOnly      bool      `db:"read_only"`
+	CreatedAt     time.Time `db:"created_at"`
+}
+
 // ServerGameConfig represents a game configuration deployed on a specific server
 type ServerGameConfig struct {
 	SGCID        int64  `db:"sgc_id"`
@@ -165,6 +177,8 @@ type ConfigurationPatch struct {
 	EntityID     int64     `db:"entity_id"`
 	PatchContent *string   `db:"patch_content"`
 	PatchFormat  string    `db:"patch_format"`
+	VolumeID     *int64    `db:"volume_id"`      // Optional FK to game_config_volumes
+	PathOverride *string   `db:"path_override"`  // Optional relative path override
 	CreatedAt    time.Time `db:"created_at"`
 	UpdatedAt    time.Time `db:"updated_at"`
 }

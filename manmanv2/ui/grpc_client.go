@@ -237,6 +237,62 @@ func (c *ControlClient) ListConfigurationStrategies(ctx context.Context, req *ma
 	return c.api.ListConfigurationStrategies(ctx, req)
 }
 
+// GameConfigVolume methods
+
+// CreateGameConfigVolume creates a new volume for a game config
+func (c *ControlClient) CreateGameConfigVolume(ctx context.Context, configID int64, name, description, containerPath, hostSubpath string, readOnly bool) (*manmanpb.GameConfigVolume, error) {
+	resp, err := c.api.CreateGameConfigVolume(ctx, &manmanpb.CreateGameConfigVolumeRequest{
+		ConfigId:      configID,
+		Name:          name,
+		Description:   description,
+		ContainerPath: containerPath,
+		HostSubpath:   hostSubpath,
+		ReadOnly:      readOnly,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create game config volume: %w", err)
+	}
+	return resp.Volume, nil
+}
+
+// ListGameConfigVolumes retrieves all volumes for a game config
+func (c *ControlClient) ListGameConfigVolumes(ctx context.Context, configID int64) ([]*manmanpb.GameConfigVolume, error) {
+	resp, err := c.api.ListGameConfigVolumes(ctx, &manmanpb.ListGameConfigVolumesRequest{
+		ConfigId: configID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list game config volumes: %w", err)
+	}
+	return resp.Volumes, nil
+}
+
+// UpdateGameConfigVolume updates an existing volume
+func (c *ControlClient) UpdateGameConfigVolume(ctx context.Context, volumeID int64, name, description, containerPath, hostSubpath string, readOnly bool) (*manmanpb.GameConfigVolume, error) {
+	resp, err := c.api.UpdateGameConfigVolume(ctx, &manmanpb.UpdateGameConfigVolumeRequest{
+		VolumeId:      volumeID,
+		Name:          name,
+		Description:   description,
+		ContainerPath: containerPath,
+		HostSubpath:   hostSubpath,
+		ReadOnly:      readOnly,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update game config volume: %w", err)
+	}
+	return resp.Volume, nil
+}
+
+// DeleteGameConfigVolume deletes a volume
+func (c *ControlClient) DeleteGameConfigVolume(ctx context.Context, volumeID int64) error {
+	_, err := c.api.DeleteGameConfigVolume(ctx, &manmanpb.DeleteGameConfigVolumeRequest{
+		VolumeId: volumeID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete game config volume: %w", err)
+	}
+	return nil
+}
+
 // ListServerGameConfigs retrieves server game configs for a server.
 func (c *ControlClient) ListServerGameConfigs(ctx context.Context, serverID int64) ([]*manmanpb.ServerGameConfig, error) {
 	resp, err := c.api.ListServerGameConfigs(ctx, &manmanpb.ListServerGameConfigsRequest{

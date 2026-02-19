@@ -72,6 +72,13 @@ service ManManAPI {
   rpc DeleteConfigurationPatch(DeleteConfigurationPatchRequest) returns (DeleteConfigurationPatchResponse);
   rpc ListConfigurationPatches(ListConfigurationPatchesRequest) returns (ListConfigurationPatchesResponse);
 
+  // GameConfig volume management
+  rpc CreateGameConfigVolume(CreateGameConfigVolumeRequest) returns (CreateGameConfigVolumeResponse);
+  rpc GetGameConfigVolume(GetGameConfigVolumeRequest) returns (GetGameConfigVolumeResponse);
+  rpc ListGameConfigVolumes(ListGameConfigVolumesRequest) returns (ListGameConfigVolumesResponse);
+  rpc UpdateGameConfigVolume(UpdateGameConfigVolumeRequest) returns (UpdateGameConfigVolumeResponse);
+  rpc DeleteGameConfigVolume(DeleteGameConfigVolumeRequest) returns (DeleteGameConfigVolumeResponse);
+
   // Configuration preview (new)
   rpc PreviewConfiguration(PreviewConfigurationRequest) returns (PreviewConfigurationResponse);
 
@@ -595,6 +602,58 @@ message ListConfigurationPatchesRequest {
 message ListConfigurationPatchesResponse {
   repeated ConfigurationPatch patches = 1;
 }
+
+// ============================================================================
+// GameConfig Volume RPCs
+// ============================================================================
+
+message CreateGameConfigVolumeRequest {
+  int64 config_id = 1;
+  string name = 2;
+  string description = 3;
+  string container_path = 4;
+  string host_subpath = 5;
+  bool read_only = 6;
+}
+
+message CreateGameConfigVolumeResponse {
+  GameConfigVolume volume = 1;
+}
+
+message GetGameConfigVolumeRequest {
+  int64 volume_id = 1;
+}
+
+message GetGameConfigVolumeResponse {
+  GameConfigVolume volume = 1;
+}
+
+message ListGameConfigVolumesRequest {
+  int64 config_id = 1;
+}
+
+message ListGameConfigVolumesResponse {
+  repeated GameConfigVolume volumes = 1;
+}
+
+message UpdateGameConfigVolumeRequest {
+  int64 volume_id = 1;
+  string name = 2;
+  string description = 3;
+  string container_path = 4;
+  string host_subpath = 5;
+  bool read_only = 6;
+}
+
+message UpdateGameConfigVolumeResponse {
+  GameConfigVolume volume = 1;
+}
+
+message DeleteGameConfigVolumeRequest {
+  int64 volume_id = 1;
+}
+
+message DeleteGameConfigVolumeResponse {}
 
 // ============================================================================
 // Configuration Preview RPCs

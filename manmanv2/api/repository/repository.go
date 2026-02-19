@@ -123,6 +123,15 @@ type ConfigurationStrategyRepository interface {
 	Delete(ctx context.Context, strategyID int64) error
 }
 
+// GameConfigVolumeRepository defines operations for GameConfigVolume entities
+type GameConfigVolumeRepository interface {
+	Create(ctx context.Context, volume *manman.GameConfigVolume) (*manman.GameConfigVolume, error)
+	Get(ctx context.Context, volumeID int64) (*manman.GameConfigVolume, error)
+	ListByGameConfig(ctx context.Context, configID int64) ([]*manman.GameConfigVolume, error)
+	Update(ctx context.Context, volume *manman.GameConfigVolume) error
+	Delete(ctx context.Context, volumeID int64) error
+}
+
 // ConfigurationPatchRepository defines operations for ConfigurationPatch entities
 type ConfigurationPatchRepository interface {
 	Create(ctx context.Context, patch *manman.ConfigurationPatch) (*manman.ConfigurationPatch, error)
@@ -187,6 +196,7 @@ type Repository struct {
 	ServerPorts            ServerPortRepository
 	ConfigurationStrategies ConfigurationStrategyRepository
 	ConfigurationPatches   ConfigurationPatchRepository
+	GameConfigVolumes      GameConfigVolumeRepository
 	WorkshopAddons         WorkshopAddonRepository
 	WorkshopInstallations  WorkshopInstallationRepository
 	WorkshopLibraries      WorkshopLibraryRepository
