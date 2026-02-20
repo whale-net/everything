@@ -273,6 +273,12 @@ type WorkshopAddon struct {
 	UpdatedAt        time.Time  `db:"updated_at"`
 }
 
+// WorkshopAddonWithGame is returned by ListAddons queries that join with the games table.
+type WorkshopAddonWithGame struct {
+	WorkshopAddon
+	SteamAppID *string // games.steam_app_id
+}
+
 // GameAddonPathPreset represents a reusable installation path template for workshop addons
 type GameAddonPathPreset struct {
 	PresetID         int64     `db:"preset_id"`

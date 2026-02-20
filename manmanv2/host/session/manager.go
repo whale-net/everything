@@ -21,9 +21,10 @@ import (
 )
 
 const (
-	// internalDataDir is the well-known path inside this container where session data is stored
-	// The host's data directory should be mounted here
-	internalDataDir = "/var/lib/manman/sessions"
+	// InternalDataDir is the well-known path inside this container where session data is stored.
+	// The host's data directory should be mounted here. Exported so the workshop orchestrator
+	// can create volume directories under the same tree before spawning download containers.
+	InternalDataDir = "/var/lib/manman/sessions"
 )
 
 // SessionManager manages the lifecycle of game server sessions
@@ -110,7 +111,7 @@ func (sm *SessionManager) getSGCInternalDir(sgcID int64) string {
 	if sm.environment != "" {
 		dirName = fmt.Sprintf("sgc-%s-%d", sm.environment, sgcID)
 	}
-	return filepath.Join(internalDataDir, dirName)
+	return filepath.Join(InternalDataDir, dirName)
 }
 
 // getSGCHostDir returns the path to SGC data on the host (for Docker bind mounts)

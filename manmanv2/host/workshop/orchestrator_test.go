@@ -27,7 +27,8 @@ func TestNewDownloadOrchestrator(t *testing.T) {
 		nil, // workshopClient
 		1,   // serverID
 		"test", // environment
-		"/tmp/test", // hostDataDir
+		"/tmp/test",     // hostDataDir
+		"/var/lib/test", // internalDataDir
 		3, // maxConcurrent
 		mockPublisher,
 	)
@@ -116,16 +117,16 @@ func TestGetSGCHostDir(t *testing.T) {
 
 func TestBuildSteamCMDCommand(t *testing.T) {
 	orchestrator := &DownloadOrchestrator{}
-	
-	cmd := orchestrator.buildSteamCMDCommand("550", "123456789")
-	
-	assert.Len(t, cmd, 3)
-	assert.Equal(t, "/bin/bash", cmd[0])
-	assert.Equal(t, "-c", cmd[1])
-	assert.Contains(t, cmd[2], "steamcmd")
-	assert.Contains(t, cmd[2], "+login anonymous")
-	assert.Contains(t, cmd[2], "+workshop_download_item 550 123456789")
-	assert.Contains(t, cmd[2], "+quit")
+
+	// steamcmd/steamcmd image has ENTRYPOINT ["steamcmd"], so args are passed directly
+	cmd := orchestrator.buildSteamCMDCommand("550", "123456789", "/data/mods")
+
+	assert.Equal(t, []string{
+		"+force_install_dir", "/data/mods",
+		"+login", "anonymous",
+		"+workshop_download_item", "550", "123456789",
+		"+quit",
+	}, cmd)
 }
 
 func TestParseProgress(t *testing.T) {
@@ -168,7 +169,7 @@ func TestParseProgress(t *testing.T) {
 
 func TestInProgressTracking(t *testing.T) {
 	orchestrator := NewDownloadOrchestrator(
-		nil, nil, nil, 1, "test", "/tmp", 3, &MockInstallationStatusPublisher{},
+		nil, nil, nil, 1, "test", "/tmp", "/var/lib/test", 3, &MockInstallationStatusPublisher{},
 	)
 	
 	// Initially not in progress

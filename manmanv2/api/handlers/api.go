@@ -735,8 +735,8 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 	// Publish start session command to RabbitMQ
 	if h.publisher != nil {
 		cmd := buildStartSessionCommand(session, sgc, gc, internalForce, volumes)
-		// Increased timeout to allow for image pulling
-		if err := h.publisher.PublishStartSession(ctx, sgc.ServerID, cmd, 2*time.Minute); err != nil {
+		// Short timeout: host manager replies immediately on receipt (work runs async).
+		if err := h.publisher.PublishStartSession(ctx, sgc.ServerID, cmd, 30*time.Second); err != nil {
 			log.Printf("Warning: Failed to publish start session command: %v", err)
 			// Don't fail the request - the session is created, operator can manually trigger
 		}

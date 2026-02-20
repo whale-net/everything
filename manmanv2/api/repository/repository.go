@@ -177,7 +177,7 @@ type WorkshopLibraryRepository interface {
 
 	AddAddon(ctx context.Context, libraryID, addonID int64, displayOrder int) error
 	RemoveAddon(ctx context.Context, libraryID, addonID int64) error
-	ListAddons(ctx context.Context, libraryID int64) ([]*manman.WorkshopAddon, error)
+	ListAddons(ctx context.Context, libraryID int64) ([]*manman.WorkshopAddonWithGame, error)
 
 	AddReference(ctx context.Context, parentLibraryID, childLibraryID int64) error
 	RemoveReference(ctx context.Context, parentLibraryID, childLibraryID int64) error

@@ -665,7 +665,7 @@ func (h *WorkshopServiceHandler) GetLibraryAddons(ctx context.Context, req *pb.G
 
 	pbAddons := make([]*pb.WorkshopAddon, len(addons))
 	for i, addon := range addons {
-		pbAddons[i] = addonToProto(addon)
+		pbAddons[i] = addonWithGameToProto(addon)
 	}
 
 	return &pb.GetLibraryAddonsResponse{
@@ -698,7 +698,8 @@ func (h *WorkshopServiceHandler) GetChildLibraries(ctx context.Context, req *pb.
 // Conversion Helpers
 // ============================================================================
 
-// addonToProto converts a WorkshopAddon model to protobuf
+// addonToProto converts a WorkshopAddon model to protobuf.
+// steam_app_id is read from metadata when available (legacy path for single-addon fetches).
 func addonToProto(addon *manman.WorkshopAddon) *pb.WorkshopAddon {
 	pbAddon := &pb.WorkshopAddon{
 		AddonId:      addon.AddonID,
@@ -731,6 +732,16 @@ func addonToProto(addon *manman.WorkshopAddon) *pb.WorkshopAddon {
 	}
 
 	return pbAddon
+}
+
+// addonWithGameToProto converts a WorkshopAddonWithGame (joined) to protobuf,
+// using the game's steam_app_id directly from the JOIN result.
+func addonWithGameToProto(addon *manman.WorkshopAddonWithGame) *pb.WorkshopAddon {
+	pb := addonToProto(&addon.WorkshopAddon)
+	if addon.SteamAppID != nil {
+		pb.SteamAppId = *addon.SteamAppID
+	}
+	return pb
 }
 
 // installationToProto converts a WorkshopInstallation model to protobuf

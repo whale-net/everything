@@ -88,10 +88,19 @@ func (c *Consumer) handleStartSession(ctx context.Context, msg rmq.Message) erro
 		return fmt.Errorf("failed to unmarshal start session command: %w", err)
 	}
 	slog.Info("received command", "command", "start_session", "session_id", cmd.SessionID, "sgc_id", cmd.SGCID, "routing_key", msg.RoutingKey)
-	if err := c.handler.HandleStartSession(ctx, &cmd); err != nil {
-		return err
-	}
-	slog.Info("command completed", "command", "start_session", "session_id", cmd.SessionID)
+
+	// Run in a goroutine to avoid blocking the RMQ consumer. Addon downloads can
+	// take several minutes, and QoS=1 means no other messages (stop, kill, etc.)
+	// would be processable while this handler blocks. The API gets an immediate
+	// "acknowledged" reply; session progress is reported via status updates.
+	go func() {
+		if err := c.handler.HandleStartSession(context.Background(), &cmd); err != nil {
+			slog.Error("session start failed", "session_id", cmd.SessionID, "error", err)
+		} else {
+			slog.Info("command completed", "command", "start_session", "session_id", cmd.SessionID)
+		}
+	}()
+
 	return nil
 }
 

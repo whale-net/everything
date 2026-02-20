@@ -108,6 +108,7 @@ func run() error {
 		serverID,
 		environment,
 		hostDataDir,
+		session.InternalDataDir,
 		5, // max concurrent downloads
 		rmqPublisher,
 	)
@@ -385,7 +386,11 @@ func (h *CommandHandlerImpl) HandleDownloadAddon(ctx context.Context, cmd *rmq.D
 	}
 
 	// Call download orchestrator in a goroutine to avoid blocking RabbitMQ consumer
-	go h.downloadOrchestrator.HandleDownloadCommand(ctx, workshopCmd)
+	go func() {
+		if err := h.downloadOrchestrator.HandleDownloadCommand(ctx, workshopCmd); err != nil {
+			slog.Error("async download command failed", "installation_id", workshopCmd.InstallationID, "error", err)
+		}
+	}()
 
 	return nil
 }

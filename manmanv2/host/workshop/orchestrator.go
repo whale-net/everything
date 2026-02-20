@@ -4,13 +4,17 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/whale-net/everything/libs/go/docker"
 	"github.com/whale-net/everything/manmanv2/host/rmq"
 	pb "github.com/whale-net/everything/manmanv2/protos"
@@ -18,15 +22,16 @@ import (
 
 // DownloadOrchestrator manages workshop addon download container lifecycle within host manager
 type DownloadOrchestrator struct {
-	dockerClient   *docker.Client
-	grpcClient     pb.ManManAPIClient
-	workshopClient pb.WorkshopServiceClient
-	serverID       int64
-	environment    string
-	hostDataDir    string
-	maxConcurrent  int
-	semaphore      chan struct{}
-	rmqPublisher   InstallationStatusPublisher
+	dockerClient    *docker.Client
+	grpcClient      pb.ManManAPIClient
+	workshopClient  pb.WorkshopServiceClient
+	serverID        int64
+	environment     string
+	hostDataDir     string
+	internalDataDir string // path where hostDataDir is mounted inside this container
+	maxConcurrent   int
+	semaphore       chan struct{}
+	rmqPublisher    InstallationStatusPublisher
 
 	// In-progress download tracking to prevent duplicates
 	inProgressMutex     sync.RWMutex
@@ -65,6 +70,7 @@ func NewDownloadOrchestrator(
 	serverID int64,
 	environment string,
 	hostDataDir string,
+	internalDataDir string,
 	maxConcurrent int,
 	rmqPublisher InstallationStatusPublisher,
 ) *DownloadOrchestrator {
@@ -75,6 +81,7 @@ func NewDownloadOrchestrator(
 		serverID:            serverID,
 		environment:         environment,
 		hostDataDir:         hostDataDir,
+		internalDataDir:     internalDataDir,
 		maxConcurrent:       maxConcurrent,
 		semaphore:           make(chan struct{}, maxConcurrent),
 		rmqPublisher:        rmqPublisher,
@@ -82,8 +89,10 @@ func NewDownloadOrchestrator(
 	}
 }
 
+const steamCMDImage = "steamcmd/steamcmd:latest"
+
 // HandleDownloadCommand processes download commands from RabbitMQ
-func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *DownloadAddonCommand) {
+func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *DownloadAddonCommand) error {
 	logger := slog.With(
 		"installation_id", cmd.InstallationID,
 		"sgc_id", cmd.SGCID,
@@ -94,7 +103,7 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 	// Check for duplicate in-progress downloads for this installation
 	if do.isDownloadInProgress(cmd.InstallationID) {
 		logger.Info("download already in progress, skipping duplicate")
-		return
+		return nil
 	}
 
 	// Mark download as in progress
@@ -125,24 +134,37 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 	if err != nil {
 		logger.Error("failed to resolve volume mounts", "error", err)
 		do.handleDownloadError(ctx, cmd.InstallationID, err)
-		return
+		return err
 	}
 
 	// Build SteamCMD command
-	steamCmd := do.buildSteamCMDCommand(cmd.SteamAppID, cmd.WorkshopID)
+	steamCmd := do.buildSteamCMDCommand(cmd.SteamAppID, cmd.WorkshopID, cmd.InstallPath)
 
-	// Create container
-	containerID, err := do.dockerClient.CreateContainer(ctx, docker.ContainerConfig{
+	containerConfig := docker.ContainerConfig{
 		Name:    containerName,
-		Image:   "steamcmd/steamcmd:latest",
+		Image:   steamCMDImage,
 		Command: steamCmd,
 		Volumes: volumeMounts,
 		Env:     []string{},
-	})
+	}
+
+	// Create container, pulling image if needed
+	containerID, err := do.dockerClient.CreateContainer(ctx, containerConfig)
 	if err != nil {
-		logger.Error("failed to create download container", "error", err)
-		do.handleDownloadError(ctx, cmd.InstallationID, err)
-		return
+		if strings.Contains(err.Error(), "No such image") {
+			logger.Info("pulling steamcmd image", "image", steamCMDImage)
+			if pullErr := do.dockerClient.PullImage(ctx, steamCMDImage); pullErr != nil {
+				logger.Error("failed to pull steamcmd image", "error", pullErr)
+				do.handleDownloadError(ctx, cmd.InstallationID, pullErr)
+				return pullErr
+			}
+			containerID, err = do.dockerClient.CreateContainer(ctx, containerConfig)
+		}
+		if err != nil {
+			logger.Error("failed to create download container", "error", err)
+			do.handleDownloadError(ctx, cmd.InstallationID, err)
+			return err
+		}
 	}
 
 	// Start container
@@ -150,22 +172,30 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 	if err != nil {
 		logger.Error("failed to start download container", "error", err)
 		do.handleDownloadError(ctx, cmd.InstallationID, err)
-		return
+		return err
 	}
 
-	// Monitor container logs for progress
+	// Monitor container logs for progress.
+	// Docker returns a multiplexed stream with 8-byte binary headers per message.
+	// We use stdcopy.StdCopy to demultiplex it before scanning for text lines.
 	logReader, err := do.dockerClient.GetContainerLogs(ctx, containerID, true, "all")
 	if err != nil {
 		logger.Error("failed to get container logs", "error", err)
 		do.handleDownloadError(ctx, cmd.InstallationID, err)
-		return
+		return err
 	}
 	defer logReader.Close()
 
-	// Parse logs and update progress
-	scanner := bufio.NewScanner(logReader)
+	pr, pw := io.Pipe()
+	go func() {
+		defer pw.Close()
+		_, _ = stdcopy.StdCopy(pw, pw, logReader)
+	}()
+
+	scanner := bufio.NewScanner(pr)
 	for scanner.Scan() {
 		line := scanner.Text()
+		logger.Info("steamcmd", "line", line)
 		if progress := do.parseProgress(line); progress > 0 {
 			do.publishStatus(ctx, cmd.InstallationID, InstallationStatusDownloading, progress, nil)
 		}
@@ -194,10 +224,12 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 		errMsg := fmt.Sprintf("download failed with exit code %d", exitCode)
 		logger.Error("download failed", "exit_code", exitCode)
 		do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, &errMsg)
-	} else {
-		logger.Info("download completed successfully")
-		do.publishStatus(ctx, cmd.InstallationID, InstallationStatusInstalled, 100, nil)
+		return fmt.Errorf("%s", errMsg)
 	}
+
+	logger.Info("download completed successfully")
+	do.publishStatus(ctx, cmd.InstallationID, InstallationStatusInstalled, 100, nil)
+	return nil
 }
 
 // getDownloadContainerName generates environment-aware container name
@@ -242,28 +274,67 @@ func (do *DownloadOrchestrator) publishStatus(ctx context.Context, installationI
 	}
 }
 
-// resolveVolumeMounts gets volume mounts from SGC configuration
+// resolveVolumeMounts gets volume mounts from SGC configuration, matching the game container's
+// mount scheme, and ensures the target directories exist with world-writable permissions.
+//
+// Directories are created at the internal path (inside this container) so they are visible
+// to Docker on the host. We use 0777 so any container user (including steam, UID 1000) can write.
 func (do *DownloadOrchestrator) resolveVolumeMounts(ctx context.Context, sgcID int64) ([]string, error) {
-	// Get SGC data directory on host
-	sgcDataDir := do.getSGCHostDir(sgcID)
+	sgcHostDir := do.getSGCHostDir(sgcID)
+	sgcInternalDir := do.getSGCInternalDir(sgcID)
 
-	// Mount the SGC data directory to the download container
-	// This allows the download container to write to the same volumes as the game container
-	return []string{
-		fmt.Sprintf("%s:/data", sgcDataDir),
-	}, nil
+	// Look up the SGC to get its game_config_id
+	sgcResp, err := do.grpcClient.GetServerGameConfig(ctx, &pb.GetServerGameConfigRequest{
+		ServerGameConfigId: sgcID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get SGC %d: %w", sgcID, err)
+	}
+
+	// List volumes for this game config
+	volumesResp, err := do.grpcClient.ListGameConfigVolumes(ctx, &pb.ListGameConfigVolumesRequest{
+		ConfigId: sgcResp.Config.GameConfigId,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list volumes for game config %d: %w", sgcResp.Config.GameConfigId, err)
+	}
+
+	if len(volumesResp.Volumes) == 0 {
+		return nil, fmt.Errorf("no volumes configured for game config %d (SGC %d)", sgcResp.Config.GameConfigId, sgcID)
+	}
+
+	// Build mount strings matching the game container's volume mount scheme:
+	//   sgcHostDir/<host_subpath>:<container_path>
+	// Also create the directories now with 0777 so steamcmd (steam user, UID 1000) can write.
+	mounts := make([]string, 0, len(volumesResp.Volumes))
+	for _, vol := range volumesResp.Volumes {
+		subPath := strings.TrimPrefix(vol.HostSubpath, "/")
+		if subPath == "" {
+			subPath = vol.Name
+		}
+
+		// Create the directory at the internal path (accessible inside this container)
+		internalPath := filepath.Join(sgcInternalDir, subPath)
+		if err := os.MkdirAll(internalPath, 0777); err != nil {
+			return nil, fmt.Errorf("failed to create volume directory %s: %w", internalPath, err)
+		}
+
+		hostPath := filepath.Join(sgcHostDir, subPath)
+		mounts = append(mounts, fmt.Sprintf("%s:%s", hostPath, vol.ContainerPath))
+	}
+
+	return mounts, nil
 }
 
-// buildSteamCMDCommand constructs the SteamCMD command for downloading
-func (do *DownloadOrchestrator) buildSteamCMDCommand(steamAppID, workshopID string) []string {
+// buildSteamCMDCommand constructs the SteamCMD command for downloading.
+// The steamcmd/steamcmd image has ENTRYPOINT ["steamcmd"], so these args are passed
+// directly to steamcmd — no bash wrapper needed or wanted.
+func (do *DownloadOrchestrator) buildSteamCMDCommand(steamAppID, workshopID, installPath string) []string {
 	return []string{
-		"/bin/bash",
-		"-c",
-		fmt.Sprintf(
-			"steamcmd +login anonymous +workshop_download_item %s %s +quit",
-			steamAppID,
-			workshopID,
-		),
+		"+force_install_dir", installPath,
+		"+login", "anonymous",
+		"+workshop_download_item", steamAppID, workshopID,
+		"+quit",
 	}
 }
 
@@ -279,13 +350,23 @@ func (do *DownloadOrchestrator) parseProgress(logLine string) int {
 	return 0
 }
 
-// getSGCHostDir returns the host path for SGC data
+// getSGCHostDir returns the host path for SGC data (used as Docker bind mount source)
 func (do *DownloadOrchestrator) getSGCHostDir(sgcID int64) string {
 	dirName := fmt.Sprintf("sgc-%d", sgcID)
 	if do.environment != "" {
 		dirName = fmt.Sprintf("sgc-%s-%d", do.environment, sgcID)
 	}
 	return filepath.Join(do.hostDataDir, dirName)
+}
+
+// getSGCInternalDir returns the path inside this container where SGC data is accessible.
+// hostDataDir is mounted at internalDataDir, so volume directories can be created here.
+func (do *DownloadOrchestrator) getSGCInternalDir(sgcID int64) string {
+	dirName := fmt.Sprintf("sgc-%d", sgcID)
+	if do.environment != "" {
+		dirName = fmt.Sprintf("sgc-%s-%d", do.environment, sgcID)
+	}
+	return filepath.Join(do.internalDataDir, dirName)
 }
 
 // handleDownloadError handles download errors
@@ -437,7 +518,9 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 		}
 
 		// Download addon (blocking)
-		do.HandleDownloadCommand(ctx, cmd)
+		if err := do.HandleDownloadCommand(ctx, cmd); err != nil {
+			return fmt.Errorf("failed to download addon %d: %w", addonID, err)
+		}
 
 		logger.Info("addon installation completed", "addon_id", addonID)
 	}

@@ -155,14 +155,16 @@ func (r *WorkshopLibraryRepository) RemoveAddon(ctx context.Context, libraryID, 
 	return err
 }
 
-// ListAddons retrieves all addons in a library
-func (r *WorkshopLibraryRepository) ListAddons(ctx context.Context, libraryID int64) ([]*manman.WorkshopAddon, error) {
+// ListAddons retrieves all addons in a library, joined with their game's steam_app_id
+func (r *WorkshopLibraryRepository) ListAddons(ctx context.Context, libraryID int64) ([]*manman.WorkshopAddonWithGame, error) {
 	query := `
 		SELECT wa.addon_id, wa.game_id, wa.workshop_id, wa.platform_type, wa.name, wa.description,
-		       wa.file_size_bytes, wa.installation_path, wa.is_collection, wa.is_deprecated,
-		       wa.metadata, wa.last_updated, wa.created_at, wa.updated_at
+		       wa.file_size_bytes, wa.installation_path, wa.preset_id, wa.volume_id,
+		       wa.is_collection, wa.is_deprecated, wa.metadata, wa.last_updated,
+		       wa.created_at, wa.updated_at, g.steam_app_id
 		FROM workshop_addons wa
 		INNER JOIN workshop_library_addons wla ON wa.addon_id = wla.addon_id
+		INNER JOIN games g ON wa.game_id = g.game_id
 		WHERE wla.library_id = $1
 		ORDER BY wla.display_order, wa.addon_id
 	`
@@ -173,29 +175,32 @@ func (r *WorkshopLibraryRepository) ListAddons(ctx context.Context, libraryID in
 	}
 	defer rows.Close()
 
-	var addons []*manman.WorkshopAddon
+	var addons []*manman.WorkshopAddonWithGame
 	for rows.Next() {
-		addon := &manman.WorkshopAddon{}
+		row := &manman.WorkshopAddonWithGame{}
 		err := rows.Scan(
-			&addon.AddonID,
-			&addon.GameID,
-			&addon.WorkshopID,
-			&addon.PlatformType,
-			&addon.Name,
-			&addon.Description,
-			&addon.FileSizeBytes,
-			&addon.InstallationPath,
-			&addon.IsCollection,
-			&addon.IsDeprecated,
-			&addon.Metadata,
-			&addon.LastUpdated,
-			&addon.CreatedAt,
-			&addon.UpdatedAt,
+			&row.AddonID,
+			&row.GameID,
+			&row.WorkshopID,
+			&row.PlatformType,
+			&row.Name,
+			&row.Description,
+			&row.FileSizeBytes,
+			&row.InstallationPath,
+			&row.PresetID,
+			&row.VolumeID,
+			&row.IsCollection,
+			&row.IsDeprecated,
+			&row.Metadata,
+			&row.LastUpdated,
+			&row.CreatedAt,
+			&row.UpdatedAt,
+			&row.SteamAppID,
 		)
 		if err != nil {
 			return nil, err
 		}
-		addons = append(addons, addon)
+		addons = append(addons, row)
 	}
 
 	return addons, rows.Err()

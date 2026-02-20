@@ -9,6 +9,7 @@ go_library(
         "//libs/go/docker",
         "//manmanv2/host/rmq",
         "//manmanv2/protos:manmanpb",
+        "@com_github_docker_docker//pkg/stdcopy",
     ],
 )
 
