@@ -3,7 +3,6 @@ package workshop
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -427,24 +426,13 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 			return fmt.Errorf("failed to trigger installation for addon %d: %w", addonID, err)
 		}
 
-		// Parse JSON metadata to extract steam_app_id (empty metadata is fine)
-		var steamAppID string
-		if addon.Metadata != "" {
-			var meta map[string]interface{}
-			if err := json.Unmarshal([]byte(addon.Metadata), &meta); err != nil {
-				logger.Warn("failed to parse addon metadata, proceeding without steam_app_id", "addon_id", addonID, "error", err)
-			} else {
-				steamAppID, _ = meta["steam_app_id"].(string)
-			}
-		}
-
 		// Now handle the download synchronously
 		cmd := &DownloadAddonCommand{
 			InstallationID: installResp.Installation.InstallationId,
 			SGCID:          sgcID,
 			AddonID:        addonID,
 			WorkshopID:     addon.WorkshopId,
-			SteamAppID:     steamAppID,
+			SteamAppID:     addon.SteamAppId,
 			InstallPath:    installResp.Installation.InstallationPath,
 		}
 

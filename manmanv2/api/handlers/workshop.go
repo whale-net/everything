@@ -725,9 +725,9 @@ func addonToProto(addon *manman.WorkshopAddon) *pb.WorkshopAddon {
 		pbAddon.LastUpdated = addon.LastUpdated.Unix()
 	}
 	if addon.Metadata != nil {
-		// Convert metadata map to JSON string
-		// For now, leave empty; proper JSON marshaling would be done here
-		pbAddon.Metadata = ""
+		if appID, ok := addon.Metadata["steam_app_id"].(string); ok {
+			pbAddon.SteamAppId = appID
+		}
 	}
 
 	return pbAddon

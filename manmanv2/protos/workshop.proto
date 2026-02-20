@@ -65,10 +65,11 @@ message WorkshopAddon {
   int64 volume_id = 16;  // Optional: custom volume override
   bool is_collection = 9;
   bool is_deprecated = 10;
-  string metadata = 11;  // JSON-encoded metadata
+  string metadata = 11;  // JSON-encoded metadata (deprecated; use typed fields below)
   int64 last_updated = 12;  // Unix timestamp
   int64 created_at = 13;  // Unix timestamp
   int64 updated_at = 14;  // Unix timestamp
+  string steam_app_id = 17;  // Steam application ID (e.g. "252490"), extracted from metadata
 }
 
 // GameAddonPathPreset represents a reusable installation path template
