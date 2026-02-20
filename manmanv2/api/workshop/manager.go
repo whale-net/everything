@@ -43,7 +43,7 @@ type RemoveAddonCommand struct {
 
 // WorkshopManagerInterface defines the interface for workshop addon operations
 type WorkshopManagerInterface interface {
-	InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall bool) (*manman.WorkshopInstallation, error)
+	InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall, skipDispatch bool) (*manman.WorkshopInstallation, error)
 	RemoveInstallation(ctx context.Context, installationID int64) error
 	FetchMetadata(ctx context.Context, gameID int64, workshopID string) (*manman.WorkshopAddon, error)
 	EnsureLibraryAddonsInstalled(ctx context.Context, sgcID int64) error
@@ -90,8 +90,9 @@ func NewWorkshopManager(
 	}
 }
 
-// InstallAddon downloads and installs an addon to a ServerGameConfig
-func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall bool) (*manman.WorkshopInstallation, error) {
+// InstallAddon creates/updates the installation record and, unless skipDispatch is true,
+// publishes a download command to RabbitMQ for the host manager to execute.
+func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall, skipDispatch bool) (*manman.WorkshopInstallation, error) {
 	// 1. Check if already installed
 	existing, err := wm.installationRepo.GetBySGCAndAddon(ctx, sgcID, addonID)
 	if err == nil && existing.Status == manman.InstallationStatusInstalled && !forceReinstall {
@@ -140,27 +141,29 @@ func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int6
 		}
 	}
 
-	// 6. Publish download command to RabbitMQ for host manager
-	steamAppID := ""
-	if addon.Metadata != nil {
-		if appID, ok := addon.Metadata["steam_app_id"].(string); ok {
-			steamAppID = appID
+	// 6. Publish download command to RabbitMQ for host manager (unless caller skips dispatch)
+	if !skipDispatch {
+		steamAppID := ""
+		if addon.Metadata != nil {
+			if appID, ok := addon.Metadata["steam_app_id"].(string); ok {
+				steamAppID = appID
+			}
 		}
-	}
 
-	downloadCmd := &DownloadAddonCommand{
-		InstallationID: installation.InstallationID,
-		SGCID:          sgcID,
-		AddonID:        addonID,
-		WorkshopID:     addon.WorkshopID,
-		SteamAppID:     steamAppID,
-		InstallPath:    installPath,
-	}
+		downloadCmd := &DownloadAddonCommand{
+			InstallationID: installation.InstallationID,
+			SGCID:          sgcID,
+			AddonID:        addonID,
+			WorkshopID:     addon.WorkshopID,
+			SteamAppID:     steamAppID,
+			InstallPath:    installPath,
+		}
 
-	routingKey := fmt.Sprintf("command.host.%d.workshop.download", sgc.ServerID)
-	err = wm.rmqPublisher.Publish(ctx, "manman.commands", routingKey, downloadCmd)
-	if err != nil {
-		return nil, fmt.Errorf("failed to publish download command: %w", err)
+		routingKey := fmt.Sprintf("command.host.%d.workshop.download", sgc.ServerID)
+		err = wm.rmqPublisher.Publish(ctx, "manman.commands", routingKey, downloadCmd)
+		if err != nil {
+			return nil, fmt.Errorf("failed to publish download command: %w", err)
+		}
 	}
 
 	return installation, nil
@@ -326,7 +329,7 @@ func (wm *WorkshopManager) EnsureLibraryAddonsInstalled(ctx context.Context, sgc
 			continue // already installed
 		}
 
-		if _, err := wm.InstallAddon(ctx, sgcID, addonID, false); err != nil {
+		if _, err := wm.InstallAddon(ctx, sgcID, addonID, false, false); err != nil {
 			log.Printf("Warning: failed to trigger install for SGC %d addon %d: %v", sgcID, addonID, err)
 			continue
 		}

@@ -198,6 +198,10 @@ message InstallAddonRequest {
   int64 sgc_id = 1;
   int64 addon_id = 2;
   bool force_reinstall = 3;
+  // When true, creates/updates the installation record but does NOT publish
+  // a download command to RabbitMQ. The caller is responsible for triggering
+  // the download directly (e.g. EnsureLibraryAddonsInstalled on the host).
+  bool skip_dispatch = 4;
 }
 
 message InstallAddonResponse {

@@ -729,13 +729,8 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 		volumes = []*manman.GameConfigVolume{}
 	}
 
-	// Pre-flight: ensure all addons from attached libraries are installed
-	if h.workshopManager != nil {
-		if err := h.workshopManager.EnsureLibraryAddonsInstalled(ctx, sgc.SGCID); err != nil {
-			log.Printf("Warning: pre-flight addon install incomplete for SGC %d: %v", sgc.SGCID, err)
-			// Do not block session start - installs may still complete during startup
-		}
-	}
+	// Addon downloads are handled blocking by the host manager during session start.
+	// No pre-flight needed here.
 
 	// Publish start session command to RabbitMQ
 	if h.publisher != nil {

@@ -24,6 +24,7 @@ func TestNewDownloadOrchestrator(t *testing.T) {
 	orchestrator := NewDownloadOrchestrator(
 		nil, // dockerClient
 		nil, // grpcClient
+		nil, // workshopClient
 		1,   // serverID
 		"test", // environment
 		"/tmp/test", // hostDataDir
@@ -167,7 +168,7 @@ func TestParseProgress(t *testing.T) {
 
 func TestInProgressTracking(t *testing.T) {
 	orchestrator := NewDownloadOrchestrator(
-		nil, nil, 1, "test", "/tmp", 3, &MockInstallationStatusPublisher{},
+		nil, nil, nil, 1, "test", "/tmp", 3, &MockInstallationStatusPublisher{},
 	)
 	
 	// Initially not in progress

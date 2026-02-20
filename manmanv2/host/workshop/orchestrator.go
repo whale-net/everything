@@ -3,6 +3,7 @@ package workshop
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -18,17 +19,18 @@ import (
 
 // DownloadOrchestrator manages workshop addon download container lifecycle within host manager
 type DownloadOrchestrator struct {
-	dockerClient *docker.Client
-	grpcClient   pb.ManManAPIClient
-	serverID     int64
-	environment  string
-	hostDataDir  string
-	maxConcurrent int
-	semaphore    chan struct{}
-	rmqPublisher InstallationStatusPublisher
-	
+	dockerClient   *docker.Client
+	grpcClient     pb.ManManAPIClient
+	workshopClient pb.WorkshopServiceClient
+	serverID       int64
+	environment    string
+	hostDataDir    string
+	maxConcurrent  int
+	semaphore      chan struct{}
+	rmqPublisher   InstallationStatusPublisher
+
 	// In-progress download tracking to prevent duplicates
-	inProgressMutex sync.RWMutex
+	inProgressMutex     sync.RWMutex
 	inProgressDownloads map[int64]bool
 }
 
@@ -60,6 +62,7 @@ const (
 func NewDownloadOrchestrator(
 	dockerClient *docker.Client,
 	grpcClient pb.ManManAPIClient,
+	workshopClient pb.WorkshopServiceClient,
 	serverID int64,
 	environment string,
 	hostDataDir string,
@@ -69,6 +72,7 @@ func NewDownloadOrchestrator(
 	return &DownloadOrchestrator{
 		dockerClient:        dockerClient,
 		grpcClient:          grpcClient,
+		workshopClient:      workshopClient,
 		serverID:            serverID,
 		environment:         environment,
 		hostDataDir:         hostDataDir,
@@ -298,7 +302,7 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 	logger.Info("ensuring library addons are installed")
 
 	// Call the API to get all addons that need to be installed for this SGC
-	resp, err := do.grpcClient.ListSGCLibraries(ctx, &pb.ListSGCLibrariesRequest{
+	resp, err := do.workshopClient.ListSGCLibraries(ctx, &pb.ListSGCLibrariesRequest{
 		SgcId: sgcID,
 	})
 	if err != nil {
@@ -332,7 +336,7 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 		visited[libID] = true
 
 		// Get addons for this library
-		addonsResp, err := do.grpcClient.GetLibraryAddons(ctx, &pb.GetLibraryAddonsRequest{
+		addonsResp, err := do.workshopClient.GetLibraryAddons(ctx, &pb.GetLibraryAddonsRequest{
 			LibraryId: libID,
 		})
 		if err != nil {
@@ -345,7 +349,7 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 		}
 
 		// Get child libraries
-		childrenResp, err := do.grpcClient.GetChildLibraries(ctx, &pb.GetChildLibrariesRequest{
+		childrenResp, err := do.workshopClient.GetChildLibraries(ctx, &pb.GetChildLibrariesRequest{
 			LibraryId: libID,
 		})
 		if err != nil {
@@ -397,7 +401,7 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 		logger.Info("checking addon installation", "addon_id", addonID, "workshop_id", addon.WorkshopId)
 
 		// Check if already installed
-		installations, err := do.grpcClient.ListInstallations(ctx, &pb.ListInstallationsRequest{
+		installations, err := do.workshopClient.ListInstallations(ctx, &pb.ListInstallationsRequest{
 			SgcId:   sgcID,
 			AddonId: addonID,
 		})
@@ -412,14 +416,26 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 			}
 		}
 
-		// Trigger installation via API (this creates the installation record)
-		installResp, err := do.grpcClient.InstallAddon(ctx, &pb.InstallAddonRequest{
-			SgcId:   sgcID,
-			AddonId: addonID,
+		// Trigger installation via API (creates/updates the record; we handle the download below)
+		installResp, err := do.workshopClient.InstallAddon(ctx, &pb.InstallAddonRequest{
+			SgcId:        sgcID,
+			AddonId:      addonID,
+			SkipDispatch: true,
 		})
 		if err != nil {
 			logger.Error("failed to trigger installation", "addon_id", addonID, "error", err)
 			return fmt.Errorf("failed to trigger installation for addon %d: %w", addonID, err)
+		}
+
+		// Parse JSON metadata to extract steam_app_id (empty metadata is fine)
+		var steamAppID string
+		if addon.Metadata != "" {
+			var meta map[string]interface{}
+			if err := json.Unmarshal([]byte(addon.Metadata), &meta); err != nil {
+				logger.Warn("failed to parse addon metadata, proceeding without steam_app_id", "addon_id", addonID, "error", err)
+			} else {
+				steamAppID, _ = meta["steam_app_id"].(string)
+			}
 		}
 
 		// Now handle the download synchronously
@@ -428,7 +444,7 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 			SGCID:          sgcID,
 			AddonID:        addonID,
 			WorkshopID:     addon.WorkshopId,
-			SteamAppID:     addon.Metadata["steam_app_id"].(string), // TODO: proper type handling
+			SteamAppID:     steamAppID,
 			InstallPath:    installResp.Installation.InstallationPath,
 		}
 

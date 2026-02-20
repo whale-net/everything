@@ -256,7 +256,6 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 				update := &hostrmq.SessionStatusUpdate{
 					SessionID: sessionID,
 					Status:    manman.SessionStatusStarting,
-					Timestamp: time.Now().Unix(),
 				}
 				if err := sm.rmqPublisher.PublishSessionStatus(ctx, update); err != nil {
 					slog.Warn("failed to publish heartbeat", "session_id", sessionID, "error", err)

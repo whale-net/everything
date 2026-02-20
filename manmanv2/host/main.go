@@ -88,7 +88,7 @@ func run() error {
 	defer rmqConn.Close()
 
 	// Initialize gRPC client for control API
-	grpcClient, err := initializeGRPCClient(ctx, apiAddress)
+	grpcClient, workshopClient, err := initializeGRPCClient(ctx, apiAddress)
 	if err != nil {
 		return fmt.Errorf("failed to initialize gRPC client: %w", err)
 	}
@@ -104,6 +104,7 @@ func run() error {
 	downloadOrchestrator := workshop.NewDownloadOrchestrator(
 		dockerClient,
 		grpcClient,
+		workshopClient,
 		serverID,
 		environment,
 		hostDataDir,
@@ -391,7 +392,7 @@ func (h *CommandHandlerImpl) HandleDownloadAddon(ctx context.Context, cmd *rmq.D
 
 // selfRegister generates a server name (if not provided) and registers with the control plane
 // initializeGRPCClient creates a gRPC client connection to the control API
-func initializeGRPCClient(ctx context.Context, apiAddress string) (pb.ManManAPIClient, error) {
+func initializeGRPCClient(ctx context.Context, apiAddress string) (pb.ManManAPIClient, pb.WorkshopServiceClient, error) {
 	// Build TLS config based on environment and auto-detection
 	var tlsConfig *grpcclient.TLSConfig
 	apiTLSEnabled := shouldUseAPITLS(apiAddress)
@@ -425,11 +426,12 @@ func initializeGRPCClient(ctx context.Context, apiAddress string) (pb.ManManAPIC
 			backoff *= 2
 		}
 		if err != nil {
-			return nil, fmt.Errorf("failed to connect to API after retries: %w", err)
+			return nil, nil, fmt.Errorf("failed to connect to API after retries: %w", err)
 		}
 	}
 
-	return pb.NewManManAPIClient(client.GetConnection()), nil
+	conn := client.GetConnection()
+	return pb.NewManManAPIClient(conn), pb.NewWorkshopServiceClient(conn), nil
 }
 
 func selfRegister(ctx context.Context, apiAddress, serverName, environment, dockerSocket string) (int64, error) {
@@ -452,7 +454,7 @@ func selfRegister(ctx context.Context, apiAddress, serverName, environment, dock
 		}
 	}
 
-	grpcClient, err := initializeGRPCClient(ctx, apiAddress)
+	grpcClient, _, err := initializeGRPCClient(ctx, apiAddress)
 	if err != nil {
 		return 0, err
 	}
