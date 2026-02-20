@@ -474,6 +474,16 @@ func (c *ControlClient) RemoveInstallation(ctx context.Context, installationID i
 	return err
 }
 
+func (c *ControlClient) ResetInstallation(ctx context.Context, installationID int64) (*manmanpb.WorkshopInstallation, error) {
+	resp, err := c.workshop.ResetInstallation(ctx, &manmanpb.ResetInstallationRequest{
+		InstallationId: installationID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Installation, nil
+}
+
 func (c *ControlClient) CreateAddon(ctx context.Context, gameID int64, workshopID, platformType, name, description string, fileSizeBytes int64, isCollection bool) (*manmanpb.WorkshopAddon, error) {
 	resp, err := c.workshop.CreateAddon(ctx, &manmanpb.CreateAddonRequest{
 		GameId:        gameID,

@@ -65,6 +65,11 @@
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm">
                         {{if eq .Status "installed"}}
+                        <form hx-post="/workshop/reset" hx-confirm="Re-download this addon on next session start?" class="inline">
+                            <input type="hidden" name="installation_id" value="{{.InstallationId}}">
+                            <input type="hidden" name="config_id" value="{{$.Config.ConfigId}}">
+                            <button type="submit" class="text-blue-600 hover:text-blue-900 mr-3">Re-download</button>
+                        </form>
                         <form hx-post="/workshop/remove" hx-confirm="Remove this addon?" class="inline">
                             <input type="hidden" name="installation_id" value="{{.InstallationId}}">
                             <input type="hidden" name="config_id" value="{{$.Config.ConfigId}}">

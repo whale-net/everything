@@ -45,6 +45,7 @@ type RemoveAddonCommand struct {
 type WorkshopManagerInterface interface {
 	InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall, skipDispatch bool) (*manman.WorkshopInstallation, error)
 	RemoveInstallation(ctx context.Context, installationID int64) error
+	ResetInstallation(ctx context.Context, installationID int64) (*manman.WorkshopInstallation, error)
 	FetchMetadata(ctx context.Context, gameID int64, workshopID string) (*manman.WorkshopAddon, error)
 	EnsureLibraryAddonsInstalled(ctx context.Context, sgcID int64) error
 }
@@ -425,4 +426,27 @@ func (wm *WorkshopManager) RemoveInstallation(ctx context.Context, installationI
 	}
 
 	return nil
+}
+
+// ResetInstallation resets an installation status to pending for re-download
+func (wm *WorkshopManager) ResetInstallation(ctx context.Context, installationID int64) (*manman.WorkshopInstallation, error) {
+	// Get installation record
+	installation, err := wm.installationRepo.Get(ctx, installationID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get installation: %w", err)
+	}
+
+	// Reset status to pending and clear error/progress
+	err = wm.installationRepo.UpdateStatus(ctx, installationID, manman.InstallationStatusPending, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reset installation status: %w", err)
+	}
+
+	// Fetch updated installation
+	installation, err = wm.installationRepo.Get(ctx, installationID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get updated installation: %w", err)
+	}
+
+	return installation, nil
 }

@@ -418,6 +418,22 @@ func (h *WorkshopServiceHandler) RemoveInstallation(ctx context.Context, req *pb
 	return &pb.RemoveInstallationResponse{}, nil
 }
 
+// ResetInstallation resets an installation status to pending for re-download
+func (h *WorkshopServiceHandler) ResetInstallation(ctx context.Context, req *pb.ResetInstallationRequest) (*pb.ResetInstallationResponse, error) {
+	if req.InstallationId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "installation_id is required")
+	}
+
+	installation, err := h.workshopManager.ResetInstallation(ctx, req.InstallationId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to reset installation: %v", err)
+	}
+
+	return &pb.ResetInstallationResponse{
+		Installation: installationToProto(installation),
+	}, nil
+}
+
 // ============================================================================
 // Library Management RPCs
 // ============================================================================

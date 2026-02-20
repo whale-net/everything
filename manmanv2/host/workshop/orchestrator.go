@@ -137,8 +137,25 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 		return err
 	}
 
-	// Build SteamCMD command
-	steamCmd := do.buildSteamCMDCommand(cmd.SteamAppID, cmd.WorkshopID, cmd.InstallPath)
+	// Create temporary download directory for SteamCMD
+	// SteamCMD creates steamapps/workshop/content/<appid>/<workshopid>/ structure
+	// We'll extract from there to the final install path
+	tempDownloadDir := filepath.Join(do.getSGCInternalDir(cmd.SGCID), ".workshop-temp", fmt.Sprintf("%d-%d", cmd.AddonID, time.Now().Unix()))
+	if err := os.MkdirAll(tempDownloadDir, 0777); err != nil {
+		logger.Error("failed to create temp download directory", "error", err)
+		do.handleDownloadError(ctx, cmd.InstallationID, err)
+		return err
+	}
+	defer os.RemoveAll(tempDownloadDir) // Clean up temp dir after download
+
+	// Mount temp directory into container at /tmp/workshop-download
+	// This allows SteamCMD to write there and us to read from the same location
+	containerTempDir := "/tmp/workshop-download"
+	tempHostDir := filepath.Join(do.getSGCHostDir(cmd.SGCID), ".workshop-temp", fmt.Sprintf("%d-%d", cmd.AddonID, time.Now().Unix()))
+	volumeMounts = append(volumeMounts, fmt.Sprintf("%s:%s", tempHostDir, containerTempDir))
+
+	// Build SteamCMD command with container temp directory
+	steamCmd := do.buildSteamCMDCommand(cmd.SteamAppID, cmd.WorkshopID, containerTempDir)
 
 	containerConfig := docker.ContainerConfig{
 		Name:    containerName,
@@ -225,6 +242,110 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 		logger.Error("download failed", "exit_code", exitCode)
 		do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, &errMsg)
 		return fmt.Errorf("%s", errMsg)
+	}
+
+	// Extract files from SteamCMD's nested structure to final install path
+	steamContentDir := filepath.Join(tempDownloadDir, "steamapps", "workshop", "content", cmd.SteamAppID, cmd.WorkshopID)
+	
+	// Check if directory exists and has content
+	entries, err := os.ReadDir(steamContentDir)
+	if err != nil {
+		errMsg := fmt.Sprintf("downloaded content not found at expected path: %s (error: %v)", steamContentDir, err)
+		logger.Error("extraction failed", "error", errMsg, "temp_dir", tempDownloadDir)
+		do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, &errMsg)
+		return fmt.Errorf("%s", errMsg)
+	}
+	if len(entries) == 0 {
+		errMsg := fmt.Sprintf("downloaded content directory is empty: %s", steamContentDir)
+		logger.Error("extraction failed", "error", errMsg, "temp_dir", tempDownloadDir)
+		do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, &errMsg)
+		return fmt.Errorf("%s", errMsg)
+	}
+
+	// Convert container path to internal path for file operations
+	// cmd.InstallPath is a container path (e.g., /data/maps/addon_name)
+	// We need to resolve it to the internal path where we can actually write files
+	internalInstallPath, err := do.resolveContainerPathToInternal(ctx, cmd.SGCID, cmd.InstallPath)
+	if err != nil {
+		errMsg := fmt.Sprintf("failed to resolve install path: %v", err)
+		logger.Error("extraction failed", "error", err, "container_path", cmd.InstallPath)
+		do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, &errMsg)
+		return fmt.Errorf("%s", errMsg)
+	}
+
+	// Ensure parent directory of install path exists
+	installDir := filepath.Dir(internalInstallPath)
+	if err := os.MkdirAll(installDir, 0777); err != nil {
+		errMsg := fmt.Sprintf("failed to create install directory: %v", err)
+		logger.Error("extraction failed", "error", err, "install_dir", installDir)
+		do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, &errMsg)
+		return fmt.Errorf("%s", errMsg)
+	}
+
+	// Move all files from steam content directory to install path
+	logger.Info("extracting workshop content", "from", steamContentDir, "to", internalInstallPath, "file_count", len(entries))
+	
+	// Handle single file - check if it needs renaming based on SteamCMD's legacy format
+	// SteamCMD downloads workshop items with internal Steam filenames (e.g., "16796113200273194991_legacy.bin")
+	// Different games expect different formats:
+	// - Source engine games (L4D2, CS:GO, etc.): Expect .vpk files named <workshopid>.vpk
+	// - Garry's Mod: Expects .gma files
+	// - Other games: May expect .bsp, .pak, or other formats
+	//
+	// The "_legacy.bin" suffix indicates SteamCMD's generic wrapper format.
+	// For Source engine games, these are actually VPK archives with the wrong extension.
+	// Reference: https://steamcommunity.com/app/550/discussions/3/7340374598287174069/
+	if len(entries) == 1 && !entries[0].IsDir() {
+		srcFile := filepath.Join(steamContentDir, entries[0].Name())
+		filename := entries[0].Name()
+		
+		// Check if this is a legacy.bin file that needs renaming
+		// For now, we handle Source engine games (L4D2, etc.) by renaming to .vpk
+		// TODO: Add game-specific detection based on steam_app_id for other formats:
+		//   - Garry's Mod (4000): .gma
+		//   - Other Source games: .vpk
+		//   - Non-Source games: Keep original or extract
+		var dstFile string
+		if strings.HasSuffix(filename, "_legacy.bin") {
+			// Rename to <workshopid>.vpk for Source engine games
+			// The workshop ID is the canonical identifier that games use to load content
+			dstFile = filepath.Join(internalInstallPath, cmd.WorkshopID+".vpk")
+			logger.Info("renaming legacy.bin to vpk", "from", filename, "to", cmd.WorkshopID+".vpk")
+		} else {
+			// Keep original filename for files that don't use the legacy format
+			dstFile = filepath.Join(internalInstallPath, filename)
+			logger.Info("keeping original filename", "file", filename)
+		}
+		
+		// Ensure parent directory exists
+		if err := os.MkdirAll(filepath.Dir(dstFile), 0777); err != nil {
+			errMsg := fmt.Sprintf("failed to create install directory: %v", err)
+			logger.Error("extraction failed", "error", err)
+			do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, &errMsg)
+			return fmt.Errorf("%s", errMsg)
+		}
+		
+		// Move the file
+		if err := os.Rename(srcFile, dstFile); err != nil {
+			// If rename fails (cross-device), copy then delete
+			if err := copyFile(srcFile, dstFile); err != nil {
+				errMsg := fmt.Sprintf("failed to copy workshop file: %v", err)
+				logger.Error("extraction failed", "error", err)
+				do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, &errMsg)
+				return fmt.Errorf("%s", errMsg)
+			}
+			os.Remove(srcFile)
+		}
+	} else {
+		// Multiple files or directory - move entire directory structure as-is
+		// Workshop items with multiple files (models, textures, sounds, etc.) should
+		// preserve their directory structure exactly as the creator uploaded them
+		if err := do.moveDirectory(steamContentDir, internalInstallPath); err != nil {
+			errMsg := fmt.Sprintf("failed to extract workshop content: %v", err)
+			logger.Error("extraction failed", "error", err)
+			do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, &errMsg)
+			return fmt.Errorf("%s", errMsg)
+		}
 	}
 
 	logger.Info("download completed successfully")
@@ -369,10 +490,143 @@ func (do *DownloadOrchestrator) getSGCInternalDir(sgcID int64) string {
 	return filepath.Join(do.internalDataDir, dirName)
 }
 
+// resolveContainerPathToInternal converts a container path to the internal path
+// where the host-manager can access it. This looks up the volume configuration
+// to find which volume contains the path and maps it to the internal directory.
+func (do *DownloadOrchestrator) resolveContainerPathToInternal(ctx context.Context, sgcID int64, containerPath string) (string, error) {
+	sgcInternalDir := do.getSGCInternalDir(sgcID)
+
+	// Get SGC to look up game config
+	sgcResp, err := do.grpcClient.GetServerGameConfig(ctx, &pb.GetServerGameConfigRequest{
+		ServerGameConfigId: sgcID,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to get SGC %d: %w", sgcID, err)
+	}
+
+	// List volumes for this game config
+	volumesResp, err := do.grpcClient.ListGameConfigVolumes(ctx, &pb.ListGameConfigVolumesRequest{
+		ConfigId: sgcResp.Config.GameConfigId,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to list volumes: %w", err)
+	}
+
+	// Find which volume contains this container path
+	for _, vol := range volumesResp.Volumes {
+		// Check if containerPath starts with this volume's container path
+		if strings.HasPrefix(containerPath, vol.ContainerPath) {
+			// Get the relative path within the volume
+			relPath := strings.TrimPrefix(containerPath, vol.ContainerPath)
+			relPath = strings.TrimPrefix(relPath, "/")
+
+			// Build internal path: sgcInternalDir/<host_subpath>/<relPath>
+			subPath := strings.TrimPrefix(vol.HostSubpath, "/")
+			if subPath == "" {
+				subPath = vol.Name
+			}
+			return filepath.Join(sgcInternalDir, subPath, relPath), nil
+		}
+	}
+
+	return "", fmt.Errorf("no volume found for container path %s", containerPath)
+}
+
 // handleDownloadError handles download errors
 func (do *DownloadOrchestrator) handleDownloadError(ctx context.Context, installationID int64, err error) {
 	errMsg := err.Error()
 	do.publishStatus(ctx, installationID, InstallationStatusFailed, 0, &errMsg)
+}
+
+// moveDirectory moves all contents from src to dst, preserving directory structure
+func (do *DownloadOrchestrator) moveDirectory(src, dst string) error {
+	// Check if destination already exists and remove it
+	if _, err := os.Stat(dst); err == nil {
+		if err := os.RemoveAll(dst); err != nil {
+			return fmt.Errorf("failed to remove existing destination: %w", err)
+		}
+	}
+
+	// Try simple rename first (works if on same filesystem)
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+
+	// If rename fails, copy recursively then remove source
+	if err := do.copyDirectory(src, dst); err != nil {
+		return fmt.Errorf("failed to copy directory: %w", err)
+	}
+
+	if err := os.RemoveAll(src); err != nil {
+		return fmt.Errorf("failed to remove source after copy: %w", err)
+	}
+
+	return nil
+}
+
+// copyDirectory recursively copies a directory
+func (do *DownloadOrchestrator) copyDirectory(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Calculate destination path
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		dstPath := filepath.Join(dst, relPath)
+
+		if info.IsDir() {
+			return os.MkdirAll(dstPath, info.Mode())
+		}
+
+		// Copy file
+		srcFile, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer srcFile.Close()
+
+		dstFile, err := os.Create(dstPath)
+		if err != nil {
+			return err
+		}
+		defer dstFile.Close()
+
+		if _, err := io.Copy(dstFile, srcFile); err != nil {
+			return err
+		}
+
+		return os.Chmod(dstPath, info.Mode())
+	})
+}
+
+// copyFile copies a single file from src to dst
+func copyFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		return err
+	}
+
+	// Copy permissions
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	return os.Chmod(dst, srcInfo.Mode())
 }
 
 // EnsureLibraryAddonsInstalled downloads all library addons for an SGC before session start (blocking)

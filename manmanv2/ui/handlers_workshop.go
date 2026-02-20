@@ -439,6 +439,34 @@ func (app *App) handleRemoveInstallation(w http.ResponseWriter, r *http.Request)
 	http.Redirect(w, r, "/workshop/installations?config_id="+configIDStr, http.StatusSeeOther)
 }
 
+func (app *App) handleResetInstallation(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := context.Background()
+
+	installationIDStr := r.FormValue("installation_id")
+	configIDStr := r.FormValue("config_id")
+
+	installationID, err := strconv.ParseInt(installationIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid installation_id", http.StatusBadRequest)
+		return
+	}
+
+	_, err = app.grpc.ResetInstallation(ctx, installationID)
+	if err != nil {
+		log.Printf("Error resetting installation: %v", err)
+		http.Error(w, "Failed to reset installation", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("HX-Trigger", "installationUpdated")
+	http.Redirect(w, r, "/workshop/installations?config_id="+configIDStr, http.StatusSeeOther)
+}
+
 func (app *App) handleFetchAddonMetadata(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

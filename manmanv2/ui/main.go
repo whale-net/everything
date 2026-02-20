@@ -215,6 +215,7 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/workshop/installations", app.auth.RequireAuthFunc(app.handleWorkshopInstallations))
 	mux.HandleFunc("/workshop/install", app.auth.RequireAuthFunc(app.handleInstallAddon))
 	mux.HandleFunc("/workshop/remove", app.auth.RequireAuthFunc(app.handleRemoveInstallation))
+	mux.HandleFunc("/workshop/reset", app.auth.RequireAuthFunc(app.handleResetInstallation))
 	mux.HandleFunc("/workshop/fetch-metadata", app.auth.RequireAuthFunc(app.handleFetchAddonMetadata))
 	mux.HandleFunc("/workshop/create-addon", app.auth.RequireAuthFunc(app.handleCreateAddon))
 	mux.HandleFunc("/workshop/update-addon-details", app.auth.RequireAuthFunc(app.handleUpdateAddonDetails))

@@ -19,6 +19,7 @@ service WorkshopService {
   rpc GetInstallation(GetInstallationRequest) returns (GetInstallationResponse);
   rpc ListInstallations(ListInstallationsRequest) returns (ListInstallationsResponse);
   rpc RemoveInstallation(RemoveInstallationRequest) returns (RemoveInstallationResponse);
+  rpc ResetInstallation(ResetInstallationRequest) returns (ResetInstallationResponse);
   
   // Library Management
   rpc CreateLibrary(CreateLibraryRequest) returns (CreateLibraryResponse);
@@ -234,6 +235,14 @@ message RemoveInstallationRequest {
 }
 
 message RemoveInstallationResponse {}
+
+message ResetInstallationRequest {
+  int64 installation_id = 1;
+}
+
+message ResetInstallationResponse {
+  WorkshopInstallation installation = 1;
+}
 
 // ============================================================================
 // Library Management RPCs
