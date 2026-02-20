@@ -168,12 +168,12 @@ func (m *MockWorkshopLibraryRepository) RemoveAddon(ctx context.Context, library
 	return args.Error(0)
 }
 
-func (m *MockWorkshopLibraryRepository) ListAddons(ctx context.Context, libraryID int64) ([]*manman.WorkshopAddon, error) {
+func (m *MockWorkshopLibraryRepository) ListAddons(ctx context.Context, libraryID int64) ([]*manman.WorkshopAddonWithGame, error) {
 	args := m.Called(ctx, libraryID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*manman.WorkshopAddon), args.Error(1)
+	return args.Get(0).([]*manman.WorkshopAddonWithGame), args.Error(1)
 }
 
 func (m *MockWorkshopLibraryRepository) AddReference(ctx context.Context, parentLibraryID, childLibraryID int64) error {
