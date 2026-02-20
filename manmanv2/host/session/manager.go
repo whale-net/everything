@@ -28,31 +28,45 @@ const (
 
 // SessionManager manages the lifecycle of game server sessions
 type SessionManager struct {
-	dockerClient *docker.Client
-	stateManager *Manager
-	environment  string
-	hostDataDir  string // Path on the host where session data lives (for Docker bind mounts)
-	grpcClient   pb.ManManAPIClient
-	renderer     *config.Renderer
-	rmqPublisher interface {
+	dockerClient         *docker.Client
+	stateManager         *Manager
+	environment          string
+	hostDataDir          string // Path on the host where session data lives (for Docker bind mounts)
+	grpcClient           pb.ManManAPIClient
+	renderer             *config.Renderer
+	workshopOrchestrator WorkshopOrchestrator
+	rmqPublisher         interface {
 		PublishLog(ctx context.Context, sessionID int64, source string, message string) error
 		PublishSessionStatus(ctx context.Context, update *hostrmq.SessionStatusUpdate) error
 	}
 }
 
+// WorkshopOrchestrator defines the interface for workshop addon downloads
+type WorkshopOrchestrator interface {
+	EnsureLibraryAddonsInstalled(ctx context.Context, sgcID int64, heartbeatFn func()) error
+}
+
 // NewSessionManager creates a new session manager
-func NewSessionManager(dockerClient *docker.Client, environment string, hostDataDir string, grpcClient pb.ManManAPIClient, rmqPublisher interface {
-	PublishLog(ctx context.Context, sessionID int64, source string, message string) error
-	PublishSessionStatus(ctx context.Context, update *hostrmq.SessionStatusUpdate) error
-}) *SessionManager {
+func NewSessionManager(
+	dockerClient *docker.Client,
+	environment string,
+	hostDataDir string,
+	grpcClient pb.ManManAPIClient,
+	workshopOrchestrator WorkshopOrchestrator,
+	rmqPublisher interface {
+		PublishLog(ctx context.Context, sessionID int64, source string, message string) error
+		PublishSessionStatus(ctx context.Context, update *hostrmq.SessionStatusUpdate) error
+	},
+) *SessionManager {
 	return &SessionManager{
-		dockerClient: dockerClient,
-		stateManager: NewManager(),
-		environment:  environment,
-		hostDataDir:  hostDataDir,
-		grpcClient:   grpcClient,
-		renderer:     config.NewRenderer(nil),
-		rmqPublisher: rmqPublisher,
+		dockerClient:         dockerClient,
+		stateManager:         NewManager(),
+		environment:          environment,
+		hostDataDir:          hostDataDir,
+		grpcClient:           grpcClient,
+		workshopOrchestrator: workshopOrchestrator,
+		renderer:             config.NewRenderer(nil),
+		rmqPublisher:         rmqPublisher,
 	}
 }
 
@@ -232,7 +246,35 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 		}
 	}
 
-	// 3. Create game container
+	// 3. Download workshop addons from libraries (blocking)
+	if sm.workshopOrchestrator != nil {
+		slog.Info("downloading workshop addons from libraries", "session_id", sessionID, "sgc_id", cmd.SGCID)
+
+		// Heartbeat function to keep session alive during download
+		heartbeatFn := func() {
+			if sm.rmqPublisher != nil {
+				update := &hostrmq.SessionStatusUpdate{
+					SessionID: sessionID,
+					Status:    manman.SessionStatusStarting,
+					Timestamp: time.Now().Unix(),
+				}
+				if err := sm.rmqPublisher.PublishSessionStatus(ctx, update); err != nil {
+					slog.Warn("failed to publish heartbeat", "session_id", sessionID, "error", err)
+				}
+			}
+		}
+
+		if err := sm.workshopOrchestrator.EnsureLibraryAddonsInstalled(ctx, cmd.SGCID, heartbeatFn); err != nil {
+			slog.Error("failed to download workshop addons", "session_id", sessionID, "error", err)
+			sm.cleanupSession(ctx, state)
+			state.UpdateStatus(manman.SessionStatusCrashed)
+			sm.stateManager.RemoveSession(sessionID)
+			return fmt.Errorf("failed to download workshop addons: %w", err)
+		}
+		slog.Info("workshop addons downloaded successfully", "session_id", sessionID)
+	}
+
+	// 4. Create game container
 	slog.Info("creating container", "session_id", sessionID, "image", cmd.Image)
 	containerID, err := sm.createGameContainer(ctx, state, cmd)
 	if err != nil {

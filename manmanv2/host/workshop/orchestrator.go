@@ -290,3 +290,154 @@ func (do *DownloadOrchestrator) handleDownloadError(ctx context.Context, install
 	errMsg := err.Error()
 	do.publishStatus(ctx, installationID, InstallationStatusFailed, 0, &errMsg)
 }
+
+// EnsureLibraryAddonsInstalled downloads all library addons for an SGC before session start (blocking)
+// Returns when all downloads complete or when context is cancelled
+func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context, sgcID int64, heartbeatFn func()) error {
+	logger := slog.With("sgc_id", sgcID)
+	logger.Info("ensuring library addons are installed")
+
+	// Call the API to get all addons that need to be installed for this SGC
+	resp, err := do.grpcClient.ListSGCLibraries(ctx, &pb.ListSGCLibrariesRequest{
+		SgcId: sgcID,
+	})
+	if err != nil {
+		logger.Error("failed to list SGC libraries", "error", err)
+		return fmt.Errorf("failed to list SGC libraries: %w", err)
+	}
+
+	if len(resp.Libraries) == 0 {
+		logger.Info("no libraries attached to SGC, skipping addon downloads")
+		return nil
+	}
+
+	logger.Info("found libraries attached to SGC", "count", len(resp.Libraries))
+
+	// Collect all unique addon IDs from all libraries (including nested references)
+	addonIDs := make(map[int64]*pb.WorkshopAddon)
+	visited := make(map[int64]bool)
+	queue := make([]int64, 0, len(resp.Libraries))
+	for _, lib := range resp.Libraries {
+		queue = append(queue, lib.LibraryId)
+	}
+
+	// BFS to collect all addons from all libraries
+	for len(queue) > 0 {
+		libID := queue[0]
+		queue = queue[1:]
+
+		if visited[libID] {
+			continue
+		}
+		visited[libID] = true
+
+		// Get addons for this library
+		addonsResp, err := do.grpcClient.GetLibraryAddons(ctx, &pb.GetLibraryAddonsRequest{
+			LibraryId: libID,
+		})
+		if err != nil {
+			logger.Warn("failed to get addons for library", "library_id", libID, "error", err)
+			continue
+		}
+
+		for _, addon := range addonsResp.Addons {
+			addonIDs[addon.AddonId] = addon
+		}
+
+		// Get child libraries
+		childrenResp, err := do.grpcClient.GetChildLibraries(ctx, &pb.GetChildLibrariesRequest{
+			LibraryId: libID,
+		})
+		if err != nil {
+			logger.Warn("failed to get child libraries", "library_id", libID, "error", err)
+			continue
+		}
+
+		for _, child := range childrenResp.Libraries {
+			queue = append(queue, child.LibraryId)
+		}
+	}
+
+	if len(addonIDs) == 0 {
+		logger.Info("no addons found in libraries")
+		return nil
+	}
+
+	logger.Info("found addons to install", "count", len(addonIDs))
+
+	// Start heartbeat ticker
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	// Start heartbeat goroutine
+	heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
+	defer cancelHeartbeat()
+
+	go func() {
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case <-ticker.C:
+				if heartbeatFn != nil {
+					heartbeatFn()
+				}
+			}
+		}
+	}()
+
+	// Download each addon (sequentially for now, can parallelize later)
+	for addonID, addon := range addonIDs {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		logger.Info("checking addon installation", "addon_id", addonID, "workshop_id", addon.WorkshopId)
+
+		// Check if already installed
+		installations, err := do.grpcClient.ListInstallations(ctx, &pb.ListInstallationsRequest{
+			SgcId:   sgcID,
+			AddonId: addonID,
+		})
+		if err != nil {
+			logger.Warn("failed to check installation status", "addon_id", addonID, "error", err)
+			// Continue anyway, we'll try to install
+		} else if len(installations.Installations) > 0 {
+			inst := installations.Installations[0]
+			if inst.Status == InstallationStatusInstalled {
+				logger.Info("addon already installed, skipping", "addon_id", addonID)
+				continue
+			}
+		}
+
+		// Trigger installation via API (this creates the installation record)
+		installResp, err := do.grpcClient.InstallAddon(ctx, &pb.InstallAddonRequest{
+			SgcId:   sgcID,
+			AddonId: addonID,
+		})
+		if err != nil {
+			logger.Error("failed to trigger installation", "addon_id", addonID, "error", err)
+			return fmt.Errorf("failed to trigger installation for addon %d: %w", addonID, err)
+		}
+
+		// Now handle the download synchronously
+		cmd := &DownloadAddonCommand{
+			InstallationID: installResp.Installation.InstallationId,
+			SGCID:          sgcID,
+			AddonID:        addonID,
+			WorkshopID:     addon.WorkshopId,
+			SteamAppID:     addon.Metadata["steam_app_id"].(string), // TODO: proper type handling
+			InstallPath:    installResp.Installation.InstallationPath,
+		}
+
+		// Download addon (blocking)
+		do.HandleDownloadCommand(ctx, cmd)
+
+		logger.Info("addon installation completed", "addon_id", addonID)
+	}
+
+	logger.Info("all library addons installed successfully")
+	return nil
+}
