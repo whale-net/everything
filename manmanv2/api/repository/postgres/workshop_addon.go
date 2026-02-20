@@ -19,10 +19,10 @@ func (r *WorkshopAddonRepository) Create(ctx context.Context, addon *manman.Work
 	query := `
 		INSERT INTO workshop_addons (
 			game_id, workshop_id, platform_type, name, description,
-			file_size_bytes, installation_path, is_collection, is_deprecated,
-			metadata, last_updated
+			file_size_bytes, installation_path, preset_id, volume_id,
+			is_collection, is_deprecated, metadata, last_updated
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING addon_id, created_at, updated_at
 	`
 
@@ -35,6 +35,8 @@ func (r *WorkshopAddonRepository) Create(ctx context.Context, addon *manman.Work
 		addon.Description,
 		addon.FileSizeBytes,
 		addon.InstallationPath,
+		addon.PresetID,
+		addon.VolumeID,
 		addon.IsCollection,
 		addon.IsDeprecated,
 		addon.Metadata,
@@ -53,8 +55,8 @@ func (r *WorkshopAddonRepository) Get(ctx context.Context, addonID int64) (*manm
 
 	query := `
 		SELECT addon_id, game_id, workshop_id, platform_type, name, description,
-			   file_size_bytes, installation_path, is_collection, is_deprecated,
-			   metadata, last_updated, created_at, updated_at
+			   file_size_bytes, installation_path, preset_id, volume_id,
+			   is_collection, is_deprecated, metadata, last_updated, created_at, updated_at
 		FROM workshop_addons
 		WHERE addon_id = $1
 	`
@@ -68,6 +70,8 @@ func (r *WorkshopAddonRepository) Get(ctx context.Context, addonID int64) (*manm
 		&addon.Description,
 		&addon.FileSizeBytes,
 		&addon.InstallationPath,
+		&addon.PresetID,
+		&addon.VolumeID,
 		&addon.IsCollection,
 		&addon.IsDeprecated,
 		&addon.Metadata,
@@ -87,8 +91,8 @@ func (r *WorkshopAddonRepository) GetByWorkshopID(ctx context.Context, gameID in
 
 	query := `
 		SELECT addon_id, game_id, workshop_id, platform_type, name, description,
-			   file_size_bytes, installation_path, is_collection, is_deprecated,
-			   metadata, last_updated, created_at, updated_at
+			   file_size_bytes, installation_path, preset_id, volume_id,
+			   is_collection, is_deprecated, metadata, last_updated, created_at, updated_at
 		FROM workshop_addons
 		WHERE game_id = $1 AND workshop_id = $2 AND platform_type = $3
 	`
@@ -102,6 +106,8 @@ func (r *WorkshopAddonRepository) GetByWorkshopID(ctx context.Context, gameID in
 		&addon.Description,
 		&addon.FileSizeBytes,
 		&addon.InstallationPath,
+		&addon.PresetID,
+		&addon.VolumeID,
 		&addon.IsCollection,
 		&addon.IsDeprecated,
 		&addon.Metadata,
@@ -123,8 +129,8 @@ func (r *WorkshopAddonRepository) List(ctx context.Context, gameID *int64, inclu
 
 	query := `
 		SELECT addon_id, game_id, workshop_id, platform_type, name, description,
-			   file_size_bytes, installation_path, is_collection, is_deprecated,
-			   metadata, last_updated, created_at, updated_at
+			   file_size_bytes, installation_path, preset_id, volume_id,
+			   is_collection, is_deprecated, metadata, last_updated, created_at, updated_at
 		FROM workshop_addons
 		WHERE ($1::bigint IS NULL OR game_id = $1)
 		  AND ($2 = true OR is_deprecated = false)
@@ -150,6 +156,8 @@ func (r *WorkshopAddonRepository) List(ctx context.Context, gameID *int64, inclu
 			&addon.Description,
 			&addon.FileSizeBytes,
 			&addon.InstallationPath,
+			&addon.PresetID,
+			&addon.VolumeID,
 			&addon.IsCollection,
 			&addon.IsDeprecated,
 			&addon.Metadata,
@@ -170,8 +178,9 @@ func (r *WorkshopAddonRepository) Update(ctx context.Context, addon *manman.Work
 	query := `
 		UPDATE workshop_addons
 		SET name = $2, description = $3, file_size_bytes = $4,
-		    installation_path = $5, is_collection = $6, is_deprecated = $7,
-		    metadata = $8, last_updated = $9, updated_at = CURRENT_TIMESTAMP
+		    installation_path = $5, preset_id = $6, volume_id = $7,
+		    is_collection = $8, is_deprecated = $9, metadata = $10,
+		    last_updated = $11, updated_at = CURRENT_TIMESTAMP
 		WHERE addon_id = $1
 	`
 
@@ -182,6 +191,8 @@ func (r *WorkshopAddonRepository) Update(ctx context.Context, addon *manman.Work
 		addon.Description,
 		addon.FileSizeBytes,
 		addon.InstallationPath,
+		addon.PresetID,
+		addon.VolumeID,
 		addon.IsCollection,
 		addon.IsDeprecated,
 		addon.Metadata,
