@@ -100,9 +100,6 @@ func run() error {
 	}
 	defer rmqPublisher.Close()
 
-	// Initialize session manager with gRPC client for configuration fetching and RMQ publisher for logs
-	sessionManager := session.NewSessionManager(dockerClient, environment, hostDataDir, grpcClient, rmqPublisher)
-
 	// Initialize download orchestrator for workshop addon downloads
 	downloadOrchestrator := workshop.NewDownloadOrchestrator(
 		dockerClient,
@@ -113,6 +110,9 @@ func run() error {
 		5, // max concurrent downloads
 		rmqPublisher,
 	)
+
+	// Initialize session manager with gRPC client for configuration fetching and RMQ publisher for logs
+	sessionManager := session.NewSessionManager(dockerClient, environment, hostDataDir, grpcClient, downloadOrchestrator, rmqPublisher)
 
 	// Recover orphaned sessions on startup
 	logger.Info("recovering orphaned sessions")
