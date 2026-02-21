@@ -10,8 +10,9 @@ import (
 
 // ControlClient wraps the ManManAPI gRPC client
 type ControlClient struct {
-	conn *grpcclient.Client
-	api  manmanpb.ManManAPIClient
+	conn     *grpcclient.Client
+	api      manmanpb.ManManAPIClient
+	workshop manmanpb.WorkshopServiceClient
 }
 
 // NewControlClient creates a new control API client
@@ -22,10 +23,12 @@ func NewControlClient(ctx context.Context, addr string) (*ControlClient, error) 
 	}
 
 	api := manmanpb.NewManManAPIClient(conn.GetConnection())
+	workshop := manmanpb.NewWorkshopServiceClient(conn.GetConnection())
 
 	return &ControlClient{
-		conn: conn,
-		api:  api,
+		conn:     conn,
+		api:      api,
+		workshop: workshop,
 	}, nil
 }
 
@@ -218,10 +221,9 @@ func (c *ControlClient) StopSession(ctx context.Context, sessionID int64) (*manm
 }
 
 // StartSession starts a new session for a server game config.
-func (c *ControlClient) StartSession(ctx context.Context, serverGameConfigID int64, parameters map[string]string, force bool) (*manmanpb.Session, error) {
+func (c *ControlClient) StartSession(ctx context.Context, serverGameConfigID int64, force bool) (*manmanpb.Session, error) {
 	resp, err := c.api.StartSession(ctx, &manmanpb.StartSessionRequest{
 		ServerGameConfigId: serverGameConfigID,
-		Parameters:         parameters,
 		Force:              force,
 	})
 	if err != nil {
@@ -233,6 +235,62 @@ func (c *ControlClient) StartSession(ctx context.Context, serverGameConfigID int
 // ListConfigurationStrategies retrieves all strategies for a game.
 func (c *ControlClient) ListConfigurationStrategies(ctx context.Context, req *manmanpb.ListConfigurationStrategiesRequest) (*manmanpb.ListConfigurationStrategiesResponse, error) {
 	return c.api.ListConfigurationStrategies(ctx, req)
+}
+
+// GameConfigVolume methods
+
+// CreateGameConfigVolume creates a new volume for a game config
+func (c *ControlClient) CreateGameConfigVolume(ctx context.Context, configID int64, name, description, containerPath, hostSubpath string, readOnly bool) (*manmanpb.GameConfigVolume, error) {
+	resp, err := c.api.CreateGameConfigVolume(ctx, &manmanpb.CreateGameConfigVolumeRequest{
+		ConfigId:      configID,
+		Name:          name,
+		Description:   description,
+		ContainerPath: containerPath,
+		HostSubpath:   hostSubpath,
+		ReadOnly:      readOnly,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create game config volume: %w", err)
+	}
+	return resp.Volume, nil
+}
+
+// ListGameConfigVolumes retrieves all volumes for a game config
+func (c *ControlClient) ListGameConfigVolumes(ctx context.Context, configID int64) ([]*manmanpb.GameConfigVolume, error) {
+	resp, err := c.api.ListGameConfigVolumes(ctx, &manmanpb.ListGameConfigVolumesRequest{
+		ConfigId: configID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list game config volumes: %w", err)
+	}
+	return resp.Volumes, nil
+}
+
+// UpdateGameConfigVolume updates an existing volume
+func (c *ControlClient) UpdateGameConfigVolume(ctx context.Context, volumeID int64, name, description, containerPath, hostSubpath string, readOnly bool) (*manmanpb.GameConfigVolume, error) {
+	resp, err := c.api.UpdateGameConfigVolume(ctx, &manmanpb.UpdateGameConfigVolumeRequest{
+		VolumeId:      volumeID,
+		Name:          name,
+		Description:   description,
+		ContainerPath: containerPath,
+		HostSubpath:   hostSubpath,
+		ReadOnly:      readOnly,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update game config volume: %w", err)
+	}
+	return resp.Volume, nil
+}
+
+// DeleteGameConfigVolume deletes a volume
+func (c *ControlClient) DeleteGameConfigVolume(ctx context.Context, volumeID int64) error {
+	_, err := c.api.DeleteGameConfigVolume(ctx, &manmanpb.DeleteGameConfigVolumeRequest{
+		VolumeId: volumeID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete game config volume: %w", err)
+	}
+	return nil
 }
 
 // ListServerGameConfigs retrieves server game configs for a server.
@@ -248,11 +306,10 @@ func (c *ControlClient) ListServerGameConfigs(ctx context.Context, serverID int6
 }
 
 // DeployGameConfig deploys a game config to a server.
-func (c *ControlClient) DeployGameConfig(ctx context.Context, serverID, gameConfigID int64, parameters map[string]string) (*manmanpb.ServerGameConfig, error) {
+func (c *ControlClient) DeployGameConfig(ctx context.Context, serverID, gameConfigID int64) (*manmanpb.ServerGameConfig, error) {
 	resp, err := c.api.DeployGameConfig(ctx, &manmanpb.DeployGameConfigRequest{
 		ServerId:     serverID,
 		GameConfigId: gameConfigID,
-		Parameters:  parameters,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to deploy game config: %w", err)
@@ -362,4 +419,316 @@ func (c *ControlClient) GetActionDefinition(ctx context.Context, actionID int64)
 		return nil, nil, fmt.Errorf("failed to get action definition: %w", err)
 	}
 	return resp.Action, resp.InputFields, nil
+}
+
+// Workshop addon methods
+
+func (c *ControlClient) ListWorkshopAddons(ctx context.Context, offset, limit int32, gameID int64) ([]*manmanpb.WorkshopAddon, error) {
+	resp, err := c.workshop.ListAddons(ctx, &manmanpb.ListAddonsRequest{
+		Offset: offset,
+		Limit:  limit,
+		GameId: gameID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Addons, nil
+}
+
+func (c *ControlClient) GetWorkshopAddon(ctx context.Context, addonID int64) (*manmanpb.WorkshopAddon, error) {
+	resp, err := c.workshop.GetAddon(ctx, &manmanpb.GetAddonRequest{
+		AddonId: addonID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Addon, nil
+}
+
+func (c *ControlClient) ListWorkshopInstallations(ctx context.Context, sgcID int64) ([]*manmanpb.WorkshopInstallation, error) {
+	resp, err := c.workshop.ListInstallations(ctx, &manmanpb.ListInstallationsRequest{
+		SgcId: sgcID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Installations, nil
+}
+
+func (c *ControlClient) InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall bool) (*manmanpb.WorkshopInstallation, error) {
+	resp, err := c.workshop.InstallAddon(ctx, &manmanpb.InstallAddonRequest{
+		SgcId:          sgcID,
+		AddonId:        addonID,
+		ForceReinstall: forceReinstall,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Installation, nil
+}
+
+func (c *ControlClient) RemoveInstallation(ctx context.Context, installationID int64) error {
+	_, err := c.workshop.RemoveInstallation(ctx, &manmanpb.RemoveInstallationRequest{
+		InstallationId: installationID,
+	})
+	return err
+}
+
+func (c *ControlClient) ResetInstallation(ctx context.Context, installationID int64) (*manmanpb.WorkshopInstallation, error) {
+	resp, err := c.workshop.ResetInstallation(ctx, &manmanpb.ResetInstallationRequest{
+		InstallationId: installationID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Installation, nil
+}
+
+func (c *ControlClient) CreateAddon(ctx context.Context, gameID int64, workshopID, platformType, name, description string, fileSizeBytes int64, isCollection bool) (*manmanpb.WorkshopAddon, error) {
+	resp, err := c.workshop.CreateAddon(ctx, &manmanpb.CreateAddonRequest{
+		GameId:        gameID,
+		WorkshopId:    workshopID,
+		PlatformType:  platformType,
+		Name:          name,
+		Description:   description,
+		FileSizeBytes: fileSizeBytes,
+		IsCollection:  isCollection,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create addon: %w", err)
+	}
+	return resp.Addon, nil
+}
+
+func (c *ControlClient) FetchAddonMetadata(ctx context.Context, gameID int64, workshopID, platformType string) (*manmanpb.WorkshopAddon, error) {
+	resp, err := c.workshop.FetchAddonMetadata(ctx, &manmanpb.FetchAddonMetadataRequest{
+		GameId:       gameID,
+		WorkshopId:   workshopID,
+		PlatformType: platformType,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Addon, nil
+}
+
+// Library management methods
+
+func (c *ControlClient) ListLibraries(ctx context.Context, limit, offset int32, gameID int64) ([]*manmanpb.WorkshopLibrary, error) {
+	resp, err := c.workshop.ListLibraries(ctx, &manmanpb.ListLibrariesRequest{
+		GameId: gameID,
+		Limit:  limit,
+		Offset: offset,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Libraries, nil
+}
+
+func (c *ControlClient) GetLibrary(ctx context.Context, libraryID int64) (*manmanpb.WorkshopLibrary, error) {
+	resp, err := c.workshop.GetLibrary(ctx, &manmanpb.GetLibraryRequest{
+		LibraryId: libraryID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Library, nil
+}
+
+func (c *ControlClient) CreateLibrary(ctx context.Context, gameID int64, name, description string, presetID int64) (*manmanpb.WorkshopLibrary, error) {
+	resp, err := c.workshop.CreateLibrary(ctx, &manmanpb.CreateLibraryRequest{
+		GameId:      gameID,
+		Name:        name,
+		Description: description,
+		PresetId:    presetID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Library, nil
+}
+
+func (c *ControlClient) DeleteLibrary(ctx context.Context, libraryID int64) error {
+	_, err := c.workshop.DeleteLibrary(ctx, &manmanpb.DeleteLibraryRequest{
+		LibraryId: libraryID,
+	})
+	return err
+}
+
+func (c *ControlClient) DeleteAddon(ctx context.Context, addonID int64) error {
+	_, err := c.workshop.DeleteAddon(ctx, &manmanpb.DeleteAddonRequest{
+		AddonId: addonID,
+	})
+	return err
+}
+
+func (c *ControlClient) AddAddonToLibrary(ctx context.Context, libraryID, addonID int64) error {
+	_, err := c.workshop.AddAddonToLibrary(ctx, &manmanpb.AddAddonToLibraryRequest{
+		LibraryId: libraryID,
+		AddonId:   addonID,
+	})
+	return err
+}
+
+func (c *ControlClient) RemoveAddonFromLibrary(ctx context.Context, libraryID, addonID int64) error {
+	_, err := c.workshop.RemoveAddonFromLibrary(ctx, &manmanpb.RemoveAddonFromLibraryRequest{
+		LibraryId: libraryID,
+		AddonId:   addonID,
+	})
+	return err
+}
+
+func (c *ControlClient) AddLibraryReference(ctx context.Context, parentID, childID int64) error {
+	_, err := c.workshop.AddLibraryReference(ctx, &manmanpb.AddLibraryReferenceRequest{
+		ParentLibraryId: parentID,
+		ChildLibraryId:  childID,
+	})
+	return err
+}
+
+func (c *ControlClient) RemoveLibraryReference(ctx context.Context, parentID, childID int64) error {
+	_, err := c.workshop.RemoveLibraryReference(ctx, &manmanpb.RemoveLibraryReferenceRequest{
+		ParentLibraryId: parentID,
+		ChildLibraryId:  childID,
+	})
+	return err
+}
+
+// GetLibraryAddons returns addons in a library
+func (c *ControlClient) GetLibraryAddons(ctx context.Context, libraryID int64) ([]*manmanpb.WorkshopAddon, error) {
+	resp, err := c.workshop.GetLibraryAddons(ctx, &manmanpb.GetLibraryAddonsRequest{
+		LibraryId: libraryID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Addons, nil
+}
+
+// GetChildLibraries returns child libraries
+func (c *ControlClient) GetChildLibraries(ctx context.Context, libraryID int64) ([]*manmanpb.WorkshopLibrary, error) {
+	resp, err := c.workshop.GetChildLibraries(ctx, &manmanpb.GetChildLibrariesRequest{
+		LibraryId: libraryID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Libraries, nil
+}
+
+// UpdateLibrary updates a library's name, description, and preset
+func (c *ControlClient) UpdateLibrary(ctx context.Context, libraryID int64, name, description string, presetID int64) (*manmanpb.WorkshopLibrary, error) {
+	resp, err := c.workshop.UpdateLibrary(ctx, &manmanpb.UpdateLibraryRequest{
+		LibraryId:   libraryID,
+		Name:        name,
+		Description: description,
+		PresetId:    presetID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update library: %w", err)
+	}
+	return resp.Library, nil
+}
+
+// UpdateAddon updates an addon's name and description
+func (c *ControlClient) UpdateAddon(ctx context.Context, addonID int64, name, description string) (*manmanpb.WorkshopAddon, error) {
+	resp, err := c.workshop.UpdateAddon(ctx, &manmanpb.UpdateAddonRequest{
+		AddonId:     addonID,
+		Name:        name,
+		Description: description,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update addon: %w", err)
+	}
+	return resp.Addon, nil
+}
+
+// SGC-Library management methods
+
+func (c *ControlClient) AddLibraryToSGC(ctx context.Context, sgcID, libraryID, presetID, volumeID int64, pathOverride string) error {
+	_, err := c.workshop.AddLibraryToSGC(ctx, &manmanpb.AddLibraryToSGCRequest{
+		SgcId:                    sgcID,
+		LibraryId:                libraryID,
+		PresetId:                 presetID,
+		VolumeId:                 volumeID,
+		InstallationPathOverride: pathOverride,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to add library to SGC: %w", err)
+	}
+	return nil
+}
+
+func (c *ControlClient) ListSGCLibraries(ctx context.Context, sgcID int64) ([]*manmanpb.WorkshopLibrary, error) {
+	resp, err := c.workshop.ListSGCLibraries(ctx, &manmanpb.ListSGCLibrariesRequest{
+		SgcId: sgcID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list SGC libraries: %w", err)
+	}
+	return resp.Libraries, nil
+}
+
+func (c *ControlClient) RemoveLibraryFromSGC(ctx context.Context, sgcID, libraryID int64) error {
+	_, err := c.workshop.RemoveLibraryFromSGC(ctx, &manmanpb.RemoveLibraryFromSGCRequest{
+		SgcId:     sgcID,
+		LibraryId: libraryID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to remove library from SGC: %w", err)
+	}
+	return nil
+}
+
+func (c *ControlClient) GetSGCLibraryAttachments(ctx context.Context, sgcID int64) ([]*manmanpb.SGCWorkshopLibrary, error) {
+	resp, err := c.workshop.GetSGCLibraryAttachments(ctx, &manmanpb.GetSGCLibraryAttachmentsRequest{
+		SgcId: sgcID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get SGC library attachments: %w", err)
+	}
+	return resp.Attachments, nil
+}
+
+// Path Preset Management
+
+func (c *ControlClient) CreateAddonPathPreset(ctx context.Context, gameID int64, name, description, installationPath string) (*manmanpb.GameAddonPathPreset, error) {
+	resp, err := c.workshop.CreateAddonPathPreset(ctx, &manmanpb.CreateAddonPathPresetRequest{
+		GameId:           gameID,
+		Name:             name,
+		Description:      description,
+		InstallationPath: installationPath,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Preset, nil
+}
+
+func (c *ControlClient) ListAddonPathPresets(ctx context.Context, gameID int64) ([]*manmanpb.GameAddonPathPreset, error) {
+	resp, err := c.workshop.ListAddonPathPresets(ctx, &manmanpb.ListAddonPathPresetsRequest{
+		GameId: gameID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Presets, nil
+}
+
+func (c *ControlClient) UpdateAddonPathPreset(ctx context.Context, presetID int64, name, description, installationPath string) error {
+	_, err := c.workshop.UpdateAddonPathPreset(ctx, &manmanpb.UpdateAddonPathPresetRequest{
+		PresetId:         presetID,
+		Name:             name,
+		Description:      description,
+		InstallationPath: installationPath,
+	})
+	return err
+}
+
+func (c *ControlClient) DeleteAddonPathPreset(ctx context.Context, presetID int64) error {
+	_, err := c.workshop.DeleteAddonPathPreset(ctx, &manmanpb.DeleteAddonPathPresetRequest{
+		PresetId: presetID,
+	})
+	return err
 }

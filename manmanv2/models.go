@@ -56,10 +56,20 @@ type GameConfig struct {
 	Image        string  `db:"image"`
 	ArgsTemplate *string `db:"args_template"`
 	EnvTemplate  JSONB   `db:"env_template"`
-	Files        JSONB   `db:"files"`
-	Parameters   JSONB   `db:"parameters"`
 	Entrypoint     JSONB   `db:"entrypoint"` // []string stored as JSONB
 	Command        JSONB   `db:"command"`    // []string stored as JSONB
+}
+
+// GameConfigVolume represents a volume mount configuration specific to a GameConfig
+type GameConfigVolume struct {
+	VolumeID      int64     `db:"volume_id"`
+	ConfigID      int64     `db:"config_id"`
+	Name          string    `db:"name"`
+	Description   *string   `db:"description"`
+	ContainerPath string    `db:"container_path"`
+	HostSubpath   *string   `db:"host_subpath"`
+	ReadOnly      bool      `db:"read_only"`
+	CreatedAt     time.Time `db:"created_at"`
 }
 
 // ServerGameConfig represents a game configuration deployed on a specific server
@@ -68,7 +78,6 @@ type ServerGameConfig struct {
 	ServerID     int64  `db:"server_id"`
 	GameConfigID int64  `db:"game_config_id"`
 	PortBindings JSONB  `db:"port_bindings"`
-	Parameters   JSONB  `db:"parameters"`
 	Status       string `db:"status"`
 }
 
@@ -80,7 +89,6 @@ type Session struct {
 	EndedAt              *time.Time `db:"ended_at"`
 	ExitCode             *int       `db:"exit_code"`
 	Status               string     `db:"status"`
-	Parameters           JSONB      `db:"parameters"`
 	RestoredFromBackupID *int64     `db:"restored_from_backup_id"`
 	CreatedAt            time.Time  `db:"created_at"`
 	UpdatedAt            time.Time  `db:"updated_at"`
@@ -143,55 +151,6 @@ type Backup struct {
 }
 
 // ============================================================================
-// Normalized Parameter Schema Models
-// ============================================================================
-
-// ParameterDefinition defines a parameter for a game
-type ParameterDefinition struct {
-	ParamID       int64     `db:"param_id"`
-	GameID        int64     `db:"game_id"`
-	Key           string    `db:"key"`
-	ParamType     string    `db:"param_type"`
-	Description   *string   `db:"description"`
-	Required      bool      `db:"required"`
-	DefaultValue  *string   `db:"default_value"`
-	MinValue      *int64    `db:"min_value"`
-	MaxValue      *int64    `db:"max_value"`
-	AllowedValues *[]string `db:"allowed_values"` // PostgreSQL text[] array
-	CreatedAt     time.Time `db:"created_at"`
-	UpdatedAt     time.Time `db:"updated_at"`
-}
-
-// GameConfigParameterValue stores a parameter value for a GameConfig
-type GameConfigParameterValue struct {
-	ValueID   int64     `db:"value_id"`
-	ConfigID  int64     `db:"config_id"`
-	ParamID   int64     `db:"param_id"`
-	Value     string    `db:"value"`
-	CreatedAt time.Time `db:"created_at"`
-	UpdatedAt time.Time `db:"updated_at"`
-}
-
-// ServerGameConfigParameterValue stores a parameter value override for a ServerGameConfig
-type ServerGameConfigParameterValue struct {
-	ValueID   int64     `db:"value_id"`
-	SGCID     int64     `db:"sgc_id"`
-	ParamID   int64     `db:"param_id"`
-	Value     string    `db:"value"`
-	CreatedAt time.Time `db:"created_at"`
-	UpdatedAt time.Time `db:"updated_at"`
-}
-
-// SessionParameterValue stores a parameter value override for a Session
-type SessionParameterValue struct {
-	ValueID   int64     `db:"value_id"`
-	SessionID int64     `db:"session_id"`
-	ParamID   int64     `db:"param_id"`
-	Value     string    `db:"value"`
-	CreatedAt time.Time `db:"created_at"`
-}
-
-// ============================================================================
 // Configuration Strategy System Models
 // ============================================================================
 
@@ -210,18 +169,6 @@ type ConfigurationStrategy struct {
 	UpdatedAt     time.Time `db:"updated_at"`
 }
 
-// StrategyParameterBinding links parameters to configuration strategies
-type StrategyParameterBinding struct {
-	BindingID      int64     `db:"binding_id"`
-	StrategyID     int64     `db:"strategy_id"`
-	ParamID        int64     `db:"param_id"`
-	BindingType    string    `db:"binding_type"`
-	TargetKey      string    `db:"target_key"`
-	ValueTemplate  *string   `db:"value_template"`
-	ConditionExpr  *string   `db:"condition_expr"`
-	CreatedAt      time.Time `db:"created_at"`
-}
-
 // ConfigurationPatch stores configuration overrides at different levels
 type ConfigurationPatch struct {
 	PatchID      int64     `db:"patch_id"`
@@ -230,6 +177,8 @@ type ConfigurationPatch struct {
 	EntityID     int64     `db:"entity_id"`
 	PatchContent *string   `db:"patch_content"`
 	PatchFormat  string    `db:"patch_format"`
+	VolumeID     *int64    `db:"volume_id"`      // Optional FK to game_config_volumes
+	PathOverride *string   `db:"path_override"`  // Optional relative path override
 	CreatedAt    time.Time `db:"created_at"`
 	UpdatedAt    time.Time `db:"updated_at"`
 }
@@ -300,6 +249,96 @@ type ActionExecution struct {
 	ExecutedAt      time.Time  `db:"executed_at"`
 }
 
+// ============================================================================
+// Workshop Addon Management Models
+// ============================================================================
+
+// WorkshopAddon represents a workshop addon in the library
+type WorkshopAddon struct {
+	AddonID          int64      `db:"addon_id"`
+	GameID           int64      `db:"game_id"`
+	WorkshopID       string     `db:"workshop_id"`
+	PlatformType     string     `db:"platform_type"`
+	Name             string     `db:"name"`
+	Description      *string    `db:"description"`
+	FileSizeBytes    *int64     `db:"file_size_bytes"`
+	InstallationPath *string    `db:"installation_path"`
+	PresetID         *int64     `db:"preset_id"`
+	VolumeID         *int64     `db:"volume_id"`
+	IsCollection     bool       `db:"is_collection"`
+	IsDeprecated     bool       `db:"is_deprecated"`
+	Metadata         JSONB      `db:"metadata"`
+	LastUpdated      *time.Time `db:"last_updated"`
+	CreatedAt        time.Time  `db:"created_at"`
+	UpdatedAt        time.Time  `db:"updated_at"`
+}
+
+// WorkshopAddonWithGame is returned by ListAddons queries that join with the games table.
+type WorkshopAddonWithGame struct {
+	WorkshopAddon
+	SteamAppID *string // games.steam_app_id
+}
+
+// GameAddonPathPreset represents a reusable installation path template for workshop addons
+type GameAddonPathPreset struct {
+	PresetID         int64     `db:"preset_id"`
+	GameID           int64     `db:"game_id"`
+	Name             string    `db:"name"`
+	Description      *string   `db:"description"`
+	InstallationPath string    `db:"installation_path"`
+	CreatedAt        time.Time `db:"created_at"`
+}
+// WorkshopInstallation represents an addon installed on a ServerGameConfig
+type WorkshopInstallation struct {
+	InstallationID      int64      `db:"installation_id"`
+	SGCID               int64      `db:"sgc_id"`
+	AddonID             int64      `db:"addon_id"`
+	Status              string     `db:"status"`
+	InstallationPath    string     `db:"installation_path"`
+	ProgressPercent     int        `db:"progress_percent"`
+	ErrorMessage        *string    `db:"error_message"`
+	DownloadStartedAt   *time.Time `db:"download_started_at"`
+	DownloadCompletedAt *time.Time `db:"download_completed_at"`
+	CreatedAt           time.Time  `db:"created_at"`
+	UpdatedAt           time.Time  `db:"updated_at"`
+}
+
+// WorkshopLibrary represents a collection of workshop addons
+type WorkshopLibrary struct {
+	LibraryID   int64     `db:"library_id"`
+	GameID      int64     `db:"game_id"`
+	Name        string    `db:"name"`
+	Description *string   `db:"description"`
+	PresetID    *int64    `db:"preset_id"`
+	CreatedAt   time.Time `db:"created_at"`
+	UpdatedAt   time.Time `db:"updated_at"`
+}
+
+// SGCWorkshopLibrary represents a library attached to an SGC with optional overrides
+type SGCWorkshopLibrary struct {
+	SGCID                    int64     `db:"sgc_id"`
+	LibraryID                int64     `db:"library_id"`
+	PresetID                 *int64    `db:"preset_id"`
+	VolumeID                 *int64    `db:"volume_id"`
+	InstallationPathOverride *string   `db:"installation_path_override"`
+	CreatedAt                time.Time `db:"created_at"`
+}
+
+// WorkshopLibraryAddon represents the junction between libraries and addons
+type WorkshopLibraryAddon struct {
+	LibraryID    int64     `db:"library_id"`
+	AddonID      int64     `db:"addon_id"`
+	DisplayOrder int       `db:"display_order"`
+	CreatedAt    time.Time `db:"created_at"`
+}
+
+// WorkshopLibraryReference represents library-to-library references for hierarchies
+type WorkshopLibraryReference struct {
+	ParentLibraryID int64     `db:"parent_library_id"`
+	ChildLibraryID  int64     `db:"child_library_id"`
+	CreatedAt       time.Time `db:"created_at"`
+}
+
 // Status constants
 const (
 	ServerStatusOnline  = "online"
@@ -319,12 +358,6 @@ const (
 
 	ProtocolTCP = "TCP"
 	ProtocolUDP = "UDP"
-
-	// Parameter types
-	ParamTypeString = "string"
-	ParamTypeInt    = "int"
-	ParamTypeBool   = "bool"
-	ParamTypeSecret = "secret"
 
 	// Configuration strategy types
 	StrategyTypeCLIArgs        = "cli_args"
@@ -389,6 +422,16 @@ const (
 	ActionLevelGame              = "game"
 	ActionLevelGameConfig        = "game_config"
 	ActionLevelServerGameConfig  = "server_game_config"
+
+	// Workshop installation statuses
+	InstallationStatusPending     = "pending"
+	InstallationStatusDownloading = "downloading"
+	InstallationStatusInstalled   = "installed"
+	InstallationStatusFailed      = "failed"
+	InstallationStatusRemoved     = "removed"
+
+	// Workshop platform types
+	PlatformTypeSteamWorkshop = "steam_workshop"
 )
 
 // IsActive returns true if the session is in an active state (not completed or stopped)

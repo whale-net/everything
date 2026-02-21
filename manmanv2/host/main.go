@@ -17,6 +17,7 @@ import (
 	rmqlib "github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/manmanv2/host/rmq"
 	"github.com/whale-net/everything/manmanv2/host/session"
+	"github.com/whale-net/everything/manmanv2/host/workshop"
 	pb "github.com/whale-net/everything/manmanv2/protos"
 )
 
@@ -87,7 +88,7 @@ func run() error {
 	defer rmqConn.Close()
 
 	// Initialize gRPC client for control API
-	grpcClient, err := initializeGRPCClient(ctx, apiAddress)
+	grpcClient, workshopClient, err := initializeGRPCClient(ctx, apiAddress)
 	if err != nil {
 		return fmt.Errorf("failed to initialize gRPC client: %w", err)
 	}
@@ -99,8 +100,21 @@ func run() error {
 	}
 	defer rmqPublisher.Close()
 
+	// Initialize download orchestrator for workshop addon downloads
+	downloadOrchestrator := workshop.NewDownloadOrchestrator(
+		dockerClient,
+		grpcClient,
+		workshopClient,
+		serverID,
+		environment,
+		hostDataDir,
+		session.InternalDataDir,
+		5, // max concurrent downloads
+		rmqPublisher,
+	)
+
 	// Initialize session manager with gRPC client for configuration fetching and RMQ publisher for logs
-	sessionManager := session.NewSessionManager(dockerClient, environment, hostDataDir, grpcClient, rmqPublisher)
+	sessionManager := session.NewSessionManager(dockerClient, environment, hostDataDir, grpcClient, downloadOrchestrator, rmqPublisher)
 
 	// Recover orphaned sessions on startup
 	logger.Info("recovering orphaned sessions")
@@ -121,9 +135,10 @@ func run() error {
 
 	// Initialize command handler
 	commandHandler := &CommandHandlerImpl{
-		sessionManager: sessionManager,
-		publisher:      rmqPublisher,
-		serverID:       serverID,
+		sessionManager:       sessionManager,
+		publisher:            rmqPublisher,
+		serverID:             serverID,
+		downloadOrchestrator: downloadOrchestrator,
 	}
 
 	// Initialize RabbitMQ consumer
@@ -199,9 +214,10 @@ func run() error {
 
 // CommandHandlerImpl implements the CommandHandler interface
 type CommandHandlerImpl struct {
-	sessionManager *session.SessionManager
-	publisher      *rmq.Publisher
-	serverID       int64
+	sessionManager      *session.SessionManager
+	publisher           *rmq.Publisher
+	serverID            int64
+	downloadOrchestrator *workshop.DownloadOrchestrator
 }
 
 // HandleStartSession handles a start session command
@@ -225,7 +241,8 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 
 	ports := make(map[string]string, len(cmd.ServerGameConfig.PortBindings))
 	for _, pb := range cmd.ServerGameConfig.PortBindings {
-		ports[fmt.Sprintf("%d", pb.ContainerPort)] = fmt.Sprintf("%d", pb.HostPort)
+		// Include protocol in key to support both TCP and UDP on same port
+		ports[fmt.Sprintf("%d/%s", pb.ContainerPort, pb.Protocol)] = fmt.Sprintf("%d/%s", pb.HostPort, pb.Protocol)
 	}
 
 	volumes := make([]session.VolumeMount, 0, len(cmd.GameConfig.Volumes))
@@ -349,9 +366,38 @@ func (h *CommandHandlerImpl) HandleSendInput(ctx context.Context, cmd *rmq.SendI
 	return nil
 }
 
+// HandleDownloadAddon handles a workshop addon download command
+func (h *CommandHandlerImpl) HandleDownloadAddon(ctx context.Context, cmd *rmq.DownloadAddonCommand) error {
+	slog.Info("processing download addon command",
+		"installation_id", cmd.InstallationID,
+		"sgc_id", cmd.SGCID,
+		"addon_id", cmd.AddonID,
+		"workshop_id", cmd.WorkshopID,
+		"steam_app_id", cmd.SteamAppID)
+
+	// Convert rmq.DownloadAddonCommand to workshop.DownloadAddonCommand
+	workshopCmd := &workshop.DownloadAddonCommand{
+		InstallationID: cmd.InstallationID,
+		SGCID:          cmd.SGCID,
+		AddonID:        cmd.AddonID,
+		WorkshopID:     cmd.WorkshopID,
+		SteamAppID:     cmd.SteamAppID,
+		InstallPath:    cmd.InstallPath,
+	}
+
+	// Call download orchestrator in a goroutine to avoid blocking RabbitMQ consumer
+	go func() {
+		if err := h.downloadOrchestrator.HandleDownloadCommand(ctx, workshopCmd); err != nil {
+			slog.Error("async download command failed", "installation_id", workshopCmd.InstallationID, "error", err)
+		}
+	}()
+
+	return nil
+}
+
 // selfRegister generates a server name (if not provided) and registers with the control plane
 // initializeGRPCClient creates a gRPC client connection to the control API
-func initializeGRPCClient(ctx context.Context, apiAddress string) (pb.ManManAPIClient, error) {
+func initializeGRPCClient(ctx context.Context, apiAddress string) (pb.ManManAPIClient, pb.WorkshopServiceClient, error) {
 	// Build TLS config based on environment and auto-detection
 	var tlsConfig *grpcclient.TLSConfig
 	apiTLSEnabled := shouldUseAPITLS(apiAddress)
@@ -385,11 +431,12 @@ func initializeGRPCClient(ctx context.Context, apiAddress string) (pb.ManManAPIC
 			backoff *= 2
 		}
 		if err != nil {
-			return nil, fmt.Errorf("failed to connect to API after retries: %w", err)
+			return nil, nil, fmt.Errorf("failed to connect to API after retries: %w", err)
 		}
 	}
 
-	return pb.NewManManAPIClient(client.GetConnection()), nil
+	conn := client.GetConnection()
+	return pb.NewManManAPIClient(conn), pb.NewWorkshopServiceClient(conn), nil
 }
 
 func selfRegister(ctx context.Context, apiAddress, serverName, environment, dockerSocket string) (int64, error) {
@@ -412,7 +459,7 @@ func selfRegister(ctx context.Context, apiAddress, serverName, environment, dock
 		}
 	}
 
-	grpcClient, err := initializeGRPCClient(ctx, apiAddress)
+	grpcClient, _, err := initializeGRPCClient(ctx, apiAddress)
 	if err != nil {
 		return 0, err
 	}

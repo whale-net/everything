@@ -13,6 +13,7 @@ go_library(
         "//libs/go/rmq",
         "//manmanv2/host/rmq",
         "//manmanv2/host/session",
+        "//manmanv2/host/workshop",
         "//manmanv2/protos:manmanpb",
         "@com_github_google_uuid//:uuid",
     ],

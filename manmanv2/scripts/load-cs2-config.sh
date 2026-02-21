@@ -274,25 +274,25 @@ EOF
   config_id="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); config=data.get("config", {}); print(config.get("config_id") or config.get("configId") or "")' <<< "${create_config_json}")"
 fi
 
-echo "Ensuring CS2 volume strategy exists..."
-create_strategy_payload="$(cat <<EOF
+echo "Ensuring CS2 volume exists for config..."
+create_volume_payload="$(cat <<EOF
 {
-  "game_id": ${game_id},
+  "config_id": ${config_id},
   "name": "cs2-data",
   "description": "Persistent CS2 game data volume mounted to /home/steam/cs2-dedicated in container",
-  "strategy_type": "volume",
-  "target_path": "/home/steam/cs2-dedicated",
-  "base_template": "cs2-data"
+  "container_path": "/home/steam/cs2-dedicated",
+  "host_subpath": "cs2-data",
+  "read_only": false
 }
 EOF
 )"
-strategy_result="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateConfigurationStrategy" "${create_strategy_payload}" 2>&1 || true)"
-if echo "${strategy_result}" | grep -q "duplicate key\|already exists"; then
-  echo "  Volume strategy 'cs2-data' already exists (skipped)"
-elif echo "${strategy_result}" | grep -q "strategy"; then
-  echo "  ✔ Created volume strategy 'cs2-data'"
+volume_result="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateGameConfigVolume" "${create_volume_payload}" 2>&1 || true)"
+if echo "${volume_result}" | grep -q "duplicate key\|already exists"; then
+  echo "  Volume 'cs2-data' already exists for this config (skipped)"
+elif echo "${volume_result}" | grep -q "volume"; then
+  echo "  ✔ Created volume 'cs2-data' for GameConfig"
 else
-  echo "  Warning: Unexpected response from volume strategy creation"
+  echo "  Warning: Unexpected response from volume creation"
 fi
 
 if [[ -z "${config_id}" ]]; then

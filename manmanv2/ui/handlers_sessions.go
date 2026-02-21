@@ -47,11 +47,16 @@ type SessionsPageData struct {
 
 // SessionDetailPageData holds data for a single session.
 type SessionDetailPageData struct {
-	Title   string
-	Active  string
-	User    *htmxauth.UserInfo
-	Session *manmanpb.Session
-	Actions []*manmanpb.ActionDefinition
+	Title         string
+	Active        string
+	User          *htmxauth.UserInfo
+	Session       *manmanpb.Session
+	SGC           *manmanpb.ServerGameConfig
+	GameConfig    *manmanpb.GameConfig
+	Game          *manmanpb.Game
+	Actions       []*manmanpb.ActionDefinition
+	Libraries     []*manmanpb.WorkshopLibrary
+	Installations []*manmanpb.WorkshopInstallation
 }
 
 func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
@@ -262,12 +267,65 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		actions = []*manmanpb.ActionDefinition{}
 	}
 
+	// Fetch SGC, GameConfig, and Game details
+	var sgc *manmanpb.ServerGameConfig
+	var gameConfig *manmanpb.GameConfig
+	var game *manmanpb.Game
+	var libraries []*manmanpb.WorkshopLibrary
+	var installations []*manmanpb.WorkshopInstallation
+
+	if sessionResp.Session.ServerGameConfigId != 0 {
+		sgcResp, err := app.grpc.GetAPI().GetServerGameConfig(ctx, &manmanpb.GetServerGameConfigRequest{
+			ServerGameConfigId: sessionResp.Session.ServerGameConfigId,
+		})
+		if err != nil {
+			log.Printf("Warning: failed to get SGC for session detail: %v", err)
+		} else {
+			sgc = sgcResp.Config
+
+			// Fetch GameConfig
+			if sgc.GameConfigId != 0 {
+				gcResp, err := app.grpc.GetGameConfig(ctx, sgc.GameConfigId)
+				if err != nil {
+					log.Printf("Warning: failed to get GameConfig for session detail: %v", err)
+				} else {
+					gameConfig = gcResp
+
+					// Fetch Game
+					if gameConfig.GameId != 0 {
+						game, err = app.grpc.GetGame(ctx, gameConfig.GameId)
+						if err != nil {
+							log.Printf("Warning: failed to get Game for session detail: %v", err)
+						}
+					}
+				}
+			}
+		}
+
+		// Fetch workshop libraries and installations
+		libraries, err = app.grpc.ListSGCLibraries(ctx, sessionResp.Session.ServerGameConfigId)
+		if err != nil {
+			log.Printf("Warning: failed to list SGC libraries for session detail: %v", err)
+			libraries = []*manmanpb.WorkshopLibrary{}
+		}
+		installations, err = app.grpc.ListWorkshopInstallations(ctx, sessionResp.Session.ServerGameConfigId)
+		if err != nil {
+			log.Printf("Warning: failed to list workshop installations for session detail: %v", err)
+			installations = []*manmanpb.WorkshopInstallation{}
+		}
+	}
+
 	data := SessionDetailPageData{
-		Title:   "Session " + sessionIDStr,
-		Active:  "sessions",
-		User:    user,
-		Session: sessionResp.Session,
-		Actions: actions,
+		Title:         "Session " + sessionIDStr,
+		Active:        "sessions",
+		User:          user,
+		Session:       sessionResp.Session,
+		SGC:           sgc,
+		GameConfig:    gameConfig,
+		Game:          game,
+		Actions:       actions,
+		Libraries:     libraries,
+		Installations: installations,
 	}
 
 	layoutData := LayoutData{
@@ -424,7 +482,7 @@ func (app *App) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 	force := r.FormValue("force") == "true"
 
 	ctx := context.Background()
-	session, err := app.grpc.StartSession(ctx, serverGameConfigID, nil, force)
+	session, err := app.grpc.StartSession(ctx, serverGameConfigID, force)
 	if err != nil {
 		log.Printf("Error starting session: %v", err)
 

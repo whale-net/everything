@@ -1,0 +1,232 @@
+{{define "sgc_detail_content"}}
+<div class="action-bar">
+    <div>
+        <nav style="font-size: 0.85rem; color: #6b7280; margin-bottom: 0.5rem;">
+            {{if .GameConfig}}
+            <a href="/games/{{.GameConfig.GameId}}/config/{{.GameConfig.ConfigId}}">{{.GameConfig.Name}}</a> &rsaquo;
+            {{end}}
+            SGC {{.SGC.ServerGameConfigId}}
+        </nav>
+        <h1 style="margin: 0;">SGC {{.SGC.ServerGameConfigId}}</h1>
+    </div>
+    <div>
+        <form method="post" action="/sessions/start" style="display: inline;">
+            <input type="hidden" name="server_game_config_id" value="{{.SGC.ServerGameConfigId}}">
+            <button type="submit" class="btn btn-success">Start Session</button>
+        </form>
+    </div>
+</div>
+
+<!-- SGC Info -->
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Deployment Info</div>
+    </div>
+    <dl style="display: grid; grid-template-columns: 200px 1fr; gap: 0.5rem;">
+        <dt><strong>SGC ID:</strong></dt>
+        <dd>{{.SGC.ServerGameConfigId}}</dd>
+
+        <dt><strong>Server:</strong></dt>
+        <dd>
+            {{if .Server}}
+            <a href="/servers/{{.Server.ServerId}}">{{.Server.Name}}</a>
+            {{else}}
+            Server {{.SGC.ServerId}}
+            {{end}}
+        </dd>
+
+        <dt><strong>Game Config:</strong></dt>
+        <dd>
+            {{if .GameConfig}}
+            <a href="/games/{{.GameConfig.GameId}}/config/{{.GameConfig.ConfigId}}">{{.GameConfig.Name}}</a>
+            {{else}}
+            Config {{.SGC.GameConfigId}}
+            {{end}}
+        </dd>
+
+        <dt><strong>Status:</strong></dt>
+        <dd><span class="badge {{statusBadge .SGC.Status}}">{{.SGC.Status}}</span></dd>
+    </dl>
+</div>
+
+<!-- Libraries -->
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Workshop Libraries</div>
+        <button class="btn btn-primary btn-sm" onclick="toggleAddLibraryPanel()">Add Library</button>
+    </div>
+
+    {{if .PendingCount}}
+    <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 0.75rem; margin-bottom: 1rem; color: #856404;">
+        {{.PendingCount}} addon(s) pending installation — will be installed before the next session starts.
+    </div>
+    {{end}}
+
+    {{if .LibraryAttachments}}
+    <table>
+        <thead>
+            <tr>
+                <th>Library</th>
+                <th>Install Path</th>
+                <th>Volume</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .LibraryAttachments}}
+            <tr>
+                <td>
+                    <a href="/workshop/library-detail?library_id={{.Library.LibraryId}}">{{.Library.Name}}</a>
+                    {{if .Library.PresetId}}<br><small style="color:#9ca3af;">Preset: {{.PresetName}}</small>{{end}}
+                </td>
+                <td>
+                    <code style="font-size:12px;">{{.ComputedPath}}</code>
+                    {{if .PathOverride}}<br><small style="color:#f59e0b;">⚠ Override</small>{{end}}
+                </td>
+                <td>
+                    {{if .VolumeName}}
+                        <span style="font-size:13px;">{{.VolumeName}}</span>
+                    {{else}}
+                        <small style="color:#9ca3af;">First available</small>
+                    {{end}}
+                </td>
+                <td>
+                    <form method="POST" action="/sgc/remove-library" style="display:inline;">
+                        <input type="hidden" name="sgc_id" value="{{$.SGC.ServerGameConfigId}}">
+                        <input type="hidden" name="library_id" value="{{.Library.LibraryId}}">
+                        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Remove this library?')">Remove</button>
+                    </form>
+                </td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else}}
+    <div class="empty-state" style="padding: 1.5rem;">
+        <p>No libraries attached. Add a library to automatically install its addons before sessions start.</p>
+    </div>
+    {{end}}
+
+    <!-- Add Library Panel -->
+    <div id="add-library-panel" style="display: none; margin-top: 1rem; border-top: 1px solid #eee; padding-top: 1rem;">
+        <h3 style="margin-bottom: 0.75rem;">Add Library</h3>
+        <input
+            type="text"
+            placeholder="Search libraries..."
+            style="margin-bottom: 0.5rem;"
+            hx-get="/sgc/api/available-libraries?sgc_id={{.SGC.ServerGameConfigId}}"
+            hx-trigger="keyup changed delay:300ms"
+            hx-target="#sgc-available-libraries"
+            name="q"
+        >
+        <div id="sgc-available-libraries"
+             hx-get="/sgc/api/available-libraries?sgc_id={{.SGC.ServerGameConfigId}}"
+             hx-trigger="load">
+        </div>
+    </div>
+</div>
+
+<!-- Sessions -->
+<div class="card">
+    <div class="card-header">
+        <div class="card-title">Sessions</div>
+        <a href="/sessions?server_game_config_id={{.SGC.ServerGameConfigId}}" class="btn btn-secondary btn-sm">View All</a>
+    </div>
+
+    {{if .Sessions}}
+    <table>
+        <thead>
+            <tr>
+                <th>Session ID</th>
+                <th>Status</th>
+                <th>Started</th>
+                <th>Ended</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Sessions}}
+            <tr>
+                <td>{{.SessionId}}</td>
+                <td><span class="badge {{statusBadge .Status}}">{{.Status}}</span></td>
+                <td>{{timeAgo .StartedAt}}</td>
+                <td>{{timeAgo .EndedAt}}</td>
+                <td><a href="/sessions/{{.SessionId}}" class="btn btn-secondary btn-sm">View</a></td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else}}
+    <div class="empty-state" style="padding: 1.5rem;">
+        <p>No sessions yet for this SGC.</p>
+    </div>
+    {{end}}
+</div>
+
+<script>
+function toggleAddLibraryPanel() {
+    var panel = document.getElementById('add-library-panel');
+    if (panel.style.display === 'none') {
+        panel.style.display = 'block';
+    } else {
+        panel.style.display = 'none';
+    }
+}
+</script>
+{{end}}
+
+{{define "sgc_available_libraries_partial"}}
+{{if .Libraries}}
+<div style="margin-top: 0.5rem;">
+    {{range .Libraries}}
+    <div x-data="{ expanded: false }" style="border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 0.75rem; padding: 0.75rem; background: white;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <strong>{{.Name}}</strong>
+                {{if .Description}}<br><small style="color: #6b7280;">{{.Description}}</small>{{end}}
+                {{if .PresetId}}<br><small style="color: #3498db;">Default: {{.PresetName}} ({{.PresetPath}})</small>{{end}}
+            </div>
+            <button @click="expanded = !expanded" class="btn btn-primary btn-sm" x-text="expanded ? 'Cancel' : 'Add'">Add</button>
+        </div>
+
+        <div x-show="expanded" x-cloak x-transition style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #e5e7eb;">
+            <form method="POST" action="/sgc/add-library">
+                <input type="hidden" name="sgc_id" value="{{$.SGCID}}">
+                <input type="hidden" name="library_id" value="{{.LibraryId}}">
+
+                <div class="form-group">
+                    <label>Path Preset <small style="color: #9ca3af;">(Optional override)</small></label>
+                    <select name="preset_id">
+                        <option value="">-- Use library default {{if .PresetName}}({{.PresetName}}){{end}} --</option>
+                        {{range $.Presets}}
+                        <option value="{{.PresetId}}">{{.Name}} ({{.InstallationPath}})</option>
+                        {{end}}
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Volume <small style="color: #9ca3af;">(Optional)</small></label>
+                    <select name="volume_id">
+                        <option value="">-- Use first available volume --</option>
+                        {{range $.Volumes}}
+                        <option value="{{.VolumeId}}">{{.Name}} ({{.ContainerPath}})</option>
+                        {{end}}
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Custom Path Override <small style="color: #9ca3af;">(Advanced)</small></label>
+                    <input type="text" name="installation_path_override" placeholder="e.g., custom/path/here">
+                    <small style="color: #9ca3af;">Leave empty to use preset. If set, completely overrides preset path.</small>
+                </div>
+
+                <button type="submit" class="btn btn-success">Attach Library</button>
+            </form>
+        </div>
+    </div>
+    {{end}}
+</div>
+{{else}}
+<p style="color: #6b7280; margin-top: 0.5rem;">No libraries available to add.</p>
+{{end}}
+{{end}}

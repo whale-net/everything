@@ -72,6 +72,13 @@ service ManManAPI {
   rpc DeleteConfigurationPatch(DeleteConfigurationPatchRequest) returns (DeleteConfigurationPatchResponse);
   rpc ListConfigurationPatches(ListConfigurationPatchesRequest) returns (ListConfigurationPatchesResponse);
 
+  // GameConfig volume management
+  rpc CreateGameConfigVolume(CreateGameConfigVolumeRequest) returns (CreateGameConfigVolumeResponse);
+  rpc GetGameConfigVolume(GetGameConfigVolumeRequest) returns (GetGameConfigVolumeResponse);
+  rpc ListGameConfigVolumes(ListGameConfigVolumesRequest) returns (ListGameConfigVolumesResponse);
+  rpc UpdateGameConfigVolume(UpdateGameConfigVolumeRequest) returns (UpdateGameConfigVolumeResponse);
+  rpc DeleteGameConfigVolume(DeleteGameConfigVolumeRequest) returns (DeleteGameConfigVolumeResponse);
+
   // Configuration preview (new)
   rpc PreviewConfiguration(PreviewConfigurationRequest) returns (PreviewConfigurationResponse);
 
@@ -235,8 +242,6 @@ message CreateGameConfigRequest {
   string image = 3;
   string args_template = 4;
   map<string, string> env_template = 5;
-  repeated FileTemplate files = 6;
-  repeated Parameter parameters = 7;
   repeated string entrypoint = 8;
   repeated string command = 9;
 }
@@ -251,8 +256,6 @@ message UpdateGameConfigRequest {
   string image = 3;
   string args_template = 4;
   map<string, string> env_template = 5;
-  repeated FileTemplate files = 6;
-  repeated Parameter parameters = 7;
   repeated string update_paths = 8;  // Field paths to update (empty = update all)
   repeated string entrypoint = 9;
   repeated string command = 10;
@@ -295,7 +298,6 @@ message DeployGameConfigRequest {
   int64 server_id = 1;
   int64 game_config_id = 2;
   repeated PortBinding port_bindings = 3;
-  map<string, string> parameters = 4;
 }
 
 message DeployGameConfigResponse {
@@ -305,7 +307,6 @@ message DeployGameConfigResponse {
 message UpdateServerGameConfigRequest {
   int64 server_game_config_id = 1;
   repeated PortBinding port_bindings = 2;
-  map<string, string> parameters = 3;
   string status = 4;
   repeated string update_paths = 5;  // Field paths to update (empty = update all)
 }
@@ -352,7 +353,6 @@ message GetSessionResponse {
 
 message StartSessionRequest {
   int64 server_game_config_id = 1;
-  map<string, string> parameters = 2;  // optional session-level overrides
   bool force = 3;
 }
 
@@ -484,7 +484,6 @@ message ValidateDeploymentRequest {
   int64 server_id = 1;
   int64 game_config_id = 2;
   repeated PortBinding port_bindings = 3;
-  map<string, string> parameters = 4;
 }
 
 message ValidateDeploymentResponse {
@@ -605,12 +604,63 @@ message ListConfigurationPatchesResponse {
 }
 
 // ============================================================================
+// GameConfig Volume RPCs
+// ============================================================================
+
+message CreateGameConfigVolumeRequest {
+  int64 config_id = 1;
+  string name = 2;
+  string description = 3;
+  string container_path = 4;
+  string host_subpath = 5;
+  bool read_only = 6;
+}
+
+message CreateGameConfigVolumeResponse {
+  GameConfigVolume volume = 1;
+}
+
+message GetGameConfigVolumeRequest {
+  int64 volume_id = 1;
+}
+
+message GetGameConfigVolumeResponse {
+  GameConfigVolume volume = 1;
+}
+
+message ListGameConfigVolumesRequest {
+  int64 config_id = 1;
+}
+
+message ListGameConfigVolumesResponse {
+  repeated GameConfigVolume volumes = 1;
+}
+
+message UpdateGameConfigVolumeRequest {
+  int64 volume_id = 1;
+  string name = 2;
+  string description = 3;
+  string container_path = 4;
+  string host_subpath = 5;
+  bool read_only = 6;
+}
+
+message UpdateGameConfigVolumeResponse {
+  GameConfigVolume volume = 1;
+}
+
+message DeleteGameConfigVolumeRequest {
+  int64 volume_id = 1;
+}
+
+message DeleteGameConfigVolumeResponse {}
+
+// ============================================================================
 // Configuration Preview RPCs
 // ============================================================================
 
 message PreviewConfigurationRequest {
   int64 session_id = 1;  // Preview for this session
-  map<string, string> parameter_overrides = 2;  // Try different values
 }
 
 message PreviewConfigurationResponse {

@@ -49,7 +49,7 @@ func (h *ValidationHandler) ValidateDeployment(ctx context.Context, req *pb.Vali
 	}
 
 	// 2. Check game config exists
-	gameConfig, err := h.gameConfigRepo.Get(ctx, req.GameConfigId)
+	_, err = h.gameConfigRepo.Get(ctx, req.GameConfigId)
 	if err != nil {
 		return &pb.ValidateDeploymentResponse{
 			Valid: false,
@@ -77,12 +77,7 @@ func (h *ValidationHandler) ValidateDeployment(ctx context.Context, req *pb.Vali
 	//     }
 	// }
 
-	// 4. Validate parameters with detailed type checking
-	definitions := jsonbToParamsDefinitions(gameConfig.Parameters)
-	paramIssues := ValidateParametersWithDetails(definitions, req.Parameters)
-	issues = append(issues, paramIssues...)
-
-	// 5. Estimate resources
+	// 4. Estimate resources
 	estimate := &pb.DeploymentEstimate{
 		EstimatedMemoryMb:      1024, // Default estimate
 		EstimatedCpuMillicores: 500,  // Default estimate

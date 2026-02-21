@@ -87,6 +87,97 @@
 
 <div class="card">
     <div class="card-header">
+        <div class="card-title">Addon Path Presets</div>
+    </div>
+    <div class="card-content">
+        <p style="color: #666; margin-bottom: 1rem;">
+            Define reusable installation paths for workshop addons. Presets help avoid re-entering the same path for similar addons (e.g., maps, plugins).
+        </p>
+        {{if .PathPresets}}
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Volume</th>
+                    <th>Installation Path</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .PathPresets}}
+                <tr>
+                    <td><strong>{{.Name}}</strong>{{if .Description}}<br><small style="color: #666;">{{.Description}}</small>{{end}}</td>
+                    <td><em>(relative path)</em></td>
+                    <td><code>{{.InstallationPath}}</code></td>
+                    <td>
+                        <form method="POST" action="/games/{{$.Game.GameId}}/presets/{{.PresetId}}/delete" style="display: inline;">
+                            <input type="hidden" name="preset_id" value="{{.PresetId}}">
+                            <input type="hidden" name="game_id" value="{{$.Game.GameId}}">
+                            <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this preset?')">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+        {{else}}
+        <div class="empty-state">
+            <p>No path presets defined. Add a preset to make addon installation easier.</p>
+        </div>
+        {{end}}
+        <div style="margin-top: 1rem;">
+            <button class="btn btn-primary btn-sm" onclick="document.getElementById('add-preset-form').style.display='block'">+ Add Preset</button>
+        </div>
+    </div>
+</div>
+
+<!-- Add Preset Form (hidden by default) -->
+<div id="add-preset-form" style="display: none;">
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title">Add Path Preset</div>
+        </div>
+        <form method="POST" action="/games/{{.Game.GameId}}/presets/create">
+            <input type="hidden" name="game_id" value="{{.Game.GameId}}">
+
+            <div class="form-group">
+                <label for="preset_name">Name *</label>
+                <input type="text" id="preset_name" name="name" required placeholder="e.g., Maps, Plugins, Skins">
+                <small>Short label for this preset (e.g., "Maps", "SourceMod Plugins")</small>
+            </div>
+
+            <div class="form-group">
+                <label for="preset_description">Description</label>
+                <textarea id="preset_description" name="description" rows="2" placeholder="Optional description of what addons use this path"></textarea>
+            </div>
+
+            <div class="form-group">
+                <label for="preset_volume_id">Volume (Optional)</label>
+                <select id="preset_volume_id" name="volume_id">
+                    <option value="">-- Use first volume (default) --</option>
+                    {{range .Volumes}}
+                    <option value="{{.VolumeId}}">{{.Name}} ({{.ContainerPath}})</option>
+                    {{end}}
+                </select>
+                <small>Select which volume addons using this preset should install to</small>
+            </div>
+
+            <div class="form-group">
+                <label for="preset_installation_path">Installation Path *</label>
+                <input type="text" id="preset_installation_path" name="installation_path" required placeholder="e.g., left4dead2/maps/">
+                <small>Relative path within the volume (e.g., "addons/sourcemod/plugins/")</small>
+            </div>
+
+            <div style="display: flex; gap: 0.5rem;">
+                <button type="submit" class="btn btn-success">Add Preset</button>
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('add-preset-form').style.display='none'">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
         <div class="card-title">Game Configurations</div>
         <a href="/games/{{.Game.GameId}}/configs/new" class="btn btn-sm btn-primary">Create Config</a>
     </div>
@@ -97,7 +188,7 @@
             <tr>
                 <th>Name</th>
                 <th>Docker Image</th>
-                <th>Parameters</th>
+                <th>SGCs</th>
                 <th>Actions</th>
             </tr>
         </thead>
@@ -106,7 +197,7 @@
             <tr>
                 <td><a href="/games/{{$.Game.GameId}}/configs/{{.ConfigId}}">{{.Name}}</a></td>
                 <td><code>{{.Image}}</code></td>
-                <td>{{len .Parameters}} parameters</td>
+                <td>{{index $.SgcCounts .ConfigId}}</td>
                 <td>
                     <a href="/games/{{$.Game.GameId}}/configs/{{.ConfigId}}" class="btn btn-sm btn-primary">View</a>
                 </td>

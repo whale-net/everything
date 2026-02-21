@@ -22,11 +22,14 @@ type GamesPageData struct {
 
 // GameDetailPageData holds data for game detail page
 type GameDetailPageData struct {
-	Title   string
-	Active  string
-	User    *htmxauth.UserInfo
-	Game    *manmanpb.Game
-	Configs []*manmanpb.GameConfig
+	Title       string
+	Active      string
+	User        *htmxauth.UserInfo
+	Game        *manmanpb.Game
+	Configs     []*manmanpb.GameConfig
+	SgcCounts   map[int64]int
+	PathPresets []*manmanpb.GameAddonPathPreset
+	Volumes     map[int64]*manmanpb.GameConfigVolume // volumeID -> Volume for preset lookup
 }
 
 // GameFormData holds data for create/edit game form
@@ -160,6 +163,17 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 		case "actions":
 			app.handleGameActions(w, r)
 			return
+		case "presets":
+			// Handle preset routes: /games/{id}/presets/create or /games/{id}/presets/{preset_id}/delete
+			if len(pathParts) > 3 {
+				if pathParts[3] == "create" {
+					app.handleCreateAddonPathPreset(w, r)
+					return
+				} else if len(pathParts) > 4 && pathParts[4] == "delete" {
+					app.handleDeleteAddonPathPreset(w, r)
+					return
+				}
+			}
 		case "configs":
 			// Handle config routes
 			if len(pathParts) > 3 {
@@ -190,13 +204,47 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Error fetching game configs: %v", err)
 		configs = []*manmanpb.GameConfig{} // Continue with empty list
 	}
-	
+
+	// Build SGC count map: configID → number of SGCs deployed
+	sgcCounts := make(map[int64]int)
+	allSGCs, err := app.grpc.ListServerGameConfigs(ctx, 0)
+	if err != nil {
+		log.Printf("Warning: failed to fetch SGC counts: %v", err)
+	} else {
+		for _, sgc := range allSGCs {
+			sgcCounts[sgc.GameConfigId]++
+		}
+	}
+
+	// Fetch path presets for this game
+	pathPresets, err := app.grpc.ListAddonPathPresets(ctx, gameID)
+	if err != nil {
+		log.Printf("Warning: failed to fetch path presets: %v", err)
+		pathPresets = []*manmanpb.GameAddonPathPreset{}
+	}
+
+	// Fetch all volumes for all configs of this game (for preset dropdown)
+	volumeMap := make(map[int64]*manmanpb.GameConfigVolume)
+	for _, config := range configs {
+		volumes, err := app.grpc.ListGameConfigVolumes(ctx, config.ConfigId)
+		if err != nil {
+			log.Printf("Warning: failed to fetch volumes for config %d: %v", config.ConfigId, err)
+			continue
+		}
+		for _, vol := range volumes {
+			volumeMap[vol.VolumeId] = vol
+		}
+	}
+
 	data := GameDetailPageData{
-		Title:   game.Name,
-		Active:  "games",
-		User:    user,
-		Game:    game,
-		Configs: configs,
+		Title:       game.Name,
+		Active:      "games",
+		User:        user,
+		Game:        game,
+		Configs:     configs,
+		SgcCounts:   sgcCounts,
+		PathPresets: pathPresets,
+		Volumes:     volumeMap,
 	}
 
 	layoutData := LayoutData{
@@ -299,7 +347,7 @@ type GameConfigDetailPageData struct {
 	Servers     []*manmanpb.Server
 	Deployments []ServerGameConfigView
 	DeployError string
-	Volumes     []*manmanpb.ConfigurationStrategy
+	Volumes     []*manmanpb.GameConfigVolume
 }
 
 type ServerGameConfigView struct {
@@ -334,18 +382,29 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 		case "update-env":
 			app.handleGameConfigUpdateEnv(w, r, gameIDStr, configIDStr)
 			return
-		case "update-parameters":
-			app.handleGameConfigUpdateParameters(w, r, gameIDStr, configIDStr)
-			return
 		case "delete":
 			app.handleGameConfigDelete(w, r, gameIDStr, configIDStr)
 			return
 		case "actions":
 			app.handleConfigActions(w, r)
 			return
+		case "volumes":
+			// Handle volume routes
+			if len(pathParts) > 5 {
+				// /games/{id}/configs/{config_id}/volumes/{action_or_volume_id}
+				actionOrVolumeID := pathParts[5]
+				if actionOrVolumeID == "create" {
+					app.handleGameConfigVolumeCreate(w, r, gameIDStr, configIDStr)
+					return
+				} else {
+					// Assume it's a volume_id for delete
+					app.handleGameConfigVolumeDelete(w, r, gameIDStr, configIDStr, actionOrVolumeID)
+					return
+				}
+			}
 		}
 	}
-	
+
 	// Special handling for "new" config
 	if configIDStr == "new" {
 		app.handleGameConfigNew(w, r, gameIDStr)
@@ -380,21 +439,11 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 		return
 	}
 
-	// Fetch volume strategies
-	strategies, err := app.grpc.ListConfigurationStrategies(ctx, &manmanpb.ListConfigurationStrategiesRequest{
-		GameId: gameID,
-	})
+	// Fetch volumes for this GameConfig
+	volumes, err := app.grpc.ListGameConfigVolumes(ctx, configID)
 	if err != nil {
-		log.Printf("Warning: Failed to fetch configuration strategies: %v", err)
-	}
-
-	var volumeMounts []*manmanpb.ConfigurationStrategy
-	if strategies != nil {
-		for _, s := range strategies.Strategies {
-			if s.StrategyType == "volume" {
-				volumeMounts = append(volumeMounts, s)
-			}
-		}
+		log.Printf("Warning: Failed to fetch volumes for config %d: %v", configID, err)
+		volumes = []*manmanpb.GameConfigVolume{}
 	}
 
 	servers, err := app.grpc.ListServers(ctx)
@@ -431,7 +480,7 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 		Servers:     servers,
 		Deployments: deployments,
 		DeployError: deployError,
-		Volumes:     volumeMounts,
+		Volumes:     volumes,
 	}
 
 	layoutData := LayoutData{
@@ -482,7 +531,7 @@ func (app *App) handleGameConfigDeploy(w http.ResponseWriter, r *http.Request, g
 	}
 
 	ctx := context.Background()
-	_, err = app.grpc.DeployGameConfig(ctx, serverID, configID, map[string]string{})
+	_, err = app.grpc.DeployGameConfig(ctx, serverID, configID)
 	if err != nil {
 		log.Printf("Error deploying game config: %v", err)
 		redirectURL := "/games/" + gameIDStr + "/configs/" + configIDStr + "?deploy_error=Failed%20to%20deploy%20config"
@@ -568,10 +617,8 @@ func (app *App) handleGameConfigCreate(w http.ResponseWriter, r *http.Request, g
 		GameId:        gameID,
 		Name:          name,
 		Image:         image,
-		ArgsTemplate:  argsTemplate,
-		EnvTemplate:   make(map[string]string),
-		Files:         []*manmanpb.FileTemplate{},
-		Parameters:    []*manmanpb.Parameter{},
+		ArgsTemplate: argsTemplate,
+		EnvTemplate:  make(map[string]string),
 	}
 	
 	config, err := app.grpc.CreateGameConfig(ctx, req)
@@ -699,7 +746,9 @@ func (app *App) handleGameConfigUpdateEnv(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusOK)
 }
 
-func (app *App) handleGameConfigUpdateParameters(w http.ResponseWriter, r *http.Request, gameIDStr, configIDStr string) {
+// Volume CRUD handlers
+
+func (app *App) handleGameConfigVolumeCreate(w http.ResponseWriter, r *http.Request, gameIDStr, configIDStr string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -716,29 +765,108 @@ func (app *App) handleGameConfigUpdateParameters(w http.ResponseWriter, r *http.
 		return
 	}
 
-	paramsJSON := strings.TrimSpace(r.FormValue("parameters_json"))
-	var parameters []*manmanpb.Parameter
-	if paramsJSON != "" {
-		if err := json.Unmarshal([]byte(paramsJSON), &parameters); err != nil {
-			http.Error(w, "Invalid parameters JSON", http.StatusBadRequest)
-			return
-		}
+	name := strings.TrimSpace(r.FormValue("name"))
+	description := strings.TrimSpace(r.FormValue("description"))
+	containerPath := strings.TrimSpace(r.FormValue("container_path"))
+	hostSubpath := strings.TrimSpace(r.FormValue("host_subpath"))
+	readOnly := r.FormValue("read_only") == "on"
+
+	if name == "" || containerPath == "" {
+		http.Error(w, "Name and container path are required", http.StatusBadRequest)
+		return
 	}
 
 	ctx := context.Background()
-	req := &manmanpb.UpdateGameConfigRequest{
-		ConfigId:   configID,
-		Parameters: parameters,
-		UpdatePaths: []string{"parameters"},
-	}
-
-	_, err = app.grpc.UpdateGameConfig(ctx, req)
+	_, err = app.grpc.CreateGameConfigVolume(ctx, configID, name, description, containerPath, hostSubpath, readOnly)
 	if err != nil {
-		log.Printf("Error updating parameters: %v", err)
-		http.Error(w, "Failed to update parameters", http.StatusInternalServerError)
+		log.Printf("Error creating volume: %v", err)
+		http.Error(w, "Failed to create volume", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("HX-Redirect", "/games/"+gameIDStr+"/configs/"+configIDStr)
 	w.WriteHeader(http.StatusOK)
+}
+
+func (app *App) handleGameConfigVolumeDelete(w http.ResponseWriter, r *http.Request, gameIDStr, configIDStr, volumeIDStr string) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	volumeID, err := strconv.ParseInt(volumeIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid volume ID", http.StatusBadRequest)
+		return
+	}
+
+	ctx := context.Background()
+	err = app.grpc.DeleteGameConfigVolume(ctx, volumeID)
+	if err != nil {
+		log.Printf("Error deleting volume: %v", err)
+		http.Error(w, "Failed to delete volume", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("HX-Redirect", "/games/"+gameIDStr+"/configs/"+configIDStr)
+	w.WriteHeader(http.StatusOK)
+}
+
+
+// Addon Path Preset handlers
+
+func (app *App) handleCreateAddonPathPreset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := context.Background()
+
+	gameIDStr := r.FormValue("game_id")
+	name := r.FormValue("name")
+	description := r.FormValue("description")
+	installationPath := r.FormValue("installation_path")
+
+	gameID, err := strconv.ParseInt(gameIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid game_id", http.StatusBadRequest)
+		return
+	}
+
+	_, err = app.grpc.CreateAddonPathPreset(ctx, gameID, name, description, installationPath)
+	if err != nil {
+		log.Printf("Error creating preset: %v", err)
+		http.Error(w, "Failed to create preset", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/games/"+gameIDStr, http.StatusSeeOther)
+}
+
+func (app *App) handleDeleteAddonPathPreset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := context.Background()
+
+	presetIDStr := r.FormValue("preset_id")
+	gameIDStr := r.FormValue("game_id")
+
+	presetID, err := strconv.ParseInt(presetIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid preset_id", http.StatusBadRequest)
+		return
+	}
+
+	err = app.grpc.DeleteAddonPathPreset(ctx, presetID)
+	if err != nil {
+		log.Printf("Error deleting preset: %v", err)
+		http.Error(w, "Failed to delete preset", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/games/"+gameIDStr, http.StatusSeeOther)
 }

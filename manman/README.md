@@ -1,237 +1,70 @@
-# ManMan - Manifest Management System
+# ManMan V1 - Legacy Manifest Management System
 
-A microservices-based manifest management system for game server orchestration.
+**⚠️ Status: Legacy/Maintenance Mode**
 
-## 📚 Documentation
+This directory contains the original ManMan V1 services written in Python. These services remain in use but are in maintenance mode. **New development should target [ManManV2](../manmanv2)** instead.
 
-- **[Getting Started Guide](./GETTING_STARTED.md)** - Choose your path (dev, deployment, features)
-- **[Architecture Overview](./ARCHITECTURE.md)** - ManManV2 system design (split-plane)
-- **[Feature Documentation](./docs/)** - Parameters, backups, monitoring, etc.
-- **[Local Development](../manman-v2/README.md)** - Run ManManV2 locally with Tilt
-- **[Production Deployment](./docs/PRODUCTION_DEPLOYMENT.md)** - Deploy to production
+## Quick Navigation
 
----
+- **🚀 Starting fresh?** → Go to [ManManV2 (../manmanv2)](../manmanv2)
+- **📖 Need documentation?** → See [docs/README.md](./docs/README.md)
+- **🛠️ Local development?** → See [../manmanv2/README.md](../manmanv2/README.md)
+- **📦 Deploying V1 services?** → See [docs/PRODUCTION_DEPLOYMENT.md](./docs/PRODUCTION_DEPLOYMENT.md)
 
-## Project Structure
+## What's Here
 
-This repository contains both **ManMan V1** (Python, legacy) and **ManMan V2** (Go, current):
+This directory contains the **legacy V1 services** (Python-based):
 
-- **V1 (Legacy):** Python microservices in `src/`
-- **V2 (Current):** Go services in `api/`, `processor/`, `host/`, `migrate/`
+- **Experience API** - User-facing game server management API
+- **Status API** - Internal status monitoring and health checks
+- **Worker DAL API** - Worker data access layer
+- **Status Processor** - Background event processor
+- **Worker** - General background task processor
+- **Migration** - Database schema migration runner
+- **Management UI** - Admin web interface (Go-based wrapper)
 
----
-
-## 🚀 Quick Start
-
-### Build Everything
-
-```bash
-# Build all manman services
-bazel build //manman/...
-
-# Build the Helm chart
-bazel build //manman:manman_chart
-```
-
-### Deploy with Helm
-
-```bash
-# Build the chart first
-bazel build //manman:manman_chart
-
-# Development deployment
-helm install manman-dev \
-  bazel-bin/manman/host-services_chart/host-services \
-  --namespace manman \
-  --create-namespace
-
-# With custom values
-helm install manman-dev \
-  bazel-bin/manman/host-services_chart/host-services \
-  -f custom-values.yaml \
-  --namespace manman
-```
-
----
-
-## 📦 Services
-
-ManMan consists of 5 microservices:
-
-### APIs
-
-| Service | Type | Port | Description | Access |
-|---------|------|------|-------------|--------|
-| **Experience API** | external-api | 8000 | User-facing game server management | Public |
-| **Worker DAL API** | external-api | 8000 | Worker data access layer | Public |
-| **Status API** | internal-api | 8000 | Status monitoring and health | Internal |
-
-### Workers
-
-| Service | Type | Description |
-|---------|------|-------------|
-| **Status Processor** | worker | Background status event processor |
-| **Worker** | worker | General background task processor |
-
-### Jobs
-
-| Service | Type | Description |
-|---------|------|-------------|
-| **Migration** | job | Database schema migrations (runs first) |
-
----
-
-## 🏗️ Architecture
-
-```
-┌─────────────────┐     ┌─────────────────┐
-│ Experience API  │────▶│  Status API     │ (internal)
-│ (external)      │     │                 │
-└────────┬────────┘     └────────┬────────┘
-         │                       │
-         │                       │
-         ▼                       ▼
-    ┌─────────────────────────────────┐
-    │      PostgreSQL Database        │
-    │  (with Alembic migrations)      │
-    └─────────────────────────────────┘
-         ▲                       ▲
-         │                       │
-┌────────┴────────┐     ┌────────┴────────┐
-│ Worker DAL API  │     │ Status Processor│
-│ (external)      │     │    (worker)     │
-└─────────────────┘     └─────────────────┘
-         ▲
-         │
-    ┌────┴─────┐
-    │ RabbitMQ │
-    └──────────┘
-```
-
----
-
-## 📚 Documentation
-
-- **[design/](./design/)** - Architecture and design documents
-
----
-
-## 🛠️ Development
-
-### Local Development with Tilt
-
-The fastest way to develop locally is using [Tilt](https://tilt.dev/), which provides:
-- Hot reloading on code changes
-- Automatic image rebuilds
-- Local Kubernetes deployment
-- Infrastructure provisioning (PostgreSQL, RabbitMQ, OTEL Collector)
-
-#### Prerequisites
-
-```bash
-# Install Tilt
-curl -fsSL https://raw.githubusercontent.com/tilt-dev/tilt/master/scripts/install.sh | bash
-
-# Start local Kubernetes cluster (Docker Desktop, minikube, or kind)
-```
-
-#### Setup Environment
-
-```bash
-# Copy environment template
-cd manman
-cp .env.example .env
-
-# Edit .env with your OIDC configuration
-# Required variables:
-# - OIDC_ISSUER (your OIDC provider URL)
-# - OIDC_CLIENT_ID (registered client ID)
-# - OIDC_CLIENT_SECRET (client secret from provider)
-```
-
-#### Start Development Environment
-
-```bash
-# From manman directory
-tilt up
-
-# Or from repository root
-tilt up -f manman/Tiltfile
-```
-
-This will:
-1. Build all ManMan services with Bazel
-2. Deploy PostgreSQL, RabbitMQ, and OTEL Collector
-3. Deploy all ManMan services via Helm
-4. Watch for code changes and hot reload
-
-#### Access Services
-
-After running `tilt up`, services are available at:
-
-- **Management UI**: http://management-ui.manman.local:30080 (OIDC auth required)
-- **Experience API**: http://experience-api.manman.local:30080
-- **Worker DAL API**: http://worker-dal-api.manman.local:30080
-- **PostgreSQL**: localhost:5432 (via port-forward)
-- **RabbitMQ Management**: http://localhost:15672
-
-Add to `/etc/hosts`:
-```
-127.0.0.1 management-ui.manman.local
-127.0.0.1 experience-api.manman.local
-127.0.0.1 worker-dal-api.manman.local
-```
-
-#### Management UI Authentication
-
-The Management UI runs in **OIDC mode** with Tilt. You need to configure:
-
-1. **OIDC Provider**: Set up a client in your OIDC provider (Keycloak, Auth0, etc.)
-2. **Redirect URI**: Configure `http://management-ui.manman.local:30080/auth/callback`
-3. **Environment Variables**: Set in `.env` file
-   ```bash
-   OIDC_ISSUER=https://your-keycloak.com/realms/your-realm
-   OIDC_CLIENT_ID=management-ui
-   OIDC_CLIENT_SECRET=your-secret-from-provider
-   ```
-
-If you want to run without authentication (dev only):
-```bash
-# Modify manman/Tiltfile and change:
-apps_config['management-ui']['env_vars']['AUTH_MODE'] = 'none'
-```
-
-#### Disable Specific Services
-
-```bash
-# Set in .env to disable services
-ENABLE_STATUS_PROCESSOR=false
-ENABLE_WORKER_DAL_API=false
-```
-
-### Project Structure
+## Directory Structure
 
 ```
 manman/
-├── BUILD.bazel              # Release apps and Helm chart definition
-├── src/                     # Source code
-│   ├── host/               # API services and main entry point
-│   │   ├── api/           # FastAPI applications
-│   │   └── main.py        # CLI with all service commands
-│   ├── worker/            # Background worker service
-│   ├── repository/        # Data access layer
-│   ├── migrations/        # Alembic database migrations
-│   └── BUILD.bazel        # Build targets
-└── design/                 # Design documents
+├── README.md                    ← You are here (legacy service overview)
+├── GETTING_STARTED.md          ← Entry point guide (redirects to V2)
+├── docs/                       ← Feature documentation and guides
+│   ├── README.md              ← Documentation index
+│   ├── PRODUCTION_DEPLOYMENT.md ← Deployment configuration
+│   ├── PARAMETER_SYSTEM.md    ← Parameter configuration
+│   ├── BACKUP_SYSTEM.md       ← Backup & restore
+│   └── THIRD_PARTY_IMAGES.md  ← Custom Docker images
+├── src/                        ← V1 Python source code
+│   ├── host/                  ← FastAPI services
+│   ├── worker/                ← Worker service
+│   ├── repository/            ← Data access layer
+│   ├── migrations/            ← Database migrations
+│   └── models.py              ← Data models
+├── management-ui/             ← Go-based web interface
+├── clients/                   ← Client libraries
+└── test_data/                 ← Test fixtures
 ```
 
-### Running Services Locally
+## Building & Running
+
+### Build V1 Services
+
+```bash
+# Build all V1 services
+bazel build //manman/...
+
+# Build Helm chart
+bazel build //manman:manman_chart
+```
+
+### Run Services Locally
 
 ```bash
 # Experience API
 bazel run //manman/src/host:experience_api
 
-# Status API  
+# Status API
 bazel run //manman/src/host:status_api
 
 # Worker DAL API
@@ -239,387 +72,46 @@ bazel run //manman/src/host:worker_dal_api
 
 # Status Processor
 bazel run //manman/src/host:status_processor
-
-# Run migrations
-bazel run //manman/src/host:migration
 ```
 
-### Running Tests
+### Deploy to Kubernetes
 
 ```bash
-# All tests
-bazel test //manman/...
-
-# Specific test suites
-bazel test //manman/src:manman_core_test
-bazel test //manman/src/host:manman_host_test
-```
-
----
-
-## 🐳 Container Images
-
-### Building Images
-
-```bash
-# Build all images
-bazel build //manman:experience_api_image
-bazel build //manman:status_api_image
-bazel build //manman:worker_dal_api_image
-bazel build //manman:status_processor_image
-bazel build //manman:migration_image
-```
-
-### Running Containers Locally
-
-```bash
-# Load and run
-bazel run //manman:experience_api_image_load
-docker run --rm -p 8000:8000 experience_api:latest
-```
-
----
-
-## ☸️ Kubernetes Deployment
-
-### Using Helm Chart (Recommended)
-
-The manman services are deployed using a **composed Helm chart** that bundles all 5 services together.
-
-#### Chart Location
-
-```bash
-# Build first
+# Build chart
 bazel build //manman:manman_chart
 
-# Chart generated at:
-bazel-bin/manman/host-services_chart/host-services/
-```
-
-#### Deploy
-
-```bash
 # Install
-helm install manman-dev \
+helm install manman-v1 \
   bazel-bin/manman/host-services_chart/host-services \
   --namespace manman \
   --create-namespace
 
 # Upgrade
-helm upgrade manman-dev \
+helm upgrade manman-v1 \
   bazel-bin/manman/host-services_chart/host-services
-
-# Uninstall
-helm uninstall manman-dev --namespace manman
 ```
 
-#### Customize Deployment
+## Documentation
 
-```yaml
-# custom-values.yaml
-apps:
-  experience_api:
-    replicas: 5
-    resources:
-      limits:
-        memory: "1Gi"
-        cpu: "1000m"
-```
+- **[docs/README.md](./docs/README.md)** - Documentation index for features and deployment
+- **[docs/PRODUCTION_DEPLOYMENT.md](./docs/PRODUCTION_DEPLOYMENT.md)** - Production setup and configuration
+- **[docs/PARAMETER_SYSTEM.md](./docs/PARAMETER_SYSTEM.md)** - Parameter configuration system
+- **[docs/BACKUP_SYSTEM.md](./docs/BACKUP_SYSTEM.md)** - Backup and restore system
+- **[docs/THIRD_PARTY_IMAGES.md](./docs/THIRD_PARTY_IMAGES.md)** - Running custom Docker images
 
-```bash
-helm install manman-dev \
-  bazel-bin/manman/host-services_chart/host-services \
-  -f custom-values.yaml
-```
+## Migration to V2
 
-### Resource Names in Kubernetes
+For new projects or deployments, use **[ManManV2](../manmanv2)** instead. It provides:
 
-When deployed, services are named as `{service}-{environment}`:
+- **Go services** - Better performance and deployment model
+- **Split-plane architecture** - Control plane + execution plane separation
+- **Modern tooling** - gRPC, Protocol Buffers, improved developer experience
+- **Better documentation** - Clear architecture and setup guides
 
-- `experience_api-dev`
-- `status_api-dev`
-- `worker_dal_api-dev`
-- `status_processor-dev`
-- `migration-dev` (job)
+See [../manmanv2/README.md](../manmanv2/README.md) to get started.
 
-### Service Discovery
+## Support
 
-```bash
-# From within the cluster
-http://experience_api-dev-service.manman.svc.cluster.local:8000
-http://status_api-dev-service.manman.svc.cluster.local:8000
-http://worker_dal_api-dev-service.manman.svc.cluster.local:8000
-```
-
----
-
-## 🔄 Migration System
-
-ManMan uses Alembic for database migrations.
-
-### Migration Job
-
-The migration job runs automatically before other services start:
-
-- **Helm hook**: `pre-install,pre-upgrade`
-- **ArgoCD sync-wave**: `-1` (runs first)
-- **Command**: `host run-migration`
-
-### Manual Migration Operations
-
-```bash
-# Run migrations
-bazel run //manman/src/host:migration
-
-# Create new migration (dev only)
-bazel run //manman/src/host:migration -- create-migration "add user table"
-
-# Downgrade
-bazel run //manman/src/host:migration -- run-downgrade <revision>
-```
-
-### Migration Files
-
-```
-manman/src/migrations/
-├── versions/           # Migration scripts
-├── env.py             # Alembic environment config
-└── script.py.mako     # Migration template
-```
-
----
-
-## 🔧 Configuration
-
-### Environment Variables
-
-All services require these environment variables:
-
-```bash
-# Database
-MANMAN_POSTGRES_URL=postgresql+psycopg2://user:pass@host:5432/db
-
-# RabbitMQ
-MANMAN_RABBITMQ_HOST=rabbitmq.example.com
-MANMAN_RABBITMQ_PORT=5672
-MANMAN_RABBITMQ_USER=user
-MANMAN_RABBITMQ_PASSWORD=pass
-MANMAN_RABBITMQ_ENABLE_SSL=false
-MANMAN_RABBITMQ_SSL_HOSTNAME=
-
-# Environment
-APP_ENV=dev  # dev, staging, prod
-
-# OpenTelemetry (optional)
-MANMAN_LOG_OTLP=false
-OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=
-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=
-```
-
-### Configuration in Kubernetes
-
-Set via Helm values or ConfigMap:
-
-```yaml
-apps:
-  experience_api:
-    env:
-      - name: MANMAN_POSTGRES_URL
-        value: "postgresql://..."
-      - name: APP_ENV
-        value: "production"
-```
-
----
-
-## 📊 Monitoring
-
-### Health Checks
-
-All services expose a `/health` endpoint:
-
-```bash
-# Experience API
-curl http://localhost:8000/health
-
-# Status API
-curl http://localhost:8000/health
-```
-
-### Health Check Configuration
-
-```yaml
-livenessProbe:
-  httpGet:
-    path: /health
-    port: 8000
-  initialDelaySeconds: 10
-  periodSeconds: 10
-
-readinessProbe:
-  httpGet:
-    path: /health
-    port: 8000
-  initialDelaySeconds: 10
-  periodSeconds: 10
-```
-
-### OpenTelemetry Support
-
-ManMan supports OpenTelemetry for distributed tracing and logging:
-
-```bash
-# Enable OTLP logging
---log-otlp
-
-# Set endpoints
-OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://otel-collector:4317
-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://otel-collector:4317
-```
-
----
-
-## 🔐 Security
-
-### RabbitMQ SSL
-
-Enable SSL for RabbitMQ connections:
-
-```bash
-MANMAN_RABBITMQ_ENABLE_SSL=true
-MANMAN_RABBITMQ_SSL_HOSTNAME=rabbitmq.secure.example.com
-```
-
-### Production Considerations
-
-- Use Kubernetes Secrets for sensitive values
-- Enable TLS for Ingress endpoints
-- Configure NetworkPolicies to restrict traffic
-- Use PodSecurityPolicies or Pod Security Standards
-- Set appropriate resource limits
-
----
-
-## 📈 Scaling
-
-### Horizontal Scaling
-
-Scale services via Helm values:
-
-```bash
-helm upgrade manman-dev \
-  bazel-bin/manman/host-services_chart/host-services \
-  --set apps.experience_api.replicas=10 \
-  --set apps.status_processor.replicas=5
-```
-
-### Recommended Replica Counts
-
-| Service | Dev | Staging | Production |
-|---------|-----|---------|------------|
-| Experience API | 2 | 3 | 5-10 |
-| Status API | 2 | 2 | 3-5 |
-| Worker DAL API | 2 | 3 | 5-10 |
-| Status Processor | 2 | 3 | 5+ |
-
----
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-**Services won't start**
-```bash
-# Check logs
-kubectl logs -n manman deployment/experience_api-dev
-
-# Common causes:
-# - Missing environment variables
-# - Database connection failed
-# - RabbitMQ connection failed
-```
-
-**Migration job failed**
-```bash
-# View migration logs
-kubectl logs -n manman job/migration-dev
-
-# Delete and retry
-kubectl delete job -n manman migration-dev
-helm upgrade manman-dev bazel-bin/manman/host-services_chart/host-services
-```
-
-**Health checks failing**
-```bash
-# Port forward and test directly
-kubectl port-forward -n manman deployment/experience_api-dev 8000:8000
-curl http://localhost:8000/health
-
-# Should return 200 OK
-```
-
----
-
-## 🚢 CI/CD
-
-### GitHub Actions Integration
-
-```yaml
-- name: Build manman services
-  run: bazel build //manman/...
-
-- name: Build Helm chart
-  run: bazel build //manman:manman_chart
-
-- name: Deploy to dev
-  run: |
-    helm upgrade --install manman-dev \
-      bazel-bin/manman/host-services_chart/host-services \
-      --namespace manman \
-      --create-namespace \
-      --wait
-```
-
-### ArgoCD Integration
-
-```yaml
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: manman
-spec:
-  source:
-    path: bazel-bin/manman/host-services_chart/host-services
-  destination:
-    namespace: manman
-  syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
-```
-
----
-
-## 📝 License
-
-See repository root for license information.
-
----
-
-## 🤝 Contributing
-
-1. Create feature branch
-2. Make changes
-3. Run tests: `bazel test //manman/...`
-4. Build chart: `bazel build //manman:manman_chart`
-5. Validate: `helm lint bazel-bin/manman/host-services_chart/host-services`
-6. Submit PR
-
----
-
-## 📞 Support
-
-For questions or issues:
-
-1. Consult [design/](./design/) documents for architecture details
-2. Check Bazel build logs: `bazel build //manman:manman_chart --verbose_failures`
+- **Questions about V1?** → Check [docs/README.md](./docs/README.md)
+- **Need to migrate to V2?** → See [../manmanv2/GETTING_STARTED.md](../manmanv2/GETTING_STARTED.md)
+- **Architecture questions?** → See [../manmanv2/ARCHITECTURE.md](../manmanv2/ARCHITECTURE.md)

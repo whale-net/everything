@@ -1,0 +1,22 @@
+{{define "workshop_available_addons_partial"}}
+{{if .Addons}}
+{{range .Addons}}
+<div class="available-row">
+    <div style="min-width:0;flex:1;">
+        <div class="available-row-name">
+            {{.Name}}
+            {{if .IsCollection}}<span class="type-pill type-collection" style="margin-left:5px;">Collection</span>{{else}}<span class="type-pill type-addon" style="margin-left:5px;">Addon</span>{{end}}
+        </div>
+        <div class="available-row-sub" style="font-family:monospace;">{{.WorkshopId}}{{if .FileSizeBytes}} · {{printf "%.1f" (divf .FileSizeBytes 1048576)}} MB{{end}}</div>
+    </div>
+    <form method="POST" action="/workshop/add-addon-to-library" style="flex-shrink:0;margin-left:10px;">
+        <input type="hidden" name="library_id" value="{{$.LibraryID}}">
+        <input type="hidden" name="addon_id" value="{{.AddonId}}">
+        <button type="submit" class="btn btn-sm btn-primary">Add</button>
+    </form>
+</div>
+{{end}}
+{{else}}
+<div style="text-align:center;padding:20px;color:#9ca3af;font-size:13px;">No available addons found.</div>
+{{end}}
+{{end}}

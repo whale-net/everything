@@ -8,11 +8,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	rmqlib "github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manmanv2/api/handlers"
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
+	"github.com/whale-net/everything/manmanv2/api/steam"
+	"github.com/whale-net/everything/manmanv2/api/workshop"
 	pb "github.com/whale-net/everything/manmanv2/protos"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -91,9 +94,58 @@ func run() error {
 		grpc.MaxSendMsgSize(10 * 1024 * 1024), // 10 MB
 	)
 
+	// Register Workshop service early so workshopManager is available for APIServer
+	steamAPIKey := getEnv("STEAM_API_KEY", "")
+	steamClient := steam.NewSteamWorkshopClient(steamAPIKey, 30*time.Second)
+	rmqPublisher, err := rmqlib.NewPublisher(rmqConn)
+	if err != nil {
+		return fmt.Errorf("failed to create RMQ publisher: %w", err)
+	}
+	defer rmqPublisher.Close()
+
+	workshopManager := workshop.NewWorkshopManager(
+		repo.WorkshopAddons,
+		repo.WorkshopInstallations,
+		repo.WorkshopLibraries,
+		repo.ServerGameConfigs,
+		repo.GameConfigs,
+		repo.GameConfigVolumes,
+		repo.AddonPathPresets,
+		repo.Sessions,
+		steamClient,
+		rmqPublisher,
+	)
+
 	// Register API server
-	apiServer := handlers.NewAPIServer(repo, s3Client, rmqConn)
+	apiServer := handlers.NewAPIServer(repo, s3Client, rmqConn, workshopManager)
 	pb.RegisterManManAPIServer(grpcServer, apiServer)
+
+	// Register Workshop service
+	workshopHandler := handlers.NewWorkshopServiceHandler(
+		repo.WorkshopAddons,
+		repo.WorkshopInstallations,
+		repo.WorkshopLibraries,
+		repo.ServerGameConfigs,
+		repo.AddonPathPresets,
+		workshopManager,
+	)
+	pb.RegisterWorkshopServiceServer(grpcServer, workshopHandler)
+
+	// Initialize workshop status handler for installation status updates
+	log.Println("Setting up workshop status handler...")
+	workshopStatusHandler, err := handlers.NewWorkshopStatusHandler(repo.WorkshopInstallations, rmqConn)
+	if err != nil {
+		return fmt.Errorf("failed to create workshop status handler: %w", err)
+	}
+	defer workshopStatusHandler.Close()
+
+	// Start workshop status consumer in background
+	go func() {
+		if err := workshopStatusHandler.Start(ctx); err != nil {
+			log.Printf("Warning: Workshop status handler stopped: %v", err)
+		}
+	}()
+	log.Println("Workshop status handler started")
 
 	// Register reflection service (for grpcurl, debugging)
 	reflection.Register(grpcServer)

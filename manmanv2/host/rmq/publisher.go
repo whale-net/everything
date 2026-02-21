@@ -62,3 +62,14 @@ func (p *Publisher) PublishHealth(ctx context.Context, stats *SessionStats) erro
 func (p *Publisher) Close() error {
 	return p.publisher.Close()
 }
+
+// PublishInstallationStatus publishes a workshop addon installation status update
+func (p *Publisher) PublishInstallationStatus(ctx context.Context, update *InstallationStatusUpdate) error {
+	routingKey := fmt.Sprintf("status.workshop.installation.%d", update.InstallationID)
+	slog.Info("publishing installation status event",
+		"installation_id", update.InstallationID,
+		"status", update.Status,
+		"progress_percent", update.ProgressPercent,
+		"routing_key", routingKey)
+	return p.publisher.Publish(ctx, "manman", routingKey, update)
+}

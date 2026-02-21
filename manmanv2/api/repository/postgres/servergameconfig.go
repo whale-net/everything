@@ -130,3 +130,92 @@ func (r *ServerGameConfigRepository) Delete(ctx context.Context, sgcID int64) er
 	_, err := r.db.Exec(ctx, query, sgcID)
 	return err
 }
+
+func (r *ServerGameConfigRepository) AddLibrary(ctx context.Context, sgcID, libraryID int64, presetID, volumeID *int64, installationPathOverride *string) error {
+	query := `
+		INSERT INTO sgc_workshop_libraries (sgc_id, library_id, preset_id, volume_id, installation_path_override)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (sgc_id, library_id) DO UPDATE
+		SET preset_id = EXCLUDED.preset_id,
+		    volume_id = EXCLUDED.volume_id,
+		    installation_path_override = EXCLUDED.installation_path_override
+	`
+	_, err := r.db.Exec(ctx, query, sgcID, libraryID, presetID, volumeID, installationPathOverride)
+	return err
+}
+
+func (r *ServerGameConfigRepository) RemoveLibrary(ctx context.Context, sgcID, libraryID int64) error {
+	query := `DELETE FROM sgc_workshop_libraries WHERE sgc_id = $1 AND library_id = $2`
+	_, err := r.db.Exec(ctx, query, sgcID, libraryID)
+	return err
+}
+
+func (r *ServerGameConfigRepository) GetSGCLibraryAttachments(ctx context.Context, sgcID int64) ([]*manman.SGCWorkshopLibrary, error) {
+	query := `
+		SELECT sgc_id, library_id, preset_id, volume_id, installation_path_override, created_at
+		FROM sgc_workshop_libraries
+		WHERE sgc_id = $1
+		ORDER BY library_id
+	`
+
+	rows, err := r.db.Query(ctx, query, sgcID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var attachments []*manman.SGCWorkshopLibrary
+	for rows.Next() {
+		attachment := &manman.SGCWorkshopLibrary{}
+		err := rows.Scan(
+			&attachment.SGCID,
+			&attachment.LibraryID,
+			&attachment.PresetID,
+			&attachment.VolumeID,
+			&attachment.InstallationPathOverride,
+			&attachment.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		attachments = append(attachments, attachment)
+	}
+
+	return attachments, rows.Err()
+}
+
+func (r *ServerGameConfigRepository) ListLibraries(ctx context.Context, sgcID int64) ([]*manman.WorkshopLibrary, error) {
+	query := `
+		SELECT wl.library_id, wl.game_id, wl.name, wl.description, wl.preset_id, wl.created_at, wl.updated_at
+		FROM workshop_libraries wl
+		INNER JOIN sgc_workshop_libraries swl ON wl.library_id = swl.library_id
+		WHERE swl.sgc_id = $1
+		ORDER BY wl.library_id
+	`
+
+	rows, err := r.db.Query(ctx, query, sgcID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var libraries []*manman.WorkshopLibrary
+	for rows.Next() {
+		lib := &manman.WorkshopLibrary{}
+		err := rows.Scan(
+			&lib.LibraryID,
+			&lib.GameID,
+			&lib.Name,
+			&lib.Description,
+			&lib.PresetID,
+			&lib.CreatedAt,
+			&lib.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		libraries = append(libraries, lib)
+	}
+
+	return libraries, rows.Err()
+}

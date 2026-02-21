@@ -86,7 +86,10 @@
                     <td><a href="/servers/{{.Server.ServerId}}">{{.Server.Name}}</a></td>
                     <td><code>{{.Config.ServerGameConfigId}}</code></td>
                     <td>{{.Config.Status}}</td>
-                    <td><a class="btn btn-secondary btn-sm" href="/sessions?server_game_config_id={{.Config.ServerGameConfigId}}">View Sessions</a></td>
+                    <td>
+                        <a class="btn btn-secondary btn-sm" href="/sgc/{{.Config.ServerGameConfigId}}">Manage SGC</a>
+                        <a class="btn btn-secondary btn-sm" href="/sessions?server_game_config_id={{.Config.ServerGameConfigId}}">View Sessions</a>
+                    </td>
                 </tr>
                 {{end}}
             </tbody>
@@ -114,28 +117,80 @@
                     <th>Name</th>
                     <th>Container Path</th>
                     <th>Host Subpath</th>
-                    <th>Description</th>
+                    <th>Read-Only</th>
+                    <th>Actions</th>
                 </tr>
             </thead>
             <tbody>
                 {{range .Volumes}}
                 <tr>
-                    <td><strong>{{.Name}}</strong></td>
-                    <td><code>{{.TargetPath}}</code></td>
-                    <td><code>{{if .BaseTemplate}}{{.BaseTemplate}}{{else}}<em>(default)</em>{{end}}</code></td>
-                    <td>{{.Description}}</td>
+                    <td><strong>{{.Name}}</strong>{{if .Description}}<br><small style="color: #666;">{{.Description}}</small>{{end}}</td>
+                    <td><code>{{.ContainerPath}}</code></td>
+                    <td><code>{{if .HostSubpath}}{{.HostSubpath}}{{else}}<em>(auto)</em>{{end}}</code></td>
+                    <td>{{if .ReadOnly}}Yes{{else}}No{{end}}</td>
+                    <td>
+                        <button class="btn btn-danger btn-sm"
+                                hx-delete="/games/{{$.Game.GameId}}/configs/{{$.Config.ConfigId}}/volumes/{{.VolumeId}}"
+                                hx-confirm="Delete this volume?"
+                                hx-target="body">Delete</button>
+                    </td>
                 </tr>
                 {{end}}
             </tbody>
         </table>
         {{else}}
         <div class="empty-state">
-            <p>No volume mounts defined for this game.</p>
+            <p>No volumes configured for this GameConfig.</p>
         </div>
         {{end}}
         <div style="margin-top: 1rem;">
-            <a href="/games/{{.Game.GameId}}" class="btn btn-secondary btn-sm">Manage Volumes in Game Settings</a>
+            <button class="btn btn-primary btn-sm" onclick="document.getElementById('add-volume-form').style.display='block'">+ Add Volume</button>
         </div>
+    </div>
+</div>
+
+<!-- Add Volume Form (hidden by default) -->
+<div id="add-volume-form" style="display: none;">
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title">Add Volume Mount</div>
+        </div>
+        <form hx-post="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/volumes/create" hx-swap="none">
+            <div class="form-group">
+                <label for="volume_name">Name *</label>
+                <input type="text" id="volume_name" name="name" required placeholder="e.g., data, mods, config">
+                <small>Unique identifier for this volume</small>
+            </div>
+
+            <div class="form-group">
+                <label for="container_path">Container Path *</label>
+                <input type="text" id="container_path" name="container_path" required placeholder="e.g., /data">
+                <small>Absolute path where volume is mounted inside the container</small>
+            </div>
+
+            <div class="form-group">
+                <label for="host_subpath">Host Subpath</label>
+                <input type="text" id="host_subpath" name="host_subpath" placeholder="e.g., data/">
+                <small>Optional subdirectory name on host (leave empty for auto-generated)</small>
+            </div>
+
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="read_only"> Read-Only
+                </label>
+                <small>Check if this volume should be mounted as read-only</small>
+            </div>
+
+            <div class="form-group">
+                <label for="volume_description">Description</label>
+                <textarea id="volume_description" name="description" rows="2" placeholder="Optional description of what this volume contains"></textarea>
+            </div>
+
+            <div style="display: flex; gap: 0.5rem;">
+                <button type="submit" class="btn btn-success">Add Volume</button>
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('add-volume-form').style.display='none'">Cancel</button>
+            </div>
+        </form>
     </div>
 </div>
 
@@ -167,53 +222,6 @@
             </div>
         </form>
     </div>
-</div>
-
-<div class="card">
-    <div class="card-header">
-        <div class="card-title">Parameters</div>
-    </div>
-    <div style="margin-bottom: 1rem; padding: 0.75rem; background: #f8f9fa; border-left: 4px solid #3498db;">
-        <strong>Parameter resolution order:</strong> Session overrides → Server Game Config overrides → GameConfig defaults.
-        Use this GameConfig to define the base knobs, then override per-server and per-session.
-    </div>
-    <form method="POST" action="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/update-parameters" style="margin-bottom: 1rem;">
-        <div class="form-group">
-            <label for="parameters_json">Edit Parameters (JSON)</label>
-            <textarea id="parameters_json" name="parameters_json" rows="8">{{toJSONEmpty .Config.Parameters}}</textarea>
-            <small style="color: #666;">Array of objects: key, type, required, default_value, description, value</small>
-        </div>
-        <button type="submit" class="btn btn-success">Save Parameters</button>
-    </form>
-    
-    {{if .Config.Parameters}}
-    <table>
-        <thead>
-            <tr>
-                <th>Key</th>
-                <th>Type</th>
-                <th>Required</th>
-                <th>Default</th>
-                <th>Description</th>
-            </tr>
-        </thead>
-        <tbody>
-            {{range .Config.Parameters}}
-            <tr>
-                <td><code>{{.Key}}</code></td>
-                <td><span class="badge badge-secondary">{{.Type}}</span></td>
-                <td>{{if .Required}}Yes{{else}}No{{end}}</td>
-                <td>{{if .DefaultValue}}<code>{{.DefaultValue}}</code>{{else}}-{{end}}</td>
-                <td>{{.Description}}</td>
-            </tr>
-            {{end}}
-        </tbody>
-    </table>
-    {{else}}
-    <div class="empty-state">
-        <p>No parameters defined.</p>
-    </div>
-    {{end}}
 </div>
 
 <div class="card">
@@ -319,36 +327,4 @@
 })();
 </script>
 
-<div class="card">
-    <div class="card-header">
-        <div class="card-title">File Templates</div>
-    </div>
-    
-    {{if .Config.Files}}
-    <table>
-        <thead>
-            <tr>
-                <th>Path</th>
-                <th>Mode</th>
-                <th>Template</th>
-                <th>Preview</th>
-            </tr>
-        </thead>
-        <tbody>
-            {{range .Config.Files}}
-            <tr>
-                <td><code>{{.Path}}</code></td>
-                <td><code>{{.Mode}}</code></td>
-                <td>{{if .IsTemplate}}Yes{{else}}No{{end}}</td>
-                <td><pre style="max-height: 100px; overflow: auto; background: #f5f5f5; padding: 0.5rem;">{{.Content}}</pre></td>
-            </tr>
-            {{end}}
-        </tbody>
-    </table>
-    {{else}}
-    <div class="empty-state">
-        <p>No file templates defined.</p>
-    </div>
-    {{end}}
-</div>
 {{end}}

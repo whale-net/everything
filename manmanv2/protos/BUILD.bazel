@@ -18,6 +18,7 @@ proto_library(
         "api.proto",
         "messages.proto",
         "log_processor.proto",
+        "workshop.proto",
     ],
     visibility = ["//visibility:public"],
 )

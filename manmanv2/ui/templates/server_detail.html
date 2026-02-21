@@ -62,6 +62,7 @@
                     {{else}}-{{end}}
                 </td>
                 <td>
+                    <a href="/sgc/{{.ServerGameConfigId}}" class="btn btn-sm btn-secondary">Manage SGC</a>
                     <a href="/sessions?server_game_config_id={{.ServerGameConfigId}}" class="btn btn-sm btn-secondary">View Sessions</a>
                     <div style="display: inline-flex; align-items: center; gap: 0.5rem; position: relative;">
                         <form method="POST" action="/sessions/start" style="display: inline-flex; align-items: center; gap: 0.5rem;">

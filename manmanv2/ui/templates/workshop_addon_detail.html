@@ -1,0 +1,149 @@
+{{define "workshop_addon_detail_content"}}
+<style>
+[x-cloak] { display: none !important; }
+.addon-detail-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; gap: 16px; }
+.addon-detail-title { font-size: 22px; font-weight: 700; color: #1f2937; }
+.addon-detail-header-actions { display: flex; gap: 8px; flex-shrink: 0; align-items: flex-start; }
+.info-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; margin-bottom: 20px; }
+.info-item { background: white; border-radius: 8px; border: 1px solid #e5e7eb; padding: 14px 16px; }
+.info-item-label { font-size: 11px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+.info-item-value { font-size: 14px; color: #1f2937; font-weight: 500; word-break: break-all; }
+.section-card { background: white; border-radius: 8px; border: 1px solid #e5e7eb; padding: 20px; margin-bottom: 16px; }
+.section-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.section-card-header h2 { font-size: 16px; font-weight: 700; color: #1f2937; margin: 0; }
+.lib-list { display: flex; flex-direction: column; gap: 8px; }
+.lib-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: #f9fafb; border-radius: 6px; border: 1px solid #e5e7eb; }
+.lib-row-name { font-weight: 600; font-size: 14px; color: #1f2937; text-decoration: none; }
+.lib-row-name:hover { color: #3498db; }
+.lib-row-meta { font-size: 12px; color: #9ca3af; margin-top: 2px; }
+.available-list { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; padding-right: 4px; }
+.available-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f9fafb; border-radius: 6px; border: 1px solid transparent; transition: border-color 0.15s; }
+.available-row:hover { border-color: #d1d5db; }
+.available-row-name { font-size: 13px; color: #374151; font-weight: 500; }
+.filter-input { width: 100%; padding: 7px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px; margin-bottom: 10px; }
+.filter-input:focus { outline: none; border-color: #3498db; }
+.type-pill { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.type-addon { background: #dbeafe; color: #1e40af; }
+.type-collection { background: #e0e7ff; color: #3730a3; }
+.game-tag { font-size: 11px; background: #e0e7ff; color: #3730a3; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+.desc-card { background: white; border-radius: 8px; border: 1px solid #e5e7eb; padding: 16px 20px; margin-bottom: 16px; font-size: 14px; color: #374151; line-height: 1.6; }
+</style>
+
+<div x-data="{ libSearch: '', confirmDelete: false }">
+
+<div class="addon-detail-header">
+    <div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+            <a href="/workshop/library" style="font-size:13px;color:#6b7280;text-decoration:none;">Workshop</a>
+            <span style="color:#d1d5db;">›</span>
+            <a href="/workshop/search?type=addon" style="font-size:13px;color:#6b7280;text-decoration:none;">Addons</a>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+            <div class="addon-detail-title">{{.Addon.Name}}</div>
+            {{if .Addon.IsCollection}}
+            <span class="type-pill type-collection">Collection</span>
+            {{else}}
+            <span class="type-pill type-addon">Addon</span>
+            {{end}}
+        </div>
+    </div>
+    <div class="addon-detail-header-actions">
+        <form method="POST" action="/workshop/delete-addon" x-show="!confirmDelete" x-cloak>
+            <input type="hidden" name="addon_id" value="{{.Addon.AddonId}}">
+            <button type="button" @click="confirmDelete = true" class="btn btn-danger">Delete Addon</button>
+        </form>
+        <div x-show="confirmDelete" x-cloak style="display:flex;gap:6px;align-items:center;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:8px 12px;">
+            <span style="font-size:13px;color:#991b1b;">Delete permanently?</span>
+            <form method="POST" action="/workshop/delete-addon" style="display:inline;">
+                <input type="hidden" name="addon_id" value="{{.Addon.AddonId}}">
+                <button type="submit" class="btn btn-sm btn-danger">Yes, Delete</button>
+            </form>
+            <button @click="confirmDelete = false" class="btn btn-sm btn-secondary">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<div class="info-grid">
+    <div class="info-item">
+        <div class="info-item-label">Workshop ID</div>
+        <div class="info-item-value" style="font-family:monospace;font-size:13px;">{{.Addon.WorkshopId}}</div>
+    </div>
+    <div class="info-item">
+        <div class="info-item-label">Game</div>
+        <div class="info-item-value">{{if .Game}}{{.Game.Name}}{{else}}Unknown{{end}}</div>
+    </div>
+    <div class="info-item">
+        <div class="info-item-label">Platform</div>
+        <div class="info-item-value">{{.Addon.PlatformType}}</div>
+    </div>
+    <div class="info-item">
+        <div class="info-item-label">File Size</div>
+        <div class="info-item-value">{{if .Addon.FileSizeBytes}}{{printf "%.2f" (divf .Addon.FileSizeBytes 1048576)}} MB{{else}}Unknown{{end}}</div>
+    </div>
+    <div class="info-item">
+        <div class="info-item-label">Added</div>
+        <div class="info-item-value">{{timeAgo .Addon.CreatedAt}}</div>
+    </div>
+    <div class="info-item">
+        <div class="info-item-label">Last Updated</div>
+        <div class="info-item-value">{{timeAgo .Addon.UpdatedAt}}</div>
+    </div>
+</div>
+
+{{if .Addon.Description}}
+<div class="desc-card">{{.Addon.Description}}</div>
+{{end}}
+
+<!-- Libraries containing this addon -->
+<div class="section-card">
+    <div class="section-card-header">
+        <h2>In Libraries <span style="font-weight:400;color:#9ca3af;font-size:14px;">({{len .ContainingLibraries}})</span></h2>
+    </div>
+    {{if .ContainingLibraries}}
+    <div class="lib-list">
+        {{range .ContainingLibraries}}
+        <div class="lib-row">
+            <div>
+                <a href="/workshop/library-detail?library_id={{.LibraryId}}" class="lib-row-name">{{.Name}}</a>
+                {{if .Description}}<div class="lib-row-meta">{{.Description}}</div>{{end}}
+            </div>
+        </div>
+        {{end}}
+    </div>
+    {{else}}
+    <p style="color:#9ca3af;font-size:14px;">Not in any libraries yet.</p>
+    {{end}}
+</div>
+
+<!-- Add to library -->
+{{if .AvailableLibraries}}
+<div class="section-card" x-data="{ showAdd: false, libSearch: '' }">
+    <div class="section-card-header">
+        <h2>Add to Library</h2>
+        <button @click="showAdd = !showAdd" class="btn btn-sm btn-primary" x-text="showAdd ? 'Cancel' : 'Add to Library'">Add to Library</button>
+    </div>
+    <div x-show="showAdd" x-cloak x-transition>
+        <input type="text" x-model="libSearch" class="filter-input" placeholder="Filter libraries...">
+        <div class="available-list">
+            {{range .AvailableLibraries}}
+            <div class="available-row"
+                 x-show="!libSearch || '{{.Name}}'.toLowerCase().includes(libSearch.toLowerCase())">
+                <div>
+                    <div class="available-row-name">{{.Name}}</div>
+                    {{if .Description}}<div style="font-size:11px;color:#9ca3af;">{{.Description}}</div>{{end}}
+                </div>
+                <form method="POST" action="/workshop/add-addon-to-library" style="flex-shrink:0;">
+                    <input type="hidden" name="library_id" value="{{.LibraryId}}">
+                    <input type="hidden" name="addon_id" value="{{$.Addon.AddonId}}">
+                    <input type="hidden" name="return_url" value="/workshop/addon?addon_id={{$.Addon.AddonId}}">
+                    <button type="submit" class="btn btn-sm btn-primary">Add</button>
+                </form>
+            </div>
+            {{end}}
+        </div>
+    </div>
+</div>
+{{end}}
+
+</div>{{/* end x-data */}}
+{{end}}

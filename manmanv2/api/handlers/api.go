@@ -12,6 +12,7 @@ import (
 	"github.com/whale-net/everything/manmanv2"
 	"github.com/whale-net/everything/manmanv2/api/repository"
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
+	"github.com/whale-net/everything/manmanv2/api/workshop"
 	pb "github.com/whale-net/everything/manmanv2/protos"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -33,10 +34,11 @@ type APIServer struct {
 	backupHandler           *BackupHandler
 	strategyHandler         *ConfigurationStrategyHandler
 	patchHandler            *ConfigurationPatchHandler
+	volumeHandler           *GameConfigVolumeHandler
 	actionHandler           *ActionHandler
 }
 
-func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq.Connection) *APIServer {
+func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq.Connection, workshopManager workshop.WorkshopManagerInterface) *APIServer {
 	// Create command publisher with RPC support
 	commandPublisher, err := NewCommandPublisher(rmqConn)
 	if err != nil {
@@ -57,13 +59,14 @@ func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq
 		gameHandler:             NewGameHandler(repo.Games),
 		gameConfigHandler:       NewGameConfigHandler(repo.GameConfigs),
 		serverGameConfigHandler: NewServerGameConfigHandler(repo.ServerGameConfigs, repo.ServerPorts),
-		sessionHandler:          NewSessionHandler(repo, commandPublisher),
+		sessionHandler:          NewSessionHandler(repo, commandPublisher, workshopManager),
 		registrationHandler:     NewRegistrationHandler(repo.Servers, repo.ServerCapabilities),
 		validationHandler:       NewValidationHandler(repo.Servers, repo.GameConfigs),
 		logsHandler:             NewLogsHandler(repo.LogReferences, s3Client),
 		backupHandler:           NewBackupHandler(repo.Backups, repo.Sessions, s3Client),
 		strategyHandler:         NewConfigurationStrategyHandler(repo.ConfigurationStrategies),
 		patchHandler:            NewConfigurationPatchHandler(repo.ConfigurationPatches),
+		volumeHandler:           NewGameConfigVolumeHandler(repo.GameConfigVolumes),
 		actionHandler:           NewActionHandler(repo.Actions.(*postgres.ActionRepository), repo.Sessions, repo.ServerGameConfigs, repo.GameConfigs, commandPublisher),
 	}
 }
@@ -251,9 +254,7 @@ func (h *GameConfigHandler) CreateGameConfig(ctx context.Context, req *pb.Create
 		Name:         req.Name,
 		Image:        req.Image,
 		ArgsTemplate: stringPtr(req.ArgsTemplate),
-		EnvTemplate:  mapToJSONB(req.EnvTemplate),
-		Files:        filesToJSONB(req.Files),
-		Parameters:   parametersToJSONB(req.Parameters),
+		EnvTemplate: mapToJSONB(req.EnvTemplate),
 		Entrypoint:   stringArrayToJSONB(req.Entrypoint),
 		Command:      stringArrayToJSONB(req.Command),
 	}
@@ -289,12 +290,6 @@ func (h *GameConfigHandler) UpdateGameConfig(ctx context.Context, req *pb.Update
 		if req.EnvTemplate != nil {
 			config.EnvTemplate = mapToJSONB(req.EnvTemplate)
 		}
-		if req.Files != nil {
-			config.Files = filesToJSONB(req.Files)
-		}
-		if req.Parameters != nil {
-			config.Parameters = parametersToJSONB(req.Parameters)
-		}
 		if req.Entrypoint != nil {
 			config.Entrypoint = stringArrayToJSONB(req.Entrypoint)
 		}
@@ -313,10 +308,6 @@ func (h *GameConfigHandler) UpdateGameConfig(ctx context.Context, req *pb.Update
 				config.ArgsTemplate = stringPtr(req.ArgsTemplate)
 			case "env_template":
 				config.EnvTemplate = mapToJSONB(req.EnvTemplate)
-			case "files":
-				config.Files = filesToJSONB(req.Files)
-			case "parameters":
-				config.Parameters = parametersToJSONB(req.Parameters)
 			case "entrypoint":
 				config.Entrypoint = stringArrayToJSONB(req.Entrypoint)
 			case "command":
@@ -349,7 +340,6 @@ func gameConfigToProto(c *manman.GameConfig) *pb.GameConfig {
 		Name:        c.Name,
 		Image:       c.Image,
 		EnvTemplate: jsonbToMap(c.EnvTemplate),
-		Files:       jsonbToFiles(c.Files),
 		Entrypoint:  jsonbToStringArray(c.Entrypoint),
 		Command:     jsonbToStringArray(c.Command),
 	}
@@ -441,7 +431,6 @@ func (h *ServerGameConfigHandler) DeployGameConfig(ctx context.Context, req *pb.
 		GameConfigID: req.GameConfigId,
 		Status:       manman.SGCStatusInactive,
 		PortBindings: portBindingsToJSONB(req.PortBindings),
-		Parameters:   mapToJSONB(req.Parameters),
 	}
 
 	sgc, err := h.repo.Create(ctx, sgc)
@@ -470,9 +459,6 @@ func (h *ServerGameConfigHandler) UpdateServerGameConfig(ctx context.Context, re
 		if req.PortBindings != nil {
 			sgc.PortBindings = portBindingsToJSONB(req.PortBindings)
 		}
-		if req.Parameters != nil {
-			sgc.Parameters = mapToJSONB(req.Parameters)
-		}
 		if req.Status != "" {
 			sgc.Status = req.Status
 		}
@@ -482,8 +468,6 @@ func (h *ServerGameConfigHandler) UpdateServerGameConfig(ctx context.Context, re
 			switch path {
 			case "port_bindings":
 				sgc.PortBindings = portBindingsToJSONB(req.PortBindings)
-			case "parameters":
-				sgc.Parameters = mapToJSONB(req.Parameters)
 			case "status":
 				sgc.Status = req.Status
 			}
@@ -522,20 +506,22 @@ func serverGameConfigToProto(sgc *manman.ServerGameConfig) *pb.ServerGameConfig 
 
 // SessionHandler handles Session-related RPCs
 type SessionHandler struct {
-	repo        *repository.Repository
-	sessionRepo repository.SessionRepository
-	sgcRepo     repository.ServerGameConfigRepository
-	gcRepo      repository.GameConfigRepository
-	publisher   *CommandPublisher
+	repo            *repository.Repository
+	sessionRepo     repository.SessionRepository
+	sgcRepo         repository.ServerGameConfigRepository
+	gcRepo          repository.GameConfigRepository
+	publisher       *CommandPublisher
+	workshopManager workshop.WorkshopManagerInterface
 }
 
-func NewSessionHandler(repo *repository.Repository, publisher *CommandPublisher) *SessionHandler {
+func NewSessionHandler(repo *repository.Repository, publisher *CommandPublisher, workshopManager workshop.WorkshopManagerInterface) *SessionHandler {
 	return &SessionHandler{
-		repo:        repo,
-		sessionRepo: repo.Sessions,
-		sgcRepo:     repo.ServerGameConfigs,
-		gcRepo:      repo.GameConfigs,
-		publisher:   publisher,
+		repo:            repo,
+		sessionRepo:     repo.Sessions,
+		sgcRepo:         repo.ServerGameConfigs,
+		gcRepo:          repo.GameConfigs,
+		publisher:       publisher,
+		workshopManager: workshopManager,
 	}
 }
 
@@ -663,9 +649,8 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 
 	// Create session in database
 	session := &manman.Session{
-		SGCID:      req.ServerGameConfigId,
-		Status:     manman.SessionStatusPending,
-		Parameters: mapToJSONB(req.Parameters),
+		SGCID:  req.ServerGameConfigId,
+		Status: manman.SessionStatusPending,
 	}
 
 	session, err = h.sessionRepo.Create(ctx, session)
@@ -737,18 +722,21 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 		log.Printf("[session %d] allocated %d ports on server %d", session.SessionID, len(portBindings), sgc.ServerID)
 	}
 
-	// Fetch Configuration Strategies for the game to get volume mounts
-	strategies, err := h.repo.ConfigurationStrategies.ListByGame(ctx, gc.GameID)
+	// Fetch volumes for this GameConfig
+	volumes, err := h.repo.GameConfigVolumes.ListByGameConfig(ctx, gc.ConfigID)
 	if err != nil {
-		log.Printf("Warning: Failed to fetch configuration strategies for game %d: %v", gc.GameID, err)
-		// Continue anyway, volumes might not be defined as strategies yet
+		log.Printf("Warning: Failed to fetch volumes for config %d: %v", gc.ConfigID, err)
+		volumes = []*manman.GameConfigVolume{}
 	}
+
+	// Addon downloads are handled blocking by the host manager during session start.
+	// No pre-flight needed here.
 
 	// Publish start session command to RabbitMQ
 	if h.publisher != nil {
-		cmd := buildStartSessionCommand(session, sgc, gc, req.Parameters, internalForce, strategies)
-		// Increased timeout to allow for image pulling
-		if err := h.publisher.PublishStartSession(ctx, sgc.ServerID, cmd, 2*time.Minute); err != nil {
+		cmd := buildStartSessionCommand(session, sgc, gc, internalForce, volumes)
+		// Short timeout: host manager replies immediately on receipt (work runs async).
+		if err := h.publisher.PublishStartSession(ctx, sgc.ServerID, cmd, 30*time.Second); err != nil {
 			log.Printf("Warning: Failed to publish start session command: %v", err)
 			// Don't fail the request - the session is created, operator can manually trigger
 		}
@@ -835,48 +823,38 @@ func (h *SessionHandler) SendInput(ctx context.Context, req *pb.SendInputRequest
 }
 
 // buildStartSessionCommand converts database models to RabbitMQ message format
-func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameConfig, gc *manman.GameConfig, sessionParams map[string]string, force bool, strategies []*manman.ConfigurationStrategy) map[string]interface{} {
+func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameConfig, gc *manman.GameConfig, force bool, volumes []*manman.GameConfigVolume) map[string]interface{} {
 	// Build game config message
 	gameConfig := map[string]interface{}{
-		"config_id":       gc.ConfigID,
-		"image":           gc.Image,
-		"args_template":   gc.ArgsTemplate,
-		"env_template":    jsonbToMap(gc.EnvTemplate),
-		"files":           convertFilesToMessage(gc.Files),
-		"parameters":      convertParametersToMessage(gc.Parameters),
-		"entrypoint":      jsonbToStringArray(gc.Entrypoint),
-		"command":         jsonbToStringArray(gc.Command),
+		"config_id":     gc.ConfigID,
+		"image":         gc.Image,
+		"args_template": gc.ArgsTemplate,
+		"env_template": jsonbToMap(gc.EnvTemplate),
+		"entrypoint":    jsonbToStringArray(gc.Entrypoint),
+		"command":       jsonbToStringArray(gc.Command),
 	}
 
-	// Add volume mounts from strategies
-	var volumes []map[string]interface{}
-	for _, s := range strategies {
-		if s.StrategyType == manman.StrategyTypeVolume {
-			vol := map[string]interface{}{
-				"name":           s.Name,
-				"container_path": s.TargetPath,
-			}
-			if s.BaseTemplate != nil {
-				vol["host_subpath"] = *s.BaseTemplate
-			}
-			if s.RenderOptions != nil {
-				vol["options"] = s.RenderOptions
-			}
-			volumes = append(volumes, vol)
+	// Add volume mounts from game_config_volumes
+	var volumeMsgs []map[string]interface{}
+	for _, vol := range volumes {
+		volMsg := map[string]interface{}{
+			"name":           vol.Name,
+			"container_path": vol.ContainerPath,
 		}
+		if vol.HostSubpath != nil {
+			volMsg["host_subpath"] = *vol.HostSubpath
+		}
+		if vol.ReadOnly {
+			volMsg["options"] = map[string]interface{}{"read_only": true}
+		}
+		volumeMsgs = append(volumeMsgs, volMsg)
 	}
-	gameConfig["volumes"] = volumes
+	gameConfig["volumes"] = volumeMsgs
 
 	// Build server game config message
 	serverGameConfig := map[string]interface{}{
 		"sgc_id":        sgc.SGCID,
 		"port_bindings": convertPortBindingsToMessage(sgc.PortBindings),
-		"parameters":    jsonbToMap(sgc.Parameters),
-	}
-
-	// Merge session-level parameters
-	if sessionParams == nil {
-		sessionParams = make(map[string]string)
 	}
 
 	return map[string]interface{}{
@@ -884,36 +862,11 @@ func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameCon
 		"sgc_id":             sgc.SGCID,
 		"game_config":        gameConfig,
 		"server_game_config": serverGameConfig,
-		"parameters":         sessionParams,
 		"force":              force,
 	}
 }
 
 // Helper functions to convert JSONB to message format
-func convertFilesToMessage(filesJSON manman.JSONB) []interface{} {
-	// Files are stored as array of objects in JSONB
-	if filesJSON == nil {
-		return []interface{}{}
-	}
-	// Return as-is since it's already in the right format
-	if files, ok := filesJSON["files"].([]interface{}); ok {
-		return files
-	}
-	return []interface{}{}
-}
-
-func convertParametersToMessage(paramsJSON manman.JSONB) []interface{} {
-	// Parameters are stored as array of objects in JSONB
-	if paramsJSON == nil {
-		return []interface{}{}
-	}
-	// Return as-is since it's already in the right format
-	if params, ok := paramsJSON["parameters"].([]interface{}); ok {
-		return params
-	}
-	return []interface{}{}
-}
-
 func convertPortBindingsToMessage(bindingsJSON manman.JSONB) []interface{} {
 	if bindingsJSON == nil {
 		return []interface{}{}
@@ -954,7 +907,6 @@ func sessionToProto(s *manman.Session) *pb.Session {
 		SessionId:          s.SessionID,
 		ServerGameConfigId: s.SGCID,
 		Status:             s.Status,
-		Parameters:         jsonbToMap(s.Parameters),
 	}
 
 	if s.StartedAt != nil {
@@ -1259,6 +1211,116 @@ func patchToProto(p *manman.ConfigurationPatch) *pb.ConfigurationPatch {
 	if p.PatchContent != nil {
 		proto.PatchContent = *p.PatchContent
 	}
+	if p.VolumeID != nil {
+		proto.VolumeId = *p.VolumeID
+	}
+	if p.PathOverride != nil {
+		proto.PathOverride = *p.PathOverride
+	}
+
+	return proto
+}
+
+// GameConfigVolumeHandler handles GameConfigVolume-related RPCs
+type GameConfigVolumeHandler struct {
+	repo repository.GameConfigVolumeRepository
+}
+
+func NewGameConfigVolumeHandler(repo repository.GameConfigVolumeRepository) *GameConfigVolumeHandler {
+	return &GameConfigVolumeHandler{repo: repo}
+}
+
+func (h *GameConfigVolumeHandler) CreateGameConfigVolume(ctx context.Context, req *pb.CreateGameConfigVolumeRequest) (*pb.CreateGameConfigVolumeResponse, error) {
+	volume := &manman.GameConfigVolume{
+		ConfigID:      req.ConfigId,
+		Name:          req.Name,
+		Description:   stringPtr(req.Description),
+		ContainerPath: req.ContainerPath,
+		HostSubpath:   stringPtr(req.HostSubpath),
+		ReadOnly:      req.ReadOnly,
+	}
+
+	created, err := h.repo.Create(ctx, volume)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create game config volume: %v", err)
+	}
+
+	return &pb.CreateGameConfigVolumeResponse{
+		Volume: gameConfigVolumeToProto(created),
+	}, nil
+}
+
+func (h *GameConfigVolumeHandler) GetGameConfigVolume(ctx context.Context, req *pb.GetGameConfigVolumeRequest) (*pb.GetGameConfigVolumeResponse, error) {
+	volume, err := h.repo.Get(ctx, req.VolumeId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "game config volume not found: %v", err)
+	}
+
+	return &pb.GetGameConfigVolumeResponse{
+		Volume: gameConfigVolumeToProto(volume),
+	}, nil
+}
+
+func (h *GameConfigVolumeHandler) ListGameConfigVolumes(ctx context.Context, req *pb.ListGameConfigVolumesRequest) (*pb.ListGameConfigVolumesResponse, error) {
+	volumes, err := h.repo.ListByGameConfig(ctx, req.ConfigId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list game config volumes: %v", err)
+	}
+
+	pbVolumes := make([]*pb.GameConfigVolume, len(volumes))
+	for i, v := range volumes {
+		pbVolumes[i] = gameConfigVolumeToProto(v)
+	}
+
+	return &pb.ListGameConfigVolumesResponse{
+		Volumes: pbVolumes,
+	}, nil
+}
+
+func (h *GameConfigVolumeHandler) UpdateGameConfigVolume(ctx context.Context, req *pb.UpdateGameConfigVolumeRequest) (*pb.UpdateGameConfigVolumeResponse, error) {
+	volume, err := h.repo.Get(ctx, req.VolumeId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "game config volume not found: %v", err)
+	}
+
+	volume.Name = req.Name
+	volume.Description = stringPtr(req.Description)
+	volume.ContainerPath = req.ContainerPath
+	volume.HostSubpath = stringPtr(req.HostSubpath)
+	volume.ReadOnly = req.ReadOnly
+
+	if err := h.repo.Update(ctx, volume); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update game config volume: %v", err)
+	}
+
+	return &pb.UpdateGameConfigVolumeResponse{
+		Volume: gameConfigVolumeToProto(volume),
+	}, nil
+}
+
+func (h *GameConfigVolumeHandler) DeleteGameConfigVolume(ctx context.Context, req *pb.DeleteGameConfigVolumeRequest) (*pb.DeleteGameConfigVolumeResponse, error) {
+	if err := h.repo.Delete(ctx, req.VolumeId); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete game config volume: %v", err)
+	}
+
+	return &pb.DeleteGameConfigVolumeResponse{}, nil
+}
+
+func gameConfigVolumeToProto(v *manman.GameConfigVolume) *pb.GameConfigVolume {
+	proto := &pb.GameConfigVolume{
+		VolumeId:      v.VolumeID,
+		ConfigId:      v.ConfigID,
+		Name:          v.Name,
+		ContainerPath: v.ContainerPath,
+		ReadOnly:      v.ReadOnly,
+	}
+
+	if v.Description != nil {
+		proto.Description = *v.Description
+	}
+	if v.HostSubpath != nil {
+		proto.HostSubpath = *v.HostSubpath
+	}
 
 	return proto
 }
@@ -1387,6 +1449,27 @@ func (s *APIServer) DeleteConfigurationPatch(ctx context.Context, req *pb.Delete
 
 func (s *APIServer) ListConfigurationPatches(ctx context.Context, req *pb.ListConfigurationPatchesRequest) (*pb.ListConfigurationPatchesResponse, error) {
 	return s.patchHandler.ListConfigurationPatches(ctx, req)
+}
+
+// APIServer wrapper methods for GameConfigVolume
+func (s *APIServer) CreateGameConfigVolume(ctx context.Context, req *pb.CreateGameConfigVolumeRequest) (*pb.CreateGameConfigVolumeResponse, error) {
+	return s.volumeHandler.CreateGameConfigVolume(ctx, req)
+}
+
+func (s *APIServer) GetGameConfigVolume(ctx context.Context, req *pb.GetGameConfigVolumeRequest) (*pb.GetGameConfigVolumeResponse, error) {
+	return s.volumeHandler.GetGameConfigVolume(ctx, req)
+}
+
+func (s *APIServer) ListGameConfigVolumes(ctx context.Context, req *pb.ListGameConfigVolumesRequest) (*pb.ListGameConfigVolumesResponse, error) {
+	return s.volumeHandler.ListGameConfigVolumes(ctx, req)
+}
+
+func (s *APIServer) UpdateGameConfigVolume(ctx context.Context, req *pb.UpdateGameConfigVolumeRequest) (*pb.UpdateGameConfigVolumeResponse, error) {
+	return s.volumeHandler.UpdateGameConfigVolume(ctx, req)
+}
+
+func (s *APIServer) DeleteGameConfigVolume(ctx context.Context, req *pb.DeleteGameConfigVolumeRequest) (*pb.DeleteGameConfigVolumeResponse, error) {
+	return s.volumeHandler.DeleteGameConfigVolume(ctx, req)
 }
 
 // Game Actions RPCs

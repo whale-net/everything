@@ -17,8 +17,8 @@ func NewGameConfigRepository(db *pgxpool.Pool) *GameConfigRepository {
 
 func (r *GameConfigRepository) Create(ctx context.Context, config *manman.GameConfig) (*manman.GameConfig, error) {
 	query := `
-		INSERT INTO game_configs (game_id, name, image, args_template, env_template, files, entrypoint, command)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO game_configs (game_id, name, image, args_template, env_template, entrypoint, command)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING config_id
 	`
 
@@ -28,7 +28,6 @@ func (r *GameConfigRepository) Create(ctx context.Context, config *manman.GameCo
 		config.Image,
 		config.ArgsTemplate,
 		config.EnvTemplate,
-		config.Files,
 		config.Entrypoint,
 		config.Command,
 	).Scan(&config.ConfigID)
@@ -43,7 +42,7 @@ func (r *GameConfigRepository) Get(ctx context.Context, configID int64) (*manman
 	config := &manman.GameConfig{}
 
 	query := `
-		SELECT config_id, game_id, name, image, args_template, env_template, files, entrypoint, command
+		SELECT config_id, game_id, name, image, args_template, env_template, entrypoint, command
 		FROM game_configs
 		WHERE config_id = $1
 	`
@@ -55,7 +54,6 @@ func (r *GameConfigRepository) Get(ctx context.Context, configID int64) (*manman
 		&config.Image,
 		&config.ArgsTemplate,
 		&config.EnvTemplate,
-		&config.Files,
 		&config.Entrypoint,
 		&config.Command,
 	)
@@ -76,7 +74,7 @@ func (r *GameConfigRepository) List(ctx context.Context, gameID *int64, limit, o
 
 	if gameID != nil {
 		query = `
-			SELECT config_id, game_id, name, image, args_template, env_template, files, entrypoint, command
+			SELECT config_id, game_id, name, image, args_template, env_template, entrypoint, command
 			FROM game_configs
 			WHERE game_id = $1
 			ORDER BY config_id
@@ -85,7 +83,7 @@ func (r *GameConfigRepository) List(ctx context.Context, gameID *int64, limit, o
 		args = []interface{}{*gameID, limit, offset}
 	} else {
 		query = `
-			SELECT config_id, game_id, name, image, args_template, env_template, files, entrypoint, command
+			SELECT config_id, game_id, name, image, args_template, env_template, entrypoint, command
 			FROM game_configs
 			ORDER BY config_id
 			LIMIT $1 OFFSET $2
@@ -109,7 +107,6 @@ func (r *GameConfigRepository) List(ctx context.Context, gameID *int64, limit, o
 			&config.Image,
 			&config.ArgsTemplate,
 			&config.EnvTemplate,
-			&config.Files,
 			&config.Entrypoint,
 			&config.Command,
 		)
@@ -125,7 +122,7 @@ func (r *GameConfigRepository) List(ctx context.Context, gameID *int64, limit, o
 func (r *GameConfigRepository) Update(ctx context.Context, config *manman.GameConfig) error {
 	query := `
 		UPDATE game_configs
-		SET name = $2, image = $3, args_template = $4, env_template = $5, files = $6, entrypoint = $7, command = $8
+		SET name = $2, image = $3, args_template = $4, env_template = $5, entrypoint = $6, command = $7
 		WHERE config_id = $1
 	`
 
@@ -135,7 +132,6 @@ func (r *GameConfigRepository) Update(ctx context.Context, config *manman.GameCo
 		config.Image,
 		config.ArgsTemplate,
 		config.EnvTemplate,
-		config.Files,
 		config.Entrypoint,
 		config.Command,
 	)

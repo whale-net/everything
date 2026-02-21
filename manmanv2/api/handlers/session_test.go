@@ -93,12 +93,22 @@ func (m *MockServerPortRepo) DeallocatePortsBySessionID(ctx context.Context, ses
 	return nil
 }
 
+// MockGameConfigVolumeRepo
+type MockGameConfigVolumeRepo struct {
+	repository.GameConfigVolumeRepository
+}
+
+func (m *MockGameConfigVolumeRepo) ListByGameConfig(ctx context.Context, configID int64) ([]*manman.GameConfigVolume, error) {
+	return []*manman.GameConfigVolume{}, nil
+}
+
 func TestStartSessionLifecycle(t *testing.T) {
 	sessionRepo := &MockSessionRepo{}
 	sgcRepo := &MockSGCRepo{}
 	gcRepo := &MockGCRepo{}
 	strategyRepo := &MockStrategyRepo{}
 	serverPortRepo := &MockServerPortRepo{}
+	volumeRepo := &MockGameConfigVolumeRepo{}
 
 	repo := &repository.Repository{
 		Sessions:                sessionRepo,
@@ -106,6 +116,7 @@ func TestStartSessionLifecycle(t *testing.T) {
 		GameConfigs:             gcRepo,
 		ConfigurationStrategies: strategyRepo,
 		ServerPorts:             serverPortRepo,
+		GameConfigVolumes:       volumeRepo,
 	}
 
 	h := &SessionHandler{

@@ -371,10 +371,10 @@ bazel test //manman/processor:integration_test
 
 ## Related Documentation
 
-- [ManManV2 Architecture](../manman/manman-v2.md)
-- [Phase 6 Completion Report](../manman/PHASE_6_COMPLETE.md)
-- [Control Plane API](../manman/protos/api.proto)
-- [Event Processor Design](../manman/PHASE_6_STATUS.md)
+- [Architecture](./ARCHITECTURE.md)
+- [Control Plane API](../manmanv2/protos/api.proto)
+- [Event Processor](./processor/README.md)
+- [External Subscriber Example](./examples/external-subscriber/README.md)
 
 ## Getting Help
 

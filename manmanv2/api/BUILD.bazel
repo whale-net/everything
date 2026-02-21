@@ -9,6 +9,8 @@ go_binary(
         "//libs/go/s3",
         "//manmanv2/api/handlers",
         "//manmanv2/api/repository/postgres",
+        "//manmanv2/api/steam",
+        "//manmanv2/api/workshop",
         "//manmanv2/protos:manmanpb",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//reflection",

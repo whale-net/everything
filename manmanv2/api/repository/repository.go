@@ -46,6 +46,11 @@ type ServerGameConfigRepository interface {
 	List(ctx context.Context, serverID *int64, limit, offset int) ([]*manman.ServerGameConfig, error)
 	Update(ctx context.Context, sgc *manman.ServerGameConfig) error
 	Delete(ctx context.Context, sgcID int64) error
+
+	AddLibrary(ctx context.Context, sgcID, libraryID int64, presetID, volumeID *int64, installationPathOverride *string) error
+	RemoveLibrary(ctx context.Context, sgcID, libraryID int64) error
+	ListLibraries(ctx context.Context, sgcID int64) ([]*manman.WorkshopLibrary, error)
+	GetSGCLibraryAttachments(ctx context.Context, sgcID int64) ([]*manman.SGCWorkshopLibrary, error)
 }
 
 // SessionFilters defines filters for session queries
@@ -120,6 +125,15 @@ type ConfigurationStrategyRepository interface {
 	Delete(ctx context.Context, strategyID int64) error
 }
 
+// GameConfigVolumeRepository defines operations for GameConfigVolume entities
+type GameConfigVolumeRepository interface {
+	Create(ctx context.Context, volume *manman.GameConfigVolume) (*manman.GameConfigVolume, error)
+	Get(ctx context.Context, volumeID int64) (*manman.GameConfigVolume, error)
+	ListByGameConfig(ctx context.Context, configID int64) ([]*manman.GameConfigVolume, error)
+	Update(ctx context.Context, volume *manman.GameConfigVolume) error
+	Delete(ctx context.Context, volumeID int64) error
+}
+
 // ConfigurationPatchRepository defines operations for ConfigurationPatch entities
 type ConfigurationPatchRepository interface {
 	Create(ctx context.Context, patch *manman.ConfigurationPatch) (*manman.ConfigurationPatch, error)
@@ -128,6 +142,56 @@ type ConfigurationPatchRepository interface {
 	List(ctx context.Context, strategyID *int64, patchLevel *string, entityID *int64) ([]*manman.ConfigurationPatch, error)
 	Update(ctx context.Context, patch *manman.ConfigurationPatch) error
 	Delete(ctx context.Context, patchID int64) error
+}
+
+// WorkshopAddonRepository defines operations for WorkshopAddon entities
+type WorkshopAddonRepository interface {
+	Create(ctx context.Context, addon *manman.WorkshopAddon) (*manman.WorkshopAddon, error)
+	Get(ctx context.Context, addonID int64) (*manman.WorkshopAddon, error)
+	GetByWorkshopID(ctx context.Context, gameID int64, workshopID string, platformType string) (*manman.WorkshopAddon, error)
+	List(ctx context.Context, gameID *int64, includeDeprecated bool, limit, offset int) ([]*manman.WorkshopAddon, error)
+	Update(ctx context.Context, addon *manman.WorkshopAddon) error
+	Delete(ctx context.Context, addonID int64) error
+}
+
+// WorkshopInstallationRepository defines operations for installation tracking
+type WorkshopInstallationRepository interface {
+	Create(ctx context.Context, installation *manman.WorkshopInstallation) (*manman.WorkshopInstallation, error)
+	Get(ctx context.Context, installationID int64) (*manman.WorkshopInstallation, error)
+	GetBySGCAndAddon(ctx context.Context, sgcID, addonID int64) (*manman.WorkshopInstallation, error)
+	List(ctx context.Context, limit, offset int) ([]*manman.WorkshopInstallation, error)
+	ListBySGC(ctx context.Context, sgcID int64, limit, offset int) ([]*manman.WorkshopInstallation, error)
+	ListByAddon(ctx context.Context, addonID int64, limit, offset int) ([]*manman.WorkshopInstallation, error)
+	UpdateStatus(ctx context.Context, installationID int64, status string, errorMsg *string) error
+	UpdateProgress(ctx context.Context, installationID int64, percent int) error
+	Delete(ctx context.Context, installationID int64) error
+}
+
+// WorkshopLibraryRepository defines operations for library management
+type WorkshopLibraryRepository interface {
+	Create(ctx context.Context, library *manman.WorkshopLibrary) (*manman.WorkshopLibrary, error)
+	Get(ctx context.Context, libraryID int64) (*manman.WorkshopLibrary, error)
+	List(ctx context.Context, gameID *int64, limit, offset int) ([]*manman.WorkshopLibrary, error)
+	Update(ctx context.Context, library *manman.WorkshopLibrary) error
+	Delete(ctx context.Context, libraryID int64) error
+
+	AddAddon(ctx context.Context, libraryID, addonID int64, displayOrder int) error
+	RemoveAddon(ctx context.Context, libraryID, addonID int64) error
+	ListAddons(ctx context.Context, libraryID int64) ([]*manman.WorkshopAddonWithGame, error)
+
+	AddReference(ctx context.Context, parentLibraryID, childLibraryID int64) error
+	RemoveReference(ctx context.Context, parentLibraryID, childLibraryID int64) error
+	ListReferences(ctx context.Context, libraryID int64) ([]*manman.WorkshopLibrary, error)
+	DetectCircularReference(ctx context.Context, parentLibraryID, childLibraryID int64) (bool, error)
+}
+
+// AddonPathPresetRepository defines operations for game addon path presets
+type AddonPathPresetRepository interface {
+	Create(ctx context.Context, preset *manman.GameAddonPathPreset) (*manman.GameAddonPathPreset, error)
+	Get(ctx context.Context, presetID int64) (*manman.GameAddonPathPreset, error)
+	ListByGame(ctx context.Context, gameID int64) ([]*manman.GameAddonPathPreset, error)
+	Update(ctx context.Context, preset *manman.GameAddonPathPreset) error
+	Delete(ctx context.Context, presetID int64) error
 }
 
 // Repository aggregates all repository interfaces
@@ -143,5 +207,10 @@ type Repository struct {
 	ServerPorts            ServerPortRepository
 	ConfigurationStrategies ConfigurationStrategyRepository
 	ConfigurationPatches   ConfigurationPatchRepository
+	GameConfigVolumes      GameConfigVolumeRepository
+	WorkshopAddons         WorkshopAddonRepository
+	WorkshopInstallations  WorkshopInstallationRepository
+	WorkshopLibraries      WorkshopLibraryRepository
+	AddonPathPresets       AddonPathPresetRepository
 	Actions                interface{} // ActionRepository from postgres package
 }
