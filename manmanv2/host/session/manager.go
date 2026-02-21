@@ -176,37 +176,10 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	slog.Debug("session added to state manager", "session_id", sessionID)
 	state.UpdateStatus(manman.SessionStatusStarting)
 
-	// 1. Create Docker network
-	networkName := sm.getNetworkName(sessionID)
-	slog.Info("creating network", "session_id", sessionID, "network", networkName)
-	networkLabels := map[string]string{
-		"manman.type":        "network",
-		"manman.session_id":  fmt.Sprintf("%d", sessionID),
-		"manman.server_id":   fmt.Sprintf("%d", cmd.ServerID),
-		"manman.environment": sm.environment,
-	}
-	networkID, err := sm.dockerClient.CreateNetwork(ctx, networkName, networkLabels)
-	if err != nil {
-		if strings.Contains(err.Error(), "already exists") {
-			slog.Info("network already exists, reusing", "session_id", sessionID, "network", networkName)
-			id, netErr := sm.dockerClient.GetNetworkIDByName(ctx, networkName)
-			if netErr != nil {
-				slog.Error("failed to get existing network ID", "session_id", sessionID, "error", netErr)
-				state.UpdateStatus(manman.SessionStatusCrashed)
-				sm.stateManager.RemoveSession(sessionID)
-				return fmt.Errorf("failed to get existing network ID: %w", netErr)
-			}
-			networkID = id
-		} else {
-			slog.Error("failed to create network", "session_id", sessionID, "error", err)
-			state.UpdateStatus(manman.SessionStatusCrashed)
-			sm.stateManager.RemoveSession(sessionID)
-			return fmt.Errorf("failed to create network: %w", err)
-		}
-	}
-	slog.Info("network ready", "session_id", sessionID, "network_id", networkID)
-	state.NetworkID = networkID
-	state.NetworkName = networkName
+	// 1. Skip custom network - use default bridge for external port access
+	slog.Info("using default bridge network", "session_id", sessionID)
+	state.NetworkID = ""
+	state.NetworkName = ""
 
 	// 2. Fetch and render configurations
 	slog.Info("fetching configuration strategies", "session_id", sessionID)
