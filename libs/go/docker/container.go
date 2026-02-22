@@ -88,7 +88,7 @@ func (c *Client) CreateContainer(ctx context.Context, config ContainerConfig) (s
 		ExposedPorts: exposedPorts,
 		OpenStdin:    config.OpenStdin,
 		StdinOnce:    false, // stdin survives detach; needed for recovery re-attach
-		Tty:          config.OpenStdin, // Allocate pseudo-TTY when stdin is enabled to prevent blocking
+		// Note: Tty is NOT set - we need multiplexed stream format for log parsing
 	}
 
 	hostConfig := &container.HostConfig{
