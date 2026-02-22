@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 # Docker SDK library for container management
 go_library(
@@ -23,6 +23,15 @@ go_library(
         "@com_github_docker_go_connections//nat",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
         "@io_opentelemetry_go_otel_trace//:trace",
+    ],
+)
+
+go_test(
+    name = "docker_test",
+    srcs = ["container_test.go"],
+    embed = [":docker"],
+    deps = [
+        "@com_github_docker_docker//api/types/mount",
     ],
 )
 

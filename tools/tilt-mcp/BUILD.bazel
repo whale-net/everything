@@ -4,28 +4,28 @@ load("//tools/bazel:pytest.bzl", "py_test")
 py_library(
     name = "server_lib",
     srcs = ["server.py"],
-    deps = ["@pypi//:fastmcp"],
     visibility = ["//tools/tilt-mcp:__pkg__"],
+    deps = ["@pypi//:fastmcp"],
 )
 
 py_binary(
     name = "tilt-mcp-server",
     srcs = ["server.py"],
     main = "server.py",
+    visibility = ["//visibility:public"],
     deps = [
         ":server_lib",
         "@pypi//:fastmcp",
     ],
-    visibility = ["//visibility:public"],
 )
 
 py_test(
     name = "test_server",
+    size = "small",
     srcs = ["test_server.py"],
     deps = [
         ":server_lib",
         "@pypi//:pytest",
         "@pypi//:pytest-asyncio",
     ],
-    size = "small",
 )

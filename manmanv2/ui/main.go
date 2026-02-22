@@ -226,15 +226,30 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/workshop/api/presets-for-game", app.auth.RequireAuthFunc(app.handlePresetsForGame))
 
 	// Protected routes - SGC detail
-	mux.HandleFunc("/sgc/", app.auth.RequireAuthFunc(app.handleSGCDetail))
+	mux.HandleFunc("/sgc/", app.auth.RequireAuthFunc(app.handleSGCRoutes))
 	mux.HandleFunc("/sgc/add-library", app.auth.RequireAuthFunc(app.handleAddLibraryToSGC))
 	mux.HandleFunc("/sgc/remove-library", app.auth.RequireAuthFunc(app.handleSGCRemoveLibrary))
 	mux.HandleFunc("/sgc/api/available-libraries", app.auth.RequireAuthFunc(app.handleSGCAvailableLibraries))
+
+	// Backup config management
+	mux.HandleFunc("/backup-configs/create", app.auth.RequireAuthFunc(app.handleBackupConfigCreate))
+	mux.HandleFunc("/backup-configs/", app.auth.RequireAuthFunc(app.handleBackupConfigDelete))
 
 	// API endpoints for HTMX partial updates
 	mux.HandleFunc("/api/dashboard-summary", app.auth.RequireAuthFunc(app.handleDashboardSummary))
 	mux.HandleFunc("/api/dashboard-sessions", app.auth.RequireAuthFunc(app.handleDashboardSessions))
 }
+// handleSGCRoutes dispatches /sgc/* routes
+func (app *App) handleSGCRoutes(w http.ResponseWriter, r *http.Request) {
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// /sgc/{id}/backup/trigger
+	if len(pathParts) >= 4 && pathParts[2] == "backup" && pathParts[3] == "trigger" {
+		app.handleTriggerBackup(w, r)
+		return
+	}
+	app.handleSGCDetail(w, r)
+}
+
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

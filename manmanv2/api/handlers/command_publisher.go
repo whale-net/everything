@@ -77,6 +77,12 @@ func (p *CommandPublisher) PublishSendInput(ctx context.Context, serverID int64,
 	return p.publishAndWait(ctx, routingKey, cmd, timeout)
 }
 
+func (p *CommandPublisher) PublishBackup(ctx context.Context, serverID int64, cmd interface{}) error {
+	routingKey := fmt.Sprintf("command.host.%d.backup", serverID)
+	// Fire-and-forget: backup is async, status comes back via RMQ
+	return p.publisher.Publish(ctx, "manman", routingKey, cmd)
+}
+
 func (p *CommandPublisher) publishAndWait(ctx context.Context, routingKey string, data interface{}, timeout time.Duration) error {
 	// Generate correlation ID
 	correlationID := uuid.New().String()

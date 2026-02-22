@@ -104,6 +104,7 @@ message GameConfigVolume {
   string container_path = 5;
   string host_subpath = 6;
   bool read_only = 7;
+  string volume_type = 8;
 }
 
 // ServerGameConfig represents a game configuration deployed on a specific server
@@ -129,12 +130,28 @@ message Session {
 // Backup represents a compressed backup of game save data stored in S3
 message Backup {
   int64 backup_id = 1;
-  int64 session_id = 2;  // Session that was backed up
-  int64 server_game_config_id = 3;  // SGC for this backup
-  string s3_url = 4;  // S3 URL for the backup tarball
-  int64 size_bytes = 5;  // Size of the backup file
-  string description = 6;  // User-provided description
-  int64 created_at = 7;  // Unix timestamp
+  int64 session_id = 2;
+  int64 server_game_config_id = 3;
+  int64 backup_config_id = 8;  // 0 for manual backups
+  int64 volume_id = 9;
+  string s3_url = 4;
+  int64 size_bytes = 5;
+  string status = 10;  // pending/running/completed/failed
+  string description = 6;
+  string error_message = 11;
+  int64 created_at = 7;
+}
+
+// BackupConfig defines a scheduled backup for a specific volume
+message BackupConfig {
+  int64 backup_config_id = 1;
+  int64 volume_id = 2;
+  int32 cadence_minutes = 3;
+  string backup_path = 4;
+  bool enabled = 5;
+  int64 last_backup_at = 6;  // Unix timestamp, 0 if never
+  int64 created_at = 7;
+  int64 updated_at = 8;
 }
 
 // ServerPort represents port allocation tracking at server level

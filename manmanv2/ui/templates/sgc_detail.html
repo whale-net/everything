@@ -173,6 +173,7 @@ function toggleAddLibraryPanel() {
     }
 }
 </script>
+{{template "sgc_backup_section" .}}
 {{end}}
 
 {{define "sgc_available_libraries_partial"}}
@@ -229,4 +230,55 @@ function toggleAddLibraryPanel() {
 {{else}}
 <p style="color: #6b7280; margin-top: 0.5rem;">No libraries available to add.</p>
 {{end}}
+{{end}}
+
+{{define "sgc_backup_section"}}
+<div class="card mt-4">
+  <div class="card-header"><strong>Backups</strong></div>
+  <div class="card-body">
+    {{if .BackupConfigs}}
+    <h6>Trigger Manual Backup</h6>
+    {{range .BackupConfigs}}
+    <div class="mb-2">
+      <span class="text-muted small">Volume: <code>{{.Volume.Name}}</code></span>
+      {{range .Configs}}
+      <form method="POST" action="/sgc/{{$.SGC.SgcId}}/backup/trigger" style="display:inline">
+        <input type="hidden" name="backup_config_id" value="{{.BackupConfigId}}">
+        <button type="submit" class="btn btn-sm btn-outline-primary ms-2">
+          Trigger: <code>{{.BackupPath}}</code>
+        </button>
+      </form>
+      {{end}}
+    </div>
+    {{end}}
+    {{else}}
+    <p class="text-muted small">No backup configs configured for this SGC's volumes.</p>
+    {{end}}
+
+    <h6 class="mt-3">Recent Backups</h6>
+    {{if .RecentBackups}}
+    <table class="table table-sm table-bordered">
+      <thead><tr><th>ID</th><th>Status</th><th>Size</th><th>S3 URL</th><th>Created</th></tr></thead>
+      <tbody>
+        {{range .RecentBackups}}
+        <tr>
+          <td>{{.BackupId}}</td>
+          <td>
+            {{if eq .Status "completed"}}<span class="badge bg-success">completed</span>
+            {{else if eq .Status "failed"}}<span class="badge bg-danger">failed</span>
+            {{else if eq .Status "running"}}<span class="badge bg-warning text-dark">running</span>
+            {{else}}<span class="badge bg-secondary">{{.Status}}</span>{{end}}
+          </td>
+          <td>{{if .SizeBytes}}{{.SizeBytes}}B{{else}}-{{end}}</td>
+          <td>{{if .S3Url}}<a href="{{.S3Url}}" target="_blank" class="text-truncate d-inline-block" style="max-width:200px">{{.S3Url}}</a>{{else}}-{{end}}</td>
+          <td>{{.CreatedAt}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{else}}
+    <p class="text-muted small">No backups yet.</p>
+    {{end}}
+  </div>
+</div>
 {{end}}

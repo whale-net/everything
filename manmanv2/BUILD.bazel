@@ -54,3 +54,10 @@ filegroup(
     srcs = glob(["docs/**/*"]),
     visibility = ["//visibility:public"],
 )
+
+go_test(
+    name = "manmanv2_test",
+    srcs = ["models_test.go"],
+    data = glob(["testdata/**"]),
+    embed = [":models"],
+)

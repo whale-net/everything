@@ -48,6 +48,17 @@ service ManManAPI {
   rpc ListBackups(ListBackupsRequest) returns (ListBackupsResponse);
   rpc GetBackup(GetBackupRequest) returns (GetBackupResponse);
   rpc DeleteBackup(DeleteBackupRequest) returns (DeleteBackupResponse);
+  rpc TriggerBackup(TriggerBackupRequest) returns (TriggerBackupResponse);
+
+  // BackupConfig management
+  rpc CreateBackupConfig(CreateBackupConfigRequest) returns (CreateBackupConfigResponse);
+  rpc GetBackupConfig(GetBackupConfigRequest) returns (GetBackupConfigResponse);
+  rpc ListBackupConfigs(ListBackupConfigsRequest) returns (ListBackupConfigsResponse);
+  rpc UpdateBackupConfig(UpdateBackupConfigRequest) returns (UpdateBackupConfigResponse);
+  rpc DeleteBackupConfig(DeleteBackupConfigRequest) returns (DeleteBackupConfigResponse);
+  rpc AddBackupConfigAction(AddBackupConfigActionRequest) returns (AddBackupConfigActionResponse);
+  rpc RemoveBackupConfigAction(RemoveBackupConfigActionRequest) returns (RemoveBackupConfigActionResponse);
+  rpc ListBackupConfigActions(ListBackupConfigActionsRequest) returns (ListBackupConfigActionsResponse);
 
   // Server registration (new)
   rpc RegisterServer(RegisterServerRequest) returns (RegisterServerResponse);
@@ -418,6 +429,87 @@ message DeleteBackupResponse {
   // Empty - success indicated by no error
 }
 
+message TriggerBackupRequest {
+  int64 server_game_config_id = 1;
+  int64 backup_config_id = 2;
+}
+
+message TriggerBackupResponse {
+  int64 backup_id = 1;
+}
+
+// ============================================================================
+// BackupConfig RPCs
+// ============================================================================
+
+message CreateBackupConfigRequest {
+  int64 volume_id = 1;
+  int32 cadence_minutes = 2;
+  string backup_path = 3;
+  bool enabled = 4;
+}
+
+message CreateBackupConfigResponse {
+  BackupConfig config = 1;
+}
+
+message GetBackupConfigRequest {
+  int64 backup_config_id = 1;
+}
+
+message GetBackupConfigResponse {
+  BackupConfig config = 1;
+}
+
+message ListBackupConfigsRequest {
+  int64 volume_id = 1;
+}
+
+message ListBackupConfigsResponse {
+  repeated BackupConfig configs = 1;
+}
+
+message UpdateBackupConfigRequest {
+  int64 backup_config_id = 1;
+  int32 cadence_minutes = 2;
+  string backup_path = 3;
+  bool enabled = 4;
+}
+
+message UpdateBackupConfigResponse {
+  BackupConfig config = 1;
+}
+
+message DeleteBackupConfigRequest {
+  int64 backup_config_id = 1;
+}
+
+message DeleteBackupConfigResponse {}
+
+message AddBackupConfigActionRequest {
+  int64 backup_config_id = 1;
+  int64 action_id = 2;
+  int32 display_order = 3;
+}
+
+message AddBackupConfigActionResponse {}
+
+message RemoveBackupConfigActionRequest {
+  int64 backup_config_id = 1;
+  int64 action_id = 2;
+}
+
+message RemoveBackupConfigActionResponse {}
+
+message ListBackupConfigActionsRequest {
+  int64 backup_config_id = 1;
+}
+
+message ListBackupConfigActionsResponse {
+  repeated int64 action_ids = 1;
+  repeated int32 display_orders = 2;
+}
+
 // ============================================================================
 // Server Registration RPCs
 // ============================================================================
@@ -614,6 +706,7 @@ message CreateGameConfigVolumeRequest {
   string container_path = 4;
   string host_subpath = 5;
   bool read_only = 6;
+  string volume_type = 7;
 }
 
 message CreateGameConfigVolumeResponse {
@@ -643,6 +736,7 @@ message UpdateGameConfigVolumeRequest {
   string container_path = 4;
   string host_subpath = 5;
   bool read_only = 6;
+  string volume_type = 7;
 }
 
 message UpdateGameConfigVolumeResponse {

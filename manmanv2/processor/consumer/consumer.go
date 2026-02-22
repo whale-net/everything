@@ -36,6 +36,7 @@ func NewProcessorConsumer(
 	bindings := []string{
 		"status.host.#",
 		"status.session.#",
+		"status.backup.#",
 		"health.#",
 	}
 

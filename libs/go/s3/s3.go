@@ -10,6 +10,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
@@ -17,6 +18,7 @@ import (
 // Client wraps the AWS S3 client for ManMan operations
 type Client struct {
 	s3Client *s3.Client
+	uploader *manager.Uploader
 	bucket   string
 }
 
@@ -67,6 +69,7 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 
 	return &Client{
 		s3Client: s3.NewFromConfig(awsCfg, s3Opts...),
+		uploader: manager.NewUploader(s3.NewFromConfig(awsCfg, s3Opts...)),
 		bucket:   cfg.Bucket,
 	}, nil
 }
@@ -108,6 +111,34 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, opts *Uplo
 	}
 
 	// Return S3 URL in the format: s3://bucket/key
+	return fmt.Sprintf("s3://%s/%s", c.bucket, key), nil
+}
+
+// UploadStream uploads an io.Reader to S3 using multipart upload (streaming, no full buffering).
+// Use this for large files like backup tarballs.
+func (c *Client) UploadStream(ctx context.Context, key string, r io.Reader, opts *UploadOptions) (string, error) {
+	if opts == nil {
+		opts = &UploadOptions{}
+	}
+
+	input := &s3.PutObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+		Body:   r,
+	}
+	if opts.ContentType != "" {
+		input.ContentType = aws.String(opts.ContentType)
+	}
+	if opts.ContentEncoding != "" {
+		input.ContentEncoding = aws.String(opts.ContentEncoding)
+	}
+	if len(opts.Metadata) > 0 {
+		input.Metadata = opts.Metadata
+	}
+
+	if _, err := c.uploader.Upload(ctx, input); err != nil {
+		return "", fmt.Errorf("failed to stream upload to S3: %w", err)
+	}
 	return fmt.Sprintf("s3://%s/%s", c.bucket, key), nil
 }
 

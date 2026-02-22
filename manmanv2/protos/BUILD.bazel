@@ -16,8 +16,8 @@ proto_library(
     name = "manmanpb_proto",
     srcs = [
         "api.proto",
-        "messages.proto",
         "log_processor.proto",
+        "messages.proto",
         "workshop.proto",
     ],
     visibility = ["//visibility:public"],

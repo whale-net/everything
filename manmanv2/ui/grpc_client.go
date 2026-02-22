@@ -732,3 +732,55 @@ func (c *ControlClient) DeleteAddonPathPreset(ctx context.Context, presetID int6
 	})
 	return err
 }
+
+// ============================================================================
+// Backup Config methods
+// ============================================================================
+
+func (c *ControlClient) ListBackupConfigs(ctx context.Context, volumeID int64) ([]*manmanpb.BackupConfig, error) {
+	resp, err := c.api.ListBackupConfigs(ctx, &manmanpb.ListBackupConfigsRequest{VolumeId: volumeID})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Configs, nil
+}
+
+func (c *ControlClient) CreateBackupConfig(ctx context.Context, volumeID int64, cadenceMinutes int32, backupPath string, enabled bool) (*manmanpb.BackupConfig, error) {
+	resp, err := c.api.CreateBackupConfig(ctx, &manmanpb.CreateBackupConfigRequest{
+		VolumeId:       volumeID,
+		CadenceMinutes: cadenceMinutes,
+		BackupPath:     backupPath,
+		Enabled:        enabled,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Config, nil
+}
+
+func (c *ControlClient) DeleteBackupConfig(ctx context.Context, backupConfigID int64) error {
+	_, err := c.api.DeleteBackupConfig(ctx, &manmanpb.DeleteBackupConfigRequest{BackupConfigId: backupConfigID})
+	return err
+}
+
+func (c *ControlClient) TriggerBackup(ctx context.Context, sgcID, backupConfigID int64) (int64, error) {
+	resp, err := c.api.TriggerBackup(ctx, &manmanpb.TriggerBackupRequest{
+		ServerGameConfigId: sgcID,
+		BackupConfigId:     backupConfigID,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return resp.BackupId, nil
+}
+
+func (c *ControlClient) ListBackups(ctx context.Context, sgcID int64) ([]*manmanpb.Backup, error) {
+	resp, err := c.api.ListBackups(ctx, &manmanpb.ListBackupsRequest{
+		ServerGameConfigId: sgcID,
+		PageSize:           50,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Backups, nil
+}

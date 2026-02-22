@@ -12,6 +12,7 @@ type VolumeMountMessage struct {
 	Name          string            `json:"name"`
 	ContainerPath string            `json:"container_path"`
 	HostSubpath   string            `json:"host_subpath,omitempty"`
+	VolumeType    string            `json:"volume_type,omitempty"`
 	Options       map[string]string `json:"options,omitempty"`
 }
 
@@ -104,4 +105,23 @@ type InstallationStatusUpdate struct {
 	Status          string  `json:"status"` // "pending" | "downloading" | "installed" | "failed" | "removed"
 	ProgressPercent int     `json:"progress_percent"`
 	ErrorMessage    *string `json:"error_message,omitempty"`
+}
+
+// BackupCommand instructs the host-manager to archive a volume sub-path and upload to S3
+type BackupCommand struct {
+	BackupID          int64    `json:"backup_id"`
+	SGCID             int64    `json:"sgc_id"`
+	VolumeHostPath    string   `json:"volume_host_path"`    // absolute path on host to the volume root
+	BackupPath        string   `json:"backup_path"`         // relative path within volume to archive
+	S3Key             string   `json:"s3_key"`              // pre-computed: backups/{sgc_id}/{config_id}/{backup_id}.tar.gz
+	PreActionCommands []string `json:"pre_action_commands"` // pre-rendered commands to send to container stdin
+}
+
+// BackupStatusUpdate reports the result of a backup operation back to the processor
+type BackupStatusUpdate struct {
+	BackupID     int64   `json:"backup_id"`
+	S3URL        *string `json:"s3_url,omitempty"`
+	SizeBytes    *int64  `json:"size_bytes,omitempty"`
+	Status       string  `json:"status"` // "completed" | "failed"
+	ErrorMessage *string `json:"error_message,omitempty"`
 }

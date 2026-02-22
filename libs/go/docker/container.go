@@ -70,12 +70,23 @@ func (c *Client) CreateContainer(ctx context.Context, config ContainerConfig) (s
 	for _, vol := range config.Volumes {
 		parts := strings.SplitN(vol, ":", 2)
 		if len(parts) != 2 {
-			return "", fmt.Errorf("invalid volume format: %s (expected host:container)", vol)
+			return "", fmt.Errorf("invalid volume format: %s (expected source:target)", vol)
 		}
+		
+		source := parts[0]
+		target := parts[1]
+		
+		// Determine mount type: named volumes don't start with / or .
+		// Bind mounts have absolute paths (/) or relative paths (.)
+		mountType := mount.TypeVolume
+		if strings.HasPrefix(source, "/") || strings.HasPrefix(source, ".") {
+			mountType = mount.TypeBind
+		}
+		
 		mounts = append(mounts, mount.Mount{
-			Type:   mount.TypeBind,
-			Source: parts[0],
-			Target: parts[1],
+			Type:   mountType,
+			Source: source,
+			Target: target,
 		})
 	}
 

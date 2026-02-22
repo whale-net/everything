@@ -114,6 +114,7 @@ func run() error {
 		ServerCapabilities: postgres.NewServerCapabilityRepository(dbPool),
 		LogReferences:      postgres.NewLogReferenceRepository(dbPool),
 		Backups:            postgres.NewBackupRepository(dbPool),
+		BackupConfigs:      postgres.NewBackupConfigRepository(dbPool),
 		ServerPorts:        postgres.NewServerPortRepository(dbPool),
 	}
 
@@ -135,6 +136,9 @@ func run() error {
 
 	healthHandler := handlers.NewHealthHandler(repo, publisher, cfg.StaleHostThreshold, logger)
 	handlerRegistry.Register("health.#", healthHandler)
+
+	backupStatusHandler := handlers.NewBackupStatusHandler(repo, logger)
+	handlerRegistry.Register("status.backup.#", backupStatusHandler)
 
 	// Create consumer
 	processorConsumer, err := consumer.NewProcessorConsumer(
@@ -169,6 +173,14 @@ func run() error {
 
 	// Start stale session checker
 	sessionStatusHandler.StartStaleSessionChecker(appCtx, 10*time.Second, time.Duration(cfg.StaleSessionThreshold)*time.Second)
+
+	// Start backup scheduler (River)
+	riverClient, err := startBackupScheduler(appCtx, dbPool, repo, rmqConn, logger)
+	if err != nil {
+		logger.Warn("failed to start backup scheduler, scheduled backups will not run", "error", err)
+	} else {
+		defer riverClient.Stop(context.Background()) //nolint:errcheck
+	}
 
 	// Start consumer in background
 	consumerErrChan := make(chan error, 1)

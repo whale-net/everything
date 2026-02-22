@@ -4,6 +4,7 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "processor_lib",
     srcs = [
+        "backup_scheduler.go",
         "config.go",
         "main.go",
     ],
@@ -12,11 +13,17 @@ go_library(
     deps = [
         "//libs/go/logging",
         "//libs/go/rmq",
+        "//manmanv2:models",
         "//manmanv2/api/repository",
         "//manmanv2/api/repository/postgres",
+        "//manmanv2/host/rmq",
         "//manmanv2/processor/consumer",
         "//manmanv2/processor/handlers",
+        "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_riverqueue_river//:river",
+        "@com_github_riverqueue_river_riverdriver_riverpgxv5//:riverpgxv5",
+        "@com_github_riverqueue_river//rivermigrate",
     ],
 )
 
