@@ -556,145 +556,15 @@ func (sm *SessionManager) cleanupSession(ctx context.Context, state *State) {
 
 // startOutputReader spawns a goroutine that reads the Docker multiplexed stream
 func (sm *SessionManager) startLogReader(state *State) {
-	go func() {
-		// Buffer for batching log messages
-		const bufferSize = 50
-		const flushInterval = 1 * time.Second
-
-		logBuffer := make([]string, 0, bufferSize)
-		sourceBuffer := make([]string, 0, bufferSize)
-		ticker := time.NewTicker(flushInterval)
-		defer ticker.Stop()
-
-		// Metrics for aggregate logging
-		var stdoutCount, stderrCount, errorCount, warnCount int
-
-		// Channel to receive log messages from reader goroutine
-		logChan := make(chan struct {
-			message string
-			source  string
-		}, 10)
-
-		// Start a separate goroutine to read from Docker logs stream
-		go func() {
-			defer close(logChan)
-			for {
-				// Read 8-byte header: [streamType, 0, 0, 0, size(4 bytes big-endian)]
-				header := make([]byte, 8)
-				if _, err := io.ReadFull(state.LogReader, header); err != nil {
-					// EOF or closed — container exited or logs closed
-					return
-				}
-				size := binary.BigEndian.Uint32(header[4:8])
-				data := make([]byte, size)
-				if _, err := io.ReadFull(state.LogReader, data); err != nil {
-					return
-				}
-
-				message := string(data)
-				var source string
-				if header[0] == 2 {
-					source = "stderr"
-				} else {
-					source = "stdout"
-				}
-
-				// Game server output is published to RMQ only, not to host logs
-				select {
-				case logChan <- struct {
-					message string
-					source  string
-				}{message, source}:
-				default:
-					slog.Warn("log channel full, dropping message", "session_id", state.SessionID)
-				}
-			}
-		}()
-
-		flushLogs := func() {
-			if len(logBuffer) == 0 {
-				return
-			}
-
-			// Log aggregate metrics
-			if stdoutCount > 0 || stderrCount > 0 {
-				slog.Info("session log metrics",
-					"session_id", state.SessionID,
-					"total", stdoutCount+stderrCount,
-					"stdout", stdoutCount,
-					"stderr", stderrCount,
-					"errors", errorCount,
-					"warnings", warnCount)
-			}
-
-			// Publish logs to RabbitMQ in background
-			if sm.rmqPublisher != nil {
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				defer cancel()
-
-				for i := 0; i < len(logBuffer); i++ {
-					// Fire-and-forget publish, don't block on errors
-					if err := sm.rmqPublisher.PublishLog(ctx, state.SessionID, sourceBuffer[i], logBuffer[i]); err != nil {
-						slog.Warn("failed to publish log to RabbitMQ", "session_id", state.SessionID, "error", err)
-					}
-				}
-			}
-
-			// Clear buffers and reset metrics
-			logBuffer = logBuffer[:0]
-			sourceBuffer = sourceBuffer[:0]
-			stdoutCount = 0
-			stderrCount = 0
-			errorCount = 0
-			warnCount = 0
-		}
-
-		// Flush logs on exit
-		defer flushLogs()
-
-		// Main event loop
-		for {
-			select {
-			case <-ticker.C:
-				// Periodic flush every second
-				flushLogs()
-
-			case logMsg, ok := <-logChan:
-				if !ok {
-					// Channel closed - container exited
-					sm.handleContainerExit(state)
-					return
-				}
-
-				// Add to buffer
-				logBuffer = append(logBuffer, logMsg.message)
-				sourceBuffer = append(sourceBuffer, logMsg.source)
-
-				// Track metrics
-				if logMsg.source == "stderr" {
-					stderrCount++
-				} else {
-					stdoutCount++
-				}
-
-				msgLower := strings.ToLower(logMsg.message)
-				if strings.Contains(msgLower, "error") || strings.Contains(msgLower, "exception") || strings.Contains(msgLower, "fatal") {
-					errorCount++
-				}
-				if strings.Contains(msgLower, "warn") {
-					warnCount++
-				}
-
-				// Flush if buffer is full
-				if len(logBuffer) >= bufferSize {
-					flushLogs()
-				}
-			}
-		}
-	}()
+	sm.startStreamReader(state, state.LogReader)
 }
 
 func (sm *SessionManager) startOutputReader(state *State) {
+	sm.startStreamReader(state, state.AttachResp.Reader)
+}
+
+// startStreamReader reads from a Docker multiplexed stream and publishes logs to RabbitMQ
+func (sm *SessionManager) startStreamReader(state *State, reader io.Reader) {
 	go func() {
 		// Buffer for batching log messages
 		const bufferSize = 50
@@ -720,13 +590,13 @@ func (sm *SessionManager) startOutputReader(state *State) {
 			for {
 				// Read 8-byte header: [streamType, 0, 0, 0, size(4 bytes big-endian)]
 				header := make([]byte, 8)
-				if _, err := io.ReadFull(state.AttachResp.Reader, header); err != nil {
-					// EOF or closed — container exited or attach was closed
+				if _, err := io.ReadFull(reader, header); err != nil {
+					// EOF or closed — container exited or stream closed
 					return
 				}
 				size := binary.BigEndian.Uint32(header[4:8])
 				data := make([]byte, size)
-				if _, err := io.ReadFull(state.AttachResp.Reader, data); err != nil {
+				if _, err := io.ReadFull(reader, data); err != nil {
 					return
 				}
 
