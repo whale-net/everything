@@ -67,10 +67,10 @@ func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID 
 		}
 
 		if status.Running {
-			// Re-attach to running game container
-			attachResp, err := sm.dockerClient.AttachToContainer(ctx, game.ID)
+			// Re-attach to running game container using logs API
+			logReader, err := sm.dockerClient.GetContainerLogs(ctx, game.ID, true, "all")
 			if err != nil {
-				slog.Warn("failed to attach to running container, removing", "session_id", sessionID, "container_id", game.ID, "error", err)
+				slog.Warn("failed to get logs from running container, removing", "session_id", sessionID, "container_id", game.ID, "error", err)
 				_ = sm.dockerClient.StopContainer(ctx, game.ID, nil)
 				_ = sm.dockerClient.RemoveContainer(ctx, game.ID, true)
 				continue
@@ -81,13 +81,15 @@ func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID 
 				SessionID:       sessionID,
 				SGCID:           sgcID,
 				GameContainerID: game.ID,
-				AttachResp:      &attachResp,
+				LogReader:       logReader,
+				AttachResp:      nil, // Will attach lazily when command is sent
+				AttachStrategy:  "lazy",
 				NetworkName:     networkName,
 				Status:          manman.SessionStatusRunning,
 			}
 
 			sm.stateManager.AddSession(state)
-			sm.startOutputReader(state)
+			sm.startLogReader(state)
 			slog.Info("session recovered", "session_id", sessionID, "sgc_id", sgcID)
 		} else {
 			// Not running — nothing to recover, remove it
