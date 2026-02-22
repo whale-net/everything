@@ -406,21 +406,17 @@ func (sm *SessionManager) SendInput(ctx context.Context, sessionID int64, input 
 		return fmt.Errorf("session %d not found", sessionID)
 	}
 
-	// Lazy attach: attach only when sending command
 	state.mu.Lock()
-	needsAttach := state.AttachResp == nil
-	strategy := state.AttachStrategy
-	state.mu.Unlock()
+	defer state.mu.Unlock()
 
-	if needsAttach {
+	// Lazy attach: attach only when sending command
+	if state.AttachResp == nil {
 		slog.Debug("attaching to container for command", "session_id", sessionID)
 		attachResp, err := sm.dockerClient.AttachToContainer(ctx, state.GameContainerID)
 		if err != nil {
 			return fmt.Errorf("failed to attach to container: %w", err)
 		}
-		state.mu.Lock()
 		state.AttachResp = &attachResp
-		state.mu.Unlock()
 	}
 
 	// Write command to stdin
@@ -432,13 +428,9 @@ func (sm *SessionManager) SendInput(ctx context.Context, sessionID int64, input 
 	slog.Debug("sent stdin input", "session_id", sessionID, "bytes", len(input))
 
 	// For lazy strategy, detach after sending command
-	if strategy == "lazy" {
-		state.mu.Lock()
-		if state.AttachResp != nil {
-			state.AttachResp.Close()
-			state.AttachResp = nil
-		}
-		state.mu.Unlock()
+	if state.AttachStrategy == "lazy" {
+		state.AttachResp.Close()
+		state.AttachResp = nil
 		slog.Debug("detached after command", "session_id", sessionID)
 	}
 
