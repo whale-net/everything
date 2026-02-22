@@ -235,8 +235,16 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 	}
 
 	var command []string
-	if cmd.GameConfig.ArgsTemplate != "" {
+	if len(cmd.GameConfig.Command) > 0 {
+		// Use command array directly (for passing args to entrypoint)
+		command = cmd.GameConfig.Command
+		slog.Info("using command array", "session_id", cmd.SessionID, "command", command)
+	} else if cmd.GameConfig.ArgsTemplate != "" {
+		// Fallback to args_template wrapped in shell
 		command = []string{"/bin/sh", "-c", cmd.GameConfig.ArgsTemplate}
+		slog.Info("using args_template", "session_id", cmd.SessionID, "args_template", cmd.GameConfig.ArgsTemplate)
+	} else {
+		slog.Info("no command or args_template set", "session_id", cmd.SessionID)
 	}
 
 	ports := make(map[string]string, len(cmd.ServerGameConfig.PortBindings))
