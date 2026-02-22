@@ -1,6 +1,7 @@
 package session
 
 import (
+	"io"
 	"sync"
 	"time"
 
@@ -15,7 +16,9 @@ type State struct {
 	NetworkID       string
 	NetworkName     string
 	GameContainerID string
-	AttachResp      *types.HijackedResponse // stdin/stdout attach; nil until container started
+	LogReader       io.ReadCloser               // Docker logs API stream for stdout/stderr
+	AttachResp      *types.HijackedResponse     // stdin attach; nil until command is sent
+	AttachStrategy  string                      // "lazy" | "persistent"
 	StartedAt       *time.Time
 	StoppedAt       *time.Time
 	ExitCode        *int
