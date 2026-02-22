@@ -519,6 +519,9 @@ func (sm *SessionManager) createGameContainer(ctx context.Context, state *State,
 }
 
 func (sm *SessionManager) getNamedVolumeName(sgcID int64, volumeName string) string {
+	if sm.environment != "" {
+		return fmt.Sprintf("manman-sgc-%s-%d-%s", sm.environment, sgcID, volumeName)
+	}
 	return fmt.Sprintf("manman-sgc-%d-%s", sgcID, volumeName)
 }
 
