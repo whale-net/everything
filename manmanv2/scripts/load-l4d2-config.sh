@@ -259,8 +259,6 @@ if [[ -z "${config_id}" ]]; then
     "RCON_PASSWORD": "changeme",
     "LAN": "false"
   },
-  "files": [],
-  "parameters": [],
   "entrypoint": [],
   "command": []
 }
@@ -362,8 +360,7 @@ if [[ -z "${sgc_id}" ]]; then
       "host_port": 27015,
       "protocol": "UDP"
     }
-  ],
-  "parameters": {}
+  ]
 }
 EOF
 )"
