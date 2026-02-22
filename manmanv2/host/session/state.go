@@ -19,6 +19,7 @@ type State struct {
 	LogReader       io.ReadCloser               // Docker logs API stream for stdout/stderr
 	AttachResp      *types.HijackedResponse     // stdin attach; nil until command is sent
 	AttachStrategy  string                      // "lazy" | "persistent"
+	IsTTY           bool                        // Whether container uses TTY mode
 	StartedAt       *time.Time
 	StoppedAt       *time.Time
 	ExitCode        *int

@@ -84,6 +84,7 @@ func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID 
 				LogReader:       logReader,
 				AttachResp:      nil, // Will attach lazily when command is sent
 				AttachStrategy:  "lazy",
+				IsTTY:           true, // Always use TTY mode
 				NetworkName:     networkName,
 				Status:          manman.SessionStatusRunning,
 			}

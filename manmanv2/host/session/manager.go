@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -326,6 +327,7 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	}
 	state.LogReader = logReader
 	state.AttachStrategy = "lazy" // Default to lazy attach
+	state.IsTTY = true             // Always use TTY mode
 
 	// 5. Start log reader goroutine
 	slog.Debug("spawning log reader", "session_id", sessionID)
@@ -556,15 +558,20 @@ func (sm *SessionManager) cleanupSession(ctx context.Context, state *State) {
 
 // startOutputReader spawns a goroutine that reads the Docker multiplexed stream
 func (sm *SessionManager) startLogReader(state *State) {
-	sm.startStreamReader(state, state.LogReader)
+	sm.startStreamReaderWithFormat(state, state.LogReader, state.IsTTY)
 }
 
 func (sm *SessionManager) startOutputReader(state *State) {
-	sm.startStreamReader(state, state.AttachResp.Reader)
+	sm.startStreamReaderWithFormat(state, state.AttachResp.Reader, state.IsTTY)
 }
 
 // startStreamReader reads from a Docker multiplexed stream and publishes logs to RabbitMQ
 func (sm *SessionManager) startStreamReader(state *State, reader io.Reader) {
+	sm.startStreamReaderWithFormat(state, reader, false) // Default: multiplexed format
+}
+
+// startStreamReaderWithFormat reads from a Docker stream (multiplexed or TTY) and publishes logs to RabbitMQ
+func (sm *SessionManager) startStreamReaderWithFormat(state *State, reader io.Reader, isTTY bool) {
 	go func() {
 		// Buffer for batching log messages
 		const bufferSize = 50
@@ -587,35 +594,53 @@ func (sm *SessionManager) startStreamReader(state *State, reader io.Reader) {
 		// Start a separate goroutine to read from Docker stream
 		go func() {
 			defer close(logChan)
-			for {
-				// Read 8-byte header: [streamType, 0, 0, 0, size(4 bytes big-endian)]
-				header := make([]byte, 8)
-				if _, err := io.ReadFull(reader, header); err != nil {
-					// EOF or closed — container exited or stream closed
-					return
+			
+			if isTTY {
+				// TTY mode: raw text, line-by-line
+				scanner := bufio.NewScanner(reader)
+				for scanner.Scan() {
+					message := scanner.Text()
+					select {
+					case logChan <- struct {
+						message string
+						source  string
+					}{message, "stdout"}: // TTY doesn't distinguish stdout/stderr
+					default:
+						slog.Warn("log channel full, dropping message", "session_id", state.SessionID)
+					}
 				}
-				size := binary.BigEndian.Uint32(header[4:8])
-				data := make([]byte, size)
-				if _, err := io.ReadFull(reader, data); err != nil {
-					return
-				}
+			} else {
+				// Multiplexed mode: 8-byte headers
+				for {
+					// Read 8-byte header: [streamType, 0, 0, 0, size(4 bytes big-endian)]
+					header := make([]byte, 8)
+					if _, err := io.ReadFull(reader, header); err != nil {
+						// EOF or closed — container exited or stream closed
+						return
+					}
+					size := binary.BigEndian.Uint32(header[4:8])
+					data := make([]byte, size)
+					if _, err := io.ReadFull(reader, data); err != nil {
+						return
+					}
 
-				message := string(data)
-				var source string
-				if header[0] == 2 {
-					source = "stderr"
-				} else {
-					source = "stdout"
-				}
+					message := string(data)
+					var source string
+					if header[0] == 2 {
+						source = "stderr"
+					} else {
+						source = "stdout"
+					}
 
-				// Game server output is published to RMQ only, not to host logs
-				select {
-				case logChan <- struct {
-					message string
-					source  string
-				}{message, source}:
-				default:
-					slog.Warn("log channel full, dropping message", "session_id", state.SessionID)
+					// Game server output is published to RMQ only, not to host logs
+					select {
+					case logChan <- struct {
+						message string
+						source  string
+					}{message, source}:
+					default:
+						slog.Warn("log channel full, dropping message", "session_id", state.SessionID)
+					}
 				}
 			}
 		}()
