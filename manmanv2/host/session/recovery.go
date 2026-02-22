@@ -56,7 +56,9 @@ func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID 
 		sessionID, sgcID, err := extractIDsFromLabels(status.Labels)
 		if err != nil {
 			slog.Warn("could not extract IDs from game container, removing", "container_id", game.ID, "error", err)
-			_ = sm.dockerClient.RemoveContainer(ctx, game.ID, true)
+			if err := sm.dockerClient.RemoveContainer(ctx, game.ID, true); err != nil {
+				slog.Warn("failed to remove unlabeled container", "container_id", game.ID, "error", err)
+			}
 			continue
 		}
 
@@ -71,8 +73,12 @@ func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID 
 			attachResp, err := sm.dockerClient.AttachToContainer(ctx, game.ID)
 			if err != nil {
 				slog.Warn("failed to attach to running container, removing", "session_id", sessionID, "container_id", game.ID, "error", err)
-				_ = sm.dockerClient.StopContainer(ctx, game.ID, nil)
-				_ = sm.dockerClient.RemoveContainer(ctx, game.ID, true)
+				if stopErr := sm.dockerClient.StopContainer(ctx, game.ID, nil); stopErr != nil {
+					slog.Warn("failed to stop container during recovery", "container_id", game.ID, "error", stopErr)
+				}
+				if rmErr := sm.dockerClient.RemoveContainer(ctx, game.ID, true); rmErr != nil {
+					slog.Warn("failed to remove container during recovery", "container_id", game.ID, "error", rmErr)
+				}
 				continue
 			}
 
@@ -92,7 +98,9 @@ func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID 
 		} else {
 			// Not running — nothing to recover, remove it
 			slog.Info("game container not running, removing", "session_id", sessionID, "sgc_id", sgcID)
-			_ = sm.dockerClient.RemoveContainer(ctx, game.ID, true)
+			if err := sm.dockerClient.RemoveContainer(ctx, game.ID, true); err != nil {
+				slog.Warn("failed to remove stopped container during recovery", "session_id", sessionID, "container_id", game.ID, "error", err)
+			}
 		}
 	}
 
@@ -125,10 +133,53 @@ func extractIDsFromLabels(labels map[string]string) (sessionID int64, sgcID int6
 	return sessionID, sgcID, nil
 }
 
-// cleanupOrphanedNetworks removes networks that don't have any containers
+// cleanupOrphanedNetworks removes networks whose session_id is not tracked in state.
+// Called during recovery (startup) to handle networks orphaned by crashes.
 func (sm *SessionManager) cleanupOrphanedNetworks(ctx context.Context, serverID int64) {
-	// Note: Docker client may not support filtering networks by labels
-	// This is a placeholder - implementing network cleanup requires
-	// listing all networks and checking container membership
-	slog.Debug("TODO: implement network cleanup", "server_id", serverID)
+	networkFilters := map[string]string{
+		"manman.type":      "network",
+		"manman.server_id": fmt.Sprintf("%d", serverID),
+	}
+	if sm.environment != "" {
+		networkFilters["manman.environment"] = sm.environment
+	}
+
+	networks, err := sm.dockerClient.ListNetworks(ctx, networkFilters)
+	if err != nil {
+		slog.Error("failed to list networks for orphan cleanup", "server_id", serverID, "error", err)
+		return
+	}
+
+	activeSessionIDs := sm.stateManager.GetActiveSessionIDs()
+
+	for _, net := range networks {
+		// Environment filtering (same logic as container cleanup)
+		if sm.environment != "" {
+			if env, ok := net.Labels["manman.environment"]; !ok || env != sm.environment {
+				continue
+			}
+		} else {
+			if env, ok := net.Labels["manman.environment"]; ok && env != "" {
+				continue
+			}
+		}
+
+		sessionIDStr, ok := net.Labels["manman.session_id"]
+		if !ok {
+			continue
+		}
+		sessionID, err := strconv.ParseInt(sessionIDStr, 10, 64)
+		if err != nil {
+			continue
+		}
+
+		if activeSessionIDs[sessionID] {
+			continue
+		}
+
+		slog.Info("removing orphaned network", "network_id", net.ID, "network_name", net.Name, "session_id", sessionID)
+		if err := sm.dockerClient.RemoveNetwork(ctx, net.ID); err != nil {
+			slog.Warn("failed to remove orphaned network", "network_id", net.ID, "network_name", net.Name, "error", err)
+		}
+	}
 }

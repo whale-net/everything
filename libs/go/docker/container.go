@@ -298,6 +298,41 @@ func (c *Client) RemoveNetwork(ctx context.Context, networkID string) error {
 	return c.cli.NetworkRemove(ctx, networkID)
 }
 
+// NetworkInfo represents basic information about a Docker network
+type NetworkInfo struct {
+	ID        string
+	Name      string
+	Labels    map[string]string
+	CreatedAt time.Time
+}
+
+// ListNetworks lists networks matching the given label filters
+func (c *Client) ListNetworks(ctx context.Context, labelFilters map[string]string) ([]NetworkInfo, error) {
+	filterArgs := filters.NewArgs()
+	for key, value := range labelFilters {
+		filterArgs.Add("label", fmt.Sprintf("%s=%s", key, value))
+	}
+
+	networks, err := c.cli.NetworkList(ctx, network.ListOptions{
+		Filters: filterArgs,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list networks: %w", err)
+	}
+
+	result := make([]NetworkInfo, 0, len(networks))
+	for _, n := range networks {
+		result = append(result, NetworkInfo{
+			ID:        n.ID,
+			Name:      n.Name,
+			Labels:    n.Labels,
+			CreatedAt: n.Created,
+		})
+	}
+
+	return result, nil
+}
+
 // GetContainerLogs returns the logs from a container
 func (c *Client) GetContainerLogs(ctx context.Context, containerID string, follow bool, tail string) (io.ReadCloser, error) {
 	options := container.LogsOptions{

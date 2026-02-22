@@ -374,12 +374,16 @@ func (sm *SessionManager) StopSession(ctx context.Context, sessionID int64, forc
 		}
 
 		// 4. Remove game container
-		_ = sm.dockerClient.RemoveContainer(ctx, state.GameContainerID, true)
+		if err := sm.dockerClient.RemoveContainer(ctx, state.GameContainerID, true); err != nil {
+			slog.Warn("failed to remove container during stop", "session_id", sessionID, "container_id", state.GameContainerID, "error", err)
+		}
 	}
 
 	// 5. Remove network
 	if state.NetworkID != "" {
-		_ = sm.dockerClient.RemoveNetwork(ctx, state.NetworkID)
+		if err := sm.dockerClient.RemoveNetwork(ctx, state.NetworkID); err != nil {
+			slog.Warn("failed to remove network during stop", "session_id", sessionID, "network_id", state.NetworkID, "error", err)
+		}
 	}
 
 	now := time.Now()
@@ -520,11 +524,15 @@ func (sm *SessionManager) cleanupSession(ctx context.Context, state *State) {
 	}
 
 	if state.GameContainerID != "" {
-		_ = sm.dockerClient.RemoveContainer(ctx, state.GameContainerID, true)
+		if err := sm.dockerClient.RemoveContainer(ctx, state.GameContainerID, true); err != nil {
+			slog.Warn("failed to remove container during cleanup", "session_id", state.SessionID, "container_id", state.GameContainerID, "error", err)
+		}
 	}
 
 	if state.NetworkID != "" {
-		_ = sm.dockerClient.RemoveNetwork(ctx, state.NetworkID)
+		if err := sm.dockerClient.RemoveNetwork(ctx, state.NetworkID); err != nil {
+			slog.Warn("failed to remove network during cleanup", "session_id", state.SessionID, "network_id", state.NetworkID, "error", err)
+		}
 	}
 }
 
@@ -700,6 +708,13 @@ func (sm *SessionManager) handleContainerExit(state *State) {
 		slog.Warn("failed to remove crashed container", "session_id", state.SessionID, "error", err)
 	}
 
+	// Clean up the network
+	if state.NetworkID != "" {
+		if err := sm.dockerClient.RemoveNetwork(ctx, state.NetworkID); err != nil {
+			slog.Warn("failed to remove network after crash", "session_id", state.SessionID, "network_id", state.NetworkID, "error", err)
+		}
+	}
+
 	// Remove session from state manager to allow new sessions for this SGC
 	sm.stateManager.RemoveSession(state.SessionID)
 	slog.Info("removed session from state manager after crash", "session_id", state.SessionID)
@@ -777,9 +792,67 @@ func (sm *SessionManager) CleanupOrphans(ctx context.Context, serverID int64) er
 
 		slog.Info("cleaning up orphaned game container", "container_id", game.ID, "sgc_id", sgcID, "age", age)
 		if status.Running {
-			_ = sm.dockerClient.StopContainer(ctx, game.ID, nil)
+			if err := sm.dockerClient.StopContainer(ctx, game.ID, nil); err != nil {
+				slog.Warn("failed to stop orphaned container", "container_id", game.ID, "error", err)
+			}
 		}
-		_ = sm.dockerClient.RemoveContainer(ctx, game.ID, true)
+		if err := sm.dockerClient.RemoveContainer(ctx, game.ID, true); err != nil {
+			slog.Warn("failed to remove orphaned container", "container_id", game.ID, "error", err)
+		}
+	}
+
+	// Clean up orphaned networks
+	networkFilters := map[string]string{
+		"manman.type":      "network",
+		"manman.server_id": fmt.Sprintf("%d", serverID),
+	}
+	if sm.environment != "" {
+		networkFilters["manman.environment"] = sm.environment
+	}
+
+	networks, err := sm.dockerClient.ListNetworks(ctx, networkFilters)
+	if err != nil {
+		slog.Error("failed to list networks for orphan cleanup", "server_id", serverID, "error", err)
+		// Don't fail the whole cleanup if network listing fails
+		return nil
+	}
+
+	activeSessionIDs := sm.stateManager.GetActiveSessionIDs()
+
+	for _, net := range networks {
+		if sm.environment != "" {
+			if env, ok := net.Labels["manman.environment"]; !ok || env != sm.environment {
+				continue
+			}
+		} else {
+			if env, ok := net.Labels["manman.environment"]; ok && env != "" {
+				continue
+			}
+		}
+
+		sessionIDStr, ok := net.Labels["manman.session_id"]
+		if !ok {
+			continue
+		}
+		sessionID, err := strconv.ParseInt(sessionIDStr, 10, 64)
+		if err != nil {
+			continue
+		}
+
+		if activeSessionIDs[sessionID] {
+			continue
+		}
+
+		// Apply grace period using Docker's network creation time
+		networkAge := now.Sub(net.CreatedAt)
+		if networkAge < gracePeriod {
+			continue
+		}
+
+		slog.Info("cleaning up orphaned network", "network_id", net.ID, "network_name", net.Name, "session_id", sessionID, "age", networkAge)
+		if err := sm.dockerClient.RemoveNetwork(ctx, net.ID); err != nil {
+			slog.Warn("failed to remove orphaned network", "network_id", net.ID, "network_name", net.Name, "error", err)
+		}
 	}
 
 	slog.Info("orphan cleanup completed")
