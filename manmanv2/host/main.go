@@ -235,7 +235,11 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 	}
 
 	var command []string
-	if cmd.GameConfig.ArgsTemplate != "" {
+	if len(cmd.GameConfig.Command) > 0 {
+		// Use command array directly (for passing args to entrypoint)
+		command = cmd.GameConfig.Command
+	} else if cmd.GameConfig.ArgsTemplate != "" {
+		// Fallback to args_template wrapped in shell
 		command = []string{"/bin/sh", "-c", cmd.GameConfig.ArgsTemplate}
 	}
 
