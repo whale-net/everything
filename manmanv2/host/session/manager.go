@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -314,21 +315,23 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	}
 	slog.Info("container started", "session_id", sessionID, "container_id", containerID)
 
-	// 4. Attach to container for stdin/stdout
-	slog.Info("attaching to container", "session_id", sessionID)
-	attachResp, err := sm.dockerClient.AttachToContainer(ctx, containerID)
+	// 4. Stream logs using Docker logs API (doesn't interfere with stdin during startup)
+	slog.Info("starting log stream", "session_id", sessionID)
+	logReader, err := sm.dockerClient.GetContainerLogs(ctx, containerID, true, "all")
 	if err != nil {
-		slog.Error("failed to attach to container", "session_id", sessionID, "error", err)
+		slog.Error("failed to get container logs", "session_id", sessionID, "error", err)
 		sm.cleanupSession(ctx, state)
 		state.UpdateStatus(manman.SessionStatusCrashed)
 		sm.stateManager.RemoveSession(sessionID)
-		return fmt.Errorf("failed to attach to game container: %w", err)
+		return fmt.Errorf("failed to get container logs: %w", err)
 	}
-	state.AttachResp = &attachResp
+	state.LogReader = logReader
+	state.AttachStrategy = "lazy" // Default to lazy attach
+	state.IsTTY = true             // Always use TTY mode
 
-	// 5. Start output reader goroutine
-	slog.Debug("spawning output reader", "session_id", sessionID)
-	sm.startOutputReader(state)
+	// 5. Start log reader goroutine
+	slog.Debug("spawning log reader", "session_id", sessionID)
+	sm.startLogReader(state)
 
 	now := time.Now()
 	state.StartedAt = &now
@@ -404,16 +407,36 @@ func (sm *SessionManager) SendInput(ctx context.Context, sessionID int64, input 
 	if !ok {
 		return fmt.Errorf("session %d not found", sessionID)
 	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	// Lazy attach: attach only when sending command
 	if state.AttachResp == nil {
-		return fmt.Errorf("session %d: no active stdin connection", sessionID)
+		slog.Debug("attaching to container for command", "session_id", sessionID)
+		attachResp, err := sm.dockerClient.AttachToContainer(ctx, state.GameContainerID)
+		if err != nil {
+			return fmt.Errorf("failed to attach to container: %w", err)
+		}
+		state.AttachResp = &attachResp
 	}
+
+	// Write command to stdin
 	_, err := state.AttachResp.Conn.Write(input)
 	if err != nil {
 		slog.Error("failed to write stdin", "session_id", sessionID, "error", err)
-	} else {
-		slog.Debug("sent stdin input", "session_id", sessionID, "bytes", len(input))
+		return err
 	}
-	return err
+	slog.Debug("sent stdin input", "session_id", sessionID, "bytes", len(input))
+
+	// For lazy strategy, detach after sending command
+	if state.AttachStrategy == "lazy" {
+		state.AttachResp.Close()
+		state.AttachResp = nil
+		slog.Debug("detached after command", "session_id", sessionID)
+	}
+
+	return nil
 }
 
 // createGameContainer creates the game container directly
@@ -514,6 +537,11 @@ func isNameConflictError(err error) bool {
 
 // cleanupSession cleans up containers and network for a session
 func (sm *SessionManager) cleanupSession(ctx context.Context, state *State) {
+	if state.LogReader != nil {
+		state.LogReader.Close()
+		state.LogReader = nil
+	}
+
 	if state.AttachResp != nil {
 		state.AttachResp.Close()
 		state.AttachResp = nil
@@ -529,7 +557,21 @@ func (sm *SessionManager) cleanupSession(ctx context.Context, state *State) {
 }
 
 // startOutputReader spawns a goroutine that reads the Docker multiplexed stream
+func (sm *SessionManager) startLogReader(state *State) {
+	sm.startStreamReaderWithFormat(state, state.LogReader, state.IsTTY)
+}
+
 func (sm *SessionManager) startOutputReader(state *State) {
+	sm.startStreamReaderWithFormat(state, state.AttachResp.Reader, state.IsTTY)
+}
+
+// startStreamReader reads from a Docker multiplexed stream and publishes logs to RabbitMQ
+func (sm *SessionManager) startStreamReader(state *State, reader io.Reader) {
+	sm.startStreamReaderWithFormat(state, reader, false) // Default: multiplexed format
+}
+
+// startStreamReaderWithFormat reads from a Docker stream (multiplexed or TTY) and publishes logs to RabbitMQ
+func (sm *SessionManager) startStreamReaderWithFormat(state *State, reader io.Reader, isTTY bool) {
 	go func() {
 		// Buffer for batching log messages
 		const bufferSize = 50
@@ -552,35 +594,53 @@ func (sm *SessionManager) startOutputReader(state *State) {
 		// Start a separate goroutine to read from Docker stream
 		go func() {
 			defer close(logChan)
-			for {
-				// Read 8-byte header: [streamType, 0, 0, 0, size(4 bytes big-endian)]
-				header := make([]byte, 8)
-				if _, err := io.ReadFull(state.AttachResp.Reader, header); err != nil {
-					// EOF or closed — container exited or attach was closed
-					return
+			
+			if isTTY {
+				// TTY mode: raw text, line-by-line
+				scanner := bufio.NewScanner(reader)
+				for scanner.Scan() {
+					message := scanner.Text()
+					select {
+					case logChan <- struct {
+						message string
+						source  string
+					}{message, "stdout"}: // TTY doesn't distinguish stdout/stderr
+					default:
+						slog.Warn("log channel full, dropping message", "session_id", state.SessionID)
+					}
 				}
-				size := binary.BigEndian.Uint32(header[4:8])
-				data := make([]byte, size)
-				if _, err := io.ReadFull(state.AttachResp.Reader, data); err != nil {
-					return
-				}
+			} else {
+				// Multiplexed mode: 8-byte headers
+				for {
+					// Read 8-byte header: [streamType, 0, 0, 0, size(4 bytes big-endian)]
+					header := make([]byte, 8)
+					if _, err := io.ReadFull(reader, header); err != nil {
+						// EOF or closed — container exited or stream closed
+						return
+					}
+					size := binary.BigEndian.Uint32(header[4:8])
+					data := make([]byte, size)
+					if _, err := io.ReadFull(reader, data); err != nil {
+						return
+					}
 
-				message := string(data)
-				var source string
-				if header[0] == 2 {
-					source = "stderr"
-				} else {
-					source = "stdout"
-				}
+					message := string(data)
+					var source string
+					if header[0] == 2 {
+						source = "stderr"
+					} else {
+						source = "stdout"
+					}
 
-				// Game server output is published to RMQ only, not to host logs
-				select {
-				case logChan <- struct {
-					message string
-					source  string
-				}{message, source}:
-				default:
-					slog.Warn("log channel full, dropping message", "session_id", state.SessionID)
+					// Game server output is published to RMQ only, not to host logs
+					select {
+					case logChan <- struct {
+						message string
+						source  string
+					}{message, source}:
+					default:
+						slog.Warn("log channel full, dropping message", "session_id", state.SessionID)
+					}
 				}
 			}
 		}()
