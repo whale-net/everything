@@ -20,15 +20,16 @@ go_library(
         "@io_opentelemetry_go_otel_log//global",
         "@io_opentelemetry_go_otel_metric//:metric",
         "@io_opentelemetry_go_otel_sdk//resource",
+        "@io_opentelemetry_go_otel_sdk//trace",
         "@io_opentelemetry_go_otel_sdk_log//:log",
         "@io_opentelemetry_go_otel_sdk_metric//:metric",
-        "@io_opentelemetry_go_otel_sdk//trace",
         "@io_opentelemetry_go_otel_trace//:trace",
     ],
 )
 
 go_test(
     name = "logging_test",
+    size = "small",
     srcs = [
         "logging_test.go",
         "metrics_test.go",
@@ -46,5 +47,4 @@ go_test(
         "@io_opentelemetry_go_otel_sdk_metric//:metric",
         "@io_opentelemetry_go_otel_sdk_metric//metricdata",
     ],
-    size = "small",
 )

@@ -133,7 +133,10 @@ func (h *BackupHandler) DeleteBackup(ctx context.Context, req *pb.DeleteBackupRe
 	}
 
 	// Extract S3 key from URL (format: s3://bucket/key)
-	s3Key, err := extractS3Key(backup.S3URL)
+	if backup.S3URL == nil {
+		return nil, status.Error(codes.FailedPrecondition, "backup has no S3 URL")
+	}
+	s3Key, err := extractS3Key(*backup.S3URL)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "invalid S3 URL: %v", err)
 	}
@@ -156,11 +159,15 @@ func backupToProto(b *manman.Backup) *pb.Backup {
 		BackupId:           b.BackupID,
 		SessionId:          b.SessionID,
 		ServerGameConfigId: b.ServerGameConfigID,
-		S3Url:              b.S3URL,
-		SizeBytes:          b.SizeBytes,
 		CreatedAt:          b.CreatedAt.Unix(),
 	}
 
+	if b.S3URL != nil {
+		pbBackup.S3Url = *b.S3URL
+	}
+	if b.SizeBytes != nil {
+		pbBackup.SizeBytes = *b.SizeBytes
+	}
 	if b.Description != nil {
 		pbBackup.Description = *b.Description
 	}

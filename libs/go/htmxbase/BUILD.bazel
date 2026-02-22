@@ -2,7 +2,10 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "htmxbase",
-    srcs = ["layout.go"],
+    srcs = [
+        "example_integration.go",
+        "layout.go",
+    ],
     importpath = "github.com/whale-net/everything/libs/go/htmxbase",
     visibility = ["//visibility:public"],
 )

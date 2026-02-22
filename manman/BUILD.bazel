@@ -1,4 +1,3 @@
-load("@rules_go//go:def.bzl", "go_library", "go_test")
 load("@rules_python//python:defs.bzl", "py_library")
 load("//tools/bazel:release.bzl", "release_app", "release_helm_chart")
 load("//tools/openapi:openapi_client.bzl", "openapi_client")

@@ -18,9 +18,7 @@ go_test(
     srcs = ["orchestrator_test.go"],
     embed = [":workshop"],
     deps = [
-        "//libs/go/docker",
         "//manmanv2/host/rmq",
-        "//manmanv2/protos:manmanpb",
         "@com_github_stretchr_testify//assert",
     ],
 )

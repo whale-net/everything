@@ -257,8 +257,6 @@ func buildVolumeHostPath(hostSubpath *string) string {
 	return ""
 }
 
-func strPtr(s string) *string { return &s }
-
 func renderActionTemplate(tmplStr string, inputs map[string]string) (string, error) {
 	tmpl, err := template.New("action").Parse(tmplStr)
 	if err != nil {
