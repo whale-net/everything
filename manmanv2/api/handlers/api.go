@@ -852,6 +852,9 @@ func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameCon
 		if vol.HostSubpath != nil {
 			volMsg["host_subpath"] = *vol.HostSubpath
 		}
+		if vol.VolumeType != "" {
+			volMsg["volume_type"] = vol.VolumeType
+		}
 		if vol.ReadOnly {
 			volMsg["options"] = map[string]interface{}{"read_only": true}
 		}
@@ -1239,6 +1242,11 @@ func NewGameConfigVolumeHandler(repo repository.GameConfigVolumeRepository) *Gam
 }
 
 func (h *GameConfigVolumeHandler) CreateGameConfigVolume(ctx context.Context, req *pb.CreateGameConfigVolumeRequest) (*pb.CreateGameConfigVolumeResponse, error) {
+	volumeType := req.VolumeType
+	if volumeType == "" {
+		volumeType = "bind"
+	}
+	
 	volume := &manman.GameConfigVolume{
 		ConfigID:      req.ConfigId,
 		Name:          req.Name,
@@ -1246,6 +1254,7 @@ func (h *GameConfigVolumeHandler) CreateGameConfigVolume(ctx context.Context, re
 		ContainerPath: req.ContainerPath,
 		HostSubpath:   stringPtr(req.HostSubpath),
 		ReadOnly:      req.ReadOnly,
+		VolumeType:    volumeType,
 	}
 
 	created, err := h.repo.Create(ctx, volume)
@@ -1296,6 +1305,9 @@ func (h *GameConfigVolumeHandler) UpdateGameConfigVolume(ctx context.Context, re
 	volume.ContainerPath = req.ContainerPath
 	volume.HostSubpath = stringPtr(req.HostSubpath)
 	volume.ReadOnly = req.ReadOnly
+	if req.VolumeType != "" {
+		volume.VolumeType = req.VolumeType
+	}
 
 	if err := h.repo.Update(ctx, volume); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update game config volume: %v", err)
@@ -1321,6 +1333,7 @@ func gameConfigVolumeToProto(v *manman.GameConfigVolume) *pb.GameConfigVolume {
 		Name:          v.Name,
 		ContainerPath: v.ContainerPath,
 		ReadOnly:      v.ReadOnly,
+		VolumeType:    v.VolumeType,
 	}
 
 	if v.Description != nil {

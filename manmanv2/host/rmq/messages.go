@@ -12,6 +12,7 @@ type VolumeMountMessage struct {
 	Name          string            `json:"name"`
 	ContainerPath string            `json:"container_path"`
 	HostSubpath   string            `json:"host_subpath,omitempty"`
+	VolumeType    string            `json:"volume_type,omitempty"`
 	Options       map[string]string `json:"options,omitempty"`
 }
 

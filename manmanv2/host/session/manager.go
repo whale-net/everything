@@ -89,6 +89,7 @@ type VolumeMount struct {
 	Name          string
 	ContainerPath string
 	HostSubpath   string
+	VolumeType    string
 	Options       map[string]string
 }
 
@@ -468,22 +469,29 @@ func (sm *SessionManager) createGameContainer(ctx context.Context, state *State,
 	// - chown to specific UID (e.g., 1000): Doesn't work for multi-container scenarios
 	// - User namespaces: Adds complexity and may not be compatible with all game server images
 	for _, vol := range cmd.Volumes {
-		subDir := vol.HostSubpath
-		if subDir == "" {
-			// Use volume name as default subdirectory to avoid clashing
-			subDir = vol.Name
-		}
+		var mountStr string
+		
+		if vol.VolumeType == "named" {
+			// Use Docker named volume (auto-initialized with container's files on first use)
+			volumeName := sm.getNamedVolumeName(state.SGCID, vol.Name)
+			mountStr = fmt.Sprintf("%s:%s", volumeName, vol.ContainerPath)
+			slog.Info("using named volume", "volume", volumeName, "container_path", vol.ContainerPath)
+		} else {
+			// Use bind mount (default behavior)
+			subDir := vol.HostSubpath
+			if subDir == "" {
+				subDir = vol.Name
+			}
 
-		// Create directory at internal path (mounted from host)
-		internalPath := filepath.Join(sgcInternalDir, strings.TrimPrefix(subDir, "/"))
-		if err := os.MkdirAll(internalPath, 0777); err != nil {
-			return "", fmt.Errorf("failed to create volume directory %s: %w", internalPath, err)
-		}
+			internalPath := filepath.Join(sgcInternalDir, strings.TrimPrefix(subDir, "/"))
+			if err := os.MkdirAll(internalPath, 0777); err != nil {
+				return "", fmt.Errorf("failed to create volume directory %s: %w", internalPath, err)
+			}
 
-		// Tell Docker to bind mount from host path
-		hostPath := filepath.Join(sgcHostDir, strings.TrimPrefix(subDir, "/"))
-		mountStr := fmt.Sprintf("%s:%s", hostPath, vol.ContainerPath)
-		// TODO: handle options (readonly etc)
+			hostPath := filepath.Join(sgcHostDir, strings.TrimPrefix(subDir, "/"))
+			mountStr = fmt.Sprintf("%s:%s", hostPath, vol.ContainerPath)
+		}
+		
 		volumes = append(volumes, mountStr)
 	}
 
@@ -508,6 +516,10 @@ func (sm *SessionManager) createGameContainer(ctx context.Context, state *State,
 	}
 
 	return sm.dockerClient.CreateContainer(ctx, config)
+}
+
+func (sm *SessionManager) getNamedVolumeName(sgcID int64, volumeName string) string {
+	return fmt.Sprintf("manman-sgc-%d-%s", sgcID, volumeName)
 }
 
 // handleNameConflict handles an idempotent start when a container with the same name already exists

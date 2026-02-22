@@ -259,6 +259,7 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 			Name:          v.Name,
 			ContainerPath: v.ContainerPath,
 			HostSubpath:   v.HostSubpath,
+			VolumeType:    v.VolumeType,
 			Options:       v.Options,
 		})
 	}
