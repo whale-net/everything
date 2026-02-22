@@ -249,6 +249,8 @@ func (app *App) handleSGCRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	app.handleSGCDetail(w, r)
 }
+
+func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, `{"status":"ok"}`)
