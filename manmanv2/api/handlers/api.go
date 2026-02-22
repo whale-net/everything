@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"log"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -825,13 +826,20 @@ func (h *SessionHandler) SendInput(ctx context.Context, req *pb.SendInputRequest
 // buildStartSessionCommand converts database models to RabbitMQ message format
 func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameConfig, gc *manman.GameConfig, force bool, volumes []*manman.GameConfigVolume) map[string]interface{} {
 	// Build game config message
+	commandArray := jsonbToStringArray(gc.Command)
+	slog.Info("building start session command", 
+		"session_id", session.SessionID,
+		"config_id", gc.ConfigID,
+		"command_from_db", gc.Command,
+		"command_array", commandArray)
+	
 	gameConfig := map[string]interface{}{
 		"config_id":     gc.ConfigID,
 		"image":         gc.Image,
 		"args_template": gc.ArgsTemplate,
 		"env_template": jsonbToMap(gc.EnvTemplate),
 		"entrypoint":    jsonbToStringArray(gc.Entrypoint),
-		"command":       jsonbToStringArray(gc.Command),
+		"command":       commandArray,
 	}
 
 	// Add volume mounts from game_config_volumes

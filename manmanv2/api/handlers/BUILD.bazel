@@ -37,6 +37,7 @@ go_library(
 go_test(
     name = "handlers_test",
     srcs = [
+        "converters_test.go",
         "registration_test.go",
         "session_test.go",
         "workshop_test.go",
