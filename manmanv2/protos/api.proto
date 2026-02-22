@@ -614,6 +614,7 @@ message CreateGameConfigVolumeRequest {
   string container_path = 4;
   string host_subpath = 5;
   bool read_only = 6;
+  string volume_type = 7;
 }
 
 message CreateGameConfigVolumeResponse {
@@ -643,6 +644,7 @@ message UpdateGameConfigVolumeRequest {
   string container_path = 4;
   string host_subpath = 5;
   bool read_only = 6;
+  string volume_type = 7;
 }
 
 message UpdateGameConfigVolumeResponse {

@@ -259,8 +259,6 @@ if [[ -z "${config_id}" ]]; then
     "RCON_PASSWORD": "changeme",
     "LAN": "false"
   },
-  "files": [],
-  "parameters": [],
   "entrypoint": [],
   "command": []
 }
@@ -278,7 +276,8 @@ create_volume_payload="$(cat <<EOF
   "description": "Persistent L4D2 configuration volume mounted to /cfg in container",
   "container_path": "/cfg",
   "host_subpath": "l4d2-cfg",
-  "read_only": false
+  "read_only": false,
+  "volume_type": "named"
 }
 EOF
 )"
@@ -286,7 +285,7 @@ volume_result="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateGame
 if echo "${volume_result}" | grep -q "duplicate key\|already exists"; then
   echo "  Volume 'l4d2-cfg' already exists for this config (skipped)"
 elif echo "${volume_result}" | grep -q "volume"; then
-  echo "  ✔ Created volume 'l4d2-cfg' for GameConfig"
+  echo "  ✔ Created volume 'l4d2-cfg' for GameConfig (type: named)"
 else
   echo "  Warning: Unexpected response from volume creation"
 fi
@@ -299,7 +298,8 @@ create_addons_volume_payload="$(cat <<EOF
   "description": "Persistent L4D2 addons/mods volume mounted to /addons in container",
   "container_path": "/addons",
   "host_subpath": "l4d2-addons",
-  "read_only": false
+  "read_only": false,
+  "volume_type": "bind"
 }
 EOF
 )"
@@ -307,7 +307,7 @@ addons_volume_result="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/Cre
 if echo "${addons_volume_result}" | grep -q "duplicate key\|already exists"; then
   echo "  Volume 'l4d2-addons' already exists for this config (skipped)"
 elif echo "${addons_volume_result}" | grep -q "volume"; then
-  echo "  ✔ Created volume 'l4d2-addons' for GameConfig"
+  echo "  ✔ Created volume 'l4d2-addons' for GameConfig (type: bind)"
 else
   echo "  Warning: Unexpected response from addons volume creation"
 fi
@@ -360,8 +360,7 @@ if [[ -z "${sgc_id}" ]]; then
       "host_port": 27015,
       "protocol": "UDP"
     }
-  ],
-  "parameters": {}
+  ]
 }
 EOF
 )"

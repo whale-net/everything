@@ -104,6 +104,7 @@ message GameConfigVolume {
   string container_path = 5;
   string host_subpath = 6;
   bool read_only = 7;
+  string volume_type = 8;
 }
 
 // ServerGameConfig represents a game configuration deployed on a specific server
