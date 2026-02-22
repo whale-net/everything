@@ -870,3 +870,8 @@ func (sm *SessionManager) GetSessionStats() SessionStats {
 func (sm *SessionManager) GetSessionState(sessionID int64) (*State, bool) {
 	return sm.stateManager.GetSession(sessionID)
 }
+
+// GetSessionStateBySGCID retrieves the active session state for a given SGC
+func (sm *SessionManager) GetSessionStateBySGCID(sgcID int64) (*State, bool) {
+	return sm.stateManager.GetSessionBySGCID(sgcID)
+}

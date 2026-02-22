@@ -24,8 +24,10 @@ type SGCDetailPageData struct {
 	LibraryAttachments []*SGCLibraryAttachment
 	Installations      []*manmanpb.WorkshopInstallation
 	// AddonStatusMap maps addon_id -> installation status for quick lookup
-	AddonStatusMap map[int64]*manmanpb.WorkshopInstallation
-	PendingCount   int
+	AddonStatusMap    map[int64]*manmanpb.WorkshopInstallation
+	PendingCount      int
+	BackupConfigs     []*BackupConfigsForVolume // backup configs for trigger buttons
+	RecentBackups     []*manmanpb.Backup        // recent backup history
 }
 
 // SGCLibraryAttachment holds computed library attachment data for display
@@ -129,6 +131,35 @@ func (app *App) handleSGCDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Fetch backup configs per volume (for trigger buttons)
+	var backupConfigsByVolume []*BackupConfigsForVolume
+	if gameConfig != nil {
+		volumes, err := app.grpc.ListGameConfigVolumes(ctx, gameConfig.ConfigId)
+		if err != nil {
+			log.Printf("Warning: failed to fetch volumes for backup configs: %v", err)
+		} else {
+			for _, vol := range volumes {
+				cfgs, err := app.grpc.ListBackupConfigs(ctx, vol.VolumeId)
+				if err != nil {
+					cfgs = []*manmanpb.BackupConfig{}
+				}
+				if len(cfgs) > 0 {
+					backupConfigsByVolume = append(backupConfigsByVolume, &BackupConfigsForVolume{
+						Volume:  vol,
+						Configs: cfgs,
+					})
+				}
+			}
+		}
+	}
+
+	// Fetch recent backups for this SGC
+	recentBackups, err := app.grpc.ListBackups(ctx, sgcID)
+	if err != nil {
+		log.Printf("Warning: failed to list backups for SGC %d: %v", sgcID, err)
+		recentBackups = []*manmanpb.Backup{}
+	}
+
 	data := SGCDetailPageData{
 		Title:              fmt.Sprintf("SGC %d", sgcID),
 		Active:             "sessions",
@@ -141,6 +172,8 @@ func (app *App) handleSGCDetail(w http.ResponseWriter, r *http.Request) {
 		Installations:      installations,
 		AddonStatusMap:     addonStatusMap,
 		PendingCount:       pendingCount,
+		BackupConfigs:      backupConfigsByVolume,
+		RecentBackups:      recentBackups,
 	}
 
 	layoutData, err := app.buildLayoutData(r, data.Title, data.Active, user)

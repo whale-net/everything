@@ -339,15 +339,16 @@ func (app *App) handleGameDelete(w http.ResponseWriter, r *http.Request, gameIDS
 
 // GameConfigDetailPageData holds data for config detail page
 type GameConfigDetailPageData struct {
-	Title       string
-	Active      string
-	User        *htmxauth.UserInfo
-	Game        *manmanpb.Game
-	Config      *manmanpb.GameConfig
-	Servers     []*manmanpb.Server
-	Deployments []ServerGameConfigView
-	DeployError string
-	Volumes     []*manmanpb.GameConfigVolume
+	Title          string
+	Active         string
+	User           *htmxauth.UserInfo
+	Game           *manmanpb.Game
+	Config         *manmanpb.GameConfig
+	Servers        []*manmanpb.Server
+	Deployments    []ServerGameConfigView
+	DeployError    string
+	Volumes        []*manmanpb.GameConfigVolume
+	BackupConfigs  []*BackupConfigsForVolume // backup configs grouped by volume
 }
 
 type ServerGameConfigView struct {
@@ -470,17 +471,32 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 	}
 
 	deployError := strings.TrimSpace(r.URL.Query().Get("deploy_error"))
-	
+
+	// Fetch backup configs per volume
+	var backupConfigsByVolume []*BackupConfigsForVolume
+	for _, vol := range volumes {
+		cfgs, err := app.grpc.ListBackupConfigs(ctx, vol.VolumeId)
+		if err != nil {
+			log.Printf("Warning: failed to fetch backup configs for volume %d: %v", vol.VolumeId, err)
+			cfgs = []*manmanpb.BackupConfig{}
+		}
+		backupConfigsByVolume = append(backupConfigsByVolume, &BackupConfigsForVolume{
+			Volume:  vol,
+			Configs: cfgs,
+		})
+	}
+
 	data := GameConfigDetailPageData{
-		Title:       config.Name + " - " + game.Name,
-		Active:      "games",
-		User:        user,
-		Game:        game,
-		Config:      config,
-		Servers:     servers,
-		Deployments: deployments,
-		DeployError: deployError,
-		Volumes:     volumes,
+		Title:         config.Name + " - " + game.Name,
+		Active:        "games",
+		User:          user,
+		Game:          game,
+		Config:        config,
+		Servers:       servers,
+		Deployments:   deployments,
+		DeployError:   deployError,
+		Volumes:       volumes,
+		BackupConfigs: backupConfigsByVolume,
 	}
 
 	layoutData := LayoutData{

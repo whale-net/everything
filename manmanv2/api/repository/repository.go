@@ -101,6 +101,23 @@ type BackupRepository interface {
 	Get(ctx context.Context, backupID int64) (*manman.Backup, error)
 	List(ctx context.Context, sgcID *int64, sessionID *int64, limit int, offset int) ([]*manman.Backup, error)
 	Delete(ctx context.Context, backupID int64) error
+	UpdateStatus(ctx context.Context, backupID int64, status string, s3URL *string, sizeBytes *int64, errMsg *string) error
+}
+
+// BackupConfigRepository defines operations for BackupConfig entities
+type BackupConfigRepository interface {
+	Create(ctx context.Context, cfg *manman.BackupConfig) (*manman.BackupConfig, error)
+	Get(ctx context.Context, backupConfigID int64) (*manman.BackupConfig, error)
+	List(ctx context.Context, volumeID int64) ([]*manman.BackupConfig, error)
+	Update(ctx context.Context, cfg *manman.BackupConfig) error
+	Delete(ctx context.Context, backupConfigID int64) error
+	// ListDue returns enabled configs whose cadence has elapsed and whose SGC had an active session since last_backup_at
+	ListDue(ctx context.Context, now time.Time) ([]*manman.BackupConfig, error)
+	UpdateLastBackupAt(ctx context.Context, backupConfigID int64, t time.Time) error
+	// Actions
+	AddAction(ctx context.Context, backupConfigID, actionID int64, displayOrder int) error
+	RemoveAction(ctx context.Context, backupConfigID, actionID int64) error
+	ListActions(ctx context.Context, backupConfigID int64) ([]*manman.BackupConfigAction, error)
 }
 
 // ServerPortRepository defines operations for port allocation management
@@ -204,6 +221,7 @@ type Repository struct {
 	ServerCapabilities     ServerCapabilityRepository
 	LogReferences          LogReferenceRepository
 	Backups                BackupRepository
+	BackupConfigs          BackupConfigRepository
 	ServerPorts            ServerPortRepository
 	ConfigurationStrategies ConfigurationStrategyRepository
 	ConfigurationPatches   ConfigurationPatchRepository

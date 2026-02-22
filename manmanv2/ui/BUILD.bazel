@@ -6,6 +6,7 @@ go_library(
     srcs = [
         "grpc_client.go",
         "handlers_actions.go",
+        "handlers_backup.go",
         "handlers_games.go",
         "handlers_home.go",
         "handlers_sessions.go",

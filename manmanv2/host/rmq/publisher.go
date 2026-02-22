@@ -73,3 +73,13 @@ func (p *Publisher) PublishInstallationStatus(ctx context.Context, update *Insta
 		"routing_key", routingKey)
 	return p.publisher.Publish(ctx, "manman", routingKey, update)
 }
+
+// PublishBackupStatus publishes a backup completion/failure status update
+func (p *Publisher) PublishBackupStatus(ctx context.Context, update *BackupStatusUpdate) error {
+	routingKey := fmt.Sprintf("status.backup.%d", update.BackupID)
+	slog.Info("publishing backup status event",
+		"backup_id", update.BackupID,
+		"status", update.Status,
+		"routing_key", routingKey)
+	return p.publisher.Publish(ctx, "manman", routingKey, update)
+}

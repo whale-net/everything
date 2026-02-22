@@ -6,6 +6,7 @@ go_library(
         "action.go",
         "api.go",
         "backup.go",
+        "backup_config.go",
         "command_publisher.go",
         "converters.go",
         "game.go",

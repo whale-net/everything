@@ -33,6 +33,7 @@ type APIServer struct {
 	validationHandler       *ValidationHandler
 	logsHandler             *LogsHandler
 	backupHandler           *BackupHandler
+	backupConfigHandler     *BackupConfigHandler
 	strategyHandler         *ConfigurationStrategyHandler
 	patchHandler            *ConfigurationPatchHandler
 	volumeHandler           *GameConfigVolumeHandler
@@ -65,6 +66,7 @@ func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq
 		validationHandler:       NewValidationHandler(repo.Servers, repo.GameConfigs),
 		logsHandler:             NewLogsHandler(repo.LogReferences, s3Client),
 		backupHandler:           NewBackupHandler(repo.Backups, repo.Sessions, s3Client),
+		backupConfigHandler:     NewBackupConfigHandler(repo.BackupConfigs, repo.Backups, repo.ServerGameConfigs, repo.Sessions, repo.GameConfigVolumes, repo.Servers, repo.Actions.(*postgres.ActionRepository), commandPublisher),
 		strategyHandler:         NewConfigurationStrategyHandler(repo.ConfigurationStrategies),
 		patchHandler:            NewConfigurationPatchHandler(repo.ConfigurationPatches),
 		volumeHandler:           NewGameConfigVolumeHandler(repo.GameConfigVolumes),
@@ -969,6 +971,47 @@ func (s *APIServer) ListBackups(ctx context.Context, req *pb.ListBackupsRequest)
 
 func (s *APIServer) GetBackup(ctx context.Context, req *pb.GetBackupRequest) (*pb.GetBackupResponse, error) {
 	return s.backupHandler.GetBackup(ctx, req)
+}
+
+func (s *APIServer) DeleteBackup(ctx context.Context, req *pb.DeleteBackupRequest) (*pb.DeleteBackupResponse, error) {
+	return s.backupHandler.DeleteBackup(ctx, req)
+}
+
+func (s *APIServer) TriggerBackup(ctx context.Context, req *pb.TriggerBackupRequest) (*pb.TriggerBackupResponse, error) {
+	return s.backupConfigHandler.TriggerBackup(ctx, req)
+}
+
+// BackupConfig RPCs
+func (s *APIServer) CreateBackupConfig(ctx context.Context, req *pb.CreateBackupConfigRequest) (*pb.CreateBackupConfigResponse, error) {
+	return s.backupConfigHandler.CreateBackupConfig(ctx, req)
+}
+
+func (s *APIServer) GetBackupConfig(ctx context.Context, req *pb.GetBackupConfigRequest) (*pb.GetBackupConfigResponse, error) {
+	return s.backupConfigHandler.GetBackupConfig(ctx, req)
+}
+
+func (s *APIServer) ListBackupConfigs(ctx context.Context, req *pb.ListBackupConfigsRequest) (*pb.ListBackupConfigsResponse, error) {
+	return s.backupConfigHandler.ListBackupConfigs(ctx, req)
+}
+
+func (s *APIServer) UpdateBackupConfig(ctx context.Context, req *pb.UpdateBackupConfigRequest) (*pb.UpdateBackupConfigResponse, error) {
+	return s.backupConfigHandler.UpdateBackupConfig(ctx, req)
+}
+
+func (s *APIServer) DeleteBackupConfig(ctx context.Context, req *pb.DeleteBackupConfigRequest) (*pb.DeleteBackupConfigResponse, error) {
+	return s.backupConfigHandler.DeleteBackupConfig(ctx, req)
+}
+
+func (s *APIServer) AddBackupConfigAction(ctx context.Context, req *pb.AddBackupConfigActionRequest) (*pb.AddBackupConfigActionResponse, error) {
+	return s.backupConfigHandler.AddBackupConfigAction(ctx, req)
+}
+
+func (s *APIServer) RemoveBackupConfigAction(ctx context.Context, req *pb.RemoveBackupConfigActionRequest) (*pb.RemoveBackupConfigActionResponse, error) {
+	return s.backupConfigHandler.RemoveBackupConfigAction(ctx, req)
+}
+
+func (s *APIServer) ListBackupConfigActions(ctx context.Context, req *pb.ListBackupConfigActionsRequest) (*pb.ListBackupConfigActionsResponse, error) {
+	return s.backupConfigHandler.ListBackupConfigActions(ctx, req)
 }
 
 // ConfigurationStrategyHandler handles ConfigurationStrategy-related RPCs
