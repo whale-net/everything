@@ -278,6 +278,8 @@ spec:
           value: "{rabbitmq_url}"
         - name: S3_ENDPOINT
           value: "{s3_endpoint}"
+        - name: S3_PUBLIC_ENDPOINT
+          value: "{s3_public_endpoint}"
         - name: S3_ACCESS_KEY
           value: "{s3_access_key}"
         - name: S3_SECRET_KEY
@@ -289,6 +291,7 @@ spec:
         db_url=db_url,
         rabbitmq_url=rabbitmq_url,
         s3_endpoint=s3_endpoint,
+        s3_public_endpoint=os.environ.get('S3_PUBLIC_ENDPOINT', 'http://localhost:9000'),
         s3_access_key=s3_access_key,
         s3_secret_key=s3_secret_key,
         s3_bucket=s3_bucket,
