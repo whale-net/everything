@@ -139,6 +139,8 @@ func run() error {
 		publisher:            rmqPublisher,
 		serverID:             serverID,
 		downloadOrchestrator: downloadOrchestrator,
+		internalDataDir:      session.InternalDataDir,
+		environment:          environment,
 	}
 
 	// Initialize RabbitMQ consumer
@@ -214,10 +216,12 @@ func run() error {
 
 // CommandHandlerImpl implements the CommandHandler interface
 type CommandHandlerImpl struct {
-	sessionManager      *session.SessionManager
-	publisher           *rmq.Publisher
-	serverID            int64
+	sessionManager       *session.SessionManager
+	publisher            *rmq.Publisher
+	serverID             int64
 	downloadOrchestrator *workshop.DownloadOrchestrator
+	internalDataDir      string
+	environment          string
 }
 
 // HandleStartSession handles a start session command
