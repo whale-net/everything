@@ -291,7 +291,7 @@ spec:
         db_url=db_url,
         rabbitmq_url=rabbitmq_url,
         s3_endpoint=s3_endpoint,
-        s3_public_endpoint=os.environ.get('S3_PUBLIC_ENDPOINT', 'http://localhost:9000'),
+        s3_public_endpoint=os.environ.get('S3_PUBLIC_ENDPOINT', 'http://host.docker.internal:9000'),
         s3_access_key=s3_access_key,
         s3_secret_key=s3_secret_key,
         s3_bucket=s3_bucket,
