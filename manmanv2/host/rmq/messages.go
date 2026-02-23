@@ -114,6 +114,7 @@ type BackupCommand struct {
 	VolumeHostPath    string   `json:"volume_host_path"`    // absolute path on host to the volume root
 	BackupPath        string   `json:"backup_path"`         // relative path within volume to archive
 	S3Key             string   `json:"s3_key"`              // pre-computed: backups/{sgc_id}/{config_id}/{backup_id}.tar.gz
+	PresignedURL      string   `json:"presigned_url"`       // pre-signed PUT URL for direct upload
 	PreActionCommands []string `json:"pre_action_commands"` // pre-rendered commands to send to container stdin
 }
 

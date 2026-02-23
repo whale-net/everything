@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -18,6 +19,7 @@ import (
 // Client wraps the AWS S3 client for ManMan operations
 type Client struct {
 	s3Client *s3.Client
+	presign  *s3.PresignClient
 	uploader *manager.Uploader
 	bucket   string
 }
@@ -67,9 +69,11 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 		})
 	}
 
+	s3c := s3.NewFromConfig(awsCfg, s3Opts...)
 	return &Client{
-		s3Client: s3.NewFromConfig(awsCfg, s3Opts...),
-		uploader: manager.NewUploader(s3.NewFromConfig(awsCfg, s3Opts...)),
+		s3Client: s3c,
+		presign:  s3.NewPresignClient(s3c),
+		uploader: manager.NewUploader(s3c),
 		bucket:   cfg.Bucket,
 	}, nil
 }
@@ -114,6 +118,23 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, opts *Uplo
 	return fmt.Sprintf("s3://%s/%s", c.bucket, key), nil
 }
 
+// PresignPutURL generates a pre-signed PUT URL for the given key.
+func (c *Client) PresignPutURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	req, err := c.presign.PresignPutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	}, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", fmt.Errorf("failed to presign PUT URL: %w", err)
+	}
+	return req.URL, nil
+}
+
+// noSeekReader wraps an io.Reader to prevent the AWS SDK from seeking it.
+type noSeekReader struct{ r io.Reader }
+
+func (n noSeekReader) Read(p []byte) (int, error) { return n.r.Read(p) }
+
 // UploadStream uploads an io.Reader to S3 using PutObject (streaming, no seeking required).
 func (c *Client) UploadStream(ctx context.Context, key string, r io.Reader, opts *UploadOptions) (string, error) {
 	if opts == nil {
@@ -123,7 +144,7 @@ func (c *Client) UploadStream(ctx context.Context, key string, r io.Reader, opts
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(key),
-		Body:   r,
+		Body:   noSeekReader{r},
 	}
 	if opts.ContentType != "" {
 		input.ContentType = aws.String(opts.ContentType)
@@ -135,7 +156,9 @@ func (c *Client) UploadStream(ctx context.Context, key string, r io.Reader, opts
 		input.Metadata = opts.Metadata
 	}
 
-	if _, err := c.s3Client.PutObject(ctx, input); err != nil {
+	if _, err := c.s3Client.PutObject(ctx, input, func(o *s3.Options) {
+		o.RetryMaxAttempts = 1
+	}); err != nil {
 		return "", fmt.Errorf("failed to stream upload to S3: %w", err)
 	}
 	return fmt.Sprintf("s3://%s/%s", c.bucket, key), nil

@@ -14,7 +14,6 @@ go_library(
         "//libs/go/grpcclient",
         "//libs/go/logging",
         "//libs/go/rmq",
-        "//libs/go/s3",
         "//manmanv2:models",
         "//manmanv2/host/rmq",
         "//manmanv2/host/session",

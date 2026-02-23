@@ -4,18 +4,18 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os/exec"
 	"time"
 
-	s3lib "github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manmanv2"
 	hostrmq "github.com/whale-net/everything/manmanv2/host/rmq"
 )
 
-// HandleBackup archives a volume sub-path and streams it to S3.
+// HandleBackup archives a volume sub-path and streams it to S3 via pre-signed URL.
 func (h *CommandHandlerImpl) HandleBackup(ctx context.Context, cmd *hostrmq.BackupCommand) error {
-	if h.s3Client == nil {
-		return fmt.Errorf("s3 client not configured, cannot run backup %d", cmd.BackupID)
+	if cmd.PresignedURL == "" {
+		return fmt.Errorf("presigned_url is empty for backup %d", cmd.BackupID)
 	}
 
 	slog.Info("processing backup command", "backup_id", cmd.BackupID, "sgc_id", cmd.SGCID, "s3_key", cmd.S3Key)
@@ -64,19 +64,30 @@ func (h *CommandHandlerImpl) HandleBackup(ctx context.Context, cmd *hostrmq.Back
 		return fail(fmt.Errorf("failed to start tar: %w", err))
 	}
 
-	// 3. Stream to S3 via multipart upload
-	s3URL, err := h.s3Client.UploadStream(ctx, cmd.S3Key, tarReader, &s3lib.UploadOptions{
-		ContentType: "application/gzip",
-	})
+	// 3. Stream tar output directly to S3 via pre-signed PUT URL
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, cmd.PresignedURL, tarReader)
+	if err != nil {
+		_ = tarCmd.Process.Kill()
+		return fail(fmt.Errorf("failed to create upload request: %w", err))
+	}
+	req.Header.Set("Content-Type", "application/gzip")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		_ = tarCmd.Process.Kill()
 		return fail(fmt.Errorf("failed to upload to S3: %w", err))
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		_ = tarCmd.Process.Kill()
+		return fail(fmt.Errorf("S3 upload returned status %d", resp.StatusCode))
 	}
 
 	if err := tarCmd.Wait(); err != nil {
 		return fail(fmt.Errorf("tar exited with error: %w", err))
 	}
 
+	s3URL := fmt.Sprintf("s3://%s", cmd.S3Key)
 	slog.Info("backup completed", "backup_id", cmd.BackupID, "s3_url", s3URL)
 
 	return h.publisher.PublishBackupStatus(ctx, &hostrmq.BackupStatusUpdate{

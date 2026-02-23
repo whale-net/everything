@@ -7,6 +7,7 @@ import (
 	"text/template"
 	"time"
 
+	s3lib "github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manmanv2"
 	"github.com/whale-net/everything/manmanv2/api/repository"
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
@@ -26,6 +27,7 @@ type BackupConfigHandler struct {
 	serverRepo       repository.ServerRepository
 	actionRepo       *postgres.ActionRepository
 	commandPublisher *CommandPublisher
+	s3Client         *s3lib.Client
 }
 
 func NewBackupConfigHandler(
@@ -37,6 +39,7 @@ func NewBackupConfigHandler(
 	serverRepo repository.ServerRepository,
 	actionRepo *postgres.ActionRepository,
 	commandPublisher *CommandPublisher,
+	s3Client *s3lib.Client,
 ) *BackupConfigHandler {
 	return &BackupConfigHandler{
 		backupConfigRepo: backupConfigRepo,
@@ -47,6 +50,7 @@ func NewBackupConfigHandler(
 		serverRepo:       serverRepo,
 		actionRepo:       actionRepo,
 		commandPublisher: commandPublisher,
+		s3Client:         s3Client,
 	}
 }
 
@@ -216,12 +220,19 @@ func (h *BackupConfigHandler) TriggerBackup(ctx context.Context, req *pb.Trigger
 
 	s3Key := fmt.Sprintf("backups/%d/%d/%d.tar.gz", sgc.SGCID, cfg.BackupConfigID, backup.BackupID)
 
+	presignedURL, err := h.s3Client.PresignPutURL(ctx, s3Key, 1*time.Hour)
+	if err != nil {
+		_ = h.backupRepo.UpdateStatus(ctx, backup.BackupID, manman.BackupStatusFailed, nil, nil, strPtr(err.Error()))
+		return nil, status.Errorf(codes.Internal, "failed to generate presigned URL: %v", err)
+	}
+
 	cmd := &hostrmq.BackupCommand{
 		BackupID:          backup.BackupID,
 		SGCID:             sgc.SGCID,
 		VolumeHostPath:    buildVolumeHostPath(volume.HostSubpath),
 		BackupPath:        cfg.BackupPath,
 		S3Key:             s3Key,
+		PresignedURL:      presignedURL,
 		PreActionCommands: preActionCommands,
 	}
 

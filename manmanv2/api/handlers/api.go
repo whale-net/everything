@@ -66,7 +66,7 @@ func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq
 		validationHandler:       NewValidationHandler(repo.Servers, repo.GameConfigs),
 		logsHandler:             NewLogsHandler(repo.LogReferences, s3Client),
 		backupHandler:           NewBackupHandler(repo.Backups, repo.Sessions, s3Client),
-		backupConfigHandler:     NewBackupConfigHandler(repo.BackupConfigs, repo.Backups, repo.ServerGameConfigs, repo.Sessions, repo.GameConfigVolumes, repo.Servers, repo.Actions.(*postgres.ActionRepository), commandPublisher),
+		backupConfigHandler:     NewBackupConfigHandler(repo.BackupConfigs, repo.Backups, repo.ServerGameConfigs, repo.Sessions, repo.GameConfigVolumes, repo.Servers, repo.Actions.(*postgres.ActionRepository), commandPublisher, s3Client),
 		strategyHandler:         NewConfigurationStrategyHandler(repo.ConfigurationStrategies),
 		patchHandler:            NewConfigurationPatchHandler(repo.ConfigurationPatches),
 		volumeHandler:           NewGameConfigVolumeHandler(repo.GameConfigVolumes),
