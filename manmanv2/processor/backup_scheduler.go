@@ -45,7 +45,7 @@ func (w *backupScanWorker) Work(ctx context.Context, _ *river.Job[backupScanArgs
 		_, err := w.riverClient.Insert(ctx, scheduledBackupArgs{BackupConfigID: cfg.BackupConfigID}, &river.InsertOpts{
 			UniqueOpts: river.UniqueOpts{
 				ByArgs:   true,
-				ByPeriod: 5 * time.Minute,
+				ByPeriod: time.Duration(cfg.CadenceMinutes) * time.Minute,
 			},
 		})
 		if err != nil {
