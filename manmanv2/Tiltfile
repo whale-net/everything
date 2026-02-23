@@ -368,6 +368,8 @@ spec:
           value: "{s3_secret_key}"
         - name: S3_BUCKET
           value: "{s3_bucket}"
+        - name: S3_REGION
+          value: "us-east-1"
 """.format(
         namespace=namespace,
         db_url=db_url,
