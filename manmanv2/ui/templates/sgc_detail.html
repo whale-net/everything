@@ -242,7 +242,7 @@ function toggleAddLibraryPanel() {
     <div class="mb-2">
       <span class="text-muted small">Volume: <code>{{.Volume.Name}}</code></span>
       {{range .Configs}}
-      <form method="POST" action="/sgc/{{$.SGC.SgcId}}/backup/trigger" style="display:inline">
+      <form method="POST" action="/sgc/{{$.SGC.ServerGameConfigId}}/backup/trigger" style="display:inline">
         <input type="hidden" name="backup_config_id" value="{{.BackupConfigId}}">
         <button type="submit" class="btn btn-sm btn-outline-primary ms-2">
           Trigger: <code>{{.BackupPath}}</code>
