@@ -189,10 +189,10 @@ func (r *BackupConfigRepository) ListDue(ctx context.Context, now time.Time) ([]
 		      OR bc.last_backup_at + (bc.cadence_minutes * INTERVAL '1 minute') <= $1
 		  )
 		  -- SGC had a session active at any point since last backup:
-		  -- still running (end_time IS NULL) or ended after last_backup_at
+		  -- still running (ended_at IS NULL) or ended after last_backup_at
 		  AND (
-		      s.end_time IS NULL
-		      OR s.end_time >= COALESCE(bc.last_backup_at, 'epoch'::timestamp)
+		      s.ended_at IS NULL
+		      OR s.ended_at >= COALESCE(bc.last_backup_at, 'epoch'::timestamp)
 		  )
 	`, now)
 	if err != nil {
