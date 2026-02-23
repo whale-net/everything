@@ -69,11 +69,8 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 
 	return &Client{
 		s3Client: s3.NewFromConfig(awsCfg, s3Opts...),
-		uploader: manager.NewUploader(s3.NewFromConfig(awsCfg, s3Opts...), func(u *manager.Uploader) {
-			u.Concurrency = 1
-			u.BufferProvider = manager.NewBufferedReadSeekerWriteToPool(5 * 1024 * 1024)
-		}),
-		bucket: cfg.Bucket,
+		uploader: manager.NewUploader(s3.NewFromConfig(awsCfg, s3Opts...)),
+		bucket:   cfg.Bucket,
 	}, nil
 }
 
@@ -117,8 +114,7 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, opts *Uplo
 	return fmt.Sprintf("s3://%s/%s", c.bucket, key), nil
 }
 
-// UploadStream uploads an io.Reader to S3 using multipart upload (streaming, no full buffering).
-// Use this for large files like backup tarballs.
+// UploadStream uploads an io.Reader to S3 using PutObject (streaming, no seeking required).
 func (c *Client) UploadStream(ctx context.Context, key string, r io.Reader, opts *UploadOptions) (string, error) {
 	if opts == nil {
 		opts = &UploadOptions{}
@@ -139,7 +135,7 @@ func (c *Client) UploadStream(ctx context.Context, key string, r io.Reader, opts
 		input.Metadata = opts.Metadata
 	}
 
-	if _, err := c.uploader.Upload(ctx, input); err != nil {
+	if _, err := c.s3Client.PutObject(ctx, input); err != nil {
 		return "", fmt.Errorf("failed to stream upload to S3: %w", err)
 	}
 	return fmt.Sprintf("s3://%s/%s", c.bucket, key), nil
