@@ -69,8 +69,11 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 
 	return &Client{
 		s3Client: s3.NewFromConfig(awsCfg, s3Opts...),
-		uploader: manager.NewUploader(s3.NewFromConfig(awsCfg, s3Opts...)),
-		bucket:   cfg.Bucket,
+		uploader: manager.NewUploader(s3.NewFromConfig(awsCfg, s3Opts...), func(u *manager.Uploader) {
+			u.Concurrency = 1
+			u.BufferProvider = manager.NewBufferedReadSeekerWriteToPool(5 * 1024 * 1024)
+		}),
+		bucket: cfg.Bucket,
 	}, nil
 }
 
