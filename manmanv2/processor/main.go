@@ -115,6 +115,7 @@ func run() error {
 		LogReferences:      postgres.NewLogReferenceRepository(dbPool),
 		Backups:            postgres.NewBackupRepository(dbPool),
 		BackupConfigs:      postgres.NewBackupConfigRepository(dbPool),
+		GameConfigVolumes:  postgres.NewGameConfigVolumeRepository(dbPool),
 		ServerPorts:        postgres.NewServerPortRepository(dbPool),
 	}
 
