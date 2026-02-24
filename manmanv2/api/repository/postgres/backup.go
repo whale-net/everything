@@ -43,7 +43,7 @@ func (r *BackupRepository) Get(ctx context.Context, backupID int64) (*manman.Bac
 	query := `
 		SELECT backup_id, session_id, server_game_config_id, backup_config_id, volume_id,
 		       s3_url, size_bytes, status, error_message, description, created_at
-		FROM backups WHERE backup_id = $1
+		FROM backups WHERE backup_id = $1 AND deleted_at IS NULL
 	`
 	b := &manman.Backup{}
 	err := r.db.QueryRow(ctx, query, backupID).Scan(
@@ -63,6 +63,7 @@ func (r *BackupRepository) List(ctx context.Context, sgcID *int64, sessionID *in
 		FROM backups
 		WHERE ($1::bigint IS NULL OR server_game_config_id = $1)
 		  AND ($2::bigint IS NULL OR session_id = $2)
+		  AND deleted_at IS NULL
 		ORDER BY created_at DESC
 		LIMIT $3 OFFSET $4
 	`
@@ -87,7 +88,7 @@ func (r *BackupRepository) List(ctx context.Context, sgcID *int64, sessionID *in
 }
 
 func (r *BackupRepository) Delete(ctx context.Context, backupID int64) error {
-	_, err := r.db.Exec(ctx, `DELETE FROM backups WHERE backup_id = $1`, backupID)
+	_, err := r.db.Exec(ctx, `UPDATE backups SET deleted_at = NOW() WHERE backup_id = $1`, backupID)
 	return err
 }
 
@@ -122,7 +123,7 @@ func (r *BackupConfigRepository) Get(ctx context.Context, id int64) (*manman.Bac
 	cfg := &manman.BackupConfig{}
 	err := r.db.QueryRow(ctx, `
 		SELECT backup_config_id, volume_id, cadence_minutes, backup_path, enabled, last_backup_at, created_at, updated_at
-		FROM backup_configs WHERE backup_config_id = $1
+		FROM backup_configs WHERE backup_config_id = $1 AND deleted_at IS NULL
 	`, id).Scan(
 		&cfg.BackupConfigID, &cfg.VolumeID, &cfg.CadenceMinutes, &cfg.BackupPath,
 		&cfg.Enabled, &cfg.LastBackupAt, &cfg.CreatedAt, &cfg.UpdatedAt,
@@ -136,7 +137,7 @@ func (r *BackupConfigRepository) Get(ctx context.Context, id int64) (*manman.Bac
 func (r *BackupConfigRepository) List(ctx context.Context, volumeID int64) ([]*manman.BackupConfig, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT backup_config_id, volume_id, cadence_minutes, backup_path, enabled, last_backup_at, created_at, updated_at
-		FROM backup_configs WHERE volume_id = $1 ORDER BY backup_config_id
+		FROM backup_configs WHERE volume_id = $1 AND deleted_at IS NULL ORDER BY backup_config_id
 	`, volumeID)
 	if err != nil {
 		return nil, err
@@ -167,7 +168,7 @@ func (r *BackupConfigRepository) Update(ctx context.Context, cfg *manman.BackupC
 }
 
 func (r *BackupConfigRepository) Delete(ctx context.Context, id int64) error {
-	_, err := r.db.Exec(ctx, `DELETE FROM backup_configs WHERE backup_config_id = $1`, id)
+	_, err := r.db.Exec(ctx, `UPDATE backup_configs SET deleted_at = NOW() WHERE backup_config_id = $1`, id)
 	return err
 }
 
@@ -183,6 +184,7 @@ func (r *BackupConfigRepository) ListDue(ctx context.Context, now time.Time) ([]
 		JOIN server_game_configs sgc ON sgc.game_config_id = gc.config_id
 		JOIN sessions s ON s.sgc_id = sgc.sgc_id
 		WHERE bc.enabled = true
+		  AND bc.deleted_at IS NULL
 		  -- cadence has elapsed since last backup (or never backed up)
 		  AND (
 		      bc.last_backup_at IS NULL

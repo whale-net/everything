@@ -14,6 +14,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
 	"github.com/whale-net/everything/libs/go/rmq"
+	s3lib "github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manmanv2"
 	"github.com/whale-net/everything/manmanv2/api/repository"
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
@@ -44,7 +45,7 @@ func (w *backupScanWorker) Work(ctx context.Context, _ *river.Job[backupScanArgs
 		_, err := w.riverClient.Insert(ctx, scheduledBackupArgs{BackupConfigID: cfg.BackupConfigID}, &river.InsertOpts{
 			UniqueOpts: river.UniqueOpts{
 				ByArgs:   true,
-				ByPeriod: 5 * time.Minute,
+				ByPeriod: time.Duration(cfg.CadenceMinutes) * time.Minute,
 			},
 		})
 		if err != nil {
@@ -69,6 +70,7 @@ type scheduledBackupWorker struct {
 	repo       *repository.Repository
 	actionRepo *postgres.ActionRepository
 	publisher  *rmq.Publisher
+	s3Client   *s3lib.Client
 	logger     *slog.Logger
 }
 
@@ -143,12 +145,21 @@ func (w *scheduledBackupWorker) Work(ctx context.Context, job *river.Job[schedul
 		}
 
 		s3Key := fmt.Sprintf("backups/%d/%d/%d.tar.gz", sgc.SGCID, cfg.BackupConfigID, backup.BackupID)
+
+		presignedURL, err := w.s3Client.PresignPutURL(ctx, s3Key, 1*time.Hour)
+		if err != nil {
+			w.logger.Error("failed to generate presigned URL", "backup_id", backup.BackupID, "error", err)
+			_ = w.repo.Backups.UpdateStatus(ctx, backup.BackupID, manman.BackupStatusFailed, nil, nil, strPtr(err.Error()))
+			continue
+		}
+
 		cmd := &hostrmq.BackupCommand{
 			BackupID:          backup.BackupID,
 			SGCID:             sgc.SGCID,
 			VolumeHostPath:    hostPath,
 			BackupPath:        cfg.BackupPath,
 			S3Key:             s3Key,
+			PresignedURL:      presignedURL,
 			PreActionCommands: preActionCommands,
 		}
 
@@ -164,7 +175,7 @@ func (w *scheduledBackupWorker) Work(ctx context.Context, job *river.Job[schedul
 // Startup
 // ============================================================================
 
-func startBackupScheduler(ctx context.Context, dbPool *pgxpool.Pool, repo *repository.Repository, rmqConn *rmq.Connection, logger *slog.Logger) (*river.Client[pgx.Tx], error) {
+func startBackupScheduler(ctx context.Context, dbPool *pgxpool.Pool, repo *repository.Repository, rmqConn *rmq.Connection, s3Client *s3lib.Client, logger *slog.Logger) (*river.Client[pgx.Tx], error) {
 	// Run River schema migrations
 	migrator, err := rivermigrate.New(riverpgxv5.New(dbPool), nil)
 	if err != nil {
@@ -195,6 +206,7 @@ func startBackupScheduler(ctx context.Context, dbPool *pgxpool.Pool, repo *repos
 		repo:       repo,
 		actionRepo: actionRepo,
 		publisher:  publisher,
+		s3Client:   s3Client,
 		logger:     logger,
 	})
 
@@ -239,3 +251,5 @@ func renderSchedulerActionTemplate(tmplStr string) (string, error) {
 	}
 	return buf.String(), nil
 }
+
+func strPtr(s string) *string { return &s }

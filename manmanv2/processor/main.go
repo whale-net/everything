@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
+	s3lib "github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manmanv2/api/repository"
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
 	"github.com/whale-net/everything/manmanv2/processor/consumer"
@@ -115,6 +116,7 @@ func run() error {
 		LogReferences:      postgres.NewLogReferenceRepository(dbPool),
 		Backups:            postgres.NewBackupRepository(dbPool),
 		BackupConfigs:      postgres.NewBackupConfigRepository(dbPool),
+		GameConfigVolumes:  postgres.NewGameConfigVolumeRepository(dbPool),
 		ServerPorts:        postgres.NewServerPortRepository(dbPool),
 	}
 
@@ -175,7 +177,19 @@ func run() error {
 	sessionStatusHandler.StartStaleSessionChecker(appCtx, 10*time.Second, time.Duration(cfg.StaleSessionThreshold)*time.Second)
 
 	// Start backup scheduler (River)
-	riverClient, err := startBackupScheduler(appCtx, dbPool, repo, rmqConn, logger)
+	s3Client, err := s3lib.NewClient(appCtx, s3lib.Config{
+		Bucket:         os.Getenv("S3_BUCKET"),
+		Region:         os.Getenv("S3_REGION"),
+		Endpoint:       os.Getenv("S3_ENDPOINT"),
+		PublicEndpoint: os.Getenv("S3_PUBLIC_ENDPOINT"),
+		AccessKey:      os.Getenv("S3_ACCESS_KEY"),
+		SecretKey:      os.Getenv("S3_SECRET_KEY"),
+	})
+	if err != nil {
+		logger.Warn("failed to initialize S3 client, scheduled backups will not run", "error", err)
+		s3Client = nil
+	}
+	riverClient, err := startBackupScheduler(appCtx, dbPool, repo, rmqConn, s3Client, logger)
 	if err != nil {
 		logger.Warn("failed to start backup scheduler, scheduled backups will not run", "error", err)
 	} else {

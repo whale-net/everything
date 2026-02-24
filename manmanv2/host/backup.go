@@ -3,19 +3,23 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
-	s3lib "github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manmanv2"
 	hostrmq "github.com/whale-net/everything/manmanv2/host/rmq"
 )
 
-// HandleBackup archives a volume sub-path and streams it to S3.
+// HandleBackup archives a volume sub-path and streams it to S3 via pre-signed URL.
 func (h *CommandHandlerImpl) HandleBackup(ctx context.Context, cmd *hostrmq.BackupCommand) error {
-	if h.s3Client == nil {
-		return fmt.Errorf("s3 client not configured, cannot run backup %d", cmd.BackupID)
+	if cmd.PresignedURL == "" {
+		return fmt.Errorf("presigned_url is empty for backup %d", cmd.BackupID)
 	}
 
 	slog.Info("processing backup command", "backup_id", cmd.BackupID, "sgc_id", cmd.SGCID, "s3_key", cmd.S3Key)
@@ -46,10 +50,17 @@ func (h *CommandHandlerImpl) HandleBackup(ctx context.Context, cmd *hostrmq.Back
 	}
 
 	// 2. Build tar command: stream to stdout
-	tarPath := cmd.VolumeHostPath
-	if tarPath == "" {
+	// VolumeHostPath is the host_subpath (e.g. "data"); build the full internal path:
+	//   {internalDataDir}/sgc[-{env}]-{sgcID}/{hostSubpath}
+	dirName := fmt.Sprintf("sgc-%d", cmd.SGCID)
+	if h.environment != "" {
+		dirName = fmt.Sprintf("sgc-%s-%d", h.environment, cmd.SGCID)
+	}
+	subPath := strings.TrimPrefix(cmd.VolumeHostPath, "/")
+	if subPath == "" {
 		return fail(fmt.Errorf("volume_host_path is empty"))
 	}
+	tarPath := filepath.Join(h.internalDataDir, dirName, subPath)
 	backupPath := cmd.BackupPath
 	if backupPath == "" {
 		backupPath = "."
@@ -64,19 +75,50 @@ func (h *CommandHandlerImpl) HandleBackup(ctx context.Context, cmd *hostrmq.Back
 		return fail(fmt.Errorf("failed to start tar: %w", err))
 	}
 
-	// 3. Stream to S3 via multipart upload
-	s3URL, err := h.s3Client.UploadStream(ctx, cmd.S3Key, tarReader, &s3lib.UploadOptions{
-		ContentType: "application/gzip",
-	})
+	// 3. Buffer tar output to temp file (needed for Content-Length on presigned PUT)
+	tmpFile, err := os.CreateTemp("", "backup-*.tar.gz")
 	if err != nil {
 		_ = tarCmd.Process.Kill()
-		return fail(fmt.Errorf("failed to upload to S3: %w", err))
+		return fail(fmt.Errorf("failed to create temp file: %w", err))
 	}
+	defer os.Remove(tmpFile.Name())
+	defer tmpFile.Close()
 
+	if _, err := io.Copy(tmpFile, tarReader); err != nil {
+		_ = tarCmd.Process.Kill()
+		return fail(fmt.Errorf("failed to buffer tar output: %w", err))
+	}
 	if err := tarCmd.Wait(); err != nil {
 		return fail(fmt.Errorf("tar exited with error: %w", err))
 	}
 
+	size, err := tmpFile.Seek(0, io.SeekEnd)
+	if err != nil {
+		return fail(fmt.Errorf("failed to get temp file size: %w", err))
+	}
+	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
+		return fail(fmt.Errorf("failed to rewind temp file: %w", err))
+	}
+
+	// 4. Upload to S3 via pre-signed PUT URL with known Content-Length
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, cmd.PresignedURL, tmpFile)
+	if err != nil {
+		return fail(fmt.Errorf("failed to create upload request: %w", err))
+	}
+	req.Header.Set("Content-Type", "application/gzip")
+	req.ContentLength = size
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		_ = tarCmd.Process.Kill()
+		return fail(fmt.Errorf("failed to upload to S3: %w", err))
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fail(fmt.Errorf("S3 upload returned status %d", resp.StatusCode))
+	}
+
+	s3URL := fmt.Sprintf("s3://%s", cmd.S3Key)
 	slog.Info("backup completed", "backup_id", cmd.BackupID, "s3_url", s3URL)
 
 	return h.publisher.PublishBackupStatus(ctx, &hostrmq.BackupStatusUpdate{

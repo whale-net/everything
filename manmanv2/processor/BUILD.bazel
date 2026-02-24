@@ -13,6 +13,7 @@ go_library(
     deps = [
         "//libs/go/logging",
         "//libs/go/rmq",
+        "//libs/go/s3",
         "//manmanv2:models",
         "//manmanv2/api/repository",
         "//manmanv2/api/repository/postgres",

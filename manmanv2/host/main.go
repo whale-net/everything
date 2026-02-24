@@ -15,7 +15,6 @@ import (
 	grpcclient "github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/logging"
 	rmqlib "github.com/whale-net/everything/libs/go/rmq"
-	s3lib "github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manmanv2/host/rmq"
 	"github.com/whale-net/everything/manmanv2/host/session"
 	"github.com/whale-net/everything/manmanv2/host/workshop"
@@ -117,19 +116,6 @@ func run() error {
 	// Initialize session manager with gRPC client for configuration fetching and RMQ publisher for logs
 	sessionManager := session.NewSessionManager(dockerClient, environment, hostDataDir, grpcClient, downloadOrchestrator, rmqPublisher)
 
-	// Initialize S3 client for backups
-	s3Client, err := s3lib.NewClient(ctx, s3lib.Config{
-		Bucket:    getEnv("S3_BUCKET", "manman-logs"),
-		Region:    getEnv("S3_REGION", "us-east-1"),
-		Endpoint:  getEnv("S3_ENDPOINT", ""),
-		AccessKey: getEnv("AWS_ACCESS_KEY_ID", ""),
-		SecretKey: getEnv("AWS_SECRET_ACCESS_KEY", ""),
-	})
-	if err != nil {
-		logger.Warn("failed to initialize S3 client, backups will not work", "error", err)
-		s3Client = nil
-	}
-
 	// Recover orphaned sessions on startup
 	logger.Info("recovering orphaned sessions")
 	if err := sessionManager.RecoverOrphanedSessions(ctx, serverID); err != nil {
@@ -153,7 +139,8 @@ func run() error {
 		publisher:            rmqPublisher,
 		serverID:             serverID,
 		downloadOrchestrator: downloadOrchestrator,
-		s3Client:             s3Client,
+		internalDataDir:      session.InternalDataDir,
+		environment:          environment,
 	}
 
 	// Initialize RabbitMQ consumer
@@ -229,11 +216,12 @@ func run() error {
 
 // CommandHandlerImpl implements the CommandHandler interface
 type CommandHandlerImpl struct {
-	sessionManager      *session.SessionManager
-	publisher           *rmq.Publisher
-	serverID            int64
+	sessionManager       *session.SessionManager
+	publisher            *rmq.Publisher
+	serverID             int64
 	downloadOrchestrator *workshop.DownloadOrchestrator
-	s3Client            *s3lib.Client
+	internalDataDir      string
+	environment          string
 }
 
 // HandleStartSession handles a start session command
