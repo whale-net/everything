@@ -107,6 +107,13 @@ func (h *CommandHandlerImpl) HandleBackup(ctx context.Context, cmd *hostrmq.Back
 	}
 	req.Header.Set("Content-Type", "application/gzip")
 	req.ContentLength = size
+	// GetBody allows the HTTP client to retry on HTTP/2 REFUSED_STREAM
+	req.GetBody = func() (io.ReadCloser, error) {
+		if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
+			return nil, err
+		}
+		return io.NopCloser(tmpFile), nil
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
