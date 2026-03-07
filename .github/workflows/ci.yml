@@ -29,7 +29,7 @@ jobs:
     - name: Build all targets
       run: |
         # Build all targets to verify compilation
-        bazel build //...
+        bazel build --config=ci //...
         # Shutdown Bazel server to prevent hanging
         bazel shutdown
 
@@ -57,7 +57,7 @@ jobs:
     - name: Run tests
       run: |
         # Run all tests and let Bazel handle caching
-        bazel test //...
+        bazel test --config=ci //...
         # Shutdown Bazel server to prevent hanging
         bazel shutdown
         
@@ -97,7 +97,7 @@ jobs:
         # Uses oci_image_index with platform transitions for true multiarch images
         # If this fails, ARM64 deployments will crash at runtime!
         echo "::group::Cross-Compilation Verification"
-        bazel test //tools/scripts:test_cross_compilation --config=ci --test_output=streamed
+        bazel test --config=ci //tools/scripts:test_cross_compilation --test_output=streamed
         echo "::endgroup::"
         # Shutdown Bazel server to prevent hanging
         bazel shutdown
@@ -119,7 +119,7 @@ jobs:
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
-        cache-suffix: 'plan'
+        cache-suffix: 'test'
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
@@ -149,7 +149,7 @@ jobs:
         
         # Use release helper to plan the Docker builds
         echo "Planning Docker builds using release tool..."
-        PLAN_OUTPUT=$(bazel run //tools:release -- plan \
+        PLAN_OUTPUT=$(bazel run --config=ci //tools:release -- plan \
           --event-type "$EVENT_TYPE" \
           --base-commit="$BASE_COMMIT" \
           --format github)

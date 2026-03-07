@@ -24,9 +24,10 @@ build:ci --guard_against_concurrent_changes
 build:ci --experimental_remote_merkle_tree_cache
 build:ci --remote_timeout=60
 build:ci --remote_cache_compression
-# Download only metadata from remote cache for faster builds
-# Actual outputs are only downloaded when needed (e.g., for tests, or final artifacts)
-build:ci --remote_download_minimal
+# Download final outputs but not intermediate artifacts - safe for both build and test jobs
+build:ci --remote_download_toplevel
+# For future RBE build-only jobs: download only metadata (not safe for test jobs)
+build:ci-build-only --remote_download_minimal
 # Build metadata optimizations  
 build:ci --nolegacy_external_runfiles
 # Memory and CPU optimizations
