@@ -757,8 +757,10 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 			SkipDispatch: true,
 		})
 		if err != nil {
-			logger.Error("failed to trigger installation", "addon_id", addonID, "error", err)
-			return fmt.Errorf("failed to trigger installation for addon %d: %w", addonID, err)
+			// Treat installation errors as non-fatal: a misconfigured addon (e.g. missing
+			// installation path) should not prevent the session from starting. Log and skip.
+			logger.Error("failed to trigger installation, skipping addon", "addon_id", addonID, "workshop_id", addon.WorkshopId, "error", err)
+			continue
 		}
 
 		// Now handle the download synchronously
@@ -773,7 +775,8 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 
 		// Download addon (blocking)
 		if err := do.HandleDownloadCommand(ctx, cmd); err != nil {
-			return fmt.Errorf("failed to download addon %d: %w", addonID, err)
+			logger.Error("failed to download addon, skipping", "addon_id", addonID, "workshop_id", addon.WorkshopId, "error", err)
+			continue
 		}
 
 		logger.Info("addon installation completed", "addon_id", addonID)

@@ -64,6 +64,14 @@ func (h *WorkshopServiceHandler) CreateAddon(ctx context.Context, req *pb.Create
 		platformType = manman.PlatformTypeSteamWorkshop
 	}
 
+	// VALIDATION: Addon must have a way to determine installation path
+	// Either preset_id OR installation_path must be provided
+	if req.PresetId == 0 && req.InstallationPath == "" {
+		return nil, status.Error(codes.InvalidArgument,
+			"addon must have either preset_id or installation_path set. "+
+				"Use preset_id to reference a path preset, or provide a custom installation_path.")
+	}
+
 	// Build addon model
 	addon := &manman.WorkshopAddon{
 		GameID:       req.GameId,
