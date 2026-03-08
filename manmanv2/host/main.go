@@ -157,6 +157,7 @@ func run() error {
 	}
 
 	// Start health check publisher
+	// (RabbitMQ channel failures are now handled automatically by the Publisher library)
 	healthTicker := time.NewTicker(5 * time.Second)
 	defer healthTicker.Stop()
 

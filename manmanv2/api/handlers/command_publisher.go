@@ -77,10 +77,14 @@ func (p *CommandPublisher) PublishSendInput(ctx context.Context, serverID int64,
 	return p.publishAndWait(ctx, routingKey, cmd, timeout)
 }
 
+const backupCommandExpiry = time.Hour
+
 func (p *CommandPublisher) PublishBackup(ctx context.Context, serverID int64, cmd interface{}) error {
 	routingKey := fmt.Sprintf("command.host.%d.backup", serverID)
-	// Fire-and-forget: backup is async, status comes back via RMQ
-	return p.publisher.Publish(ctx, "manman", routingKey, cmd)
+	// Fire-and-forget: backup is async, status comes back via RMQ.
+	// TTL of 1 hour: if the host manager is down and commands queue up,
+	// the broker will drop stale backup commands rather than running them all at once.
+	return p.publisher.PublishWithExpiry(ctx, "manman", routingKey, cmd, backupCommandExpiry)
 }
 
 func (p *CommandPublisher) publishAndWait(ctx context.Context, routingKey string, data interface{}, timeout time.Duration) error {

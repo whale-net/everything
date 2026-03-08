@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/whale-net/everything/libs/go/rmq"
 )
@@ -160,12 +161,20 @@ func (c *Consumer) handleDownloadAddon(ctx context.Context, msg rmq.Message) err
 	return nil
 }
 
+const backupCommandMaxAge = time.Hour
+
 func (c *Consumer) handleBackup(ctx context.Context, msg rmq.Message) error {
 	var cmd BackupCommand
 	if err := json.Unmarshal(msg.Body, &cmd); err != nil {
 		return fmt.Errorf("failed to unmarshal backup command: %w", err)
 	}
 	slog.Info("received command", "command", "backup", "backup_id", cmd.BackupID, "sgc_id", cmd.SGCID, "routing_key", msg.RoutingKey)
+
+	if !cmd.CreatedAt.IsZero() && time.Since(cmd.CreatedAt) > backupCommandMaxAge {
+		slog.Warn("discarding expired backup command", "backup_id", cmd.BackupID, "sgc_id", cmd.SGCID, "age", time.Since(cmd.CreatedAt).Round(time.Second))
+		return nil
+	}
+
 	go func() {
 		if err := c.handler.HandleBackup(context.Background(), &cmd); err != nil {
 			slog.Error("backup failed", "backup_id", cmd.BackupID, "error", err)
