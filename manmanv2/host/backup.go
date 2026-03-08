@@ -120,9 +120,10 @@ func (h *CommandHandlerImpl) HandleBackup(ctx context.Context, cmd *hostrmq.Back
 		_ = tarCmd.Process.Kill()
 		return fail(fmt.Errorf("failed to upload to S3: %w", err))
 	}
+	respBody, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return fail(fmt.Errorf("S3 upload returned status %d", resp.StatusCode))
+		return fail(fmt.Errorf("S3 upload returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody))))
 	}
 
 	s3URL := fmt.Sprintf("s3://%s", cmd.S3Key)
