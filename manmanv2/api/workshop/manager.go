@@ -161,7 +161,7 @@ func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int6
 		}
 
 		routingKey := fmt.Sprintf("command.host.%d.workshop.download", sgc.ServerID)
-		err = wm.rmqPublisher.Publish(ctx, "manman.commands", routingKey, downloadCmd)
+		err = wm.rmqPublisher.Publish(ctx, "manman", routingKey, downloadCmd)
 		if err != nil {
 			return nil, fmt.Errorf("failed to publish download command: %w", err)
 		}
@@ -420,7 +420,7 @@ func (wm *WorkshopManager) RemoveInstallation(ctx context.Context, installationI
 	}
 
 	routingKey := fmt.Sprintf("command.host.%d.workshop.remove", sgc.ServerID)
-	err = wm.rmqPublisher.Publish(ctx, "manman.commands", routingKey, removeCmd)
+	err = wm.rmqPublisher.Publish(ctx, "manman", routingKey, removeCmd)
 	if err != nil {
 		return fmt.Errorf("failed to publish remove command: %w", err)
 	}
