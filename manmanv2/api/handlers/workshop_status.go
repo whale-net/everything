@@ -24,13 +24,18 @@ func NewWorkshopStatusHandler(installationRepo repository.WorkshopInstallationRe
 		return nil, err
 	}
 
+	if err := consumer.BindExchange("manman", []string{"status.workshop.installation.#"}); err != nil {
+		consumer.Close()
+		return nil, err
+	}
+
 	handler := &WorkshopStatusHandler{
 		installationRepo: installationRepo,
 		consumer:         consumer,
 	}
 
 	// Register message handler
-	consumer.RegisterHandler("workshop.installation.status", handler.handleStatusUpdate)
+	consumer.RegisterHandler("status.workshop.installation.#", handler.handleStatusUpdate)
 
 	return handler, nil
 }
