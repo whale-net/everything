@@ -46,6 +46,14 @@ func (m *MockWorkshopAddonRepository) Update(ctx context.Context, addon *manman.
 	return args.Error(0)
 }
 
+func (m *MockWorkshopAddonRepository) GetByWorkshopID(ctx context.Context, gameID int64, workshopID string, platformType string) (*manman.WorkshopAddon, error) {
+	args := m.Called(ctx, gameID, workshopID, platformType)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*manman.WorkshopAddon), args.Error(1)
+}
+
 func (m *MockWorkshopAddonRepository) Delete(ctx context.Context, addonID int64) error {
 	args := m.Called(ctx, addonID)
 	return args.Error(0)
@@ -714,7 +722,7 @@ func TestAddAddonToLibrary(t *testing.T) {
 	tests := []struct {
 		name          string
 		request       *pb.AddAddonToLibraryRequest
-		mockSetup     func(*MockWorkshopLibraryRepository)
+		mockSetup     func(*MockWorkshopAddonRepository, *MockWorkshopLibraryRepository)
 		expectedError codes.Code
 	}{
 		{
@@ -724,8 +732,14 @@ func TestAddAddonToLibrary(t *testing.T) {
 				AddonId:      100,
 				DisplayOrder: 5,
 			},
-			mockSetup: func(m *MockWorkshopLibraryRepository) {
-				m.On("AddAddon", mock.Anything, int64(1), int64(100), 5).Return(nil)
+			mockSetup: func(a *MockWorkshopAddonRepository, l *MockWorkshopLibraryRepository) {
+				// Addon has a preset, so path validation passes without needing library.Get
+				a.On("Get", mock.Anything, int64(100)).Return(&manman.WorkshopAddon{
+					AddonID:  100,
+					Name:     "Test Addon",
+					PresetID: 1,
+				}, nil)
+				l.On("AddAddon", mock.Anything, int64(1), int64(100), 5).Return(nil)
 			},
 			expectedError: codes.OK,
 		},
@@ -734,7 +748,7 @@ func TestAddAddonToLibrary(t *testing.T) {
 			request: &pb.AddAddonToLibraryRequest{
 				AddonId: 100,
 			},
-			mockSetup:     func(m *MockWorkshopLibraryRepository) {},
+			mockSetup:     func(a *MockWorkshopAddonRepository, l *MockWorkshopLibraryRepository) {},
 			expectedError: codes.InvalidArgument,
 		},
 		{
@@ -742,18 +756,20 @@ func TestAddAddonToLibrary(t *testing.T) {
 			request: &pb.AddAddonToLibraryRequest{
 				LibraryId: 1,
 			},
-			mockSetup:     func(m *MockWorkshopLibraryRepository) {},
+			mockSetup:     func(a *MockWorkshopAddonRepository, l *MockWorkshopLibraryRepository) {},
 			expectedError: codes.InvalidArgument,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mockRepo := new(MockWorkshopLibraryRepository)
-			tt.mockSetup(mockRepo)
+			mockAddonRepo := new(MockWorkshopAddonRepository)
+			mockLibraryRepo := new(MockWorkshopLibraryRepository)
+			tt.mockSetup(mockAddonRepo, mockLibraryRepo)
 
 			handler := &WorkshopServiceHandler{
-				libraryRepo: mockRepo,
+				addonRepo:   mockAddonRepo,
+				libraryRepo: mockLibraryRepo,
 			}
 
 			resp, err := handler.AddAddonToLibrary(context.Background(), tt.request)
@@ -768,7 +784,8 @@ func TestAddAddonToLibrary(t *testing.T) {
 				assert.NotNil(t, resp)
 			}
 
-			mockRepo.AssertExpectations(t)
+			mockAddonRepo.AssertExpectations(t)
+			mockLibraryRepo.AssertExpectations(t)
 		})
 	}
 }
