@@ -484,15 +484,17 @@ func (c *ControlClient) ResetInstallation(ctx context.Context, installationID in
 	return resp.Installation, nil
 }
 
-func (c *ControlClient) CreateAddon(ctx context.Context, gameID int64, workshopID, platformType, name, description string, fileSizeBytes int64, isCollection bool) (*manmanpb.WorkshopAddon, error) {
+func (c *ControlClient) CreateAddon(ctx context.Context, gameID int64, workshopID, platformType, name, description string, fileSizeBytes int64, isCollection bool, installationPath string, presetID int64) (*manmanpb.WorkshopAddon, error) {
 	resp, err := c.workshop.CreateAddon(ctx, &manmanpb.CreateAddonRequest{
-		GameId:        gameID,
-		WorkshopId:    workshopID,
-		PlatformType:  platformType,
-		Name:          name,
-		Description:   description,
-		FileSizeBytes: fileSizeBytes,
-		IsCollection:  isCollection,
+		GameId:           gameID,
+		WorkshopId:       workshopID,
+		PlatformType:     platformType,
+		Name:             name,
+		Description:      description,
+		FileSizeBytes:    fileSizeBytes,
+		IsCollection:     isCollection,
+		InstallationPath: installationPath,
+		PresetId:         presetID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create addon: %w", err)

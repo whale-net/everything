@@ -494,6 +494,8 @@ func (app *App) handleFetchAddonMetadata(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	presets, _ := app.grpc.ListAddonPathPresets(ctx, gameID)
+
 	// Return a confirmation/edit form inline via HTMX
 	w.Header().Set("Content-Type", "text/html")
 	sizeStr := ""
@@ -507,6 +509,18 @@ func (app *App) handleFetchAddonMetadata(w http.ResponseWriter, r *http.Request)
 		isCollectionStr = "true"
 	}
 	fileSizeBytesStr := strconv.FormatInt(addon.FileSizeBytes, 10)
+
+	presetOptions := ""
+	if len(presets) != 1 {
+		presetOptions = `<option value="0">— none —</option>`
+	}
+	for _, p := range presets {
+		selected := ""
+		if len(presets) == 1 {
+			selected = ` selected`
+		}
+		presetOptions += `<option value="` + strconv.FormatInt(p.PresetId, 10) + `"` + selected + `>` + p.Name + ` (` + p.InstallationPath + `)</option>`
+	}
 
 	w.Write([]byte(`<div style="margin-top:14px;border:2px solid #10b981;border-radius:8px;background:#f0fdf4;padding:16px;">
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
@@ -531,6 +545,14 @@ func (app *App) handleFetchAddonMetadata(w http.ResponseWriter, r *http.Request)
 <label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:3px;">Description</label>
 <textarea name="description" rows="2" style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:inherit;resize:vertical;">` + addon.Description + `</textarea>
 </div>
+<div>
+<label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:3px;">Path Preset</label>
+<select name="preset_id" style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:14px;">` + presetOptions + `</select>
+</div>
+<div>
+<label style="font-size:12px;font-weight:600;color:#374151;display:block;margin-bottom:3px;">Installation Path <span style="font-weight:400;color:#6b7280;">(overrides preset)</span></label>
+<input type="text" name="installation_path" placeholder="e.g. /serverfiles/game/addons" style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:14px;">
+</div>
 <div style="grid-column:span 2;display:flex;justify-content:flex-end;gap:8px;margin-top:4px;">
 <button type="submit" class="btn btn-primary">Save Addon</button>
 </div>
@@ -553,6 +575,8 @@ func (app *App) handleCreateAddon(w http.ResponseWriter, r *http.Request) {
 	description := r.FormValue("description")
 	fileSizeBytesStr := r.FormValue("file_size_bytes")
 	isCollectionStr := r.FormValue("is_collection")
+	installationPath := r.FormValue("installation_path")
+	presetIDStr := r.FormValue("preset_id")
 
 	gameID, err := strconv.ParseInt(gameIDStr, 10, 64)
 	if err != nil {
@@ -565,8 +589,12 @@ func (app *App) handleCreateAddon(w http.ResponseWriter, r *http.Request) {
 		fileSizeBytes, _ = strconv.ParseInt(fileSizeBytesStr, 10, 64)
 	}
 	isCollection := isCollectionStr == "true"
+	var presetID int64
+	if presetIDStr != "" {
+		presetID, _ = strconv.ParseInt(presetIDStr, 10, 64)
+	}
 
-	addon, err := app.grpc.CreateAddon(ctx, gameID, workshopID, platformType, name, description, fileSizeBytes, isCollection)
+	addon, err := app.grpc.CreateAddon(ctx, gameID, workshopID, platformType, name, description, fileSizeBytes, isCollection, installationPath, presetID)
 	if err != nil {
 		log.Printf("Error creating addon: %v", err)
 		http.Error(w, "Failed to create addon", http.StatusInternalServerError)

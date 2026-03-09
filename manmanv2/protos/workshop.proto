@@ -62,8 +62,7 @@ message WorkshopAddon {
   string description = 6;
   int64 file_size_bytes = 7;
   string installation_path = 8;
-  int64 preset_id = 15;  // Optional: reference to path preset
-  int64 volume_id = 16;  // Optional: custom volume override
+  int64 preset_id = 15;
   bool is_collection = 9;
   bool is_deprecated = 10;
   string metadata = 11;  // JSON-encoded metadata (deprecated; use typed fields below)

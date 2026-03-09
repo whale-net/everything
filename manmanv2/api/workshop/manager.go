@@ -191,27 +191,18 @@ func (wm *WorkshopManager) resolveInstallationPath(ctx context.Context, sgc *man
 
 	// Determine effective preset: addon's own preset, or library default override
 	effectivePresetID := addon.PresetID
-	if effectivePresetID == nil && presetIDOverride != 0 {
-		effectivePresetID = &presetIDOverride
+	if effectivePresetID == 0 && presetIDOverride != 0 {
+		effectivePresetID = presetIDOverride
 	}
 
 	// Option 1: Addon uses a preset (own or library default)
-	if effectivePresetID != nil {
-		preset, err := wm.presetRepo.Get(ctx, *effectivePresetID)
+	if effectivePresetID != 0 {
+		preset, err := wm.presetRepo.Get(ctx, effectivePresetID)
 		if err != nil {
 			return "", fmt.Errorf("failed to get preset: %w", err)
 		}
 		// Preset provides the installation path
 		relativePath = preset.InstallationPath
-	}
-
-	// Option 2: Addon specifies a custom volume
-	if addon.VolumeID != nil {
-		vol, err := wm.volumeRepo.Get(ctx, *addon.VolumeID)
-		if err != nil {
-			return "", fmt.Errorf("failed to get addon volume: %w", err)
-		}
-		volume = vol
 	}
 
 	// Use addon's custom path if no preset was used
