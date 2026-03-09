@@ -593,6 +593,27 @@ func (h *WorkshopServiceHandler) AddAddonToLibrary(ctx context.Context, req *pb.
 		return nil, status.Error(codes.InvalidArgument, "addon_id is required")
 	}
 
+	// Validate that the addon will be installable: it must have its own installation path
+	// configured, or the library must have a default preset_id to fall back on.
+	addon, err := h.addonRepo.Get(ctx, req.AddonId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "addon %d not found: %v", req.AddonId, err)
+	}
+	addonHasPath := addon.PresetID != nil || (addon.InstallationPath != nil && *addon.InstallationPath != "")
+
+	if !addonHasPath {
+		library, err := h.libraryRepo.Get(ctx, req.LibraryId)
+		if err != nil {
+			return nil, status.Errorf(codes.NotFound, "library %d not found: %v", req.LibraryId, err)
+		}
+		if library.PresetID == nil {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"addon %d (%s) has no installation_path or preset_id, and library %d (%s) has no default preset_id. "+
+					"Set a path on the addon, or set a default preset on the library before adding this addon.",
+				addon.AddonID, addon.Name, library.LibraryID, library.Name)
+		}
+	}
+
 	displayOrder := int(req.DisplayOrder)
 	if displayOrder < 0 {
 		displayOrder = 0
