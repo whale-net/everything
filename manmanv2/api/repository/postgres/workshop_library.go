@@ -159,7 +159,7 @@ func (r *WorkshopLibraryRepository) RemoveAddon(ctx context.Context, libraryID, 
 func (r *WorkshopLibraryRepository) ListAddons(ctx context.Context, libraryID int64) ([]*manman.WorkshopAddonWithGame, error) {
 	query := `
 		SELECT wa.addon_id, wa.game_id, wa.workshop_id, wa.platform_type, wa.name, wa.description,
-		       wa.file_size_bytes, wa.installation_path, wa.preset_id, wa.volume_id,
+		       wa.file_size_bytes, wa.installation_path, wa.preset_id,
 		       wa.is_collection, wa.is_deprecated, wa.metadata, wa.last_updated,
 		       wa.created_at, wa.updated_at, g.steam_app_id
 		FROM workshop_addons wa
@@ -188,7 +188,6 @@ func (r *WorkshopLibraryRepository) ListAddons(ctx context.Context, libraryID in
 			&row.FileSizeBytes,
 			&row.InstallationPath,
 			&row.PresetID,
-			&row.VolumeID,
 			&row.IsCollection,
 			&row.IsDeprecated,
 			&row.Metadata,

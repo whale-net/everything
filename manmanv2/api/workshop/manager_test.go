@@ -240,6 +240,34 @@ func (m *mockStrategyRepo) Delete(ctx context.Context, strategyID int64) error {
 	return fmt.Errorf("not implemented")
 }
 
+type mockGameRepo struct {
+	games map[int64]*manman.Game
+}
+
+func (m *mockGameRepo) Create(ctx context.Context, game *manman.Game) (*manman.Game, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockGameRepo) Get(ctx context.Context, gameID int64) (*manman.Game, error) {
+	game, ok := m.games[gameID]
+	if !ok {
+		return nil, fmt.Errorf("game not found")
+	}
+	return game, nil
+}
+
+func (m *mockGameRepo) List(ctx context.Context, limit, offset int) ([]*manman.Game, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockGameRepo) Update(ctx context.Context, game *manman.Game) error {
+	return fmt.Errorf("not implemented")
+}
+
+func (m *mockGameRepo) Delete(ctx context.Context, gameID int64) error {
+	return fmt.Errorf("not implemented")
+}
+
 type mockRMQPublisher struct {
 	publishedCommands []*DownloadAddonCommand
 	publishedRemovals []*RemoveAddonCommand
@@ -314,6 +342,7 @@ func createTestManager() (*WorkshopManager, *mockAddonRepo, *mockInstallationRep
 		installByID:   make(map[int64]*manman.WorkshopInstallation),
 	}
 	sgcRepo := &mockSGCRepo{sgcs: make(map[int64]*manman.ServerGameConfig)}
+	gameRepo := &mockGameRepo{games: make(map[int64]*manman.Game)}
 	gameConfigRepo := &mockGameConfigRepo{gameConfigs: make(map[int64]*manman.GameConfig)}
 	volumeRepo := &mockVolumeRepo{volumes: make(map[int64][]*manman.GameConfigVolume)}
 	sessionRepo := &mockSessionRepo{sessions: make(map[int64][]*manman.Session)}
@@ -327,6 +356,7 @@ func createTestManager() (*WorkshopManager, *mockAddonRepo, *mockInstallationRep
 		installationRepo,
 		nil, // libraryRepo not needed for these tests
 		sgcRepo,
+		gameRepo,
 		gameConfigRepo,
 		volumeRepo,
 		nil, // presetRepo not needed for these tests
@@ -395,7 +425,7 @@ func TestProperty6_InstallationIdempotency(t *testing.T) {
 	}
 
 	// First installation
-	inst1, err := manager.InstallAddon(ctx, sgcID, addonID, false, false)
+	inst1, err := manager.InstallAddon(ctx, sgcID, addonID, false, false, "", 0)
 	if err != nil {
 		t.Fatalf("First installation failed: %v", err)
 	}
@@ -416,7 +446,7 @@ func TestProperty6_InstallationIdempotency(t *testing.T) {
 	installationRepo.UpdateStatus(ctx, inst1.InstallationID, manman.InstallationStatusInstalled, nil)
 
 	// Second installation (should be idempotent)
-	inst2, err := manager.InstallAddon(ctx, sgcID, addonID, false, false)
+	inst2, err := manager.InstallAddon(ctx, sgcID, addonID, false, false, "", 0)
 	if err != nil {
 		t.Fatalf("Second installation failed: %v", err)
 	}
@@ -435,7 +465,7 @@ func TestProperty6_InstallationIdempotency(t *testing.T) {
 	}
 
 	// Third installation with force_reinstall
-	inst3, err := manager.InstallAddon(ctx, sgcID, addonID, true, false)
+	inst3, err := manager.InstallAddon(ctx, sgcID, addonID, true, false, "", 0)
 	if err != nil {
 		t.Fatalf("Third installation with force failed: %v", err)
 	}
@@ -537,7 +567,7 @@ func TestProperty11_PathResolutionConsistency(t *testing.T) {
 			}
 
 			// Install addon
-			inst, err := manager.InstallAddon(ctx, sgcID, addonID, false, false)
+			inst, err := manager.InstallAddon(ctx, sgcID, addonID, false, false, "", 0)
 			if err != nil {
 				t.Fatalf("Installation failed: %v", err)
 			}
@@ -596,7 +626,7 @@ func TestProperty14_VolumeStrategyValidation(t *testing.T) {
 	// Test 1: No volume strategy at all
 	volumeRepo.volumes[gameConfigID] = []*manman.GameConfigVolume{}
 
-	_, err := manager.InstallAddon(ctx, sgcID, addonID, false, false)
+	_, err := manager.InstallAddon(ctx, sgcID, addonID, false, false, "", 0)
 	if err == nil {
 		t.Error("Expected error when no volume strategy exists, got nil")
 	}
@@ -610,7 +640,7 @@ func TestProperty14_VolumeStrategyValidation(t *testing.T) {
 	
 	// Test case removed - no longer relevant with volume system
 
-	_, err = manager.InstallAddon(ctx, sgcID, addonID, false, false)
+	_, err = manager.InstallAddon(ctx, sgcID, addonID, false, false, "", 0)
 	if err == nil {
 		t.Error("Expected error when no volume strategy exists (only cli_args), got nil")
 	}
@@ -622,7 +652,7 @@ func TestProperty14_VolumeStrategyValidation(t *testing.T) {
 	}
 	volumeRepo.volumes[gameConfigID] = []*manman.GameConfigVolume{volumeStrategy}
 
-	_, err = manager.InstallAddon(ctx, sgcID, addonID, false, false)
+	_, err = manager.InstallAddon(ctx, sgcID, addonID, false, false, "", 0)
 	if err == nil {
 		t.Error("Expected error when volume strategy missing target_path, got nil")
 	}
@@ -635,7 +665,7 @@ func TestProperty14_VolumeStrategyValidation(t *testing.T) {
 	volumeStrategy.ContainerPath = targetPath
 	volumeRepo.volumes[gameConfigID] = []*manman.GameConfigVolume{volumeStrategy}
 
-	inst, err := manager.InstallAddon(ctx, sgcID, addonID, false, false)
+	inst, err := manager.InstallAddon(ctx, sgcID, addonID, false, false, "", 0)
 	if err != nil {
 		t.Errorf("Expected success with valid volume strategy, got error: %v", err)
 	}

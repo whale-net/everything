@@ -43,7 +43,7 @@ type RemoveAddonCommand struct {
 
 // WorkshopManagerInterface defines the interface for workshop addon operations
 type WorkshopManagerInterface interface {
-	InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall, skipDispatch bool) (*manman.WorkshopInstallation, error)
+	InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall, skipDispatch bool, installationPathOverride string, presetIDOverride int64) (*manman.WorkshopInstallation, error)
 	RemoveInstallation(ctx context.Context, installationID int64) error
 	ResetInstallation(ctx context.Context, installationID int64) (*manman.WorkshopInstallation, error)
 	FetchMetadata(ctx context.Context, gameID int64, workshopID string) (*manman.WorkshopAddon, error)
@@ -56,6 +56,7 @@ type WorkshopManager struct {
 	installationRepo repository.WorkshopInstallationRepository
 	libraryRepo      repository.WorkshopLibraryRepository
 	sgcRepo          repository.ServerGameConfigRepository
+	gameRepo         repository.GameRepository
 	gameConfigRepo   repository.GameConfigRepository
 	volumeRepo       repository.GameConfigVolumeRepository
 	presetRepo       repository.AddonPathPresetRepository
@@ -70,6 +71,7 @@ func NewWorkshopManager(
 	installationRepo repository.WorkshopInstallationRepository,
 	libraryRepo repository.WorkshopLibraryRepository,
 	sgcRepo repository.ServerGameConfigRepository,
+	gameRepo repository.GameRepository,
 	gameConfigRepo repository.GameConfigRepository,
 	volumeRepo repository.GameConfigVolumeRepository,
 	presetRepo repository.AddonPathPresetRepository,
@@ -82,6 +84,7 @@ func NewWorkshopManager(
 		installationRepo: installationRepo,
 		libraryRepo:      libraryRepo,
 		sgcRepo:          sgcRepo,
+		gameRepo:         gameRepo,
 		gameConfigRepo:   gameConfigRepo,
 		volumeRepo:       volumeRepo,
 		presetRepo:       presetRepo,
@@ -93,7 +96,9 @@ func NewWorkshopManager(
 
 // InstallAddon creates/updates the installation record and, unless skipDispatch is true,
 // publishes a download command to RabbitMQ for the host manager to execute.
-func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall, skipDispatch bool) (*manman.WorkshopInstallation, error) {
+// installationPathOverride, if non-empty, overrides the addon's configured installation path.
+// presetIDOverride, if non-zero, is used as the preset when the addon has none configured (library default).
+func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall, skipDispatch bool, installationPathOverride string, presetIDOverride int64) (*manman.WorkshopInstallation, error) {
 	// 1. Check if already installed
 	existing, err := wm.installationRepo.GetBySGCAndAddon(ctx, sgcID, addonID)
 	if err == nil && existing.Status == manman.InstallationStatusInstalled && !forceReinstall {
@@ -113,7 +118,7 @@ func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int6
 	}
 
 	// 4. Resolve installation path from volume strategies
-	installPath, err := wm.resolveInstallationPath(ctx, sgc, addon)
+	installPath, err := wm.resolveInstallationPath(ctx, sgc, addon, installationPathOverride, presetIDOverride)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve installation path: %w", err)
 	}
@@ -144,11 +149,13 @@ func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int6
 
 	// 6. Publish download command to RabbitMQ for host manager (unless caller skips dispatch)
 	if !skipDispatch {
+		game, err := wm.gameRepo.Get(ctx, addon.GameID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get game for addon: %w", err)
+		}
 		steamAppID := ""
-		if addon.Metadata != nil {
-			if appID, ok := addon.Metadata["steam_app_id"].(string); ok {
-				steamAppID = appID
-			}
+		if game.SteamAppID != nil {
+			steamAppID = *game.SteamAppID
 		}
 
 		downloadCmd := &DownloadAddonCommand{
@@ -161,7 +168,7 @@ func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int6
 		}
 
 		routingKey := fmt.Sprintf("command.host.%d.workshop.download", sgc.ServerID)
-		err = wm.rmqPublisher.Publish(ctx, "manman.commands", routingKey, downloadCmd)
+		err = wm.rmqPublisher.Publish(ctx, "manman", routingKey, downloadCmd)
 		if err != nil {
 			return nil, fmt.Errorf("failed to publish download command: %w", err)
 		}
@@ -170,28 +177,32 @@ func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int6
 	return installation, nil
 }
 
-// resolveInstallationPath determines the target path for addon installation
-func (wm *WorkshopManager) resolveInstallationPath(ctx context.Context, sgc *manman.ServerGameConfig, addon *manman.WorkshopAddon) (string, error) {
+// resolveInstallationPath determines the target path for addon installation.
+// installationPathOverride, if non-empty, is used as the absolute installation path directly.
+// presetIDOverride, if non-zero, is used as the preset when the addon has none of its own (library default).
+func (wm *WorkshopManager) resolveInstallationPath(ctx context.Context, sgc *manman.ServerGameConfig, addon *manman.WorkshopAddon, installationPathOverride string, presetIDOverride int64) (string, error) {
+	// Library-level path override takes highest precedence — returned as-is (absolute path)
+	if installationPathOverride != "" {
+		return installationPathOverride, nil
+	}
+
 	var volume *manman.GameConfigVolume
 	var relativePath string
 
-	// Option 1: Addon uses a preset
-	if addon.PresetID != nil {
-		preset, err := wm.presetRepo.Get(ctx, *addon.PresetID)
+	// Determine effective preset: addon's own preset, or library default override
+	effectivePresetID := addon.PresetID
+	if effectivePresetID == 0 && presetIDOverride != 0 {
+		effectivePresetID = presetIDOverride
+	}
+
+	// Option 1: Addon uses a preset (own or library default)
+	if effectivePresetID != 0 {
+		preset, err := wm.presetRepo.Get(ctx, effectivePresetID)
 		if err != nil {
 			return "", fmt.Errorf("failed to get preset: %w", err)
 		}
 		// Preset provides the installation path
 		relativePath = preset.InstallationPath
-	}
-
-	// Option 2: Addon specifies a custom volume
-	if addon.VolumeID != nil {
-		vol, err := wm.volumeRepo.Get(ctx, *addon.VolumeID)
-		if err != nil {
-			return "", fmt.Errorf("failed to get addon volume: %w", err)
-		}
-		volume = vol
 	}
 
 	// Use addon's custom path if no preset was used
@@ -330,7 +341,7 @@ func (wm *WorkshopManager) EnsureLibraryAddonsInstalled(ctx context.Context, sgc
 			continue // already installed
 		}
 
-		if _, err := wm.InstallAddon(ctx, sgcID, addonID, false, false); err != nil {
+		if _, err := wm.InstallAddon(ctx, sgcID, addonID, false, false, "", 0); err != nil {
 			log.Printf("Warning: failed to trigger install for SGC %d addon %d: %v", sgcID, addonID, err)
 			continue
 		}
@@ -344,7 +355,11 @@ func (wm *WorkshopManager) EnsureLibraryAddonsInstalled(ctx context.Context, sgc
 	// 4. Poll until all triggered addons are installed or failed (up to 90s)
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
-		time.Sleep(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
 
 		allDone := true
 		for _, addonID := range triggered {
@@ -405,13 +420,7 @@ func (wm *WorkshopManager) RemoveInstallation(ctx context.Context, installationI
 		return fmt.Errorf("failed to get SGC: %w", err)
 	}
 
-	// Update status to removed
-	err = wm.installationRepo.UpdateStatus(ctx, installationID, manman.InstallationStatusRemoved, nil)
-	if err != nil {
-		return fmt.Errorf("failed to update installation status: %w", err)
-	}
-
-	// Publish removal command to host manager to delete files
+	// Publish removal command first; only update DB status after successful publish
 	removeCmd := &RemoveAddonCommand{
 		InstallationID:   installationID,
 		SGCID:            installation.SGCID,
@@ -420,9 +429,14 @@ func (wm *WorkshopManager) RemoveInstallation(ctx context.Context, installationI
 	}
 
 	routingKey := fmt.Sprintf("command.host.%d.workshop.remove", sgc.ServerID)
-	err = wm.rmqPublisher.Publish(ctx, "manman.commands", routingKey, removeCmd)
+	err = wm.rmqPublisher.Publish(ctx, "manman", routingKey, removeCmd)
 	if err != nil {
 		return fmt.Errorf("failed to publish remove command: %w", err)
+	}
+
+	err = wm.installationRepo.UpdateStatus(ctx, installationID, manman.InstallationStatusRemoved, nil)
+	if err != nil {
+		return fmt.Errorf("failed to update installation status: %w", err)
 	}
 
 	return nil

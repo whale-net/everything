@@ -157,6 +157,7 @@ func run() error {
 	}
 
 	// Start health check publisher
+	// (RabbitMQ channel failures are now handled automatically by the Publisher library)
 	healthTicker := time.NewTicker(5 * time.Second)
 	defer healthTicker.Stop()
 
@@ -406,6 +407,16 @@ func (h *CommandHandlerImpl) HandleDownloadAddon(ctx context.Context, cmd *rmq.D
 	}()
 
 	return nil
+}
+
+// HandleRemoveAddon handles a workshop addon removal command
+func (h *CommandHandlerImpl) HandleRemoveAddon(ctx context.Context, cmd *rmq.RemoveAddonCommand) error {
+	slog.Info("processing remove addon command",
+		"installation_id", cmd.InstallationID,
+		"sgc_id", cmd.SGCID,
+		"addon_id", cmd.AddonID,
+		"installation_path", cmd.InstallationPath)
+	return h.downloadOrchestrator.HandleRemoveCommand(ctx, cmd)
 }
 
 // selfRegister generates a server name (if not provided) and registers with the control plane

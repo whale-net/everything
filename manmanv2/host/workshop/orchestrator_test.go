@@ -172,14 +172,14 @@ func TestInProgressTracking(t *testing.T) {
 		nil, nil, nil, 1, "test", "/tmp", "/var/lib/test", 3, &MockInstallationStatusPublisher{},
 	)
 	
-	// Initially not in progress
-	assert.False(t, orchestrator.isDownloadInProgress(123))
-	
-	// Mark as in progress
-	orchestrator.markDownloadInProgress(123)
-	assert.True(t, orchestrator.isDownloadInProgress(123))
-	
+	// Initially not in progress; checkAndMark returns false and marks it
+	assert.False(t, orchestrator.checkAndMarkDownloadInProgress(123))
+
+	// Already marked; checkAndMark returns true without double-marking
+	assert.True(t, orchestrator.checkAndMarkDownloadInProgress(123))
+
 	// Mark as complete
 	orchestrator.markDownloadComplete(123)
-	assert.False(t, orchestrator.isDownloadInProgress(123))
+	// After completion, should be free again
+	assert.False(t, orchestrator.checkAndMarkDownloadInProgress(123))
 }

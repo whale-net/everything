@@ -287,8 +287,7 @@ type WorkshopAddon struct {
 	Description      *string    `db:"description"`
 	FileSizeBytes    *int64     `db:"file_size_bytes"`
 	InstallationPath *string    `db:"installation_path"`
-	PresetID         *int64     `db:"preset_id"`
-	VolumeID         *int64     `db:"volume_id"`
+	PresetID         int64      `db:"preset_id"`
 	IsCollection     bool       `db:"is_collection"`
 	IsDeprecated     bool       `db:"is_deprecated"`
 	Metadata         JSONB      `db:"metadata"`

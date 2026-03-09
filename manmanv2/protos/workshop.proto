@@ -62,8 +62,7 @@ message WorkshopAddon {
   string description = 6;
   int64 file_size_bytes = 7;
   string installation_path = 8;
-  int64 preset_id = 15;  // Optional: reference to path preset
-  int64 volume_id = 16;  // Optional: custom volume override
+  int64 preset_id = 15;
   bool is_collection = 9;
   bool is_deprecated = 10;
   string metadata = 11;  // JSON-encoded metadata (deprecated; use typed fields below)
@@ -204,6 +203,12 @@ message InstallAddonRequest {
   // a download command to RabbitMQ. The caller is responsible for triggering
   // the download directly (e.g. EnsureLibraryAddonsInstalled on the host).
   bool skip_dispatch = 4;
+  // Optional: override the addon's configured installation path (absolute path on the volume).
+  // Takes precedence over preset_id and installation_path on the addon record.
+  string installation_path_override = 5;
+  // Optional: use this preset for path resolution when the addon has no preset_id configured.
+  // Applies the library's default preset. Takes precedence over addon's own preset_id.
+  int64 preset_id_override = 6;
 }
 
 message InstallAddonResponse {

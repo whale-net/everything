@@ -66,13 +66,10 @@ func (h *WorkshopServiceHandler) CreateAddon(ctx context.Context, req *pb.Create
 
 	// VALIDATION: Addon must have a way to determine installation path
 	// Either preset_id OR installation_path must be provided
-	hasPresetID := req.PresetId != 0
-	hasInstallPath := req.InstallationPath != ""
-
-	if !hasPresetID && !hasInstallPath {
+	if req.PresetId == 0 && req.InstallationPath == "" {
 		return nil, status.Error(codes.InvalidArgument,
 			"addon must have either preset_id or installation_path set. "+
-			"Use preset_id to reference a path preset, or provide a custom installation_path.")
+				"Use preset_id to reference a path preset, or provide a custom installation_path.")
 	}
 
 	// Build addon model
@@ -90,9 +87,7 @@ func (h *WorkshopServiceHandler) CreateAddon(ctx context.Context, req *pb.Create
 	if req.FileSizeBytes > 0 {
 		addon.FileSizeBytes = &req.FileSizeBytes
 	}
-	if req.PresetId != 0 {
-		addon.PresetID = &req.PresetId
-	}
+	addon.PresetID = req.PresetId
 	if req.InstallationPath != "" {
 		addon.InstallationPath = &req.InstallationPath
 	}
@@ -194,9 +189,7 @@ func (h *WorkshopServiceHandler) UpdateAddon(ctx context.Context, req *pb.Update
 		if req.FileSizeBytes > 0 {
 			addon.FileSizeBytes = &req.FileSizeBytes
 		}
-		if req.PresetId != 0 {
-			addon.PresetID = &req.PresetId
-		}
+		addon.PresetID = req.PresetId
 		if req.InstallationPath != "" {
 			addon.InstallationPath = &req.InstallationPath
 		}
@@ -217,11 +210,7 @@ func (h *WorkshopServiceHandler) UpdateAddon(ctx context.Context, req *pb.Update
 			case "file_size_bytes":
 				addon.FileSizeBytes = &req.FileSizeBytes
 			case "preset_id":
-				if req.PresetId != 0 {
-					addon.PresetID = &req.PresetId
-				} else {
-					addon.PresetID = nil
-				}
+				addon.PresetID = req.PresetId
 			case "installation_path":
 				if req.InstallationPath != "" {
 					addon.InstallationPath = &req.InstallationPath
@@ -238,7 +227,7 @@ func (h *WorkshopServiceHandler) UpdateAddon(ctx context.Context, req *pb.Update
 	}
 
 	// VALIDATION: After update, addon must still have a way to determine installation path
-	hasPresetID := addon.PresetID != nil && *addon.PresetID != 0
+	hasPresetID := addon.PresetID != 0
 	hasInstallPath := addon.InstallationPath != nil && *addon.InstallationPath != ""
 
 	if !hasPresetID && !hasInstallPath {
@@ -318,7 +307,7 @@ func (h *WorkshopServiceHandler) InstallAddon(ctx context.Context, req *pb.Insta
 		return nil, status.Error(codes.InvalidArgument, "addon_id is required")
 	}
 
-	installation, err := h.workshopManager.InstallAddon(ctx, req.SgcId, req.AddonId, req.ForceReinstall, req.SkipDispatch)
+	installation, err := h.workshopManager.InstallAddon(ctx, req.SgcId, req.AddonId, req.ForceReinstall, req.SkipDispatch, req.InstallationPathOverride, req.PresetIdOverride)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to install addon: %v", err)
 	}
@@ -596,6 +585,27 @@ func (h *WorkshopServiceHandler) AddAddonToLibrary(ctx context.Context, req *pb.
 		return nil, status.Error(codes.InvalidArgument, "addon_id is required")
 	}
 
+	// Validate that the addon will be installable: it must have its own installation path
+	// configured, or the library must have a default preset_id to fall back on.
+	addon, err := h.addonRepo.Get(ctx, req.AddonId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "addon %d not found: %v", req.AddonId, err)
+	}
+	addonHasPath := addon.PresetID != 0 || (addon.InstallationPath != nil && *addon.InstallationPath != "")
+
+	if !addonHasPath {
+		library, err := h.libraryRepo.Get(ctx, req.LibraryId)
+		if err != nil {
+			return nil, status.Errorf(codes.NotFound, "library %d not found: %v", req.LibraryId, err)
+		}
+		if library.PresetID == nil {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"addon %d (%s) has no installation_path or preset_id, and library %d (%s) has no default preset_id. "+
+					"Set a path on the addon, or set a default preset on the library before adding this addon.",
+				addon.AddonID, addon.Name, library.LibraryID, library.Name)
+		}
+	}
+
 	displayOrder := int(req.DisplayOrder)
 	if displayOrder < 0 {
 		displayOrder = 0
@@ -738,6 +748,7 @@ func addonToProto(addon *manman.WorkshopAddon) *pb.WorkshopAddon {
 	if addon.InstallationPath != nil {
 		pbAddon.InstallationPath = *addon.InstallationPath
 	}
+	pbAddon.PresetId = addon.PresetID
 	if addon.LastUpdated != nil {
 		pbAddon.LastUpdated = addon.LastUpdated.Unix()
 	}

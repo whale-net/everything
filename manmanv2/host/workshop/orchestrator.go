@@ -100,14 +100,11 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 		"workshop_id", cmd.WorkshopID,
 	)
 
-	// Check for duplicate in-progress downloads for this installation
-	if do.isDownloadInProgress(cmd.InstallationID) {
+	// Atomically check and mark to prevent duplicate concurrent downloads
+	if do.checkAndMarkDownloadInProgress(cmd.InstallationID) {
 		logger.Info("download already in progress, skipping duplicate")
 		return nil
 	}
-
-	// Mark download as in progress
-	do.markDownloadInProgress(cmd.InstallationID)
 	defer do.markDownloadComplete(cmd.InstallationID)
 
 	// Acquire semaphore for concurrency control
@@ -361,18 +358,16 @@ func (do *DownloadOrchestrator) getDownloadContainerName(sgcID, addonID int64) s
 	return fmt.Sprintf("workshop-download-%d-%d", sgcID, addonID)
 }
 
-// isDownloadInProgress checks if a download is already in progress
-func (do *DownloadOrchestrator) isDownloadInProgress(installationID int64) bool {
-	do.inProgressMutex.RLock()
-	defer do.inProgressMutex.RUnlock()
-	return do.inProgressDownloads[installationID]
-}
-
-// markDownloadInProgress marks a download as in progress
-func (do *DownloadOrchestrator) markDownloadInProgress(installationID int64) {
+// checkAndMarkDownloadInProgress atomically checks if a download is in progress and marks it if not.
+// Returns true if the download was already in progress (caller should skip).
+func (do *DownloadOrchestrator) checkAndMarkDownloadInProgress(installationID int64) bool {
 	do.inProgressMutex.Lock()
 	defer do.inProgressMutex.Unlock()
+	if do.inProgressDownloads[installationID] {
+		return true
+	}
 	do.inProgressDownloads[installationID] = true
+	return false
 }
 
 // markDownloadComplete marks a download as complete
@@ -380,6 +375,37 @@ func (do *DownloadOrchestrator) markDownloadComplete(installationID int64) {
 	do.inProgressMutex.Lock()
 	defer do.inProgressMutex.Unlock()
 	delete(do.inProgressDownloads, installationID)
+}
+
+// HandleRemoveCommand removes workshop addon files from disk and publishes a status update.
+func (do *DownloadOrchestrator) HandleRemoveCommand(ctx context.Context, cmd *rmq.RemoveAddonCommand) error {
+	logger := slog.With(
+		"installation_id", cmd.InstallationID,
+		"sgc_id", cmd.SGCID,
+		"addon_id", cmd.AddonID,
+		"installation_path", cmd.InstallationPath,
+	)
+	logger.Info("removing workshop addon files")
+
+	errMsg := func(s string) *string { return &s }
+
+	if cmd.InstallationPath == "" {
+		msg := "installation_path is empty, nothing to remove"
+		logger.Warn(msg)
+		do.publishStatus(ctx, cmd.InstallationID, InstallationStatusRemoved, 0, nil)
+		return nil
+	}
+
+	if err := os.RemoveAll(cmd.InstallationPath); err != nil {
+		e := fmt.Sprintf("failed to remove addon files: %v", err)
+		logger.Error(e)
+		do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, errMsg(e))
+		return fmt.Errorf("%s", e)
+	}
+
+	logger.Info("addon files removed successfully")
+	do.publishStatus(ctx, cmd.InstallationID, InstallationStatusRemoved, 0, nil)
+	return nil
 }
 
 // publishStatus sends status updates back to control plane via RabbitMQ
@@ -635,73 +661,125 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 	logger := slog.With("sgc_id", sgcID)
 	logger.Info("ensuring library addons are installed")
 
-	// Call the API to get all addons that need to be installed for this SGC
-	resp, err := do.workshopClient.ListSGCLibraries(ctx, &pb.ListSGCLibrariesRequest{
+	// Fetch library attachments (includes installation_path_override and preset_id per library)
+	attachmentsResp, err := do.workshopClient.GetSGCLibraryAttachments(ctx, &pb.GetSGCLibraryAttachmentsRequest{
 		SgcId: sgcID,
 	})
 	if err != nil {
-		logger.Error("failed to list SGC libraries", "error", err)
-		return fmt.Errorf("failed to list SGC libraries: %w", err)
+		logger.Error("failed to get SGC library attachments", "error", err)
+		return fmt.Errorf("failed to get SGC library attachments: %w", err)
 	}
 
-	if len(resp.Libraries) == 0 {
+	if len(attachmentsResp.Attachments) == 0 {
 		logger.Info("no libraries attached to SGC, skipping addon downloads")
 		return nil
 	}
 
-	logger.Info("found libraries attached to SGC", "count", len(resp.Libraries))
+	// Fetch library defaults (includes library's default preset_id)
+	librariesResp, err := do.workshopClient.ListSGCLibraries(ctx, &pb.ListSGCLibrariesRequest{
+		SgcId: sgcID,
+	})
+	if err != nil {
+		logger.Warn("failed to list SGC libraries for defaults, proceeding without library presets", "error", err)
+	}
 
-	// Collect all unique addon IDs from all libraries (including nested references)
-	addonIDs := make(map[int64]*pb.WorkshopAddon)
+	// Build map: libraryID → library default preset_id
+	libraryDefaultPreset := make(map[int64]int64)
+	if librariesResp != nil {
+		for _, lib := range librariesResp.Libraries {
+			if lib.PresetId != 0 {
+				libraryDefaultPreset[lib.LibraryId] = lib.PresetId
+			}
+		}
+	}
+
+	// Build map: libraryID → effective overrides (attachment overrides take priority over library defaults)
+	type libraryOverrides struct {
+		pathOverride string
+		presetID     int64 // effective: attachment's preset > library default preset
+	}
+	libraryOpts := make(map[int64]libraryOverrides)
+	for _, att := range attachmentsResp.Attachments {
+		opts := libraryOverrides{
+			pathOverride: att.InstallationPathOverride,
+			presetID:     att.PresetId, // SGC attachment override
+		}
+		if opts.presetID == 0 {
+			opts.presetID = libraryDefaultPreset[att.LibraryId] // fall back to library default
+		}
+		libraryOpts[att.LibraryId] = opts
+	}
+
+	logger.Info("found libraries attached to SGC", "count", len(attachmentsResp.Attachments))
+
+	// Collect all unique addons from all libraries (including nested references).
+	// Track the overrides that apply to each addon (inherited from the top-level library attachment).
+	type addonEntry struct {
+		addon        *pb.WorkshopAddon
+		pathOverride string
+		presetID     int64
+	}
+	addonMap := make(map[int64]addonEntry)
 	visited := make(map[int64]bool)
-	queue := make([]int64, 0, len(resp.Libraries))
-	for _, lib := range resp.Libraries {
-		queue = append(queue, lib.LibraryId)
+
+	type queueItem struct {
+		libraryID    int64
+		pathOverride string // inherited from the top-level SGC library attachment
+		presetID     int64 // effective preset (attachment override or library default)
+	}
+	queue := make([]queueItem, 0, len(attachmentsResp.Attachments))
+	for _, att := range attachmentsResp.Attachments {
+		opts := libraryOpts[att.LibraryId]
+		queue = append(queue, queueItem{libraryID: att.LibraryId, pathOverride: opts.pathOverride, presetID: opts.presetID})
 	}
 
 	// BFS to collect all addons from all libraries
 	for len(queue) > 0 {
-		libID := queue[0]
+		item := queue[0]
 		queue = queue[1:]
 
-		if visited[libID] {
+		if visited[item.libraryID] {
 			continue
 		}
-		visited[libID] = true
+		visited[item.libraryID] = true
 
 		// Get addons for this library
 		addonsResp, err := do.workshopClient.GetLibraryAddons(ctx, &pb.GetLibraryAddonsRequest{
-			LibraryId: libID,
+			LibraryId: item.libraryID,
 		})
 		if err != nil {
-			logger.Warn("failed to get addons for library", "library_id", libID, "error", err)
+			logger.Warn("failed to get addons for library", "library_id", item.libraryID, "error", err)
 			continue
 		}
 
 		for _, addon := range addonsResp.Addons {
-			addonIDs[addon.AddonId] = addon
+			if _, exists := addonMap[addon.AddonId]; !exists {
+				addonMap[addon.AddonId] = addonEntry{addon: addon, pathOverride: item.pathOverride, presetID: item.presetID}
+			}
 		}
 
-		// Get child libraries
+		// Get child libraries (inherit parent's overrides)
 		childrenResp, err := do.workshopClient.GetChildLibraries(ctx, &pb.GetChildLibrariesRequest{
-			LibraryId: libID,
+			LibraryId: item.libraryID,
 		})
 		if err != nil {
-			logger.Warn("failed to get child libraries", "library_id", libID, "error", err)
+			logger.Warn("failed to get child libraries", "library_id", item.libraryID, "error", err)
 			continue
 		}
 
 		for _, child := range childrenResp.Libraries {
-			queue = append(queue, child.LibraryId)
+			queue = append(queue, queueItem{libraryID: child.LibraryId, pathOverride: item.pathOverride, presetID: item.presetID})
 		}
 	}
 
-	if len(addonIDs) == 0 {
+	addonIDs := addonMap
+
+	if len(addonMap) == 0 {
 		logger.Info("no addons found in libraries")
 		return nil
 	}
 
-	logger.Info("found addons to install", "count", len(addonIDs))
+	logger.Info("found addons to install", "count", len(addonMap))
 
 	// Start heartbeat ticker
 	ticker := time.NewTicker(5 * time.Second)
@@ -725,7 +803,8 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 	}()
 
 	// Download each addon (sequentially for now, can parallelize later)
-	for addonID, addon := range addonIDs {
+	for addonID, entry := range addonIDs {
+		addon := entry.addon
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -752,13 +831,22 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 
 		// Trigger installation via API (creates/updates the record; we handle the download below)
 		installResp, err := do.workshopClient.InstallAddon(ctx, &pb.InstallAddonRequest{
-			SgcId:        sgcID,
-			AddonId:      addonID,
-			SkipDispatch: true,
+			SgcId:                    sgcID,
+			AddonId:                  addonID,
+			SkipDispatch:             true,
+			InstallationPathOverride: entry.pathOverride,
+			PresetIdOverride:         entry.presetID,
 		})
 		if err != nil {
-			logger.Error("failed to trigger installation", "addon_id", addonID, "error", err)
-			return fmt.Errorf("failed to trigger installation for addon %d: %w", addonID, err)
+			// Treat installation errors as non-fatal: a misconfigured addon (e.g. missing
+			// installation path) should not prevent the session from starting. Log and skip.
+			logger.Error("failed to trigger installation, skipping addon", "addon_id", addonID, "workshop_id", addon.WorkshopId, "error", err)
+			continue
+		}
+
+		if installResp.Installation == nil {
+			logger.Error("InstallAddon returned nil installation, skipping addon", "addon_id", addonID)
+			continue
 		}
 
 		// Now handle the download synchronously
@@ -773,7 +861,8 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 
 		// Download addon (blocking)
 		if err := do.HandleDownloadCommand(ctx, cmd); err != nil {
-			return fmt.Errorf("failed to download addon %d: %w", addonID, err)
+			logger.Error("failed to download addon, skipping", "addon_id", addonID, "workshop_id", addon.WorkshopId, "error", err)
+			continue
 		}
 
 		logger.Info("addon installation completed", "addon_id", addonID)

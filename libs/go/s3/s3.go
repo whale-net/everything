@@ -40,6 +40,11 @@ type Config struct {
 func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 	configOpts := []func(*config.LoadOptions) error{
 		config.WithRegion(cfg.Region),
+		// Disable automatic CRC32 checksum injection (default since service/s3 v1.73.0).
+		// OVH Object Storage does not support x-amz-sdk-checksum-algorithm or
+		// STREAMING-UNSIGNED-PAYLOAD-TRAILER, causing requests to be rejected (404/501).
+		config.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
+		config.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
 	}
 
 	// If static credentials are provided, use them instead of default credential chain
@@ -140,8 +145,9 @@ func (c *Client) PresignPutURL(ctx context.Context, key string, ttl time.Duratio
 		pc = c.presignPublic
 	}
 	req, err := pc.PresignPutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(c.bucket),
-		Key:    aws.String(key),
+		Bucket:      aws.String(c.bucket),
+		Key:         aws.String(key),
+		ContentType: aws.String("application/gzip"),
 	}, s3.WithPresignExpires(ttl))
 	if err != nil {
 		return "", fmt.Errorf("failed to presign PUT URL: %w", err)

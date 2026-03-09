@@ -234,6 +234,7 @@ func (h *BackupConfigHandler) TriggerBackup(ctx context.Context, req *pb.Trigger
 		S3Key:             s3Key,
 		PresignedURL:      presignedURL,
 		PreActionCommands: preActionCommands,
+		CreatedAt:         time.Now(),
 	}
 
 	if err := h.commandPublisher.PublishBackup(ctx, server.ServerID, cmd); err != nil {

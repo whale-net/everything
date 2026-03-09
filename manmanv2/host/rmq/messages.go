@@ -1,5 +1,7 @@
 package rmq
 
+import "time"
+
 // PortBindingMessage represents a container-to-host port mapping
 type PortBindingMessage struct {
 	ContainerPort int32  `json:"container_port"`
@@ -107,15 +109,24 @@ type InstallationStatusUpdate struct {
 	ErrorMessage    *string `json:"error_message,omitempty"`
 }
 
+// RemoveAddonCommand represents a command to remove a workshop addon from disk
+type RemoveAddonCommand struct {
+	InstallationID   int64  `json:"installation_id"`
+	SGCID            int64  `json:"sgc_id"`
+	AddonID          int64  `json:"addon_id"`
+	InstallationPath string `json:"installation_path"`
+}
+
 // BackupCommand instructs the host-manager to archive a volume sub-path and upload to S3
 type BackupCommand struct {
-	BackupID          int64    `json:"backup_id"`
-	SGCID             int64    `json:"sgc_id"`
-	VolumeHostPath    string   `json:"volume_host_path"`    // absolute path on host to the volume root
-	BackupPath        string   `json:"backup_path"`         // relative path within volume to archive
-	S3Key             string   `json:"s3_key"`              // pre-computed: backups/{sgc_id}/{config_id}/{backup_id}.tar.gz
-	PresignedURL      string   `json:"presigned_url"`       // pre-signed PUT URL for direct upload
-	PreActionCommands []string `json:"pre_action_commands"` // pre-rendered commands to send to container stdin
+	BackupID          int64     `json:"backup_id"`
+	SGCID             int64     `json:"sgc_id"`
+	VolumeHostPath    string    `json:"volume_host_path"`    // absolute path on host to the volume root
+	BackupPath        string    `json:"backup_path"`         // relative path within volume to archive
+	S3Key             string    `json:"s3_key"`              // pre-computed: backups/{sgc_id}/{config_id}/{backup_id}.tar.gz
+	PresignedURL      string    `json:"presigned_url"`       // pre-signed PUT URL for direct upload
+	PreActionCommands []string  `json:"pre_action_commands"` // pre-rendered commands to send to container stdin
+	CreatedAt         time.Time `json:"created_at"`          // used to discard commands that queued too long
 }
 
 // BackupStatusUpdate reports the result of a backup operation back to the processor

@@ -107,15 +107,23 @@ func (h *CommandHandlerImpl) HandleBackup(ctx context.Context, cmd *hostrmq.Back
 	}
 	req.Header.Set("Content-Type", "application/gzip")
 	req.ContentLength = size
+	// GetBody allows the HTTP client to retry on HTTP/2 REFUSED_STREAM
+	req.GetBody = func() (io.ReadCloser, error) {
+		if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
+			return nil, err
+		}
+		return io.NopCloser(tmpFile), nil
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		_ = tarCmd.Process.Kill()
 		return fail(fmt.Errorf("failed to upload to S3: %w", err))
 	}
+	respBody, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return fail(fmt.Errorf("S3 upload returned status %d", resp.StatusCode))
+		return fail(fmt.Errorf("S3 upload returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody))))
 	}
 
 	s3URL := fmt.Sprintf("s3://%s", cmd.S3Key)

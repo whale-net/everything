@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -21,7 +22,9 @@ type Message struct {
 type MessageHandler func(ctx context.Context, msg Message) error
 
 // Consumer consumes messages from RabbitMQ queues
+// It automatically recovers from channel closures for reply publishing
 type Consumer struct {
+	mu       sync.Mutex
 	channel  *amqp.Channel
 	queue    string
 	handlers map[string]MessageHandler
@@ -135,8 +138,12 @@ func buildQueueArguments(queueName string, durable, autoDelete bool, messageTTL,
 
 // BindExchange binds the consumer's queue to an exchange with routing keys
 func (c *Consumer) BindExchange(exchange string, routingKeys []string) error {
+	c.mu.Lock()
+	ch := c.channel
+	c.mu.Unlock()
+
 	for _, key := range routingKeys {
-		if err := c.channel.QueueBind(
+		if err := ch.QueueBind(
 			c.queue,    // queue name
 			key,        // routing key
 			exchange,   // exchange
@@ -156,7 +163,11 @@ func (c *Consumer) RegisterHandler(routingKeyPattern string, handler MessageHand
 
 // Start starts consuming messages
 func (c *Consumer) Start(ctx context.Context) error {
-	msgs, err := c.channel.Consume(
+	c.mu.Lock()
+	ch := c.channel
+	c.mu.Unlock()
+
+	msgs, err := ch.Consume(
 		c.queue, // queue
 		"",      // consumer
 		false,   // auto-ack (we'll ack manually)
@@ -267,6 +278,7 @@ func getRetryCount(delivery amqp.Delivery) int {
 }
 
 // sendReply sends a reply message back to the caller
+// It automatically reconnects to RabbitMQ if the channel is closed
 func (c *Consumer) sendReply(ctx context.Context, replyTo, correlationID string, err error) {
 	response := map[string]interface{}{
 		"correlation_id": correlationID,
@@ -285,7 +297,13 @@ func (c *Consumer) sendReply(ctx context.Context, replyTo, correlationID string,
 
 	// Publish reply using the channel directly (no exchange, direct to queue)
 	log.Printf("Sending reply to %s (correlation_id=%s, success=%v)", replyTo, correlationID, err == nil)
-	publishErr := c.channel.PublishWithContext(
+
+	// First attempt
+	c.mu.Lock()
+	ch := c.channel
+	c.mu.Unlock()
+
+	publishErr := ch.PublishWithContext(
 		ctx,
 		"",      // exchange (empty for direct queue publish)
 		replyTo, // routing key (queue name)
@@ -298,11 +316,51 @@ func (c *Consumer) sendReply(ctx context.Context, replyTo, correlationID string,
 		},
 	)
 
-	if publishErr != nil {
-		log.Printf("Failed to send reply to %s: %v", replyTo, publishErr)
-	} else {
+	// If publish succeeded, return
+	if publishErr == nil {
 		log.Printf("Successfully sent reply to %s", replyTo)
+		return
 	}
+
+	// If the channel is closed, try to recreate and retry once
+	if isChannelClosed(publishErr) {
+		log.Printf("Channel closed while sending reply, attempting to recreate channel")
+		c.mu.Lock()
+		// Recreate the channel
+		newCh, recreateErr := c.conn.Channel()
+		if recreateErr != nil {
+			c.mu.Unlock()
+			log.Printf("Failed to recreate channel for reply: %v (original error: %v)", recreateErr, publishErr)
+			return
+		}
+
+		c.channel = newCh
+		ch = newCh
+		c.mu.Unlock()
+
+		// Retry the publish once
+		retryErr := ch.PublishWithContext(
+			ctx,
+			"",      // exchange (empty for direct queue publish)
+			replyTo, // routing key (queue name)
+			false,   // mandatory
+			false,   // immediate
+			amqp.Publishing{
+				ContentType:   "application/json",
+				Body:          responseBytes,
+				CorrelationId: correlationID,
+			},
+		)
+
+		if retryErr != nil {
+			log.Printf("Failed to send reply after channel recreation: %v", retryErr)
+		} else {
+			log.Printf("Successfully sent reply to %s after channel recreation", replyTo)
+		}
+		return
+	}
+
+	log.Printf("Failed to send reply to %s: %v", replyTo, publishErr)
 }
 
 // matchesRoutingKey checks if a routing key matches a pattern
@@ -335,11 +393,15 @@ func UnmarshalMessage(body []byte, v interface{}) error {
 // DeleteQueue deletes the queue associated with this consumer
 // This should be called before Close() to remove the queue from RabbitMQ
 func (c *Consumer) DeleteQueue() error {
-	if c.channel == nil {
+	c.mu.Lock()
+	ch := c.channel
+	c.mu.Unlock()
+
+	if ch == nil {
 		return fmt.Errorf("channel is nil")
 	}
 
-	_, err := c.channel.QueueDelete(
+	_, err := ch.QueueDelete(
 		c.queue, // queue name
 		false,   // ifUnused - delete even if there are consumers
 		false,   // ifEmpty - delete even if there are messages
@@ -355,6 +417,9 @@ func (c *Consumer) DeleteQueue() error {
 
 // Close closes the consumer channel
 func (c *Consumer) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.channel != nil {
 		return c.channel.Close()
 	}
