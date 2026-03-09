@@ -204,8 +204,8 @@ type MockWorkshopManager struct {
 	mock.Mock
 }
 
-func (m *MockWorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall, skipDispatch bool, installationPathOverride string) (*manman.WorkshopInstallation, error) {
-	args := m.Called(ctx, sgcID, addonID, forceReinstall, skipDispatch, installationPathOverride)
+func (m *MockWorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall, skipDispatch bool, installationPathOverride string, presetIDOverride int64) (*manman.WorkshopInstallation, error) {
+	args := m.Called(ctx, sgcID, addonID, forceReinstall, skipDispatch, installationPathOverride, presetIDOverride)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -253,7 +253,7 @@ func TestInstallAddon(t *testing.T) {
 				AddonId: 100,
 			},
 			mockSetup: func(m *MockWorkshopManager) {
-				m.On("InstallAddon", mock.Anything, int64(1), int64(100), false, false, "").
+				m.On("InstallAddon", mock.Anything, int64(1), int64(100), false, false, "", int64(0)).
 					Return(&manman.WorkshopInstallation{
 						InstallationID:   1,
 						SGCID:            1,

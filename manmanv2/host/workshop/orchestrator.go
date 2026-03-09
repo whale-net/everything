@@ -661,7 +661,7 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 	logger := slog.With("sgc_id", sgcID)
 	logger.Info("ensuring library addons are installed")
 
-	// Fetch library attachments (includes installation_path_override per library)
+	// Fetch library attachments (includes installation_path_override and preset_id per library)
 	attachmentsResp, err := do.workshopClient.GetSGCLibraryAttachments(ctx, &pb.GetSGCLibraryAttachmentsRequest{
 		SgcId: sgcID,
 	})
@@ -670,26 +670,54 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 		return fmt.Errorf("failed to get SGC library attachments: %w", err)
 	}
 
-	// Build map: libraryID → installation path override
-	libraryPathOverride := make(map[int64]string)
-	for _, att := range attachmentsResp.Attachments {
-		if att.InstallationPathOverride != "" {
-			libraryPathOverride[att.LibraryId] = att.InstallationPathOverride
-		}
-	}
-
 	if len(attachmentsResp.Attachments) == 0 {
 		logger.Info("no libraries attached to SGC, skipping addon downloads")
 		return nil
 	}
 
+	// Fetch library defaults (includes library's default preset_id)
+	librariesResp, err := do.workshopClient.ListSGCLibraries(ctx, &pb.ListSGCLibrariesRequest{
+		SgcId: sgcID,
+	})
+	if err != nil {
+		logger.Warn("failed to list SGC libraries for defaults, proceeding without library presets", "error", err)
+	}
+
+	// Build map: libraryID → library default preset_id
+	libraryDefaultPreset := make(map[int64]int64)
+	if librariesResp != nil {
+		for _, lib := range librariesResp.Libraries {
+			if lib.PresetId != 0 {
+				libraryDefaultPreset[lib.LibraryId] = lib.PresetId
+			}
+		}
+	}
+
+	// Build map: libraryID → effective overrides (attachment overrides take priority over library defaults)
+	type libraryOverrides struct {
+		pathOverride string
+		presetID     int64 // effective: attachment's preset > library default preset
+	}
+	libraryOpts := make(map[int64]libraryOverrides)
+	for _, att := range attachmentsResp.Attachments {
+		opts := libraryOverrides{
+			pathOverride: att.InstallationPathOverride,
+			presetID:     att.PresetId, // SGC attachment override
+		}
+		if opts.presetID == 0 {
+			opts.presetID = libraryDefaultPreset[att.LibraryId] // fall back to library default
+		}
+		libraryOpts[att.LibraryId] = opts
+	}
+
 	logger.Info("found libraries attached to SGC", "count", len(attachmentsResp.Attachments))
 
 	// Collect all unique addons from all libraries (including nested references).
-	// Track the path override that applies to each addon (from the top-level library attachment).
+	// Track the overrides that apply to each addon (inherited from the top-level library attachment).
 	type addonEntry struct {
 		addon        *pb.WorkshopAddon
 		pathOverride string
+		presetID     int64
 	}
 	addonMap := make(map[int64]addonEntry)
 	visited := make(map[int64]bool)
@@ -697,10 +725,12 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 	type queueItem struct {
 		libraryID    int64
 		pathOverride string // inherited from the top-level SGC library attachment
+		presetID     int64 // effective preset (attachment override or library default)
 	}
 	queue := make([]queueItem, 0, len(attachmentsResp.Attachments))
 	for _, att := range attachmentsResp.Attachments {
-		queue = append(queue, queueItem{libraryID: att.LibraryId, pathOverride: libraryPathOverride[att.LibraryId]})
+		opts := libraryOpts[att.LibraryId]
+		queue = append(queue, queueItem{libraryID: att.LibraryId, pathOverride: opts.pathOverride, presetID: opts.presetID})
 	}
 
 	// BFS to collect all addons from all libraries
@@ -724,11 +754,11 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 
 		for _, addon := range addonsResp.Addons {
 			if _, exists := addonMap[addon.AddonId]; !exists {
-				addonMap[addon.AddonId] = addonEntry{addon: addon, pathOverride: item.pathOverride}
+				addonMap[addon.AddonId] = addonEntry{addon: addon, pathOverride: item.pathOverride, presetID: item.presetID}
 			}
 		}
 
-		// Get child libraries (inherit parent's override)
+		// Get child libraries (inherit parent's overrides)
 		childrenResp, err := do.workshopClient.GetChildLibraries(ctx, &pb.GetChildLibrariesRequest{
 			LibraryId: item.libraryID,
 		})
@@ -738,7 +768,7 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 		}
 
 		for _, child := range childrenResp.Libraries {
-			queue = append(queue, queueItem{libraryID: child.LibraryId, pathOverride: item.pathOverride})
+			queue = append(queue, queueItem{libraryID: child.LibraryId, pathOverride: item.pathOverride, presetID: item.presetID})
 		}
 	}
 
@@ -805,6 +835,7 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 			AddonId:                  addonID,
 			SkipDispatch:             true,
 			InstallationPathOverride: entry.pathOverride,
+			PresetIdOverride:         entry.presetID,
 		})
 		if err != nil {
 			// Treat installation errors as non-fatal: a misconfigured addon (e.g. missing

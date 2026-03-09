@@ -207,6 +207,9 @@ message InstallAddonRequest {
   // Optional: override the addon's configured installation path (absolute path on the volume).
   // Takes precedence over preset_id and installation_path on the addon record.
   string installation_path_override = 5;
+  // Optional: use this preset for path resolution when the addon has no preset_id configured.
+  // Applies the library's default preset. Takes precedence over addon's own preset_id.
+  int64 preset_id_override = 6;
 }
 
 message InstallAddonResponse {
