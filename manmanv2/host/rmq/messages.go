@@ -109,6 +109,14 @@ type InstallationStatusUpdate struct {
 	ErrorMessage    *string `json:"error_message,omitempty"`
 }
 
+// RemoveAddonCommand represents a command to remove a workshop addon from disk
+type RemoveAddonCommand struct {
+	InstallationID   int64  `json:"installation_id"`
+	SGCID            int64  `json:"sgc_id"`
+	AddonID          int64  `json:"addon_id"`
+	InstallationPath string `json:"installation_path"`
+}
+
 // BackupCommand instructs the host-manager to archive a volume sub-path and upload to S3
 type BackupCommand struct {
 	BackupID          int64     `json:"backup_id"`

@@ -17,6 +17,7 @@ type CommandHandler interface {
 	HandleKillSession(ctx context.Context, cmd *KillSessionCommand) error
 	HandleSendInput(ctx context.Context, cmd *SendInputCommand) error
 	HandleDownloadAddon(ctx context.Context, cmd *DownloadAddonCommand) error
+	HandleRemoveAddon(ctx context.Context, cmd *RemoveAddonCommand) error
 	HandleBackup(ctx context.Context, cmd *BackupCommand) error
 }
 
@@ -44,6 +45,7 @@ func NewConsumer(conn *rmq.Connection, serverID int64, handler CommandHandler) (
 		fmt.Sprintf("command.host.%d.session.kill", serverID),
 		fmt.Sprintf("command.host.%d.session.send_input", serverID),
 		fmt.Sprintf("command.host.%d.workshop.download", serverID),
+		fmt.Sprintf("command.host.%d.workshop.remove", serverID),
 		fmt.Sprintf("command.host.%d.backup", serverID),
 	}
 
@@ -65,6 +67,7 @@ func NewConsumer(conn *rmq.Connection, serverID int64, handler CommandHandler) (
 	killKey := fmt.Sprintf("command.host.%d.session.kill", serverID)
 	sendInputKey := fmt.Sprintf("command.host.%d.session.send_input", serverID)
 	downloadAddonKey := fmt.Sprintf("command.host.%d.workshop.download", serverID)
+	removeAddonKey := fmt.Sprintf("command.host.%d.workshop.remove", serverID)
 	backupKey := fmt.Sprintf("command.host.%d.backup", serverID)
 
 	consumer.RegisterHandler(startKey, c.handleStartSession)
@@ -72,6 +75,7 @@ func NewConsumer(conn *rmq.Connection, serverID int64, handler CommandHandler) (
 	consumer.RegisterHandler(killKey, c.handleKillSession)
 	consumer.RegisterHandler(sendInputKey, c.handleSendInput)
 	consumer.RegisterHandler(downloadAddonKey, c.handleDownloadAddon)
+	consumer.RegisterHandler(removeAddonKey, c.handleRemoveAddon)
 	consumer.RegisterHandler(backupKey, c.handleBackup)
 
 	return c, nil
@@ -158,6 +162,22 @@ func (c *Consumer) handleDownloadAddon(ctx context.Context, msg rmq.Message) err
 		return err
 	}
 	slog.Info("command completed", "command", "download_addon", "installation_id", cmd.InstallationID)
+	return nil
+}
+
+func (c *Consumer) handleRemoveAddon(ctx context.Context, msg rmq.Message) error {
+	var cmd RemoveAddonCommand
+	if err := json.Unmarshal(msg.Body, &cmd); err != nil {
+		return fmt.Errorf("failed to unmarshal remove addon command: %w", err)
+	}
+	slog.Info("received command", "command", "remove_addon", "installation_id", cmd.InstallationID, "sgc_id", cmd.SGCID, "addon_id", cmd.AddonID, "routing_key", msg.RoutingKey)
+	go func() {
+		if err := c.handler.HandleRemoveAddon(context.Background(), &cmd); err != nil {
+			slog.Error("remove addon failed", "installation_id", cmd.InstallationID, "error", err)
+		} else {
+			slog.Info("command completed", "command", "remove_addon", "installation_id", cmd.InstallationID)
+		}
+	}()
 	return nil
 }
 

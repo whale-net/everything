@@ -100,14 +100,11 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 		"workshop_id", cmd.WorkshopID,
 	)
 
-	// Check for duplicate in-progress downloads for this installation
-	if do.isDownloadInProgress(cmd.InstallationID) {
+	// Atomically check and mark to prevent duplicate concurrent downloads
+	if do.checkAndMarkDownloadInProgress(cmd.InstallationID) {
 		logger.Info("download already in progress, skipping duplicate")
 		return nil
 	}
-
-	// Mark download as in progress
-	do.markDownloadInProgress(cmd.InstallationID)
 	defer do.markDownloadComplete(cmd.InstallationID)
 
 	// Acquire semaphore for concurrency control
@@ -361,18 +358,16 @@ func (do *DownloadOrchestrator) getDownloadContainerName(sgcID, addonID int64) s
 	return fmt.Sprintf("workshop-download-%d-%d", sgcID, addonID)
 }
 
-// isDownloadInProgress checks if a download is already in progress
-func (do *DownloadOrchestrator) isDownloadInProgress(installationID int64) bool {
-	do.inProgressMutex.RLock()
-	defer do.inProgressMutex.RUnlock()
-	return do.inProgressDownloads[installationID]
-}
-
-// markDownloadInProgress marks a download as in progress
-func (do *DownloadOrchestrator) markDownloadInProgress(installationID int64) {
+// checkAndMarkDownloadInProgress atomically checks if a download is in progress and marks it if not.
+// Returns true if the download was already in progress (caller should skip).
+func (do *DownloadOrchestrator) checkAndMarkDownloadInProgress(installationID int64) bool {
 	do.inProgressMutex.Lock()
 	defer do.inProgressMutex.Unlock()
+	if do.inProgressDownloads[installationID] {
+		return true
+	}
 	do.inProgressDownloads[installationID] = true
+	return false
 }
 
 // markDownloadComplete marks a download as complete
@@ -380,6 +375,37 @@ func (do *DownloadOrchestrator) markDownloadComplete(installationID int64) {
 	do.inProgressMutex.Lock()
 	defer do.inProgressMutex.Unlock()
 	delete(do.inProgressDownloads, installationID)
+}
+
+// HandleRemoveCommand removes workshop addon files from disk and publishes a status update.
+func (do *DownloadOrchestrator) HandleRemoveCommand(ctx context.Context, cmd *rmq.RemoveAddonCommand) error {
+	logger := slog.With(
+		"installation_id", cmd.InstallationID,
+		"sgc_id", cmd.SGCID,
+		"addon_id", cmd.AddonID,
+		"installation_path", cmd.InstallationPath,
+	)
+	logger.Info("removing workshop addon files")
+
+	errMsg := func(s string) *string { return &s }
+
+	if cmd.InstallationPath == "" {
+		msg := "installation_path is empty, nothing to remove"
+		logger.Warn(msg)
+		do.publishStatus(ctx, cmd.InstallationID, InstallationStatusRemoved, 0, nil)
+		return nil
+	}
+
+	if err := os.RemoveAll(cmd.InstallationPath); err != nil {
+		e := fmt.Sprintf("failed to remove addon files: %v", err)
+		logger.Error(e)
+		do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, errMsg(e))
+		return fmt.Errorf("%s", e)
+	}
+
+	logger.Info("addon files removed successfully")
+	do.publishStatus(ctx, cmd.InstallationID, InstallationStatusRemoved, 0, nil)
+	return nil
 }
 
 // publishStatus sends status updates back to control plane via RabbitMQ
@@ -760,6 +786,11 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 			// Treat installation errors as non-fatal: a misconfigured addon (e.g. missing
 			// installation path) should not prevent the session from starting. Log and skip.
 			logger.Error("failed to trigger installation, skipping addon", "addon_id", addonID, "workshop_id", addon.WorkshopId, "error", err)
+			continue
+		}
+
+		if installResp.Installation == nil {
+			logger.Error("InstallAddon returned nil installation, skipping addon", "addon_id", addonID)
 			continue
 		}
 

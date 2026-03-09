@@ -110,6 +110,7 @@ func run() error {
 		repo.WorkshopInstallations,
 		repo.WorkshopLibraries,
 		repo.ServerGameConfigs,
+		repo.Games,
 		repo.GameConfigs,
 		repo.GameConfigVolumes,
 		repo.AddonPathPresets,

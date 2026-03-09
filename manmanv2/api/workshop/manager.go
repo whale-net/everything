@@ -56,6 +56,7 @@ type WorkshopManager struct {
 	installationRepo repository.WorkshopInstallationRepository
 	libraryRepo      repository.WorkshopLibraryRepository
 	sgcRepo          repository.ServerGameConfigRepository
+	gameRepo         repository.GameRepository
 	gameConfigRepo   repository.GameConfigRepository
 	volumeRepo       repository.GameConfigVolumeRepository
 	presetRepo       repository.AddonPathPresetRepository
@@ -70,6 +71,7 @@ func NewWorkshopManager(
 	installationRepo repository.WorkshopInstallationRepository,
 	libraryRepo repository.WorkshopLibraryRepository,
 	sgcRepo repository.ServerGameConfigRepository,
+	gameRepo repository.GameRepository,
 	gameConfigRepo repository.GameConfigRepository,
 	volumeRepo repository.GameConfigVolumeRepository,
 	presetRepo repository.AddonPathPresetRepository,
@@ -82,6 +84,7 @@ func NewWorkshopManager(
 		installationRepo: installationRepo,
 		libraryRepo:      libraryRepo,
 		sgcRepo:          sgcRepo,
+		gameRepo:         gameRepo,
 		gameConfigRepo:   gameConfigRepo,
 		volumeRepo:       volumeRepo,
 		presetRepo:       presetRepo,
@@ -144,11 +147,13 @@ func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int6
 
 	// 6. Publish download command to RabbitMQ for host manager (unless caller skips dispatch)
 	if !skipDispatch {
+		game, err := wm.gameRepo.Get(ctx, addon.GameID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get game for addon: %w", err)
+		}
 		steamAppID := ""
-		if addon.Metadata != nil {
-			if appID, ok := addon.Metadata["steam_app_id"].(string); ok {
-				steamAppID = appID
-			}
+		if game.SteamAppID != nil {
+			steamAppID = *game.SteamAppID
 		}
 
 		downloadCmd := &DownloadAddonCommand{
@@ -344,7 +349,11 @@ func (wm *WorkshopManager) EnsureLibraryAddonsInstalled(ctx context.Context, sgc
 	// 4. Poll until all triggered addons are installed or failed (up to 90s)
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
-		time.Sleep(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
 
 		allDone := true
 		for _, addonID := range triggered {
@@ -405,13 +414,7 @@ func (wm *WorkshopManager) RemoveInstallation(ctx context.Context, installationI
 		return fmt.Errorf("failed to get SGC: %w", err)
 	}
 
-	// Update status to removed
-	err = wm.installationRepo.UpdateStatus(ctx, installationID, manman.InstallationStatusRemoved, nil)
-	if err != nil {
-		return fmt.Errorf("failed to update installation status: %w", err)
-	}
-
-	// Publish removal command to host manager to delete files
+	// Publish removal command first; only update DB status after successful publish
 	removeCmd := &RemoveAddonCommand{
 		InstallationID:   installationID,
 		SGCID:            installation.SGCID,
@@ -423,6 +426,11 @@ func (wm *WorkshopManager) RemoveInstallation(ctx context.Context, installationI
 	err = wm.rmqPublisher.Publish(ctx, "manman", routingKey, removeCmd)
 	if err != nil {
 		return fmt.Errorf("failed to publish remove command: %w", err)
+	}
+
+	err = wm.installationRepo.UpdateStatus(ctx, installationID, manman.InstallationStatusRemoved, nil)
+	if err != nil {
+		return fmt.Errorf("failed to update installation status: %w", err)
 	}
 
 	return nil

@@ -240,6 +240,34 @@ func (m *mockStrategyRepo) Delete(ctx context.Context, strategyID int64) error {
 	return fmt.Errorf("not implemented")
 }
 
+type mockGameRepo struct {
+	games map[int64]*manman.Game
+}
+
+func (m *mockGameRepo) Create(ctx context.Context, game *manman.Game) (*manman.Game, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockGameRepo) Get(ctx context.Context, gameID int64) (*manman.Game, error) {
+	game, ok := m.games[gameID]
+	if !ok {
+		return nil, fmt.Errorf("game not found")
+	}
+	return game, nil
+}
+
+func (m *mockGameRepo) List(ctx context.Context, limit, offset int) ([]*manman.Game, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockGameRepo) Update(ctx context.Context, game *manman.Game) error {
+	return fmt.Errorf("not implemented")
+}
+
+func (m *mockGameRepo) Delete(ctx context.Context, gameID int64) error {
+	return fmt.Errorf("not implemented")
+}
+
 type mockRMQPublisher struct {
 	publishedCommands []*DownloadAddonCommand
 	publishedRemovals []*RemoveAddonCommand
@@ -314,6 +342,7 @@ func createTestManager() (*WorkshopManager, *mockAddonRepo, *mockInstallationRep
 		installByID:   make(map[int64]*manman.WorkshopInstallation),
 	}
 	sgcRepo := &mockSGCRepo{sgcs: make(map[int64]*manman.ServerGameConfig)}
+	gameRepo := &mockGameRepo{games: make(map[int64]*manman.Game)}
 	gameConfigRepo := &mockGameConfigRepo{gameConfigs: make(map[int64]*manman.GameConfig)}
 	volumeRepo := &mockVolumeRepo{volumes: make(map[int64][]*manman.GameConfigVolume)}
 	sessionRepo := &mockSessionRepo{sessions: make(map[int64][]*manman.Session)}
@@ -327,6 +356,7 @@ func createTestManager() (*WorkshopManager, *mockAddonRepo, *mockInstallationRep
 		installationRepo,
 		nil, // libraryRepo not needed for these tests
 		sgcRepo,
+		gameRepo,
 		gameConfigRepo,
 		volumeRepo,
 		nil, // presetRepo not needed for these tests
