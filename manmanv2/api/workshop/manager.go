@@ -43,7 +43,7 @@ type RemoveAddonCommand struct {
 
 // WorkshopManagerInterface defines the interface for workshop addon operations
 type WorkshopManagerInterface interface {
-	InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall, skipDispatch bool) (*manman.WorkshopInstallation, error)
+	InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall, skipDispatch bool, installationPathOverride string) (*manman.WorkshopInstallation, error)
 	RemoveInstallation(ctx context.Context, installationID int64) error
 	ResetInstallation(ctx context.Context, installationID int64) (*manman.WorkshopInstallation, error)
 	FetchMetadata(ctx context.Context, gameID int64, workshopID string) (*manman.WorkshopAddon, error)
@@ -96,7 +96,8 @@ func NewWorkshopManager(
 
 // InstallAddon creates/updates the installation record and, unless skipDispatch is true,
 // publishes a download command to RabbitMQ for the host manager to execute.
-func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall, skipDispatch bool) (*manman.WorkshopInstallation, error) {
+// installationPathOverride, if non-empty, overrides the addon's configured installation path.
+func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall, skipDispatch bool, installationPathOverride string) (*manman.WorkshopInstallation, error) {
 	// 1. Check if already installed
 	existing, err := wm.installationRepo.GetBySGCAndAddon(ctx, sgcID, addonID)
 	if err == nil && existing.Status == manman.InstallationStatusInstalled && !forceReinstall {
@@ -116,7 +117,7 @@ func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int6
 	}
 
 	// 4. Resolve installation path from volume strategies
-	installPath, err := wm.resolveInstallationPath(ctx, sgc, addon)
+	installPath, err := wm.resolveInstallationPath(ctx, sgc, addon, installationPathOverride)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve installation path: %w", err)
 	}
@@ -175,8 +176,14 @@ func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int6
 	return installation, nil
 }
 
-// resolveInstallationPath determines the target path for addon installation
-func (wm *WorkshopManager) resolveInstallationPath(ctx context.Context, sgc *manman.ServerGameConfig, addon *manman.WorkshopAddon) (string, error) {
+// resolveInstallationPath determines the target path for addon installation.
+// installationPathOverride, if non-empty, is used as the absolute installation path directly.
+func (wm *WorkshopManager) resolveInstallationPath(ctx context.Context, sgc *manman.ServerGameConfig, addon *manman.WorkshopAddon, installationPathOverride string) (string, error) {
+	// Library-level override takes highest precedence — returned as-is (absolute path)
+	if installationPathOverride != "" {
+		return installationPathOverride, nil
+	}
+
 	var volume *manman.GameConfigVolume
 	var relativePath string
 
@@ -335,7 +342,7 @@ func (wm *WorkshopManager) EnsureLibraryAddonsInstalled(ctx context.Context, sgc
 			continue // already installed
 		}
 
-		if _, err := wm.InstallAddon(ctx, sgcID, addonID, false, false); err != nil {
+		if _, err := wm.InstallAddon(ctx, sgcID, addonID, false, false, ""); err != nil {
 			log.Printf("Warning: failed to trigger install for SGC %d addon %d: %v", sgcID, addonID, err)
 			continue
 		}

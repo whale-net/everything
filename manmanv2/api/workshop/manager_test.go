@@ -425,7 +425,7 @@ func TestProperty6_InstallationIdempotency(t *testing.T) {
 	}
 
 	// First installation
-	inst1, err := manager.InstallAddon(ctx, sgcID, addonID, false, false)
+	inst1, err := manager.InstallAddon(ctx, sgcID, addonID, false, false, "")
 	if err != nil {
 		t.Fatalf("First installation failed: %v", err)
 	}
@@ -446,7 +446,7 @@ func TestProperty6_InstallationIdempotency(t *testing.T) {
 	installationRepo.UpdateStatus(ctx, inst1.InstallationID, manman.InstallationStatusInstalled, nil)
 
 	// Second installation (should be idempotent)
-	inst2, err := manager.InstallAddon(ctx, sgcID, addonID, false, false)
+	inst2, err := manager.InstallAddon(ctx, sgcID, addonID, false, false, "")
 	if err != nil {
 		t.Fatalf("Second installation failed: %v", err)
 	}
@@ -465,7 +465,7 @@ func TestProperty6_InstallationIdempotency(t *testing.T) {
 	}
 
 	// Third installation with force_reinstall
-	inst3, err := manager.InstallAddon(ctx, sgcID, addonID, true, false)
+	inst3, err := manager.InstallAddon(ctx, sgcID, addonID, true, false, "")
 	if err != nil {
 		t.Fatalf("Third installation with force failed: %v", err)
 	}
@@ -567,7 +567,7 @@ func TestProperty11_PathResolutionConsistency(t *testing.T) {
 			}
 
 			// Install addon
-			inst, err := manager.InstallAddon(ctx, sgcID, addonID, false, false)
+			inst, err := manager.InstallAddon(ctx, sgcID, addonID, false, false, "")
 			if err != nil {
 				t.Fatalf("Installation failed: %v", err)
 			}
@@ -626,7 +626,7 @@ func TestProperty14_VolumeStrategyValidation(t *testing.T) {
 	// Test 1: No volume strategy at all
 	volumeRepo.volumes[gameConfigID] = []*manman.GameConfigVolume{}
 
-	_, err := manager.InstallAddon(ctx, sgcID, addonID, false, false)
+	_, err := manager.InstallAddon(ctx, sgcID, addonID, false, false, "")
 	if err == nil {
 		t.Error("Expected error when no volume strategy exists, got nil")
 	}
@@ -640,7 +640,7 @@ func TestProperty14_VolumeStrategyValidation(t *testing.T) {
 	
 	// Test case removed - no longer relevant with volume system
 
-	_, err = manager.InstallAddon(ctx, sgcID, addonID, false, false)
+	_, err = manager.InstallAddon(ctx, sgcID, addonID, false, false, "")
 	if err == nil {
 		t.Error("Expected error when no volume strategy exists (only cli_args), got nil")
 	}
@@ -652,7 +652,7 @@ func TestProperty14_VolumeStrategyValidation(t *testing.T) {
 	}
 	volumeRepo.volumes[gameConfigID] = []*manman.GameConfigVolume{volumeStrategy}
 
-	_, err = manager.InstallAddon(ctx, sgcID, addonID, false, false)
+	_, err = manager.InstallAddon(ctx, sgcID, addonID, false, false, "")
 	if err == nil {
 		t.Error("Expected error when volume strategy missing target_path, got nil")
 	}
@@ -665,7 +665,7 @@ func TestProperty14_VolumeStrategyValidation(t *testing.T) {
 	volumeStrategy.ContainerPath = targetPath
 	volumeRepo.volumes[gameConfigID] = []*manman.GameConfigVolume{volumeStrategy}
 
-	inst, err := manager.InstallAddon(ctx, sgcID, addonID, false, false)
+	inst, err := manager.InstallAddon(ctx, sgcID, addonID, false, false, "")
 	if err != nil {
 		t.Errorf("Expected success with valid volume strategy, got error: %v", err)
 	}
