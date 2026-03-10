@@ -37,6 +37,8 @@ require (
 )
 
 require (
+	github.com/Oudwins/tailwind-merge-go v0.2.1 // indirect
+	github.com/a-h/templ v0.3.1001 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.22.2 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
