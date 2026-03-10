@@ -450,11 +450,17 @@ func (do *DownloadOrchestrator) resolveVolumeMounts(ctx context.Context, sgcID i
 		return nil, fmt.Errorf("no volumes configured for game config %d (SGC %d)", sgcResp.Config.GameConfigId, sgcID)
 	}
 
-	// Build mount strings matching the game container's volume mount scheme:
-	//   sgcHostDir/<host_subpath>:<container_path>
-	// Also create the directories now with 0777 so steamcmd (steam user, UID 1000) can write.
+	// Build mount strings matching the game container's volume mount scheme.
+	// Named volumes use the Docker named volume directly; bind-mount volumes use
+	// sgcHostDir/<host_subpath>:<container_path> and pre-create the directory.
 	mounts := make([]string, 0, len(volumesResp.Volumes))
 	for _, vol := range volumesResp.Volumes {
+		if vol.VolumeType == "named" {
+			volumeName := do.getNamedVolumeName(sgcID, vol.Name)
+			mounts = append(mounts, fmt.Sprintf("%s:%s", volumeName, vol.ContainerPath))
+			continue
+		}
+
 		subPath := strings.TrimPrefix(vol.HostSubpath, "/")
 		if subPath == "" {
 			subPath = vol.Name
@@ -471,6 +477,15 @@ func (do *DownloadOrchestrator) resolveVolumeMounts(ctx context.Context, sgcID i
 	}
 
 	return mounts, nil
+}
+
+// getNamedVolumeName returns the Docker named volume name for a given SGC and volume,
+// using the same naming convention as the session manager.
+func (do *DownloadOrchestrator) getNamedVolumeName(sgcID int64, volumeName string) string {
+	if do.environment != "" {
+		return fmt.Sprintf("manman-sgc-%s-%d-%s", do.environment, sgcID, volumeName)
+	}
+	return fmt.Sprintf("manman-sgc-%d-%s", sgcID, volumeName)
 }
 
 // buildSteamCMDCommand constructs the SteamCMD command for downloading.
@@ -541,18 +556,25 @@ func (do *DownloadOrchestrator) resolveContainerPathToInternal(ctx context.Conte
 	// Find which volume contains this container path
 	for _, vol := range volumesResp.Volumes {
 		// Check if containerPath starts with this volume's container path
-		if strings.HasPrefix(containerPath, vol.ContainerPath) {
-			// Get the relative path within the volume
-			relPath := strings.TrimPrefix(containerPath, vol.ContainerPath)
-			relPath = strings.TrimPrefix(relPath, "/")
-
-			// Build internal path: sgcInternalDir/<host_subpath>/<relPath>
-			subPath := strings.TrimPrefix(vol.HostSubpath, "/")
-			if subPath == "" {
-				subPath = vol.Name
-			}
-			return filepath.Join(sgcInternalDir, subPath, relPath), nil
+		if !strings.HasPrefix(containerPath, vol.ContainerPath) {
+			continue
 		}
+
+		relPath := strings.TrimPrefix(containerPath, vol.ContainerPath)
+		relPath = strings.TrimPrefix(relPath, "/")
+
+		if vol.VolumeType == "named" {
+			// The named volume is mounted directly at vol.ContainerPath inside the download
+			// container (via resolveVolumeMounts), so the install path is just the container path.
+			return filepath.Join(vol.ContainerPath, relPath), nil
+		}
+
+		// Bind-mount: translate to internal path via SGC data dir
+		subPath := strings.TrimPrefix(vol.HostSubpath, "/")
+		if subPath == "" {
+			subPath = vol.Name
+		}
+		return filepath.Join(sgcInternalDir, subPath, relPath), nil
 	}
 
 	return "", fmt.Errorf("no volume found for container path %s", containerPath)

@@ -19,6 +19,7 @@ type SGCDetailPageData struct {
 	User               *htmxauth.UserInfo
 	SGC                *manmanpb.ServerGameConfig
 	Server             *manmanpb.Server
+	Game               *manmanpb.Game
 	GameConfig         *manmanpb.GameConfig
 	Sessions           []*manmanpb.Session
 	LibraryAttachments []*SGCLibraryAttachment
@@ -85,10 +86,22 @@ func (app *App) handleSGCDetail(w http.ResponseWriter, r *http.Request) {
 		ConfigId: sgc.GameConfigId,
 	})
 	var gameConfig *manmanpb.GameConfig
+	var game *manmanpb.Game
 	if err != nil {
 		log.Printf("Warning: failed to fetch game config %d: %v", sgc.GameConfigId, err)
 	} else {
 		gameConfig = gcResp.Config
+		// Fetch game
+		if gameConfig != nil {
+			gameResp, err := app.grpc.GetAPI().GetGame(ctx, &manmanpb.GetGameRequest{
+				GameId: gameConfig.GameId,
+			})
+			if err != nil {
+				log.Printf("Warning: failed to fetch game %d: %v", gameConfig.GameId, err)
+			} else {
+				game = gameResp.Game
+			}
+		}
 	}
 
 	// Fetch sessions for this SGC
@@ -166,6 +179,7 @@ func (app *App) handleSGCDetail(w http.ResponseWriter, r *http.Request) {
 		User:               user,
 		SGC:                sgc,
 		Server:             server,
+		Game:               game,
 		GameConfig:         gameConfig,
 		Sessions:           sessions,
 		LibraryAttachments: libraryAttachments,

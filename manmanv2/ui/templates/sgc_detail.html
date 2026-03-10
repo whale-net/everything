@@ -1,63 +1,114 @@
 {{define "sgc_detail_content"}}
-<div class="action-bar">
+<!-- Breadcrumbs -->
+<nav class="flex mb-4" aria-label="Breadcrumb">
+    <ol class="inline-flex items-center space-x-1 md:space-x-3">
+        <li class="inline-flex items-center">
+            <a href="/games" class="text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400">Games</a>
+        </li>
+        {{if .Game}}
+        <li class="inline-flex items-center">
+            <svg class="w-3 h-3 text-gray-400 mx-1" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"></path>
+            </svg>
+            <a href="/games/{{.Game.GameId}}" class="text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400">{{.Game.Name}}</a>
+        </li>
+        {{end}}
+        {{if .GameConfig}}
+        <li class="inline-flex items-center">
+            <svg class="w-3 h-3 text-gray-400 mx-1" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"></path>
+            </svg>
+            <a href="/games/{{.GameConfig.GameId}}/config/{{.GameConfig.ConfigId}}" class="text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400">{{.GameConfig.Name}}</a>
+        </li>
+        {{end}}
+        <li class="inline-flex items-center">
+            <svg class="w-3 h-3 text-gray-400 mx-1" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"></path>
+            </svg>
+            <span class="text-sm font-medium text-gray-500 dark:text-gray-400">Server Deployment</span>
+        </li>
+    </ol>
+</nav>
+
+<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
     <div>
-        <nav style="font-size: 0.85rem; color: #6b7280; margin-bottom: 0.5rem;">
-            {{if .GameConfig}}
-            <a href="/games/{{.GameConfig.GameId}}/config/{{.GameConfig.ConfigId}}">{{.GameConfig.Name}}</a> &rsaquo;
-            {{end}}
-            SGC {{.SGC.ServerGameConfigId}}
-        </nav>
-        <h1 style="margin: 0;">SGC {{.SGC.ServerGameConfigId}}</h1>
+        <div class="flex items-center gap-2 mb-2">
+            <span class="inline-flex items-center px-3 py-1 rounded-md text-xs font-semibold bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
+                🚀 SERVER DEPLOYMENT
+            </span>
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {{statusBadge .SGC.Status}}">
+                {{.SGC.Status}}
+            </span>
+        </div>
+        <h1 class="text-3xl font-bold text-gray-900 dark:text-white">SGC-{{.SGC.ServerGameConfigId}}</h1>
+        {{if .Server}}
+        <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">Deployed on {{.Server.Name}}</p>
+        {{end}}
     </div>
-    <div>
-        <form method="post" action="/sessions/start" style="display: inline;">
+    <div class="flex gap-2">
+        <form method="post" action="/sessions/start">
             <input type="hidden" name="server_game_config_id" value="{{.SGC.ServerGameConfigId}}">
-            <button type="submit" class="btn btn-success">Start Session</button>
+            <button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-green-600 hover:bg-green-700 text-white font-medium rounded-md transition-colors">
+                Start Session
+            </button>
         </form>
     </div>
 </div>
 
 <!-- SGC Info -->
-<div class="card">
-    <div class="card-header">
-        <div class="card-title">Deployment Info</div>
-    </div>
-    <dl style="display: grid; grid-template-columns: 200px 1fr; gap: 0.5rem;">
-        <dt><strong>SGC ID:</strong></dt>
-        <dd>{{.SGC.ServerGameConfigId}}</dd>
+<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-6 mb-6">
+    <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Deployment Info</h2>
+    <dl class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">SGC ID</dt>
+            <dd class="mt-1 text-sm text-gray-900 dark:text-white font-mono">{{.SGC.ServerGameConfigId}}</dd>
+        </div>
 
-        <dt><strong>Server:</strong></dt>
-        <dd>
-            {{if .Server}}
-            <a href="/servers/{{.Server.ServerId}}">{{.Server.Name}}</a>
-            {{else}}
-            Server {{.SGC.ServerId}}
-            {{end}}
-        </dd>
+        <div>
+            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Server</dt>
+            <dd class="mt-1 text-sm">
+                {{if .Server}}
+                <a href="/servers/{{.Server.ServerId}}" class="text-blue-600 dark:text-blue-400 hover:underline">{{.Server.Name}}</a>
+                {{else}}
+                <span class="text-gray-900 dark:text-white">Server {{.SGC.ServerId}}</span>
+                {{end}}
+            </dd>
+        </div>
 
-        <dt><strong>Game Config:</strong></dt>
-        <dd>
-            {{if .GameConfig}}
-            <a href="/games/{{.GameConfig.GameId}}/config/{{.GameConfig.ConfigId}}">{{.GameConfig.Name}}</a>
-            {{else}}
-            Config {{.SGC.GameConfigId}}
-            {{end}}
-        </dd>
+        <div>
+            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Game Config</dt>
+            <dd class="mt-1 text-sm">
+                {{if .GameConfig}}
+                <a href="/games/{{.GameConfig.GameId}}/config/{{.GameConfig.ConfigId}}" class="text-blue-600 dark:text-blue-400 hover:underline">{{.GameConfig.Name}}</a>
+                {{else}}
+                <span class="text-gray-900 dark:text-white">Config {{.SGC.GameConfigId}}</span>
+                {{end}}
+            </dd>
+        </div>
 
-        <dt><strong>Status:</strong></dt>
-        <dd><span class="badge {{statusBadge .SGC.Status}}">{{.SGC.Status}}</span></dd>
+        <div>
+            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Status</dt>
+            <dd class="mt-1">
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {{statusBadge .SGC.Status}}">
+                    {{.SGC.Status}}
+                </span>
+            </dd>
+        </div>
     </dl>
 </div>
 
 <!-- Libraries -->
-<div class="card">
-    <div class="card-header">
-        <div class="card-title">Workshop Libraries</div>
-        <button class="btn btn-primary btn-sm" onclick="toggleAddLibraryPanel()">Add Library</button>
+<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 mb-6 overflow-hidden">
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-gray-200 dark:border-slate-700">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Workshop Libraries</h2>
+        <button onclick="toggleAddLibraryPanel()" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-md transition-colors">
+            Add Library
+        </button>
     </div>
 
     {{if .PendingCount}}
-    <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 0.75rem; margin-bottom: 1rem; color: #856404;">
+    <div class="bg-yellow-50 dark:bg-yellow-900/20 border-l-4 border-yellow-400 p-4 m-4">
+        <p class="text-sm text-yellow-800 dark:text-yellow-200">
         {{.PendingCount}} addon(s) pending installation — will be installed before the next session starts.
     </div>
     {{end}}
@@ -233,9 +284,14 @@ function toggleAddLibraryPanel() {
 {{end}}
 
 {{define "sgc_backup_section"}}
-<div class="card mt-4">
-  <div class="card-header"><strong>Backups</strong></div>
-  <div class="card-body">
+<div x-data="{ expanded: false }" class="card mt-4">
+  <button @click="expanded = !expanded" class="card-header d-flex justify-content-between align-items-center w-100 border-0 bg-transparent text-start" style="cursor: pointer;">
+    <strong>Backups</strong>
+    <svg :class="expanded ? 'rotate-180' : ''" style="width: 20px; height: 20px; transition: transform 0.2s;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+    </svg>
+  </button>
+  <div x-show="expanded" x-cloak x-collapse class="card-body">
     {{if .BackupConfigs}}
     <h6>Trigger Manual Backup</h6>
     {{range .BackupConfigs}}
@@ -280,5 +336,53 @@ function toggleAddLibraryPanel() {
     <p class="text-muted small">No backups yet.</p>
     {{end}}
   </div>
+</div>
+
+<!-- Danger Zone -->
+<div x-data="{ confirmDelete: false, confirmStop: false }" class="bg-white dark:bg-slate-800 rounded-lg shadow-md border-2 border-red-200 dark:border-red-900 overflow-hidden mt-6">
+    <div class="bg-red-50 dark:bg-red-900/20 px-6 py-4 border-b-2 border-red-200 dark:border-red-900">
+        <h2 class="text-lg font-semibold text-red-900 dark:text-red-200">⚠️ Danger Zone</h2>
+    </div>
+    <div class="p-6 space-y-4">
+        <!-- Stop Deployment -->
+        {{range .Sessions}}
+        {{if eq .Status "running"}}
+        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-gray-200 dark:border-slate-700">
+            <div>
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-white mb-1">Stop deployment</h3>
+                <p class="text-sm text-gray-600 dark:text-gray-400">Stop the running server. Players will be disconnected. You can redeploy later.</p>
+            </div>
+            <div class="flex-shrink-0">
+                <button x-show="!confirmStop" @click="confirmStop = true" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-orange-600 hover:bg-orange-700 text-white font-medium rounded-md transition-colors">Stop Server</button>
+                <div x-show="confirmStop" x-cloak class="flex gap-2 items-center">
+                    <span class="text-sm text-orange-900 dark:text-orange-200 font-medium">Stop now?</span>
+                    <form method="POST" action="/sessions/{{.SessionId}}/stop" class="inline">
+                        <button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-orange-600 hover:bg-orange-700 text-white font-medium rounded-md transition-colors">Yes, Stop</button>
+                    </form>
+                    <button @click="confirmStop = false" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-gray-600 hover:bg-gray-700 text-white font-medium rounded-md transition-colors">Cancel</button>
+                </div>
+            </div>
+        </div>
+        {{end}}
+        {{end}}
+        
+        <!-- Delete SGC -->
+        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div>
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-white mb-1">Delete this server config</h3>
+                <p class="text-sm text-gray-600 dark:text-gray-400">Permanently delete this server game config. Active deployments will be stopped. This action cannot be undone.</p>
+            </div>
+            <div class="flex-shrink-0">
+                <button x-show="!confirmDelete" @click="confirmDelete = true" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">Delete SGC</button>
+                <div x-show="confirmDelete" x-cloak class="flex gap-2 items-center">
+                    <span class="text-sm text-red-900 dark:text-red-200 font-medium">Are you sure?</span>
+                    <form method="POST" action="/sgc/{{.SGC.ServerGameConfigId}}/delete" class="inline">
+                        <button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">Yes, Delete</button>
+                    </form>
+                    <button @click="confirmDelete = false" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-gray-600 hover:bg-gray-700 text-white font-medium rounded-md transition-colors">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 {{end}}

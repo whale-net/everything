@@ -101,7 +101,7 @@ func (h *CommandHandlerImpl) HandleBackup(ctx context.Context, cmd *hostrmq.Back
 	}
 
 	// 4. Upload to S3 via pre-signed PUT URL with known Content-Length
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, cmd.PresignedURL, tmpFile)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, cmd.PresignedURL, io.NopCloser(tmpFile))
 	if err != nil {
 		return fail(fmt.Errorf("failed to create upload request: %w", err))
 	}
