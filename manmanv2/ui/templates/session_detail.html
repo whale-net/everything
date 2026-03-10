@@ -450,151 +450,376 @@ function parseAndAppendRawLine(container, lineText) {
     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900">
         <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Historical Logs</h2>
         <div class="flex flex-wrap items-center gap-2">
-            <button id="load-historical" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-md transition-colors">Load Logs</button>
-            <button id="download-historical" class="hidden inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors">Download</button>
-            <button id="clear-historical" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors">Clear</button>
+            <button id="load-logs-btn" disabled class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white text-sm font-medium rounded-md transition-colors">Load Logs</button>
+            <button id="clear-logs-btn" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors">Clear</button>
         </div>
     </div>
-    <div class="p-4">
-        <div class="flex flex-col sm:flex-row gap-4 mb-4 items-start sm:items-end">
-            <div class="flex-1 min-w-[200px]">
-                <label for="center-time" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Time UTC (±10 minutes):</label>
-                <input type="datetime-local" id="center-time" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-            </div>
-            <div class="text-sm text-gray-600 dark:text-gray-400 pb-2">
-                Enter time in UTC. Loads logs from 10 minutes before to 10 minutes after.
-            </div>
+    
+    <!-- Histogram Container -->
+    <div class="p-4 border-b border-gray-200 dark:border-slate-700">
+        <div class="flex items-center justify-between mb-2">
+            <div id="histogram-status" class="text-sm text-gray-600 dark:text-gray-400"></div>
+            <button id="zoom-out-btn" style="display: none;" class="text-sm text-blue-600 hover:text-blue-700 dark:text-blue-400">← Back to overview</button>
         </div>
-        <div id="historical-status" class="text-sm text-gray-600 dark:text-gray-400 mb-4"></div>
+        <div style="position: relative;">
+            <canvas id="log-histogram" width="800" height="200" style="width: 100%; height: 200px; cursor: crosshair;"></canvas>
+            <div id="tooltip" style="position: absolute; display: none; background: rgba(0,0,0,0.8); color: white; padding: 8px; border-radius: 4px; font-size: 12px; pointer-events: none; z-index: 1000; white-space: nowrap;"></div>
+        </div>
+        <div id="selection-info" class="text-sm text-gray-700 dark:text-gray-300 mt-2"></div>
     </div>
-    <div id="historical-log-viewer" class="log-viewer-container hidden">
-        <pre id="historical-log-output" class="log-viewer-output"></pre>
+
+    <!-- Log Content Container -->
+    <div id="log-content" class="log-viewer-container" style="display: none;">
+        <!-- HTMX will swap content here -->
     </div>
 </div>
 
+<style>
+#log-histogram {
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+}
+[data-theme="dark"] #log-histogram {
+    border-color: #374151;
+}
+</style>
+
 <script>
 (function() {
-    const loadBtn = document.getElementById('load-historical');
-    const downloadBtn = document.getElementById('download-historical');
-    const clearBtn = document.getElementById('clear-historical');
-    const centerTimeInput = document.getElementById('center-time');
-    const statusDiv = document.getElementById('historical-status');
-    const logViewer = document.getElementById('historical-log-viewer');
-    const logOutput = document.getElementById('historical-log-output');
+    const canvas = document.getElementById('log-histogram');
+    const ctx = canvas.getContext('2d');
+    const statusDiv = document.getElementById('histogram-status');
+    const selectionInfo = document.getElementById('selection-info');
+    const loadBtn = document.getElementById('load-logs-btn');
+    const clearBtn = document.getElementById('clear-logs-btn');
+    const logContent = document.getElementById('log-content');
+    const tooltip = document.getElementById('tooltip');
+    const zoomOutBtn = document.getElementById('zoom-out-btn');
+    
+    let fullHistogramData = null;  // Full session data
+    let histogramData = null;       // Current view (full or zoomed)
+    let zoomRange = null;           // Current zoom range {start, end}
+    let selection = null;
+    let isSelecting = false;
+    let selectionStart = null;
 
-    let currentLogData = null; // Store current log data for download
-
-    // Set default time to session end time
-    {{if .Session.EndedAt}}
-    const centerTime = new Date({{.Session.EndedAt}} * 1000);
-    centerTimeInput.value = centerTime.toISOString().slice(0, 16);
-    {{end}}
-
-    loadBtn.onclick = async () => {
-        // Parse as UTC (datetime-local gives us a string like "2026-02-10T04:09")
-        const centerStr = centerTimeInput.value;
-        if (!centerStr) {
-            statusDiv.textContent = 'Please select a valid time';
-            statusDiv.style.color = '#f48771';
-            return;
-        }
-
-        // Create UTC date by appending 'Z' to force UTC interpretation
-        const center = new Date(centerStr + 'Z');
-        if (isNaN(center.getTime())) {
-            statusDiv.textContent = 'Please select a valid time';
-            statusDiv.style.color = '#f48771';
-            return;
-        }
-
-        // Calculate ±10 minutes
-        const start = new Date(center.getTime() - (10 * 60 * 1000));  // 10 minutes before
-        const end = new Date(center.getTime() + (10 * 60 * 1000));    // 10 minutes after
-
-        statusDiv.textContent = 'Loading logs...';
-        statusDiv.style.color = '#4fc1ff';
-        loadBtn.disabled = true;
-
+    // Fetch histogram data
+    async function loadHistogram(startTime, endTime) {
+        statusDiv.textContent = 'Loading histogram...';
         try {
-            const url = `/api/sessions/historical-logs?session_id={{.Session.SessionId}}&start=${Math.floor(start.getTime() / 1000)}&end=${Math.floor(end.getTime() / 1000)}`;
-            const response = await fetch(url);
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+            let url = '/sessions/{{.Session.SessionId}}/logs/histogram';
+            if (startTime && endTime) {
+                url += `?start=${startTime}&end=${endTime}`;
             }
+            
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            
+            const data = await resp.json();
+            
+            if (!data.buckets || data.buckets.length === 0) {
+                statusDiv.textContent = 'No logs available for this session';
+                return false;
+            }
+            
+            if (!startTime && !endTime) {
+                fullHistogramData = data;
+                zoomRange = null;
+                zoomOutBtn.style.display = 'none';
+            } else {
+                zoomRange = { start: startTime, end: endTime };
+                zoomOutBtn.style.display = 'inline';
+            }
+            
+            histogramData = data;
+            const zoomText = zoomRange ? ' (zoomed)' : '';
+            statusDiv.textContent = `Showing ${histogramData.buckets.length} time buckets (${histogramData.granularity} resolution)${zoomText}`;
+            renderHistogram();
+            return true;
+        } catch (err) {
+            statusDiv.textContent = `Error loading histogram: ${err.message}`;
+            statusDiv.style.color = '#f48771';
+            return false;
+        }
+    }
 
-            const data = await response.json();
-            logOutput.textContent = '';
+    function renderHistogram() {
+        if (!histogramData || !histogramData.buckets.length) return;
 
-            if (!data.batches || data.batches.length === 0) {
-                statusDiv.textContent = 'No logs found for this time range';
-                logViewer.classList.add('hidden');
-                downloadBtn.classList.add('hidden');
-                currentLogData = null;
+        const width = canvas.width;
+        const height = canvas.height;
+        const padding = { top: 20, right: 20, bottom: 40, left: 60 };
+        const chartWidth = width - padding.left - padding.right;
+        const chartHeight = height - padding.top - padding.bottom;
+
+        // Clear canvas
+        ctx.clearRect(0, 0, width, height);
+
+        // Find max line count for scaling
+        const maxLines = Math.max(...histogramData.buckets.map(b => 
+            (b.stdout_lines || 0) + (b.stderr_lines || 0) + (b.host_lines || 0)
+        ));
+
+        if (maxLines === 0) return;
+
+        const barWidth = chartWidth / histogramData.buckets.length;
+
+        // Draw bars
+        histogramData.buckets.forEach((bucket, i) => {
+            const x = padding.left + i * barWidth;
+            const total = (bucket.stdout_lines || 0) + (bucket.stderr_lines || 0) + (bucket.host_lines || 0);
+            
+            if (total === 0) return;
+
+            const barHeight = (total / maxLines) * chartHeight;
+            let currentY = padding.top + chartHeight - barHeight;
+
+            // Draw stacked bars
+            if (bucket.stdout_lines > 0) {
+                const h = (bucket.stdout_lines / total) * barHeight;
+                ctx.fillStyle = '#d4d4d4';
+                ctx.fillRect(x, currentY, barWidth - 1, h);
+                currentY += h;
+            }
+            if (bucket.stderr_lines > 0) {
+                const h = (bucket.stderr_lines / total) * barHeight;
+                ctx.fillStyle = '#f48771';
+                ctx.fillRect(x, currentY, barWidth - 1, h);
+                currentY += h;
+            }
+            if (bucket.host_lines > 0) {
+                const h = (bucket.host_lines / total) * barHeight;
+                ctx.fillStyle = '#4fc1ff';
+                ctx.fillRect(x, currentY, barWidth - 1, h);
+            }
+        });
+
+        // Draw axes
+        ctx.strokeStyle = '#9ca3af';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(padding.left, padding.top);
+        ctx.lineTo(padding.left, padding.top + chartHeight);
+        ctx.lineTo(padding.left + chartWidth, padding.top + chartHeight);
+        ctx.stroke();
+
+        // Draw y-axis labels
+        ctx.fillStyle = '#6b7280';
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'right';
+        for (let i = 0; i <= 4; i++) {
+            const y = padding.top + chartHeight - (i / 4) * chartHeight;
+            const value = Math.round((i / 4) * maxLines);
+            ctx.fillText(value.toString(), padding.left - 10, y + 4);
+        }
+
+        // Draw x-axis labels (show ~5 labels)
+        ctx.textAlign = 'center';
+        const labelStep = Math.max(1, Math.floor(histogramData.buckets.length / 5));
+        for (let i = 0; i < histogramData.buckets.length; i += labelStep) {
+            const bucket = histogramData.buckets[i];
+            const x = padding.left + i * barWidth + barWidth / 2;
+            const date = new Date(bucket.timestamp * 1000);
+            const label = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+            ctx.fillText(label, x, padding.top + chartHeight + 20);
+        }
+
+        // Draw selection overlay if exists
+        if (selection) {
+            ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
+            const startIdx = Math.min(selection.startIdx, selection.endIdx);
+            const endIdx = Math.max(selection.startIdx, selection.endIdx);
+            const x = padding.left + startIdx * barWidth;
+            const w = (endIdx - startIdx + 1) * barWidth;
+            ctx.fillRect(x, padding.top, w, chartHeight);
+        }
+    }
+
+    // Mouse event handlers
+    canvas.addEventListener('mousedown', (e) => {
+        if (!histogramData) return;
+        
+        const rect = canvas.getBoundingClientRect();
+        const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+        const padding = 60;
+        const chartWidth = canvas.width - padding - 20;
+        const barWidth = chartWidth / histogramData.buckets.length;
+        
+        const idx = Math.floor((x - padding) / barWidth);
+        if (idx >= 0 && idx < histogramData.buckets.length) {
+            // Double-click to zoom
+            if (e.detail === 2 && !zoomRange) {
+                zoomIntoBucket(idx);
                 return;
             }
-
-            // Store data for download
-            currentLogData = data;
-
-            // Display batches in order
-            for (const batch of data.batches) {
-                const lines = batch.content.split('\n');
-                for (const lineText of lines) {
-                    parseAndAppendRawLine(logOutput, lineText);
-                }
-            }
-
-            logViewer.classList.remove('hidden');
-            downloadBtn.classList.remove('hidden');
-            statusDiv.textContent = `Loaded ${data.batches.length} log batch(es)`;
-        } catch (err) {
-            statusDiv.textContent = `Error: ${err.message}`;
-        } finally {
-            loadBtn.disabled = false;
+            
+            isSelecting = true;
+            selectionStart = idx;
+            selection = { startIdx: idx, endIdx: idx };
+            updateSelection();
         }
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+        if (!histogramData) return;
+        
+        const rect = canvas.getBoundingClientRect();
+        const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+        const y = e.clientY - rect.top;
+        const padding = 60;
+        const chartWidth = canvas.width - padding - 20;
+        const barWidth = chartWidth / histogramData.buckets.length;
+        
+        const idx = Math.floor((x - padding) / barWidth);
+        
+        // Show tooltip on hover
+        if (idx >= 0 && idx < histogramData.buckets.length && !isSelecting) {
+            const bucket = histogramData.buckets[idx];
+            const date = new Date(bucket.timestamp * 1000);
+            const total = (bucket.stdout_lines || 0) + (bucket.stderr_lines || 0) + (bucket.host_lines || 0);
+            
+            tooltip.innerHTML = `
+                <div><strong>${date.toLocaleString()}</strong></div>
+                <div>Total: ${total.toLocaleString()} lines</div>
+                ${bucket.stdout_lines ? `<div style="color: #d4d4d4;">stdout: ${bucket.stdout_lines.toLocaleString()}</div>` : ''}
+                ${bucket.stderr_lines ? `<div style="color: #f48771;">stderr: ${bucket.stderr_lines.toLocaleString()}</div>` : ''}
+                ${bucket.host_lines ? `<div style="color: #4fc1ff;">host: ${bucket.host_lines.toLocaleString()}</div>` : ''}
+                ${!zoomRange ? '<div style="margin-top: 4px; font-size: 11px; color: #aaa;">Double-click to zoom</div>' : ''}
+            `;
+            tooltip.style.display = 'block';
+            tooltip.style.left = (e.clientX - rect.left + 10) + 'px';
+            tooltip.style.top = (y + 10) + 'px';
+        } else {
+            tooltip.style.display = 'none';
+        }
+        
+        // Handle selection drag
+        if (isSelecting && idx >= 0 && idx < histogramData.buckets.length) {
+            selection.endIdx = idx;
+            renderHistogram();
+            updateSelection();
+        }
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+        tooltip.style.display = 'none';
+    });
+
+    canvas.addEventListener('mouseup', () => {
+        isSelecting = false;
+    });
+
+    function zoomIntoBucket(idx) {
+        const bucket = histogramData.buckets[idx];
+        const bucketDuration = histogramData.granularity === '1m' ? 60 : 
+                              histogramData.granularity === '5m' ? 300 : 3600;
+        
+        // Zoom into a range around this bucket (e.g., ±10 buckets or 1 hour, whichever is smaller)
+        const zoomBuckets = Math.min(20, histogramData.buckets.length);
+        const startIdx = Math.max(0, idx - Math.floor(zoomBuckets / 2));
+        const endIdx = Math.min(histogramData.buckets.length - 1, startIdx + zoomBuckets);
+        
+        const startTime = histogramData.buckets[startIdx].timestamp;
+        const endTime = histogramData.buckets[endIdx].timestamp + bucketDuration;
+        
+        loadHistogram(startTime, endTime);
+    }
+
+    zoomOutBtn.onclick = () => {
+        loadHistogram();
+        selection = null;
+        selectionInfo.textContent = '';
+        loadBtn.disabled = true;
     };
 
-    downloadBtn.onclick = () => {
-        if (!currentLogData || !currentLogData.batches) {
-            return;
+    function updateSelection() {
+        if (!selection || !histogramData) return;
+        
+        const startIdx = Math.min(selection.startIdx, selection.endIdx);
+        const endIdx = Math.max(selection.startIdx, selection.endIdx);
+        
+        const startTime = histogramData.buckets[startIdx].timestamp;
+        const endBucket = histogramData.buckets[endIdx];
+        const bucketDuration = histogramData.granularity === '1m' ? 60 : 
+                              histogramData.granularity === '5m' ? 300 : 3600;
+        const endTime = endBucket.timestamp + bucketDuration;
+        
+        // Auto-truncate if > 6 hours
+        const maxDuration = 6 * 60 * 60;
+        let actualEndTime = endTime;
+        let truncated = false;
+        if (endTime - startTime > maxDuration) {
+            actualEndTime = startTime + maxDuration;
+            truncated = true;
         }
+        
+        const startDate = new Date(startTime * 1000);
+        const endDate = new Date(actualEndTime * 1000);
+        
+        selectionInfo.innerHTML = `Selected: ${startDate.toLocaleString()} - ${endDate.toLocaleString()}` +
+            (truncated ? ' <span style="color: #f59e0b;">(truncated to 6 hours)</span>' : '');
+        
+        // Update hidden form fields
+        document.getElementById('log-start').value = startTime;
+        document.getElementById('log-end').value = actualEndTime;
+        
+        loadBtn.disabled = false;
+    }
 
-        // Combine all batches into a single text file
-        let combinedLogs = '';
-        for (const batch of currentLogData.batches) {
-            combinedLogs += batch.content;
-        }
-
-        // Create download link
-        const blob = new Blob([combinedLogs], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-
-        // Generate filename with center timestamp
-        const centerDate = new Date(centerTimeInput.value);
-        const filename = `session-{{.Session.SessionId}}-logs-${centerDate.toISOString().replace(/[:.]/g, '-')}.log`;
-        a.download = filename;
-
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+    loadBtn.onclick = () => {
+        const start = document.getElementById('log-start').value;
+        const end = document.getElementById('log-end').value;
+        
+        logContent.style.display = 'block';
+        logContent.innerHTML = '<div style="padding: 1rem; text-align: center;">Loading logs...</div>';
+        loadBtn.disabled = true;
+        canvas.style.pointerEvents = 'none';
+        canvas.style.opacity = '0.5';
+        
+        htmx.ajax('GET', `/sessions/{{.Session.SessionId}}/logs/load?start=${start}&end=${end}`, {
+            target: '#log-content',
+            swap: 'innerHTML'
+        }).then(() => {
+            loadBtn.disabled = false;
+            canvas.style.pointerEvents = 'auto';
+            canvas.style.opacity = '1';
+        });
     };
 
     clearBtn.onclick = () => {
-        logOutput.textContent = '';
-        logViewer.style.display = 'none';
-        downloadBtn.style.display = 'none';
-        statusDiv.textContent = '';
-        currentLogData = null;
+        logContent.innerHTML = '';
+        logContent.style.display = 'none';
+        selection = null;
+        selectionInfo.textContent = '';
+        loadBtn.disabled = true;
+        renderHistogram();
     };
 
-    // Auto-load logs on page load
-    {{if .Session.EndedAt}}
-    setTimeout(() => loadBtn.click(), 500);
-    {{end}}
+    // Hidden form fields for HTMX
+    const form = document.createElement('div');
+    form.innerHTML = '<input type="hidden" id="log-start"><input type="hidden" id="log-end">';
+    document.body.appendChild(form);
+
+    // Load histogram on page load, then auto-select last 10 buckets
+    loadHistogram().then(() => {
+        if (histogramData && histogramData.buckets.length > 0) {
+            // Select last 10 buckets (or all if fewer than 10)
+            const numBuckets = Math.min(10, histogramData.buckets.length);
+            const endIdx = histogramData.buckets.length - 1;
+            const startIdx = Math.max(0, endIdx - numBuckets + 1);
+            
+            selection = { startIdx, endIdx };
+            updateSelection();
+            renderHistogram();
+            
+            // Auto-load logs for this selection
+            setTimeout(() => {
+                if (loadBtn && !loadBtn.disabled) {
+                    loadBtn.click();
+                }
+            }, 500);
+        }
+    });
 })();
 </script>
 {{end}}

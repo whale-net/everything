@@ -67,6 +67,7 @@ service ManManAPI {
   // Log management (new)
   rpc SendBatchedLogs(SendBatchedLogsRequest) returns (SendBatchedLogsResponse);
   rpc GetHistoricalLogs(GetHistoricalLogsRequest) returns (GetHistoricalLogsResponse);
+  rpc GetLogHistogram(GetLogHistogramRequest) returns (GetLogHistogramResponse);
 
   // Validation (new)
   rpc ValidateDeployment(ValidateDeploymentRequest) returns (ValidateDeploymentResponse);
@@ -552,20 +553,42 @@ message SendBatchedLogsResponse {
 message GetHistoricalLogsRequest {
   int64 sgc_id = 1;  // DEPRECATED: Use session_id instead
   int64 start_timestamp = 2;  // Unix timestamp
-  int64 end_timestamp = 3;    // Unix timestamp (max 30 minutes from start)
+  int64 end_timestamp = 3;    // Unix timestamp (max 6 hours from start)
   int64 session_id = 4;  // Session ID to query logs for
+  int32 offset = 5;      // Line offset for pagination (default: 0)
+  int32 limit = 6;       // Max lines to return (default: 10000)
 }
 
 message GetHistoricalLogsResponse {
   repeated HistoricalLogBatch batches = 1;
   int64 earliest_available_timestamp = 2;  // Unix timestamp
   int64 latest_available_timestamp = 3;    // Unix timestamp
+  int32 total_lines = 4;     // Total lines in requested range
+  bool has_more = 5;         // True if more lines available
 }
 
 message HistoricalLogBatch {
   int64 minute_timestamp = 1;  // Unix timestamp
   string content = 2;          // Raw log text
   int32 line_count = 3;
+}
+
+message GetLogHistogramRequest {
+  int64 session_id = 1;
+}
+
+message GetLogHistogramResponse {
+  repeated HistogramBucket buckets = 1;
+  string granularity = 2;  // "1m", "5m", "1h"
+  int64 session_start = 3;  // Unix timestamp
+  int64 session_end = 4;    // Unix timestamp
+}
+
+message HistogramBucket {
+  int64 timestamp = 1;      // Unix timestamp (bucket start)
+  int32 stdout_lines = 2;
+  int32 stderr_lines = 3;
+  int32 host_lines = 4;
 }
 
 // ============================================================================
