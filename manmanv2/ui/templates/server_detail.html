@@ -1,8 +1,8 @@
 {{define "server_detail_content"}}
-<div class="action-bar">
+<div class="flex justify-between items-center mb-6">
     <h1>{{.Server.Name}}</h1>
     <div>
-        <a href="/servers" class="btn btn-secondary btn-sm">Back to Servers</a>
+        <a href="/servers" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">Back to Servers</a>
         <span class="badge {{statusBadge .Server.Status}}" style="font-size: 1rem; padding: 0.5rem 1rem;">
             {{.Server.Status}}
         </span>

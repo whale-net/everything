@@ -28,12 +28,12 @@
 <div x-show="showAddAddon" x-cloak x-transition class="bg-white dark:bg-slate-800 rounded-lg shadow-md border-2 border-indigo-500 p-6 mb-6">
     <div class="flex justify-between items-center mb-4 pb-4 border-b border-gray-200 dark:border-slate-700">
         <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Fetch Addon from Steam Workshop</h3>
-        <button @click="showAddAddon = false" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors">Cancel</button>
+        <button @click="showAddAddon = false" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">Cancel</button>
     </div>
     <form hx-post="/workshop/fetch-metadata" hx-target="#addAddonResult" hx-swap="innerHTML" class="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div>
             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Game</label>
-            <select name="game_id" required class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <select name="game_id" required class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
                 {{range .Games}}
                 <option value="{{.GameId}}">{{.Name}}</option>
                 {{end}}
@@ -41,16 +41,16 @@
         </div>
         <div>
             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Workshop ID</label>
-            <input type="text" name="workshop_id" required placeholder="e.g., 2938285337" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <input type="text" name="workshop_id" required placeholder="e.g., 2938285337" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
         </div>
         <div>
             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Platform</label>
-            <select name="platform_type" required class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <select name="platform_type" required class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
                 <option value="steam_workshop">Steam Workshop</option>
             </select>
         </div>
         <div class="flex items-end">
-            <button type="submit" class="w-full inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md transition-colors">Fetch</button>
+            <button type="submit" class="w-full inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-md transition-colors">Fetch</button>
         </div>
     </form>
     <div id="addAddonResult" class="mt-4"></div>
@@ -60,13 +60,13 @@
 <div x-show="showCreateLibrary" x-cloak x-transition class="bg-white dark:bg-slate-800 rounded-lg shadow-md border-2 border-indigo-500 p-6 mb-6">
     <div class="flex justify-between items-center mb-4 pb-4 border-b border-gray-200 dark:border-slate-700">
         <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Create New Library</h3>
-        <button @click="showCreateLibrary = false" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors">Cancel</button>
+        <button @click="showCreateLibrary = false" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">Cancel</button>
     </div>
     <form method="POST" action="/workshop/create-library" class="space-y-4">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Game *</label>
-                <select name="game_id" required class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <select name="game_id" required class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
                     {{range .Games}}
                     <option value="{{.GameId}}">{{.Name}}</option>
                     {{end}}
@@ -74,29 +74,29 @@
             </div>
             <div>
                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Name *</label>
-                <input type="text" name="name" required placeholder="e.g., Essential Maps" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <input type="text" name="name" required placeholder="e.g., Essential Maps" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
             </div>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Description</label>
-                <input type="text" name="description" placeholder="Optional" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <input type="text" name="description" placeholder="Optional" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
             </div>
             <div>
                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Default Path Preset <span class="text-xs text-gray-500">(Optional)</span></label>
-                <select name="preset_id" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <select name="preset_id" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
                     <option value="">-- No preset --</option>
                 </select>
             </div>
         </div>
-        <button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md transition-colors">Create Library</button>
+        <button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-md transition-colors">Create Library</button>
     </form>
 </div>
 
 <!-- Libraries Section -->
 <div class="flex justify-between items-center mb-4">
     <h2 class="text-xl font-bold text-gray-900 dark:text-white">Libraries <span class="text-sm font-normal text-gray-500 dark:text-gray-400">({{len .Libraries}})</span></h2>
-    <a href="/workshop/search?type=library" class="text-sm text-blue-600 dark:text-blue-400 hover:underline">Browse all →</a>
+    <a href="/workshop/search?type=library" class="text-sm text-indigo-600 dark:text-indigo-400 hover:underline">Browse all →</a>
 </div>
 
 {{if .Libraries}}
@@ -124,14 +124,14 @@
     <div class="text-6xl mb-4">📚</div>
     <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">No libraries yet</h3>
     <p class="text-gray-600 dark:text-gray-400 mb-4">Create a library to organize your addons into reusable collections.</p>
-    <button @click="showCreateLibrary = true" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md transition-colors">Create Library</button>
+    <button @click="showCreateLibrary = true" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-md transition-colors">Create Library</button>
 </div>
 {{end}}
 
 <!-- Recent Addons Section -->
 <div class="flex justify-between items-center mb-4">
     <h2 class="text-xl font-bold text-gray-900 dark:text-white">Recent Addons <span class="text-sm font-normal text-gray-500 dark:text-gray-400">({{len .Addons}} total)</span></h2>
-    <a href="/workshop/search?type=addon" class="text-sm text-blue-600 dark:text-blue-400 hover:underline">Browse all →</a>
+    <a href="/workshop/search?type=addon" class="text-sm text-indigo-600 dark:text-indigo-400 hover:underline">Browse all →</a>
 </div>
 
 {{if .RecentAddons}}
@@ -159,7 +159,7 @@
     <div class="text-6xl mb-4">🧩</div>
     <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">No addons yet</h3>
     <p class="text-gray-600 dark:text-gray-400 mb-4">Fetch addon metadata from Steam Workshop to get started.</p>
-    <button @click="showAddAddon = true" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md transition-colors">Add Addon</button>
+    <button @click="showAddAddon = true" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-md transition-colors">Add Addon</button>
 </div>
 {{end}}
 

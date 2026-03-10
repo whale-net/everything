@@ -31,9 +31,9 @@
         <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">for {{.Game.Name}}</p>
     </div>
     <div class="flex flex-wrap gap-2">
-        <a href="/games/{{.Game.GameId}}" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors">Back to Game</a>
-        <a href="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/actions" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-md transition-colors">⚡ Manage Actions</a>
-        <button onclick="document.getElementById('edit-form').classList.remove('hidden')" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors">Edit</button>
+        <a href="/games/{{.Game.GameId}}" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">Back to Game</a>
+        <a href="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/actions" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors">⚡ Manage Actions</a>
+        <button onclick="document.getElementById('edit-form').classList.remove('hidden')" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">Edit</button>
     </div>
 </div>
 
@@ -48,7 +48,7 @@
         <div>
             <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Game</dt>
             <dd class="mt-1 text-sm">
-                <a href="/games/{{.Game.GameId}}" class="text-blue-600 dark:text-blue-400 hover:underline">{{.Game.Name}}</a>
+                <a href="/games/{{.Game.GameId}}" class="text-indigo-600 dark:text-indigo-400 hover:underline">{{.Game.Name}}</a>
             </dd>
         </div>
         
@@ -130,8 +130,8 @@
                     <td><code>{{.Config.ServerGameConfigId}}</code></td>
                     <td>{{.Config.Status}}</td>
                     <td>
-                        <a class="btn btn-secondary btn-sm" href="/sgc/{{.Config.ServerGameConfigId}}">Manage SGC</a>
-                        <a class="btn btn-secondary btn-sm" href="/sessions?server_game_config_id={{.Config.ServerGameConfigId}}">View Sessions</a>
+                        <a class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors" href="/sgc/{{.Config.ServerGameConfigId}}">Manage SGC</a>
+                        <a class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors" href="/sessions?server_game_config_id={{.Config.ServerGameConfigId}}">View Sessions</a>
                     </td>
                 </tr>
                 {{end}}
@@ -322,7 +322,7 @@
             </tbody>
         </table>
         <div style="display: flex; gap: 0.5rem;">
-            <button type="button" id="env-add-row" class="btn btn-secondary btn-sm">+ Add Variable</button>
+            <button type="button" id="env-add-row" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">+ Add Variable</button>
             <button type="submit" class="btn btn-success btn-sm">Save</button>
         </div>
     </form>
@@ -476,7 +476,7 @@
                     <form method="POST" action="/games/{{.Config.GameId}}/configs/{{.Config.ConfigId}}/delete" class="inline">
                         <button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">Yes, Delete</button>
                     </form>
-                    <button @click="confirmDelete = false" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-gray-600 hover:bg-gray-700 text-white font-medium rounded-md transition-colors">Cancel</button>
+                    <button @click="confirmDelete = false" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-slate-600 hover:bg-slate-700 text-white font-medium rounded-md transition-colors">Cancel</button>
                 </div>
             </div>
         </div>

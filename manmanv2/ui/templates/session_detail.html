@@ -1,11 +1,11 @@
 {{define "session_detail_content"}}
-<div class="action-bar">
+<div class="flex justify-between items-center mb-6">
     <h1>Session {{.Session.SessionId}}</h1>
     <div>
-        <a href="/sessions" class="btn btn-secondary btn-sm">Back to Sessions</a>
+        <a href="/sessions" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">Back to Sessions</a>
         {{if eq .Session.Status "running"}}
         <form hx-post="/sessions/{{.Session.SessionId}}/stop" hx-target="body" style="display: inline;">
-            <button type="submit" class="btn btn-danger btn-sm">Stop Session</button>
+            <button type="submit" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-md transition-colors">Stop Session</button>
         </form>
         {{end}}
     </div>
@@ -605,7 +605,7 @@ function parseAndAppendRawLine(container, lineText) {
 
         // Draw y-axis labels
         ctx.fillStyle = '#6b7280';
-        ctx.font = '12px sans-serif';
+        ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
         ctx.textAlign = 'right';
         for (let i = 0; i <= 4; i++) {
             const y = padding.top + chartHeight - (i / 4) * chartHeight;
