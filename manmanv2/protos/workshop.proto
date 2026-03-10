@@ -209,6 +209,8 @@ message InstallAddonRequest {
   // Optional: use this preset for path resolution when the addon has no preset_id configured.
   // Applies the library's default preset. Takes precedence over addon's own preset_id.
   int64 preset_id_override = 6;
+  // Optional: which volume to install into. Takes precedence over the default volume selection.
+  int64 volume_id_override = 7;
 }
 
 message InstallAddonResponse {

@@ -134,10 +134,11 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 		return err
 	}
 
-	// Create temporary download directory for SteamCMD
-	// SteamCMD creates steamapps/workshop/content/<appid>/<workshopid>/ structure
-	// We'll extract from there to the final install path
-	tempDownloadDir := filepath.Join(do.getSGCInternalDir(cmd.SGCID), ".workshop-temp", fmt.Sprintf("%d-%d", cmd.AddonID, time.Now().Unix()))
+	// Create temporary download directory for SteamCMD.
+	// SteamCMD creates steamapps/workshop/content/<appid>/<workshopid>/ structure;
+	// we extract from there to a staging subdir before installing to the target volume.
+	tempSuffix := fmt.Sprintf("%d-%d", cmd.AddonID, time.Now().Unix())
+	tempDownloadDir := filepath.Join(do.getSGCInternalDir(cmd.SGCID), ".workshop-temp", tempSuffix)
 	if err := os.MkdirAll(tempDownloadDir, 0777); err != nil {
 		logger.Error("failed to create temp download directory", "error", err)
 		do.handleDownloadError(ctx, cmd.InstallationID, err)
@@ -145,10 +146,11 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 	}
 	defer os.RemoveAll(tempDownloadDir) // Clean up temp dir after download
 
-	// Mount temp directory into container at /tmp/workshop-download
-	// This allows SteamCMD to write there and us to read from the same location
+	// Mount temp directory into container at /tmp/workshop-download.
+	// tempHostDir and tempDownloadDir point to the same location from Docker's and
+	// the host-manager's perspectives respectively.
 	containerTempDir := "/tmp/workshop-download"
-	tempHostDir := filepath.Join(do.getSGCHostDir(cmd.SGCID), ".workshop-temp", fmt.Sprintf("%d-%d", cmd.AddonID, time.Now().Unix()))
+	tempHostDir := filepath.Join(do.getSGCHostDir(cmd.SGCID), ".workshop-temp", tempSuffix)
 	volumeMounts = append(volumeMounts, fmt.Sprintf("%s:%s", tempHostDir, containerTempDir))
 
 	// Build SteamCMD command with container temp directory
@@ -259,10 +261,8 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 		return fmt.Errorf("%s", errMsg)
 	}
 
-	// Convert container path to internal path for file operations
-	// cmd.InstallPath is a container path (e.g., /data/maps/addon_name)
-	// We need to resolve it to the internal path where we can actually write files
-	internalInstallPath, err := do.resolveContainerPathToInternal(ctx, cmd.SGCID, cmd.InstallPath)
+	// Resolve where this install path lives (bind-mount or named volume)
+	target, err := do.resolveInstallTarget(ctx, cmd.SGCID, cmd.InstallPath)
 	if err != nil {
 		errMsg := fmt.Sprintf("failed to resolve install path: %v", err)
 		logger.Error("extraction failed", "error", err, "container_path", cmd.InstallPath)
@@ -270,61 +270,34 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 		return fmt.Errorf("%s", errMsg)
 	}
 
-	// Ensure parent directory of install path exists
-	installDir := filepath.Dir(internalInstallPath)
-	if err := os.MkdirAll(installDir, 0777); err != nil {
-		errMsg := fmt.Sprintf("failed to create install directory: %v", err)
-		logger.Error("extraction failed", "error", err, "install_dir", installDir)
+	// Stage extracted files into a subdirectory of the temp dir so they are
+	// accessible via the existing bind mount regardless of target volume type.
+	stagingDir := filepath.Join(tempDownloadDir, "staging")
+	if err := os.MkdirAll(stagingDir, 0777); err != nil {
+		errMsg := fmt.Sprintf("failed to create staging directory: %v", err)
+		logger.Error("extraction failed", "error", err)
 		do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, &errMsg)
 		return fmt.Errorf("%s", errMsg)
 	}
 
-	// Move all files from steam content directory to install path
-	logger.Info("extracting workshop content", "from", steamContentDir, "to", internalInstallPath, "file_count", len(entries))
-	
-	// Handle single file - check if it needs renaming based on SteamCMD's legacy format
-	// SteamCMD downloads workshop items with internal Steam filenames (e.g., "16796113200273194991_legacy.bin")
-	// Different games expect different formats:
-	// - Source engine games (L4D2, CS:GO, etc.): Expect .vpk files named <workshopid>.vpk
-	// - Garry's Mod: Expects .gma files
-	// - Other games: May expect .bsp, .pak, or other formats
-	//
-	// The "_legacy.bin" suffix indicates SteamCMD's generic wrapper format.
-	// For Source engine games, these are actually VPK archives with the wrong extension.
-	// Reference: https://steamcommunity.com/app/550/discussions/3/7340374598287174069/
+	// Move all files from SteamCMD's nested structure into the staging dir,
+	// renaming legacy.bin → <workshopid>.vpk for Source engine games along the way.
+	logger.Info("extracting workshop content", "from", steamContentDir, "to", stagingDir, "file_count", len(entries))
+
 	if len(entries) == 1 && !entries[0].IsDir() {
 		srcFile := filepath.Join(steamContentDir, entries[0].Name())
 		filename := entries[0].Name()
-		
-		// Check if this is a legacy.bin file that needs renaming
-		// For now, we handle Source engine games (L4D2, etc.) by renaming to .vpk
-		// TODO: Add game-specific detection based on steam_app_id for other formats:
-		//   - Garry's Mod (4000): .gma
-		//   - Other Source games: .vpk
-		//   - Non-Source games: Keep original or extract
+
 		var dstFile string
 		if strings.HasSuffix(filename, "_legacy.bin") {
-			// Rename to <workshopid>.vpk for Source engine games
-			// The workshop ID is the canonical identifier that games use to load content
-			dstFile = filepath.Join(internalInstallPath, cmd.WorkshopID+".vpk")
+			dstFile = filepath.Join(stagingDir, cmd.WorkshopID+".vpk")
 			logger.Info("renaming legacy.bin to vpk", "from", filename, "to", cmd.WorkshopID+".vpk")
 		} else {
-			// Keep original filename for files that don't use the legacy format
-			dstFile = filepath.Join(internalInstallPath, filename)
+			dstFile = filepath.Join(stagingDir, filename)
 			logger.Info("keeping original filename", "file", filename)
 		}
-		
-		// Ensure parent directory exists
-		if err := os.MkdirAll(filepath.Dir(dstFile), 0777); err != nil {
-			errMsg := fmt.Sprintf("failed to create install directory: %v", err)
-			logger.Error("extraction failed", "error", err)
-			do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, &errMsg)
-			return fmt.Errorf("%s", errMsg)
-		}
-		
-		// Move the file
+
 		if err := os.Rename(srcFile, dstFile); err != nil {
-			// If rename fails (cross-device), copy then delete
 			if err := copyFile(srcFile, dstFile); err != nil {
 				errMsg := fmt.Sprintf("failed to copy workshop file: %v", err)
 				logger.Error("extraction failed", "error", err)
@@ -334,11 +307,51 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 			os.Remove(srcFile)
 		}
 	} else {
-		// Multiple files or directory - move entire directory structure as-is
-		// Workshop items with multiple files (models, textures, sounds, etc.) should
-		// preserve their directory structure exactly as the creator uploaded them
-		if err := do.moveDirectory(steamContentDir, internalInstallPath); err != nil {
+		if err := do.moveDirectory(steamContentDir, stagingDir); err != nil {
 			errMsg := fmt.Sprintf("failed to extract workshop content: %v", err)
+			logger.Error("extraction failed", "error", err)
+			do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, &errMsg)
+			return fmt.Errorf("%s", errMsg)
+		}
+	}
+
+	// Install staged files into the target volume.
+	if target.isNamed {
+		// Named volume: use a busybox helper container so Docker manages the copy natively.
+		// The staging dir is bind-mounted and the named volume is mounted at its container path.
+		stagingHostDir := filepath.Join(tempHostDir, "staging")
+		destPath := target.ContainerPath
+		if target.RelPath != "" {
+			destPath = filepath.Join(destPath, target.RelPath)
+		}
+		copyCmd := fmt.Sprintf("mkdir -p %s && cp -r /tmp/workshop-staging/. %s/", destPath, destPath)
+		helperConfig := docker.ContainerConfig{
+			Name:  fmt.Sprintf("workshop-install-%s-%d-%d", do.environment, cmd.SGCID, cmd.AddonID),
+			Image: "busybox:latest",
+			Command: []string{"sh", "-c", copyCmd},
+			Volumes: []string{
+				fmt.Sprintf("%s:/tmp/workshop-staging", stagingHostDir),
+				fmt.Sprintf("%s:%s", target.VolumeName, target.ContainerPath),
+			},
+		}
+		logger.Info("copying to named volume via helper container", "volume", target.VolumeName, "dest", destPath)
+		if err := do.runHelperContainer(ctx, helperConfig); err != nil {
+			errMsg := fmt.Sprintf("failed to copy files into named volume: %v", err)
+			logger.Error("extraction failed", "error", err)
+			do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, &errMsg)
+			return fmt.Errorf("%s", errMsg)
+		}
+	} else {
+		// Bind-mount volume: move files directly to the resolved host path.
+		installPath := target.BindPath
+		if err := os.MkdirAll(installPath, 0777); err != nil {
+			errMsg := fmt.Sprintf("failed to create install directory: %v", err)
+			logger.Error("extraction failed", "error", err)
+			do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, &errMsg)
+			return fmt.Errorf("%s", errMsg)
+		}
+		if err := do.moveDirectory(stagingDir, installPath); err != nil {
+			errMsg := fmt.Sprintf("failed to move files to install path: %v", err)
 			logger.Error("extraction failed", "error", err)
 			do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, &errMsg)
 			return fmt.Errorf("%s", errMsg)
@@ -421,8 +434,11 @@ func (do *DownloadOrchestrator) publishStatus(ctx context.Context, installationI
 	}
 }
 
-// resolveVolumeMounts gets volume mounts from SGC configuration, matching the game container's
-// mount scheme, and ensures the target directories exist with world-writable permissions.
+// resolveVolumeMounts gets bind-mount volume mounts from SGC configuration for the SteamCMD
+// download container, and ensures the target directories exist with world-writable permissions.
+//
+// Named volumes are excluded — the SteamCMD container downloads to a temp dir, and files
+// are copied into named volumes afterwards via a separate helper container.
 //
 // Directories are created at the internal path (inside this container) so they are visible
 // to Docker on the host. We use 0777 so any container user (including steam, UID 1000) can write.
@@ -450,14 +466,11 @@ func (do *DownloadOrchestrator) resolveVolumeMounts(ctx context.Context, sgcID i
 		return nil, fmt.Errorf("no volumes configured for game config %d (SGC %d)", sgcResp.Config.GameConfigId, sgcID)
 	}
 
-	// Build mount strings matching the game container's volume mount scheme.
-	// Named volumes use the Docker named volume directly; bind-mount volumes use
-	// sgcHostDir/<host_subpath>:<container_path> and pre-create the directory.
+	// Build mount strings for bind-mount volumes only.
+	// Named volumes are handled separately after download via a helper container.
 	mounts := make([]string, 0, len(volumesResp.Volumes))
 	for _, vol := range volumesResp.Volumes {
 		if vol.VolumeType == "named" {
-			volumeName := do.getNamedVolumeName(sgcID, vol.Name)
-			mounts = append(mounts, fmt.Sprintf("%s:%s", volumeName, vol.ContainerPath))
 			continue
 		}
 
@@ -531,31 +544,45 @@ func (do *DownloadOrchestrator) getSGCInternalDir(sgcID int64) string {
 	return filepath.Join(do.internalDataDir, dirName)
 }
 
-// resolveContainerPathToInternal converts a container path to the internal path
-// where the host-manager can access it. This looks up the volume configuration
-// to find which volume contains the path and maps it to the internal directory.
-func (do *DownloadOrchestrator) resolveContainerPathToInternal(ctx context.Context, sgcID int64, containerPath string) (string, error) {
+// installTarget describes where extracted workshop files should be placed.
+// For bind-mount volumes the host-manager can write directly to BindPath.
+// For named volumes files must be copied in via a Docker helper container.
+type installTarget struct {
+	// isNamed is true when the target volume is a Docker named volume.
+	isNamed bool
+
+	// BindPath is the host-accessible path to write to (bind-mount volumes only).
+	BindPath string
+
+	// VolumeName is the Docker named volume name (named volumes only).
+	VolumeName string
+	// ContainerPath is where the named volume is mounted inside game containers (named volumes only).
+	ContainerPath string
+
+	// RelPath is any sub-path within the volume root.
+	RelPath string
+}
+
+// resolveInstallTarget looks up the volume that contains containerPath for the given SGC
+// and returns an installTarget describing how to write files there.
+func (do *DownloadOrchestrator) resolveInstallTarget(ctx context.Context, sgcID int64, containerPath string) (installTarget, error) {
 	sgcInternalDir := do.getSGCInternalDir(sgcID)
 
-	// Get SGC to look up game config
 	sgcResp, err := do.grpcClient.GetServerGameConfig(ctx, &pb.GetServerGameConfigRequest{
 		ServerGameConfigId: sgcID,
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to get SGC %d: %w", sgcID, err)
+		return installTarget{}, fmt.Errorf("failed to get SGC %d: %w", sgcID, err)
 	}
 
-	// List volumes for this game config
 	volumesResp, err := do.grpcClient.ListGameConfigVolumes(ctx, &pb.ListGameConfigVolumesRequest{
 		ConfigId: sgcResp.Config.GameConfigId,
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to list volumes: %w", err)
+		return installTarget{}, fmt.Errorf("failed to list volumes: %w", err)
 	}
 
-	// Find which volume contains this container path
 	for _, vol := range volumesResp.Volumes {
-		// Check if containerPath starts with this volume's container path
 		if !strings.HasPrefix(containerPath, vol.ContainerPath) {
 			continue
 		}
@@ -564,20 +591,71 @@ func (do *DownloadOrchestrator) resolveContainerPathToInternal(ctx context.Conte
 		relPath = strings.TrimPrefix(relPath, "/")
 
 		if vol.VolumeType == "named" {
-			// The named volume is mounted directly at vol.ContainerPath inside the download
-			// container (via resolveVolumeMounts), so the install path is just the container path.
-			return filepath.Join(vol.ContainerPath, relPath), nil
+			return installTarget{
+				isNamed:       true,
+				VolumeName:    do.getNamedVolumeName(sgcID, vol.Name),
+				ContainerPath: vol.ContainerPath,
+				RelPath:       relPath,
+			}, nil
 		}
 
-		// Bind-mount: translate to internal path via SGC data dir
+		// Bind-mount: resolve to the host-accessible internal path
 		subPath := strings.TrimPrefix(vol.HostSubpath, "/")
 		if subPath == "" {
 			subPath = vol.Name
 		}
-		return filepath.Join(sgcInternalDir, subPath, relPath), nil
+		return installTarget{
+			isNamed:  false,
+			BindPath: filepath.Join(sgcInternalDir, subPath, relPath),
+		}, nil
 	}
 
-	return "", fmt.Errorf("no volume found for container path %s", containerPath)
+	return installTarget{}, fmt.Errorf("no volume found for container path %s", containerPath)
+}
+
+// runHelperContainer creates, starts, waits for, and removes a short-lived container.
+// Used to perform operations (e.g. copying files into a named volume) that require Docker's
+// volume machinery rather than direct host filesystem access.
+func (do *DownloadOrchestrator) runHelperContainer(ctx context.Context, config docker.ContainerConfig) error {
+	// Clean up any leftover container from a previous failed attempt
+	if existing, err := do.dockerClient.GetContainerStatus(ctx, config.Name); err == nil && existing != nil {
+		_ = do.dockerClient.RemoveContainer(ctx, existing.ContainerID, true)
+	}
+
+	containerID, err := do.dockerClient.CreateContainer(ctx, config)
+	if err != nil {
+		if strings.Contains(err.Error(), "No such image") {
+			if pullErr := do.dockerClient.PullImage(ctx, config.Image); pullErr != nil {
+				return fmt.Errorf("failed to pull helper image %s: %w", config.Image, pullErr)
+			}
+			containerID, err = do.dockerClient.CreateContainer(ctx, config)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to create helper container: %w", err)
+		}
+	}
+
+	if err := do.dockerClient.StartContainer(ctx, containerID); err != nil {
+		_ = do.dockerClient.RemoveContainer(ctx, containerID, true)
+		return fmt.Errorf("failed to start helper container: %w", err)
+	}
+
+	// Wait for completion
+	for {
+		status, err := do.dockerClient.GetContainerStatus(ctx, containerID)
+		if err != nil {
+			_ = do.dockerClient.RemoveContainer(ctx, containerID, true)
+			return fmt.Errorf("failed to get helper container status: %w", err)
+		}
+		if !status.Running {
+			_ = do.dockerClient.RemoveContainer(ctx, containerID, true)
+			if status.ExitCode != 0 {
+				return fmt.Errorf("helper container exited with code %d", status.ExitCode)
+			}
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // handleDownloadError handles download errors
@@ -719,12 +797,14 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 	type libraryOverrides struct {
 		pathOverride string
 		presetID     int64 // effective: attachment's preset > library default preset
+		volumeID     int64 // which volume to install into
 	}
 	libraryOpts := make(map[int64]libraryOverrides)
 	for _, att := range attachmentsResp.Attachments {
 		opts := libraryOverrides{
 			pathOverride: att.InstallationPathOverride,
 			presetID:     att.PresetId, // SGC attachment override
+			volumeID:     att.VolumeId,
 		}
 		if opts.presetID == 0 {
 			opts.presetID = libraryDefaultPreset[att.LibraryId] // fall back to library default
@@ -740,6 +820,7 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 		addon        *pb.WorkshopAddon
 		pathOverride string
 		presetID     int64
+		volumeID     int64
 	}
 	addonMap := make(map[int64]addonEntry)
 	visited := make(map[int64]bool)
@@ -748,11 +829,12 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 		libraryID    int64
 		pathOverride string // inherited from the top-level SGC library attachment
 		presetID     int64 // effective preset (attachment override or library default)
+		volumeID     int64 // which volume to install into
 	}
 	queue := make([]queueItem, 0, len(attachmentsResp.Attachments))
 	for _, att := range attachmentsResp.Attachments {
 		opts := libraryOpts[att.LibraryId]
-		queue = append(queue, queueItem{libraryID: att.LibraryId, pathOverride: opts.pathOverride, presetID: opts.presetID})
+		queue = append(queue, queueItem{libraryID: att.LibraryId, pathOverride: opts.pathOverride, presetID: opts.presetID, volumeID: opts.volumeID})
 	}
 
 	// BFS to collect all addons from all libraries
@@ -776,7 +858,7 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 
 		for _, addon := range addonsResp.Addons {
 			if _, exists := addonMap[addon.AddonId]; !exists {
-				addonMap[addon.AddonId] = addonEntry{addon: addon, pathOverride: item.pathOverride, presetID: item.presetID}
+				addonMap[addon.AddonId] = addonEntry{addon: addon, pathOverride: item.pathOverride, presetID: item.presetID, volumeID: item.volumeID}
 			}
 		}
 
@@ -790,7 +872,7 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 		}
 
 		for _, child := range childrenResp.Libraries {
-			queue = append(queue, queueItem{libraryID: child.LibraryId, pathOverride: item.pathOverride, presetID: item.presetID})
+			queue = append(queue, queueItem{libraryID: child.LibraryId, pathOverride: item.pathOverride, presetID: item.presetID, volumeID: item.volumeID})
 		}
 	}
 
@@ -858,6 +940,7 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 			SkipDispatch:             true,
 			InstallationPathOverride: entry.pathOverride,
 			PresetIdOverride:         entry.presetID,
+			VolumeIdOverride:         entry.volumeID,
 		})
 		if err != nil {
 			// Treat installation errors as non-fatal: a misconfigured addon (e.g. missing

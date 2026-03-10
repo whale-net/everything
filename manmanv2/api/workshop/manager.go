@@ -43,7 +43,7 @@ type RemoveAddonCommand struct {
 
 // WorkshopManagerInterface defines the interface for workshop addon operations
 type WorkshopManagerInterface interface {
-	InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall, skipDispatch bool, installationPathOverride string, presetIDOverride int64) (*manman.WorkshopInstallation, error)
+	InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall, skipDispatch bool, installationPathOverride string, presetIDOverride int64, volumeIDOverride int64) (*manman.WorkshopInstallation, error)
 	RemoveInstallation(ctx context.Context, installationID int64) error
 	ResetInstallation(ctx context.Context, installationID int64) (*manman.WorkshopInstallation, error)
 	FetchMetadata(ctx context.Context, gameID int64, workshopID string) (*manman.WorkshopAddon, error)
@@ -98,7 +98,8 @@ func NewWorkshopManager(
 // publishes a download command to RabbitMQ for the host manager to execute.
 // installationPathOverride, if non-empty, overrides the addon's configured installation path.
 // presetIDOverride, if non-zero, is used as the preset when the addon has none configured (library default).
-func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall, skipDispatch bool, installationPathOverride string, presetIDOverride int64) (*manman.WorkshopInstallation, error) {
+// volumeIDOverride, if non-zero, selects which volume to install into (takes precedence over default volume selection).
+func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int64, forceReinstall, skipDispatch bool, installationPathOverride string, presetIDOverride int64, volumeIDOverride int64) (*manman.WorkshopInstallation, error) {
 	// 1. Check if already installed
 	existing, err := wm.installationRepo.GetBySGCAndAddon(ctx, sgcID, addonID)
 	if err == nil && existing.Status == manman.InstallationStatusInstalled && !forceReinstall {
@@ -118,7 +119,7 @@ func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int6
 	}
 
 	// 4. Resolve installation path from volume strategies
-	installPath, err := wm.resolveInstallationPath(ctx, sgc, addon, installationPathOverride, presetIDOverride)
+	installPath, err := wm.resolveInstallationPath(ctx, sgc, addon, installationPathOverride, presetIDOverride, volumeIDOverride)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve installation path: %w", err)
 	}
@@ -180,38 +181,47 @@ func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int6
 // resolveInstallationPath determines the target path for addon installation.
 // installationPathOverride, if non-empty, is used as the absolute installation path directly.
 // presetIDOverride, if non-zero, is used as the preset when the addon has none of its own (library default).
-func (wm *WorkshopManager) resolveInstallationPath(ctx context.Context, sgc *manman.ServerGameConfig, addon *manman.WorkshopAddon, installationPathOverride string, presetIDOverride int64) (string, error) {
+// volumeIDOverride, if non-zero, selects which volume to resolve the relative path against.
+func (wm *WorkshopManager) resolveInstallationPath(ctx context.Context, sgc *manman.ServerGameConfig, addon *manman.WorkshopAddon, installationPathOverride string, presetIDOverride int64, volumeIDOverride int64) (string, error) {
 	// Library-level path override takes highest precedence — returned as-is (absolute path)
 	if installationPathOverride != "" {
 		return installationPathOverride, nil
 	}
 
-	var volume *manman.GameConfigVolume
-	var relativePath string
-
-	// Determine effective preset: addon's own preset, or library default override
+	// Determine effective preset: addon's own preset takes priority, then library override
 	effectivePresetID := addon.PresetID
 	if effectivePresetID == 0 && presetIDOverride != 0 {
 		effectivePresetID = presetIDOverride
 	}
 
-	// Option 1: Addon uses a preset (own or library default)
+	// Resolve relative path from preset or addon's own installation_path field
+	var relativePath string
 	if effectivePresetID != 0 {
 		preset, err := wm.presetRepo.Get(ctx, effectivePresetID)
 		if err != nil {
 			return "", fmt.Errorf("failed to get preset: %w", err)
 		}
-		// Preset provides the installation path
 		relativePath = preset.InstallationPath
-	}
-
-	// Use addon's custom path if no preset was used
-	if relativePath == "" && addon.InstallationPath != nil && *addon.InstallationPath != "" {
+	} else if addon.InstallationPath != nil && *addon.InstallationPath != "" {
 		relativePath = *addon.InstallationPath
 	}
 
-	// Option 3: Fallback to first volume (legacy behavior)
-	if volume == nil {
+	if relativePath == "" {
+		return "", fmt.Errorf("addon %d (%s) is missing installation path configuration. "+
+			"Please set either preset_id or installation_path on the addon. "+
+			"Current state: preset_id=%v, installation_path=%v",
+			addon.AddonID, addon.Name, addon.PresetID, addon.InstallationPath)
+	}
+
+	// Select the volume: explicit override first, then first volume as fallback
+	var volume *manman.GameConfigVolume
+	if volumeIDOverride != 0 {
+		v, err := wm.volumeRepo.Get(ctx, volumeIDOverride)
+		if err != nil {
+			return "", fmt.Errorf("failed to get volume %d: %w", volumeIDOverride, err)
+		}
+		volume = v
+	} else {
 		volumes, err := wm.volumeRepo.ListByGameConfig(ctx, sgc.GameConfigID)
 		if err != nil {
 			return "", fmt.Errorf("failed to get volumes: %w", err)
@@ -222,16 +232,7 @@ func (wm *WorkshopManager) resolveInstallationPath(ctx context.Context, sgc *man
 		volume = volumes[0]
 	}
 
-	if relativePath == "" {
-		return "", fmt.Errorf("addon %d (%s) is missing installation path configuration. "+
-			"Please set either preset_id or installation_path on the addon. "+
-			"Current state: preset_id=%v, installation_path=%v",
-			addon.AddonID, addon.Name, addon.PresetID, addon.InstallationPath)
-	}
-
-	// Resolve to absolute path
-	fullPath := filepath.Join(volume.ContainerPath, relativePath)
-	return fullPath, nil
+	return filepath.Join(volume.ContainerPath, relativePath), nil
 }
 
 // FetchMetadata fetches metadata from Steam Workshop without creating a database record
@@ -341,7 +342,7 @@ func (wm *WorkshopManager) EnsureLibraryAddonsInstalled(ctx context.Context, sgc
 			continue // already installed
 		}
 
-		if _, err := wm.InstallAddon(ctx, sgcID, addonID, false, false, "", 0); err != nil {
+		if _, err := wm.InstallAddon(ctx, sgcID, addonID, false, false, "", 0, 0); err != nil {
 			log.Printf("Warning: failed to trigger install for SGC %d addon %d: %v", sgcID, addonID, err)
 			continue
 		}
