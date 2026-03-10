@@ -1,0 +1,75 @@
+package forms
+
+import "fmt"
+
+// Input renders a text input field
+templ Input(name, value, placeholder string, inputType ...string) {
+	{{ typ := "text" }}
+	if len(inputType) > 0 {
+		{{ typ = inputType[0] }}
+	}
+	<input
+		type={ typ }
+		name={ name }
+		value={ value }
+		placeholder={ placeholder }
+		class="block w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-slate-800 text-slate-900 dark:text-white sm:text-sm"
+	/>
+}
+
+// Textarea renders a textarea field
+templ Textarea(name, value, placeholder string, rows ...int) {
+	{{ r := "3" }}
+	if len(rows) > 0 {
+		{{ r = fmt.Sprintf("%d", rows[0]) }}
+	}
+	<textarea
+		name={ name }
+		placeholder={ placeholder }
+		rows={ r }
+		class="block w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-slate-800 text-slate-900 dark:text-white sm:text-sm"
+	>{ value }</textarea>
+}
+
+// Select renders a select dropdown
+templ Select(name, value string, options []SelectOption) {
+	<select
+		name={ name }
+		class="block w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-slate-800 text-slate-900 dark:text-white sm:text-sm"
+	>
+		for _, opt := range options {
+			if opt.Value == value {
+				<option value={ opt.Value } selected>{ opt.Label }</option>
+			} else {
+				<option value={ opt.Value }>{ opt.Label }</option>
+			}
+		}
+	</select>
+}
+
+// SelectOption represents a select option
+type SelectOption struct {
+	Value string
+	Label string
+}
+
+// Checkbox renders a checkbox input
+templ Checkbox(name string, checked bool, label string) {
+	<label class="flex items-center">
+		if checked {
+			<input
+				type="checkbox"
+				name={ name }
+				checked
+				class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+			/>
+		} else {
+			<input
+				type="checkbox"
+				name={ name }
+				class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+			/>
+		}
+		<span class="ml-2 text-sm text-slate-700 dark:text-slate-300">{ label }</span>
+	</label>
+}

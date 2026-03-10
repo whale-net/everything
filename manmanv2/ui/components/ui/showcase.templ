@@ -1,0 +1,128 @@
+package ui
+
+import "github.com/whale-net/everything/manmanv2/ui/types"
+
+// ComponentShowcase demonstrates all UI components
+templ ComponentShowcase() {
+	<!DOCTYPE html>
+	<html lang="en" class="dark">
+		<head>
+			<meta charset="UTF-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<title>Component Showcase</title>
+			<script src="https://cdn.tailwindcss.com"></script>
+		</head>
+		<body class="bg-gray-100 dark:bg-slate-950 p-8">
+			<div class="max-w-6xl mx-auto space-y-8">
+				<h1 class="text-4xl font-bold text-slate-900 dark:text-white mb-8">Component Showcase</h1>
+				
+				<!-- Buttons -->
+				<section>
+					<h2 class="text-2xl font-semibold text-slate-900 dark:text-white mb-4">Buttons</h2>
+					<div class="flex flex-wrap gap-4">
+						@Button(types.ButtonProps{Variant: types.ButtonPrimary}) {
+							Primary Button
+						}
+						@Button(types.ButtonProps{Variant: types.ButtonSecondary}) {
+							Secondary Button
+						}
+						@Button(types.ButtonProps{Variant: types.ButtonDanger}) {
+							Danger Button
+						}
+						@Button(types.ButtonProps{Variant: types.ButtonSuccess}) {
+							Success Button
+						}
+						@Button(types.ButtonProps{Variant: types.ButtonPrimary, Disabled: true}) {
+							Disabled Button
+						}
+					</div>
+					<div class="flex flex-wrap gap-4 mt-4">
+						@Button(types.ButtonProps{Size: types.ButtonSizeSmall}) {
+							Small
+						}
+						@Button(types.ButtonProps{Size: types.ButtonSizeMedium}) {
+							Medium
+						}
+						@Button(types.ButtonProps{Size: types.ButtonSizeLarge}) {
+							Large
+						}
+					</div>
+				</section>
+				
+				<!-- Badges -->
+				<section>
+					<h2 class="text-2xl font-semibold text-slate-900 dark:text-white mb-4">Badges</h2>
+					<div class="flex flex-wrap gap-4">
+						@Badge(types.BadgeProps{Variant: types.BadgePrimary}) {
+							Primary
+						}
+						@Badge(types.BadgeProps{Variant: types.BadgeSecondary}) {
+							Secondary
+						}
+						@Badge(types.BadgeProps{Variant: types.BadgeSuccess}) {
+							Success
+						}
+						@Badge(types.BadgeProps{Variant: types.BadgeWarning}) {
+							Warning
+						}
+						@Badge(types.BadgeProps{Variant: types.BadgeDanger}) {
+							Danger
+						}
+						@Badge(types.BadgeProps{Variant: types.BadgeInfo}) {
+							Info
+						}
+					</div>
+				</section>
+				
+				<!-- Cards -->
+				<section>
+					<h2 class="text-2xl font-semibold text-slate-900 dark:text-white mb-4">Cards</h2>
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+						@Card() {
+							@CardHeader() {
+								<h3 class="text-lg font-semibold text-slate-900 dark:text-white">Card Title</h3>
+							}
+							@CardBody() {
+								<p class="text-slate-600 dark:text-slate-300">This is a card with header, body, and footer sections.</p>
+							}
+							@CardFooter() {
+								@Button(types.ButtonProps{Size: types.ButtonSizeSmall}) {
+									Action
+								}
+							}
+						}
+						
+						@Card() {
+							@CardBody() {
+								<h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-2">Simple Card</h3>
+								<p class="text-slate-600 dark:text-slate-300">This card only has a body section.</p>
+							}
+						}
+					</div>
+				</section>
+				
+				<!-- Alerts -->
+				<section>
+					<h2 class="text-2xl font-semibold text-slate-900 dark:text-white mb-4">Alerts</h2>
+					<div class="space-y-4">
+						@Alert(types.AlertProps{Variant: types.AlertInfo}) {
+							<strong>Info:</strong> This is an informational alert.
+						}
+						@Alert(types.AlertProps{Variant: types.AlertSuccess}) {
+							<strong>Success:</strong> Operation completed successfully!
+						}
+						@Alert(types.AlertProps{Variant: types.AlertWarning}) {
+							<strong>Warning:</strong> Please review this carefully.
+						}
+						@Alert(types.AlertProps{Variant: types.AlertDanger}) {
+							<strong>Error:</strong> Something went wrong.
+						}
+						@Alert(types.AlertProps{Variant: types.AlertInfo, Dismissible: true}) {
+							<strong>Dismissible:</strong> Click the X to dismiss this alert.
+						}
+					</div>
+				</section>
+			</div>
+		</body>
+	</html>
+}

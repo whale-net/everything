@@ -1,0 +1,35 @@
+package ui
+
+import "github.com/whale-net/everything/manmanv2/ui/types"
+
+// Card renders a card container with optional props
+templ Card(props ...types.CardProps) {
+	{{ var p types.CardProps }}
+	if len(props) > 0 {
+		{{ p = props[0] }}
+	}
+	<div class={ cardClasses(p) }>
+		{ children... }
+	</div>
+}
+
+// CardHeader renders a card header section
+templ CardHeader() {
+	<div class="px-6 py-4 border-b border-gray-200 dark:border-slate-700">
+		{ children... }
+	</div>
+}
+
+// CardBody renders a card body section
+templ CardBody() {
+	<div class="px-6 py-4">
+		{ children... }
+	</div>
+}
+
+// CardFooter renders a card footer section
+templ CardFooter() {
+	<div class="px-6 py-4 border-t border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900">
+		{ children... }
+	</div>
+}

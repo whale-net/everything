@@ -1,0 +1,77 @@
+package layout
+
+import "github.com/whale-net/everything/manmanv2/ui/types"
+
+// Nav renders the navigation bar
+templ Nav(data types.LayoutData) {
+	<nav class="bg-slate-800 dark:bg-slate-900 shadow-lg sticky top-0 z-50">
+		<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+			<div class="flex items-center justify-between h-16">
+				<!-- Logo and main nav -->
+				<div class="flex items-center flex-1">
+					<div class="flex-shrink-0">
+						<a href="/" class="text-xl font-bold text-white">ManManV2</a>
+					</div>
+					
+					<!-- Desktop navigation -->
+					<div class="hidden md:block ml-10">
+						<div class="flex items-baseline space-x-4">
+							@navLink("/", "home", "Dashboard", data.Active)
+							@navLink("/servers", "servers", "Servers", data.Active)
+							@navLink("/games", "games", "Games", data.Active)
+							@navLink("/sessions", "sessions", "Sessions", data.Active)
+							@navLink("/workshop/library", "workshop", "Workshop", data.Active)
+						</div>
+					</div>
+				</div>
+				
+				<!-- Right side: Theme switcher, user -->
+				<div class="hidden md:flex items-center space-x-4">
+					@themeSwitcher()
+					if data.User != nil {
+						<div class="text-sm text-slate-300">
+							{ data.User.Email }
+						</div>
+					}
+				</div>
+			</div>
+		</div>
+	</nav>
+}
+
+// navLink renders a navigation link
+templ navLink(href, key, label, active string) {
+	if key == active {
+		<a
+			href={ templ.URL(href) }
+			class="bg-slate-900 dark:bg-black text-white px-3 py-2 rounded-md text-sm font-medium transition-colors"
+		>
+			{ label }
+		</a>
+	} else {
+		<a
+			href={ templ.URL(href) }
+			class="text-slate-300 hover:bg-slate-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors"
+		>
+			{ label }
+		</a>
+	}
+}
+
+// themeSwitcher renders the theme switcher button
+templ themeSwitcher() {
+	<div x-data="{ theme: localStorage.getItem('manman-theme') || 'light' }">
+		<button
+			@click="theme = theme === 'light' ? 'night' : 'light'; localStorage.setItem('manman-theme', theme); document.documentElement.setAttribute('data-theme', theme); document.documentElement.classList.toggle('dark', theme !== 'light')"
+			class="p-2 rounded-md text-slate-300 hover:bg-slate-700 hover:text-white transition-colors"
+			title="Toggle theme"
+		>
+			<svg x-show="theme === 'light'" class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+				<path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z"></path>
+			</svg>
+			<svg x-show="theme !== 'light'" class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+				<path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clip-rule="evenodd"></path>
+			</svg>
+		</button>
+	</div>
+}

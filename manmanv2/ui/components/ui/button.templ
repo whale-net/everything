@@ -1,0 +1,24 @@
+package ui
+
+import "github.com/whale-net/everything/manmanv2/ui/types"
+
+// Button renders a button with optional props
+templ Button(props ...types.ButtonProps) {
+	{{ var p types.ButtonProps }}
+	if len(props) > 0 {
+		{{ p = props[0] }}
+	}
+	{{ btnType := p.Type }}
+	if btnType == "" {
+		{{ btnType = "button" }}
+	}
+	<button
+		type={ btnType }
+		class={ buttonClasses(p) }
+		if p.Disabled {
+			disabled
+		}
+	>
+		{ children... }
+	</button>
+}

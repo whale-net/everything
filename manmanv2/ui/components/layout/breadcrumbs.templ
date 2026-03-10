@@ -1,0 +1,36 @@
+package layout
+
+// Breadcrumbs renders a breadcrumb navigation
+templ Breadcrumbs(items []BreadcrumbItem) {
+	<nav class="flex mb-4" aria-label="Breadcrumb">
+		<ol class="inline-flex items-center space-x-1 md:space-x-3">
+			for i, item := range items {
+				<li class="inline-flex items-center">
+					if i > 0 {
+						<svg class="w-6 h-6 text-slate-400" fill="currentColor" viewBox="0 0 20 20">
+							<path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"></path>
+						</svg>
+					}
+					if item.Href != "" {
+						<a
+							href={ templ.URL(item.Href) }
+							class="inline-flex items-center text-sm font-medium text-slate-700 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400"
+						>
+							{ item.Label }
+						</a>
+					} else {
+						<span class="text-sm font-medium text-slate-500 dark:text-slate-500">
+							{ item.Label }
+						</span>
+					}
+				</li>
+			}
+		</ol>
+	</nav>
+}
+
+// BreadcrumbItem represents a single breadcrumb item
+type BreadcrumbItem struct {
+	Label string
+	Href  string
+}

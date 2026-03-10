@@ -1,0 +1,10 @@
+load("//tools:templ.bzl", "templ_library")
+
+templ_library(
+    name = "forms",
+    srcs = [
+        "inputs.templ",
+        "field.templ",
+    ],
+    visibility = ["//manmanv2/ui:__subpackages__"],
+)
