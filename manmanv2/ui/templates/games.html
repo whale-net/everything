@@ -1,9 +1,13 @@
 {{define "games_content"}}
-<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-    <h1 class="text-3xl font-bold text-gray-900 dark:text-white">Games</h1>
-    <a href="/games/new" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md transition-colors">
-        Create New Game
-    </a>
+<!-- Hero Header -->
+<div class="bg-gradient-to-br from-blue-600 to-cyan-600 rounded-lg p-6 md:p-8 mb-6 shadow-lg">
+    <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div class="text-white">
+            <h1 class="text-2xl md:text-3xl font-bold mb-2">Games</h1>
+            <p class="text-blue-100 text-sm">Manage game configurations and deployments</p>
+        </div>
+        <a href="/games/new" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-white hover:bg-gray-50 text-blue-600 font-semibold rounded-md transition-colors shadow-md">+ Create New Game</a>
+    </div>
 </div>
 
 {{if .Games}}

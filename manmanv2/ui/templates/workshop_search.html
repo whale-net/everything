@@ -35,7 +35,7 @@
                 <select name="game_id" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
                     <option value="">All Games</option>
                     {{range .Games}}
-                    <option value="{{.GameId}}" {{if eq $.GameFilter .GameId}}selected{{end}}>{{.Name}}</option>
+                    <option value="{{.GameId}}" {{if eq $.GameID .GameId}}selected{{end}}>{{.Name}}</option>
                     {{end}}
                 </select>
             </div>

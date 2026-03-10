@@ -17,7 +17,7 @@
         <div class="flex items-center gap-2 flex-wrap">
             <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">Library</span>
             {{if .Game}}<span class="inline-flex items-center px-3 py-1 rounded text-xs font-semibold bg-gray-100 text-gray-700 dark:bg-slate-700 dark:text-gray-300">{{.Game.Name}}</span>{{end}}
-            <span class="text-sm text-gray-500 dark:text-gray-400">{{len .Library.Addons}} addons</span>
+            <span class="text-sm text-gray-500 dark:text-gray-400">{{len .Addons}} addons</span>
         </div>
     </div>
     <div class="flex gap-2">
@@ -66,11 +66,11 @@
 <div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-6 mb-6">
     <div class="flex justify-between items-center mb-4">
         <h2 class="text-lg font-bold text-gray-900 dark:text-white">Addons in Library</h2>
-        <span class="text-sm text-gray-500 dark:text-gray-400">{{len .Library.Addons}} addons</span>
+        <span class="text-sm text-gray-500 dark:text-gray-400">{{len .Addons}} addons</span>
     </div>
-    {{if .Library.Addons}}
+    {{if .Addons}}
     <div class="divide-y divide-gray-200 dark:divide-slate-700">
-        {{range .Library.Addons}}
+        {{range .Addons}}
         <div class="flex justify-between items-center py-3 hover:bg-gray-50 dark:hover:bg-slate-900 px-3 -mx-3 rounded">
             <div class="flex-1 min-w-0">
                 <a href="/workshop/addon?addon_id={{.AddonId}}" class="font-semibold text-sm text-gray-900 dark:text-white hover:text-blue-600 block truncate">{{.Name}}</a>
