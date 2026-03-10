@@ -21,6 +21,64 @@ var templates *template.Template
 
 // manmanStyles contains the CSS styles for the ManManV2 UI
 const manmanStyles = template.CSS(`
+/* Theme-specific CSS variables */
+:root[data-theme="light"] {
+	--bg-primary: #ffffff;
+	--bg-secondary: #f9fafb;
+	--bg-tertiary: #f3f4f6;
+	--text-primary: #111827;
+	--text-secondary: #6b7280;
+	--border-color: #e5e7eb;
+}
+
+:root[data-theme="night"] {
+	--bg-primary: #1e293b;
+	--bg-secondary: #0f172a;
+	--bg-tertiary: #334155;
+	--text-primary: #f1f5f9;
+	--text-secondary: #cbd5e1;
+	--border-color: #475569;
+}
+
+:root[data-theme="oled"] {
+	--bg-primary: #000000;
+	--bg-secondary: #0a0a0a;
+	--bg-tertiary: #1a1a1a;
+	--text-primary: #ffffff;
+	--text-secondary: #a3a3a3;
+	--border-color: #262626;
+}
+
+/* Apply dark class for Tailwind dark mode */
+:root[data-theme="night"],
+:root[data-theme="oled"] {
+	color-scheme: dark;
+}
+
+/* OLED theme overrides - pure black backgrounds */
+:root[data-theme="oled"] main {
+	background-color: #000000 !important;
+}
+
+:root[data-theme="oled"] nav {
+	background-color: #000000 !important;
+}
+
+:root[data-theme="oled"] .dark\:bg-slate-900,
+:root[data-theme="oled"] .dark\:bg-slate-800,
+:root[data-theme="oled"] .dark\:bg-slate-700 {
+	background-color: #000000 !important;
+}
+
+:root[data-theme="oled"] .dark\:bg-slate-950 {
+	background-color: #000000 !important;
+}
+
+:root[data-theme="oled"] .dark\:border-slate-700,
+:root[data-theme="oled"] .dark\:border-slate-600 {
+	border-color: #1a1a1a !important;
+}
+
 * {
 	margin: 0;
 	padding: 0;
@@ -29,70 +87,21 @@ const manmanStyles = template.CSS(`
 
 body {
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-	background: #f5f5f5;
-	color: #333;
 	line-height: 1.6;
 }
 
-.container {
-	max-width: 1200px;
-	margin: 0 auto;
-	padding: 0 20px;
-}
+/* Legacy CSS for backward compatibility during migration */
+/* These will be removed as templates are migrated to Tailwind */
 
-/* Navigation */
-nav {
-	background: #2c3e50;
-	color: white;
-	padding: 1rem 0;
-	box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-}
-
-nav .container {
-	display: flex;
-	justify-content: space-between;
-	align-items: center;
-}
-
-nav .logo {
-	font-size: 1.5rem;
-	font-weight: bold;
-}
-
-nav ul {
-	list-style: none;
-	display: flex;
-	gap: 2rem;
-}
-
-nav a {
-	color: white;
-	text-decoration: none;
-	transition: opacity 0.2s;
-}
-
-nav a:hover {
-	opacity: 0.8;
-}
-
-nav a.active {
-	border-bottom: 2px solid #3498db;
-	padding-bottom: 4px;
-}
-
-/* Main content */
-main {
-	padding: 2rem 0;
-	min-height: calc(100vh - 200px);
-}
-
-/* Cards */
+/* Cards - theme-aware */
 .card {
-	background: white;
+	background: var(--bg-primary);
+	color: var(--text-primary);
 	border-radius: 8px;
 	padding: 1.5rem;
 	box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 	margin-bottom: 1.5rem;
+	border: 1px solid var(--border-color);
 }
 
 .card-header {
@@ -101,15 +110,16 @@ main {
 	align-items: center;
 	margin-bottom: 1rem;
 	padding-bottom: 0.5rem;
-	border-bottom: 1px solid #eee;
+	border-bottom: 1px solid var(--border-color);
 }
 
 .card-title {
 	font-size: 1.25rem;
 	font-weight: 600;
+	color: var(--text-primary);
 }
 
-/* Buttons */
+/* Buttons - legacy */
 .btn {
 	display: inline-block;
 	padding: 0.5rem 1rem;
@@ -119,6 +129,10 @@ main {
 	text-decoration: none;
 	font-size: 0.9rem;
 	transition: all 0.2s;
+	min-height: 44px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
 }
 
 .btn-primary {
@@ -160,6 +174,7 @@ main {
 .btn-sm {
 	padding: 0.25rem 0.5rem;
 	font-size: 0.85rem;
+	min-height: 36px;
 }
 
 /* Badges */
@@ -191,33 +206,35 @@ main {
 	color: #383d41;
 }
 
-/* Tables */
+/* Tables - theme-aware */
 table {
 	width: 100%;
 	border-collapse: collapse;
 	font-size: 0.875rem;
+	background: var(--bg-primary);
+	color: var(--text-primary);
 }
 
 th, td {
 	padding: 0.4rem 0.6rem;
 	text-align: left;
-	border-bottom: 1px solid #eee;
+	border-bottom: 1px solid var(--border-color);
 }
 
 th {
-	background: #f8f9fa;
+	background: var(--bg-secondary);
 	font-weight: 600;
 	font-size: 0.8rem;
 	text-transform: uppercase;
-	color: #6b7280;
+	color: var(--text-secondary);
 	letter-spacing: 0.03em;
 }
 
 tr:hover {
-	background: #f8f9fa;
+	background: var(--bg-secondary);
 }
 
-/* Forms */
+/* Forms - theme-aware */
 .form-group {
 	margin-bottom: 1rem;
 }
@@ -226,17 +243,22 @@ label {
 	display: block;
 	margin-bottom: 0.25rem;
 	font-weight: 500;
+	color: var(--text-primary);
 }
 
 input[type="text"],
 input[type="number"],
+input[type="datetime-local"],
 textarea,
 select {
 	width: 100%;
 	padding: 0.5rem;
-	border: 1px solid #ddd;
+	border: 1px solid var(--border-color);
 	border-radius: 4px;
 	font-size: 1rem;
+	background: var(--bg-primary);
+	color: var(--text-primary);
+	min-height: 44px;
 }
 
 textarea {
@@ -268,13 +290,15 @@ textarea {
 	}
 }
 
-/* Stats cards */
+/* Stats cards - theme-aware */
 .stat-card {
-	background: white;
+	background: var(--bg-primary);
+	color: var(--text-primary);
 	border-radius: 8px;
 	padding: 1.5rem;
 	box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 	text-align: center;
+	border: 1px solid var(--border-color);
 }
 
 .stat-value {
@@ -284,7 +308,7 @@ textarea {
 }
 
 .stat-label {
-	color: #7f8c8d;
+	color: var(--text-secondary);
 	margin-top: 0.5rem;
 }
 
@@ -292,7 +316,7 @@ textarea {
 .empty-state {
 	text-align: center;
 	padding: 3rem;
-	color: #7f8c8d;
+	color: var(--text-secondary);
 }
 
 /* Loading indicator */
@@ -305,7 +329,7 @@ textarea {
 }
 
 .spinner {
-	border: 3px solid #f3f3f3;
+	border: 3px solid var(--border-color);
 	border-top: 3px solid #3498db;
 	border-radius: 50%;
 	width: 20px;
@@ -320,22 +344,16 @@ textarea {
 	100% { transform: rotate(360deg); }
 }
 
-/* Toast notifications */
-#toast {
-	position: fixed;
-	bottom: 2rem;
-	right: 2rem;
-	max-width: 400px;
-	z-index: 1000;
-}
-
+/* Toast notifications - theme-aware */
 .toast {
-	background: white;
+	background: var(--bg-primary);
+	color: var(--text-primary);
 	border-radius: 4px;
 	padding: 1rem;
-	box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+	box-shadow: 0 4px 6px rgba(0,0,0,0.3);
 	margin-bottom: 0.5rem;
 	animation: slideIn 0.3s ease-out;
+	border: 1px solid var(--border-color);
 }
 
 @keyframes slideIn {
@@ -363,9 +381,11 @@ textarea {
 	justify-content: space-between;
 	align-items: center;
 	margin-bottom: 1.5rem;
+	flex-wrap: wrap;
+	gap: 1rem;
 }
 
-/* Session panels */
+/* Session panels - theme-aware */
 .session-panels {
 	display: flex;
 	flex-wrap: wrap;
@@ -374,15 +394,16 @@ textarea {
 }
 
 .session-panel {
-	background: white;
+	background: var(--bg-primary);
+	color: var(--text-primary);
 	border-radius: 8px;
 	padding: 1rem 1.25rem;
 	box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 	width: calc(50% - 0.5rem);
 	text-decoration: none;
-	color: inherit;
 	transition: box-shadow 0.2s, transform 0.15s;
 	display: block;
+	border: 1px solid var(--border-color);
 }
 
 .session-panel:hover {
@@ -399,25 +420,25 @@ textarea {
 
 .session-uptime {
 	font-size: 0.8rem;
-	color: #7f8c8d;
+	color: var(--text-secondary);
 }
 
 .session-panel-game {
 	font-weight: 600;
 	font-size: 1.05rem;
-	color: #1f2937;
+	color: var(--text-primary);
 	margin-bottom: 0.15rem;
 }
 
 .session-panel-config {
 	font-size: 0.85rem;
-	color: #6b7280;
+	color: var(--text-secondary);
 	margin-bottom: 0.5rem;
 }
 
 .session-panel-meta {
 	font-size: 0.8rem;
-	color: #7f8c8d;
+	color: var(--text-secondary);
 }
 
 .session-panel-ports {
@@ -441,8 +462,46 @@ textarea {
 	.session-panel {
 		width: 100%;
 	}
+	
+	.action-bar {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+}
+
+/* Alert styles - theme-aware */
+.alert {
+	padding: 1rem;
+	border-radius: 4px;
+	margin-bottom: 1rem;
+	border: 1px solid;
+}
+
+.alert-warning {
+	background: #fff3cd;
+	color: #856404;
+	border-color: #ffc107;
+}
+
+.alert-info {
+	background: #d1ecf1;
+	color: #0c5460;
+	border-color: #bee5eb;
+}
+
+.alert-danger {
+	background: #f8d7da;
+	color: #721c24;
+	border-color: #f5c6cb;
 }
 `)
+
+// Breadcrumb represents a single breadcrumb item
+type Breadcrumb struct {
+	Label string
+	URL   string
+	Icon  string
+}
 
 // LayoutData is the shared layout context for all pages.
 type LayoutData struct {
@@ -453,6 +512,7 @@ type LayoutData struct {
 	Servers         []*manmanpb.Server
 	SelectedServer  *manmanpb.Server
 	DefaultServerID int64
+	Breadcrumbs     []Breadcrumb
 }
 
 func init() {
@@ -496,6 +556,12 @@ func renderPage(w http.ResponseWriter, contentTemplate string, contentData any, 
 	return htmxbase.Render(w, htmxbase.LayoutData{
 		Title:       layout.Title,
 		TitleSuffix: "ManManV2",
+		CustomHead: template.HTML(`<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+	darkMode: 'class',
+}
+</script>`),
 		CustomCSS:   manmanStyles,
 		Content:     template.HTML(wrapperBuf.String()),
 		CustomScripts: template.JS(`
@@ -577,16 +643,18 @@ func formatDuration(value int, unit string) string {
 
 func statusBadge(status string) string {
 	switch status {
-	case "online", "active", "running":
-		return "badge-success"
+	case "online", "active", "running", "completed":
+		return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
 	case "offline", "inactive", "stopped":
-		return "badge-secondary"
+		return "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300"
 	case "starting", "stopping", "pending":
-		return "badge-warning"
-	case "crashed", "error":
-		return "badge-danger"
+		return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
+	case "crashed", "error", "failed":
+		return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
+	case "deployed":
+		return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
 	default:
-		return "badge-secondary"
+		return "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300"
 	}
 }
 

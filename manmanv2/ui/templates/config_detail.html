@@ -1,81 +1,124 @@
 {{define "config_detail_content"}}
-<div class="action-bar">
-    <h1>{{.Config.Name}}</h1>
+<!-- Breadcrumbs -->
+<nav class="flex mb-4" aria-label="Breadcrumb">
+    <ol class="inline-flex items-center space-x-1 md:space-x-3">
+        <li class="inline-flex items-center">
+            <a href="/games" class="text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400">Games</a>
+        </li>
+        <li class="inline-flex items-center">
+            <svg class="w-3 h-3 text-gray-400 mx-1" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"></path>
+            </svg>
+            <a href="/games/{{.Game.GameId}}" class="text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400">{{.Game.Name}}</a>
+        </li>
+        <li class="inline-flex items-center">
+            <svg class="w-3 h-3 text-gray-400 mx-1" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"></path>
+            </svg>
+            <span class="text-sm font-medium text-gray-500 dark:text-gray-400">{{.Config.Name}}</span>
+        </li>
+    </ol>
+</nav>
+
+<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
     <div>
-        <a href="/games/{{.Game.GameId}}" class="btn btn-secondary btn-sm">Back to Game</a>
-        <a href="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/actions" class="btn btn-primary btn-sm">
-            <i class="fa fa-bolt"></i> Manage Actions
-        </a>
-        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('edit-form').style.display='block'">Edit</button>
-        <button class="btn btn-danger btn-sm"
-                hx-delete="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/delete"
-                hx-confirm="Are you sure you want to delete this configuration?">Delete</button>
+        <div class="flex items-center gap-2 mb-2">
+            <span class="inline-flex items-center px-3 py-1 rounded-md text-xs font-semibold bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                ⚙️ GAME CONFIG
+            </span>
+        </div>
+        <h1 class="text-3xl font-bold text-gray-900 dark:text-white">{{.Config.Name}}</h1>
+        <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">for {{.Game.Name}}</p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+        <a href="/games/{{.Game.GameId}}" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors">Back to Game</a>
+        <a href="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/actions" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-md transition-colors">⚡ Manage Actions</a>
+        <button onclick="document.getElementById('edit-form').classList.remove('hidden')" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors">Edit</button>
     </div>
 </div>
 
-<div class="card">
-    <div class="card-header">
-        <div class="card-title">Configuration Details</div>
-    </div>
-    <dl style="display: grid; grid-template-columns: 200px 1fr; gap: 0.5rem;">
-        <dt><strong>Config ID:</strong></dt>
-        <dd>{{.Config.ConfigId}}</dd>
+<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-6 mb-6">
+    <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Configuration Details</h2>
+    <dl class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Config ID</dt>
+            <dd class="mt-1 text-sm text-gray-900 dark:text-white font-mono">{{.Config.ConfigId}}</dd>
+        </div>
         
-        <dt><strong>Game:</strong></dt>
-        <dd><a href="/games/{{.Game.GameId}}">{{.Game.Name}}</a></dd>
+        <div>
+            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Game</dt>
+            <dd class="mt-1 text-sm">
+                <a href="/games/{{.Game.GameId}}" class="text-blue-600 dark:text-blue-400 hover:underline">{{.Game.Name}}</a>
+            </dd>
+        </div>
         
-        <dt><strong>Name:</strong></dt>
-        <dd>{{.Config.Name}}</dd>
+        <div>
+            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Name</dt>
+            <dd class="mt-1 text-sm text-gray-900 dark:text-white">{{.Config.Name}}</dd>
+        </div>
         
-        <dt><strong>Docker Image:</strong></dt>
-        <dd><code>{{.Config.Image}}</code></dd>
+        <div>
+            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Docker Image</dt>
+            <dd class="mt-1 text-sm font-mono text-gray-900 dark:text-white">{{.Config.Image}}</dd>
+        </div>
         
-        <dt><strong>Entrypoint:</strong></dt>
-        <dd>
-            {{if .Config.Entrypoint}}
-            <code>{{range $i, $val := .Config.Entrypoint}}{{if $i}} {{end}}{{$val}}{{end}}</code>
-            {{else}}-{{end}}
-        </dd>
+        <div>
+            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Entrypoint</dt>
+            <dd class="mt-1 text-sm font-mono text-gray-900 dark:text-white">
+                {{if .Config.Entrypoint}}
+                {{range $i, $val := .Config.Entrypoint}}{{if $i}} {{end}}{{$val}}{{end}}
+                {{else}}-{{end}}
+            </dd>
+        </div>
         
-        <dt><strong>Command:</strong></dt>
-        <dd>
-            {{if .Config.Command}}
-            <code>{{range $i, $val := .Config.Command}}{{if $i}} {{end}}{{$val}}{{end}}</code>
-            {{else}}-{{end}}
-        </dd>
+        <div>
+            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Command</dt>
+            <dd class="mt-1 text-sm font-mono text-gray-900 dark:text-white">
+                {{if .Config.Command}}
+                {{range $i, $val := .Config.Command}}{{if $i}} {{end}}{{$val}}{{end}}
+                {{else}}-{{end}}
+            </dd>
+        </div>
         
-        <dt><strong>Args Template:</strong></dt>
-        <dd>{{if .Config.ArgsTemplate}}<pre style="background: #f5f5f5; padding: 0.5rem;">{{.Config.ArgsTemplate}}</pre>{{else}}-{{end}}</dd>
+        <div class="md:col-span-2">
+            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Args Template</dt>
+            <dd class="mt-1">
+                {{if .Config.ArgsTemplate}}
+                <pre class="text-sm font-mono text-gray-900 dark:text-white bg-gray-50 dark:bg-slate-900 p-3 rounded border border-gray-200 dark:border-slate-700 overflow-x-auto">{{.Config.ArgsTemplate}}</pre>
+                {{else}}<span class="text-sm text-gray-900 dark:text-white">-</span>{{end}}
+            </dd>
+        </div>
     </dl>
 </div>
 
-<div class="card">
-    <div class="card-header">
-        <div class="card-title">Deploy to Server</div>
-    </div>
+<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-6 mb-6">
+    <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Deploy to Server</h2>
     {{if .DeployError}}
-    <div class="alert alert-warning" style="margin-bottom: 1rem;">{{.DeployError}}</div>
+    <div class="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md p-4 mb-4">
+        <p class="text-sm text-yellow-800 dark:text-yellow-200">{{.DeployError}}</p>
+    </div>
     {{end}}
-    <form method="POST" action="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/deploy" style="display: flex; gap: 0.75rem; align-items: end; flex-wrap: wrap;">
-        <div class="form-group" style="min-width: 240px;">
-            <label for="server_id">Server</label>
-            <select id="server_id" name="server_id" required>
+    <form method="POST" action="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/deploy" class="flex flex-col sm:flex-row gap-3 items-start sm:items-end">
+        <div class="flex-1 min-w-[240px]">
+            <label for="server_id" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Server</label>
+            <select id="server_id" name="server_id" required class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
                 <option value="">Select a server</option>
                 {{range .Servers}}
                 <option value="{{.ServerId}}">{{.Name}} ({{.Status}})</option>
                 {{end}}
             </select>
         </div>
-        <button type="submit" class="btn btn-success">Deploy GameConfig</button>
+        <button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-green-600 hover:bg-green-700 text-white font-medium rounded-md transition-colors">Deploy GameConfig</button>
     </form>
     {{if .Deployments}}
-    <div style="margin-top: 1rem;">
-        <strong>Existing deployments</strong>
-        <table style="margin-top: 0.5rem;">
-            <thead>
-                <tr>
-                    <th>Server</th>
-                    <th>Server Game Config</th>
+    <div class="mt-6">
+        <h3 class="text-sm font-semibold text-gray-900 dark:text-white mb-3">Existing Deployments</h3>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
+                <thead class="bg-gray-50 dark:bg-slate-900">
+                    <tr>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Server</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Server Game Config</th>
                     <th>Status</th>
                     <th></th>
                 </tr>
@@ -224,10 +267,40 @@
     </div>
 </div>
 
-<div class="card">
+<div x-data="{ editMode: false }" class="card">
     <div class="card-header">
         <div class="card-title">Environment Variables</div>
+        <button type="button" @click="editMode = !editMode" class="btn btn-sm" :class="editMode ? 'btn-secondary' : 'btn-primary'">
+            <span x-text="editMode ? 'Cancel' : 'Edit'"></span>
+        </button>
     </div>
+    
+    <!-- View Mode -->
+    <div x-show="!editMode" x-cloak>
+        {{if .Config.EnvTemplate}}
+        <table style="margin-bottom: 0;">
+            <thead>
+                <tr>
+                    <th>Key</th>
+                    <th>Value</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range $key, $value := .Config.EnvTemplate}}
+                <tr>
+                    <td style="font-family: monospace; font-size: 0.85rem;">{{$key}}</td>
+                    <td style="font-family: monospace; font-size: 0.85rem;">{{$value}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+        {{else}}
+        <p class="text-muted small" style="padding: 1rem;">No environment variables set.</p>
+        {{end}}
+    </div>
+    
+    <!-- Edit Mode -->
+    <div x-show="editMode" x-cloak>
     <form id="env-form" method="POST" action="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/update-env">
         <input type="hidden" id="env_template_json" name="env_template_json" value="">
         <table id="env-table" style="margin-bottom: 0.75rem;">
@@ -253,6 +326,7 @@
             <button type="submit" class="btn btn-success btn-sm">Save</button>
         </div>
     </form>
+    </div>
 </div>
 
 <script>
@@ -382,5 +456,30 @@
     </form>
     {{end}}
   </div>
+</div>
+
+<!-- Danger Zone -->
+<div x-data="{ confirmDelete: false }" class="bg-white dark:bg-slate-800 rounded-lg shadow-md border-2 border-red-200 dark:border-red-900 overflow-hidden mt-6">
+    <div class="bg-red-50 dark:bg-red-900/20 px-6 py-4 border-b-2 border-red-200 dark:border-red-900">
+        <h2 class="text-lg font-semibold text-red-900 dark:text-red-200">⚠️ Danger Zone</h2>
+    </div>
+    <div class="p-6">
+        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div>
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-white mb-1">Delete this configuration</h3>
+                <p class="text-sm text-gray-600 dark:text-gray-400">All server game configs and deployments using this configuration will be removed. This action cannot be undone.</p>
+            </div>
+            <div class="flex-shrink-0">
+                <button x-show="!confirmDelete" @click="confirmDelete = true" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">Delete Config</button>
+                <div x-show="confirmDelete" x-cloak class="flex gap-2 items-center">
+                    <span class="text-sm text-red-900 dark:text-red-200 font-medium">Are you sure?</span>
+                    <form method="POST" action="/games/{{.Config.GameId}}/configs/{{.Config.ConfigId}}/delete" class="inline">
+                        <button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">Yes, Delete</button>
+                    </form>
+                    <button @click="confirmDelete = false" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-gray-600 hover:bg-gray-700 text-white font-medium rounded-md transition-colors">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 {{end}}

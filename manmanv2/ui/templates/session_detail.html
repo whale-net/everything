@@ -134,24 +134,24 @@ function parseAndAppendRawLine(container, lineText) {
 </script>
 
 {{if eq .Session.Status "running"}}
-<div class="card">
-    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
-        <div class="card-title">Live Logs</div>
-        <div style="display: flex; gap: 0.5rem; align-items: center;">
-            <button id="toggle-logs" class="btn btn-sm btn-secondary">Hide</button>
-            <button id="clear-logs" class="btn btn-sm btn-secondary">Clear</button>
-            <span id="log-status" style="font-size: 0.85rem; color: #888;">Connecting...</span>
+<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 mb-6 overflow-hidden">
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Live Logs</h2>
+        <div class="flex flex-wrap items-center gap-2">
+            <button id="toggle-logs" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors">Hide</button>
+            <button id="clear-logs" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors">Clear</button>
+            <span id="log-status" class="text-sm text-gray-600 dark:text-gray-400">Connecting...</span>
         </div>
     </div>
-    <div id="log-viewer" class="log-viewer">
-        <pre id="log-output" class="log-output"></pre>
+    <div id="log-viewer" class="log-viewer-container">
+        <pre id="log-output" class="log-viewer-output"></pre>
     </div>
-    <div class="stdin-input">
-        <form id="stdin-form" style="display: flex; gap: 0.5rem; padding: 0.75rem; background: #2d2d2d; border-top: 1px solid #3e3e3e;">
-            <input type="text" id="stdin-input" placeholder="Send command to server..." style="flex: 1; padding: 0.5rem; background: #1e1e1e; border: 1px solid #3e3e3e; color: #d4d4d4; font-family: 'Consolas', 'Monaco', 'Courier New', monospace; border-radius: 4px;">
-            <button type="submit" id="stdin-submit" class="btn btn-sm btn-primary" style="min-width: 80px;">Send</button>
+    <div class="border-t border-gray-700">
+        <form id="stdin-form" class="flex gap-2 p-3 bg-slate-900">
+            <input type="text" id="stdin-input" placeholder="Send command to server..." class="flex-1 px-3 py-2 min-h-[44px] bg-slate-950 border border-slate-700 text-gray-200 font-mono text-sm rounded focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <button type="submit" id="stdin-submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md transition-colors min-w-[80px]">Send</button>
         </form>
-        <div id="stdin-status" style="padding: 0 0.75rem 0.5rem; font-size: 0.75rem; color: #888; min-height: 1.25rem;"></div>
+        <div id="stdin-status" class="px-3 pb-2 text-xs text-gray-500 min-h-[1.5rem] bg-slate-900"></div>
     </div>
 </div>
 
@@ -258,38 +258,73 @@ function parseAndAppendRawLine(container, lineText) {
 {{end}}
 
 <style>
-.log-viewer {
+/* Unified log viewer styles - matches partials/log_viewer.html */
+.log-viewer-container {
     background: #1e1e1e;
-    border-radius: 4px;
     max-height: 600px;
     overflow: hidden;
-    display: block;
 }
-.log-output {
+
+[data-theme="oled"] .log-viewer-container {
+    background: #000000;
+}
+
+.log-viewer-output {
     margin: 0;
     padding: 1rem;
     color: #d4d4d4;
     font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
     font-size: 0.875rem;
+    line-height: 1.5;
     overflow-y: auto;
+    overflow-x: auto;
     max-height: 600px;
     white-space: pre-wrap;
     word-wrap: break-word;
 }
+
+@media (max-width: 640px) {
+    .log-viewer-output {
+        font-size: 0.75rem;
+        padding: 0.75rem;
+    }
+}
+
+.log-viewer-container.collapsed .log-viewer-output {
+    display: none;
+}
+
 .log-line {
     display: block;
 }
+
 .log-stdout {
     color: #d4d4d4;
 }
+
 .log-stderr {
     color: #f48771;
 }
+
 .log-host {
     color: #4fc1ff;
 }
-.log-viewer.collapsed .log-output {
-    display: none;
+
+.log-info {
+    color: #4fc1ff;
+}
+
+.log-warning {
+    color: #f9c74f;
+}
+
+.log-error {
+    color: #f48771;
+}
+
+.log-timestamp {
+    color: #858585;
+    margin-right: 0.5rem;
 }
 </style>
 
@@ -411,29 +446,29 @@ function parseAndAppendRawLine(container, lineText) {
 })();
 </script>
 {{else}}
-<div class="card">
-    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
-        <div class="card-title">Historical Logs</div>
-        <div style="display: flex; gap: 0.5rem; align-items: center;">
-            <button id="load-historical" class="btn btn-sm btn-primary">Load Logs</button>
-            <button id="download-historical" class="btn btn-sm btn-secondary" style="display: none;">Download</button>
-            <button id="clear-historical" class="btn btn-sm btn-secondary">Clear</button>
+<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 mb-6 overflow-hidden">
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Historical Logs</h2>
+        <div class="flex flex-wrap items-center gap-2">
+            <button id="load-historical" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-md transition-colors">Load Logs</button>
+            <button id="download-historical" class="hidden inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors">Download</button>
+            <button id="clear-historical" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors">Clear</button>
         </div>
     </div>
-    <div style="padding: 1rem;">
-        <div style="display: flex; gap: 1rem; margin-bottom: 1rem; align-items: flex-end;">
-            <div>
-                <label for="center-time" style="display: block; margin-bottom: 0.25rem; font-size: 0.875rem; font-weight: 500;">Time UTC (±10 minutes):</label>
-                <input type="datetime-local" id="center-time" style="padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.875rem;">
+    <div class="p-4">
+        <div class="flex flex-col sm:flex-row gap-4 mb-4 items-start sm:items-end">
+            <div class="flex-1 min-w-[200px]">
+                <label for="center-time" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Time UTC (±10 minutes):</label>
+                <input type="datetime-local" id="center-time" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
             </div>
-            <div style="font-size: 0.875rem; color: #666; padding-bottom: 0.5rem;">
+            <div class="text-sm text-gray-600 dark:text-gray-400 pb-2">
                 Enter time in UTC. Loads logs from 10 minutes before to 10 minutes after.
             </div>
         </div>
-        <div id="historical-status" style="font-size: 0.875rem; color: #888; margin-bottom: 1rem;"></div>
+        <div id="historical-status" class="text-sm text-gray-600 dark:text-gray-400 mb-4"></div>
     </div>
-    <div id="historical-log-viewer" class="log-viewer" style="display: none;">
-        <pre id="historical-log-output" class="log-output"></pre>
+    <div id="historical-log-viewer" class="log-viewer-container hidden">
+        <pre id="historical-log-output" class="log-viewer-output"></pre>
     </div>
 </div>
 
@@ -493,9 +528,8 @@ function parseAndAppendRawLine(container, lineText) {
 
             if (!data.batches || data.batches.length === 0) {
                 statusDiv.textContent = 'No logs found for this time range';
-                statusDiv.style.color = '#888';
-                logViewer.style.display = 'none';
-                downloadBtn.style.display = 'none';
+                logViewer.classList.add('hidden');
+                downloadBtn.classList.add('hidden');
                 currentLogData = null;
                 return;
             }
@@ -511,13 +545,11 @@ function parseAndAppendRawLine(container, lineText) {
                 }
             }
 
-            logViewer.style.display = 'block';
-            downloadBtn.style.display = 'inline-block';
+            logViewer.classList.remove('hidden');
+            downloadBtn.classList.remove('hidden');
             statusDiv.textContent = `Loaded ${data.batches.length} log batch(es)`;
-            statusDiv.style.color = '#4fc1ff';
         } catch (err) {
             statusDiv.textContent = `Error: ${err.message}`;
-            statusDiv.style.color = '#f48771';
         } finally {
             loadBtn.disabled = false;
         }

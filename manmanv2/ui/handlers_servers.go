@@ -21,11 +21,12 @@ type ServersPageData struct {
 
 // ServerDetailPageData holds data for server detail page
 type ServerDetailPageData struct {
-	Title   string
-	Active  string
-	User    *htmxauth.UserInfo
-	Server  *manmanpb.Server
-	Configs []*manmanpb.ServerGameConfig
+	Title        string
+	Active       string
+	User         *htmxauth.UserInfo
+	Server       *manmanpb.Server
+	Configs      []*manmanpb.ServerGameConfig
+	ConfigGameID map[int64]int64 // map[config_id]game_id
 }
 
 func (app *App) handleServers(w http.ResponseWriter, r *http.Request) {
@@ -97,12 +98,24 @@ func (app *App) handleServerDetail(w http.ResponseWriter, r *http.Request) {
 		configsResp = &manmanpb.ListServerGameConfigsResponse{Configs: []*manmanpb.ServerGameConfig{}}
 	}
 	
+	// Build map of config_id -> game_id
+	configGameID := make(map[int64]int64)
+	for _, sgc := range configsResp.Configs {
+		gcResp, err := app.grpc.GetAPI().GetGameConfig(ctx, &manmanpb.GetGameConfigRequest{
+			ConfigId: sgc.GameConfigId,
+		})
+		if err == nil && gcResp.Config != nil {
+			configGameID[sgc.GameConfigId] = gcResp.Config.GameId
+		}
+	}
+	
 	data := ServerDetailPageData{
-		Title:   resp.Server.Name,
-		Active:  "servers",
-		User:    user,
-		Server:  resp.Server,
-		Configs: configsResp.Configs,
+		Title:        resp.Server.Name,
+		Active:       "servers",
+		User:         user,
+		Server:       resp.Server,
+		Configs:      configsResp.Configs,
+		ConfigGameID: configGameID,
 	}
 
 	layoutData := LayoutData{
