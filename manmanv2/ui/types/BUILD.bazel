@@ -2,8 +2,18 @@ load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "types",
-    srcs = ["props.go", "page_data.go"],
+    srcs = [
+        "props.go",
+        "page_data.go",
+        "games.go",
+        "servers.go",
+        "sessions.go",
+        "workshop.go",
+    ],
     importpath = "github.com/whale-net/everything/manmanv2/ui/types",
-    deps = ["//libs/go/htmxauth"],
+    deps = [
+        "//libs/go/htmxauth",
+        "//manmanv2/protos:manmanpb",
+    ],
     visibility = ["//manmanv2/ui:__subpackages__"],
 )

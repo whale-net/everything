@@ -122,7 +122,8 @@
   - All UI components with examples
   - Layout components with examples
   - Form components with validation examples
-  - Domain components with use cases
+  - Domain components with use case
+- update design guide documentation
 - Update BUILD.bazel files with clear organization and comments
 - Remove old templates/ directory (after verifying all pages migrated)
 - Remove templates.go (after verifying no dependencies)
@@ -172,3 +173,97 @@ templ Button(props ...types.ButtonProps) {
 ## Next Steps
 
 Continue with Task 5 to migrate the Games pages, which will establish the pattern for all other page migrations.
+
+
+## Task 5 Complete ✅
+
+Task 5: Migrate Games Pages is now complete!
+
+**Completed:**
+- Created types/games.go with GamesPageData, GameDetailPageData, GameFormData
+- Created pages/games/list.templ (games list with grid layout)
+- Created pages/games/detail.templ (game detail with configurations)
+- Created pages/games/form.templ (create/edit game form)
+- All pages use layout composition and component library
+- Successfully built with Bazel
+
+**Files Created:**
+- manmanv2/ui/types/games.go
+- manmanv2/ui/pages/games/list.templ
+- manmanv2/ui/pages/games/detail.templ
+- manmanv2/ui/pages/games/form.templ
+- manmanv2/ui/pages/games/BUILD.bazel
+
+**Pattern Established:**
+The games pages demonstrate the full pattern for page migration:
+1. Create types in types/ directory
+2. Create page templates in pages/ directory
+3. Use @layout.Base() for consistent layout
+4. Use component library (ui, forms) for UI elements
+5. Generate with templ, build with Bazel
+
+This pattern will be followed for all remaining page migrations (Tasks 6-10).
+
+
+## Task 6 Complete ✅
+
+Domain components created for reusable game-specific UI elements:
+- GameCard, ConfigCard, ServerCard components
+- DeploymentTable with status badges
+- ServerStatusBadge, DeploymentStatusBadge helpers
+
+**Files:** manmanv2/ui/components/domain/cards.templ, deployments.templ
+
+## Task 7 Complete ✅
+
+Servers pages migrated to templ:
+- Created types/servers.go with ServersPageData, ServerDetailPageData
+- Created pages/servers/list.templ (servers list with grid)
+- Created pages/servers/detail.templ (server detail page)
+- Uses domain components for consistent UI
+
+**Files:** manmanv2/ui/types/servers.go, pages/servers/list.templ, detail.templ
+
+## Progress Summary
+
+**Completed: Tasks 1-7** (58% of total work)
+- ✅ Infrastructure (templ, components, layout, forms)
+- ✅ Games pages (list, detail, form)
+- ✅ Domain components (cards, tables, badges)
+- ✅ Servers pages (list, detail)
+
+**Remaining: Tasks 8-12** (42% of total work)
+- Task 8: Sessions pages (complex with logs)
+- Task 9: Workshop pages (5 pages)
+- Task 10: Config detail (collapsible sections)
+- Task 11: Utilities (render, HTMX, validation)
+- Task 12: Documentation & cleanup
+
+**Pattern Established:** All future pages follow the same structure:
+1. Create types in types/
+2. Create templ pages in pages/
+3. Use @layout.Base() + components
+4. Generate with templ, build with Bazel
+
+
+## Task 8 Complete ✅
+
+Sessions pages migrated with complex features:
+- Created types/sessions.go with SessionsPageData, SessionDetailPageData
+- Created pages/sessions/list.templ with status filters and table view
+- Created pages/sessions/detail.templ with collapsible logs section (Alpine.js)
+- Implemented session status badges (live, completed, crashed)
+- Log viewer with terminal-style display (max-height with scroll)
+
+**Files:** 
+- manmanv2/ui/types/sessions.go
+- manmanv2/ui/pages/sessions/list.templ
+- manmanv2/ui/pages/sessions/detail.templ
+
+**Progress: Tasks 1-8 Complete (67% done)**
+
+Remaining:
+- Task 9: Workshop pages (5 pages)
+- Task 10: Config detail (collapsible sections)
+- Task 11: Utilities
+- Task 12: Documentation & cleanup

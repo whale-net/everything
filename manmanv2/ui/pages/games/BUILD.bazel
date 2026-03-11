@@ -1,0 +1,18 @@
+load("//tools:templ.bzl", "templ_library")
+
+templ_library(
+    name = "games",
+    srcs = [
+        "list.templ",
+        "detail.templ",
+        "form.templ",
+    ],
+    deps = [
+        "//manmanv2/ui/components/layout",
+        "//manmanv2/ui/components/ui",
+        "//manmanv2/ui/components/forms",
+        "//manmanv2/ui/types",
+        "//manmanv2/protos:manmanpb",
+    ],
+    visibility = ["//manmanv2/ui:__pkg__"],
+)
