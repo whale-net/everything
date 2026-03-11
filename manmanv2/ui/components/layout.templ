@@ -23,23 +23,23 @@ type Breadcrumb struct {
 
 templ NavItem(href, label, active string) {
 	if active == label {
-		<a href={ templ.URL(href) } class="bg-blue-600 dark:bg-slate-900 text-white px-3 py-2 rounded-md text-sm font-medium transition-colors">{ label }</a>
+		<a href={ templ.URL(href) } class="bg-slate-900 dark:bg-black text-white px-3 py-2 rounded-md text-sm font-medium transition-colors">{ label }</a>
 	} else {
-		<a href={ templ.URL(href) } class="text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-gray-900 dark:hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors">{ label }</a>
+		<a href={ templ.URL(href) } class="text-slate-300 hover:bg-slate-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors">{ label }</a>
 	}
 }
 
 templ MobileNavItem(href, label, active string) {
 	if active == label {
-		<a href={ templ.URL(href) } class="bg-blue-600 dark:bg-slate-700 text-white block px-3 py-3 rounded-md text-base font-medium min-h-[44px] flex items-center">{ label }</a>
+		<a href={ templ.URL(href) } class="bg-slate-700 text-white block px-3 py-3 rounded-md text-base font-medium min-h-[44px] flex items-center">{ label }</a>
 	} else {
-		<a href={ templ.URL(href) } class="text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-gray-900 dark:hover:text-white block px-3 py-3 rounded-md text-base font-medium min-h-[44px] flex items-center">{ label }</a>
+		<a href={ templ.URL(href) } class="text-slate-300 hover:bg-slate-700 hover:text-white block px-3 py-3 rounded-md text-base font-medium min-h-[44px] flex items-center">{ label }</a>
 	}
 }
 
 templ ThemeSwitcher() {
 	<div class="relative" id="theme-switcher">
-		<button type="button" id="theme-button" class="text-gray-700 dark:text-slate-300 hover:text-gray-900 dark:hover:text-white p-2 rounded-md hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors" aria-label="Switch theme">
+		<button type="button" id="theme-button" class="text-slate-300 hover:text-white p-2 rounded-md hover:bg-slate-700 transition-colors" aria-label="Switch theme">
 			<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path>
 			</svg>
@@ -64,7 +64,7 @@ templ MobileThemeSwitcher() {
 templ ServerSelector(servers []*manmanpb.Server, selectedServer *manmanpb.Server) {
 	if len(servers) > 0 {
 		<form method="POST" action="/select-server" class="flex items-center">
-			<select name="server_id" onchange="this.form.submit()" class="bg-white dark:bg-slate-950 text-gray-900 dark:text-white border border-gray-300 dark:border-slate-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+			<select name="server_id" onchange="this.form.submit()" class="bg-slate-700 dark:bg-slate-950 text-white border border-slate-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
 				<option value="">Select Server</option>
 				for _, server := range servers {
 					if selectedServer != nil && selectedServer.ServerId == server.ServerId {
@@ -118,12 +118,12 @@ templ MobileServerSelector(servers []*manmanpb.Server, selectedServer *manmanpb.
 }
 
 templ Nav(data LayoutData) {
-	<nav class="bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 shadow-sm sticky top-0 z-50">
+	<nav class="bg-slate-800 dark:bg-slate-900 shadow-lg sticky top-0 z-50">
 		<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
 			<div class="flex items-center justify-between h-16">
 				<div class="flex items-center flex-1">
 					<div class="flex-shrink-0">
-						<a href="/" class="text-xl font-bold text-gray-900 dark:text-white">ManManV2</a>
+						<a href="/" class="text-xl font-bold text-white">ManManV2</a>
 					</div>
 					<div class="hidden md:block ml-10">
 						<div class="flex items-baseline space-x-4">
@@ -139,13 +139,13 @@ templ Nav(data LayoutData) {
 					@ServerSelector(data.Servers, data.SelectedServer)
 					@ThemeSwitcher()
 					if data.User != nil {
-						<a href="/auth/logout" class="text-gray-700 dark:text-slate-300 hover:text-gray-900 dark:hover:text-white px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors">
+						<a href="/auth/logout" class="text-slate-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium hover:bg-slate-700 transition-colors">
 							Logout ({ data.User.Name })
 						</a>
 					}
 				</div>
 				<div class="md:hidden">
-					<button type="button" id="mobile-menu-button" class="text-gray-700 dark:text-slate-300 hover:text-gray-900 dark:hover:text-white p-2 rounded-md hover:bg-gray-100 dark:hover:bg-slate-700" aria-label="Open menu">
+					<button type="button" id="mobile-menu-button" class="text-slate-300 hover:text-white p-2 rounded-md hover:bg-slate-700" aria-label="Open menu">
 						<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
 						</svg>
@@ -153,7 +153,7 @@ templ Nav(data LayoutData) {
 				</div>
 			</div>
 		</div>
-		<div id="mobile-menu" class="hidden md:hidden bg-gray-50 dark:bg-black border-t border-gray-200 dark:border-slate-800">
+		<div id="mobile-menu" class="hidden md:hidden bg-slate-900 dark:bg-black">
 			<div class="px-2 pt-2 pb-3 space-y-1">
 				@MobileNavItem("/", "Dashboard", data.Active)
 				@MobileNavItem("/servers", "Servers", data.Active)
@@ -163,7 +163,7 @@ templ Nav(data LayoutData) {
 				@MobileServerSelector(data.Servers, data.SelectedServer)
 				@MobileThemeSwitcher()
 				if data.User != nil {
-					<a href="/auth/logout" class="text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-gray-900 dark:hover:text-white block px-3 py-3 rounded-md text-base font-medium min-h-[44px] flex items-center">
+					<a href="/auth/logout" class="text-slate-300 hover:bg-slate-700 hover:text-white block px-3 py-3 rounded-md text-base font-medium min-h-[44px] flex items-center">
 						Logout ({ data.User.Name })
 					</a>
 				}
@@ -216,6 +216,7 @@ script themeManagement() {
 		const mobileMenu = document.getElementById('mobile-menu');
 
 		function setTheme(theme) {
+			const currentTheme = document.documentElement.getAttribute('data-theme');
 			document.documentElement.setAttribute('data-theme', theme);
 			localStorage.setItem('manman-theme', theme);
 			
@@ -223,6 +224,11 @@ script themeManagement() {
 				document.documentElement.classList.remove('dark');
 			} else {
 				document.documentElement.classList.add('dark');
+			}
+			
+			// Reload page if theme actually changed (Tailwind CDN needs reload)
+			if (currentTheme && currentTheme !== theme) {
+				location.reload();
 			}
 		}
 
@@ -256,13 +262,6 @@ script themeManagement() {
 				mobileMenu.classList.toggle('hidden');
 			});
 		}
-
-		const savedTheme = localStorage.getItem('manman-theme');
-		if (savedTheme) {
-			setTheme(savedTheme);
-		} else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-			setTheme('night');
-		}
 	})();
 }
 
@@ -278,7 +277,7 @@ script toastScript() {
 
 templ Layout(data LayoutData) {
 	@Nav(data)
-	<main class="min-h-screen bg-gray-50 dark:bg-slate-900">
+	<main class="min-h-screen bg-gray-100 dark:bg-slate-900">
 		<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
 			@Breadcrumbs(data.Breadcrumbs)
 			{ children... }

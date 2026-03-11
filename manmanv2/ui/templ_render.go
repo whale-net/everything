@@ -16,16 +16,33 @@ func RenderTempl(w http.ResponseWriter, r *http.Request, title string, component
 		return err
 	}
 
-	themeInit := `<script src="https://cdn.tailwindcss.com"></script>
-<script>
+	themeInit := `<script>
+// Theme initialization - MUST run before Tailwind processes classes
 (function() {
     const theme = localStorage.getItem('manman-theme') || 
                   (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'light');
     document.documentElement.setAttribute('data-theme', theme);
     if (theme === 'night' || theme === 'oled') {
         document.documentElement.classList.add('dark');
+    } else {
+        document.documentElement.classList.remove('dark');
     }
 })();
+</script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+// Configure Tailwind with custom utilities
+tailwind.config = {
+    darkMode: 'class',
+    theme: {
+        extend: {
+            minHeight: {
+                'touch': '44px',
+                'touch-sm': '36px'
+            }
+        }
+    }
+};
 </script>`
 
 	layoutData := htmxbase.LayoutData{
