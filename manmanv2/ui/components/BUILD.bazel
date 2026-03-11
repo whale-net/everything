@@ -1,0 +1,12 @@
+load("//tools:templ.bzl", "templ_library")
+
+templ_library(
+    name = "components",
+    srcs = glob(["*.templ"]),
+    visibility = ["//manmanv2/ui:__subpackages__"],
+    deps = [
+        "//libs/go/htmxauth",
+        "//libs/go/htmxbase",
+        "//manmanv2/protos:manmanpb",
+    ],
+)

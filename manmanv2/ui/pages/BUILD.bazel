@@ -1,0 +1,12 @@
+load("//tools:templ.bzl", "templ_library")
+
+templ_library(
+    name = "pages",
+    srcs = glob(["*.templ"]),
+    visibility = ["//manmanv2/ui:__pkg__"],
+    deps = [
+        "//libs/go/htmxauth",
+        "//manmanv2/protos:manmanpb",
+        "//manmanv2/ui/components",
+    ],
+)

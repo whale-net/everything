@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/manmanv2/ui/pages"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
@@ -29,20 +30,15 @@ type DashboardSummaryData struct {
 func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
 
-	data := HomePageData{
-		Title:  "Dashboard",
-		Active: "home",
-		User:   user,
-	}
-
-	layoutData, err := app.buildLayoutData(r, data.Title, data.Active, user)
+	layoutData, err := app.buildTemplLayoutData(r, "Dashboard", "home", user, nil)
 	if err != nil {
 		log.Printf("Error building layout data: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	if err := renderPage(w, "home_content", data, layoutData); err != nil {
+	// Use templ to render the home page
+	if err := RenderTempl(w, r, "Dashboard", pages.Home(layoutData)); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}

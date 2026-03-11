@@ -61,63 +61,66 @@ Start with pages needing most cleanup (high legacy CSS usage), then medium, then
 
 ## Phase 1: Foundation & Tooling
 
-### Task 1: Create templ infrastructure
-- [ ] Create `manmanv2/ui/components/` directory
-- [ ] Create `manmanv2/ui/pages/` directory
-- [ ] Create `templ_render.go` with helper functions for rendering templ components to http.ResponseWriter
-- [ ] Update BUILD.bazel to add `templ_library` rules (keep existing go_library)
-- [ ] Add templ dependencies: `@com_github_a_h_templ//:templ`, `@com_github_a_h_templ//runtime`
-- [ ] Test: `bazel build //manmanv2/ui:ui_lib` succeeds with empty templ structure
-- [ ] Demo: Verify Bazel builds successfully
+### Task 1: Create templ infrastructure ✅ COMPLETE
+- [x] Create `manmanv2/ui/components/` directory
+- [x] Create `manmanv2/ui/pages/` directory
+- [x] Create `templ_render.go` with helper functions for rendering templ components to http.ResponseWriter
+- [x] Update BUILD.bazel to add `templ_library` rules (keep existing go_library)
+- [x] Add templ dependencies: `@com_github_a_h_templ//:templ`, `@com_github_a_h_templ//runtime`
+- [x] Test: `bazel build //manmanv2/ui:ui_lib` succeeds with empty templ structure
+- [x] Demo: Verify Bazel builds successfully
 
 **Implementation Notes:**
-- Keep existing `go_library` and `embedsrcs` intact
-- Add separate `templ_library` targets for components and pages
-- `templ_render.go` should provide simple wrapper: `func RenderTempl(w http.ResponseWriter, r *http.Request, component templ.Component) error`
+- Created separate BUILD.bazel files in components/ and pages/ subdirectories
+- Each templ_library has its own importpath based on package location
+- `templ_render.go` provides simple wrapper: `func RenderTempl(w http.ResponseWriter, r *http.Request, component templ.Component) error`
 
 ---
 
-### Task 2: Create base layout components
-- [ ] Create `components/layout.templ`
-- [ ] Extract navigation from `wrapper.html` to `Nav()` component
-- [ ] Create `NavItem(href, label, active)` component for navigation links
-- [ ] Extract theme switcher to `ThemeSwitcher()` component
-- [ ] Create `Layout(title, active, content)` component that wraps content with nav
-- [ ] Keep htmxbase integration for outer HTML structure (unchanged)
-- [ ] Test: Layout renders with correct theme classes and navigation
-- [ ] Demo: Render test page with navigation showing active states and theme switcher working
+### Task 2: Create base layout components ✅ COMPLETE
+- [x] Create `components/layout.templ`
+- [x] Extract navigation from `wrapper.html` to `Nav()` component
+- [x] Create `NavItem(href, label, active)` component for navigation links
+- [x] Extract theme switcher to `ThemeSwitcher()` component
+- [x] Create `Layout(title, active, content)` component that wraps content with nav
+- [x] Keep htmxbase integration for outer HTML structure (unchanged)
+- [x] Test: Layout renders with correct theme classes and navigation
+- [x] Demo: Render test page with navigation showing active states and theme switcher working
 
 **Implementation Notes:**
-- Preserve exact HTML structure from wrapper.html
-- Keep all Alpine.js directives for mobile menu and theme switching
-- Maintain server selector dropdown functionality
-- Do NOT change any JavaScript or HTMX behavior
+- Preserved exact HTML structure from wrapper.html
+- Kept all Alpine.js directives for mobile menu and theme switching
+- Maintained server selector dropdown functionality
+- Layout component wraps htmxbase.Base for outer HTML structure
+- Added `buildTemplLayoutData()` helper in main.go for templ pages
 
 ---
 
-### Task 3: Create core UI component library
-- [ ] Create `components/ui.templ`
-- [ ] Implement `Button(variant, size, text, attrs)` component
+### Task 3: Create core UI component library ✅ COMPLETE
+- [x] Create `components/ui.templ`
+- [x] Implement `Button(variant, size, text, attrs)` component
   - Variants: primary (indigo), success (green), danger (red), secondary (slate)
   - Sizes: default (44px min-height), small (36px min-height)
-- [ ] Implement `Badge(status, text)` component
+- [x] Implement `Badge(status, text)` component
   - Use same logic as `statusBadge()` helper from templates.go
-- [ ] Implement `Card(title, content)` component
+- [x] Implement `Card(title, content)` component
   - Standard card with optional header
-- [ ] Implement `HeroHeader(title, subtitle, actions)` component
+- [x] Implement `HeroHeader(title, subtitle, actions)` component
   - Gradient hero for section pages (games, servers, sessions, workshop)
-- [ ] Implement `Table(headers, rows)` component
+- [x] Implement `Table(headers, rows)` component
   - Responsive table wrapper with proper Tailwind classes
-- [ ] Implement `FormInput(label, name, inputType, value, attrs)` component
+- [x] Implement `FormInput(label, name, inputType, value, attrs)` component
   - Standard form input with label
-- [ ] Test: Each component renders with correct Tailwind classes in all three themes
-- [ ] Demo: Create sample page using all components, verify theme support
+- [x] Test: Each component renders with correct Tailwind classes in all three themes
+- [x] Demo: Create sample page using all components, verify theme support
 
 **Implementation Notes:**
 - All components use pure Tailwind (no legacy CSS)
 - Match exact styling from DESIGN_SYSTEM.md
 - Preserve min-height requirements (44px standard, 36px small)
 - Support dark mode with `dark:` variants
+- Added helper components: DLItem, DLItemMono, DLItemCode, TableInline, EmptyState, Alert
+- Added ButtonLink for anchor tags styled as buttons
 
 ---
 
@@ -331,13 +334,13 @@ Start with pages needing most cleanup (high legacy CSS usage), then medium, then
 
 ---
 
-### Task 15: Migrate home.html and dashboard partials
-- [ ] Create `pages/home.templ`
+### Task 15: Migrate home.html and dashboard partials ✅ IN PROGRESS
+- [x] Create `pages/home.templ`
 - [ ] Create `components/dashboard.templ`
 - [ ] Implement `DashboardSummary(stats)` component
 - [ ] Implement `DashboardSessions(sessions)` component
 - [ ] Convert home page using dashboard components
-- [ ] Update `handlers_home.go` - `handleHome()` to use templ render
+- [x] Update `handlers_home.go` - `handleHome()` to use templ render
 - [ ] Update dashboard API handlers to return templ partials
 - [ ] Test: Dashboard displays correctly
 - [ ] Test: HTMX updates work (summary stats, session list)
@@ -348,6 +351,7 @@ Start with pages needing most cleanup (high legacy CSS usage), then medium, then
 **Implementation Notes:**
 - Dashboard API endpoints may need updates to render templ partials
 - Preserve exact HTMX polling behavior
+- **Current Status**: Basic home page created and handler updated, needs dashboard partials for HTMX endpoints
 
 ---
 
@@ -523,20 +527,72 @@ go_library(
 
 ## Progress Tracking
 
-**Phase 1**: ☐ Not Started  
+**Phase 1**: ✅ COMPLETE (3/3 tasks)
 **Phase 2**: ☐ Not Started  
 **Phase 3**: ☐ Not Started  
 **Phase 4**: ☐ Not Started  
-**Phase 5**: ☐ Not Started  
+**Phase 5**: ⏳ IN PROGRESS (Task 15 started - 1/3 tasks)
 **Phase 6**: ☐ Not Started  
 
-**Overall Progress**: 0/18 tasks completed (0%)
+**Overall Progress**: 3.5/18 tasks completed (19%)
+
+---
+
+## Current Status Summary
+
+**Completed:**
+- ✅ Templ infrastructure set up with separate BUILD files for components/ and pages/
+- ✅ Base layout components created (Nav, ThemeSwitcher, Breadcrumbs, Layout)
+- ✅ Core UI component library created (Button, Badge, Card, HeroHeader, FormInput, Table, etc.)
+- ✅ Home page migrated to templ (pages/home.templ)
+- ✅ Handler updated (handlers_home.go uses RenderTempl)
+- ✅ Bazel builds successfully
+- ✅ Tilt deployed and manmanv2-ui is running
+
+**In Progress:**
+- ⏳ Task 15: Home page needs dashboard partials for HTMX endpoints (/api/dashboard-summary, /api/dashboard-sessions)
+
+**Next Steps:**
+1. Create dashboard.templ components for HTMX partials
+2. Update dashboard API handlers to use templ
+3. Test home page with live HTMX updates
+4. Remove templates/home.html after verification
+5. Continue with remaining pages (prioritize high legacy CSS pages per plan)
+
+**Architecture Notes:**
+- Components and pages are in separate packages with own BUILD files
+- Layout component wraps htmxbase.Base for outer HTML structure
+- Helper function `buildTemplLayoutData()` converts to components.LayoutData
+- All templ files must be generated with `~/go/bin/templ generate` before Bazel build
 
 ---
 
 ## Notes & Lessons Learned
 
-_Add notes here as you progress through the migration_
+### 2026-03-11 - Phase 1 Complete
+
+**What Worked:**
+- Separate BUILD.bazel files for components/ and pages/ subdirectories
+- templ_library macro works well with proper dependency setup
+- Layout component successfully wraps htmxbase.Base for outer HTML
+- Components can be imported across packages using full import paths
+
+**Challenges:**
+- Initial attempt to mix htmxbase (html/template) directly in templ components failed
+- templ_library macro uses native.package_name() for importpath, requiring subdirectories for separate packages
+- Must run `~/go/bin/templ generate` before Bazel builds to create _templ.go files
+- Keyword escaping in templ: "for" in text must be written as `{ "for" }` to avoid parser confusion
+
+**Architecture Decisions:**
+- Keep htmxbase wrapper at page level (not in Layout component)
+- Layout component provides nav + main content wrapper
+- Pages call Layout component and pass children
+- Helper function `buildTemplLayoutData()` bridges old LayoutData to components.LayoutData
+
+**Next Session:**
+- Start with simple pages (home, games, servers, sessions) to validate patterns
+- Save complex pages (config_detail, workshop) for after patterns are proven
+- Consider reordering migration to do Phase 4 (simple list pages) before Phase 2 (complex detail pages)
 
 ---
 

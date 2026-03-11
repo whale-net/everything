@@ -62,3 +62,13 @@ sh_test(
         "manual",
     ],  # Requires helm binary to run
 )
+
+go_test(
+    name = "helm_test",
+    srcs = [
+        "composer_test.go",
+        "types_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":helm"],
+)
