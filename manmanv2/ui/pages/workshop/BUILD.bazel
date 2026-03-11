@@ -1,0 +1,19 @@
+load("//tools:templ.bzl", "templ_library")
+
+templ_library(
+    name = "workshop",
+    srcs = [
+        "library.templ",
+        "library_detail.templ",
+        "addon_detail.templ",
+        "search.templ",
+        "installations.templ",
+    ],
+    deps = [
+        "//manmanv2/ui/components/layout",
+        "//manmanv2/ui/components/ui",
+        "//manmanv2/ui/components/forms",
+        "//manmanv2/ui/types",
+    ],
+    visibility = ["//manmanv2/ui:__pkg__"],
+)

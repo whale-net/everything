@@ -267,3 +267,25 @@ Remaining:
 - Task 10: Config detail (collapsible sections)
 - Task 11: Utilities
 - Task 12: Documentation & cleanup
+
+
+## Task 9 Complete ✅
+
+Workshop pages migrated (all 5 pages):
+- Created types/workshop.go with all workshop page data types
+- Created pages/workshop/library.templ (library list)
+- Created pages/workshop/library_detail.templ (library detail with addons)
+- Created pages/workshop/addon_detail.templ (addon detail)
+- Created pages/workshop/search.templ (search with results)
+- Created pages/workshop/installations.templ (installations table)
+
+**Files:**
+- manmanv2/ui/types/workshop.go
+- manmanv2/ui/pages/workshop/*.templ (5 files)
+
+**Progress: Tasks 1-9 Complete (75% done)**
+
+Remaining:
+- Task 10: Config detail (most complex - collapsible sections)
+- Task 11: Utilities (render, HTMX, validation)
+- Task 12: Documentation & cleanup

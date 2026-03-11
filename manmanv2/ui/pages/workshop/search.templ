@@ -1,0 +1,68 @@
+package workshop
+
+import (
+	"fmt"
+	"github.com/whale-net/everything/manmanv2/ui/components/layout"
+	"github.com/whale-net/everything/manmanv2/ui/components/ui"
+	"github.com/whale-net/everything/manmanv2/ui/components/forms"
+	"github.com/whale-net/everything/manmanv2/ui/types"
+)
+
+templ Search(data types.WorkshopSearchPageData) {
+	@layout.Base(data.Layout) {
+		@layout.Hero("Workshop Search", "Find libraries and addons")
+		
+		<form method="GET" action="/workshop/search" class="mb-6">
+			<div class="flex gap-2">
+				@forms.Input("q", data.Query, "Search workshop...")
+				<button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md">
+					Search
+				</button>
+			</div>
+		</form>
+		
+		if data.Query != "" {
+			<div class="space-y-6">
+				if len(data.Libraries) > 0 {
+					<div>
+						<h2 class="text-xl font-semibold text-slate-900 dark:text-white mb-4">Libraries</h2>
+						<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+							for _, lib := range data.Libraries {
+								<a href={ templ.URL("/workshop/library/" + fmt.Sprintf("%d", lib.LibraryId)) }>
+									@ui.Card() {
+										@ui.CardBody() {
+											<h3 class="font-semibold text-slate-900 dark:text-white">{ lib.Name }</h3>
+										}
+									}
+								</a>
+							}
+						</div>
+					</div>
+				}
+				
+				if len(data.Addons) > 0 {
+					<div>
+						<h2 class="text-xl font-semibold text-slate-900 dark:text-white mb-4">Addons</h2>
+						<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+							for _, addon := range data.Addons {
+								<a href={ templ.URL("/workshop/addon/" + fmt.Sprintf("%d", addon.AddonId)) }>
+									@ui.Card() {
+										@ui.CardBody() {
+											<h3 class="font-semibold text-slate-900 dark:text-white">{ addon.Name }</h3>
+										}
+									}
+								</a>
+							}
+						</div>
+					</div>
+				}
+				
+				if len(data.Libraries) == 0 && len(data.Addons) == 0 {
+					@ui.Alert(types.AlertProps{Variant: types.AlertInfo}) {
+						No results found for "{ data.Query }"
+					}
+				}
+			</div>
+		}
+	}
+}
