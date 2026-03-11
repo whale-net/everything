@@ -2,10 +2,10 @@
 <!-- Alpine.js Action Management App -->
 <div x-data="actionManager()" x-init="init()">
 
-    <div class="action-bar">
+    <div class="flex justify-between items-center mb-6">
         <h1>Manage Actions - {{.EntityName}}</h1>
         <div>
-            <button class="btn btn-primary btn-sm" @click="showForm = true; editMode = false; resetForm()">
+            <button class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors" @click="showForm = true; editMode = false; resetForm()">
                 <i class="fa fa-plus"></i> New Action
             </button>
         </div>
@@ -14,7 +14,7 @@
     <!-- Error/Success Messages -->
     <div x-show="errorMessage"
          x-transition
-         class="alert alert-danger"
+         class="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border-l-4 border-red-500 dark:border-red-400 rounded"
          style="margin-top: 1rem;"
          x-cloak>
         <strong>Error:</strong> <span x-text="errorMessage"></span>
@@ -23,7 +23,7 @@
 
     <div x-show="successMessage"
          x-transition
-         class="alert alert-success"
+         class="mb-4 p-4 bg-green-50 dark:bg-green-900/20 border-l-4 border-green-500 dark:border-green-400 rounded"
          style="margin-top: 1rem;"
          x-cloak>
         <strong>Success:</strong> <span x-text="successMessage"></span>
@@ -44,10 +44,10 @@
          style="margin-bottom: 2rem;"
          x-cloak>
 
-        <div class="card" style="border: 2px solid #4CAF50;">
-            <div class="card-header" style="background: #f0f9ff; display: flex; justify-content: space-between; align-items: center;">
-                <div class="card-title" x-text="editMode ? 'Edit Action' : 'Create New Action'" style="margin: 0;"></div>
-                <button @click="closeForm()" class="btn btn-sm btn-secondary">
+        <div class="bg-white dark:bg-slate-800 rounded-lg shadow-md p-6 mb-6 border border-gray-200 dark:border-slate-700" style="border: 2px solid #4CAF50;">
+            <div class="flex justify-between items-center mb-4 pb-4 border-b border-gray-200 dark:border-slate-700" style="background: #f0f9ff; display: flex; justify-content: space-between; align-items: center;">
+                <div class="text-xl font-semibold text-slate-900 dark:text-white" x-text="editMode ? 'Edit Action' : 'Create New Action'" style="margin: 0;"></div>
+                <button @click="closeForm()" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">
                     <i class="fa fa-times"></i> Cancel
                 </button>
             </div>
@@ -329,21 +329,21 @@
                                         </button>
                                     </div>
                                 </template>
-                                <button type="button" @click="addOption(index)" class="btn btn-sm btn-secondary">
+                                <button type="button" @click="addOption(index)" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">
                                     <i class="fa fa-plus"></i> Add Option
                                 </button>
                             </div>
                         </div>
                     </template>
 
-                    <button type="button" @click="addField()" class="btn btn-secondary">
+                    <button type="button" @click="addField()" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-slate-600 hover:bg-slate-700 text-white font-medium rounded-md transition-colors">
                         <i class="fa fa-plus"></i> Add Input Field
                     </button>
                 </div>
 
                 <!-- Form Actions -->
                 <div class="form-actions" style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #ddd;">
-                    <button type="button" @click="closeForm()" class="btn btn-secondary">
+                    <button type="button" @click="closeForm()" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-slate-600 hover:bg-slate-700 text-white font-medium rounded-md transition-colors">
                         Cancel
                     </button>
                     <button type="submit" class="btn btn-primary" :disabled="submitting">
@@ -356,9 +356,9 @@
     </div>
 
     <!-- Local Actions (Defined at this level) -->
-    <div class="card">
-        <div class="card-header">
-            <div class="card-title">Actions Defined at This Level</div>
+    <div class="bg-white dark:bg-slate-800 rounded-lg shadow-md p-6 mb-6 border border-gray-200 dark:border-slate-700">
+        <div class="flex justify-between items-center mb-4 pb-4 border-b border-gray-200 dark:border-slate-700">
+            <div class="text-xl font-semibold text-slate-900 dark:text-white">Actions Defined at This Level</div>
         </div>
         <div class="card-body">
             {{if .LocalActions}}
@@ -392,7 +392,7 @@
                                 {{end}}
                             </td>
                             <td>
-                                <button class="btn btn-sm btn-secondary"
+                                <button class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors"
                                         hx-get="{{$.CurrentPath}}/edit/{{$action.Action.ActionId}}"
                                         hx-target="#htmx-script-target"
                                         hx-swap="innerHTML">
@@ -416,9 +416,9 @@
 
     <!-- Inherited Actions (From parent levels) -->
     {{if .InheritedActions}}
-    <div class="card" style="margin-top: 2rem;">
-        <div class="card-header">
-            <div class="card-title">Inherited Actions (Read-Only)</div>
+    <div class="bg-white dark:bg-slate-800 rounded-lg shadow-md p-6 mb-6 border border-gray-200 dark:border-slate-700" style="margin-top: 2rem;">
+        <div class="flex justify-between items-center mb-4 pb-4 border-b border-gray-200 dark:border-slate-700">
+            <div class="text-xl font-semibold text-slate-900 dark:text-white">Inherited Actions (Read-Only)</div>
         </div>
         <div class="card-body">
             <p class="text-muted" style="margin-bottom: 1rem;">
@@ -454,7 +454,7 @@
                             <td>{{if .Action.GroupName}}{{.Action.GroupName}}{{else}}-{{end}}</td>
                             <td><code style="font-size: 0.85em;">{{.Action.CommandTemplate}}</code></td>
                             <td>
-                                <a href="{{.EditURL}}" class="btn btn-sm btn-secondary">
+                                <a href="{{.EditURL}}" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">
                                     <i class="fa fa-external-link"></i> Edit at Source
                                 </a>
                             </td>

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"time"
 
 	"github.com/whale-net/everything/libs/go/s3"
@@ -81,14 +82,21 @@ func (h *LogsHandler) SendBatchedLogs(ctx context.Context, req *pb.SendBatchedLo
 }
 
 func (h *LogsHandler) GetHistoricalLogs(ctx context.Context, req *pb.GetHistoricalLogsRequest) (*pb.GetHistoricalLogsResponse, error) {
-	// Validate time range (max 30 minutes)
-	maxDuration := int64(30 * 60) // 30 minutes in seconds
+	// Validate time range (max 6 hours)
+	maxDuration := int64(6 * 60 * 60) // 6 hours in seconds
 	if req.EndTimestamp-req.StartTimestamp > maxDuration {
-		return nil, fmt.Errorf("time range too large: maximum 30 minutes allowed")
+		return nil, fmt.Errorf("time range too large: maximum 6 hours allowed")
 	}
 
 	startTime := time.Unix(req.StartTimestamp, 0)
 	endTime := time.Unix(req.EndTimestamp, 0)
+
+	// Set defaults for pagination
+	offset := req.Offset
+	limit := req.Limit
+	if limit == 0 {
+		limit = 10000
+	}
 
 	// Query database for log references in range by session ID
 	logRefs, err := h.logRefRepo.ListBySessionAndTimeRange(ctx, req.SessionId, startTime, endTime)
@@ -96,10 +104,30 @@ func (h *LogsHandler) GetHistoricalLogs(ctx context.Context, req *pb.GetHistoric
 		return nil, fmt.Errorf("failed to query log references: %w", err)
 	}
 
-	// Download S3 objects and build batches
-	batches := make([]*pb.HistoricalLogBatch, 0, len(logRefs))
+	// Calculate total lines and apply pagination
+	totalLines := int32(0)
+	for _, ref := range logRefs {
+		totalLines += ref.LineCount
+	}
+
+	// Download S3 objects and build batches with pagination
+	batches := make([]*pb.HistoricalLogBatch, 0)
+	currentOffset := int32(0)
+	linesLoaded := int32(0)
+
 	for _, logRef := range logRefs {
-		// Parse S3 URL to extract key (format: s3://bucket/key)
+		// Skip batches before offset
+		if currentOffset+logRef.LineCount <= offset {
+			currentOffset += logRef.LineCount
+			continue
+		}
+
+		// Stop if we've loaded enough lines
+		if linesLoaded >= limit {
+			break
+		}
+
+		// Parse S3 URL to extract key
 		s3Key, err := parseS3Key(logRef.FilePath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse S3 URL %s: %w", logRef.FilePath, err)
@@ -123,6 +151,8 @@ func (h *LogsHandler) GetHistoricalLogs(ctx context.Context, req *pb.GetHistoric
 			LineCount:       logRef.LineCount,
 		}
 		batches = append(batches, batch)
+		linesLoaded += logRef.LineCount
+		currentOffset += logRef.LineCount
 	}
 
 	// Get min/max available times for time picker (by session)
@@ -132,7 +162,9 @@ func (h *LogsHandler) GetHistoricalLogs(ctx context.Context, req *pb.GetHistoric
 	}
 
 	resp := &pb.GetHistoricalLogsResponse{
-		Batches: batches,
+		Batches:    batches,
+		TotalLines: totalLines,
+		HasMore:    currentOffset < totalLines,
 	}
 
 	if minTime != nil {
@@ -143,6 +175,87 @@ func (h *LogsHandler) GetHistoricalLogs(ctx context.Context, req *pb.GetHistoric
 	}
 
 	return resp, nil
+}
+
+func (h *LogsHandler) GetLogHistogram(ctx context.Context, req *pb.GetLogHistogramRequest) (*pb.GetLogHistogramResponse, error) {
+	// Get session time range
+	minTime, maxTime, err := h.logRefRepo.GetMinMaxTimesBySession(ctx, req.SessionId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get session time range: %w", err)
+	}
+
+	if minTime == nil || maxTime == nil {
+		// No logs for this session
+		return &pb.GetLogHistogramResponse{
+			Buckets:     []*pb.HistogramBucket{},
+			Granularity: "1m",
+		}, nil
+	}
+
+	// Calculate session duration and determine bucket size
+	duration := maxTime.Sub(*minTime)
+	var bucketSeconds int64
+	var granularity string
+
+	if duration < time.Hour {
+		// < 1 hour: 1-minute buckets
+		bucketSeconds = 60
+		granularity = "1m"
+	} else if duration < 24*time.Hour {
+		// 1-24 hours: 5-minute buckets
+		bucketSeconds = 5 * 60
+		granularity = "5m"
+	} else {
+		// > 24 hours: 1-hour buckets
+		bucketSeconds = 60 * 60
+		granularity = "1h"
+	}
+
+	// Cap at 1000 buckets - adjust granularity if needed
+	maxBuckets := int64(1000)
+	estimatedBuckets := int64(duration.Seconds()) / bucketSeconds
+	if estimatedBuckets > maxBuckets {
+		bucketSeconds = int64(duration.Seconds()) / maxBuckets
+		if bucketSeconds < 1 {
+			bucketSeconds = 1
+		}
+		granularity = fmt.Sprintf("%ds", bucketSeconds)
+	}
+
+	// Safety check: ensure bucketSeconds is at least 1
+	if bucketSeconds < 1 {
+		bucketSeconds = 1
+	}
+
+	// Get histogram data from repository
+	histogramData, err := h.logRefRepo.GetHistogramBySession(ctx, req.SessionId, bucketSeconds)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get histogram data: %w", err)
+	}
+
+	// Convert to protobuf format
+	buckets := make([]*pb.HistogramBucket, 0, len(histogramData))
+	for timestamp, sources := range histogramData {
+		bucket := &pb.HistogramBucket{
+			Timestamp:   timestamp,
+			StdoutLines: sources["stdout"],
+			StderrLines: sources["stderr"],
+			HostLines:   sources["host"],
+		}
+		buckets = append(buckets, bucket)
+	}
+
+	// Sort buckets by timestamp
+	sort.Slice(buckets, func(i, j int) bool {
+		return buckets[i].Timestamp < buckets[j].Timestamp
+	})
+
+	return &pb.GetLogHistogramResponse{
+		Buckets:      buckets,
+		Granularity:  granularity,
+		SessionStart: minTime.Unix(),
+		SessionEnd:   maxTime.Unix(),
+	}, nil
 }
 
 func parseS3Key(s3URL string) (string, error) {

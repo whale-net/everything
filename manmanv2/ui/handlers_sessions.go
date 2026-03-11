@@ -249,6 +249,16 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(pathParts) > 3 && pathParts[2] == "logs" && pathParts[3] == "histogram" {
+		app.handleLogHistogram(w, r)
+		return
+	}
+
+	if len(pathParts) > 3 && pathParts[2] == "logs" && pathParts[3] == "load" {
+		app.handleLoadHistoricalLogs(w, r)
+		return
+	}
+
 	ctx := context.Background()
 	sessionResp, err := app.grpc.GetSession(ctx, &manmanpb.GetSessionRequest{
 		SessionId: sessionID,
@@ -709,6 +719,176 @@ func (app *App) handleHistoricalLogs(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Error encoding response: %v", err)
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 		return
+	}
+}
+
+// handleLogHistogram handles API requests for log histogram data
+func (app *App) handleLogHistogram(w http.ResponseWriter, r *http.Request) {
+	// Extract session ID from URL path: /sessions/{id}/logs/histogram
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(pathParts) < 2 {
+		http.Error(w, "Invalid URL path", http.StatusBadRequest)
+		return
+	}
+
+	sessionID, err := strconv.ParseInt(pathParts[1], 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid session_id", http.StatusBadRequest)
+		return
+	}
+
+	// Check for optional zoom range parameters
+	startStr := r.URL.Query().Get("start")
+	endStr := r.URL.Query().Get("end")
+
+	ctx := context.Background()
+
+	// If zoom range provided, fetch histogram for that range only
+	if startStr != "" && endStr != "" {
+		startTime, err := strconv.ParseInt(startStr, 10, 64)
+		if err != nil {
+			http.Error(w, "Invalid start timestamp", http.StatusBadRequest)
+			return
+		}
+
+		endTime, err := strconv.ParseInt(endStr, 10, 64)
+		if err != nil {
+			http.Error(w, "Invalid end timestamp", http.StatusBadRequest)
+			return
+		}
+
+		// For now, just use the full histogram
+		// TODO: Add range support to GetLogHistogram RPC to filter buckets by time range
+		_ = startTime
+		_ = endTime
+	}
+
+	// Call gRPC GetLogHistogram
+	resp, err := app.grpc.GetLogHistogram(ctx, &manmanpb.GetLogHistogramRequest{
+		SessionId: sessionID,
+	})
+	if err != nil {
+		log.Printf("Error fetching log histogram for session %d: %v", sessionID, err)
+		http.Error(w, fmt.Sprintf("Failed to fetch log histogram: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Return JSON response
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("Error encoding response: %v", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+}
+
+// handleLoadHistoricalLogs handles HTMX requests to load paginated historical logs
+func (app *App) handleLoadHistoricalLogs(w http.ResponseWriter, r *http.Request) {
+	// Extract session ID from URL path: /sessions/{id}/logs/load
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(pathParts) < 2 {
+		http.Error(w, "Invalid URL path", http.StatusBadRequest)
+		return
+	}
+
+	sessionID, err := strconv.ParseInt(pathParts[1], 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid session_id", http.StatusBadRequest)
+		return
+	}
+
+	// Parse query parameters
+	startStr := r.URL.Query().Get("start")
+	endStr := r.URL.Query().Get("end")
+	offsetStr := r.URL.Query().Get("offset")
+	limitStr := r.URL.Query().Get("limit")
+
+	if startStr == "" || endStr == "" {
+		http.Error(w, "Missing required parameters: start, end", http.StatusBadRequest)
+		return
+	}
+
+	startTimestamp, err := strconv.ParseInt(startStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid start timestamp", http.StatusBadRequest)
+		return
+	}
+
+	endTimestamp, err := strconv.ParseInt(endStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid end timestamp", http.StatusBadRequest)
+		return
+	}
+
+	// Auto-truncate if range > 6 hours
+	maxDuration := int64(6 * 60 * 60) // 6 hours
+	if endTimestamp-startTimestamp > maxDuration {
+		endTimestamp = startTimestamp + maxDuration
+	}
+
+	offset := int32(0)
+	if offsetStr != "" {
+		offsetVal, err := strconv.ParseInt(offsetStr, 10, 32)
+		if err == nil {
+			offset = int32(offsetVal)
+		}
+	}
+
+	limit := int32(10000)
+	if limitStr != "" {
+		limitVal, err := strconv.ParseInt(limitStr, 10, 32)
+		if err == nil {
+			limit = int32(limitVal)
+		}
+	}
+
+	ctx := context.Background()
+
+	// Call gRPC GetHistoricalLogs with pagination
+	resp, err := app.grpc.GetHistoricalLogs(ctx, &manmanpb.GetHistoricalLogsRequest{
+		SessionId:      sessionID,
+		StartTimestamp: startTimestamp,
+		EndTimestamp:   endTimestamp,
+		Offset:         offset,
+		Limit:          limit,
+	})
+	if err != nil {
+		log.Printf("Error fetching historical logs for session %d: %v", sessionID, err)
+		http.Error(w, fmt.Sprintf("Failed to fetch logs: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Render HTML response
+	w.Header().Set("Content-Type", "text/html")
+
+	// Show truncation warning if we auto-truncated
+	if endTimestamp != startTimestamp+maxDuration && endTimestamp-startTimestamp == maxDuration {
+		fmt.Fprintf(w, `<div class="alert alert-warning" style="margin-bottom: 1rem; padding: 0.75rem; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; color: #856404;">
+			Selection reduced to 6 hours (maximum allowed)
+		</div>`)
+	}
+
+	// Render log content
+	fmt.Fprintf(w, `<pre id="log-output" class="log-viewer-output">`)
+	for _, batch := range resp.Batches {
+		fmt.Fprintf(w, "%s", batch.Content)
+	}
+	fmt.Fprintf(w, `</pre>`)
+
+	// Add "Load More" button if there's more data
+	if resp.HasMore {
+		nextOffset := offset + limit
+		fmt.Fprintf(w, `
+		<div style="text-align: center; padding: 1rem;">
+			<button class="btn btn-primary"
+				hx-get="/sessions/%d/logs/load?start=%d&end=%d&offset=%d&limit=%d"
+				hx-target="#log-content"
+				hx-swap="beforeend"
+				hx-indicator="#log-loading">
+				Load More (%d lines remaining)
+			</button>
+			<span id="log-loading" class="htmx-indicator" style="margin-left: 0.5rem;">Loading...</span>
+		</div>`, sessionID, startTimestamp, endTimestamp, nextOffset, limit, resp.TotalLines-int32(offset)-limit)
 	}
 }
 

@@ -955,6 +955,10 @@ func (s *APIServer) GetHistoricalLogs(ctx context.Context, req *pb.GetHistorical
 	return s.logsHandler.GetHistoricalLogs(ctx, req)
 }
 
+func (s *APIServer) GetLogHistogram(ctx context.Context, req *pb.GetLogHistogramRequest) (*pb.GetLogHistogramResponse, error) {
+	return s.logsHandler.GetLogHistogram(ctx, req)
+}
+
 // Validation RPCs
 func (s *APIServer) ValidateDeployment(ctx context.Context, req *pb.ValidateDeploymentRequest) (*pb.ValidateDeploymentResponse, error) {
 	return s.validationHandler.ValidateDeployment(ctx, req)

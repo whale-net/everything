@@ -209,6 +209,15 @@ func (c *ControlClient) GetHistoricalLogs(ctx context.Context, req *manmanpb.Get
 	return resp, nil
 }
 
+// GetLogHistogram retrieves histogram data for session logs.
+func (c *ControlClient) GetLogHistogram(ctx context.Context, req *manmanpb.GetLogHistogramRequest) (*manmanpb.GetLogHistogramResponse, error) {
+	resp, err := c.api.GetLogHistogram(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get log histogram: %w", err)
+	}
+	return resp, nil
+}
+
 // StopSession stops a running session by ID.
 func (c *ControlClient) StopSession(ctx context.Context, sessionID int64) (*manmanpb.Session, error) {
 	resp, err := c.api.StopSession(ctx, &manmanpb.StopSessionRequest{

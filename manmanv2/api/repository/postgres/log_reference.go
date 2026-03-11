@@ -249,3 +249,47 @@ func (r *LogReferenceRepository) GetMinMaxTimesBySession(ctx context.Context, se
 
 	return minTime, maxTime, nil
 }
+
+func (r *LogReferenceRepository) GetHistogramBySession(ctx context.Context, sessionID int64, bucketSeconds int64) (map[int64]map[string]int32, error) {
+	// Safety check
+	if bucketSeconds < 1 {
+		bucketSeconds = 1
+	}
+
+	query := `
+		SELECT 
+			(EXTRACT(EPOCH FROM start_time)::bigint / $2) * $2 AS bucket_timestamp,
+			source,
+			SUM(line_count) AS total_lines
+		FROM log_references
+		WHERE session_id = $1 AND state = 'complete'
+		GROUP BY bucket_timestamp, source
+		ORDER BY bucket_timestamp
+	`
+
+	rows, err := r.db.Query(ctx, query, sessionID, bucketSeconds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Map: timestamp -> source -> line_count
+	histogram := make(map[int64]map[string]int32)
+
+	for rows.Next() {
+		var timestamp int64
+		var source string
+		var lineCount int32
+
+		if err := rows.Scan(&timestamp, &source, &lineCount); err != nil {
+			return nil, err
+		}
+
+		if histogram[timestamp] == nil {
+			histogram[timestamp] = make(map[string]int32)
+		}
+		histogram[timestamp][source] = lineCount
+	}
+
+	return histogram, rows.Err()
+}

@@ -307,7 +307,7 @@ func (h *WorkshopServiceHandler) InstallAddon(ctx context.Context, req *pb.Insta
 		return nil, status.Error(codes.InvalidArgument, "addon_id is required")
 	}
 
-	installation, err := h.workshopManager.InstallAddon(ctx, req.SgcId, req.AddonId, req.ForceReinstall, req.SkipDispatch, req.InstallationPathOverride, req.PresetIdOverride)
+	installation, err := h.workshopManager.InstallAddon(ctx, req.SgcId, req.AddonId, req.ForceReinstall, req.SkipDispatch, req.InstallationPathOverride, req.PresetIdOverride, req.VolumeIdOverride)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to install addon: %v", err)
 	}

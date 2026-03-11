@@ -1,5 +1,4 @@
 {{define "config_detail_content"}}
-<div x-data="{ showEdit: false, showAdvancedConfig: false, showBackupConfig: false, showDangerZone: false }">
 <!-- Breadcrumbs -->
 <nav class="flex mb-4" aria-label="Breadcrumb">
     <ol class="inline-flex items-center space-x-1 md:space-x-3">
@@ -34,9 +33,7 @@
     <div class="flex flex-wrap gap-2">
         <a href="/games/{{.Game.GameId}}" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">Back to Game</a>
         <a href="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/actions" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors">⚡ Manage Actions</a>
-        <button @click="showEdit = !showEdit" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">
-            <span x-text="showEdit ? 'Cancel Edit' : 'Edit'">Edit</span>
-        </button>
+        <button onclick="document.getElementById('edit-form').classList.remove('hidden')" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">Edit</button>
     </div>
 </div>
 
@@ -94,86 +91,60 @@
     </dl>
 </div>
 
-<!-- Deployments Section - Prominent -->
-<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border-2 border-indigo-200 dark:border-indigo-900 overflow-hidden mb-6">
-    <div class="bg-indigo-50 dark:bg-indigo-900/20 px-6 py-4 border-b border-indigo-200 dark:border-indigo-900">
-        <h2 class="text-lg font-semibold text-indigo-900 dark:text-indigo-200">🚀 Deployments</h2>
+<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-6 mb-6">
+    <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Deploy to Server</h2>
+    {{if .DeployError}}
+    <div class="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md p-4 mb-4">
+        <p class="text-sm text-yellow-800 dark:text-yellow-200">{{.DeployError}}</p>
     </div>
-    <div class="p-6">
-        {{if .DeployError}}
-        <div class="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md p-4 mb-4">
-            <p class="text-sm text-yellow-800 dark:text-yellow-200">{{.DeployError}}</p>
+    {{end}}
+    <form method="POST" action="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/deploy" class="flex flex-col sm:flex-row gap-3 items-start sm:items-end">
+        <div class="flex-1 min-w-[240px]">
+            <label for="server_id" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Server</label>
+            <select id="server_id" name="server_id" required class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="">Select a server</option>
+                {{range .Servers}}
+                <option value="{{.ServerId}}">{{.Name}} ({{.Status}})</option>
+                {{end}}
+            </select>
         </div>
-        {{end}}
-        
-        {{if .Deployments}}
-        <div class="mb-6">
-            <h3 class="text-base font-semibold text-slate-900 dark:text-white mb-3">Active Deployments ({{len .Deployments}})</h3>
-            <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
-                    <thead class="bg-gray-50 dark:bg-slate-900">
-                        <tr>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Server</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">SGC ID</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Status</th>
-                            <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody class="bg-white dark:bg-slate-800 divide-y divide-gray-200 dark:divide-slate-700">
-                        {{range .Deployments}}
-                        <tr class="hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors">
-                            <td class="px-6 py-4 whitespace-nowrap">
-                                <a href="/servers/{{.Server.ServerId}}" class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline">{{.Server.Name}}</a>
-                            </td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-slate-700 dark:text-slate-300">{{.Config.ServerGameConfigId}}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-700 dark:text-slate-300">{{.Config.Status}}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-right text-sm space-x-2">
-                                <a class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors" href="/sgc/{{.Config.ServerGameConfigId}}">Manage</a>
-                                <a class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors" href="/sessions?server_game_config_id={{.Config.ServerGameConfigId}}">Sessions</a>
-                            </td>
-                        </tr>
-                        {{end}}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        {{else}}
-        <div class="bg-slate-50 dark:bg-slate-900/50 rounded-lg p-8 text-center mb-6">
-            <svg class="mx-auto h-12 w-12 text-slate-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"></path>
-            </svg>
-            <h3 class="text-sm font-medium text-slate-900 dark:text-white mb-1">No deployments yet</h3>
-            <p class="text-sm text-slate-500 dark:text-slate-400">Deploy this config to a server to create a Server Game Config</p>
-        </div>
-        {{end}}
-        
-        <div class="border-t border-gray-200 dark:border-slate-700 pt-6">
-            <h3 class="text-base font-semibold text-slate-900 dark:text-white mb-3">Deploy to New Server</h3>
-            <form method="POST" action="/games/{{.Game.GameId}}/configs/{{.Config.ConfigId}}/deploy" class="flex flex-col sm:flex-row gap-3 items-start sm:items-end">
-                <div class="flex-1 min-w-[240px]">
-                    <label for="server_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Server</label>
-                    <select id="server_id" name="server_id" required class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                        <option value="">Select a server</option>
-                        {{range .Servers}}
-                        <option value="{{.ServerId}}">{{.Name}} ({{.Status}})</option>
-                        {{end}}
-                    </select>
-                </div>
-                <button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-green-600 hover:bg-green-700 text-white font-medium rounded-md transition-colors">Deploy Config</button>
-            </form>
-        </div>
+        <button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-green-600 hover:bg-green-700 text-white font-medium rounded-md transition-colors">Deploy GameConfig</button>
+    </form>
+    {{if .Deployments}}
+    <div class="mt-6">
+        <h3 class="text-sm font-semibold text-gray-900 dark:text-white mb-3">Existing Deployments</h3>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
+                <thead class="bg-gray-50 dark:bg-slate-900">
+                    <tr>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Server</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Server Game Config</th>
+                    <th>Status</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Deployments}}
+                <tr>
+                    <td><a href="/servers/{{.Server.ServerId}}">{{.Server.Name}}</a></td>
+                    <td><code>{{.Config.ServerGameConfigId}}</code></td>
+                    <td>{{.Config.Status}}</td>
+                    <td>
+                        <a class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors" href="/sgc/{{.Config.ServerGameConfigId}}">Manage SGC</a>
+                        <a class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors" href="/sessions?server_game_config_id={{.Config.ServerGameConfigId}}">View Sessions</a>
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
     </div>
+    {{else}}
+    <div class="empty-state" style="margin-top: 1rem;">
+        <p>No deployments yet. Deploy this config to a server to create a Server Game Config.</p>
+    </div>
+    {{end}}
 </div>
 
-<!-- Advanced Configuration (Collapsible) -->
-<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 overflow-hidden mb-6">
-    <button @click="showAdvancedConfig = !showAdvancedConfig" class="w-full px-6 py-4 flex justify-between items-center hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors">
-        <h2 class="text-lg font-semibold text-slate-900 dark:text-white">⚙️ Advanced Configuration</h2>
-        <svg class="w-5 h-5 text-slate-600 dark:text-slate-400 transition-transform" :class="{ 'rotate-180': showAdvancedConfig }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-        </svg>
-    </button>
-    <div x-show="showAdvancedConfig" x-collapse class="border-t border-gray-200 dark:border-slate-700">
 <div class="card">
     <div class="card-header">
         <div class="card-title">Volume Mounts</div>
@@ -267,7 +238,7 @@
 </div>
 
 <!-- Edit form (hidden by default) -->
-<div x-show="showEdit" x-cloak>
+<div id="edit-form" style="display: none;">
     <div class="card">
         <div class="card-header">
             <div class="card-title">Edit Configuration</div>
@@ -430,48 +401,21 @@
 })();
 </script>
 
-</div>
-</div>
 {{template "backup_configs_section" .}}
 
 {{end}}
 
 {{define "backup_configs_section"}}
-<!-- Backup Configuration (Collapsible) -->
-<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 overflow-hidden mb-6">
-    <button @click="showBackupConfig = !showBackupConfig" class="w-full px-6 py-4 flex justify-between items-center hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors">
-        <div>
-            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">💾 Backup Configuration</h2>
-            <p class="text-sm text-slate-600 dark:text-slate-400 mt-1">{{len .BackupConfigs}} volume(s) configured</p>
-        </div>
-        <svg class="w-5 h-5 text-slate-600 dark:text-slate-400 transition-transform" :class="{ 'rotate-180': showBackupConfig }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-        </svg>
-    </button>
-    <div x-show="showBackupConfig" x-collapse class="border-t border-gray-200 dark:border-slate-700 p-6">
-  <div class="card-body" x-data="{ openVolumes: {} }">
-    {{range $index, $bc := .BackupConfigs}}
-    <div class="mb-4 border border-gray-200 dark:border-slate-700 rounded-lg overflow-hidden">
-      <button @click="openVolumes[{{$index}}] = !openVolumes[{{$index}}]" class="w-full px-4 py-3 flex justify-between items-center bg-gray-50 dark:bg-slate-900 hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors">
-        <div class="flex items-center gap-2">
-          <span class="text-sm font-semibold text-slate-900 dark:text-white">{{$bc.Volume.Name}}</span>
-          <code class="text-xs text-slate-600 dark:text-slate-400">{{$bc.Volume.ContainerPath}}</code>
-          {{if $bc.Configs}}
-          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200">
-            {{len $bc.Configs}} backup(s)
-          </span>
-          {{end}}
-        </div>
-        <svg class="w-4 h-4 text-slate-600 dark:text-slate-400 transition-transform" :class="{ 'rotate-180': openVolumes[{{$index}}] }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-        </svg>
-      </button>
-      <div x-show="openVolumes[{{$index}}]" x-collapse class="p-4 bg-white dark:bg-slate-800">
-    {{if $bc.Configs}}
+<div class="card mt-4">
+  <div class="card-header"><strong>Backup Configurations</strong></div>
+  <div class="card-body">
+    {{range .BackupConfigs}}
+    <h6 class="mt-2">Volume: <code>{{.Volume.Name}}</code> ({{.Volume.ContainerPath}})</h6>
+    {{if .Configs}}
     <table class="table table-sm table-bordered mb-2">
       <thead><tr><th>ID</th><th>Path</th><th>Cadence (min)</th><th>Enabled</th><th></th></tr></thead>
       <tbody>
-        {{range $bc.Configs}}
+        {{range .Configs}}
         <tr>
           <td>{{.BackupConfigId}}</td>
           <td><code>{{.BackupPath}}</code></td>
@@ -489,45 +433,41 @@
     {{else}}
     <p class="text-muted small">No backup configs for this volume.</p>
     {{end}}
-    <form method="POST" action="/backup-configs/create" class="flex flex-wrap gap-2 items-end mt-3">
-      <input type="hidden" name="volume_id" value="{{$bc.Volume.VolumeId}}">
-      <div>
-        <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Path</label>
-        <input type="text" name="backup_path" class="px-2 py-1 text-sm border border-gray-300 dark:border-slate-600 rounded bg-white dark:bg-slate-800 text-slate-900 dark:text-white w-32" placeholder="." value=".">
+    <form method="POST" action="/backup-configs/create" class="row g-2 align-items-end mt-1">
+      <input type="hidden" name="volume_id" value="{{.Volume.VolumeId}}">
+      <div class="col-auto">
+        <label class="form-label small">Path</label>
+        <input type="text" name="backup_path" class="form-control form-control-sm" placeholder="." value=".">
       </div>
-      <div>
-        <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Cadence (min)</label>
-        <input type="number" name="cadence_minutes" class="px-2 py-1 text-sm border border-gray-300 dark:border-slate-600 rounded bg-white dark:bg-slate-800 text-slate-900 dark:text-white w-24" value="1440" min="1">
+      <div class="col-auto">
+        <label class="form-label small">Cadence (min)</label>
+        <input type="number" name="cadence_minutes" class="form-control form-control-sm" value="1440" min="1">
       </div>
-      <div>
-        <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Enabled</label>
-        <select name="enabled" class="px-2 py-1 text-sm border border-gray-300 dark:border-slate-600 rounded bg-white dark:bg-slate-800 text-slate-900 dark:text-white w-20">
+      <div class="col-auto">
+        <label class="form-label small">Enabled</label>
+        <select name="enabled" class="form-select form-select-sm">
           <option value="true">Yes</option>
           <option value="false">No</option>
         </select>
       </div>
-      <button type="submit" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors">Add</button>
-    </form>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-sm btn-primary">Add Backup Config</button>
       </div>
-    </div>
+    </form>
     {{end}}
   </div>
-    </div>
 </div>
 
-<!-- Danger Zone (Collapsible) -->
-<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border-2 border-red-200 dark:border-red-900 overflow-hidden mb-6">
-    <button @click="showDangerZone = !showDangerZone" class="w-full bg-red-50 dark:bg-red-900/20 px-6 py-4 border-b-2 border-red-200 dark:border-red-900 flex justify-between items-center hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors">
+<!-- Danger Zone -->
+<div x-data="{ confirmDelete: false }" class="bg-white dark:bg-slate-800 rounded-lg shadow-md border-2 border-red-200 dark:border-red-900 overflow-hidden mt-6">
+    <div class="bg-red-50 dark:bg-red-900/20 px-6 py-4 border-b-2 border-red-200 dark:border-red-900">
         <h2 class="text-lg font-semibold text-red-900 dark:text-red-200">⚠️ Danger Zone</h2>
-        <svg class="w-5 h-5 text-red-900 dark:text-red-200 transition-transform" :class="{ 'rotate-180': showDangerZone }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-        </svg>
-    </button>
-    <div x-show="showDangerZone" x-collapse x-data="{ confirmDelete: false }" class="p-6">
+    </div>
+    <div class="p-6">
         <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <div>
-                <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-1">Delete this configuration</h3>
-                <p class="text-sm text-slate-600 dark:text-slate-400">All server game configs and deployments using this configuration will be removed. This action cannot be undone.</p>
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-white mb-1">Delete this configuration</h3>
+                <p class="text-sm text-gray-600 dark:text-gray-400">All server game configs and deployments using this configuration will be removed. This action cannot be undone.</p>
             </div>
             <div class="flex-shrink-0">
                 <button x-show="!confirmDelete" @click="confirmDelete = true" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">Delete Config</button>
@@ -541,7 +481,5 @@
             </div>
         </div>
     </div>
-</div>
-
 </div>
 {{end}}

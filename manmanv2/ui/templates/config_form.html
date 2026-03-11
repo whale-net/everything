@@ -1,7 +1,7 @@
 {{define "config_form_content"}}
-<div class="card">
-    <div class="card-header">
-        <div class="card-title">{{if .Edit}}Edit Configuration{{else}}Create New Configuration{{end}}</div>
+<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md p-6 mb-6 border border-gray-200 dark:border-slate-700">
+    <div class="flex justify-between items-center mb-4 pb-4 border-b border-gray-200 dark:border-slate-700">
+        <div class="text-xl font-semibold text-slate-900 dark:text-white">{{if .Edit}}Edit Configuration{{else}}Create New Configuration{{end}}</div>
     </div>
     
     <form hx-post="/games/{{.Game.GameId}}/configs/create" hx-swap="none">

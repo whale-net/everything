@@ -1,69 +1,77 @@
 {{define "sessions_content"}}
-<h1>Sessions</h1>
+<!-- Hero Header -->
+<div class="bg-gradient-to-br from-indigo-600 to-purple-600 rounded-lg p-6 md:p-8 mb-6 shadow-lg">
+    <div class="text-white">
+        <h1 class="text-2xl md:text-3xl font-bold mb-2">Sessions</h1>
+        <p class="text-indigo-100 text-sm">Manage game server sessions and deployments</p>
+    </div>
+</div>
 
 {{if .SelectedServerID}}
-<div class="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 border-l-4 border-blue-500 dark:border-blue-400 rounded">
-    <strong class="text-blue-900 dark:text-blue-200">Server scope:</strong> 
-    <span class="text-blue-800 dark:text-blue-300">Viewing sessions for the server selected in the top navigation bar.</span>
+<div class="mb-4 p-4 bg-indigo-50 dark:bg-indigo-900/20 border-l-4 border-indigo-500 dark:border-indigo-400 rounded">
+    <strong class="text-indigo-900 dark:text-indigo-200">Server scope:</strong> 
+    <span class="text-indigo-800 dark:text-indigo-300">Viewing sessions for the server selected in the top navigation bar.</span>
 </div>
 {{end}}
 
-<div class="card">
+<!-- Filters -->
+<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-6 mb-6">
     <form method="GET" action="/sessions">
-        <div class="grid grid-4">
-            <div class="form-group">
-                <label for="status">Status Filter (comma-separated)</label>
-                <input type="text" id="status" name="status" value="{{.StatusFilter}}" placeholder="running, stopped, crashed">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div>
+                <label for="status" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Status Filter</label>
+                <input type="text" id="status" name="status" value="{{.StatusFilter}}" placeholder="running, stopped, crashed" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
             </div>
-            <div class="form-group">
-                <label for="server_game_config_id">Server Game Config</label>
-                <select id="server_game_config_id" name="server_game_config_id">
+            <div>
+                <label for="server_game_config_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Server Game Config</label>
+                <select id="server_game_config_id" name="server_game_config_id" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
                     <option value="">All configs</option>
                     {{range .SGCOptions}}
                     <option value="{{.ServerGameConfigId}}" {{if eq (printf "%d" .ServerGameConfigId) $.ServerGameConfigID}}selected{{end}}>{{.DisplayName}}</option>
                     {{end}}
                 </select>
             </div>
-            <div class="form-group" style="display: flex; align-items: center;">
-                <label style="margin-right: 0.5rem;">
-                    <input type="checkbox" name="live_only" value="1" {{if .LiveOnly}}checked{{end}}>
-                    Live only
+            <div class="flex items-end">
+                <label class="flex items-center gap-2">
+                    <input type="checkbox" name="live_only" value="1" {{if .LiveOnly}}checked{{end}} class="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500">
+                    <span class="text-sm text-slate-700 dark:text-slate-300">Live only</span>
                 </label>
             </div>
-            <div class="form-group" style="display: flex; align-items: flex-end;">
-                <button type="submit" class="btn btn-primary">Apply Filters</button>
+            <div class="flex items-end">
+                <button type="submit" class="w-full inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-md transition-colors">Apply Filters</button>
             </div>
         </div>
     </form>
 </div>
 
-<div id="start-session-panel">
-    <div class="card">
-        <div class="card-header">
-            <div class="card-title">Start Session</div>
-        </div>
+<!-- Start Session Panel -->
+<div id="start-session-panel" class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 overflow-hidden mb-6">
+    <div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900">
+        <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Start Session</h2>
+    </div>
+    <div class="p-6">
         {{if not .SelectedServerID}}
-        <div style="padding: 1rem; background: #fff3cd; border-left: 4px solid #f39c12;">
-            <strong>Select a server first</strong> using the dropdown in the top navigation bar.
+        <div class="p-4 bg-yellow-50 dark:bg-yellow-900/20 border-l-4 border-yellow-400 rounded">
+            <p class="text-sm text-yellow-900 dark:text-yellow-200"><strong>Select a server first</strong> using the dropdown in the top navigation bar.</p>
         </div>
         {{else}}
         {{if .StartWarning}}
-        <div style="margin-bottom: 1rem; padding: 0.75rem; border-left: 4px solid #f39c12; background: #fff8e1;">
-            <strong>Warning:</strong> {{.StartWarning}}
+        <div class="mb-4 p-4 bg-yellow-50 dark:bg-yellow-900/20 border-l-4 border-yellow-400 rounded">
+            <p class="text-sm text-yellow-900 dark:text-yellow-200"><strong>Warning:</strong> {{.StartWarning}}</p>
         </div>
         {{end}}
 
         {{if .StartError}}
-        <div style="margin-bottom: 1rem; padding: 0.75rem; border-left: 4px solid #e74c3c; background: #fdecea;">
-            <strong>Start failed:</strong> {{.StartError}}
+        <div class="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border-l-4 border-red-500 dark:border-red-400 rounded">
+            <p class="text-sm text-red-900 dark:text-red-200 mb-3"><strong>Start failed:</strong> {{.StartError}}</p>
             
             {{if .ShowForce}}
-            <form method="POST" action="/sessions/start" style="margin-top: 0.75rem;">
+            <form method="POST" action="/sessions/start">
                 <input type="hidden" name="server_game_config_id" value="{{.ForceSGCID}}">
                 <input type="hidden" name="server_id" value="{{.SelectedServerID}}">
                 <input type="hidden" name="force" value="true">
-                <button type="submit" class="btn btn-danger">Force Start New Session</button>
-                <p style="margin-top: 0.5rem; font-size: 0.85rem; color: #666;">
+                <button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">Force Start New Session</button>
+                <p class="mt-2 text-xs text-slate-600 dark:text-slate-400">
                     This will attempt to gracefully stop the existing container, then force stop and remove it before starting a new one.
                 </p>
             </form>
@@ -72,67 +80,71 @@
         {{end}}
 
         <form method="POST" action="/sessions/start">
-            <div class="grid grid-2">
-                <div class="form-group">
-                    <label for="start_server_game_config_id">Server Game Config</label>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <div>
+                    <label for="start_server_game_config_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Server Game Config</label>
                     <select id="start_server_game_config_id"
                             name="server_game_config_id"
                             required
                             hx-get="/api/sessions/check-active"
                             hx-trigger="change"
                             hx-target="#session-start-warning"
-                            hx-include="[name='server_id']">
+                            hx-include="[name='server_id']"
+                            class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
                         <option value="">Select a config</option>
                         {{range .SGCOptions}}
                         <option value="{{.ServerGameConfigId}}">{{.DisplayName}}</option>
                         {{end}}
                     </select>
-                    <small style="color: #666;">Only configs for the selected server</small>
-                    <div style="margin-top: 0.25rem; font-size: 0.9rem; color: #666;">
+                    <p class="mt-1 text-xs text-slate-600 dark:text-slate-400">Only configs for the selected server</p>
+                    <p class="mt-1 text-xs text-slate-600 dark:text-slate-400">
                         Need a Server Game Config first? Deploy a GameConfig to a server from the GameConfig detail page.
-                    </div>
+                    </p>
                     <div id="session-start-warning"></div>
                 </div>
             </div>
             <input type="hidden" name="server_id" value="{{.SelectedServerID}}">
-            <div style="margin-top: 0.5rem; display: flex; align-items: center; gap: 1rem;">
-                <label style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.9rem; margin: 0;">
-                    <input type="checkbox" name="force" value="true" style="margin: 0;">
-                    Force start (stop existing container if needed)
+            <div class="flex items-center gap-4">
+                <label class="flex items-center gap-2">
+                    <input type="checkbox" name="force" value="true" class="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500">
+                    <span class="text-sm text-slate-700 dark:text-slate-300">Force start (stop existing container if needed)</span>
                 </label>
-                <button type="submit" class="btn btn-success">Start Session</button>
+                <button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-green-600 hover:bg-green-700 text-white font-medium rounded-md transition-colors">Start Session</button>
             </div>
         </form>
         {{end}}
     </div>
+</div>
 
-    {{if .ServerConfigs}}
-    <div class="card">
-        <div class="card-header">
-            <div class="card-title">Game Server Containers (GSCs) Status</div>
-        </div>
-        <table>
-            <thead>
+<!-- GSC Status -->
+{{if .ServerConfigs}}
+<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 overflow-hidden mb-6">
+    <div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900">
+        <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Game Server Containers (GSCs) Status</h2>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
+            <thead class="bg-gray-50 dark:bg-slate-900">
                 <tr>
-                    <th>GSC (Server Game Config)</th>
-                    <th>Status</th>
-                    <th>Live Session</th>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">GSC (Server Game Config)</th>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Status</th>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Live Session</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody class="bg-white dark:bg-slate-800 divide-y divide-gray-200 dark:divide-slate-700">
                 {{range .ServerConfigs}}
-                <tr>
-                    <td>{{sgcName $.SGCDisplayNames .ServerGameConfigId}}</td>
-                    <td>{{.Status}}</td>
-                    <td>
+                <tr class="hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors">
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 dark:text-white">{{sgcName $.SGCDisplayNames .ServerGameConfigId}}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-700 dark:text-slate-300">{{.Status}}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm">
                         {{if $.LiveSessionByConfig}}
                             {{with index $.LiveSessionByConfig .ServerGameConfigId}}
-                                <a href="/sessions/{{.SessionId}}" class="btn btn-sm btn-primary">View Live Session</a>
+                                <a href="/sessions/{{.SessionId}}" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors">View Live Session</a>
                             {{else}}
-                                <span class="badge badge-secondary">None</span>
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300">None</span>
                             {{end}}
                         {{else}}
-                            <span class="badge badge-secondary">None</span>
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300">None</span>
                         {{end}}
                     </td>
                 </tr>
@@ -140,37 +152,50 @@
             </tbody>
         </table>
     </div>
-    {{end}}
 </div>
+{{end}}
 
+<!-- Sessions List -->
 {{if .Sessions}}
-<div class="card" style="padding: 0;">
-    <table>
-        <thead>
-            <tr>
-                <th>ID</th>
-                <th>Status</th>
-                <th>Config</th>
-                <th>Started</th>
-                <th>Ended</th>
-            </tr>
-        </thead>
-        <tbody>
-            {{range .Sessions}}
-            <tr>
-                <td><a href="/sessions/{{.SessionId}}">{{.SessionId}}</a></td>
-                <td><span class="badge {{statusBadge .Status}}">{{.Status}}</span></td>
-                <td>{{sgcName $.SGCDisplayNames .ServerGameConfigId}}</td>
-                <td>{{timeAgo .StartedAt}}</td>
-                <td>{{timeAgo .EndedAt}}</td>
-            </tr>
-            {{end}}
-        </tbody>
-    </table>
+<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
+            <thead class="bg-gray-50 dark:bg-slate-900">
+                <tr>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">ID</th>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Status</th>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Config</th>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Started</th>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Ended</th>
+                </tr>
+            </thead>
+            <tbody class="bg-white dark:bg-slate-800 divide-y divide-gray-200 dark:divide-slate-700">
+                {{range .Sessions}}
+                <tr class="hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors">
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <a href="/sessions/{{.SessionId}}" class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300">{{.SessionId}}</a>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {{statusBadge .Status}}">{{.Status}}</span>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-700 dark:text-slate-300">{{sgcName $.SGCDisplayNames .ServerGameConfigId}}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-700 dark:text-slate-300">{{timeAgo .StartedAt}}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-700 dark:text-slate-300">{{timeAgo .EndedAt}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
 </div>
 {{else}}
-<div class="empty-state">
-    <p>No sessions found for the selected filters.</p>
+<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-12">
+    <div class="text-center">
+        <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+        </svg>
+        <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No sessions found</h3>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">No sessions found for the selected filters.</p>
+    </div>
 </div>
 {{end}}
 {{end}}
