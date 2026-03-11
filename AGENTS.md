@@ -15,6 +15,19 @@ Before touching image builds, platform targets, or container tooling: read [`doc
 
 This repo uses true cross-compilation for ARM64. Breakage is **silent at build time** and only fails at runtime. If `image-integration` tests fail, **do not merge**.
 
+## Documentation Conventions
+
+Each domain follows a standard file set. Use these as your primary reference before searching.
+
+| File | Purpose | When to read it |
+|------|---------|-----------------|
+| `README.md` | Setup, local dev, and general usage | Starting work in a domain |
+| `ARCHITECTURE.md` | System design, component relationships, data flow | Before making structural or cross-cutting changes |
+| `ENV.md` | All environment variables for the domain or component | Configuring, deploying, or debugging runtime behavior |
+| `TOC.md` | Index of concepts pointing to deeper docs | Finding domain-specific docs on a topic |
+
+Not every domain has all four files — `ENV.md` is only present where runtime configuration applies, `ARCHITECTURE.md` may be omitted for simple utilities.
+
 ## Domains
 
 | Domain | Description | Reference |

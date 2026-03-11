@@ -4,8 +4,7 @@ Active game server orchestration platform. Split-plane architecture: cloud contr
 
 ## Start Here
 
-- [README.md](README.md) — Local development setup, links, and getting started
-- [QUICK-START.md](QUICK-START.md) — 5-minute setup guide
+- [README.md](README.md) — Local development setup, quick start, and workflow
 - [ABOUT.md](ABOUT.md) — What ManManV2 is and why it exists
 - [ARCHITECTURE.md](ARCHITECTURE.md) — Split-plane design, component relationships, data flow
 
