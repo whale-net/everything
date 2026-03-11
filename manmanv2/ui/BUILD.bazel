@@ -24,6 +24,12 @@ go_library(
         "//libs/go/htmxauth",
         "//libs/go/htmxbase",
         "//manmanv2/protos:manmanpb",
+        "//manmanv2/ui/pages/configs",
+        "//manmanv2/ui/pages/games",
+        "//manmanv2/ui/pages/servers",
+        "//manmanv2/ui/pages/sessions",
+        "//manmanv2/ui/pages/workshop",
+        "//manmanv2/ui/types",
         "@org_golang_google_grpc//:grpc",
     ],
 )

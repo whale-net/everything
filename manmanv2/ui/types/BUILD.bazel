@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "props.go",
         "page_data.go",
+        "configs.go",
         "games.go",
         "servers.go",
         "sessions.go",
