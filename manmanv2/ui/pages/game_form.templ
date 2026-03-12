@@ -1,0 +1,116 @@
+package pages
+
+import (
+	"strings"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+)
+
+templ GameForm(layout components.LayoutData, game *manmanpb.Game, edit bool) {
+	@components.Layout(layout) {
+		<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md p-6 mb-6 border border-gray-200 dark:border-slate-700">
+			<div class="flex justify-between items-center mb-4 pb-4 border-b border-gray-200 dark:border-slate-700">
+				<div class="text-xl font-semibold text-slate-900 dark:text-white">
+					if edit {
+						Edit Game
+					} else {
+						Create New Game
+					}
+				</div>
+			</div>
+			<form hx-post="/games/create" hx-swap="none">
+				<div class="mb-4">
+					<label for="name" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Name *</label>
+					<input
+						type="text"
+						id="name"
+						name="name"
+						value={ gameValue(game, "name") }
+						required
+						class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+					/>
+				</div>
+				<div class="mb-4">
+					<label for="steam_app_id" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Steam App ID</label>
+					<input
+						type="text"
+						id="steam_app_id"
+						name="steam_app_id"
+						value={ gameValue(game, "steam_app_id") }
+						placeholder="Optional"
+						class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+					/>
+				</div>
+				<div class="mb-4">
+					<label for="genre" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Genre</label>
+					<input
+						type="text"
+						id="genre"
+						name="genre"
+						value={ gameValue(game, "genre") }
+						placeholder="e.g., Survival, RPG, FPS"
+						class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+					/>
+				</div>
+				<div class="mb-4">
+					<label for="publisher" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Publisher</label>
+					<input
+						type="text"
+						id="publisher"
+						name="publisher"
+						value={ gameValue(game, "publisher") }
+						class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+					/>
+				</div>
+				<div class="mb-4">
+					<label for="tags" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Tags (comma-separated)</label>
+					<input
+						type="text"
+						id="tags"
+						name="tags"
+						value={ gameValue(game, "tags") }
+						placeholder="e.g., multiplayer, sandbox, open-world"
+						class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+					/>
+				</div>
+				<div class="flex gap-2">
+					<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-green-600 hover:bg-green-700 text-white font-medium rounded-md transition-colors">
+						if edit {
+							Update Game
+						} else {
+							Create Game
+						}
+					</button>
+					<a href="/games" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-slate-600 hover:bg-slate-700 text-white font-medium rounded-md transition-colors">
+						Cancel
+					</a>
+				</div>
+			</form>
+		</div>
+	}
+}
+
+func gameValue(game *manmanpb.Game, field string) string {
+	if game == nil {
+		return ""
+	}
+	switch field {
+	case "name":
+		return game.Name
+	case "steam_app_id":
+		return game.SteamAppId
+	case "genre":
+		if game.Metadata != nil {
+			return game.Metadata.Genre
+		}
+	case "publisher":
+		if game.Metadata != nil {
+			return game.Metadata.Publisher
+		}
+	case "tags":
+		if game.Metadata != nil {
+			return strings.Join(game.Metadata.Tags, ", ")
+		}
+	}
+	return ""
+}

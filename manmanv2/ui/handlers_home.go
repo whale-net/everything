@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/manmanv2/ui/components"
 	"github.com/whale-net/everything/manmanv2/ui/pages"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
@@ -19,13 +20,9 @@ type HomePageData struct {
 	User   *htmxauth.UserInfo
 }
 
-// DashboardSummaryData holds dashboard summary statistics
-type DashboardSummaryData struct {
-	TotalServers   int
-	OnlineServers  int
-	TotalGames     int
-	ActiveSessions int
-}
+// DashboardSummaryData is now in components package
+// ActiveSessionInfo is now in components package
+// PortInfo is now in components package
 
 func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
@@ -47,7 +44,6 @@ func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
 func (app *App) handleDashboardSummary(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
 
-	// Fetch data from gRPC API
 	servers, err := app.grpc.ListServers(ctx)
 	if err != nil {
 		log.Printf("Error fetching servers: %v", err)
@@ -62,14 +58,13 @@ func (app *App) handleDashboardSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessions, err := app.grpc.ListSessions(ctx, true) // live only
+	sessions, err := app.grpc.ListSessions(ctx, true)
 	if err != nil {
 		log.Printf("Error fetching sessions: %v", err)
 		http.Error(w, "Failed to fetch sessions", http.StatusInternalServerError)
 		return
 	}
 
-	// Count online servers
 	onlineServers := 0
 	for _, server := range servers {
 		if server.Status == "online" {
@@ -77,52 +72,32 @@ func (app *App) handleDashboardSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	data := DashboardSummaryData{
+	data := components.DashboardSummaryData{
 		TotalServers:   len(servers),
 		OnlineServers:  onlineServers,
 		TotalGames:     len(games),
 		ActiveSessions: len(sessions),
 	}
 
-	if err := templates.ExecuteTemplate(w, "dashboard_summary.html", data); err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-	}
+	components.DashboardSummary(data).Render(r.Context(), w)
 }
 
 // PortInfo holds resolved port binding data for templates.
-type PortInfo struct {
-	HostPort int32
-	Protocol string
-}
+type PortInfo = components.PortInfo
 
 // ActiveSessionInfo holds enriched session data for the dashboard.
-type ActiveSessionInfo struct {
-	SessionID  int64
-	Status     string
-	Uptime     string
-	ServerName string
-	GameName   string
-	ConfigName string
-	Ports      []PortInfo
-}
-
-// DashboardSessionsData holds the list of active sessions for the dashboard partial.
-type DashboardSessionsData struct {
-	Sessions []ActiveSessionInfo
-}
+type ActiveSessionInfo = components.ActiveSessionInfo
 
 func (app *App) handleDashboardSessions(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
 
-	sessions, err := app.grpc.ListSessions(ctx, true) // live only
+	sessions, err := app.grpc.ListSessions(ctx, true)
 	if err != nil {
 		log.Printf("Error fetching sessions: %v", err)
 		http.Error(w, "Failed to fetch sessions", http.StatusInternalServerError)
 		return
 	}
 
-	// Build lookup maps for related entities
 	servers, err := app.grpc.ListServers(ctx)
 	if err != nil {
 		log.Printf("Error fetching servers: %v", err)
@@ -133,7 +108,6 @@ func (app *App) handleDashboardSessions(w http.ResponseWriter, r *http.Request) 
 		serverByID[s.ServerId] = s
 	}
 
-	// Resolve SGCs by fetching configs per server
 	sgcByID := make(map[int64]*manmanpb.ServerGameConfig)
 	for _, server := range servers {
 		sgcs, err := app.grpc.ListServerGameConfigs(ctx, server.ServerId)
@@ -146,7 +120,6 @@ func (app *App) handleDashboardSessions(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Resolve game configs and games
 	gameConfigByID := make(map[int64]*manmanpb.GameConfig)
 	gameByID := make(map[int64]*manmanpb.Game)
 	for _, sgc := range sgcByID {
@@ -168,7 +141,6 @@ func (app *App) handleDashboardSessions(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Build enriched session list
 	var enriched []ActiveSessionInfo
 	for _, s := range sessions {
 		info := ActiveSessionInfo{
@@ -208,11 +180,7 @@ func (app *App) handleDashboardSessions(w http.ResponseWriter, r *http.Request) 
 		enriched = append(enriched, info)
 	}
 
-	data := DashboardSessionsData{Sessions: enriched}
-	if err := templates.ExecuteTemplate(w, "dashboard_sessions.html", data); err != nil {
-		log.Printf("Error rendering dashboard sessions: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-	}
+	components.DashboardSessions(enriched).Render(r.Context(), w)
 }
 
 func computeUptime(startedAt int64) string {
@@ -239,20 +207,18 @@ func computeUptime(startedAt int64) string {
 func (app *App) handleConfigStrategiesDocs(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
 
-	data := HomePageData{
-		Title:  "Configuration Strategies",
-		Active: "docs",
-		User:   user,
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Configuration Strategies", URL: "/config-strategies"},
 	}
 
-	layoutData, err := app.buildLayoutData(r, data.Title, data.Active, user)
+	layoutData, err := app.buildTemplLayoutData(r, "Configuration Strategies", "docs", user, breadcrumbs)
 	if err != nil {
 		log.Printf("Error building layout data: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	if err := renderPage(w, "content", data, layoutData); err != nil {
+	if err := RenderTempl(w, r, "Configuration Strategies", pages.ConfigStrategiesDocs(layoutData)); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}

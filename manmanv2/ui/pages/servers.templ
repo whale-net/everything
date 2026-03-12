@@ -1,0 +1,80 @@
+package pages
+
+import (
+	"fmt"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+)
+
+templ Servers(layout components.LayoutData, servers []*manmanpb.Server) {
+	@components.Layout(layout) {
+		@components.HeroHeader("Servers", "Servers self-register via the host manager and appear here automatically when online")
+		<div class="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-md p-4 mb-6">
+			<p class="text-sm text-indigo-800 dark:text-indigo-200">
+				<a href="/games" class="font-medium underline hover:text-indigo-900 dark:hover:text-indigo-100">Configure game deployments</a>
+				<span> to run on these servers.</span>
+			</p>
+		</div>
+		if len(servers) > 0 {
+			<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 overflow-hidden">
+				<div class="overflow-x-auto">
+					<table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
+						<thead class="bg-gray-50 dark:bg-slate-900">
+							<tr>
+								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Name</th>
+								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Status</th>
+								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Environment</th>
+								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Last Seen</th>
+								<th scope="col" class="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Actions</th>
+							</tr>
+						</thead>
+						<tbody class="bg-white dark:bg-slate-800 divide-y divide-gray-200 dark:divide-slate-700">
+							for _, server := range servers {
+								<tr class="hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors">
+									<td class="px-6 py-4 whitespace-nowrap">
+										<a href={ templ.URL(fmt.Sprintf("/servers/%d", server.ServerId)) } class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300">
+											{ server.Name }
+										</a>
+									</td>
+									<td class="px-6 py-4 whitespace-nowrap">
+										@components.Badge(serverStatusVariant(server.Status), server.Status)
+									</td>
+									<td class="px-6 py-4 whitespace-nowrap text-sm text-slate-700 dark:text-slate-300">
+										if server.Environment != "" {
+											{ server.Environment }
+										} else {
+											-
+										}
+									</td>
+									<td class="px-6 py-4 whitespace-nowrap text-sm text-slate-700 dark:text-slate-300">{ timeAgo(server.LastSeen) }</td>
+									<td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+										@components.ButtonLink(components.ButtonPrimary, components.ButtonSmall, "View", fmt.Sprintf("/servers/%d", server.ServerId))
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		} else {
+			@components.EmptyState(
+				"No servers found",
+				"Servers will appear here when they register with the control plane. To add a server, run the host manager on your server hardware with the control API URL configured.",
+				"",
+				"",
+			)
+		}
+	}
+}
+
+func serverStatusVariant(status string) string {
+	switch status {
+	case "online":
+		return "success"
+	case "offline":
+		return "secondary"
+	default:
+		return "secondary"
+	}
+}
+

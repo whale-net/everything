@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	"github.com/whale-net/everything/manmanv2/ui/pages"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
@@ -74,13 +76,14 @@ type WorkshopLibraryDetailPageData struct {
 
 // WorkshopInstallationsPageData holds data for installations page
 type WorkshopInstallationsPageData struct {
-	Title           string
-	Active          string
-	User            *htmxauth.UserInfo
-	Config          *manmanpb.GameConfig
-	Installations   []*manmanpb.WorkshopInstallation
-	AvailableAddons []*manmanpb.WorkshopAddon
+	Title              string
+	Active             string
+	User               *htmxauth.UserInfo
+	Config             *manmanpb.GameConfig
+	Installations      []*manmanpb.WorkshopInstallation
+	AvailableLibraries []*manmanpb.WorkshopLibrary
 }
+
 
 func (app *App) handleWorkshopLibrary(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
@@ -339,39 +342,27 @@ func (app *App) handleWorkshopInstallations(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	addons, err := app.grpc.ListWorkshopAddons(ctx, 0, 200, config.GameId)
+	libraries, err := app.grpc.ListLibraries(ctx, 200, 0, config.GameId)
 	if err != nil {
-		log.Printf("Error fetching addons: %v", err)
-		http.Error(w, "Failed to fetch addons", http.StatusInternalServerError)
+		log.Printf("Error fetching libraries: %v", err)
+		http.Error(w, "Failed to fetch libraries", http.StatusInternalServerError)
 		return
 	}
 
-	data := WorkshopInstallationsPageData{
-		Title:           "Workshop Installations",
-		Active:          "workshop",
-		User:            user,
-		Config:          config,
-		Installations:   installations,
-		AvailableAddons: addons,
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Games", URL: "/games"},
+		{Label: fmt.Sprintf("Config %d", config.ConfigId), URL: fmt.Sprintf("/games/%d/configs/%d", config.GameId, config.ConfigId)},
+		{Label: "Workshop Installations", URL: ""},
 	}
 
-	servers, err := app.grpc.ListServers(ctx)
+	layoutData, err := app.buildTemplLayoutData(r, "Workshop Installations", "Workshop", user, breadcrumbs)
 	if err != nil {
-		log.Printf("Error fetching servers: %v", err)
-		servers = []*manmanpb.Server{}
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
 	}
 
-	selectedServer := app.getSelectedServer(r, servers)
-
-	layoutData := LayoutData{
-		Title:          data.Title,
-		Active:         data.Active,
-		User:           data.User,
-		Servers:        servers,
-		SelectedServer: selectedServer,
-	}
-
-	if err := renderPage(w, "workshop_installations_content", data, layoutData); err != nil {
+	if err := RenderTempl(w, r, "Workshop Installations", pages.WorkshopInstallations(layoutData, config, installations, libraries)); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}

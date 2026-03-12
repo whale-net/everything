@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	"github.com/whale-net/everything/manmanv2/ui/pages"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
@@ -52,20 +55,18 @@ func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	data := GamesPageData{
-		Title:  "Games",
-		Active: "games",
-		User:   user,
-		Games:  games,
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Games", URL: "/games"},
 	}
 
-	layoutData := LayoutData{
-		Title:  data.Title,
-		Active: data.Active,
-		User:   data.User,
+	layoutData, err := app.buildTemplLayoutData(r, "Games", "Games", user, breadcrumbs)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
 	}
 
-	if err := renderPage(w, "games_content", data, layoutData); err != nil {
+	if err := RenderTempl(w, r, "Games", pages.Games(layoutData, games)); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
@@ -74,23 +75,23 @@ func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 func (app *App) handleGameNew(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
 
-	data := GameFormData{
-		Game: &manmanpb.Game{
-			Metadata: &manmanpb.GameMetadata{},
-		},
-		Edit: false,
-		Title: "Create Game",
-		Active: "games",
-		User: user,
+	game := &manmanpb.Game{
+		Metadata: &manmanpb.GameMetadata{},
 	}
 
-	layoutData := LayoutData{
-		Title:  data.Title,
-		Active: data.Active,
-		User:   data.User,
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Games", URL: "/games"},
+		{Label: "Create", URL: "/games/new"},
 	}
 
-	if err := renderPage(w, "game_form_content", data, layoutData); err != nil {
+	layoutData, err := app.buildTemplLayoutData(r, "Create Game", "Games", user, breadcrumbs)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := RenderTempl(w, r, "Create Game", pages.GameForm(layoutData, game, false)); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
@@ -587,24 +588,20 @@ func (app *App) handleGameConfigNew(w http.ResponseWriter, r *http.Request, game
 	
 	user := htmxauth.GetUser(r.Context())
 
-	data := GameConfigFormData{
-		Game: game,
-		Config: &manmanpb.GameConfig{
-			GameId: gameID,
-		},
-		Edit: false,
-		Title: "Create Configuration",
-		Active: "games",
-		User: user,
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Games", URL: "/games"},
+		{Label: game.Name, URL: fmt.Sprintf("/games/%d", game.GameId)},
+		{Label: "Create Config", URL: ""},
 	}
 
-	layoutData := LayoutData{
-		Title:  data.Title,
-		Active: data.Active,
-		User:   data.User,
+	layoutData, err := app.buildTemplLayoutData(r, "Create Configuration", "Games", user, breadcrumbs)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
 	}
 
-	if err := renderPage(w, "config_form_content", data, layoutData); err != nil {
+	if err := RenderTempl(w, r, "Create Configuration", pages.ConfigForm(layoutData, game, nil, false)); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
