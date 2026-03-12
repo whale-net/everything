@@ -369,15 +369,9 @@ func (app *App) handleSGCAvailableLibraries(w http.ResponseWriter, r *http.Reque
 		presetMap[p.PresetId] = p
 	}
 
-	type EnrichedLibrary struct {
-		*manmanpb.WorkshopLibrary
-		PresetName string
-		PresetPath string
-	}
-
-	enriched := make([]*EnrichedLibrary, len(available))
+	enriched := make([]*components.EnrichedLibrary, len(available))
 	for i, lib := range available {
-		e := &EnrichedLibrary{WorkshopLibrary: lib}
+		e := &components.EnrichedLibrary{WorkshopLibrary: lib}
 		if lib.PresetId != 0 {
 			if preset := presetMap[lib.PresetId]; preset != nil {
 				e.PresetName = preset.Name
@@ -389,7 +383,7 @@ func (app *App) handleSGCAvailableLibraries(w http.ResponseWriter, r *http.Reque
 
 	type AvailableLibrariesData struct {
 		SGCID     int64
-		Libraries []*EnrichedLibrary
+		Libraries []*components.EnrichedLibrary
 		Presets   []*manmanpb.GameAddonPathPreset
 		Volumes   []*manmanpb.GameConfigVolume
 	}
@@ -401,10 +395,7 @@ func (app *App) handleSGCAvailableLibraries(w http.ResponseWriter, r *http.Reque
 		Volumes:   volumes,
 	}
 
-	if err := renderTemplate(w, "sgc_available_libraries_partial", data); err != nil {
-		log.Printf("Error rendering available libraries partial: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-	}
+	RenderTempl(w, r, "", components.SGCAvailableLibraries(data.SGCID, data.Libraries, data.Presets, data.Volumes))
 }
 
 func (app *App) handleSGCRemoveLibrary(w http.ResponseWriter, r *http.Request) {
