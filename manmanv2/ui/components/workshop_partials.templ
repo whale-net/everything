@@ -1,0 +1,87 @@
+package components
+
+import (
+	"fmt"
+	"github.com/whale-net/everything/manmanv2/protos"
+)
+
+type WorkshopAvailableAddonsProps struct {
+	Addons    []*manmanpb.WorkshopAddon
+	LibraryID int64
+}
+
+templ WorkshopAvailableAddons(props WorkshopAvailableAddonsProps) {
+	if len(props.Addons) > 0 {
+		for _, addon := range props.Addons {
+			<div class="flex items-center gap-3 p-3 border-b border-gray-200 dark:border-slate-700 last:border-b-0 hover:bg-gray-50 dark:hover:bg-slate-700/50 transition-colors">
+				<div class="flex-1 min-w-0">
+					<div class="flex items-center gap-2 mb-1">
+						<span class="font-medium text-slate-900 dark:text-white">{ addon.Name }</span>
+						if addon.IsCollection {
+							@Badge("primary", "Collection")
+						} else {
+							@Badge("secondary", "Addon")
+						}
+					</div>
+					<div class="text-sm text-slate-600 dark:text-slate-400 font-mono">
+						{ addon.WorkshopId }
+						if addon.FileSizeBytes > 0 {
+							· { formatFileSize(addon.FileSizeBytes) }
+						}
+					</div>
+				</div>
+				<form method="POST" action="/workshop/add-addon-to-library" class="flex-shrink-0">
+					<input type="hidden" name="library_id" value={ formatInt64(props.LibraryID) }/>
+					<input type="hidden" name="addon_id" value={ formatInt64(addon.AddonId) }/>
+					<button type="submit" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors">
+						Add
+					</button>
+				</form>
+			</div>
+		}
+	} else {
+		<div class="text-center py-8 text-sm text-slate-500 dark:text-slate-400">
+			No available addons found.
+		</div>
+	}
+}
+
+type WorkshopAvailableLibrariesProps struct {
+	Libraries []*manmanpb.WorkshopLibrary
+	LibraryID int64
+}
+
+templ WorkshopAvailableLibraries(props WorkshopAvailableLibrariesProps) {
+	if len(props.Libraries) > 0 {
+		for _, library := range props.Libraries {
+			<div class="flex items-center gap-3 p-3 border-b border-gray-200 dark:border-slate-700 last:border-b-0 hover:bg-gray-50 dark:hover:bg-slate-700/50 transition-colors">
+				<div class="flex-1 min-w-0">
+					<div class="font-medium text-slate-900 dark:text-white mb-1">{ library.Name }</div>
+					if library.Description != "" {
+						<div class="text-sm text-slate-600 dark:text-slate-400">{ library.Description }</div>
+					}
+				</div>
+				<form method="POST" action="/workshop/add-library-reference" class="flex-shrink-0">
+					<input type="hidden" name="parent_library_id" value={ formatInt64(props.LibraryID) }/>
+					<input type="hidden" name="child_library_id" value={ formatInt64(library.LibraryId) }/>
+					<button type="submit" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors">
+						Include
+					</button>
+				</form>
+			</div>
+		}
+	} else {
+		<div class="text-center py-8 text-sm text-slate-500 dark:text-slate-400">
+			No other libraries available.
+		</div>
+	}
+}
+
+func formatFileSize(bytes int64) string {
+	mb := float64(bytes) / 1048576.0
+	return fmt.Sprintf("%.1f MB", mb)
+}
+
+func formatInt64(n int64) string {
+	return fmt.Sprintf("%d", n)
+}

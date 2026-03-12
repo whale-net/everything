@@ -635,16 +635,15 @@ func (app *App) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 }
 
 // AvailableAddonsData holds data for the HTMX available addons partial
-type AvailableAddonsData struct {
-	Addons    []*manmanpb.WorkshopAddon
-	LibraryID int64
-}
-
-// AvailableLibrariesData holds data for the HTMX available libraries partial
-type AvailableLibrariesData struct {
-	Libraries []*manmanpb.WorkshopLibrary
-	LibraryID int64
-}
+// LEGACY: These types are no longer used (migrated to templ components)
+// type AvailableAddonsData struct {
+// 	Addons    []*manmanpb.WorkshopAddon
+// 	LibraryID int64
+// }
+// type AvailableLibrariesData struct {
+// 	Libraries []*manmanpb.WorkshopLibrary
+// 	LibraryID int64
+// }
 
 func (app *App) handleAvailableAddons(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
@@ -683,11 +682,11 @@ func (app *App) handleAvailableAddons(w http.ResponseWriter, r *http.Request) {
 		available = append(available, a)
 	}
 
-	data := AvailableAddonsData{Addons: available, LibraryID: libraryID}
 	w.Header().Set("Content-Type", "text/html")
-	if err := renderTemplate(w, "workshop_available_addons_partial", data); err != nil {
-		log.Printf("Error rendering partial: %v", err)
-	}
+	RenderTempl(w, r, "", components.WorkshopAvailableAddons(components.WorkshopAvailableAddonsProps{
+		Addons:    available,
+		LibraryID: libraryID,
+	}))
 }
 
 func (app *App) handleAvailableLibraries(w http.ResponseWriter, r *http.Request) {
@@ -727,11 +726,11 @@ func (app *App) handleAvailableLibraries(w http.ResponseWriter, r *http.Request)
 		available = append(available, lib)
 	}
 
-	data := AvailableLibrariesData{Libraries: available, LibraryID: libraryID}
 	w.Header().Set("Content-Type", "text/html")
-	if err := renderTemplate(w, "workshop_available_libraries_partial", data); err != nil {
-		log.Printf("Error rendering partial: %v", err)
-	}
+	RenderTempl(w, r, "", components.WorkshopAvailableLibraries(components.WorkshopAvailableLibrariesProps{
+		Libraries: available,
+		LibraryID: libraryID,
+	}))
 }
 
 func (app *App) handleDeleteAddon(w http.ResponseWriter, r *http.Request) {
