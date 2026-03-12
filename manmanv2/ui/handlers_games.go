@@ -237,27 +237,33 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	data := GameDetailPageData{
-		Title:       game.Name,
-		Active:      "games",
-		User:        user,
+	// Convert volume map to slice
+	var volumeSlice []*manmanpb.GameConfigVolume
+	for _, vol := range volumeMap {
+		volumeSlice = append(volumeSlice, vol)
+	}
+
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Games", URL: "/games"},
+		{Label: game.Name, URL: ""},
+	}
+	layoutData, err := app.buildTemplLayoutData(r, game.Name, "games", user, breadcrumbs)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Failed to build layout", http.StatusInternalServerError)
+		return
+	}
+
+	data := pages.GameDetailPageData{
+		Layout:      layoutData,
 		Game:        game,
+		PathPresets: pathPresets,
+		Volumes:     volumeSlice,
 		Configs:     configs,
 		SgcCounts:   sgcCounts,
-		PathPresets: pathPresets,
-		Volumes:     volumeMap,
 	}
 
-	layoutData := LayoutData{
-		Title:  data.Title,
-		Active: data.Active,
-		User:   data.User,
-	}
-
-	if err := renderPage(w, "game_detail_content", data, layoutData); err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-	}
+	RenderTempl(w, r, game.Name, pages.GameDetail(data))
 }
 
 func (app *App) handleGameEdit(w http.ResponseWriter, r *http.Request, gameIDStr string) {
@@ -473,43 +479,53 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 
 	deployError := strings.TrimSpace(r.URL.Query().Get("deploy_error"))
 
-	// Fetch backup configs per volume
-	var backupConfigsByVolume []*BackupConfigsForVolume
+	// Convert backup configs to templ format
+	var templBackupConfigs []pages.BackupConfigGroup
 	for _, vol := range volumes {
 		cfgs, err := app.grpc.ListBackupConfigs(ctx, vol.VolumeId)
 		if err != nil {
 			log.Printf("Warning: failed to fetch backup configs for volume %d: %v", vol.VolumeId, err)
 			cfgs = []*manmanpb.BackupConfig{}
 		}
-		backupConfigsByVolume = append(backupConfigsByVolume, &BackupConfigsForVolume{
+		templBackupConfigs = append(templBackupConfigs, pages.BackupConfigGroup{
 			Volume:  vol,
 			Configs: cfgs,
 		})
 	}
 
-	data := GameConfigDetailPageData{
-		Title:         config.Name + " - " + game.Name,
-		Active:        "games",
-		User:          user,
+	// Convert deployments to templ format
+	var templDeployments []pages.ServerGameConfigView
+	for _, dep := range deployments {
+		templDeployments = append(templDeployments, pages.ServerGameConfigView{
+			Server: dep.Server,
+			Config: dep.Config,
+		})
+	}
+
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Games", URL: "/games"},
+		{Label: game.Name, URL: fmt.Sprintf("/games/%d", game.GameId)},
+		{Label: config.Name, URL: ""},
+	}
+	layoutData, err := app.buildTemplLayoutData(r, config.Name+" - "+game.Name, "games", user, breadcrumbs)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	pageData := pages.ConfigDetailPageData{
+		Layout:        layoutData,
 		Game:          game,
 		Config:        config,
 		Servers:       servers,
-		Deployments:   deployments,
+		Deployments:   templDeployments,
 		DeployError:   deployError,
 		Volumes:       volumes,
-		BackupConfigs: backupConfigsByVolume,
+		BackupConfigs: templBackupConfigs,
 	}
 
-	layoutData := LayoutData{
-		Title:  data.Title,
-		Active: data.Active,
-		User:   data.User,
-	}
-
-	if err := renderPage(w, "config_detail_content", data, layoutData); err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-	}
+	RenderTempl(w, r, config.Name+" - "+game.Name, pages.ConfigDetail(pageData))
 }
 
 func (app *App) handleGameConfigDeploy(w http.ResponseWriter, r *http.Request, gameIDStr, configIDStr string) {

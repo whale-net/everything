@@ -110,14 +110,6 @@ func (app *App) handleWorkshopLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	servers, err := app.grpc.ListServers(ctx)
-	if err != nil {
-		log.Printf("Error fetching servers: %v", err)
-		servers = []*manmanpb.Server{}
-	}
-
-	selectedServer := app.getSelectedServer(r, servers)
-
 	// Sort addons by UpdatedAt descending for recent addons
 	sorted := make([]*manmanpb.WorkshopAddon, len(addons))
 	copy(sorted, addons)
@@ -129,30 +121,25 @@ func (app *App) handleWorkshopLibrary(w http.ResponseWriter, r *http.Request) {
 		recentAddons = recentAddons[:8]
 	}
 
-	data := WorkshopLibraryPageData{
-		Title:          "Workshop Library",
-		Active:         "workshop",
-		User:           user,
-		Games:          games,
-		Addons:         addons,
-		RecentAddons:   recentAddons,
-		Libraries:      libraries,
-		Servers:        servers,
-		SelectedServer: selectedServer,
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Workshop", URL: "/workshop/library"},
+	}
+	layoutData, err := app.buildTemplLayoutData(r, "Workshop Library", "workshop", user, breadcrumbs)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Failed to build layout", http.StatusInternalServerError)
+		return
 	}
 
-	layoutData := LayoutData{
-		Title:          data.Title,
-		Active:         data.Active,
-		User:           data.User,
-		Servers:        servers,
-		SelectedServer: selectedServer,
+	pageData := pages.WorkshopLibraryPageData{
+		Layout:       layoutData,
+		Games:        games,
+		Libraries:    libraries,
+		RecentAddons: recentAddons,
+		Addons:       addons,
 	}
 
-	if err := renderPage(w, "workshop_library_content", data, layoutData); err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Failed to render page", http.StatusInternalServerError)
-	}
+	RenderTempl(w, r, "Workshop Library", pages.WorkshopLibrary(pageData))
 }
 
 func (app *App) handleWorkshopSearch(w http.ResponseWriter, r *http.Request) {
@@ -187,35 +174,28 @@ func (app *App) handleWorkshopSearch(w http.ResponseWriter, r *http.Request) {
 		libraries = []*manmanpb.WorkshopLibrary{}
 	}
 
-	servers, _ := app.grpc.ListServers(ctx)
-	selectedServer := app.getSelectedServer(r, servers)
-
-	data := WorkshopSearchPageData{
-		Title:          "Workshop Search",
-		Active:         "workshop",
-		User:           user,
-		Games:          games,
-		Addons:         addons,
-		Libraries:      libraries,
-		Servers:        servers,
-		SelectedServer: selectedServer,
-		Query:          query,
-		GameID:         gameID,
-		TypeFilter:     typeFilter,
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Workshop", URL: "/workshop/library"},
+		{Label: "Search", URL: "/workshop/search"},
+	}
+	layoutData, err := app.buildTemplLayoutData(r, "Workshop Search", "workshop", user, breadcrumbs)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Failed to build layout", http.StatusInternalServerError)
+		return
 	}
 
-	layoutData := LayoutData{
-		Title:          data.Title,
-		Active:         data.Active,
-		User:           data.User,
-		Servers:        servers,
-		SelectedServer: selectedServer,
+	data := pages.WorkshopSearchPageData{
+		Layout:     layoutData,
+		Query:      query,
+		GameID:     gameID,
+		TypeFilter: typeFilter,
+		Games:      games,
+		Libraries:  libraries,
+		Addons:     addons,
 	}
 
-	if err := renderPage(w, "workshop_search_content", data, layoutData); err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Failed to render page", http.StatusInternalServerError)
-	}
+	RenderTempl(w, r, "Workshop Search", pages.WorkshopSearch(data))
 }
 
 func (app *App) handleWorkshopAddonDetail(w http.ResponseWriter, r *http.Request) {
@@ -241,9 +221,8 @@ func (app *App) handleWorkshopAddonDetail(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	games, _ := app.grpc.ListGames(ctx)
-
 	var game *manmanpb.Game
+	games, _ := app.grpc.ListGames(ctx)
 	for _, g := range games {
 		if g.GameId == addon.GameId {
 			game = g
@@ -277,39 +256,32 @@ func (app *App) handleWorkshopAddonDetail(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	servers, _ := app.grpc.ListServers(ctx)
-	selectedServer := app.getSelectedServer(r, servers)
-
 	addonName := addon.Name
 	if addonName == "" {
 		addonName = "Addon " + addonIDStr
 	}
 
-	data := WorkshopAddonDetailPageData{
-		Title:               addonName,
-		Active:              "workshop",
-		User:                user,
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Workshop", URL: "/workshop/library"},
+		{Label: "Addons", URL: "/workshop/search?type=addon"},
+		{Label: addonName, URL: ""},
+	}
+	layoutData, err := app.buildTemplLayoutData(r, addonName, "workshop", user, breadcrumbs)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Failed to build layout", http.StatusInternalServerError)
+		return
+	}
+
+	data := pages.WorkshopAddonDetailPageData{
+		Layout:              layoutData,
 		Addon:               addon,
 		Game:                game,
-		Games:               games,
 		ContainingLibraries: containingLibraries,
 		AvailableLibraries:  availableLibraries,
-		Servers:             servers,
-		SelectedServer:      selectedServer,
 	}
 
-	layoutData := LayoutData{
-		Title:          data.Title,
-		Active:         data.Active,
-		User:           data.User,
-		Servers:        servers,
-		SelectedServer: selectedServer,
-	}
-
-	if err := renderPage(w, "workshop_addon_detail_content", data, layoutData); err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Failed to render page", http.StatusInternalServerError)
-	}
+	RenderTempl(w, r, addonName, pages.WorkshopAddonDetail(data))
 }
 
 func (app *App) handleWorkshopInstallations(w http.ResponseWriter, r *http.Request) {
@@ -836,32 +808,6 @@ func (app *App) handleLibraryDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Get child libraries
-	childLibraries, err := app.grpc.GetChildLibraries(ctx, libraryID)
-	if err != nil {
-		log.Printf("Error fetching child libraries: %v", err)
-		childLibraries = []*manmanpb.WorkshopLibrary{}
-	}
-
-	// Build set of child library IDs
-	isChild := make(map[int64]bool)
-	for _, cl := range childLibraries {
-		isChild[cl.LibraryId] = true
-	}
-
-	// Get available libraries for nesting (exclude self and already-nested)
-	allLibraries, err := app.grpc.ListLibraries(ctx, 200, 0, library.GameId)
-	if err != nil {
-		log.Printf("Error fetching available libraries: %v", err)
-		allLibraries = []*manmanpb.WorkshopLibrary{}
-	}
-	var availableLibraries []*manmanpb.WorkshopLibrary
-	for _, lib := range allLibraries {
-		if lib.LibraryId != libraryID && !isChild[lib.LibraryId] {
-			availableLibraries = append(availableLibraries, lib)
-		}
-	}
-
 	games, _ := app.grpc.ListGames(ctx)
 	var game *manmanpb.Game
 	for _, g := range games {
@@ -871,44 +817,27 @@ func (app *App) handleLibraryDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Fetch presets for this game
-	presets, err := app.grpc.ListAddonPathPresets(ctx, library.GameId)
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Workshop", URL: "/workshop/library"},
+		{Label: library.Name, URL: ""},
+	}
+	layoutData, err := app.buildTemplLayoutData(r, library.Name, "workshop", user, breadcrumbs)
 	if err != nil {
-		log.Printf("Warning: failed to fetch presets: %v", err)
-		presets = []*manmanpb.GameAddonPathPreset{}
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Failed to build layout", http.StatusInternalServerError)
+		return
 	}
 
-	servers, _ := app.grpc.ListServers(ctx)
-	selectedServer := app.getSelectedServer(r, servers)
-
-	data := WorkshopLibraryDetailPageData{
-		Title:              library.Name,
-		Active:             "workshop",
-		User:               user,
-		Library:            library,
-		Game:               game,
-		Games:              games,
-		Addons:             addons,
-		AvailableAddons:    availableAddons,
-		ChildLibraries:     childLibraries,
-		AvailableLibraries: availableLibraries,
-		Presets:            presets,
-		Servers:            servers,
-		SelectedServer:     selectedServer,
+	data := pages.WorkshopLibraryDetailPageData{
+		Layout:          layoutData,
+		Library:         library,
+		Game:            game,
+		Games:           games,
+		Addons:          addons,
+		AvailableAddons: availableAddons,
 	}
 
-	layoutData := LayoutData{
-		Title:          data.Title,
-		Active:         data.Active,
-		User:           data.User,
-		Servers:        servers,
-		SelectedServer: selectedServer,
-	}
-
-	if err := renderPage(w, "workshop_library_detail_content", data, layoutData); err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Failed to render page", http.StatusInternalServerError)
-	}
+	RenderTempl(w, r, library.Name, pages.WorkshopLibraryDetail(data))
 }
 
 func (app *App) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {

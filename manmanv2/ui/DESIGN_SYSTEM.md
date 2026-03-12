@@ -33,6 +33,19 @@ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 **Usage**: Main section pages (Games, Servers, Sessions, Workshop)  
 **Do NOT use on**: Detail pages (use breadcrumbs instead)
 
+**Templ Component**: `@components.Hero(title, subtitle, actions)`
+
+```templ
+@components.Hero("Games", "Manage game configurations and deployments") {
+    @components.Button(components.ButtonProps{
+        Text: "+ Create Game",
+        Variant: "primary",
+        URL: "/games/new",
+    })
+}
+```
+
+**Raw HTML** (if not using component):
 ```html
 <div class="bg-gradient-to-br from-indigo-600 to-purple-600 rounded-lg p-6 md:p-8 mb-6 shadow-lg">
     <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -41,11 +54,6 @@ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             <p class="text-indigo-100 text-sm">Page description</p>
         </div>
         <div class="flex gap-2">
-            <!-- Ghost button (on gradient) -->
-            <button class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-white/20 hover:bg-white/30 text-white border border-white/30 font-medium rounded-md transition-colors">
-                Secondary
-            </button>
-            <!-- Solid white button (primary CTA) -->
             <button class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-white hover:bg-gray-50 text-indigo-600 font-semibold rounded-md transition-colors shadow-md">
                 + Create New
             </button>
@@ -58,46 +66,75 @@ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 
 ### Buttons
 
+**Templ Component**: `@components.Button(components.ButtonProps{...})`
+
 #### Primary (Indigo)
 **Usage**: Create, Edit, View, Manage, Configure
 
-```html
-<button class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-md transition-colors">
-    Primary Action
-</button>
+```templ
+@components.Button(components.ButtonProps{
+    Text: "Primary Action",
+    Variant: "primary",
+    URL: "/action",
+})
 ```
 
 #### Success (Green)
 **Usage**: Start, Deploy, Save, Confirm, Enable
 
-```html
-<button class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-green-600 hover:bg-green-700 text-white font-medium rounded-md transition-colors">
-    Start / Save
-</button>
+```templ
+@components.Button(components.ButtonProps{
+    Text: "Start Session",
+    Variant: "success",
+    URL: "/start",
+})
 ```
 
 #### Danger (Red)
 **Usage**: Delete, Stop, Force, Remove, Disable
 
-```html
-<button class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">
-    Delete / Stop
-</button>
+```templ
+@components.Button(components.ButtonProps{
+    Text: "Delete",
+    Variant: "danger",
+    URL: "/delete",
+})
 ```
 
 #### Secondary (Slate)
 **Usage**: Cancel, Back, Close, Dismiss
 
+```templ
+@components.Button(components.ButtonProps{
+    Text: "Cancel",
+    Variant: "secondary",
+    URL: "/back",
+})
+```
+
+**Raw HTML** (if not using component):
 ```html
+<!-- Primary -->
+<button class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-md transition-colors">
+    Primary Action
+</button>
+
+<!-- Success -->
+<button class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-green-600 hover:bg-green-700 text-white font-medium rounded-md transition-colors">
+    Start / Save
+</button>
+
+<!-- Danger -->
+<button class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">
+    Delete / Stop
+</button>
+
+<!-- Secondary -->
 <button class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-slate-600 hover:bg-slate-700 text-white font-medium rounded-md transition-colors">
     Cancel / Back
 </button>
-```
 
-#### Small Button
-**Usage**: Inline actions, table actions (min 36px)
-
-```html
+<!-- Small Button -->
 <button class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors">
     Small Action
 </button>
@@ -107,16 +144,24 @@ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 
 ### Badges
 
+**Templ Component**: `@components.Badge(status, text)`
+
 #### Status Badge Colors
 
-| Status | Color | Classes |
+| Status | Color | Variant |
 |--------|-------|---------|
-| Active, Running, Online | Green | `bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200` |
-| Pending, Starting, Stopping | Yellow | `bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200` |
-| Error, Crashed, Failed | Red | `bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200` |
-| Info, Deployed | Indigo | `bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200` |
-| Inactive, Stopped, Offline | Slate | `bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300` |
+| Active, Running, Online, Success | Green | `"success"` |
+| Pending, Starting, Stopping, Warning | Yellow | `"warning"` |
+| Error, Crashed, Failed, Danger | Red | `"danger"` |
+| Info, Deployed, Primary | Indigo | `"primary"` |
+| Inactive, Stopped, Offline, Secondary | Slate | `"secondary"` |
 
+```templ
+@components.Badge("running", "")        // Uses status text
+@components.Badge("success", "Active")  // Custom text
+```
+
+**Raw HTML**:
 ```html
 <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
     Active
@@ -388,25 +433,53 @@ The indigo-purple gradient works in all three themes:
 
 When updating a page to the design system:
 
+- [ ] Use templ components (`@components.Button`, `@components.Badge`, `@components.Hero`)
 - [ ] Replace blue buttons with indigo (`bg-indigo-600 hover:bg-indigo-700`)
 - [ ] Replace gray buttons with slate (`bg-slate-600 hover:bg-slate-700`)
-- [ ] Add hero header to main section pages
+- [ ] Add hero header to main section pages (use `@components.Hero`)
 - [ ] Move delete actions to danger zone at bottom
-- [ ] Update status badges to use new colors
+- [ ] Update status badges to use new colors (use `@components.Badge`)
 - [ ] Ensure all buttons meet 44px minimum height
 - [ ] Test in all three themes (light/night/OLED)
 - [ ] Verify mobile responsiveness
+- [ ] Use data attributes for passing dynamic data to JavaScript (NOT template expressions in `<script>` tags)
+
+---
+
+## JavaScript Integration
+
+### Passing Dynamic Data to Scripts
+
+**Problem**: Templ expressions `{ }` inside `<script>` tags are treated as **literal text**, not evaluated.
+
+**Wrong**:
+```templ
+<script>
+  const sessionId = { fmt.Sprintf("%d", data.Session.SessionId) };  // Outputs literal string!
+</script>
+```
+
+**Correct**: Use HTML data attributes (which ARE evaluated), then read in JavaScript:
+```templ
+<div id="my-script" data-session-id={ fmt.Sprintf("%d", data.Session.SessionId) }></div>
+<script>
+  const sessionId = parseInt(document.getElementById('my-script').dataset.sessionId);
+</script>
+```
+
+**Why**: Templ treats script content as raw strings to avoid breaking JavaScript syntax. Dynamic values must be injected via HTML attributes.
 
 ---
 
 ## Resources
 
-- **Component Library**: `manmanv2/ui/templates/partials/components.html`
-- **Example Pages**: `games.html`, `servers.html`, `sessions.html`
-- **Workshop Examples**: `workshop_library.html`, `workshop_search.html`
+- **Component Library**: `manmanv2/ui/components/ui.templ`
+- **Example Pages**: `manmanv2/ui/pages/*.templ`
+- **README**: `manmanv2/ui/README.md` (includes critical gotchas)
+- **Components Guide**: `manmanv2/ui/COMPONENTS.md`
 
 ---
 
 **Last Updated**: March 2026  
-**Version**: 1.0  
+**Version**: 2.0 (Templ Migration)  
 **Status**: Production Ready

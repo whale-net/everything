@@ -303,10 +303,19 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	data := SessionDetailPageData{
-		Title:         "Session " + sessionIDStr,
-		Active:        "sessions",
-		User:          user,
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Sessions", URL: "/sessions"},
+		{Label: "Session " + sessionIDStr, URL: ""},
+	}
+	layoutData, err := app.buildTemplLayoutData(r, "Session "+sessionIDStr, "sessions", user, breadcrumbs)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	pageData := pages.SessionDetailPageData{
+		Layout:        layoutData,
 		Session:       sessionResp.Session,
 		SGC:           sgc,
 		GameConfig:    gameConfig,
@@ -316,16 +325,7 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		Installations: installations,
 	}
 
-	layoutData := LayoutData{
-		Title:  data.Title,
-		Active: data.Active,
-		User:   data.User,
-	}
-
-	if err := renderPage(w, "session_detail_content", data, layoutData); err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-	}
+	RenderTempl(w, r, "Session "+sessionIDStr, pages.SessionDetail(pageData))
 }
 
 func (app *App) handleSessionStop(w http.ResponseWriter, r *http.Request, sessionID int64) {
@@ -847,11 +847,11 @@ func (app *App) handleLoadHistoricalLogs(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Render log content
-	fmt.Fprintf(w, `<pre id="log-output" class="log-viewer-output">`)
+	fmt.Fprintf(w, `<div class="log-viewer-container"><pre id="log-output" class="log-viewer-output">`)
 	for _, batch := range resp.Batches {
 		fmt.Fprintf(w, "%s", batch.Content)
 	}
-	fmt.Fprintf(w, `</pre>`)
+	fmt.Fprintf(w, `</pre></div>`)
 
 	// Add "Load More" button if there's more data
 	if resp.HasMore {

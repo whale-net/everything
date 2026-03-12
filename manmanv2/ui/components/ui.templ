@@ -58,28 +58,32 @@ templ ButtonLink(variant ButtonVariant, size ButtonSize, text, href string) {
 }
 
 func badgeClasses(status string) string {
-	base := "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium"
-	
 	switch status {
-	case "online", "active", "running", "completed":
-		return base + " bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
-	case "offline", "inactive", "stopped":
-		return base + " bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300"
-	case "starting", "stopping", "pending":
-		return base + " bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
-	case "crashed", "error", "failed":
-		return base + " bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
-	case "deployed":
-		return base + " bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200"
+	case "online", "active", "running", "completed", "success":
+		return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
+	case "offline", "inactive", "stopped", "secondary":
+		return "bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300"
+	case "starting", "stopping", "pending", "warning":
+		return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
+	case "crashed", "error", "failed", "danger":
+		return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
+	case "deployed", "primary":
+		return "bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200"
 	default:
-		return base + " bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300"
+		return "bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300"
 	}
 }
 
 templ Badge(status, text string) {
-	<span class={ badgeClasses(status) }>
-		{ text }
-	</span>
+	if text == "" {
+		<span class={ "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium", badgeClasses(status) }>
+			{ status }
+		</span>
+	} else {
+		<span class={ "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium", badgeClasses(status) }>
+			{ text }
+		</span>
+	}
 }
 
 templ Card(title string) {

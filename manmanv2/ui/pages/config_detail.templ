@@ -1,0 +1,195 @@
+package pages
+
+import (
+	"fmt"
+	"strings"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+)
+
+type ConfigDetailPageData struct {
+	Layout        components.LayoutData
+	Game          *manmanpb.Game
+	Config        *manmanpb.GameConfig
+	Servers       []*manmanpb.Server
+	Deployments   []ServerGameConfigView
+	DeployError   string
+	Volumes       []*manmanpb.GameConfigVolume
+	BackupConfigs []BackupConfigGroup
+}
+
+type ServerGameConfigView struct {
+	Server *manmanpb.Server
+	Config *manmanpb.ServerGameConfig
+}
+
+templ ConfigDetail(data ConfigDetailPageData) {
+	@components.Layout(data.Layout) {
+		<style>
+			[x-cloak] { display: none !important; }
+		</style>
+		<div x-data="{ showEdit: false }">
+			<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+				<div>
+					<div class="flex items-center gap-2 mb-2">
+						<span class="inline-flex items-center px-3 py-1 rounded-md text-xs font-semibold bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+							⚙️ GAME CONFIG
+						</span>
+					</div>
+					<h1 class="text-3xl font-bold text-gray-900 dark:text-white">{ data.Config.Name }</h1>
+					<p class="text-sm text-gray-600 dark:text-gray-400 mt-1">{ fmt.Sprintf("for %s", data.Game.Name) }</p>
+				</div>
+				<div class="flex flex-wrap gap-2">
+					<a href={ templ.URL(fmt.Sprintf("/games/%d", data.Game.GameId)) } class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">Back to Game</a>
+					<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d/actions", data.Game.GameId, data.Config.ConfigId)) } class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors">⚡ Manage Actions</a>
+					<button @click="showEdit = !showEdit" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">
+						<span x-text="showEdit ? 'Cancel Edit' : 'Edit'">Edit</span>
+					</button>
+				</div>
+			</div>
+			<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-6 mb-6">
+				<h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Configuration Details</h2>
+				<dl class="grid grid-cols-1 md:grid-cols-2 gap-4">
+					@components.DLItemMono("Config ID", fmt.Sprintf("%d", data.Config.ConfigId))
+					<div>
+						<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Game</dt>
+						<dd class="mt-1 text-sm">
+							<a href={ templ.URL(fmt.Sprintf("/games/%d", data.Game.GameId)) } class="text-indigo-600 dark:text-indigo-400 hover:underline">{ data.Game.Name }</a>
+						</dd>
+					</div>
+					@components.DLItem("Name", data.Config.Name)
+					@components.DLItemMono("Docker Image", data.Config.Image)
+					<div>
+						<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Entrypoint</dt>
+						<dd class="mt-1 text-sm font-mono text-gray-900 dark:text-white">
+							if len(data.Config.Entrypoint) > 0 {
+								{ strings.Join(data.Config.Entrypoint, " ") }
+							} else {
+								-
+							}
+						</dd>
+					</div>
+					<div>
+						<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Command</dt>
+						<dd class="mt-1 text-sm font-mono text-gray-900 dark:text-white">
+							if len(data.Config.Command) > 0 {
+								{ strings.Join(data.Config.Command, " ") }
+							} else {
+								-
+							}
+						</dd>
+					</div>
+					if data.Config.ArgsTemplate != "" {
+						<div class="md:col-span-2">
+							<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Args Template</dt>
+							<dd class="mt-1">
+								<pre class="text-sm font-mono text-gray-900 dark:text-white bg-gray-50 dark:bg-slate-900 p-3 rounded border border-gray-200 dark:border-slate-700 overflow-x-auto">{ data.Config.ArgsTemplate }</pre>
+							</dd>
+						</div>
+					}
+				</dl>
+			</div>
+			<!-- Deployments -->
+			<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border-2 border-indigo-200 dark:border-indigo-900 overflow-hidden mb-6">
+				<div class="bg-indigo-50 dark:bg-indigo-900/20 px-6 py-4 border-b border-indigo-200 dark:border-indigo-900">
+					<h2 class="text-lg font-semibold text-indigo-900 dark:text-indigo-200">🚀 Deployments</h2>
+				</div>
+				<div class="p-6">
+					if data.DeployError != "" {
+						<div class="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md p-4 mb-4">
+							<p class="text-sm text-yellow-800 dark:text-yellow-200">{ data.DeployError }</p>
+						</div>
+					}
+					if len(data.Deployments) > 0 {
+						<div class="mb-6">
+							<h3 class="text-base font-semibold text-slate-900 dark:text-white mb-3">Active Deployments ({ fmt.Sprintf("%d", len(data.Deployments)) })</h3>
+							<div class="overflow-x-auto">
+								<table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
+									<thead class="bg-gray-50 dark:bg-slate-900">
+										<tr>
+											<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Server</th>
+											<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">SGC ID</th>
+											<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Status</th>
+											<th scope="col" class="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Actions</th>
+										</tr>
+									</thead>
+									<tbody class="bg-white dark:bg-slate-800 divide-y divide-gray-200 dark:divide-slate-700">
+										for _, dep := range data.Deployments {
+											<tr class="hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors">
+												<td class="px-6 py-4 whitespace-nowrap">
+													<a href={ templ.URL(fmt.Sprintf("/servers/%d", dep.Server.ServerId)) } class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline">{ dep.Server.Name }</a>
+												</td>
+												<td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-slate-700 dark:text-slate-300">{ fmt.Sprintf("%d", dep.Config.ServerGameConfigId) }</td>
+												<td class="px-6 py-4 whitespace-nowrap text-sm text-slate-700 dark:text-slate-300">{ dep.Config.Status }</td>
+												<td class="px-6 py-4 whitespace-nowrap text-right text-sm space-x-2">
+													<a class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors" href={ templ.URL(fmt.Sprintf("/sgc/%d", dep.Config.ServerGameConfigId)) }>Manage</a>
+													<a class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors" href={ templ.URL(fmt.Sprintf("/sessions?server_game_config_id=%d", dep.Config.ServerGameConfigId)) }>Sessions</a>
+												</td>
+											</tr>
+										}
+									</tbody>
+								</table>
+							</div>
+						</div>
+					} else {
+						<div class="bg-slate-50 dark:bg-slate-900/50 rounded-lg p-8 text-center mb-6">
+							<h3 class="text-sm font-medium text-slate-900 dark:text-white mb-1">No deployments yet</h3>
+							<p class="text-sm text-slate-500 dark:text-slate-400">Deploy this config to a server to create a Server Game Config</p>
+						</div>
+					}
+					<div class="border-t border-gray-200 dark:border-slate-700 pt-6">
+						<h3 class="text-base font-semibold text-slate-900 dark:text-white mb-3">Deploy to Server</h3>
+						<form method="POST" action={ templ.URL(fmt.Sprintf("/games/%d/configs/%d/deploy", data.Game.GameId, data.Config.ConfigId)) } class="flex gap-3">
+							<select name="server_id" required class="flex-1 px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white">
+								<option value="">Select a server...</option>
+								for _, server := range data.Servers {
+									<option value={ fmt.Sprintf("%d", server.ServerId) }>{ server.Name }</option>
+								}
+							</select>
+							<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-green-600 hover:bg-green-700 text-white font-medium rounded-md transition-colors">Deploy</button>
+						</form>
+					</div>
+				</div>
+			</div>
+			<!-- Volumes -->
+			<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 overflow-hidden mb-6">
+				<div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-slate-700">
+					<h2 class="text-lg font-semibold text-gray-900 dark:text-white">Volumes</h2>
+					<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d/volumes/new", data.Game.GameId, data.Config.ConfigId)) } class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors">Add Volume</a>
+				</div>
+				if len(data.Volumes) > 0 {
+					<div class="overflow-x-auto">
+						<table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
+							<thead class="bg-gray-50 dark:bg-slate-900">
+								<tr>
+									<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Name</th>
+									<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Container Path</th>
+									<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Type</th>
+									<th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
+								</tr>
+							</thead>
+							<tbody class="bg-white dark:bg-slate-800 divide-y divide-gray-200 dark:divide-slate-700">
+								for _, vol := range data.Volumes {
+									<tr class="hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors">
+										<td class="px-6 py-4 text-sm font-medium text-gray-900 dark:text-white">{ vol.Name }</td>
+										<td class="px-6 py-4 text-sm font-mono text-gray-700 dark:text-gray-300">{ vol.ContainerPath }</td>
+										<td class="px-6 py-4 text-sm text-gray-700 dark:text-gray-300">{ vol.VolumeType }</td>
+										<td class="px-6 py-4 text-right">
+											<form method="POST" action={ templ.URL(fmt.Sprintf("/games/%d/configs/%d/volumes/%d/delete", data.Game.GameId, data.Config.ConfigId, vol.VolumeId)) } class="inline">
+												<button type="submit" onclick="return confirm('Delete this volume?')" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-md transition-colors">Delete</button>
+											</form>
+										</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				} else {
+					<div class="p-12 text-center">
+						<p class="text-gray-500 dark:text-gray-400">No volumes configured</p>
+					</div>
+				}
+			</div>
+		</div>
+	}
+}
