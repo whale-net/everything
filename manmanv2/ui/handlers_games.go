@@ -409,6 +409,12 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 					app.handleGameConfigVolumeDelete(w, r, gameIDStr, configIDStr, actionOrVolumeID)
 					return
 				}
+			} else {
+				// POST to /games/{id}/configs/{config_id}/volumes (create)
+				if r.Method == http.MethodPost {
+					app.handleGameConfigVolumeCreate(w, r, gameIDStr, configIDStr)
+					return
+				}
 			}
 		}
 	}
@@ -480,14 +486,14 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 	deployError := strings.TrimSpace(r.URL.Query().Get("deploy_error"))
 
 	// Convert backup configs to templ format
-	var templBackupConfigs []pages.BackupConfigGroup
+	var templBackupConfigs []pages.ConfigBackupGroup
 	for _, vol := range volumes {
 		cfgs, err := app.grpc.ListBackupConfigs(ctx, vol.VolumeId)
 		if err != nil {
 			log.Printf("Warning: failed to fetch backup configs for volume %d: %v", vol.VolumeId, err)
 			cfgs = []*manmanpb.BackupConfig{}
 		}
-		templBackupConfigs = append(templBackupConfigs, pages.BackupConfigGroup{
+		templBackupConfigs = append(templBackupConfigs, pages.ConfigBackupGroup{
 			Volume:  vol,
 			Configs: cfgs,
 		})
@@ -798,15 +804,20 @@ func (app *App) handleGameConfigVolumeCreate(w http.ResponseWriter, r *http.Requ
 	description := strings.TrimSpace(r.FormValue("description"))
 	containerPath := strings.TrimSpace(r.FormValue("container_path"))
 	hostSubpath := strings.TrimSpace(r.FormValue("host_subpath"))
-	readOnly := r.FormValue("read_only") == "on"
+	volumeType := strings.TrimSpace(r.FormValue("volume_type"))
+	readOnly := r.FormValue("read_only") == "true"
 
 	if name == "" || containerPath == "" {
 		http.Error(w, "Name and container path are required", http.StatusBadRequest)
 		return
 	}
 
+	if volumeType == "" {
+		volumeType = "bind"
+	}
+
 	ctx := context.Background()
-	_, err = app.grpc.CreateGameConfigVolume(ctx, configID, name, description, containerPath, hostSubpath, readOnly)
+	_, err = app.grpc.CreateGameConfigVolume(ctx, configID, name, description, containerPath, hostSubpath, readOnly, volumeType)
 	if err != nil {
 		log.Printf("Error creating volume: %v", err)
 		http.Error(w, "Failed to create volume", http.StatusInternalServerError)
