@@ -1,0 +1,16 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/manmanv2/ui/components"
+)
+
+type ActionsManagePageData struct {
+	Layout      components.LayoutData
+	HTMLContent string
+}
+
+templ ActionsManage(data ActionsManagePageData) {
+	@components.Layout(data.Layout) {
+		@templ.Raw(data.HTMLContent)
+	}
+}

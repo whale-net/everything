@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	"github.com/whale-net/everything/manmanv2/ui/pages"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
@@ -147,16 +149,33 @@ func (app *App) handleGameActions(w http.ResponseWriter, r *http.Request) {
 		IconOptions:      getIconOptions(),
 	}
 
-	layoutData := LayoutData{
-		Title:  data.Title,
-		Active: data.Active,
-		User:   data.User,
+	// Render the old template to HTML
+	var htmlBuf strings.Builder
+	if err := templates.ExecuteTemplate(&htmlBuf, "actions_manage_content", data); err != nil {
+		log.Printf("Error rendering actions template: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
 	}
 
-	if err := renderPage(w, "actions_manage_content", data, layoutData); err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Games", URL: "/games"},
+		{Label: game.Name, URL: fmt.Sprintf("/games/%d", gameID)},
+		{Label: "Actions", URL: fmt.Sprintf("/games/%d/actions", gameID)},
 	}
+
+	layoutData, err := app.buildTemplLayoutData(r, "Manage Actions - "+game.Name, "games", user, breadcrumbs)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Failed to build layout", http.StatusInternalServerError)
+		return
+	}
+
+	pageData := pages.ActionsManagePageData{
+		Layout:      layoutData,
+		HTMLContent: htmlBuf.String(),
+	}
+
+	RenderTempl(w, r, "Manage Actions", pages.ActionsManage(pageData))
 }
 
 // handleConfigActions displays the actions management page for a config
@@ -237,16 +256,35 @@ func (app *App) handleConfigActions(w http.ResponseWriter, r *http.Request) {
 		IconOptions:      getIconOptions(),
 	}
 
-	layoutData := LayoutData{
-		Title:  data.Title,
-		Active: data.Active,
-		User:   data.User,
+	// Render the old template to HTML
+	var htmlBuf strings.Builder
+	if err := templates.ExecuteTemplate(&htmlBuf, "actions_manage_content", data); err != nil {
+		log.Printf("Error rendering actions template: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
 	}
 
-	if err := renderPage(w, "actions_manage_content", data, layoutData); err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Games", URL: "/games"},
+		{Label: game.Name, URL: fmt.Sprintf("/games/%d", gameID)},
+		{Label: "Configs", URL: fmt.Sprintf("/games/%d/configs", gameID)},
+		{Label: config.Name, URL: fmt.Sprintf("/games/%d/configs/%d", gameID, configID)},
+		{Label: "Actions", URL: fmt.Sprintf("/games/%d/configs/%d/actions", gameID, configID)},
 	}
+
+	layoutData, err := app.buildTemplLayoutData(r, "Manage Actions - "+config.Name, "games", user, breadcrumbs)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Failed to build layout", http.StatusInternalServerError)
+		return
+	}
+
+	pageData := pages.ActionsManagePageData{
+		Layout:      layoutData,
+		HTMLContent: htmlBuf.String(),
+	}
+
+	RenderTempl(w, r, "Manage Actions", pages.ActionsManage(pageData))
 }
 
 // handleSGCActions displays the actions management page for an SGC
