@@ -4,9 +4,15 @@
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `SECRET_KEY` | Session encryption key | `random-32-char-string` |
+| `SECRET_KEY` | Session encryption key (also derives the AES key for refresh token encryption) | `random-32-char-string` |
 | `CONTROL_API_URL` | Control API gRPC endpoint | `control-api:50051` |
 | `LOG_PROCESSOR_URL` | Log processor gRPC endpoint | `log-processor:50053` |
+
+## Recommended
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `DATABASE_URL` | PostgreSQL connection string for DB-backed sessions. Without this, sessions fall back to cookie storage and access tokens cannot be refreshed — users will experience gRPC failures after the access token expires (typically 5–15 min). | `postgres://user:pass@postgres:5432/manman` |
 
 ## Optional
 
@@ -38,16 +44,17 @@ The UI forwards the logged-in user's access token to the API and log-processor o
 
 ## Modes
 
-**Development (no auth):**
+**Development (no auth, no DB):**
 ```bash
 AUTH_MODE=none
 GRPC_AUTH_MODE=none
 SECRET_KEY=dev-secret
 CONTROL_API_URL=localhost:50051
 LOG_PROCESSOR_URL=localhost:50053
+# DATABASE_URL not set — cookie sessions, no token refresh needed in dev
 ```
 
-**Production (OIDC auth):**
+**Production (OIDC auth + DB sessions):**
 ```bash
 AUTH_MODE=oidc
 GRPC_AUTH_MODE=oidc
@@ -58,6 +65,7 @@ OIDC_CLIENT_SECRET=<from-oidc-provider>
 OIDC_REDIRECT_URI=https://manman.company.com/auth/callback
 CONTROL_API_URL=control-api:50051
 LOG_PROCESSOR_URL=log-processor:50053
+DATABASE_URL=postgres://user:pass@postgres:5432/manman
 ```
 
 ## Service Dependencies
