@@ -13,6 +13,7 @@ go_library(
     importpath = "github.com/whale-net/everything/manman/management-ui",
     visibility = ["//visibility:private"],
     deps = [
+        "//generated/go/manman:experience_api",
         "//libs/go/htmxauth",
         "//libs/go/logging",
     ],
@@ -28,16 +29,6 @@ go_test(
     name = "management_ui_test",
     srcs = ["main_test.go"],
     embed = [":management_ui_lib"],
-    deps = [
-        "//libs/go/htmxauth",
-        "@com_github_stretchr_testify//assert",
-    ],
-)
-
-go_test(
-    name = "management-ui_test",
-    srcs = ["main_test.go"],
-    embed = [":management-ui_lib"],
     deps = [
         "//libs/go/htmxauth",
         "@com_github_stretchr_testify//assert",
