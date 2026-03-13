@@ -54,6 +54,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -234,6 +235,14 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// stripScheme removes http:// or https:// from an endpoint string so it can
+// be passed to WithEndpoint, which expects host:port.
+func stripScheme(endpoint string) string {
+	endpoint = strings.TrimPrefix(endpoint, "https://")
+	endpoint = strings.TrimPrefix(endpoint, "http://")
+	return endpoint
+}
+
 // setupOTLP creates an OTLP gRPC log exporter and registers it as the
 // global OTel LoggerProvider.
 func setupOTLP(cfg Config) error {
@@ -241,7 +250,7 @@ func setupOTLP(cfg Config) error {
 	defer cancel()
 
 	exporter, err := otlploggrpc.New(ctx,
-		otlploggrpc.WithEndpoint(cfg.OTLPEndpoint),
+		otlploggrpc.WithEndpoint(stripScheme(cfg.OTLPEndpoint)),
 		otlploggrpc.WithInsecure(),
 	)
 	if err != nil {

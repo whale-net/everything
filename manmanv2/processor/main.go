@@ -50,6 +50,7 @@ func run() error {
 		Domain:      "manmanv2",
 		Level:       logLevel,
 		JSONFormat:  true,
+		EnableOTLP:  true,
 	})
 	defer logging.Shutdown(context.Background())
 

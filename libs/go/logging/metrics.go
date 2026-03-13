@@ -38,7 +38,7 @@ func setupMetrics(cfg Config) error {
 	defer cancel()
 
 	exporter, err := otlpmetricgrpc.New(ctx,
-		otlpmetricgrpc.WithEndpoint(cfg.OTLPEndpoint),
+		otlpmetricgrpc.WithEndpoint(stripScheme(cfg.OTLPEndpoint)),
 		otlpmetricgrpc.WithInsecure(),
 	)
 	if err != nil {

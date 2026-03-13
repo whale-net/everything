@@ -262,18 +262,10 @@ spec:
         env:
         - name: PORT
           value: "50051"
-        - name: DB_HOST
-          value: "postgres-dev.{namespace}.svc.cluster.local"
-        - name: DB_PORT
-          value: "5432"
-        - name: DB_USER
-          value: "postgres"
-        - name: DB_PASSWORD
-          value: "password"
-        - name: DB_NAME
-          value: "manmanv2"
-        - name: DB_SSL_MODE
-          value: "disable"
+        - name: PG_DATABASE_URL
+          value: "{db_url}"
+        - name: GRPC_AUTH_MODE
+          value: "none"
         - name: RABBITMQ_URL
           value: "{rabbitmq_url}"
         - name: S3_ENDPOINT
@@ -370,6 +362,8 @@ spec:
           value: "{s3_bucket}"
         - name: S3_REGION
           value: "us-east-1"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "{otel_endpoint}"
 """.format(
         namespace=namespace,
         db_url=db_url,
@@ -379,6 +373,7 @@ spec:
         s3_access_key=s3_access_key,
         s3_secret_key=s3_secret_key,
         s3_bucket=s3_bucket,
+        otel_endpoint=otel_endpoint,
     )))
 
     # Build dependency list for processor
@@ -452,8 +447,10 @@ spec:
           value: "{s3_access_key}"
         - name: S3_SECRET_KEY
           value: "{s3_secret_key}"
-        - name: DATABASE_URL
-          value: "postgres://postgres:password@postgres-dev.{namespace}.svc.cluster.local:5432/manmanv2?sslmode=disable"
+        - name: PG_DATABASE_URL
+          value: "{db_url}"
+        - name: GRPC_AUTH_MODE
+          value: "none"
         - name: API_ADDRESS
           value: "manmanv2-api.{namespace}.svc.cluster.local:50051"
 """.format(
@@ -463,6 +460,7 @@ spec:
         s3_access_key=s3_access_key,
         s3_secret_key=s3_secret_key,
         s3_bucket=s3_bucket,
+        db_url=db_url,
     )))
 
     # Build dependency list for log-processor
@@ -521,6 +519,8 @@ spec:
         - name: PORT
           value: "8000"
         - name: AUTH_MODE
+          value: "none"
+        - name: GRPC_AUTH_MODE
           value: "none"
         - name: SECRET_KEY
           value: "dev-secret-key"
