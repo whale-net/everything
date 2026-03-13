@@ -5,6 +5,7 @@ go_binary(
     name = "control-api",
     srcs = ["main.go"],
     deps = [
+        "//libs/go/db",
         "//libs/go/grpcauth",
         "//libs/go/rmq",
         "//libs/go/s3",

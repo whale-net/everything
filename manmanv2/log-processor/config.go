@@ -17,7 +17,7 @@ type Config struct {
 	S3Endpoint        string
 	S3AccessKey       string
 	S3SecretKey       string
-	DatabaseURL       string
+	DatabaseURL       string // alias for PG_DATABASE_URL
 	APIAddress        string
 	// Server auth (incoming requests)
 	GRPCAuthMode     string
@@ -42,7 +42,7 @@ func LoadConfig() *Config {
 		S3Endpoint:           getEnv("S3_ENDPOINT", ""),
 		S3AccessKey:          getEnv("S3_ACCESS_KEY", ""),
 		S3SecretKey:          getEnv("S3_SECRET_KEY", ""),
-		DatabaseURL:          getEnv("DATABASE_URL", ""),
+		DatabaseURL:          getEnv("PG_DATABASE_URL", ""),
 		APIAddress:           getEnv("API_ADDRESS", "localhost:50051"),
 		GRPCAuthMode:         getEnv("GRPC_AUTH_MODE", "none"),
 		GRPCOIDCIssuer:       getEnv("GRPC_OIDC_ISSUER", ""),

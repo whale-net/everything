@@ -9,10 +9,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/libs/go/s3"
@@ -50,18 +50,13 @@ func main() {
 		}
 		log.Printf("S3 client initialized: bucket=%s, region=%s", config.S3Bucket, config.S3Region)
 
-		// Connect to database
+		// Connect to database (URL already loaded from PG_DATABASE_URL into config)
 		log.Println("Connecting to database...")
-		dbPool, err := pgxpool.New(ctx, config.DatabaseURL)
+		dbPool, err := db.NewPool(ctx, config.DatabaseURL)
 		if err != nil {
 			log.Fatalf("Failed to connect to database: %v", err)
 		}
 		defer dbPool.Close()
-
-		// Verify database connection
-		if err := dbPool.Ping(ctx); err != nil {
-			log.Fatalf("Failed to ping database: %v", err)
-		}
 		log.Println("Connected to database")
 
 		// Create log reference repository
