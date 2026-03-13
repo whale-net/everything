@@ -18,6 +18,14 @@ brew install grpcurl
 go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
 ```
 
+### One-time host DNS setup
+
+The host manager runs bare-metal and needs to reach the in-cluster MinIO instance via presigned URLs. Add this entry to `/etc/hosts` so the K8s-internal hostname resolves to `localhost` (where Tilt port-forwards MinIO on port 9000):
+
+```bash
+echo "127.0.0.1 minio-dev.manmanv2-local-dev.svc.cluster.local" | sudo tee -a /etc/hosts
+```
+
 ## Quick Start
 
 ### 1. Build Images (~2 minutes)

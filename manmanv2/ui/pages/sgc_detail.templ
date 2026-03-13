@@ -1,0 +1,266 @@
+package pages
+
+import (
+	"fmt"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+)
+
+type SGCDetailPageData struct {
+	Layout              components.LayoutData
+	SGC                 *manmanpb.ServerGameConfig
+	Server              *manmanpb.Server
+	GameConfig          *manmanpb.GameConfig
+	Game                *manmanpb.Game
+	LibraryAttachments  []LibraryAttachment
+	Sessions            []*manmanpb.Session
+	PendingCount        int
+	BackupConfigs       []BackupConfigGroup
+	RecentBackups       []*manmanpb.Backup
+}
+
+type LibraryAttachment struct {
+	Library      *manmanpb.WorkshopLibrary
+	PresetName   string
+	ComputedPath string
+	PathOverride bool
+	VolumeName   string
+}
+
+type BackupConfigGroup struct {
+	Volume  *manmanpb.GameConfigVolume
+	Configs []*manmanpb.BackupConfig
+}
+
+templ SGCDetail(data SGCDetailPageData) {
+	@components.Layout(data.Layout) {
+		<style>
+			[x-cloak] { display: none !important; }
+		</style>
+		<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+			<div>
+				<div class="flex items-center gap-2 mb-2">
+					<span class="inline-flex items-center px-3 py-1 rounded-md text-xs font-semibold bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
+						🚀 SERVER DEPLOYMENT
+					</span>
+					@components.Badge(data.SGC.Status, "")
+				</div>
+				<h1 class="text-3xl font-bold text-gray-900 dark:text-white">SGC-{ fmt.Sprintf("%d", data.SGC.ServerGameConfigId) }</h1>
+				if data.Server != nil {
+					<p class="text-sm text-gray-600 dark:text-gray-400 mt-1">Deployed on { data.Server.Name }</p>
+				}
+			</div>
+			<div class="flex gap-2">
+				<form method="post" action="/sessions/start">
+					<input type="hidden" name="server_game_config_id" value={ fmt.Sprintf("%d", data.SGC.ServerGameConfigId) }/>
+					<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-green-600 hover:bg-green-700 text-white font-medium rounded-md transition-colors">
+						Start Session
+					</button>
+				</form>
+			</div>
+		</div>
+		<!-- SGC Info -->
+		<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-6 mb-6">
+			<h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Deployment Info</h2>
+			<dl class="grid grid-cols-1 md:grid-cols-2 gap-4">
+				@components.DLItemMono("SGC ID", fmt.Sprintf("%d", data.SGC.ServerGameConfigId))
+				<div>
+					<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Server</dt>
+					<dd class="mt-1 text-sm">
+						if data.Server != nil {
+							<a href={ templ.URL(fmt.Sprintf("/servers/%d", data.Server.ServerId)) } class="text-indigo-600 dark:text-indigo-400 hover:underline">{ data.Server.Name }</a>
+						} else {
+							<span class="text-gray-900 dark:text-white">Server { fmt.Sprintf("%d", data.SGC.ServerId) }</span>
+						}
+					</dd>
+				</div>
+				<div>
+					<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Game Config</dt>
+					<dd class="mt-1 text-sm">
+						if data.GameConfig != nil {
+							<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.GameConfig.GameId, data.GameConfig.ConfigId)) } class="text-indigo-600 dark:text-indigo-400 hover:underline">{ data.GameConfig.Name }</a>
+						} else {
+							<span class="text-gray-900 dark:text-white">Config { fmt.Sprintf("%d", data.SGC.GameConfigId) }</span>
+						}
+					</dd>
+				</div>
+				<div>
+					<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Status</dt>
+					<dd class="mt-1">
+						@components.Badge(data.SGC.Status, "")
+					</dd>
+				</div>
+			</dl>
+		</div>
+		<!-- Libraries -->
+		<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 mb-6 overflow-hidden">
+			<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-gray-200 dark:border-slate-700">
+				<h2 class="text-lg font-semibold text-gray-900 dark:text-white">Workshop Libraries</h2>
+				<button onclick="document.getElementById('add-library-panel').style.display='block'" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors">
+					Add Library
+				</button>
+			</div>
+			if data.PendingCount > 0 {
+				<div class="bg-yellow-50 dark:bg-yellow-900/20 border-l-4 border-yellow-400 p-4 m-4">
+					<p class="text-sm text-yellow-800 dark:text-yellow-200">
+						{ fmt.Sprintf("%d addon(s) pending installation — will be installed before the next session starts.", data.PendingCount) }
+					</p>
+				</div>
+			}
+			if len(data.LibraryAttachments) > 0 {
+				<div class="overflow-x-auto">
+					<table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
+						<thead class="bg-gray-50 dark:bg-slate-900">
+							<tr>
+								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Library</th>
+								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Install Path</th>
+								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Volume</th>
+								<th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
+							</tr>
+						</thead>
+						<tbody class="bg-white dark:bg-slate-800 divide-y divide-gray-200 dark:divide-slate-700">
+							for _, att := range data.LibraryAttachments {
+								<tr class="hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors">
+									<td class="px-6 py-4">
+										<a href={ templ.URL(fmt.Sprintf("/workshop/library-detail?library_id=%d", att.Library.LibraryId)) } class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline">{ att.Library.Name }</a>
+										if att.PresetName != "" {
+											<br/>
+											<small class="text-gray-500 dark:text-gray-400">Preset: { att.PresetName }</small>
+										}
+									</td>
+									<td class="px-6 py-4">
+										<code class="text-xs text-gray-900 dark:text-white">{ att.ComputedPath }</code>
+										if att.PathOverride {
+											<br/>
+											<small class="text-orange-600 dark:text-orange-400">⚠ Override</small>
+										}
+									</td>
+									<td class="px-6 py-4 text-sm text-gray-700 dark:text-gray-300">
+										if att.VolumeName != "" {
+											{ att.VolumeName }
+										} else {
+											<small class="text-gray-500 dark:text-gray-400">First available</small>
+										}
+									</td>
+									<td class="px-6 py-4 text-right">
+										<form method="POST" action="/sgc/remove-library" class="inline">
+											<input type="hidden" name="sgc_id" value={ fmt.Sprintf("%d", data.SGC.ServerGameConfigId) }/>
+											<input type="hidden" name="library_id" value={ fmt.Sprintf("%d", att.Library.LibraryId) }/>
+											<button type="submit" onclick="return confirm('Remove this library?')" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-md transition-colors">Remove</button>
+										</form>
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			} else {
+				<div class="p-12 text-center">
+					<p class="text-gray-500 dark:text-gray-400">No libraries attached. Add a library to automatically install its addons before sessions start.</p>
+				</div>
+			}
+			<div id="add-library-panel" style="display: none;" class="p-4 border-t border-gray-200 dark:border-slate-700">
+				<h3 class="text-sm font-semibold text-gray-900 dark:text-white mb-3">Add Library</h3>
+				<input
+					type="text"
+					placeholder="Search libraries..."
+					class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white mb-3"
+					hx-get={ fmt.Sprintf("/sgc/api/available-libraries?sgc_id=%d", data.SGC.ServerGameConfigId) }
+					hx-trigger="keyup changed delay:300ms"
+					hx-target="#sgc-available-libraries"
+					name="q"
+				/>
+				<div
+					id="sgc-available-libraries"
+					hx-get={ fmt.Sprintf("/sgc/api/available-libraries?sgc_id=%d", data.SGC.ServerGameConfigId) }
+					hx-trigger="load"
+				></div>
+			</div>
+		</div>
+		<!-- Sessions -->
+		<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 overflow-hidden mb-6">
+			<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-gray-200 dark:border-slate-700">
+				<h2 class="text-lg font-semibold text-gray-900 dark:text-white">Sessions</h2>
+				<a href={ templ.URL(fmt.Sprintf("/sessions?server_game_config_id=%d", data.SGC.ServerGameConfigId)) } class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">View All</a>
+			</div>
+			if len(data.Sessions) > 0 {
+				<div class="overflow-x-auto">
+					<table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
+						<thead class="bg-gray-50 dark:bg-slate-900">
+							<tr>
+								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Session ID</th>
+								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</th>
+								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Started</th>
+								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Ended</th>
+								<th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
+							</tr>
+						</thead>
+						<tbody class="bg-white dark:bg-slate-800 divide-y divide-gray-200 dark:divide-slate-700">
+							for _, session := range data.Sessions {
+								<tr class="hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors">
+									<td class="px-6 py-4 text-sm font-mono text-gray-900 dark:text-white">{ fmt.Sprintf("%d", session.SessionId) }</td>
+									<td class="px-6 py-4">
+										@components.Badge(session.Status, "")
+									</td>
+									<td class="px-6 py-4 text-sm text-gray-700 dark:text-gray-300">{ timeAgo(session.StartedAt) }</td>
+									<td class="px-6 py-4 text-sm text-gray-700 dark:text-gray-300">{ timeAgo(session.EndedAt) }</td>
+									<td class="px-6 py-4 text-right">
+										<a href={ templ.URL(fmt.Sprintf("/sessions/%d", session.SessionId)) } class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">View</a>
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			} else {
+				<div class="p-12 text-center">
+					<p class="text-gray-500 dark:text-gray-400">No sessions yet for this SGC.</p>
+				</div>
+			}
+		</div>
+		<!-- Danger Zone -->
+		<div x-data="{ confirmDelete: false, confirmStop: false }" class="bg-white dark:bg-slate-800 rounded-lg shadow-md border-2 border-red-200 dark:border-red-900 overflow-hidden mt-6">
+			<div class="bg-red-50 dark:bg-red-900/20 px-6 py-4 border-b-2 border-red-200 dark:border-red-900">
+				<h2 class="text-lg font-semibold text-red-900 dark:text-red-200">⚠️ Danger Zone</h2>
+			</div>
+			<div class="p-6 space-y-4">
+				for _, session := range data.Sessions {
+					if session.Status == "running" {
+						<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-gray-200 dark:border-slate-700">
+							<div>
+								<h3 class="text-sm font-semibold text-gray-900 dark:text-white mb-1">Stop deployment</h3>
+								<p class="text-sm text-gray-600 dark:text-gray-400">Stop the running server. Players will be disconnected. You can redeploy later.</p>
+							</div>
+							<div class="flex-shrink-0">
+								<button x-show="!confirmStop" @click="confirmStop = true" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-orange-600 hover:bg-orange-700 text-white font-medium rounded-md transition-colors">Stop Server</button>
+								<div x-show="confirmStop" x-cloak class="flex gap-2 items-center">
+									<span class="text-sm text-orange-900 dark:text-orange-200 font-medium">Stop now?</span>
+									<form method="POST" action={ templ.URL(fmt.Sprintf("/sessions/%d/stop", session.SessionId)) } class="inline">
+										<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-orange-600 hover:bg-orange-700 text-white font-medium rounded-md transition-colors">Yes, Stop</button>
+									</form>
+									<button @click="confirmStop = false" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-slate-600 hover:bg-slate-700 text-white font-medium rounded-md transition-colors">Cancel</button>
+								</div>
+							</div>
+						</div>
+					}
+				}
+				<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+					<div>
+						<h3 class="text-sm font-semibold text-gray-900 dark:text-white mb-1">Delete this server config</h3>
+						<p class="text-sm text-gray-600 dark:text-gray-400">Permanently delete this server game config. Active deployments will be stopped. This action cannot be undone.</p>
+					</div>
+					<div class="flex-shrink-0">
+						<button x-show="!confirmDelete" @click="confirmDelete = true" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">Delete SGC</button>
+						<div x-show="confirmDelete" x-cloak class="flex gap-2 items-center">
+							<span class="text-sm text-red-900 dark:text-red-200 font-medium">Are you sure?</span>
+							<form method="POST" action={ templ.URL(fmt.Sprintf("/sgc/%d/delete", data.SGC.ServerGameConfigId)) } class="inline">
+								<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">Yes, Delete</button>
+							</form>
+							<button @click="confirmDelete = false" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-slate-600 hover:bg-slate-700 text-white font-medium rounded-md transition-colors">Cancel</button>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	}
+}

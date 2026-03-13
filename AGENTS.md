@@ -9,6 +9,33 @@
 - Do not patch production environments — rely on release actions and human inputs.
 - Read relevant docs before falling back to search or bash exploration.
 
+## Bazel — Default Build, Test, and Query Tool
+
+Use Bazel as the primary tool for building, running, testing, and exploring the codebase. Do not fall back to `go build`, `go test`, `python`, or direct binary invocations unless you have confirmed there is no Bazel target for the task.
+
+**Build and run:**
+```
+bazel build //path/to/target
+bazel run //path/to/target
+```
+
+**Test — always use Bazel for tests:**
+```
+bazel test //path/to/...          # all tests in a subtree
+bazel test //path/to:specific_test
+```
+
+**Query — use before reading files to understand structure and dependencies:**
+```
+bazel query //path/to/...                         # list all targets
+bazel query 'deps(//some:target)'                 # transitive deps
+bazel query 'rdeps(//..., //some:lib)'            # reverse deps (who uses this?)
+bazel query 'kind(go_binary, //...)'              # find targets by rule type
+bazel query 'attr(name, foo, //...)'              # find by attribute
+```
+
+**When to break out of Bazel:** Only use raw shell commands, `go` tooling, or direct interpreters when a task explicitly requires it (e.g. interacting with a live process, running a one-off script with no BUILD target, or debugging a Bazel configuration issue itself).
+
 ## ⚠️ Critical: Cross-Compilation
 
 Before touching image builds, platform targets, or container tooling: read [`docs/DOCKER.md`](docs/DOCKER.md).

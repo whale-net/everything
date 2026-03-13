@@ -1,0 +1,181 @@
+package pages
+
+import (
+	"fmt"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+)
+
+type WorkshopLibraryPageData struct {
+	Layout       components.LayoutData
+	Games        []*manmanpb.Game
+	Libraries    []*manmanpb.WorkshopLibrary
+	RecentAddons []*manmanpb.WorkshopAddon
+	Addons       []*manmanpb.WorkshopAddon
+}
+
+templ WorkshopLibrary(data WorkshopLibraryPageData) {
+	@components.Layout(data.Layout) {
+		<style>
+			[x-cloak] { display: none !important; }
+		</style>
+		<div x-data="{ showAddAddon: false, showCreateLibrary: false }">
+			<!-- Hero Header -->
+			<div class="bg-gradient-to-br from-indigo-600 to-purple-600 rounded-lg p-6 md:p-8 mb-6 shadow-lg">
+				<div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+					<div class="text-white">
+						<h1 class="text-2xl md:text-3xl font-bold mb-2">Workshop Library</h1>
+						<p class="text-indigo-100 text-sm">Manage addon libraries and workshop content for your game servers</p>
+					</div>
+					<div class="flex flex-wrap gap-2">
+						<a href="/workshop/search" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-white/20 hover:bg-white/30 text-white border border-white/30 font-medium rounded-md transition-colors">Search</a>
+						<button @click="showAddAddon = !showAddAddon; showCreateLibrary = false" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-white/20 hover:bg-white/30 text-white border border-white/30 font-medium rounded-md transition-colors">
+							<span x-text="showAddAddon ? '✕ Cancel' : '+ Add Addon'">+ Add Addon</span>
+						</button>
+						<button @click="showCreateLibrary = !showCreateLibrary; showAddAddon = false" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-white hover:bg-gray-50 text-indigo-600 font-semibold rounded-md transition-colors">
+							<span x-text="showCreateLibrary ? '✕ Cancel' : '+ New Library'">+ New Library</span>
+						</button>
+					</div>
+				</div>
+			</div>
+			<!-- Add Addon Form -->
+			<div x-show="showAddAddon" x-cloak x-transition class="bg-white dark:bg-slate-800 rounded-lg shadow-md border-2 border-indigo-500 p-6 mb-6">
+				<div class="flex justify-between items-center mb-4 pb-4 border-b border-gray-200 dark:border-slate-700">
+					<h3 class="text-lg font-semibold text-gray-900 dark:text-white">Fetch Addon from Steam Workshop</h3>
+					<button @click="showAddAddon = false" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">Cancel</button>
+				</div>
+				<form hx-post="/workshop/fetch-metadata" hx-target="#addAddonResult" hx-swap="innerHTML" class="grid grid-cols-1 md:grid-cols-4 gap-4">
+					<div>
+						<label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Game</label>
+						<select name="game_id" required class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+							for _, game := range data.Games {
+								<option value={ fmt.Sprintf("%d", game.GameId) }>{ game.Name }</option>
+							}
+						</select>
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Workshop ID</label>
+						<input type="text" name="workshop_id" required placeholder="e.g., 2938285337" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"/>
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Platform</label>
+						<select name="platform_type" required class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+							<option value="steam_workshop">Steam Workshop</option>
+						</select>
+					</div>
+					<div class="flex items-end">
+						<button type="submit" class="w-full inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-md transition-colors">Fetch</button>
+					</div>
+				</form>
+				<div id="addAddonResult" class="mt-4"></div>
+			</div>
+			<!-- Create Library Form -->
+			<div x-show="showCreateLibrary" x-cloak x-transition class="bg-white dark:bg-slate-800 rounded-lg shadow-md border-2 border-indigo-500 p-6 mb-6">
+				<div class="flex justify-between items-center mb-4 pb-4 border-b border-gray-200 dark:border-slate-700">
+					<h3 class="text-lg font-semibold text-gray-900 dark:text-white">Create New Library</h3>
+					<button @click="showCreateLibrary = false" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">Cancel</button>
+				</div>
+				<form method="POST" action="/workshop/create-library" class="space-y-4">
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+						<div>
+							<label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Game *</label>
+							<select name="game_id" required class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+								for _, game := range data.Games {
+									<option value={ fmt.Sprintf("%d", game.GameId) }>{ game.Name }</option>
+								}
+							</select>
+						</div>
+						<div>
+							<label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Name *</label>
+							<input type="text" name="name" required placeholder="e.g., Essential Maps" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"/>
+						</div>
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Description</label>
+						<input type="text" name="description" placeholder="Optional" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"/>
+					</div>
+					<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-md transition-colors">Create Library</button>
+				</form>
+			</div>
+			<!-- Libraries Section -->
+			<div class="flex justify-between items-center mb-4">
+				<h2 class="text-xl font-bold text-gray-900 dark:text-white">Libraries <span class="text-sm font-normal text-gray-500 dark:text-gray-400">({ fmt.Sprintf("%d", len(data.Libraries)) })</span></h2>
+				<a href="/workshop/search?type=library" class="text-sm text-indigo-600 dark:text-indigo-400 hover:underline">Browse all →</a>
+			</div>
+			if len(data.Libraries) > 0 {
+				<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+					for _, lib := range data.Libraries {
+						<a href={ templ.URL(fmt.Sprintf("/workshop/library-detail?library_id=%d", lib.LibraryId)) } class="block bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-5 hover:shadow-lg hover:-translate-y-0.5 transition-all">
+							<div class="flex justify-between items-start mb-2 gap-2">
+								<span class="font-semibold text-gray-900 dark:text-white">{ lib.Name }</span>
+								for _, game := range data.Games {
+									if game.GameId == lib.GameId {
+										<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200 whitespace-nowrap">{ game.Name }</span>
+									}
+								}
+							</div>
+							<div class="text-sm text-gray-600 dark:text-gray-400 mb-3 line-clamp-2">
+								if lib.Description != "" {
+									{ lib.Description }
+								} else {
+									<em class="text-gray-400 dark:text-gray-500">No description</em>
+								}
+							</div>
+							<div class="flex justify-between items-center text-xs text-gray-500 dark:text-gray-400">
+								<span>{ timeAgo(lib.UpdatedAt) }</span>
+							</div>
+						</a>
+					}
+				</div>
+			} else {
+				<div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-12 text-center mb-8">
+					<div class="text-6xl mb-4">📚</div>
+					<h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">No libraries yet</h3>
+					<p class="text-gray-600 dark:text-gray-400 mb-4">Create a library to organize your addons into reusable collections.</p>
+					<button @click="showCreateLibrary = true" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-md transition-colors">Create Library</button>
+				</div>
+			}
+			<!-- Recent Addons Section -->
+			<div class="flex justify-between items-center mb-4">
+				<h2 class="text-xl font-bold text-gray-900 dark:text-white">Recent Addons <span class="text-sm font-normal text-gray-500 dark:text-gray-400">({ fmt.Sprintf("%d total", len(data.Addons)) })</span></h2>
+				<a href="/workshop/search?type=addon" class="text-sm text-indigo-600 dark:text-indigo-400 hover:underline">Browse all →</a>
+			</div>
+			if len(data.RecentAddons) > 0 {
+				<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+					for _, addon := range data.RecentAddons {
+						<a href={ templ.URL(fmt.Sprintf("/workshop/addon?addon_id=%d", addon.AddonId)) } class="block bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-4 hover:shadow-md transition-shadow">
+							<div class="font-semibold text-gray-900 dark:text-white text-sm mb-2">{ addon.Name }</div>
+							<div class="inline-block font-mono text-xs bg-gray-100 dark:bg-slate-900 text-gray-700 dark:text-gray-300 px-2 py-1 rounded mb-3">{ addon.WorkshopId }</div>
+							<div class="flex justify-between items-center text-xs text-gray-500 dark:text-gray-400">
+								<span>
+									for _, game := range data.Games {
+										if game.GameId == addon.GameId {
+											{ game.Name }
+										}
+									}
+								</span>
+								<div class="flex items-center gap-2">
+									if addon.FileSizeBytes > 0 {
+										<span>{ fmt.Sprintf("%.1f MB", float64(addon.FileSizeBytes)/1048576) }</span>
+									}
+									if addon.IsCollection {
+										<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200">Collection</span>
+									} else {
+										<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">Addon</span>
+									}
+								</div>
+							</div>
+						</a>
+					}
+				</div>
+			} else {
+				<div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-12 text-center">
+					<div class="text-6xl mb-4">🧩</div>
+					<h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">No addons yet</h3>
+					<p class="text-gray-600 dark:text-gray-400 mb-4">Fetch addon metadata from Steam Workshop to get started.</p>
+					<button @click="showAddAddon = true" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-md transition-colors">Add Addon</button>
+				</div>
+			}
+		</div>
+	}
+}

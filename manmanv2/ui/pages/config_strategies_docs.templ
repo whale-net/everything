@@ -1,0 +1,26 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/manmanv2/ui/components"
+)
+
+templ ConfigStrategiesDocs(layout components.LayoutData) {
+	@components.Layout(layout) {
+		<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md p-6 mb-6 border border-gray-200 dark:border-slate-700 prose dark:prose-invert max-w-none">
+			<h1 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">Configuration Strategy System</h1>
+			<h2 class="text-xl font-semibold text-slate-900 dark:text-white mt-6 mb-3">Overview</h2>
+			<p class="text-slate-700 dark:text-slate-300">The configuration strategy system provides a flexible, database-driven approach to generating game server configurations. It allows you to define how configuration files are created, what parameters can be customized, and how those parameters map to actual configuration values.</p>
+			<div class="bg-gray-50 dark:bg-slate-900 p-4 rounded-md my-4">
+				<strong class="text-slate-900 dark:text-white">Current Status:</strong>
+				<ul class="mt-2 ml-6 text-slate-700 dark:text-slate-300">
+					<li>✅ Database schema and CRUD operations</li>
+					<li>✅ Volume mounting (volume strategy type)</li>
+					<li>🚧 File rendering system (in development)</li>
+					<li>⏳ Parameter resolution and binding</li>
+					<li>⏳ Configuration patches</li>
+				</ul>
+			</div>
+			<p class="text-sm text-slate-600 dark:text-slate-400 italic">Note: This is a documentation page. Full implementation details are available in the source code and database schema.</p>
+		</div>
+	}
+}

@@ -1,0 +1,761 @@
+package pages
+
+import (
+	"fmt"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+)
+
+type SessionDetailPageData struct {
+	Layout        components.LayoutData
+	Session       *manmanpb.Session
+	SGC           *manmanpb.ServerGameConfig
+	GameConfig    *manmanpb.GameConfig
+	Game          *manmanpb.Game
+	Actions       []*manmanpb.ActionDefinition
+	Libraries     []*manmanpb.WorkshopLibrary
+	Installations []*manmanpb.WorkshopInstallation
+}
+
+func buttonStyleClass(style string) string {
+	switch style {
+	case "primary":
+		return "bg-indigo-600 hover:bg-indigo-700 text-white"
+	case "success":
+		return "bg-green-600 hover:bg-green-700 text-white"
+	case "danger":
+		return "bg-red-600 hover:bg-red-700 text-white"
+	case "warning":
+		return "bg-yellow-600 hover:bg-yellow-700 text-white"
+	default:
+		return "bg-slate-600 hover:bg-slate-700 text-white"
+	}
+}
+
+templ SessionDetail(data SessionDetailPageData) {
+	@components.Layout(data.Layout) {
+		<style>
+			[x-cloak] { display: none !important; }
+			.log-viewer-container {
+				background: #1e1e1e;
+				max-height: 600px;
+				overflow: hidden;
+			}
+			[data-theme="oled"] .log-viewer-container {
+				background: #000000;
+			}
+			.log-viewer-output {
+				margin: 0;
+				padding: 1rem;
+				color: #d4d4d4;
+				font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+				font-size: 0.875rem;
+				line-height: 1.5;
+				overflow-y: auto;
+				overflow-x: auto;
+				max-height: 600px;
+				white-space: pre-wrap;
+				word-wrap: break-word;
+			}
+			.log-viewer-container.collapsed .log-viewer-output {
+				display: none;
+			}
+			.log-line { display: block; }
+			.log-stdout { color: #d4d4d4; }
+			.log-stderr { color: #f48771; }
+			.log-host { color: #4fc1ff; }
+			.log-info { color: #4fc1ff; }
+			.log-warning { color: #f9c74f; }
+			.log-error { color: #f48771; }
+			.log-timestamp { color: #858585; margin-right: 0.5rem; }
+			#log-histogram {
+				border: 1px solid #e5e7eb;
+				border-radius: 4px;
+			}
+			[data-theme="dark"] #log-histogram {
+				border-color: #374151;
+			}
+		</style>
+		<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+			<div>
+				<div class="flex items-center gap-2 mb-2">
+					<span class="inline-flex items-center px-3 py-1 rounded-md text-xs font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+						🎮 SESSION
+					</span>
+					@components.Badge(data.Session.Status, "")
+				</div>
+				<h1 class="text-3xl font-bold text-gray-900 dark:text-white">Session { fmt.Sprintf("%d", data.Session.SessionId) }</h1>
+				if data.Game != nil {
+					<p class="text-sm text-gray-600 dark:text-gray-400 mt-1">{ data.Game.Name }</p>
+				}
+			</div>
+			<div class="flex flex-wrap gap-2">
+				if data.Session.Status == "running" {
+					<form method="POST" action={ templ.URL(fmt.Sprintf("/sessions/%d/stop", data.Session.SessionId)) } class="inline">
+						<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">Stop Session</button>
+					</form>
+				}
+				if data.SGC != nil {
+					<a href={ templ.URL(fmt.Sprintf("/sgc/%d", data.SGC.ServerGameConfigId)) } class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">View SGC</a>
+				}
+			</div>
+		</div>
+		<!-- Session Info -->
+		<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-6 mb-6">
+			<h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Session Details</h2>
+			<dl class="grid grid-cols-1 md:grid-cols-2 gap-4">
+				@components.DLItemMono("Session ID", fmt.Sprintf("%d", data.Session.SessionId))
+				<div>
+					<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Status</dt>
+					<dd class="mt-1">
+						@components.Badge(data.Session.Status, "")
+					</dd>
+				</div>
+				<div class="md:col-span-2">
+					<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Available</dt>
+					<dd class="mt-1">
+						if data.Session.Status == "running" {
+							<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">Yes (Ready for connections)</span>
+						} else if data.Session.Status == "starting" || data.Session.Status == "pending" {
+							<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">Starting (Wait for it to be ready)</span>
+						} else {
+							<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200">No (Server is not running)</span>
+						}
+					</dd>
+				</div>
+				if data.Game != nil {
+					<div>
+						<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Game</dt>
+						<dd class="mt-1 text-sm">
+							<a href={ templ.URL(fmt.Sprintf("/games/%d", data.Game.GameId)) } class="text-indigo-600 dark:text-indigo-400 hover:underline">{ data.Game.Name }</a>
+						</dd>
+					</div>
+				}
+				if data.GameConfig != nil {
+					<div>
+						<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">GameConfig</dt>
+						<dd class="mt-1 text-sm">
+							<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.GameConfig.GameId, data.GameConfig.ConfigId)) } class="text-indigo-600 dark:text-indigo-400 hover:underline">{ data.GameConfig.Name }</a>
+							<small class="text-gray-600 dark:text-gray-400 ml-1">({ data.GameConfig.Image })</small>
+						</dd>
+					</div>
+				}
+				if data.SGC != nil {
+					<div>
+						<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Server Game Config</dt>
+						<dd class="mt-1 text-sm">
+							<a href={ templ.URL(fmt.Sprintf("/sgc/%d", data.SGC.ServerGameConfigId)) } class="text-indigo-600 dark:text-indigo-400 hover:underline">SGC #{ fmt.Sprintf("%d", data.SGC.ServerGameConfigId) }</a>
+							<small class="text-gray-600 dark:text-gray-400 ml-1">(Server #{ fmt.Sprintf("%d", data.SGC.ServerId) })</small>
+						</dd>
+					</div>
+				}
+				@components.DLItem("Started", fmt.Sprintf("%s (%s)", timeAgo(data.Session.StartedAt), formatTime(data.Session.StartedAt)))
+				if data.Session.EndedAt > 0 {
+					@components.DLItem("Ended", fmt.Sprintf("%s (%s)", timeAgo(data.Session.EndedAt), formatTime(data.Session.EndedAt)))
+				}
+				@components.DLItem("Exit Code", fmt.Sprintf("%d", data.Session.ExitCode))
+			</dl>
+		</div>
+		// Live/Historical Logs
+		if data.Session.Status == "running" {
+			// Live Logs
+			<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 mb-6 overflow-hidden">
+				<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900">
+					<h2 class="text-lg font-semibold text-gray-900 dark:text-white">Live Logs</h2>
+					<div class="flex flex-wrap items-center gap-2">
+						<button id="toggle-logs" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors">Hide</button>
+						<button id="clear-logs" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors">Clear</button>
+						<span id="log-status" class="text-sm text-gray-600 dark:text-gray-400">Connecting...</span>
+					</div>
+				</div>
+				<div id="log-viewer" class="log-viewer-container">
+					<pre id="log-output" class="log-viewer-output"></pre>
+				</div>
+				<div class="border-t border-gray-700">
+					<form id="stdin-form" class="flex gap-2 p-3 bg-slate-900">
+						<input type="text" id="stdin-input" placeholder="Send command to server..." class="flex-1 px-3 py-2 min-h-[44px] bg-slate-950 border border-slate-700 text-gray-200 font-mono text-sm rounded focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+						<button type="submit" id="stdin-submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md transition-colors min-w-[80px]">Send</button>
+					</form>
+					<div id="stdin-status" class="px-3 pb-2 text-xs text-gray-500 min-h-[1.5rem] bg-slate-900"></div>
+				</div>
+			</div>
+			<div id="live-logs-script" data-session-id={ fmt.Sprintf("%d", data.Session.SessionId) }></div>
+			<script type="text/javascript">
+				(function() {
+					const sessionId = parseInt(document.getElementById('live-logs-script').dataset.sessionId);
+					const logOutput = document.getElementById('log-output');
+					const logStatus = document.getElementById('log-status');
+					const logViewer = document.getElementById('log-viewer');
+					const toggleBtn = document.getElementById('toggle-logs');
+					const clearBtn = document.getElementById('clear-logs');
+					let autoScroll = true;
+					let evtSource = null;
+
+					function appendLogLine(container, timestamp, source, message) {
+						const line = document.createElement('span');
+						line.className = 'log-line log-' + source;
+						line.textContent = '[' + timestamp + '] [' + source + '] ' + message;
+						container.appendChild(line);
+						container.appendChild(document.createTextNode('\n'));
+					}
+
+					function connect() {
+						evtSource = new EventSource('/sessions/' + sessionId + '/logs/stream');
+						evtSource.onopen = () => {
+							logStatus.textContent = '● Connected';
+							logStatus.style.color = '#4fc1ff';
+						};
+						evtSource.onmessage = (event) => {
+							const d = JSON.parse(event.data);
+							if (d.type === 'connected') return;
+							const date = new Date(d.timestamp);
+							const time = date.toLocaleTimeString('en-US', { hour12: false });
+							appendLogLine(logOutput, time, d.source, d.message);
+							if (autoScroll) {
+								logOutput.scrollTop = logOutput.scrollHeight;
+							}
+							const lines = logOutput.children;
+							if (lines.length > 1000) {
+								logOutput.removeChild(lines[0]);
+							}
+						};
+						evtSource.onerror = () => {
+							logStatus.textContent = '● Disconnected';
+							logStatus.style.color = '#f48771';
+							evtSource.close();
+							setTimeout(connect, 2000);
+						};
+					}
+
+					toggleBtn.onclick = () => {
+						logViewer.classList.toggle('collapsed');
+						toggleBtn.textContent = logViewer.classList.contains('collapsed') ? 'Show' : 'Hide';
+					};
+					clearBtn.onclick = () => { logOutput.textContent = ''; };
+					logOutput.onscroll = () => {
+						const atBottom = logOutput.scrollHeight - logOutput.clientHeight <= logOutput.scrollTop + 50;
+						autoScroll = atBottom;
+					};
+					connect();
+					window.addEventListener('beforeunload', () => { if (evtSource) evtSource.close(); });
+
+					const stdinForm = document.getElementById('stdin-form');
+					const stdinInput = document.getElementById('stdin-input');
+					const stdinSubmit = document.getElementById('stdin-submit');
+					const stdinStatus = document.getElementById('stdin-status');
+					stdinForm.onsubmit = async (e) => {
+						e.preventDefault();
+						const input = stdinInput.value;
+						if (!input.trim()) return;
+						stdinInput.disabled = true;
+						stdinSubmit.disabled = true;
+						stdinStatus.textContent = 'Sending...';
+						stdinStatus.style.color = '#4fc1ff';
+						try {
+							const response = await fetch('/api/sessions/' + sessionId + '/stdin', {
+								method: 'POST',
+								headers: { 'Content-Type': 'application/json' },
+								body: JSON.stringify({ input: input }),
+								signal: AbortSignal.timeout(10000)
+							});
+							if (!response.ok) throw new Error('HTTP ' + response.status + ': ' + await response.text());
+							stdinInput.value = '';
+							stdinStatus.textContent = '✓ Sent';
+							stdinStatus.style.color = '#4fc1ff';
+							setTimeout(() => { stdinStatus.textContent = ''; }, 2000);
+						} catch (err) {
+							stdinStatus.textContent = '✗ Error: ' + err.message;
+							stdinStatus.style.color = '#f48771';
+						} finally {
+							stdinInput.disabled = false;
+							stdinSubmit.disabled = false;
+							stdinInput.focus();
+						}
+					};
+				})();
+			</script>
+		} else {
+			// Historical Logs
+			<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 mb-6 overflow-hidden">
+				<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900">
+					<h2 class="text-lg font-semibold text-gray-900 dark:text-white">Historical Logs</h2>
+					<div class="flex flex-wrap items-center gap-2">
+						<button id="load-logs-btn" disabled class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white text-sm font-medium rounded-md transition-colors">Load Logs</button>
+						<button id="clear-logs-btn" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors">Clear</button>
+					</div>
+				</div>
+				<div class="p-4 border-b border-gray-200 dark:border-slate-700">
+					<div class="flex items-center justify-between mb-2">
+						<div id="histogram-status" class="text-sm text-gray-600 dark:text-gray-400"></div>
+						<button id="zoom-out-btn" style="display: none;" class="text-sm text-blue-600 hover:text-blue-700 dark:text-blue-400">← Back to overview</button>
+					</div>
+					<div style="position: relative;">
+						<canvas id="log-histogram" width="800" height="200" style="width: 100%; height: 200px; cursor: crosshair;"></canvas>
+						<div id="tooltip" style="position: absolute; display: none; background: rgba(0,0,0,0.8); color: white; padding: 8px; border-radius: 4px; font-size: 12px; pointer-events: none; z-index: 1000; white-space: nowrap;"></div>
+					</div>
+					<div id="selection-info" class="text-sm text-gray-700 dark:text-gray-300 mt-2"></div>
+				</div>
+				<div id="log-content" style="display: none;"></div>
+			</div>
+			<style>
+				#log-histogram { border: 2px solid #3b82f6; border-radius: 4px; background: white; }
+				[data-theme="dark"] #log-histogram { border-color: #3b82f6; background: #1e293b; }
+			</style>
+			<div id="hist-logs-script" data-session-id={ fmt.Sprintf("%d", data.Session.SessionId) }></div>
+			<script type="text/javascript">
+				(function() {
+					const sessionId = parseInt(document.getElementById('hist-logs-script').dataset.sessionId);
+					const canvas = document.getElementById('log-histogram');
+					if (!canvas) {
+						console.error('Canvas element not found');
+						return;
+					}
+					const ctx = canvas.getContext('2d');
+					const statusDiv = document.getElementById('histogram-status');
+					const selectionInfo = document.getElementById('selection-info');
+					const loadBtn = document.getElementById('load-logs-btn');
+					const clearBtn = document.getElementById('clear-logs-btn');
+					const logContent = document.getElementById('log-content');
+					const tooltip = document.getElementById('tooltip');
+					const zoomOutBtn = document.getElementById('zoom-out-btn');
+					
+					let fullHistogramData = null;
+					let histogramData = null;
+					let zoomRange = null;
+					let selection = null;
+					let isSelecting = false;
+					let selectionStart = null;
+
+					async function loadHistogram(startTime, endTime) {
+						statusDiv.textContent = 'Loading histogram...';
+						console.log('Loading histogram for session:', sessionId, 'range:', startTime, endTime);
+						try {
+							let url = '/sessions/' + sessionId + '/logs/histogram';
+							if (startTime && endTime) {
+								url += '?start=' + startTime + '&end=' + endTime;
+							}
+							console.log('Fetching:', url);
+							const resp = await fetch(url);
+							console.log('Response status:', resp.status);
+							if (!resp.ok) throw new Error('HTTP ' + resp.status);
+							const data = await resp.json();
+							console.log('Histogram data:', data);
+							if (!data.buckets || data.buckets.length === 0) {
+								statusDiv.textContent = 'No logs available for this session';
+								console.log('No buckets in response');
+								return false;
+							}
+							if (!startTime && !endTime) {
+								fullHistogramData = data;
+								zoomRange = null;
+								zoomOutBtn.style.display = 'none';
+							} else {
+								zoomRange = { start: startTime, end: endTime };
+								zoomOutBtn.style.display = 'inline';
+							}
+							histogramData = data;
+							const zoomText = zoomRange ? ' (zoomed)' : '';
+							statusDiv.textContent = 'Showing ' + histogramData.buckets.length + ' time buckets (' + histogramData.granularity + ' resolution)' + zoomText;
+							console.log('Rendering histogram with', histogramData.buckets.length, 'buckets');
+							renderHistogram();
+							return true;
+						} catch (err) {
+							console.error('Error loading histogram:', err);
+							statusDiv.textContent = 'Error loading histogram: ' + err.message;
+							statusDiv.style.color = '#f48771';
+							return false;
+						}
+					}
+
+					function renderHistogram() {
+						console.log('renderHistogram called, data:', histogramData);
+						if (!histogramData || !histogramData.buckets.length) return;
+						const width = canvas.width;
+						const height = canvas.height;
+						const padding = { top: 20, right: 20, bottom: 40, left: 60 };
+						const chartWidth = width - padding.left - padding.right;
+						const chartHeight = height - padding.top - padding.bottom;
+						ctx.clearRect(0, 0, width, height);
+						const maxLines = Math.max(...histogramData.buckets.map(b => (b.stdout_lines || 0) + (b.stderr_lines || 0) + (b.host_lines || 0)));
+						if (maxLines === 0) return;
+						const barWidth = chartWidth / histogramData.buckets.length;
+						histogramData.buckets.forEach((bucket, i) => {
+							const x = padding.left + i * barWidth;
+							const total = (bucket.stdout_lines || 0) + (bucket.stderr_lines || 0) + (bucket.host_lines || 0);
+							if (total === 0) return;
+							const barHeight = (total / maxLines) * chartHeight;
+							let currentY = padding.top + chartHeight - barHeight;
+							if (bucket.stdout_lines > 0) {
+								const h = (bucket.stdout_lines / total) * barHeight;
+								ctx.fillStyle = '#d4d4d4';
+								ctx.fillRect(x, currentY, barWidth - 1, h);
+								currentY += h;
+							}
+							if (bucket.stderr_lines > 0) {
+								const h = (bucket.stderr_lines / total) * barHeight;
+								ctx.fillStyle = '#f48771';
+								ctx.fillRect(x, currentY, barWidth - 1, h);
+								currentY += h;
+							}
+							if (bucket.host_lines > 0) {
+								const h = (bucket.host_lines / total) * barHeight;
+								ctx.fillStyle = '#4fc1ff';
+								ctx.fillRect(x, currentY, barWidth - 1, h);
+							}
+						});
+						ctx.strokeStyle = '#9ca3af';
+						ctx.lineWidth = 1;
+						ctx.beginPath();
+						ctx.moveTo(padding.left, padding.top);
+						ctx.lineTo(padding.left, padding.top + chartHeight);
+						ctx.lineTo(padding.left + chartWidth, padding.top + chartHeight);
+						ctx.stroke();
+						ctx.fillStyle = '#6b7280';
+						ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+						ctx.textAlign = 'right';
+						for (let i = 0; i <= 4; i++) {
+							const y = padding.top + chartHeight - (i / 4) * chartHeight;
+							const value = Math.round((i / 4) * maxLines);
+							ctx.fillText(value.toString(), padding.left - 10, y + 4);
+						}
+						ctx.textAlign = 'center';
+						const labelStep = Math.max(1, Math.floor(histogramData.buckets.length / 5));
+						for (let i = 0; i < histogramData.buckets.length; i += labelStep) {
+							const bucket = histogramData.buckets[i];
+							const x = padding.left + i * barWidth + barWidth / 2;
+							const date = new Date(bucket.timestamp * 1000);
+							const label = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+							ctx.fillText(label, x, padding.top + chartHeight + 20);
+						}
+						if (selection) {
+							ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
+							const startIdx = Math.min(selection.startIdx, selection.endIdx);
+							const endIdx = Math.max(selection.startIdx, selection.endIdx);
+							const x = padding.left + startIdx * barWidth;
+							const w = (endIdx - startIdx + 1) * barWidth;
+							ctx.fillRect(x, padding.top, w, chartHeight);
+						}
+					}
+
+					canvas.addEventListener('mousedown', (e) => {
+						if (!histogramData) return;
+						const rect = canvas.getBoundingClientRect();
+						const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+						const padding = 60;
+						const chartWidth = canvas.width - padding - 20;
+						const barWidth = chartWidth / histogramData.buckets.length;
+						const idx = Math.floor((x - padding) / barWidth);
+						if (idx >= 0 && idx < histogramData.buckets.length) {
+							if (e.detail === 2 && !zoomRange) {
+								zoomIntoBucket(idx);
+								return;
+							}
+							isSelecting = true;
+							selectionStart = idx;
+							selection = { startIdx: idx, endIdx: idx };
+							updateSelection();
+						}
+					});
+
+					canvas.addEventListener('mousemove', (e) => {
+						if (!histogramData) return;
+						const rect = canvas.getBoundingClientRect();
+						const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+						const y = e.clientY - rect.top;
+						const padding = 60;
+						const chartWidth = canvas.width - padding - 20;
+						const barWidth = chartWidth / histogramData.buckets.length;
+						const idx = Math.floor((x - padding) / barWidth);
+						if (idx >= 0 && idx < histogramData.buckets.length && !isSelecting) {
+							const bucket = histogramData.buckets[idx];
+							const date = new Date(bucket.timestamp * 1000);
+							const total = (bucket.stdout_lines || 0) + (bucket.stderr_lines || 0) + (bucket.host_lines || 0);
+							tooltip.innerHTML = '<div><strong>' + date.toLocaleString() + '</strong></div>' +
+								'<div>Total: ' + total.toLocaleString() + ' lines</div>' +
+								(bucket.stdout_lines ? '<div style="color: #d4d4d4;">stdout: ' + bucket.stdout_lines.toLocaleString() + '</div>' : '') +
+								(bucket.stderr_lines ? '<div style="color: #f48771;">stderr: ' + bucket.stderr_lines.toLocaleString() + '</div>' : '') +
+								(bucket.host_lines ? '<div style="color: #4fc1ff;">host: ' + bucket.host_lines.toLocaleString() + '</div>' : '') +
+								(!zoomRange ? '<div style="margin-top: 4px; font-size: 11px; color: #aaa;">Double-click to zoom</div>' : '');
+							tooltip.style.display = 'block';
+							tooltip.style.left = (e.clientX - rect.left + 10) + 'px';
+							tooltip.style.top = (y + 10) + 'px';
+						} else {
+							tooltip.style.display = 'none';
+						}
+						if (isSelecting && idx >= 0 && idx < histogramData.buckets.length) {
+							selection.endIdx = idx;
+							renderHistogram();
+							updateSelection();
+						}
+					});
+
+					canvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+					canvas.addEventListener('mouseup', () => { isSelecting = false; });
+
+					function zoomIntoBucket(idx) {
+						const bucket = histogramData.buckets[idx];
+						const bucketDuration = histogramData.granularity === '1m' ? 60 : histogramData.granularity === '5m' ? 300 : 3600;
+						const zoomBuckets = Math.min(20, histogramData.buckets.length);
+						const startIdx = Math.max(0, idx - Math.floor(zoomBuckets / 2));
+						const endIdx = Math.min(histogramData.buckets.length - 1, startIdx + zoomBuckets);
+						const startTime = histogramData.buckets[startIdx].timestamp;
+						const endTime = histogramData.buckets[endIdx].timestamp + bucketDuration;
+						loadHistogram(startTime, endTime);
+					}
+
+					zoomOutBtn.onclick = () => {
+						loadHistogram();
+						selection = null;
+						selectionInfo.textContent = '';
+						loadBtn.disabled = true;
+					};
+
+					function updateSelection() {
+						if (!selection || !histogramData) return;
+						const startIdx = Math.min(selection.startIdx, selection.endIdx);
+						const endIdx = Math.max(selection.startIdx, selection.endIdx);
+						const startTime = histogramData.buckets[startIdx].timestamp;
+						const endBucket = histogramData.buckets[endIdx];
+						const bucketDuration = histogramData.granularity === '1m' ? 60 : histogramData.granularity === '5m' ? 300 : 3600;
+						const endTime = endBucket.timestamp + bucketDuration;
+						const maxDuration = 6 * 60 * 60;
+						let actualEndTime = endTime;
+						let truncated = false;
+						if (endTime - startTime > maxDuration) {
+							actualEndTime = startTime + maxDuration;
+							truncated = true;
+						}
+						const startDate = new Date(startTime * 1000);
+						const endDate = new Date(actualEndTime * 1000);
+						selectionInfo.innerHTML = 'Selected: ' + startDate.toLocaleString() + ' - ' + endDate.toLocaleString() +
+							(truncated ? ' <span style="color: #f59e0b;">(truncated to 6 hours)</span>' : '');
+						const startInput = document.createElement('input');
+						startInput.type = 'hidden';
+						startInput.id = 'log-start';
+						startInput.value = startTime;
+						const endInput = document.createElement('input');
+						endInput.type = 'hidden';
+						endInput.id = 'log-end';
+						endInput.value = actualEndTime;
+						const oldStart = document.getElementById('log-start');
+						const oldEnd = document.getElementById('log-end');
+						if (oldStart) oldStart.remove();
+						if (oldEnd) oldEnd.remove();
+						document.body.appendChild(startInput);
+						document.body.appendChild(endInput);
+						loadBtn.disabled = false;
+					}
+
+					loadBtn.onclick = () => {
+						const start = document.getElementById('log-start').value;
+						const end = document.getElementById('log-end').value;
+						logContent.style.display = 'block';
+						logContent.innerHTML = '<div style="padding: 1rem; text-align: center;">Loading logs...</div>';
+						loadBtn.disabled = true;
+						canvas.style.pointerEvents = 'none';
+						canvas.style.opacity = '0.5';
+						htmx.ajax('GET', '/sessions/' + sessionId + '/logs/load?start=' + start + '&end=' + end, {
+							target: '#log-content',
+							swap: 'innerHTML'
+						}).then(() => {
+							loadBtn.disabled = false;
+							canvas.style.pointerEvents = 'auto';
+							canvas.style.opacity = '1';
+						});
+					};
+
+					clearBtn.onclick = () => {
+						logContent.innerHTML = '';
+						logContent.style.display = 'none';
+						selection = null;
+						selectionInfo.textContent = '';
+						loadBtn.disabled = true;
+						renderHistogram();
+					};
+
+					loadHistogram().then(() => {
+						if (histogramData && histogramData.buckets.length > 0) {
+							const numBuckets = Math.min(10, histogramData.buckets.length);
+							const endIdx = histogramData.buckets.length - 1;
+							const startIdx = Math.max(0, endIdx - numBuckets + 1);
+							selection = { startIdx, endIdx };
+							updateSelection();
+							renderHistogram();
+							setTimeout(() => {
+								if (loadBtn && !loadBtn.disabled) {
+									loadBtn.click();
+								}
+							}, 500);
+						}
+					});
+				})();
+			</script>
+		}
+		<!-- Actions -->
+		if len(data.Actions) > 0 {
+			<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 overflow-hidden mb-6">
+				<div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-slate-700">
+					<h2 class="text-lg font-semibold text-gray-900 dark:text-white">Available Actions</h2>
+				</div>
+				<div class="p-6">
+					<div id="action-status" class="mb-4"></div>
+					for _, action := range data.Actions {
+						<div class="mb-6 pb-6 border-b border-gray-200 dark:border-slate-700 last:border-0">
+							if action.GroupName != "" {
+								<h4 class="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase mb-2">{ action.GroupName }</h4>
+							}
+							if action.Description != "" {
+								<p class="text-sm text-gray-600 dark:text-gray-400 mb-3">{ action.Description }</p>
+							}
+							if len(action.InputFields) == 0 {
+								<!-- Simple button (no inputs) -->
+								<button
+									class={ "inline-flex items-center justify-center px-4 py-2 min-h-[44px] font-medium rounded-md transition-colors", buttonStyleClass(action.ButtonStyle) }
+									hx-post={ fmt.Sprintf("/sessions/%d/actions/execute", data.Session.SessionId) }
+									hx-vals={ fmt.Sprintf("{\"action_id\": \"%d\"}", action.ActionId) }
+									hx-target="#action-status"
+									hx-swap="innerHTML"
+									if action.RequiresConfirmation {
+										hx-confirm={ action.ConfirmationMessage }
+									}
+								>
+									{ action.Label }
+								</button>
+							} else {
+								<!-- Parameterized button (with inputs) -->
+								<form
+									hx-post={ fmt.Sprintf("/sessions/%d/actions/execute", data.Session.SessionId) }
+									hx-target="#action-status"
+									hx-swap="innerHTML"
+									class="flex flex-col gap-3 max-w-lg"
+								>
+									<input type="hidden" name="action_id" value={ fmt.Sprintf("%d", action.ActionId) }/>
+									for _, field := range action.InputFields {
+										<div>
+											<label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+												{ field.Label }
+												if field.Required {
+													<span class="text-red-600">*</span>
+												}
+											</label>
+											if field.FieldType == "select" {
+												<select
+													name={ field.Name }
+													required?={ field.Required }
+													class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
+												>
+													for _, opt := range field.Options {
+														<option value={ opt.Value } selected?={ opt.IsDefault }>{ opt.Label }</option>
+													}
+												</select>
+											} else if field.FieldType == "textarea" {
+												<textarea
+													name={ field.Name }
+													placeholder={ field.Placeholder }
+													required?={ field.Required }
+													class="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white min-h-[80px]"
+												></textarea>
+											} else if field.FieldType == "number" {
+												<input
+													type="number"
+													name={ field.Name }
+													placeholder={ field.Placeholder }
+													required?={ field.Required }
+													if field.MinValue != 0 {
+														min={ fmt.Sprintf("%f", field.MinValue) }
+													}
+													if field.MaxValue != 0 {
+														max={ fmt.Sprintf("%f", field.MaxValue) }
+													}
+													class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
+												/>
+											} else {
+												<input
+													type={ field.FieldType }
+													name={ field.Name }
+													placeholder={ field.Placeholder }
+													required?={ field.Required }
+													if field.Pattern != "" {
+														pattern={ field.Pattern }
+													}
+													if field.MinLength != 0 {
+														minlength={ fmt.Sprintf("%d", field.MinLength) }
+													}
+													if field.MaxLength != 0 {
+														maxlength={ fmt.Sprintf("%d", field.MaxLength) }
+													}
+													class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
+												/>
+											}
+											if field.HelpText != "" {
+												<small class="block mt-1 text-sm text-gray-600 dark:text-gray-400">{ field.HelpText }</small>
+											}
+										</div>
+									}
+									<button
+										type="submit"
+										class={ "inline-flex items-center justify-center px-4 py-2 min-h-[44px] font-medium rounded-md transition-colors", buttonStyleClass(action.ButtonStyle) }
+										if action.RequiresConfirmation {
+											hx-confirm={ action.ConfirmationMessage }
+										}
+									>
+										{ action.Label }
+									</button>
+								</form>
+							}
+						</div>
+					}
+				</div>
+			</div>
+		}
+		<!-- Workshop Installations -->
+		if len(data.Installations) > 0 {
+			<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 overflow-hidden mb-6">
+				<div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-slate-700">
+					<h2 class="text-lg font-semibold text-gray-900 dark:text-white">Workshop Addons</h2>
+				</div>
+				if data.Session.Status == "pending" || data.Session.Status == "starting" {
+					<div class="bg-yellow-50 dark:bg-yellow-900/20 border-l-4 border-yellow-400 p-4 m-4">
+						<p class="text-sm text-yellow-800 dark:text-yellow-200">Installing addons before launch...</p>
+					</div>
+				}
+				<div class="overflow-x-auto">
+					<table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
+						<thead class="bg-gray-50 dark:bg-slate-900">
+							<tr>
+								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Addon ID</th>
+								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</th>
+								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Progress</th>
+								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Path</th>
+							</tr>
+						</thead>
+						<tbody class="bg-white dark:bg-slate-800 divide-y divide-gray-200 dark:divide-slate-700">
+							for _, inst := range data.Installations {
+								<tr class="hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors">
+									<td class="px-6 py-4 text-sm text-gray-900 dark:text-white">
+										<a href={ templ.URL(fmt.Sprintf("/workshop/addon?addon_id=%d", inst.AddonId)) } class="text-indigo-600 dark:text-indigo-400 hover:underline">{ fmt.Sprintf("%d", inst.AddonId) }</a>
+									</td>
+									<td class="px-6 py-4">
+										@components.Badge(inst.Status, "")
+									</td>
+									<td class="px-6 py-4 text-sm text-gray-700 dark:text-gray-300">
+										if inst.Status == "downloading" {
+											{ fmt.Sprintf("%d%%", inst.ProgressPercent) }
+										} else {
+											—
+										}
+									</td>
+									<td class="px-6 py-4 text-xs font-mono text-gray-700 dark:text-gray-300">{ inst.InstallationPath }</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		} else if len(data.Libraries) > 0 {
+			<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-12 text-center mb-6">
+				<p class="text-gray-500 dark:text-gray-400">Libraries attached but no addons installed yet.</p>
+			</div>
+		}
+	}
+}

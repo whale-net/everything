@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/manmanv2/ui/components"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
@@ -369,5 +370,26 @@ func (app *App) buildLayoutData(r *http.Request, title, active string, user *htm
 		Servers:         servers,
 		SelectedServer:  selectedServer,
 		DefaultServerID: defaultServerID,
+	}, nil
+}
+
+// buildTemplLayoutData builds components.LayoutData for templ pages
+func (app *App) buildTemplLayoutData(r *http.Request, title, active string, user *htmxauth.UserInfo, breadcrumbs []components.Breadcrumb) (components.LayoutData, error) {
+	ctx := context.Background()
+	servers, err := app.grpc.ListServers(ctx)
+	if err != nil {
+		log.Printf("Error fetching servers for layout: %v", err)
+		servers = []*manmanpb.Server{}
+	}
+
+	selectedServer := app.getSelectedServer(r, servers)
+
+	return components.LayoutData{
+		Title:          title,
+		Active:         active,
+		User:           user,
+		Servers:        servers,
+		SelectedServer: selectedServer,
+		Breadcrumbs:    breadcrumbs,
 	}, nil
 }

@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	"github.com/whale-net/everything/manmanv2/ui/pages"
 	"github.com/whale-net/everything/manmanv2/protos"
 )
 
@@ -40,20 +42,18 @@ func (app *App) handleServers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	data := ServersPageData{
-		Title:   "Servers",
-		Active:  "servers",
-		User:    user,
-		Servers: servers,
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Servers", URL: "/servers"},
 	}
 
-	layoutData := LayoutData{
-		Title:  data.Title,
-		Active: data.Active,
-		User:   data.User,
+	layoutData, err := app.buildTemplLayoutData(r, "Servers", "Servers", user, breadcrumbs)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
 	}
 
-	if err := renderPage(w, "servers_content", data, layoutData); err != nil {
+	if err := RenderTempl(w, r, "Servers", pages.Servers(layoutData, servers)); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
@@ -98,33 +98,19 @@ func (app *App) handleServerDetail(w http.ResponseWriter, r *http.Request) {
 		configsResp = &manmanpb.ListServerGameConfigsResponse{Configs: []*manmanpb.ServerGameConfig{}}
 	}
 	
-	// Build map of config_id -> game_id
-	configGameID := make(map[int64]int64)
-	for _, sgc := range configsResp.Configs {
-		gcResp, err := app.grpc.GetAPI().GetGameConfig(ctx, &manmanpb.GetGameConfigRequest{
-			ConfigId: sgc.GameConfigId,
-		})
-		if err == nil && gcResp.Config != nil {
-			configGameID[sgc.GameConfigId] = gcResp.Config.GameId
-		}
-	}
-	
-	data := ServerDetailPageData{
-		Title:        resp.Server.Name,
-		Active:       "servers",
-		User:         user,
-		Server:       resp.Server,
-		Configs:      configsResp.Configs,
-		ConfigGameID: configGameID,
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Servers", URL: "/servers"},
+		{Label: resp.Server.Name, URL: ""},
 	}
 
-	layoutData := LayoutData{
-		Title:  data.Title,
-		Active: data.Active,
-		User:   data.User,
+	layoutData, err := app.buildTemplLayoutData(r, resp.Server.Name, "Servers", user, breadcrumbs)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
 	}
 
-	if err := renderPage(w, "server_detail_content", data, layoutData); err != nil {
+	if err := RenderTempl(w, r, resp.Server.Name, pages.ServerDetail(layoutData, resp.Server, configsResp.Configs)); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}

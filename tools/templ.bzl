@@ -14,14 +14,24 @@ def templ_library(name, srcs, deps = [], go_srcs = [], visibility = None, **kwar
         **kwargs: Additional arguments passed to go_library
     """
     
-    # Convert .templ files to expected _templ.go files
-    generated_files = [src.replace(".templ", "_templ.go") for src in srcs]
+    # Generate Go files from templ files using templ binary
+    generated_files = []
+    for src in srcs:
+        out = src.replace(".templ", "_templ.go")
+        generated_files.append(out)
+        
+        native.genrule(
+            name = name + "_gen_" + src.replace("/", "_").replace(".templ", ""),
+            srcs = [src],
+            outs = [out],
+            cmd = "$(location @com_github_a_h_templ//cmd/templ) generate -f $(SRCS) -stdout > $(OUTS)",
+            tools = ["@com_github_a_h_templ//cmd/templ"],
+        )
     
     # Combine generated files with additional Go sources
     all_srcs = generated_files + go_srcs
     
-    # Create go_library with both .templ and generated .go files
-    # Always include templ and templ/runtime as dependencies
+    # Create go_library with generated .go files
     go_library(
         name = name,
         srcs = all_srcs,

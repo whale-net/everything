@@ -249,7 +249,7 @@ func (c *ControlClient) ListConfigurationStrategies(ctx context.Context, req *ma
 // GameConfigVolume methods
 
 // CreateGameConfigVolume creates a new volume for a game config
-func (c *ControlClient) CreateGameConfigVolume(ctx context.Context, configID int64, name, description, containerPath, hostSubpath string, readOnly bool) (*manmanpb.GameConfigVolume, error) {
+func (c *ControlClient) CreateGameConfigVolume(ctx context.Context, configID int64, name, description, containerPath, hostSubpath string, readOnly bool, volumeType string) (*manmanpb.GameConfigVolume, error) {
 	resp, err := c.api.CreateGameConfigVolume(ctx, &manmanpb.CreateGameConfigVolumeRequest{
 		ConfigId:      configID,
 		Name:          name,
@@ -257,6 +257,7 @@ func (c *ControlClient) CreateGameConfigVolume(ctx context.Context, configID int
 		ContainerPath: containerPath,
 		HostSubpath:   hostSubpath,
 		ReadOnly:      readOnly,
+		VolumeType:    volumeType,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create game config volume: %w", err)

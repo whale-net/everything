@@ -1,0 +1,92 @@
+package pages
+
+import (
+	"fmt"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+)
+
+templ ConfigForm(layout components.LayoutData, game *manmanpb.Game, config *manmanpb.GameConfig, edit bool) {
+	@components.Layout(layout) {
+		<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md p-6 mb-6 border border-gray-200 dark:border-slate-700">
+			<div class="flex justify-between items-center mb-4 pb-4 border-b border-gray-200 dark:border-slate-700">
+				<div class="text-xl font-semibold text-slate-900 dark:text-white">
+					if edit {
+						Edit Configuration
+					} else {
+						Create New Configuration
+					}
+				</div>
+			</div>
+			<form hx-post={ fmt.Sprintf("/games/%d/configs/create", game.GameId) } hx-swap="none">
+				<div class="mb-4">
+					<label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Game</label>
+					<input type="text" value={ game.Name } disabled class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-gray-100 dark:bg-slate-700 text-gray-900 dark:text-white"/>
+				</div>
+				<div class="mb-4">
+					<label for="name" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Configuration Name *</label>
+					<input
+						type="text"
+						id="name"
+						name="name"
+						value={ configValue(config, "name") }
+						required
+						placeholder="e.g., Vanilla Server, Modded Setup"
+						class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+					/>
+				</div>
+				<div class="mb-4">
+					<label for="image" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Docker Image *</label>
+					<input
+						type="text"
+						id="image"
+						name="image"
+						value={ configValue(config, "image") }
+						required
+						placeholder="e.g., itzg/minecraft-server:latest"
+						class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+					/>
+					<p class="mt-1 text-xs text-gray-600 dark:text-gray-400">The Docker image to use for this game server</p>
+				</div>
+				<div class="mb-4">
+					<label for="args_template" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Args Template</label>
+					<textarea
+						id="args_template"
+						name="args_template"
+						placeholder="Optional command line arguments template"
+						class="w-full px-3 py-2 min-h-[88px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+					>{ configValue(config, "args_template") }</textarea>
+					<p class="mt-1 text-xs text-gray-600 dark:text-gray-400">Use template variables like { "{{.PARAM_NAME}}" } to reference parameters</p>
+				</div>
+				<p class="mb-4 text-sm text-gray-600 dark:text-gray-400 italic">Note: After creating the configuration, you can add parameters, environment variables, and file templates on the detail page.</p>
+				<div class="flex gap-2">
+					<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-green-600 hover:bg-green-700 text-white font-medium rounded-md transition-colors">
+						if edit {
+							Update Configuration
+						} else {
+							Create Configuration
+						}
+					</button>
+					<a href={ templ.URL(fmt.Sprintf("/games/%d", game.GameId)) } class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-slate-600 hover:bg-slate-700 text-white font-medium rounded-md transition-colors">
+						Cancel
+					</a>
+				</div>
+			</form>
+		</div>
+	}
+}
+
+func configValue(config *manmanpb.GameConfig, field string) string {
+	if config == nil {
+		return ""
+	}
+	switch field {
+	case "name":
+		return config.Name
+	case "image":
+		return config.Image
+	case "args_template":
+		return config.ArgsTemplate
+	}
+	return ""
+}

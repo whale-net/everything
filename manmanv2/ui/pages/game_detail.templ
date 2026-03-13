@@ -1,0 +1,288 @@
+package pages
+
+import (
+	"fmt"
+	"strings"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+)
+
+type GameDetailPageData struct {
+	Layout      components.LayoutData
+	Game        *manmanpb.Game
+	PathPresets []*manmanpb.GameAddonPathPreset
+	Volumes     []*manmanpb.GameConfigVolume
+	Configs     []*manmanpb.GameConfig
+	SgcCounts   map[int64]int
+}
+
+func metadataValue(game *manmanpb.Game, field string) string {
+	if game.Metadata == nil {
+		return ""
+	}
+	switch field {
+	case "genre":
+		return game.Metadata.Genre
+	case "publisher":
+		return game.Metadata.Publisher
+	}
+	return ""
+}
+
+func metadataTags(game *manmanpb.Game) string {
+	if game.Metadata == nil || len(game.Metadata.Tags) == 0 {
+		return ""
+	}
+	return strings.Join(game.Metadata.Tags, ", ")
+}
+
+templ GameDetail(data GameDetailPageData) {
+	@components.Layout(data.Layout) {
+		<style>
+			[x-cloak] { display: none !important; }
+		</style>
+		<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+			<div>
+				<div class="flex items-center gap-2 mb-2">
+					<span class="inline-flex items-center px-3 py-1 rounded-md text-xs font-semibold bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200">
+						🎮 GAME
+					</span>
+				</div>
+				<h1 class="text-3xl font-bold text-gray-900 dark:text-white">{ data.Game.Name }</h1>
+			</div>
+			<div class="flex flex-wrap gap-2">
+				<a href={ templ.URL(fmt.Sprintf("/games/%d/actions", data.Game.GameId)) } class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors">
+					⚡ Manage Actions
+				</a>
+				<button onclick="document.getElementById('edit-form').classList.remove('hidden')" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">
+					Edit
+				</button>
+			</div>
+		</div>
+		<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-6 mb-6">
+			<h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Game Information</h2>
+			<dl class="grid grid-cols-1 md:grid-cols-2 gap-4">
+				@components.DLItem("Game ID", fmt.Sprintf("%d", data.Game.GameId))
+				@components.DLItem("Name", data.Game.Name)
+				@components.DLItem("Steam App ID", func() string {
+					if data.Game.SteamAppId != "" {
+						return data.Game.SteamAppId
+					}
+					return "-"
+				}())
+				if data.Game.Metadata != nil {
+					@components.DLItem("Genre", func() string {
+						if data.Game.Metadata.Genre != "" {
+							return data.Game.Metadata.Genre
+						}
+						return "-"
+					}())
+					@components.DLItem("Publisher", func() string {
+						if data.Game.Metadata.Publisher != "" {
+							return data.Game.Metadata.Publisher
+						}
+						return "-"
+					}())
+					<div>
+						<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Tags</dt>
+						<dd class="mt-1 flex flex-wrap gap-1">
+							if len(data.Game.Metadata.Tags) > 0 {
+								for _, tag := range data.Game.Metadata.Tags {
+									<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300">{ tag }</span>
+								}
+							} else {
+								<span class="text-sm text-gray-900 dark:text-white">-</span>
+							}
+						</dd>
+					</div>
+				}
+			</dl>
+		</div>
+		<!-- Edit form -->
+		<div id="edit-form" class="hidden mb-6">
+			<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-6">
+				<h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Edit Game</h2>
+				<form hx-post={ fmt.Sprintf("/games/%d/edit", data.Game.GameId) } hx-swap="none" class="space-y-4">
+					<div>
+						<label for="name" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Name *</label>
+						<input type="text" id="name" name="name" value={ data.Game.Name } required class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+					</div>
+					<div>
+						<label for="steam_app_id" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Steam App ID</label>
+						<input type="text" id="steam_app_id" name="steam_app_id" value={ data.Game.SteamAppId } class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+					</div>
+					<div>
+						<label for="genre" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Genre</label>
+						<input type="text" id="genre" name="genre" value={ metadataValue(data.Game, "genre") } class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+					</div>
+					<div>
+						<label for="publisher" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Publisher</label>
+						<input type="text" id="publisher" name="publisher" value={ metadataValue(data.Game, "publisher") } class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+					</div>
+					<div>
+						<label for="tags" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Tags (comma-separated)</label>
+						<input type="text" id="tags" name="tags" value={ metadataTags(data.Game) } class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+					</div>
+					<div class="flex gap-3 pt-2">
+						<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-green-600 hover:bg-green-700 text-white font-medium rounded-md transition-colors">Save Changes</button>
+						<button type="button" onclick="document.getElementById('edit-form').classList.add('hidden')" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-slate-600 hover:bg-slate-700 text-white font-medium rounded-md transition-colors">Cancel</button>
+					</div>
+				</form>
+			</div>
+		</div>
+		<!-- Path Presets -->
+		<div x-data="{ expanded: false }" class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 mb-6 overflow-hidden">
+			<button @click="expanded = !expanded" class="w-full flex justify-between items-center p-4 border-b border-gray-200 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors">
+				<div class="flex items-center gap-3">
+					<h2 class="text-lg font-semibold text-gray-900 dark:text-white">Addon Path Presets</h2>
+					<span class="text-sm text-gray-500 dark:text-gray-400">({ fmt.Sprintf("%d presets", len(data.PathPresets)) })</span>
+				</div>
+				<svg :class="expanded ? 'rotate-180' : ''" class="w-5 h-5 text-gray-500 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+				</svg>
+			</button>
+			<div x-show="expanded" x-cloak x-collapse>
+				if len(data.PathPresets) > 0 {
+					<div class="overflow-x-auto">
+						<table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
+							<thead class="bg-gray-50 dark:bg-slate-900">
+								<tr>
+									<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Name</th>
+									<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Volume</th>
+									<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Installation Path</th>
+									<th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
+								</tr>
+							</thead>
+							<tbody class="bg-white dark:bg-slate-800 divide-y divide-gray-200 dark:divide-slate-700">
+								for _, preset := range data.PathPresets {
+									<tr class="hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors">
+										<td class="px-6 py-4">
+											<div class="text-sm font-medium text-gray-900 dark:text-white">{ preset.Name }</div>
+											if preset.Description != "" {
+												<div class="text-xs text-gray-500 dark:text-gray-400 mt-1">{ preset.Description }</div>
+											}
+										</td>
+										<td class="px-6 py-4 text-sm text-gray-700 dark:text-gray-300"><em>(relative path)</em></td>
+										<td class="px-6 py-4 text-sm font-mono text-gray-900 dark:text-white">{ preset.InstallationPath }</td>
+										<td class="px-6 py-4 text-right">
+											<form method="POST" action={ templ.URL(fmt.Sprintf("/games/%d/presets/%d/delete", data.Game.GameId, preset.PresetId)) } class="inline">
+												<button type="submit" onclick="return confirm('Delete this preset?')" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-md transition-colors">Delete</button>
+											</form>
+										</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				} else {
+					<div class="p-12 text-center">
+						<p class="text-gray-500 dark:text-gray-400">No path presets defined. Add a preset to make addon installation easier.</p>
+					</div>
+				}
+				<div class="p-4 border-t border-gray-200 dark:border-slate-700">
+					<button onclick="document.getElementById('add-preset-form').classList.remove('hidden')" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors">+ Add Preset</button>
+				</div>
+			</div>
+		</div>
+		<!-- Add Preset Form -->
+		<div id="add-preset-form" class="hidden mb-6">
+			<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-6">
+				<h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Add Path Preset</h2>
+				<form method="POST" action={ templ.URL(fmt.Sprintf("/games/%d/presets/create", data.Game.GameId)) } class="space-y-4">
+					<input type="hidden" name="game_id" value={ fmt.Sprintf("%d", data.Game.GameId) }/>
+					<div>
+						<label for="preset_name" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Name *</label>
+						<input type="text" id="preset_name" name="name" required placeholder="e.g., Maps, Plugins, Skins" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+						<p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Short label for this preset</p>
+					</div>
+					<div>
+						<label for="preset_description" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Description</label>
+						<textarea id="preset_description" name="description" rows="2" placeholder="Optional description" class="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+					</div>
+					<div>
+						<label for="preset_volume_id" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Volume (Optional)</label>
+						<select id="preset_volume_id" name="volume_id" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+							<option value="">-- Use first volume (default) --</option>
+							for _, vol := range data.Volumes {
+								<option value={ fmt.Sprintf("%d", vol.VolumeId) }>{ vol.Name } ({ vol.ContainerPath })</option>
+							}
+						</select>
+						<p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Select which volume addons using this preset should install to</p>
+					</div>
+					<div>
+						<label for="preset_installation_path" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Installation Path *</label>
+						<input type="text" id="preset_installation_path" name="installation_path" required placeholder="e.g., left4dead2/maps/" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+						<p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Relative path within the volume</p>
+					</div>
+					<div class="flex gap-3 pt-2">
+						<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-green-600 hover:bg-green-700 text-white font-medium rounded-md transition-colors">Add Preset</button>
+						<button type="button" onclick="document.getElementById('add-preset-form').classList.add('hidden')" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-slate-600 hover:bg-slate-700 text-white font-medium rounded-md transition-colors">Cancel</button>
+					</div>
+				</form>
+			</div>
+		</div>
+		<!-- Configs -->
+		<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 overflow-hidden mb-6">
+			<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-gray-200 dark:border-slate-700">
+				<h2 class="text-lg font-semibold text-gray-900 dark:text-white">Game Configurations</h2>
+				<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/new", data.Game.GameId)) } class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors">Create Config</a>
+			</div>
+			if len(data.Configs) > 0 {
+				<div class="overflow-x-auto">
+					<table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
+						<thead class="bg-gray-50 dark:bg-slate-900">
+							<tr>
+								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Name</th>
+								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Docker Image</th>
+								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">SGCs</th>
+								<th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
+							</tr>
+						</thead>
+						<tbody class="bg-white dark:bg-slate-800 divide-y divide-gray-200 dark:divide-slate-700">
+							for _, config := range data.Configs {
+								<tr class="hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors">
+									<td class="px-6 py-4">
+										<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.Game.GameId, config.ConfigId)) } class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline">{ config.Name }</a>
+									</td>
+									<td class="px-6 py-4 text-sm font-mono text-gray-700 dark:text-gray-300">{ config.Image }</td>
+									<td class="px-6 py-4 text-sm text-gray-700 dark:text-gray-300">{ fmt.Sprintf("%d", data.SgcCounts[config.ConfigId]) }</td>
+									<td class="px-6 py-4 text-right">
+										<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.Game.GameId, config.ConfigId)) } class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors">View</a>
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			} else {
+				<div class="p-12 text-center">
+					<p class="text-gray-500 dark:text-gray-400">No configurations yet. Create a configuration to deploy this game.</p>
+				</div>
+			}
+		</div>
+		<!-- Danger Zone -->
+		<div x-data="{ confirmDelete: false }" class="bg-white dark:bg-slate-800 rounded-lg shadow-md border-2 border-red-200 dark:border-red-900 overflow-hidden mt-6">
+			<div class="bg-red-50 dark:bg-red-900/20 px-6 py-4 border-b-2 border-red-200 dark:border-red-900">
+				<h2 class="text-lg font-semibold text-red-900 dark:text-red-200">⚠️ Danger Zone</h2>
+			</div>
+			<div class="p-6">
+				<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+					<div>
+						<h3 class="text-sm font-semibold text-gray-900 dark:text-white mb-1">Delete this game</h3>
+						<p class="text-sm text-gray-600 dark:text-gray-400">Once deleted, all configurations and deployments will be removed. This action cannot be undone.</p>
+					</div>
+					<div class="flex-shrink-0">
+						<button x-show="!confirmDelete" @click="confirmDelete = true" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">Delete Game</button>
+						<div x-show="confirmDelete" x-cloak class="flex gap-2 items-center">
+							<span class="text-sm text-red-900 dark:text-red-200 font-medium">Are you sure?</span>
+							<form method="POST" action={ templ.URL(fmt.Sprintf("/games/%d/delete", data.Game.GameId)) } class="inline">
+								<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">Yes, Delete</button>
+							</form>
+							<button @click="confirmDelete = false" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-slate-600 hover:bg-slate-700 text-white font-medium rounded-md transition-colors">Cancel</button>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	}
+}

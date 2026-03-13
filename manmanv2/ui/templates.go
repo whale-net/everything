@@ -1,5 +1,12 @@
 package main
 
+// LEGACY: This file contains the old html/template system.
+// Remaining legacy templates:
+// - actions_manage.html (809 lines - complex action management UI)
+//
+// All other pages and partials have been migrated to templ (see pages/*.templ and components/*.templ).
+// New pages should use templ components.
+
 import (
 	"bytes"
 	"embed"
@@ -14,7 +21,7 @@ import (
 	"github.com/whale-net/everything/manmanv2/protos"
 )
 
-//go:embed templates/*.html templates/partials/*.html
+//go:embed templates/*.html
 var templateFS embed.FS
 
 var templates *template.Template
@@ -529,7 +536,7 @@ func init() {
 		"divf":        func(a int64, b float64) float64 { return float64(a) / b },
 	}
 	
-	templates, err = template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/*.html", "templates/partials/*.html")
+	templates, err = template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/*.html")
 	if err != nil {
 		log.Fatalf("Failed to parse templates: %v", err)
 	}

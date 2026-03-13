@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	"github.com/whale-net/everything/manmanv2/ui/pages"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
@@ -173,34 +175,59 @@ func (app *App) handleSGCDetail(w http.ResponseWriter, r *http.Request) {
 		recentBackups = []*manmanpb.Backup{}
 	}
 
-	data := SGCDetailPageData{
-		Title:              fmt.Sprintf("SGC %d", sgcID),
-		Active:             "sessions",
-		User:               user,
-		SGC:                sgc,
-		Server:             server,
-		Game:               game,
-		GameConfig:         gameConfig,
-		Sessions:           sessions,
-		LibraryAttachments: libraryAttachments,
-		Installations:      installations,
-		AddonStatusMap:     addonStatusMap,
-		PendingCount:       pendingCount,
-		BackupConfigs:      backupConfigsByVolume,
-		RecentBackups:      recentBackups,
+	// Convert library attachments to templ format
+	var templLibAttachments []pages.LibraryAttachment
+	for _, att := range libraryAttachments {
+		templLibAttachments = append(templLibAttachments, pages.LibraryAttachment{
+			Library:      att.Library,
+			PresetName:   att.PresetName,
+			ComputedPath: att.ComputedPath,
+			PathOverride: att.PathOverride != "",
+			VolumeName:   att.VolumeName,
+		})
 	}
 
-	layoutData, err := app.buildLayoutData(r, data.Title, data.Active, user)
+	// Convert backup configs to templ format
+	var templBackupConfigs []pages.BackupConfigGroup
+	for _, bcv := range backupConfigsByVolume {
+		templBackupConfigs = append(templBackupConfigs, pages.BackupConfigGroup{
+			Volume:  bcv.Volume,
+			Configs: bcv.Configs,
+		})
+	}
+
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Games", URL: "/games"},
+	}
+	if game != nil {
+		breadcrumbs = append(breadcrumbs, components.Breadcrumb{Label: game.Name, URL: fmt.Sprintf("/games/%d", game.GameId)})
+	}
+	if gameConfig != nil {
+		breadcrumbs = append(breadcrumbs, components.Breadcrumb{Label: gameConfig.Name, URL: fmt.Sprintf("/games/%d/configs/%d", gameConfig.GameId, gameConfig.ConfigId)})
+	}
+	breadcrumbs = append(breadcrumbs, components.Breadcrumb{Label: "Server Deployment", URL: ""})
+
+	layoutData, err := app.buildTemplLayoutData(r, fmt.Sprintf("SGC %d", sgcID), "sessions", user, breadcrumbs)
 	if err != nil {
 		log.Printf("Error building layout data: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	if err := renderPage(w, "sgc_detail_content", data, layoutData); err != nil {
-		log.Printf("Error rendering SGC detail template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	pageData := pages.SGCDetailPageData{
+		Layout:             layoutData,
+		SGC:                sgc,
+		Server:             server,
+		GameConfig:         gameConfig,
+		Game:               game,
+		LibraryAttachments: templLibAttachments,
+		Sessions:           sessions,
+		PendingCount:       pendingCount,
+		BackupConfigs:      templBackupConfigs,
+		RecentBackups:      recentBackups,
 	}
+
+	RenderTempl(w, r, fmt.Sprintf("SGC %d", sgcID), pages.SGCDetail(pageData))
 }
 
 func (app *App) handleAddLibraryToSGC(w http.ResponseWriter, r *http.Request) {
@@ -342,15 +369,9 @@ func (app *App) handleSGCAvailableLibraries(w http.ResponseWriter, r *http.Reque
 		presetMap[p.PresetId] = p
 	}
 
-	type EnrichedLibrary struct {
-		*manmanpb.WorkshopLibrary
-		PresetName string
-		PresetPath string
-	}
-
-	enriched := make([]*EnrichedLibrary, len(available))
+	enriched := make([]*components.EnrichedLibrary, len(available))
 	for i, lib := range available {
-		e := &EnrichedLibrary{WorkshopLibrary: lib}
+		e := &components.EnrichedLibrary{WorkshopLibrary: lib}
 		if lib.PresetId != 0 {
 			if preset := presetMap[lib.PresetId]; preset != nil {
 				e.PresetName = preset.Name
@@ -362,7 +383,7 @@ func (app *App) handleSGCAvailableLibraries(w http.ResponseWriter, r *http.Reque
 
 	type AvailableLibrariesData struct {
 		SGCID     int64
-		Libraries []*EnrichedLibrary
+		Libraries []*components.EnrichedLibrary
 		Presets   []*manmanpb.GameAddonPathPreset
 		Volumes   []*manmanpb.GameConfigVolume
 	}
@@ -374,10 +395,7 @@ func (app *App) handleSGCAvailableLibraries(w http.ResponseWriter, r *http.Reque
 		Volumes:   volumes,
 	}
 
-	if err := renderTemplate(w, "sgc_available_libraries_partial", data); err != nil {
-		log.Printf("Error rendering available libraries partial: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-	}
+	RenderTempl(w, r, "", components.SGCAvailableLibraries(data.SGCID, data.Libraries, data.Presets, data.Volumes))
 }
 
 func (app *App) handleSGCRemoveLibrary(w http.ResponseWriter, r *http.Request) {

@@ -1,0 +1,249 @@
+package components
+
+import "fmt"
+
+type ButtonVariant string
+
+const (
+	ButtonPrimary   ButtonVariant = "primary"
+	ButtonSuccess   ButtonVariant = "success"
+	ButtonDanger    ButtonVariant = "danger"
+	ButtonSecondary ButtonVariant = "secondary"
+)
+
+type ButtonSize string
+
+const (
+	ButtonDefault ButtonSize = "default"
+	ButtonSmall   ButtonSize = "small"
+)
+
+func buttonClasses(variant ButtonVariant, size ButtonSize) string {
+	base := "inline-flex items-center justify-center font-medium rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2"
+	
+	var sizeClass string
+	if size == ButtonSmall {
+		sizeClass = "px-3 py-1.5 min-h-[36px] text-sm"
+	} else {
+		sizeClass = "px-4 py-2 min-h-[44px]"
+	}
+	
+	var variantClass string
+	switch variant {
+	case ButtonPrimary:
+		variantClass = "bg-indigo-600 hover:bg-indigo-700 text-white focus:ring-indigo-500"
+	case ButtonSuccess:
+		variantClass = "bg-green-600 hover:bg-green-700 text-white focus:ring-green-500"
+	case ButtonDanger:
+		variantClass = "bg-red-600 hover:bg-red-700 text-white focus:ring-red-500"
+	case ButtonSecondary:
+		variantClass = "bg-slate-600 hover:bg-slate-700 text-white focus:ring-slate-500"
+	default:
+		variantClass = "bg-indigo-600 hover:bg-indigo-700 text-white focus:ring-indigo-500"
+	}
+	
+	return fmt.Sprintf("%s %s %s", base, sizeClass, variantClass)
+}
+
+templ Button(variant ButtonVariant, size ButtonSize, text string) {
+	<button class={ buttonClasses(variant, size) }>
+		{ text }
+	</button>
+}
+
+templ ButtonLink(variant ButtonVariant, size ButtonSize, text, href string) {
+	<a href={ templ.URL(href) } class={ buttonClasses(variant, size) }>
+		{ text }
+	</a>
+}
+
+func badgeClasses(status string) string {
+	switch status {
+	case "online", "active", "running", "completed", "success":
+		return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
+	case "offline", "inactive", "stopped", "secondary":
+		return "bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300"
+	case "starting", "stopping", "pending", "warning":
+		return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
+	case "crashed", "error", "failed", "danger":
+		return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
+	case "deployed", "primary":
+		return "bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200"
+	default:
+		return "bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300"
+	}
+}
+
+templ Badge(status, text string) {
+	if text == "" {
+		<span class={ "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium", badgeClasses(status) }>
+			{ status }
+		</span>
+	} else {
+		<span class={ "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium", badgeClasses(status) }>
+			{ text }
+		</span>
+	}
+}
+
+templ Card(title string) {
+	<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 mb-6 overflow-hidden">
+		if title != "" {
+			<div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900">
+				<h2 class="text-lg font-semibold text-slate-900 dark:text-white">{ title }</h2>
+			</div>
+		}
+		<div class="p-6">
+			{ children... }
+		</div>
+	</div>
+}
+
+templ CardSimple() {
+	<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-6 mb-6">
+		{ children... }
+	</div>
+}
+
+templ HeroHeader(title, subtitle string) {
+	<div class="bg-gradient-to-br from-indigo-600 to-purple-600 rounded-lg p-6 md:p-8 mb-6 shadow-lg">
+		<div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+			<div class="text-white">
+				<h1 class="text-2xl md:text-3xl font-bold mb-2">{ title }</h1>
+				if subtitle != "" {
+					<p class="text-indigo-100 text-sm">{ subtitle }</p>
+				}
+			</div>
+			<div class="flex gap-2">
+				{ children... }
+			</div>
+		</div>
+	</div>
+}
+
+templ FormInput(label, name, inputType, value string) {
+	<div class="mb-4">
+		<label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">{ label }</label>
+		<input
+			type={ inputType }
+			name={ name }
+			value={ value }
+			class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+		/>
+	</div>
+}
+
+templ FormSelect(label, name string, options []SelectOption, selected string) {
+	<div class="mb-4">
+		<label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">{ label }</label>
+		<select
+			name={ name }
+			class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+		>
+			for _, opt := range options {
+				if opt.Value == selected {
+					<option value={ opt.Value } selected>{ opt.Label }</option>
+				} else {
+					<option value={ opt.Value }>{ opt.Label }</option>
+				}
+			}
+		</select>
+	</div>
+}
+
+templ FormTextarea(label, name, value string, rows int) {
+	<div class="mb-4">
+		<label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">{ label }</label>
+		<textarea
+			name={ name }
+			rows={ fmt.Sprintf("%d", rows) }
+			class="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+		>{ value }</textarea>
+	</div>
+}
+
+type SelectOption struct {
+	Value string
+	Label string
+}
+
+templ EmptyState(title, description, actionText, actionHref string) {
+	<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-12">
+		<div class="text-center">
+			<svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+			</svg>
+			<h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">{ title }</h3>
+			<p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{ description }</p>
+			if actionText != "" && actionHref != "" {
+				<div class="mt-6">
+					<a href={ templ.URL(actionHref) } class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-md transition-colors">
+						{ actionText }
+					</a>
+				</div>
+			}
+		</div>
+	</div>
+}
+
+templ Alert(alertType, message string) {
+	if alertType == "warning" {
+		<div class="mb-4 p-4 bg-yellow-50 dark:bg-yellow-900/20 border-l-4 border-yellow-400 rounded">
+			<p class="text-sm text-yellow-900 dark:text-yellow-200">{ message }</p>
+		</div>
+	} else if alertType == "error" {
+		<div class="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border-l-4 border-red-500 dark:border-red-400 rounded">
+			<p class="text-sm text-red-900 dark:text-red-200">{ message }</p>
+		</div>
+	} else {
+		<div class="mb-4 p-4 bg-indigo-50 dark:bg-indigo-900/20 border-l-4 border-indigo-500 dark:border-indigo-400 rounded">
+			<p class="text-sm text-indigo-900 dark:text-indigo-200">{ message }</p>
+		</div>
+	}
+}
+
+
+templ DLItem(label, value string) {
+	<div>
+		<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">{ label }</dt>
+		<dd class="mt-1 text-sm text-gray-900 dark:text-white">{ value }</dd>
+	</div>
+}
+
+templ DLItemMono(label, value string) {
+	<div>
+		<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">{ label }</dt>
+		<dd class="mt-1 text-sm text-gray-900 dark:text-white font-mono">{ value }</dd>
+	</div>
+}
+
+templ DLItemCode(label, value string) {
+	<div class="md:col-span-2">
+		<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">{ label }</dt>
+		<dd class="mt-1">
+			if value != "" {
+				<pre class="text-sm font-mono text-gray-900 dark:text-white bg-gray-50 dark:bg-slate-900 p-3 rounded border border-gray-200 dark:border-slate-700 overflow-x-auto">{ value }</pre>
+			} else {
+				<span class="text-sm text-gray-900 dark:text-white">-</span>
+			}
+		</dd>
+	</div>
+}
+
+templ Table() {
+	<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 overflow-hidden">
+		<div class="overflow-x-auto">
+			<table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
+				{ children... }
+			</table>
+		</div>
+	</div>
+}
+
+templ TableInline() {
+	<div class="overflow-x-auto">
+		<table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
+			{ children... }
+		</table>
+	</div>
+}

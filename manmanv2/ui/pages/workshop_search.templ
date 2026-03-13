@@ -1,0 +1,158 @@
+package pages
+
+import (
+	"fmt"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+)
+
+type WorkshopSearchPageData struct {
+	Layout        components.LayoutData
+	Query         string
+	GameID        int64
+	TypeFilter    string
+	Games         []*manmanpb.Game
+	Libraries     []*manmanpb.WorkshopLibrary
+	Addons        []*manmanpb.WorkshopAddon
+}
+
+templ WorkshopSearch(data WorkshopSearchPageData) {
+	@components.Layout(data.Layout) {
+		<style>
+			[x-cloak] { display: none !important; }
+		</style>
+		<div 
+			id="workshop-search-data"
+			data-query={ data.Query }
+			data-type-filter={ data.TypeFilter }
+			data-libraries={ templ.JSONString(data.Libraries) }
+			data-addons={ templ.JSONString(data.Addons) }
+			data-games={ templ.JSONString(data.Games) }
+			x-data="{
+				query: '',
+				typeFilter: 'all',
+				libraries: [],
+				addons: [],
+				games: [],
+				init() {
+					this.query = this.$el.dataset.query || '';
+					this.typeFilter = this.$el.dataset.typeFilter || 'all';
+					this.libraries = JSON.parse(this.$el.dataset.libraries || '[]');
+					this.addons = JSON.parse(this.$el.dataset.addons || '[]');
+					this.games = JSON.parse(this.$el.dataset.games || '[]');
+				},
+				get filteredLibraries() {
+					if (!this.query) return this.libraries;
+					const q = this.query.toLowerCase();
+					return this.libraries.filter(lib => 
+						lib.name.toLowerCase().includes(q) || 
+						(lib.description && lib.description.toLowerCase().includes(q))
+					);
+				},
+				get filteredAddons() {
+					if (!this.query) return this.addons;
+					const q = this.query.toLowerCase();
+					return this.addons.filter(addon => 
+						addon.name.toLowerCase().includes(q) || 
+						addon.workshop_id.toLowerCase().includes(q)
+					);
+				},
+				get showLibraries() { return this.typeFilter === 'all' || this.typeFilter === 'library'; },
+				get showAddons() { return this.typeFilter === 'all' || this.typeFilter === 'addon' || this.typeFilter === 'collection'; }
+			}"
+		>
+			<div class="bg-gradient-to-br from-indigo-600 to-purple-600 rounded-lg p-6 md:p-8 mb-6 shadow-lg">
+				<div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+					<div class="text-white">
+						<h1 class="text-2xl md:text-3xl font-bold mb-2">Workshop Search</h1>
+						<p class="text-indigo-100 text-sm">Search and discover workshop content and addon libraries</p>
+					</div>
+					<a href="/workshop/library" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-white/20 hover:bg-white/30 text-white border border-white/30 font-medium rounded-md transition-colors">← Workshop Home</a>
+				</div>
+			</div>
+			<!-- Filter Bar -->
+			<div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-4 mb-6">
+				<form method="GET" action="/workshop/search" class="space-y-4">
+					<div class="flex flex-col md:flex-row gap-4">
+						<div class="flex-1">
+							<label class="block text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider mb-2">Search Query</label>
+							<input type="text" name="q" x-model="query" placeholder="Search by name or ID..." class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"/>
+						</div>
+						<div class="w-full md:w-48">
+							<label class="block text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider mb-2">Game</label>
+							<select name="game_id" class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+								<option value="">All Games</option>
+								for _, game := range data.Games {
+									if game.GameId == data.GameID {
+										<option value={ fmt.Sprintf("%d", game.GameId) } selected>{ game.Name }</option>
+									} else {
+										<option value={ fmt.Sprintf("%d", game.GameId) }>{ game.Name }</option>
+									}
+								}
+							</select>
+						</div>
+						<div class="flex items-end">
+							<button type="submit" class="w-full md:w-auto inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-md transition-colors">Search</button>
+						</div>
+					</div>
+					<div class="pt-4 border-t border-gray-200 dark:border-slate-700">
+						<label class="block text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider mb-2">Type Filter</label>
+						<div class="flex flex-wrap gap-2">
+							<button type="button" @click="typeFilter = 'all'" :class="typeFilter === 'all' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white dark:bg-slate-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-slate-600 hover:border-blue-600 hover:text-blue-600'" class="px-4 py-2 min-h-[44px] text-sm font-medium border rounded-full transition-colors">All</button>
+							<button type="button" @click="typeFilter = 'library'" :class="typeFilter === 'library' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white dark:bg-slate-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-slate-600 hover:border-blue-600 hover:text-blue-600'" class="px-4 py-2 min-h-[44px] text-sm font-medium border rounded-full transition-colors">Libraries</button>
+							<button type="button" @click="typeFilter = 'addon'" :class="typeFilter === 'addon' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white dark:bg-slate-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-slate-600 hover:border-blue-600 hover:text-blue-600'" class="px-4 py-2 min-h-[44px] text-sm font-medium border rounded-full transition-colors">Addons</button>
+							<button type="button" @click="typeFilter = 'collection'" :class="typeFilter === 'collection' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white dark:bg-slate-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-slate-600 hover:border-blue-600 hover:text-blue-600'" class="px-4 py-2 min-h-[44px] text-sm font-medium border rounded-full transition-colors">Collections</button>
+						</div>
+					</div>
+				</form>
+			</div>
+			<!-- Libraries Results -->
+			<div x-show="showLibraries" x-cloak class="mb-8">
+				<div class="flex justify-between items-center mb-4 pb-3 border-b-2 border-gray-200 dark:border-slate-700">
+					<h2 class="text-lg font-bold text-gray-900 dark:text-white">Libraries</h2>
+					<span class="text-sm text-gray-500 dark:text-gray-400" x-text="`${filteredLibraries.length} results`"></span>
+				</div>
+				<div x-show="filteredLibraries.length === 0" class="text-center py-12 text-gray-500 dark:text-gray-400">No libraries found</div>
+				<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+					<template x-for="(lib, index) in filteredLibraries">
+						<a :href="`/workshop/library-detail?library_id=${lib.library_id}`" class="block bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-5 hover:shadow-lg hover:-translate-y-0.5 transition-all">
+							<div class="flex justify-between items-start mb-2 gap-2">
+								<span class="font-semibold text-gray-900 dark:text-white" x-text="lib.name"></span>
+								<template x-for="(game, gindex) in games">
+									<span x-show="game.game_id === lib.game_id" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200 whitespace-nowrap" x-text="game.name"></span>
+								</template>
+							</div>
+							<div class="text-sm text-gray-600 dark:text-gray-400 mb-3 line-clamp-2">
+								<span x-show="lib.description" x-text="lib.description"></span>
+								<em x-show="!lib.description" class="text-gray-400 dark:text-gray-500">No description</em>
+							</div>
+						</a>
+					</template>
+				</div>
+			</div>
+			<!-- Addons Results -->
+			<div x-show="showAddons" x-cloak>
+				<div class="flex justify-between items-center mb-4 pb-3 border-b-2 border-gray-200 dark:border-slate-700">
+					<h2 class="text-lg font-bold text-gray-900 dark:text-white">Addons</h2>
+					<span class="text-sm text-gray-500 dark:text-gray-400" x-text="`${filteredAddons.length} results`"></span>
+				</div>
+				<div x-show="filteredAddons.length === 0" class="text-center py-12 text-gray-500 dark:text-gray-400">No addons found</div>
+				<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+					<template x-for="(addon, index) in filteredAddons">
+						<a :href="`/workshop/addon?addon_id=${addon.addon_id}`" class="block bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-4 hover:shadow-md transition-shadow">
+							<div class="font-semibold text-gray-900 dark:text-white text-sm mb-2" x-text="addon.name"></div>
+							<div class="inline-block font-mono text-xs bg-gray-100 dark:bg-slate-900 text-gray-700 dark:text-gray-300 px-2 py-1 rounded mb-3" x-text="addon.workshop_id"></div>
+							<div class="flex justify-between items-center text-xs text-gray-500 dark:text-gray-400">
+								<span x-show="addon.file_size_bytes > 0" x-text="`${(addon.file_size_bytes / 1048576).toFixed(1)} MB`"></span>
+								<template x-for="(game, gindex) in games">
+									<span x-show="game.game_id === addon.game_id" x-text="game.name"></span>
+								</template>
+							</div>
+						</a>
+					</template>
+				</div>
+			</div>
+		</div>
+	}
+}
+

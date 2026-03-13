@@ -67,6 +67,29 @@ Type-safe, component-based UI built with Go + templ + HTMX + Tailwind CSS.
 - Tailwind CSS with tailwind-merge-go
 - Alpine.js for client-side state
 
+## Critical Gotchas
+
+### JavaScript and Template Expressions
+
+**Problem**: Templ expressions `{ }` inside `<script>` tags are treated as **literal text**, not evaluated.
+
+**Wrong**:
+```templ
+<script>
+  const sessionId = { fmt.Sprintf("%d", data.Session.SessionId) };  // Outputs literal string!
+</script>
+```
+
+**Correct**: Use HTML data attributes (which ARE evaluated), then read in JavaScript:
+```templ
+<div id="my-script" data-session-id={ fmt.Sprintf("%d", data.Session.SessionId) }></div>
+<script>
+  const sessionId = parseInt(document.getElementById('my-script').dataset.sessionId);
+</script>
+```
+
+**Why**: Templ treats script content as raw strings to avoid breaking JavaScript syntax. Dynamic values must be injected via HTML attributes.
+
 ## Build System
 
 Uses custom `templ_library` Bazel macro:

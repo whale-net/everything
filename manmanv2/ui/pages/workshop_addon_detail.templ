@@ -1,0 +1,151 @@
+package pages
+
+import (
+	"fmt"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+)
+
+type WorkshopAddonDetailPageData struct {
+	Layout              components.LayoutData
+	Addon               *manmanpb.WorkshopAddon
+	Game                *manmanpb.Game
+	ContainingLibraries []*manmanpb.WorkshopLibrary
+	AvailableLibraries  []*manmanpb.WorkshopLibrary
+}
+
+templ WorkshopAddonDetail(data WorkshopAddonDetailPageData) {
+	@components.Layout(data.Layout) {
+		<style>
+			[x-cloak] { display: none !important; }
+		</style>
+		<div x-data="{ confirmDelete: false, filterLibs: '' }">
+			<!-- Header with Breadcrumbs -->
+			<div class="flex flex-col md:flex-row justify-between items-start gap-4 mb-6">
+				<div>
+					<div class="flex items-center gap-2 mb-2 text-sm">
+						<a href="/workshop/library" class="text-gray-600 dark:text-gray-400 hover:text-blue-600">Workshop</a>
+						<span class="text-gray-400">›</span>
+						<a href="/workshop/search?type=addon" class="text-gray-600 dark:text-gray-400 hover:text-blue-600">Addons</a>
+					</div>
+					<div class="flex items-center gap-3">
+						<h1 class="text-3xl font-bold text-gray-900 dark:text-white">{ data.Addon.Name }</h1>
+						if data.Addon.IsCollection {
+							<span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200">Collection</span>
+						} else {
+							<span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">Addon</span>
+						}
+					</div>
+				</div>
+			</div>
+			<!-- Info Grid -->
+			<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+				<div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-4">
+					<div class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Workshop ID</div>
+					<div class="text-sm font-mono text-gray-900 dark:text-white break-all">{ data.Addon.WorkshopId }</div>
+				</div>
+				<div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-4">
+					<div class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Game</div>
+					<div class="text-sm font-medium text-gray-900 dark:text-white">
+						if data.Game != nil {
+							{ data.Game.Name }
+						} else {
+							Unknown
+						}
+					</div>
+				</div>
+				<div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-4">
+					<div class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Platform</div>
+					<div class="text-sm font-medium text-gray-900 dark:text-white">{ data.Addon.PlatformType }</div>
+				</div>
+				<div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-4">
+					<div class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">File Size</div>
+					<div class="text-sm font-medium text-gray-900 dark:text-white">
+						if data.Addon.FileSizeBytes > 0 {
+							{ fmt.Sprintf("%.1f MB", float64(data.Addon.FileSizeBytes)/1048576) }
+						} else {
+							Unknown
+						}
+					</div>
+				</div>
+			</div>
+			<!-- Description -->
+			if data.Addon.Description != "" {
+				<div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-5 mb-6">
+					<div class="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">{ data.Addon.Description }</div>
+				</div>
+			}
+			<!-- Associated Libraries -->
+			<div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-6 mb-6">
+				<div class="flex justify-between items-center mb-4">
+					<h2 class="text-lg font-bold text-gray-900 dark:text-white">Associated Libraries</h2>
+					<span class="text-sm text-gray-500 dark:text-gray-400">{ fmt.Sprintf("%d libraries", len(data.ContainingLibraries)) }</span>
+				</div>
+				if len(data.ContainingLibraries) > 0 {
+					<div class="space-y-2">
+						for _, lib := range data.ContainingLibraries {
+							<div class="flex justify-between items-center p-3 bg-gray-50 dark:bg-slate-900 rounded-lg border border-gray-200 dark:border-slate-700">
+								<div>
+									<a href={ templ.URL(fmt.Sprintf("/workshop/library-detail?library_id=%d", lib.LibraryId)) } class="font-semibold text-sm text-gray-900 dark:text-white hover:text-blue-600">{ lib.Name }</a>
+								</div>
+								<form method="POST" action="/workshop/remove-addon-from-library">
+									<input type="hidden" name="library_id" value={ fmt.Sprintf("%d", lib.LibraryId) }/>
+									<input type="hidden" name="addon_id" value={ fmt.Sprintf("%d", data.Addon.AddonId) }/>
+									<button type="submit" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded transition-colors">Remove</button>
+								</form>
+							</div>
+						}
+					</div>
+				} else {
+					<div class="text-center py-8 text-gray-500 dark:text-gray-400 text-sm">Not associated with any libraries</div>
+				}
+			</div>
+			<!-- Add to Library -->
+			<div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-6">
+				<h2 class="text-lg font-bold text-gray-900 dark:text-white mb-4">Add to Library</h2>
+				<input type="text" x-model="filterLibs" placeholder="Filter libraries..." class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white mb-3 focus:outline-none focus:ring-2 focus:ring-indigo-500"/>
+				if len(data.AvailableLibraries) > 0 {
+					<div class="space-y-2 max-h-80 overflow-y-auto">
+						for _, lib := range data.AvailableLibraries {
+							<div x-show={ fmt.Sprintf("filterLibs === '' || '%s'.toLowerCase().includes(filterLibs.toLowerCase())", lib.Name) } class="flex justify-between items-center p-3 bg-gray-50 dark:bg-slate-900 rounded-lg border border-transparent hover:border-gray-300 dark:hover:border-slate-600 transition-colors">
+								<span class="text-sm text-gray-900 dark:text-white font-medium">{ lib.Name }</span>
+								<form method="POST" action="/workshop/add-addon-to-library">
+									<input type="hidden" name="library_id" value={ fmt.Sprintf("%d", lib.LibraryId) }/>
+									<input type="hidden" name="addon_id" value={ fmt.Sprintf("%d", data.Addon.AddonId) }/>
+									<button type="submit" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded transition-colors">Add</button>
+								</form>
+							</div>
+						}
+					</div>
+				} else {
+					<div class="text-center py-8 text-gray-500 dark:text-gray-400 text-sm">No available libraries</div>
+				}
+			</div>
+			<!-- Danger Zone -->
+			<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border-2 border-red-200 dark:border-red-900 overflow-hidden mt-6">
+				<div class="bg-red-50 dark:bg-red-900/20 px-6 py-4 border-b-2 border-red-200 dark:border-red-900">
+					<h2 class="text-lg font-semibold text-red-900 dark:text-red-200">⚠️ Danger Zone</h2>
+				</div>
+				<div class="p-6">
+					<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+						<div>
+							<h3 class="text-sm font-semibold text-gray-900 dark:text-white mb-1">Delete this addon</h3>
+							<p class="text-sm text-gray-600 dark:text-gray-400">Permanently delete this addon from the system. It will be removed from all libraries. This action cannot be undone.</p>
+						</div>
+						<div class="flex-shrink-0">
+							<button x-show="!confirmDelete" @click="confirmDelete = true" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">Delete Addon</button>
+							<div x-show="confirmDelete" x-cloak class="flex gap-2 items-center">
+								<span class="text-sm text-red-900 dark:text-red-200 font-medium">Are you sure?</span>
+								<form method="POST" action="/workshop/delete-addon" class="inline">
+									<input type="hidden" name="addon_id" value={ fmt.Sprintf("%d", data.Addon.AddonId) }/>
+									<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">Yes, Delete</button>
+								</form>
+								<button @click="confirmDelete = false" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-slate-600 hover:bg-slate-700 text-white font-medium rounded-md transition-colors">Cancel</button>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	}
+}

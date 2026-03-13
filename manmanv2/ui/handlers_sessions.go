@@ -13,37 +13,16 @@ import (
 	"time"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	"github.com/whale-net/everything/manmanv2/ui/pages"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
 // SGCDisplayInfo holds a server game config ID and a human-readable label for dropdowns.
-type SGCDisplayInfo struct {
-	ServerGameConfigId int64
-	DisplayName        string
-}
+type SGCDisplayInfo = pages.SGCDisplayInfo
 
 // SessionsPageData holds data for the sessions list page.
-type SessionsPageData struct {
-	Title        string
-	Active       string
-	User         *htmxauth.UserInfo
-	Sessions     []*manmanpb.Session
-	LiveOnly     bool
-	StatusFilter string
-	ServerGameConfigID string
-	Servers      []*manmanpb.Server
-	ServerConfigs []*manmanpb.ServerGameConfig
-	SGCOptions   []SGCDisplayInfo
-	// SGCDisplayNames maps SGC ID -> display name for use in the session table
-	SGCDisplayNames map[int64]string
-	SelectedServerID string
-	SelectedServerStatus string
-	StartWarning string
-	StartError string
-	ShowForce    bool
-	ForceSGCID   string
-	LiveSessionByConfig map[int64]*manmanpb.Session
-}
+type SessionsPageData = pages.SessionsPageData
 
 // SessionDetailPageData holds data for a single session.
 type SessionDetailPageData struct {
@@ -185,19 +164,14 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := SessionsPageData{
-		Title:        "Sessions",
-		Active:       "sessions",
-		User:         user,
 		Sessions:     sessions,
 		LiveOnly:     liveOnly,
 		StatusFilter: statusFilter,
 		ServerGameConfigID: serverGameConfigIDStr,
-		Servers:      servers,
 		ServerConfigs: serverConfigs,
 		SGCOptions:   sgcOptions,
 		SGCDisplayNames: sgcDisplayNames,
 		SelectedServerID: strconv.FormatInt(selectedServerID, 10),
-		SelectedServerStatus: selectedServerStatus,
 		StartWarning: startWarning,
 		StartError: startError,
 		ShowForce:    showForce,
@@ -205,14 +179,18 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 		LiveSessionByConfig: liveSessionByConfig,
 	}
 
-	layoutData, err := app.buildLayoutData(r, data.Title, data.Active, user)
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Sessions", URL: "/sessions"},
+	}
+
+	layoutData, err := app.buildTemplLayoutData(r, "Sessions", "Sessions", user, breadcrumbs)
 	if err != nil {
 		log.Printf("Error building layout data: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	if err := renderPage(w, "sessions_content", data, layoutData); err != nil {
+	if err := RenderTempl(w, r, "Sessions", pages.Sessions(layoutData, data)); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
@@ -325,10 +303,19 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	data := SessionDetailPageData{
-		Title:         "Session " + sessionIDStr,
-		Active:        "sessions",
-		User:          user,
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Sessions", URL: "/sessions"},
+		{Label: "Session " + sessionIDStr, URL: ""},
+	}
+	layoutData, err := app.buildTemplLayoutData(r, "Session "+sessionIDStr, "sessions", user, breadcrumbs)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	pageData := pages.SessionDetailPageData{
+		Layout:        layoutData,
 		Session:       sessionResp.Session,
 		SGC:           sgc,
 		GameConfig:    gameConfig,
@@ -338,16 +325,7 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		Installations: installations,
 	}
 
-	layoutData := LayoutData{
-		Title:  data.Title,
-		Active: data.Active,
-		User:   data.User,
-	}
-
-	if err := renderPage(w, "session_detail_content", data, layoutData); err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-	}
+	RenderTempl(w, r, "Session "+sessionIDStr, pages.SessionDetail(pageData))
 }
 
 func (app *App) handleSessionStop(w http.ResponseWriter, r *http.Request, sessionID int64) {
@@ -869,11 +847,11 @@ func (app *App) handleLoadHistoricalLogs(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Render log content
-	fmt.Fprintf(w, `<pre id="log-output" class="log-viewer-output">`)
+	fmt.Fprintf(w, `<div class="log-viewer-container"><pre id="log-output" class="log-viewer-output">`)
 	for _, batch := range resp.Batches {
 		fmt.Fprintf(w, "%s", batch.Content)
 	}
-	fmt.Fprintf(w, `</pre>`)
+	fmt.Fprintf(w, `</pre></div>`)
 
 	// Add "Load More" button if there's more data
 	if resp.HasMore {
