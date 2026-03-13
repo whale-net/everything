@@ -9,6 +9,35 @@ Each component documents its own env vars:
 - [ui/ENV.md](ui/ENV.md) — UI service
 - [api/S3_CONFIG.md](api/S3_CONFIG.md) — S3/object storage
 
+## gRPC Authentication
+
+All gRPC endpoints (API :50051, log-processor :50053) support JWT authentication via Keycloak. Default is `none` (dev mode — no Keycloak needed).
+
+### API & Log-Processor (server side — incoming requests)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GRPC_AUTH_MODE` | `none` | `none` or `oidc` |
+| `GRPC_OIDC_ISSUER` | `""` | Keycloak realm URL, e.g. `https://auth.company.com/realms/myrealm` |
+| `GRPC_OIDC_CLIENT_ID` | `""` | Expected audience / client ID in token |
+
+### Log-Processor & Host (client side — outgoing calls to API)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GRPC_AUTH_MODE` | `none` | `none` or `oidc` |
+| `GRPC_AUTH_TOKEN_URL` | `""` | Keycloak token endpoint, e.g. `https://auth.company.com/realms/myrealm/protocol/openid-connect/token` |
+| `GRPC_AUTH_CLIENT_ID` | `""` | Service account client ID |
+| `GRPC_AUTH_CLIENT_SECRET` | `""` | Service account client secret |
+
+### UI (client side — forwards logged-in user's token per request)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GRPC_AUTH_MODE` | `none` | `none` or `oidc` |
+
+See [ui/ENV.md](ui/ENV.md) for full UI configuration.
+
 ## Local Development (`.env` / Tilt)
 
 ```bash
@@ -41,8 +70,14 @@ S3_BUCKET=manmanv2-dev
 SERVER_ID=host-local-dev-1
 RABBITMQ_URL=amqp://rabbit:password@localhost:5672/manmanv2-dev
 DOCKER_SOCKET=/var/run/docker.sock
+
+# gRPC auth (service account, for calling the API)
+GRPC_AUTH_MODE=none                     # or 'oidc'
+GRPC_AUTH_TOKEN_URL=                    # Keycloak token endpoint
+GRPC_AUTH_CLIENT_ID=                    # service account client ID
+GRPC_AUTH_CLIENT_SECRET=               # service account client secret
 ```
 
 ## Platform-Wide Variables
 
-<!-- TODO: Document env vars shared across multiple ManManV2 control plane components -->
+`GRPC_AUTH_MODE` appears on every component. Set it consistently across the platform — mismatched modes will cause `codes.Unauthenticated` errors.
