@@ -11,6 +11,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//libs/go/docker",
+        "//libs/go/grpcauth",
         "//libs/go/grpcclient",
         "//libs/go/logging",
         "//libs/go/rmq",
@@ -20,6 +21,7 @@ go_library(
         "//manmanv2/host/workshop",
         "//manmanv2/protos:manmanpb",
         "@com_github_google_uuid//:uuid",
+        "@org_golang_google_grpc//:grpc",
     ],
 )
 

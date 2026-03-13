@@ -21,6 +21,7 @@ go_library(
     importpath = "github.com/whale-net/everything/manmanv2/ui",
     visibility = ["//visibility:private"],
     deps = [
+        "//libs/go/grpcauth",
         "//libs/go/grpcclient",
         "//libs/go/htmxauth",
         "//libs/go/htmxbase",
@@ -29,6 +30,7 @@ go_library(
         "//manmanv2/ui/pages",
         "@com_github_a_h_templ//:templ",
         "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//credentials/insecure",
     ],
 )
 

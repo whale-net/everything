@@ -12,6 +12,7 @@ import (
 
 	rmqlib "github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/libs/go/s3"
+	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/manmanv2/api/handlers"
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
 	"github.com/whale-net/everything/manmanv2/api/steam"
@@ -46,6 +47,9 @@ func run() error {
 	s3PublicEndpoint := getEnv("S3_PUBLIC_ENDPOINT", "") // Optional: public-facing endpoint for pre-signed URLs
 	s3AccessKey := getEnv("S3_ACCESS_KEY", "")         // Optional: for static credentials (MinIO, etc.)
 	s3SecretKey := getEnv("S3_SECRET_KEY", "")         // Optional: for static credentials (MinIO, etc.)
+	grpcAuthMode := getEnv("GRPC_AUTH_MODE", "none")
+	grpcOIDCIssuer := getEnv("GRPC_OIDC_ISSUER", "")
+	grpcOIDCClientID := getEnv("GRPC_OIDC_CLIENT_ID", "")
 
 	// Build connection string
 	connString := fmt.Sprintf(
@@ -90,10 +94,22 @@ func run() error {
 	defer rmqConn.Close()
 	log.Println("RabbitMQ connection established")
 
+	// Create auth interceptors
+	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(ctx, grpcauth.ServerConfig{
+		Mode:      grpcauth.AuthMode(grpcAuthMode),
+		IssuerURL: grpcOIDCIssuer,
+		ClientID:  grpcOIDCClientID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create auth interceptors: %w", err)
+	}
+
 	// Create gRPC server
 	grpcServer := grpc.NewServer(
 		grpc.MaxRecvMsgSize(10 * 1024 * 1024), // 10 MB
 		grpc.MaxSendMsgSize(10 * 1024 * 1024), // 10 MB
+		grpc.ChainUnaryInterceptor(unaryInt),
+		grpc.ChainStreamInterceptor(streamInt),
 	)
 
 	// Register Workshop service early so workshopManager is available for APIServer

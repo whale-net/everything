@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/whale-net/everything/libs/go/docker"
+	"github.com/whale-net/everything/libs/go/grpcauth"
 	grpcclient "github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/logging"
 	rmqlib "github.com/whale-net/everything/libs/go/rmq"
@@ -19,6 +20,7 @@ import (
 	"github.com/whale-net/everything/manmanv2/host/session"
 	"github.com/whale-net/everything/manmanv2/host/workshop"
 	pb "github.com/whale-net/everything/manmanv2/protos"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -63,9 +65,29 @@ func run() error {
 		return fmt.Errorf("HOST_DATA_DIR must be provided (path on host where session data is stored, e.g., /home/manman_dev/manman-v2/manager-data)")
 	}
 
+	// Build service account auth dial option
+	grpcAuthMode := getEnv("GRPC_AUTH_MODE", "none")
+	grpcAuthTokenURL := getEnv("GRPC_AUTH_TOKEN_URL", "")
+	grpcAuthClientID := getEnv("GRPC_AUTH_CLIENT_ID", "")
+	grpcAuthClientSecret := getEnv("GRPC_AUTH_CLIENT_SECRET", "")
+	apiTLSEnabled := shouldUseAPITLS(apiAddress)
+	if useTLS := os.Getenv("API_USE_TLS"); useTLS != "" {
+		apiTLSEnabled = useTLS == "true"
+	}
+	authOpt, err := grpcauth.NewServiceAccountDialOption(grpcauth.ClientConfig{
+		Mode:                     grpcauth.AuthMode(grpcAuthMode),
+		TokenURL:                 grpcAuthTokenURL,
+		ClientID:                 grpcAuthClientID,
+		ClientSecret:             grpcAuthClientSecret,
+		RequireTransportSecurity: apiTLSEnabled,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create auth dial option: %w", err)
+	}
+
 	// Self-registration mode: Register with API and get server_id
 	logger.Info("starting host manager (self-registration mode)")
-	serverID, err := selfRegister(ctx, apiAddress, serverName, environment, dockerSocket)
+	serverID, err := selfRegister(ctx, apiAddress, serverName, environment, dockerSocket, authOpt)
 	if err != nil {
 		return fmt.Errorf("failed to self-register: %w", err)
 	}
@@ -88,7 +110,7 @@ func run() error {
 	defer rmqConn.Close()
 
 	// Initialize gRPC client for control API
-	grpcClient, workshopClient, err := initializeGRPCClient(ctx, apiAddress)
+	grpcClient, workshopClient, err := initializeGRPCClient(ctx, apiAddress, authOpt)
 	if err != nil {
 		return fmt.Errorf("failed to initialize gRPC client: %w", err)
 	}
@@ -419,9 +441,8 @@ func (h *CommandHandlerImpl) HandleRemoveAddon(ctx context.Context, cmd *rmq.Rem
 	return h.downloadOrchestrator.HandleRemoveCommand(ctx, cmd)
 }
 
-// selfRegister generates a server name (if not provided) and registers with the control plane
 // initializeGRPCClient creates a gRPC client connection to the control API
-func initializeGRPCClient(ctx context.Context, apiAddress string) (pb.ManManAPIClient, pb.WorkshopServiceClient, error) {
+func initializeGRPCClient(ctx context.Context, apiAddress string, authOpt grpc.DialOption) (pb.ManManAPIClient, pb.WorkshopServiceClient, error) {
 	// Build TLS config based on environment and auto-detection
 	var tlsConfig *grpcclient.TLSConfig
 	apiTLSEnabled := shouldUseAPITLS(apiAddress)
@@ -441,14 +462,14 @@ func initializeGRPCClient(ctx context.Context, apiAddress string) (pb.ManManAPIC
 	connCtx, connCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer connCancel()
 
-	client, err := grpcclient.NewClientWithTLS(connCtx, apiAddress, tlsConfig)
+	client, err := grpcclient.NewClientWithTLS(connCtx, apiAddress, tlsConfig, authOpt)
 	if err != nil {
 		// Retry connection with exponential backoff
 		backoff := 1 * time.Second
 		for i := 0; i < 5; i++ {
 			slog.Warn("failed to connect to API, retrying", "error", err, "backoff", backoff)
 			time.Sleep(backoff)
-			client, err = grpcclient.NewClientWithTLS(connCtx, apiAddress, tlsConfig)
+			client, err = grpcclient.NewClientWithTLS(connCtx, apiAddress, tlsConfig, authOpt)
 			if err == nil {
 				break
 			}
@@ -463,7 +484,7 @@ func initializeGRPCClient(ctx context.Context, apiAddress string) (pb.ManManAPIC
 	return pb.NewManManAPIClient(conn), pb.NewWorkshopServiceClient(conn), nil
 }
 
-func selfRegister(ctx context.Context, apiAddress, serverName, environment, dockerSocket string) (int64, error) {
+func selfRegister(ctx context.Context, apiAddress, serverName, environment, dockerSocket string, authOpt grpc.DialOption) (int64, error) {
 	// Generate server name if not provided
 	if serverName == "" {
 		hostname, err := os.Hostname()
@@ -483,7 +504,7 @@ func selfRegister(ctx context.Context, apiAddress, serverName, environment, dock
 		}
 	}
 
-	grpcClient, _, err := initializeGRPCClient(ctx, apiAddress)
+	grpcClient, _, err := initializeGRPCClient(ctx, apiAddress, authOpt)
 	if err != nil {
 		return 0, err
 	}

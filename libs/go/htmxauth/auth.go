@@ -168,6 +168,14 @@ func GetUser(ctx context.Context) *UserInfo {
 	return user
 }
 
+// GetAccessToken retrieves the user's access token. Returns "dev-token" in no-auth mode.
+func (a *Authenticator) GetAccessToken(r *http.Request) (string, error) {
+	if a.config.Mode == AuthModeNone {
+		return "dev-token", nil
+	}
+	return a.sessions.GetAccessToken(r)
+}
+
 // HandleLogin initiates the OIDC login flow
 func (a *Authenticator) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	if a.config.Mode == AuthModeNone {
@@ -360,6 +368,9 @@ func (sm *SessionManager) SetUserInfo(w http.ResponseWriter, r *http.Request, to
 		session.Values["email"] = email
 	}
 
+	// Store access token for gRPC forwarding (note: adds ~1-3KB to cookie size)
+	session.Values["access_token"] = token.AccessToken
+
 	return session.Save(r, w)
 }
 
@@ -423,6 +434,19 @@ func (sm *SessionManager) VerifyOAuthState(r *http.Request, state string) (bool,
 	}
 
 	return true, nil
+}
+
+// GetAccessToken retrieves the stored access token from session
+func (sm *SessionManager) GetAccessToken(r *http.Request) (string, error) {
+	session, err := sm.GetSession(r)
+	if err != nil {
+		return "", err
+	}
+	token, ok := session.Values["access_token"].(string)
+	if !ok || token == "" {
+		return "", fmt.Errorf("no access token in session")
+	}
+	return token, nil
 }
 
 // GetNextURL retrieves and clears the next URL from session
