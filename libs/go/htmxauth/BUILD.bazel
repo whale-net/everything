@@ -2,12 +2,16 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "htmxauth",
-    srcs = ["auth.go"],
+    srcs = [
+        "auth.go",
+        "db_session.go",
+    ],
     importpath = "github.com/whale-net/everything/libs/go/htmxauth",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_coreos_go_oidc_v3//oidc",
         "@com_github_gorilla_sessions//:sessions",
+        "@com_github_jackc_pgx_v5//pgxpool",
         "@org_golang_x_oauth2//:oauth2",
     ],
 )

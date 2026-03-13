@@ -24,6 +24,7 @@ go_library(
         "//libs/go/grpcauth",
         "//libs/go/grpcclient",
         "//libs/go/htmxauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
         "//libs/go/htmxbase",
         "//manmanv2/protos:manmanpb",
         "//manmanv2/ui/components",

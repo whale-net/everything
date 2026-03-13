@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/manmanv2/ui/components"
@@ -42,6 +43,9 @@ type Config struct {
 
 	// gRPC auth mode for forwarding user tokens
 	GRPCAuthMode string
+
+	// Database (optional; enables DB-backed sessions with automatic token refresh)
+	DatabaseURL string
 }
 
 // LoadConfig loads configuration from environment variables
@@ -58,6 +62,7 @@ func LoadConfig() *Config {
 		ControlAPIURL:    getEnv("CONTROL_API_URL", "control-api-dev-service:50051"),
 		LogProcessorURL:  getEnv("LOG_PROCESSOR_URL", "log-processor:50053"),
 		GRPCAuthMode:     strings.ToLower(getEnv("GRPC_AUTH_MODE", "none")),
+		DatabaseURL:      getEnv("DATABASE_URL", ""),
 	}
 }
 
@@ -103,9 +108,28 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 		OIDCRedirectURL:  config.OIDCRedirectURL,
 	}
 
-	auth, err := htmxauth.NewAuthenticator(ctx, authConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize authenticator: %w", err)
+	var auth *htmxauth.Authenticator
+	if config.DatabaseURL != "" {
+		log.Println("Using DB-backed sessions (token refresh enabled)")
+		pool, err := pgxpool.New(ctx, config.DatabaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to session DB: %w", err)
+		}
+		if err := pool.Ping(ctx); err != nil {
+			return nil, fmt.Errorf("session DB ping failed: %w", err)
+		}
+		store := htmxauth.NewDBSessionManager(ctx, pool, config.SessionSecret, "manmanv2_ui_session")
+		auth, err = htmxauth.NewAuthenticatorWithDB(ctx, authConfig, store)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize authenticator: %w", err)
+		}
+	} else {
+		log.Println("Using cookie-backed sessions (no DATABASE_URL set; access tokens will not refresh)")
+		var err error
+		auth, err = htmxauth.NewAuthenticator(ctx, authConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize authenticator: %w", err)
+		}
 	}
 
 	// Create user token dial option for forwarding per-request tokens
