@@ -20,8 +20,15 @@ Active game server orchestration platform. Split-plane architecture: cloud contr
 
 ## Configuration
 
+- [ENV.md](ENV.md) — Platform-wide environment variables (gRPC auth, database, infrastructure)
 - [ui/ENV.md](ui/ENV.md) — UI service environment variables
 - [api/S3_CONFIG.md](api/S3_CONFIG.md) — S3/object storage configuration
+
+## Shared Libraries
+
+- [../../libs/go/grpcauth/README.md](../../libs/go/grpcauth/README.md) — gRPC JWT authentication (server interceptors + client credentials)
+- [../../libs/go/htmxauth/README.md](../../libs/go/htmxauth/README.md) — OIDC login, cookie and DB-backed sessions, access token forwarding
+- [../../libs/go/db/README.md](../../libs/go/db/README.md) — PostgreSQL connection pool (`PG_DATABASE_URL`)
 
 ## Testing
 

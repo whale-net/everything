@@ -64,6 +64,18 @@ S3_SECRET_KEY=minioadmin
 S3_BUCKET=manmanv2-dev
 ```
 
+## Database
+
+All services that need PostgreSQL use `PG_DATABASE_URL`. The individual `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_SSL_MODE` variables are no longer used.
+
+| Variable | Description |
+|----------|-------------|
+| `PG_DATABASE_URL` | PostgreSQL connection string, e.g. `postgres://user:pass@host:5432/dbname` |
+
+Services that read this variable: **API**, **log-processor** (archival), **UI** (DB-backed sessions).
+
+---
+
 ## Host Manager
 
 ```bash
