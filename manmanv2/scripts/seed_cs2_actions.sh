@@ -5,161 +5,31 @@ set -euo pipefail
 # Requires: grpcurl, python3
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+# shellcheck source=common.sh
+source "${SCRIPT_DIR}/common.sh"
 
-# Default values
 CONTROL_API_ADDR="${CONTROL_API_ADDR:-localhost:50052}"
 USE_TLS="${USE_TLS:-auto}"
 INSECURE_TLS="${INSECURE_TLS:-false}"
 
-# Auto-detect TLS based on port (443 = TLS)
-if [[ "${USE_TLS}" == "auto" ]]; then
-  if [[ "${CONTROL_API_ADDR}" =~ :443$ ]]; then
-    USE_TLS="true"
-  else
-    USE_TLS="false"
-  fi
-fi
-
-grpc_call() {
-  local addr="$1"
-  local method="$2"
-  local data="$3"
-
-  local tls_flags=""
-  if [[ "${USE_TLS}" == "true" ]]; then
-    if [[ "${INSECURE_TLS}" == "true" ]]; then
-      tls_flags="-insecure"
-    fi
-  else
-    tls_flags="-plaintext"
-  fi
-
-  local CMD=(grpcurl ${tls_flags})
-  if [[ -n "${ACCESS_TOKEN:-}" ]]; then
-    CMD+=("-H" "Authorization: Bearer ${ACCESS_TOKEN}")
-  fi
-  CMD+=(
-    -import-path "${REPO_ROOT}"
-    -proto "${REPO_ROOT}/manmanv2/protos/api.proto"
-    -proto "${REPO_ROOT}/manmanv2/protos/messages.proto"
-    -d "${data}"
-    "${addr}" "${method}"
-  )
-  "${CMD[@]}"
-}
-
-
-create_action() {
-  local data="$1"
-  local output
-  output="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "${data}" 2>&1)"
-  local ec=$?
-  if [[ $ec -eq 0 ]] && ! echo "$output" | grep -qi "error"; then
-    echo "    ✓ Created"
-  else
-    echo "    ⚠ Failed/Already exists:"
-    echo "$output" | sed 's/^/      /'
-  fi
-}
+resolve_tls
 
 echo "════════════════════════════════════════════════════"
 echo "  Seeding Counter-Strike 2 Game Actions"
-
-create_action() {
-  local data="$1"
-  local output
-  output="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "${data}" 2>&1)"
-  local ec=$?
-  if [[ $ec -eq 0 ]] && ! echo "$output" | grep -qi "error"; then
-    echo "    ✓ Created"
-  else
-    echo "    ⚠ Failed/Already exists:"
-    echo "$output" | sed 's/^/      /'
-  fi
-}
-
 echo "════════════════════════════════════════════════════"
 echo "GRPC API:  ${CONTROL_API_ADDR}"
 echo ""
 
-# Check for grpcurl
-if ! command -v grpcurl &> /dev/null; then
-  echo "Error: grpcurl is not installed"
-  echo "Install with: brew install grpcurl (macOS) or go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest"
-  exit 1
-fi
+require_grpcurl
+setup_auth
+test_api_connectivity
 
-# Authentication setup
-ACCESS_TOKEN=""
-if [[ "${GRPC_AUTH_MODE:-none}" == "oidc" ]]; then
-  echo "Getting OIDC token from Keycloak..."
-  if [[ -z "${GRPC_AUTH_TOKEN_URL:-}" || -z "${GRPC_AUTH_CLIENT_ID:-}" || -z "${GRPC_AUTH_CLIENT_SECRET:-}" ]]; then
-    echo "Error: GRPC_AUTH_MODE=oidc requires GRPC_AUTH_TOKEN_URL, GRPC_AUTH_CLIENT_ID, and GRPC_AUTH_CLIENT_SECRET"
-    exit 1
-  fi
-  
-  token_resp=$(curl -s -X POST "${GRPC_AUTH_TOKEN_URL}" \
-    -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "grant_type=client_credentials" \
-    -d "client_id=${GRPC_AUTH_CLIENT_ID}" \
-    -d "client_secret=${GRPC_AUTH_CLIENT_SECRET}")
-  
-  ACCESS_TOKEN=$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read() or "{}").get("access_token", ""))' <<< "${token_resp}")
-  if [[ -z "${ACCESS_TOKEN}" ]]; then
-    echo "Error: Failed to obtain access token."
-    exit 1
-  fi
-  echo "✓ Token obtained successfully"
-  echo ""
-fi
-
-# Test API connectivity
-echo "Testing API connectivity..."
-TLS_FLAGS=""
-if [[ "${USE_TLS}" == "true" ]]; then
-  if [[ "${INSECURE_TLS}" == "true" ]]; then
-    TLS_FLAGS="-insecure"
-  fi
-else
-  TLS_FLAGS="-plaintext"
-fi
-
-TEST_CMD=(grpcurl ${TLS_FLAGS})
-if [[ -n "${ACCESS_TOKEN:-}" ]]; then
-  TEST_CMD+=("-H" "Authorization: Bearer ${ACCESS_TOKEN}")
-fi
-TEST_CMD+=("${CONTROL_API_ADDR}" list manman.v1.ManManAPI)
-
-if ! "${TEST_CMD[@]}" &> /dev/null; then
-  echo "✗ Cannot connect to API at ${CONTROL_API_ADDR}"
-  echo "Make sure the control plane is running and accessible"
-  if [[ "${USE_TLS}" == "false" ]]; then
-    echo "Hint: If the endpoint uses TLS, set USE_TLS=true"
-  fi
-  exit 1
-fi
-echo "✓ API is reachable"
-echo ""
-
-# Find CS2 game ID
 echo "Finding Counter-Strike 2 game..."
-games_resp="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/ListGames" '{"page_size":100}')"
-game_id="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); games=data.get("games", []);
-found="";
-for g in games:
-    name=(g.get("name") or "").strip()
-    if name in ["Counter-Strike 2", "CS2"]:
-        found=(g.get("gameId") or g.get("game_id") or "")
-        break
-print(found)' <<< "${games_resp}")"
-
+game_id="$(find_game_id_by_name "Counter-Strike 2")"
 if [[ -z "${game_id}" ]]; then
-  echo "✗ Counter-Strike 2 game not found"
-  echo "Please create the Counter-Strike 2 game first"
+  echo "✗ Counter-Strike 2 game not found. Run load-cs2-config.sh first."
   exit 1
 fi
-
 echo "✓ Found Counter-Strike 2 game (ID: ${game_id})"
 echo ""
 

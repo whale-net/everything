@@ -17,7 +17,8 @@ set -euo pipefail
 #   --help                    Show this help message
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+# shellcheck source=common.sh
+source "${SCRIPT_DIR}/common.sh"
 
 # Default values (can be overridden by env vars or CLI args)
 CONTROL_API_ADDR="${CONTROL_API_ADDR:-localhost:50052}"
@@ -66,42 +67,7 @@ for arg in "$@"; do
   esac
 done
 
-# Auto-detect TLS based on port (443 = TLS)
-if [[ "${USE_TLS}" == "auto" ]]; then
-  if [[ "${CONTROL_API_ADDR}" =~ :443$ ]]; then
-    USE_TLS="true"
-  else
-    USE_TLS="false"
-  fi
-fi
-
-grpc_call() {
-  local addr="$1"
-  local method="$2"
-  local data="$3"
-
-  local tls_flags=""
-  if [[ "${USE_TLS}" == "true" ]]; then
-    if [[ "${INSECURE_TLS}" == "true" ]]; then
-      tls_flags="-insecure"
-    fi
-  else
-    tls_flags="-plaintext"
-  fi
-
-  local CMD=(grpcurl ${tls_flags})
-  if [[ -n "${ACCESS_TOKEN:-}" ]]; then
-    CMD+=("-H" "Authorization: Bearer ${ACCESS_TOKEN}")
-  fi
-  CMD+=(
-    -import-path "${REPO_ROOT}"
-    -proto "${REPO_ROOT}/manmanv2/protos/api.proto"
-    -proto "${REPO_ROOT}/manmanv2/protos/messages.proto"
-    -d "${data}"
-    "${addr}" "${method}"
-  )
-  "${CMD[@]}"
-}
+resolve_tls
 
 echo ""
 echo "════════════════════════════════════════════════════"
@@ -114,100 +80,9 @@ echo "Config:    ${GAME_CONFIG_NAME}"
 echo "Image:     ${IMAGE}"
 echo ""
 
-# Check for grpcurl
-if ! command -v grpcurl &> /dev/null; then
-  echo "Error: grpcurl is not installed"
-  echo "Install with: brew install grpcurl (macOS) or go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest"
-  exit 1
-fi
-
-# Authentication setup
-ACCESS_TOKEN=""
-if [[ "${GRPC_AUTH_MODE:-none}" == "oidc" ]]; then
-  echo "Getting OIDC token from Keycloak..."
-  if [[ -z "${GRPC_AUTH_TOKEN_URL:-}" || -z "${GRPC_AUTH_CLIENT_ID:-}" || -z "${GRPC_AUTH_CLIENT_SECRET:-}" ]]; then
-    echo "Error: GRPC_AUTH_MODE=oidc requires GRPC_AUTH_TOKEN_URL, GRPC_AUTH_CLIENT_ID, and GRPC_AUTH_CLIENT_SECRET"
-    exit 1
-  fi
-
-  token_resp=$(curl -s -X POST "${GRPC_AUTH_TOKEN_URL}" \
-    -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "grant_type=client_credentials" \
-    -d "client_id=${GRPC_AUTH_CLIENT_ID}" \
-    -d "client_secret=${GRPC_AUTH_CLIENT_SECRET}")
-
-  ACCESS_TOKEN=$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read() or "{}").get("access_token", ""))' <<< "${token_resp}")
-  if [[ -z "${ACCESS_TOKEN}" ]]; then
-    echo "Error: Failed to obtain access token."
-    exit 1
-  fi
-  echo "✓ Token obtained successfully"
-  echo ""
-fi
-
-# Test API connectivity
-echo "Testing API connectivity..."
-TLS_FLAGS=""
-if [[ "${USE_TLS}" == "true" ]]; then
-  if [[ "${INSECURE_TLS}" == "true" ]]; then
-    TLS_FLAGS="-insecure"
-  fi
-else
-  TLS_FLAGS="-plaintext"
-fi
-
-TEST_CMD=(grpcurl ${TLS_FLAGS})
-if [[ -n "${ACCESS_TOKEN:-}" ]]; then
-  TEST_CMD+=("-H" "Authorization: Bearer ${ACCESS_TOKEN}")
-fi
-TEST_CMD+=("${CONTROL_API_ADDR}" list manman.v1.ManManAPI)
-
-if ! "${TEST_CMD[@]}" &> /dev/null; then
-  echo "✗ Cannot connect to API at ${CONTROL_API_ADDR}"
-  echo "Make sure the control plane is running and accessible"
-  if [[ "${USE_TLS}" == "false" ]]; then
-    echo "Hint: If the endpoint uses TLS, try adding --tls flag"
-  fi
-  exit 1
-fi
-echo "✓ API is reachable"
-echo ""
-
-find_game_id_by_name() {
-  local target_name="${1}"
-  local page_token=""
-  while true; do
-    local payload
-    if [[ -n "${page_token}" ]]; then
-      payload="$(printf '{"page_size":100,"page_token":"%s"}' "${page_token}")"
-    else
-      payload='{"page_size":100}'
-    fi
-    local resp
-    resp="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/ListGames" "${payload}")"
-    local result
-    result="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); games=data.get("games", []);
-found="";
-for g in games:
-    name=(g.get("name") or "").strip()
-    if name==sys.argv[1]:
-        found=(g.get("game_id") or g.get("gameId") or "")
-        break
-next_token=(data.get("next_page_token") or data.get("nextPageToken") or "")
-print(f"{found}|{next_token}")' "${target_name}" <<< "${resp}")"
-    local found="${result%%|*}"
-    local next="${result#*|}"
-    if [[ -n "${found}" ]]; then
-      echo "${found}"
-      return 0
-    fi
-    if [[ -z "${next}" ]]; then
-      echo ""
-      return 0
-    fi
-    page_token="${next}"
-  done
-}
+require_grpcurl
+setup_auth
+test_api_connectivity
 
 game_id="$(find_game_id_by_name "${GAME_NAME}")"
 
@@ -238,42 +113,7 @@ if [[ -z "${game_id}" ]]; then
   fi
 fi
 
-find_config_id() {
-  local page_token=""
-  while true; do
-    local payload
-    if [[ -n "${page_token}" ]]; then
-      payload="$(printf '{"game_id":%s,"page_size":100,"page_token":"%s"}' "${game_id}" "${page_token}")"
-    else
-      payload="$(printf '{"game_id":%s,"page_size":100}' "${game_id}")"
-    fi
-    local resp
-    resp="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/ListGameConfigs" "${payload}")"
-    local result
-    result="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); configs=data.get("configs", []);
-found="";
-for c in configs:
-    name=(c.get("name") or "").strip()
-    if name==sys.argv[1]:
-        found=(c.get("config_id") or c.get("configId") or "")
-        break
-next_token=(data.get("next_page_token") or data.get("nextPageToken") or "")
-print(f"{found}|{next_token}")' "${GAME_CONFIG_NAME}" <<< "${resp}")"
-    local found="${result%%|*}"
-    local next="${result#*|}"
-    if [[ -n "${found}" ]]; then
-      echo "${found}"
-      return 0
-    fi
-    if [[ -z "${next}" ]]; then
-      echo ""
-      return 0
-    fi
-    page_token="${next}"
-  done
-}
-
-config_id="$(find_config_id)"
+config_id="$(find_config_id_by_name "${game_id}" "${GAME_CONFIG_NAME}")"
 
 if [[ -z "${config_id}" ]]; then
   echo "Creating game config '${GAME_CONFIG_NAME}' for game_id=${game_id}..."
@@ -350,7 +190,7 @@ fi
 
 if [[ -z "${config_id}" ]]; then
   echo "Config already exists or create failed; re-listing..."
-  config_id="$(find_config_id)"
+  config_id="$(find_config_id_by_name "${game_id}" "${GAME_CONFIG_NAME}")"
   if [[ -z "${config_id}" ]]; then
     echo "Failed to resolve config_id"
     exit 1
@@ -360,24 +200,8 @@ fi
 echo "✔ Game ID: ${game_id}"
 echo "✔ Config ID: ${config_id}"
 
-# Deploy or update ServerGameConfig with port bindings
 echo "Checking if config is deployed to default server..."
-find_sgc_id() {
-  local resp
-  resp="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/ListServerGameConfigs" '{"page_size":100}')"
-  local result
-  result="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); configs=data.get("configs", []);
-found="";
-for c in configs:
-    cid=str(c.get("gameConfigId") or c.get("game_config_id") or "")
-    if cid==sys.argv[1]:
-        found=str(c.get("serverGameConfigId") or c.get("sgc_id") or "")
-        break
-print(found)' "${config_id}" <<< "${resp}")"
-  echo "${result}"
-}
-
-sgc_id="$(find_sgc_id)"
+sgc_id="$(find_sgc_id "${config_id}")"
 
 if [[ -z "${sgc_id}" ]]; then
   echo "Deploying config to default server with port bindings..."
@@ -405,7 +229,7 @@ EOF
   if echo "${deploy_json}" | grep -qi "error\|failed"; then
     echo "  ⚠️  Deploy failed (may already exist or port conflict)"
     echo "  Checking if SGC was created..."
-    sgc_id="$(find_sgc_id)"
+    sgc_id="$(find_sgc_id "${config_id}")"
     if [[ -n "${sgc_id}" ]]; then
       echo "  ✔ Found existing SGC ID: ${sgc_id}"
     else
