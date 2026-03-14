@@ -21,7 +21,7 @@ jobs:
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
-        cache-suffix: 'build'
+        cache-suffix: 'ci'
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
@@ -49,7 +49,7 @@ jobs:
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
-        cache-suffix: 'test'
+        cache-suffix: 'ci'
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
@@ -84,7 +84,7 @@ jobs:
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
-        cache-suffix: 'container-arch'
+        cache-suffix: 'ci'
         setup-docker: 'true'
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
@@ -119,7 +119,7 @@ jobs:
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
-        cache-suffix: 'test'
+        cache-suffix: 'ci'
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
@@ -194,7 +194,7 @@ jobs:
       uses: ./.github/actions/setup-build-env
       with:
         setup-docker: 'true'
-        cache-suffix: 'docker'
+        cache-suffix: 'ci'
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}

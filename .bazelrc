@@ -36,11 +36,18 @@ build:ci --java_runtime_version=remotejdk_11
 test:ci --cache_test_results=yes
 test:ci --test_timeout_filters=-eternal
 
-# Container image build optimization
+# Container image build optimization for CI (used by docker job in ci.yml)
 # Use toplevel downloads - downloads only the final outputs needed
 # Intermediate layer tars are cached remotely but not downloaded locally in CI
 build:ci-images --config=ci
 build:ci-images --remote_download_toplevel
+
+# Clean release builds - no remote cache reads to prevent cache poisoning
+# Used by the release workflow when publishing images to registry
+# Still uploads results so CI jobs benefit, but never trusts cached artifacts
+build:ci-release --config=ci
+build:ci-release --noremote_accept_cached
+build:ci-release --remote_download_toplevel
 
 # Test configurations
 test --test_output=errors
