@@ -35,16 +35,50 @@ grpc_call() {
     tls_flags="-plaintext"
   fi
 
-  grpcurl ${tls_flags} \
-    -import-path "${REPO_ROOT}" \
-    -proto "${REPO_ROOT}/manmanv2/protos/api.proto" \
-    -proto "${REPO_ROOT}/manmanv2/protos/messages.proto" \
-    -d "${data}" \
+  local CMD=(grpcurl ${tls_flags})
+  if [[ -n "${ACCESS_TOKEN:-}" ]]; then
+    CMD+=("-H" "Authorization: Bearer ${ACCESS_TOKEN}")
+  fi
+  CMD+=(
+    -import-path "${REPO_ROOT}"
+    -proto "${REPO_ROOT}/manmanv2/protos/api.proto"
+    -proto "${REPO_ROOT}/manmanv2/protos/messages.proto"
+    -d "${data}"
     "${addr}" "${method}"
+  )
+  "${CMD[@]}"
+}
+
+
+create_action() {
+  local data="$1"
+  local output
+  output="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "${data}" 2>&1)"
+  local ec=$?
+  if [[ $ec -eq 0 ]] && ! echo "$output" | grep -qi "error"; then
+    echo "    ✓ Created"
+  else
+    echo "    ⚠ Failed/Already exists:"
+    echo "$output" | sed 's/^/      /'
+  fi
 }
 
 echo "════════════════════════════════════════════════════"
 echo "  Seeding Counter-Strike 2 Game Actions"
+
+create_action() {
+  local data="$1"
+  local output
+  output="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "${data}" 2>&1)"
+  local ec=$?
+  if [[ $ec -eq 0 ]] && ! echo "$output" | grep -qi "error"; then
+    echo "    ✓ Created"
+  else
+    echo "    ⚠ Failed/Already exists:"
+    echo "$output" | sed 's/^/      /'
+  fi
+}
+
 echo "════════════════════════════════════════════════════"
 echo "GRPC API:  ${CONTROL_API_ADDR}"
 echo ""
@@ -54,6 +88,30 @@ if ! command -v grpcurl &> /dev/null; then
   echo "Error: grpcurl is not installed"
   echo "Install with: brew install grpcurl (macOS) or go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest"
   exit 1
+fi
+
+# Authentication setup
+ACCESS_TOKEN=""
+if [[ "${GRPC_AUTH_MODE:-none}" == "oidc" ]]; then
+  echo "Getting OIDC token from Keycloak..."
+  if [[ -z "${GRPC_AUTH_TOKEN_URL:-}" || -z "${GRPC_AUTH_CLIENT_ID:-}" || -z "${GRPC_AUTH_CLIENT_SECRET:-}" ]]; then
+    echo "Error: GRPC_AUTH_MODE=oidc requires GRPC_AUTH_TOKEN_URL, GRPC_AUTH_CLIENT_ID, and GRPC_AUTH_CLIENT_SECRET"
+    exit 1
+  fi
+  
+  token_resp=$(curl -s -X POST "${GRPC_AUTH_TOKEN_URL}" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "grant_type=client_credentials" \
+    -d "client_id=${GRPC_AUTH_CLIENT_ID}" \
+    -d "client_secret=${GRPC_AUTH_CLIENT_SECRET}")
+  
+  ACCESS_TOKEN=$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read() or "{}").get("access_token", ""))' <<< "${token_resp}")
+  if [[ -z "${ACCESS_TOKEN}" ]]; then
+    echo "Error: Failed to obtain access token."
+    exit 1
+  fi
+  echo "✓ Token obtained successfully"
+  echo ""
 fi
 
 # Test API connectivity
@@ -67,7 +125,13 @@ else
   TLS_FLAGS="-plaintext"
 fi
 
-if ! grpcurl ${TLS_FLAGS} "${CONTROL_API_ADDR}" list manman.v1.ManManAPI &> /dev/null; then
+TEST_CMD=(grpcurl ${TLS_FLAGS})
+if [[ -n "${ACCESS_TOKEN:-}" ]]; then
+  TEST_CMD+=("-H" "Authorization: Bearer ${ACCESS_TOKEN}")
+fi
+TEST_CMD+=("${CONTROL_API_ADDR}" list manman.v1.ManManAPI)
+
+if ! "${TEST_CMD[@]}" &> /dev/null; then
   echo "✗ Cannot connect to API at ${CONTROL_API_ADDR}"
   echo "Make sure the control plane is running and accessible"
   if [[ "${USE_TLS}" == "false" ]]; then
@@ -104,7 +168,7 @@ echo "Creating actions..."
 
 # 1. Change Map (with select field)
 echo "  Creating 'Change Map' action..."
-grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(cat <<EOF
+create_action "$(cat <<EOF
 {
   "action": {
     "definition_level": "game",
@@ -174,11 +238,11 @@ grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(
   ]
 }
 EOF
-)" > /dev/null 2>&1 && echo "    ✓ Created" || echo "    ⚠ Already exists or failed"
+)"
 
 # 2. Restart Match
 echo "  Creating 'Restart Match' action..."
-grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(cat <<EOF
+create_action "$(cat <<EOF
 {
   "action": {
     "definition_level": "game",
@@ -229,11 +293,11 @@ grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(
   ]
 }
 EOF
-)" > /dev/null 2>&1 && echo "    ✓ Created" || echo "    ⚠ Already exists or failed"
+)"
 
 # 3. Stop Server
 echo "  Creating 'Stop Server' action..."
-grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(cat <<EOF
+create_action "$(cat <<EOF
 {
   "action": {
     "definition_level": "game",
@@ -251,11 +315,11 @@ grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(
   }
 }
 EOF
-)" > /dev/null 2>&1 && echo "    ✓ Created" || echo "    ⚠ Already exists or failed"
+)"
 
 # 4. Broadcast Preset Message
 echo "  Creating 'Broadcast Message' action..."
-grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(cat <<EOF
+create_action "$(cat <<EOF
 {
   "action": {
     "definition_level": "game",
@@ -314,11 +378,11 @@ grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(
   ]
 }
 EOF
-)" > /dev/null 2>&1 && echo "    ✓ Created" || echo "    ⚠ Already exists or failed"
+)"
 
 # 5. Custom Message
 echo "  Creating 'Custom Message' action..."
-grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(cat <<EOF
+create_action "$(cat <<EOF
 {
   "action": {
     "definition_level": "game",
@@ -347,11 +411,11 @@ grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(
   ]
 }
 EOF
-)" > /dev/null 2>&1 && echo "    ✓ Created" || echo "    ⚠ Already exists or failed"
+)"
 
 # 6. Kick All Bots
 echo "  Creating 'Kick All Bots' action..."
-grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(cat <<EOF
+create_action "$(cat <<EOF
 {
   "action": {
     "definition_level": "game",
@@ -369,11 +433,11 @@ grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(
   }
 }
 EOF
-)" > /dev/null 2>&1 && echo "    ✓ Created" || echo "    ⚠ Already exists or failed"
+)"
 
 # 7. Host Workshop Map
 echo "  Creating 'Host Workshop Map' action..."
-grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(cat <<EOF
+create_action "$(cat <<EOF
 {
   "action": {
     "definition_level": "game",
@@ -404,11 +468,11 @@ grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(
   ]
 }
 EOF
-)" > /dev/null 2>&1 && echo "    ✓ Created" || echo "    ⚠ Already exists or failed"
+)"
 
 # 8. Change Workshop Map (from collection)
 echo "  Creating 'Change Workshop Map' action..."
-grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(cat <<EOF
+create_action "$(cat <<EOF
 {
   "action": {
     "definition_level": "game",
@@ -437,11 +501,11 @@ grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(
   ]
 }
 EOF
-)" > /dev/null 2>&1 && echo "    ✓ Created" || echo "    ⚠ Already exists or failed"
+)"
 
 # 9. List Workshop Maps
 echo "  Creating 'List Workshop Maps' action..."
-grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(cat <<EOF
+create_action "$(cat <<EOF
 {
   "action": {
     "definition_level": "game",
@@ -457,11 +521,11 @@ grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(
   }
 }
 EOF
-)" > /dev/null 2>&1 && echo "    ✓ Created" || echo "    ⚠ Already exists or failed"
+)"
 
 # 10. Execute Config
 echo "  Creating 'Execute Config' action..."
-grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(cat <<EOF
+create_action "$(cat <<EOF
 {
   "action": {
     "definition_level": "game",
@@ -492,7 +556,7 @@ grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateActionDefinition" "$(
   ]
 }
 EOF
-)" > /dev/null 2>&1 && echo "    ✓ Created" || echo "    ⚠ Already exists or failed"
+)"
 
 echo ""
 echo "✔ Counter-Strike 2 actions seeded successfully!"

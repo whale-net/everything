@@ -363,7 +363,7 @@ func (r *ActionRepository) Create(ctx context.Context, action *manman.ActionDefi
 	}
 	defer tx.Rollback(ctx)
 
-	// Insert action definition
+	// Insert action definition with ON CONFLICT DO UPDATE to support idempotent matching
 	query := `
 		INSERT INTO action_definitions (
 			definition_level, entity_id, name, label, description,
@@ -371,6 +371,18 @@ func (r *ActionRepository) Create(ctx context.Context, action *manman.ActionDefi
 			icon, requires_confirmation, confirmation_message, enabled
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		ON CONFLICT (definition_level, entity_id, name) DO UPDATE SET
+			label = EXCLUDED.label,
+			description = EXCLUDED.description,
+			command_template = EXCLUDED.command_template,
+			display_order = EXCLUDED.display_order,
+			group_name = EXCLUDED.group_name,
+			button_style = EXCLUDED.button_style,
+			icon = EXCLUDED.icon,
+			requires_confirmation = EXCLUDED.requires_confirmation,
+			confirmation_message = EXCLUDED.confirmation_message,
+			enabled = EXCLUDED.enabled,
+			updated_at = NOW()
 		RETURNING action_id
 	`
 
@@ -392,6 +404,13 @@ func (r *ActionRepository) Create(ctx context.Context, action *manman.ActionDefi
 	).Scan(&actionID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert action definition: %w", err)
+	}
+
+	// Delete existing fields if any before inserting new ones
+	deleteFieldsQuery := `DELETE FROM action_input_fields WHERE action_id = $1`
+	_, err = tx.Exec(ctx, deleteFieldsQuery, actionID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete existing input fields: %w", err)
 	}
 
 	// Insert input fields and options
