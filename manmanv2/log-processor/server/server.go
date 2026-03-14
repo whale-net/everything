@@ -37,7 +37,17 @@ func (s *Server) StreamSessionLogs(req *manmanpb.StreamSessionLogsRequest, strea
 	}
 	defer subscription.Unsubscribe()
 
-	// Stream logs to client
+	// Send backlog first so the client sees historical messages before live ones.
+	// The backlog was snapshot atomically at subscribe time, so no messages are
+	// missed or duplicated when we transition to the live channel below.
+	for _, msg := range subscription.Backlog() {
+		if err := stream.Send(msg); err != nil {
+			log.Printf("[log-processor] failed to send backlog message for session %d: %v", sessionID, err)
+			return err
+		}
+	}
+
+	// Stream live logs to client
 	logCh := subscription.Channel()
 	for {
 		select {

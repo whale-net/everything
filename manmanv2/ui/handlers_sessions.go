@@ -617,33 +617,60 @@ func (app *App) handleSessionLogsStream(w http.ResponseWriter, r *http.Request) 
 	fmt.Fprintf(w, "data: {\"type\":\"connected\"}\n\n")
 	flusher.Flush()
 
+	// Receive gRPC messages in a goroutine so we can interleave with keepalive ticks.
+	type recvResult struct {
+		msg *manmanpb.LogMessage
+		err error
+	}
+	recvCh := make(chan recvResult, 1)
+	go func() {
+		for {
+			msg, err := stream.Recv()
+			recvCh <- recvResult{msg, err}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	keepalive := time.NewTicker(30 * time.Second)
+	defer keepalive.Stop()
+
 	// Stream logs as SSE events
 	for {
-		msg, err := stream.Recv()
-		if err != nil {
-			if err == io.EOF {
-				// Stream closed normally
-				log.Printf("Log stream closed for session %d", sessionID)
-			} else {
-				log.Printf("Error receiving log for session %d: %v", sessionID, err)
-			}
+		select {
+		case <-r.Context().Done():
 			return
-		}
+		case <-keepalive.C:
+			// SSE comment keeps the connection alive through proxies
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
+		case result := <-recvCh:
+			if result.err != nil {
+				if result.err == io.EOF {
+					log.Printf("Log stream closed for session %d", sessionID)
+				} else if r.Context().Err() == nil {
+					// Only log if it wasn't a client disconnect
+					log.Printf("Error receiving log for session %d: %v", sessionID, result.err)
+				}
+				return
+			}
 
-		// Format as JSON for easier client parsing
-		data := map[string]interface{}{
-			"timestamp": msg.Timestamp,
-			"source":    msg.Source,
-			"message":   msg.Message,
-		}
-		jsonData, err := json.Marshal(data)
-		if err != nil {
-			log.Printf("Failed to marshal log message: %v", err)
-			continue
-		}
+			// Format as JSON for easier client parsing
+			data := map[string]interface{}{
+				"timestamp": result.msg.Timestamp,
+				"source":    result.msg.Source,
+				"message":   result.msg.Message,
+			}
+			jsonData, err := json.Marshal(data)
+			if err != nil {
+				log.Printf("Failed to marshal log message: %v", err)
+				continue
+			}
 
-		fmt.Fprintf(w, "data: %s\n\n", jsonData)
-		flusher.Flush()
+			fmt.Fprintf(w, "data: %s\n\n", jsonData)
+			flusher.Flush()
+		}
 	}
 }
 
