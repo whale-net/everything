@@ -351,11 +351,12 @@ jobs:
         echo "Building and releasing $FULL_APP_NAME version $VERSION using multiarch release system"
         
         # Build the release helper binary first (avoids nested Bazel invocations)
+        # Use ci-release config: builds from source (no remote cache reads) to prevent cache poisoning
         echo "Building release helper..."
-        bazel build --config=ci-images //tools:release
+        bazel build --config=ci-release //tools:release
         
         # Execute the release helper directly (not via 'bazel run' to avoid deadlocks)
-        RELEASE_HELPER="$(bazel info bazel-bin --config=ci-images)/tools/release_helper/release_helper"
+        RELEASE_HELPER="$(bazel info bazel-bin --config=ci-release)/tools/release_helper/release_helper"
         
         # Use release-multiarch with full domain-app name to ensure correct artifact is released
         if [[ "$DRY_RUN" == "true" ]]; then
