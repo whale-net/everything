@@ -7,35 +7,32 @@ on:
     branches: [ main ]
 
 jobs:
-  # Build job - builds all targets to verify compilation
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        
-    - name: Setup Build Environment
-      uses: ./.github/actions/setup-build-env
-      with:
-        cache-suffix: 'ci'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-        
-    - name: Build all targets
-      run: |
-        # Build all targets to verify compilation
-        bazel build --config=ci //...
-        # Shutdown Bazel server to prevent hanging
-        bazel shutdown
+  # # Build job - commented out in favor of merged build+test job below
+  # # Uncomment and remove build step from test job to restore separate build/test parallelism
+  # build:
+  #   name: Build
+  #   runs-on: ubuntu-latest
+  #
+  #   steps:
+  #   - name: Checkout code
+  #     uses: actions/checkout@v4
+  #     with:
+  #       fetch-depth: 0
+  #
+  #   - name: Setup Build Environment
+  #     uses: ./.github/actions/setup-build-env
+  #     with:
+  #       cache-suffix: 'ci'
+  #       bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+  #       bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+  #       bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+  #
+  #   - name: Build all targets
+  #     run: |
+  #       bazel build --config=ci //...
+  #       bazel shutdown
 
-  # Test job - builds and tests in one step for better cache utilization
-  # Note: Docker setup not needed here - all unit tests use mocking
-  # Integration tests requiring Docker run in separate test-container-arch job
+  # Combined build + test job - reuses warm Bazel server to avoid duplicate analysis
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -54,9 +51,11 @@ jobs:
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
         
-    - name: Run tests
+    - name: Build and test all targets
       run: |
-        # Run all tests and let Bazel handle caching
+        # Build all targets first to verify compilation
+        bazel build --config=ci //...
+        # Run all tests - reuses warm Bazel server, analysis is near-instant
         bazel test --config=ci //...
         # Shutdown Bazel server to prevent hanging
         bazel shutdown
@@ -106,7 +105,7 @@ jobs:
   plan-docker:
     name: Plan Docker Builds
     runs-on: ubuntu-latest
-    needs: [build, test, test-container-arch]
+    needs: [test, test-container-arch]
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       apps: ${{ steps.plan.outputs.apps }}
@@ -221,7 +220,7 @@ jobs:
   build-summary:
     name: Build Summary
     runs-on: ubuntu-latest
-    needs: [build, test, plan-docker, test-container-arch, docker]
+    needs: [test, plan-docker, test-container-arch, docker]
     if: always()
     steps:
     - name: Collect build results and generate summary
@@ -230,15 +229,13 @@ jobs:
         echo "" >> $GITHUB_STEP_SUMMARY
         
         # Check the status of all jobs
-        BUILD_RESULT="${{ needs.build.result }}"
         TEST_RESULT="${{ needs.test.result }}"
         CONTAINER_ARCH_RESULT="${{ needs.test-container-arch.result }}"
         PLAN_JOB_RESULT="${{ needs.plan-docker.result }}"
         DOCKER_RESULT="${{ needs.docker.result }}"
         
         echo "**Job Results:**" >> $GITHUB_STEP_SUMMARY
-        echo "- Build: $BUILD_RESULT" >> $GITHUB_STEP_SUMMARY
-        echo "- Test: $TEST_RESULT" >> $GITHUB_STEP_SUMMARY
+        echo "- Build & Test: $TEST_RESULT" >> $GITHUB_STEP_SUMMARY
         echo "- Container Architecture Test: $CONTAINER_ARCH_RESULT" >> $GITHUB_STEP_SUMMARY
         echo "- Planning: $PLAN_JOB_RESULT" >> $GITHUB_STEP_SUMMARY
         echo "- Docker: $DOCKER_RESULT" >> $GITHUB_STEP_SUMMARY
@@ -252,19 +249,11 @@ jobs:
         fi
         
         # Determine overall status
-        # Build job must always pass
-        if [[ "$BUILD_RESULT" != "success" ]]; then
-          echo "❌ **Overall Status: FAILED**" >> $GITHUB_STEP_SUMMARY
-          echo "Build job failed - compilation is broken!" >> $GITHUB_STEP_SUMMARY
-          echo "::error::Build job failed"
-          exit 1
-        fi
-        
-        # Test job must always pass
+        # Test job (includes build) must always pass
         if [[ "$TEST_RESULT" != "success" ]]; then
           echo "❌ **Overall Status: FAILED**" >> $GITHUB_STEP_SUMMARY
-          echo "Test job failed - tests are failing!" >> $GITHUB_STEP_SUMMARY
-          echo "::error::Test job failed"
+          echo "Build & Test job failed!" >> $GITHUB_STEP_SUMMARY
+          echo "::error::Build & Test job failed"
           exit 1
         fi
         

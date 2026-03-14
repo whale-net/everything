@@ -28,6 +28,10 @@ build:ci --remote_cache_compression
 build:ci --remote_download_toplevel
 # For future RBE build-only jobs: download only metadata (not safe for test jobs)
 build:ci-build-only --remote_download_minimal
+# Skip checking external repo files for modifications - deps are pinned by lockfiles
+build:ci --noexperimental_check_external_repository_files
+# Hardlink from repository cache instead of copying - reduces I/O on CI runners
+build:ci --experimental_repository_cache_hardlinks
 # Build metadata optimizations  
 build:ci --nolegacy_external_runfiles
 # Memory and CPU optimizations
