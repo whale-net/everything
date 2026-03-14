@@ -33,12 +33,16 @@ type SessionConsumer struct {
 	done          chan struct{}
 	logsProcessed *int64 // Pointer to manager's counter for atomic increment
 
+	// idleSince is set when subscriber count drops to zero.
+	// Zero value means the consumer has active subscribers.
+	idleSince time.Time
+
 	// Ring buffer for recent logs
-	logBuffer     []*manmanpb.LogMessage
-	bufferSize    int
-	bufferIndex   int
-	bufferFull    bool
-	bufferMu      sync.RWMutex
+	logBuffer  []*manmanpb.LogMessage
+	bufferSize int
+	bufferIndex int
+	bufferFull  bool
+	bufferMu   sync.RWMutex
 }
 
 // Manager manages consumers for multiple sessions
@@ -92,11 +96,18 @@ func NewManager(conn *rmq.Connection, config *ConsumerConfig, grpcClient manmanp
 
 // Subscription represents a subscription to session logs
 type Subscription struct {
-	ch     chan *manmanpb.LogMessage
-	cancel func()
+	ch      chan *manmanpb.LogMessage
+	backlog []*manmanpb.LogMessage
+	cancel  func()
 }
 
-// Channel returns the read-only channel for receiving log messages
+// Backlog returns buffered log messages that existed at the time of subscription.
+// These should be sent to the client before reading from Channel().
+func (s *Subscription) Backlog() []*manmanpb.LogMessage {
+	return s.backlog
+}
+
+// Channel returns the read-only channel for receiving live log messages
 func (s *Subscription) Channel() <-chan *manmanpb.LogMessage {
 	return s.ch
 }
@@ -123,9 +134,10 @@ func (m *Manager) Subscribe(ctx context.Context, sessionID int64) (*Subscription
 		m.consumers[sessionID] = consumer
 	}
 
-	// Create subscriber channel
+	// Create subscriber channel. Capacity only needs to cover live message bursts
+	// since backlog is delivered separately via Subscription.Backlog().
 	ch := make(chan *manmanpb.LogMessage, 100)
-	consumer.addSubscriber(ch)
+	backlog := consumer.addSubscriber(ch)
 
 	// Create cancel function
 	cancel := func() {
@@ -139,16 +151,18 @@ func (m *Manager) Subscribe(ctx context.Context, sessionID int64) (*Subscription
 
 		c.removeSubscriber(ch)
 
-		// If no more subscribers, clean up consumer
+		// Mark idle instead of closing. The ring buffer stays alive so reconnecting
+		// clients get the full backlog. The periodic cleanup in logStats reaps
+		// consumers that remain subscriber-less beyond the idle TTL.
 		if c.getSubscriberCount() == 0 {
-			c.close()
-			delete(m.consumers, sessionID)
+			c.idleSince = time.Now()
 		}
 	}
 
 	return &Subscription{
-		ch:     ch,
-		cancel: cancel,
+		ch:      ch,
+		backlog: backlog,
+		cancel:  cancel,
 	}, nil
 }
 
@@ -294,25 +308,16 @@ func (sc *SessionConsumer) getBufferedLogs() []*manmanpb.LogMessage {
 	return result
 }
 
-// addSubscriber adds a subscriber channel and sends buffered logs
-func (sc *SessionConsumer) addSubscriber(ch chan *manmanpb.LogMessage) {
+// addSubscriber registers a subscriber channel and returns the current backlog atomically.
+// The caller must send all backlog messages to the client before reading from ch,
+// guaranteeing that no messages are missed or duplicated: any message added to the
+// ring buffer after this call will also be broadcast to ch.
+func (sc *SessionConsumer) addSubscriber(ch chan *manmanpb.LogMessage) []*manmanpb.LogMessage {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	sc.subscribers[ch] = struct{}{}
-
-	// Send buffered logs to new subscriber in a goroutine to avoid blocking
-	go func() {
-		bufferedLogs := sc.getBufferedLogs()
-		for _, msg := range bufferedLogs {
-			select {
-			case ch <- msg:
-			default:
-				// Channel full, skip
-				log.Printf("[log-processor] subscriber channel full while sending buffered logs for session %d", sc.sessionID)
-				return
-			}
-		}
-	}()
+	sc.idleSince = time.Time{} // clear idle marker
+	return sc.getBufferedLogs()
 }
 
 // removeSubscriber removes a subscriber channel
@@ -429,12 +434,36 @@ func (m *Manager) logStats() {
 		case <-m.statsCtx.Done():
 			return
 		case <-ticker.C:
+			m.reapIdleConsumers()
+
 			m.mu.RLock()
 			activeSources := len(m.consumers)
 			m.mu.RUnlock()
 
 			logsProcessed := atomic.LoadInt64(&m.logsProcessed)
 			log.Printf("[log-processor] Stats: %d logs processed from %d active source(s)", logsProcessed, activeSources)
+		}
+	}
+}
+
+const idleConsumerTTL = 5 * time.Minute
+
+// reapIdleConsumers closes and removes on-demand consumers that have had no
+// subscribers for longer than idleConsumerTTL. Lifecycle-managed consumers are
+// cleaned up by DeleteConsumerForSession when the session ends.
+func (m *Manager) reapIdleConsumers() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now()
+	for sessionID, c := range m.consumers {
+		c.mu.RLock()
+		idle := !c.idleSince.IsZero() && now.Sub(c.idleSince) > idleConsumerTTL
+		c.mu.RUnlock()
+		if idle {
+			c.close()
+			delete(m.consumers, sessionID)
+			log.Printf("[consumer-manager] reaped idle consumer for session %d", sessionID)
 		}
 	}
 }

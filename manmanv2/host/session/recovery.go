@@ -82,8 +82,8 @@ func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID 
 				SGCID:           sgcID,
 				GameContainerID: game.ID,
 				LogReader:       logReader,
-				AttachResp:      nil, // Will attach lazily when command is sent
-				AttachStrategy:  "lazy",
+				AttachResp:      nil, // Attached on first SendInput
+				AttachStrategy:  "persistent",
 				IsTTY:           true, // Always use TTY mode
 				NetworkName:     networkName,
 				Status:          manman.SessionStatusRunning,
