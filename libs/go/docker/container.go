@@ -320,13 +320,16 @@ func (c *Client) GetContainerLogs(ctx context.Context, containerID string, follo
 	return c.cli.ContainerLogs(ctx, containerID, options)
 }
 
-// AttachToContainer attaches to a running container for stdin/stdout/stderr
+// AttachToContainer attaches to a running container for stdin input only.
+// Stdout/Stderr are not attached here because container output is read
+// independently via GetContainerLogs; attaching them with no reader would
+// cause backpressure that could stall the container process.
 func (c *Client) AttachToContainer(ctx context.Context, containerID string) (types.HijackedResponse, error) {
 	options := container.AttachOptions{
 		Stream: true,
 		Stdin:  true,
-		Stdout: true,
-		Stderr: true,
+		Stdout: false,
+		Stderr: false,
 	}
 	return c.cli.ContainerAttach(ctx, containerID, options)
 }

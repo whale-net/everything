@@ -327,7 +327,7 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 		return fmt.Errorf("failed to get container logs: %w", err)
 	}
 	state.LogReader = logReader
-	state.AttachStrategy = "lazy" // Default to lazy attach
+	state.AttachStrategy = "persistent"
 	state.IsTTY = true             // Always use TTY mode
 
 	// 5. Start log reader goroutine
