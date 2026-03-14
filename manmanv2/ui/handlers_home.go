@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -42,7 +41,7 @@ func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
 }
 
 func (app *App) handleDashboardSummary(w http.ResponseWriter, r *http.Request) {
-	ctx := context.Background()
+	ctx := r.Context()
 
 	servers, err := app.grpc.ListServers(ctx)
 	if err != nil {
@@ -89,7 +88,7 @@ type PortInfo = components.PortInfo
 type ActiveSessionInfo = components.ActiveSessionInfo
 
 func (app *App) handleDashboardSessions(w http.ResponseWriter, r *http.Request) {
-	ctx := context.Background()
+	ctx := r.Context()
 
 	sessions, err := app.grpc.ListSessions(ctx, true)
 	if err != nil {

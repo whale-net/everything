@@ -59,7 +59,7 @@ func (app *App) handleSGCDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	// Fetch SGC
 	sgcResp, err := app.grpc.GetAPI().GetServerGameConfig(ctx, &manmanpb.GetServerGameConfigRequest{
@@ -267,7 +267,7 @@ func (app *App) handleAddLibraryToSGC(w http.ResponseWriter, r *http.Request) {
 		volumeID, _ = strconv.ParseInt(volumeIDStr, 10, 64)
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 	if err := app.grpc.AddLibraryToSGC(ctx, sgcID, libraryID, presetID, volumeID, installationPathOverride); err != nil {
 		log.Printf("Error adding library %d to SGC %d: %v", libraryID, sgcID, err)
 		http.Error(w, "Failed to add library", http.StatusInternalServerError)
@@ -294,7 +294,7 @@ func (app *App) handleSGCAvailableLibraries(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	// Fetch SGC to get game/config info
 	sgcResp, err := app.grpc.GetAPI().GetServerGameConfig(ctx, &manmanpb.GetServerGameConfigRequest{
@@ -424,7 +424,7 @@ func (app *App) handleSGCRemoveLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 	if err := app.grpc.RemoveLibraryFromSGC(ctx, sgcID, libraryID); err != nil {
 		log.Printf("Error removing library %d from SGC %d: %v", libraryID, sgcID, err)
 		http.Error(w, "Failed to remove library", http.StatusInternalServerError)

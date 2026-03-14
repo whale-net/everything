@@ -288,6 +288,8 @@ spec:
           value: "{s3_secret_key}"
         - name: S3_BUCKET
           value: "{s3_bucket}"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "{otel_endpoint}"
 """.format(
         namespace=namespace,
         pg_database_url=pg_database_url,
@@ -297,6 +299,7 @@ spec:
         s3_access_key=s3_access_key,
         s3_secret_key=s3_secret_key,
         s3_bucket=s3_bucket,
+        otel_endpoint=otel_endpoint,
     )))
 
     # Build dependency list for API
@@ -537,7 +540,9 @@ spec:
           value: "manmanv2-api.{namespace}.svc.cluster.local:50051"
         - name: LOG_PROCESSOR_URL
           value: "manmanv2-log-processor.{namespace}.svc.cluster.local:50053"
-""".format(namespace=namespace)))
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "{otel_endpoint}"
+""".format(namespace=namespace, otel_endpoint=otel_endpoint)))
 
     # Build dependency list for UI
     ui_deps = ['manmanv2-api']

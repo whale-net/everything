@@ -84,7 +84,7 @@ func getIconOptions() []IconOption {
 // handleGameActions displays the actions management page for a game
 func (app *App) handleGameActions(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
-	ctx := context.Background()
+	ctx := r.Context()
 
 	// Extract game ID from URL
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/games/"), "/")
@@ -181,7 +181,7 @@ func (app *App) handleGameActions(w http.ResponseWriter, r *http.Request) {
 // handleConfigActions displays the actions management page for a config
 func (app *App) handleConfigActions(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
-	ctx := context.Background()
+	ctx := r.Context()
 
 	// Extract config ID from URL: /games/{gameID}/configs/{configID}/actions
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
@@ -290,7 +290,7 @@ func (app *App) handleConfigActions(w http.ResponseWriter, r *http.Request) {
 // handleSGCActions displays the actions management page for an SGC
 func (app *App) handleSGCActions(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
-	ctx := context.Background()
+	ctx := r.Context()
 
 	// Extract SGC ID from URL
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/sgcs/"), "/")
@@ -468,7 +468,7 @@ func (app *App) handleActionMutation(w http.ResponseWriter, r *http.Request, lev
 
 // handleActionCreate creates a new action
 func (app *App) handleActionCreate(w http.ResponseWriter, r *http.Request, level string, entityID int64) {
-	ctx := context.Background()
+	ctx := r.Context()
 
 	// Parse action fields from form
 	action := &manmanpb.ActionDefinition{
@@ -528,7 +528,7 @@ func (app *App) handleActionCreate(w http.ResponseWriter, r *http.Request, level
 
 // handleActionUpdate updates an existing action
 func (app *App) handleActionUpdate(w http.ResponseWriter, r *http.Request, level string, entityID int64) {
-	ctx := context.Background()
+	ctx := r.Context()
 
 	actionID := parseIntOrZero(r.FormValue("action_id"))
 	if actionID == 0 {
@@ -595,7 +595,7 @@ func (app *App) handleActionUpdate(w http.ResponseWriter, r *http.Request, level
 
 // handleActionDelete deletes an action
 func (app *App) handleActionDelete(w http.ResponseWriter, r *http.Request) {
-	ctx := context.Background()
+	ctx := r.Context()
 
 	actionID := parseIntOrZero(r.FormValue("action_id"))
 	if actionID == 0 {
@@ -623,7 +623,7 @@ func (app *App) handleActionDelete(w http.ResponseWriter, r *http.Request) {
 
 // handleActionEditForm renders a pre-populated edit form for an action
 func (app *App) handleActionEditForm(w http.ResponseWriter, r *http.Request, actionID int64, level string, entityID int64) {
-	ctx := context.Background()
+	ctx := r.Context()
 
 	// Fetch the action details
 	action, fields, err := app.grpc.GetActionDefinition(ctx, actionID)

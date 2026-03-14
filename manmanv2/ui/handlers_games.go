@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -46,7 +45,7 @@ type GameFormData struct {
 
 func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
-	ctx := context.Background()
+	ctx := r.Context()
 	
 	games, err := app.grpc.ListGames(ctx)
 	if err != nil {
@@ -103,7 +102,7 @@ func (app *App) handleGameCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	ctx := context.Background()
+	ctx := r.Context()
 	
 	// Parse form data
 	name := r.FormValue("name")
@@ -191,7 +190,7 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	ctx := context.Background()
+	ctx := r.Context()
 	
 	game, err := app.grpc.GetGame(ctx, gameID)
 	if err != nil {
@@ -283,7 +282,7 @@ func (app *App) handleGameEdit(w http.ResponseWriter, r *http.Request, gameIDStr
 		return
 	}
 	
-	ctx := context.Background()
+	ctx := r.Context()
 	
 	// Parse form data
 	name := r.FormValue("name")
@@ -330,7 +329,7 @@ func (app *App) handleGameDelete(w http.ResponseWriter, r *http.Request, gameIDS
 		return
 	}
 	
-	ctx := context.Background()
+	ctx := r.Context()
 	
 	err = app.grpc.DeleteGame(ctx, gameID)
 	if err != nil {
@@ -437,7 +436,7 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 		return
 	}
 	
-	ctx := context.Background()
+	ctx := r.Context()
 	
 	game, err := app.grpc.GetGame(ctx, gameID)
 	if err != nil {
@@ -569,7 +568,7 @@ func (app *App) handleGameConfigDeploy(w http.ResponseWriter, r *http.Request, g
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 	_, err = app.grpc.DeployGameConfig(ctx, serverID, configID)
 	if err != nil {
 		log.Printf("Error deploying game config: %v", err)
@@ -599,7 +598,7 @@ func (app *App) handleGameConfigNew(w http.ResponseWriter, r *http.Request, game
 		return
 	}
 	
-	ctx := context.Background()
+	ctx := r.Context()
 	
 	game, err := app.grpc.GetGame(ctx, gameID)
 	if err != nil {
@@ -641,7 +640,7 @@ func (app *App) handleGameConfigCreate(w http.ResponseWriter, r *http.Request, g
 		return
 	}
 	
-	ctx := context.Background()
+	ctx := r.Context()
 	
 	// Parse form data
 	name := r.FormValue("name")
@@ -685,7 +684,7 @@ func (app *App) handleGameConfigEdit(w http.ResponseWriter, r *http.Request, gam
 		return
 	}
 	
-	ctx := context.Background()
+	ctx := r.Context()
 	
 	// Parse form data
 	name := r.FormValue("name")
@@ -723,7 +722,7 @@ func (app *App) handleGameConfigDelete(w http.ResponseWriter, r *http.Request, g
 		return
 	}
 	
-	ctx := context.Background()
+	ctx := r.Context()
 	
 	err = app.grpc.DeleteGameConfig(ctx, configID)
 	if err != nil {
@@ -763,7 +762,7 @@ func (app *App) handleGameConfigUpdateEnv(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 	req := &manmanpb.UpdateGameConfigRequest{
 		ConfigId:    configID,
 		EnvTemplate: envTemplate,
@@ -816,7 +815,7 @@ func (app *App) handleGameConfigVolumeCreate(w http.ResponseWriter, r *http.Requ
 		volumeType = "bind"
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 	_, err = app.grpc.CreateGameConfigVolume(ctx, configID, name, description, containerPath, hostSubpath, readOnly, volumeType)
 	if err != nil {
 		log.Printf("Error creating volume: %v", err)
@@ -840,7 +839,7 @@ func (app *App) handleGameConfigVolumeDelete(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 	err = app.grpc.DeleteGameConfigVolume(ctx, volumeID)
 	if err != nil {
 		log.Printf("Error deleting volume: %v", err)
@@ -861,7 +860,7 @@ func (app *App) handleCreateAddonPathPreset(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	gameIDStr := r.FormValue("game_id")
 	name := r.FormValue("name")
@@ -890,7 +889,7 @@ func (app *App) handleDeleteAddonPathPreset(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	presetIDStr := r.FormValue("preset_id")
 	gameIDStr := r.FormValue("game_id")

@@ -291,8 +291,6 @@ if [[ -z "${config_id}" ]]; then
   "env_template": {
     "EULA": "TRUE"
   },
-  "files": [],
-  "parameters": [],
   "entrypoint": [],
   "command": []
 }
@@ -366,8 +364,7 @@ if [[ -z "${sgc_id}" ]]; then
       "host_port": 25565,
       "protocol": "TCP"
     }
-  ],
-  "parameters": {}
+  ]
 }
 EOF
 )"

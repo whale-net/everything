@@ -263,8 +263,6 @@ if [[ -z "${config_id}" ]]; then
     "TV_ENABLE": "0",
     "STEAMAPPVALIDATE": "0"
   },
-  "files": [],
-  "parameters": [],
   "entrypoint": [],
   "command": []
 }
@@ -348,8 +346,7 @@ if [[ -z "${sgc_id}" ]]; then
       "host_port": 27020,
       "protocol": "UDP"
     }
-  ],
-  "parameters": {}
+  ]
 }
 EOF
 )"

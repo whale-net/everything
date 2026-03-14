@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log"
 	"net/http"
 	"strconv"
@@ -33,7 +32,7 @@ type ServerDetailPageData struct {
 
 func (app *App) handleServers(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
-	ctx := context.Background()
+	ctx := r.Context()
 	
 	servers, err := app.grpc.ListServers(ctx)
 	if err != nil {
@@ -76,7 +75,7 @@ func (app *App) handleServerDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	ctx := context.Background()
+	ctx := r.Context()
 	
 	// Fetch server details
 	resp, err := app.grpc.GetAPI().GetServer(ctx, &manmanpb.GetServerRequest{

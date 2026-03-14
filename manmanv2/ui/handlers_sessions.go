@@ -49,7 +49,7 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 	showForce := r.URL.Query().Get("show_force") == "1"
 	forceSGCID := r.URL.Query().Get("sgc_id")
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	// Fetch all servers to build layout data
 	servers, err := app.grpc.ListServers(ctx)
@@ -237,7 +237,7 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 	sessionResp, err := app.grpc.GetSession(ctx, &manmanpb.GetSessionRequest{
 		SessionId: sessionID,
 	})
@@ -334,7 +334,7 @@ func (app *App) handleSessionStop(w http.ResponseWriter, r *http.Request, sessio
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 	_, err := app.grpc.StopSession(ctx, sessionID)
 	if err != nil {
 		log.Printf("Error stopping session: %v", err)
@@ -399,7 +399,7 @@ func (app *App) handleExecuteAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Execute the action
-	ctx := context.Background()
+	ctx := r.Context()
 	resp, err := app.grpc.ExecuteAction(ctx, sessionID, actionID, inputValues)
 	if err != nil {
 		log.Printf("Error executing action: %v", err)
@@ -469,7 +469,7 @@ func (app *App) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 
 	force := r.FormValue("force") == "true"
 
-	ctx := context.Background()
+	ctx := r.Context()
 	session, err := app.grpc.StartSession(ctx, serverGameConfigID, force)
 	if err != nil {
 		log.Printf("Error starting session: %v", err)
@@ -526,7 +526,7 @@ func (app *App) handleCheckActiveSession(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	// Check for active sessions on this SGC
 	req := &manmanpb.ListSessionsRequest{
@@ -677,7 +677,7 @@ func (app *App) handleHistoricalLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	// Call gRPC GetHistoricalLogs directly with session ID
 	resp, err := app.grpc.GetHistoricalLogs(ctx, &manmanpb.GetHistoricalLogsRequest{
@@ -719,7 +719,7 @@ func (app *App) handleLogHistogram(w http.ResponseWriter, r *http.Request) {
 	startStr := r.URL.Query().Get("start")
 	endStr := r.URL.Query().Get("end")
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	// If zoom range provided, fetch histogram for that range only
 	if startStr != "" && endStr != "" {
@@ -820,7 +820,7 @@ func (app *App) handleLoadHistoricalLogs(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	// Call gRPC GetHistoricalLogs with pagination
 	resp, err := app.grpc.GetHistoricalLogs(ctx, &manmanpb.GetHistoricalLogsRequest{

@@ -155,11 +155,13 @@ func (r *Runner) UpWithTracking() error {
 	// Create ONE migrator for all steps. Creating a new migrator per iteration leaks
 	// the dedicated advisory-lock connection acquired by postgres.WithInstance, exhausting
 	// the connection pool after ~MaxOpenConns/2 migrations.
+	// Do NOT call m.Close() — WithInstance doesn't own the DB, but Close() closes it anyway,
+	// which would break callers that use the DB after UpWithTracking returns.
+	// The advisory lock is acquired and released by Lock()/Unlock() inside each Steps() call.
 	m, err := r.createMigrator()
 	if err != nil {
 		return err
 	}
-	defer m.Close()
 
 	// Track version locally — avoids calling r.Version() (which creates another migrator)
 	// on every iteration.
