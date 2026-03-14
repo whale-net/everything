@@ -424,6 +424,11 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 		return
 	}
 	
+	if configIDStr == "create" {
+		app.handleGameConfigCreate(w, r, gameIDStr)
+		return
+	}
+	
 	gameID, err := strconv.ParseInt(gameIDStr, 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid game ID", http.StatusBadRequest)

@@ -157,8 +157,12 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 	queueName := fmt.Sprintf("logs.session.%d", sessionID)
 	routingKey := fmt.Sprintf("logs.session.%d", sessionID)
 
+	// Use background context for the consumer loop and API calls since this consumer
+	// is shared natively across all users and shouldn't die when the first viewer disconnects.
+	consumerCtx, cancel := context.WithCancel(context.Background())
+
 	// Query session to get SGC ID
-	sessionResp, err := m.grpcClient.GetSession(ctx, &manmanpb.GetSessionRequest{
+	sessionResp, err := m.grpcClient.GetSession(consumerCtx, &manmanpb.GetSessionRequest{
 		SessionId: sessionID,
 	})
 	if err != nil {
@@ -179,7 +183,6 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 		return nil, fmt.Errorf("failed to bind queue to exchange: %w", err)
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
 	bufferSize := 500 // Keep last 500 log messages in memory
 	sc := &SessionConsumer{
 		sessionID:     sessionID,
@@ -187,7 +190,7 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 		queueName:     queueName,
 		consumer:      consumer,
 		subscribers:   make(map[chan *manmanpb.LogMessage]struct{}),
-		cancel:        cancel,
+		cancel:        cancel, // This cancel is for the consumerCtx
 		done:          make(chan struct{}),
 		logsProcessed: &m.logsProcessed,
 		logBuffer:     make([]*manmanpb.LogMessage, bufferSize),
@@ -196,8 +199,8 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 		bufferFull:    false,
 	}
 
-	// Start consuming in background
-	go sc.consumeLoop(ctx, m.config.DebugLogOutput, m.archiver)
+	// Start consuming in background using the detached context
+	go sc.consumeLoop(consumerCtx, m.config.DebugLogOutput, m.archiver)
 
 	return sc, nil
 }

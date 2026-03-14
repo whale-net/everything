@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/libs/go/logging"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -141,14 +141,11 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 	}
 
 	// Initialize log-processor gRPC client
-	logProcessorConn, err := grpc.NewClient(config.LogProcessorURL,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		userAuthOpt,
-	)
+	logProcessorConn, err := grpcclient.NewClient(ctx, config.LogProcessorURL, userAuthOpt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to log-processor: %w", err)
 	}
-	logProcessorClient := manmanpb.NewLogProcessorClient(logProcessorConn)
+	logProcessorClient := manmanpb.NewLogProcessorClient(logProcessorConn.GetConnection())
 
 	return &App{
 		config:       config,
