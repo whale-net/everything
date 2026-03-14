@@ -36,9 +36,11 @@ func run() error {
 
 	// Configure structured logging
 	logging.Configure(logging.Config{
-		ServiceName: "host-manager",
-		Domain:      "manmanv2",
-		JSONFormat:  getEnv("LOG_FORMAT", "json") == "json",
+		ServiceName:   "host-manager",
+		Domain:        "manmanv2",
+		JSONFormat:    getEnv("LOG_FORMAT", "json") == "json",
+		EnableOTLP:    true,
+		EnableTracing: true,
 	})
 	defer logging.Shutdown(ctx)
 

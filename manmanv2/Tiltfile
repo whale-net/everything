@@ -43,6 +43,16 @@ setup_dev_util(namespace)
 db_info = setup_postgres(namespace, db_name='manmanv2')
 db_url = get_custom_or_default('BUILD_POSTGRES_ENV', 'POSTGRES_URL', db_info['url'])
 
+# pgx-compatible postgres URL (postgres:// scheme, not SQLAlchemy postgresql+psycopg2://)
+# Used by Go services that use pgxpool (API, log-processor, UI)
+pg_database_url = get_custom_or_default(
+    'BUILD_POSTGRES_ENV',
+    'PG_DATABASE_URL',
+    'postgres://{}:{}@{}:{}/{}?sslmode=disable'.format(
+        db_info['user'], db_info['password'], db_info['host'], db_info['port'], db_info['database']
+    )
+)
+
 # RabbitMQ Message Queue
 rmq_info = setup_rabbitmq(namespace)
 rabbitmq_host = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_HOST', rmq_info['host'])
@@ -263,7 +273,7 @@ spec:
         - name: PORT
           value: "50051"
         - name: PG_DATABASE_URL
-          value: "{db_url}"
+          value: "{pg_database_url}"
         - name: GRPC_AUTH_MODE
           value: "none"
         - name: RABBITMQ_URL
@@ -280,7 +290,7 @@ spec:
           value: "{s3_bucket}"
 """.format(
         namespace=namespace,
-        db_url=db_url,
+        pg_database_url=pg_database_url,
         rabbitmq_url=rabbitmq_url,
         s3_endpoint=s3_endpoint,
         s3_public_endpoint=os.environ.get('S3_PUBLIC_ENDPOINT', 'http://host.docker.internal:9000'),
@@ -366,7 +376,6 @@ spec:
           value: "{otel_endpoint}"
 """.format(
         namespace=namespace,
-        db_url=db_url,
         rabbitmq_url=rabbitmq_url,
         s3_endpoint=s3_endpoint,
         s3_public_endpoint=os.environ.get('S3_PUBLIC_ENDPOINT', 'http://host.docker.internal:9000'),
@@ -448,7 +457,7 @@ spec:
         - name: S3_SECRET_KEY
           value: "{s3_secret_key}"
         - name: PG_DATABASE_URL
-          value: "{db_url}"
+          value: "{pg_database_url}"
         - name: GRPC_AUTH_MODE
           value: "none"
         - name: API_ADDRESS
@@ -460,7 +469,7 @@ spec:
         s3_access_key=s3_access_key,
         s3_secret_key=s3_secret_key,
         s3_bucket=s3_bucket,
-        db_url=db_url,
+        pg_database_url=pg_database_url,
     )))
 
     # Build dependency list for log-processor

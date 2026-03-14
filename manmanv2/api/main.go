@@ -12,8 +12,10 @@ import (
 
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/libs/go/logging"
 	rmqlib "github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/libs/go/s3"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"github.com/whale-net/everything/manmanv2/api/handlers"
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
 	"github.com/whale-net/everything/manmanv2/api/steam"
@@ -32,6 +34,15 @@ func main() {
 func run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	logging.Configure(logging.Config{
+		ServiceName:   "control-api",
+		Domain:        "manmanv2",
+		JSONFormat:    true,
+		EnableOTLP:    true,
+		EnableTracing: true,
+	})
+	defer logging.Shutdown(ctx) //nolint:errcheck
 
 	// Get configuration from environment
 	port := getEnv("PORT", "50051")
@@ -99,6 +110,7 @@ func run() error {
 	grpcServer := grpc.NewServer(
 		grpc.MaxRecvMsgSize(10 * 1024 * 1024), // 10 MB
 		grpc.MaxSendMsgSize(10 * 1024 * 1024), // 10 MB
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.ChainUnaryInterceptor(unaryInt),
 		grpc.ChainStreamInterceptor(streamInt),
 	)

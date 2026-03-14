@@ -46,11 +46,12 @@ func run() error {
 	}
 
 	logging.Configure(logging.Config{
-		ServiceName: "event-processor",
-		Domain:      "manmanv2",
-		Level:       logLevel,
-		JSONFormat:  true,
-		EnableOTLP:  true,
+		ServiceName:   "event-processor",
+		Domain:        "manmanv2",
+		Level:         logLevel,
+		JSONFormat:    true,
+		EnableOTLP:    true,
+		EnableTracing: true,
 	})
 	defer logging.Shutdown(context.Background())
 

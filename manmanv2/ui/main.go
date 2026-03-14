@@ -16,6 +16,8 @@ import (
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/logging"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"github.com/whale-net/everything/manmanv2/ui/components"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
@@ -171,8 +173,18 @@ func main() {
 	// Load configuration
 	config := LoadConfig()
 
-	// Create application
 	ctx := context.Background()
+
+	logging.Configure(logging.Config{
+		ServiceName:   "manmanv2-ui",
+		Domain:        "manmanv2",
+		JSONFormat:    true,
+		EnableOTLP:    true,
+		EnableTracing: true,
+	})
+	defer logging.Shutdown(ctx) //nolint:errcheck
+
+	// Create application
 	app, err := NewApp(ctx, config)
 	if err != nil {
 		log.Fatalf("Failed to initialize application: %v", err)
@@ -183,11 +195,11 @@ func main() {
 	mux := http.NewServeMux()
 	app.setupRoutes(mux)
 
-	// Create server
+	// Create server — wrap mux with otelhttp so every HTTP request gets a span.
 	addr := fmt.Sprintf("%s:%s", config.Host, config.Port)
 	server := &http.Server{
 		Addr:         addr,
-		Handler:      mux,
+		Handler:      otelhttp.NewHandler(mux, "manmanv2-ui"),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -394,8 +406,7 @@ func (app *App) getSelectedServer(r *http.Request, servers []*manmanpb.Server) *
 
 // buildLayoutData populates common layout data with servers and selection
 func (app *App) buildLayoutData(r *http.Request, title, active string, user *htmxauth.UserInfo) (LayoutData, error) {
-	ctx := context.Background()
-	servers, err := app.grpc.ListServers(ctx)
+	servers, err := app.grpc.ListServers(r.Context())
 	if err != nil {
 		log.Printf("Error fetching servers for layout: %v", err)
 		servers = []*manmanpb.Server{}
@@ -422,8 +433,7 @@ func (app *App) buildLayoutData(r *http.Request, title, active string, user *htm
 
 // buildTemplLayoutData builds components.LayoutData for templ pages
 func (app *App) buildTemplLayoutData(r *http.Request, title, active string, user *htmxauth.UserInfo, breadcrumbs []components.Breadcrumb) (components.LayoutData, error) {
-	ctx := context.Background()
-	servers, err := app.grpc.ListServers(ctx)
+	servers, err := app.grpc.ListServers(r.Context())
 	if err != nil {
 		log.Printf("Error fetching servers for layout: %v", err)
 		servers = []*manmanpb.Server{}

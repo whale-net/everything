@@ -8,6 +8,8 @@ import (
 	"sync"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 // Message contains all information about an incoming message
@@ -214,6 +216,16 @@ func (c *Consumer) handleMessage(ctx context.Context, delivery amqp.Delivery) {
 		delivery.Nack(false, false) // Reject and don't requeue
 		return
 	}
+
+	// Extract trace context from AMQP headers so this message is linked to
+	// the publisher's span as a child.
+	carrier := propagation.MapCarrier{}
+	for k, v := range delivery.Headers {
+		if s, ok := v.(string); ok {
+			carrier[k] = s
+		}
+	}
+	ctx = otel.GetTextMapPropagator().Extract(ctx, carrier)
 
 	// Create message struct
 	msg := Message{

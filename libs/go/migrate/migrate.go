@@ -152,24 +152,23 @@ func (r *Runner) UpWithTracking() error {
 		return fmt.Errorf("database is in dirty state (version %d). Use --force to recover", currentVersion)
 	}
 
-	// Run migrations one at a time
+	// Create ONE migrator for all steps. Creating a new migrator per iteration leaks
+	// the dedicated advisory-lock connection acquired by postgres.WithInstance, exhausting
+	// the connection pool after ~MaxOpenConns/2 migrations.
+	m, err := r.createMigrator()
+	if err != nil {
+		return err
+	}
+	defer m.Close()
+
+	// Track version locally — avoids calling r.Version() (which creates another migrator)
+	// on every iteration.
+	nextVersion := currentVersion + 1
+
 	for {
-		// Create migrator for this step
-		m, err := r.createMigrator()
-		if err != nil {
-			return err
-		}
-
-		// Get current version before each step
-		beforeVersion, _, err := r.Version()
-		if err != nil && err.Error() != "no migration" {
-			return fmt.Errorf("failed to get version: %w", err)
-		}
-
-		nextVersion := beforeVersion + 1
 		startTime := time.Now()
 
-		// Try to run one migration (don't record start yet - wait to see if it exists)
+		// Try to run one migration
 		stepErr := m.Steps(1)
 
 		if stepErr == migrate.ErrNoChange {
@@ -211,6 +210,8 @@ func (r *Runner) UpWithTracking() error {
 				fmt.Printf("Warning: failed to record migration success in history: %v\n", err)
 			}
 		}
+
+		nextVersion++
 	}
 }
 
