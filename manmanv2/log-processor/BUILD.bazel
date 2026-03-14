@@ -12,6 +12,7 @@ go_library(
     deps = [
         "//libs/go/db",
         "//libs/go/grpcauth",
+        "//libs/go/logging",
         "//libs/go/rmq",
         "//libs/go/s3",
         "//manmanv2/api/repository/postgres",
@@ -20,6 +21,7 @@ go_library(
         "//manmanv2/log-processor/lifecycle",
         "//manmanv2/log-processor/server",
         "//manmanv2/protos:manmanpb",
+        "@io_opentelemetry_go_contrib_instrumentation_google_golang_org_grpc_otelgrpc//:otelgrpc",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//credentials/insecure",
     ],
