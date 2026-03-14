@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -42,7 +41,7 @@ func (app *App) handleBackupConfigCreate(w http.ResponseWriter, r *http.Request)
 		backupPath = "."
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 	if _, err := app.grpc.CreateBackupConfig(ctx, volumeID, int32(cadence), backupPath, enabled); err != nil {
 		log.Printf("Error creating backup config: %v", err)
 		http.Error(w, "Failed to create backup config", http.StatusInternalServerError)
@@ -79,7 +78,7 @@ func (app *App) handleBackupConfigDelete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 	if err := app.grpc.DeleteBackupConfig(ctx, backupConfigID); err != nil {
 		log.Printf("Error deleting backup config %d: %v", backupConfigID, err)
 		http.Error(w, "Failed to delete backup config", http.StatusInternalServerError)
@@ -125,7 +124,7 @@ func (app *App) handleTriggerBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 	backupID, err := app.grpc.TriggerBackup(ctx, sgcID, backupConfigID)
 	if err != nil {
 		log.Printf("Error triggering backup for SGC %d config %d: %v", sgcID, backupConfigID, err)

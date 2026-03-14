@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -87,7 +86,7 @@ type WorkshopInstallationsPageData struct {
 
 func (app *App) handleWorkshopLibrary(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
-	ctx := context.Background()
+	ctx := r.Context()
 
 	games, err := app.grpc.ListGames(ctx)
 	if err != nil {
@@ -144,7 +143,7 @@ func (app *App) handleWorkshopLibrary(w http.ResponseWriter, r *http.Request) {
 
 func (app *App) handleWorkshopSearch(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
-	ctx := context.Background()
+	ctx := r.Context()
 
 	query := r.URL.Query().Get("q")
 	gameIDStr := r.URL.Query().Get("game_id")
@@ -200,7 +199,7 @@ func (app *App) handleWorkshopSearch(w http.ResponseWriter, r *http.Request) {
 
 func (app *App) handleWorkshopAddonDetail(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
-	ctx := context.Background()
+	ctx := r.Context()
 
 	addonIDStr := r.URL.Query().Get("addon_id")
 	if addonIDStr == "" {
@@ -286,7 +285,7 @@ func (app *App) handleWorkshopAddonDetail(w http.ResponseWriter, r *http.Request
 
 func (app *App) handleWorkshopInstallations(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
-	ctx := context.Background()
+	ctx := r.Context()
 
 	configIDStr := r.URL.Query().Get("config_id")
 	if configIDStr == "" {
@@ -346,7 +345,7 @@ func (app *App) handleInstallAddon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	configIDStr := r.FormValue("config_id")
 	addonIDStr := r.FormValue("addon_id")
@@ -380,7 +379,7 @@ func (app *App) handleRemoveInstallation(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	installationIDStr := r.FormValue("installation_id")
 	configIDStr := r.FormValue("config_id")
@@ -408,7 +407,7 @@ func (app *App) handleResetInstallation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	installationIDStr := r.FormValue("installation_id")
 	configIDStr := r.FormValue("config_id")
@@ -436,7 +435,7 @@ func (app *App) handleFetchAddonMetadata(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	gameIDStr := r.FormValue("game_id")
 	workshopID := r.FormValue("workshop_id")
@@ -529,7 +528,7 @@ func (app *App) handleCreateAddon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	gameIDStr := r.FormValue("game_id")
 	workshopID := r.FormValue("workshop_id")
@@ -574,7 +573,7 @@ func (app *App) handleUpdateAddonDetails(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	addonIDStr := r.FormValue("addon_id")
 	name := r.FormValue("name")
@@ -602,7 +601,7 @@ func (app *App) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	libraryIDStr := r.FormValue("library_id")
 	name := r.FormValue("name")
@@ -646,7 +645,7 @@ func (app *App) handleUpdateLibrary(w http.ResponseWriter, r *http.Request) {
 // }
 
 func (app *App) handleAvailableAddons(w http.ResponseWriter, r *http.Request) {
-	ctx := context.Background()
+	ctx := r.Context()
 
 	libraryIDStr := r.URL.Query().Get("library_id")
 	q := strings.ToLower(r.URL.Query().Get("q"))
@@ -690,7 +689,7 @@ func (app *App) handleAvailableAddons(w http.ResponseWriter, r *http.Request) {
 }
 
 func (app *App) handleAvailableLibraries(w http.ResponseWriter, r *http.Request) {
-	ctx := context.Background()
+	ctx := r.Context()
 
 	libraryIDStr := r.URL.Query().Get("library_id")
 	q := strings.ToLower(r.URL.Query().Get("q"))
@@ -739,7 +738,7 @@ func (app *App) handleDeleteAddon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	addonIDStr := r.FormValue("addon_id")
 	addonID, err := strconv.ParseInt(addonIDStr, 10, 64)
@@ -760,7 +759,7 @@ func (app *App) handleDeleteAddon(w http.ResponseWriter, r *http.Request) {
 
 func (app *App) handleLibraryDetail(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
-	ctx := context.Background()
+	ctx := r.Context()
 
 	libraryIDStr := r.URL.Query().Get("library_id")
 	if libraryIDStr == "" {
@@ -845,7 +844,7 @@ func (app *App) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	gameIDStr := r.FormValue("game_id")
 	name := r.FormValue("name")
@@ -883,7 +882,7 @@ func (app *App) handleDeleteLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	libraryIDStr := r.FormValue("library_id")
 	libraryID, err := strconv.ParseInt(libraryIDStr, 10, 64)
@@ -908,7 +907,7 @@ func (app *App) handleAddAddonToLibrary(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	libraryIDStr := r.FormValue("library_id")
 	addonIDStr := r.FormValue("addon_id")
@@ -946,7 +945,7 @@ func (app *App) handleRemoveAddonFromLibrary(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	libraryIDStr := r.FormValue("library_id")
 	addonIDStr := r.FormValue("addon_id")
@@ -984,7 +983,7 @@ func (app *App) handleAddLibraryReference(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	parentIDStr := r.FormValue("parent_library_id")
 	childIDStr := r.FormValue("child_library_id")
@@ -1017,7 +1016,7 @@ func (app *App) handleRemoveLibraryReference(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	ctx := context.Background()
+	ctx := r.Context()
 
 	parentIDStr := r.FormValue("parent_library_id")
 	childIDStr := r.FormValue("child_library_id")
@@ -1045,7 +1044,7 @@ func (app *App) handleRemoveLibraryReference(w http.ResponseWriter, r *http.Requ
 }
 
 func (app *App) handlePresetsForGame(w http.ResponseWriter, r *http.Request) {
-	ctx := context.Background()
+	ctx := r.Context()
 	gameIDStr := r.URL.Query().Get("game_id")
 
 	gameID, err := strconv.ParseInt(gameIDStr, 10, 64)

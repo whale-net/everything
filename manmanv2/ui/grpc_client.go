@@ -6,6 +6,7 @@ import (
 
 	"github.com/whale-net/everything/libs/go/grpcclient"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+	"google.golang.org/grpc"
 )
 
 // ControlClient wraps the ManManAPI gRPC client
@@ -16,8 +17,8 @@ type ControlClient struct {
 }
 
 // NewControlClient creates a new control API client
-func NewControlClient(ctx context.Context, addr string) (*ControlClient, error) {
-	conn, err := grpcclient.NewClient(ctx, addr)
+func NewControlClient(ctx context.Context, addr string, extraOpts ...grpc.DialOption) (*ControlClient, error) {
+	conn, err := grpcclient.NewClient(ctx, addr, extraOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to control API: %w", err)
 	}

@@ -40,7 +40,7 @@ For historical log storage and retrieval:
 
 | Variable | Description | Required | Default | Example |
 |----------|-------------|----------|---------|---------|
-| `DATABASE_URL` | PostgreSQL connection string (stores log metadata) | **Yes** | `` (disabled) | `postgres://user:pass@db:5432/manmanv2` |
+| `PG_DATABASE_URL` | PostgreSQL connection string (stores log metadata) | **Yes** | `` (disabled) | `postgres://user:pass@db:5432/manmanv2` |
 | `S3_BUCKET` | S3 bucket for log storage | **Yes** | `manman-logs` | `my-logs-bucket` |
 | `S3_REGION` | S3 region | No | `us-east-1` | `us-west-2` |
 | `S3_ENDPOINT` | Custom S3 endpoint (MinIO, etc.) | No | `` (AWS S3) | `http://minio:9000` |
@@ -51,13 +51,26 @@ For historical log storage and retrieval:
 **\*Required when using MinIO or non-AWS S3. For AWS S3, IAM roles can be used instead.**
 
 **Archival Requirements:**
-- `DATABASE_URL` **AND** `S3_BUCKET` must both be configured to enable archival
+- `PG_DATABASE_URL` **AND** `S3_BUCKET` must both be configured to enable archival
 - `API_ADDRESS` must be reachable to fetch session metadata
 - Appropriate S3 credentials must be provided (access key/secret or IAM role)
 - If any requirement is missing, log-processor runs in streaming-only mode
 
 **Why API_ADDRESS is needed:**
 The archiver needs to fetch the ServerGameConfigId (SGC ID) from each session to properly organize and index logs in S3. This allows querying logs by both session ID and server configuration.
+
+### gRPC Authentication
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GRPC_AUTH_MODE` | `none` | `none` or `oidc`. Must match the API server. |
+| `GRPC_OIDC_ISSUER` | `""` | Keycloak realm URL (server side, required for `oidc`) |
+| `GRPC_OIDC_CLIENT_ID` | `""` | Expected audience in incoming tokens (server side) |
+| `GRPC_AUTH_TOKEN_URL` | `""` | Keycloak token endpoint (client side, for calling the API) |
+| `GRPC_AUTH_CLIENT_ID` | `""` | Service account client ID |
+| `GRPC_AUTH_CLIENT_SECRET` | `""` | Service account client secret |
+
+See [manmanv2/ENV.md](../ENV.md) for the full gRPC authentication overview.
 
 ### Configuration Notes
 

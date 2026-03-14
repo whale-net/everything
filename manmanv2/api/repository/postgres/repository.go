@@ -1,26 +1,12 @@
 package postgres
 
 import (
-	"context"
-	"fmt"
-
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/whale-net/everything/manmanv2/api/repository"
 )
 
-// NewRepository creates a new repository with PostgreSQL implementations
-func NewRepository(ctx context.Context, connString string) (*repository.Repository, error) {
-	pool, err := pgxpool.New(ctx, connString)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create connection pool: %w", err)
-	}
-
-	// Test connection
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("failed to ping database: %w", err)
-	}
-
+// NewRepository creates a new repository from an existing connection pool.
+func NewRepository(pool *pgxpool.Pool) *repository.Repository {
 	return &repository.Repository{
 		Servers:                 NewServerRepository(pool),
 		Games:                   NewGameRepository(pool),
@@ -40,5 +26,5 @@ func NewRepository(ctx context.Context, connString string) (*repository.Reposito
 		WorkshopLibraries:       NewWorkshopLibraryRepository(pool),
 		AddonPathPresets:        NewAddonPathPresetRepository(pool),
 		Actions:                 NewActionRepository(pool),
-	}, nil
+	}
 }

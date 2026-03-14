@@ -276,6 +276,61 @@ Default scopes (automatically requested):
 - `profile` - User profile info
 - `email` - User email
 
+## DB-Backed Sessions
+
+By default, sessions are stored in an encrypted gorilla/sessions cookie. This works well for pure HTTP auth, but has a limitation when the UI also makes gRPC calls on behalf of the user: the access token stored in the cookie expires (typically 5–15 min), while the session cookie itself remains valid (24 h). After token expiry, gRPC calls fail while the UI still appears logged in.
+
+### DB session manager
+
+`DBSessionManager` stores session state in PostgreSQL and automatically refreshes the access token when it is close to expiry:
+
+- Only a session ID cookie is sent to the browser (no token in cookie).
+- Refresh tokens are AES-256-GCM encrypted at rest. The encryption key is derived from `SECRET_KEY` via SHA-256.
+- Concurrent requests trigger a single refresh — `SELECT FOR UPDATE` prevents double-refresh races.
+- Stale sessions are cleaned up hourly.
+
+### Setup
+
+1. Apply migration `032_ui_sessions` to create the `ui_sessions` table.
+2. Set `PG_DATABASE_URL`.
+3. Use `NewAuthenticatorWithDB` instead of `NewAuthenticator`:
+
+```go
+pool, err := db.NewPool(ctx, "")  // reads PG_DATABASE_URL
+if err != nil {
+    log.Fatal(err)
+}
+
+dbSessions, err := htmxauth.NewDBSessionManager(ctx, pool, os.Getenv("SECRET_KEY"), "manmanv2-ui")
+if err != nil {
+    log.Fatal(err)
+}
+
+auth, err := htmxauth.NewAuthenticatorWithDB(ctx, htmxauth.Config{
+    Mode:             htmxauth.AuthModeOIDC,
+    SessionSecret:    os.Getenv("SECRET_KEY"),
+    OIDCIssuer:       os.Getenv("OIDC_ISSUER"),
+    OIDCClientID:     os.Getenv("OIDC_CLIENT_ID"),
+    OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
+    OIDCRedirectURL:  os.Getenv("OIDC_REDIRECT_URI"),
+}, dbSessions)
+```
+
+### GetAccessToken
+
+`GetAccessToken` retrieves the user's access token from the session. In DB mode it auto-refreshes if expiry is within 2 minutes. In dev mode (`AuthModeNone`) it returns the string `"dev-token"`.
+
+```go
+token, err := auth.GetAccessToken(r)
+if err != nil {
+    // user not authenticated, or cookie mode with expired token
+}
+```
+
+Use this to forward the token to gRPC calls via `grpcauth.WithUserToken`.
+
+---
+
 ## Security Considerations
 
 ### Production Checklist

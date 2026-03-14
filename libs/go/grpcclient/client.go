@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -44,7 +45,7 @@ type TLSConfig struct {
 //   - GRPC_TLS_SKIP_VERIFY=false (optional): Disable certificate verification (insecure, dev only)
 //   - GRPC_CA_CERT_PATH=/path/to/ca.crt (optional): Custom CA certificate
 //   - GRPC_TLS_SERVER_NAME=api.example.com (optional): Server name for certificate verification
-func NewClient(ctx context.Context, address string) (*Client, error) {
+func NewClient(ctx context.Context, address string, extraOpts ...grpc.DialOption) (*Client, error) {
 	// Load TLS config from environment
 	var tlsConfig *TLSConfig
 
@@ -59,11 +60,11 @@ func NewClient(ctx context.Context, address string) (*Client, error) {
 		tlsConfig.Enabled = true
 	}
 
-	return NewClientWithTLS(ctx, address, tlsConfig)
+	return NewClientWithTLS(ctx, address, tlsConfig, extraOpts...)
 }
 
 // NewClientWithTLS creates a new gRPC client with explicit TLS configuration
-func NewClientWithTLS(ctx context.Context, address string, tlsConfig *TLSConfig) (*Client, error) {
+func NewClientWithTLS(ctx context.Context, address string, tlsConfig *TLSConfig, extraOpts ...grpc.DialOption) (*Client, error) {
 	var opts []grpc.DialOption
 
 	// Determine connection type
@@ -85,6 +86,9 @@ func NewClientWithTLS(ctx context.Context, address string, tlsConfig *TLSConfig)
 		}
 	}
 
+	// Inject otelgrpc stats handler so all outbound calls are automatically traced.
+	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+	opts = append(opts, extraOpts...)
 	opts = append(opts, grpc.WithBlock())
 
 	conn, err := grpc.DialContext(ctx, address, opts...)

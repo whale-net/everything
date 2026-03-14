@@ -47,38 +47,69 @@ type UserInfo struct {
 	RawClaims         map[string]interface{}
 }
 
+// sessionStore is the internal interface implemented by SessionManager and DBSessionManager.
+type sessionStore interface {
+	GetUserInfo(r *http.Request) (*UserInfo, error)
+	SetUserInfo(w http.ResponseWriter, r *http.Request, token *oauth2.Token, idToken *oidc.IDToken) error
+	GetAccessToken(r *http.Request) (string, error)
+	ClearSession(w http.ResponseWriter, r *http.Request) error
+	SetOAuthState(w http.ResponseWriter, r *http.Request, state string, nextURL string) error
+	VerifyOAuthState(r *http.Request, state string) (bool, error)
+	GetNextURL(w http.ResponseWriter, r *http.Request) string
+}
+
 // Authenticator handles authentication for an application
 type Authenticator struct {
 	config       Config
-	sessions     *SessionManager
+	sessions     sessionStore
 	provider     *oidc.Provider
 	oauth2Config *oauth2.Config
 	verifier     *oidc.IDTokenVerifier
 }
 
-// NewAuthenticator creates a new authenticator instance
+// NewAuthenticator creates a new authenticator using a cookie-backed session store.
+// Tokens are stored encrypted in the cookie; no database required, but refresh
+// tokens are not persisted so access tokens cannot be refreshed after expiry.
 func NewAuthenticator(ctx context.Context, config Config) (*Authenticator, error) {
-	// Set defaults
+	applyDefaults(&config)
+	auth := &Authenticator{
+		config:   config,
+		sessions: NewSessionManager(config.SessionSecret, config.SessionName),
+	}
+	if config.Mode == AuthModeOIDC {
+		if err := auth.initOIDC(ctx); err != nil {
+			return nil, fmt.Errorf("failed to initialize OIDC: %w", err)
+		}
+	}
+	return auth, nil
+}
+
+// NewAuthenticatorWithDB creates a new authenticator using a PostgreSQL-backed session store.
+// The browser cookie holds only an opaque session ID; access tokens, refresh tokens, and
+// user info are stored in the ui_sessions table. Tokens are refreshed automatically on
+// GetAccessToken when within 2 minutes of expiry.
+func NewAuthenticatorWithDB(ctx context.Context, config Config, store *DBSessionManager) (*Authenticator, error) {
+	applyDefaults(&config)
+	auth := &Authenticator{
+		config:   config,
+		sessions: store,
+	}
+	if config.Mode == AuthModeOIDC {
+		if err := auth.initOIDC(ctx); err != nil {
+			return nil, fmt.Errorf("failed to initialize OIDC: %w", err)
+		}
+		store.oauth2Cfg = auth.oauth2Config
+	}
+	return auth, nil
+}
+
+func applyDefaults(config *Config) {
 	if config.SessionName == "" {
 		config.SessionName = "htmx_session"
 	}
 	if len(config.OIDCScopes) == 0 {
 		config.OIDCScopes = []string{oidc.ScopeOpenID, "profile", "email"}
 	}
-
-	auth := &Authenticator{
-		config:   config,
-		sessions: NewSessionManager(config.SessionSecret, config.SessionName),
-	}
-
-	// Initialize OIDC if required
-	if config.Mode == AuthModeOIDC {
-		if err := auth.initOIDC(ctx); err != nil {
-			return nil, fmt.Errorf("failed to initialize OIDC: %w", err)
-		}
-	}
-
-	return auth, nil
 }
 
 // initOIDC initializes OIDC provider and configuration
@@ -166,6 +197,14 @@ func GetUser(ctx context.Context) *UserInfo {
 		return nil
 	}
 	return user
+}
+
+// GetAccessToken retrieves the user's access token. Returns "dev-token" in no-auth mode.
+func (a *Authenticator) GetAccessToken(r *http.Request) (string, error) {
+	if a.config.Mode == AuthModeNone {
+		return "dev-token", nil
+	}
+	return a.sessions.GetAccessToken(r)
 }
 
 // HandleLogin initiates the OIDC login flow
@@ -360,6 +399,9 @@ func (sm *SessionManager) SetUserInfo(w http.ResponseWriter, r *http.Request, to
 		session.Values["email"] = email
 	}
 
+	// Store access token for gRPC forwarding (note: adds ~1-3KB to cookie size)
+	session.Values["access_token"] = token.AccessToken
+
 	return session.Save(r, w)
 }
 
@@ -423,6 +465,19 @@ func (sm *SessionManager) VerifyOAuthState(r *http.Request, state string) (bool,
 	}
 
 	return true, nil
+}
+
+// GetAccessToken retrieves the stored access token from session
+func (sm *SessionManager) GetAccessToken(r *http.Request) (string, error) {
+	session, err := sm.GetSession(r)
+	if err != nil {
+		return "", err
+	}
+	token, ok := session.Values["access_token"].(string)
+	if !ok || token == "" {
+		return "", fmt.Errorf("no access token in session")
+	}
+	return token, nil
 }
 
 // GetNextURL retrieves and clears the next URL from session

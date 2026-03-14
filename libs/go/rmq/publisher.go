@@ -9,6 +9,8 @@ import (
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 // Publisher publishes messages to RabbitMQ exchanges
@@ -90,24 +92,28 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, bo
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
+	// Inject trace context into AMQP headers so consumers can extract it.
+	carrier := propagation.MapCarrier{}
+	otel.GetTextMapPropagator().Inject(ctx, carrier)
+	headers := amqp.Table{}
+	for k, v := range carrier {
+		headers[k] = v
+	}
+
+	publishing := amqp.Publishing{
+		ContentType:  "application/json",
+		Body:         bodyBytes,
+		DeliveryMode: amqp.Persistent,
+		Timestamp:    time.Now(),
+		Headers:      headers,
+	}
+
 	// First attempt
 	p.mu.Lock()
 	ch := p.channel
 	p.mu.Unlock()
 
-	err = ch.PublishWithContext(
-		ctx,
-		exchange,
-		routingKey,
-		false, // mandatory
-		false, // immediate
-		amqp.Publishing{
-			ContentType:  "application/json",
-			Body:         bodyBytes,
-			DeliveryMode: amqp.Persistent,
-			Timestamp:    time.Now(),
-		},
-	)
+	err = ch.PublishWithContext(ctx, exchange, routingKey, false, false, publishing)
 
 	// If publish succeeded, return
 	if err == nil {
@@ -129,20 +135,7 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, bo
 		p.mu.Unlock()
 
 		// Retry the publish once
-		retryErr := ch.PublishWithContext(
-			ctx,
-			exchange,
-			routingKey,
-			false, // mandatory
-			false, // immediate
-			amqp.Publishing{
-				ContentType:  "application/json",
-				Body:         bodyBytes,
-				DeliveryMode: amqp.Persistent,
-				Timestamp:    time.Now(),
-			},
-		)
-
+		retryErr := ch.PublishWithContext(ctx, exchange, routingKey, false, false, publishing)
 		if retryErr != nil {
 			return fmt.Errorf("publish failed after channel recreation: %w", retryErr)
 		}

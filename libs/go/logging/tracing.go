@@ -35,7 +35,7 @@ func setupTracing(cfg Config) error {
 	defer cancel()
 
 	exporter, err := otlptracegrpc.New(ctx,
-		otlptracegrpc.WithEndpoint(cfg.OTLPEndpoint),
+		otlptracegrpc.WithEndpoint(stripScheme(cfg.OTLPEndpoint)),
 		otlptracegrpc.WithInsecure(),
 	)
 	if err != nil {

@@ -10,8 +10,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/whale-net/everything/libs/go/db"
+	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/libs/go/logging"
 	rmqlib "github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/libs/go/s3"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"github.com/whale-net/everything/manmanv2/api/handlers"
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
 	"github.com/whale-net/everything/manmanv2/api/steam"
@@ -31,34 +35,36 @@ func run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	logging.Configure(logging.Config{
+		ServiceName:   "control-api",
+		Domain:        "manmanv2",
+		JSONFormat:    true,
+		EnableOTLP:    true,
+		EnableTracing: true,
+	})
+	defer logging.Shutdown(ctx) //nolint:errcheck
+
 	// Get configuration from environment
 	port := getEnv("PORT", "50051")
-	dbHost := getEnv("DB_HOST", "localhost")
-	dbPort := getEnv("DB_PORT", "5432")
-	dbUser := getEnv("DB_USER", "postgres")
-	dbPassword := getEnv("DB_PASSWORD", "")
-	dbName := getEnv("DB_NAME", "manman")
-	dbSSLMode := getEnv("DB_SSL_MODE", "disable")
 	rabbitmqURL := getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 	s3Bucket := getEnv("S3_BUCKET", "manman-logs")
 	s3Region := getEnv("S3_REGION", "us-east-1")
-	s3Endpoint := getEnv("S3_ENDPOINT", "")           // Optional: for S3-compatible storage (OVH, MinIO, etc.)
+	s3Endpoint := getEnv("S3_ENDPOINT", "")             // Optional: for S3-compatible storage (OVH, MinIO, etc.)
 	s3PublicEndpoint := getEnv("S3_PUBLIC_ENDPOINT", "") // Optional: public-facing endpoint for pre-signed URLs
-	s3AccessKey := getEnv("S3_ACCESS_KEY", "")         // Optional: for static credentials (MinIO, etc.)
-	s3SecretKey := getEnv("S3_SECRET_KEY", "")         // Optional: for static credentials (MinIO, etc.)
+	s3AccessKey := getEnv("S3_ACCESS_KEY", "")           // Optional: for static credentials (MinIO, etc.)
+	s3SecretKey := getEnv("S3_SECRET_KEY", "")           // Optional: for static credentials (MinIO, etc.)
+	grpcAuthMode := getEnv("GRPC_AUTH_MODE", "none")
+	grpcOIDCIssuer := getEnv("GRPC_OIDC_ISSUER", "")
+	grpcOIDCClientID := getEnv("GRPC_OIDC_CLIENT_ID", "")
 
-	// Build connection string
-	connString := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
-		dbHost, dbPort, dbUser, dbPassword, dbName, dbSSLMode,
-	)
-
-	// Initialize repository
+	// Initialize database pool (reads PG_DATABASE_URL)
 	log.Println("Connecting to database...")
-	repo, err := postgres.NewRepository(ctx, connString)
+	pool, err := db.NewPool(ctx, "")
 	if err != nil {
-		return fmt.Errorf("failed to initialize repository: %w", err)
+		return fmt.Errorf("failed to connect to database: %w", err)
 	}
+	defer pool.Close()
+	repo := postgres.NewRepository(pool)
 	log.Println("Database connection established")
 
 	// Initialize S3 client
@@ -90,10 +96,23 @@ func run() error {
 	defer rmqConn.Close()
 	log.Println("RabbitMQ connection established")
 
+	// Create auth interceptors
+	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(ctx, grpcauth.ServerConfig{
+		Mode:      grpcauth.AuthMode(grpcAuthMode),
+		IssuerURL: grpcOIDCIssuer,
+		ClientID:  grpcOIDCClientID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create auth interceptors: %w", err)
+	}
+
 	// Create gRPC server
 	grpcServer := grpc.NewServer(
 		grpc.MaxRecvMsgSize(10 * 1024 * 1024), // 10 MB
 		grpc.MaxSendMsgSize(10 * 1024 * 1024), // 10 MB
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+		grpc.ChainUnaryInterceptor(unaryInt),
+		grpc.ChainStreamInterceptor(streamInt),
 	)
 
 	// Register Workshop service early so workshopManager is available for APIServer
