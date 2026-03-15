@@ -1363,7 +1363,7 @@
     },
     "@@rules_pycross+//pycross/extensions:pycross.bzl%pycross": {
       "general": {
-        "bzlTransitiveDigest": "SP3tRjnDIWWAuvvuOk2MTdOYWsrSAt08/pLpT+zRpXQ=",
+        "bzlTransitiveDigest": "Mm1WOtDJrQzdDM+ojBY+XjXyWcHDH5kyF6X9Ys/sRbM=",
         "usagesDigest": "eVRjwbyXu3n7jXjrOKjJYJ+fDWGyZMHXiarlXPL/89c=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -1564,6 +1564,16 @@
           ],
           [
             "rules_cc+",
+            "cc_compatibility_proxy",
+            "rules_cc++compatibility_proxy+cc_compatibility_proxy"
+          ],
+          [
+            "rules_cc+",
+            "rules_cc",
+            "rules_cc+"
+          ],
+          [
+            "rules_cc++compatibility_proxy+cc_compatibility_proxy",
             "rules_cc",
             "rules_cc+"
           ],
@@ -1630,7 +1640,7 @@
           [
             "rules_python+",
             "rules_python_internal",
-            "rules_python++internal_deps+rules_python_internal"
+            "rules_python++config+rules_python_internal"
           ]
         ]
       }
@@ -1909,8 +1919,8 @@
     },
     "@@rules_python+//python/uv:uv.bzl%uv": {
       "general": {
-        "bzlTransitiveDigest": "bGHlxez0Lkvq2VwrlfCLraKHiJIRHSIJb432X2+pky8=",
-        "usagesDigest": "NLVT/j5MDeByMeAteJXuCT7XkRj5dlKKVJm5XGD/Ol8=",
+        "bzlTransitiveDigest": "85utVTiuGY4Ut0FgpNLZvwD42nCeVn+J4Cit6fSR5OM=",
+        "usagesDigest": "XRYYokHTb3p1WwpZj2sncZ1bh8zJfO4YrKJ2PkapnO8=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
