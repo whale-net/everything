@@ -36,3 +36,24 @@ constraint_value(
     name = "board_elegoo_esp32",
     constraint_setting = ":board",
 )
+
+# ── Pin abstraction ──────────────────────────────────────────────────────────
+# Alias resolves to the correct board's generated board_pins.h at build time.
+# Add new boards to this select() when registering them.
+#
+# Usage in firmware cc_library/cc_binary:
+#   deps = ["//tools/firmware:board_pins"]
+# In C++:
+#   #include "board_pins.h"
+#   // BOARD_PIN_LED, board::kLed, board::kSda, etc.
+
+alias(
+    name = "board_pins",
+    actual = select({
+        "//tools/firmware/esp32:is_elegoo_esp32": "//tools/firmware/esp32:elegoo_esp32_pins",
+        "//conditions:default": ":no_board_pins",
+    }),
+)
+
+# Empty fallback for host builds (tests that don't target a specific board).
+cc_library(name = "no_board_pins")

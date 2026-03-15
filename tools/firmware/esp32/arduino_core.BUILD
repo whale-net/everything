@@ -23,6 +23,11 @@ filegroup(
     srcs = glob(["tools/sdk/bin/bootloader_*.bin"]),
 )
 
+filegroup(
+    name = "partitions",
+    srcs = glob(["tools/partitions/*.bin"]),
+)
+
 # ── Arduino core C sources ───────────────────────────────────────────────────
 
 cc_library(

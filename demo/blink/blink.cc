@@ -4,24 +4,21 @@
 // tokenized / RPC-based log transports without changing application code.
 
 #include <Arduino.h>
+#include "board_pins.h"  // provided by //tools/firmware:board_pins
 #include "pw_log/log.h"
-
-namespace {
-constexpr int kLedPin = 2;  // Built-in LED on most ESP32 dev boards
-}  // namespace
 
 void setup() {
     Serial.begin(115200);
-    pinMode(kLedPin, OUTPUT);
-    PW_LOG_INFO("Blink starting on ELEGOO ESP32");
+    pinMode(board::kLed, OUTPUT);
+    PW_LOG_INFO("Blink starting (LED pin=%d)", board::kLed);
 }
 
 void loop() {
-    digitalWrite(kLedPin, HIGH);
+    digitalWrite(board::kLed, HIGH);
     PW_LOG_DEBUG("LED on");
     delay(1000);
 
-    digitalWrite(kLedPin, LOW);
+    digitalWrite(board::kLed, LOW);
     PW_LOG_DEBUG("LED off");
     delay(1000);
 }

@@ -4,30 +4,19 @@ load("//tools/bazel:esp32.bzl", "esp32_firmware")
 load("@rules_cc//cc:defs.bzl", "cc_test")
 
 # ── Firmware targets (ESP32 only) ────────────────────────────────────────────
-# Build with:  bazel build //demo/blink:blink_bin --config=esp32
-# Produces:
-#   blink_lib — cc_library (your sketch code)
+# Build:  bazel build //demo/blink:blink_bin --config=esp32
+# Flash:  bazel run  //demo/blink:flash -- /dev/ttyUSB0
+#
+# esp32_firmware() generates:
+#   blink_lib — cc_library (sketch + board_pins)
 #   blink_elf — ELF binary (Xtensa, inspect with readelf / objdump)
-#   blink_bin — flashable .bin image (via esptool elf2image)
+#   blink_bin — flashable .bin (esptool elf2image)
+#   flash     — universal flash target (from flash_firmware() in flash.bzl)
 
 esp32_firmware(
     name = "blink",
     srcs = ["blink.cc"],
     deps = ["@pigweed//pw_log"],
-)
-
-# ── Flash target (manual — not included in //... builds) ────────────────────
-# Usage:  bazel run //demo/blink:flash -- /dev/ttyUSB0
-
-sh_binary(
-    name = "flash",
-    srcs = ["flash.sh"],
-    data = [
-        ":blink_bin",
-        "//tools/firmware/esp32:esptool_wrapper",
-        "@arduino_esp32//:bootloader",
-    ],
-    tags = ["manual"],
 )
 
 # ── Host-side unit tests (no hardware needed) ────────────────────────────────

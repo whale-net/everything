@@ -4,6 +4,7 @@ load("@rules_cc//cc:defs.bzl", "cc_toolchain")
 load("@rules_python//python:defs.bzl", "py_binary")
 load(":cc_toolchain_config.bzl", "cc_toolchain_config")
 load("//tools/firmware:boards.bzl", "firmware_board")
+load("//tools/firmware:pins.bzl", "board_pins")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -12,6 +13,29 @@ package(default_visibility = ["//visibility:public"])
 firmware_board(
     name = "elegoo_esp32",
     cpu_constraint = "//tools/firmware:cpu_xtensa",
+)
+
+# config_setting: used by //tools/firmware:board_pins alias and any other
+# select() that needs to branch on this specific board.
+config_setting(
+    name = "is_elegoo_esp32",
+    constraint_values = ["//tools/firmware:board_elegoo_esp32"],
+)
+
+# ── Pin definitions ───────────────────────────────────────────────────────────
+# Pin names are PascalCase logical identifiers; numbers are GPIO indices.
+# These map to the ELEGOO ESP32 dev board (standard ESP32 DevKit v1 layout).
+
+board_pins(
+    name = "elegoo_esp32_pins",
+    board_name = "elegoo_esp32",
+    pins = {
+        "Led": 2,    # Built-in blue LED
+        "Sda": 21,   # I2C data (Wire.begin default)
+        "Scl": 22,   # I2C clock (Wire.begin default)
+        "Rx2": 16,   # UART2 RX (Serial2)
+        "Tx2": 17,   # UART2 TX (Serial2)
+    },
 )
 
 # ── Toolchain file groups ────────────────────────────────────────────────────
