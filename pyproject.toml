@@ -62,6 +62,9 @@ dependencies = [
 
     # MCP server framework
     "fastmcp",
+
+    # Embedded firmware flashing (ESP32)
+    "esptool",
 ]
 
 [build-system]

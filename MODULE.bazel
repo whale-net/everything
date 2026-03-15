@@ -18,6 +18,21 @@ bazel_dep(name = "rules_java", version = "8.12.0")
 bazel_dep(name = "rules_proto", version = "7.0.2")
 bazel_dep(name = "protobuf", version = "28.3")
 
+# ── Firmware / Embedded ──────────────────────────────────────────────────────
+bazel_dep(name = "rules_cc", version = "0.2.1")
+
+# Pigweed via git_override (BCR version lags; quickstart uses this pattern).
+bazel_dep(name = "pigweed")
+git_override(
+    module_name = "pigweed",
+    commit = "1685478789a2626f190280be1b2e6d8f90965747",  # 2026-03-14 HEAD
+    remote = "https://pigweed.googlesource.com/pigweed/pigweed",
+)
+
+# Pigweed transitive dependencies (required by pw_unit_test / pw_rpc)
+bazel_dep(name = "freertos", version = "10.5.1.bcr.2")
+bazel_dep(name = "nanopb", version = "0.4.9.1.bcr.2")
+
 # OCI/Docker setup - Ubuntu base image for all containers
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 
@@ -89,6 +104,27 @@ use_repo(python, "python_versions")
 # Stripped Python builds from python-build-standalone for production containers
 # These are optimized, production-ready builds (~20MB binary vs ~108MB debug)
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+# ── ESP32 Xtensa GCC cross-compiler (Espressif crosstool-NG, GCC 15.2) ──────
+http_archive(
+    name = "xtensa_esp_elf_linux64",
+    build_file = "//tools/firmware/esp32:xtensa_toolchain.BUILD",
+    sha256 = "3d50f5cd5f173acfd524e07c1cd69bc99585731a415ca2e5bce879997fe602b8",
+    strip_prefix = "xtensa-esp-elf",
+    urls = ["https://github.com/espressif/crosstool-NG/releases/download/esp-15.2.0_20251204/xtensa-esp-elf-15.2.0_20251204-x86_64-linux-gnu.tar.xz"],
+)
+
+# ── Arduino ESP32 core 1.0.6 (simpler flags; migrate to 3.x after POC) ──────
+http_archive(
+    name = "arduino_esp32",
+    build_file = "//tools/firmware/esp32:arduino_core.BUILD",
+    sha256 = "982da9aaa181b6cb9c692dd4c9622b022ecc0d1e3aa0c5b70428ccc3c1b4556b",
+    strip_prefix = "esp32-1.0.6",
+    urls = ["https://github.com/espressif/arduino-esp32/releases/download/1.0.6/esp32-1.0.6.zip"],
+)
+
+# ── Toolchain registration ───────────────────────────────────────────────────
+register_toolchains("//tools/firmware/esp32:xtensa_toolchain")
 
 http_archive(
     name = "python_stripped_x86_64",

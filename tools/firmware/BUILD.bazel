@@ -1,0 +1,38 @@
+"""Board abstraction: CPU and board identity constraint_settings.
+
+Adding a new board:
+  1. Add a constraint_value here for the CPU family (if new).
+  2. Add a constraint_value here for the board identity.
+  3. Call firmware_board() in the board's subdirectory BUILD.bazel.
+"""
+
+package(default_visibility = ["//visibility:public"])
+
+# ── CPU family constraint ────────────────────────────────────────────────────
+# @platforms//cpu doesn't have Xtensa, so we define our own.
+
+constraint_setting(name = "cpu_family")
+
+constraint_value(
+    name = "cpu_xtensa",
+    constraint_setting = ":cpu_family",
+)
+
+constraint_value(
+    name = "cpu_armv6m",
+    constraint_setting = ":cpu_family",
+)  # Raspberry Pi Pico (RP2040, Cortex-M0+)
+
+constraint_value(
+    name = "cpu_armv7em",
+    constraint_setting = ":cpu_family",
+)  # STM32 (Cortex-M4/M7)
+
+# ── Board identity constraint ────────────────────────────────────────────────
+
+constraint_setting(name = "board")
+
+constraint_value(
+    name = "board_elegoo_esp32",
+    constraint_setting = ":board",
+)

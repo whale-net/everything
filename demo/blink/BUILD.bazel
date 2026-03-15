@@ -1,0 +1,43 @@
+"""Blink demo — ELEGOO ESP32 firmware + host-side unit tests."""
+
+load("//tools/bazel:esp32.bzl", "esp32_firmware")
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
+# ── Firmware targets (ESP32 only) ────────────────────────────────────────────
+# Build with:  bazel build //demo/blink:blink_bin --config=esp32
+# Produces:
+#   blink_lib — cc_library (your sketch code)
+#   blink_elf — ELF binary (Xtensa, inspect with readelf / objdump)
+#   blink_bin — flashable .bin image (via esptool elf2image)
+
+esp32_firmware(
+    name = "blink",
+    srcs = ["blink.cc"],
+    deps = ["@pigweed//pw_log"],
+)
+
+# ── Flash target (manual — not included in //... builds) ────────────────────
+# Usage:  bazel run //demo/blink:flash -- /dev/ttyUSB0
+
+sh_binary(
+    name = "flash",
+    srcs = ["flash.sh"],
+    data = [
+        ":blink_bin",
+        "//tools/firmware/esp32:esptool_wrapper",
+        "@arduino_esp32//:bootloader",
+    ],
+    tags = ["manual"],
+)
+
+# ── Host-side unit tests (no hardware needed) ────────────────────────────────
+# Usage:  bazel test //demo/blink:blink_logic_test
+
+cc_test(
+    name = "blink_logic_test",
+    srcs = ["blink_logic_test.cc"],
+    deps = [
+        "@pigweed//pw_unit_test",
+        "@pigweed//pw_unit_test:googletest_style_event_handler",
+    ],
+)
