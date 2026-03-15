@@ -65,3 +65,8 @@ build --java_runtime_version=remotejdk_17
 # even when building for different target platforms (ARM64, AMD64)
 # Set host_platform explicitly to prevent platform transitions from affecting exec tools
 build --host_platform=@platforms//host
+
+# ── ESP32 firmware build config ──────────────────────────────────────────────
+# Usage: bazel build //demo/blink:blink_bin --config=esp32
+build:esp32 --platforms=//tools/firmware/esp32:elegoo_esp32
+build:esp32 --@pigweed//pw_log:backend=@pigweed//pw_log_basic

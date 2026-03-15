@@ -1,0 +1,408 @@
+"""Xtensa ESP32 cc_toolchain_config rule.
+
+Targets the Espressif crosstool-NG GCC 15.2 toolchain
+(xtensa-esp-elf-*).  Compile / link flags derived from the Arduino
+ESP32 1.0.6 platform.txt.
+
+References:
+  - github.com/simonhorlick/bazel_esp32 (flag lists + structure)
+  - Bazel cc_toolchain_config API documentation
+"""
+
+load(
+    "@bazel_tools//tools/cpp:cc_toolchain_config_lib.bzl",
+    "action_config",
+    "feature",
+    "flag_group",
+    "flag_set",
+    "tool",
+    "tool_path",
+    "variable_with_value",
+    "with_feature_set",
+)
+load("@bazel_tools//tools/build_defs/cc:action_names.bzl", "ACTION_NAMES")
+
+# ── Toolchain binary paths (relative to execroot) ───────────────────────────
+
+_TOOLCHAIN_PATH = "external/xtensa_esp_elf_linux64/bin"
+_GCC = _TOOLCHAIN_PATH + "/xtensa-esp-elf-gcc"
+_GPP = _TOOLCHAIN_PATH + "/xtensa-esp-elf-g++"
+_AR = _TOOLCHAIN_PATH + "/xtensa-esp-elf-ar"
+_LD = _TOOLCHAIN_PATH + "/xtensa-esp-elf-ld"
+_OBJCOPY = _TOOLCHAIN_PATH + "/xtensa-esp-elf-objcopy"
+_STRIP = _TOOLCHAIN_PATH + "/xtensa-esp-elf-strip"
+_CPP = _TOOLCHAIN_PATH + "/xtensa-esp-elf-cpp"
+_OBJDUMP = _TOOLCHAIN_PATH + "/xtensa-esp-elf-objdump"
+_NM = _TOOLCHAIN_PATH + "/xtensa-esp-elf-nm"
+
+# ── Compiler / linker flags from Arduino 1.0.6 platform.txt ────────────────
+
+_COMPILE_FLAGS_C = [
+    "-mlongcalls",
+    "-ffunction-sections",
+    "-fdata-sections",
+    "-fstrict-volatile-bitfields",
+    "-Os",
+    "-std=gnu11",
+    "-MMD",
+    "-c",
+]
+
+_COMPILE_FLAGS_CXX = [
+    "-mlongcalls",
+    "-ffunction-sections",
+    "-fdata-sections",
+    "-fstrict-volatile-bitfields",
+    "-fno-exceptions",
+    "-fno-rtti",
+    "-Os",
+    "-std=gnu++11",
+    "-MMD",
+    "-c",
+]
+
+_LINK_FLAGS = [
+    "-nostdlib",
+    "-Wl,--gc-sections",
+    "-Wl,-static",
+    "-mlongcalls",
+    "-Wl,-EL",
+]
+
+# ── Built-in include directories ─────────────────────────────────────────────
+
+_CXX_BUILTIN_INCLUDE_DIRECTORIES = [
+    "external/xtensa_esp_elf_linux64/xtensa-esp-elf/sys-include",
+    "external/xtensa_esp_elf_linux64/lib/gcc/xtensa-esp-elf/15.2.0/include",
+    "external/xtensa_esp_elf_linux64/lib/gcc/xtensa-esp-elf/15.2.0/include-fixed",
+    "external/arduino_esp32/cores/esp32",
+    "external/arduino_esp32/variants/esp32",
+]
+
+# ── Action sets (all C/C++ compile + link actions) ───────────────────────────
+
+_ALL_COMPILE_ACTIONS = [
+    ACTION_NAMES.c_compile,
+    ACTION_NAMES.cpp_compile,
+    ACTION_NAMES.linkstamp_compile,
+    ACTION_NAMES.assemble,
+    ACTION_NAMES.preprocess_assemble,
+    ACTION_NAMES.cpp_header_parsing,
+    ACTION_NAMES.cpp_module_compile,
+    ACTION_NAMES.cpp_module_codegen,
+    ACTION_NAMES.clif_match,
+    ACTION_NAMES.lto_backend,
+]
+
+_ALL_LINK_ACTIONS = [
+    ACTION_NAMES.cpp_link_executable,
+    ACTION_NAMES.cpp_link_dynamic_library,
+    ACTION_NAMES.cpp_link_nodeps_dynamic_library,
+]
+
+def _impl(ctx):
+    # ── Tool paths ──────────────────────────────────────────────────────────
+    tool_paths = [
+        tool_path(name = "gcc",     path = _GCC),
+        tool_path(name = "g++",     path = _GPP),
+        tool_path(name = "cpp",     path = _CPP),
+        tool_path(name = "ar",      path = _AR),
+        tool_path(name = "ld",      path = _LD),
+        tool_path(name = "objcopy", path = _OBJCOPY),
+        tool_path(name = "strip",   path = _STRIP),
+        tool_path(name = "objdump", path = _OBJDUMP),
+        tool_path(name = "nm",      path = _NM),
+        # gcov not used for embedded, but the field must be present
+        tool_path(name = "gcov",    path = "/bin/false"),
+        tool_path(name = "dwp",     path = "/bin/false"),
+        tool_path(name = "llvm-profdata", path = "/bin/false"),
+    ]
+
+    # ── Features ────────────────────────────────────────────────────────────
+
+    default_compile_flags_feature = feature(
+        name = "default_compile_flags",
+        enabled = True,
+        flag_sets = [
+            flag_set(
+                actions = [ACTION_NAMES.c_compile],
+                flag_groups = [flag_group(flags = _COMPILE_FLAGS_C)],
+            ),
+            flag_set(
+                actions = [
+                    ACTION_NAMES.cpp_compile,
+                    ACTION_NAMES.cpp_header_parsing,
+                    ACTION_NAMES.cpp_module_compile,
+                    ACTION_NAMES.cpp_module_codegen,
+                ],
+                flag_groups = [flag_group(flags = _COMPILE_FLAGS_CXX)],
+            ),
+        ],
+    )
+
+    default_link_flags_feature = feature(
+        name = "default_link_flags",
+        enabled = True,
+        flag_sets = [
+            flag_set(
+                actions = _ALL_LINK_ACTIONS,
+                flag_groups = [flag_group(flags = _LINK_FLAGS)],
+            ),
+        ],
+    )
+
+    # Supports #include <header> with absolute paths in the sandbox
+    supports_pic_feature = feature(name = "supports_pic", enabled = False)
+    supports_dynamic_linker_feature = feature(name = "supports_dynamic_linker", enabled = False)
+
+    # Required by Bazel's C++ rules to emit dependency files
+    dependency_file_feature = feature(
+        name = "dependency_file",
+        enabled = True,
+        flag_sets = [
+            flag_set(
+                actions = _ALL_COMPILE_ACTIONS,
+                flag_groups = [
+                    flag_group(
+                        flags = ["-MD", "-MF", "%{dependency_file}"],
+                        expand_if_available = "dependency_file",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    output_execpath_flags_feature = feature(
+        name = "output_execpath_flags",
+        flag_sets = [
+            flag_set(
+                actions = _ALL_LINK_ACTIONS,
+                flag_groups = [
+                    flag_group(
+                        flags = ["-o", "%{output_execpath}"],
+                        expand_if_available = "output_execpath",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    libraries_to_link_feature = feature(
+        name = "libraries_to_link",
+        flag_sets = [
+            flag_set(
+                actions = _ALL_LINK_ACTIONS,
+                flag_groups = [
+                    flag_group(
+                        iterate_over = "libraries_to_link",
+                        flag_groups = [
+                            flag_group(
+                                flags = ["-Wl,--start-lib"],
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
+                                    value = "object_file_group",
+                                ),
+                            ),
+                            flag_group(
+                                flags = ["%{libraries_to_link.object_files}"],
+                                iterate_over = "libraries_to_link.object_files",
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
+                                    value = "object_file_group",
+                                ),
+                            ),
+                            flag_group(
+                                flags = ["-Wl,--end-lib"],
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
+                                    value = "object_file_group",
+                                ),
+                            ),
+                            flag_group(
+                                flags = ["%{libraries_to_link.name}"],
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
+                                    value = "object_file",
+                                ),
+                            ),
+                            flag_group(
+                                flags = ["%{libraries_to_link.name}"],
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
+                                    value = "interface_library",
+                                ),
+                            ),
+                            flag_group(
+                                flags = ["%{libraries_to_link.name}"],
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
+                                    value = "static_library",
+                                ),
+                            ),
+                            flag_group(
+                                flags = ["-l%{libraries_to_link.name}"],
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
+                                    value = "dynamic_library",
+                                ),
+                            ),
+                            flag_group(
+                                flags = ["-l:%{libraries_to_link.name}"],
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
+                                    value = "versioned_dynamic_library",
+                                ),
+                            ),
+                        ],
+                        expand_if_available = "libraries_to_link",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    user_compile_flags_feature = feature(
+        name = "user_compile_flags",
+        enabled = True,
+        flag_sets = [
+            flag_set(
+                actions = _ALL_COMPILE_ACTIONS,
+                flag_groups = [
+                    flag_group(
+                        flags = ["%{user_compile_flags}"],
+                        iterate_over = "user_compile_flags",
+                        expand_if_available = "user_compile_flags",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    sysroot_feature = feature(
+        name = "sysroot",
+        enabled = True,
+        flag_sets = [
+            flag_set(
+                actions = _ALL_COMPILE_ACTIONS + _ALL_LINK_ACTIONS,
+                flag_groups = [
+                    flag_group(
+                        flags = ["--sysroot=%{sysroot}"],
+                        expand_if_available = "sysroot",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    includes_feature = feature(
+        name = "includes",
+        enabled = True,
+        flag_sets = [
+            flag_set(
+                actions = _ALL_COMPILE_ACTIONS,
+                flag_groups = [
+                    flag_group(
+                        flags = ["-include", "%{includes}"],
+                        iterate_over = "includes",
+                        expand_if_available = "includes",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    include_paths_feature = feature(
+        name = "include_paths",
+        enabled = True,
+        flag_sets = [
+            flag_set(
+                actions = _ALL_COMPILE_ACTIONS,
+                flag_groups = [
+                    flag_group(
+                        flags = ["-iquote", "%{quote_include_paths}"],
+                        iterate_over = "quote_include_paths",
+                        expand_if_available = "quote_include_paths",
+                    ),
+                    flag_group(
+                        flags = ["-I%{include_paths}"],
+                        iterate_over = "include_paths",
+                        expand_if_available = "include_paths",
+                    ),
+                    flag_group(
+                        flags = ["-isystem", "%{system_include_paths}"],
+                        iterate_over = "system_include_paths",
+                        expand_if_available = "system_include_paths",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    source_file_feature = feature(
+        name = "source_file",
+        enabled = True,
+        flag_sets = [
+            flag_set(
+                actions = _ALL_COMPILE_ACTIONS,
+                flag_groups = [
+                    flag_group(
+                        flags = ["%{source_file}"],
+                        expand_if_available = "source_file",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    output_compile_flags_feature = feature(
+        name = "output_compile_flags",
+        enabled = True,
+        flag_sets = [
+            flag_set(
+                actions = _ALL_COMPILE_ACTIONS,
+                flag_groups = [
+                    flag_group(
+                        flags = ["-o", "%{output_file}"],
+                        expand_if_available = "output_file",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    features = [
+        default_compile_flags_feature,
+        default_link_flags_feature,
+        supports_pic_feature,
+        supports_dynamic_linker_feature,
+        dependency_file_feature,
+        output_execpath_flags_feature,
+        libraries_to_link_feature,
+        user_compile_flags_feature,
+        sysroot_feature,
+        includes_feature,
+        include_paths_feature,
+        source_file_feature,
+        output_compile_flags_feature,
+    ]
+
+    return cc_common.create_cc_toolchain_config_info(
+        ctx = ctx,
+        toolchain_identifier = "xtensa-esp32-elf",
+        host_system_name = "x86_64-unknown-linux-gnu",
+        target_system_name = "xtensa-esp32-elf",
+        target_cpu = "xtensa",
+        target_libc = "unknown",
+        compiler = "gcc",
+        abi_version = "unknown",
+        abi_libc_version = "unknown",
+        tool_paths = tool_paths,
+        features = features,
+        cxx_builtin_include_directories = _CXX_BUILTIN_INCLUDE_DIRECTORIES,
+    )
+
+cc_toolchain_config = rule(
+    implementation = _impl,
+    attrs = {},
+    provides = [CcToolchainConfigInfo],
+)

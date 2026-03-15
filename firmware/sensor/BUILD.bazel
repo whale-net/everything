@@ -1,0 +1,16 @@
+"""Board-agnostic sensor abstraction layer."""
+
+package(default_visibility = ["//visibility:public"])
+
+# ISensor interface — compiles on host and device.
+cc_library(
+    name = "sensor",
+    hdrs = ["sensor.h"],
+    deps = ["@pigweed//pw_status"],
+)
+
+cc_library(
+    name = "mock_sensor",
+    hdrs = ["mock_sensor.h"],
+    deps = [":sensor"],
+)
