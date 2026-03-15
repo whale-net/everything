@@ -1,0 +1,20 @@
+"""Non-blocking timing utilities (pw_chrono-based)."""
+
+package(default_visibility = ["//visibility:public"])
+
+# LoopTimer — header-only, compiles on host and device.
+cc_library(
+    name = "loop_timer",
+    hdrs = ["loop_timer.h"],
+    deps = ["@pigweed//pw_chrono:system_clock"],
+)
+
+cc_test(
+    name = "loop_timer_test",
+    srcs = ["loop_timer_test.cc"],
+    deps = [
+        ":loop_timer",
+        "@pigweed//pw_unit_test",
+        "@pigweed//pw_unit_test:googletest_style_event_handler",
+    ],
+)

@@ -1,0 +1,24 @@
+"""Network state machine (Wi-Fi + MQTT)."""
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "network_manager",
+    srcs = ["network_manager.cc"],
+    hdrs = ["network_manager.h"],
+    deps = [
+        "@pigweed//pw_chrono:system_clock",
+        "@pigweed//pw_log",
+        "@pigweed//pw_status",
+    ],
+)
+
+cc_test(
+    name = "network_manager_test",
+    srcs = ["network_manager_test.cc"],
+    deps = [
+        ":network_manager",
+        "@pigweed//pw_unit_test",
+        "@pigweed//pw_unit_test:googletest_style_event_handler",
+    ],
+)
