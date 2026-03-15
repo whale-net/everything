@@ -29,6 +29,6 @@ cc_test(
         ":mqtt_writer",
         "//firmware/sensor:mock_sensor",
         "@pigweed//pw_unit_test",
-        "@pigweed//pw_unit_test:googletest_style_event_handler",
+        "@pigweed//pw_unit_test:logging_main",
     ],
 )

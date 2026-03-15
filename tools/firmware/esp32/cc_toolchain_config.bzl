@@ -17,6 +17,7 @@ load(
     "flag_set",
     "tool",
     "tool_path",
+    "variable_with_value",
     "with_feature_set",
 )
 load("@bazel_tools//tools/build_defs/cc:action_names.bzl", "ACTION_NAMES")
@@ -30,6 +31,7 @@ _AR = _TOOLCHAIN_PATH + "/xtensa-esp-elf-ar"
 _LD = _TOOLCHAIN_PATH + "/xtensa-esp-elf-ld"
 _OBJCOPY = _TOOLCHAIN_PATH + "/xtensa-esp-elf-objcopy"
 _STRIP = _TOOLCHAIN_PATH + "/xtensa-esp-elf-strip"
+_CPP = _TOOLCHAIN_PATH + "/xtensa-esp-elf-cpp"
 _OBJDUMP = _TOOLCHAIN_PATH + "/xtensa-esp-elf-objdump"
 _NM = _TOOLCHAIN_PATH + "/xtensa-esp-elf-nm"
 
@@ -103,6 +105,7 @@ def _impl(ctx):
     tool_paths = [
         tool_path(name = "gcc",     path = _GCC),
         tool_path(name = "g++",     path = _GPP),
+        tool_path(name = "cpp",     path = _CPP),
         tool_path(name = "ar",      path = _AR),
         tool_path(name = "ld",      path = _LD),
         tool_path(name = "objcopy", path = _OBJCOPY),
@@ -195,58 +198,58 @@ def _impl(ctx):
                         flag_groups = [
                             flag_group(
                                 flags = ["-Wl,--start-lib"],
-                                expand_if_equal = struct(
-                                    variable = "libraries_to_link.type",
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
                                     value = "object_file_group",
                                 ),
                             ),
                             flag_group(
                                 flags = ["%{libraries_to_link.object_files}"],
                                 iterate_over = "libraries_to_link.object_files",
-                                expand_if_equal = struct(
-                                    variable = "libraries_to_link.type",
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
                                     value = "object_file_group",
                                 ),
                             ),
                             flag_group(
                                 flags = ["-Wl,--end-lib"],
-                                expand_if_equal = struct(
-                                    variable = "libraries_to_link.type",
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
                                     value = "object_file_group",
                                 ),
                             ),
                             flag_group(
                                 flags = ["%{libraries_to_link.name}"],
-                                expand_if_equal = struct(
-                                    variable = "libraries_to_link.type",
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
                                     value = "object_file",
                                 ),
                             ),
                             flag_group(
                                 flags = ["%{libraries_to_link.name}"],
-                                expand_if_equal = struct(
-                                    variable = "libraries_to_link.type",
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
                                     value = "interface_library",
                                 ),
                             ),
                             flag_group(
                                 flags = ["%{libraries_to_link.name}"],
-                                expand_if_equal = struct(
-                                    variable = "libraries_to_link.type",
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
                                     value = "static_library",
                                 ),
                             ),
                             flag_group(
                                 flags = ["-l%{libraries_to_link.name}"],
-                                expand_if_equal = struct(
-                                    variable = "libraries_to_link.type",
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
                                     value = "dynamic_library",
                                 ),
                             ),
                             flag_group(
                                 flags = ["-l:%{libraries_to_link.name}"],
-                                expand_if_equal = struct(
-                                    variable = "libraries_to_link.type",
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
                                     value = "versioned_dynamic_library",
                                 ),
                             ),

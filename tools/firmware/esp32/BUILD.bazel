@@ -69,4 +69,5 @@ py_binary(
     srcs = ["esptool_wrapper.py"],
     main = "esptool_wrapper.py",
     deps = ["@pypi//:esptool"],
+    tags = ["manual"],  # only built when explicitly requested (e.g. bazel run //demo/blink:flash)
 )

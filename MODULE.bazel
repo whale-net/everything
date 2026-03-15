@@ -6,6 +6,18 @@ module(
 bazel_dep(name = "bazel_skylib", version = "1.8.1")
 bazel_dep(name = "rules_python", version = "1.6.1")
 bazel_dep(name = "rules_pycross", version = "0.8.0")
+archive_override(
+    module_name = "rules_pycross",
+    urls = ["https://github.com/jvolkman/rules_pycross/releases/download/v0.8.0/rules_pycross-v0.8.0.tar.gz"],
+    integrity = "sha256-MFozt0xQfe2JBV5CN6AxbYYsWlvyASqY9scarRFCXOc=",
+    strip_prefix = "rules_pycross-0.8.0",
+    # Patch: skip EOL Python versions (e.g. 3.8 from grpc+ transitive pip.parse)
+    # that are absent from rules_python 1.x MINOR_MAPPING.  Without this patch,
+    # pycross fails with "Unknown Python version: 3.8".
+    # Remove when rules_pycross handles EOL versions gracefully upstream.
+    patches = ["//tools/bazel/patches:pycross-skip-unknown-python.patch"],
+    patch_strip = 1,
+)
 bazel_dep(name = "rules_go", version = "0.57.0")
 bazel_dep(name = "gazelle", version = "0.39.1")
 bazel_dep(name = "rules_oci", version = "2.2.6")
@@ -147,6 +159,10 @@ exports_files(["python"])
 environments = use_extension("@rules_pycross//pycross/extensions:environments.bzl", "environments")
 environments.create_for_python_toolchains(
     name = "everything_pycross_envs",
+    # Pin to 3.13 explicitly: Pigweed's transitive deps register 3.10/3.11/3.12
+    # (and something at 3.8), which rules_pycross 0.8.0 cannot handle as they
+    # lack micro versions.  Scoping to our one version avoids the conflict.
+    python_versions = ["3.13"],
     platforms = [
         "x86_64-unknown-linux-gnu",
         "aarch64-unknown-linux-gnu",

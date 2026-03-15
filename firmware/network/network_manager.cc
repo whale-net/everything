@@ -13,6 +13,15 @@
 
 #include "pw_log/log.h"
 
+// Platform hooks — implemented in esp32_platform.cc on-device, or stubbed in
+// host unit tests.  Declared at global scope so both targets can define them
+// without namespace qualification.
+extern bool WiFiIsConnected();
+extern bool MQTTConnect(const char*, uint16_t, const char*, const char*,
+                        const char*);
+extern bool MQTTIsConnected();
+extern bool MQTTPublish(const char*, const char*);
+
 namespace firmware {
 
 namespace {
@@ -54,13 +63,6 @@ NetworkManager::State NetworkManager::Poll() {
 }
 
 void NetworkManager::PollConnecting() {
-  // Platform hook: override WiFiIsConnected() and MQTTIsConnected()
-  // with real implementations on-device.  On host, stubs return false
-  // initially (for timeout testing) or true (for happy-path testing).
-  extern bool WiFiIsConnected();
-  extern bool MQTTConnect(const char*, uint16_t, const char*,
-                          const char*, const char*);
-
   if (state_age_ms() > static_cast<uint32_t>(
           std::chrono::duration_cast<std::chrono::milliseconds>(
               kConnectTimeoutMs).count())) {
@@ -84,9 +86,6 @@ void NetworkManager::PollConnecting() {
 }
 
 void NetworkManager::PollReady() {
-  extern bool WiFiIsConnected();
-  extern bool MQTTIsConnected();
-
   if (!WiFiIsConnected() || !MQTTIsConnected()) {
     PW_LOG_WARN("NetworkManager: connection lost, backing off");
     backoff_attempt_++;
@@ -108,7 +107,6 @@ pw::Status NetworkManager::Publish(const char* topic, const char* payload) {
                  StateToString(state_));
     return pw::Status::Unavailable();
   }
-  extern bool MQTTPublish(const char*, const char*);
   if (!MQTTPublish(topic, payload)) {
     return pw::Status::Internal();
   }

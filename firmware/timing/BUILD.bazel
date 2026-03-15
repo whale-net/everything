@@ -15,6 +15,6 @@ cc_test(
     deps = [
         ":loop_timer",
         "@pigweed//pw_unit_test",
-        "@pigweed//pw_unit_test:googletest_style_event_handler",
+        "@pigweed//pw_unit_test:logging_main",
     ],
 )
