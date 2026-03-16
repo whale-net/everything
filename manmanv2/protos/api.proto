@@ -686,6 +686,7 @@ message CreateConfigurationPatchRequest {
   int64 entity_id = 3;     // game_config_id, server_game_config_id, or session_id
   string patch_content = 4;
   string patch_format = 5;  // "properties", "json_merge_patch", etc.
+  int32 patch_order = 6;    // Application order (lower = earlier = lower priority), default 0
 }
 
 message CreateConfigurationPatchResponse {
@@ -696,6 +697,7 @@ message UpdateConfigurationPatchRequest {
   int64 patch_id = 1;
   string patch_content = 2;
   string patch_format = 3;
+  int32 patch_order = 4;  // Application order (lower = earlier = lower priority)
 }
 
 message UpdateConfigurationPatchResponse {

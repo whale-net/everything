@@ -190,6 +190,7 @@ message ConfigurationPatch {
   string patch_format = 6;  // "template", "json_merge_patch", "json_patch", "yaml_merge"
   int64 volume_id = 7;  // Optional FK to game_config_volumes
   string path_override = 8;  // Optional relative path override
+  int32 patch_order = 9;  // Application order (lower = earlier = lower priority)
 }
 
 // PatchLayer shows one layer of configuration patches

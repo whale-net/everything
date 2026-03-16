@@ -499,3 +499,71 @@ max-players=50`
 	t.Logf("   Final: motd=%s, max-players=%s, difficulty=%s, pvp=%s",
 		properties["motd"], properties["max-players"], properties["difficulty"], properties["pvp"])
 }
+
+func TestMultiplePatchesSameLevel(t *testing.T) {
+	// Test that multiple patches at the same level are applied in patch_order order.
+	// Lower patch_order patches are applied first (lower priority);
+	// higher patch_order patches override them (last-write-wins in properties map).
+	// Properties only present in the first patch should survive.
+
+	// Simulate two game_config-level patches concatenated by the API in patch_order order:
+	// patch_order=0: base networking settings
+	patch0 := `online-mode=true
+max-players=20
+difficulty=normal`
+
+	// patch_order=1: overrides max-players and adds motd; difficulty is NOT present
+	patch1 := `max-players=50
+motd=Custom Server`
+
+	// API joins them with "\n" (patch_order=0 first, then patch_order=1)
+	cascaded := patch0 + "\n" + patch1
+
+	properties := parsePropertiesFile(cascaded)
+
+	// patch_order=1 overrides max-players from patch_order=0
+	if properties["max-players"] != "50" {
+		t.Errorf("max-players: expected '50' (from patch_order=1), got '%s'", properties["max-players"])
+	}
+
+	// motd only exists in patch_order=1
+	if properties["motd"] != "Custom Server" {
+		t.Errorf("motd: expected 'Custom Server', got '%s'", properties["motd"])
+	}
+
+	// difficulty only exists in patch_order=0 and should survive
+	if properties["difficulty"] != "normal" {
+		t.Errorf("difficulty: expected 'normal' (from patch_order=0), got '%s'", properties["difficulty"])
+	}
+
+	// online-mode only exists in patch_order=0 and should survive
+	if properties["online-mode"] != "true" {
+		t.Errorf("online-mode: expected 'true' (from patch_order=0), got '%s'", properties["online-mode"])
+	}
+
+	// 4 unique keys total
+	if len(properties) != 4 {
+		t.Errorf("Expected 4 unique properties, got %d: %v", len(properties), properties)
+	}
+
+	// No duplicate max-players entries
+	maxPlayersCount := 0
+	for _, line := range strings.Split(cascaded, "\n") {
+		if strings.HasPrefix(line, "max-players=") {
+			maxPlayersCount++
+		}
+	}
+	if maxPlayersCount != 2 {
+		t.Errorf("Expected 2 raw max-players lines in input, got %d", maxPlayersCount)
+	}
+	// But the parsed map should have deduplicated to 1 winner
+	if properties["max-players"] != "50" {
+		t.Errorf("Deduplication failed: max-players should be '50', got '%s'", properties["max-players"])
+	}
+
+	t.Logf("✅ Multiple patches same level test passed!")
+	t.Logf("   patch_order=0: online-mode=true, max-players=20, difficulty=normal")
+	t.Logf("   patch_order=1: max-players=50, motd=Custom Server")
+	t.Logf("   Final: max-players=%s (patch_order=1 wins), difficulty=%s (patch_order=0 survives)",
+		properties["max-players"], properties["difficulty"])
+}
