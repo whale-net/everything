@@ -1,0 +1,10 @@
+"""Firmware-layer shared types."""
+
+package(default_visibility = ["//visibility:public"])
+
+# Canonical pin role enum — the single source of truth for logical pin names.
+# Keep in sync with REQUIRED_PINS / OPTIONAL_PINS in tools/firmware/pins.bzl.
+cc_library(
+    name = "pins",
+    hdrs = ["pins.h"],
+)
