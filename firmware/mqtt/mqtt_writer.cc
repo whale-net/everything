@@ -37,6 +37,11 @@ int MQTTWriter::PublishAll() {
   int published = 0;
   for (size_t i = 0; i < sensors_.size() && i < kMaxSensors; ++i) {
     if (!sensor_ok_[i]) continue;
+    if (!sensors_[i]->IsValid()) {
+      PW_LOG_WARN("MQTTWriter: '%s' has no valid reading, skipping",
+                  sensors_[i]->name());
+      continue;
+    }
 
     // Format topic: "<prefix>/<sensor_name>"
     pw::StringBuffer<kTopicBufSize> topic;

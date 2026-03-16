@@ -35,6 +35,10 @@ class ISensor {
   // Unique hardware address or channel identifier (e.g. I2C address).
   // Used for diagnostics and de-duplication.
   virtual uint8_t address() const = 0;
+
+  // Returns false if no valid reading has been obtained yet (e.g. open-circuit
+  // sensor before first successful Read()). Default: always valid.
+  virtual bool IsValid() const { return true; }
 };
 
 }  // namespace firmware

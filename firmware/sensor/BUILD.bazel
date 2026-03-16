@@ -4,11 +4,6 @@ load("@rules_cc//cc:defs.bzl", "cc_test")
 
 package(default_visibility = ["//visibility:public"])
 
-ESP32_COMPAT = [
-    "@platforms//os:none",
-    "//tools/firmware:cpu_xtensa",
-]
-
 # ISensor interface — compiles on host and device.
 cc_library(
     name = "sensor",
@@ -28,16 +23,15 @@ cc_library(
     hdrs = ["thermistor_math.h"],
 )
 
-# ThermistorSensor — Arduino ADC implementation; device-only.
+# ThermistorSensor — IAdc-backed; host-compilable (no Arduino dependency).
 cc_library(
     name = "thermistor",
     srcs = ["thermistor.cc"],
     hdrs = ["thermistor.h"],
-    target_compatible_with = ESP32_COMPAT,
     deps = [
         ":sensor",
         ":thermistor_math",
-        "@arduino_esp32//:core_lib",
+        "//firmware/adc:adc",
         "@pigweed//pw_status",
     ],
 )
@@ -47,6 +41,17 @@ cc_test(
     srcs = ["thermistor_test.cc"],
     deps = [
         ":thermistor_math",
+        "@pigweed//pw_unit_test",
+        "@pigweed//pw_unit_test:logging_main",
+    ],
+)
+
+cc_test(
+    name = "thermistor_sensor_test",
+    srcs = ["thermistor_sensor_test.cc"],
+    deps = [
+        ":thermistor",
+        "//firmware/adc:fake_adc",
         "@pigweed//pw_unit_test",
         "@pigweed//pw_unit_test:logging_main",
     ],

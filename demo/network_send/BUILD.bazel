@@ -14,6 +14,7 @@ esp32_firmware(
     name = "network_send",
     srcs = ["network_send.cc"],
     deps = [
+        "//firmware/adc:arduino_adc",
         "//firmware/mqtt:mqtt_writer",
         "//firmware/network:network_manager",
         "//firmware/network:network_publisher",

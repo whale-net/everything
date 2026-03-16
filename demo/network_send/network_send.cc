@@ -23,6 +23,7 @@
 #include <WiFi.h>
 
 #include "board_pins.h"
+#include "firmware/adc/arduino_adc.h"
 #include "firmware/mqtt/mqtt_writer.h"
 #include "firmware/network/network_manager.h"
 #include "firmware/network/network_publisher.h"
@@ -75,7 +76,8 @@ namespace {
 
 firmware::NetworkManager   net(kNetConfig);
 firmware::NetworkPublisher publisher(net);
-firmware::ThermistorSensor thermistor(board::kAdc0);
+firmware::ArduinoAdc       adc;
+firmware::ThermistorSensor thermistor(board::kAdc0, &adc);
 
 firmware::ISensor* const kSensors[] = {&thermistor};
 firmware::MQTTWriter writer(kSensors, "home/sensors", &publisher);
