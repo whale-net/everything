@@ -95,17 +95,16 @@ board_pins(
 )
 ```
 
-### Step 3 — Register the pins alias
+### Step 3 — Register the board in the pins registry
 
 ```starlark
-# tools/firmware/BUILD.bazel  — add to the existing select()
-alias(
+# tools/firmware/BUILD.bazel  — add one entry to board_pins_registry()
+board_pins_registry(
     name = "board_pins",
-    actual = select({
+    boards = {
         "//tools/firmware/esp32:is_elegoo_esp32":  "//tools/firmware/esp32:elegoo_esp32_pins",
-        "//tools/firmware/esp32:is_hiletgo_esp32": "//tools/firmware/esp32:hiletgo_esp32_pins",
-        "//conditions:default": ":no_board_pins",
-    }),
+        "//tools/firmware/esp32:is_hiletgo_esp32": "//tools/firmware/esp32:hiletgo_esp32_pins",  # new
+    },
 )
 ```
 
@@ -275,9 +274,24 @@ build:pico_w --@pigweed//pw_log:backend=@pigweed//pw_log_basic
 
 ## Pin Abstraction
 
+### Pin schema
+
+Pins are divided into two categories defined in `tools/firmware/pins.bzl`:
+
+| Category | List | Behaviour |
+|----------|------|-----------|
+| **Required** (`REQUIRED_PINS`) | `Led` | Every board must declare these. `board_pins()` fails at Bazel analysis time if any are absent. |
+| **Optional** (`OPTIONAL_PINS`) | `Sda`, `Scl`, `Rx2`, `Tx2` | Boards may omit these. Absent ones default to `-1` and get a `BOARD_PIN_X_SUPPORTED = 0` flag. |
+
+When you introduce a new peripheral pin anywhere in the firmware, add its name
+to `OPTIONAL_PINS` in `pins.bzl`. You do **not** need to update every existing
+board's `board_pins()` call — absent optional pins default to `-1` automatically.
+
 ### Declaring pins
 
-Pins are declared once per board in its BUILD.bazel using `board_pins()`:
+Pins are declared once per board in its BUILD.bazel using `board_pins()`.
+Each board must live in its own Bazel package (separate `BUILD.bazel` file) —
+two `board_pins()` calls in the same package would collide on the output filename.
 
 ```starlark
 load("//tools/firmware:pins.bzl", "board_pins")
@@ -286,16 +300,16 @@ board_pins(
     name = "my_board_pins",
     board_name = "my_board",
     pins = {
-        "Led":      2,   # PascalCase logical name → GPIO number
-        "SensorCs": 5,
-        "Sda":     21,
-        "Scl":     22,
+        "Led":  2,   # required — must be present
+        "Sda": 21,   # optional — omit if not wired; defaults to -1
+        "Scl": 22,
+        # Rx2 and Tx2 omitted → auto-filled as -1 with SUPPORTED = 0
     },
 )
 ```
 
-`board_pins()` generates `board_pins.h` in the package's genfiles directory
-and wraps it in a `cc_library` with `includes = ["."]` so it's reachable as:
+`board_pins()` generates `board_pins.h` inside a per-board subdirectory in
+genfiles and wraps it in a `cc_library`, so it's reachable as:
 
 ```cpp
 #include "board_pins.h"
@@ -307,26 +321,49 @@ and wraps it in a `cc_library` with `includes = ["."]` so it's reachable as:
 #include "board_pins.h"   // dep: //tools/firmware:board_pins
 
 void setup() {
-    pinMode(board::kLed, OUTPUT);       // C++ typed constant
+    pinMode(board::kLed, OUTPUT);           // required — always present
+
+    // Guard optional pins with the SUPPORTED flag:
+#if BOARD_PIN_SDA_SUPPORTED
     Wire.begin(board::kSda, board::kScl);
+#endif
 }
 
-// C macros also available (for C files or legacy code):
-// BOARD_PIN_LED, BOARD_PIN_SDA, BOARD_PIN_SCL
+// C macros (for C files or legacy code):
+// BOARD_PIN_LED               — GPIO number
+// BOARD_PIN_SDA_SUPPORTED     — 1 if wired, 0 if absent on this board
+// BOARD_PIN_SDA               — GPIO number (-1 if absent)
 ```
 
-The dependency is `//tools/firmware:board_pins` — the `alias()` in
-`tools/firmware/BUILD.bazel` that resolves to the correct board at build time.
-Host builds (tests) get an empty `no_board_pins` library.
+The dependency is `//tools/firmware:board_pins` — the alias in
+`tools/firmware/BUILD.bazel` (managed by `board_pins_registry()`) that resolves
+to the correct board at build time. Host builds (tests) get an empty
+`no_board_pins` library.
+
+### Registering a board in the alias
+
+After writing the `board_pins()` call, add the board to `board_pins_registry()`
+in `tools/firmware/BUILD.bazel`:
+
+```starlark
+board_pins_registry(
+    name = "board_pins",
+    boards = {
+        "//tools/firmware/esp32:is_elegoo_esp32": "//tools/firmware/esp32:elegoo_esp32_pins",
+        "//tools/firmware/esp32:is_hiletgo_esp32": "//tools/firmware/esp32:hiletgo_esp32_pins",  # new
+    },
+)
+```
 
 ### Adding a new logical pin name
 
-If your firmware needs a pin name not yet in any board's declaration:
+If your firmware needs a pin name that no board currently declares:
 
-1. Add the name to every board's `board_pins()` call in its BUILD.bazel.
-2. Use `0` or `-1` for boards that don't have that peripheral (and guard with
-   `#if BOARD_PIN_SENSOR_CS >= 0` in C++ if needed).
-3. Reference it via `board::kSensorCs` in the firmware.
+1. Add the name to `OPTIONAL_PINS` in `tools/firmware/pins.bzl`.
+2. Declare it in any board's `board_pins()` that physically has it; boards
+   without it automatically get `-1` and `SUPPORTED = 0`.
+3. Guard usage in firmware with `#if BOARD_PIN_<NAME>_SUPPORTED`.
+4. Reference the value via `board::k<Name>` in C++.
 
 ---
 
@@ -452,7 +489,7 @@ generate the right command-line arguments in the wrapper script.
 □ tools/firmware/BUILD.bazel
     □ constraint_value for board identity (always)
     □ constraint_value for cpu_family (only if new CPU)
-    □ Add board to board_pins alias select()
+    □ Add board to board_pins_registry() boards dict
 
 □ tools/firmware/<family>/BUILD.bazel
     □ firmware_board()

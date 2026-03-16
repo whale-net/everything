@@ -1,0 +1,48 @@
+"""I2C bus abstraction layer."""
+
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ESP32_COMPAT = [
+    "@platforms//os:none",
+    "//tools/firmware:cpu_xtensa",
+]
+
+# II2CBus interface — host-compilable; no Arduino dependency.
+cc_library(
+    name = "i2c_bus",
+    hdrs = ["i2c_bus.h"],
+    deps = ["@pigweed//pw_status"],
+)
+
+# ArduinoI2CBus — Wire-backed implementation; device-only.
+cc_library(
+    name = "arduino_i2c_bus",
+    srcs = ["arduino_i2c_bus.cc"],
+    hdrs = ["arduino_i2c_bus.h"],
+    target_compatible_with = ESP32_COMPAT,
+    deps = [
+        ":i2c_bus",
+        "@arduino_esp32//:core_lib",
+        "@pigweed//pw_status",
+    ],
+)
+
+# FakeI2CBus — records transactions; host test double.
+cc_library(
+    name = "fake_i2c_bus",
+    hdrs = ["fake_i2c_bus.h"],
+    deps = [":i2c_bus"],
+)
+
+cc_test(
+    name = "i2c_bus_test",
+    srcs = ["i2c_bus_test.cc"],
+    deps = [
+        ":fake_i2c_bus",
+        "@pigweed//pw_status",
+        "@pigweed//pw_unit_test",
+        "@pigweed//pw_unit_test:logging_main",
+    ],
+)

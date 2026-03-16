@@ -3,8 +3,12 @@
 Adding a new board:
   1. Add a constraint_value here for the CPU family (if new).
   2. Add a constraint_value here for the board identity.
-  3. Call firmware_board() in the board's subdirectory BUILD.bazel.
+  3. Call firmware_board() + board_pins() in the board's subdirectory BUILD.bazel.
+  4. Add the board to board_pins_registry() below.
 """
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("//tools/firmware:pins.bzl", "board_pins_registry")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -38,21 +42,21 @@ constraint_value(
 )
 
 # ── Pin abstraction ──────────────────────────────────────────────────────────
-# Alias resolves to the correct board's generated board_pins.h at build time.
-# Add new boards to this select() when registering them.
+# board_pins_registry() generates the alias() + select() from a dict.
+# Add one entry per board; the macro appends //conditions:default → no_board_pins.
 #
 # Usage in firmware cc_library/cc_binary:
 #   deps = ["//tools/firmware:board_pins"]
 # In C++:
 #   #include "board_pins.h"
-#   // BOARD_PIN_LED, board::kLed, board::kSda, etc.
+#   // Required: BOARD_PIN_LED, board::kLed
+#   // Optional: #if BOARD_PIN_SDA_SUPPORTED ... board::kSda ... #endif
 
-alias(
+board_pins_registry(
     name = "board_pins",
-    actual = select({
+    boards = {
         "//tools/firmware/esp32:is_elegoo_esp32": "//tools/firmware/esp32:elegoo_esp32_pins",
-        "//conditions:default": ":no_board_pins",
-    }),
+    },
 )
 
 # Empty fallback for host builds (tests that don't target a specific board).

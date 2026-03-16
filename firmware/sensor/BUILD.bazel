@@ -1,6 +1,13 @@
 """Board-agnostic sensor abstraction layer."""
 
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
 package(default_visibility = ["//visibility:public"])
+
+ESP32_COMPAT = [
+    "@platforms//os:none",
+    "//tools/firmware:cpu_xtensa",
+]
 
 # ISensor interface — compiles on host and device.
 cc_library(
@@ -13,4 +20,34 @@ cc_library(
     name = "mock_sensor",
     hdrs = ["mock_sensor.h"],
     deps = [":sensor"],
+)
+
+# Pure NTC math — no Arduino dependency; host-compilable.
+cc_library(
+    name = "thermistor_math",
+    hdrs = ["thermistor_math.h"],
+)
+
+# ThermistorSensor — Arduino ADC implementation; device-only.
+cc_library(
+    name = "thermistor",
+    srcs = ["thermistor.cc"],
+    hdrs = ["thermistor.h"],
+    target_compatible_with = ESP32_COMPAT,
+    deps = [
+        ":sensor",
+        ":thermistor_math",
+        "@arduino_esp32//:core_lib",
+        "@pigweed//pw_status",
+    ],
+)
+
+cc_test(
+    name = "thermistor_test",
+    srcs = ["thermistor_test.cc"],
+    deps = [
+        ":thermistor_math",
+        "@pigweed//pw_unit_test",
+        "@pigweed//pw_unit_test:logging_main",
+    ],
 )
