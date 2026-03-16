@@ -76,9 +76,7 @@ def esp32_firmware(name, srcs, deps = [], copts = [], flash_config = None, **kwa
         cmd = " ".join([
             "$(location //tools/firmware/esp32:esptool_wrapper)",
             "--chip esp32 elf2image",
-            "--flash_mode dio",
-            "--flash_freq 80m",
-            "--flash_size 4MB",
+            flash_config.write_flash_args,
             "-o $@",
             "$<",
         ]),

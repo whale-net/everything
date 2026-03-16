@@ -16,6 +16,9 @@
 // Run:
 //   bazel test //demo/network_send:network_send_test
 
+#include <cstring>
+#include <vector>
+
 #include "firmware/mqtt/mock_publisher.h"
 #include "firmware/mqtt/mqtt_writer.h"
 #include "firmware/network/network_manager.h"
@@ -34,17 +37,16 @@ bool g_mqtt_up   = false;
 bool g_mqtt_publish_ok = true;
 
 struct CapturedPublish {
-    bool called = false;
     char topic[128] = {};
     char payload[64] = {};
-    void reset() { called = false; topic[0] = '\0'; payload[0] = '\0'; }
-} g_last_publish;
+};
+std::vector<CapturedPublish> g_all_publishes;
 
 void reset_stubs() {
     g_wifi_up = false;
     g_mqtt_up = false;
     g_mqtt_publish_ok = true;
-    g_last_publish.reset();
+    g_all_publishes.clear();
 }
 }  // namespace
 
@@ -54,11 +56,13 @@ bool MQTTConnect(const char*, uint16_t, const char*, const char*, const char*) {
 }
 bool MQTTIsConnected() { return g_mqtt_up; }
 bool MQTTPublish(const char* topic, const char* payload) {
-    g_last_publish.called = true;
-    std::strncpy(g_last_publish.topic,   topic,   sizeof(g_last_publish.topic)   - 1);
-    std::strncpy(g_last_publish.payload, payload, sizeof(g_last_publish.payload) - 1);
+    CapturedPublish msg{};
+    std::strncpy(msg.topic,   topic,   sizeof(msg.topic)   - 1);
+    std::strncpy(msg.payload, payload, sizeof(msg.payload) - 1);
+    g_all_publishes.push_back(msg);
     return g_mqtt_publish_ok;
 }
+void WiFiConnect() {}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -179,7 +183,7 @@ TEST(FullStack, IdleNetworkPreventsPublish) {
     int count = writer.PublishAll();
 
     EXPECT_EQ(count, 0);
-    EXPECT_FALSE(g_last_publish.called);
+    EXPECT_TRUE(g_all_publishes.empty());
 }
 
 TEST(FullStack, ConnectThenPublishReachesNetwork) {
@@ -201,10 +205,10 @@ TEST(FullStack, ConnectThenPublishReachesNetwork) {
 
     int count = writer.PublishAll();
 
-    EXPECT_EQ(count, 1);
-    EXPECT_TRUE(g_last_publish.called);
-    EXPECT_STREQ(g_last_publish.topic, "home/sensors/thermistor");
-    float published_value = std::atof(g_last_publish.payload);
+    ASSERT_EQ(count, 1);
+    ASSERT_EQ(g_all_publishes.size(), 1u);
+    EXPECT_STREQ(g_all_publishes[0].topic, "home/sensors/thermistor");
+    float published_value = std::atof(g_all_publishes[0].payload);
     EXPECT_FLOAT_EQ(published_value, 23.5f);
 }
 
@@ -232,11 +236,11 @@ TEST(FullStack, NetworkDropCausesMissedPublish) {
 
     ASSERT_EQ(net.state(), firmware::NetworkManager::State::kBackoff);
 
-    g_last_publish.reset();
+    g_all_publishes.clear();
     int count = writer.PublishAll();  // should not publish
 
     EXPECT_EQ(count, 0);
-    EXPECT_FALSE(g_last_publish.called);
+    EXPECT_TRUE(g_all_publishes.empty());
 }
 
 TEST(FullStack, MultipleSensorsAllPublishedWhenReady) {
@@ -257,10 +261,12 @@ TEST(FullStack, MultipleSensorsAllPublishedWhenReady) {
     bring_up(net);
     int count = writer.PublishAll();
 
-    // Both sensors published; we only inspect the last captured MQTTPublish
-    // call, so just verify count — exact ordering is MQTTWriter's concern.
-    EXPECT_EQ(count, 2);
-    EXPECT_TRUE(g_last_publish.called);
+    ASSERT_EQ(count, 2);
+    ASSERT_EQ(g_all_publishes.size(), 2u);
+    EXPECT_STREQ(g_all_publishes[0].topic, "home/sensors/temperature");
+    EXPECT_STREQ(g_all_publishes[1].topic, "home/sensors/humidity");
+    EXPECT_FLOAT_EQ(std::atof(g_all_publishes[0].payload), 21.0f);
+    EXPECT_FLOAT_EQ(std::atof(g_all_publishes[1].payload), 60.0f);
 }
 
 TEST(FullStack, PublishFailureReturnsInternalError) {

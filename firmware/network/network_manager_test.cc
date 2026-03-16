@@ -27,8 +27,9 @@ bool MQTTConnect(const char*, uint16_t, const char*, const char*,
 }
 bool MQTTIsConnected() { return g_mqtt_connected; }
 bool MQTTPublish(const char*, const char*) { return g_mqtt_publish_ok; }
+void WiFiConnect() {}
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+// ── Test fixture ──────────────────────────────────────────────────────────────
 
 namespace firmware {
 namespace {
@@ -42,23 +43,35 @@ NetworkManager::Config TestConfig() {
       .device_id = "esp32_test_aa:bb:cc",
       .mqtt_user = nullptr,
       .mqtt_pass = nullptr,
+      .connect_timeout_ms = 15'000,
   };
 }
 
-TEST(NetworkManagerTest, InitialStateIsIdle) {
+class NetworkManagerTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    g_wifi_connected = false;
+    g_mqtt_connected = false;
+    g_mqtt_publish_ok = true;
+  }
+};
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+TEST_F(NetworkManagerTest, InitialStateIsIdle) {
   auto cfg = TestConfig();
   NetworkManager nm(cfg);
   EXPECT_EQ(nm.state(), NetworkManager::State::kIdle);
 }
 
-TEST(NetworkManagerTest, ConnectTransitionsToConnecting) {
+TEST_F(NetworkManagerTest, ConnectTransitionsToConnecting) {
   auto cfg = TestConfig();
   NetworkManager nm(cfg);
   nm.Connect();
   EXPECT_EQ(nm.state(), NetworkManager::State::kConnecting);
 }
 
-TEST(NetworkManagerTest, ConnectIsNoopWhenAlreadyConnecting) {
+TEST_F(NetworkManagerTest, ConnectIsNoopWhenAlreadyConnecting) {
   auto cfg = TestConfig();
   NetworkManager nm(cfg);
   nm.Connect();
@@ -66,7 +79,7 @@ TEST(NetworkManagerTest, ConnectIsNoopWhenAlreadyConnecting) {
   EXPECT_EQ(nm.state(), NetworkManager::State::kConnecting);
 }
 
-TEST(NetworkManagerTest, PollTransitionsToReadyWhenBothUp) {
+TEST_F(NetworkManagerTest, PollTransitionsToReadyWhenBothUp) {
   g_wifi_connected = true;
   g_mqtt_connected = true;
 
@@ -76,15 +89,9 @@ TEST(NetworkManagerTest, PollTransitionsToReadyWhenBothUp) {
   nm.Poll();  // PollConnecting: both up → kReady
 
   EXPECT_EQ(nm.state(), NetworkManager::State::kReady);
-
-  g_wifi_connected = false;
-  g_mqtt_connected = false;
 }
 
-TEST(NetworkManagerTest, PollStaysConnectingWhenWiFiDown) {
-  g_wifi_connected = false;
-  g_mqtt_connected = false;
-
+TEST_F(NetworkManagerTest, PollStaysConnectingWhenWiFiDown) {
   auto cfg = TestConfig();
   NetworkManager nm(cfg);
   nm.Connect();
@@ -93,17 +100,16 @@ TEST(NetworkManagerTest, PollStaysConnectingWhenWiFiDown) {
   EXPECT_EQ(nm.state(), NetworkManager::State::kConnecting);
 }
 
-TEST(NetworkManagerTest, PublishFailsWhenNotReady) {
+TEST_F(NetworkManagerTest, PublishFailsWhenNotReady) {
   auto cfg = TestConfig();
   NetworkManager nm(cfg);
   pw::Status s = nm.Publish("home/temp", "23.5");
   EXPECT_EQ(s, pw::Status::Unavailable());
 }
 
-TEST(NetworkManagerTest, PublishSucceedsWhenReady) {
+TEST_F(NetworkManagerTest, PublishSucceedsWhenReady) {
   g_wifi_connected = true;
   g_mqtt_connected = true;
-  g_mqtt_publish_ok = true;
 
   auto cfg = TestConfig();
   NetworkManager nm(cfg);
@@ -112,16 +118,22 @@ TEST(NetworkManagerTest, PublishSucceedsWhenReady) {
 
   pw::Status s = nm.Publish("home/temp", "23.5");
   EXPECT_EQ(s, pw::OkStatus());
-
-  g_wifi_connected = false;
-  g_mqtt_connected = false;
 }
 
-TEST(NetworkManagerTest, StateToStringCoversAllStates) {
+TEST_F(NetworkManagerTest, StateToStringCoversAllStates) {
   EXPECT_STREQ(StateToString(NetworkManager::State::kIdle),       "kIdle");
   EXPECT_STREQ(StateToString(NetworkManager::State::kConnecting), "kConnecting");
   EXPECT_STREQ(StateToString(NetworkManager::State::kReady),      "kReady");
   EXPECT_STREQ(StateToString(NetworkManager::State::kBackoff),    "kBackoff");
+}
+
+TEST_F(NetworkManagerTest, ConnectTimeoutTransitionsToBackoff) {
+  auto cfg = TestConfig();
+  cfg.connect_timeout_ms = 0;  // expire immediately
+  NetworkManager nm(cfg);
+  nm.Connect();
+  nm.Poll();  // state_age_ms() > 0 → backoff
+  EXPECT_EQ(nm.state(), NetworkManager::State::kBackoff);
 }
 
 }  // namespace

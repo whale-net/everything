@@ -8,6 +8,7 @@
 // The ADC pin number doubles as the ISensor::address() identifier.
 
 #include <cstdint>
+#include <limits>
 
 #include "firmware/sensor/sensor.h"
 #include "firmware/sensor/thermistor_math.h"
@@ -36,7 +37,7 @@ class ThermistorSensor final : public ISensor {
   uint8_t pin_;
   thermistor::Config cfg_;
   const char* name_;
-  float last_valid_ = 0.0f;
+  float last_valid_ = std::numeric_limits<float>::quiet_NaN();
 };
 
 }  // namespace firmware

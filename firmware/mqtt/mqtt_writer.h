@@ -68,9 +68,10 @@ class MQTTWriter {
   const char* topic_prefix_;
   IPublisher* publisher_;
 
+  static constexpr size_t kMaxSensors = 16;
+
   // Track which sensors initialised successfully.
-  // Max 16 sensors — adjust if needed, still stack-allocated.
-  bool sensor_ok_[16] = {};
+  bool sensor_ok_[kMaxSensors] = {};
 };
 
 }  // namespace firmware

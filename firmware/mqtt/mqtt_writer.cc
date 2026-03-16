@@ -1,5 +1,6 @@
 #include "firmware/mqtt/mqtt_writer.h"
 
+#include "pw_assert/check.h"
 #include "pw_log/log.h"
 #include "pw_string/string_builder.h"
 
@@ -12,8 +13,11 @@ constexpr size_t kPayloadBufSize = 32;
 }  // namespace
 
 int MQTTWriter::InitAll() {
+  PW_DCHECK(sensors_.size() <= MQTTWriter::kMaxSensors,
+            "Too many sensors: %zu (max %zu)",
+            sensors_.size(), MQTTWriter::kMaxSensors);
   int ok_count = 0;
-  for (size_t i = 0; i < sensors_.size() && i < 16; ++i) {
+  for (size_t i = 0; i < sensors_.size() && i < kMaxSensors; ++i) {
     pw::Status s = sensors_[i]->Init();
     sensor_ok_[i] = s.ok();
     if (s.ok()) {
@@ -31,7 +35,7 @@ int MQTTWriter::InitAll() {
 
 int MQTTWriter::PublishAll() {
   int published = 0;
-  for (size_t i = 0; i < sensors_.size() && i < 16; ++i) {
+  for (size_t i = 0; i < sensors_.size() && i < kMaxSensors; ++i) {
     if (!sensor_ok_[i]) continue;
 
     // Format topic: "<prefix>/<sensor_name>"

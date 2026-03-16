@@ -8,6 +8,7 @@ cc_library(
     hdrs = ["mqtt_writer.h"],
     deps = [
         "//firmware/sensor:sensor",
+        "@pigweed//pw_assert:check",
         "@pigweed//pw_log",
         "@pigweed//pw_span",
         "@pigweed//pw_status",

@@ -84,8 +84,19 @@ firmware::MQTTWriter writer(kSensors, "home/sensors", &publisher);
 
 // ── Sketch ────────────────────────────────────────────────────────────────────
 
+// Platform hook: called by NetworkManager when entering kConnecting.
+// ESP32 handles re-association internally when setAutoReconnect(true);
+// re-calling WiFi.begin() here is a no-op in that case.
+void WiFiConnect() {
+    WiFi.begin(kNetConfig.ssid, kNetConfig.password);
+}
+
 void setup() {
     Serial.begin(115200);
+    // Enable persistent auto-reconnect so the ESP32 re-associates after a
+    // link drop without waiting for the state machine to call WiFiConnect().
+    WiFi.setAutoReconnect(true);
+    WiFi.persistent(true);
     WiFi.begin(kNetConfig.ssid, kNetConfig.password);
 
     int init_ok = writer.InitAll();

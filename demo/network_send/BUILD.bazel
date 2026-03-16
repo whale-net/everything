@@ -19,6 +19,7 @@ esp32_firmware(
         "//firmware/network:network_publisher",
         "//firmware/sensor:thermistor",
         "@pigweed//pw_log",
+        "@pubsubclient//:pubsubclient",
     ],
 )
 

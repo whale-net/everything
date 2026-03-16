@@ -21,13 +21,15 @@ extern bool MQTTConnect(const char*, uint16_t, const char*, const char*,
                         const char*);
 extern bool MQTTIsConnected();
 extern bool MQTTPublish(const char*, const char*);
+// Called when transitioning to kConnecting to (re-)initiate the Wi-Fi
+// association.  On ESP32 with setAutoReconnect(true), this is a no-op for
+// the initial connect; the hook exists so the state machine can explicitly
+// trigger reconnection without coupling to WiFi.h.
+extern void WiFiConnect();
 
 namespace firmware {
 
 namespace {
-
-// Connection attempt timeout before entering backoff.
-constexpr auto kConnectTimeoutMs = std::chrono::milliseconds(15'000);
 
 uint32_t NowMs() {
   // Converts pw_chrono time point to uint32_t milliseconds.
@@ -63,9 +65,7 @@ NetworkManager::State NetworkManager::Poll() {
 }
 
 void NetworkManager::PollConnecting() {
-  if (state_age_ms() > static_cast<uint32_t>(
-          std::chrono::duration_cast<std::chrono::milliseconds>(
-              kConnectTimeoutMs).count())) {
+  if (state_age_ms() >= config_.connect_timeout_ms) {
     PW_LOG_WARN("NetworkManager: connect timeout after %u ms, backing off",
                 state_age_ms());
     backoff_attempt_++;
@@ -125,11 +125,16 @@ void NetworkManager::TransitionTo(State next) {
                StateToString(state_), StateToString(next));
   state_ = next;
   state_entered_ = pw::chrono::SystemClock::now();
+  if (next == State::kConnecting) {
+    WiFiConnect();
+  }
 }
 
 uint32_t NetworkManager::NextBackoffMs() const {
   // Exponential backoff: 1 s * 2^attempt, capped at kMaxBackoffSeconds.
-  uint32_t seconds = 1u << backoff_attempt_;
+  // Cap shift at 31 to prevent UB when backoff_attempt_ >= 32.
+  uint32_t shift = backoff_attempt_ < 31u ? backoff_attempt_ : 31u;
+  uint32_t seconds = 1u << shift;
   if (seconds > kMaxBackoffSeconds) seconds = kMaxBackoffSeconds;
   return seconds * 1000u;
 }
