@@ -2,6 +2,18 @@
 
 package(default_visibility = ["//visibility:public"])
 
+# IPublisher adapter that forwards to NetworkManager::Publish().
+# Header-only; depends only on network_manager + mqtt_writer (both host-safe).
+cc_library(
+    name = "network_publisher",
+    hdrs = ["network_publisher.h"],
+    deps = [
+        ":network_manager",
+        "//firmware/mqtt:mqtt_writer",
+        "@pigweed//pw_status",
+    ],
+)
+
 cc_library(
     name = "network_manager",
     srcs = ["network_manager.cc"],
