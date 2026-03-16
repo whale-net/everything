@@ -26,6 +26,9 @@ extern bool MQTTPublish(const char*, const char*);
 // the initial connect; the hook exists so the state machine can explicitly
 // trigger reconnection without coupling to WiFi.h.
 extern void WiFiConnect();
+// Drive the PubSubClient keep-alive.  Called by the application loop every
+// pass (not by NetworkManager itself).
+extern void MQTTLoop();
 
 namespace firmware {
 

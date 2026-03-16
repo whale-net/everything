@@ -16,11 +16,12 @@ esp32_firmware(
     deps = [
         "//firmware/adc:arduino_adc",
         "//firmware/mqtt:mqtt_writer",
+        "//firmware/network:esp32_platform",
         "//firmware/network:network_manager",
         "//firmware/network:network_publisher",
         "//firmware/sensor:thermistor",
+        "//firmware/timing:loop_timer",
         "@pigweed//pw_log",
-        "@pubsubclient//:pubsubclient",
     ],
 )
 

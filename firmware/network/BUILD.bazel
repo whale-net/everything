@@ -1,6 +1,26 @@
 """Network state machine (Wi-Fi + MQTT)."""
 
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
 package(default_visibility = ["//visibility:public"])
+
+ESP32_COMPAT = [
+    "@platforms//os:none",
+    "//tools/firmware:cpu_xtensa",
+]
+
+# ESP32 platform hook implementations (WiFi + PubSubClient).
+# Link this instead of @pubsubclient directly; it owns WiFiClient and
+# PubSubClient and exposes the 6 hook functions expected by network_manager.cc.
+cc_library(
+    name = "esp32_platform",
+    srcs = ["esp32_platform.cc"],
+    target_compatible_with = ESP32_COMPAT,
+    deps = [
+        "@arduino_esp32//:core_lib",
+        "@pubsubclient//:pubsubclient",
+    ],
+)
 
 # IPublisher adapter that forwards to NetworkManager::Publish().
 # Header-only; depends only on network_manager + mqtt_writer (both host-safe).

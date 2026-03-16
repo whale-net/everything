@@ -69,6 +69,10 @@ class NetworkManager {
 
   explicit NetworkManager(const Config& config) : config_(config) {}
 
+  // Override the device_id after construction.  Call before Connect() so the
+  // kConnecting handler uses the updated value.
+  void set_device_id(const char* id) { config_.device_id = id; }
+
   // Initiate a connection attempt.  No-op if already kConnecting or kReady.
   void Connect();
 
@@ -93,7 +97,7 @@ class NetworkManager {
 
   uint32_t NextBackoffMs() const;
 
-  const Config& config_;
+  Config config_;
   State state_ = State::kIdle;
   pw::chrono::SystemClock::time_point state_entered_;
   uint32_t backoff_attempt_ = 0;  // Increments on each consecutive failure.
