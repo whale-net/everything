@@ -13,6 +13,10 @@ service LogProcessor {
 // StreamSessionLogsRequest requests log streaming for a session
 message StreamSessionLogsRequest {
   int64 session_id = 1;
+  // Only backlog messages with sequence_number greater than this value are sent.
+  // Set to the last received sequence_number on reconnect to avoid duplicate messages.
+  // Zero (default) sends the full backlog.
+  int64 after_sequence_number = 2;
 }
 
 // LogMessage represents a single log message from a session
@@ -21,4 +25,7 @@ message LogMessage {
   int64 timestamp = 2;      // Unix milliseconds
   string source = 3;        // "stdout", "stderr", "host"
   string message = 4;
+  // Monotonically increasing sequence number assigned per session consumer.
+  // Clients should track this and pass it as after_sequence_number on reconnect.
+  int64 sequence_number = 5;
 }

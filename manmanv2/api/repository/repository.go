@@ -157,6 +157,7 @@ type ConfigurationPatchRepository interface {
 	Create(ctx context.Context, patch *manman.ConfigurationPatch) (*manman.ConfigurationPatch, error)
 	Get(ctx context.Context, patchID int64) (*manman.ConfigurationPatch, error)
 	GetByStrategyAndEntity(ctx context.Context, strategyID int64, patchLevel string, entityID int64) (*manman.ConfigurationPatch, error)
+	ListByStrategyAndEntity(ctx context.Context, strategyID int64, patchLevel string, entityID int64) ([]*manman.ConfigurationPatch, error)
 	List(ctx context.Context, strategyID *int64, patchLevel *string, entityID *int64) ([]*manman.ConfigurationPatch, error)
 	Update(ctx context.Context, patch *manman.ConfigurationPatch) error
 	Delete(ctx context.Context, patchID int64) error

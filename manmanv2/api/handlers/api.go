@@ -1182,26 +1182,22 @@ func (h *ConfigurationStrategyHandler) GetSessionConfiguration(ctx context.Conte
 		}
 
 		// Cascade patches: GameConfig → ServerGameConfig
-		patchContent := ""
-
-		// 1. Get game_config level patch
-		gcPatch, err := fullRepo.ConfigurationPatches.GetByStrategyAndEntity(ctx, strategy.StrategyID, "game_config", gc.ConfigID)
-		if err == nil && gcPatch.PatchContent != nil {
-			patchContent = *gcPatch.PatchContent
+		// 1. Get all game_config level patches (ordered by patch_order ASC, patch_id ASC)
+		gcPatches, err := fullRepo.ConfigurationPatches.ListByStrategyAndEntity(ctx, strategy.StrategyID, "game_config", gc.ConfigID)
+		if err != nil {
+			gcPatches = nil
 		}
 
-		// 2. Get server_game_config level patch (overrides game_config)
-		sgcPatch, err := fullRepo.ConfigurationPatches.GetByStrategyAndEntity(ctx, strategy.StrategyID, "server_game_config", sgc.SGCID)
-		if err == nil && sgcPatch.PatchContent != nil {
-			// For properties files, we need to merge the patches
-			// For now, SGC patch completely overrides GC patch
-			// TODO: Implement smarter merging for properties files
-			if patchContent != "" {
-				patchContent = patchContent + "\n" + *sgcPatch.PatchContent
-			} else {
-				patchContent = *sgcPatch.PatchContent
-			}
+		// 2. Get all server_game_config level patches (override game_config)
+		sgcPatches, err := fullRepo.ConfigurationPatches.ListByStrategyAndEntity(ctx, strategy.StrategyID, "server_game_config", sgc.SGCID)
+		if err != nil {
+			sgcPatches = nil
 		}
+
+		// Concatenate all patches in cascade order: GC patches first, then SGC patches
+		// Each group is already ordered by patch_order; SGC patches override GC patches
+		allPatches := append(gcPatches, sgcPatches...)
+		patchContent := joinPatchContents(allPatches)
 
 		// Set rendered content to the cascaded patches
 		// Host-manager will merge this with existing file if base is empty (merge mode)
@@ -1257,6 +1253,24 @@ func strategyToProto(s *manman.ConfigurationStrategy) *pb.ConfigurationStrategy 
 	return proto
 }
 
+// joinPatchContents concatenates non-nil patch contents with newline separators.
+func joinPatchContents(patches []*manman.ConfigurationPatch) string {
+	var parts []string
+	for _, p := range patches {
+		if p.PatchContent != nil && *p.PatchContent != "" {
+			parts = append(parts, *p.PatchContent)
+		}
+	}
+	result := ""
+	for i, part := range parts {
+		if i > 0 {
+			result += "\n"
+		}
+		result += part
+	}
+	return result
+}
+
 func patchToProto(p *manman.ConfigurationPatch) *pb.ConfigurationPatch {
 	proto := &pb.ConfigurationPatch{
 		PatchId:     p.PatchID,
@@ -1264,6 +1278,7 @@ func patchToProto(p *manman.ConfigurationPatch) *pb.ConfigurationPatch {
 		PatchLevel:  p.PatchLevel,
 		EntityId:    p.EntityID,
 		PatchFormat: p.PatchFormat,
+		PatchOrder:  int32(p.PatchOrder),
 	}
 
 	if p.PatchContent != nil {
@@ -1434,6 +1449,7 @@ func (h *ConfigurationPatchHandler) CreateConfigurationPatch(ctx context.Context
 		EntityID:     req.EntityId,
 		PatchContent: stringPtr(req.PatchContent),
 		PatchFormat:  req.PatchFormat,
+		PatchOrder:   int(req.PatchOrder),
 	}
 
 	patch, err := h.repo.Create(ctx, patch)
@@ -1454,6 +1470,7 @@ func (h *ConfigurationPatchHandler) UpdateConfigurationPatch(ctx context.Context
 
 	patch.PatchContent = stringPtr(req.PatchContent)
 	patch.PatchFormat = req.PatchFormat
+	patch.PatchOrder = int(req.PatchOrder)
 
 	if err := h.repo.Update(ctx, patch); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update configuration patch: %v", err)

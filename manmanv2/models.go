@@ -203,6 +203,7 @@ type ConfigurationPatch struct {
 	PatchFormat  string    `db:"patch_format"`
 	VolumeID     *int64    `db:"volume_id"`      // Optional FK to game_config_volumes
 	PathOverride *string   `db:"path_override"`  // Optional relative path override
+	PatchOrder   int       `db:"patch_order"`    // Application order (lower = earlier = lower priority)
 	CreatedAt    time.Time `db:"created_at"`
 	UpdatedAt    time.Time `db:"updated_at"`
 }

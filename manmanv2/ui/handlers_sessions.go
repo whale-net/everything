@@ -603,9 +603,24 @@ func (app *App) handleSessionLogsStream(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Disable the server-level WriteTimeout for this long-lived SSE connection.
+	// WriteTimeout applies to the entire handler duration, which would kill the
+	// stream after 15s. The SSE keepalive comment handles proxy idle timeouts.
+	rc := http.NewResponseController(w)
+	if err := rc.SetWriteDeadline(time.Time{}); err != nil {
+		log.Printf("Failed to disable write deadline for SSE stream (session %d): %v", sessionID, err)
+	}
+
+	// Parse optional after_sequence_number for reconnect deduplication
+	var afterSequenceNumber int64
+	if s := r.URL.Query().Get("after_sequence_number"); s != "" {
+		afterSequenceNumber, _ = strconv.ParseInt(s, 10, 64)
+	}
+
 	// Create gRPC stream directly to log-processor
 	stream, err := app.logProcessor.StreamSessionLogs(r.Context(), &manmanpb.StreamSessionLogsRequest{
-		SessionId: sessionID,
+		SessionId:           sessionID,
+		AfterSequenceNumber: afterSequenceNumber,
 	})
 	if err != nil {
 		log.Printf("Failed to create log stream for session %d: %v", sessionID, err)
@@ -658,9 +673,10 @@ func (app *App) handleSessionLogsStream(w http.ResponseWriter, r *http.Request) 
 
 			// Format as JSON for easier client parsing
 			data := map[string]interface{}{
-				"timestamp": result.msg.Timestamp,
-				"source":    result.msg.Source,
-				"message":   result.msg.Message,
+				"timestamp":       result.msg.Timestamp,
+				"source":          result.msg.Source,
+				"message":         result.msg.Message,
+				"sequence_number": result.msg.SequenceNumber,
 			}
 			jsonData, err := json.Marshal(data)
 			if err != nil {
