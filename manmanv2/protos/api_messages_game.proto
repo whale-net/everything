@@ -1,0 +1,115 @@
+syntax = "proto3";
+
+package manman.v1;
+
+option go_package = "github.com/whale-net/everything/manmanv2/protos;manmanpb";
+
+import "manmanv2/protos/messages.proto";
+
+// ============================================================================
+// Game RPCs
+// ============================================================================
+
+message ListGamesRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListGamesResponse {
+  repeated Game games = 1;
+  string next_page_token = 2;
+}
+
+message GetGameRequest {
+  int64 game_id = 1;
+}
+
+message GetGameResponse {
+  Game game = 1;
+}
+
+message CreateGameRequest {
+  string name = 1;
+  string steam_app_id = 2;  // optional
+  GameMetadata metadata = 3;
+}
+
+message CreateGameResponse {
+  Game game = 1;
+}
+
+message UpdateGameRequest {
+  int64 game_id = 1;
+  string name = 2;
+  string steam_app_id = 3;
+  GameMetadata metadata = 4;
+  repeated string update_paths = 5;  // Field paths to update (empty = update all)
+}
+
+message UpdateGameResponse {
+  Game game = 1;
+}
+
+message DeleteGameRequest {
+  int64 game_id = 1;
+}
+
+message DeleteGameResponse {}
+
+// ============================================================================
+// GameConfig RPCs
+// ============================================================================
+
+message ListGameConfigsRequest {
+  int64 game_id = 1;  // optional filter
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListGameConfigsResponse {
+  repeated GameConfig configs = 1;
+  string next_page_token = 2;
+}
+
+message GetGameConfigRequest {
+  int64 config_id = 1;
+}
+
+message GetGameConfigResponse {
+  GameConfig config = 1;
+}
+
+message CreateGameConfigRequest {
+  int64 game_id = 1;
+  string name = 2;
+  string image = 3;
+  string args_template = 4;
+  map<string, string> env_template = 5;
+  repeated string entrypoint = 8;
+  repeated string command = 9;
+}
+
+message CreateGameConfigResponse {
+  GameConfig config = 1;
+}
+
+message UpdateGameConfigRequest {
+  int64 config_id = 1;
+  string name = 2;
+  string image = 3;
+  string args_template = 4;
+  map<string, string> env_template = 5;
+  repeated string update_paths = 8;  // Field paths to update (empty = update all)
+  repeated string entrypoint = 9;
+  repeated string command = 10;
+}
+
+message UpdateGameConfigResponse {
+  GameConfig config = 1;
+}
+
+message DeleteGameConfigRequest {
+  int64 config_id = 1;
+}
+
+message DeleteGameConfigResponse {}

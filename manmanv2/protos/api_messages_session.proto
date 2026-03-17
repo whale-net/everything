@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package manman.v1;
+
+option go_package = "github.com/whale-net/everything/manmanv2/protos;manmanpb";
+
+import "manmanv2/protos/messages.proto";
+
+// ============================================================================
+// Session RPCs
+// ============================================================================
+
+message ListSessionsRequest {
+  int64 server_game_config_id = 1;  // optional filter
+  int32 page_size = 2;
+  string page_token = 3;
+
+  // Enhanced filters
+  repeated string status_filter = 4;
+  int64 started_after = 5;
+  int64 started_before = 6;
+  int64 server_id = 7;
+  bool live_only = 8;
+}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+  string next_page_token = 2;
+}
+
+message GetSessionRequest {
+  int64 session_id = 1;
+}
+
+message GetSessionResponse {
+  Session session = 1;
+}
+
+message StartSessionRequest {
+  int64 server_game_config_id = 1;
+  bool force = 3;
+}
+
+message StartSessionResponse {
+  Session session = 1;
+}
+
+message StopSessionRequest {
+  int64 session_id = 1;
+}
+
+message StopSessionResponse {
+  Session session = 1;
+}
+
+message SendInputRequest {
+  int64 session_id = 1;
+  bytes input = 2;
+}
+
+message SendInputResponse {
+  // Empty response on success
+}

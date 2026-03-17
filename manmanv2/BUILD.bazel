@@ -1,22 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_helm_chart")
-
-# ==============================================================================
-# ManManV2 (Go) - Database Models
-# ==============================================================================
-
-go_library(
-    name = "models",
-    srcs = ["models.go"],
-    importpath = "github.com/whale-net/everything/manmanv2",
-    visibility = ["//visibility:public"],
-)
-
-go_test(
-    name = "models_test",
-    srcs = ["models_test.go"],
-    embed = [":models"],
-)
 
 # ==============================================================================
 # ManManV2 Helm Chart
@@ -55,9 +37,3 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-go_test(
-    name = "manmanv2_test",
-    srcs = ["models_test.go"],
-    data = glob(["testdata/**"]),
-    embed = [":models"],
-)

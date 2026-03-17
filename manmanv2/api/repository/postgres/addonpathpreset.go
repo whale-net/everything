@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	manman "github.com/whale-net/everything/manmanv2"
+	manman "github.com/whale-net/everything/manmanv2/models"
 )
 
 type AddonPathPresetRepository struct {

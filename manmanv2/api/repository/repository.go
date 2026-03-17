@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/whale-net/everything/manmanv2"
+	"github.com/whale-net/everything/manmanv2/models"
 )
 
 // ServerRepository defines operations for Server entities

@@ -3,7 +3,7 @@ package session_test
 import (
 	"testing"
 
-	"github.com/whale-net/everything/manmanv2"
+	"github.com/whale-net/everything/manmanv2/models"
 	"github.com/whale-net/everything/manmanv2/host/session"
 )
 

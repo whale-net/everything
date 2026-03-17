@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/whale-net/everything/manmanv2"
+	"github.com/whale-net/everything/manmanv2/models"
 )
 
 // TestPortAllocationBasic tests basic port allocation and deallocation

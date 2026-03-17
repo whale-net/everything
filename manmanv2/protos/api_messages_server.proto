@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package manman.v1;
+
+option go_package = "github.com/whale-net/everything/manmanv2/protos;manmanpb";
+
+import "manmanv2/protos/messages.proto";
+
+// ============================================================================
+// Server RPCs
+// ============================================================================
+
+message ListServersRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListServersResponse {
+  repeated Server servers = 1;
+  string next_page_token = 2;
+}
+
+message GetServerRequest {
+  int64 server_id = 1;
+}
+
+message GetServerResponse {
+  Server server = 1;
+}
+
+message CreateServerRequest {
+  string name = 1;
+}
+
+message CreateServerResponse {
+  Server server = 1;
+}
+
+message UpdateServerRequest {
+  int64 server_id = 1;
+  string name = 2;
+  string status = 3;
+  bool is_default = 4;
+  repeated string update_paths = 5;  // Field paths to update (empty = update all)
+}
+
+message UpdateServerResponse {
+  Server server = 1;
+}
+
+message DeleteServerRequest {
+  int64 server_id = 1;
+}
+
+message DeleteServerResponse {}
