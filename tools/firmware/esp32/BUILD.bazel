@@ -1,0 +1,98 @@
+"""ESP32 (Xtensa LX6) platform, cc_toolchain, and toolchain registration."""
+
+load("@rules_cc//cc:defs.bzl", "cc_toolchain")
+load("@rules_python//python:defs.bzl", "py_binary")
+load(":cc_toolchain_config.bzl", "cc_toolchain_config")
+load("//tools/firmware:boards.bzl", "firmware_board")
+load("//tools/firmware:pins.bzl", "board_pins")
+
+package(default_visibility = ["//visibility:public"])
+
+# ── Board platform ───────────────────────────────────────────────────────────
+
+firmware_board(
+    name = "elegoo_esp32",
+    cpu_constraint = "//tools/firmware:cpu_xtensa",
+)
+
+# config_setting: used by //tools/firmware:board_pins alias and any other
+# select() that needs to branch on this specific board.
+config_setting(
+    name = "is_elegoo_esp32",
+    constraint_values = ["//tools/firmware:board_elegoo_esp32"],
+)
+
+# ── Pin definitions ───────────────────────────────────────────────────────────
+# Pin names are PascalCase logical identifiers; numbers are GPIO indices.
+# These map to the ELEGOO ESP32 dev board (standard ESP32 DevKit v1 layout).
+
+board_pins(
+    name = "elegoo_esp32_pins",
+    board_name = "elegoo_esp32",
+    pins = {
+        "Led":  2,   # Built-in blue LED
+        "Sda": 21,   # I2C data (Wire.begin default)
+        "Scl": 22,   # I2C clock (Wire.begin default)
+        "Rx2": 16,   # UART2 RX (Serial2)
+        "Tx2": 17,   # UART2 TX (Serial2)
+        "Adc0": 34,  # ADC1_CH6 — input-only; safe to use with Wi-Fi active
+    },
+)
+
+# ── Toolchain file groups ────────────────────────────────────────────────────
+
+filegroup(name = "empty")
+
+filegroup(
+    name = "all_files",
+    srcs = [
+        ":cc_wrapper.sh",
+        "@xtensa_esp_elf_linux64//:all_files",
+    ],
+)
+
+# ── Toolchain config ─────────────────────────────────────────────────────────
+
+cc_toolchain_config(name = "xtensa_toolchain_config")
+
+# ── cc_toolchain target ──────────────────────────────────────────────────────
+
+cc_toolchain(
+    name = "xtensa_cc_toolchain",
+    all_files = ":all_files",
+    ar_files = "@xtensa_esp_elf_linux64//:all_files",
+    compiler_files = ":all_files",
+    dwp_files = ":empty",
+    linker_files = ":all_files",
+    objcopy_files = ":empty",
+    strip_files = ":empty",
+    supports_param_files = 0,
+    toolchain_config = ":xtensa_toolchain_config",
+)
+
+# ── Toolchain registration target ────────────────────────────────────────────
+# Also registered in MODULE.bazel via register_toolchains().
+
+toolchain(
+    name = "xtensa_toolchain",
+    exec_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+    target_compatible_with = [
+        "@platforms//os:none",
+        "//tools/firmware:cpu_xtensa",
+    ],
+    toolchain = ":xtensa_cc_toolchain",
+    toolchain_type = "@rules_cc//cc:toolchain_type",
+)
+
+# ── esptool flash utility ────────────────────────────────────────────────────
+
+py_binary(
+    name = "esptool_wrapper",
+    srcs = ["esptool_wrapper.py"],
+    main = "esptool_wrapper.py",
+    deps = ["@pypi//:esptool"],
+    tags = ["manual"],  # only built when explicitly requested (e.g. bazel run //demo/blink:flash)
+)

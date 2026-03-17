@@ -1,0 +1,37 @@
+"""ADC abstraction layer."""
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ESP32_COMPAT = [
+    "@platforms//os:none",
+    "//tools/firmware:cpu_xtensa",
+]
+
+# IAdc interface — host-compilable; no Arduino dependency.
+cc_library(
+    name = "adc",
+    hdrs = ["adc.h"],
+    deps = ["@pigweed//pw_status"],
+)
+
+# ArduinoAdc — analogRead()-backed implementation; device-only.
+cc_library(
+    name = "arduino_adc",
+    srcs = ["arduino_adc.cc"],
+    hdrs = ["arduino_adc.h"],
+    target_compatible_with = ESP32_COMPAT,
+    deps = [
+        ":adc",
+        "@arduino_esp32//:core_lib",
+        "@pigweed//pw_status",
+    ],
+)
+
+# FakeAdc — preset per-pin values; host test double.
+cc_library(
+    name = "fake_adc",
+    hdrs = ["fake_adc.h"],
+    deps = [":adc"],
+)

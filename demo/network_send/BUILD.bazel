@@ -1,0 +1,47 @@
+"""network_send demo — thermistor over MQTT + host-side integration tests."""
+
+load("//tools/bazel:esp32.bzl", "esp32_firmware")
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
+# ── Firmware target (ESP32 only) ──────────────────────────────────────────────
+# Build:  bazel build //demo/network_send:network_send_bin --config=esp32
+# Flash:  bazel run  //demo/network_send:flash -- /dev/ttyUSB0
+#
+# Requires PubSubClient in the Arduino library path.
+# Edit kNetConfig in network_send.cc before flashing.
+
+esp32_firmware(
+    name = "network_send",
+    srcs = ["network_send.cc"],
+    deps = [
+        "//firmware/adc:arduino_adc",
+        "//firmware/mqtt:mqtt_writer",
+        "//firmware/network:esp32_platform",
+        "//firmware/network:network_manager",
+        "//firmware/network:network_publisher",
+        "//firmware/sensor:thermistor",
+        "//firmware/timing:loop_timer",
+        "@pigweed//pw_log",
+    ],
+)
+
+# ── Host-side integration tests (no hardware needed) ──────────────────────────
+# Usage:  bazel test //demo/network_send:network_send_test
+#
+# Tests message formatting (FakeSensor + FakePublisher) and full-stack flow
+# (NetworkManager + NetworkPublisher driven by controllable platform stubs).
+
+cc_test(
+    name = "network_send_test",
+    srcs = ["network_send_test.cc"],
+    deps = [
+        "//firmware/mqtt:mock_publisher",
+        "//firmware/mqtt:mqtt_writer",
+        "//firmware/network:network_manager",
+        "//firmware/network:network_publisher",
+        "//firmware/sensor:mock_sensor",
+        "@pigweed//pw_status",
+        "@pigweed//pw_unit_test",
+        "@pigweed//pw_unit_test:logging_main",
+    ],
+)

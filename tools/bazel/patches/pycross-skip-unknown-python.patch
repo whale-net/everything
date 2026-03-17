@@ -1,0 +1,26 @@
+--- a/pycross/private/toolchain_helpers.bzl
++++ b/pycross/private/toolchain_helpers.bzl
+@@ -14,9 +14,12 @@ def _get_micro_version(version):
+     if version in MINOR_MAPPING:
+         return MINOR_MAPPING[version]
+     elif version in TOOL_VERSIONS:
+         return version
+
+-    fail("Unknown Python version: {}".format(version))
++    # Return None for EOL/unsupported versions (e.g. Python 3.8 registered by
++    # grpc+ transitive pip.parse but absent from rules_python 1.x MINOR_MAPPING).
++    # Callers in _dedupe_versions filter None out.
++    return None
+
+ def _get_version_components(version):
+@@ -69,6 +72,10 @@ def _dedupe_versions(versions):
+     unique_versions = {}
+     for version in sorted(versions):
+         micro_version = _get_micro_version(version)
++
++        if micro_version == None:
++            continue
++
+
+         # In sorted order, 3.10.6 will override 3.10.
+         unique_versions[micro_version] = version

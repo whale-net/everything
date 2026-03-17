@@ -1,10 +1,10 @@
 # Everything Monorepo
 
-A modern Bazel monorepo supporting both Python and Go development with automated release management, Helm chart generation, and multi-platform container builds.
+A modern Bazel monorepo supporting Python, Go, and embedded C++ firmware development with automated release management, Helm chart generation, and multi-platform container builds.
 
 ## 🌟 Key Features
 
-- **Multi-Language Support**: Python and Go with shared libraries
+- **Multi-Language Support**: Python, Go, and embedded C++ with shared libraries
 - **Automated Releases**: Intelligent change detection and selective app releases
 - **Container Native**: Multi-platform Docker images (AMD64/ARM64) with OCI standards
 - **Helm Integration**: Automatic Kubernetes chart generation from app metadata
@@ -19,19 +19,28 @@ everything/
 │   ├── src/                # Python services (APIs, workers, migrations)
 │   └── management-ui/      # Go-based HTMX management interface
 ├── friendly_computing_machine/  # Slack bot with Temporal workflows
-├── demo/                    # Example applications (hello_python, hello_go, hello_fastapi, etc.)
+├── firmware/                # Embedded C++ application layer (board-agnostic)
+│   ├── sensor/             # ISensor interface + host-side test mocks
+│   ├── mqtt/               # MQTTWriter (zero-allocation) + IPublisher
+│   ├── network/            # Wi-Fi + MQTT state machine (non-blocking)
+│   └── timing/             # pw_chrono-based loop timer (replaces delay())
+├── demo/                    # Example applications
+│   ├── blink/              # ESP32 blink demo (pw_log + esptool flash target)
+│   └── hello_*/            # Go / Python / gRPC examples
 ├── libs/                    # Shared libraries
 │   ├── python/             # Python libs (alembic, cli, gunicorn, logging, postgres, rmq, retry)
 │   └── go/                 # Go libs (htmxauth)
 ├── generated/              # Generated OpenAPI clients (py/, go/)
 ├── tools/                   # Build and release tooling
+│   ├── firmware/           # ESP32 cc_toolchain, board constraints, flash infra
+│   ├── bazel/              # Shared Bazel macros (esp32_firmware(), etc.)
 │   ├── helm/               # Helm chart generation
 │   ├── release_helper/     # Release automation
 │   └── tilt/               # Local development with Tilt
 ├── docs/                    # Documentation
 ├── .github/workflows/      # CI/CD pipelines
 ├── BUILD.bazel             # Root build configuration
-└── MODULE.bazel            # External dependencies
+└── MODULE.bazel            # External dependencies (incl. Pigweed, Xtensa GCC)
 ```
 
 **Core Principles:**
@@ -46,11 +55,13 @@ everything/
 |---------|-------------|---------------|
 | **ManMan** | Game server orchestration (V2 Go + V1 Python legacy) | [MANMAN_STRUCTURE.md](MANMAN_STRUCTURE.md), [manmanv2/README.md](manmanv2/README.md) |
 | **Friendly Computing Machine** | Slack bot with Temporal workflow support | [friendly_computing_machine/README.md](friendly_computing_machine/README.md) |
+| **Firmware** | ESP32 embedded firmware (Pigweed + Arduino core + Bazel cc_toolchain) | [tools/firmware/README.md](tools/firmware/README.md), [firmware/README.md](firmware/README.md) |
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 - **Bazel 8.3+** with bzlmod support
+- **usbipd-win** (WSL2 only, for ESP32 flashing — see [tools/firmware/README.md](tools/firmware/README.md))
 - **Docker** (for container images)
 - **Git** (for version control)
 - **Python Virtual Environment** (recommended)
@@ -146,6 +157,22 @@ bazel run //path/to/app:app_name
 # Test an app
 bazel test //path/to/app:test_target
 ```
+
+### Building and Flashing Firmware (ESP32)
+
+```bash
+# Host-side tests — runs on your machine, no board needed
+bazel test //firmware/...
+bazel test //demo/blink:blink_logic_test
+
+# Build flashable image (requires --config=esp32)
+bazel build //demo/blink:blink_bin --config=esp32
+
+# Flash to board (WSL2: attach CP2102 via usbipd first)
+bazel run //demo/blink:flash -- /dev/ttyUSB0
+```
+
+See [tools/firmware/README.md](tools/firmware/README.md) for toolchain details and adding new boards.
 
 ### Releasing Apps
 

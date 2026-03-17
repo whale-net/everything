@@ -1,0 +1,3 @@
+# Universal flash driver — referenced by flash_firmware() generated wrappers.
+
+exports_files(["flash.py"])

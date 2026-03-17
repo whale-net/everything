@@ -2,4 +2,5 @@
 
 exports_files([
     "containerd-errdefs-pkg-errhttp.patch",
+    "pycross-skip-unknown-python.patch",
 ])
