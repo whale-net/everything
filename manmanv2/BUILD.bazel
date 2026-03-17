@@ -7,7 +7,16 @@ load("//tools/bazel:release.bzl", "release_helm_chart")
 
 go_library(
     name = "models",
-    srcs = ["models.go"],
+    srcs = [
+        "models_action.go",
+        "models_backup.go",
+        "models_config.go",
+        "models_game.go",
+        "models_server.go",
+        "models_session.go",
+        "models_workshop.go",
+        "types.go",
+    ],
     importpath = "github.com/whale-net/everything/manmanv2",
     visibility = ["//visibility:public"],
 )

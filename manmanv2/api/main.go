@@ -17,6 +17,7 @@ import (
 	"github.com/whale-net/everything/libs/go/s3"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"github.com/whale-net/everything/manmanv2/api/handlers"
+	workshophandler "github.com/whale-net/everything/manmanv2/api/handlers/workshop"
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
 	"github.com/whale-net/everything/manmanv2/api/steam"
 	"github.com/whale-net/everything/manmanv2/api/workshop"
@@ -143,7 +144,7 @@ func run() error {
 	pb.RegisterManManAPIServer(grpcServer, apiServer)
 
 	// Register Workshop service
-	workshopHandler := handlers.NewWorkshopServiceHandler(
+	workshopHandler := workshophandler.NewWorkshopServiceHandler(
 		repo.WorkshopAddons,
 		repo.WorkshopInstallations,
 		repo.WorkshopLibraries,
@@ -155,7 +156,7 @@ func run() error {
 
 	// Initialize workshop status handler for installation status updates
 	log.Println("Setting up workshop status handler...")
-	workshopStatusHandler, err := handlers.NewWorkshopStatusHandler(repo.WorkshopInstallations, rmqConn)
+	workshopStatusHandler, err := workshophandler.NewWorkshopStatusHandler(repo.WorkshopInstallations, rmqConn)
 	if err != nil {
 		return fmt.Errorf("failed to create workshop status handler: %w", err)
 	}
