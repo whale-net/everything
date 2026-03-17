@@ -603,6 +603,14 @@ func (app *App) handleSessionLogsStream(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Disable the server-level WriteTimeout for this long-lived SSE connection.
+	// WriteTimeout applies to the entire handler duration, which would kill the
+	// stream after 15s. The SSE keepalive comment handles proxy idle timeouts.
+	rc := http.NewResponseController(w)
+	if err := rc.SetWriteDeadline(time.Time{}); err != nil {
+		log.Printf("Failed to disable write deadline for SSE stream (session %d): %v", sessionID, err)
+	}
+
 	// Parse optional after_sequence_number for reconnect deduplication
 	var afterSequenceNumber int64
 	if s := r.URL.Query().Get("after_sequence_number"); s != "" {
