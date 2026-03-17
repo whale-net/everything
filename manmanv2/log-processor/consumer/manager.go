@@ -38,11 +38,12 @@ type SessionConsumer struct {
 	idleSince time.Time
 
 	// Ring buffer for recent logs
-	logBuffer  []*manmanpb.LogMessage
-	bufferSize int
-	bufferIndex int
-	bufferFull  bool
-	bufferMu   sync.RWMutex
+	logBuffer       []*manmanpb.LogMessage
+	bufferSize      int
+	bufferIndex     int
+	bufferFull      bool
+	bufferMu        sync.RWMutex
+	sequenceCounter int64 // monotonically increasing, protected by bufferMu
 }
 
 // Manager manages consumers for multiple sessions
@@ -57,6 +58,9 @@ type Manager struct {
 	statsCtx      context.Context
 	statsCancel   context.CancelFunc
 	statsWg       sync.WaitGroup
+	// retainedLogs holds the last retainLogCount messages from reaped consumers so
+	// a reconnecting client still gets recent context. Protected by m.mu.
+	retainedLogs map[int64][]*manmanpb.LogMessage
 }
 
 // Archiver is the interface for log archival
@@ -85,6 +89,7 @@ func NewManager(conn *rmq.Connection, config *ConsumerConfig, grpcClient manmanp
 		logsProcessed: 0,
 		statsCtx:      ctx,
 		statsCancel:   cancel,
+		retainedLogs:  make(map[int64][]*manmanpb.LogMessage),
 	}
 
 	// Start stats logger
@@ -117,9 +122,12 @@ func (s *Subscription) Unsubscribe() {
 	s.cancel()
 }
 
-// Subscribe subscribes to logs for a session
-// Creates a consumer if one doesn't exist yet
-func (m *Manager) Subscribe(ctx context.Context, sessionID int64) (*Subscription, error) {
+// Subscribe subscribes to logs for a session.
+// Creates a consumer if one doesn't exist yet.
+// afterSequence filters the backlog: only messages with sequence_number > afterSequence are
+// included. Pass 0 to receive the full backlog (initial connect). On reconnect, pass the
+// last sequence_number the client received to skip already-seen messages.
+func (m *Manager) Subscribe(ctx context.Context, sessionID int64, afterSequence int64) (*Subscription, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -137,7 +145,7 @@ func (m *Manager) Subscribe(ctx context.Context, sessionID int64) (*Subscription
 	// Create subscriber channel. Capacity only needs to cover live message bursts
 	// since backlog is delivered separately via Subscription.Backlog().
 	ch := make(chan *manmanpb.LogMessage, 100)
-	backlog := consumer.addSubscriber(ch)
+	backlog := consumer.addSubscriber(ch, afterSequence)
 
 	// Create cancel function
 	cancel := func() {
@@ -213,6 +221,13 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 		bufferFull:    false,
 	}
 
+	// Seed with any logs retained from a previous consumer reap so reconnecting
+	// clients get recent context without waiting for RabbitMQ to re-deliver.
+	if retained, ok := m.retainedLogs[sessionID]; ok {
+		sc.seedBuffer(retained)
+		delete(m.retainedLogs, sessionID)
+	}
+
 	// Start consuming in background using the detached context
 	go sc.consumeLoop(consumerCtx, m.config.DebugLogOutput, m.archiver)
 
@@ -270,16 +285,21 @@ func (m *Manager) DeleteConsumerForSession(sessionID int64) error {
 		// Continue anyway to clean up the consumer
 	}
 
-	// Remove from map
+	// Remove from maps
 	delete(m.consumers, sessionID)
+	delete(m.retainedLogs, sessionID)
 	log.Printf("[consumer-manager] deleted consumer for session %d", sessionID)
 	return nil
 }
 
-// addLogToBuffer adds a log message to the ring buffer
+// addLogToBuffer assigns a sequence number and adds a log message to the ring buffer.
+// The sequence number is assigned under bufferMu so it is stable once visible to readers.
 func (sc *SessionConsumer) addLogToBuffer(msg *manmanpb.LogMessage) {
 	sc.bufferMu.Lock()
 	defer sc.bufferMu.Unlock()
+
+	sc.sequenceCounter++
+	msg.SequenceNumber = sc.sequenceCounter
 
 	sc.logBuffer[sc.bufferIndex] = msg
 	sc.bufferIndex++
@@ -289,35 +309,69 @@ func (sc *SessionConsumer) addLogToBuffer(msg *manmanpb.LogMessage) {
 	}
 }
 
-// getBufferedLogs returns all buffered logs in chronological order
-func (sc *SessionConsumer) getBufferedLogs() []*manmanpb.LogMessage {
+// getBufferedLogs returns buffered logs in chronological order with sequence_number
+// greater than afterSequence. Pass 0 to receive the full backlog.
+func (sc *SessionConsumer) getBufferedLogs(afterSequence int64) []*manmanpb.LogMessage {
 	sc.bufferMu.RLock()
 	defer sc.bufferMu.RUnlock()
 
+	var ordered []*manmanpb.LogMessage
 	if !sc.bufferFull {
-		// Buffer not full yet, return logs from 0 to bufferIndex
-		result := make([]*manmanpb.LogMessage, sc.bufferIndex)
-		copy(result, sc.logBuffer[:sc.bufferIndex])
-		return result
+		ordered = make([]*manmanpb.LogMessage, sc.bufferIndex)
+		copy(ordered, sc.logBuffer[:sc.bufferIndex])
+	} else {
+		// Buffer is full: return logs from bufferIndex to end, then 0 to bufferIndex-1
+		ordered = make([]*manmanpb.LogMessage, sc.bufferSize)
+		copy(ordered, sc.logBuffer[sc.bufferIndex:])
+		copy(ordered[sc.bufferSize-sc.bufferIndex:], sc.logBuffer[:sc.bufferIndex])
 	}
 
-	// Buffer is full, return logs from bufferIndex to end, then 0 to bufferIndex-1
-	result := make([]*manmanpb.LogMessage, sc.bufferSize)
-	copy(result, sc.logBuffer[sc.bufferIndex:])
-	copy(result[sc.bufferSize-sc.bufferIndex:], sc.logBuffer[:sc.bufferIndex])
-	return result
+	if afterSequence == 0 {
+		return ordered
+	}
+
+	// Sequence numbers are monotonically increasing, so find the first entry
+	// past the client's last-seen sequence and return from there.
+	for i, msg := range ordered {
+		if msg.SequenceNumber > afterSequence {
+			return ordered[i:]
+		}
+	}
+	return nil
+}
+
+// seedBuffer pre-populates the ring buffer with msgs whose sequence numbers are already
+// assigned (e.g. retained from a previous consumer). The sequenceCounter is advanced to
+// the highest sequence number seen so new messages continue the same sequence.
+// Must be called before consumeLoop is started (no lock needed at that point).
+func (sc *SessionConsumer) seedBuffer(msgs []*manmanpb.LogMessage) {
+	sc.bufferMu.Lock()
+	defer sc.bufferMu.Unlock()
+
+	for _, msg := range msgs {
+		sc.logBuffer[sc.bufferIndex] = msg
+		sc.bufferIndex++
+		if sc.bufferIndex >= sc.bufferSize {
+			sc.bufferIndex = 0
+			sc.bufferFull = true
+		}
+		if msg.SequenceNumber > sc.sequenceCounter {
+			sc.sequenceCounter = msg.SequenceNumber
+		}
+	}
 }
 
 // addSubscriber registers a subscriber channel and returns the current backlog atomically.
 // The caller must send all backlog messages to the client before reading from ch,
 // guaranteeing that no messages are missed or duplicated: any message added to the
 // ring buffer after this call will also be broadcast to ch.
-func (sc *SessionConsumer) addSubscriber(ch chan *manmanpb.LogMessage) []*manmanpb.LogMessage {
+// Only backlog messages with sequence_number > afterSequence are returned; pass 0 for the full backlog.
+func (sc *SessionConsumer) addSubscriber(ch chan *manmanpb.LogMessage, afterSequence int64) []*manmanpb.LogMessage {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	sc.subscribers[ch] = struct{}{}
 	sc.idleSince = time.Time{} // clear idle marker
-	return sc.getBufferedLogs()
+	return sc.getBufferedLogs(afterSequence)
 }
 
 // removeSubscriber removes a subscriber channel
@@ -446,7 +500,12 @@ func (m *Manager) logStats() {
 	}
 }
 
-const idleConsumerTTL = 5 * time.Minute
+const (
+	idleConsumerTTL = 5 * time.Minute
+	// retainLogCount is the number of recent log messages preserved in memory after
+	// a consumer is reaped, so reconnecting clients still receive recent context.
+	retainLogCount = 50
+)
 
 // reapIdleConsumers closes and removes on-demand consumers that have had no
 // subscribers for longer than idleConsumerTTL. Lifecycle-managed consumers are
@@ -461,9 +520,18 @@ func (m *Manager) reapIdleConsumers() {
 		idle := !c.idleSince.IsZero() && now.Sub(c.idleSince) > idleConsumerTTL
 		c.mu.RUnlock()
 		if idle {
+			// Retain the tail of the ring buffer so a reconnecting client still gets
+			// recent context even after the RabbitMQ consumer has been torn down.
+			logs := c.getBufferedLogs(0)
+			if len(logs) > retainLogCount {
+				logs = logs[len(logs)-retainLogCount:]
+			}
+			if len(logs) > 0 {
+				m.retainedLogs[sessionID] = logs
+			}
 			c.close()
 			delete(m.consumers, sessionID)
-			log.Printf("[consumer-manager] reaped idle consumer for session %d", sessionID)
+			log.Printf("[consumer-manager] reaped idle consumer for session %d (retained %d messages)", sessionID, len(logs))
 		}
 	}
 }

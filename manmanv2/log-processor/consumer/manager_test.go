@@ -29,7 +29,8 @@ func newTestConsumer(sessionID int64, bufferSize int) *SessionConsumer {
 // newTestManager builds a Manager with only the fields needed by reapIdleConsumers.
 func newTestManager() *Manager {
 	return &Manager{
-		consumers: make(map[int64]*SessionConsumer),
+		consumers:    make(map[int64]*SessionConsumer),
+		retainedLogs: make(map[int64][]*manmanpb.LogMessage),
 	}
 }
 
@@ -56,7 +57,7 @@ func TestNewSubscriberGetsBacklog(t *testing.T) {
 	sc.addLogToBuffer(makeMsg(3))
 
 	ch := make(chan *manmanpb.LogMessage, 10)
-	backlog := sc.addSubscriber(ch)
+	backlog := sc.addSubscriber(ch, 0)
 
 	if len(backlog) != 3 {
 		t.Fatalf("expected 3 backlog messages, got %d", len(backlog))
@@ -80,8 +81,8 @@ func TestMultipleSubscribersGetIndependentBacklogs(t *testing.T) {
 	ch1 := make(chan *manmanpb.LogMessage, 10)
 	ch2 := make(chan *manmanpb.LogMessage, 10)
 
-	backlog1 := sc.addSubscriber(ch1)
-	backlog2 := sc.addSubscriber(ch2)
+	backlog1 := sc.addSubscriber(ch1, 0)
+	backlog2 := sc.addSubscriber(ch2, 0)
 
 	if len(backlog1) != 3 {
 		t.Errorf("client 1: expected 3 backlog messages, got %d", len(backlog1))
@@ -110,7 +111,7 @@ func TestBufferSurvivesUnsubscribe(t *testing.T) {
 
 	// First client subscribes then unsubscribes.
 	ch1 := make(chan *manmanpb.LogMessage, 10)
-	sc.addSubscriber(ch1)
+	sc.addSubscriber(ch1, 0)
 	sc.removeSubscriber(ch1)
 
 	// Simulate more messages arriving while no one is watching.
@@ -118,7 +119,7 @@ func TestBufferSurvivesUnsubscribe(t *testing.T) {
 
 	// Second client subscribes (e.g. page refresh).
 	ch2 := make(chan *manmanpb.LogMessage, 10)
-	backlog := sc.addSubscriber(ch2)
+	backlog := sc.addSubscriber(ch2, 0)
 
 	if len(backlog) != 3 {
 		t.Fatalf("expected 3 backlog messages after reconnect, got %d: %v", len(backlog), timestamps(backlog))
@@ -138,8 +139,8 @@ func TestIdleMarkedOnLastUnsubscribe(t *testing.T) {
 
 	ch1 := make(chan *manmanpb.LogMessage, 10)
 	ch2 := make(chan *manmanpb.LogMessage, 10)
-	sc.addSubscriber(ch1)
-	sc.addSubscriber(ch2)
+	sc.addSubscriber(ch1, 0)
+	sc.addSubscriber(ch2, 0)
 
 	before := time.Now()
 
@@ -169,7 +170,7 @@ func TestIdleClearedOnResubscribe(t *testing.T) {
 	sc.idleSince = time.Now().Add(-10 * time.Minute) // pretend it's been idle
 
 	ch := make(chan *manmanpb.LogMessage, 10)
-	sc.addSubscriber(ch)
+	sc.addSubscriber(ch, 0)
 
 	if !sc.idleSince.IsZero() {
 		t.Error("idleSince should be cleared when a subscriber joins")
@@ -219,7 +220,7 @@ func TestRingBufferWrapAround(t *testing.T) {
 		sc.addLogToBuffer(makeMsg(i))
 	}
 
-	logs := sc.getBufferedLogs()
+	logs := sc.getBufferedLogs(0)
 
 	if len(logs) != bufSize {
 		t.Fatalf("expected %d buffered logs, got %d", bufSize, len(logs))
@@ -231,5 +232,242 @@ func TestRingBufferWrapAround(t *testing.T) {
 		if logs[i].Timestamp != ts {
 			t.Errorf("logs[%d]: expected ts %d, got %d", i, ts, logs[i].Timestamp)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// after_sequence_number filtering
+// ---------------------------------------------------------------------------
+
+// TestAfterSequenceNumberZeroReturnsFullBacklog verifies that passing 0 (the
+// default on first connect) returns the entire backlog.
+func TestAfterSequenceNumberZeroReturnsFullBacklog(t *testing.T) {
+	sc := newTestConsumer(1, 10)
+	sc.addLogToBuffer(makeMsg(1))
+	sc.addLogToBuffer(makeMsg(2))
+	sc.addLogToBuffer(makeMsg(3))
+
+	logs := sc.getBufferedLogs(0)
+	if len(logs) != 3 {
+		t.Fatalf("expected 3 logs, got %d", len(logs))
+	}
+}
+
+// TestAfterSequenceNumberFiltersBacklog verifies that only messages with
+// sequence_number > afterSequence are returned, avoiding duplicates on reconnect.
+func TestAfterSequenceNumberFiltersBacklog(t *testing.T) {
+	sc := newTestConsumer(1, 10)
+	sc.addLogToBuffer(makeMsg(10))
+	sc.addLogToBuffer(makeMsg(20))
+	sc.addLogToBuffer(makeMsg(30))
+
+	// Simulate client that received the first two messages (seq 1 and 2).
+	logs := sc.getBufferedLogs(2)
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 log after seq 2, got %d", len(logs))
+	}
+	if logs[0].Timestamp != 30 {
+		t.Errorf("expected ts 30, got %d", logs[0].Timestamp)
+	}
+}
+
+// TestAfterSequenceNumberAllSeenReturnsNil verifies that when the client has
+// already seen every message in the buffer, nothing is returned.
+func TestAfterSequenceNumberAllSeenReturnsNil(t *testing.T) {
+	sc := newTestConsumer(1, 10)
+	sc.addLogToBuffer(makeMsg(1))
+	sc.addLogToBuffer(makeMsg(2))
+
+	logs := sc.getBufferedLogs(sc.sequenceCounter) // seen everything
+	if len(logs) != 0 {
+		t.Fatalf("expected empty backlog, got %d messages", len(logs))
+	}
+}
+
+// TestAfterSequenceNumberViaSubscribe verifies the filter propagates through
+// addSubscriber so the full subscribe path is exercised.
+func TestAfterSequenceNumberViaSubscribe(t *testing.T) {
+	sc := newTestConsumer(1, 10)
+	sc.addLogToBuffer(makeMsg(100))
+	sc.addLogToBuffer(makeMsg(200))
+	sc.addLogToBuffer(makeMsg(300))
+
+	seqAfterFirst := sc.logBuffer[0].SequenceNumber // seq of first message
+
+	ch := make(chan *manmanpb.LogMessage, 10)
+	backlog := sc.addSubscriber(ch, seqAfterFirst)
+
+	if len(backlog) != 2 {
+		t.Fatalf("expected 2 backlog messages, got %d", len(backlog))
+	}
+	for _, msg := range backlog {
+		if msg.SequenceNumber <= seqAfterFirst {
+			t.Errorf("backlog contained already-seen sequence %d", msg.SequenceNumber)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Retained log buffer after consumer reap
+// ---------------------------------------------------------------------------
+
+// TestReapRetainsLogs verifies that reaping an idle consumer saves the last
+// retainLogCount messages into m.retainedLogs.
+func TestReapRetainsLogs(t *testing.T) {
+	m := newTestManager()
+	sc := newTestConsumer(1, 100)
+	for i := int64(1); i <= 10; i++ {
+		sc.addLogToBuffer(makeMsg(i))
+	}
+	sc.idleSince = time.Now().Add(-(idleConsumerTTL + time.Second))
+	m.consumers[1] = sc
+
+	m.reapIdleConsumers()
+
+	if _, exists := m.consumers[1]; exists {
+		t.Fatal("consumer should have been reaped")
+	}
+	retained := m.retainedLogs[1]
+	if len(retained) != 10 {
+		t.Fatalf("expected 10 retained messages, got %d", len(retained))
+	}
+}
+
+// TestReapRetainsAtMostRetainLogCount verifies the cap is applied when the
+// buffer holds more than retainLogCount messages.
+func TestReapRetainsAtMostRetainLogCount(t *testing.T) {
+	m := newTestManager()
+	sc := newTestConsumer(1, 500)
+	for i := int64(1); i <= int64(retainLogCount+20); i++ {
+		sc.addLogToBuffer(makeMsg(i))
+	}
+	sc.idleSince = time.Now().Add(-(idleConsumerTTL + time.Second))
+	m.consumers[1] = sc
+
+	m.reapIdleConsumers()
+
+	retained := m.retainedLogs[1]
+	if len(retained) != retainLogCount {
+		t.Fatalf("expected %d retained messages, got %d", retainLogCount, len(retained))
+	}
+	// Verify it kept the most-recent messages.
+	lastTS := retained[len(retained)-1].Timestamp
+	if lastTS != int64(retainLogCount+20) {
+		t.Errorf("last retained ts = %d, want %d", lastTS, int64(retainLogCount+20))
+	}
+}
+
+// TestReapEmptyBufferNoRetainEntry verifies that a consumer with an empty ring
+// buffer does not create a retainedLogs entry.
+func TestReapEmptyBufferNoRetainEntry(t *testing.T) {
+	m := newTestManager()
+	sc := newTestConsumer(1, 10)
+	sc.idleSince = time.Now().Add(-(idleConsumerTTL + time.Second))
+	m.consumers[1] = sc
+
+	m.reapIdleConsumers()
+
+	if _, ok := m.retainedLogs[1]; ok {
+		t.Error("expected no retained entry for consumer with empty buffer")
+	}
+}
+
+// TestSeedBufferPreservesSequenceNumbers verifies that seedBuffer does not
+// reassign sequence numbers and advances sequenceCounter to the max seen.
+func TestSeedBufferPreservesSequenceNumbers(t *testing.T) {
+	sc := newTestConsumer(1, 10)
+
+	seed := []*manmanpb.LogMessage{
+		{Timestamp: 1, SequenceNumber: 10},
+		{Timestamp: 2, SequenceNumber: 20},
+		{Timestamp: 3, SequenceNumber: 30},
+	}
+	sc.seedBuffer(seed)
+
+	logs := sc.getBufferedLogs(0)
+	if len(logs) != 3 {
+		t.Fatalf("expected 3 messages after seed, got %d", len(logs))
+	}
+	for i, want := range []int64{10, 20, 30} {
+		if logs[i].SequenceNumber != want {
+			t.Errorf("logs[%d].SequenceNumber = %d, want %d", i, logs[i].SequenceNumber, want)
+		}
+	}
+	if sc.sequenceCounter != 30 {
+		t.Errorf("sequenceCounter = %d, want 30", sc.sequenceCounter)
+	}
+}
+
+// TestSeedBufferContinuesSequence verifies that messages added after seedBuffer
+// continue from the seeded sequence counter without gaps or resets.
+func TestSeedBufferContinuesSequence(t *testing.T) {
+	sc := newTestConsumer(1, 10)
+	sc.seedBuffer([]*manmanpb.LogMessage{
+		{Timestamp: 1, SequenceNumber: 5},
+	})
+
+	sc.addLogToBuffer(makeMsg(2))
+
+	logs := sc.getBufferedLogs(0)
+	if len(logs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(logs))
+	}
+	if logs[1].SequenceNumber != 6 {
+		t.Errorf("post-seed message SequenceNumber = %d, want 6", logs[1].SequenceNumber)
+	}
+}
+
+// TestRetainedLogsSeededOnReconnect verifies that a new consumer seeded with
+// retained logs surfaces those messages in the subscription backlog.
+func TestRetainedLogsSeededOnReconnect(t *testing.T) {
+	// Simulate the scenario: consumer was reaped, retained logs stored, then a
+	// new consumer is manually created and seeded (mirrors createConsumer logic).
+	retained := []*manmanpb.LogMessage{
+		{Timestamp: 100, SequenceNumber: 1},
+		{Timestamp: 200, SequenceNumber: 2},
+	}
+
+	sc := newTestConsumer(1, 10)
+	sc.seedBuffer(retained)
+
+	ch := make(chan *manmanpb.LogMessage, 10)
+	backlog := sc.addSubscriber(ch, 0)
+
+	if len(backlog) != 2 {
+		t.Fatalf("expected 2 backlog messages from retained seed, got %d", len(backlog))
+	}
+	if backlog[0].Timestamp != 100 || backlog[1].Timestamp != 200 {
+		t.Errorf("unexpected backlog timestamps: %v", timestamps(backlog))
+	}
+}
+
+// TestRetainedLogsClearedByReapAndReuse verifies that retained logs are consumed
+// (deleted from the map) the first time a new consumer for that session is seeded.
+func TestRetainedLogsClearedByReapAndReuse(t *testing.T) {
+	m := newTestManager()
+	sc := newTestConsumer(1, 10)
+	sc.addLogToBuffer(makeMsg(1))
+	sc.idleSince = time.Now().Add(-(idleConsumerTTL + time.Second))
+	m.consumers[1] = sc
+
+	m.reapIdleConsumers()
+
+	if _, ok := m.retainedLogs[1]; !ok {
+		t.Fatal("expected retained entry after reap")
+	}
+
+	// Manually apply the same seeding logic createConsumer would use.
+	sc2 := newTestConsumer(1, 10)
+	if retained, ok := m.retainedLogs[1]; ok {
+		sc2.seedBuffer(retained)
+		delete(m.retainedLogs, 1)
+	}
+
+	if _, ok := m.retainedLogs[1]; ok {
+		t.Error("retained entry should be cleared after seeding new consumer")
+	}
+	logs := sc2.getBufferedLogs(0)
+	if len(logs) != 1 {
+		t.Fatalf("new consumer expected 1 seeded message, got %d", len(logs))
 	}
 }

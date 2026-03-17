@@ -603,9 +603,16 @@ func (app *App) handleSessionLogsStream(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Parse optional after_sequence_number for reconnect deduplication
+	var afterSequenceNumber int64
+	if s := r.URL.Query().Get("after_sequence_number"); s != "" {
+		afterSequenceNumber, _ = strconv.ParseInt(s, 10, 64)
+	}
+
 	// Create gRPC stream directly to log-processor
 	stream, err := app.logProcessor.StreamSessionLogs(r.Context(), &manmanpb.StreamSessionLogsRequest{
-		SessionId: sessionID,
+		SessionId:           sessionID,
+		AfterSequenceNumber: afterSequenceNumber,
 	})
 	if err != nil {
 		log.Printf("Failed to create log stream for session %d: %v", sessionID, err)
@@ -658,9 +665,10 @@ func (app *App) handleSessionLogsStream(w http.ResponseWriter, r *http.Request) 
 
 			// Format as JSON for easier client parsing
 			data := map[string]interface{}{
-				"timestamp": result.msg.Timestamp,
-				"source":    result.msg.Source,
-				"message":   result.msg.Message,
+				"timestamp":       result.msg.Timestamp,
+				"source":          result.msg.Source,
+				"message":         result.msg.Message,
+				"sequence_number": result.msg.SequenceNumber,
 			}
 			jsonData, err := json.Marshal(data)
 			if err != nil {

@@ -31,7 +31,7 @@ func (s *Server) StreamSessionLogs(req *manmanpb.StreamSessionLogsRequest, strea
 	log.Printf("[log-processor] client subscribed to session %d logs", sessionID)
 
 	// Subscribe to consumer manager
-	subscription, err := s.consumerManager.Subscribe(stream.Context(), sessionID)
+	subscription, err := s.consumerManager.Subscribe(stream.Context(), sessionID, req.AfterSequenceNumber)
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to logs: %w", err)
 	}

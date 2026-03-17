@@ -190,6 +190,7 @@ templ SessionDetail(data SessionDetailPageData) {
 					const clearBtn = document.getElementById('clear-logs');
 					let autoScroll = true;
 					let evtSource = null;
+					let lastSequenceNumber = 0;
 
 					function appendLogLine(container, timestamp, source, message) {
 						const line = document.createElement('span');
@@ -200,7 +201,10 @@ templ SessionDetail(data SessionDetailPageData) {
 					}
 
 					function connect() {
-						evtSource = new EventSource('/sessions/' + sessionId + '/logs/stream');
+						const url = lastSequenceNumber > 0
+							? '/sessions/' + sessionId + '/logs/stream?after_sequence_number=' + lastSequenceNumber
+							: '/sessions/' + sessionId + '/logs/stream';
+						evtSource = new EventSource(url);
 						evtSource.onopen = () => {
 							logStatus.textContent = '● Connected';
 							logStatus.style.color = '#4fc1ff';
@@ -208,6 +212,7 @@ templ SessionDetail(data SessionDetailPageData) {
 						evtSource.onmessage = (event) => {
 							const d = JSON.parse(event.data);
 							if (d.type === 'connected') return;
+							if (d.sequence_number) lastSequenceNumber = d.sequence_number;
 							const date = new Date(d.timestamp);
 							const time = date.toLocaleTimeString('en-US', { hour12: false });
 							appendLogLine(logOutput, time, d.source, d.message);
