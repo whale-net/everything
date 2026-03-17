@@ -27,7 +27,7 @@ go_library(
     deps = [
         "//libs/go/rmq",
         "//libs/go/s3",
-        "//manmanv2:models",
+        "//manmanv2/models:models",
         "//manmanv2/api/repository",
         "//manmanv2/api/repository/postgres",
         "//manmanv2/api/workshop",
@@ -49,7 +49,7 @@ go_test(
     ],
     embed = [":handlers"],
     deps = [
-        "//manmanv2:models",
+        "//manmanv2/models:models",
         "//manmanv2/api/repository",
         "//manmanv2/protos:manmanpb",
         "@com_github_jackc_pgx_v5//:pgx",

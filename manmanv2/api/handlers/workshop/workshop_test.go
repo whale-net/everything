@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"github.com/whale-net/everything/manmanv2"
+	"github.com/whale-net/everything/manmanv2/models"
 	pb "github.com/whale-net/everything/manmanv2/protos"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "models",
+    srcs = [
+        "models_action.go",
+        "models_backup.go",
+        "models_config.go",
+        "models_game.go",
+        "models_server.go",
+        "models_session.go",
+        "models_workshop.go",
+        "types.go",
+    ],
+    importpath = "github.com/whale-net/everything/manmanv2/models",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "models_test",
+    srcs = ["models_test.go"],
+    embed = [":models"],
+)

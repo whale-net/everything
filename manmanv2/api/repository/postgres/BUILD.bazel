@@ -25,7 +25,7 @@ go_library(
     importpath = "github.com/whale-net/everything/manmanv2/api/repository/postgres",
     visibility = ["//manmanv2:__subpackages__"],
     deps = [
-        "//manmanv2:models",
+        "//manmanv2/models:models",
         "//manmanv2/api/repository",
         "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgxpool",
@@ -37,7 +37,7 @@ go_test(
     srcs = ["server_port_test.go"],
     embed = [":postgres"],
     deps = [
-        "//manmanv2:models",
+        "//manmanv2/models:models",
     ],
 )
 
@@ -46,7 +46,7 @@ go_test(
     srcs = ["workshop_addon_property_test.go"],
     embed = [":postgres"],
     deps = [
-        "//manmanv2:models",
+        "//manmanv2/models:models",
     ],
 )
 
@@ -55,7 +55,7 @@ go_test(
     srcs = ["workshop_installation_property_test.go"],
     embed = [":postgres"],
     deps = [
-        "//manmanv2:models",
+        "//manmanv2/models:models",
     ],
 )
 
@@ -64,7 +64,7 @@ go_test(
     srcs = ["workshop_library_property_test.go"],
     embed = [":postgres"],
     deps = [
-        "//manmanv2:models",
+        "//manmanv2/models:models",
     ],
 )
 
@@ -77,5 +77,5 @@ go_test(
         "workshop_library_property_test.go",
     ],
     embed = [":postgres"],
-    deps = ["//manmanv2:models"],
+    deps = ["//manmanv2/models:models"],
 )

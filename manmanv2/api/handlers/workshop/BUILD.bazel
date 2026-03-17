@@ -14,7 +14,7 @@ go_library(
     visibility = ["//manmanv2/api:__subpackages__"],
     deps = [
         "//libs/go/rmq",
-        "//manmanv2:models",
+        "//manmanv2/models:models",
         "//manmanv2/api/repository",
         "//manmanv2/api/workshop",
         "//manmanv2/host/rmq",
@@ -29,7 +29,7 @@ go_test(
     srcs = ["workshop_test.go"],
     embed = [":workshop"],
     deps = [
-        "//manmanv2:models",
+        "//manmanv2/models:models",
         "//manmanv2/protos:manmanpb",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//mock",
