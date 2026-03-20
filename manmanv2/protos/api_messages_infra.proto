@@ -70,6 +70,8 @@ message HistoricalLogBatch {
 
 message GetLogHistogramRequest {
   int64 session_id = 1;
+  int64 start_timestamp = 2;  // 0 = from session start
+  int64 end_timestamp = 3;    // 0 = to session end
 }
 
 message GetLogHistogramResponse {

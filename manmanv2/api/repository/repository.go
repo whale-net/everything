@@ -93,7 +93,7 @@ type LogReferenceRepository interface {
 	ListByTimeRange(ctx context.Context, sgcID int64, startTime, endTime time.Time) ([]*manman.LogReference, error)
 	GetMinMaxTimes(ctx context.Context, sgcID int64) (minTime, maxTime *time.Time, err error)
 	GetMinMaxTimesBySession(ctx context.Context, sessionID int64) (minTime, maxTime *time.Time, err error)
-	GetHistogramBySession(ctx context.Context, sessionID int64, bucketSeconds int64) (map[int64]map[string]int32, error)
+	GetHistogramBySession(ctx context.Context, sessionID int64, bucketSeconds int64, startTime, endTime *int64) (map[int64]map[string]int32, error)
 }
 
 // BackupRepository defines operations for Backup entities
