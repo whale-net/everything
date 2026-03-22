@@ -21,9 +21,11 @@ go_test(
     name = "rmq_test",
     size = "small",
     srcs = [
+        "connection_internal_test.go",
         "connection_test.go",
         "consumer_internal_test.go",
         "consumer_test.go",
+        "publisher_internal_test.go",
         "publisher_test.go",
     ],
     embed = [":rmq"],
