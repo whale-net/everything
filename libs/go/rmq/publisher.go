@@ -16,10 +16,13 @@ import (
 // Publisher publishes messages to RabbitMQ exchanges
 // It automatically recovers from channel closures by recreating the channel
 type Publisher struct {
-	mu        sync.Mutex
-	channel   *amqp.Channel
-	conn      *Connection
-	exchange  string
+	mu         sync.Mutex
+	channel    *amqp.Channel
+	conn       *Connection
+	exchange   string
+	// chanOpener is the factory used to recreate channels after failure.
+	// It defaults to openAndConfigureChannel and is overridable in tests.
+	chanOpener func(conn *Connection, exchange string) (*amqp.Channel, error)
 }
 
 // NewPublisher creates a new publisher
@@ -30,9 +33,10 @@ func NewPublisher(conn *Connection) (*Publisher, error) {
 	}
 
 	return &Publisher{
-		channel:  ch,
-		conn:     conn,
-		exchange: "manman",
+		channel:    ch,
+		conn:       conn,
+		exchange:   "manman",
+		chanOpener: openAndConfigureChannel,
 	}, nil
 }
 
@@ -120,19 +124,27 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, bo
 		return nil
 	}
 
-	// If the channel is closed, try to recreate and retry once
+	// If the channel is closed, try to recreate and retry once.
+	// Guard against the double-recreation race: two goroutines can both read
+	// the same closed channel pointer, both fail, and both enter this block.
+	// Only the first to acquire the lock should recreate; the second should
+	// reuse the channel the first goroutine already installed.
 	if isChannelClosed(err) {
 		p.mu.Lock()
-		// Recreate the channel
-		newCh, recreateErr := openAndConfigureChannel(p.conn, exchange)
-		if recreateErr != nil {
+		if p.channel != ch {
+			// Another goroutine already replaced the closed channel.
+			ch = p.channel
 			p.mu.Unlock()
-			return fmt.Errorf("publish failed and channel recreation failed: %w (original error: %w)", recreateErr, err)
+		} else {
+			newCh, recreateErr := p.chanOpener(p.conn, exchange)
+			if recreateErr != nil {
+				p.mu.Unlock()
+				return fmt.Errorf("publish failed and channel recreation failed: %w (original error: %w)", recreateErr, err)
+			}
+			p.channel = newCh
+			ch = newCh
+			p.mu.Unlock()
 		}
-
-		p.channel = newCh
-		ch = newCh
-		p.mu.Unlock()
 
 		// Retry the publish once
 		retryErr := ch.PublishWithContext(ctx, exchange, routingKey, false, false, publishing)
@@ -195,15 +207,19 @@ func (p *Publisher) PublishWithExpiry(ctx context.Context, exchange, routingKey 
 
 	if isChannelClosed(err) {
 		p.mu.Lock()
-		newCh, recreateErr := openAndConfigureChannel(p.conn, exchange)
-		if recreateErr != nil {
+		if p.channel != ch {
+			ch = p.channel
 			p.mu.Unlock()
-			return fmt.Errorf("publish failed and channel recreation failed: %w (original error: %w)", recreateErr, err)
+		} else {
+			newCh, recreateErr := p.chanOpener(p.conn, exchange)
+			if recreateErr != nil {
+				p.mu.Unlock()
+				return fmt.Errorf("publish failed and channel recreation failed: %w (original error: %w)", recreateErr, err)
+			}
+			p.channel = newCh
+			ch = newCh
+			p.mu.Unlock()
 		}
-
-		p.channel = newCh
-		ch = newCh
-		p.mu.Unlock()
 
 		retryErr := ch.PublishWithContext(
 			ctx,
@@ -261,19 +277,23 @@ func (p *Publisher) PublishWithReply(ctx context.Context, exchange, routingKey s
 		return nil
 	}
 
-	// If the channel is closed, try to recreate and retry once
+	// If the channel is closed, try to recreate and retry once.
+	// Same double-recreation guard as Publish.
 	if isChannelClosed(err) {
 		p.mu.Lock()
-		// Recreate the channel
-		newCh, recreateErr := openAndConfigureChannel(p.conn, exchange)
-		if recreateErr != nil {
+		if p.channel != ch {
+			ch = p.channel
 			p.mu.Unlock()
-			return fmt.Errorf("publish failed and channel recreation failed: %w (original error: %w)", recreateErr, err)
+		} else {
+			newCh, recreateErr := p.chanOpener(p.conn, exchange)
+			if recreateErr != nil {
+				p.mu.Unlock()
+				return fmt.Errorf("publish failed and channel recreation failed: %w (original error: %w)", recreateErr, err)
+			}
+			p.channel = newCh
+			ch = newCh
+			p.mu.Unlock()
 		}
-
-		p.channel = newCh
-		ch = newCh
-		p.mu.Unlock()
 
 		// Retry the publish once
 		retryErr := ch.PublishWithContext(

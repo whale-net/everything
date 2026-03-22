@@ -6,13 +6,20 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-// Connection wraps a RabbitMQ connection
+// Connection wraps a RabbitMQ connection with automatic reconnection support.
+// If the underlying TCP connection is lost, the next call to Channel() will
+// transparently re-dial and return a channel on the fresh connection.
 type Connection struct {
+	mu   sync.Mutex
 	conn *amqp.Connection
+	// dial re-establishes the underlying AMQP connection from scratch.
+	// It is nil only for zero-value Connection structs (not created via a constructor).
+	dial func() (*amqp.Connection, error)
 }
 
 // Config holds RabbitMQ connection configuration
@@ -41,20 +48,27 @@ type TLSConfig struct {
 
 // NewConnection creates a new RabbitMQ connection
 func NewConnection(config Config) (*Connection, error) {
-	url := fmt.Sprintf("amqp://%s:%s@%s:%d%s",
-		config.Username,
-		config.Password,
-		config.Host,
-		config.Port,
-		config.VHost,
-	)
-
-	conn, err := amqp.Dial(url)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
+	dial := func() (*amqp.Connection, error) {
+		url := fmt.Sprintf("amqp://%s:%s@%s:%d%s",
+			config.Username,
+			config.Password,
+			config.Host,
+			config.Port,
+			config.VHost,
+		)
+		conn, err := amqp.Dial(url)
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
+		}
+		return conn, nil
 	}
 
-	return &Connection{conn: conn}, nil
+	conn, err := dial()
+	if err != nil {
+		return nil, err
+	}
+
+	return &Connection{conn: conn, dial: dial}, nil
 }
 
 // NewConnectionFromURL creates a new RabbitMQ connection from a URL
@@ -69,27 +83,43 @@ func NewConnectionFromURL(url string) (*Connection, error) {
 		return NewConnectionWithTLS(url, tlsConfig)
 	}
 
-	conn, err := amqp.Dial(url)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
+	dial := func() (*amqp.Connection, error) {
+		conn, err := amqp.Dial(url)
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
+		}
+		return conn, nil
 	}
 
-	return &Connection{conn: conn}, nil
+	conn, err := dial()
+	if err != nil {
+		return nil, err
+	}
+
+	return &Connection{conn: conn, dial: dial}, nil
 }
 
 // NewConnectionWithTLS creates a new RabbitMQ connection with explicit TLS configuration
 func NewConnectionWithTLS(url string, tlsConfig *TLSConfig) (*Connection, error) {
-	config, err := buildTLSConfig(tlsConfig)
+	tlsCfg, err := buildTLSConfig(tlsConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build TLS config: %w", err)
 	}
 
-	conn, err := amqp.DialTLS(url, config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to RabbitMQ with TLS: %w", err)
+	dial := func() (*amqp.Connection, error) {
+		conn, err := amqp.DialTLS(url, tlsCfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to RabbitMQ with TLS: %w", err)
+		}
+		return conn, nil
 	}
 
-	return &Connection{conn: conn}, nil
+	conn, err := dial()
+	if err != nil {
+		return nil, err
+	}
+
+	return &Connection{conn: conn, dial: dial}, nil
 }
 
 // getTLSConfigFromEnv creates TLS configuration from environment variables
@@ -152,23 +182,49 @@ func buildTLSConfig(config *TLSConfig) (*tls.Config, error) {
 
 // Close closes the RabbitMQ connection
 func (c *Connection) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.conn != nil && !c.conn.IsClosed() {
 		return c.conn.Close()
 	}
 	return nil
 }
 
-// GetConnection returns the underlying AMQP connection
+// GetConnection returns the underlying AMQP connection.
+// Callers should not cache the returned value; use Channel() for all messaging operations.
 func (c *Connection) GetConnection() *amqp.Connection {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.conn
 }
 
-// Channel creates a new channel from the connection
+// Channel creates a new AMQP channel. If the underlying connection has been
+// lost, Channel transparently re-dials before opening the channel.
 func (c *Connection) Channel() (*amqp.Channel, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.conn == nil || c.conn.IsClosed() {
+		if c.dial == nil {
+			return nil, fmt.Errorf("connection is closed and cannot reconnect: no dial function available")
+		}
+		newConn, err := c.dial()
+		if err != nil {
+			return nil, fmt.Errorf("failed to reconnect to RabbitMQ: %w", err)
+		}
+		c.conn = newConn
+	}
+
 	return c.conn.Channel()
 }
 
-// NotifyClose returns a channel that will be closed when the connection is closed
+// NotifyClose returns a channel that will be closed when the connection is closed.
+// After a reconnection the previous notify channel will not fire; callers that
+// need to react to reconnection events should watch the channel returned here
+// and call NotifyClose again after each reconnect.
 func (c *Connection) NotifyClose(receiver chan *amqp.Error) chan *amqp.Error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.conn.NotifyClose(receiver)
 }
