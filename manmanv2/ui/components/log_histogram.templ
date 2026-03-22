@@ -19,7 +19,10 @@ templ LogHistogram(data LogHistogramData) {
 		<div class="p-4 border-b border-gray-200 dark:border-slate-700">
 			<div class="flex items-center justify-between mb-2">
 				<div id="histogram-status" class="text-sm text-gray-600 dark:text-gray-400"></div>
-				<button id="zoom-out-btn" style="display: none;" class="text-sm text-blue-600 hover:text-blue-700 dark:text-blue-400">← Back to overview</button>
+				<div class="flex items-center gap-2">
+					<button id="zoom-out-btn" disabled style="display: none;" class="inline-flex items-center gap-1 px-2 py-1 text-sm bg-gray-100 hover:bg-gray-200 dark:bg-slate-700 dark:hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 dark:text-gray-300 rounded-md transition-colors">← Zoom Out</button>
+					<button id="zoom-in-btn" disabled style="display: none;" class="inline-flex items-center gap-1 px-2 py-1 text-sm bg-gray-100 hover:bg-gray-200 dark:bg-slate-700 dark:hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 dark:text-gray-300 rounded-md transition-colors">Zoom In →</button>
+				</div>
 			</div>
 			<div style="position: relative;">
 				<canvas id="log-histogram" style="width: 100%; height: 300px; cursor: crosshair;"></canvas>
@@ -51,6 +54,7 @@ templ LogHistogram(data LogHistogramData) {
 			const logContent = document.getElementById('log-content');
 			const tooltip = document.getElementById('tooltip');
 			const zoomOutBtn = document.getElementById('zoom-out-btn');
+			const zoomInBtn = document.getElementById('zoom-in-btn');
 
 			let histogramData = null;
 			let zoomStack = []; // stack of {start, end} for drill-down history
@@ -150,7 +154,7 @@ templ LogHistogram(data LogHistogramData) {
 					histogramData = data;
 					const zoomText = zoomStack.length > 0 ? ' (zoomed)' : '';
 					statusDiv.textContent = 'Showing ' + histogramData.buckets.length + ' time buckets (' + histogramData.granularity + ' resolution)' + zoomText;
-					zoomOutBtn.style.display = zoomStack.length > 0 ? 'inline' : 'none';
+					updateZoomButtons();
 					renderHistogram();
 					return true;
 				} catch (err) {
@@ -286,17 +290,20 @@ templ LogHistogram(data LogHistogramData) {
 				const x = e.clientX - rect.left;
 				const idx = xToIndex(x);
 
-				if (e.detail === 2) {
-					drillDown(idx);
-					return;
-				}
-
 				if (idx >= 0 && idx < histogramData.buckets.length) {
 					isSelecting = true;
 					selectionStart = idx;
 					selection = { startIdx: idx, endIdx: idx };
 					updateSelection();
 				}
+			});
+
+			canvas.addEventListener('dblclick', (e) => {
+				if (!histogramData) return;
+				const rect = canvas.getBoundingClientRect();
+				const x = e.clientX - rect.left;
+				const idx = xToIndex(x);
+				drillDown(idx, idx);
 			});
 
 			canvas.addEventListener('mousemove', (e) => {
@@ -315,7 +322,7 @@ templ LogHistogram(data LogHistogramData) {
 						(bucket.stdout_lines ? '<div style="color: #d4d4d4;">stdout: ' + bucket.stdout_lines.toLocaleString() + '</div>' : '') +
 						(bucket.stderr_lines ? '<div style="color: #f48771;">stderr: ' + bucket.stderr_lines.toLocaleString() + '</div>' : '') +
 						(bucket.host_lines ? '<div style="color: #4fc1ff;">host: ' + bucket.host_lines.toLocaleString() + '</div>' : '') +
-						(canZoom ? '<div style="margin-top: 4px; font-size: 11px; color: #aaa;">Double-click to zoom in</div>' : '');
+						(canZoom ? '<div style="margin-top: 4px; font-size: 11px; color: #aaa;">Select range then click Zoom In (or double-click)</div>' : '');
 					tooltip.style.display = 'block';
 					tooltip.style.left = (x + 10) + 'px';
 					tooltip.style.top = (e.clientY - rect.top + 10) + 'px';
@@ -333,20 +340,36 @@ templ LogHistogram(data LogHistogramData) {
 			canvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
 			canvas.addEventListener('mouseup', () => { isSelecting = false; });
 
-			function drillDown(idx) {
+			function updateZoomButtons() {
+				const canZoomIn = histogramData && nextFinerGranularity(histogramData.granularity) !== null;
+				const canZoomOut = zoomStack.length > 0;
+				zoomInBtn.style.display = canZoomIn ? 'inline-flex' : 'none';
+				zoomInBtn.disabled = !selection;
+				zoomOutBtn.style.display = canZoomOut ? 'inline-flex' : 'none';
+				zoomOutBtn.disabled = false;
+			}
+
+			// drillDown: zoom into the index range [startIdx, endIdx]
+			function drillDown(startIdx, endIdx) {
 				if (!histogramData) return;
 				const nextGran = nextFinerGranularity(histogramData.granularity);
 				if (!nextGran) return;
-				const bucket = histogramData.buckets[idx];
-				const bucketDuration = granularityToSeconds(histogramData.granularity);
-				const startTime = bucket.timestamp;
-				const endTime = bucket.timestamp + bucketDuration;
+				const bucketSecs = granularityToSeconds(histogramData.granularity);
+				const si = Math.min(startIdx, endIdx);
+				const ei = Math.max(startIdx, endIdx);
+				const startTime = histogramData.buckets[si].timestamp;
+				const endTime = histogramData.buckets[ei].timestamp + bucketSecs;
 				zoomStack.push({ start: startTime, end: endTime });
 				selection = null;
 				selectionInfo.textContent = '';
 				loadBtn.disabled = true;
 				loadHistogram(startTime, endTime);
 			}
+
+			zoomInBtn.onclick = () => {
+				if (!selection) return;
+				drillDown(selection.startIdx, selection.endIdx);
+			};
 
 			zoomOutBtn.onclick = () => {
 				zoomStack.pop();
@@ -386,6 +409,7 @@ templ LogHistogram(data LogHistogramData) {
 				logOffset = 0;
 				loadBtn.disabled = false;
 				loadMoreBtn.style.display = 'none';
+				updateZoomButtons();
 			}
 
 			function loadLogs(start, end, offset, limit, append) {
