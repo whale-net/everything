@@ -209,14 +209,24 @@ func main() {
 	}
 }
 
-// withAccessToken wraps a protected handler to also inject the user's access token
-// into the request context for gRPC forwarding.
+// withAccessToken wraps a protected handler to inject the user's access token
+// into the request context for gRPC forwarding. If the token is unavailable or
+// expired, the user is redirected to re-authenticate. HTMX partial requests
+// receive an HX-Redirect header so the full page reloads to the login URL.
 func (app *App) withAccessToken(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, err := app.auth.GetAccessToken(r)
-		if err == nil {
-			r = r.WithContext(grpcauth.WithUserToken(r.Context(), token))
+		if err != nil {
+			loginURL := fmt.Sprintf("/auth/login?next=%s", r.URL.RequestURI())
+			if r.Header.Get("HX-Request") == "true" {
+				w.Header().Set("HX-Redirect", loginURL)
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			http.Redirect(w, r, loginURL, http.StatusSeeOther)
+			return
 		}
+		r = r.WithContext(grpcauth.WithUserToken(r.Context(), token))
 		next(w, r)
 	}
 }
