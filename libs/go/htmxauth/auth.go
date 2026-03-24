@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -467,7 +469,8 @@ func (sm *SessionManager) VerifyOAuthState(r *http.Request, state string) (bool,
 	return true, nil
 }
 
-// GetAccessToken retrieves the stored access token from session
+// GetAccessToken retrieves the stored access token from session.
+// Returns an error if the token is missing or has expired.
 func (sm *SessionManager) GetAccessToken(r *http.Request) (string, error) {
 	session, err := sm.GetSession(r)
 	if err != nil {
@@ -477,7 +480,33 @@ func (sm *SessionManager) GetAccessToken(r *http.Request) (string, error) {
 	if !ok || token == "" {
 		return "", fmt.Errorf("no access token in session")
 	}
+	if isJWTExpired(token) {
+		return "", fmt.Errorf("access token expired")
+	}
 	return token, nil
+}
+
+// isJWTExpired decodes the JWT payload (without verification) and checks the exp claim.
+// Returns false if the token cannot be parsed, so non-JWT tokens are allowed through.
+func isJWTExpired(tokenStr string) bool {
+	parts := strings.SplitN(tokenStr, ".", 3)
+	if len(parts) != 3 {
+		return false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return false
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return false
+	}
+	if claims.Exp == 0 {
+		return false
+	}
+	return time.Now().Unix() > claims.Exp
 }
 
 // GetNextURL retrieves and clears the next URL from session
