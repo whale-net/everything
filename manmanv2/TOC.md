@@ -35,6 +35,10 @@ Active game server orchestration platform. Split-plane architecture: cloud contr
 - [testdata/README.md](testdata/README.md) — Test fixtures and test data patterns
 - [testdata/BAZEL_LIMITATION.md](testdata/BAZEL_LIMITATION.md) — Known Bazel limitation with testdata
 
+## Plans
+
+- [docs/RESTORE_PLAN.md](docs/RESTORE_PLAN.md) — Backup restore system implementation plan (restore from backup, safety backups, user uploads)
+
 ## Archive
 
 Self-registration feature docs in [docs/ARCHIVE/](docs/ARCHIVE/) — feature complete, archived for reference.
