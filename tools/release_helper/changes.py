@@ -152,42 +152,8 @@ def detect_changed_apps(base_commit: Optional[str] = None) -> List[Dict[str, str
         print("No valid Bazel targets in changed files", file=sys.stderr)
         return []
     
-    # Query rdeps for all valid labels and changed packages
-    all_affected_targets = set()
+    # Get all app_metadata targets first
     try:
-        # Build query for file labels and package changes
-        query_parts = []
-        if valid_labels:
-            query_parts.append(" + ".join(valid_labels))
-        if changed_packages:
-            # For changed packages, query all targets in those packages
-            for pkg in changed_packages:
-                query_parts.append(f"{pkg}/...")
-        
-        if not query_parts:
-            print("No query parts to analyze", file=sys.stderr)
-            return []
-        
-        labels_expr = " + ".join(query_parts)
-        result = run_bazel([
-            "query",
-            f"rdeps(//..., {labels_expr})",
-            "--output=label"
-        ])
-        if result.stdout.strip():
-            all_affected_targets = set(result.stdout.strip().split('\n'))
-    except subprocess.CalledProcessError as e:
-        print(f"Error querying reverse dependencies: {e}", file=sys.stderr)
-        return []
-    
-    if not all_affected_targets:
-        print("No targets affected by changed files", file=sys.stderr)
-        return []
-    
-    # Find app_metadata targets that depend on affected targets
-    # Strategy: Query which metadata targets have the affected targets in their dependency graph
-    try:
-        # Get all app_metadata targets
         result = run_bazel([
             "query",
             "kind('app_metadata', //...)",
@@ -198,15 +164,31 @@ def detect_changed_apps(base_commit: Optional[str] = None) -> List[Dict[str, str
         if not all_metadata_targets:
             print("No app_metadata targets found", file=sys.stderr)
             return []
-        
-        # For each metadata target, check if it depends on any affected targets
-        # Use rdeps in reverse: which metadata targets depend on the affected targets?
+    except subprocess.CalledProcessError as e:
+        print(f"Error querying app_metadata targets: {e}", file=sys.stderr)
+        return []
+    
+    # Build query for file labels and package changes
+    query_parts = []
+    if valid_labels:
+        query_parts.append(" + ".join(valid_labels))
+    if changed_packages:
+        # For changed packages, query all targets in those packages
+        for pkg in changed_packages:
+            query_parts.append(f"{pkg}/...")
+    
+    if not query_parts:
+        print("No query parts to analyze", file=sys.stderr)
+        return []
+    
+    # Query rdeps scoped to metadata targets
+    try:
         metadata_expr = " + ".join(all_metadata_targets)
-        affected_expr = " + ".join(all_affected_targets)
+        labels_expr = " + ".join(query_parts)
         
         result = run_bazel([
             "query",
-            f"rdeps({metadata_expr}, {affected_expr})",
+            f"rdeps({metadata_expr}, {labels_expr})",
             "--output=label"
         ])
         
@@ -215,7 +197,8 @@ def detect_changed_apps(base_commit: Optional[str] = None) -> List[Dict[str, str
         else:
             all_affected_metadata = set()
             
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        print(f"Error querying reverse dependencies: {e}", file=sys.stderr)
         all_affected_metadata = set()
     
     if not all_affected_metadata:
