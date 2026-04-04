@@ -86,13 +86,29 @@ The CP2102 USB-UART bridge requires USB passthrough from Windows to WSL2:
 
 ```powershell
 # Windows PowerShell (run as Administrator)
+# Install usbipd-win if not already installed:
+winget install usbipd
+
+# Run usbipd list to find the CP2102 "USB Serial" entry and note its BUS_ID (e.g. 9-1).
+# The BUS_ID reflects the physical USB port — it may change if you replug to a different slot.
 usbipd list
+
+# Bind marks the device as shareable with WSL. This is a one-time step per device
+# and persists across reboots and replugs (even if the BUS_ID changes).
+usbipd bind --busid <BUS_ID>
+
+# Attach forwards the device into the running WSL session.
+# Re-run this each time you plug in the device or restart WSL.
 usbipd attach --wsl --busid <BUS_ID>
 ```
 
 ```bash
 # WSL2 — verify the device appeared
 ls /dev/ttyUSB*
+
+# If nothing appears, the cp210x driver may need to be loaded manually
+# (WSL2 kernels don't always auto-load it):
+sudo modprobe cp210x
 
 # Grant access (pick one):
 sudo chmod 666 /dev/ttyUSB0        # temporary
