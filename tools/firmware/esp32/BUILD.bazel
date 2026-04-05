@@ -47,6 +47,7 @@ filegroup(name = "empty")
 filegroup(
     name = "wrapper_scripts",
     srcs = [
+        ":xtensa_wrapper.sh",
         ":cc_wrapper.sh",
         ":gpp_wrapper.sh",
         ":ar_wrapper.sh",

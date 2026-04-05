@@ -70,10 +70,8 @@ def esp32_firmware(name, srcs, deps = [], copts = [], flash_config = None, **kwa
         srcs = ["@arduino_esp32//:main_cpp"],
         additional_linker_inputs = _ldscripts,
         linkopts = [
-            "-nostdlib",
-            "-Wl,--gc-sections",
-            "-Wl,-static",
-            "-Wl,-EL",
+            # -nostdlib / --gc-sections / -static / -EL are set by the toolchain's
+            # default_link_flags_feature (cc_toolchain_config.bzl) — not repeated here.
             # Linker scripts — memory layout & ROM symbol mappings
             "-T", "$(execpath @arduino_esp32//:tools/sdk/ld/esp32_out.ld)",
             "-T", "$(execpath @arduino_esp32//:tools/sdk/ld/esp32.project.ld)",

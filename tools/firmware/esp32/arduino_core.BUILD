@@ -9,23 +9,15 @@ directly, otherwise the linker cannot find user-defined setup()/loop().
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(glob(["**"]))
+# Export only the linker scripts referenced via $(execpath ...) in esp32.bzl.
+# (Previously exported glob(["**"]) which was overly broad.)
+exports_files(glob(["tools/sdk/ld/*.ld"]))
 
 # ── Pre-compiled SDK static libraries ────────────────────────────────────────
 
 filegroup(
-    name = "sdk_libs",
-    srcs = glob(["tools/sdk/lib/*.a"]),
-)
-
-filegroup(
     name = "bootloader",
     srcs = glob(["tools/sdk/bin/bootloader_*.bin"]),
-)
-
-filegroup(
-    name = "ldscripts",
-    srcs = glob(["tools/sdk/ld/*.ld"]),
 )
 
 # Precompiled ESP-IDF SDK static libraries, exposed as a cc_library so Bazel
@@ -102,6 +94,17 @@ _SDK_INCLUDES = [
     "tools/sdk/include/xtensa-debug-module",
 ]
 
+# ── GCC 15 compatibility flags (applied to all Arduino core targets) ─────────
+# GCC 15 is stricter about transitive headers, implicit conversions, and POSIX
+# feature-test macros. These flags paper over upstream code that predates GCC 15.
+_GCC15_COMPAT = [
+    "-include", "stdint.h",               # stdint types not always transitively available
+    "-Wno-error=int-conversion",           # promoted to hard errors in GCC 15
+    "-Wno-error=incompatible-pointer-types",
+    "-D_POSIX_TIMEOUTS",                   # enables pthread_mutex_timedlock in newlib
+    "-w",                                  # suppress remaining upstream warnings
+]
+
 # ── Arduino core C sources ───────────────────────────────────────────────────
 
 cc_library(
@@ -122,16 +125,7 @@ cc_library(
         "-fstrict-volatile-bitfields",
         "-Os",
         "-std=gnu11",
-        "-include", "stdint.h",  # GCC 15: stdint types not transitively available
-        # GCC 15 promoted these implicit-conversion diagnostics to hard errors
-        # by default. Demote them back to warnings, then -w suppresses them.
-        "-Wno-error=int-conversion",
-        "-Wno-error=incompatible-pointer-types",
-        # GCC 15 gthr-default.h unconditionally calls pthread_mutex_timedlock,
-        # but ESP32 newlib only declares it under _POSIX_TIMEOUTS.
-        "-D_POSIX_TIMEOUTS",
-        "-w",  # suppress upstream warnings
-    ],
+    ] + _GCC15_COMPAT,
     includes = [
         "cores/esp32",
         "variants/esp32",
@@ -164,19 +158,7 @@ cc_library(
         "-fno-rtti",
         "-Os",
         "-std=gnu++11",
-        # GCC 15 is stricter about transitive header includes. Arduino 1.0.6
-        # assumes stdint types (uint8_t etc.) are transitively available via
-        # headers like <functional>. Force-include stdint.h to restore that.
-        "-include", "stdint.h",
-        # GCC 15 promoted these implicit-conversion diagnostics to hard errors
-        # by default. Demote them back to warnings, then -w suppresses them.
-        "-Wno-error=int-conversion",
-        "-Wno-error=incompatible-pointer-types",
-        # GCC 15 gthr-default.h unconditionally calls pthread_mutex_timedlock,
-        # but ESP32 newlib only declares it under _POSIX_TIMEOUTS.
-        "-D_POSIX_TIMEOUTS",
-        "-w",  # suppress upstream warnings
-    ],
+    ] + _GCC15_COMPAT,
     includes = [
         "cores/esp32",
         "variants/esp32",

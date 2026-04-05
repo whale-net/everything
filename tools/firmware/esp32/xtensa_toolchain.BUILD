@@ -57,8 +57,9 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 # and eh_alloc in libstdc++ references getenv from the SDK's libc).
 cc_library(
     name = "esp32_cxx_runtime",
-    srcs = [
-        "lib/gcc/xtensa-esp-elf/15.2.0/esp32/libgcc.a",
+    srcs = glob([
+        # glob matches regardless of GCC version (e.g. 15.2.0 → 16.x on upgrade)
+        "lib/gcc/xtensa-esp-elf/*/esp32/libgcc.a",
         "xtensa-esp-elf/lib/esp32/libstdc++.a",
-    ],
+    ]),
 )
