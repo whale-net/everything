@@ -1,12 +1,18 @@
 #!/bin/bash
-# Xtensa ESP32 compiler wrapper.
+# Xtensa ESP32 C compiler wrapper.
 #
 # Required because --incompatible_strict_action_env is set in .bazelrc.
 # Strips host-specific flags that xtensa-esp-elf-gcc doesn't understand.
+#
+# Uses a glob to locate the toolchain so that bzlmod canonical repo names
+# (e.g. +_repo_rules2+xtensa_esp_elf_linux64) are handled transparently.
+# From the package dir (tools/firmware/esp32/), three levels up reaches the
+# execroot root where external/ lives.
 
 set -euo pipefail
 
-REAL_GCC="$(dirname "$0")/../../external/xtensa_esp_elf_linux64/bin/xtensa-esp-elf-gcc"
+XTENSA_BIN=("$(dirname "$0")/../../../external/"*xtensa_esp_elf_linux64/bin)
+REAL_GCC="${XTENSA_BIN[0]}/xtensa-esp32-elf-gcc"
 
 ARGS=()
 for arg in "$@"; do

@@ -47,3 +47,18 @@ filegroup(
     name = "strip",
     srcs = ["bin/xtensa-esp-elf-strip"],
 )
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+# GCC runtime + C++ standard library for ESP32 (little-endian Xtensa LX6).
+# These must be inside the --start-group/--end-group block (added as cc_library
+# deps, not -l linkopts) so the linker can resolve circular references with the
+# ESP-IDF SDK libs (e.g. libnvs_flash references _Unwind_Resume from libstdc++,
+# and eh_alloc in libstdc++ references getenv from the SDK's libc).
+cc_library(
+    name = "esp32_cxx_runtime",
+    srcs = [
+        "lib/gcc/xtensa-esp-elf/15.2.0/esp32/libgcc.a",
+        "xtensa-esp-elf/lib/esp32/libstdc++.a",
+    ],
+)

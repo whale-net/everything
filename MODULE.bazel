@@ -187,6 +187,9 @@ lock_import.import_uv(
     project_file = "//:pyproject.toml",
     repo = "pypi",
     target_environments = ["@everything_pycross_envs//:environments"],
+    # setuptools is the build backend for esptool (sdist-only package).
+    # Without it, pycross wheel_builder can't build the esptool wheel.
+    default_build_dependencies = ["setuptools"],
 )
 
 # Create the package repositories

@@ -24,6 +24,32 @@ load("@bazel_skylib//rules:write_file.bzl", "write_file")
 # Runfile path to the shared flash.py driver.
 _FLASH_PY_RUNFILE = "_main/tools/firmware/flash/flash.py"
 
+# ── Exec-hosted tool wrapper ─────────────────────────────────────────────────
+# When building with a cross-compiled target platform (e.g. --config=esp32),
+# Bazel builds all `data` deps in the target configuration. Flash tools like
+# esptool run on the developer's host machine, so they must be built in the
+# exec (host) configuration. This rule wraps a py_binary with cfg="exec" and
+# exposes its runfiles so rlocation() in the flash script finds the binary at
+# its original workspace-relative path.
+
+def _exec_hosted_tool_impl(ctx):
+    tool = ctx.attr.tool[DefaultInfo]
+    return [DefaultInfo(
+        files = tool.files,
+        runfiles = tool.default_runfiles,
+    )]
+
+_exec_hosted_tool = rule(
+    implementation = _exec_hosted_tool_impl,
+    attrs = {
+        "tool": attr.label(
+            cfg = "exec",
+            executable = True,
+            mandatory = True,
+        ),
+    },
+)
+
 def _label_to_runfile(label):
     """Convert a //pkg:target or :target label to a _main-workspace runfile path."""
     if label.startswith("//"):
@@ -150,7 +176,16 @@ def flash_firmware(name, firmware_name, board_config, tags = None, visibility = 
         ":" + firmware_name + "_bin",
     ]
     if tool == "esptool":
-        data += [board_config.esptool] + list(board_config.pre_segment_labels)
+        # Wrap esptool in an exec-cfg target so it is always built for the host
+        # platform, not the embedded target platform (e.g. ESP32 / os:none).
+        exec_tool_name = "_" + name + "_esptool_exec"
+        _exec_hosted_tool(
+            name = exec_tool_name,
+            tool = board_config.esptool,
+            tags = tags,
+            visibility = ["//visibility:private"],
+        )
+        data += [":" + exec_tool_name] + list(board_config.pre_segment_labels)
 
     native.sh_binary(
         name = name,

@@ -53,19 +53,52 @@ def esp32_firmware(name, srcs, deps = [], copts = [], flash_config = None, **kwa
         **kwargs
     )
 
+    # Linker scripts define ESP32 memory layout (same set Arduino 1.0.6 uses).
+    # Must be in additional_linker_inputs so Bazel stages them in the sandbox
+    # before the link action runs; referenced via $(execpath ...) below.
+    _ldscripts = [
+        "@arduino_esp32//:tools/sdk/ld/esp32_out.ld",
+        "@arduino_esp32//:tools/sdk/ld/esp32.project.ld",
+        "@arduino_esp32//:tools/sdk/ld/esp32.rom.ld",
+        "@arduino_esp32//:tools/sdk/ld/esp32.peripherals.ld",
+        "@arduino_esp32//:tools/sdk/ld/esp32.rom.libgcc.ld",
+        "@arduino_esp32//:tools/sdk/ld/esp32.rom.spiram_incompatible_fns.ld",
+    ]
+
     cc_binary(
         name = name + "_elf",
         srcs = ["@arduino_esp32//:main_cpp"],
+        additional_linker_inputs = _ldscripts,
         linkopts = [
-            "-Wl,--gc-sections",
-            "-Wl,-EL",
             "-nostdlib",
+            "-Wl,--gc-sections",
+            "-Wl,-static",
+            "-Wl,-EL",
+            # Linker scripts — memory layout & ROM symbol mappings
+            "-T", "$(execpath @arduino_esp32//:tools/sdk/ld/esp32_out.ld)",
+            "-T", "$(execpath @arduino_esp32//:tools/sdk/ld/esp32.project.ld)",
+            "-T", "$(execpath @arduino_esp32//:tools/sdk/ld/esp32.rom.ld)",
+            "-T", "$(execpath @arduino_esp32//:tools/sdk/ld/esp32.peripherals.ld)",
+            "-T", "$(execpath @arduino_esp32//:tools/sdk/ld/esp32.rom.libgcc.ld)",
+            "-T", "$(execpath @arduino_esp32//:tools/sdk/ld/esp32.rom.spiram_incompatible_fns.ld)",
+            # Force-include entry points and guard symbols (same as Arduino 1.0.6)
+            "-u", "esp_app_desc",
+            "-u", "ld_include_panic_highint_hdl",
+            "-u", "call_user_start_cpu0",
+            "-Wl,--undefined=uxTopUsedPriority",
+            "-u", "__cxa_guard_dummy",
+            "-u", "__cxx_fatal_exception",
         ],
         target_compatible_with = ESP32_COMPAT,
         deps = [
             ":" + name + "_lib",
             "@arduino_esp32//:core_c_lib",
             "@arduino_esp32//:core_lib",
+            # Precompiled ESP-IDF SDK libs (inside --start-group via toolchain feature)
+            "@arduino_esp32//:sdk_lib",
+            # GCC runtime + libstdc++ as deps so they're inside --start-group,
+            # letting the linker resolve circular refs with SDK's libc/nvs_flash.
+            "@xtensa_esp_elf_linux64//:esp32_cxx_runtime",
         ],
     )
 

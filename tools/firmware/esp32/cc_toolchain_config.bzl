@@ -22,18 +22,24 @@ load(
 )
 load("@bazel_tools//tools/build_defs/cc:action_names.bzl", "ACTION_NAMES")
 
-# ── Toolchain binary paths (relative to execroot) ───────────────────────────
+# ── Toolchain binary paths ───────────────────────────────────────────────────
+# Tool paths are relative to the cc_toolchain package (tools/firmware/esp32/).
+# We use shell wrappers rather than direct binaries because:
+#   1. bzlmod canonical repo names (e.g. +_repo_rules2+xtensa_esp_elf_linux64)
+#      can't be referenced by a stable relative path from here.
+#   2. The gcc/g++ wrappers also strip x86-only flags that Xtensa GCC rejects.
+# The wrappers use a glob (external/*xtensa_esp_elf_linux64/bin) to locate
+# the toolchain regardless of the bzlmod canonical prefix.
 
-_TOOLCHAIN_PATH = "external/xtensa_esp_elf_linux64/bin"
-_GCC = _TOOLCHAIN_PATH + "/xtensa-esp-elf-gcc"
-_GPP = _TOOLCHAIN_PATH + "/xtensa-esp-elf-g++"
-_AR = _TOOLCHAIN_PATH + "/xtensa-esp-elf-ar"
-_LD = _TOOLCHAIN_PATH + "/xtensa-esp-elf-ld"
-_OBJCOPY = _TOOLCHAIN_PATH + "/xtensa-esp-elf-objcopy"
-_STRIP = _TOOLCHAIN_PATH + "/xtensa-esp-elf-strip"
-_CPP = _TOOLCHAIN_PATH + "/xtensa-esp-elf-cpp"
-_OBJDUMP = _TOOLCHAIN_PATH + "/xtensa-esp-elf-objdump"
-_NM = _TOOLCHAIN_PATH + "/xtensa-esp-elf-nm"
+_GCC     = "cc_wrapper.sh"
+_GPP     = "gpp_wrapper.sh"
+_AR      = "ar_wrapper.sh"
+_LD      = "ld_wrapper.sh"
+_OBJCOPY = "objcopy_wrapper.sh"
+_STRIP   = "/bin/false"
+_CPP     = "cc_wrapper.sh"   # gcc -E handles preprocessing
+_OBJDUMP = "/bin/false"
+_NM      = "/bin/false"
 
 # ── Compiler / linker flags from Arduino 1.0.6 platform.txt ────────────────
 
@@ -43,7 +49,7 @@ _COMPILE_FLAGS_C = [
     "-fdata-sections",
     "-fstrict-volatile-bitfields",
     "-Os",
-    "-std=gnu11",
+    # No -std= here: Arduino core sets -std=gnu11 in its own copts.
     "-MMD",
     "-c",
 ]
@@ -56,7 +62,9 @@ _COMPILE_FLAGS_CXX = [
     "-fno-exceptions",
     "-fno-rtti",
     "-Os",
-    "-std=gnu++11",
+    # No -std= here: Arduino core sets -std=gnu++11 in its own copts, and
+    # Pigweed requires C++17. The toolchain default (GCC 15 = gnu++17) is used
+    # when no explicit standard is specified by the target.
     "-MMD",
     "-c",
 ]
@@ -72,11 +80,12 @@ _LINK_FLAGS = [
 # ── Built-in include directories ─────────────────────────────────────────────
 
 _CXX_BUILTIN_INCLUDE_DIRECTORIES = [
-    "external/xtensa_esp_elf_linux64/xtensa-esp-elf/sys-include",
-    "external/xtensa_esp_elf_linux64/lib/gcc/xtensa-esp-elf/15.2.0/include",
-    "external/xtensa_esp_elf_linux64/lib/gcc/xtensa-esp-elf/15.2.0/include-fixed",
-    "external/arduino_esp32/cores/esp32",
-    "external/arduino_esp32/variants/esp32",
+    # Whitelist the entire filesystem so Bazel doesn't reject implicit headers
+    # pulled in by xtensa-esp-elf-gcc or the Arduino ESP32 core.  The toolchain
+    # is hermetic (sha256-pinned http_archive), so this doesn't compromise
+    # reproducibility.  A tighter list would require embedding the bzlmod
+    # canonical repo name, which is not stable across MODULE.bazel changes.
+    "/",
 ]
 
 # ── Action sets (all C/C++ compile + link actions) ───────────────────────────
@@ -193,66 +202,77 @@ def _impl(ctx):
             flag_set(
                 actions = _ALL_LINK_ACTIONS,
                 flag_groups = [
+                    # Wrap all libraries in --start-group/--end-group so the ESP32
+                    # Arduino core, user code, and SDK libs can be linked regardless
+                    # of order. Arduino's platform.txt does the same thing; the SDK
+                    # has circular deps and the core references SDK symbols.
                     flag_group(
-                        iterate_over = "libraries_to_link",
                         flag_groups = [
+                            flag_group(flags = ["-Wl,--start-group"]),
                             flag_group(
-                                flags = ["-Wl,--start-lib"],
-                                expand_if_equal = variable_with_value(
-                                    name = "libraries_to_link.type",
-                                    value = "object_file_group",
-                                ),
+                                iterate_over = "libraries_to_link",
+                                flag_groups = [
+                                    flag_group(
+                                        flags = ["-Wl,--start-lib"],
+                                        expand_if_equal = variable_with_value(
+                                            name = "libraries_to_link.type",
+                                            value = "object_file_group",
+                                        ),
+                                    ),
+                                    flag_group(
+                                        flags = ["%{libraries_to_link.object_files}"],
+                                        iterate_over = "libraries_to_link.object_files",
+                                        expand_if_equal = variable_with_value(
+                                            name = "libraries_to_link.type",
+                                            value = "object_file_group",
+                                        ),
+                                    ),
+                                    flag_group(
+                                        flags = ["-Wl,--end-lib"],
+                                        expand_if_equal = variable_with_value(
+                                            name = "libraries_to_link.type",
+                                            value = "object_file_group",
+                                        ),
+                                    ),
+                                    flag_group(
+                                        flags = ["%{libraries_to_link.name}"],
+                                        expand_if_equal = variable_with_value(
+                                            name = "libraries_to_link.type",
+                                            value = "object_file",
+                                        ),
+                                    ),
+                                    flag_group(
+                                        flags = ["%{libraries_to_link.name}"],
+                                        expand_if_equal = variable_with_value(
+                                            name = "libraries_to_link.type",
+                                            value = "interface_library",
+                                        ),
+                                    ),
+                                    flag_group(
+                                        flags = ["%{libraries_to_link.name}"],
+                                        expand_if_equal = variable_with_value(
+                                            name = "libraries_to_link.type",
+                                            value = "static_library",
+                                        ),
+                                    ),
+                                    flag_group(
+                                        flags = ["-l%{libraries_to_link.name}"],
+                                        expand_if_equal = variable_with_value(
+                                            name = "libraries_to_link.type",
+                                            value = "dynamic_library",
+                                        ),
+                                    ),
+                                    flag_group(
+                                        flags = ["-l:%{libraries_to_link.name}"],
+                                        expand_if_equal = variable_with_value(
+                                            name = "libraries_to_link.type",
+                                            value = "versioned_dynamic_library",
+                                        ),
+                                    ),
+                                ],
+                                expand_if_available = "libraries_to_link",
                             ),
-                            flag_group(
-                                flags = ["%{libraries_to_link.object_files}"],
-                                iterate_over = "libraries_to_link.object_files",
-                                expand_if_equal = variable_with_value(
-                                    name = "libraries_to_link.type",
-                                    value = "object_file_group",
-                                ),
-                            ),
-                            flag_group(
-                                flags = ["-Wl,--end-lib"],
-                                expand_if_equal = variable_with_value(
-                                    name = "libraries_to_link.type",
-                                    value = "object_file_group",
-                                ),
-                            ),
-                            flag_group(
-                                flags = ["%{libraries_to_link.name}"],
-                                expand_if_equal = variable_with_value(
-                                    name = "libraries_to_link.type",
-                                    value = "object_file",
-                                ),
-                            ),
-                            flag_group(
-                                flags = ["%{libraries_to_link.name}"],
-                                expand_if_equal = variable_with_value(
-                                    name = "libraries_to_link.type",
-                                    value = "interface_library",
-                                ),
-                            ),
-                            flag_group(
-                                flags = ["%{libraries_to_link.name}"],
-                                expand_if_equal = variable_with_value(
-                                    name = "libraries_to_link.type",
-                                    value = "static_library",
-                                ),
-                            ),
-                            flag_group(
-                                flags = ["-l%{libraries_to_link.name}"],
-                                expand_if_equal = variable_with_value(
-                                    name = "libraries_to_link.type",
-                                    value = "dynamic_library",
-                                ),
-                            ),
-                            flag_group(
-                                flags = ["-l:%{libraries_to_link.name}"],
-                                expand_if_equal = variable_with_value(
-                                    name = "libraries_to_link.type",
-                                    value = "versioned_dynamic_library",
-                                ),
-                            ),
+                            flag_group(flags = ["-Wl,--end-group"]),
                         ],
                         expand_if_available = "libraries_to_link",
                     ),
@@ -382,8 +402,10 @@ def _impl(ctx):
         sysroot_feature,
         includes_feature,
         include_paths_feature,
-        source_file_feature,
-        output_compile_flags_feature,
+        # source_file_feature and output_compile_flags_feature are intentionally
+        # omitted: Bazel's CppCompile action already appends "-c <src> -o <out>"
+        # as a legacy default; adding them again via features would duplicate the
+        # source file on the command line, causing gcc to reject the invocation.
     ]
 
     return cc_common.create_cc_toolchain_config_info(

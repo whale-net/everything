@@ -24,9 +24,83 @@ filegroup(
 )
 
 filegroup(
+    name = "ldscripts",
+    srcs = glob(["tools/sdk/ld/*.ld"]),
+)
+
+# Precompiled ESP-IDF SDK static libraries, exposed as a cc_library so Bazel
+# includes them in the --start-group/--end-group block (see cc_toolchain_config.bzl).
+# This matches what Arduino's platform.txt does: link all SDK .a files in one group.
+cc_library(
+    name = "sdk_lib",
+    srcs = glob(["tools/sdk/lib/*.a"]),
+    target_compatible_with = [
+        "@platforms//os:none",
+        "@@//tools/firmware:cpu_xtensa",
+    ],
+)
+
+filegroup(
     name = "partitions",
     srcs = glob(["tools/partitions/*.bin"]),
 )
+
+# ── ESP-IDF SDK include paths ─────────────────────────────────────────────────
+# The Arduino ESP32 core (1.0.6) requires headers from the pre-built ESP-IDF
+# SDK bundled in tools/sdk/include/.  Two levels are needed:
+#   1. tools/sdk/include          — for #include "freertos/FreeRTOS.h" style
+#   2. tools/sdk/include/<subdir> — for bare #include "FreeRTOSConfig.h" inside
+#                                   each SDK component's own headers
+
+_SDK_INCLUDES = [
+    "tools/sdk/include",
+    "tools/sdk/include/app_trace",
+    "tools/sdk/include/app_update",
+    "tools/sdk/include/asio",
+    "tools/sdk/include/bootloader_support",
+    "tools/sdk/include/bt",
+    "tools/sdk/include/coap",
+    "tools/sdk/include/config",
+    "tools/sdk/include/console",
+    "tools/sdk/include/driver",
+    "tools/sdk/include/efuse",
+    "tools/sdk/include/esp-tls",
+    "tools/sdk/include/esp32",
+    "tools/sdk/include/esp_adc_cal",
+    "tools/sdk/include/esp_event",
+    "tools/sdk/include/esp_http_client",
+    "tools/sdk/include/esp_http_server",
+    "tools/sdk/include/esp_https_ota",
+    "tools/sdk/include/esp_https_server",
+    "tools/sdk/include/esp_ringbuf",
+    "tools/sdk/include/esp_websocket_client",
+    "tools/sdk/include/espcoredump",
+    "tools/sdk/include/ethernet",
+    "tools/sdk/include/fatfs",
+    "tools/sdk/include/freertos",
+    "tools/sdk/include/heap",
+    "tools/sdk/include/log",
+    "tools/sdk/include/lwip",
+    "tools/sdk/include/mbedtls",
+    "tools/sdk/include/mdns",
+    "tools/sdk/include/mqtt",
+    "tools/sdk/include/newlib",
+    "tools/sdk/include/nghttp",
+    "tools/sdk/include/nvs_flash",
+    "tools/sdk/include/openssl",
+    "tools/sdk/include/pthread",
+    "tools/sdk/include/sdmmc",
+    "tools/sdk/include/soc",
+    "tools/sdk/include/spi_flash",
+    "tools/sdk/include/spiffs",
+    "tools/sdk/include/tcp_transport",
+    "tools/sdk/include/tcpip_adapter",
+    "tools/sdk/include/ulp",
+    "tools/sdk/include/vfs",
+    "tools/sdk/include/wear_levelling",
+    "tools/sdk/include/wpa_supplicant",
+    "tools/sdk/include/xtensa-debug-module",
+]
 
 # ── Arduino core C sources ───────────────────────────────────────────────────
 
@@ -39,6 +113,7 @@ cc_library(
     hdrs = glob([
         "cores/esp32/**/*.h",
         "variants/esp32/**/*.h",
+        "tools/sdk/include/**/*.h",
     ]),
     copts = [
         "-mlongcalls",
@@ -47,15 +122,23 @@ cc_library(
         "-fstrict-volatile-bitfields",
         "-Os",
         "-std=gnu11",
+        "-include", "stdint.h",  # GCC 15: stdint types not transitively available
+        # GCC 15 promoted these implicit-conversion diagnostics to hard errors
+        # by default. Demote them back to warnings, then -w suppresses them.
+        "-Wno-error=int-conversion",
+        "-Wno-error=incompatible-pointer-types",
+        # GCC 15 gthr-default.h unconditionally calls pthread_mutex_timedlock,
+        # but ESP32 newlib only declares it under _POSIX_TIMEOUTS.
+        "-D_POSIX_TIMEOUTS",
         "-w",  # suppress upstream warnings
     ],
     includes = [
         "cores/esp32",
         "variants/esp32",
-    ],
+    ] + _SDK_INCLUDES,
     target_compatible_with = [
         "@platforms//os:none",
-        "//tools/firmware:cpu_xtensa",
+        "@@//tools/firmware:cpu_xtensa",
     ],
 )
 
@@ -70,6 +153,7 @@ cc_library(
     hdrs = glob([
         "cores/esp32/**/*.h",
         "variants/esp32/**/*.h",
+        "tools/sdk/include/**/*.h",
     ]),
     copts = [
         "-mlongcalls",
@@ -80,15 +164,26 @@ cc_library(
         "-fno-rtti",
         "-Os",
         "-std=gnu++11",
+        # GCC 15 is stricter about transitive header includes. Arduino 1.0.6
+        # assumes stdint types (uint8_t etc.) are transitively available via
+        # headers like <functional>. Force-include stdint.h to restore that.
+        "-include", "stdint.h",
+        # GCC 15 promoted these implicit-conversion diagnostics to hard errors
+        # by default. Demote them back to warnings, then -w suppresses them.
+        "-Wno-error=int-conversion",
+        "-Wno-error=incompatible-pointer-types",
+        # GCC 15 gthr-default.h unconditionally calls pthread_mutex_timedlock,
+        # but ESP32 newlib only declares it under _POSIX_TIMEOUTS.
+        "-D_POSIX_TIMEOUTS",
         "-w",  # suppress upstream warnings
     ],
     includes = [
         "cores/esp32",
         "variants/esp32",
-    ],
+    ] + _SDK_INCLUDES,
     target_compatible_with = [
         "@platforms//os:none",
-        "//tools/firmware:cpu_xtensa",
+        "@@//tools/firmware:cpu_xtensa",
     ],
     deps = [":core_c_lib"],
 )
@@ -111,7 +206,7 @@ cc_library(
     includes = ["libraries/WiFi/src"],
     target_compatible_with = [
         "@platforms//os:none",
-        "//tools/firmware:cpu_xtensa",
+        "@@//tools/firmware:cpu_xtensa",
     ],
     deps = [":core_lib"],
 )
