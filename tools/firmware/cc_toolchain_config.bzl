@@ -1,88 +1,81 @@
 """Generic cc_toolchain_config rule for embedded GCC cross-compilers.
 
-Parameterized so each board directory provides its own flags and identity
-without duplicating the feature machinery. The rule derives
-cxx_builtin_include_directories from gcc_tool + toolchain_triple + gcc_version,
-replacing the previous "whitelist the entire filesystem" hack.
+Uses the modern Bazel action_config + tool(tool = <label>) API so board
+toolchain binaries are referenced directly as Bazel labels — no wrapper
+scripts or glob path hacks required.
+
+cxx_builtin_include_directories are derived from gcc_binary + toolchain_triple
++ gcc_version at analysis time, eliminating the old "/" filesystem whitelist.
 
 ### Adding a new board
 
 1.  Download the toolchain via http_archive in MODULE.bazel.
-2.  Write a build file for it (following xtensa_toolchain.BUILD as a template):
-      - filegroup :all_files
-      - filegroup :gcc  ← this is what gcc_tool points to
-      - cc_library :cxx_runtime (libgcc.a + libstdc++.a or equivalent)
+2.  Write a build_file for it (following xtensa_toolchain.BUILD as template):
+      filegroup :all_files  — all toolchain files (staged in every sandbox)
+      filegroup :gcc        — the C compiler binary
+      filegroup :g++        — the C++ compiler binary
+      filegroup :ar         — the archiver binary
+      cc_library :cxx_runtime  — libgcc.a + libstdc++.a (or equivalent)
 3.  In your board's BUILD.bazel:
       load("//tools/firmware:cc_toolchain_config.bzl", "cc_toolchain_config")
+      _GCC_VERSION = "14.2.0"  # keep in sync with MODULE.bazel URL
       cc_toolchain_config(
-          name = "..._toolchain_config",
-          gcc_tool          = "@your_toolchain//:gcc",
-          toolchain_triple  = "arm-none-eabi",       # must match lib/gcc/<triple>/
-          gcc_version       = "14.2.0",              # keep in sync with MODULE.bazel URL
-          toolchain_identifier  = "arm-none-eabi",
-          target_system_name    = "arm-none-eabi",
-          target_cpu            = "armv6m",
+          name = "...",
+          gcc_binary       = "@your_toolchain//:gcc",
+          gpp_binary       = "@your_toolchain//:g++",
+          ar_binary        = "@your_toolchain//:ar",
+          toolchain_triple = "arm-none-eabi",
+          gcc_version      = _GCC_VERSION,
+          toolchain_identifier = "arm-none-eabi",
+          target_system_name   = "arm-none-eabi",
+          target_cpu           = "armv6m",
           compile_flags_c   = ["-mcpu=cortex-m0plus", "-mthumb", "-Os", ...],
           compile_flags_cxx = ["-mcpu=cortex-m0plus", "-mthumb", "-fno-exceptions", ...],
-          link_flags        = ["-nostdlib", "-Wl,--gc-sections", "-mcpu=cortex-m0plus", ...],
+          link_flags        = ["-nostdlib", "-Wl,--gc-sections", ...],
       )
-4.  Create the same wrapper-script convention the ESP32 uses:
-      cc_wrapper.sh / gpp_wrapper.sh / ar_wrapper.sh / ld_wrapper.sh / objcopy_wrapper.sh
-    Each is a one-liner that delegates to your board's xtensa_wrapper.sh equivalent.
-
-### Wrapper script convention
-
-tool_path entries use paths relative to the cc_toolchain target's package, so
-"cc_wrapper.sh" resolves to <board-dir>/cc_wrapper.sh regardless of where this
-.bzl file lives.  All boards must provide files with these exact names.
 
 ### cxx_builtin_include_directories
 
-The rule whitelists only the three standard GCC installation directories:
-  lib/gcc/<triple>/<version>/include
-  lib/gcc/<triple>/<version>/include-fixed
-  <triple>/include
+Derived from the execroot-relative path of gcc_binary at analysis time:
+  {toolchain_root}/lib/gcc/{triple}/{version}/include
+  {toolchain_root}/lib/gcc/{triple}/{version}/include-fixed
+  {toolchain_root}/{triple}/include
+  {toolchain_root}/{triple}/sys-include
 
-This is derived from the execroot-relative path of gcc_tool at analysis time.
-Bazel accepts execroot-relative paths in cxx_builtin_include_directories, so
-no absolute path or sysroot tricks are needed.
+Bazel accepts execroot-relative paths here, so no absolute path or sysroot
+magic is needed and the unstable bzlmod canonical repo name is never embedded.
 """
 
 load(
     "@bazel_tools//tools/cpp:cc_toolchain_config_lib.bzl",
+    "action_config",
     "feature",
     "flag_group",
     "flag_set",
-    "tool_path",
+    "tool",
     "variable_with_value",
 )
 load("@bazel_tools//tools/build_defs/cc:action_names.bzl", "ACTION_NAMES")
 
-# ── Wrapper script names (relative to the cc_toolchain target's package) ─────
-# Each board directory must provide files with exactly these names.
-_GCC     = "cc_wrapper.sh"
-_GPP     = "gpp_wrapper.sh"
-_AR      = "ar_wrapper.sh"
-_LD      = "ld_wrapper.sh"
-_OBJCOPY = "objcopy_wrapper.sh"
-_CPP     = "cc_wrapper.sh"    # gcc -E handles preprocessing
-
 # ── Action sets ───────────────────────────────────────────────────────────────
 
-_ALL_COMPILE_ACTIONS = [
+_C_COMPILE_ACTIONS = [
     ACTION_NAMES.c_compile,
-    ACTION_NAMES.cpp_compile,
-    ACTION_NAMES.linkstamp_compile,
     ACTION_NAMES.assemble,
     ACTION_NAMES.preprocess_assemble,
+]
+
+_CXX_COMPILE_ACTIONS = [
+    ACTION_NAMES.cpp_compile,
     ACTION_NAMES.cpp_header_parsing,
     ACTION_NAMES.cpp_module_compile,
     ACTION_NAMES.cpp_module_codegen,
-    ACTION_NAMES.clif_match,
-    ACTION_NAMES.lto_backend,
+    ACTION_NAMES.linkstamp_compile,
 ]
 
-_ALL_LINK_ACTIONS = [
+_ALL_COMPILE_ACTIONS = _C_COMPILE_ACTIONS + _CXX_COMPILE_ACTIONS
+
+_LINK_ACTIONS = [
     ACTION_NAMES.cpp_link_executable,
     ACTION_NAMES.cpp_link_dynamic_library,
     ACTION_NAMES.cpp_link_nodeps_dynamic_library,
@@ -90,11 +83,11 @@ _ALL_LINK_ACTIONS = [
 
 def _impl(ctx):
     # ── Derive toolchain include directories ──────────────────────────────────
-    # ctx.file.gcc_tool.path is execroot-relative, e.g.:
-    #   external/+_repo_rules2+xtensa_esp_elf_linux64/bin/xtensa-esp-elf-gcc
-    # Strip everything from "/bin/" onward to get the toolchain root.
-    # Bazel accepts execroot-relative paths in cxx_builtin_include_directories.
-    gcc_path = ctx.file.gcc_tool.path
+    # ctx.file.gcc_binary.path is execroot-relative, e.g.:
+    #   external/+_repo_rules2+xtensa_esp_elf_linux64/bin/xtensa-esp32-elf-gcc
+    # Strip everything from "/bin/" onward to get the toolchain root, then
+    # construct the standard GCC include directory paths.
+    gcc_path = ctx.file.gcc_binary.path
     toolchain_root = gcc_path[:gcc_path.rfind("/bin/")]
     triple = ctx.attr.toolchain_triple
     version = ctx.attr.gcc_version
@@ -106,41 +99,46 @@ def _impl(ctx):
         toolchain_root + "/" + triple + "/sys-include",
     ]
 
-    # ── Tool paths ────────────────────────────────────────────────────────────
-    tool_paths = [
-        tool_path(name = "gcc",     path = _GCC),
-        tool_path(name = "g++",     path = _GPP),
-        tool_path(name = "cpp",     path = _CPP),
-        tool_path(name = "ar",      path = _AR),
-        tool_path(name = "ld",      path = _LD),
-        tool_path(name = "objcopy", path = _OBJCOPY),
-        tool_path(name = "strip",   path = "/bin/false"),
-        tool_path(name = "objdump", path = "/bin/false"),
-        tool_path(name = "nm",      path = "/bin/false"),
-        tool_path(name = "gcov",    path = "/bin/false"),
-        tool_path(name = "dwp",     path = "/bin/false"),
-        tool_path(name = "llvm-profdata", path = "/bin/false"),
+    # ── Action configs (modern API: tool referenced by label, not path) ───────
+    # action_config maps each Bazel action to its compiler/linker/archiver binary.
+    # The File objects come from the rule attrs, so Bazel tracks them as proper
+    # dependencies — no wrapper scripts or glob path discovery needed.
+    gcc = ctx.file.gcc_binary
+    gpp = ctx.file.gpp_binary
+    ar  = ctx.file.ar_binary
+
+    action_configs = [
+        # C compilation
+        action_config(action_name = ACTION_NAMES.c_compile,           enabled = True, tools = [tool(tool = gcc)]),
+        action_config(action_name = ACTION_NAMES.assemble,            enabled = True, tools = [tool(tool = gcc)]),
+        action_config(action_name = ACTION_NAMES.preprocess_assemble, enabled = True, tools = [tool(tool = gcc)]),
+        # C++ compilation
+        action_config(action_name = ACTION_NAMES.cpp_compile,         enabled = True, tools = [tool(tool = gpp)]),
+        action_config(action_name = ACTION_NAMES.cpp_header_parsing,  enabled = True, tools = [tool(tool = gpp)]),
+        action_config(action_name = ACTION_NAMES.cpp_module_compile,  enabled = True, tools = [tool(tool = gpp)]),
+        action_config(action_name = ACTION_NAMES.cpp_module_codegen,  enabled = True, tools = [tool(tool = gpp)]),
+        action_config(action_name = ACTION_NAMES.linkstamp_compile,   enabled = True, tools = [tool(tool = gpp)]),
+        # Linking (GCC as driver — invokes ld internally)
+        action_config(action_name = ACTION_NAMES.cpp_link_executable,              enabled = True, tools = [tool(tool = gcc)]),
+        action_config(action_name = ACTION_NAMES.cpp_link_dynamic_library,         enabled = True, tools = [tool(tool = gcc)]),
+        action_config(action_name = ACTION_NAMES.cpp_link_nodeps_dynamic_library,  enabled = True, tools = [tool(tool = gcc)]),
+        # Archiving — implies archiver_flags so the feature is activated for this action
+        action_config(action_name = ACTION_NAMES.cpp_link_static_library, enabled = True, tools = [tool(tool = ar)], implies = ["archiver_flags"]),
     ]
 
     # ── Features ──────────────────────────────────────────────────────────────
 
-    # Board-specific compile flags.  The rule appends -MMD and -c so callers
-    # don't need to include them.
+    # Board-specific compile flags.  -MMD and -c are appended by the rule.
     default_compile_flags_feature = feature(
         name = "default_compile_flags",
         enabled = True,
         flag_sets = [
             flag_set(
-                actions = [ACTION_NAMES.c_compile],
+                actions = _C_COMPILE_ACTIONS,
                 flag_groups = [flag_group(flags = ctx.attr.compile_flags_c + ["-MMD", "-c"])],
             ),
             flag_set(
-                actions = [
-                    ACTION_NAMES.cpp_compile,
-                    ACTION_NAMES.cpp_header_parsing,
-                    ACTION_NAMES.cpp_module_compile,
-                    ACTION_NAMES.cpp_module_codegen,
-                ],
+                actions = _CXX_COMPILE_ACTIONS,
                 flag_groups = [flag_group(flags = ctx.attr.compile_flags_cxx + ["-MMD", "-c"])],
             ),
         ],
@@ -151,14 +149,54 @@ def _impl(ctx):
         enabled = True,
         flag_sets = [
             flag_set(
-                actions = _ALL_LINK_ACTIONS,
+                actions = _LINK_ACTIONS,
                 flag_groups = [flag_group(flags = ctx.attr.link_flags)],
             ),
         ],
     )
 
-    supports_pic_feature = feature(name = "supports_pic", enabled = False)
+    supports_pic_feature            = feature(name = "supports_pic",            enabled = False)
     supports_dynamic_linker_feature = feature(name = "supports_dynamic_linker", enabled = False)
+
+    # ar flags for cpp_link_static_library.
+    # With action_config, Bazel no longer auto-provides these — they must be
+    # explicit.  rcsD: create archive, add with index, use deterministic mode.
+    archiver_flags_feature = feature(
+        name = "archiver_flags",
+        flag_sets = [
+            flag_set(
+                actions = [ACTION_NAMES.cpp_link_static_library],
+                flag_groups = [
+                    flag_group(flags = ["rcsD"]),
+                    flag_group(
+                        flags = ["%{output_execpath}"],
+                        expand_if_available = "output_execpath",
+                    ),
+                    flag_group(
+                        iterate_over = "libraries_to_link",
+                        flag_groups = [
+                            flag_group(
+                                flags = ["%{libraries_to_link.name}"],
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
+                                    value = "object_file",
+                                ),
+                            ),
+                            flag_group(
+                                flags = ["%{libraries_to_link.object_files}"],
+                                iterate_over = "libraries_to_link.object_files",
+                                expand_if_equal = variable_with_value(
+                                    name = "libraries_to_link.type",
+                                    value = "object_file_group",
+                                ),
+                            ),
+                        ],
+                        expand_if_available = "libraries_to_link",
+                    ),
+                ],
+            ),
+        ],
+    )
 
     dependency_file_feature = feature(
         name = "dependency_file",
@@ -180,7 +218,7 @@ def _impl(ctx):
         name = "output_execpath_flags",
         flag_sets = [
             flag_set(
-                actions = _ALL_LINK_ACTIONS,
+                actions = _LINK_ACTIONS,
                 flag_groups = [
                     flag_group(
                         flags = ["-o", "%{output_execpath}"],
@@ -193,12 +231,11 @@ def _impl(ctx):
 
     # Wrap all libraries in --start-group/--end-group so embedded SDK archives
     # with circular dependencies link correctly regardless of order.
-    # (Arduino's platform.txt does the same thing.)
     libraries_to_link_feature = feature(
         name = "libraries_to_link",
         flag_sets = [
             flag_set(
-                actions = _ALL_LINK_ACTIONS,
+                actions = _LINK_ACTIONS,
                 flag_groups = [
                     flag_group(
                         flag_groups = [
@@ -297,7 +334,7 @@ def _impl(ctx):
         enabled = True,
         flag_sets = [
             flag_set(
-                actions = _ALL_COMPILE_ACTIONS + _ALL_LINK_ACTIONS,
+                actions = _ALL_COMPILE_ACTIONS + _LINK_ACTIONS,
                 flag_groups = [
                     flag_group(
                         flags = ["--sysroot=%{sysroot}"],
@@ -360,6 +397,7 @@ def _impl(ctx):
         default_link_flags_feature,
         supports_pic_feature,
         supports_dynamic_linker_feature,
+        archiver_flags_feature,
         dependency_file_feature,
         output_execpath_flags_feature,
         libraries_to_link_feature,
@@ -379,7 +417,7 @@ def _impl(ctx):
         compiler = "gcc",
         abi_version = ctx.attr.abi_version,
         abi_libc_version = ctx.attr.abi_libc_version,
-        tool_paths = tool_paths,
+        action_configs = action_configs,
         features = features,
         cxx_builtin_include_directories = cxx_builtin_include_directories,
     )
@@ -387,28 +425,35 @@ def _impl(ctx):
 cc_toolchain_config = rule(
     implementation = _impl,
     attrs = {
-        # ── Toolchain binary ──────────────────────────────────────────────────
-        "gcc_tool": attr.label(
+        # ── Toolchain binaries (referenced by label — no wrapper scripts needed)
+        "gcc_binary": attr.label(
             allow_single_file = True,
             mandatory = True,
-            doc = "GCC binary filegroup. Its execroot-relative path is used to " +
-                  "derive cxx_builtin_include_directories at analysis time.",
+            doc = "C compiler binary (e.g. @toolchain//:gcc). Also used as the " +
+                  "linker driver and to derive cxx_builtin_include_directories.",
+        ),
+        "gpp_binary": attr.label(
+            allow_single_file = True,
+            mandatory = True,
+            doc = "C++ compiler binary (e.g. @toolchain//:g++).",
+        ),
+        "ar_binary": attr.label(
+            allow_single_file = True,
+            mandatory = True,
+            doc = "Archiver binary (e.g. @toolchain//:ar).",
         ),
         # ── Include directory derivation ──────────────────────────────────────
-        # These two attrs together locate lib/gcc/<triple>/<version>/include
-        # and <triple>/include inside the toolchain archive.
         "toolchain_triple": attr.string(
             mandatory = True,
-            doc = "Target triple used in the GCC installation layout, e.g. " +
+            doc = "Target triple in the GCC installation layout, e.g. " +
                   "'xtensa-esp-elf' or 'arm-none-eabi'.",
         ),
         "gcc_version": attr.string(
             mandatory = True,
             doc = "GCC version string, e.g. '15.2.0'. Must match the version " +
-                  "in the toolchain archive. Keep in sync with the http_archive " +
-                  "URL in MODULE.bazel.",
+                  "in the toolchain archive. Keep in sync with MODULE.bazel.",
         ),
-        # ── Toolchain identity (passed to cc_common.create_cc_toolchain_config_info)
+        # ── Toolchain identity ────────────────────────────────────────────────
         "toolchain_identifier": attr.string(mandatory = True),
         "target_system_name":   attr.string(mandatory = True),
         "target_cpu":           attr.string(mandatory = True),
@@ -416,8 +461,8 @@ cc_toolchain_config = rule(
         "abi_version":          attr.string(default = "unknown"),
         "abi_libc_version":     attr.string(default = "unknown"),
         # ── Board-specific flags ──────────────────────────────────────────────
-        # Architecture flags, optimization level, language features.
-        # Do NOT include -std=, -MMD, or -c here; those are handled by the rule.
+        # Architecture flags, optimization, language features.
+        # Do NOT include -std=, -MMD, or -c; those are handled by the rule.
         "compile_flags_c":   attr.string_list(default = []),
         "compile_flags_cxx": attr.string_list(default = []),
         "link_flags":        attr.string_list(default = []),

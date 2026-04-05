@@ -1,7 +1,11 @@
 """Build file for the Xtensa ESP-ELF GCC archive (@xtensa_esp_elf_linux64).
 
-Binary prefix in the 15.x toolchain: xtensa-esp-elf-
-Verify after extraction: ls bin/
+The toolchain ships two binary families:
+  xtensa-esp-elf-*    — generic multi-target Xtensa (big-endian default)
+  xtensa-esp32-elf-*  — ESP32-specific (little-endian default, required)
+
+We always use the xtensa-esp32-elf-* variants so the compiler produces
+little-endian objects without needing extra flags.
 """
 
 package(default_visibility = ["//visibility:public"])
@@ -20,32 +24,32 @@ filegroup(
 
 filegroup(
     name = "gcc",
-    srcs = ["bin/xtensa-esp-elf-gcc"],
+    srcs = ["bin/xtensa-esp32-elf-gcc"],
 )
 
 filegroup(
     name = "g++",
-    srcs = ["bin/xtensa-esp-elf-g++"],
+    srcs = ["bin/xtensa-esp32-elf-g++"],
 )
 
 filegroup(
     name = "ar",
-    srcs = ["bin/xtensa-esp-elf-ar"],
+    srcs = ["bin/xtensa-esp32-elf-ar"],
 )
 
 filegroup(
     name = "ld",
-    srcs = ["bin/xtensa-esp-elf-ld"],
+    srcs = ["bin/xtensa-esp32-elf-ld"],
 )
 
 filegroup(
     name = "objcopy",
-    srcs = ["bin/xtensa-esp-elf-objcopy"],
+    srcs = ["bin/xtensa-esp32-elf-objcopy"],
 )
 
 filegroup(
     name = "strip",
-    srcs = ["bin/xtensa-esp-elf-strip"],
+    srcs = ["bin/xtensa-esp32-elf-strip"],
 )
 
 load("@rules_cc//cc:defs.bzl", "cc_library")

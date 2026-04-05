@@ -45,23 +45,8 @@ board_pins(
 filegroup(name = "empty")
 
 filegroup(
-    name = "wrapper_scripts",
-    srcs = [
-        ":xtensa_wrapper.sh",
-        ":cc_wrapper.sh",
-        ":gpp_wrapper.sh",
-        ":ar_wrapper.sh",
-        ":ld_wrapper.sh",
-        ":objcopy_wrapper.sh",
-    ],
-)
-
-filegroup(
     name = "all_files",
-    srcs = [
-        ":wrapper_scripts",
-        "@xtensa_esp_elf_linux64//:all_files",
-    ],
+    srcs = ["@xtensa_esp_elf_linux64//:all_files"],
 )
 
 # ── Toolchain config ─────────────────────────────────────────────────────────
@@ -72,7 +57,9 @@ _GCC_VERSION = "15.2.0"
 
 cc_toolchain_config(
     name = "xtensa_toolchain_config",
-    gcc_tool = "@xtensa_esp_elf_linux64//:gcc",
+    gcc_binary = "@xtensa_esp_elf_linux64//:gcc",
+    gpp_binary = "@xtensa_esp_elf_linux64//:g++",
+    ar_binary  = "@xtensa_esp_elf_linux64//:ar",
     toolchain_triple = "xtensa-esp-elf",
     gcc_version = _GCC_VERSION,
     toolchain_identifier = "xtensa-esp32-elf",
