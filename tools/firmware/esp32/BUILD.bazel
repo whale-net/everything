@@ -2,7 +2,7 @@
 
 load("@rules_cc//cc:defs.bzl", "cc_toolchain")
 load("@rules_python//python:defs.bzl", "py_binary")
-load(":cc_toolchain_config.bzl", "cc_toolchain_config")
+load("//tools/firmware:cc_toolchain_config.bzl", "cc_toolchain_config")
 load("//tools/firmware:boards.bzl", "firmware_board")
 load("//tools/firmware:pins.bzl", "board_pins")
 
@@ -66,7 +66,45 @@ filegroup(
 
 # ── Toolchain config ─────────────────────────────────────────────────────────
 
-cc_toolchain_config(name = "xtensa_toolchain_config")
+# GCC version — keep in sync with the xtensa_esp_elf_linux64 http_archive URL
+# in MODULE.bazel. Used to locate lib/gcc/xtensa-esp-elf/{version}/include.
+_GCC_VERSION = "15.2.0"
+
+cc_toolchain_config(
+    name = "xtensa_toolchain_config",
+    gcc_tool = "@xtensa_esp_elf_linux64//:gcc",
+    toolchain_triple = "xtensa-esp-elf",
+    gcc_version = _GCC_VERSION,
+    toolchain_identifier = "xtensa-esp32-elf",
+    target_system_name = "xtensa-esp32-elf",
+    target_cpu = "xtensa",
+    # Flags derived from Arduino ESP32 1.0.6 platform.txt.
+    # -std= is intentionally absent: SDK targets set their own standard
+    # (gnu11/gnu++11); Pigweed targets use the GCC 15 default (gnu++17).
+    compile_flags_c = [
+        "-mlongcalls",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-fstrict-volatile-bitfields",
+        "-Os",
+    ],
+    compile_flags_cxx = [
+        "-mlongcalls",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-fstrict-volatile-bitfields",
+        "-fno-exceptions",
+        "-fno-rtti",
+        "-Os",
+    ],
+    link_flags = [
+        "-nostdlib",
+        "-Wl,--gc-sections",
+        "-Wl,-static",
+        "-mlongcalls",
+        "-Wl,-EL",
+    ],
+)
 
 # ── cc_toolchain target ──────────────────────────────────────────────────────
 

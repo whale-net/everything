@@ -118,6 +118,11 @@ use_repo(python, "python_versions")
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 # ── ESP32 Xtensa GCC cross-compiler (Espressif crosstool-NG, GCC 15.2) ──────
+# GCC version: 15.2.0
+# When upgrading, update _GCC_VERSION in tools/firmware/esp32/BUILD.bazel to match.
+# The version string is used to locate compiler include directories at analysis time:
+#   lib/gcc/xtensa-esp-elf/{version}/include
+# (See tools/firmware/cc_toolchain_config.bzl for details.)
 http_archive(
     name = "xtensa_esp_elf_linux64",
     build_file = "//tools/firmware/esp32:xtensa_toolchain.BUILD",

@@ -1,94 +1,73 @@
-"""Xtensa ESP32 cc_toolchain_config rule.
+"""Generic cc_toolchain_config rule for embedded GCC cross-compilers.
 
-Targets the Espressif crosstool-NG GCC 15.2 toolchain
-(xtensa-esp-elf-*).  Compile / link flags derived from the Arduino
-ESP32 1.0.6 platform.txt.
+Parameterized so each board directory provides its own flags and identity
+without duplicating the feature machinery. The rule derives
+cxx_builtin_include_directories from gcc_tool + toolchain_triple + gcc_version,
+replacing the previous "whitelist the entire filesystem" hack.
 
-References:
-  - github.com/simonhorlick/bazel_esp32 (flag lists + structure)
-  - Bazel cc_toolchain_config API documentation
+### Adding a new board
+
+1.  Download the toolchain via http_archive in MODULE.bazel.
+2.  Write a build file for it (following xtensa_toolchain.BUILD as a template):
+      - filegroup :all_files
+      - filegroup :gcc  ← this is what gcc_tool points to
+      - cc_library :cxx_runtime (libgcc.a + libstdc++.a or equivalent)
+3.  In your board's BUILD.bazel:
+      load("//tools/firmware:cc_toolchain_config.bzl", "cc_toolchain_config")
+      cc_toolchain_config(
+          name = "..._toolchain_config",
+          gcc_tool          = "@your_toolchain//:gcc",
+          toolchain_triple  = "arm-none-eabi",       # must match lib/gcc/<triple>/
+          gcc_version       = "14.2.0",              # keep in sync with MODULE.bazel URL
+          toolchain_identifier  = "arm-none-eabi",
+          target_system_name    = "arm-none-eabi",
+          target_cpu            = "armv6m",
+          compile_flags_c   = ["-mcpu=cortex-m0plus", "-mthumb", "-Os", ...],
+          compile_flags_cxx = ["-mcpu=cortex-m0plus", "-mthumb", "-fno-exceptions", ...],
+          link_flags        = ["-nostdlib", "-Wl,--gc-sections", "-mcpu=cortex-m0plus", ...],
+      )
+4.  Create the same wrapper-script convention the ESP32 uses:
+      cc_wrapper.sh / gpp_wrapper.sh / ar_wrapper.sh / ld_wrapper.sh / objcopy_wrapper.sh
+    Each is a one-liner that delegates to your board's xtensa_wrapper.sh equivalent.
+
+### Wrapper script convention
+
+tool_path entries use paths relative to the cc_toolchain target's package, so
+"cc_wrapper.sh" resolves to <board-dir>/cc_wrapper.sh regardless of where this
+.bzl file lives.  All boards must provide files with these exact names.
+
+### cxx_builtin_include_directories
+
+The rule whitelists only the three standard GCC installation directories:
+  lib/gcc/<triple>/<version>/include
+  lib/gcc/<triple>/<version>/include-fixed
+  <triple>/include
+
+This is derived from the execroot-relative path of gcc_tool at analysis time.
+Bazel accepts execroot-relative paths in cxx_builtin_include_directories, so
+no absolute path or sysroot tricks are needed.
 """
 
 load(
     "@bazel_tools//tools/cpp:cc_toolchain_config_lib.bzl",
-    "action_config",
     "feature",
     "flag_group",
     "flag_set",
-    "tool",
     "tool_path",
     "variable_with_value",
-    "with_feature_set",
 )
 load("@bazel_tools//tools/build_defs/cc:action_names.bzl", "ACTION_NAMES")
 
-# ── Toolchain binary paths ───────────────────────────────────────────────────
-# Tool paths are relative to the cc_toolchain package (tools/firmware/esp32/).
-# We use shell wrappers rather than direct binaries because:
-#   1. bzlmod canonical repo names (e.g. +_repo_rules2+xtensa_esp_elf_linux64)
-#      can't be referenced by a stable relative path from here.
-#   2. The gcc/g++ wrappers also strip x86-only flags that Xtensa GCC rejects.
-# The wrappers use a glob (external/*xtensa_esp_elf_linux64/bin) to locate
-# the toolchain regardless of the bzlmod canonical prefix.
-
+# ── Wrapper script names (relative to the cc_toolchain target's package) ─────
+# Each board directory must provide files with exactly these names.
 _GCC     = "cc_wrapper.sh"
 _GPP     = "gpp_wrapper.sh"
 _AR      = "ar_wrapper.sh"
 _LD      = "ld_wrapper.sh"
 _OBJCOPY = "objcopy_wrapper.sh"
-_STRIP   = "/bin/false"
-_CPP     = "cc_wrapper.sh"   # gcc -E handles preprocessing
-_OBJDUMP = "/bin/false"
-_NM      = "/bin/false"
+_CPP     = "cc_wrapper.sh"    # gcc -E handles preprocessing
 
-# ── Compiler / linker flags from Arduino 1.0.6 platform.txt ────────────────
-
-_COMPILE_FLAGS_C = [
-    "-mlongcalls",
-    "-ffunction-sections",
-    "-fdata-sections",
-    "-fstrict-volatile-bitfields",
-    "-Os",
-    # No -std= here: Arduino core sets -std=gnu11 in its own copts.
-    "-MMD",
-    "-c",
-]
-
-_COMPILE_FLAGS_CXX = [
-    "-mlongcalls",
-    "-ffunction-sections",
-    "-fdata-sections",
-    "-fstrict-volatile-bitfields",
-    "-fno-exceptions",
-    "-fno-rtti",
-    "-Os",
-    # No -std= here: Arduino core sets -std=gnu++11 in its own copts, and
-    # Pigweed requires C++17. The toolchain default (GCC 15 = gnu++17) is used
-    # when no explicit standard is specified by the target.
-    "-MMD",
-    "-c",
-]
-
-_LINK_FLAGS = [
-    "-nostdlib",
-    "-Wl,--gc-sections",
-    "-Wl,-static",
-    "-mlongcalls",
-    "-Wl,-EL",
-]
-
-# ── Built-in include directories ─────────────────────────────────────────────
-
-_CXX_BUILTIN_INCLUDE_DIRECTORIES = [
-    # Whitelist the entire filesystem so Bazel doesn't reject implicit headers
-    # pulled in by xtensa-esp-elf-gcc or the Arduino ESP32 core.  The toolchain
-    # is hermetic (sha256-pinned http_archive), so this doesn't compromise
-    # reproducibility.  A tighter list would require embedding the bzlmod
-    # canonical repo name, which is not stable across MODULE.bazel changes.
-    "/",
-]
-
-# ── Action sets (all C/C++ compile + link actions) ───────────────────────────
+# ── Action sets ───────────────────────────────────────────────────────────────
 
 _ALL_COMPILE_ACTIONS = [
     ACTION_NAMES.c_compile,
@@ -110,7 +89,24 @@ _ALL_LINK_ACTIONS = [
 ]
 
 def _impl(ctx):
-    # ── Tool paths ──────────────────────────────────────────────────────────
+    # ── Derive toolchain include directories ──────────────────────────────────
+    # ctx.file.gcc_tool.path is execroot-relative, e.g.:
+    #   external/+_repo_rules2+xtensa_esp_elf_linux64/bin/xtensa-esp-elf-gcc
+    # Strip everything from "/bin/" onward to get the toolchain root.
+    # Bazel accepts execroot-relative paths in cxx_builtin_include_directories.
+    gcc_path = ctx.file.gcc_tool.path
+    toolchain_root = gcc_path[:gcc_path.rfind("/bin/")]
+    triple = ctx.attr.toolchain_triple
+    version = ctx.attr.gcc_version
+
+    cxx_builtin_include_directories = [
+        toolchain_root + "/lib/gcc/" + triple + "/" + version + "/include",
+        toolchain_root + "/lib/gcc/" + triple + "/" + version + "/include-fixed",
+        toolchain_root + "/" + triple + "/include",
+        toolchain_root + "/" + triple + "/sys-include",
+    ]
+
+    # ── Tool paths ────────────────────────────────────────────────────────────
     tool_paths = [
         tool_path(name = "gcc",     path = _GCC),
         tool_path(name = "g++",     path = _GPP),
@@ -118,24 +114,25 @@ def _impl(ctx):
         tool_path(name = "ar",      path = _AR),
         tool_path(name = "ld",      path = _LD),
         tool_path(name = "objcopy", path = _OBJCOPY),
-        tool_path(name = "strip",   path = _STRIP),
-        tool_path(name = "objdump", path = _OBJDUMP),
-        tool_path(name = "nm",      path = _NM),
-        # gcov not used for embedded, but the field must be present
+        tool_path(name = "strip",   path = "/bin/false"),
+        tool_path(name = "objdump", path = "/bin/false"),
+        tool_path(name = "nm",      path = "/bin/false"),
         tool_path(name = "gcov",    path = "/bin/false"),
         tool_path(name = "dwp",     path = "/bin/false"),
         tool_path(name = "llvm-profdata", path = "/bin/false"),
     ]
 
-    # ── Features ────────────────────────────────────────────────────────────
+    # ── Features ──────────────────────────────────────────────────────────────
 
+    # Board-specific compile flags.  The rule appends -MMD and -c so callers
+    # don't need to include them.
     default_compile_flags_feature = feature(
         name = "default_compile_flags",
         enabled = True,
         flag_sets = [
             flag_set(
                 actions = [ACTION_NAMES.c_compile],
-                flag_groups = [flag_group(flags = _COMPILE_FLAGS_C)],
+                flag_groups = [flag_group(flags = ctx.attr.compile_flags_c + ["-MMD", "-c"])],
             ),
             flag_set(
                 actions = [
@@ -144,7 +141,7 @@ def _impl(ctx):
                     ACTION_NAMES.cpp_module_compile,
                     ACTION_NAMES.cpp_module_codegen,
                 ],
-                flag_groups = [flag_group(flags = _COMPILE_FLAGS_CXX)],
+                flag_groups = [flag_group(flags = ctx.attr.compile_flags_cxx + ["-MMD", "-c"])],
             ),
         ],
     )
@@ -155,16 +152,14 @@ def _impl(ctx):
         flag_sets = [
             flag_set(
                 actions = _ALL_LINK_ACTIONS,
-                flag_groups = [flag_group(flags = _LINK_FLAGS)],
+                flag_groups = [flag_group(flags = ctx.attr.link_flags)],
             ),
         ],
     )
 
-    # Supports #include <header> with absolute paths in the sandbox
     supports_pic_feature = feature(name = "supports_pic", enabled = False)
     supports_dynamic_linker_feature = feature(name = "supports_dynamic_linker", enabled = False)
 
-    # Required by Bazel's C++ rules to emit dependency files
     dependency_file_feature = feature(
         name = "dependency_file",
         enabled = True,
@@ -196,16 +191,15 @@ def _impl(ctx):
         ],
     )
 
+    # Wrap all libraries in --start-group/--end-group so embedded SDK archives
+    # with circular dependencies link correctly regardless of order.
+    # (Arduino's platform.txt does the same thing.)
     libraries_to_link_feature = feature(
         name = "libraries_to_link",
         flag_sets = [
             flag_set(
                 actions = _ALL_LINK_ACTIONS,
                 flag_groups = [
-                    # Wrap all libraries in --start-group/--end-group so the ESP32
-                    # Arduino core, user code, and SDK libs can be linked regardless
-                    # of order. Arduino's platform.txt does the same thing; the SDK
-                    # has circular deps and the core references SDK symbols.
                     flag_group(
                         flag_groups = [
                             flag_group(flags = ["-Wl,--start-group"]),
@@ -358,38 +352,9 @@ def _impl(ctx):
         ],
     )
 
-    source_file_feature = feature(
-        name = "source_file",
-        enabled = True,
-        flag_sets = [
-            flag_set(
-                actions = _ALL_COMPILE_ACTIONS,
-                flag_groups = [
-                    flag_group(
-                        flags = ["%{source_file}"],
-                        expand_if_available = "source_file",
-                    ),
-                ],
-            ),
-        ],
-    )
-
-    output_compile_flags_feature = feature(
-        name = "output_compile_flags",
-        enabled = True,
-        flag_sets = [
-            flag_set(
-                actions = _ALL_COMPILE_ACTIONS,
-                flag_groups = [
-                    flag_group(
-                        flags = ["-o", "%{output_file}"],
-                        expand_if_available = "output_file",
-                    ),
-                ],
-            ),
-        ],
-    )
-
+    # Note: source_file and output_compile_flags features are intentionally
+    # omitted — Bazel's CppCompile action already appends "-c <src> -o <out>"
+    # as a legacy default; adding them again would duplicate the source file.
     features = [
         default_compile_flags_feature,
         default_link_flags_feature,
@@ -402,29 +367,60 @@ def _impl(ctx):
         sysroot_feature,
         includes_feature,
         include_paths_feature,
-        # source_file_feature and output_compile_flags_feature are intentionally
-        # omitted: Bazel's CppCompile action already appends "-c <src> -o <out>"
-        # as a legacy default; adding them again via features would duplicate the
-        # source file on the command line, causing gcc to reject the invocation.
     ]
 
     return cc_common.create_cc_toolchain_config_info(
         ctx = ctx,
-        toolchain_identifier = "xtensa-esp32-elf",
+        toolchain_identifier = ctx.attr.toolchain_identifier,
         host_system_name = "x86_64-unknown-linux-gnu",
-        target_system_name = "xtensa-esp32-elf",
-        target_cpu = "xtensa",
-        target_libc = "unknown",
+        target_system_name = ctx.attr.target_system_name,
+        target_cpu = ctx.attr.target_cpu,
+        target_libc = ctx.attr.target_libc,
         compiler = "gcc",
-        abi_version = "unknown",
-        abi_libc_version = "unknown",
+        abi_version = ctx.attr.abi_version,
+        abi_libc_version = ctx.attr.abi_libc_version,
         tool_paths = tool_paths,
         features = features,
-        cxx_builtin_include_directories = _CXX_BUILTIN_INCLUDE_DIRECTORIES,
+        cxx_builtin_include_directories = cxx_builtin_include_directories,
     )
 
 cc_toolchain_config = rule(
     implementation = _impl,
-    attrs = {},
+    attrs = {
+        # ── Toolchain binary ──────────────────────────────────────────────────
+        "gcc_tool": attr.label(
+            allow_single_file = True,
+            mandatory = True,
+            doc = "GCC binary filegroup. Its execroot-relative path is used to " +
+                  "derive cxx_builtin_include_directories at analysis time.",
+        ),
+        # ── Include directory derivation ──────────────────────────────────────
+        # These two attrs together locate lib/gcc/<triple>/<version>/include
+        # and <triple>/include inside the toolchain archive.
+        "toolchain_triple": attr.string(
+            mandatory = True,
+            doc = "Target triple used in the GCC installation layout, e.g. " +
+                  "'xtensa-esp-elf' or 'arm-none-eabi'.",
+        ),
+        "gcc_version": attr.string(
+            mandatory = True,
+            doc = "GCC version string, e.g. '15.2.0'. Must match the version " +
+                  "in the toolchain archive. Keep in sync with the http_archive " +
+                  "URL in MODULE.bazel.",
+        ),
+        # ── Toolchain identity (passed to cc_common.create_cc_toolchain_config_info)
+        "toolchain_identifier": attr.string(mandatory = True),
+        "target_system_name":   attr.string(mandatory = True),
+        "target_cpu":           attr.string(mandatory = True),
+        "target_libc":          attr.string(default = "unknown"),
+        "abi_version":          attr.string(default = "unknown"),
+        "abi_libc_version":     attr.string(default = "unknown"),
+        # ── Board-specific flags ──────────────────────────────────────────────
+        # Architecture flags, optimization level, language features.
+        # Do NOT include -std=, -MMD, or -c here; those are handled by the rule.
+        "compile_flags_c":   attr.string_list(default = []),
+        "compile_flags_cxx": attr.string_list(default = []),
+        "link_flags":        attr.string_list(default = []),
+    },
     provides = [CcToolchainConfigInfo],
 )
