@@ -50,21 +50,6 @@ _exec_hosted_tool = rule(
     },
 )
 
-def _label_to_runfile(label):
-    """Convert a //pkg:target or :target label to a _main-workspace runfile path."""
-    if label.startswith("//"):
-        colon = label.find(":")
-        if colon >= 0:
-            pkg = label[2:colon]
-            target = label[colon + 1:]
-        else:
-            pkg = label[2:]
-            target = pkg.split("/")[-1]
-        return "_main/{}/{}".format(pkg, target)
-    elif label.startswith(":"):
-        return "_main/{}/{}".format(native.package_name(), label[1:])
-    return label
-
 def flash_firmware(name, firmware_name, board_config, tags = None, visibility = None):
     """Create a 'bazel run' target that flashes a firmware binary to a board.
 

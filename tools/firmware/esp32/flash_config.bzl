@@ -10,9 +10,9 @@ ESP32_DIO_80M = struct(
     tool = "esptool",
     chip = "esp32",
     baud = 921600,
-    before = "default_reset",
-    after = "hard_reset",
-    write_flash_args = "--flash_mode dio --flash_freq 80m --flash_size 4MB",
+    before = "default-reset",
+    after = "hard-reset",
+    write_flash_args = "--flash-mode dio --flash-freq 80m --flash-size 4MB",
     app_offset = "0x10000",
     # Runfile-root-relative paths for segments flashed before the app binary.
     # The bash runfiles library resolves the `arduino_esp32` prefix via the
@@ -37,9 +37,9 @@ ESP32_QIO_80M = struct(
     tool = "esptool",
     chip = "esp32",
     baud = 921600,
-    before = "default_reset",
-    after = "hard_reset",
-    write_flash_args = "--flash_mode qio --flash_freq 80m --flash_size 4MB",
+    before = "default-reset",
+    after = "hard-reset",
+    write_flash_args = "--flash-mode qio --flash-freq 80m --flash-size 4MB",
     app_offset = "0x10000",
     pre_segments = [
         ("0x1000", "arduino_esp32/tools/sdk/bin/bootloader_qio_80m.bin"),

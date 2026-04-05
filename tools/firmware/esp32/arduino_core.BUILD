@@ -144,11 +144,9 @@ cc_library(
         ["cores/esp32/**/*.cpp"],
         exclude = ["cores/esp32/main.cpp"],
     ),
-    hdrs = glob([
-        "cores/esp32/**/*.h",
-        "variants/esp32/**/*.h",
-        "tools/sdk/include/**/*.h",
-    ]),
+    # hdrs and includes are intentionally omitted: core_c_lib already declares
+    # them and exports them transitively (Bazel propagates cc_library hdrs and
+    # includes through the dep graph). Declaring them again would be redundant.
     copts = [
         "-mlongcalls",
         "-ffunction-sections",
@@ -159,10 +157,6 @@ cc_library(
         "-Os",
         "-std=gnu++11",
     ] + _GCC15_COMPAT,
-    includes = [
-        "cores/esp32",
-        "variants/esp32",
-    ] + _SDK_INCLUDES,
     target_compatible_with = [
         "@platforms//os:none",
         "@@//tools/firmware:cpu_xtensa",

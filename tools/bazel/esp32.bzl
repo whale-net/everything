@@ -90,7 +90,6 @@ def esp32_firmware(name, srcs, deps = [], copts = [], flash_config = None, **kwa
         target_compatible_with = ESP32_COMPAT,
         deps = [
             ":" + name + "_lib",
-            "@arduino_esp32//:core_c_lib",
             "@arduino_esp32//:core_lib",
             # Precompiled ESP-IDF SDK libs (inside --start-group via toolchain feature)
             "@arduino_esp32//:sdk_lib",
