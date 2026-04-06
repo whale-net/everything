@@ -3,16 +3,17 @@
 
 #include <Arduino.h>
 #include "board_pins.h"  // provided by //tools/firmware:board_pins
+#include "pw_log/log.h"
 
 void setup() {
     Serial.begin(115200);
     pinMode(board::kLed, OUTPUT);
-    Serial.printf("Blink starting (LED pin=%d)\n", board::kLed);
+    PW_LOG_INFO("Blink starting (LED pin=%d)", board::kLed);
 }
 
 void loop() {
     digitalWrite(board::kLed, HIGH);
-    delay(300);
+    delay(100);
     digitalWrite(board::kLed, LOW);
-    delay(300);
+    delay(1000);
 }

@@ -157,6 +157,20 @@ toolchain(
     toolchain_type = "@rules_cc//cc:toolchain_type",
 )
 
+# ── Partition table generation: CSV → BIN ───────────────────────────────────
+# gen_esp32part.py is bundled in the Arduino ESP32 core archive; it uses only
+# Python stdlib so we can invoke it directly without a py_binary wrapper.
+
+genrule(
+    name = "max_app_4MB_bin",
+    srcs = [
+        "@arduino_esp32//:tools/partitions/max_app_4MB.csv",
+        "@arduino_esp32//:tools/gen_esp32part.py",
+    ],
+    outs = ["max_app_4MB.bin"],
+    cmd = "python3 $(location @arduino_esp32//:tools/gen_esp32part.py) $(location @arduino_esp32//:tools/partitions/max_app_4MB.csv) $@",
+)
+
 # ── Bootloader conversion: ELF → BIN ────────────────────────────────────────
 # Arduino ESP32 3.x ships bootloaders as ELF files; esptool elf2image converts
 # them to the raw binary format required for flashing.

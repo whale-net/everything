@@ -23,6 +23,11 @@ filegroup(
     srcs = glob(["tools/partitions/*.bin"]),
 )
 
+exports_files([
+    "tools/gen_esp32part.py",
+    "tools/partitions/max_app_4MB.csv",
+])
+
 # ── GCC 15 compatibility flags (applied to all Arduino core targets) ─────────
 # GCC 15 is stricter about transitive headers, implicit conversions, and POSIX
 # feature-test macros. These flags paper over upstream code that predates GCC 15.

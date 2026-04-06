@@ -16,6 +16,7 @@ load("@rules_cc//cc:defs.bzl", "cc_test")
 esp32_firmware(
     name = "blink",
     srcs = ["blink.cc"],
+    deps = ["@pigweed//pw_log"],
 )
 
 # ── Host-side unit tests (no hardware needed) ────────────────────────────────
