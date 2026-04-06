@@ -65,5 +65,10 @@ cc_library(
         # glob matches regardless of GCC version (e.g. 15.2.0 → 16.x on upgrade)
         "lib/gcc/xtensa-esp-elf/*/esp32/libgcc.a",
         "xtensa-esp-elf/lib/esp32/libstdc++.a",
+        # newlib libc and libm for ESP32 — provide memcpy/memset/fprintf etc.
+        # Use the plain esp32 variant (not no-rtti/psram) to match the
+        # toolchain's default search path when -lc / -lm are passed.
+        "xtensa-esp-elf/lib/esp32/libc.a",
+        "xtensa-esp-elf/lib/esp32/libm.a",
     ]),
 )

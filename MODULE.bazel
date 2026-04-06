@@ -140,13 +140,24 @@ http_archive(
     urls = ["https://codeload.github.com/knolleary/pubsubclient/zip/refs/tags/v2.8"],
 )
 
-# ── Arduino ESP32 core 1.0.6 (simpler flags; migrate to 3.x after POC) ──────
+# ── Arduino ESP32 3.3.7 (ESP-IDF v5.5.2) ─────────────────────────────────────
+# Release is split into two archives:
+#   arduino_esp32      — framework sources: cores/, libraries/, variants/, tools/partitions/
+#   arduino_esp32_libs — precompiled SDK:   include/, lib/*.a, ld/*.ld, bin/bootloader_*.elf
 http_archive(
     name = "arduino_esp32",
     build_file = "//tools/firmware/esp32:arduino_core.BUILD",
-    sha256 = "982da9aaa181b6cb9c692dd4c9622b022ecc0d1e3aa0c5b70428ccc3c1b4556b",
-    strip_prefix = "esp32-1.0.6",
-    urls = ["https://github.com/espressif/arduino-esp32/releases/download/1.0.6/esp32-1.0.6.zip"],
+    sha256 = "5267dc9a240daf4b8d26d3a1eb4c4f1dc8a40d43d527e6f6ce08cb6baaf6efac",
+    strip_prefix = "esp32-core-3.3.7",
+    urls = ["https://github.com/espressif/arduino-esp32/releases/download/3.3.7/esp32-core-3.3.7.zip"],
+)
+
+http_archive(
+    name = "arduino_esp32_libs",
+    build_file = "//tools/firmware/esp32:arduino_libs.BUILD",
+    sha256 = "913cffb43e7fdd8f8ddcd045908fa49f98dfff28832706c850b66fe9ab324bd7",
+    strip_prefix = "esp32-libs",
+    urls = ["https://github.com/espressif/arduino-esp32/releases/download/3.3.7/esp32-libs-3.3.7.zip"],
 )
 
 # ── Toolchain registration ───────────────────────────────────────────────────

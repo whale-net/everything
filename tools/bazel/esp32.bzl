@@ -53,16 +53,20 @@ def esp32_firmware(name, srcs, deps = [], copts = [], flash_config = None, **kwa
         **kwargs
     )
 
-    # Linker scripts define ESP32 memory layout (same set Arduino 1.0.6 uses).
+    # Linker scripts define ESP32 memory layout (Arduino ESP32 3.x / ESP-IDF v5.5.2).
     # Must be in additional_linker_inputs so Bazel stages them in the sandbox
     # before the link action runs; referenced via $(execpath ...) below.
+    # Order matches flags/ld_flags in the esp32-libs archive.
     _ldscripts = [
-        "@arduino_esp32//:tools/sdk/ld/esp32_out.ld",
-        "@arduino_esp32//:tools/sdk/ld/esp32.project.ld",
-        "@arduino_esp32//:tools/sdk/ld/esp32.rom.ld",
-        "@arduino_esp32//:tools/sdk/ld/esp32.peripherals.ld",
-        "@arduino_esp32//:tools/sdk/ld/esp32.rom.libgcc.ld",
-        "@arduino_esp32//:tools/sdk/ld/esp32.rom.spiram_incompatible_fns.ld",
+        "@arduino_esp32_libs//:ld/esp32.rom.redefined.ld",
+        "@arduino_esp32_libs//:ld/esp32.peripherals.ld",
+        "@arduino_esp32_libs//:ld/esp32.rom.ld",
+        "@arduino_esp32_libs//:ld/esp32.rom.api.ld",
+        "@arduino_esp32_libs//:ld/esp32.rom.libgcc.ld",
+        "@arduino_esp32_libs//:ld/esp32.rom.newlib-data.ld",
+        "@arduino_esp32_libs//:ld/esp32.rom.syscalls.ld",
+        "@arduino_esp32_libs//:ld/memory.ld",
+        "@arduino_esp32_libs//:ld/sections.ld",
     ]
 
     cc_binary(
@@ -72,27 +76,69 @@ def esp32_firmware(name, srcs, deps = [], copts = [], flash_config = None, **kwa
         linkopts = [
             # -nostdlib / --gc-sections / -static / -EL are set by the toolchain's
             # default_link_flags_feature (cc_toolchain_config.bzl) — not repeated here.
-            # Linker scripts — memory layout & ROM symbol mappings
-            "-T", "$(execpath @arduino_esp32//:tools/sdk/ld/esp32_out.ld)",
-            "-T", "$(execpath @arduino_esp32//:tools/sdk/ld/esp32.project.ld)",
-            "-T", "$(execpath @arduino_esp32//:tools/sdk/ld/esp32.rom.ld)",
-            "-T", "$(execpath @arduino_esp32//:tools/sdk/ld/esp32.peripherals.ld)",
-            "-T", "$(execpath @arduino_esp32//:tools/sdk/ld/esp32.rom.libgcc.ld)",
-            "-T", "$(execpath @arduino_esp32//:tools/sdk/ld/esp32.rom.spiram_incompatible_fns.ld)",
-            # Force-include entry points and guard symbols (same as Arduino 1.0.6)
+            # Linker scripts — order matches flags/ld_scripts in the esp32-libs archive.
+            "-T", "$(execpath @arduino_esp32_libs//:ld/esp32.rom.redefined.ld)",
+            "-T", "$(execpath @arduino_esp32_libs//:ld/esp32.peripherals.ld)",
+            "-T", "$(execpath @arduino_esp32_libs//:ld/esp32.rom.ld)",
+            "-T", "$(execpath @arduino_esp32_libs//:ld/esp32.rom.api.ld)",
+            "-T", "$(execpath @arduino_esp32_libs//:ld/esp32.rom.libgcc.ld)",
+            "-T", "$(execpath @arduino_esp32_libs//:ld/esp32.rom.newlib-data.ld)",
+            "-T", "$(execpath @arduino_esp32_libs//:ld/esp32.rom.syscalls.ld)",
+            "-T", "$(execpath @arduino_esp32_libs//:ld/memory.ld)",
+            "-T", "$(execpath @arduino_esp32_libs//:ld/sections.ld)",
+            # Linker defines and options — derived from flags/ld_flags in the esp32-libs archive.
+            "-Wl,--defsym=IDF_TARGET_ESP32=0",
+            "-Wl,--no-warn-rwx-segments",
+            "-Wl,--orphan-handling=warn",
+            "-Wl,--warn-common",
+            "-Wl,--wrap=log_printf",
+            "-Wl,--wrap=longjmp",
+            # Force-include entry points — derived verbatim from flags/ld_flags.
+            "-u", "nvs_sec_provider_include_impl",
+            "-u", "ld_include_hli_vectors_bt",
+            "-u", "_Z5setupv",       # setup() — Arduino entry point
+            "-u", "_Z4loopv",        # loop()  — Arduino entry point
             "-u", "esp_app_desc",
-            "-u", "ld_include_panic_highint_hdl",
-            "-u", "call_user_start_cpu0",
-            "-Wl,--undefined=uxTopUsedPriority",
+            "-u", "esp_efuse_startup_include_func",
+            "-u", "ld_include_highint_hdl",
+            "-u", "start_app",
+            "-u", "start_app_other_cores",
+            "-u", "__ubsan_include",
+            "-u", "esp_system_include_startup_funcs",
+            "-u", "__assert_func",
+            "-u", "esp_dport_access_reg_read",
+            "-u", "esp_security_init_include_impl",
+            "-Wl,--undefined=FreeRTOS_openocd_params",
+            "-u", "app_main",
+            "-u", "esp_libc_include_heap_impl",
+            "-u", "esp_libc_include_reent_syscalls_impl",
+            "-u", "esp_libc_include_syscalls_impl",
+            "-u", "esp_libc_include_pthread_impl",
+            "-u", "esp_libc_include_assert_impl",
+            "-u", "esp_libc_include_getentropy_impl",
+            "-u", "esp_libc_include_init_funcs",
+            "-u", "esp_libc_init_funcs",
+            "-u", "pthread_include_pthread_impl",
+            "-u", "pthread_include_pthread_cond_var_impl",
+            "-u", "pthread_include_pthread_local_storage_impl",
+            "-u", "pthread_include_pthread_rwlock_impl",
+            "-u", "pthread_include_pthread_semaphore_impl",
             "-u", "__cxa_guard_dummy",
-            "-u", "__cxx_fatal_exception",
+            "-u", "__cxx_init_dummy",
+            "-u", "esp_timer_init_include_func",
+            "-u", "uart_vfs_include_dev_init",
+            "-u", "include_esp_phy_override",
+            "-u", "esp_vfs_include_console_register",
+            "-u", "vfs_include_syscalls_impl",
+            "-u", "esp_vfs_include_nullfs_register",
+            "-u", "esp_system_include_coredump_init",
         ],
         target_compatible_with = ESP32_COMPAT,
         deps = [
             ":" + name + "_lib",
             "@arduino_esp32//:core_lib",
             # Precompiled ESP-IDF SDK libs (inside --start-group via toolchain feature)
-            "@arduino_esp32//:sdk_lib",
+            "@arduino_esp32_libs//:sdk_lib",
             # GCC runtime + libstdc++ as deps so they're inside --start-group,
             # letting the linker resolve circular refs with SDK's libc/nvs_flash.
             "@xtensa_esp_elf_linux64//:esp32_cxx_runtime",
