@@ -26,17 +26,6 @@ filegroup(
 # ── GCC 15 compatibility flags (applied to all Arduino core targets) ─────────
 # GCC 15 is stricter about transitive headers, implicit conversions, and POSIX
 # feature-test macros. These flags paper over upstream code that predates GCC 15.
-# Arduino board/variant identity defines.
-# ARDUINO_BOARD and ARDUINO_VARIANT are used by Arduino framework code (e.g.
-# chip-debug-report.cpp) to embed board information in the build.
-_ARDUINO_DEFINES = [
-    "ARDUINO=10816",        # Arduino version 1.8.16 (Arduino-ESP32 3.x convention)
-    "ARDUINO_ESP32_DEV",    # Board macro (generic ESP32 dev board)
-    'ARDUINO_BOARD=\\"ESP32_DEV\\"',
-    'ARDUINO_VARIANT=\\"esp32\\"',
-    "ARDUINO_ARCH_ESP32",
-]
-
 _GCC15_COMPAT = [
     "-include", "stdint.h",               # stdint types not always transitively available
     "-Wno-error=int-conversion",           # promoted to hard errors in GCC 15
@@ -65,7 +54,10 @@ cc_library(
         "-Os",
         "-std=gnu17",
     ] + _GCC15_COMPAT,
-    defines = _ARDUINO_DEFINES,
+    defines = [
+        "ARDUINO=10816",        # Arduino-ESP32 3.x API version
+        "ARDUINO_ARCH_ESP32",
+    ],
     includes = [
         "cores/esp32",
         "variants/esp32",
@@ -74,7 +66,13 @@ cc_library(
         "@platforms//os:none",
         "@@//tools/firmware:cpu_xtensa",
     ],
-    deps = ["@arduino_esp32_libs//:sdk_lib"],
+    # @@//tools/firmware/esp32:arduino_board_defines supplies ARDUINO_BOARD,
+    # ARDUINO_VARIANT, and the board macro via select() on board constraint values.
+    # Its defines propagate here because core_c_lib depends on it.
+    deps = [
+        "@arduino_esp32_libs//:sdk_lib",
+        "@@//tools/firmware/esp32:arduino_board_defines",
+    ],
 )
 
 # ── Arduino core C++ sources ─────────────────────────────────────────────────

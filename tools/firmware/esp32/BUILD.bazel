@@ -23,6 +23,38 @@ config_setting(
     constraint_values = ["//tools/firmware:board_elegoo_esp32"],
 )
 
+# ── Arduino board identity ───────────────────────────────────────────────────
+# Provides ARDUINO_BOARD, ARDUINO_VARIANT, and the board macro to the Arduino
+# core library (core_c_lib / core_lib in @arduino_esp32//:arduino_core.BUILD).
+# Defines propagate downstream: arduino_board_defines → core_c_lib → core_lib.
+# To add a new ESP32 board: add a config_setting + select() branch here.
+#
+# Referenced from @arduino_esp32//:arduino_core.BUILD as
+#   @@//tools/firmware/esp32:arduino_board_defines
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "arduino_board_defines",
+    defines = select({
+        ":is_elegoo_esp32": [
+            "ARDUINO_ESP32_DEV",
+            'ARDUINO_BOARD=\\"ESP32_DEV\\"',
+            'ARDUINO_VARIANT=\\"esp32\\"',
+        ],
+        # Default — generic ESP32 dev board; override by adding a board-specific branch.
+        "//conditions:default": [
+            "ARDUINO_ESP32_DEV",
+            'ARDUINO_BOARD=\\"ESP32_DEV\\"',
+            'ARDUINO_VARIANT=\\"esp32\\"',
+        ],
+    }),
+    target_compatible_with = [
+        "@platforms//os:none",
+        "//tools/firmware:cpu_xtensa",
+    ],
+)
+
 # ── Pin definitions ───────────────────────────────────────────────────────────
 # Pin names are PascalCase logical identifiers; numbers are GPIO indices.
 # These map to the ELEGOO ESP32 dev board (standard ESP32 DevKit v1 layout).
