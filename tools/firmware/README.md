@@ -40,16 +40,12 @@ tools/firmware/
                            #   + bootloader ELF→BIN genrules
                            #   + partition table CSV→BIN genrule
     cc_toolchain_config.bzl  # Xtensa cc_toolchain_config rule
-    cc_wrapper.sh          # strips unsupported host flags before invoking GCC
-    gpp_wrapper.sh         # same for g++
-    ar_wrapper.sh          # same for ar
-    ld_wrapper.sh          # same for ld
-    objcopy_wrapper.sh     # same for objcopy
     flash_config.bzl       # ESP32_DIO_80M / ESP32_QIO_80M flash config structs
     xtensa_toolchain.BUILD # build_file for the Xtensa GCC http_archive
     arduino_core.BUILD     # build_file for @arduino_esp32 (framework sources)
     arduino_libs.BUILD     # build_file for @arduino_esp32_libs (ESP-IDF SDK)
     esptool_wrapper.py     # thin py_binary wrapper around the esptool package
+    pubsubclient.BUILD     # build_file for @pubsubclient (MQTT client library)
   flash/
     flash.py               # board-agnostic flash driver (esptool / avrdude / picotool)
 
@@ -140,10 +136,29 @@ All three are generated at build time — nothing is checked in as a binary arti
 
 ### Monitor serial output
 
+`pw_log_basic` writes through `pw_sys_io_stdio` → `printf` → UART0, which is the same CP2102 bridge used for flashing. No separate connection needed.
+
 ```bash
+# screen (most common)
 screen /dev/ttyUSB0 115200
-# Ctrl-A K to exit screen
+# Ctrl-A K to exit
+
+# pyserial miniterm (already available — esptool pulled it in)
+python3 -m serial.tools.miniterm /dev/ttyUSB0 115200
+# Ctrl-] to exit
+
+# raw stream (no interactivity, useful for scripting)
+stty -F /dev/ttyUSB0 115200 raw && cat /dev/ttyUSB0
 ```
+
+Output format from `pw_log_basic`:
+```
+INF Blink starting (LED pin=2)
+INF LED ON
+INF LED OFF
+```
+
+**Tip:** `setup()` runs immediately after reset, before you can open a terminal. If you want to catch the startup log line, open the monitor first, then press the reset button on the board.
 
 ---
 
@@ -230,9 +245,9 @@ Binary prefix: `xtensa-esp32-elf-` (little-endian; required for ESP32 LX6)
 
 `_GCC_VERSION` in `tools/firmware/esp32/BUILD.bazel` must match the version in the archive URL. A comment in `MODULE.bazel` documents this sync requirement.
 
-### cc_wrapper.sh (and friends)
+### Toolchain binaries
 
-Required because `.bazelrc` sets `--incompatible_strict_action_env`.  The wrappers strip x86-only flags (`-march=`, `-msse*`, `-fstack-clash-protection`, etc.) before forwarding to the Xtensa compiler/linker/ar/objcopy.
+The toolchain uses direct GCC binary labels (`bin/xtensa-esp32-elf-gcc` etc.) — no wrapper scripts. The `cc_toolchain_config.bzl` rule handles flag filtering directly.
 
 ### Arduino ESP32 core 3.3.7 (ESP-IDF v5.5.2)
 

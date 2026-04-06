@@ -43,8 +43,8 @@ filegroup(
 # Do not edit manually — regenerate from flags/includes if the libs version changes.
 
 _SDK_INCLUDES = [
-    # sdkconfig.h is flash-mode-specific; dio_qspi/include contains the DIO variant.
-    # Use @arduino_esp32_libs//:sdk_lib (DIO) or :sdk_lib_qio (QIO) accordingly.
+    # sdkconfig.h is flash-mode-specific; this uses the DIO variant.
+    # To support QIO, define a separate sdk_lib_qio target using qio_qspi/ instead.
     "dio_qspi/include",
     "include/newlib/platform_include",
     "include/freertos/config/include",
@@ -369,7 +369,6 @@ cc_library(
     srcs = glob(["lib/*.a"]) + [
         # Flash-mode-specific libspi_flash.a — provides spi_flash_mmap,
         # esp_mspi_pin_init, and other flash driver symbols.
-        # Use dio_qspi for DIO flash mode (default ESP32_DIO_80M config).
         "dio_qspi/libspi_flash.a",
     ],
     hdrs = glob([

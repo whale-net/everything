@@ -55,8 +55,8 @@ def esp32_firmware(name, srcs, deps = [], copts = [], flash_config = None, **kwa
 
     # Linker scripts define ESP32 memory layout (Arduino ESP32 3.x / ESP-IDF v5.5.2).
     # Must be in additional_linker_inputs so Bazel stages them in the sandbox
-    # before the link action runs; referenced via $(execpath ...) below.
-    # Order matches flags/ld_flags in the esp32-libs archive.
+    # before the link action runs; the -T flags below reference them via $(execpath).
+    # Order matches flags/ld_scripts in the esp32-libs archive.
     _ldscripts = [
         "@arduino_esp32_libs//:ld/esp32.rom.redefined.ld",
         "@arduino_esp32_libs//:ld/esp32.peripherals.ld",
@@ -73,19 +73,11 @@ def esp32_firmware(name, srcs, deps = [], copts = [], flash_config = None, **kwa
         name = name + "_elf",
         srcs = ["@arduino_esp32//:main_cpp"],
         additional_linker_inputs = _ldscripts,
-        linkopts = [
+        linkopts = (
             # -nostdlib / --gc-sections / -static / -EL are set by the toolchain's
             # default_link_flags_feature (cc_toolchain_config.bzl) — not repeated here.
-            # Linker scripts — order matches flags/ld_scripts in the esp32-libs archive.
-            "-T", "$(execpath @arduino_esp32_libs//:ld/esp32.rom.redefined.ld)",
-            "-T", "$(execpath @arduino_esp32_libs//:ld/esp32.peripherals.ld)",
-            "-T", "$(execpath @arduino_esp32_libs//:ld/esp32.rom.ld)",
-            "-T", "$(execpath @arduino_esp32_libs//:ld/esp32.rom.api.ld)",
-            "-T", "$(execpath @arduino_esp32_libs//:ld/esp32.rom.libgcc.ld)",
-            "-T", "$(execpath @arduino_esp32_libs//:ld/esp32.rom.newlib-data.ld)",
-            "-T", "$(execpath @arduino_esp32_libs//:ld/esp32.rom.syscalls.ld)",
-            "-T", "$(execpath @arduino_esp32_libs//:ld/memory.ld)",
-            "-T", "$(execpath @arduino_esp32_libs//:ld/sections.ld)",
+            # Derive -T flags from _ldscripts to avoid maintaining a parallel list.
+            [flag for ld in _ldscripts for flag in ["-T", "$(execpath {})".format(ld)]] + [
             # Linker defines and options — derived from flags/ld_flags in the esp32-libs archive.
             "-Wl,--defsym=IDF_TARGET_ESP32=0",
             "-Wl,--no-warn-rwx-segments",
@@ -132,7 +124,7 @@ def esp32_firmware(name, srcs, deps = [], copts = [], flash_config = None, **kwa
             "-u", "vfs_include_syscalls_impl",
             "-u", "esp_vfs_include_nullfs_register",
             "-u", "esp_system_include_coredump_init",
-        ],
+        ]),
         target_compatible_with = ESP32_COMPAT,
         deps = [
             ":" + name + "_lib",
