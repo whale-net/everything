@@ -18,7 +18,7 @@ firmware/          ← application logic (board-agnostic, host-testable)
         ↓
 Pigweed abstractions (pw_log, pw_unit_test, pw_chrono, pw_span, pw_string)
         ↓
-Board HAL / Platform (Arduino ESP32 core 1.0.6)
+Board HAL / Platform (Arduino ESP32 core 3.3.7 — ESP-IDF v5.5.2)
         ↓
 cc_toolchain (Xtensa GCC 15.2 — hermetically downloaded)
 ```
@@ -33,22 +33,32 @@ cc_toolchain (Xtensa GCC 15.2 — hermetically downloaded)
 tools/firmware/
   BUILD.bazel              # CPU + board constraint_settings
   boards.bzl               # firmware_board() macro — how to add a new board
+  flash.bzl                # flash_firmware() macro — universal flash target
   README.md                # this file
   esp32/
-    BUILD.bazel            # ESP32 platform + cc_toolchain + toolchain target
+    BUILD.bazel            # ESP32 platform + cc_toolchain + board defines
+                           #   + bootloader ELF→BIN genrules
+                           #   + partition table CSV→BIN genrule
     cc_toolchain_config.bzl  # Xtensa cc_toolchain_config rule
     cc_wrapper.sh          # strips unsupported host flags before invoking GCC
+    gpp_wrapper.sh         # same for g++
+    ar_wrapper.sh          # same for ar
+    ld_wrapper.sh          # same for ld
+    objcopy_wrapper.sh     # same for objcopy
+    flash_config.bzl       # ESP32_DIO_80M / ESP32_QIO_80M flash config structs
     xtensa_toolchain.BUILD # build_file for the Xtensa GCC http_archive
-    arduino_core.BUILD     # build_file for the Arduino ESP32 core http_archive
+    arduino_core.BUILD     # build_file for @arduino_esp32 (framework sources)
+    arduino_libs.BUILD     # build_file for @arduino_esp32_libs (ESP-IDF SDK)
     esptool_wrapper.py     # thin py_binary wrapper around the esptool package
+  flash/
+    flash.py               # board-agnostic flash driver (esptool / avrdude / picotool)
 
 tools/bazel/
-  esp32.bzl                # esp32_firmware() macro → {name}_lib / _elf / _bin
+  esp32.bzl                # esp32_firmware() macro → {name}_lib / _elf / _bin / flash
 
 demo/blink/
-  blink.cc                 # Arduino sketch using pw_log instead of Serial
+  blink.cc                 # Arduino sketch using pw_log
   blink_logic_test.cc      # host-side pw_unit_test (no hardware needed)
-  flash.sh                 # esptool runfiles wrapper for bazel run
   BUILD.bazel
 ```
 
@@ -121,6 +131,13 @@ sudo usermod -aG dialout $USER     # permanent (re-login required)
 bazel run //demo/blink:flash -- /dev/ttyUSB0
 ```
 
+This flashes three segments in one esptool invocation:
+- `0x1000` — bootloader (generated from ELF shipped in `@arduino_esp32_libs`)
+- `0x8000` — partition table (generated from `max_app_4MB.csv` in `@arduino_esp32`)
+- `0x10000` — application binary
+
+All three are generated at build time — nothing is checked in as a binary artifact.
+
 ### Monitor serial output
 
 ```bash
@@ -192,11 +209,14 @@ Pigweed is pulled via `git_override` in `MODULE.bazel` (BCR release lags the cod
 
 ### Backend selection
 
-The ESP32 pw_log backend is set in `.bazelrc`:
+Backends are set in `.bazelrc` under `build:esp32`:
 
 ```
 build:esp32 --@pigweed//pw_log:backend=@pigweed//pw_log_basic
+build:esp32 --@pigweed//pw_sys_io:backend=@pigweed//pw_sys_io_stdio
 ```
+
+`pw_log_basic` writes to `pw_sys_io`, and `pw_sys_io_stdio` maps to `printf`, which on ESP32 goes to UART0 — the same port that `Serial.begin()` configures.
 
 ---
 
@@ -204,25 +224,70 @@ build:esp32 --@pigweed//pw_log:backend=@pigweed//pw_log_basic
 
 ### Xtensa GCC 15.2 (Espressif crosstool-NG)
 
-Downloaded hermetically via `http_archive` in `MODULE.bazel`.
-sha256 is pinned: `3d50f5cd5f173acfd524e07c1cd69bc99585731a415ca2e5bce879997fe602b8`.
+Downloaded hermetically via `http_archive` in `MODULE.bazel`. SHA256 is pinned.
 
-Binary prefix: `xtensa-esp-elf-`
+Binary prefix: `xtensa-esp32-elf-` (little-endian; required for ESP32 LX6)
 
-### cc_wrapper.sh
+`_GCC_VERSION` in `tools/firmware/esp32/BUILD.bazel` must match the version in the archive URL. A comment in `MODULE.bazel` documents this sync requirement.
 
-Required because `.bazelrc` sets `--incompatible_strict_action_env`.  The wrapper strips x86-only flags (`-march=`, `-msse*`, `-fstack-clash-protection`, etc.) before forwarding to `xtensa-esp-elf-gcc`.
+### cc_wrapper.sh (and friends)
 
-### Arduino ESP32 core 1.0.6
+Required because `.bazelrc` sets `--incompatible_strict_action_env`.  The wrappers strip x86-only flags (`-march=`, `-msse*`, `-fstack-clash-protection`, etc.) before forwarding to the Xtensa compiler/linker/ar/objcopy.
 
-Pulled as `@arduino_esp32` via `http_archive` (sha256 pinned: `982da9aa…`).  The `arduino_core.BUILD` build file exposes:
+### Arduino ESP32 core 3.3.7 (ESP-IDF v5.5.2)
 
-- `@arduino_esp32//:core_c_lib` — C sources
-- `@arduino_esp32//:core_lib` — C++ sources (depends on `core_c_lib`)
-- `@arduino_esp32//:main_cpp` — `main.cpp` entry point (**filegroup, not cc_library — see below**)
-- `@arduino_esp32//:bootloader` — pre-compiled bootloader blobs
+Two archives are used:
 
-**Migration path to 3.x:** Update the `http_archive` URL/sha256, rewrite `arduino_core.BUILD` (response-file flags in 3.x vs inline in 1.0.6), and update C++ standard flags (`gnu17`/`gnu++17` instead of `gnu11`/`gnu++11`).
+| Archive | Bazel name | Contents |
+|---------|-----------|----------|
+| `esp32-core-3.3.7.zip` | `@arduino_esp32` | Framework C/C++ sources, variant headers, partition CSVs, `gen_esp32part.py` |
+| `esp32-libs-3.3.7.zip` | `@arduino_esp32_libs` | Precompiled ESP-IDF SDK (296 include paths, `.a` libs, linker scripts, bootloader ELFs) |
+
+Both are pinned by SHA256 in `MODULE.bazel`.
+
+`arduino_core.BUILD` exposes:
+- `@arduino_esp32//:core_c_lib` — Arduino C sources
+- `@arduino_esp32//:core_lib` — Arduino C++ sources
+- `@arduino_esp32//:main_cpp` — `main.cpp` entry point (**filegroup** — see below)
+
+`arduino_libs.BUILD` exposes:
+- `@arduino_esp32_libs//:sdk_lib` — all ESP-IDF precompiled libs + 296-entry include path
+- `@arduino_esp32_libs//:bootloader_elf_dio_80m` / `bootloader_elf_qio_80m` — bootloader ELFs
+
+### Partition table
+
+`max_app_4MB.bin` is generated at build time by `//tools/firmware/esp32:max_app_4MB_bin`:
+
+```
+@arduino_esp32//:tools/partitions/max_app_4MB.csv
+    ↓  gen_esp32part.py (from @arduino_esp32)
+bazel-bin/tools/firmware/esp32/max_app_4MB.bin
+```
+
+Layout: `nvs@0x9000` (20K), `otadata@0xe000` (8K), `app(factory)@0x10000` (3968K), `coredump@0x3f0000` (64K).
+
+The `factory` subtype is required because `esp_ota_get_running_partition()` (called by `app_main()` before `setup()` runs) returns NULL for `ota_0` partitions with blank `otadata`, causing a boot assert. ESP-IDF v5 also requires an MD5 checksum in the table, which `gen_esp32part.py` adds automatically.
+
+### Bootloader
+
+The bootloader is converted from ELF to flashable binary at build time:
+
+```
+@arduino_esp32_libs//:bootloader_elf_dio_80m
+    ↓  esptool elf2image
+bazel-bin/tools/firmware/esp32/bootloader_dio_80m.bin
+```
+
+Both DIO and QIO variants are generated; the flash config struct selects which to use.
+
+### Flash config structs
+
+`flash_config.bzl` defines `ESP32_DIO_80M` and `ESP32_QIO_80M`.  Each struct carries:
+- Flash mode flags, baud rate, reset sequence
+- `pre_segments` — list of `struct(addr, label, output)` for segments flashed before the app
+- `esptool` — label of the esptool py_binary
+
+`flash.bzl` derives rlocation paths from `label + output` automatically; no runfile paths are hardcoded in the config structs.
 
 ---
 
