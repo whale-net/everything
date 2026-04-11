@@ -119,6 +119,18 @@ filegroup(
 # ── Optional peripheral libraries (add as needed) ────────────────────────────
 
 cc_library(
+    name = "Wire",
+    srcs = glob(["libraries/Wire/src/**/*.cpp"]),
+    hdrs = glob(["libraries/Wire/src/**/*.h"]),
+    includes = ["libraries/Wire/src"],
+    target_compatible_with = [
+        "@platforms//os:none",
+        "@@//tools/firmware:cpu_xtensa",
+    ],
+    deps = [":core_lib"],
+)
+
+cc_library(
     name = "WiFi",
     srcs = glob(["libraries/WiFi/src/**/*.cpp"]),
     hdrs = glob(["libraries/WiFi/src/**/*.h"]),

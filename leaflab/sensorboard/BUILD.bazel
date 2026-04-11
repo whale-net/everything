@@ -1,0 +1,15 @@
+"""Sensorboard firmware — BH1750 ambient light sensor via I2C → MQTT."""
+
+load("//tools/bazel:esp32.bzl", "esp32_firmware")
+
+# Build:  bazel build //leaflab/sensorboard:sensorboard_bin --config=esp32
+# Flash:  bazel run  //leaflab/sensorboard:flash -- /dev/ttyUSB0
+
+esp32_firmware(
+    name = "sensorboard",
+    srcs = ["sensorboard.cc"],
+    deps = [
+        "@arduino_esp32//:Wire",
+        "@pigweed//pw_log",
+    ],
+)
