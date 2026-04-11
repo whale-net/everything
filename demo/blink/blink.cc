@@ -13,7 +13,9 @@ void setup() {
 
 void loop() {
     digitalWrite(board::kLed, HIGH);
+    PW_LOG_INFO("LED ON");
     delay(100);
     digitalWrite(board::kLed, LOW);
+    PW_LOG_INFO("LED OFF");
     delay(1000);
 }
