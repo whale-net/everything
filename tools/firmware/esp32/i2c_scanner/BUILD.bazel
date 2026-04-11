@@ -1,0 +1,16 @@
+"""I2C bus scanner — hardware diagnostic tool."""
+
+load("//tools/bazel:esp32.bzl", "esp32_firmware")
+
+# Flash and open serial to see which I2C addresses respond:
+#   bazel run //tools/firmware/esp32/i2c_scanner:flash -- /dev/ttyUSB0
+#   screen /dev/ttyUSB0 115200
+
+esp32_firmware(
+    name = "i2c_scanner",
+    srcs = ["i2c_scanner.cc"],
+    deps = [
+        "@arduino_esp32//:Wire",
+        "@pigweed//pw_log",
+    ],
+)
