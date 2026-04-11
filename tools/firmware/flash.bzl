@@ -21,23 +21,51 @@ driver supports: esptool (ESP32), avrdude (AVR), picotool (RP2040).
 
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
 
-# Runfile path to the shared flash.py driver.
-_FLASH_PY_RUNFILE = "_main/tools/firmware/flash/flash.py"
+# _main is the canonical workspace name for the root module under bzlmod.
+# It is a Bazel constant — not a project-specific choice.
+_WORKSPACE = "_main"
 
-def _label_to_runfile(label):
-    """Convert a //pkg:target or :target label to a _main-workspace runfile path."""
-    if label.startswith("//"):
-        colon = label.find(":")
-        if colon >= 0:
-            pkg = label[2:colon]
-            target = label[colon + 1:]
-        else:
-            pkg = label[2:]
-            target = pkg.split("/")[-1]
-        return "_main/{}/{}".format(pkg, target)
-    elif label.startswith(":"):
-        return "_main/{}/{}".format(native.package_name(), label[1:])
-    return label
+def _runfile_path(label, output):
+    """Compute the rlocation path for a generated output file.
+
+    Args:
+        label:  Bazel label string, e.g. "//tools/firmware/esp32:foo_bin"
+        output: Output filename, e.g. "foo.bin"
+
+    Returns:
+        rlocation-relative path, e.g. "_main/tools/firmware/esp32/foo.bin"
+    """
+    pkg = label.lstrip("/").split(":")[0]  # "tools/firmware/esp32"
+    return "{}/{}/{}".format(_WORKSPACE, pkg, output)
+
+# Runfile path to the shared flash.py driver (source file in py_binary data).
+_FLASH_PY_RUNFILE = _runfile_path("//tools/firmware/flash:flash.py", "flash.py")
+
+# ── Exec-hosted tool wrapper ─────────────────────────────────────────────────
+# When building with a cross-compiled target platform (e.g. --config=esp32),
+# Bazel builds all `data` deps in the target configuration. Flash tools like
+# esptool run on the developer's host machine, so they must be built in the
+# exec (host) configuration. This rule wraps a py_binary with cfg="exec" and
+# exposes its runfiles so rlocation() in the flash script finds the binary at
+# its original workspace-relative path.
+
+def _exec_hosted_tool_impl(ctx):
+    tool = ctx.attr.tool[DefaultInfo]
+    return [DefaultInfo(
+        files = tool.files,
+        runfiles = tool.default_runfiles,
+    )]
+
+_exec_hosted_tool = rule(
+    implementation = _exec_hosted_tool_impl,
+    attrs = {
+        "tool": attr.label(
+            cfg = "exec",
+            executable = True,
+            mandatory = True,
+        ),
+    },
+)
 
 def flash_firmware(name, firmware_name, board_config, tags = None, visibility = None):
     """Create a 'bazel run' target that flashes a firmware binary to a board.
@@ -85,12 +113,19 @@ def flash_firmware(name, firmware_name, board_config, tags = None, visibility = 
     tool = board_config.tool
 
     if tool == "esptool":
+        esptool_label = board_config.esptool
+        # esptool is a py_binary; its binary name matches the target name.
+        esptool_target = esptool_label.split(":")[-1]
+        esptool_runfile = _runfile_path(esptool_label, esptool_target)
         lines += [
-            'ESPTOOL="$(rlocation ' + board_config.esptool_runfile + ')"',
+            'ESPTOOL="$(rlocation ' + esptool_runfile + ')"',
         ]
-        for _addr, runfile_path in board_config.pre_segments:
-            var = "SEG_" + _addr.replace("0x", "x").upper()
-            lines.append('{}="$(rlocation {})"'.format(var, runfile_path))
+        for seg in board_config.pre_segments:
+            var = "SEG_" + seg.addr.replace("0x", "x").upper()
+            lines.append('{}="$(rlocation {})"'.format(
+                var,
+                _runfile_path(seg.label, seg.output),
+            ))
 
         lines += [
             "",
@@ -104,9 +139,9 @@ def flash_firmware(name, firmware_name, board_config, tags = None, visibility = 
             '    --write-flash-args "{}" \\'.format(board_config.write_flash_args),
         ]
 
-        for addr, _runfile in board_config.pre_segments:
-            var = "SEG_" + addr.replace("0x", "x").upper()
-            lines.append('    --segment "{}=${}" \\'.format(addr, var))
+        for seg in board_config.pre_segments:
+            var = "SEG_" + seg.addr.replace("0x", "x").upper()
+            lines.append('    --segment "{}=${}" \\'.format(seg.addr, var))
 
         lines += [
             '    --segment "{}=$APP_BIN" \\'.format(board_config.app_offset),
@@ -150,7 +185,16 @@ def flash_firmware(name, firmware_name, board_config, tags = None, visibility = 
         ":" + firmware_name + "_bin",
     ]
     if tool == "esptool":
-        data += [board_config.esptool] + list(board_config.pre_segment_labels)
+        # Wrap esptool in an exec-cfg target so it is always built for the host
+        # platform, not the embedded target platform (e.g. ESP32 / os:none).
+        exec_tool_name = "_" + name + "_esptool_exec"
+        _exec_hosted_tool(
+            name = exec_tool_name,
+            tool = board_config.esptool,
+            tags = tags,
+            visibility = ["//visibility:private"],
+        )
+        data += [":" + exec_tool_name] + [seg.label for seg in board_config.pre_segments]
 
     native.sh_binary(
         name = name,

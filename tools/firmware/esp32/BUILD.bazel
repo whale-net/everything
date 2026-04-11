@@ -2,7 +2,7 @@
 
 load("@rules_cc//cc:defs.bzl", "cc_toolchain")
 load("@rules_python//python:defs.bzl", "py_binary")
-load(":cc_toolchain_config.bzl", "cc_toolchain_config")
+load("//tools/firmware:cc_toolchain_config.bzl", "cc_toolchain_config")
 load("//tools/firmware:boards.bzl", "firmware_board")
 load("//tools/firmware:pins.bzl", "board_pins")
 
@@ -13,6 +13,7 @@ package(default_visibility = ["//visibility:public"])
 firmware_board(
     name = "elegoo_esp32",
     cpu_constraint = "//tools/firmware:cpu_xtensa",
+    board_constraint = "//tools/firmware:board_elegoo_esp32",
 )
 
 # config_setting: used by //tools/firmware:board_pins alias and any other
@@ -20,6 +21,38 @@ firmware_board(
 config_setting(
     name = "is_elegoo_esp32",
     constraint_values = ["//tools/firmware:board_elegoo_esp32"],
+)
+
+# ── Arduino board identity ───────────────────────────────────────────────────
+# Provides ARDUINO_BOARD, ARDUINO_VARIANT, and the board macro to the Arduino
+# core library (core_c_lib / core_lib in @arduino_esp32//:arduino_core.BUILD).
+# Defines propagate downstream: arduino_board_defines → core_c_lib → core_lib.
+# To add a new ESP32 board: add a config_setting + select() branch here.
+#
+# Referenced from @arduino_esp32//:arduino_core.BUILD as
+#   @@//tools/firmware/esp32:arduino_board_defines
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "arduino_board_defines",
+    defines = select({
+        ":is_elegoo_esp32": [
+            "ARDUINO_ESP32_DEV",
+            'ARDUINO_BOARD=\\"ESP32_DEV\\"',
+            'ARDUINO_VARIANT=\\"esp32\\"',
+        ],
+        # Default — generic ESP32 dev board; override by adding a board-specific branch.
+        "//conditions:default": [
+            "ARDUINO_ESP32_DEV",
+            'ARDUINO_BOARD=\\"ESP32_DEV\\"',
+            'ARDUINO_VARIANT=\\"esp32\\"',
+        ],
+    }),
+    target_compatible_with = [
+        "@platforms//os:none",
+        "//tools/firmware:cpu_xtensa",
+    ],
 )
 
 # ── Pin definitions ───────────────────────────────────────────────────────────
@@ -45,22 +78,59 @@ filegroup(name = "empty")
 
 filegroup(
     name = "all_files",
-    srcs = [
-        ":cc_wrapper.sh",
-        "@xtensa_esp_elf_linux64//:all_files",
-    ],
+    srcs = ["@xtensa_esp_elf_linux64//:all_files"],
 )
 
 # ── Toolchain config ─────────────────────────────────────────────────────────
 
-cc_toolchain_config(name = "xtensa_toolchain_config")
+# GCC version — keep in sync with the xtensa_esp_elf_linux64 http_archive URL
+# in MODULE.bazel. Used to locate lib/gcc/xtensa-esp-elf/{version}/include.
+_GCC_VERSION = "15.2.0"
+
+cc_toolchain_config(
+    name = "xtensa_toolchain_config",
+    gcc_binary = "@xtensa_esp_elf_linux64//:gcc",
+    gpp_binary = "@xtensa_esp_elf_linux64//:g++",
+    ar_binary  = "@xtensa_esp_elf_linux64//:ar",
+    toolchain_triple = "xtensa-esp-elf",
+    gcc_version = _GCC_VERSION,
+    toolchain_identifier = "xtensa-esp32-elf",
+    target_system_name = "xtensa-esp32-elf",
+    target_cpu = "xtensa",
+    # Flags derived from Arduino ESP32 1.0.6 platform.txt.
+    # -std= is intentionally absent: SDK targets set their own standard
+    # (gnu11/gnu++11); Pigweed targets use the GCC 15 default (gnu++17).
+    compile_flags_c = [
+        "-mlongcalls",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-fstrict-volatile-bitfields",
+        "-Os",
+    ],
+    compile_flags_cxx = [
+        "-mlongcalls",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-fstrict-volatile-bitfields",
+        "-fno-exceptions",
+        "-fno-rtti",
+        "-Os",
+    ],
+    link_flags = [
+        "-nostdlib",
+        "-Wl,--gc-sections",
+        "-Wl,-static",
+        "-mlongcalls",
+        "-Wl,-EL",
+    ],
+)
 
 # ── cc_toolchain target ──────────────────────────────────────────────────────
 
 cc_toolchain(
     name = "xtensa_cc_toolchain",
     all_files = ":all_files",
-    ar_files = "@xtensa_esp_elf_linux64//:all_files",
+    ar_files = ":all_files",
     compiler_files = ":all_files",
     dwp_files = ":empty",
     linker_files = ":all_files",
@@ -85,6 +155,40 @@ toolchain(
     ],
     toolchain = ":xtensa_cc_toolchain",
     toolchain_type = "@rules_cc//cc:toolchain_type",
+)
+
+# ── Partition table generation: CSV → BIN ───────────────────────────────────
+# gen_esp32part.py is bundled in the Arduino ESP32 core archive; it uses only
+# Python stdlib so we can invoke it directly without a py_binary wrapper.
+
+genrule(
+    name = "max_app_4MB_bin",
+    srcs = [
+        "@arduino_esp32//:tools/partitions/max_app_4MB.csv",
+        "@arduino_esp32//:tools/gen_esp32part.py",
+    ],
+    outs = ["max_app_4MB.bin"],
+    cmd = "python3 $(location @arduino_esp32//:tools/gen_esp32part.py) $(location @arduino_esp32//:tools/partitions/max_app_4MB.csv) $@",
+)
+
+# ── Bootloader conversion: ELF → BIN ────────────────────────────────────────
+# Arduino ESP32 3.x ships bootloaders as ELF files; esptool elf2image converts
+# them to the raw binary format required for flashing.
+
+genrule(
+    name = "bootloader_dio_80m_bin",
+    srcs = ["@arduino_esp32_libs//:bootloader_elf_dio_80m"],
+    outs = ["bootloader_dio_80m.bin"],
+    cmd = "$(location :esptool_wrapper) --chip esp32 elf2image --flash-mode dio --flash-freq 80m --flash-size 4MB -o $@ $<",
+    tools = [":esptool_wrapper"],
+)
+
+genrule(
+    name = "bootloader_qio_80m_bin",
+    srcs = ["@arduino_esp32_libs//:bootloader_elf_qio_80m"],
+    outs = ["bootloader_qio_80m.bin"],
+    cmd = "$(location :esptool_wrapper) --chip esp32 elf2image --flash-mode qio --flash-freq 80m --flash-size 4MB -o $@ $<",
+    tools = [":esptool_wrapper"],
 )
 
 # ── esptool flash utility ────────────────────────────────────────────────────

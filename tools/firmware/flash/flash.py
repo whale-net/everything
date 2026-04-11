@@ -43,7 +43,7 @@ def flash_esptool(args: argparse.Namespace, segments: list[tuple[str, str]]) -> 
         "--baud", str(args.baud),
         "--before", args.before,
         "--after", args.after,
-        "write_flash",
+        "write-flash",
     ]
     if args.write_flash_args:
         cmd += args.write_flash_args.split()
