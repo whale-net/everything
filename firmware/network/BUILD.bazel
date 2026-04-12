@@ -21,6 +21,7 @@ cc_library(
         "@arduino_esp32//:WiFi",
         "@arduino_esp32//:core_lib",
         "@pubsubclient//:pubsubclient",
+        "@pigweed//pw_log",
     ],
 )
 

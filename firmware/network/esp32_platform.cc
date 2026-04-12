@@ -9,6 +9,7 @@
 
 #include <PubSubClient.h>
 #include <WiFi.h>
+#include "pw_log/log.h"
 
 static WiFiClient   wifi_client;
 static PubSubClient mqtt_client(wifi_client);
@@ -22,9 +23,20 @@ void WiFiInit(const char* ssid, const char* password) {
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
     WiFi.begin(ssid, password);
+    PW_LOG_INFO("WiFi: connecting to '%s'...", ssid);
 }
 
-bool WiFiIsConnected() { return WiFi.status() == WL_CONNECTED; }
+bool WiFiIsConnected() {
+    static bool s_was_connected = false;
+    bool connected = WiFi.status() == WL_CONNECTED;
+    if (connected && !s_was_connected) {
+        PW_LOG_INFO("WiFi: connected — IP %s", WiFi.localIP().toString().c_str());
+    } else if (!connected && s_was_connected) {
+        PW_LOG_WARN("WiFi: lost connection");
+    }
+    s_was_connected = connected;
+    return connected;
+}
 
 // Re-triggers association if not connected.  Called by NetworkManager when
 // transitioning to kConnecting.  setAutoReconnect(true) handles most cases,
