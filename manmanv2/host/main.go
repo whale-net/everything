@@ -200,6 +200,9 @@ func run() error {
 		}
 	}()
 
+	// Start Docker daemon watcher: marks sessions as crashed when daemon goes away
+	go sessionManager.WatchDaemon(ctx)
+
 	// Start periodic orphan cleanup (every 5 minutes)
 	orphanCleanupTicker := time.NewTicker(5 * time.Minute)
 	defer orphanCleanupTicker.Stop()
