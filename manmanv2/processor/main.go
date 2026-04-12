@@ -180,12 +180,11 @@ func run() error {
 
 	// Start backup scheduler (River)
 	s3Client, err := s3lib.NewClient(appCtx, s3lib.Config{
-		Bucket:         os.Getenv("S3_BUCKET"),
-		Region:         os.Getenv("S3_REGION"),
-		Endpoint:       os.Getenv("S3_ENDPOINT"),
-		PublicEndpoint: os.Getenv("S3_PUBLIC_ENDPOINT"),
-		AccessKey:      os.Getenv("S3_ACCESS_KEY"),
-		SecretKey:      os.Getenv("S3_SECRET_KEY"),
+		Bucket:    os.Getenv("S3_BUCKET"),
+		Region:    os.Getenv("S3_REGION"),
+		Endpoint:  os.Getenv("S3_ENDPOINT"),
+		AccessKey: os.Getenv("S3_ACCESS_KEY"),
+		SecretKey: os.Getenv("S3_SECRET_KEY"),
 	})
 	if err != nil {
 		logger.Warn("failed to initialize S3 client, scheduled backups will not run", "error", err)

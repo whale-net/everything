@@ -18,21 +18,19 @@ import (
 
 // Client wraps the AWS S3 client for ManMan operations
 type Client struct {
-	s3Client       *s3.Client
-	presign        *s3.PresignClient
-	presignPublic  *s3.PresignClient // uses public endpoint for pre-signed URLs
-	uploader       *manager.Uploader
-	bucket         string
+	s3Client  *s3.Client
+	presign   *s3.PresignClient
+	uploader  *manager.Uploader
+	bucket    string
 }
 
 // Config holds S3 client configuration
 type Config struct {
-	Bucket          string
-	Region          string
-	Endpoint        string // Optional: Custom S3 endpoint (e.g., for OVH, MinIO, DigitalOcean Spaces)
-	PublicEndpoint  string // Optional: Public-facing endpoint for pre-signed URLs (if different from Endpoint)
-	AccessKey       string // Optional: Static access key (for MinIO, etc.)
-	SecretKey       string // Optional: Static secret key (for MinIO, etc.)
+	Bucket    string
+	Region    string
+	Endpoint  string // Optional: Custom S3 endpoint (e.g., for OVH, MinIO, DigitalOcean Spaces)
+	AccessKey string // Optional: Static access key (for MinIO, etc.)
+	SecretKey string // Optional: Static secret key (for MinIO, etc.)
 }
 
 // NewClient creates a new S3 client
@@ -78,22 +76,11 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 
 	s3c := s3.NewFromConfig(awsCfg, s3Opts...)
 
-	// If a public endpoint is configured, create a separate presign client using it.
-	// Public endpoints (e.g. OVH's cloud.ovh.us) require virtual-hosted style URLs, not
-	// path-style, so we do not inherit s3Opts here and explicitly leave UsePathStyle false.
-	var presignPublic *s3.PresignClient
-	if cfg.PublicEndpoint != "" {
-		presignPublic = s3.NewPresignClient(s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-			o.BaseEndpoint = aws.String(cfg.PublicEndpoint)
-		}))
-	}
-
 	return &Client{
-		s3Client:      s3c,
-		presign:       s3.NewPresignClient(s3c),
-		presignPublic: presignPublic,
-		uploader:      manager.NewUploader(s3c),
-		bucket:        cfg.Bucket,
+		s3Client: s3c,
+		presign:  s3.NewPresignClient(s3c),
+		uploader: manager.NewUploader(s3c),
+		bucket:   cfg.Bucket,
 	}, nil
 }
 
