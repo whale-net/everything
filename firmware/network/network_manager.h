@@ -39,7 +39,6 @@
 
 #include <cstdint>
 
-#include "pw_chrono/system_clock.h"
 #include "pw_log/log.h"
 #include "pw_status/status.h"
 
@@ -99,8 +98,8 @@ class NetworkManager {
 
   Config config_;
   State state_ = State::kIdle;
-  pw::chrono::SystemClock::time_point state_entered_;
-  uint32_t backoff_attempt_ = 0;  // Increments on each consecutive failure.
+  uint32_t state_entered_ms_ = 0;  // PlatformNowMs() when state last changed.
+  uint32_t backoff_attempt_ = 0;   // Increments on each consecutive failure.
 };
 
 // Returns human-readable state name for logging.

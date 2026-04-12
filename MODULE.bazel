@@ -134,10 +134,23 @@ http_archive(
 # ── PubSubClient 2.8 (MQTT client for Arduino) ───────────────────────────────
 http_archive(
     name = "pubsubclient",
-    build_file = "//tools/firmware/esp32:pubsubclient.BUILD",
+    build_file_content = """
+package(default_visibility = ["//visibility:public"])
+cc_library(
+    name = "pubsubclient",
+    srcs = glob(["src/**/*.cpp"]),
+    hdrs = glob(["src/**/*.h"]),
+    includes = ["src"],
+    target_compatible_with = [
+        "@platforms//os:none",
+        "@@//tools/firmware:cpu_xtensa",
+    ],
+    deps = ["@arduino_esp32//:core_lib"],
+)
+""",
     sha256 = "837891318c255e1840917c4d1afe831d4e960375951cd2acfe15e0525b35fa8e",
     strip_prefix = "pubsubclient-2.8",
-    urls = ["https://codeload.github.com/knolleary/pubsubclient/zip/refs/tags/v2.8"],
+    urls = ["https://github.com/knolleary/pubsubclient/archive/refs/tags/v2.8.zip"],
 )
 
 # ── Arduino ESP32 3.3.7 (ESP-IDF v5.5.2) ─────────────────────────────────────

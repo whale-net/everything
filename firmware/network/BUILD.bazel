@@ -15,8 +15,10 @@ ESP32_COMPAT = [
 cc_library(
     name = "esp32_platform",
     srcs = ["esp32_platform.cc"],
+    hdrs = ["esp32_platform.h"],
     target_compatible_with = ESP32_COMPAT,
     deps = [
+        "@arduino_esp32//:WiFi",
         "@arduino_esp32//:core_lib",
         "@pubsubclient//:pubsubclient",
     ],
@@ -39,7 +41,6 @@ cc_library(
     srcs = ["network_manager.cc"],
     hdrs = ["network_manager.h"],
     deps = [
-        "@pigweed//pw_chrono:system_clock",
         "@pigweed//pw_log",
         "@pigweed//pw_status",
     ],

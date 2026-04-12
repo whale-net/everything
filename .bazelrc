@@ -66,6 +66,14 @@ build --java_runtime_version=remotejdk_17
 # Set host_platform explicitly to prevent platform transitions from affecting exec tools
 build --host_platform=@platforms//host
 
+# ── DefineCredentials defaults ───────────────────────────────────────────────
+# Empty defaults so $(WIFI_SSID)/$(WIFI_PASSWORD) always resolve.
+# Override in .bazelrc.local (gitignored):
+#   build --define=WIFI_SSID=MyNetwork
+#   build --define=WIFI_PASSWORD=MyPassword
+build --define=WIFI_SSID=
+build --define=WIFI_PASSWORD=
+
 # ── ESP32 firmware build config ──────────────────────────────────────────────
 # Usage: bazel build //demo/blink:blink_bin --config=esp32
 build:esp32 --platforms=//tools/firmware/esp32:elegoo_esp32

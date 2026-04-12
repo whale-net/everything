@@ -48,13 +48,17 @@ TEST(SensorInterface, FailingInitReturnsError) {
 
 TEST(SensorInterface, ReadReturnsFakeValue) {
     FakeSensor sensor("thermistor", 34, 21.5f);
-    EXPECT_EQ(sensor.Read(), 21.5f);
+    auto r = sensor.Read();
+    EXPECT_TRUE(r.valid);
+    EXPECT_EQ(r.value, 21.5f);
 }
 
 TEST(SensorInterface, SetValueUpdatesReading) {
     FakeSensor sensor("thermistor", 34, 20.0f);
     sensor.set_value(37.0f);
-    EXPECT_EQ(sensor.Read(), 37.0f);
+    auto r = sensor.Read();
+    EXPECT_TRUE(r.valid);
+    EXPECT_EQ(r.value, 37.0f);
 }
 
 TEST(SensorInterface, NameAndAddressPreserved) {

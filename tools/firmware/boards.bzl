@@ -11,7 +11,7 @@ Example:
     )
 """
 
-def firmware_board(name, cpu_constraint, os_constraint = "@platforms//os:none", board_constraint = None):
+def firmware_board(name, cpu_constraint, os_constraint = "@platforms//os:none", board_constraint = None, extra_constraints = []):
     """Declares a Bazel platform for a firmware board target.
 
     Args:
@@ -22,10 +22,14 @@ def firmware_board(name, cpu_constraint, os_constraint = "@platforms//os:none", 
         board_constraint: Optional board identity constraint_value
             (e.g. "//tools/firmware:board_elegoo_esp32").  Required for
             board_pins_registry() select() to resolve to the correct pins target.
+        extra_constraints: Additional constraint_value targets to include
+            (e.g. RTOS identity constraints like
+            "@pigweed//pw_build/constraints/rtos:freertos").
     """
     constraint_values = [os_constraint, cpu_constraint]
     if board_constraint != None:
         constraint_values.append(board_constraint)
+    constraint_values.extend(extra_constraints)
     native.platform(
         name = name,
         constraint_values = constraint_values,

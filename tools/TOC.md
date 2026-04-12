@@ -23,3 +23,8 @@ Build, release, and development tooling.
 
 - [steamcmd/README.md](steamcmd/README.md) — SteamCMD packaging tool
 - [lib32/README.md](lib32/README.md) — 32-bit library support
+
+## Firmware / Embedded
+
+- [firmware/README.md](firmware/README.md) — Hermetic ESP32 toolchain, esp32_firmware() macro, boards, flashing, Pigweed integration
+- [firmware/esp32/arduino_core.BUILD](firmware/esp32/arduino_core.BUILD) — Arduino ESP32 core library targets (Wire, WiFi, etc.)

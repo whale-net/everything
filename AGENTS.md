@@ -93,5 +93,7 @@ Update documentation as part of the same task that changes the code — not as a
 | `tools/` | Build, release, Helm, and development tooling | [TOC](tools/TOC.md) |
 | `friendly_computing_machine/` | Slack bot with Temporal workflows | [TOC](friendly_computing_machine/TOC.md) |
 | `docs/` | Cross-cutting infrastructure and build system docs | [TOC](docs/TOC.md) |
+| `firmware/` | Board-agnostic C++ sensor libraries (ISensor, II2CBus, MQTTWriter) | [TOC](firmware/TOC.md) |
+| `leaflab/` | Plant monitoring firmware and data pipeline | [TOC](leaflab/TOC.md) |
 | `demo/` | Example applications — see individual READMEs | — |
 | `generated/` | Auto-generated OpenAPI clients — do not edit manually | — |

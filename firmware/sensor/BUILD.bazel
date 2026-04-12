@@ -56,3 +56,27 @@ cc_test(
         "@pigweed//pw_unit_test:logging_main",
     ],
 )
+
+# BH1750 ambient light sensor — II2CBus-backed; host-compilable.
+cc_library(
+    name = "bh1750",
+    srcs = ["bh1750.cc"],
+    hdrs = ["bh1750.h"],
+    deps = [
+        ":sensor",
+        "//firmware/i2c:i2c_bus",
+        "@pigweed//pw_log",
+        "@pigweed//pw_status",
+    ],
+)
+
+cc_test(
+    name = "bh1750_test",
+    srcs = ["bh1750_test.cc"],
+    deps = [
+        ":bh1750",
+        "//firmware/i2c:fake_i2c_bus",
+        "@pigweed//pw_unit_test",
+        "@pigweed//pw_unit_test:logging_main",
+    ],
+)

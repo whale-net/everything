@@ -30,7 +30,7 @@ class FakeSensor final : public ISensor {
         init_status_(init_status) {}
 
   pw::Status Init() override { return init_status_; }
-  float Read() override { return value_; }
+  SensorReading Read() override { return SensorReading::Ok(value_); }
   const char* name() const override { return name_; }
   uint8_t address() const override { return address_; }
 
@@ -57,9 +57,9 @@ class RecordingSensor final : public ISensor {
     return pw::OkStatus();
   }
 
-  float Read() override {
+  SensorReading Read() override {
     read_call_count_++;
-    return value_;
+    return SensorReading::Ok(value_);
   }
 
   const char* name() const override { return name_; }

@@ -5,16 +5,35 @@
 // platform hooks (WiFiIsConnected, WiFiConnect, MQTTConnect, MQTTIsConnected,
 // MQTTPublish, MQTTLoop) for free — no PubSubClient.h or WiFi.h needed.
 
+#include "firmware/network/esp32_platform.h"
+
 #include <PubSubClient.h>
 #include <WiFi.h>
 
 static WiFiClient   wifi_client;
 static PubSubClient mqtt_client(wifi_client);
 
+static const char* g_ssid     = nullptr;
+static const char* g_password = nullptr;
+
+void WiFiInit(const char* ssid, const char* password) {
+    g_ssid     = ssid;
+    g_password = password;
+    WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(true);
+    WiFi.begin(ssid, password);
+}
+
 bool WiFiIsConnected() { return WiFi.status() == WL_CONNECTED; }
 
-// No-op: setAutoReconnect(true) handles re-association automatically.
-void WiFiConnect() {}
+// Re-triggers association if not connected.  Called by NetworkManager when
+// transitioning to kConnecting.  setAutoReconnect(true) handles most cases,
+// but an explicit begin() speeds up recovery after a long disconnect.
+void WiFiConnect() {
+    if (WiFi.status() != WL_CONNECTED && g_ssid) {
+        WiFi.begin(g_ssid, g_password);
+    }
+}
 
 bool MQTTConnect(const char* host, uint16_t port, const char* id,
                  const char* user, const char* pass) {
@@ -28,5 +47,6 @@ bool MQTTPublish(const char* topic, const char* payload) {
     return mqtt_client.publish(topic, payload);
 }
 
-// Drive the PubSubClient keep-alive.  Must be called every loop() pass.
 void MQTTLoop() { mqtt_client.loop(); }
+
+uint32_t PlatformNowMs() { return millis(); }

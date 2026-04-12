@@ -18,13 +18,14 @@ pw::Status ThermistorSensor::Init() {
     return s;
 }
 
-float ThermistorSensor::Read() {
+SensorReading ThermistorSensor::Read() {
     int raw = adc_->Read(pin_);
     float temp = thermistor::adc_to_celsius(raw, cfg_);
     if (!std::isnan(temp)) {
-        last_valid_ = temp;
+        last_value_ = temp;
+        valid_ = true;
     }
-    return last_valid_;
+    return valid_ ? SensorReading::Ok(last_value_) : SensorReading::Invalid();
 }
 
 }  // namespace firmware

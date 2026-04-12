@@ -24,7 +24,7 @@ cc_library(
     target_compatible_with = ESP32_COMPAT,
     deps = [
         ":i2c_bus",
-        "@arduino_esp32//:core_lib",
+        "@arduino_esp32//:Wire",
         "@pigweed//pw_status",
     ],
 )

@@ -20,6 +20,13 @@ bool g_mqtt_publish_ok = true;
 }  // namespace
 
 // Declared extern in network_manager.cc
+#include <chrono>
+uint32_t PlatformNowMs() {
+  return static_cast<uint32_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
 bool WiFiIsConnected() { return g_wifi_connected; }
 bool MQTTConnect(const char*, uint16_t, const char*, const char*,
                  const char*) {

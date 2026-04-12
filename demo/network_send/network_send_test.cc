@@ -63,6 +63,13 @@ bool MQTTPublish(const char* topic, const char* payload) {
     return g_mqtt_publish_ok;
 }
 void WiFiConnect() {}
+#include <chrono>
+uint32_t PlatformNowMs() {
+    return static_cast<uint32_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

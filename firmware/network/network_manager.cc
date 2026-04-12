@@ -9,8 +9,6 @@
 
 #include "firmware/network/network_manager.h"
 
-#include <chrono>
-
 #include "pw_log/log.h"
 
 // Platform hooks — implemented in esp32_platform.cc on-device, or stubbed in
@@ -29,21 +27,11 @@ extern void WiFiConnect();
 // Drive the PubSubClient keep-alive.  Called by the application loop every
 // pass (not by NetworkManager itself).
 extern void MQTTLoop();
+// Monotonic millisecond clock.
+// On ESP32: returns millis(). On host tests: returns std::chrono wall time.
+extern uint32_t PlatformNowMs();
 
 namespace firmware {
-
-namespace {
-
-uint32_t NowMs() {
-  // Converts pw_chrono time point to uint32_t milliseconds.
-  // On host: uses std::chrono steady_clock backend.
-  // On ESP32: uses FreeRTOS tick backend.
-  auto duration = pw::chrono::SystemClock::now().time_since_epoch();
-  return static_cast<uint32_t>(
-      std::chrono::duration_cast<std::chrono::milliseconds>(duration).count());
-}
-
-}  // namespace
 
 void NetworkManager::Connect() {
   if (state_ == State::kConnecting || state_ == State::kReady) return;
@@ -117,17 +105,14 @@ pw::Status NetworkManager::Publish(const char* topic, const char* payload) {
 }
 
 uint32_t NetworkManager::state_age_ms() const {
-  auto now = pw::chrono::SystemClock::now();
-  auto elapsed = now - state_entered_;
-  return static_cast<uint32_t>(
-      std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
+  return PlatformNowMs() - state_entered_ms_;
 }
 
 void NetworkManager::TransitionTo(State next) {
   PW_LOG_DEBUG("NetworkManager: %s → %s",
                StateToString(state_), StateToString(next));
   state_ = next;
-  state_entered_ = pw::chrono::SystemClock::now();
+  state_entered_ms_ = PlatformNowMs();
   if (next == State::kConnecting) {
     WiFiConnect();
   }

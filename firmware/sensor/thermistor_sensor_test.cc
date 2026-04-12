@@ -3,8 +3,6 @@
 
 #include "firmware/sensor/thermistor.h"
 
-#include <cmath>
-
 #include "firmware/adc/fake_adc.h"
 #include "pw_unit_test/framework.h"
 
@@ -32,45 +30,41 @@ TEST(ThermistorSensorTest, ReadConvertsRawToTemperature) {
 
     // Midpoint of 12-bit ADC: NTC == R_ref → T = T0 = 25 °C exactly.
     adc.SetReading(kPin, adc.max_value() / 2);
-    float t = sensor.Read();
+    auto r = sensor.Read();
 
     // Allow ±1 °C tolerance for integer midpoint rounding.
-    EXPECT_FALSE(std::isnan(t));
-    EXPECT_GT(t, 24.0f);
-    EXPECT_LT(t, 26.0f);
+    EXPECT_TRUE(r.valid);
+    EXPECT_GT(r.value, 24.0f);
+    EXPECT_LT(r.value, 26.0f);
 }
 
-// IsValid() is false before the first successful (non-NaN) Read().
-TEST(ThermistorSensorTest, IsValidFalseBeforeFirstGoodRead) {
+// Read() returns Invalid before the first successful (non-NaN) read.
+TEST(ThermistorSensorTest, InvalidBeforeFirstGoodRead) {
     testing::FakeAdc adc;
     ThermistorSensor sensor(kPin, &adc);
     sensor.Init();
 
-    EXPECT_FALSE(sensor.IsValid());
+    EXPECT_FALSE(sensor.Read().valid);
 }
 
-// IsValid() stays false when the ADC is at the 0 rail (open circuit).
-TEST(ThermistorSensorTest, IsValidFalseOnRailValue) {
+// Read() stays Invalid when the ADC is at the 0 rail (open circuit).
+TEST(ThermistorSensorTest, InvalidOnRailValue) {
     testing::FakeAdc adc;
     ThermistorSensor sensor(kPin, &adc);
     sensor.Init();
 
     adc.SetReading(kPin, 0);  // lower rail → NaN from adc_to_celsius
-    sensor.Read();
-
-    EXPECT_FALSE(sensor.IsValid());
+    EXPECT_FALSE(sensor.Read().valid);
 }
 
-// IsValid() becomes true after a good midpoint read.
-TEST(ThermistorSensorTest, IsValidTrueAfterGoodRead) {
+// Read() returns valid after a good midpoint read.
+TEST(ThermistorSensorTest, ValidAfterGoodRead) {
     testing::FakeAdc adc;
     ThermistorSensor sensor(kPin, &adc);
     sensor.Init();
 
     adc.SetReading(kPin, adc.max_value() / 2);
-    sensor.Read();
-
-    EXPECT_TRUE(sensor.IsValid());
+    EXPECT_TRUE(sensor.Read().valid);
 }
 
 }  // namespace
