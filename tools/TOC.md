@@ -13,6 +13,7 @@ Build, release, and development tooling.
 - [tilt/README.md](tilt/README.md) — Tilt configuration for local Kubernetes development
 - [tilt-mcp/README.md](tilt-mcp/README.md) — Tilt MCP integration for AI-assisted development
 - [tilt-mcp/CURSOR_INSTALL.md](tilt-mcp/CURSOR_INSTALL.md) — Cursor IDE integration setup
+- [serial-mcp/README.md](serial-mcp/README.md) — ESP32 serial monitor MCP server (serial_tail, serial_grep, serial_status)
 
 ## Code Generation
 
