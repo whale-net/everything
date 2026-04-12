@@ -44,6 +44,16 @@
 //   - NAMESPACE / POD_NAMESPACE -> Namespace
 //   - NODE_NAME -> NodeName
 //   - OTEL_EXPORTER_OTLP_ENDPOINT -> OTLPEndpoint
+//
+// # OTEL Disable Overrides
+//
+// These environment variables take priority over any Config field values and
+// can be used to disable OTEL signals without changing application code:
+//
+//   - OTEL_SDK_DISABLED=true   -> disables logs, traces, and metrics (OTel spec)
+//   - OTEL_LOGS_DISABLED=true  -> disables OTLP log export only
+//   - OTEL_TRACES_DISABLED=true -> disables tracing only
+//   - OTEL_METRICS_DISABLED=true -> disables metrics only
 package logging
 
 import (
@@ -226,6 +236,23 @@ func applyDefaults(cfg *Config) {
 	if cfg.OTLPEndpoint == "" {
 		cfg.OTLPEndpoint = envOr("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317")
 	}
+
+	// OTEL disable overrides — these take priority over Config field values.
+	// OTEL_SDK_DISABLED follows the OpenTelemetry spec and disables all signals.
+	if isEnvTrue("OTEL_SDK_DISABLED") {
+		cfg.EnableOTLP = false
+		cfg.EnableTracing = false
+		cfg.EnableMetrics = false
+	}
+	if isEnvTrue("OTEL_LOGS_DISABLED") {
+		cfg.EnableOTLP = false
+	}
+	if isEnvTrue("OTEL_TRACES_DISABLED") {
+		cfg.EnableTracing = false
+	}
+	if isEnvTrue("OTEL_METRICS_DISABLED") {
+		cfg.EnableMetrics = false
+	}
 }
 
 func envOr(key, fallback string) string {
@@ -233,6 +260,12 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// isEnvTrue returns true if the named environment variable is set to "true"
+// (case-insensitive).
+func isEnvTrue(key string) bool {
+	return strings.EqualFold(os.Getenv(key), "true")
 }
 
 // stripScheme removes http:// or https:// from an endpoint string so it can

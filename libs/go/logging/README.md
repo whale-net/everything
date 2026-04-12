@@ -74,6 +74,19 @@ When `Config` fields are empty, they are read from environment variables (same a
 | `NODE_NAME` | `NodeName` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `OTLPEndpoint` |
 
+## Disabling OTEL via Environment Variables
+
+These variables take priority over any `Config` field and allow disabling OTEL signals at runtime without changing application code. Useful when an OTLP collector is unavailable (e.g. bare-metal hosts in production):
+
+| Env Var | Effect |
+|---------|--------|
+| `OTEL_SDK_DISABLED=true` | Disables logs, traces, and metrics (follows [OTel spec](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/#general-sdk-configuration)) |
+| `OTEL_LOGS_DISABLED=true` | Disables OTLP log export only |
+| `OTEL_TRACES_DISABLED=true` | Disables tracing only |
+| `OTEL_METRICS_DISABLED=true` | Disables metrics only |
+
+Values are case-insensitive (`true`, `TRUE`, `True` all work).
+
 ## JSON Output Format
 
 Matches the Python `StructuredFormatter`. When a span is active, `trace_id` and `span_id` are injected automatically:

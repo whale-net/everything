@@ -169,6 +169,83 @@ func TestApplyDefaults_ExplicitOverridesEnv(t *testing.T) {
 	assert.Equal(t, "explicit-app", cfg.ServiceName)
 }
 
+func TestApplyDefaults_OTELSDKDisabled(t *testing.T) {
+	t.Setenv("OTEL_SDK_DISABLED", "true")
+
+	cfg := Config{EnableOTLP: true, EnableTracing: true, EnableMetrics: true}
+	applyDefaults(&cfg)
+
+	assert.False(t, cfg.EnableOTLP, "OTEL_SDK_DISABLED should disable logs")
+	assert.False(t, cfg.EnableTracing, "OTEL_SDK_DISABLED should disable tracing")
+	assert.False(t, cfg.EnableMetrics, "OTEL_SDK_DISABLED should disable metrics")
+}
+
+func TestApplyDefaults_OTELSDKDisabled_CaseInsensitive(t *testing.T) {
+	t.Setenv("OTEL_SDK_DISABLED", "TRUE")
+
+	cfg := Config{EnableOTLP: true, EnableTracing: true, EnableMetrics: true}
+	applyDefaults(&cfg)
+
+	assert.False(t, cfg.EnableOTLP)
+	assert.False(t, cfg.EnableTracing)
+	assert.False(t, cfg.EnableMetrics)
+}
+
+func TestApplyDefaults_OTELLogsDisabled(t *testing.T) {
+	t.Setenv("OTEL_LOGS_DISABLED", "true")
+
+	cfg := Config{EnableOTLP: true, EnableTracing: true, EnableMetrics: true}
+	applyDefaults(&cfg)
+
+	assert.False(t, cfg.EnableOTLP, "OTEL_LOGS_DISABLED should disable logs")
+	assert.True(t, cfg.EnableTracing, "OTEL_LOGS_DISABLED should not affect tracing")
+	assert.True(t, cfg.EnableMetrics, "OTEL_LOGS_DISABLED should not affect metrics")
+}
+
+func TestApplyDefaults_OTELTracesDisabled(t *testing.T) {
+	t.Setenv("OTEL_TRACES_DISABLED", "true")
+
+	cfg := Config{EnableOTLP: true, EnableTracing: true, EnableMetrics: true}
+	applyDefaults(&cfg)
+
+	assert.True(t, cfg.EnableOTLP, "OTEL_TRACES_DISABLED should not affect logs")
+	assert.False(t, cfg.EnableTracing, "OTEL_TRACES_DISABLED should disable tracing")
+	assert.True(t, cfg.EnableMetrics, "OTEL_TRACES_DISABLED should not affect metrics")
+}
+
+func TestApplyDefaults_OTELMetricsDisabled(t *testing.T) {
+	t.Setenv("OTEL_METRICS_DISABLED", "true")
+
+	cfg := Config{EnableOTLP: true, EnableTracing: true, EnableMetrics: true}
+	applyDefaults(&cfg)
+
+	assert.True(t, cfg.EnableOTLP, "OTEL_METRICS_DISABLED should not affect logs")
+	assert.True(t, cfg.EnableTracing, "OTEL_METRICS_DISABLED should not affect tracing")
+	assert.False(t, cfg.EnableMetrics, "OTEL_METRICS_DISABLED should disable metrics")
+}
+
+func TestApplyDefaults_OTELDisabled_NotSet(t *testing.T) {
+	// When env vars are not set, config values are preserved
+	cfg := Config{EnableOTLP: true, EnableTracing: true, EnableMetrics: true}
+	applyDefaults(&cfg)
+
+	assert.True(t, cfg.EnableOTLP)
+	assert.True(t, cfg.EnableTracing)
+	assert.True(t, cfg.EnableMetrics)
+}
+
+func TestApplyDefaults_OTELDisabled_FalseValue(t *testing.T) {
+	// "false" should not disable anything
+	t.Setenv("OTEL_SDK_DISABLED", "false")
+
+	cfg := Config{EnableOTLP: true, EnableTracing: true, EnableMetrics: true}
+	applyDefaults(&cfg)
+
+	assert.True(t, cfg.EnableOTLP)
+	assert.True(t, cfg.EnableTracing)
+	assert.True(t, cfg.EnableMetrics)
+}
+
 func TestJSONHandler_NumericAttrs(t *testing.T) {
 	buf := configureFresh(t, Config{
 		ServiceName: "test-app",
