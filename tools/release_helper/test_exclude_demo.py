@@ -6,6 +6,8 @@ by default and includes it when the --include-demo flag is used.
 It also tests that chart names without the "helm-" prefix are matched correctly.
 """
 
+import json
+
 import pytest
 from unittest.mock import Mock, patch
 
@@ -130,7 +132,6 @@ class TestPlanHelmReleaseExcludeDemo:
         assert result.exit_code == 0
         
         # Parse the JSON output
-        import json
         output_data = json.loads(result.stdout)
         
         # Should only include manman chart
@@ -158,7 +159,6 @@ class TestPlanHelmReleaseExcludeDemo:
         assert result.exit_code == 0
         
         # Parse the JSON output
-        import json
         output_data = json.loads(result.stdout)
         
         # Should include all charts from both domains
@@ -188,7 +188,6 @@ class TestPlanHelmReleaseExcludeDemo:
         assert result.exit_code == 0
         
         # Parse the JSON output
-        import json
         output_data = json.loads(result.stdout)
         
         # Should include the specified demo chart even without --include-demo
@@ -210,7 +209,6 @@ class TestPlanHelmReleaseExcludeDemo:
         assert result.exit_code == 0
         
         # Parse the JSON output
-        import json
         output_data = json.loads(result.stdout)
         
         # Should include all demo charts when domain is explicitly specified
@@ -236,7 +234,6 @@ class TestPlanHelmReleaseChartNameMatching:
 
         assert result.exit_code == 0
 
-        import json
         output_data = json.loads(result.stdout)
         chart_names = [chart['chart'] for chart in output_data['matrix']['include']]
         assert 'helm-manman-host-services' in chart_names
@@ -254,7 +251,6 @@ class TestPlanHelmReleaseChartNameMatching:
 
         assert result.exit_code == 0
 
-        import json
         output_data = json.loads(result.stdout)
         chart_names = [chart['chart'] for chart in output_data['matrix']['include']]
         assert 'helm-manman-host-services' in chart_names
@@ -272,7 +268,6 @@ class TestPlanHelmReleaseChartNameMatching:
 
         assert result.exit_code == 0
 
-        import json
         output_data = json.loads(result.stdout)
         chart_names = [chart['chart'] for chart in output_data['matrix']['include']]
         assert 'helm-manman-host-services' in chart_names
@@ -291,7 +286,6 @@ class TestPlanHelmReleaseChartNameMatching:
 
         assert result.exit_code == 0
 
-        import json
         output_data = json.loads(result.stdout)
         chart_names = [chart['chart'] for chart in output_data['matrix']['include']]
         assert len(chart_names) == 0
