@@ -48,7 +48,8 @@ _MAX_ENTRIES = 126
 
 
 def _crc32(data: bytes) -> int:
-    return _binascii_crc32(data, 0xFFFFFFFF) ^ 0xFFFFFFFF
+    # Matches esp_crc32_le(0xFFFFFFFF, data, len) — no final XOR.
+    return _binascii_crc32(data, 0xFFFFFFFF) & 0xFFFFFFFF
 
 
 def _crc16_ccitt(data: bytes) -> int:
