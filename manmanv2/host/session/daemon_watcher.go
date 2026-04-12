@@ -43,7 +43,9 @@ func (sm *SessionManager) WatchDaemon(ctx context.Context) {
 				if daemonHealthy {
 					daemonHealthy = false
 					slog.Warn("Docker daemon unreachable, marking all sessions as crashed", "error", err)
-					sm.markAllSessionsCrashed(ctx)
+					// Use a fresh background context so that RabbitMQ publish calls
+					// complete even if the watcher context is being cancelled.
+					sm.markAllSessionsCrashed(context.Background())
 				}
 			} else if !daemonHealthy {
 				daemonHealthy = true

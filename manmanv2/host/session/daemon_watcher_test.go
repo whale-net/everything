@@ -7,7 +7,8 @@ import (
 	hostrmq "github.com/whale-net/everything/manmanv2/host/rmq"
 )
 
-// mockRMQPublisher is a test double for the RabbitMQ publisher used by SessionManager.
+// mockRMQPublisher is a test spy that records every PublishSessionStatus call
+// so tests can verify that the correct crash events were published.
 type mockRMQPublisher struct {
 	publishedUpdates []*hostrmq.SessionStatusUpdate
 }
