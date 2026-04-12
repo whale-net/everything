@@ -18,12 +18,38 @@ and "wifi_pass", using the Arduino Preferences library.
 """
 
 import argparse
+import os
+import signal
 import struct
 import subprocess
 import sys
 import tempfile
-import os
 from binascii import crc32 as _binascii_crc32
+from pathlib import Path
+
+_SERIAL_DAEMON_PID_FILE = Path.home() / ".local" / "share" / "serial-mcp" / "daemon.pid"
+
+
+def _pause_serial_daemon() -> "int | None":
+    """SIGSTOP the serial-mcp daemon so esptool can claim the port."""
+    if not _SERIAL_DAEMON_PID_FILE.exists():
+        return None
+    try:
+        pid = int(_SERIAL_DAEMON_PID_FILE.read_text().strip())
+        os.kill(pid, signal.SIGSTOP)
+        return pid
+    except (ValueError, ProcessLookupError, OSError):
+        return None
+
+
+def _resume_serial_daemon(pid: "int | None") -> None:
+    """SIGCONT the serial-mcp daemon after flashing."""
+    if pid is None:
+        return
+    try:
+        os.kill(pid, signal.SIGCONT)
+    except (ProcessLookupError, OSError):
+        pass
 
 
 # ── NVS binary generator ─────────────────────────────────────────────────────
@@ -48,8 +74,10 @@ _MAX_ENTRIES = 126
 
 
 def _crc32(data: bytes) -> int:
-    # Matches esp_crc32_le(0xFFFFFFFF, data, len) — no final XOR.
-    return _binascii_crc32(data, 0xFFFFFFFF) & 0xFFFFFFFF
+    # Matches esp_crc32_le(0xFFFFFFFF, data, len).
+    # esp_crc32_le(0xFFFF, d) = crc32_standard(d) ^ 0xFFFF
+    #                         = binascii.crc32(d, 0) ^ 0xFFFFFFFF
+    return _binascii_crc32(data) ^ 0xFFFFFFFF
 
 
 def _crc16_ccitt(data: bytes) -> int:
@@ -144,7 +172,11 @@ def flash_nvs(esptool: str, port: str, nvs_bin: str) -> None:
         "0x9000", nvs_bin,
     ]
     print("$ " + " ".join(cmd))
-    subprocess.check_call(cmd)
+    daemon_pid = _pause_serial_daemon()
+    try:
+        subprocess.check_call(cmd)
+    finally:
+        _resume_serial_daemon(daemon_pid)
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────

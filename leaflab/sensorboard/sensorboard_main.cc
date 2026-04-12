@@ -55,7 +55,7 @@ void loop() {
         if (r.valid) {
             int whole  = static_cast<int>(r.value);
             int tenths = static_cast<int>((r.value - whole) * 10);
-            PW_LOG_INFO("%s: %d.%d", s->name(), whole, tenths);
+            //PW_LOG_INFO("%s: %d.%d", s->name(), whole, tenths);
         }
     }
 
