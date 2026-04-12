@@ -30,6 +30,47 @@ screen /dev/ttyUSB0 115200
 
 ---
 
+## WiFi and MQTT Setup
+
+Credentials are stored in the ESP32's NVS partition, separate from the firmware binary. This means they survive firmware reflashes and are never baked into the `.bin`.
+
+### Provision credentials (once per device)
+
+```bash
+bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 "MySSID" "MyPassword"
+```
+
+Run this once. Re-run only if your WiFi credentials change.
+
+### Configure the MQTT broker
+
+Edit `elegoo_config.cc`:
+
+```cpp
+static const firmware::NetworkManager::Config cfg = {
+    .mqtt_host = "mqtt.local",   // ← your broker IP or hostname
+    .mqtt_port = 1883,
+    .device_id = "leaflab-sensorboard",
+    .mqtt_user = nullptr,        // set if broker requires auth
+    .mqtt_pass = nullptr,
+};
+```
+
+Then rebuild and reflash. Credentials in NVS are unaffected.
+
+### Alternative: compile-time credentials (boards without NVS)
+
+Add to `.bazelrc.local` (gitignored — never commit credentials):
+
+```
+build --define=WIFI_SSID=MyNetwork
+build --define=WIFI_PASSWORD=MyPassword
+```
+
+Then swap `NVSCredentials` for `DefineCredentials` in `elegoo_config.cc` and add `//firmware/credentials:define_credentials` to the `BUILD.bazel` deps.
+
+---
+
 ## Build and Flash
 
 ```bash
