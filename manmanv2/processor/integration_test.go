@@ -500,6 +500,95 @@ func TestStaleHostDetection(t *testing.T) {
 	}
 }
 
+func TestHeartbeatRecovery(t *testing.T) {
+	serverRepo := NewMockServerRepository()
+	publisher := NewMockPublisher()
+	ctx := context.Background()
+
+	// Create a server and mark it offline (simulating stale checker)
+	server, _ := serverRepo.Create(ctx, "recovering-server")
+	oldTime := time.Now().Add(-120 * time.Second)
+	serverRepo.UpdateStatusAndLastSeen(ctx, server.ServerID, manman.ServerStatusOnline, oldTime)
+	serverRepo.MarkServersOffline(ctx, []int64{server.ServerID})
+
+	// Verify server is offline before test
+	offline, _ := serverRepo.Get(ctx, server.ServerID)
+	if offline.Status != manman.ServerStatusOffline {
+		t.Fatalf("Expected server to be offline before recovery test, got %q", offline.Status)
+	}
+
+	// Build repository wrapper and handler
+	repo := &repository.Repository{
+		Servers: serverRepo,
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	handler := handlers.NewHealthHandler(repo, publisher, 90, logger)
+
+	// Simulate a heartbeat arriving from the offline server
+	heartbeatMsg := rmq.HealthUpdate{
+		ServerID: server.ServerID,
+	}
+	body, _ := json.Marshal(heartbeatMsg)
+
+	err := handler.Handle(ctx, "health.heartbeat", body)
+	if err != nil {
+		t.Fatalf("Handle returned unexpected error: %v", err)
+	}
+
+	// Verify server is back online
+	recovered, _ := serverRepo.Get(ctx, server.ServerID)
+	if recovered.Status != manman.ServerStatusOnline {
+		t.Errorf("Expected server status %q after heartbeat recovery, got %q", manman.ServerStatusOnline, recovered.Status)
+	}
+	if recovered.LastSeen == nil {
+		t.Error("Expected LastSeen to be set after recovery")
+	}
+
+	// Verify recovery event published
+	if len(publisher.PublishedEvents) != 1 {
+		t.Fatalf("Expected 1 recovery event, got %d", len(publisher.PublishedEvents))
+	}
+	if publisher.PublishedEvents[0].RoutingKey != "manman.host.online" {
+		t.Errorf("Expected routing key %q for recovery event, got %q", "manman.host.online", publisher.PublishedEvents[0].RoutingKey)
+	}
+}
+
+func TestHeartbeatNoRecoveryWhenOnline(t *testing.T) {
+	serverRepo := NewMockServerRepository()
+	publisher := NewMockPublisher()
+	ctx := context.Background()
+
+	// Create a server and mark it online
+	server, _ := serverRepo.Create(ctx, "online-server")
+	now := time.Now()
+	serverRepo.UpdateStatusAndLastSeen(ctx, server.ServerID, manman.ServerStatusOnline, now)
+
+	repo := &repository.Repository{
+		Servers: serverRepo,
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	handler := handlers.NewHealthHandler(repo, publisher, 90, logger)
+
+	heartbeatMsg := rmq.HealthUpdate{ServerID: server.ServerID}
+	body, _ := json.Marshal(heartbeatMsg)
+
+	err := handler.Handle(ctx, "health.heartbeat", body)
+	if err != nil {
+		t.Fatalf("Handle returned unexpected error: %v", err)
+	}
+
+	// Verify server is still online
+	updated, _ := serverRepo.Get(ctx, server.ServerID)
+	if updated.Status != manman.ServerStatusOnline {
+		t.Errorf("Expected server to remain %q, got %q", manman.ServerStatusOnline, updated.Status)
+	}
+
+	// Verify no recovery event was published (server was already online)
+	if len(publisher.PublishedEvents) != 0 {
+		t.Errorf("Expected no published events for already-online server, got %d", len(publisher.PublishedEvents))
+	}
+}
+
 func TestStaleSessionDetection(t *testing.T) {
 	// Setup
 	sessionRepo := NewMockSessionRepository()

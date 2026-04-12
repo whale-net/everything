@@ -61,7 +61,7 @@ Environment variables:
 | `QUEUE_NAME` | `processor-events` | No | RabbitMQ queue name |
 | `LOG_LEVEL` | `info` | No | Log level (debug, info, warn, error) |
 | `HEALTH_CHECK_PORT` | `8080` | No | HTTP health check server port |
-| `STALE_HOST_THRESHOLD_SECONDS` | `10` | No | Seconds before marking host as stale |
+| `STALE_HOST_THRESHOLD_SECONDS` | `90` | No | Seconds before marking host as stale |
 | `EXTERNAL_EXCHANGE` | `external` | No | External exchange name |
 
 ## Components
@@ -112,7 +112,13 @@ Background task runs every 60 seconds to detect hosts that haven't sent heartbea
 - Marks them as offline
 - Publishes `manman.host.stale` events to external exchange
 
-Default threshold: **10 seconds** (configurable)
+Default threshold: **90 seconds** (3× the 30s heartbeat interval, configurable via `STALE_HOST_THRESHOLD_SECONDS`)
+
+### Heartbeat Recovery
+
+When a heartbeat is received from a server that is currently `offline` (e.g. previously marked stale), the processor automatically recovers it:
+- Updates status back to `online` and refreshes `last_seen`
+- Publishes a `manman.host.online` recovery event to the external exchange
 
 ### Error Handling
 

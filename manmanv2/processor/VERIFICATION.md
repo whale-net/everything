@@ -90,11 +90,15 @@ crashed   crashed   crashed   crashed
 
 ### 3. Stale Host Detection
 - ✅ Background checker runs every 60 seconds
-- ✅ Configurable threshold (default: 10 seconds)
+- ✅ Configurable threshold (default: 90 seconds — 3× the 30s heartbeat interval)
 - ✅ Publishes `manman.host.stale` events to external exchange
 - ✅ Batch updates for performance
 
-### 4. Error Handling Strategy
+### 4. Heartbeat Recovery
+- ✅ Heartbeats from offline servers trigger automatic recovery to `online`
+- ✅ Publishes `manman.host.online` recovery event on recovery
+
+### 5. Error Handling Strategy
 **Permanent Errors (NACK without requeue):**
 - Malformed JSON
 - Entity not found
