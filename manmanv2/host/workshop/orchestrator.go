@@ -164,23 +164,20 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 		Env:     []string{},
 	}
 
-	// Create container, pulling image if needed
+	// Always pull steamcmd image to ensure latest version is used
+	logger.Info("pulling steamcmd image", "image", steamCMDImage)
+	if pullErr := do.dockerClient.PullImage(ctx, steamCMDImage); pullErr != nil {
+		logger.Error("failed to pull steamcmd image", "error", pullErr)
+		do.handleDownloadError(ctx, cmd.InstallationID, pullErr)
+		return pullErr
+	}
+
+	// Create container
 	containerID, err := do.dockerClient.CreateContainer(ctx, containerConfig)
 	if err != nil {
-		if strings.Contains(err.Error(), "No such image") {
-			logger.Info("pulling steamcmd image", "image", steamCMDImage)
-			if pullErr := do.dockerClient.PullImage(ctx, steamCMDImage); pullErr != nil {
-				logger.Error("failed to pull steamcmd image", "error", pullErr)
-				do.handleDownloadError(ctx, cmd.InstallationID, pullErr)
-				return pullErr
-			}
-			containerID, err = do.dockerClient.CreateContainer(ctx, containerConfig)
-		}
-		if err != nil {
-			logger.Error("failed to create download container", "error", err)
-			do.handleDownloadError(ctx, cmd.InstallationID, err)
-			return err
-		}
+		logger.Error("failed to create download container", "error", err)
+		do.handleDownloadError(ctx, cmd.InstallationID, err)
+		return err
 	}
 
 	// Start container
@@ -624,17 +621,14 @@ func (do *DownloadOrchestrator) runHelperContainer(ctx context.Context, config d
 		_ = do.dockerClient.RemoveContainer(ctx, existing.ContainerID, true)
 	}
 
+	// Always pull helper image to ensure latest version is used
+	if pullErr := do.dockerClient.PullImage(ctx, config.Image); pullErr != nil {
+		return fmt.Errorf("failed to pull helper image %s: %w", config.Image, pullErr)
+	}
+
 	containerID, err := do.dockerClient.CreateContainer(ctx, config)
 	if err != nil {
-		if strings.Contains(err.Error(), "No such image") {
-			if pullErr := do.dockerClient.PullImage(ctx, config.Image); pullErr != nil {
-				return fmt.Errorf("failed to pull helper image %s: %w", config.Image, pullErr)
-			}
-			containerID, err = do.dockerClient.CreateContainer(ctx, config)
-		}
-		if err != nil {
-			return fmt.Errorf("failed to create helper container: %w", err)
-		}
+		return fmt.Errorf("failed to create helper container: %w", err)
 	}
 
 	if err := do.dockerClient.StartContainer(ctx, containerID); err != nil {

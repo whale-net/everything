@@ -249,7 +249,17 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 		slog.Info("workshop addons downloaded successfully", "session_id", sessionID)
 	}
 
-	// 4. Create game container
+	// 4. Pull game image (always pull to ensure latest version is used)
+	slog.Info("pulling image", "session_id", sessionID, "image", cmd.Image)
+	if pullErr := sm.dockerClient.PullImage(ctx, cmd.Image); pullErr != nil {
+		slog.Error("failed to pull image", "session_id", sessionID, "image", cmd.Image, "error", pullErr)
+		sm.cleanupSession(ctx, state)
+		state.UpdateStatus(manman.SessionStatusCrashed)
+		sm.stateManager.RemoveSession(sessionID)
+		return &rmq.PermanentError{Err: fmt.Errorf("failed to pull image %s: %w", cmd.Image, pullErr)}
+	}
+
+	// 5. Create game container
 	slog.Info("creating container", "session_id", sessionID, "image", cmd.Image)
 	containerID, err := sm.createGameContainer(ctx, state, cmd)
 	if err != nil {
@@ -272,25 +282,6 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 				return fmt.Errorf("failed to handle name conflict: %w", err)
 			}
 			slog.Info("resolved name conflict", "session_id", sessionID, "container_id", containerID)
-		} else if strings.Contains(err.Error(), "No such image") {
-			slog.Info("image not found, pulling", "session_id", sessionID, "image", cmd.Image)
-			if pullErr := sm.dockerClient.PullImage(ctx, cmd.Image); pullErr != nil {
-				slog.Error("failed to pull image", "session_id", sessionID, "image", cmd.Image, "error", pullErr)
-				sm.cleanupSession(ctx, state)
-				state.UpdateStatus(manman.SessionStatusCrashed)
-				sm.stateManager.RemoveSession(sessionID)
-				return &rmq.PermanentError{Err: fmt.Errorf("failed to pull image %s: %w", cmd.Image, pullErr)}
-			}
-
-			slog.Info("retrying container creation after pull", "session_id", sessionID)
-			containerID, err = sm.createGameContainer(ctx, state, cmd)
-			if err != nil {
-				slog.Error("failed to create container after pull", "session_id", sessionID, "error", err)
-				sm.cleanupSession(ctx, state)
-				state.UpdateStatus(manman.SessionStatusCrashed)
-				sm.stateManager.RemoveSession(sessionID)
-				return &rmq.PermanentError{Err: fmt.Errorf("failed to create game container after pull: %w", err)}
-			}
 		} else {
 			slog.Error("failed to create container", "session_id", sessionID, "error", err)
 			sm.cleanupSession(ctx, state)
