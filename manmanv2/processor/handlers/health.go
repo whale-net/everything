@@ -141,9 +141,8 @@ func (h *HealthHandler) Handle(ctx context.Context, routingKey string, body []by
 		)
 	}
 
-	// Update last_seen timestamp
-	now := time.Now()
-	err := h.repo.Servers.UpdateLastSeen(ctx, msg.ServerID, now)
+	// Fetch current server state to detect recovery
+	server, err := h.repo.Servers.Get(ctx, msg.ServerID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			h.logger.Warn("server not found",
@@ -152,11 +151,53 @@ func (h *HealthHandler) Handle(ctx context.Context, routingKey string, body []by
 			return &PermanentError{Err: fmt.Errorf("server %d not found", msg.ServerID)}
 		}
 
-		h.logger.Error("failed to update server last_seen",
+		h.logger.Error("failed to get server",
 			"error", err,
 			"server_id", msg.ServerID,
 		)
 		return err // Transient error - retry
+	}
+
+	now := time.Now()
+
+	if server.Status == manman.ServerStatusOffline {
+		// Server was marked offline (likely by the stale checker) — recover it
+		h.logger.Info("heartbeat received from offline server, recovering to online",
+			"server_id", msg.ServerID,
+		)
+
+		if err := h.repo.Servers.UpdateStatusAndLastSeen(ctx, msg.ServerID, manman.ServerStatusOnline, now); err != nil {
+			h.logger.Error("failed to recover server to online",
+				"error", err,
+				"server_id", msg.ServerID,
+			)
+			return err // Transient error - retry
+		}
+
+		recoveryEvent := rmq.HostStatusUpdate{
+			ServerID: msg.ServerID,
+			Status:   manman.ServerStatusOnline,
+		}
+		if err := h.publisher.PublishExternal(ctx, "manman.host.online", recoveryEvent); err != nil {
+			h.logger.Error("failed to publish host recovery event",
+				"error", err,
+				"server_id", msg.ServerID,
+			)
+			// Don't fail the message processing if external publish fails
+		}
+
+		h.logger.Info("server recovered to online via heartbeat",
+			"server_id", msg.ServerID,
+		)
+	} else {
+		// Normal heartbeat — just update last_seen
+		if err := h.repo.Servers.UpdateLastSeen(ctx, msg.ServerID, now); err != nil {
+			h.logger.Error("failed to update server last_seen",
+				"error", err,
+				"server_id", msg.ServerID,
+			)
+			return err // Transient error - retry
+		}
 	}
 
 	return nil

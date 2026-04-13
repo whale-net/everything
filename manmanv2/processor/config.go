@@ -36,7 +36,7 @@ func LoadConfig() (*Config, error) {
 		QueueName:             getEnv("QUEUE_NAME", "processor-events"),
 		LogLevel:              getEnv("LOG_LEVEL", "info"),
 		HealthCheckPort:       getEnv("HEALTH_CHECK_PORT", "8080"),
-		StaleHostThreshold:    getEnvInt("STALE_HOST_THRESHOLD_SECONDS", 10),
+		StaleHostThreshold:    getEnvInt("STALE_HOST_THRESHOLD_SECONDS", 90),
 		StaleSessionThreshold: getEnvInt("STALE_SESSION_THRESHOLD_SECONDS", 30), // Default 30 seconds
 		ExternalExchange:      getEnv("EXTERNAL_EXCHANGE", "external"),
 	}
