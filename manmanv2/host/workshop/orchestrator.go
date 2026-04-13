@@ -172,7 +172,7 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 		return pullErr
 	}
 
-	// Create container
+	// Create container (image already pulled above)
 	containerID, err := do.dockerClient.CreateContainer(ctx, containerConfig)
 	if err != nil {
 		logger.Error("failed to create download container", "error", err)

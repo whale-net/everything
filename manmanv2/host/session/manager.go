@@ -293,7 +293,7 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	slog.Info("container created", "session_id", sessionID, "container_id", containerID)
 	state.GameContainerID = containerID
 
-	// 3. Start game container
+	// 6. Start game container
 	slog.Info("starting container", "session_id", sessionID, "container_id", containerID)
 	if err := sm.dockerClient.StartContainer(ctx, containerID); err != nil {
 		if !strings.Contains(err.Error(), "already started") {
@@ -307,7 +307,7 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	}
 	slog.Info("container started", "session_id", sessionID, "container_id", containerID)
 
-	// 4. Stream logs using Docker logs API (doesn't interfere with stdin during startup)
+	// 7. Stream logs using Docker logs API (doesn't interfere with stdin during startup)
 	slog.Info("starting log stream", "session_id", sessionID)
 	logReader, err := sm.dockerClient.GetContainerLogs(ctx, containerID, true, "all")
 	if err != nil {
@@ -321,7 +321,7 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	state.AttachStrategy = "persistent"
 	state.IsTTY = true             // Always use TTY mode
 
-	// 5. Start log reader goroutine
+	// 8. Start log reader goroutine
 	slog.Debug("spawning log reader", "session_id", sessionID)
 	sm.startLogReader(state)
 
