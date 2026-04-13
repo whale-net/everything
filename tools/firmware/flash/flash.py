@@ -23,35 +23,8 @@ Usage:
 """
 
 import argparse
-import os
-import signal
 import subprocess
 import sys
-from pathlib import Path
-
-_SERIAL_DAEMON_PID_FILE = Path.home() / ".local" / "share" / "serial-mcp" / "daemon.pid"
-
-
-def _pause_serial_daemon() -> "int | None":
-    """SIGSTOP the serial-mcp daemon so esptool can claim the port."""
-    if not _SERIAL_DAEMON_PID_FILE.exists():
-        return None
-    try:
-        pid = int(_SERIAL_DAEMON_PID_FILE.read_text().strip())
-        os.kill(pid, signal.SIGSTOP)
-        return pid
-    except (ValueError, ProcessLookupError, OSError):
-        return None
-
-
-def _resume_serial_daemon(pid: "int | None") -> None:
-    """SIGCONT the serial-mcp daemon after flashing."""
-    if pid is None:
-        return
-    try:
-        os.kill(pid, signal.SIGCONT)
-    except (ProcessLookupError, OSError):
-        pass
 
 
 def _check_file(path: str, desc: str) -> None:
@@ -79,11 +52,7 @@ def flash_esptool(args: argparse.Namespace, segments: list[tuple[str, str]]) -> 
         cmd += [addr, path]
 
     print("$ " + " ".join(cmd))
-    daemon_pid = _pause_serial_daemon()
-    try:
-        subprocess.check_call(cmd)
-    finally:
-        _resume_serial_daemon(daemon_pid)
+    subprocess.check_call(cmd)
 
 
 def flash_avrdude(args: argparse.Namespace, segments: list[tuple[str, str]]) -> None:

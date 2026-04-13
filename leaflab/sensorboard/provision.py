@@ -18,38 +18,12 @@ and "wifi_pass", using the Arduino Preferences library.
 """
 
 import argparse
-import os
-import signal
 import struct
 import subprocess
 import sys
 import tempfile
+import os
 from binascii import crc32 as _binascii_crc32
-from pathlib import Path
-
-_SERIAL_DAEMON_PID_FILE = Path.home() / ".local" / "share" / "serial-mcp" / "daemon.pid"
-
-
-def _pause_serial_daemon() -> "int | None":
-    """SIGSTOP the serial-mcp daemon so esptool can claim the port."""
-    if not _SERIAL_DAEMON_PID_FILE.exists():
-        return None
-    try:
-        pid = int(_SERIAL_DAEMON_PID_FILE.read_text().strip())
-        os.kill(pid, signal.SIGSTOP)
-        return pid
-    except (ValueError, ProcessLookupError, OSError):
-        return None
-
-
-def _resume_serial_daemon(pid: "int | None") -> None:
-    """SIGCONT the serial-mcp daemon after flashing."""
-    if pid is None:
-        return
-    try:
-        os.kill(pid, signal.SIGCONT)
-    except (ProcessLookupError, OSError):
-        pass
 
 
 # ── NVS binary generator ─────────────────────────────────────────────────────
@@ -172,11 +146,7 @@ def flash_nvs(esptool: str, port: str, nvs_bin: str) -> None:
         "0x9000", nvs_bin,
     ]
     print("$ " + " ".join(cmd))
-    daemon_pid = _pause_serial_daemon()
-    try:
-        subprocess.check_call(cmd)
-    finally:
-        _resume_serial_daemon(daemon_pid)
+    subprocess.check_call(cmd)
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────

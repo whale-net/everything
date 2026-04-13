@@ -40,15 +40,18 @@ claude mcp list
 
 ## Available tools
 
+All tools strip ANSI escape codes and discard binary lines (boot ROM noise at
+the wrong baud rate) before returning data.
+
 ### `serial_tail(lines=50)`
 
-Returns the last N lines from the live serial buffer.
+Returns the last N clean text lines from the live serial buffer.
 
 ```json
 {
-  "lines": ["I (312) sensor: BH1750 ready @ 0x23", "I (318) wifi: connecting..."],
+  "lines": ["INF  Sensor ready: light @ 0x23", "INF  WiFi: connecting to 'MySSID'..."],
   "returned": 2,
-  "total_buffered": 147
+  "total_lines": 147
 }
 ```
 
@@ -61,9 +64,9 @@ chronological order. Returns the most recent matches when truncated.
 
 ```json
 {
-  "pattern": "ERROR",
+  "pattern": "WiFi|NVS",
   "matches": [
-    {"source": "output.log", "line": "E (512) i2c: bus init failed"}
+    {"source": "output.log", "line": "INF  WiFi: connected — IP 192.168.1.42"}
   ],
   "count": 1,
   "truncated": false
@@ -82,9 +85,36 @@ Daemon health and log statistics — useful for diagnosing connection issues.
   "daemon_alive": true,
   "daemon_pid": 18423,
   "output_log_bytes": 14209,
-  "last_serial_line": "I (1024) mqtt: published lux=312.5",
+  "last_serial_line": "INF  mqtt: published lux=312.5",
   "last_state_change": "2026-04-12T10:31:05 connected to /dev/ttyUSB0 at 115200 baud"
 }
+```
+
+### `serial_pause()`
+
+Stops the daemon gracefully (SIGTERM) and waits up to 5 s for the port to be
+released. Call this before running `bazel run .../flash` or `bazel run .../provision`.
+
+```json
+{"paused": true, "message": "daemon (pid 18423) stopped"}
+```
+
+### `serial_resume()`
+
+Restarts the daemon after a `serial_pause()`. Safe to call even if the daemon
+is already running.
+
+```json
+{"running": true, "daemon_pid": 18891, "message": "daemon running"}
+```
+
+**Flashing workflow:**
+```
+serial_pause()
+→ bazel run //leaflab/sensorboard:flash -- /dev/ttyUSB0
+→ bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 SSID PASS
+serial_resume()
+serial_grep("NVS|WiFi")
 ```
 
 ## Log files
@@ -107,7 +137,7 @@ Maximum total disk use: ~1 MB (`output.log` + `.old`) + ~200 KB (`daemon.log` + 
 |---|---|
 | No board plugged in | `output.log` stays empty; daemon retries silently every 5 s; one line written to `daemon.log` on state change |
 | Board disconnected mid-session | Same backoff; reconnects when port reappears |
-| esptool flashing | Daemon read interrupted; 5 s backoff; reconnects after flash; captures boot log |
+| esptool flashing | Call `serial_pause()` first to release the port; `serial_resume()` after to recapture the boot log |
 | Daemon killed / machine rebooted | Restarted automatically on next MCP tool call |
 
 ## Development
