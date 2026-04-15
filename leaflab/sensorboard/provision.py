@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
-"""Provision a LeafLab device with WiFi credentials stored in NVS.
+"""Provision an ESP32 device by writing key=value pairs to the NVS 'creds' namespace.
 
-Generates a minimal NVS partition image containing the WiFi SSID and
-password, then flashes it to the ESP32's NVS partition at address 0x9000.
-Credentials survive firmware reflashes and are never baked into the
-application binary.
+Generates a minimal NVS partition image and flashes it to address 0x9000.
+Values survive firmware reflashes and are never baked into the binary.
 
 Usage (via Bazel):
-    bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 "MySSID" "MyPass"
+    bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 \\
+        wifi_ssid=MySSID wifi_pass=MyPass mqtt_host=192.168.1.42
 
 Usage (direct):
     python3 provision.py --esptool /path/to/esptool_wrapper \\
-        --port /dev/ttyUSB0 --ssid "MySSID" --password "MyPass"
+        /dev/ttyUSB0 wifi_ssid=MySSID wifi_pass=MyPass
 
-The firmware reads credentials from NVS namespace "creds", keys "wifi_ssid"
-and "wifi_pass", using the Arduino Preferences library.
+Any key=value pairs are accepted; the firmware reads specific keys by name
+(wifi_ssid, wifi_pass, mqtt_host, mqtt_port) from NVS namespace "creds".
 """
 
 import argparse
@@ -159,20 +158,29 @@ def flash_nvs(esptool: str, port: str, nvs_bin: str) -> None:
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Provision ESP32 WiFi credentials via NVS")
-    p.add_argument("port",     help="Serial port, e.g. /dev/ttyUSB0")
-    p.add_argument("ssid",     help="WiFi network name")
-    p.add_argument("password", help="WiFi password")
+    p = argparse.ArgumentParser(
+        description="Provision ESP32 NVS 'creds' namespace with key=value pairs",
+        epilog="Example: provision.py /dev/ttyUSB0 wifi_ssid=MySSID wifi_pass=MyPass mqtt_host=192.168.1.42",
+    )
+    p.add_argument("port", help="Serial port, e.g. /dev/ttyUSB0")
+    p.add_argument("fields", nargs="+", metavar="key=value",
+                   help="NVS key=value pairs to write (e.g. wifi_ssid=MySSID)")
     p.add_argument("--esptool", required=True,
                    help="Path to esptool wrapper binary")
     args = p.parse_args()
 
-    print(f"Provisioning {args.port} with SSID='{args.ssid}'")
+    fields = {}
+    for f in args.fields:
+        if "=" not in f:
+            p.error(f"Expected key=value, got: {f!r}")
+        k, _, v = f.partition("=")
+        if not k:
+            p.error(f"Empty key in: {f!r}")
+        fields[k] = v
 
-    page = make_nvs_partition("creds", {
-        "wifi_ssid": args.ssid,
-        "wifi_pass": args.password,
-    })
+    print(f"Provisioning {args.port}: {', '.join(f'{k}={v!r}' for k, v in fields.items())}")
+
+    page = make_nvs_partition("creds", fields)
 
     with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
         f.write(page)

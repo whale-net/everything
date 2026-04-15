@@ -18,19 +18,29 @@ pw::Status NVSCredentials::Load() {
         return pw::Status::NotFound();
     }
 
-    String ssid = prefs.getString("wifi_ssid", "");
-    String pass = prefs.getString("wifi_pass", "");
+    String ssid      = prefs.getString("wifi_ssid", "");
+    String pass      = prefs.getString("wifi_pass", "");
+    String mqtt_host = prefs.getString("mqtt_host", "");
+    String mqtt_port = prefs.getString("mqtt_port", "");
     prefs.end();
 
     if (ssid.length() == 0) {
         PW_LOG_ERROR("NVS: 'wifi_ssid' key not found in namespace 'creds'");
-        PW_LOG_ERROR("Provision: bazel run //leaflab/sensorboard:provision -- PORT SSID PASS");
+        PW_LOG_ERROR("Provision: bazel run //leaflab/sensorboard:provision -- PORT wifi_ssid=SSID wifi_pass=PASS");
         return pw::Status::NotFound();
     }
 
-    strncpy(ssid_, ssid.c_str(), sizeof(ssid_) - 1);
-    strncpy(pass_, pass.c_str(), sizeof(pass_) - 1);
+    strncpy(ssid_,      ssid.c_str(),      sizeof(ssid_) - 1);
+    strncpy(pass_,      pass.c_str(),      sizeof(pass_) - 1);
+    strncpy(mqtt_host_, mqtt_host.c_str(), sizeof(mqtt_host_) - 1);
+    if (mqtt_port.length() > 0) {
+        mqtt_port_ = static_cast<uint16_t>(mqtt_port.toInt());
+    }
+
     PW_LOG_INFO("NVS: loaded wifi_ssid='%s'", ssid_);
+    if (mqtt_host_[0] != '\0') {
+        PW_LOG_INFO("NVS: loaded mqtt_host='%s' port=%u", mqtt_host_, mqtt_port_);
+    }
     return pw::OkStatus();
 }
 

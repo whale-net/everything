@@ -31,12 +31,13 @@ pw::span<firmware::ISensor* const> GetSensors() {
 
 // ── Network ──────────────────────────────────────────────────────────────────
 // GetNetwork() is called from setup() before Connect(). On first call it:
-//   1. Reads WiFi credentials from NVS (via Preferences.h).
+//   1. Reads credentials from NVS (wifi_ssid, wifi_pass, mqtt_host, mqtt_port).
 //   2. Initialises WiFi hardware (WiFiInit → WiFi.begin()).
 //   3. Constructs and returns the NetworkManager.
 //
-// MQTT broker: change mqtt_host to your broker's hostname or IP.
-//              Set mqtt_user/mqtt_pass if your broker requires auth.
+// Provision with:
+//   bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 \
+//     wifi_ssid=MySSID wifi_pass=MyPass mqtt_host=192.168.1.42
 
 static firmware::NVSCredentials creds;
 static firmware::NetworkManager* net = nullptr;
@@ -47,7 +48,6 @@ firmware::NetworkManager& GetNetwork() {
     pw::Status s = creds.Load();
     if (!s.ok()) {
         // Credentials not found — device will still start but WiFi won't connect.
-        // Run: bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 SSID PASS
     }
 
     WiFiInit(creds.wifi_ssid(), creds.wifi_password());
@@ -55,10 +55,10 @@ firmware::NetworkManager& GetNetwork() {
     static const firmware::NetworkManager::Config cfg = {
         .ssid      = creds.wifi_ssid(),
         .password  = creds.wifi_password(),
-        .mqtt_host = "mqtt.local",  // ← change to your MQTT broker
-        .mqtt_port = 1883,
+        .mqtt_host = creds.mqtt_host(),
+        .mqtt_port = creds.mqtt_port(),
         .device_id = "leaflab-sensorboard",
-        .mqtt_user = nullptr,       // set if your broker requires auth
+        .mqtt_user = nullptr,
         .mqtt_pass = nullptr,
     };
     static firmware::NetworkManager local_net(cfg);

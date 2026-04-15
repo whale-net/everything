@@ -30,6 +30,12 @@
 #ifndef WIFI_PASSWORD
 #define WIFI_PASSWORD ""
 #endif
+#ifndef MQTT_HOST
+#define MQTT_HOST ""
+#endif
+#ifndef MQTT_PORT
+#define MQTT_PORT 1883
+#endif
 
 namespace firmware {
 
@@ -48,6 +54,8 @@ class DefineCredentials final : public ICredentials {
 
   const char* wifi_ssid()     const override { return WIFI_SSID; }
   const char* wifi_password() const override { return WIFI_PASSWORD; }
+  const char* mqtt_host()     const override { return MQTT_HOST; }
+  uint16_t    mqtt_port()     const override { return MQTT_PORT; }
 };
 
 }  // namespace firmware
