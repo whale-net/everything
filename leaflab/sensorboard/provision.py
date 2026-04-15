@@ -42,34 +42,24 @@ from binascii import crc32 as _binascii_crc32
 #   Followed by (span-1) raw data entries, each 32 bytes, padded with 0xFF.
 #   CRC16 is CRC-16/CCITT of the null-terminated string bytes.
 
-_PAGE_SIZE  = 4096
-_ENTRY_SIZE = 32
-_MAX_ENTRIES = 126
+_PAGE_SIZE      = 4096
+_ENTRY_SIZE     = 32
+_MAX_ENTRIES    = 126
+_PARTITION_SIZE = 0x5000  # 20 KB — 5 NVS pages
 
 
 def _crc32(data: bytes) -> int:
-    # Matches esp_crc32_le(0xFFFFFFFF, data, len).
-    # esp_crc32_le(0xFFFF, d) = crc32_standard(d) ^ 0xFFFF
-    #                         = binascii.crc32(d, 0) ^ 0xFFFFFFFF
-    return _binascii_crc32(data) ^ 0xFFFFFFFF
+    # Matches esp_rom_crc32_le(0xFFFFFFFF, data, len):
+    # init=0xFFFFFFFF, poly=0xEDB88320, no final XOR.
+    # Note: binascii.crc32(data) ^ 0xFFFFFFFF is NOT the same formula.
+    return _binascii_crc32(data, 0xFFFFFFFF) & 0xFFFFFFFF
 
 
-def _crc16_ccitt(data: bytes) -> int:
-    """CRC-16/CCITT: poly 0x1021, init 0xFFFF."""
-    crc = 0xFFFF
-    for b in data:
-        crc ^= b << 8
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x1021) if (crc & 0x8000) else (crc << 1)
-            crc &= 0xFFFF
-    return crc
 
-
-def _page_header() -> bytes:
+def _page_header(seq_no: int = 0) -> bytes:
     """32-byte page header. CRC32 covers bytes 4-27 (seq+version+reserved)."""
     state  = 0xFFFFFFFE  # active
-    seq_no = 0
-    ver    = 0xFF
+    ver    = 0xFE        # ESP-IDF v5 NVS page version (0xFF = erased sentinel)
     pre_crc = struct.pack("<IB", seq_no, ver) + b"\xFF" * 19  # 24 bytes
     crc = _crc32(pre_crc)
     return struct.pack("<I", state) + pre_crc + struct.pack("<I", crc)
@@ -100,33 +90,50 @@ def _ns_entry(name: str, ns_idx: int) -> bytes:
 
 
 def _str_entries(ns: int, key_str: str, value: str) -> list:
-    """Header entry + data entries for a NUL-terminated string (type 0x21)."""
+    """Header entry + data entries for a NUL-terminated string (type 0x21).
+
+    ESP-IDF v5 NVS STR data field layout (bytes 24-31 of the entry):
+      [len:2][0xFFFF:2][crc32_of_blob:4]
+    The CRC32 is computed over the raw blob (string + NUL) with
+    esp_rom_crc32_le(0xFFFFFFFF, blob, len), i.e. _crc32(blob).
+    Storing a CRC-16 at bytes 2-3 (old v4 format) causes the library to
+    detect a CRC mismatch and erase the entry on boot.
+    """
     key  = key_str.encode()[:15].ljust(16, b"\x00")
     blob = value.encode("utf-8") + b"\x00"          # NVS stores NUL-terminated
     n_data = (len(blob) + _ENTRY_SIZE - 1) // _ENTRY_SIZE
     span = 1 + n_data
-    crc16 = _crc16_ccitt(blob)
-    data = struct.pack("<HH", len(blob), crc16) + b"\xFF" * 4
+    blob_crc32 = _crc32(blob)
+    data = struct.pack("<HHI", len(blob), 0xFFFF, blob_crc32)
     header = _pack_entry(ns, 0x21, span, key, data)
     padded = blob.ljust(n_data * _ENTRY_SIZE, b"\xFF")
     chunks = [padded[i * _ENTRY_SIZE:(i + 1) * _ENTRY_SIZE] for i in range(n_data)]
     return [header] + chunks
 
 
-def make_nvs_page(namespace: str, fields: dict) -> bytes:
-    """Generate a 4096-byte NVS partition image with one namespace."""
+def make_nvs_partition(namespace: str, fields: dict) -> bytes:
+    """Generate a full 20 KB NVS partition image (5 pages).
+
+    Page 0 holds the credentials; pages 1-4 are all-0xFF (erased).
+    Writing the full partition ensures stale data from prior sessions is
+    overwritten, which is necessary because the NVS library uses seq_no to
+    pick the active page and will ignore our page if older pages survive.
+    """
     entries = [_ns_entry(namespace, 1)]
     for k, v in fields.items():
         entries.extend(_str_entries(1, k, v))
     n = len(entries)
     if n > _MAX_ENTRIES:
         raise ValueError(f"Too many NVS entries: {n} (max {_MAX_ENTRIES})")
-    header = _page_header()
+    header = _page_header(seq_no=0)
     bitmap = _bitmap(n)
     body   = b"".join(entries).ljust(_MAX_ENTRIES * _ENTRY_SIZE, b"\xFF")
-    page   = header + bitmap + body
-    assert len(page) == _PAGE_SIZE, f"Bad page size: {len(page)}"
-    return page
+    page0  = header + bitmap + body
+    assert len(page0) == _PAGE_SIZE, f"Bad page size: {len(page0)}"
+    # Remaining pages are erased (all 0xFF)
+    partition = page0 + b"\xFF" * (_PARTITION_SIZE - _PAGE_SIZE)
+    assert len(partition) == _PARTITION_SIZE
+    return partition
 
 
 # ── Flash helper ─────────────────────────────────────────────────────────────
@@ -162,7 +169,7 @@ def main() -> None:
 
     print(f"Provisioning {args.port} with SSID='{args.ssid}'")
 
-    page = make_nvs_page("creds", {
+    page = make_nvs_partition("creds", {
         "wifi_ssid": args.ssid,
         "wifi_pass": args.password,
     })
