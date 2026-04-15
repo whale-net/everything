@@ -111,7 +111,7 @@ write_file(
         'OUT="${2:-/tmp/nvs_readback.bin}"',
         "",
         'ESPTOOL="$(rlocation _main/tools/firmware/esp32/esptool_wrapper)"',
-        'DECODE_PY="$(rlocation _main/leaflab/sensorboard/decode_nvs.py)"',
+        'DECODE_PY="$(rlocation _main/tools/firmware/esp32/decode_nvs.py)"',
         "",
         'echo "Reading NVS (0x9000, 20KB) from $PORT → $OUT"',
         'python3 "$ESPTOOL" --port "$PORT" --chip esp32 --baud 921600 \\',
@@ -126,7 +126,7 @@ sh_binary(
     name = "read_nvs",
     srcs = ["read_nvs_wrapper.sh"],
     data = [
-        "decode_nvs.py",
+        "//tools/firmware/esp32:decode_nvs",
         "//tools/firmware/esp32:esptool_wrapper",
     ],
     deps = ["@bazel_tools//tools/bash/runfiles"],

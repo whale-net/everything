@@ -201,3 +201,14 @@ py_binary(
     deps = ["@pypi//:esptool"],
     tags = ["manual"],  # only built when explicitly requested (e.g. bazel run //demo/blink:flash)
 )
+
+# ── NVS partition decoder ────────────────────────────────────────────────────
+# Reads and decodes an NVS partition binary (e.g. read back via esptool).
+# Usage: bazel run //tools/firmware/esp32:decode_nvs -- /path/to/nvs.bin
+
+py_binary(
+    name = "decode_nvs",
+    srcs = ["decode_nvs.py"],
+    main = "decode_nvs.py",
+    tags = ["manual"],
+)
