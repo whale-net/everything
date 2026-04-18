@@ -62,6 +62,9 @@ S3_ENDPOINT=http://minio:9000
 S3_ACCESS_KEY=minioadmin
 S3_SECRET_KEY=minioadmin
 S3_BUCKET=manmanv2-dev
+
+# Temporal (backup scheduler)
+TEMPORAL_HOST=temporal:7233
 ```
 
 ## Database

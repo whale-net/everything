@@ -178,7 +178,7 @@ func run() error {
 	// Start stale session checker
 	sessionStatusHandler.StartStaleSessionChecker(appCtx, 10*time.Second, time.Duration(cfg.StaleSessionThreshold)*time.Second)
 
-	// Start backup scheduler (River)
+	// Start backup scheduler (Temporal)
 	s3Client, err := s3lib.NewClient(appCtx, s3lib.Config{
 		Bucket:         os.Getenv("S3_BUCKET"),
 		Region:         os.Getenv("S3_REGION"),
@@ -191,11 +191,12 @@ func run() error {
 		logger.Warn("failed to initialize S3 client, scheduled backups will not run", "error", err)
 		s3Client = nil
 	}
-	riverClient, err := startBackupScheduler(appCtx, dbPool, repo, rmqConn, s3Client, logger)
+	temporalWorker, temporalClient, err := startBackupScheduler(appCtx, dbPool, repo, rmqConn, s3Client, cfg.TemporalHost, logger)
 	if err != nil {
 		logger.Warn("failed to start backup scheduler, scheduled backups will not run", "error", err)
 	} else {
-		defer riverClient.Stop(context.Background()) //nolint:errcheck
+		defer temporalWorker.Stop()
+		defer temporalClient.Close()
 	}
 
 	// Start consumer in background

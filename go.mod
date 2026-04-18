@@ -22,7 +22,7 @@ require (
 	golang.org/x/net v0.50.0
 	golang.org/x/oauth2 v0.34.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260128011058-8636f8732409
-	google.golang.org/grpc v1.78.0
+	google.golang.org/grpc v1.79.3
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -34,6 +34,18 @@ require (
 	go.opentelemetry.io/otel/sdk v1.40.0
 	go.opentelemetry.io/otel/sdk/log v0.16.0
 	go.opentelemetry.io/otel/sdk/metric v1.40.0
+)
+
+require go.temporal.io/sdk v1.42.0
+
+require (
+	github.com/facebookgo/clock v0.0.0-20150410010913-600d898af40a // indirect
+	github.com/gogo/protobuf v1.3.2 // indirect
+	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.2 // indirect
+	github.com/nexus-rpc/sdk-go v0.6.0 // indirect
+	github.com/robfig/cron v1.2.0 // indirect
+	go.temporal.io/api v1.62.7 // indirect
+	golang.org/x/time v0.15.0 // indirect
 )
 
 require (
@@ -52,11 +64,6 @@ require (
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/natefinch/atomic v1.0.1 // indirect
-	github.com/riverqueue/river v0.31.0 // indirect
-	github.com/riverqueue/river/riverdriver v0.31.0 // indirect
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.31.0 // indirect
-	github.com/riverqueue/river/rivershared v0.31.0 // indirect
-	github.com/riverqueue/river/rivertype v0.31.0 // indirect
 	github.com/rs/cors v1.11.1 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect

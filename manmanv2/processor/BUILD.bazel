@@ -20,11 +20,12 @@ go_library(
         "//manmanv2/host/rmq",
         "//manmanv2/processor/consumer",
         "//manmanv2/processor/handlers",
-        "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgxpool",
-        "@com_github_riverqueue_river//:river",
-        "@com_github_riverqueue_river_riverdriver_riverpgxv5//:riverpgxv5",
-        "@com_github_riverqueue_river//rivermigrate",
+        "@io_temporal_go_sdk//activity",
+        "@io_temporal_go_sdk//client",
+        "@io_temporal_go_sdk//temporal",
+        "@io_temporal_go_sdk//worker",
+        "@io_temporal_go_sdk//workflow",
     ],
 )
 

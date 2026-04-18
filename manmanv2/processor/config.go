@@ -21,6 +21,7 @@ type Config struct {
 	StaleHostThreshold    int
 	StaleSessionThreshold int
 	ExternalExchange      string
+	TemporalHost          string
 }
 
 // LoadConfig loads configuration from environment variables
@@ -39,6 +40,7 @@ func LoadConfig() (*Config, error) {
 		StaleHostThreshold:    getEnvInt("STALE_HOST_THRESHOLD_SECONDS", 90),
 		StaleSessionThreshold: getEnvInt("STALE_SESSION_THRESHOLD_SECONDS", 30), // Default 30 seconds
 		ExternalExchange:      getEnv("EXTERNAL_EXCHANGE", "external"),
+		TemporalHost:          getEnv("TEMPORAL_HOST", "temporal:7233"),
 	}
 
 	// Validate required fields
