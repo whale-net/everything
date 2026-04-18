@@ -3,9 +3,26 @@ package main
 import (
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 )
+
+// safeRedirectURL returns a safe relative redirect path from an untrusted URL.
+// It accepts only relative paths (starting with '/'); full URLs have their path extracted.
+func safeRedirectURL(raw string) string {
+	if raw == "" {
+		return "/"
+	}
+	if strings.HasPrefix(raw, "/") {
+		return raw
+	}
+	// Try to parse as full URL and return path only
+	if parsed, err := url.Parse(raw); err == nil && parsed.Path != "" {
+		return parsed.RequestURI()
+	}
+	return "/"
+}
 
 // handleRestartScheduleCreate handles POST /restart-schedules/create
 func (app *App) handleRestartScheduleCreate(w http.ResponseWriter, r *http.Request) {
@@ -44,6 +61,7 @@ func (app *App) handleRestartScheduleCreate(w http.ResponseWriter, r *http.Reque
 	if redirectURL == "" {
 		redirectURL = r.Referer()
 	}
+	redirectURL = safeRedirectURL(redirectURL)
 	if r.Header.Get("HX-Request") != "" {
 		w.Header().Set("HX-Redirect", redirectURL)
 		w.WriteHeader(http.StatusOK)
@@ -78,7 +96,7 @@ func (app *App) handleRestartScheduleDelete(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	redirectURL := r.Referer()
+	redirectURL := safeRedirectURL(r.Referer())
 	if r.Header.Get("HX-Request") != "" {
 		w.Header().Set("HX-Redirect", redirectURL)
 		w.WriteHeader(http.StatusOK)

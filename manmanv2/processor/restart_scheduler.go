@@ -120,24 +120,26 @@ func (w *scheduledRestartWorker) Work(ctx context.Context, job *river.Job[schedu
 	deadline := time.Now().Add(stopTimeout)
 	const pollInterval = 3 * time.Second
 
-	for time.Now().Before(deadline) {
+	stopped := false
+	for !stopped && time.Now().Before(deadline) {
 		sess, err := w.repo.Sessions.Get(ctx, sessionID)
 		if err != nil {
 			return fmt.Errorf("failed to poll session %d status: %w", sessionID, err)
 		}
 		switch sess.Status {
 		case "stopped", "crashed", "completed":
-			goto sessionStopped
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(pollInterval):
+			stopped = true
+		default:
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(pollInterval):
+			}
 		}
 	}
-	return fmt.Errorf("session %d did not stop within %s", sessionID, stopTimeout)
-
-sessionStopped:
+	if !stopped {
+		return fmt.Errorf("session %d did not stop within %s", sessionID, stopTimeout)
+	}
 	w.logger.Info("session stopped, starting new session",
 		"restart_schedule_id", scheduleID,
 		"sgc_id", sgcID,
