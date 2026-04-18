@@ -23,7 +23,7 @@ source "${SCRIPT_DIR}/common.sh"
 # Default values (can be overridden by env vars or CLI args)
 CONTROL_API_ADDR="${CONTROL_API_ADDR:-localhost:50052}"
 GAME_NAME="${GAME_NAME:-Arma Reforger}"
-GAME_CONFIG_NAME="${GAME_CONFIG_NAME:-Default}"
+GAME_CONFIG_NAME="${GAME_CONFIG_NAME:-Reforger}"
 IMAGE="${IMAGE:-ghcr.io/acemod/arma-reforger:latest}"
 USE_TLS="${USE_TLS:-auto}"
 INSECURE_TLS="${INSECURE_TLS:-false}"
@@ -209,6 +209,11 @@ if [[ -z "${sgc_id}" ]]; then
       "container_port": 17777,
       "host_port": 17777,
       "protocol": "UDP"
+    },
+    {
+      "container_port": 19999,
+      "host_port": 19999,
+      "protocol": "UDP"
     }
   ]
 }
@@ -271,6 +276,7 @@ if [[ -n "${sgc_id}" && "${sgc_id}" != "null" ]]; then
   echo "Port Bindings:"
   echo "  38201/UDP — Arma Reforger game port (internal: 38201)"
   echo "  17777/UDP — Steam A2S query port"
+  echo "  19999/UDP — RCON (set RCON_PASSWORD to enable)"
 fi
 echo ""
 echo "Next steps:"
