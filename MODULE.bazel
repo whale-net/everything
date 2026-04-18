@@ -6,6 +6,18 @@ module(
 bazel_dep(name = "bazel_skylib", version = "1.8.1")
 bazel_dep(name = "rules_python", version = "1.6.1")
 bazel_dep(name = "rules_pycross", version = "0.8.0")
+archive_override(
+    module_name = "rules_pycross",
+    urls = ["https://github.com/jvolkman/rules_pycross/releases/download/v0.8.0/rules_pycross-v0.8.0.tar.gz"],
+    integrity = "sha256-MFozt0xQfe2JBV5CN6AxbYYsWlvyASqY9scarRFCXOc=",
+    strip_prefix = "rules_pycross-0.8.0",
+    # Patch: skip EOL Python versions (e.g. 3.8 from grpc+ transitive pip.parse)
+    # that are absent from rules_python 1.x MINOR_MAPPING.  Without this patch,
+    # pycross fails with "Unknown Python version: 3.8".
+    # Remove when rules_pycross handles EOL versions gracefully upstream.
+    patches = ["//tools/bazel/patches:pycross-skip-unknown-python.patch"],
+    patch_strip = 1,
+)
 bazel_dep(name = "rules_go", version = "0.57.0")
 bazel_dep(name = "gazelle", version = "0.39.1")
 bazel_dep(name = "rules_oci", version = "2.2.6")
@@ -17,6 +29,21 @@ bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "rules_java", version = "8.12.0")
 bazel_dep(name = "rules_proto", version = "7.0.2")
 bazel_dep(name = "protobuf", version = "28.3")
+
+# ── Firmware / Embedded ──────────────────────────────────────────────────────
+bazel_dep(name = "rules_cc", version = "0.2.1")
+
+# Pigweed via git_override (BCR version lags; quickstart uses this pattern).
+bazel_dep(name = "pigweed")
+git_override(
+    module_name = "pigweed",
+    commit = "1685478789a2626f190280be1b2e6d8f90965747",  # 2026-03-14 HEAD
+    remote = "https://pigweed.googlesource.com/pigweed/pigweed",
+)
+
+# Pigweed transitive dependencies (required by pw_unit_test / pw_rpc)
+bazel_dep(name = "freertos", version = "10.5.1.bcr.2")
+bazel_dep(name = "nanopb", version = "0.4.9.1.bcr.2")
 
 # OCI/Docker setup - Ubuntu base image for all containers
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
@@ -90,6 +117,52 @@ use_repo(python, "python_versions")
 # These are optimized, production-ready builds (~20MB binary vs ~108MB debug)
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
+# ── ESP32 Xtensa GCC cross-compiler (Espressif crosstool-NG, GCC 15.2) ──────
+# GCC version: 15.2.0
+# When upgrading, update _GCC_VERSION in tools/firmware/esp32/BUILD.bazel to match.
+# The version string is used to locate compiler include directories at analysis time:
+#   lib/gcc/xtensa-esp-elf/{version}/include
+# (See tools/firmware/cc_toolchain_config.bzl for details.)
+http_archive(
+    name = "xtensa_esp_elf_linux64",
+    build_file = "//tools/firmware/esp32:xtensa_toolchain.BUILD",
+    sha256 = "3d50f5cd5f173acfd524e07c1cd69bc99585731a415ca2e5bce879997fe602b8",
+    strip_prefix = "xtensa-esp-elf",
+    urls = ["https://github.com/espressif/crosstool-NG/releases/download/esp-15.2.0_20251204/xtensa-esp-elf-15.2.0_20251204-x86_64-linux-gnu.tar.xz"],
+)
+
+# ── PubSubClient 2.8 (MQTT client for Arduino) ───────────────────────────────
+http_archive(
+    name = "pubsubclient",
+    build_file = "//tools/firmware/esp32:pubsubclient.BUILD",
+    sha256 = "837891318c255e1840917c4d1afe831d4e960375951cd2acfe15e0525b35fa8e",
+    strip_prefix = "pubsubclient-2.8",
+    urls = ["https://codeload.github.com/knolleary/pubsubclient/zip/refs/tags/v2.8"],
+)
+
+# ── Arduino ESP32 3.3.7 (ESP-IDF v5.5.2) ─────────────────────────────────────
+# Release is split into two archives:
+#   arduino_esp32      — framework sources: cores/, libraries/, variants/, tools/partitions/
+#   arduino_esp32_libs — precompiled SDK:   include/, lib/*.a, ld/*.ld, bin/bootloader_*.elf
+http_archive(
+    name = "arduino_esp32",
+    build_file = "//tools/firmware/esp32:arduino_core.BUILD",
+    sha256 = "5267dc9a240daf4b8d26d3a1eb4c4f1dc8a40d43d527e6f6ce08cb6baaf6efac",
+    strip_prefix = "esp32-core-3.3.7",
+    urls = ["https://github.com/espressif/arduino-esp32/releases/download/3.3.7/esp32-core-3.3.7.zip"],
+)
+
+http_archive(
+    name = "arduino_esp32_libs",
+    build_file = "//tools/firmware/esp32:arduino_libs.BUILD",
+    sha256 = "913cffb43e7fdd8f8ddcd045908fa49f98dfff28832706c850b66fe9ab324bd7",
+    strip_prefix = "esp32-libs",
+    urls = ["https://github.com/espressif/arduino-esp32/releases/download/3.3.7/esp32-libs-3.3.7.zip"],
+)
+
+# ── Toolchain registration ───────────────────────────────────────────────────
+register_toolchains("//tools/firmware/esp32:xtensa_toolchain")
+
 http_archive(
     name = "python_stripped_x86_64",
     build_file_content = """
@@ -111,6 +184,10 @@ exports_files(["python"])
 environments = use_extension("@rules_pycross//pycross/extensions:environments.bzl", "environments")
 environments.create_for_python_toolchains(
     name = "everything_pycross_envs",
+    # Pin to 3.13 explicitly: Pigweed's transitive deps register 3.10/3.11/3.12
+    # (and something at 3.8), which rules_pycross 0.8.0 cannot handle as they
+    # lack micro versions.  Scoping to our one version avoids the conflict.
+    python_versions = ["3.13"],
     platforms = [
         "x86_64-unknown-linux-gnu",
         "aarch64-unknown-linux-gnu",
@@ -126,6 +203,9 @@ lock_import.import_uv(
     project_file = "//:pyproject.toml",
     repo = "pypi",
     target_environments = ["@everything_pycross_envs//:environments"],
+    # setuptools is the build backend for esptool (sdist-only package).
+    # Without it, pycross wheel_builder can't build the esptool wheel.
+    default_build_dependencies = ["setuptools"],
 )
 
 # Create the package repositories

@@ -1,4 +1,4 @@
-package handlers
+package workshop
 
 import (
 	"context"
@@ -7,8 +7,40 @@ import (
 
 	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/manmanv2/api/repository"
+	"github.com/whale-net/everything/manmanv2/api/workshop"
 	hostrmq "github.com/whale-net/everything/manmanv2/host/rmq"
+	pb "github.com/whale-net/everything/manmanv2/protos"
 )
+
+// WorkshopServiceHandler handles workshop addon management RPCs
+type WorkshopServiceHandler struct {
+	pb.UnimplementedWorkshopServiceServer
+	addonRepo        repository.WorkshopAddonRepository
+	installationRepo repository.WorkshopInstallationRepository
+	libraryRepo      repository.WorkshopLibraryRepository
+	sgcRepo          repository.ServerGameConfigRepository
+	presetRepo       repository.AddonPathPresetRepository
+	workshopManager  workshop.WorkshopManagerInterface
+}
+
+// NewWorkshopServiceHandler creates a new WorkshopServiceHandler
+func NewWorkshopServiceHandler(
+	addonRepo repository.WorkshopAddonRepository,
+	installationRepo repository.WorkshopInstallationRepository,
+	libraryRepo repository.WorkshopLibraryRepository,
+	sgcRepo repository.ServerGameConfigRepository,
+	presetRepo repository.AddonPathPresetRepository,
+	workshopManager *workshop.WorkshopManager,
+) *WorkshopServiceHandler {
+	return &WorkshopServiceHandler{
+		addonRepo:        addonRepo,
+		installationRepo: installationRepo,
+		libraryRepo:      libraryRepo,
+		sgcRepo:          sgcRepo,
+		presetRepo:       presetRepo,
+		workshopManager:  workshopManager,
+	}
+}
 
 // WorkshopStatusHandler handles workshop installation status updates from host managers
 type WorkshopStatusHandler struct {
@@ -18,7 +50,6 @@ type WorkshopStatusHandler struct {
 
 // NewWorkshopStatusHandler creates a new workshop status handler
 func NewWorkshopStatusHandler(installationRepo repository.WorkshopInstallationRepository, rmqConn *rmq.Connection) (*WorkshopStatusHandler, error) {
-	// Create consumer for workshop installation status updates
 	consumer, err := rmq.NewConsumerWithOpts(rmqConn, "workshop.installation.status", false, false, 0, 0)
 	if err != nil {
 		return nil, err
@@ -34,7 +65,6 @@ func NewWorkshopStatusHandler(installationRepo repository.WorkshopInstallationRe
 		consumer:         consumer,
 	}
 
-	// Register message handler
 	consumer.RegisterHandler("status.workshop.installation.#", handler.handleStatusUpdate)
 
 	return handler, nil
@@ -61,13 +91,11 @@ func (h *WorkshopStatusHandler) handleStatusUpdate(ctx context.Context, msg rmq.
 	log.Printf("Received installation status update: installation_id=%d, status=%s, progress=%d%%",
 		update.InstallationID, update.Status, update.ProgressPercent)
 
-	// Update installation status in database
 	if err := h.installationRepo.UpdateStatus(ctx, update.InstallationID, update.Status, update.ErrorMessage); err != nil {
 		log.Printf("Failed to update installation status: %v", err)
 		return err
 	}
 
-	// Update progress if provided
 	if update.ProgressPercent > 0 {
 		if err := h.installationRepo.UpdateProgress(ctx, update.InstallationID, update.ProgressPercent); err != nil {
 			log.Printf("Failed to update installation progress: %v", err)

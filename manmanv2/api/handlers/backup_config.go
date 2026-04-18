@@ -8,7 +8,7 @@ import (
 	"time"
 
 	s3lib "github.com/whale-net/everything/libs/go/s3"
-	"github.com/whale-net/everything/manmanv2"
+	"github.com/whale-net/everything/manmanv2/models"
 	"github.com/whale-net/everything/manmanv2/api/repository"
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
 	hostrmq "github.com/whale-net/everything/manmanv2/host/rmq"

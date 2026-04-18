@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/whale-net/everything/manmanv2"
+	"github.com/whale-net/everything/manmanv2/models"
 )
 
 // ServerRepository defines operations for Server entities
@@ -93,7 +93,7 @@ type LogReferenceRepository interface {
 	ListByTimeRange(ctx context.Context, sgcID int64, startTime, endTime time.Time) ([]*manman.LogReference, error)
 	GetMinMaxTimes(ctx context.Context, sgcID int64) (minTime, maxTime *time.Time, err error)
 	GetMinMaxTimesBySession(ctx context.Context, sessionID int64) (minTime, maxTime *time.Time, err error)
-	GetHistogramBySession(ctx context.Context, sessionID int64, bucketSeconds int64) (map[int64]map[string]int32, error)
+	GetHistogramBySession(ctx context.Context, sessionID int64, bucketSeconds int64, startTime, endTime *int64) (map[int64]map[string]int32, error)
 }
 
 // BackupRepository defines operations for Backup entities
@@ -157,6 +157,7 @@ type ConfigurationPatchRepository interface {
 	Create(ctx context.Context, patch *manman.ConfigurationPatch) (*manman.ConfigurationPatch, error)
 	Get(ctx context.Context, patchID int64) (*manman.ConfigurationPatch, error)
 	GetByStrategyAndEntity(ctx context.Context, strategyID int64, patchLevel string, entityID int64) (*manman.ConfigurationPatch, error)
+	ListByStrategyAndEntity(ctx context.Context, strategyID int64, patchLevel string, entityID int64) ([]*manman.ConfigurationPatch, error)
 	List(ctx context.Context, strategyID *int64, patchLevel *string, entityID *int64) ([]*manman.ConfigurationPatch, error)
 	Update(ctx context.Context, patch *manman.ConfigurationPatch) error
 	Delete(ctx context.Context, patchID int64) error

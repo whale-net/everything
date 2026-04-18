@@ -62,6 +62,12 @@ dependencies = [
 
     # MCP server framework
     "fastmcp",
+
+    # Embedded firmware flashing (ESP32)
+    "esptool",
+
+    # Build backend needed by pycross to build esptool (sdist-only package)
+    "setuptools",
 ]
 
 [build-system]

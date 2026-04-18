@@ -4,16 +4,19 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
@@ -25,19 +28,32 @@ import (
 )
 
 func main() {
-	log.Println("Starting log-processor service...")
+	log.Println("starting log-processor service")
+
+	ctx := context.Background()
+
+	logging.Configure(logging.Config{
+		ServiceName:   "log-processor",
+		Domain:        "manmanv2",
+		JSONFormat:    true,
+		EnableOTLP:    true,
+		EnableTracing: true,
+	})
+	defer logging.Shutdown(ctx) //nolint:errcheck
 
 	// Load configuration
 	config := LoadConfig()
-	log.Printf("Configuration: RabbitMQ=%s, gRPC Port=%s, Buffer TTL=%ds, Max Messages=%d",
-		config.RabbitMQURL, config.GRPCPort, config.LogBufferTTL, config.LogBufferMaxMsgs)
-
-	ctx := context.Background()
+	slog.Info("configuration loaded",
+		"rabbitmq", config.RabbitMQURL,
+		"grpc_port", config.GRPCPort,
+		"buffer_ttl_s", config.LogBufferTTL,
+		"buffer_max_msgs", config.LogBufferMaxMsgs,
+	)
 
 	// Initialize S3 client (if configured)
 	var logArchiver *archiver.Archiver
 	if config.S3Bucket != "" && config.DatabaseURL != "" {
-		log.Println("Initializing S3 client for log archival...")
+		slog.Info("initializing S3 client for log archival")
 		s3Client, err := s3.NewClient(ctx, s3.Config{
 			Bucket:    config.S3Bucket,
 			Region:    config.S3Region,
@@ -46,27 +62,29 @@ func main() {
 			SecretKey: config.S3SecretKey,
 		})
 		if err != nil {
-			log.Fatalf("Failed to create S3 client: %v", err)
+			slog.Error("failed to create S3 client", "error", err)
+			os.Exit(1)
 		}
-		log.Printf("S3 client initialized: bucket=%s, region=%s", config.S3Bucket, config.S3Region)
+		slog.Info("S3 client initialized", "bucket", config.S3Bucket, "region", config.S3Region)
 
 		// Connect to database (URL already loaded from PG_DATABASE_URL into config)
-		log.Println("Connecting to database...")
+		slog.Info("connecting to database")
 		dbPool, err := db.NewPool(ctx, config.DatabaseURL)
 		if err != nil {
-			log.Fatalf("Failed to connect to database: %v", err)
+			slog.Error("failed to connect to database", "error", err)
+			os.Exit(1)
 		}
 		defer dbPool.Close()
-		log.Println("Connected to database")
+		slog.Info("connected to database")
 
 		// Create log reference repository
 		logRepo := postgres.NewLogReferenceRepository(dbPool)
 
 		// Create archiver
 		logArchiver = archiver.NewArchiver(s3Client, logRepo)
-		log.Println("Log archiver initialized")
+		slog.Info("log archiver initialized")
 	} else {
-		log.Println("S3 archival not configured (missing S3_BUCKET or DATABASE_URL)")
+		slog.Info("S3 archival not configured (missing S3_BUCKET or DATABASE_URL)")
 	}
 
 	// Build service account dial option for outgoing API calls
@@ -78,27 +96,30 @@ func main() {
 		RequireTransportSecurity: false, // internal cluster
 	})
 	if err != nil {
-		log.Fatalf("Failed to create auth dial option: %v", err)
+		slog.Error("failed to create auth dial option", "error", err)
+		os.Exit(1)
 	}
 
 	// Connect to API server for session queries
-	log.Printf("Connecting to API server at %s...", config.APIAddress)
+	slog.Info("connecting to API server", "address", config.APIAddress)
 	apiConn, err := grpc.NewClient(config.APIAddress, grpc.WithTransportCredentials(insecure.NewCredentials()), authOpt)
 	if err != nil {
-		log.Fatalf("Failed to connect to API server: %v", err)
+		slog.Error("failed to connect to API server", "error", err)
+		os.Exit(1)
 	}
 	defer apiConn.Close()
 	apiClient := manmanpb.NewManManAPIClient(apiConn)
-	log.Println("Connected to API server")
+	slog.Info("connected to API server")
 
 	// Connect to RabbitMQ
-	log.Println("Connecting to RabbitMQ...")
+	slog.Info("connecting to RabbitMQ")
 	rmqConn, err := rmq.NewConnectionFromURL(config.RabbitMQURL)
 	if err != nil {
-		log.Fatalf("Failed to connect to RabbitMQ: %v", err)
+		slog.Error("failed to connect to RabbitMQ", "error", err)
+		os.Exit(1)
 	}
 	defer rmqConn.Close()
-	log.Println("Connected to RabbitMQ")
+	slog.Info("connected to RabbitMQ")
 
 	// Create consumer manager
 	consumerConfig := &consumer.ConsumerConfig{
@@ -110,10 +131,11 @@ func main() {
 	defer consumerManager.Close()
 
 	// Create lifecycle handler for session events
-	log.Println("Initializing session lifecycle handler...")
+	slog.Info("initializing session lifecycle handler")
 	lifecycleHandler, err := lifecycle.NewHandler(rmqConn, consumerManager)
 	if err != nil {
-		log.Fatalf("Failed to create lifecycle handler: %v", err)
+		slog.Error("failed to create lifecycle handler", "error", err)
+		os.Exit(1)
 	}
 
 	// Start lifecycle handler
@@ -121,10 +143,11 @@ func main() {
 	defer lifecycleCancel()
 
 	if err := lifecycleHandler.Start(lifecycleCtx); err != nil {
-		log.Fatalf("Failed to start lifecycle handler: %v", err)
+		slog.Error("failed to start lifecycle handler", "error", err)
+		os.Exit(1)
 	}
 	defer lifecycleHandler.Close()
-	log.Println("Session lifecycle handler started")
+	slog.Info("session lifecycle handler started")
 
 	// Create auth interceptors for incoming requests
 	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(ctx, grpcauth.ServerConfig{
@@ -133,11 +156,13 @@ func main() {
 		ClientID:  config.GRPCOIDCClientID,
 	})
 	if err != nil {
-		log.Fatalf("Failed to create auth interceptors: %v", err)
+		slog.Error("failed to create auth interceptors", "error", err)
+		os.Exit(1)
 	}
 
 	// Create gRPC server
 	grpcServer := grpc.NewServer(
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.ChainUnaryInterceptor(unaryInt),
 		grpc.ChainStreamInterceptor(streamInt),
 	)
@@ -148,10 +173,11 @@ func main() {
 	addr := fmt.Sprintf("0.0.0.0:%s", config.GRPCPort)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		log.Fatalf("Failed to listen on %s: %v", addr, err)
+		slog.Error("failed to listen", "address", addr, "error", err)
+		os.Exit(1)
 	}
 
-	log.Printf("gRPC server listening on %s", addr)
+	slog.Info("gRPC server listening", "address", addr)
 
 	// Handle graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -166,13 +192,14 @@ func main() {
 
 	select {
 	case <-sigChan:
-		log.Println("Received shutdown signal, stopping server...")
+		slog.Info("received shutdown signal, stopping server")
 	case err := <-serverErrChan:
-		log.Fatalf("Failed to serve: %v", err)
+		slog.Error("failed to serve", "error", err)
+		os.Exit(1)
 	}
 
 	// Graceful shutdown
-	log.Println("Shutting down...")
+	slog.Info("shutting down")
 
 	// 1. Stop accepting new lifecycle events
 	lifecycleCancel()
@@ -180,18 +207,18 @@ func main() {
 
 	// 2. Flush pending logs to S3
 	if logArchiver != nil {
-		log.Println("Flushing log archiver...")
+		slog.Info("flushing log archiver")
 		if err := logArchiver.Close(); err != nil {
-			log.Printf("Error closing archiver: %v", err)
+			slog.Error("error closing archiver", "error", err)
 		}
 	}
 
 	// 3. Stop gRPC server (browser connections)
-	log.Println("Stopping gRPC server...")
+	slog.Info("stopping gRPC server")
 	grpcServer.GracefulStop()
 
 	// 4. Close consumer manager (closes all consumers)
 	consumerManager.Close()
 
-	log.Println("Log-processor service stopped")
+	slog.Info("log-processor service stopped")
 }

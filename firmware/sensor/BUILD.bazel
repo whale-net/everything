@@ -1,0 +1,58 @@
+"""Board-agnostic sensor abstraction layer."""
+
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# ISensor interface — compiles on host and device.
+cc_library(
+    name = "sensor",
+    hdrs = ["sensor.h"],
+    deps = ["@pigweed//pw_status"],
+)
+
+cc_library(
+    name = "mock_sensor",
+    hdrs = ["mock_sensor.h"],
+    deps = [":sensor"],
+)
+
+# Pure NTC math — no Arduino dependency; host-compilable.
+cc_library(
+    name = "thermistor_math",
+    hdrs = ["thermistor_math.h"],
+)
+
+# ThermistorSensor — IAdc-backed; host-compilable (no Arduino dependency).
+cc_library(
+    name = "thermistor",
+    srcs = ["thermistor.cc"],
+    hdrs = ["thermistor.h"],
+    deps = [
+        ":sensor",
+        ":thermistor_math",
+        "//firmware/adc:adc",
+        "@pigweed//pw_status",
+    ],
+)
+
+cc_test(
+    name = "thermistor_test",
+    srcs = ["thermistor_test.cc"],
+    deps = [
+        ":thermistor_math",
+        "@pigweed//pw_unit_test",
+        "@pigweed//pw_unit_test:logging_main",
+    ],
+)
+
+cc_test(
+    name = "thermistor_sensor_test",
+    srcs = ["thermistor_sensor_test.cc"],
+    deps = [
+        ":thermistor",
+        "//firmware/adc:fake_adc",
+        "@pigweed//pw_unit_test",
+        "@pigweed//pw_unit_test:logging_main",
+    ],
+)

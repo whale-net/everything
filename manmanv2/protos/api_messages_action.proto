@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package manman.v1;
+
+option go_package = "github.com/whale-net/everything/manmanv2/protos;manmanpb";
+
+import "manmanv2/protos/messages.proto";
+
+// ============================================================================
+// Game Actions RPCs
+// ============================================================================
+
+message GetSessionActionsRequest {
+  int64 session_id = 1;
+}
+
+message GetSessionActionsResponse {
+  repeated ActionDefinition actions = 1;
+}
+
+message ExecuteActionRequest {
+  int64 session_id = 1;
+  int64 action_id = 2;
+  map<string, string> input_values = 3;  // Field name -> user input
+}
+
+message ExecuteActionResponse {
+  string rendered_command = 1;
+  bool success = 2;
+  int64 execution_id = 3;
+  string error_message = 4;
+}
+
+// Action management messages
+
+message CreateActionDefinitionRequest {
+  ActionDefinition action = 1;
+  repeated ActionInputField input_fields = 2;
+  repeated ActionInputOption input_options = 3;
+}
+
+message CreateActionDefinitionResponse {
+  int64 action_id = 1;
+}
+
+message UpdateActionDefinitionRequest {
+  ActionDefinition action = 1;
+  repeated ActionInputField input_fields = 2;
+  repeated ActionInputOption input_options = 3;
+}
+
+message UpdateActionDefinitionResponse {
+  bool success = 1;
+}
+
+message DeleteActionDefinitionRequest {
+  int64 action_id = 1;
+}
+
+message DeleteActionDefinitionResponse {
+  bool success = 1;
+}
+
+message ListActionDefinitionsRequest {
+  // Filter by one of these (mutually exclusive)
+  optional int64 game_id = 1;
+  optional int64 config_id = 2;
+  optional int64 sgc_id = 3;
+
+  // If all are empty, list all actions
+}
+
+message ListActionDefinitionsResponse {
+  repeated ActionDefinition actions = 1;
+}
+
+message GetActionDefinitionRequest {
+  int64 action_id = 1;
+}
+
+message GetActionDefinitionResponse {
+  ActionDefinition action = 1;
+  repeated ActionInputField input_fields = 2;
+}

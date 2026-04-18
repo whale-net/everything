@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/whale-net/everything/libs/go/s3"
-	"github.com/whale-net/everything/manmanv2"
+	"github.com/whale-net/everything/manmanv2/models"
 	"github.com/whale-net/everything/manmanv2/api/repository"
 	pb "github.com/whale-net/everything/manmanv2/protos"
 )
@@ -82,12 +82,6 @@ func (h *LogsHandler) SendBatchedLogs(ctx context.Context, req *pb.SendBatchedLo
 }
 
 func (h *LogsHandler) GetHistoricalLogs(ctx context.Context, req *pb.GetHistoricalLogsRequest) (*pb.GetHistoricalLogsResponse, error) {
-	// Validate time range (max 6 hours)
-	maxDuration := int64(6 * 60 * 60) // 6 hours in seconds
-	if req.EndTimestamp-req.StartTimestamp > maxDuration {
-		return nil, fmt.Errorf("time range too large: maximum 6 hours allowed")
-	}
-
 	startTime := time.Unix(req.StartTimestamp, 0)
 	endTime := time.Unix(req.EndTimestamp, 0)
 
@@ -192,27 +186,54 @@ func (h *LogsHandler) GetLogHistogram(ctx context.Context, req *pb.GetLogHistogr
 		}, nil
 	}
 
-	// Calculate session duration and determine bucket size
-	duration := maxTime.Sub(*minTime)
+	// Determine effective range (request range or full session range)
+	rangeStart := *minTime
+	rangeEnd := *maxTime
+	var startParam, endParam *int64
+	if req.StartTimestamp != 0 {
+		t := time.Unix(req.StartTimestamp, 0)
+		rangeStart = t
+		startParam = &req.StartTimestamp
+	}
+	if req.EndTimestamp != 0 {
+		t := time.Unix(req.EndTimestamp, 0)
+		rangeEnd = t
+		endParam = &req.EndTimestamp
+	}
+
+	// Calculate range duration and determine bucket size
+	duration := rangeEnd.Sub(rangeStart)
 	var bucketSeconds int64
 	var granularity string
 
-	if duration < time.Hour {
+	switch {
+	case duration < time.Hour:
 		// < 1 hour: 1-minute buckets
 		bucketSeconds = 60
 		granularity = "1m"
-	} else if duration < 24*time.Hour {
-		// 1-24 hours: 5-minute buckets
+	case duration < 6*time.Hour:
+		// 1-6 hours: 5-minute buckets
 		bucketSeconds = 5 * 60
 		granularity = "5m"
-	} else {
-		// > 24 hours: 1-hour buckets
+	case duration < 2*24*time.Hour:
+		// 6h-2d: 1-hour buckets
 		bucketSeconds = 60 * 60
 		granularity = "1h"
+	case duration < 28*24*time.Hour:
+		// 2d-4w: 1-day buckets
+		bucketSeconds = 24 * 60 * 60
+		granularity = "1d"
+	default:
+		// >= 4 weeks: dynamic targeting ~200 buckets, minimum 1m
+		bucketSeconds = int64(duration.Seconds()) / 200
+		if bucketSeconds < 60 {
+			bucketSeconds = 60
+		}
+		granularity = fmt.Sprintf("%ds", bucketSeconds)
 	}
 
-	// Cap at 1000 buckets - adjust granularity if needed
-	maxBuckets := int64(1000)
+	// Cap at 500 buckets
+	maxBuckets := int64(500)
 	estimatedBuckets := int64(duration.Seconds()) / bucketSeconds
 	if estimatedBuckets > maxBuckets {
 		bucketSeconds = int64(duration.Seconds()) / maxBuckets
@@ -222,30 +243,35 @@ func (h *LogsHandler) GetLogHistogram(ctx context.Context, req *pb.GetLogHistogr
 		granularity = fmt.Sprintf("%ds", bucketSeconds)
 	}
 
-	// Safety check: ensure bucketSeconds is at least 1
+	// Safety check
 	if bucketSeconds < 1 {
 		bucketSeconds = 1
 	}
 
 	// Get histogram data from repository
-	histogramData, err := h.logRefRepo.GetHistogramBySession(ctx, req.SessionId, bucketSeconds)
+	histogramData, err := h.logRefRepo.GetHistogramBySession(ctx, req.SessionId, bucketSeconds, startParam, endParam)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get histogram data: %w", err)
 	}
 
-	// Convert to protobuf format
-	buckets := make([]*pb.HistogramBucket, 0, len(histogramData))
-	for timestamp, sources := range histogramData {
-		bucket := &pb.HistogramBucket{
-			Timestamp:   timestamp,
+	// Compute first/last bucket timestamps aligned to bucketSeconds
+	firstBucket := (rangeStart.Unix() / bucketSeconds) * bucketSeconds
+	lastBucket := (rangeEnd.Unix() / bucketSeconds) * bucketSeconds
+
+	// Build dense bucket array filling all slots (including zeros)
+	bucketCount := int((lastBucket-firstBucket)/bucketSeconds) + 1
+	buckets := make([]*pb.HistogramBucket, 0, bucketCount)
+	for t := firstBucket; t <= lastBucket; t += bucketSeconds {
+		sources := histogramData[t]
+		buckets = append(buckets, &pb.HistogramBucket{
+			Timestamp:   t,
 			StdoutLines: sources["stdout"],
 			StderrLines: sources["stderr"],
 			HostLines:   sources["host"],
-		}
-		buckets = append(buckets, bucket)
+		})
 	}
 
-	// Sort buckets by timestamp
+	// Sort buckets by timestamp (already in order, but be safe)
 	sort.Slice(buckets, func(i, j int) bool {
 		return buckets[i].Timestamp < buckets[j].Timestamp
 	})

@@ -1,0 +1,483 @@
+package components
+
+import "fmt"
+
+type LogHistogramData struct {
+	SessionID int64
+}
+
+templ LogHistogram(data LogHistogramData) {
+	<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 mb-6 overflow-hidden">
+		<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900">
+			<h2 class="text-lg font-semibold text-gray-900 dark:text-white">Historical Logs</h2>
+			<div class="flex flex-wrap items-center gap-2">
+				<button id="load-logs-btn" disabled class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white text-sm font-medium rounded-md transition-colors">Load Logs</button>
+				<button id="load-more-btn" style="display:none;" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors">Load More</button>
+				<button id="clear-logs-btn" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors">Clear</button>
+			</div>
+		</div>
+		<div class="p-4 border-b border-gray-200 dark:border-slate-700">
+			<div class="flex items-center justify-between mb-2">
+				<div id="histogram-status" class="text-sm text-gray-600 dark:text-gray-400"></div>
+				<div class="flex items-center gap-2">
+					<button id="zoom-out-btn" disabled style="display: none;" class="inline-flex items-center gap-1 px-2 py-1 text-sm bg-gray-100 hover:bg-gray-200 dark:bg-slate-700 dark:hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 dark:text-gray-300 rounded-md transition-colors">← Zoom Out</button>
+					<button id="zoom-in-btn" disabled style="display: none;" class="inline-flex items-center gap-1 px-2 py-1 text-sm bg-gray-100 hover:bg-gray-200 dark:bg-slate-700 dark:hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 dark:text-gray-300 rounded-md transition-colors">Zoom In →</button>
+				</div>
+			</div>
+			<div style="position: relative;">
+				<canvas id="log-histogram" style="width: 100%; height: 300px; cursor: crosshair;"></canvas>
+				<div id="tooltip" style="position: absolute; display: none; background: rgba(0,0,0,0.8); color: white; padding: 8px; border-radius: 4px; font-size: 12px; pointer-events: none; z-index: 1000; white-space: nowrap;"></div>
+			</div>
+			<div id="selection-info" class="text-sm text-gray-700 dark:text-gray-300 mt-2"></div>
+		</div>
+		<div id="log-content" style="display: none;"></div>
+	</div>
+	<style>
+		#log-histogram { border: 2px solid #3b82f6; border-radius: 4px; background: white; }
+		[data-theme="dark"] #log-histogram { border-color: #3b82f6; background: #1e293b; }
+	</style>
+	<div id="hist-logs-script" data-session-id={ fmt.Sprintf("%d", data.SessionID) }></div>
+	<script type="text/javascript">
+		(function() {
+			const sessionId = parseInt(document.getElementById('hist-logs-script').dataset.sessionId);
+			const canvas = document.getElementById('log-histogram');
+			if (!canvas) {
+				console.error('Canvas element not found');
+				return;
+			}
+			const ctx = canvas.getContext('2d');
+			const statusDiv = document.getElementById('histogram-status');
+			const selectionInfo = document.getElementById('selection-info');
+			const loadBtn = document.getElementById('load-logs-btn');
+			const loadMoreBtn = document.getElementById('load-more-btn');
+			const clearBtn = document.getElementById('clear-logs-btn');
+			const logContent = document.getElementById('log-content');
+			const tooltip = document.getElementById('tooltip');
+			const zoomOutBtn = document.getElementById('zoom-out-btn');
+			const zoomInBtn = document.getElementById('zoom-in-btn');
+
+			let histogramData = null;
+			let zoomStack = []; // stack of {start, end} for drill-down history
+			let selection = null;
+			let isSelecting = false;
+			let selectionStart = null;
+			let logOffset = 0;
+			let currentLogStart = null;
+			let currentLogEnd = null;
+
+			// DPR-aware canvas sizing
+			function resizeCanvas() {
+				const dpr = window.devicePixelRatio || 1;
+				const rect = canvas.parentElement.getBoundingClientRect();
+				canvas.width = rect.width * dpr;
+				canvas.height = 300 * dpr;
+				canvas.style.height = '300px';
+				ctx.scale(dpr, dpr);
+				renderHistogram();
+			}
+			const ro = new ResizeObserver(resizeCanvas);
+			ro.observe(canvas.parentElement);
+
+			// Logical canvas dimensions (CSS pixels)
+			function logicalWidth() { return canvas.parentElement.getBoundingClientRect().width; }
+			function logicalHeight() { return 300; }
+
+			const padding = { top: 24, right: 20, bottom: 44, left: 60 };
+
+			function chartWidth() { return logicalWidth() - padding.left - padding.right; }
+			function chartHeight() { return logicalHeight() - padding.top - padding.bottom; }
+
+			function granularityToSeconds(gran) {
+				if (gran === '1m') return 60;
+				if (gran === '5m') return 300;
+				if (gran === '1h') return 3600;
+				if (gran === '1d') return 86400;
+				// dynamic: e.g. "1234s"
+				const m = gran.match(/^(\d+)s$/);
+				return m ? parseInt(m[1]) : 3600;
+			}
+
+			function nextFinerGranularity(gran) {
+				const order = ['1d', '1h', '5m', '1m'];
+				const idx = order.indexOf(gran);
+				if (idx === -1 || idx === order.length - 1) return null;
+				return order[idx + 1];
+			}
+
+			function timestampToX(ts) {
+				if (!histogramData || !histogramData.buckets.length) return padding.left;
+				const sessionStart = histogramData.buckets[0].timestamp;
+				const sessionEnd = histogramData.buckets[histogramData.buckets.length - 1].timestamp
+					+ granularityToSeconds(histogramData.granularity);
+				const totalDuration = sessionEnd - sessionStart;
+				if (totalDuration === 0) return padding.left;
+				return padding.left + ((ts - sessionStart) / totalDuration) * chartWidth();
+			}
+
+			function xToTimestamp(x) {
+				if (!histogramData || !histogramData.buckets.length) return 0;
+				const sessionStart = histogramData.buckets[0].timestamp;
+				const sessionEnd = histogramData.buckets[histogramData.buckets.length - 1].timestamp
+					+ granularityToSeconds(histogramData.granularity);
+				const totalDuration = sessionEnd - sessionStart;
+				if (totalDuration === 0) return sessionStart;
+				return sessionStart + ((x - padding.left) / chartWidth()) * totalDuration;
+			}
+
+			function xToIndex(x) {
+				const ts = xToTimestamp(x);
+				if (!histogramData) return -1;
+				const bucketSecs = granularityToSeconds(histogramData.granularity);
+				const sessionStart = histogramData.buckets[0].timestamp;
+				const idx = Math.floor((ts - sessionStart) / bucketSecs);
+				return Math.max(0, Math.min(histogramData.buckets.length - 1, idx));
+			}
+
+			async function loadHistogram(startTime, endTime) {
+				statusDiv.textContent = 'Loading histogram...';
+				try {
+					let url = '/sessions/' + sessionId + '/logs/histogram';
+					const params = [];
+					if (startTime != null) params.push('start=' + startTime);
+					if (endTime != null) params.push('end=' + endTime);
+					if (params.length) url += '?' + params.join('&');
+
+					const resp = await fetch(url);
+					if (!resp.ok) throw new Error('HTTP ' + resp.status);
+					const data = await resp.json();
+
+					if (!data.buckets || data.buckets.length === 0) {
+						statusDiv.textContent = 'No logs available for this session';
+						return false;
+					}
+
+					histogramData = data;
+					const zoomText = zoomStack.length > 0 ? ' (zoomed)' : '';
+					statusDiv.textContent = 'Showing ' + histogramData.buckets.length + ' time buckets (' + histogramData.granularity + ' resolution)' + zoomText;
+					updateZoomButtons();
+					renderHistogram();
+					return true;
+				} catch (err) {
+					console.error('Error loading histogram:', err);
+					statusDiv.textContent = 'Error loading histogram: ' + err.message;
+					statusDiv.style.color = '#f48771';
+					return false;
+				}
+			}
+
+			function renderHistogram() {
+				if (!histogramData || !histogramData.buckets.length) return;
+
+				const w = logicalWidth();
+				const h = logicalHeight();
+				const cw = chartWidth();
+				const ch = chartHeight();
+
+				ctx.clearRect(0, 0, w, h);
+
+				const buckets = histogramData.buckets;
+				const bucketSecs = granularityToSeconds(histogramData.granularity);
+				const sessionStart = buckets[0].timestamp;
+				const sessionEnd = buckets[buckets.length - 1].timestamp + bucketSecs;
+				const totalDuration = sessionEnd - sessionStart;
+
+				const maxLines = Math.max(1, ...buckets.map(b => (b.stdout_lines || 0) + (b.stderr_lines || 0) + (b.host_lines || 0)));
+				const minBarWidth = 1;
+
+				// Draw bars
+				buckets.forEach((bucket) => {
+					const x = padding.left + ((bucket.timestamp - sessionStart) / totalDuration) * cw;
+					const bw = Math.max(minBarWidth, (bucketSecs / totalDuration) * cw - 1);
+					const total = (bucket.stdout_lines || 0) + (bucket.stderr_lines || 0) + (bucket.host_lines || 0);
+					if (total === 0) return;
+
+					const barHeight = (total / maxLines) * ch;
+					let currentY = padding.top + ch - barHeight;
+
+					if (bucket.stdout_lines > 0) {
+						const bh = (bucket.stdout_lines / total) * barHeight;
+						ctx.fillStyle = '#d4d4d4';
+						ctx.fillRect(x, currentY, bw, bh);
+						currentY += bh;
+					}
+					if (bucket.stderr_lines > 0) {
+						const bh = (bucket.stderr_lines / total) * barHeight;
+						ctx.fillStyle = '#f48771';
+						ctx.fillRect(x, currentY, bw, bh);
+						currentY += bh;
+					}
+					if (bucket.host_lines > 0) {
+						const bh = (bucket.host_lines / total) * barHeight;
+						ctx.fillStyle = '#4fc1ff';
+						ctx.fillRect(x, currentY, bw, bh);
+					}
+				});
+
+				// Draw axes
+				ctx.strokeStyle = '#9ca3af';
+				ctx.lineWidth = 1;
+				ctx.beginPath();
+				ctx.moveTo(padding.left, padding.top);
+				ctx.lineTo(padding.left, padding.top + ch);
+				ctx.lineTo(padding.left + cw, padding.top + ch);
+				ctx.stroke();
+
+				// Y-axis labels
+				ctx.fillStyle = '#6b7280';
+				ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+				ctx.textAlign = 'right';
+				for (let i = 0; i <= 4; i++) {
+					const y = padding.top + ch - (i / 4) * ch;
+					const value = Math.round((i / 4) * maxLines);
+					ctx.fillText(value.toString(), padding.left - 8, y + 4);
+				}
+
+				// X-axis labels with date change detection
+				ctx.textAlign = 'center';
+				const multiDay = (sessionEnd - sessionStart) > 86400;
+				const labelStep = Math.max(1, Math.floor(buckets.length / 8));
+				let lastDate = null;
+
+				for (let i = 0; i < buckets.length; i += labelStep) {
+					const bucket = buckets[i];
+					const x = padding.left + ((bucket.timestamp - sessionStart) / totalDuration) * cw + (bucketSecs / totalDuration) * cw / 2;
+					const date = new Date(bucket.timestamp * 1000);
+					const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+					const timeStr = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+					if (multiDay && dateStr !== lastDate) {
+						// Draw date change marker
+						ctx.strokeStyle = 'rgba(107, 114, 128, 0.5)';
+						ctx.setLineDash([4, 4]);
+						ctx.beginPath();
+						ctx.moveTo(x, padding.top);
+						ctx.lineTo(x, padding.top + ch);
+						ctx.stroke();
+						ctx.setLineDash([]);
+						ctx.strokeStyle = '#9ca3af';
+
+						ctx.fillStyle = '#374151';
+						ctx.font = 'bold 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+						ctx.fillText(dateStr, x, padding.top + ch + 14);
+						ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+						ctx.fillStyle = '#9ca3af';
+						ctx.fillText(timeStr, x, padding.top + ch + 28);
+						lastDate = dateStr;
+					} else {
+						ctx.fillStyle = '#6b7280';
+						ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+						ctx.fillText(timeStr, x, padding.top + ch + 18);
+					}
+				}
+
+				// Draw selection overlay
+				if (selection) {
+					const si = Math.min(selection.startIdx, selection.endIdx);
+					const ei = Math.max(selection.startIdx, selection.endIdx);
+					const sx = padding.left + ((buckets[si].timestamp - sessionStart) / totalDuration) * cw;
+					const ex = padding.left + ((buckets[ei].timestamp + bucketSecs - sessionStart) / totalDuration) * cw;
+					ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
+					ctx.fillRect(sx, padding.top, ex - sx, ch);
+					ctx.strokeStyle = 'rgba(59, 130, 246, 0.6)';
+					ctx.lineWidth = 1;
+					ctx.strokeRect(sx, padding.top, ex - sx, ch);
+				}
+			}
+
+			canvas.addEventListener('mousedown', (e) => {
+				if (!histogramData) return;
+				const rect = canvas.getBoundingClientRect();
+				const x = e.clientX - rect.left;
+				const idx = xToIndex(x);
+
+				if (idx >= 0 && idx < histogramData.buckets.length) {
+					isSelecting = true;
+					selectionStart = idx;
+					selection = { startIdx: idx, endIdx: idx };
+					updateSelection();
+				}
+			});
+
+			canvas.addEventListener('dblclick', (e) => {
+				if (!histogramData) return;
+				const rect = canvas.getBoundingClientRect();
+				const x = e.clientX - rect.left;
+				const idx = xToIndex(x);
+				drillDown(idx, idx);
+			});
+
+			canvas.addEventListener('mousemove', (e) => {
+				if (!histogramData) return;
+				const rect = canvas.getBoundingClientRect();
+				const x = e.clientX - rect.left;
+				const idx = xToIndex(x);
+
+				if (idx >= 0 && idx < histogramData.buckets.length && !isSelecting) {
+					const bucket = histogramData.buckets[idx];
+					const date = new Date(bucket.timestamp * 1000);
+					const total = (bucket.stdout_lines || 0) + (bucket.stderr_lines || 0) + (bucket.host_lines || 0);
+					const canZoom = nextFinerGranularity(histogramData.granularity) !== null;
+					tooltip.innerHTML = '<div><strong>' + date.toLocaleString() + '</strong></div>' +
+						'<div>Total: ' + total.toLocaleString() + ' lines</div>' +
+						(bucket.stdout_lines ? '<div style="color: #d4d4d4;">stdout: ' + bucket.stdout_lines.toLocaleString() + '</div>' : '') +
+						(bucket.stderr_lines ? '<div style="color: #f48771;">stderr: ' + bucket.stderr_lines.toLocaleString() + '</div>' : '') +
+						(bucket.host_lines ? '<div style="color: #4fc1ff;">host: ' + bucket.host_lines.toLocaleString() + '</div>' : '') +
+						(canZoom ? '<div style="margin-top: 4px; font-size: 11px; color: #aaa;">Select range then click Zoom In (or double-click)</div>' : '');
+					tooltip.style.display = 'block';
+					tooltip.style.left = (x + 10) + 'px';
+					tooltip.style.top = (e.clientY - rect.top + 10) + 'px';
+				} else {
+					tooltip.style.display = 'none';
+				}
+
+				if (isSelecting && idx >= 0 && idx < histogramData.buckets.length) {
+					selection.endIdx = idx;
+					renderHistogram();
+					updateSelection();
+				}
+			});
+
+			canvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+			canvas.addEventListener('mouseup', () => { isSelecting = false; });
+
+			function updateZoomButtons() {
+				const canZoomIn = histogramData && nextFinerGranularity(histogramData.granularity) !== null;
+				const canZoomOut = zoomStack.length > 0;
+				zoomInBtn.style.display = canZoomIn ? 'inline-flex' : 'none';
+				zoomInBtn.disabled = !selection;
+				zoomOutBtn.style.display = canZoomOut ? 'inline-flex' : 'none';
+				zoomOutBtn.disabled = false;
+			}
+
+			// drillDown: zoom into the index range [startIdx, endIdx]
+			function drillDown(startIdx, endIdx) {
+				if (!histogramData) return;
+				const nextGran = nextFinerGranularity(histogramData.granularity);
+				if (!nextGran) return;
+				const bucketSecs = granularityToSeconds(histogramData.granularity);
+				const si = Math.min(startIdx, endIdx);
+				const ei = Math.max(startIdx, endIdx);
+				const startTime = histogramData.buckets[si].timestamp;
+				const endTime = histogramData.buckets[ei].timestamp + bucketSecs;
+				zoomStack.push({ start: startTime, end: endTime });
+				selection = null;
+				selectionInfo.textContent = '';
+				loadBtn.disabled = true;
+				loadHistogram(startTime, endTime);
+			}
+
+			zoomInBtn.onclick = () => {
+				if (!selection) return;
+				drillDown(selection.startIdx, selection.endIdx);
+			};
+
+			zoomOutBtn.onclick = () => {
+				zoomStack.pop();
+				selection = null;
+				selectionInfo.textContent = '';
+				loadBtn.disabled = true;
+				if (zoomStack.length > 0) {
+					const prev = zoomStack[zoomStack.length - 1];
+					loadHistogram(prev.start, prev.end);
+				} else {
+					loadHistogram();
+				}
+			};
+
+			function updateSelection() {
+				if (!selection || !histogramData) return;
+				const si = Math.min(selection.startIdx, selection.endIdx);
+				const ei = Math.max(selection.startIdx, selection.endIdx);
+				const bucketSecs = granularityToSeconds(histogramData.granularity);
+				const startTime = histogramData.buckets[si].timestamp;
+				const endTime = histogramData.buckets[ei].timestamp + bucketSecs;
+
+				// Compute total lines in selection for info display
+				let totalLines = 0;
+				for (let i = si; i <= ei; i++) {
+					const b = histogramData.buckets[i];
+					totalLines += (b.stdout_lines || 0) + (b.stderr_lines || 0) + (b.host_lines || 0);
+				}
+
+				const startDate = new Date(startTime * 1000);
+				const endDate = new Date(endTime * 1000);
+				selectionInfo.innerHTML = 'Selected: ' + startDate.toLocaleString() + ' – ' + endDate.toLocaleString() +
+					' <span style="color: #6b7280;">(' + totalLines.toLocaleString() + ' lines in range)</span>';
+
+				currentLogStart = startTime;
+				currentLogEnd = endTime;
+				logOffset = 0;
+				loadBtn.disabled = false;
+				loadMoreBtn.style.display = 'none';
+				updateZoomButtons();
+			}
+
+			function loadLogs(start, end, offset, limit, append) {
+				if (!append) {
+					logContent.style.display = 'block';
+					logContent.innerHTML = '<div style="padding: 1rem; text-align: center;">Loading logs...</div>';
+				}
+				loadBtn.disabled = true;
+				canvas.style.pointerEvents = 'none';
+				canvas.style.opacity = '0.5';
+
+				const url = '/sessions/' + sessionId + '/logs/load?start=' + start + '&end=' + end +
+					'&offset=' + (offset || 0) + '&limit=' + (limit || 10000);
+
+				htmx.ajax('GET', url, {
+					target: '#log-content',
+					swap: append ? 'beforeend' : 'innerHTML'
+				}).then(() => {
+					loadBtn.disabled = false;
+					canvas.style.pointerEvents = 'auto';
+					canvas.style.opacity = '1';
+					// Check has_more from response headers or data attribute if available
+					// For now, show load-more based on whether we got a full page
+				});
+			}
+
+			loadBtn.onclick = () => {
+				if (currentLogStart == null) return;
+				logOffset = 0;
+				loadLogs(currentLogStart, currentLogEnd, 0, 10000, false);
+			};
+
+			loadMoreBtn.onclick = () => {
+				if (currentLogStart == null) return;
+				loadLogs(currentLogStart, currentLogEnd, logOffset, 10000, true);
+			};
+
+			clearBtn.onclick = () => {
+				logContent.innerHTML = '';
+				logContent.style.display = 'none';
+				selection = null;
+				selectionInfo.textContent = '';
+				loadBtn.disabled = true;
+				loadMoreBtn.style.display = 'none';
+				renderHistogram();
+			};
+
+			// Initial load: show full histogram, auto-select last 30 min, auto-load 300 lines
+			loadHistogram().then((ok) => {
+				if (!ok || !histogramData?.buckets?.length) return;
+
+				const buckets = histogramData.buckets;
+				const bucketSecs = granularityToSeconds(histogramData.granularity);
+				const thirtyMinAgo = Math.floor(Date.now() / 1000) - 30 * 60;
+
+				let startIdx = buckets.findIndex(b => b.timestamp >= thirtyMinAgo);
+				if (startIdx === -1) startIdx = Math.max(0, buckets.length - 1);
+				const endIdx = buckets.length - 1;
+
+				selection = { startIdx, endIdx };
+				updateSelection();
+				renderHistogram();
+
+				// Auto-load up to 300 lines for the initial selection
+				if (currentLogStart != null) {
+					loadLogs(currentLogStart, currentLogEnd, 0, 300, false);
+				}
+			});
+		})();
+	</script>
+}

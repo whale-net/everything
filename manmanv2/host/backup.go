@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/whale-net/everything/manmanv2"
+	"github.com/whale-net/everything/manmanv2/models"
 	hostrmq "github.com/whale-net/everything/manmanv2/host/rmq"
 )
 

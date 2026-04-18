@@ -603,9 +603,24 @@ func (app *App) handleSessionLogsStream(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Disable the server-level WriteTimeout for this long-lived SSE connection.
+	// WriteTimeout applies to the entire handler duration, which would kill the
+	// stream after 15s. The SSE keepalive comment handles proxy idle timeouts.
+	rc := http.NewResponseController(w)
+	if err := rc.SetWriteDeadline(time.Time{}); err != nil {
+		log.Printf("Failed to disable write deadline for SSE stream (session %d): %v", sessionID, err)
+	}
+
+	// Parse optional after_sequence_number for reconnect deduplication
+	var afterSequenceNumber int64
+	if s := r.URL.Query().Get("after_sequence_number"); s != "" {
+		afterSequenceNumber, _ = strconv.ParseInt(s, 10, 64)
+	}
+
 	// Create gRPC stream directly to log-processor
 	stream, err := app.logProcessor.StreamSessionLogs(r.Context(), &manmanpb.StreamSessionLogsRequest{
-		SessionId: sessionID,
+		SessionId:           sessionID,
+		AfterSequenceNumber: afterSequenceNumber,
 	})
 	if err != nil {
 		log.Printf("Failed to create log stream for session %d: %v", sessionID, err)
@@ -617,33 +632,61 @@ func (app *App) handleSessionLogsStream(w http.ResponseWriter, r *http.Request) 
 	fmt.Fprintf(w, "data: {\"type\":\"connected\"}\n\n")
 	flusher.Flush()
 
+	// Receive gRPC messages in a goroutine so we can interleave with keepalive ticks.
+	type recvResult struct {
+		msg *manmanpb.LogMessage
+		err error
+	}
+	recvCh := make(chan recvResult, 1)
+	go func() {
+		for {
+			msg, err := stream.Recv()
+			recvCh <- recvResult{msg, err}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	keepalive := time.NewTicker(30 * time.Second)
+	defer keepalive.Stop()
+
 	// Stream logs as SSE events
 	for {
-		msg, err := stream.Recv()
-		if err != nil {
-			if err == io.EOF {
-				// Stream closed normally
-				log.Printf("Log stream closed for session %d", sessionID)
-			} else {
-				log.Printf("Error receiving log for session %d: %v", sessionID, err)
-			}
+		select {
+		case <-r.Context().Done():
 			return
-		}
+		case <-keepalive.C:
+			// SSE comment keeps the connection alive through proxies
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
+		case result := <-recvCh:
+			if result.err != nil {
+				if result.err == io.EOF {
+					log.Printf("Log stream closed for session %d", sessionID)
+				} else if r.Context().Err() == nil {
+					// Only log if it wasn't a client disconnect
+					log.Printf("Error receiving log for session %d: %v", sessionID, result.err)
+				}
+				return
+			}
 
-		// Format as JSON for easier client parsing
-		data := map[string]interface{}{
-			"timestamp": msg.Timestamp,
-			"source":    msg.Source,
-			"message":   msg.Message,
-		}
-		jsonData, err := json.Marshal(data)
-		if err != nil {
-			log.Printf("Failed to marshal log message: %v", err)
-			continue
-		}
+			// Format as JSON for easier client parsing
+			data := map[string]interface{}{
+				"timestamp":       result.msg.Timestamp,
+				"source":          result.msg.Source,
+				"message":         result.msg.Message,
+				"sequence_number": result.msg.SequenceNumber,
+			}
+			jsonData, err := json.Marshal(data)
+			if err != nil {
+				log.Printf("Failed to marshal log message: %v", err)
+				continue
+			}
 
-		fmt.Fprintf(w, "data: %s\n\n", jsonData)
-		flusher.Flush()
+			fmt.Fprintf(w, "data: %s\n\n", jsonData)
+			flusher.Flush()
+		}
 	}
 }
 
@@ -721,30 +764,30 @@ func (app *App) handleLogHistogram(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// If zoom range provided, fetch histogram for that range only
-	if startStr != "" && endStr != "" {
+	histReq := &manmanpb.GetLogHistogramRequest{
+		SessionId: sessionID,
+	}
+
+	if startStr != "" {
 		startTime, err := strconv.ParseInt(startStr, 10, 64)
 		if err != nil {
 			http.Error(w, "Invalid start timestamp", http.StatusBadRequest)
 			return
 		}
+		histReq.StartTimestamp = startTime
+	}
 
+	if endStr != "" {
 		endTime, err := strconv.ParseInt(endStr, 10, 64)
 		if err != nil {
 			http.Error(w, "Invalid end timestamp", http.StatusBadRequest)
 			return
 		}
-
-		// For now, just use the full histogram
-		// TODO: Add range support to GetLogHistogram RPC to filter buckets by time range
-		_ = startTime
-		_ = endTime
+		histReq.EndTimestamp = endTime
 	}
 
 	// Call gRPC GetLogHistogram
-	resp, err := app.grpc.GetLogHistogram(ctx, &manmanpb.GetLogHistogramRequest{
-		SessionId: sessionID,
-	})
+	resp, err := app.grpc.GetLogHistogram(ctx, histReq)
 	if err != nil {
 		log.Printf("Error fetching log histogram for session %d: %v", sessionID, err)
 		http.Error(w, fmt.Sprintf("Failed to fetch log histogram: %v", err), http.StatusInternalServerError)
@@ -798,12 +841,6 @@ func (app *App) handleLoadHistoricalLogs(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Auto-truncate if range > 6 hours
-	maxDuration := int64(6 * 60 * 60) // 6 hours
-	if endTimestamp-startTimestamp > maxDuration {
-		endTimestamp = startTimestamp + maxDuration
-	}
-
 	offset := int32(0)
 	if offsetStr != "" {
 		offsetVal, err := strconv.ParseInt(offsetStr, 10, 32)
@@ -838,13 +875,6 @@ func (app *App) handleLoadHistoricalLogs(w http.ResponseWriter, r *http.Request)
 
 	// Render HTML response
 	w.Header().Set("Content-Type", "text/html")
-
-	// Show truncation warning if we auto-truncated
-	if endTimestamp != startTimestamp+maxDuration && endTimestamp-startTimestamp == maxDuration {
-		fmt.Fprintf(w, `<div class="alert alert-warning" style="margin-bottom: 1rem; padding: 0.75rem; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; color: #856404;">
-			Selection reduced to 6 hours (maximum allowed)
-		</div>`)
-	}
 
 	// Render log content
 	fmt.Fprintf(w, `<div class="log-viewer-container"><pre id="log-output" class="log-viewer-output">`)

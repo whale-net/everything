@@ -15,7 +15,7 @@ import (
 
 	"github.com/whale-net/everything/libs/go/docker"
 	"github.com/whale-net/everything/libs/go/rmq"
-	"github.com/whale-net/everything/manmanv2"
+	"github.com/whale-net/everything/manmanv2/models"
 	"github.com/whale-net/everything/manmanv2/host/config"
 	hostrmq "github.com/whale-net/everything/manmanv2/host/rmq"
 	pb "github.com/whale-net/everything/manmanv2/protos"
@@ -327,7 +327,7 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 		return fmt.Errorf("failed to get container logs: %w", err)
 	}
 	state.LogReader = logReader
-	state.AttachStrategy = "lazy" // Default to lazy attach
+	state.AttachStrategy = "persistent"
 	state.IsTTY = true             // Always use TTY mode
 
 	// 5. Start log reader goroutine

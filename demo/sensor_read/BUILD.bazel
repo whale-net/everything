@@ -1,0 +1,32 @@
+"""Thermistor sensor read demo — ELEGOO ESP32 firmware + host-side unit tests."""
+
+load("//tools/bazel:esp32.bzl", "esp32_firmware")
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
+# ── Firmware target (ESP32 only) ──────────────────────────────────────────────
+# Build:  bazel build //demo/sensor_read:sensor_read_bin --config=esp32
+# Flash:  bazel run  //demo/sensor_read:flash -- /dev/ttyUSB0
+
+esp32_firmware(
+    name = "sensor_read",
+    srcs = ["sensor_read.cc"],
+    deps = [
+        "//firmware/sensor:thermistor",
+        "@pigweed//pw_log",
+    ],
+)
+
+# ── Host-side unit tests (no hardware needed) ─────────────────────────────────
+# Usage:  bazel test //demo/sensor_read:sensor_read_test
+
+cc_test(
+    name = "sensor_read_test",
+    srcs = ["sensor_read_test.cc"],
+    deps = [
+        "//firmware/sensor:mock_sensor",
+        "//firmware/sensor:thermistor_math",
+        "@pigweed//pw_status",
+        "@pigweed//pw_unit_test",
+        "@pigweed//pw_unit_test:logging_main",
+    ],
+)

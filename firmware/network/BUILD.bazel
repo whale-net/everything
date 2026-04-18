@@ -1,0 +1,56 @@
+"""Network state machine (Wi-Fi + MQTT)."""
+
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ESP32_COMPAT = [
+    "@platforms//os:none",
+    "//tools/firmware:cpu_xtensa",
+]
+
+# ESP32 platform hook implementations (WiFi + PubSubClient).
+# Link this instead of @pubsubclient directly; it owns WiFiClient and
+# PubSubClient and exposes the 6 hook functions expected by network_manager.cc.
+cc_library(
+    name = "esp32_platform",
+    srcs = ["esp32_platform.cc"],
+    target_compatible_with = ESP32_COMPAT,
+    deps = [
+        "@arduino_esp32//:core_lib",
+        "@pubsubclient//:pubsubclient",
+    ],
+)
+
+# IPublisher adapter that forwards to NetworkManager::Publish().
+# Header-only; depends only on network_manager + mqtt_writer (both host-safe).
+cc_library(
+    name = "network_publisher",
+    hdrs = ["network_publisher.h"],
+    deps = [
+        ":network_manager",
+        "//firmware/mqtt:mqtt_writer",
+        "@pigweed//pw_status",
+    ],
+)
+
+cc_library(
+    name = "network_manager",
+    srcs = ["network_manager.cc"],
+    hdrs = ["network_manager.h"],
+    deps = [
+        "@pigweed//pw_chrono:system_clock",
+        "@pigweed//pw_log",
+        "@pigweed//pw_status",
+    ],
+)
+
+cc_test(
+    name = "network_manager_test",
+    srcs = ["network_manager_test.cc"],
+    deps = [
+        ":network_manager",
+        "@pigweed//pw_unit_test",
+        "@pigweed//pw_unit_test:logging_main",
+    ],
+)

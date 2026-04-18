@@ -1,0 +1,35 @@
+"""MQTTWriter — zero-allocation sensor aggregator."""
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "mqtt_writer",
+    srcs = ["mqtt_writer.cc"],
+    hdrs = ["mqtt_writer.h"],
+    deps = [
+        "//firmware/sensor:sensor",
+        "@pigweed//pw_assert:check",
+        "@pigweed//pw_log",
+        "@pigweed//pw_span",
+        "@pigweed//pw_status",
+        "@pigweed//pw_string:builder",
+    ],
+)
+
+cc_library(
+    name = "mock_publisher",
+    hdrs = ["mock_publisher.h"],
+    deps = [":mqtt_writer"],
+)
+
+cc_test(
+    name = "mqtt_writer_test",
+    srcs = ["mqtt_writer_test.cc"],
+    deps = [
+        ":mock_publisher",
+        ":mqtt_writer",
+        "//firmware/sensor:mock_sensor",
+        "@pigweed//pw_unit_test",
+        "@pigweed//pw_unit_test:logging_main",
+    ],
+)

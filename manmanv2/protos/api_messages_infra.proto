@@ -1,0 +1,125 @@
+syntax = "proto3";
+
+package manman.v1;
+
+option go_package = "github.com/whale-net/everything/manmanv2/protos;manmanpb";
+
+import "manmanv2/protos/messages.proto";
+
+// ============================================================================
+// Server Registration RPCs
+// ============================================================================
+
+message RegisterServerRequest {
+  string name = 1;
+  ServerCapabilities capabilities = 2;
+  string environment = 3;  // Optional: deployment environment (dev, staging, prod, etc.)
+}
+
+message RegisterServerResponse {
+  int64 server_id = 1;
+  Server server = 2;
+}
+
+message HeartbeatRequest {
+  int64 server_id = 1;
+  ServerCapabilities capabilities = 2;
+}
+
+message HeartbeatResponse {
+  bool acknowledged = 1;
+  int64 next_heartbeat_seconds = 2;
+}
+
+// ============================================================================
+// Log Management RPCs
+// ============================================================================
+
+message SendBatchedLogsRequest {
+  int64 server_id = 1;
+  repeated LogBatch batches = 2;
+}
+
+message SendBatchedLogsResponse {
+  int32 accepted_batches = 1;
+  repeated string failed_batch_ids = 2;
+}
+
+message GetHistoricalLogsRequest {
+  int64 sgc_id = 1;  // DEPRECATED: Use session_id instead
+  int64 start_timestamp = 2;  // Unix timestamp
+  int64 end_timestamp = 3;    // Unix timestamp (max 6 hours from start)
+  int64 session_id = 4;  // Session ID to query logs for
+  int32 offset = 5;      // Line offset for pagination (default: 0)
+  int32 limit = 6;       // Max lines to return (default: 10000)
+}
+
+message GetHistoricalLogsResponse {
+  repeated HistoricalLogBatch batches = 1;
+  int64 earliest_available_timestamp = 2;  // Unix timestamp
+  int64 latest_available_timestamp = 3;    // Unix timestamp
+  int32 total_lines = 4;     // Total lines in requested range
+  bool has_more = 5;         // True if more lines available
+}
+
+message HistoricalLogBatch {
+  int64 minute_timestamp = 1;  // Unix timestamp
+  string content = 2;          // Raw log text
+  int32 line_count = 3;
+}
+
+message GetLogHistogramRequest {
+  int64 session_id = 1;
+  int64 start_timestamp = 2;  // 0 = from session start
+  int64 end_timestamp = 3;    // 0 = to session end
+}
+
+message GetLogHistogramResponse {
+  repeated HistogramBucket buckets = 1;
+  string granularity = 2;  // "1m", "5m", "1h"
+  int64 session_start = 3;  // Unix timestamp
+  int64 session_end = 4;    // Unix timestamp
+}
+
+message HistogramBucket {
+  int64 timestamp = 1;      // Unix timestamp (bucket start)
+  int32 stdout_lines = 2;
+  int32 stderr_lines = 3;
+  int32 host_lines = 4;
+}
+
+// ============================================================================
+// Validation RPCs
+// ============================================================================
+
+message ValidateDeploymentRequest {
+  int64 server_id = 1;
+  int64 game_config_id = 2;
+  repeated PortBinding port_bindings = 3;
+}
+
+message ValidateDeploymentResponse {
+  bool valid = 1;
+  repeated ValidationIssue issues = 2;
+  DeploymentEstimate estimate = 3;
+}
+
+message ValidationIssue {
+  ValidationSeverity severity = 1;
+  string field = 2;
+  string message = 3;
+  string suggestion = 4;
+}
+
+enum ValidationSeverity {
+  VALIDATION_SEVERITY_UNSPECIFIED = 0;
+  VALIDATION_SEVERITY_ERROR = 1;
+  VALIDATION_SEVERITY_WARNING = 2;
+  VALIDATION_SEVERITY_INFO = 3;
+}
+
+message DeploymentEstimate {
+  int32 estimated_memory_mb = 1;
+  int32 estimated_cpu_millicores = 2;
+  repeated int32 allocated_ports = 3;
+}

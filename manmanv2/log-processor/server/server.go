@@ -31,13 +31,23 @@ func (s *Server) StreamSessionLogs(req *manmanpb.StreamSessionLogsRequest, strea
 	log.Printf("[log-processor] client subscribed to session %d logs", sessionID)
 
 	// Subscribe to consumer manager
-	subscription, err := s.consumerManager.Subscribe(stream.Context(), sessionID)
+	subscription, err := s.consumerManager.Subscribe(stream.Context(), sessionID, req.AfterSequenceNumber)
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to logs: %w", err)
 	}
 	defer subscription.Unsubscribe()
 
-	// Stream logs to client
+	// Send backlog first so the client sees historical messages before live ones.
+	// The backlog was snapshot atomically at subscribe time, so no messages are
+	// missed or duplicated when we transition to the live channel below.
+	for _, msg := range subscription.Backlog() {
+		if err := stream.Send(msg); err != nil {
+			log.Printf("[log-processor] failed to send backlog message for session %d: %v", sessionID, err)
+			return err
+		}
+	}
+
+	// Stream live logs to client
 	logCh := subscription.Channel()
 	for {
 		select {

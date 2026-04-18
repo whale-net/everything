@@ -342,7 +342,9 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 			return fmt.Errorf("%s", errMsg)
 		}
 	} else {
-		// Bind-mount volume: move files directly to the resolved host path.
+		// Bind-mount volume: merge files into the resolved host path.
+		// Use copyDirectory rather than moveDirectory so that previously installed
+		// addons sharing the same install path are not wiped out.
 		installPath := target.BindPath
 		if err := os.MkdirAll(installPath, 0777); err != nil {
 			errMsg := fmt.Sprintf("failed to create install directory: %v", err)
@@ -350,8 +352,8 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 			do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, &errMsg)
 			return fmt.Errorf("%s", errMsg)
 		}
-		if err := do.moveDirectory(stagingDir, installPath); err != nil {
-			errMsg := fmt.Sprintf("failed to move files to install path: %v", err)
+		if err := do.copyDirectory(stagingDir, installPath); err != nil {
+			errMsg := fmt.Sprintf("failed to copy files to install path: %v", err)
 			logger.Error("extraction failed", "error", err)
 			do.publishStatus(ctx, cmd.InstallationID, InstallationStatusFailed, 0, &errMsg)
 			return fmt.Errorf("%s", errMsg)

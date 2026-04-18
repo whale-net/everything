@@ -1,0 +1,177 @@
+syntax = "proto3";
+
+package manman.v1;
+
+option go_package = "github.com/whale-net/everything/manmanv2/protos;manmanpb";
+
+import "manmanv2/protos/messages.proto";
+
+// ============================================================================
+// Configuration Strategy RPCs
+// ============================================================================
+
+message CreateConfigurationStrategyRequest {
+  int64 game_id = 1;
+  string name = 2;
+  string description = 3;
+  string strategy_type = 4;
+  string target_path = 5;
+  string base_template = 6;
+  map<string, string> render_options = 7;
+  int32 apply_order = 8;
+}
+
+message CreateConfigurationStrategyResponse {
+  ConfigurationStrategy strategy = 1;
+}
+
+message ListConfigurationStrategiesRequest {
+  int64 game_id = 1;
+}
+
+message ListConfigurationStrategiesResponse {
+  repeated ConfigurationStrategy strategies = 1;
+}
+
+message UpdateConfigurationStrategyRequest {
+  int64 strategy_id = 1;
+  string name = 2;
+  string description = 3;
+  string strategy_type = 4;
+  string target_path = 5;
+  string base_template = 6;
+  map<string, string> render_options = 7;
+  int32 apply_order = 8;
+  repeated string update_paths = 9;
+}
+
+message UpdateConfigurationStrategyResponse {
+  ConfigurationStrategy strategy = 1;
+}
+
+message DeleteConfigurationStrategyRequest {
+  int64 strategy_id = 1;
+}
+
+message DeleteConfigurationStrategyResponse {}
+
+// ============================================================================
+// Configuration Patch RPCs
+// ============================================================================
+
+message CreateConfigurationPatchRequest {
+  int64 strategy_id = 1;
+  string patch_level = 2;  // "game_config", "server_game_config", "session"
+  int64 entity_id = 3;     // game_config_id, server_game_config_id, or session_id
+  string patch_content = 4;
+  string patch_format = 5;  // "properties", "json_merge_patch", etc.
+  int32 patch_order = 6;    // Application order (lower = earlier = lower priority), default 0
+}
+
+message CreateConfigurationPatchResponse {
+  ConfigurationPatch patch = 1;
+}
+
+message UpdateConfigurationPatchRequest {
+  int64 patch_id = 1;
+  string patch_content = 2;
+  string patch_format = 3;
+  int32 patch_order = 4;  // Application order (lower = earlier = lower priority)
+}
+
+message UpdateConfigurationPatchResponse {
+  ConfigurationPatch patch = 1;
+}
+
+message DeleteConfigurationPatchRequest {
+  int64 patch_id = 1;
+}
+
+message DeleteConfigurationPatchResponse {}
+
+message ListConfigurationPatchesRequest {
+  optional int64 strategy_id = 1;   // Filter by strategy
+  optional string patch_level = 2;   // Filter by level
+  optional int64 entity_id = 3;      // Filter by entity
+}
+
+message ListConfigurationPatchesResponse {
+  repeated ConfigurationPatch patches = 1;
+}
+
+// ============================================================================
+// GameConfig Volume RPCs
+// ============================================================================
+
+message CreateGameConfigVolumeRequest {
+  int64 config_id = 1;
+  string name = 2;
+  string description = 3;
+  string container_path = 4;
+  string host_subpath = 5;
+  bool read_only = 6;
+  string volume_type = 7;
+}
+
+message CreateGameConfigVolumeResponse {
+  GameConfigVolume volume = 1;
+}
+
+message GetGameConfigVolumeRequest {
+  int64 volume_id = 1;
+}
+
+message GetGameConfigVolumeResponse {
+  GameConfigVolume volume = 1;
+}
+
+message ListGameConfigVolumesRequest {
+  int64 config_id = 1;
+}
+
+message ListGameConfigVolumesResponse {
+  repeated GameConfigVolume volumes = 1;
+}
+
+message UpdateGameConfigVolumeRequest {
+  int64 volume_id = 1;
+  string name = 2;
+  string description = 3;
+  string container_path = 4;
+  string host_subpath = 5;
+  bool read_only = 6;
+  string volume_type = 7;
+}
+
+message UpdateGameConfigVolumeResponse {
+  GameConfigVolume volume = 1;
+}
+
+message DeleteGameConfigVolumeRequest {
+  int64 volume_id = 1;
+}
+
+message DeleteGameConfigVolumeResponse {}
+
+// ============================================================================
+// Configuration Preview RPCs
+// ============================================================================
+
+message PreviewConfigurationRequest {
+  int64 session_id = 1;  // Preview for this session
+}
+
+message PreviewConfigurationResponse {
+  repeated RenderedConfiguration configurations = 1;
+}
+
+message GetSessionConfigurationRequest {
+  int64 session_id = 1;
+}
+
+message GetSessionConfigurationResponse {
+  repeated RenderedConfiguration configurations = 1;
+  int64 game_id = 2;
+  int64 game_config_id = 3;
+  int64 server_game_config_id = 4;
+}

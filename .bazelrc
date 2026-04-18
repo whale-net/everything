@@ -24,9 +24,14 @@ build:ci --guard_against_concurrent_changes
 build:ci --experimental_remote_merkle_tree_cache
 build:ci --remote_timeout=60
 build:ci --remote_cache_compression
-# Download only metadata from remote cache for faster builds
-# Actual outputs are only downloaded when needed (e.g., for tests, or final artifacts)
-build:ci --remote_download_minimal
+# Download final outputs but not intermediate artifacts - safe for both build and test jobs
+build:ci --remote_download_toplevel
+# For future RBE build-only jobs: download only metadata (not safe for test jobs)
+build:ci-build-only --remote_download_minimal
+# Skip checking external repo files for modifications - deps are pinned by lockfiles
+build:ci --noexperimental_check_external_repository_files
+# Hardlink from repository cache instead of copying - reduces I/O on CI runners
+build:ci --experimental_repository_cache_hardlinks
 # Build metadata optimizations  
 build:ci --nolegacy_external_runfiles
 # Memory and CPU optimizations
@@ -35,11 +40,18 @@ build:ci --java_runtime_version=remotejdk_11
 test:ci --cache_test_results=yes
 test:ci --test_timeout_filters=-eternal
 
-# Container image build optimization
+# Container image build optimization for CI (used by docker job in ci.yml)
 # Use toplevel downloads - downloads only the final outputs needed
 # Intermediate layer tars are cached remotely but not downloaded locally in CI
 build:ci-images --config=ci
 build:ci-images --remote_download_toplevel
+
+# Clean release builds - no remote cache reads to prevent cache poisoning
+# Used by the release workflow when publishing images to registry
+# Still uploads results so CI jobs benefit, but never trusts cached artifacts
+build:ci-release --config=ci
+build:ci-release --noremote_accept_cached
+build:ci-release --remote_download_toplevel
 
 # Test configurations
 test --test_output=errors
@@ -53,3 +65,10 @@ build --java_runtime_version=remotejdk_17
 # even when building for different target platforms (ARM64, AMD64)
 # Set host_platform explicitly to prevent platform transitions from affecting exec tools
 build --host_platform=@platforms//host
+
+# ── ESP32 firmware build config ──────────────────────────────────────────────
+# Usage: bazel build //demo/blink:blink_bin --config=esp32
+build:esp32 --platforms=//tools/firmware/esp32:elegoo_esp32
+build:esp32 --@pigweed//pw_log:backend=@pigweed//pw_log_basic
+build:esp32 --@pigweed//pw_sys_io:backend=@pigweed//pw_sys_io_stdio
+build:esp32 --@rules_python//python/config_settings:python_version=3.13

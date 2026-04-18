@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "consumer",
@@ -7,6 +7,15 @@ go_library(
     visibility = ["//manmanv2/log-processor:__subpackages__"],
     deps = [
         "//libs/go/rmq",
+        "//manmanv2/protos:manmanpb",
+    ],
+)
+
+go_test(
+    name = "consumer_test",
+    srcs = ["manager_test.go"],
+    embed = [":consumer"],
+    deps = [
         "//manmanv2/protos:manmanpb",
     ],
 )

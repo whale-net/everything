@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/whale-net/everything/manmanv2"
+	"github.com/whale-net/everything/manmanv2/models"
 )
 
 type ConfigurationPatchRepository struct {
@@ -17,8 +17,8 @@ func NewConfigurationPatchRepository(db *pgxpool.Pool) *ConfigurationPatchReposi
 
 func (r *ConfigurationPatchRepository) Create(ctx context.Context, patch *manman.ConfigurationPatch) (*manman.ConfigurationPatch, error) {
 	query := `
-		INSERT INTO configuration_patches (strategy_id, patch_level, entity_id, patch_content, patch_format, volume_id, path_override)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO configuration_patches (strategy_id, patch_level, entity_id, patch_content, patch_format, volume_id, path_override, patch_order)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING patch_id, created_at, updated_at
 	`
 
@@ -30,6 +30,7 @@ func (r *ConfigurationPatchRepository) Create(ctx context.Context, patch *manman
 		patch.PatchFormat,
 		patch.VolumeID,
 		patch.PathOverride,
+		patch.PatchOrder,
 	).Scan(&patch.PatchID, &patch.CreatedAt, &patch.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -42,7 +43,7 @@ func (r *ConfigurationPatchRepository) Get(ctx context.Context, patchID int64) (
 	patch := &manman.ConfigurationPatch{}
 
 	query := `
-		SELECT patch_id, strategy_id, patch_level, entity_id, patch_content, patch_format, volume_id, path_override, created_at, updated_at
+		SELECT patch_id, strategy_id, patch_level, entity_id, patch_content, patch_format, volume_id, path_override, patch_order, created_at, updated_at
 		FROM configuration_patches
 		WHERE patch_id = $1
 	`
@@ -56,6 +57,7 @@ func (r *ConfigurationPatchRepository) Get(ctx context.Context, patchID int64) (
 		&patch.PatchFormat,
 		&patch.VolumeID,
 		&patch.PathOverride,
+		&patch.PatchOrder,
 		&patch.CreatedAt,
 		&patch.UpdatedAt,
 	)
@@ -70,9 +72,11 @@ func (r *ConfigurationPatchRepository) GetByStrategyAndEntity(ctx context.Contex
 	patch := &manman.ConfigurationPatch{}
 
 	query := `
-		SELECT patch_id, strategy_id, patch_level, entity_id, patch_content, patch_format, volume_id, path_override, created_at, updated_at
+		SELECT patch_id, strategy_id, patch_level, entity_id, patch_content, patch_format, volume_id, path_override, patch_order, created_at, updated_at
 		FROM configuration_patches
 		WHERE strategy_id = $1 AND patch_level = $2 AND entity_id = $3
+		ORDER BY patch_order ASC, patch_id ASC
+		LIMIT 1
 	`
 
 	err := r.db.QueryRow(ctx, query, strategyID, patchLevel, entityID).Scan(
@@ -84,6 +88,7 @@ func (r *ConfigurationPatchRepository) GetByStrategyAndEntity(ctx context.Contex
 		&patch.PatchFormat,
 		&patch.VolumeID,
 		&patch.PathOverride,
+		&patch.PatchOrder,
 		&patch.CreatedAt,
 		&patch.UpdatedAt,
 	)
@@ -94,14 +99,12 @@ func (r *ConfigurationPatchRepository) GetByStrategyAndEntity(ctx context.Contex
 	return patch, nil
 }
 
-func (r *ConfigurationPatchRepository) List(ctx context.Context, strategyID *int64, patchLevel *string, entityID *int64) ([]*manman.ConfigurationPatch, error) {
+func (r *ConfigurationPatchRepository) ListByStrategyAndEntity(ctx context.Context, strategyID int64, patchLevel string, entityID int64) ([]*manman.ConfigurationPatch, error) {
 	query := `
-		SELECT patch_id, strategy_id, patch_level, entity_id, patch_content, patch_format, volume_id, path_override, created_at, updated_at
+		SELECT patch_id, strategy_id, patch_level, entity_id, patch_content, patch_format, volume_id, path_override, patch_order, created_at, updated_at
 		FROM configuration_patches
-		WHERE ($1::bigint IS NULL OR strategy_id = $1)
-		  AND ($2::varchar IS NULL OR patch_level = $2)
-		  AND ($3::bigint IS NULL OR entity_id = $3)
-		ORDER BY patch_id
+		WHERE strategy_id = $1 AND patch_level = $2 AND entity_id = $3
+		ORDER BY patch_order ASC, patch_id ASC
 	`
 
 	rows, err := r.db.Query(ctx, query, strategyID, patchLevel, entityID)
@@ -122,6 +125,48 @@ func (r *ConfigurationPatchRepository) List(ctx context.Context, strategyID *int
 			&patch.PatchFormat,
 			&patch.VolumeID,
 			&patch.PathOverride,
+			&patch.PatchOrder,
+			&patch.CreatedAt,
+			&patch.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		patches = append(patches, patch)
+	}
+
+	return patches, rows.Err()
+}
+
+func (r *ConfigurationPatchRepository) List(ctx context.Context, strategyID *int64, patchLevel *string, entityID *int64) ([]*manman.ConfigurationPatch, error) {
+	query := `
+		SELECT patch_id, strategy_id, patch_level, entity_id, patch_content, patch_format, volume_id, path_override, patch_order, created_at, updated_at
+		FROM configuration_patches
+		WHERE ($1::bigint IS NULL OR strategy_id = $1)
+		  AND ($2::varchar IS NULL OR patch_level = $2)
+		  AND ($3::bigint IS NULL OR entity_id = $3)
+		ORDER BY patch_order ASC, patch_id ASC
+	`
+
+	rows, err := r.db.Query(ctx, query, strategyID, patchLevel, entityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var patches []*manman.ConfigurationPatch
+	for rows.Next() {
+		patch := &manman.ConfigurationPatch{}
+		err := rows.Scan(
+			&patch.PatchID,
+			&patch.StrategyID,
+			&patch.PatchLevel,
+			&patch.EntityID,
+			&patch.PatchContent,
+			&patch.PatchFormat,
+			&patch.VolumeID,
+			&patch.PathOverride,
+			&patch.PatchOrder,
 			&patch.CreatedAt,
 			&patch.UpdatedAt,
 		)
@@ -137,7 +182,7 @@ func (r *ConfigurationPatchRepository) List(ctx context.Context, strategyID *int
 func (r *ConfigurationPatchRepository) Update(ctx context.Context, patch *manman.ConfigurationPatch) error {
 	query := `
 		UPDATE configuration_patches
-		SET patch_content = $2, patch_format = $3, volume_id = $4, path_override = $5, updated_at = CURRENT_TIMESTAMP
+		SET patch_content = $2, patch_format = $3, volume_id = $4, path_override = $5, patch_order = $6, updated_at = CURRENT_TIMESTAMP
 		WHERE patch_id = $1
 	`
 
@@ -147,6 +192,7 @@ func (r *ConfigurationPatchRepository) Update(ctx context.Context, patch *manman
 		patch.PatchFormat,
 		patch.VolumeID,
 		patch.PathOverride,
+		patch.PatchOrder,
 	)
 	return err
 }

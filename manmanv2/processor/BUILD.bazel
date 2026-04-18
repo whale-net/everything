@@ -14,7 +14,7 @@ go_library(
         "//libs/go/logging",
         "//libs/go/rmq",
         "//libs/go/s3",
-        "//manmanv2:models",
+        "//manmanv2/models:models",
         "//manmanv2/api/repository",
         "//manmanv2/api/repository/postgres",
         "//manmanv2/host/rmq",
@@ -48,7 +48,7 @@ go_test(
     name = "integration_test",
     srcs = ["integration_test.go"],
     deps = [
-        "//manmanv2:models",
+        "//manmanv2/models:models",
         "//manmanv2/api/repository",
         "//manmanv2/host/rmq",
         "//manmanv2/processor/handlers",

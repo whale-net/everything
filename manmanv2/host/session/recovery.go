@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"strconv"
 
-	"github.com/whale-net/everything/manmanv2"
+	"github.com/whale-net/everything/manmanv2/models"
 )
 
 // RecoverOrphanedSessions recovers sessions from existing game containers.
@@ -82,8 +82,8 @@ func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID 
 				SGCID:           sgcID,
 				GameContainerID: game.ID,
 				LogReader:       logReader,
-				AttachResp:      nil, // Will attach lazily when command is sent
-				AttachStrategy:  "lazy",
+				AttachResp:      nil, // Attached on first SendInput
+				AttachStrategy:  "persistent",
 				IsTTY:           true, // Always use TTY mode
 				NetworkName:     networkName,
 				Status:          manman.SessionStatusRunning,

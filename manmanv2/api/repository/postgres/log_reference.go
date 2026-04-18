@@ -6,7 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/whale-net/everything/manmanv2"
+	"github.com/whale-net/everything/manmanv2/models"
 )
 
 type LogReferenceRepository struct {
@@ -250,24 +250,35 @@ func (r *LogReferenceRepository) GetMinMaxTimesBySession(ctx context.Context, se
 	return minTime, maxTime, nil
 }
 
-func (r *LogReferenceRepository) GetHistogramBySession(ctx context.Context, sessionID int64, bucketSeconds int64) (map[int64]map[string]int32, error) {
+func (r *LogReferenceRepository) GetHistogramBySession(ctx context.Context, sessionID int64, bucketSeconds int64, startTime, endTime *int64) (map[int64]map[string]int32, error) {
 	// Safety check
 	if bucketSeconds < 1 {
 		bucketSeconds = 1
 	}
 
 	query := `
-		SELECT 
+		SELECT
 			(EXTRACT(EPOCH FROM start_time)::bigint / $2) * $2 AS bucket_timestamp,
 			source,
 			SUM(line_count) AS total_lines
 		FROM log_references
 		WHERE session_id = $1 AND state = 'complete'
+		  AND ($3::bigint = 0 OR EXTRACT(EPOCH FROM start_time)::bigint >= $3)
+		  AND ($4::bigint = 0 OR EXTRACT(EPOCH FROM start_time)::bigint <= $4)
 		GROUP BY bucket_timestamp, source
 		ORDER BY bucket_timestamp
 	`
 
-	rows, err := r.db.Query(ctx, query, sessionID, bucketSeconds)
+	startVal := int64(0)
+	if startTime != nil {
+		startVal = *startTime
+	}
+	endVal := int64(0)
+	if endTime != nil {
+		endVal = *endTime
+	}
+
+	rows, err := r.db.Query(ctx, query, sessionID, bucketSeconds, startVal, endVal)
 	if err != nil {
 		return nil, err
 	}
