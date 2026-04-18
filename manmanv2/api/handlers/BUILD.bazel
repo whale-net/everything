@@ -15,6 +15,7 @@ go_library(
         "logs.go",
         "patch.go",
         "registration.go",
+        "restart_schedule.go",
         "server.go",
         "servergameconfig.go",
         "session.go",

@@ -21,6 +21,15 @@ type Config struct {
 	StaleHostThreshold    int
 	StaleSessionThreshold int
 	ExternalExchange      string
+	// gRPC connection to the control-api (used by restart scheduler)
+	APIAddress           string
+	GRPCAuthMode         string
+	GRPCAuthTokenURL     string
+	GRPCAuthClientID     string
+	GRPCAuthClientSecret string
+	// RestartStopTimeoutSeconds is how long the restart worker waits for a session
+	// to reach "stopped" state before failing (and letting River retry).
+	RestartStopTimeoutSeconds int
 }
 
 // LoadConfig loads configuration from environment variables
@@ -39,6 +48,12 @@ func LoadConfig() (*Config, error) {
 		StaleHostThreshold:    getEnvInt("STALE_HOST_THRESHOLD_SECONDS", 90),
 		StaleSessionThreshold: getEnvInt("STALE_SESSION_THRESHOLD_SECONDS", 30), // Default 30 seconds
 		ExternalExchange:      getEnv("EXTERNAL_EXCHANGE", "external"),
+		APIAddress:            getEnv("API_ADDRESS", "localhost:50051"),
+		GRPCAuthMode:          getEnv("GRPC_AUTH_MODE", "none"),
+		GRPCAuthTokenURL:      getEnv("GRPC_AUTH_TOKEN_URL", ""),
+		GRPCAuthClientID:      getEnv("GRPC_AUTH_CLIENT_ID", ""),
+		GRPCAuthClientSecret:  getEnv("GRPC_AUTH_CLIENT_SECRET", ""),
+		RestartStopTimeoutSeconds: getEnvInt("RESTART_STOP_TIMEOUT_SECONDS", 120),
 	}
 
 	// Validate required fields

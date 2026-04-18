@@ -22,6 +22,7 @@ proto_library(
         "api_messages_deployment.proto",
         "api_messages_game.proto",
         "api_messages_infra.proto",
+        "api_messages_restart.proto",
         "api_messages_server.proto",
         "api_messages_session.proto",
         "log_processor.proto",

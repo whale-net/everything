@@ -302,6 +302,10 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/backup-configs/create", app.auth.RequireAuthFunc(app.withAccessToken(app.handleBackupConfigCreate)))
 	mux.HandleFunc("/backup-configs/", app.auth.RequireAuthFunc(app.withAccessToken(app.handleBackupConfigDelete)))
 
+	// Restart schedule management
+	mux.HandleFunc("/restart-schedules/create", app.auth.RequireAuthFunc(app.withAccessToken(app.handleRestartScheduleCreate)))
+	mux.HandleFunc("/restart-schedules/", app.auth.RequireAuthFunc(app.withAccessToken(app.handleRestartScheduleDelete)))
+
 	// API endpoints for HTMX partial updates
 	mux.HandleFunc("/api/dashboard-summary", app.auth.RequireAuthFunc(app.withAccessToken(app.handleDashboardSummary)))
 	mux.HandleFunc("/api/dashboard-sessions", app.auth.RequireAuthFunc(app.withAccessToken(app.handleDashboardSessions)))
