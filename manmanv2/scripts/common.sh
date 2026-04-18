@@ -55,15 +55,6 @@ grpc_call() {
 }
 
 setup_auth() {
-  if [[ "${GRPC_AUTH_MODE:-none}" == "token" ]]; then
-    if [[ -z "${ACCESS_TOKEN:-}" ]]; then
-      echo "Error: GRPC_AUTH_MODE=token requires ACCESS_TOKEN to be set"
-      exit 1
-    fi
-    echo "✓ Using provided ACCESS_TOKEN"
-    echo ""
-    return
-  fi
   ACCESS_TOKEN=""
   if [[ "${GRPC_AUTH_MODE:-none}" == "oidc" ]]; then
     echo "Getting OIDC token from Keycloak..."
