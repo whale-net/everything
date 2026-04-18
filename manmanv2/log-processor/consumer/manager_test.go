@@ -471,3 +471,74 @@ func TestRetainedLogsClearedByReapAndReuse(t *testing.T) {
 		t.Fatalf("new consumer expected 1 seeded message, got %d", len(logs))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Slow-consumer behaviour: configurable drop vs disconnect
+// ---------------------------------------------------------------------------
+
+// TestSlowSubscriberDropModeDropsMessage verifies that when disconnectSlow is
+// false a subscriber whose channel is full is kept connected but the message is
+// dropped (the existing default behaviour).
+func TestSlowSubscriberDropModeDropsMessage(t *testing.T) {
+	sc := newTestConsumer(1, 10)
+	sc.disconnectSlow = false
+
+	// Capacity 1; pre-fill it so the next broadcast cannot send.
+	ch := make(chan *manmanpb.LogMessage, 1)
+	ch <- makeMsg(0) // fill the slot
+	sc.addSubscriber(ch, 0)
+
+	sc.broadcast(makeMsg(1))
+
+	// Subscriber must still be registered.
+	if sc.getSubscriberCount() != 1 {
+		t.Fatalf("drop mode: expected 1 subscriber after full-channel broadcast, got %d", sc.getSubscriberCount())
+	}
+
+	// Channel must still be open and contain only the pre-filled message.
+	select {
+	case msg := <-ch:
+		if msg.Timestamp != 0 {
+			t.Errorf("drop mode: expected only pre-filled message (ts=0), got ts=%d", msg.Timestamp)
+		}
+	default:
+		t.Error("drop mode: expected pre-filled message to still be in channel")
+	}
+
+	// Channel must be open (no close).
+	select {
+	case _, ok := <-ch:
+		if !ok {
+			t.Error("drop mode: channel should not be closed")
+		}
+	default:
+		// empty and open — correct
+	}
+}
+
+// TestSlowSubscriberDisconnectModeClosesChannel verifies that when
+// disconnectSlow is true a subscriber whose channel is full is removed and its
+// channel closed so the gRPC handler can detect the EOF and reconnect.
+func TestSlowSubscriberDisconnectModeClosesChannel(t *testing.T) {
+	sc := newTestConsumer(1, 10)
+	sc.disconnectSlow = true
+
+	// Capacity 1; pre-fill it so the next broadcast cannot send.
+	ch := make(chan *manmanpb.LogMessage, 1)
+	ch <- makeMsg(0) // fill the slot
+	sc.addSubscriber(ch, 0)
+
+	sc.broadcast(makeMsg(1))
+
+	// Subscriber must have been removed.
+	if sc.getSubscriberCount() != 0 {
+		t.Fatalf("disconnect mode: expected 0 subscribers after full-channel broadcast, got %d", sc.getSubscriberCount())
+	}
+
+	// Drain the pre-filled message, then confirm the channel is closed.
+	<-ch
+	_, ok := <-ch
+	if ok {
+		t.Error("disconnect mode: expected channel to be closed after slow-consumer disconnect")
+	}
+}

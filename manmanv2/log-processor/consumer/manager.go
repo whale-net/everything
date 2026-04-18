@@ -44,6 +44,9 @@ type SessionConsumer struct {
 	bufferFull      bool
 	bufferMu        sync.RWMutex
 	sequenceCounter int64 // monotonically increasing, protected by bufferMu
+
+	// disconnectSlow controls slow-consumer behaviour. See ConsumerConfig.SlowConsumerDisconnect.
+	disconnectSlow bool
 }
 
 // Manager manages consumers for multiple sessions
@@ -74,6 +77,11 @@ type ConsumerConfig struct {
 	LogBufferTTL     int
 	LogBufferMaxMsgs int
 	DebugLogOutput   bool
+	// SlowConsumerDisconnect controls behaviour when a subscriber's channel is full.
+	// When true the subscriber is disconnected (its channel closed) so the gRPC
+	// client receives an EOF and can reconnect using afterSequenceNumber to resume
+	// without data loss.  When false (default) the message is silently dropped.
+	SlowConsumerDisconnect bool
 }
 
 // NewManager creates a new consumer manager
@@ -207,18 +215,19 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 
 	bufferSize := 500 // Keep last 500 log messages in memory
 	sc := &SessionConsumer{
-		sessionID:     sessionID,
-		sgcID:         sessionResp.Session.ServerGameConfigId,
-		queueName:     queueName,
-		consumer:      consumer,
-		subscribers:   make(map[chan *manmanpb.LogMessage]struct{}),
-		cancel:        cancel, // This cancel is for the consumerCtx
-		done:          make(chan struct{}),
-		logsProcessed: &m.logsProcessed,
-		logBuffer:     make([]*manmanpb.LogMessage, bufferSize),
-		bufferSize:    bufferSize,
-		bufferIndex:   0,
-		bufferFull:    false,
+		sessionID:      sessionID,
+		sgcID:          sessionResp.Session.ServerGameConfigId,
+		queueName:      queueName,
+		consumer:       consumer,
+		subscribers:    make(map[chan *manmanpb.LogMessage]struct{}),
+		cancel:         cancel, // This cancel is for the consumerCtx
+		done:           make(chan struct{}),
+		logsProcessed:  &m.logsProcessed,
+		logBuffer:      make([]*manmanpb.LogMessage, bufferSize),
+		bufferSize:     bufferSize,
+		bufferIndex:    0,
+		bufferFull:     false,
+		disconnectSlow: m.config.SlowConsumerDisconnect,
 	}
 
 	// Seed with any logs retained from a previous consumer reap so reconnecting
@@ -378,8 +387,39 @@ func (sc *SessionConsumer) addSubscriber(ch chan *manmanpb.LogMessage, afterSequ
 func (sc *SessionConsumer) removeSubscriber(ch chan *manmanpb.LogMessage) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
+	if _, exists := sc.subscribers[ch]; !exists {
+		return // already removed; guard against double-close
+	}
 	delete(sc.subscribers, ch)
 	close(ch)
+}
+
+// broadcast sends msg to all subscribers.
+// When sc.disconnectSlow is true a subscriber whose channel is full is
+// disconnected (channel closed) so the gRPC handler receives EOF and the
+// client can reconnect using afterSequenceNumber to resume without loss.
+// When sc.disconnectSlow is false the message is dropped for that subscriber.
+func (sc *SessionConsumer) broadcast(msg *manmanpb.LogMessage) {
+	var slowChans []chan *manmanpb.LogMessage
+
+	sc.mu.RLock()
+	for ch := range sc.subscribers {
+		select {
+		case ch <- msg:
+		default:
+			if sc.disconnectSlow {
+				log.Printf("[log-processor] slow subscriber on session %d, disconnecting", sc.sessionID)
+				slowChans = append(slowChans, ch)
+			} else {
+				log.Printf("[log-processor] subscriber channel full for session %d, dropping message", sc.sessionID)
+			}
+		}
+	}
+	sc.mu.RUnlock()
+
+	for _, ch := range slowChans {
+		sc.removeSubscriber(ch)
+	}
 }
 
 // getSubscriberCount returns the number of active subscribers
@@ -452,16 +492,7 @@ func (sc *SessionConsumer) consumeLoop(ctx context.Context, debugOutput bool, ar
 		sc.addLogToBuffer(pbMsg)
 
 		// Broadcast to all subscribers
-		sc.mu.RLock()
-		for ch := range sc.subscribers {
-			select {
-			case ch <- pbMsg:
-			default:
-				// Channel full, skip (slow consumer)
-				log.Printf("[log-processor] subscriber channel full for session %d", sc.sessionID)
-			}
-		}
-		sc.mu.RUnlock()
+		sc.broadcast(pbMsg)
 
 		return nil
 	})
