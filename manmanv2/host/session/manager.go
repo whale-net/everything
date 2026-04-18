@@ -592,8 +592,10 @@ func (sm *SessionManager) startStreamReaderWithFormat(state *State, reader io.Re
 		// Buffer for batching log messages
 		const bufferSize = 50
 		const flushInterval = 1 * time.Second
-		// When the log channel is full, sleep this long before the next read
-		// to prevent the reader goroutine from spinning and starving the host.
+		// When the log channel is full, sleep this long before the next read to
+		// prevent the reader goroutine from spinning and starving the host.
+		// 10ms caps the reader at ~100 drops/s while still draining the Docker
+		// stream quickly under normal load.
 		const backpressureSleep = 10 * time.Millisecond
 
 		logBuffer := make([]string, 0, bufferSize)
