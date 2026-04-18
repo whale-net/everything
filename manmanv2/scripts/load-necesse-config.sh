@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Load a joedwards32/cs2 GameConfig with defaults for local testing.
+# Load a brammys/necesse-server GameConfig for manmanv2.
 # Requires: grpcurl, python3
 #
-# Usage: ./scripts/load-cs2-config.sh [OPTIONS]
+# Usage: ./scripts/load-necesse-config.sh [OPTIONS]
 #
 # Options:
 #   --grpc-url=HOST:PORT      GRPC API endpoint (default: localhost:50052)
 #   --api-endpoint=HOST:PORT  Alias for --grpc-url
-#   --game-name=NAME          Game name (default: Counter-Strike 2)
-#   --config-name=NAME        Config name (default: Competitive)
-#   --image=IMAGE             Docker image (default: joedwards32/cs2:latest)
+#   --game-name=NAME          Game name (default: Necesse)
+#   --config-name=NAME        Config name (default: Default)
+#   --image=IMAGE             Docker image (default: brammys/necesse-server:latest)
 #   --tls                     Use TLS for GRPC connection (auto-detected for port 443)
 #   --insecure                Use insecure TLS (skip certificate verification)
 #   --help                    Show this help message
@@ -22,9 +22,9 @@ source "${SCRIPT_DIR}/common.sh"
 
 # Default values (can be overridden by env vars or CLI args)
 CONTROL_API_ADDR="${CONTROL_API_ADDR:-localhost:50052}"
-GAME_NAME="${GAME_NAME:-Counter-Strike 2}"
-GAME_CONFIG_NAME="${GAME_CONFIG_NAME:-Competitive}"
-IMAGE="${IMAGE:-joedwards32/cs2:latest}"
+GAME_NAME="${GAME_NAME:-Necesse}"
+GAME_CONFIG_NAME="${GAME_CONFIG_NAME:-Default}"
+IMAGE="${IMAGE:-brammys/necesse-server:latest}"
 USE_TLS="${USE_TLS:-auto}"
 INSECURE_TLS="${INSECURE_TLS:-false}"
 
@@ -71,7 +71,7 @@ resolve_tls
 
 echo ""
 echo "════════════════════════════════════════════════════"
-echo "  Loading Counter-Strike 2 Configuration"
+echo "  Loading Necesse Configuration"
 echo "════════════════════════════════════════════════════"
 echo "GRPC API:  ${CONTROL_API_ADDR}"
 echo "TLS:       ${USE_TLS}"
@@ -91,11 +91,11 @@ if [[ -z "${game_id}" ]]; then
   create_game_payload="$(cat <<EOF
 {
   "name": "${GAME_NAME}",
-  "steam_app_id": "730",
+  "steam_app_id": "",
   "metadata": {
-    "genre": "FPS",
-    "publisher": "Valve",
-    "tags": ["cs2", "counter-strike", "competitive"]
+    "genre": "Survival",
+    "publisher": "BrammyS",
+    "tags": ["necesse", "survival", "sandbox"]
   }
 }
 EOF
@@ -124,20 +124,15 @@ if [[ -z "${config_id}" ]]; then
   "image": "${IMAGE}",
   "args_template": "",
   "env_template": {
-    "SRCDS_TOKEN": "YOUR_SRCDS_TOKEN_HERE",
-    "CS2_SERVERNAME": "ManManV2 CS2 Server",
-    "CS2_IP": "0.0.0.0",
-    "CS2_PORT": "27015",
-    "CS2_RCONPW": "changeme",
-    "CS2_MAXPLAYERS": "10",
-    "CS2_GAMEALIAS": "competitive",
-    "CS2_STARTMAP": "de_inferno",
-    "CS2_MAPGROUP": "mg_active",
-    "CS2_BOT_DIFFICULTY": "1",
-    "CS2_BOT_QUOTA": "0",
-    "CS2_LOG": "on",
-    "TV_ENABLE": "0",
-    "STEAMAPPVALIDATE": "0"
+    "WORLD": "world",
+    "SLOTS": "10",
+    "OWNER": "",
+    "MOTD": "ManManV2 Necesse Server",
+    "PASSWORD": "",
+    "GIVE_CLIENTS_POWER": "1",
+    "PAUSE": "1",
+    "LOGGING": "1",
+    "ZIP": "1"
   },
   "entrypoint": [],
   "command": []
@@ -148,27 +143,6 @@ EOF
   config_id="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); config=data.get("config", {}); print(config.get("config_id") or config.get("configId") or "")' <<< "${create_config_json}")"
 fi
 
-echo "Ensuring CS2 volume exists for config..."
-create_volume_payload="$(cat <<EOF
-{
-  "config_id": ${config_id},
-  "name": "cs2-data",
-  "description": "Persistent CS2 game data volume mounted to /home/steam/cs2-dedicated in container",
-  "container_path": "/home/steam/cs2-dedicated",
-  "host_subpath": "cs2-data",
-  "read_only": false
-}
-EOF
-)"
-volume_result="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateGameConfigVolume" "${create_volume_payload}" 2>&1 || true)"
-if echo "${volume_result}" | grep -q "duplicate key\|already exists"; then
-  echo "  Volume 'cs2-data' already exists for this config (skipped)"
-elif echo "${volume_result}" | grep -q "volume"; then
-  echo "  ✔ Created volume 'cs2-data' for GameConfig"
-else
-  echo "  Warning: Unexpected response from volume creation"
-fi
-
 if [[ -z "${config_id}" ]]; then
   echo "Config already exists or create failed; re-listing..."
   config_id="$(find_config_id_by_name "${game_id}" "${GAME_CONFIG_NAME}")"
@@ -176,6 +150,27 @@ if [[ -z "${config_id}" ]]; then
     echo "Failed to resolve config_id"
     exit 1
   fi
+fi
+
+echo "Ensuring Necesse saves volume exists for config..."
+create_volume_payload="$(cat <<EOF
+{
+  "config_id": ${config_id},
+  "name": "necesse-saves",
+  "description": "Persistent Necesse world saves mounted to /necesse/saves in container",
+  "container_path": "/necesse/saves",
+  "host_subpath": "necesse-saves",
+  "read_only": false
+}
+EOF
+)"
+volume_result="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateGameConfigVolume" "${create_volume_payload}" 2>&1 || true)"
+if echo "${volume_result}" | grep -q "duplicate key\|already exists"; then
+  echo "  Volume 'necesse-saves' already exists for this config (skipped)"
+elif echo "${volume_result}" | grep -q "volume"; then
+  echo "  ✔ Created volume 'necesse-saves' for GameConfig"
+else
+  echo "  Warning: Unexpected response from volume creation"
 fi
 
 echo "✔ Game ID: ${game_id}"
@@ -192,18 +187,8 @@ if [[ -z "${sgc_id}" ]]; then
   "game_config_id": ${config_id},
   "port_bindings": [
     {
-      "container_port": 27015,
-      "host_port": 27015,
-      "protocol": "TCP"
-    },
-    {
-      "container_port": 27015,
-      "host_port": 27015,
-      "protocol": "UDP"
-    },
-    {
-      "container_port": 27020,
-      "host_port": 27020,
+      "container_port": 14159,
+      "host_port": 38159,
       "protocol": "UDP"
     }
   ]
@@ -234,18 +219,8 @@ else
   "server_game_config_id": ${sgc_id},
   "port_bindings": [
     {
-      "container_port": 27015,
-      "host_port": 27015,
-      "protocol": "TCP"
-    },
-    {
-      "container_port": 27015,
-      "host_port": 27015,
-      "protocol": "UDP"
-    },
-    {
-      "container_port": 27020,
-      "host_port": 27020,
+      "container_port": 14159,
+      "host_port": 38159,
       "protocol": "UDP"
     }
   ],
@@ -271,18 +246,13 @@ if [[ -n "${sgc_id}" && "${sgc_id}" != "null" ]]; then
   echo "  SGC ID:    ${sgc_id}"
   echo ""
   echo "Port Bindings:"
-  echo "  27015/TCP - Game server port"
-  echo "  27015/UDP - Game server port"
-  echo "  27020/UDP - SourceTV port (if enabled)"
+  echo "  14159/UDP (container) → 38159/UDP (host) — Necesse game port"
 else
   echo "  SGC ID:    (not created - may already exist or port conflict)"
 fi
 echo ""
-echo "⚠️  Important: Set the SRCDS_TOKEN environment variable to your Steam Game Server Token"
-echo "   Get one at: https://steamcommunity.com/dev/managegameservers"
-echo ""
 echo "Next steps:"
-echo "  1. Update the SRCDS_TOKEN in the game config environment variables"
-echo "  2. Adjust CS2_SERVERNAME, CS2_RCONPW, and other settings as needed"
-echo "  3. Run ./scripts/seed_cs2_actions.sh to load game actions"
+echo "  1. Set PASSWORD env var if you want a password-protected server"
+echo "  2. Set OWNER env var to grant owner permissions to a player by name"
+echo "  3. Run ./scripts/seed_necesse_actions.sh to load game actions"
 echo ""

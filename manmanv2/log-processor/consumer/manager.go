@@ -228,6 +228,7 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 		delete(m.retainedLogs, sessionID)
 	}
 
+
 	// Start consuming in background using the detached context
 	go sc.consumeLoop(consumerCtx, m.config.DebugLogOutput, m.archiver)
 
