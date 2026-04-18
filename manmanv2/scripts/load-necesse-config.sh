@@ -134,7 +134,7 @@ if [[ -z "${config_id}" ]]; then
     "LOGGING": "1",
     "ZIP": "1"
   },
-  "entrypoint": [],
+  "entrypoint": ["/bin/sh", "-c", "java ${JVMARGS} -jar Server.jar -nogui -localdir -world ${WORLD} -slots ${SLOTS} -owner \"${OWNER}\" -motd \"${MOTD}\" -password \"${PASSWORD}\" -pausewhenempty ${PAUSE} -giveclientspower ${GIVE_CLIENTS_POWER} -logging ${LOGGING} -zipsaves ${ZIP} -port 38159"],
   "command": []
 }
 EOF
@@ -187,7 +187,7 @@ if [[ -z "${sgc_id}" ]]; then
   "game_config_id": ${config_id},
   "port_bindings": [
     {
-      "container_port": 14159,
+      "container_port": 38159,
       "host_port": 38159,
       "protocol": "UDP"
     }
@@ -219,7 +219,7 @@ else
   "server_game_config_id": ${sgc_id},
   "port_bindings": [
     {
-      "container_port": 14159,
+      "container_port": 38159,
       "host_port": 38159,
       "protocol": "UDP"
     }
@@ -246,7 +246,7 @@ if [[ -n "${sgc_id}" && "${sgc_id}" != "null" ]]; then
   echo "  SGC ID:    ${sgc_id}"
   echo ""
   echo "Port Bindings:"
-  echo "  14159/UDP (container) → 38159/UDP (host) — Necesse game port"
+  echo "  38159/UDP (container) → 38159/UDP (host) — Necesse game port"
 else
   echo "  SGC ID:    (not created - may already exist or port conflict)"
 fi
