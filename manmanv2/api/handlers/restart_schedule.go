@@ -60,13 +60,14 @@ func (h *RestartScheduleHandler) ListRestartSchedules(ctx context.Context, req *
 }
 
 func (h *RestartScheduleHandler) UpdateRestartSchedule(ctx context.Context, req *pb.UpdateRestartScheduleRequest) (*pb.UpdateRestartScheduleResponse, error) {
+	if req.CadenceMinutes <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "cadence_minutes must be > 0")
+	}
 	s, err := h.repo.Get(ctx, req.RestartScheduleId)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "restart schedule not found: %v", err)
 	}
-	if req.CadenceMinutes > 0 {
-		s.CadenceMinutes = int(req.CadenceMinutes)
-	}
+	s.CadenceMinutes = int(req.CadenceMinutes)
 	s.Enabled = req.Enabled
 	if err := h.repo.Update(ctx, s); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update restart schedule: %v", err)

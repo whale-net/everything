@@ -212,7 +212,11 @@ func run() error {
 			logger.Warn("failed to connect to control-api, restart scheduler will not run", "error", err)
 		} else {
 			apiClient = pb.NewManManAPIClient(grpcConn.GetConnection())
-			defer grpcConn.Close() //nolint:errcheck
+			defer func() {
+				if err := grpcConn.Close(); err != nil {
+					logger.Warn("failed to close gRPC connection", "error", err)
+				}
+			}()
 		}
 	}
 
