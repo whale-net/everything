@@ -280,8 +280,11 @@ func upsertBackupSchedule(ctx context.Context, c client.Client) error {
 	_, describeErr := handle.Describe(ctx)
 	if describeErr != nil {
 		st, ok := status.FromError(describeErr)
-		if !ok || st.Code() != codes.NotFound {
-			return fmt.Errorf("failed to describe schedule %s: %w", backupScheduleID, describeErr)
+		if !ok {
+			return fmt.Errorf("failed to describe schedule %s (non-gRPC error): %w", backupScheduleID, describeErr)
+		}
+		if st.Code() != codes.NotFound {
+			return fmt.Errorf("failed to describe schedule %s (%s): %w", backupScheduleID, st.Code(), describeErr)
 		}
 		// Schedule doesn't exist — create it
 		_, createErr := scheduleClient.Create(ctx, client.ScheduleOptions{
