@@ -169,6 +169,8 @@ fi
 echo "Ensuring volumes exist for config..."
 
 for vol_json in \
+  '{"name":"reforger-steamcmd","description":"SteamCMD tool cache","container_path":"/steamcmd","volume_type":"named","read_only":false}' \
+  '{"name":"reforger-install","description":"Arma Reforger game installation (persists across container restarts)","container_path":"/reforger","volume_type":"named","read_only":false}' \
   '{"name":"reforger-profile","description":"Arma Reforger server profile and player data","container_path":"/home/profile","volume_type":"named","read_only":false}' \
   '{"name":"reforger-configs","description":"Arma Reforger server config files","container_path":"/reforger/Configs","volume_type":"named","read_only":false}' \
   '{"name":"reforger-workshop","description":"Arma Reforger downloaded workshop mods","container_path":"/reforger/workshop","volume_type":"named","read_only":false}'; do
