@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 // NVSCredentials — reads credentials from ESP32 NVS via Preferences.h.
 //
 // NVS layout written by the provision script (namespace "creds"):

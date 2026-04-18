@@ -8,6 +8,7 @@
 #include <Arduino.h>
 
 #include "firmware/credentials/nvs_credentials.h"
+#include "firmware/device_id/efuse_device_id.h"
 #include "firmware/i2c/arduino_i2c_bus.h"
 #include "firmware/i2c/i2c_bus.h"
 #include "firmware/network/esp32_platform.h"
@@ -39,7 +40,8 @@ pw::span<firmware::ISensor* const> GetSensors() {
 //   bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 \
 //     wifi_ssid=MySSID wifi_pass=MyPass mqtt_host=192.168.1.42
 
-static firmware::NVSCredentials creds;
+static firmware::NVSCredentials  creds;
+static firmware::EfuseDeviceId   device_id("leaflab");
 static firmware::NetworkManager* net = nullptr;
 
 firmware::NetworkManager& GetNetwork() {
@@ -57,7 +59,7 @@ firmware::NetworkManager& GetNetwork() {
         .password  = creds.wifi_password(),
         .mqtt_host = creds.mqtt_host(),
         .mqtt_port = creds.mqtt_port(),
-        .device_id = "leaflab-sensorboard",
+        .device_id = device_id.Get(),
         .mqtt_user = nullptr,
         .mqtt_pass = nullptr,
     };

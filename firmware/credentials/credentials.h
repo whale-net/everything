@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include "pw_status/status.h"
 
 namespace firmware {

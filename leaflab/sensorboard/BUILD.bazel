@@ -33,6 +33,7 @@ esp32_firmware(
     deps = [
         ":sensorboard_main",
         "//firmware/credentials:nvs_credentials",
+        "//firmware/device_id:efuse_device_id",
         "//firmware/i2c:arduino_i2c_bus",
         "//firmware/network:esp32_platform",
         "//firmware/sensor:bh1750",
