@@ -592,11 +592,7 @@ func (sm *SessionManager) startStreamReaderWithFormat(state *State, reader io.Re
 		// Buffer for batching log messages
 		const bufferSize = 50
 		const flushInterval = 1 * time.Second
-		// When the log channel is full, sleep this long before the next read to
-		// prevent the reader goroutine from spinning and starving the host.
-		// 10ms caps the reader at ~100 drops/s while still draining the Docker
-		// stream quickly under normal load.
-		const backpressureSleep = 10 * time.Millisecond
+
 
 		logBuffer := make([]string, 0, bufferSize)
 		sourceBuffer := make([]string, 0, bufferSize)
@@ -632,10 +628,7 @@ func (sm *SessionManager) startStreamReaderWithFormat(state *State, reader io.Re
 						source  string
 					}{message, "stdout"}: // TTY doesn't distinguish stdout/stderr
 					default:
-						// Channel full: count the drop and throttle the reader so it
-						// does not spin and starve the rest of the host process.
 						droppedCount.Add(1)
-						time.Sleep(backpressureSleep)
 					}
 				}
 			} else {
@@ -668,10 +661,7 @@ func (sm *SessionManager) startStreamReaderWithFormat(state *State, reader io.Re
 						source  string
 					}{message, source}:
 					default:
-						// Channel full: count the drop and throttle the reader so it
-						// does not spin and starve the rest of the host process.
 						droppedCount.Add(1)
-						time.Sleep(backpressureSleep)
 					}
 				}
 			}
@@ -696,17 +686,22 @@ func (sm *SessionManager) startStreamReaderWithFormat(state *State, reader io.Re
 					"dropped", dropped)
 			}
 
-			// Publish logs to RabbitMQ in background
+			// Publish logs to RabbitMQ in a background goroutine so the event loop
+			// is never blocked waiting on RabbitMQ. Slices are copied before hand-off
+			// because logBuffer/sourceBuffer are reset immediately after this call.
 			if sm.rmqPublisher != nil {
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				defer cancel()
-
-				for i := 0; i < len(logBuffer); i++ {
-					// Fire-and-forget publish, don't block on errors
-					if err := sm.rmqPublisher.PublishLog(ctx, state.SessionID, sourceBuffer[i], logBuffer[i]); err != nil {
-						slog.Warn("failed to publish log to RabbitMQ", "session_id", state.SessionID, "error", err)
+				logsCopy := append([]string(nil), logBuffer...)
+				sourcesCopy := append([]string(nil), sourceBuffer...)
+				sessionID := state.SessionID
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					for i := range logsCopy {
+						if err := sm.rmqPublisher.PublishLog(ctx, sessionID, sourcesCopy[i], logsCopy[i]); err != nil {
+							slog.Warn("failed to publish log to RabbitMQ", "session_id", sessionID, "error", err)
+						}
 					}
-				}
+				}()
 			}
 
 			// Clear buffers and reset metrics
