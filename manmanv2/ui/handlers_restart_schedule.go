@@ -9,19 +9,23 @@ import (
 )
 
 // safeRedirectURL returns a safe relative redirect path from an untrusted URL.
-// It accepts only relative paths (starting with '/'); full URLs have their path extracted.
+// It ensures the result is a relative path that cannot be used for open redirect.
 func safeRedirectURL(raw string) string {
 	if raw == "" {
 		return "/"
 	}
-	if strings.HasPrefix(raw, "/") {
-		return raw
+	// Parse and return only the path (no scheme, host, query, or fragment)
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Path == "" {
+		return "/"
 	}
-	// Try to parse as full URL and return path only
-	if parsed, err := url.Parse(raw); err == nil && parsed.Path != "" {
-		return parsed.RequestURI()
+	// Ensure the path starts with '/' and has no second slash or backslash
+	// (e.g. '//evil.com' or '/\evil.com' could be interpreted as external URLs)
+	path := parsed.Path
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || strings.HasPrefix(path, "/\\") {
+		return "/"
 	}
-	return "/"
+	return path
 }
 
 // handleRestartScheduleCreate handles POST /restart-schedules/create
