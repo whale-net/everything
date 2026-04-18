@@ -169,12 +169,12 @@ fi
 echo "Ensuring volumes exist for config..."
 
 for vol_json in \
-  '{"name":"reforger-profile","description":"Arma Reforger server profile and player data","container_path":"/home/profile","host_subpath":"reforger-profile","read_only":false}' \
-  '{"name":"reforger-configs","description":"Arma Reforger server config files","container_path":"/reforger/Configs","host_subpath":"reforger-configs","read_only":false}' \
-  '{"name":"reforger-workshop","description":"Arma Reforger downloaded workshop mods","container_path":"/reforger/workshop","host_subpath":"reforger-workshop","read_only":false}'; do
+  '{"name":"reforger-profile","description":"Arma Reforger server profile and player data","container_path":"/home/profile","volume_type":"named","read_only":false}' \
+  '{"name":"reforger-configs","description":"Arma Reforger server config files","container_path":"/reforger/Configs","volume_type":"named","read_only":false}' \
+  '{"name":"reforger-workshop","description":"Arma Reforger downloaded workshop mods","container_path":"/reforger/workshop","volume_type":"named","read_only":false}'; do
 
   vol_name="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["name"])' "${vol_json}")"
-  payload="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); d['config_id']=${config_id}; print(json.dumps(d))" "${vol_json}")"
+  payload="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); d['config_id']=${config_id}; d.setdefault('host_subpath',''); print(json.dumps(d))" "${vol_json}")"
   result="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateGameConfigVolume" "${payload}" 2>&1 || true)"
   if echo "${result}" | grep -q "duplicate key\|already exists"; then
     echo "  Volume '${vol_name}' already exists (skipped)"
