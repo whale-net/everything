@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/whale-net/everything/libs/go/docker"
@@ -591,6 +592,9 @@ func (sm *SessionManager) startStreamReaderWithFormat(state *State, reader io.Re
 		// Buffer for batching log messages
 		const bufferSize = 50
 		const flushInterval = 1 * time.Second
+		// When the log channel is full, sleep this long before the next read
+		// to prevent the reader goroutine from spinning and starving the host.
+		const backpressureSleep = 10 * time.Millisecond
 
 		logBuffer := make([]string, 0, bufferSize)
 		sourceBuffer := make([]string, 0, bufferSize)
@@ -599,6 +603,11 @@ func (sm *SessionManager) startStreamReaderWithFormat(state *State, reader io.Re
 
 		// Metrics for aggregate logging
 		var stdoutCount, stderrCount, errorCount, warnCount int
+
+		// droppedCount is incremented by the reader goroutine when the channel is
+		// full and is reported (then reset) by the periodic flush. Using an atomic
+		// keeps the reader goroutine lock-free.
+		var droppedCount atomic.Int64
 
 		// Channel to receive log messages from reader goroutine
 		logChan := make(chan struct {
@@ -609,7 +618,7 @@ func (sm *SessionManager) startStreamReaderWithFormat(state *State, reader io.Re
 		// Start a separate goroutine to read from Docker stream
 		go func() {
 			defer close(logChan)
-			
+
 			if isTTY {
 				// TTY mode: raw text, line-by-line
 				scanner := bufio.NewScanner(reader)
@@ -621,7 +630,10 @@ func (sm *SessionManager) startStreamReaderWithFormat(state *State, reader io.Re
 						source  string
 					}{message, "stdout"}: // TTY doesn't distinguish stdout/stderr
 					default:
-						slog.Warn("log channel full, dropping message", "session_id", state.SessionID)
+						// Channel full: count the drop and throttle the reader so it
+						// does not spin and starve the rest of the host process.
+						droppedCount.Add(1)
+						time.Sleep(backpressureSleep)
 					}
 				}
 			} else {
@@ -654,26 +666,32 @@ func (sm *SessionManager) startStreamReaderWithFormat(state *State, reader io.Re
 						source  string
 					}{message, source}:
 					default:
-						slog.Warn("log channel full, dropping message", "session_id", state.SessionID)
+						// Channel full: count the drop and throttle the reader so it
+						// does not spin and starve the rest of the host process.
+						droppedCount.Add(1)
+						time.Sleep(backpressureSleep)
 					}
 				}
 			}
 		}()
 
 		flushLogs := func() {
-			if len(logBuffer) == 0 {
+			dropped := droppedCount.Swap(0)
+
+			if len(logBuffer) == 0 && dropped == 0 {
 				return
 			}
 
 			// Log aggregate metrics
-			if stdoutCount > 0 || stderrCount > 0 {
+			if stdoutCount > 0 || stderrCount > 0 || dropped > 0 {
 				slog.Info("session log metrics",
 					"session_id", state.SessionID,
 					"total", stdoutCount+stderrCount,
 					"stdout", stdoutCount,
 					"stderr", stderrCount,
 					"errors", errorCount,
-					"warnings", warnCount)
+					"warnings", warnCount,
+					"dropped", dropped)
 			}
 
 			// Publish logs to RabbitMQ in background
