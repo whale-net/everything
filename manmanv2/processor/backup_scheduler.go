@@ -13,6 +13,8 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/whale-net/everything/libs/go/rmq"
@@ -77,15 +79,15 @@ func (a *backupActivities) ExecuteBackupActivity(ctx context.Context, backupConf
 
 	actions, _ := a.repo.BackupConfigs.ListActions(ctx, cfg.BackupConfigID)
 	preActionCommands := make([]string, 0, len(actions))
-	for _, bca := range actions {
-		def, _, err := a.actionRepo.Get(ctx, bca.ActionID)
+	for _, action := range actions {
+		def, _, err := a.actionRepo.Get(ctx, action.ActionID)
 		if err != nil {
-			a.logger.Warn("failed to get action definition, skipping", "action_id", bca.ActionID, "error", err)
+			a.logger.Warn("failed to get action definition, skipping", "action_id", action.ActionID, "error", err)
 			continue
 		}
 		rendered, err := renderSchedulerActionTemplate(def.CommandTemplate)
 		if err != nil {
-			a.logger.Warn("failed to render action template, skipping", "action_id", bca.ActionID, "error", err)
+			a.logger.Warn("failed to render action template, skipping", "action_id", action.ActionID, "error", err)
 			continue
 		}
 		preActionCommands = append(preActionCommands, rendered)
@@ -164,6 +166,8 @@ func (a *backupActivities) ExecuteBackupActivity(ctx context.Context, backupConf
 func BackupScanWorkflow(ctx workflow.Context) error {
 	logger := workflow.GetLogger(ctx)
 
+	// acts is intentionally nil: Temporal SDK uses method name reflection to
+	// dispatch activities; the nil receiver is never dereferenced at runtime.
 	var acts *backupActivities
 
 	var configIDs []int64
@@ -260,7 +264,6 @@ func startBackupScheduler(
 // upsertBackupSchedule creates or updates the Temporal Schedule that triggers BackupScanWorkflow.
 func upsertBackupSchedule(ctx context.Context, c client.Client) error {
 	scheduleClient := c.ScheduleClient()
-	handle := scheduleClient.GetHandle(ctx, backupScheduleID)
 
 	scheduleSpec := client.ScheduleSpec{
 		Intervals: []client.ScheduleIntervalSpec{
@@ -273,8 +276,13 @@ func upsertBackupSchedule(ctx context.Context, c client.Client) error {
 		TaskQueue: backupTaskQueue,
 	}
 
-	_, err := handle.Describe(ctx)
-	if err != nil {
+	handle := scheduleClient.GetHandle(ctx, backupScheduleID)
+	_, describeErr := handle.Describe(ctx)
+	if describeErr != nil {
+		st, ok := status.FromError(describeErr)
+		if !ok || st.Code() != codes.NotFound {
+			return fmt.Errorf("failed to describe schedule %s: %w", backupScheduleID, describeErr)
+		}
 		// Schedule doesn't exist — create it
 		_, createErr := scheduleClient.Create(ctx, client.ScheduleOptions{
 			ID:     backupScheduleID,

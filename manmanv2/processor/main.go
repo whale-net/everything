@@ -195,8 +195,8 @@ func run() error {
 	if err != nil {
 		logger.Warn("failed to start backup scheduler, scheduled backups will not run", "error", err)
 	} else {
-		defer temporalWorker.Stop()
 		defer temporalClient.Close()
+		defer temporalWorker.Stop()
 	}
 
 	// Start consumer in background
