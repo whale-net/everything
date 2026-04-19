@@ -10,7 +10,9 @@ LeafLab devices read sensors (light, temperature, soil moisture, etc.), publish 
 
 | Directory | Description |
 |-----------|-------------|
-| `sensorboard/` | ESP32 firmware that reads sensors via I2C and logs readings |
+| `sensorboard/` | ESP32 firmware that reads sensors via I2C and publishes via MQTT |
+| `processor/` | Go service that consumes MQTT messages from RabbitMQ and writes to the database |
+| `migrate/` | Database migration runner (TimescaleDB) |
 
 ---
 
@@ -45,14 +47,91 @@ Physical sensor (BH1750, etc.)
     ↓ I2C
 ESP32 (leaflab/sensorboard firmware)
     ↓ MQTT over Wi-Fi
-MQTT broker
+RabbitMQ (MQTT plugin, amq.topic exchange)
+    ↓ AMQP
+leaflab/processor (Go)
     ↓
-Cloud pipeline            [not yet implemented]
+TimescaleDB (PostgreSQL + timescaledb extension)
     ↓
-Storage / dashboards
+Dashboards / analytics
 ```
 
 The sensor firmware layer is fully unit-tested on the host — no hardware required for most development work. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full design.
+
+---
+
+## Database Schema
+
+```mermaid
+erDiagram
+    Board {
+        bigserial board_id PK
+        varchar device_id UK "eFuse MAC e.g. leaflab-ccdba79f5fac"
+        timestamp registered_at
+        timestamp last_seen_at
+    }
+
+    SensorType {
+        bigserial sensor_type_id PK
+        varchar name UK "illuminance | temperature | humidity"
+        varchar default_unit "lx | degC | pct"
+    }
+
+    Sensor {
+        bigserial sensor_id PK
+        bigint board_id FK
+        bigint sensor_type_id FK
+        bigint region_id FK "nullable — current region"
+        varchar name "e.g. light_canopy from manifest"
+        varchar unit "as reported in manifest"
+        timestamp registered_at
+        timestamp last_seen_at
+    }
+
+    Region {
+        bigserial region_id PK
+        varchar name
+        text description
+        timestamp created_at
+    }
+
+    SensorReading {
+        bigserial reading_id PK
+        bigint sensor_id FK
+        bigint region_id FK "denorm from Sensor.region_id at write"
+        double value
+        int uptime_ms "device uptime for staleness detection"
+        timestamp recorded_at "DB time — hypertable partition key"
+    }
+
+    Plant {
+        bigserial plant_id PK
+        bigint region_id FK
+        bigint plant_type_id FK
+        varchar name
+        timestamp planted_at
+    }
+
+    PlantType {
+        bigserial plant_type_id PK
+        varchar common_name
+        varchar species
+    }
+
+    Board ||--o{ Sensor : "hosts"
+    SensorType ||--o{ Sensor : "types"
+    Region |o--o{ Sensor : "currently at"
+    Sensor ||--o{ SensorReading : "produces"
+    Region ||--o{ SensorReading : "was at (denorm snapshot)"
+    Region ||--o{ Plant : "contains"
+    PlantType ||--o{ Plant : "classifies"
+```
+
+Key design decisions:
+- `Sensor.region_id` is nullable — a board can register before being placed anywhere
+- `SensorReading.region_id` is snapshotted at insert so historical location is preserved when sensors move
+- `SensorReading.recorded_at` is DB-side `NOW()`, not device clock; `uptime_ms` carries the device timestamp
+- `Board` and `Sensor` self-register via device manifests published on connect
 
 ---
 
