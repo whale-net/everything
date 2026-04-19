@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Load a Left4DevOps/l4d2-docker GameConfig with defaults for local testing.
+# Load a ghcr.io/acemod/arma-reforger GameConfig for manmanv2.
 # Requires: grpcurl, python3
 #
-# Usage: ./scripts/load-l4d2-config.sh [OPTIONS]
+# Usage: ./scripts/load-reforger-config.sh [OPTIONS]
 #
 # Options:
 #   --grpc-url=HOST:PORT      GRPC API endpoint (default: localhost:50052)
 #   --api-endpoint=HOST:PORT  Alias for --grpc-url
-#   --game-name=NAME          Game name (default: Left 4 Dead 2)
-#   --config-name=NAME        Config name (default: Coop)
-#   --image=IMAGE             Docker image (default: left4devops/l4d2:latest)
-#   --port=PORT               Game server port, TCP+UDP (default: 27015)
+#   --game-name=NAME          Game name (default: Arma Reforger)
+#   --config-name=NAME        Config name (default: Default)
+#   --image=IMAGE             Docker image (default: ghcr.io/acemod/arma-reforger:latest)
 #   --tls                     Use TLS for GRPC connection (auto-detected for port 443)
 #   --insecure                Use insecure TLS (skip certificate verification)
 #   --help                    Show this help message
@@ -23,10 +22,9 @@ source "${SCRIPT_DIR}/common.sh"
 
 # Default values (can be overridden by env vars or CLI args)
 CONTROL_API_ADDR="${CONTROL_API_ADDR:-localhost:50052}"
-GAME_NAME="${GAME_NAME:-Left 4 Dead 2}"
-GAME_CONFIG_NAME="${GAME_CONFIG_NAME:-Coop}"
-IMAGE="${IMAGE:-left4devops/l4d2:latest}"
-GAME_PORT="${GAME_PORT:-27015}"
+GAME_NAME="${GAME_NAME:-Arma Reforger}"
+GAME_CONFIG_NAME="${GAME_CONFIG_NAME:-Reforger}"
+IMAGE="${IMAGE:-ghcr.io/acemod/arma-reforger:latest}"
 USE_TLS="${USE_TLS:-auto}"
 INSECURE_TLS="${INSECURE_TLS:-false}"
 
@@ -47,10 +45,6 @@ for arg in "$@"; do
       ;;
     --image=*)
       IMAGE="${arg#*=}"
-      shift
-      ;;
-    --port=*)
-      GAME_PORT="${arg#*=}"
       shift
       ;;
     --tls)
@@ -77,14 +71,13 @@ resolve_tls
 
 echo ""
 echo "════════════════════════════════════════════════════"
-echo "  Loading Left 4 Dead 2 Configuration"
+echo "  Loading Arma Reforger Configuration"
 echo "════════════════════════════════════════════════════"
 echo "GRPC API:  ${CONTROL_API_ADDR}"
 echo "TLS:       ${USE_TLS}"
 echo "Game:      ${GAME_NAME}"
 echo "Config:    ${GAME_CONFIG_NAME}"
 echo "Image:     ${IMAGE}"
-echo "Port:      ${GAME_PORT}"
 echo ""
 
 require_grpcurl
@@ -98,11 +91,11 @@ if [[ -z "${game_id}" ]]; then
   create_game_payload="$(cat <<EOF
 {
   "name": "${GAME_NAME}",
-  "steam_app_id": "550",
+  "steam_app_id": "1874900",
   "metadata": {
-    "genre": "FPS/Horror",
-    "publisher": "Valve",
-    "tags": ["l4d2", "left4dead2", "coop", "zombie"]
+    "genre": "Military Simulation",
+    "publisher": "Bohemia Interactive",
+    "tags": ["arma", "milsim", "reforger"]
   }
 }
 EOF
@@ -131,16 +124,29 @@ if [[ -z "${config_id}" ]]; then
   "image": "${IMAGE}",
   "args_template": "",
   "env_template": {
-    "HOSTNAME": "ManManV2 L4D2 Server",
-    "PORT": "${GAME_PORT}",
-    "DEFAULT_MAP": "c1m1_hotel",
-    "DEFAULT_MODE": "coop",
-    "GAME_TYPES": "coop,versus,survival,realism",
-    "REGION": "255",
-    "MOTD": "1",
-    "HOST_CONTENT": "Welcome to ManManV2 L4D2!",
-    "RCON_PASSWORD": "changeme",
-    "LAN": "false"
+    "GAME_NAME": "ManManV2 Arma Reforger Server",
+    "GAME_PASSWORD": "",
+    "GAME_PASSWORD_ADMIN": "",
+    "GAME_ADMINS": "",
+    "GAME_MAX_PLAYERS": "32",
+    "GAME_VISIBLE": "true",
+    "GAME_SUPPORTED_PLATFORMS": "PLATFORM_PC,PLATFORM_XBL,PLATFORM_PSN",
+    "GAME_SCENARIO_ID": "{ECC61978EDCC2B5A}Missions/23_Campaign.conf",
+    "GAME_PROPS_BATTLEYE": "true",
+    "GAME_PROPS_DISABLE_THIRD_PERSON": "false",
+    "GAME_PROPS_FAST_VALIDATION": "true",
+    "GAME_PROPS_SERVER_MAX_VIEW_DISTANCE": "2500",
+    "GAME_PROPS_SERVER_MIN_GRASS_DISTANCE": "50",
+    "GAME_PROPS_NETWORK_VIEW_DISTANCE": "1000",
+    "GAME_MODS_IDS_LIST": "",
+    "SERVER_PUBLIC_ADDRESS": "",
+    "SERVER_BIND_PORT": "38201",
+    "SERVER_PUBLIC_PORT": "38201",
+    "SERVER_A2S_PORT": "17777",
+    "RCON_PASSWORD": "",
+    "RCON_PORT": "19999",
+    "ARMA_MAX_FPS": "120",
+    "SKIP_INSTALL": "false"
   },
   "entrypoint": [],
   "command": []
@@ -151,50 +157,6 @@ EOF
   config_id="$(python3 -c 'import json,sys; data=json.loads(sys.stdin.read() or "{}"); config=data.get("config", {}); print(config.get("config_id") or config.get("configId") or "")' <<< "${create_config_json}")"
 fi
 
-echo "Ensuring L4D2 config volume exists for config..."
-create_volume_payload="$(cat <<EOF
-{
-  "config_id": ${config_id},
-  "name": "l4d2-cfg",
-  "description": "Persistent L4D2 configuration volume mounted to /cfg in container",
-  "container_path": "/cfg",
-  "host_subpath": "l4d2-cfg",
-  "read_only": false,
-  "volume_type": "named"
-}
-EOF
-)"
-volume_result="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateGameConfigVolume" "${create_volume_payload}" 2>&1 || true)"
-if echo "${volume_result}" | grep -q "duplicate key\|already exists"; then
-  echo "  Volume 'l4d2-cfg' already exists for this config (skipped)"
-elif echo "${volume_result}" | grep -q "volume"; then
-  echo "  ✔ Created volume 'l4d2-cfg' for GameConfig (type: named)"
-else
-  echo "  Warning: Unexpected response from volume creation"
-fi
-
-echo "Ensuring L4D2 addons volume exists for config..."
-create_addons_volume_payload="$(cat <<EOF
-{
-  "config_id": ${config_id},
-  "name": "l4d2-addons",
-  "description": "Persistent L4D2 addons/mods volume mounted to /addons in container",
-  "container_path": "/addons",
-  "host_subpath": "l4d2-addons",
-  "read_only": false,
-  "volume_type": "bind"
-}
-EOF
-)"
-addons_volume_result="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateGameConfigVolume" "${create_addons_volume_payload}" 2>&1 || true)"
-if echo "${addons_volume_result}" | grep -q "duplicate key\|already exists"; then
-  echo "  Volume 'l4d2-addons' already exists for this config (skipped)"
-elif echo "${addons_volume_result}" | grep -q "volume"; then
-  echo "  ✔ Created volume 'l4d2-addons' for GameConfig (type: bind)"
-else
-  echo "  Warning: Unexpected response from addons volume creation"
-fi
-
 if [[ -z "${config_id}" ]]; then
   echo "Config already exists or create failed; re-listing..."
   config_id="$(find_config_id_by_name "${game_id}" "${GAME_CONFIG_NAME}")"
@@ -203,6 +165,27 @@ if [[ -z "${config_id}" ]]; then
     exit 1
   fi
 fi
+
+echo "Ensuring volumes exist for config..."
+
+for vol_json in \
+  '{"name":"reforger-steamcmd","description":"SteamCMD tool cache","container_path":"/steamcmd","volume_type":"named","read_only":false}' \
+  '{"name":"reforger-install","description":"Arma Reforger game installation (persists across container restarts)","container_path":"/reforger","volume_type":"named","read_only":false}' \
+  '{"name":"reforger-profile","description":"Arma Reforger server profile and player data","container_path":"/home/profile","volume_type":"named","read_only":false}' \
+  '{"name":"reforger-configs","description":"Arma Reforger server config files","container_path":"/reforger/Configs","volume_type":"named","read_only":false}' \
+  '{"name":"reforger-workshop","description":"Arma Reforger downloaded workshop mods","container_path":"/reforger/workshop","volume_type":"named","read_only":false}'; do
+
+  vol_name="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["name"])' "${vol_json}")"
+  payload="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); d['config_id']=${config_id}; d.setdefault('host_subpath',''); print(json.dumps(d))" "${vol_json}")"
+  result="$(grpc_call "${CONTROL_API_ADDR}" "manman.v1.ManManAPI/CreateGameConfigVolume" "${payload}" 2>&1 || true)"
+  if echo "${result}" | grep -q "duplicate key\|already exists"; then
+    echo "  Volume '${vol_name}' already exists (skipped)"
+  elif echo "${result}" | grep -q "volume"; then
+    echo "  ✔ Created volume '${vol_name}'"
+  else
+    echo "  Warning: Unexpected response for volume '${vol_name}'"
+  fi
+done
 
 echo "✔ Game ID: ${game_id}"
 echo "✔ Config ID: ${config_id}"
@@ -218,13 +201,18 @@ if [[ -z "${sgc_id}" ]]; then
   "game_config_id": ${config_id},
   "port_bindings": [
     {
-      "container_port": ${GAME_PORT},
-      "host_port": ${GAME_PORT},
-      "protocol": "TCP"
+      "container_port": 38201,
+      "host_port": 38201,
+      "protocol": "UDP"
     },
     {
-      "container_port": ${GAME_PORT},
-      "host_port": ${GAME_PORT},
+      "container_port": 17777,
+      "host_port": 17777,
+      "protocol": "UDP"
+    },
+    {
+      "container_port": 19999,
+      "host_port": 19999,
       "protocol": "UDP"
     }
   ]
@@ -235,7 +223,6 @@ EOF
 
   if echo "${deploy_json}" | grep -qi "error\|failed"; then
     echo "  ⚠️  Deploy failed (may already exist or port conflict)"
-    echo "  Checking if SGC was created..."
     sgc_id="$(find_sgc_id "${config_id}")"
     if [[ -n "${sgc_id}" ]]; then
       echo "  ✔ Found existing SGC ID: ${sgc_id}"
@@ -255,13 +242,13 @@ else
   "server_game_config_id": ${sgc_id},
   "port_bindings": [
     {
-      "container_port": ${GAME_PORT},
-      "host_port": ${GAME_PORT},
-      "protocol": "TCP"
+      "container_port": 38201,
+      "host_port": 38201,
+      "protocol": "UDP"
     },
     {
-      "container_port": ${GAME_PORT},
-      "host_port": ${GAME_PORT},
+      "container_port": 17777,
+      "host_port": 17777,
       "protocol": "UDP"
     }
   ],
@@ -287,18 +274,15 @@ if [[ -n "${sgc_id}" && "${sgc_id}" != "null" ]]; then
   echo "  SGC ID:    ${sgc_id}"
   echo ""
   echo "Port Bindings:"
-  echo "  ${GAME_PORT}/TCP - Game server port"
-  echo "  ${GAME_PORT}/UDP - Game server port"
-else
-  echo "  SGC ID:    (not created - may already exist or port conflict)"
+  echo "  38201/UDP — Arma Reforger game port (internal: 38201)"
+  echo "  17777/UDP — Steam A2S query port"
+  echo "  19999/UDP — RCON (set RCON_PASSWORD to enable)"
 fi
 echo ""
-echo "⚠️  Important: Update the RCON_PASSWORD in the game config environment variables"
-echo "   Also customize HOSTNAME, DEFAULT_MAP, and other settings as needed"
-echo ""
 echo "Next steps:"
-echo "  1. Update the RCON_PASSWORD in the game config environment variables"
-echo "  2. Adjust HOSTNAME, DEFAULT_MAP, DEFAULT_MODE, and other settings as needed"
-echo "  3. Add custom campaigns and plugins to the /addons volume"
-echo "  4. Run ./scripts/seed_l4d2_actions.sh to load game actions"
+echo "  1. Set SERVER_PUBLIC_ADDRESS to the server's public IP"
+echo "  2. Set GAME_PASSWORD_ADMIN for admin access"
+echo "  3. Add mod IDs to GAME_MODS_IDS_LIST (auto-downloaded on start)"
+echo "  4. Set RCON_PASSWORD to enable RCON"
+echo "  5. Run ./scripts/seed_reforger_actions.sh to load game actions"
 echo ""
