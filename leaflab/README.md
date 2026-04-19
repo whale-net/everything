@@ -90,9 +90,18 @@ erDiagram
 
     Region {
         bigserial region_id PK
+        bigint parent_region_id FK "nullable — e.g. Room > Shelf > Pot"
         varchar name
         text description
         timestamp created_at
+    }
+
+    SensorRegionHistory {
+        bigserial history_id PK
+        bigint sensor_id FK
+        bigint region_id FK
+        timestamp assigned_at
+        timestamp unassigned_at "null if current"
     }
 
     SensorReading {
@@ -109,7 +118,8 @@ erDiagram
         bigint region_id FK
         bigint plant_type_id FK
         varchar name
-        timestamp planted_at
+        timestamp created_at
+        timestamp removed_at "null if still present"
     }
 
     PlantType {
@@ -121,6 +131,9 @@ erDiagram
     Board ||--o{ Sensor : "hosts"
     SensorType ||--o{ Sensor : "types"
     Region |o--o{ Sensor : "currently at"
+    Region |o--o{ Region : "parent of"
+    Sensor ||--o{ SensorRegionHistory : "tracks moves"
+    Region ||--o{ SensorRegionHistory : "recorded in"
     Sensor ||--o{ SensorReading : "produces"
     Region ||--o{ SensorReading : "was at (denorm snapshot)"
     Region ||--o{ Plant : "contains"
@@ -129,8 +142,11 @@ erDiagram
 
 Key design decisions:
 - `Sensor.region_id` is nullable — a board can register before being placed anywhere
+- `SensorRegionHistory` records every region assignment with open/closed intervals; `unassigned_at = NULL` means current
 - `SensorReading.region_id` is snapshotted at insert so historical location is preserved when sensors move
 - `SensorReading.recorded_at` is DB-side `NOW()`, not device clock; `uptime_ms` carries the device timestamp
+- `Region.parent_region_id` is self-referential and nullable — supports flat or hierarchical layouts (Room → Shelf → Pot)
+- `Plant.removed_at = NULL` means still present; set on removal rather than hard-deleting
 - `Board` and `Sensor` self-register via device manifests published on connect
 
 ---
