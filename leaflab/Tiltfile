@@ -1,23 +1,25 @@
 # LeafLab Tiltfile
 # Local development environment for LeafLab data pipeline.
 #
-# Starts RabbitMQ with the MQTT plugin enabled so ESP32 sensorboards can
-# publish sensor data directly to the broker for development and testing.
+# Starts RabbitMQ (with MQTT plugin), TimescaleDB, and the Go processor.
+# ESP32 sensorboards publish via MQTT; the processor consumes from AMQP.
 #
 # Usage:
 #   cd leaflab && tilt up
 #
 # Then provision your device:
 #   bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 \
-#     wifi_ssid=MySSID wifi_pass=MyPass mqtt_host=<HOST_IP> mqtt_port=1883
+#     wifi_ssid=MySSID wifi_pass=MyPass mqtt_host=<HOST_IP> mqtt_port=1883 \
+#     mqtt_user=rabbit mqtt_pass=password
 #
-# Subscribe to sensor data:
-#   mosquitto_sub -h localhost -p 1883 -t 'leaflab/#' -v
+# Subscribe to raw sensor data:
+#   mosquitto_sub -h localhost -p 1883 -u rabbit -P password -t 'leaflab/#' -v
 
 load('ext://namespace', 'namespace_create')
 load('../tools/tilt/common.tilt',
      'setup_dev_util', 'setup_rabbitmq', 'setup_rabbitmq_mqtt_plugin',
-     'setup_postgres', 'print_startup_banner', 'print_footer_info')
+     'setup_postgres', 'build_images_from_apps', 'detect_platform',
+     'get_watch_paths', 'print_startup_banner', 'print_footer_info')
 
 # ===========================
 # Configuration
@@ -26,7 +28,9 @@ load('../tools/tilt/common.tilt',
 namespace = 'leaflab-local-dev'
 namespace_create(namespace)
 
-print_startup_banner("LeafLab", namespace, 'linux/amd64')
+platform = detect_platform()
+
+print_startup_banner("LeafLab", namespace, platform)
 
 # ===========================
 # Infrastructure
@@ -37,8 +41,128 @@ setup_dev_util(namespace)
 rmq_info = setup_rabbitmq(namespace, mqtt=True)
 setup_rabbitmq_mqtt_plugin(namespace, labels=['leaflab-infrastructure'])
 
+# RabbitMQ AMQP URL — processor uses the default '/' vhost
+rabbitmq_url = 'amqp://{}:{}@{}:{}/'.format(
+    rmq_info['user'],
+    rmq_info['password'],
+    rmq_info['host'],
+    rmq_info['port'],
+)
+
+# PostgreSQL with TimescaleDB extension available
 db_info = setup_postgres(namespace, db_name='leaflab', resource_name='postgres-dev',
                          image='timescale/timescaledb:latest-pg16')
+pg_url = 'postgres://{}:{}@{}:{}/{}?sslmode=disable'.format(
+    db_info['user'], db_info['password'],
+    db_info['host'], db_info['port'], db_info['database'],
+)
+
+# ===========================
+# Application Images
+# ===========================
+
+watch_paths = get_watch_paths('leaflab')
+
+APPS = {
+    'migrate': {
+        'bazel_target': '//leaflab/migrate:leaflab-migrate_image_load',
+        'image_name': 'leaflab-leaflab-migrate',
+    },
+    'processor': {
+        'bazel_target': '//leaflab/processor:leaflab-processor_image_load',
+        'image_name': 'leaflab-leaflab-processor',
+    },
+}
+
+build_images_from_apps(APPS, watch_paths, platform)
+
+# ===========================
+# Kubernetes Deployments
+# ===========================
+
+# Migration Job — runs on startup, re-runs on image change
+k8s_yaml(blob("""
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: leaflab-migrate
+  namespace: {namespace}
+spec:
+  ttlSecondsAfterFinished: 30
+  template:
+    metadata:
+      labels:
+        app: leaflab-migrate
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: migrate
+        image: leaflab-leaflab-migrate
+        env:
+        - name: DB_HOST
+          value: "postgres-dev.{namespace}.svc.cluster.local"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USER
+          value: "postgres"
+        - name: DB_PASSWORD
+          value: "password"
+        - name: DB_NAME
+          value: "leaflab"
+        - name: DB_SSL_MODE
+          value: "disable"
+""".format(namespace=namespace)))
+
+k8s_resource(
+    'leaflab-migrate',
+    resource_deps=['postgres-dev'],
+    labels=['leaflab-infrastructure'],
+)
+
+# Processor — consumes MQTT messages from RabbitMQ AMQP
+k8s_yaml(blob("""
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: leaflab-processor
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: leaflab-processor
+  template:
+    metadata:
+      labels:
+        app: leaflab-processor
+    spec:
+      containers:
+      - name: processor
+        image: leaflab-leaflab-processor
+        env:
+        - name: RABBITMQ_URL
+          value: "{rabbitmq_url}"
+        - name: QUEUE_NAME
+          value: "leaflab-processor"
+        - name: DB_HOST
+          value: "postgres-dev.{namespace}.svc.cluster.local"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USER
+          value: "postgres"
+        - name: DB_PASSWORD
+          value: "password"
+        - name: DB_NAME
+          value: "leaflab"
+        - name: DB_SSL_MODE
+          value: "disable"
+""".format(namespace=namespace, rabbitmq_url=rabbitmq_url)))
+
+k8s_resource(
+    'leaflab-processor',
+    resource_deps=['rabbitmq-dev-mqtt-plugin', 'leaflab-migrate'],
+    labels=['leaflab'],
+)
 
 # ===========================
 # Access Information
@@ -55,10 +179,11 @@ print("="*60)
 print("")
 print("Provision device (use your host IP, not localhost):")
 print("  bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 \\")
-print("    wifi_ssid=SSID wifi_pass=PASS mqtt_host=<HOST_IP> mqtt_port=1883")
+print("    wifi_ssid=SSID wifi_pass=PASS mqtt_host=<HOST_IP> mqtt_port=1883 \\")
+print("    mqtt_user=rabbit mqtt_pass=password")
 print("")
 print("Subscribe to all sensor data:")
-print("  mosquitto_sub -h localhost -p 1883 -t 'leaflab/#' -v")
+print("  mosquitto_sub -h localhost -p 1883 -u rabbit -P password -t 'leaflab/#' -v")
 print("="*60)
 
 print_footer_info('leaflab')
