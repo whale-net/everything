@@ -15,25 +15,18 @@ RabbitMQ's MQTT plugin routes MQTT topics to this exchange, converting `/` → `
 
 ## Database
 
-Not yet used — wired for future schema writes. Schema is provisioned by `leaflab-migrate`.
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `PG_DATABASE_URL` | — | Yes | PostgreSQL connection string, e.g. `postgres://user:pass@host:5432/leaflab?sslmode=disable` |
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DB_HOST` | `localhost` | PostgreSQL host |
-| `DB_PORT` | `5432` | PostgreSQL port |
-| `DB_USER` | `postgres` | PostgreSQL user |
-| `DB_PASSWORD` | — | PostgreSQL password |
-| `DB_NAME` | `leaflab` | Database name |
-| `DB_SSL_MODE` | `disable` | SSL mode (`disable`, `require`, `verify-full`) |
+Schema is provisioned by `leaflab-migrate` before the processor starts.
 
 ## Local Development (Tilt)
 
-In the local Tilt environment all values are injected from the Tiltfile. No `.env` file is needed.
+All values are injected from the Tiltfile. No `.env` file is needed.
 
 ```bash
 RABBITMQ_URL=amqp://rabbit:password@rabbitmq-dev.leaflab-local-dev.svc.cluster.local:5672/
 QUEUE_NAME=leaflab-processor
-DB_HOST=postgres-dev.leaflab-local-dev.svc.cluster.local
-DB_PASSWORD=password
-DB_NAME=leaflab
+PG_DATABASE_URL=postgres://postgres:password@postgres-dev.leaflab-local-dev.svc.cluster.local:5432/leaflab?sslmode=disable
 ```

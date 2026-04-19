@@ -5,22 +5,26 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
-	"github.com/whale-net/everything/libs/go/rmq"
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
+	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/protobuf/proto"
 )
 
-// MessageHandler decodes and logs leaflab MQTT messages.
+// MessageHandler decodes leaflab MQTT messages and persists them.
 // Routing key format (MQTT '/' → AMQP '.'):
-//   leaflab.<device_id>.sensor.<sensor_name>  → SensorReading
-//   leaflab.<device_id>.manifest              → DeviceManifest
+//
+//	leaflab.<device_id>.manifest             → DeviceManifest
+//	leaflab.<device_id>.sensor.<name>        → SensorReading
 type MessageHandler struct {
 	logger *slog.Logger
+	repo   *Repository
+	cache  *SensorCache
 }
 
-func NewMessageHandler(logger *slog.Logger) *MessageHandler {
-	return &MessageHandler{logger: logger}
+func NewMessageHandler(logger *slog.Logger, repo *Repository, cache *SensorCache) *MessageHandler {
+	return &MessageHandler{logger: logger, repo: repo, cache: cache}
 }
 
 func (h *MessageHandler) Handle(ctx context.Context, msg rmq.Message) error {
@@ -33,44 +37,100 @@ func (h *MessageHandler) Handle(ctx context.Context, msg rmq.Message) error {
 
 	switch {
 	case len(parts) == 3 && parts[2] == "manifest":
-		return h.handleManifest(deviceID, msg.Body)
+		return h.handleManifest(ctx, deviceID, msg.Body)
 	case len(parts) == 4 && parts[2] == "sensor":
-		return h.handleSensorReading(deviceID, parts[3], msg.Body)
+		return h.handleSensorReading(ctx, deviceID, parts[3], msg.Body)
 	default:
 		h.logger.Warn("unhandled routing key", "key", msg.RoutingKey)
 		return nil
 	}
 }
 
-func (h *MessageHandler) handleManifest(deviceID string, body []byte) error {
+// handleManifest upserts the board and all its sensors, then populates the cache.
+func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, body []byte) error {
 	var manifest firmwarepb.DeviceManifest
 	if err := proto.Unmarshal(body, &manifest); err != nil {
-		return fmt.Errorf("failed to unmarshal DeviceManifest: %w", err)
+		return fmt.Errorf("unmarshal DeviceManifest: %w", err)
 	}
 
-	sensorNames := make([]string, 0, len(manifest.Sensors))
-	for _, s := range manifest.Sensors {
-		sensorNames = append(sensorNames, fmt.Sprintf("%s(%s)", s.Name, s.Unit))
+	boardID, err := h.repo.UpsertBoard(ctx, deviceID)
+	if err != nil {
+		return err
+	}
+	h.logger.Info("board registered", "device_id", deviceID, "board_id", boardID)
+
+	for _, sd := range manifest.Sensors {
+		typeName := sensorTypeName(sd.Type)
+
+		sensorTypeID, err := h.repo.UpsertSensorType(ctx, typeName, sd.Unit)
+		if err != nil {
+			h.logger.Error("failed to upsert sensor_type", "name", typeName, "err", err)
+			continue
+		}
+
+		sensorID, regionID, err := h.repo.UpsertSensor(ctx, boardID, sensorTypeID, sd.Name, sd.Unit)
+		if err != nil {
+			h.logger.Error("failed to upsert sensor", "name", sd.Name, "err", err)
+			continue
+		}
+
+		h.cache.Set(deviceID, sd.Name, SensorInfo{SensorID: sensorID, RegionID: regionID})
+		h.logger.Info("sensor registered",
+			"device_id", deviceID,
+			"sensor", sd.Name,
+			"type", typeName,
+			"unit", sd.Unit,
+			"sensor_id", sensorID,
+			"region_id", regionID,
+		)
 	}
 
-	h.logger.Info("manifest",
-		"device_id", deviceID,
-		"sensors", strings.Join(sensorNames, ", "),
-	)
 	return nil
 }
 
-func (h *MessageHandler) handleSensorReading(deviceID, sensorName string, body []byte) error {
-	var reading firmwarepb.SensorReading
-	if err := proto.Unmarshal(body, &reading); err != nil {
-		return fmt.Errorf("failed to unmarshal SensorReading: %w", err)
+// handleSensorReading writes a reading row. Drops the message if the sensor is
+// not yet in the cache (manifest not yet received for this device).
+func (h *MessageHandler) handleSensorReading(ctx context.Context, deviceID, sensorName string, body []byte) error {
+	info, ok := h.cache.Get(deviceID, sensorName)
+	if !ok {
+		h.logger.Warn("reading dropped — sensor not registered yet",
+			"device_id", deviceID,
+			"sensor", sensorName,
+		)
+		return nil
 	}
 
-	h.logger.Info("reading",
+	var reading firmwarepb.SensorReading
+	if err := proto.Unmarshal(body, &reading); err != nil {
+		return fmt.Errorf("unmarshal SensorReading: %w", err)
+	}
+
+	if err := h.repo.InsertReading(
+		ctx,
+		info.SensorID,
+		info.RegionID,
+		float64(reading.Value),
+		true,
+		reading.UptimeMs,
+		time.Now(),
+	); err != nil {
+		return err
+	}
+
+	h.logger.Debug("reading written",
 		"device_id", deviceID,
 		"sensor", sensorName,
 		"value", reading.Value,
 		"uptime_ms", reading.UptimeMs,
 	)
 	return nil
+}
+
+// sensorTypeName converts a proto SensorType enum value to the DB name.
+// Strips the "SENSOR_TYPE_" prefix and lowercases the result.
+// e.g. SENSOR_TYPE_ILLUMINANCE → "illuminance"
+func sensorTypeName(t firmwarepb.SensorType) string {
+	raw := t.String() // e.g. "SENSOR_TYPE_ILLUMINANCE"
+	name, _ := strings.CutPrefix(raw, "SENSOR_TYPE_")
+	return strings.ToLower(name)
 }

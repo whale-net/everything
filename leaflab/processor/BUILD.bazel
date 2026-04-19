@@ -4,16 +4,20 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "processor_lib",
     srcs = [
+        "cache.go",
         "config.go",
         "handler.go",
         "main.go",
+        "repository.go",
     ],
     importpath = "github.com/whale-net/everything/leaflab/processor",
     visibility = ["//visibility:private"],
     deps = [
         "//firmware/proto:firmwarepb",
+        "//libs/go/db",
         "//libs/go/logging",
         "//libs/go/rmq",
+        "@com_github_jackc_pgx_v5//pgxpool",
         "@org_golang_google_protobuf//proto",
     ],
 )

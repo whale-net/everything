@@ -144,19 +144,9 @@ spec:
           value: "{rabbitmq_url}"
         - name: QUEUE_NAME
           value: "leaflab-processor"
-        - name: DB_HOST
-          value: "postgres-dev.{namespace}.svc.cluster.local"
-        - name: DB_PORT
-          value: "5432"
-        - name: DB_USER
-          value: "postgres"
-        - name: DB_PASSWORD
-          value: "password"
-        - name: DB_NAME
-          value: "leaflab"
-        - name: DB_SSL_MODE
-          value: "disable"
-""".format(namespace=namespace, rabbitmq_url=rabbitmq_url)))
+        - name: PG_DATABASE_URL
+          value: "{pg_url}"
+""".format(namespace=namespace, rabbitmq_url=rabbitmq_url, pg_url=pg_url)))
 
 k8s_resource(
     'leaflab-processor',

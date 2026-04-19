@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
 )
@@ -35,6 +36,13 @@ func run() error {
 	logger := logging.Get("main")
 	logger.Info("starting leaflab-processor", "queue", cfg.QueueName)
 
+	dbPool, err := db.NewPool(context.Background(), cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("failed to connect to database: %w", err)
+	}
+	defer dbPool.Close()
+	logger.Info("database connection established")
+
 	rmqConn, err := rmq.NewConnectionFromURL(cfg.RabbitMQURL)
 	if err != nil {
 		return fmt.Errorf("failed to connect to RabbitMQ: %w", err)
@@ -56,7 +64,9 @@ func run() error {
 		return fmt.Errorf("failed to bind exchange: %w", err)
 	}
 
-	handler := NewMessageHandler(logger)
+	repo := NewRepository(dbPool)
+	cache := NewSensorCache()
+	handler := NewMessageHandler(logger, repo, cache)
 	consumer.RegisterHandler("leaflab.#", handler.Handle)
 
 	appCtx, appCancel := context.WithCancel(context.Background())
