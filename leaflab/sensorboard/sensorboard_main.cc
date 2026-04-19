@@ -4,15 +4,17 @@
 // a separate config file (e.g. elegoo_config.cc) that is linked into the
 // esp32_firmware() target.
 //
-// The config file provides three functions:
+// The config file provides:
 //   firmware::II2CBus& GetBus()                        — initialised I2C bus
 //   pw::span<firmware::ISensor* const> GetSensors()    — sensor registry
 //   firmware::NetworkManager& GetNetwork()             — lazy-init WiFi+MQTT
+//   firmware::LeafLabPublisher& GetPublisher()         — proto MQTT publisher
 
 #include <Arduino.h>
 
 #include "board_pins.h"
 #include "firmware/i2c/i2c_bus.h"
+#include "firmware/mqtt/leaflab_publisher.h"
 #include "firmware/network/network_manager.h"
 #include "firmware/sensor/sensor.h"
 #include "pw_log/log.h"
@@ -22,9 +24,9 @@
 firmware::II2CBus& GetBus();
 pw::span<firmware::ISensor* const> GetSensors();
 firmware::NetworkManager& GetNetwork();
+firmware::LeafLabPublisher& GetPublisher();
 
 // Platform keep-alive from firmware/network/esp32_platform.cc.
-// Must be called every loop() pass when connected.
 extern void MQTTLoop();
 
 void setup() {
@@ -47,16 +49,21 @@ void setup() {
 }
 
 void loop() {
-    GetNetwork().Poll();
+    static auto prev_state = firmware::NetworkManager::State::kIdle;
+
+    auto state = GetNetwork().Poll();
     MQTTLoop();
 
-    for (firmware::ISensor* s : GetSensors()) {
-        firmware::SensorReading r = s->Read();
-        if (r.valid) {
-            int whole  = static_cast<int>(r.value);
-            int tenths = static_cast<int>((r.value - whole) * 10);
-            //PW_LOG_INFO("%s: %d.%d", s->name(), whole, tenths);
-        }
+    // On each transition into kReady: publish "online" + manifest.
+    if (state == firmware::NetworkManager::State::kReady &&
+        prev_state != firmware::NetworkManager::State::kReady) {
+        GetPublisher().OnConnect();
+    }
+    prev_state = state;
+
+    // Publish sensor readings every loop pass while connected.
+    if (state == firmware::NetworkManager::State::kReady) {
+        GetPublisher().PublishReadings();
     }
 
     delay(1000);

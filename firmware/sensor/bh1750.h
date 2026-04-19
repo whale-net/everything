@@ -34,8 +34,10 @@ class BH1750Sensor final : public ISensor {
   // After kMeasureTimeMs elapses, retrieves the result and re-arms.
   SensorReading Read() override;
 
-  const char* name() const override { return name_; }
-  uint8_t address() const override { return address_; }
+  const char* name()    const override { return name_; }
+  uint8_t address()     const override { return address_; }
+  SensorType  type()    const override { return SensorType::kIlluminance; }
+  const char* unit()    const override { return "lx"; }
 
  private:
   pw::Status Trigger();

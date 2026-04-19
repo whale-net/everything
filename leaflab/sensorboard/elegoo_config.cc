@@ -11,6 +11,7 @@
 #include "firmware/device_id/efuse_device_id.h"
 #include "firmware/i2c/arduino_i2c_bus.h"
 #include "firmware/i2c/i2c_bus.h"
+#include "firmware/mqtt/leaflab_publisher.h"
 #include "firmware/network/esp32_platform.h"
 #include "firmware/network/network_manager.h"
 #include "firmware/sensor/bh1750.h"
@@ -40,9 +41,10 @@ pw::span<firmware::ISensor* const> GetSensors() {
 //   bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 \
 //     wifi_ssid=MySSID wifi_pass=MyPass mqtt_host=192.168.1.42
 
-static firmware::NVSCredentials  creds;
-static firmware::EfuseDeviceId   device_id("leaflab");
-static firmware::NetworkManager* net = nullptr;
+static firmware::NVSCredentials    creds;
+static firmware::EfuseDeviceId     device_id("leaflab");
+static firmware::NetworkManager*   net       = nullptr;
+static firmware::LeafLabPublisher* publisher = nullptr;
 
 firmware::NetworkManager& GetNetwork() {
     if (net != nullptr) return *net;
@@ -54,16 +56,29 @@ firmware::NetworkManager& GetNetwork() {
 
     WiFiInit(creds.wifi_ssid(), creds.wifi_password());
 
-    static const firmware::NetworkManager::Config cfg = {
-        .ssid      = creds.wifi_ssid(),
-        .password  = creds.wifi_password(),
-        .mqtt_host = creds.mqtt_host(),
-        .mqtt_port = creds.mqtt_port(),
-        .device_id = device_id.Get(),
-        .mqtt_user = nullptr,
-        .mqtt_pass = nullptr,
-    };
+    // LWT topic includes device_id — build into a static buffer.
+    static char lwt_topic[64];
+    snprintf(lwt_topic, sizeof(lwt_topic), "leaflab/%s/status", device_id.Get());
+
+    static firmware::NetworkManager::Config cfg;
+    cfg.ssid        = creds.wifi_ssid();
+    cfg.password    = creds.wifi_password();
+    cfg.mqtt_host   = creds.mqtt_host();
+    cfg.mqtt_port   = creds.mqtt_port();
+    cfg.device_id   = device_id.Get();
+    cfg.mqtt_user   = nullptr;
+    cfg.mqtt_pass   = nullptr;
+    cfg.lwt_topic   = lwt_topic;
+    cfg.lwt_payload = "offline";
+
     static firmware::NetworkManager local_net(cfg);
     net = &local_net;
     return *net;
+}
+
+firmware::LeafLabPublisher& GetPublisher() {
+    if (publisher != nullptr) return *publisher;
+    static firmware::LeafLabPublisher local_pub(device_id, GetSensors(), GetNetwork());
+    publisher = &local_pub;
+    return *publisher;
 }

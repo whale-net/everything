@@ -32,8 +32,10 @@ class ThermistorSensor final : public ISensor {
   // first successful read or on persistent open/short circuit.
   SensorReading Read() override;
 
-  const char* name() const override { return name_; }
-  uint8_t address() const override { return pin_; }
+  const char* name()    const override { return name_; }
+  uint8_t address()     const override { return pin_; }
+  SensorType  type()    const override { return SensorType::kTemperature; }
+  const char* unit()    const override { return "C"; }
 
  private:
   uint8_t pin_;

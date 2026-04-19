@@ -28,12 +28,15 @@ uint32_t PlatformNowMs() {
           .count());
 }
 bool WiFiIsConnected() { return g_wifi_connected; }
-bool MQTTConnect(const char*, uint16_t, const char*, const char*,
-                 const char*) {
+bool MQTTConnect(const char*, uint16_t, const char*, const char*, const char*,
+                 const char*, const char*) {
   return g_mqtt_connected;
 }
 bool MQTTIsConnected() { return g_mqtt_connected; }
 bool MQTTPublish(const char*, const char*) { return g_mqtt_publish_ok; }
+bool MQTTPublishBinary(const char*, const uint8_t*, size_t, bool) {
+  return g_mqtt_publish_ok;
+}
 void WiFiConnect() {}
 
 // ── Test fixture ──────────────────────────────────────────────────────────────

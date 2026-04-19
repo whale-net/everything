@@ -1,0 +1,7 @@
+# nanopb static size constraints for leaflab.proto.
+# These bound all allocations so the generated code is heap-free.
+
+leaflab.DeviceManifest.device_id     max_size:32
+leaflab.DeviceManifest.sensors       max_count:16
+leaflab.SensorDescriptor.name        max_size:32
+leaflab.SensorDescriptor.unit        max_size:8

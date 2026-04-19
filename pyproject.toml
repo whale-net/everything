@@ -67,6 +67,10 @@ dependencies = [
     "esptool",
     "pyserial",
 
+    # nanopb protobuf code generation (proto → .pb.h/.pb.c for firmware)
+    "protobuf",
+    "grpcio-tools",
+
     # Build backend needed by pycross to build esptool (sdist-only package)
     "setuptools",
 ]

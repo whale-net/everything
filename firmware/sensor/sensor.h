@@ -6,6 +6,15 @@
 
 namespace firmware {
 
+// Matches leaflab.SensorType in proto/leaflab/leaflab.proto.
+// Values must stay in sync with the proto enum.
+enum class SensorType : uint32_t {
+  kUnknown     = 0,
+  kIlluminance = 1,
+  kTemperature = 2,
+  kHumidity    = 3,
+};
+
 // Typed return value from ISensor::Read().
 // Bundles the measured value with a validity flag so callers never need to
 // interpret sentinel floats (NaN, -1, etc.) to detect sensor failure.
@@ -40,13 +49,18 @@ class ISensor {
   // Returns SensorReading::Invalid() if no valid reading is available.
   virtual SensorReading Read() = 0;
 
-  // Human-readable identifier used as the MQTT sub-topic.
+  // Human-readable identifier, unique per device (e.g. "light_canopy").
+  // Used as the MQTT sub-topic and manifest sensor name.
   // Must be a string literal with static lifetime (no heap allocation).
   virtual const char* name() const = 0;
 
   // Unique hardware address or channel identifier (e.g. I2C address).
   // Used for diagnostics and de-duplication.
   virtual uint8_t address() const = 0;
+
+  // Sensor type and SI unit string, used to populate the device manifest.
+  virtual SensorType   type() const = 0;
+  virtual const char*  unit() const = 0;
 };
 
 }  // namespace firmware

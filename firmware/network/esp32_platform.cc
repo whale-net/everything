@@ -48,8 +48,14 @@ void WiFiConnect() {
 }
 
 bool MQTTConnect(const char* host, uint16_t port, const char* id,
-                 const char* user, const char* pass) {
+                 const char* user, const char* pass,
+                 const char* lwt_topic, const char* lwt_payload) {
     mqtt_client.setServer(host, port);
+    if (lwt_topic != nullptr && lwt_topic[0] != '\0') {
+        return mqtt_client.connect(id, user, pass,
+                                   lwt_topic, /*qos=*/0, /*retain=*/true,
+                                   lwt_payload);
+    }
     return mqtt_client.connect(id, user, pass);
 }
 
@@ -57,6 +63,12 @@ bool MQTTIsConnected() { return mqtt_client.connected(); }
 
 bool MQTTPublish(const char* topic, const char* payload) {
     return mqtt_client.publish(topic, payload);
+}
+
+bool MQTTPublishBinary(const char* topic, const uint8_t* data, size_t len,
+                        bool retained) {
+    return mqtt_client.publish(topic, data, static_cast<unsigned int>(len),
+                               retained);
 }
 
 void MQTTLoop() { mqtt_client.loop(); }

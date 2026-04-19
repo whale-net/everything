@@ -15,10 +15,13 @@
 // host unit tests.  Declared at global scope so both targets can define them
 // without namespace qualification.
 extern bool WiFiIsConnected();
-extern bool MQTTConnect(const char*, uint16_t, const char*, const char*,
-                        const char*);
+extern bool MQTTConnect(const char* host, uint16_t port, const char* id,
+                        const char* user, const char* pass,
+                        const char* lwt_topic, const char* lwt_payload);
 extern bool MQTTIsConnected();
-extern bool MQTTPublish(const char*, const char*);
+extern bool MQTTPublish(const char* topic, const char* payload);
+extern bool MQTTPublishBinary(const char* topic, const uint8_t* data,
+                               size_t len, bool retained);
 // Called when transitioning to kConnecting to (re-)initiate the Wi-Fi
 // association.  On ESP32 with setAutoReconnect(true), this is a no-op for
 // the initial connect; the hook exists so the state machine can explicitly
@@ -66,10 +69,15 @@ void NetworkManager::PollConnecting() {
 
   if (!WiFiIsConnected()) return;  // Still waiting for DHCP.
 
-  bool mqtt_ok = MQTTConnect(config_.mqtt_host, config_.mqtt_port,
-                              config_.device_id,
-                              config_.mqtt_user, config_.mqtt_pass);
-  if (!mqtt_ok) return;  // MQTT handshake still in progress.
+  // Skip MQTT entirely if no broker is configured — WiFi-only mode.
+  bool mqtt_host_set = config_.mqtt_host != nullptr && config_.mqtt_host[0] != '\0';
+  if (mqtt_host_set) {
+    bool mqtt_ok = MQTTConnect(config_.mqtt_host, config_.mqtt_port,
+                                config_.device_id,
+                                config_.mqtt_user, config_.mqtt_pass,
+                                config_.lwt_topic, config_.lwt_payload);
+    if (!mqtt_ok) return;  // MQTT handshake still in progress.
+  }
 
   PW_LOG_INFO("NetworkManager: connected (attempt %u)", backoff_attempt_ + 1);
   backoff_attempt_ = 0;
@@ -99,6 +107,19 @@ pw::Status NetworkManager::Publish(const char* topic, const char* payload) {
     return pw::Status::Unavailable();
   }
   if (!MQTTPublish(topic, payload)) {
+    return pw::Status::Internal();
+  }
+  return pw::OkStatus();
+}
+
+pw::Status NetworkManager::Publish(const char* topic, const uint8_t* data,
+                                    size_t len, bool retained) {
+  if (state_ != State::kReady) {
+    PW_LOG_DEBUG("NetworkManager: publish skipped, state=%s",
+                 StateToString(state_));
+    return pw::Status::Unavailable();
+  }
+  if (!MQTTPublishBinary(topic, data, len, retained)) {
     return pw::Status::Internal();
   }
   return pw::OkStatus();

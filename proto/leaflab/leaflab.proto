@@ -1,0 +1,35 @@
+syntax = "proto3";
+package leaflab;
+
+// ── Sensor types ─────────────────────────────────────────────────────────────
+
+enum SensorType {
+  SENSOR_TYPE_UNKNOWN     = 0;
+  SENSOR_TYPE_ILLUMINANCE = 1;  // lx  — BH1750 and similar
+  SENSOR_TYPE_TEMPERATURE = 2;  // °C  — thermistor and similar
+  SENSOR_TYPE_HUMIDITY    = 3;  // %RH — future
+}
+
+// ── Device manifest ───────────────────────────────────────────────────────────
+// Published retained to leaflab/<device_id>/manifest on connect.
+// Describes the board's sensor complement so processors can register
+// entities without knowing the firmware source.
+
+message SensorDescriptor {
+  string     name = 1;  // unique on this device, e.g. "light_canopy"
+  SensorType type = 2;
+  string     unit = 3;  // SI unit string, e.g. "lx", "°C"
+}
+
+message DeviceManifest {
+  string device_id = 1;
+  repeated SensorDescriptor sensors = 2;
+}
+
+// ── Sensor reading ────────────────────────────────────────────────────────────
+// Published to leaflab/<device_id>/sensor/<sensor_name> each loop.
+
+message SensorReading {
+  float  value     = 1;
+  uint32 uptime_ms = 2;  // millis() on the device — useful for staleness detection
+}
