@@ -68,7 +68,10 @@ class NetworkManager {
     uint32_t connect_timeout_ms = 15'000;  // override in tests for fast timeout
   };
 
-  explicit NetworkManager(const Config& config) : config_(config) {}
+  explicit NetworkManager(const Config& config)
+      : config_(config),
+        mqtt_enabled_(config.mqtt_host != nullptr &&
+                      config.mqtt_host[0] != '\0') {}
 
   // Override the device_id after construction.  Call before Connect() so the
   // kConnecting handler uses the updated value.
@@ -103,6 +106,7 @@ class NetworkManager {
   uint32_t NextBackoffMs() const;
 
   Config config_;
+  bool mqtt_enabled_;              // true iff mqtt_host is non-empty at Connect() time.
   State state_ = State::kIdle;
   uint32_t state_entered_ms_ = 0;  // PlatformNowMs() when state last changed.
   uint32_t backoff_attempt_ = 0;   // Increments on each consecutive failure.

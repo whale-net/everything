@@ -37,26 +37,11 @@ Credentials are stored in the ESP32's NVS partition, separate from the firmware 
 ### Provision credentials (once per device)
 
 ```bash
-bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 "MySSID" "MyPassword"
+bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 \
+  wifi_ssid=MySSID wifi_pass=MyPassword mqtt_host=192.168.1.42 mqtt_port=1883
 ```
 
-Run this once. Re-run only if your WiFi credentials change.
-
-### Configure the MQTT broker
-
-Edit `elegoo_config.cc`:
-
-```cpp
-static const firmware::NetworkManager::Config cfg = {
-    .mqtt_host = "mqtt.local",   // ← your broker IP or hostname
-    .mqtt_port = 1883,
-    .device_id = "leaflab-sensorboard",
-    .mqtt_user = nullptr,        // set if broker requires auth
-    .mqtt_pass = nullptr,
-};
-```
-
-Then rebuild and reflash. Credentials in NVS are unaffected.
+Run this once. Re-run if credentials change. `mqtt_host` and `mqtt_port` are optional — omitting `mqtt_host` enables WiFi-only mode (no MQTT publishing).
 
 ### Alternative: compile-time credentials (boards without NVS)
 
@@ -123,12 +108,13 @@ This means adding a new board or sensor configuration never touches the main loo
 // firmware/sensor/my_sensor.h
 class MySensor final : public firmware::ISensor {
  public:
-  MySensor(firmware::II2CBus& bus, uint8_t address, const char* name,
-           uint32_t (*clock_fn)());
+  MySensor(firmware::II2CBus& bus, uint8_t address, const char* name);
   pw::Status Init() override;
   firmware::SensorReading Read() override;
-  const char* name() const override;
-  uint8_t address() const override;
+  const char* name()    const override;
+  uint8_t address()     const override;
+  firmware_SensorType type() const override;
+  const char* unit()    const override;
 };
 ```
 

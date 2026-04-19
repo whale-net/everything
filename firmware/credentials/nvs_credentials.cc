@@ -14,7 +14,7 @@ pw::Status NVSCredentials::Load() {
     Preferences prefs;
     if (!prefs.begin("creds", /*readOnly=*/true)) {
         PW_LOG_ERROR("NVS: failed to open namespace 'creds'");
-        PW_LOG_ERROR("Provision: bazel run //leaflab/sensorboard:provision -- PORT SSID PASS");
+        PW_LOG_ERROR("Provision: bazel run //leaflab/sensorboard:provision -- PORT wifi_ssid=... wifi_pass=... mqtt_host=...");
         return pw::Status::NotFound();
     }
 

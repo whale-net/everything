@@ -293,7 +293,4 @@ pub.set_connected(false);   // simulate broker disconnect
 
 | Item | Status | Notes |
 |------|--------|-------|
-| Secrets provisioning (Wi-Fi / MQTT credentials) | Not started | Python RPC script vs Bazel `action` target |
-| `esp32_platform.cc` | Not started | Real `WiFi.h` + `PubSubClient` implementations of the extern hooks |
-| DeviceIdentity (eFuse MAC) | Not started | Wrap in `IDeviceIdentity` facade; use as MQTT client ID |
 | TCA9548A multiplexer | Not started | Implement `II2CBus` that wraps another bus and selects a channel; sensor impls unchanged |

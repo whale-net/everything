@@ -85,7 +85,7 @@ void NetworkManager::PollConnecting() {
 }
 
 void NetworkManager::PollReady() {
-  if (!WiFiIsConnected() || !MQTTIsConnected()) {
+  if (!WiFiIsConnected() || (mqtt_enabled_ && !MQTTIsConnected())) {
     PW_LOG_WARN("NetworkManager: connection lost, backing off");
     backoff_attempt_++;
     TransitionTo(State::kBackoff);
@@ -101,7 +101,7 @@ void NetworkManager::PollBackoff() {
 }
 
 pw::Status NetworkManager::Publish(const char* topic, const char* payload) {
-  if (state_ != State::kReady) {
+  if (state_ != State::kReady || !mqtt_enabled_) {
     PW_LOG_DEBUG("NetworkManager: publish skipped, state=%s",
                  StateToString(state_));
     return pw::Status::Unavailable();
@@ -114,7 +114,7 @@ pw::Status NetworkManager::Publish(const char* topic, const char* payload) {
 
 pw::Status NetworkManager::Publish(const char* topic, const uint8_t* data,
                                     size_t len, bool retained) {
-  if (state_ != State::kReady) {
+  if (state_ != State::kReady || !mqtt_enabled_) {
     PW_LOG_DEBUG("NetworkManager: publish skipped, state=%s",
                  StateToString(state_));
     return pw::Status::Unavailable();

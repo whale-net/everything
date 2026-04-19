@@ -25,7 +25,7 @@
 │  │  BH1750 @ 0x23 (ambient light, lux)             │    │
 │  └─────────────────────────────────────────────────┘    │
 └───────────────────────┬─────────────────────────────────┘
-                        │ MQTT / Wi-Fi  [not yet implemented]
+                        │ MQTT / Wi-Fi
                   MQTT Broker
                         │
                   Cloud pipeline  [not yet implemented]
@@ -112,9 +112,9 @@ loop():
 
 ## Future Directions
 
-### MQTT Publishing
+### Cloud Pipeline
 
-Wire `MQTTWriter` into `sensorboard_main.cc` once Wi-Fi credentials are provisioned. The `MQTTWriter` and `NetworkManager` already exist in `//firmware`; only the board config and credential provisioning need to be added.
+The sensorboard publishes `DeviceManifest` (retained) and `SensorReading` protos over MQTT. A future processor service will subscribe to `leaflab/+/manifest` and `leaflab/+/sensor/+`, decode the protos, and handle Home Assistant MQTT Discovery and storage routing. See [`MQTT.md`](MQTT.md) for the topic structure.
 
 ### Multiple Sensor Types
 

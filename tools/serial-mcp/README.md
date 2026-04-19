@@ -112,7 +112,7 @@ is already running.
 ```
 serial_pause()
 → bazel run //leaflab/sensorboard:flash -- /dev/ttyUSB0
-→ bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 SSID PASS
+→ bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 wifi_ssid=MySSID wifi_pass=MyPass mqtt_host=192.168.1.42
 serial_resume()
 serial_grep("NVS|WiFi")
 ```

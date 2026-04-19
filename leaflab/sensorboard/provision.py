@@ -81,9 +81,21 @@ def _pack_entry(ns: int, typ: int, span: int, key16: bytes, data8: bytes) -> byt
     return bytes([ns, typ, span, chunk]) + struct.pack("<I", crc) + key16 + data8
 
 
+_NVS_KEY_MAX = 15  # ESP-IDF NVS key length limit (excluding NUL terminator)
+
+
+def _validate_key(key_str: str) -> None:
+    if len(key_str.encode()) > _NVS_KEY_MAX:
+        raise ValueError(
+            f"NVS key '{key_str}' is {len(key_str.encode())} bytes; "
+            f"maximum is {_NVS_KEY_MAX}."
+        )
+
+
 def _ns_entry(name: str, ns_idx: int) -> bytes:
     """Namespace declaration entry (type 0x01)."""
-    key  = name.encode()[:15].ljust(16, b"\x00")
+    _validate_key(name)
+    key  = name.encode().ljust(16, b"\x00")
     data = bytes([ns_idx]) + b"\xFF" * 7
     return _pack_entry(0, 0x01, 1, key, data)
 
@@ -98,7 +110,8 @@ def _str_entries(ns: int, key_str: str, value: str) -> list:
     Storing a CRC-16 at bytes 2-3 (old v4 format) causes the library to
     detect a CRC mismatch and erase the entry on boot.
     """
-    key  = key_str.encode()[:15].ljust(16, b"\x00")
+    _validate_key(key_str)
+    key  = key_str.encode().ljust(16, b"\x00")
     blob = value.encode("utf-8") + b"\x00"          # NVS stores NUL-terminated
     n_data = (len(blob) + _ENTRY_SIZE - 1) // _ENTRY_SIZE
     span = 1 + n_data

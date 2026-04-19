@@ -49,7 +49,7 @@ esp32_firmware(
 # Credentials survive firmware reflashes.
 #
 # Usage:
-#   bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 "MySSID" "MyPass"
+#   bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 wifi_ssid=MySSID wifi_pass=MyPass mqtt_host=192.168.1.42
 
 write_file(
     name = "provision_wrapper_gen",

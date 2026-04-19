@@ -146,5 +146,83 @@ TEST_F(NetworkManagerTest, ConnectTimeoutTransitionsToBackoff) {
   EXPECT_EQ(nm.state(), NetworkManager::State::kBackoff);
 }
 
+// ── WiFi-only mode (empty mqtt_host) ─────────────────────────────────────────
+
+TEST_F(NetworkManagerTest, WifiOnlyModeReachesReadyWithoutMqtt) {
+  g_wifi_connected = true;
+  g_mqtt_connected = false;  // MQTT never comes up
+
+  auto cfg = TestConfig();
+  cfg.mqtt_host = "";  // WiFi-only
+  NetworkManager nm(cfg);
+  nm.Connect();
+  nm.Poll();  // WiFi up, mqtt_host empty → skip MQTTConnect → kReady
+
+  EXPECT_EQ(nm.state(), NetworkManager::State::kReady);
+}
+
+TEST_F(NetworkManagerTest, WifiOnlyModeStaysReadyWhenMqttDown) {
+  g_wifi_connected = true;
+  g_mqtt_connected = false;
+
+  auto cfg = TestConfig();
+  cfg.mqtt_host = "";
+  NetworkManager nm(cfg);
+  nm.Connect();
+  nm.Poll();  // → kReady
+  nm.Poll();  // PollReady: WiFi up, MQTT disabled → stays kReady
+
+  EXPECT_EQ(nm.state(), NetworkManager::State::kReady);
+}
+
+TEST_F(NetworkManagerTest, WifiOnlyModePublishReturnsUnavailable) {
+  g_wifi_connected = true;
+  g_mqtt_connected = false;
+
+  auto cfg = TestConfig();
+  cfg.mqtt_host = "";
+  NetworkManager nm(cfg);
+  nm.Connect();
+  nm.Poll();  // → kReady
+
+  EXPECT_EQ(nm.Publish("t", "v"), pw::Status::Unavailable());
+}
+
+// ── Binary Publish ────────────────────────────────────────────────────────────
+
+TEST_F(NetworkManagerTest, PublishBinaryFailsWhenNotReady) {
+  auto cfg = TestConfig();
+  NetworkManager nm(cfg);
+  const uint8_t buf[] = {0x01};
+  EXPECT_EQ(nm.Publish("t", buf, 1), pw::Status::Unavailable());
+}
+
+TEST_F(NetworkManagerTest, PublishBinarySucceedsWhenReady) {
+  g_wifi_connected = true;
+  g_mqtt_connected = true;
+
+  auto cfg = TestConfig();
+  NetworkManager nm(cfg);
+  nm.Connect();
+  nm.Poll();  // → kReady
+
+  const uint8_t buf[] = {0xDE, 0xAD};
+  EXPECT_EQ(nm.Publish("t", buf, 2, /*retained=*/true), pw::OkStatus());
+}
+
+TEST_F(NetworkManagerTest, PublishBinaryPropagatesBrokerFailure) {
+  g_wifi_connected = true;
+  g_mqtt_connected = true;
+  g_mqtt_publish_ok = false;
+
+  auto cfg = TestConfig();
+  NetworkManager nm(cfg);
+  nm.Connect();
+  nm.Poll();  // → kReady
+
+  const uint8_t buf[] = {0x01};
+  EXPECT_EQ(nm.Publish("t", buf, 1), pw::Status::Internal());
+}
+
 }  // namespace
 }  // namespace firmware

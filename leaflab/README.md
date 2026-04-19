@@ -44,7 +44,7 @@ See [`sensorboard/README.md`](sensorboard/README.md) for full build, flash, and 
 Physical sensor (BH1750, etc.)
     ↓ I2C
 ESP32 (leaflab/sensorboard firmware)
-    ↓ MQTT over Wi-Fi     [not yet implemented]
+    ↓ MQTT over Wi-Fi
 MQTT broker
     ↓
 Cloud pipeline            [not yet implemented]
