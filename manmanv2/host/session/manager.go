@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/whale-net/everything/libs/go/docker"
@@ -588,49 +589,86 @@ func (sm *SessionManager) startStreamReader(state *State, reader io.Reader) {
 // startStreamReaderWithFormat reads from a Docker stream (multiplexed or TTY) and publishes logs to RabbitMQ
 func (sm *SessionManager) startStreamReaderWithFormat(state *State, reader io.Reader, isTTY bool) {
 	go func() {
-		// Buffer for batching log messages
 		const bufferSize = 50
 		const flushInterval = 1 * time.Second
 
+		var mu sync.Mutex
 		logBuffer := make([]string, 0, bufferSize)
 		sourceBuffer := make([]string, 0, bufferSize)
-		ticker := time.NewTicker(flushInterval)
-		defer ticker.Stop()
-
-		// Metrics for aggregate logging
 		var stdoutCount, stderrCount, errorCount, warnCount int
 
-		// Channel to receive log messages from reader goroutine
-		logChan := make(chan struct {
-			message string
-			source  string
-		}, 10)
+		// flushLogs snapshots and clears the buffer under the lock, then publishes.
+		flushLogs := func() {
+			mu.Lock()
+			if len(logBuffer) == 0 {
+				mu.Unlock()
+				return
+			}
+			logsCopy := append([]string(nil), logBuffer...)
+			sourcesCopy := append([]string(nil), sourceBuffer...)
+			sc, strc, ec, wc := stdoutCount, stderrCount, errorCount, warnCount
+			logBuffer = logBuffer[:0]
+			sourceBuffer = sourceBuffer[:0]
+			stdoutCount, stderrCount, errorCount, warnCount = 0, 0, 0, 0
+			mu.Unlock()
 
-		// Start a separate goroutine to read from Docker stream
-		go func() {
-			defer close(logChan)
-			
-			if isTTY {
-				// TTY mode: raw text, line-by-line
-				scanner := bufio.NewScanner(reader)
-				for scanner.Scan() {
-					message := scanner.Text()
-					select {
-					case logChan <- struct {
-						message string
-						source  string
-					}{message, "stdout"}: // TTY doesn't distinguish stdout/stderr
-					default:
-						slog.Warn("log channel full, dropping message", "session_id", state.SessionID)
+			if sc > 0 || strc > 0 {
+				slog.Info("session log metrics",
+					"session_id", state.SessionID,
+					"total", sc+strc,
+					"stdout", sc,
+					"stderr", strc,
+					"errors", ec,
+					"warnings", wc)
+			}
+
+			if sm.rmqPublisher != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				for i := range logsCopy {
+					if err := sm.rmqPublisher.PublishLog(ctx, state.SessionID, sourcesCopy[i], logsCopy[i]); err != nil {
+						slog.Warn("failed to publish log to RabbitMQ", "session_id", state.SessionID, "error", err)
 					}
 				}
+			}
+		}
+
+		addMessage := func(message, source string) {
+			mu.Lock()
+			logBuffer = append(logBuffer, message)
+			sourceBuffer = append(sourceBuffer, source)
+			if source == "stderr" {
+				stderrCount++
 			} else {
-				// Multiplexed mode: 8-byte headers
+				stdoutCount++
+			}
+			msgLower := strings.ToLower(message)
+			if strings.Contains(msgLower, "error") || strings.Contains(msgLower, "exception") || strings.Contains(msgLower, "fatal") {
+				errorCount++
+			}
+			if strings.Contains(msgLower, "warn") {
+				warnCount++
+			}
+			shouldFlush := len(logBuffer) >= bufferSize
+			mu.Unlock()
+			if shouldFlush {
+				flushLogs()
+			}
+		}
+
+		done := make(chan struct{})
+
+		go func() {
+			defer close(done)
+			if isTTY {
+				scanner := bufio.NewScanner(reader)
+				for scanner.Scan() {
+					addMessage(scanner.Text(), "stdout")
+				}
+			} else {
 				for {
-					// Read 8-byte header: [streamType, 0, 0, 0, size(4 bytes big-endian)]
 					header := make([]byte, 8)
 					if _, err := io.ReadFull(reader, header); err != nil {
-						// EOF or closed — container exited or stream closed
 						return
 					}
 					size := binary.BigEndian.Uint32(header[4:8])
@@ -638,106 +676,26 @@ func (sm *SessionManager) startStreamReaderWithFormat(state *State, reader io.Re
 					if _, err := io.ReadFull(reader, data); err != nil {
 						return
 					}
-
-					message := string(data)
-					var source string
+					source := "stdout"
 					if header[0] == 2 {
 						source = "stderr"
-					} else {
-						source = "stdout"
 					}
-
-					// Game server output is published to RMQ only, not to host logs
-					select {
-					case logChan <- struct {
-						message string
-						source  string
-					}{message, source}:
-					default:
-						slog.Warn("log channel full, dropping message", "session_id", state.SessionID)
-					}
+					addMessage(string(data), source)
 				}
 			}
+			sm.handleContainerExit(state)
 		}()
 
-		flushLogs := func() {
-			if len(logBuffer) == 0 {
-				return
-			}
-
-			// Log aggregate metrics
-			if stdoutCount > 0 || stderrCount > 0 {
-				slog.Info("session log metrics",
-					"session_id", state.SessionID,
-					"total", stdoutCount+stderrCount,
-					"stdout", stdoutCount,
-					"stderr", stderrCount,
-					"errors", errorCount,
-					"warnings", warnCount)
-			}
-
-			// Publish logs to RabbitMQ in background
-			if sm.rmqPublisher != nil {
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				defer cancel()
-
-				for i := 0; i < len(logBuffer); i++ {
-					// Fire-and-forget publish, don't block on errors
-					if err := sm.rmqPublisher.PublishLog(ctx, state.SessionID, sourceBuffer[i], logBuffer[i]); err != nil {
-						slog.Warn("failed to publish log to RabbitMQ", "session_id", state.SessionID, "error", err)
-					}
-				}
-			}
-
-			// Clear buffers and reset metrics
-			logBuffer = logBuffer[:0]
-			sourceBuffer = sourceBuffer[:0]
-			stdoutCount = 0
-			stderrCount = 0
-			errorCount = 0
-			warnCount = 0
-		}
-
-		// Flush logs on exit
+		ticker := time.NewTicker(flushInterval)
+		defer ticker.Stop()
 		defer flushLogs()
 
-		// Main event loop
 		for {
 			select {
 			case <-ticker.C:
-				// Periodic flush every second
 				flushLogs()
-
-			case logMsg, ok := <-logChan:
-				if !ok {
-					// Channel closed - container exited
-					sm.handleContainerExit(state)
-					return
-				}
-
-				// Add to buffer
-				logBuffer = append(logBuffer, logMsg.message)
-				sourceBuffer = append(sourceBuffer, logMsg.source)
-
-				// Track metrics
-				if logMsg.source == "stderr" {
-					stderrCount++
-				} else {
-					stdoutCount++
-				}
-
-				msgLower := strings.ToLower(logMsg.message)
-				if strings.Contains(msgLower, "error") || strings.Contains(msgLower, "exception") || strings.Contains(msgLower, "fatal") {
-					errorCount++
-				}
-				if strings.Contains(msgLower, "warn") {
-					warnCount++
-				}
-
-				// Flush if buffer is full
-				if len(logBuffer) >= bufferSize {
-					flushLogs()
-				}
+			case <-done:
+				return
 			}
 		}
 	}()
