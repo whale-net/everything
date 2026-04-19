@@ -27,6 +27,8 @@ class ICredentials {
   virtual const char* wifi_password() const = 0;
   virtual const char* mqtt_host()     const = 0;
   virtual uint16_t    mqtt_port()     const = 0;
+  virtual const char* mqtt_user()     const = 0;  // "" = no auth
+  virtual const char* mqtt_pass()     const = 0;
 };
 
 // ── Test double ──────────────────────────────────────────────────────────────
@@ -36,21 +38,27 @@ namespace testing {
 class FakeCredentials final : public ICredentials {
  public:
   FakeCredentials(const char* ssid, const char* password,
-                  const char* mqtt_host = "", uint16_t mqtt_port = 1883)
+                  const char* mqtt_host = "", uint16_t mqtt_port = 1883,
+                  const char* mqtt_user = "", const char* mqtt_pass = "")
       : ssid_(ssid), password_(password),
-        mqtt_host_(mqtt_host), mqtt_port_(mqtt_port) {}
+        mqtt_host_(mqtt_host), mqtt_port_(mqtt_port),
+        mqtt_user_(mqtt_user), mqtt_pass_(mqtt_pass) {}
 
   pw::Status Load() override { return pw::OkStatus(); }
   const char* wifi_ssid()     const override { return ssid_; }
   const char* wifi_password() const override { return password_; }
   const char* mqtt_host()     const override { return mqtt_host_; }
   uint16_t    mqtt_port()     const override { return mqtt_port_; }
+  const char* mqtt_user()     const override { return mqtt_user_; }
+  const char* mqtt_pass()     const override { return mqtt_pass_; }
 
  private:
   const char* ssid_;
   const char* password_;
   const char* mqtt_host_;
   uint16_t    mqtt_port_;
+  const char* mqtt_user_;
+  const char* mqtt_pass_;
 };
 
 }  // namespace testing

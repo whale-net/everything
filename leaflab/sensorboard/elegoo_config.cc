@@ -66,8 +66,8 @@ firmware::NetworkManager& GetNetwork() {
     cfg.mqtt_host   = creds.mqtt_host();
     cfg.mqtt_port   = creds.mqtt_port();
     cfg.device_id   = device_id.Get();
-    cfg.mqtt_user   = nullptr;
-    cfg.mqtt_pass   = nullptr;
+    cfg.mqtt_user   = creds.mqtt_user()[0] != '\0' ? creds.mqtt_user() : nullptr;
+    cfg.mqtt_pass   = creds.mqtt_pass()[0] != '\0' ? creds.mqtt_pass() : nullptr;
     cfg.lwt_topic   = lwt_topic;
     cfg.lwt_payload = "offline";
 

@@ -325,7 +325,8 @@ def setup_rabbitmq(namespace, resource_name='rabbitmq-dev', port_forward=True, m
     if port_forward:
         ports = ['5672:5672', '15672:15672']
         if mqtt:
-            ports.append('1883:1883')
+            # Bind on 0.0.0.0 so WSL2 external traffic (e.g. via Windows portproxy) can reach it.
+            ports.append('0.0.0.0:1883:1883')
         k8s_resource(workload=resource_name, port_forwards=ports)
 
     result = {
@@ -380,6 +381,9 @@ def setup_rabbitmq_mqtt_plugin(namespace, resource_name='rabbitmq-dev', labels=[
 
         echo "Enabling rabbitmq_mqtt plugin..."
         kubectl exec -n {namespace} {resource_name}-0 -- rabbitmq-plugins enable rabbitmq_mqtt
+
+        echo "Granting rabbit user permissions on / vhost for MQTT..."
+        kubectl exec -n {namespace} {resource_name}-0 -- rabbitmqctl set_permissions -p / rabbit ".*" ".*" ".*"
 
         echo "✓ rabbitmq_mqtt plugin enabled (port 1883)"
         '''.format(namespace=namespace, resource_name=resource_name),
