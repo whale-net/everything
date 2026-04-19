@@ -165,9 +165,22 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 	}
 
 	// Always pull steamcmd image to ensure latest version is used
+	// TODO: add cache fallback
 	logger.Info("pulling steamcmd image", "image", steamCMDImage)
-	if pullErr := do.dockerClient.PullImage(ctx, steamCMDImage); pullErr != nil {
-		logger.Error("failed to pull steamcmd image", "error", pullErr)
+	const maxPullAttempts = 3
+	var pullErr error
+	for attempt := 1; attempt <= maxPullAttempts; attempt++ {
+		pullErr = do.dockerClient.PullImage(ctx, steamCMDImage)
+		if pullErr == nil {
+			break
+		}
+		logger.Warn("failed to pull steamcmd image, retrying", "image", steamCMDImage, "attempt", attempt, "error", pullErr)
+		if attempt < maxPullAttempts {
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
+	}
+	if pullErr != nil {
+		logger.Error("failed to pull steamcmd image after retries", "error", pullErr)
 		do.handleDownloadError(ctx, cmd.InstallationID, pullErr)
 		return pullErr
 	}
@@ -622,8 +635,20 @@ func (do *DownloadOrchestrator) runHelperContainer(ctx context.Context, config d
 	}
 
 	// Always pull helper image to ensure latest version is used
-	if pullErr := do.dockerClient.PullImage(ctx, config.Image); pullErr != nil {
-		return fmt.Errorf("failed to pull helper image %s: %w", config.Image, pullErr)
+	// TODO: add cache fallback
+	const maxHelperPullAttempts = 3
+	var helperPullErr error
+	for attempt := 1; attempt <= maxHelperPullAttempts; attempt++ {
+		helperPullErr = do.dockerClient.PullImage(ctx, config.Image)
+		if helperPullErr == nil {
+			break
+		}
+		if attempt < maxHelperPullAttempts {
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
+	}
+	if helperPullErr != nil {
+		return fmt.Errorf("failed to pull helper image %s: %w", config.Image, helperPullErr)
 	}
 
 	containerID, err := do.dockerClient.CreateContainer(ctx, config)

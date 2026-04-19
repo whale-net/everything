@@ -250,9 +250,22 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	}
 
 	// 4. Pull game image (always pull to ensure latest version is used)
+	// TODO: add cache fallback
 	slog.Info("pulling image", "session_id", sessionID, "image", cmd.Image)
-	if pullErr := sm.dockerClient.PullImage(ctx, cmd.Image); pullErr != nil {
-		slog.Error("failed to pull image", "session_id", sessionID, "image", cmd.Image, "error", pullErr)
+	const maxPullAttempts = 3
+	var pullErr error
+	for attempt := 1; attempt <= maxPullAttempts; attempt++ {
+		pullErr = sm.dockerClient.PullImage(ctx, cmd.Image)
+		if pullErr == nil {
+			break
+		}
+		slog.Warn("failed to pull image, retrying", "session_id", sessionID, "image", cmd.Image, "attempt", attempt, "error", pullErr)
+		if attempt < maxPullAttempts {
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
+	}
+	if pullErr != nil {
+		slog.Error("failed to pull image after retries", "session_id", sessionID, "image", cmd.Image, "error", pullErr)
 		sm.cleanupSession(ctx, state)
 		state.UpdateStatus(manman.SessionStatusCrashed)
 		sm.stateManager.RemoveSession(sessionID)
