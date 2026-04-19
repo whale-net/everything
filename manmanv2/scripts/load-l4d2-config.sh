@@ -12,6 +12,7 @@ set -euo pipefail
 #   --game-name=NAME          Game name (default: Left 4 Dead 2)
 #   --config-name=NAME        Config name (default: Coop)
 #   --image=IMAGE             Docker image (default: left4devops/l4d2:latest)
+#   --port=PORT               Game server port, TCP+UDP (default: 27015)
 #   --tls                     Use TLS for GRPC connection (auto-detected for port 443)
 #   --insecure                Use insecure TLS (skip certificate verification)
 #   --help                    Show this help message
@@ -25,6 +26,7 @@ CONTROL_API_ADDR="${CONTROL_API_ADDR:-localhost:50052}"
 GAME_NAME="${GAME_NAME:-Left 4 Dead 2}"
 GAME_CONFIG_NAME="${GAME_CONFIG_NAME:-Coop}"
 IMAGE="${IMAGE:-left4devops/l4d2:latest}"
+GAME_PORT="${GAME_PORT:-27015}"
 USE_TLS="${USE_TLS:-auto}"
 INSECURE_TLS="${INSECURE_TLS:-false}"
 
@@ -45,6 +47,10 @@ for arg in "$@"; do
       ;;
     --image=*)
       IMAGE="${arg#*=}"
+      shift
+      ;;
+    --port=*)
+      GAME_PORT="${arg#*=}"
       shift
       ;;
     --tls)
@@ -78,6 +84,7 @@ echo "TLS:       ${USE_TLS}"
 echo "Game:      ${GAME_NAME}"
 echo "Config:    ${GAME_CONFIG_NAME}"
 echo "Image:     ${IMAGE}"
+echo "Port:      ${GAME_PORT}"
 echo ""
 
 require_grpcurl
@@ -125,7 +132,7 @@ if [[ -z "${config_id}" ]]; then
   "args_template": "",
   "env_template": {
     "HOSTNAME": "ManManV2 L4D2 Server",
-    "PORT": "27015",
+    "PORT": "${GAME_PORT}",
     "DEFAULT_MAP": "c1m1_hotel",
     "DEFAULT_MODE": "coop",
     "GAME_TYPES": "coop,versus,survival,realism",
@@ -211,13 +218,13 @@ if [[ -z "${sgc_id}" ]]; then
   "game_config_id": ${config_id},
   "port_bindings": [
     {
-      "container_port": 27015,
-      "host_port": 27015,
+      "container_port": ${GAME_PORT},
+      "host_port": ${GAME_PORT},
       "protocol": "TCP"
     },
     {
-      "container_port": 27015,
-      "host_port": 27015,
+      "container_port": ${GAME_PORT},
+      "host_port": ${GAME_PORT},
       "protocol": "UDP"
     }
   ]
@@ -248,13 +255,13 @@ else
   "server_game_config_id": ${sgc_id},
   "port_bindings": [
     {
-      "container_port": 27015,
-      "host_port": 27015,
+      "container_port": ${GAME_PORT},
+      "host_port": ${GAME_PORT},
       "protocol": "TCP"
     },
     {
-      "container_port": 27015,
-      "host_port": 27015,
+      "container_port": ${GAME_PORT},
+      "host_port": ${GAME_PORT},
       "protocol": "UDP"
     }
   ],
@@ -280,8 +287,8 @@ if [[ -n "${sgc_id}" && "${sgc_id}" != "null" ]]; then
   echo "  SGC ID:    ${sgc_id}"
   echo ""
   echo "Port Bindings:"
-  echo "  27015/TCP - Game server port"
-  echo "  27015/UDP - Game server port"
+  echo "  ${GAME_PORT}/TCP - Game server port"
+  echo "  ${GAME_PORT}/UDP - Game server port"
 else
   echo "  SGC ID:    (not created - may already exist or port conflict)"
 fi
