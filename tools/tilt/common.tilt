@@ -231,16 +231,18 @@ def setup_dev_util(namespace):
     """
     helm_repo('dev-util', 'https://whale-net.github.io/dev-util')
 
-def setup_postgres(namespace, db_name='default', resource_name='postgres-dev', port_forward=True):
+def setup_postgres(namespace, db_name='default', resource_name='postgres-dev', port_forward=True, image=''):
     """
     Setup PostgreSQL using dev-util helm chart.
-    
+
     Args:
         namespace: Kubernetes namespace
         db_name: Database name to create
         resource_name: K8s resource name
         port_forward: Whether to forward port 5432
-        
+        image: Override the postgres image (e.g. 'timescale/timescaledb:latest-pg16').
+               Defaults to the chart default (postgres:15.3).
+
     Returns:
         Dict with connection info:
         {
@@ -252,24 +254,30 @@ def setup_postgres(namespace, db_name='default', resource_name='postgres-dev', p
             'database': 'dbname',
             'service_info': 'localhost:5432 (user: postgres, pass: password)',
         }
-        
+
     Example:
         db_info = setup_postgres('my-domain-dev', db_name='myapp')
-        db_url = db_info['url']
+        # With TimescaleDB:
+        db_info = setup_postgres('my-domain-dev', db_name='myapp',
+                                 image='timescale/timescaledb:latest-pg16')
     """
+    flags = [
+        '--set=postgresDB={}'.format(db_name),
+        '--set=namespace={}'.format(namespace),
+    ]
+    if image != '':
+        flags.append('--set=image={}'.format(image))
+
     helm_resource(resource_name, 'dev-util/postgres-dev',
         resource_deps=['dev-util'],
-        flags=[
-            '--set=postgresDB={}'.format(db_name),
-            '--set=namespace={}'.format(namespace)
-        ]
+        flags=flags,
     )
-    
+
     if port_forward:
         k8s_resource(workload=resource_name, port_forwards='5432:5432')
-    
+
     host = '{}.{}.svc.cluster.local'.format(resource_name, namespace)
-    
+
     return {
         'url': 'postgresql+psycopg2://postgres:password@{}:5432/{}'.format(host, db_name),
         'host': host,

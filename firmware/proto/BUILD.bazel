@@ -2,7 +2,12 @@
 
 Generated at build time from firmware.proto via protoc + nanopb plugin.
 firmware.options constrains string/array sizes for heap-free operation.
+
+Go proto target (firmwarepb) is for server-side consumers (e.g. leaflab/processor).
 """
+
+load("@rules_go//proto:def.bzl", "go_proto_library")
+load("@rules_proto//proto:defs.bzl", "proto_library")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -35,4 +40,17 @@ cc_library(
     srcs = [":firmware_pb_gen"],
     hdrs = [":firmware_pb_gen"],
     deps = ["@nanopb//:nanopb"],
+)
+
+# ── Go proto (server-side consumers) ─────────────────────────────────────────
+
+proto_library(
+    name = "firmware_proto",
+    srcs = ["firmware.proto"],
+)
+
+go_proto_library(
+    name = "firmwarepb",
+    importpath = "github.com/whale-net/everything/firmware/proto",
+    proto = ":firmware_proto",
 )

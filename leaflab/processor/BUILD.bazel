@@ -1,0 +1,35 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "processor_lib",
+    srcs = [
+        "config.go",
+        "handler.go",
+        "main.go",
+    ],
+    importpath = "github.com/whale-net/everything/leaflab/processor",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//firmware/proto:firmwarepb",
+        "//libs/go/logging",
+        "//libs/go/rmq",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
+
+go_binary(
+    name = "leaflab-processor",
+    embed = [":processor_lib"],
+    visibility = ["//visibility:public"],
+)
+
+release_app(
+    name = "leaflab-processor",
+    binary_name = ":leaflab-processor",
+    language = "go",
+    domain = "leaflab",
+    description = "LeafLab sensor data processor (RabbitMQ MQTT consumer, DB writer)",
+    app_type = "worker",
+    replicas = 1,
+)

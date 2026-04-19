@@ -17,7 +17,7 @@
 load('ext://namespace', 'namespace_create')
 load('../tools/tilt/common.tilt',
      'setup_dev_util', 'setup_rabbitmq', 'setup_rabbitmq_mqtt_plugin',
-     'print_startup_banner', 'print_footer_info')
+     'setup_postgres', 'print_startup_banner', 'print_footer_info')
 
 # ===========================
 # Configuration
@@ -35,8 +35,10 @@ print_startup_banner("LeafLab", namespace, 'linux/amd64')
 setup_dev_util(namespace)
 
 rmq_info = setup_rabbitmq(namespace, mqtt=True)
-
 setup_rabbitmq_mqtt_plugin(namespace, labels=['leaflab-infrastructure'])
+
+db_info = setup_postgres(namespace, db_name='leaflab', resource_name='postgres-dev',
+                         image='timescale/timescaledb:latest-pg16')
 
 # ===========================
 # Access Information
@@ -48,6 +50,7 @@ print("="*60)
 print("  RabbitMQ AMQP:   localhost:5672 (user: rabbit, pass: password)")
 print("  RabbitMQ MQTT:   localhost:1883")
 print("  RabbitMQ Mgmt:   http://localhost:15672")
+print("  TimescaleDB:     localhost:5432 (user: postgres, pass: password, db: leaflab)")
 print("="*60)
 print("")
 print("Provision device (use your host IP, not localhost):")
