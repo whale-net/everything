@@ -1,0 +1,61 @@
+# LeafLab Tiltfile
+# Local development environment for LeafLab data pipeline.
+#
+# Starts RabbitMQ with the MQTT plugin enabled so ESP32 sensorboards can
+# publish sensor data directly to the broker for development and testing.
+#
+# Usage:
+#   cd leaflab && tilt up
+#
+# Then provision your device:
+#   bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 \
+#     wifi_ssid=MySSID wifi_pass=MyPass mqtt_host=<HOST_IP> mqtt_port=1883
+#
+# Subscribe to sensor data:
+#   mosquitto_sub -h localhost -p 1883 -t 'leaflab/#' -v
+
+load('ext://namespace', 'namespace_create')
+load('../tools/tilt/common.tilt',
+     'setup_dev_util', 'setup_rabbitmq', 'setup_rabbitmq_mqtt_plugin',
+     'print_startup_banner', 'print_footer_info')
+
+# ===========================
+# Configuration
+# ===========================
+
+namespace = 'leaflab-local-dev'
+namespace_create(namespace)
+
+print_startup_banner("LeafLab", namespace, 'linux/amd64')
+
+# ===========================
+# Infrastructure
+# ===========================
+
+setup_dev_util(namespace)
+
+rmq_info = setup_rabbitmq(namespace, mqtt=True)
+
+setup_rabbitmq_mqtt_plugin(namespace, labels=['leaflab-infrastructure'])
+
+# ===========================
+# Access Information
+# ===========================
+
+print("\n" + "="*60)
+print("LeafLab Access Information")
+print("="*60)
+print("  RabbitMQ AMQP:   localhost:5672 (user: rabbit, pass: password)")
+print("  RabbitMQ MQTT:   localhost:1883")
+print("  RabbitMQ Mgmt:   http://localhost:15672")
+print("="*60)
+print("")
+print("Provision device (use your host IP, not localhost):")
+print("  bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 \\")
+print("    wifi_ssid=SSID wifi_pass=PASS mqtt_host=<HOST_IP> mqtt_port=1883")
+print("")
+print("Subscribe to all sensor data:")
+print("  mosquitto_sub -h localhost -p 1883 -t 'leaflab/#' -v")
+print("="*60)
+
+print_footer_info('leaflab')

@@ -280,15 +280,21 @@ def setup_postgres(namespace, db_name='default', resource_name='postgres-dev', p
         'service_info': 'localhost:5432 (user: postgres, pass: password)',
     }
 
-def setup_rabbitmq(namespace, resource_name='rabbitmq-dev', port_forward=True):
+def setup_rabbitmq(namespace, resource_name='rabbitmq-dev', port_forward=True, mqtt=False):
     """
     Setup RabbitMQ using dev-util helm chart.
-    
+
     Args:
         namespace: Kubernetes namespace
         resource_name: K8s resource name
         port_forward: Whether to forward ports 5672 and 15672
-        
+        mqtt: Whether to also forward port 1883 (MQTT).
+              Caller is responsible for enabling the rabbitmq_mqtt plugin
+              (see setup_rabbitmq_mqtt_plugin).
+              NOTE: Requires dev-util rabbitmq-dev chart to expose port 1883
+              on the K8s Service — tracked in https://github.com/whale-net/dev-util/issues/TBD.
+              Until then, port-forward goes directly to the pod.
+
     Returns:
         Dict with connection info:
         {
@@ -298,23 +304,31 @@ def setup_rabbitmq(namespace, resource_name='rabbitmq-dev', port_forward=True):
             'password': 'password',
             'service_info': 'localhost:5672 (user: rabbit, pass: password)',
             'mgmt_service_info': 'http://localhost:15672',
+            # when mqtt=True:
+            'mqtt_port': '1883',
+            'mqtt_service_info': 'localhost:1883',
         }
-        
+
     Example:
         rmq_info = setup_rabbitmq('my-domain-dev')
         rmq_host = rmq_info['host']
+
+        # With MQTT:
+        rmq_info = setup_rabbitmq('my-domain-dev', mqtt=True)
     """
-    
+
     helm_resource(resource_name, 'dev-util/rabbitmq-dev',
         resource_deps=['dev-util'],
         flags=['--set=namespace={}'.format(namespace)]
     )
-    
+
     if port_forward:
-        k8s_resource(workload=resource_name, port_forwards='5672:5672')
-        k8s_resource(workload=resource_name, port_forwards='15672:15672')
-    
-    return {
+        ports = ['5672:5672', '15672:15672']
+        if mqtt:
+            ports.append('1883:1883')
+        k8s_resource(workload=resource_name, port_forwards=ports)
+
+    result = {
         'host': '{}.{}.svc.cluster.local'.format(resource_name, namespace),
         'port': '5672',
         'user': 'rabbit',
@@ -322,6 +336,56 @@ def setup_rabbitmq(namespace, resource_name='rabbitmq-dev', port_forward=True):
         'service_info': 'localhost:5672 (user: rabbit, pass: password)',
         'mgmt_service_info': 'http://localhost:15672',
     }
+
+    if mqtt:
+        result['mqtt_port'] = '1883'
+        result['mqtt_service_info'] = 'localhost:1883'
+
+    return result
+
+
+def setup_rabbitmq_mqtt_plugin(namespace, resource_name='rabbitmq-dev', labels=[]):
+    """
+    Enable the rabbitmq_mqtt plugin on a running RabbitMQ instance.
+
+    Call this after setup_rabbitmq(mqtt=True). Creates a local_resource that
+    execs into the pod and enables the plugin once the broker is ready.
+
+    Args:
+        namespace: Kubernetes namespace
+        resource_name: K8s resource name (must match setup_rabbitmq call)
+        labels: Tilt resource labels
+
+    Example:
+        rmq_info = setup_rabbitmq('my-domain-dev', mqtt=True)
+        setup_rabbitmq_mqtt_plugin('my-domain-dev')
+    """
+    local_resource(
+        '{}-mqtt-plugin'.format(resource_name),
+        cmd='''
+        set -e
+
+        echo "Waiting for RabbitMQ pod to be ready..."
+        kubectl wait --for=condition=ready pod -l app={resource_name} -n {namespace} --timeout=60s
+
+        echo "Waiting for RabbitMQ app to be fully started..."
+        for i in $(seq 1 30); do
+            if kubectl exec -n {namespace} {resource_name}-0 -- rabbitmqctl status >/dev/null 2>&1; then
+                echo "  ✓ RabbitMQ app is running"
+                break
+            fi
+            echo "  Attempt $i/30: not ready yet, waiting..."
+            sleep 2
+        done
+
+        echo "Enabling rabbitmq_mqtt plugin..."
+        kubectl exec -n {namespace} {resource_name}-0 -- rabbitmq-plugins enable rabbitmq_mqtt
+
+        echo "✓ rabbitmq_mqtt plugin enabled (port 1883)"
+        '''.format(namespace=namespace, resource_name=resource_name),
+        resource_deps=[resource_name],
+        labels=labels,
+    )
 
 def setup_otelcollector(namespace, resource_name='otelcollector-dev'):
     """
