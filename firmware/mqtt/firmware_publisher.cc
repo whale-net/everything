@@ -1,6 +1,6 @@
-// LeafLabPublisher — proto serialisation + MQTT publish for LeafLab firmware.
+// FirmwarePublisher — proto serialisation + MQTT publish for firmware.
 
-#include "firmware/mqtt/leaflab_publisher.h"
+#include "firmware/mqtt/firmware_publisher.h"
 
 #include <cstdio>
 #include <cstring>
@@ -18,17 +18,17 @@ namespace {
 constexpr size_t kTopicBufSize = 80;
 }
 
-LeafLabPublisher::LeafLabPublisher(const IDeviceId& device_id,
+FirmwarePublisher::FirmwarePublisher(const IDeviceId& device_id,
                                    pw::span<ISensor* const> sensors,
                                    NetworkManager& net)
     : device_id_(device_id), sensors_(sensors), net_(net) {}
 
-void LeafLabPublisher::OnConnect() {
+void FirmwarePublisher::OnConnect() {
   PublishStatus("online");
   PublishManifest();
 }
 
-void LeafLabPublisher::PublishReadings() {
+void FirmwarePublisher::PublishReadings() {
   for (ISensor* s : sensors_) {
     SensorReading r = s->Read();
     if (!r.valid) continue;
@@ -40,7 +40,7 @@ void LeafLabPublisher::PublishReadings() {
     uint8_t buf[firmware_SensorReading_size];
     pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
     if (!pb_encode(&stream, firmware_SensorReading_fields, &msg)) {
-      PW_LOG_WARN("LeafLabPublisher: encode failed for '%s'", s->name());
+      PW_LOG_WARN("FirmwarePublisher: encode failed for '%s'", s->name());
       continue;
     }
 
@@ -49,12 +49,12 @@ void LeafLabPublisher::PublishReadings() {
 
     pw::Status st = net_.Publish(topic.c_str(), buf, stream.bytes_written);
     if (!st.ok()) {
-      PW_LOG_WARN("LeafLabPublisher: publish failed for '%s'", s->name());
+      PW_LOG_WARN("FirmwarePublisher: publish failed for '%s'", s->name());
     }
   }
 }
 
-void LeafLabPublisher::PublishManifest() {
+void FirmwarePublisher::PublishManifest() {
   firmware_DeviceManifest manifest = firmware_DeviceManifest_init_zero;
 
   strncpy(manifest.device_id, device_id_.Get(), sizeof(manifest.device_id) - 1);
@@ -73,7 +73,7 @@ void LeafLabPublisher::PublishManifest() {
   uint8_t buf[firmware_DeviceManifest_size];
   pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
   if (!pb_encode(&stream, firmware_DeviceManifest_fields, &manifest)) {
-    PW_LOG_ERROR("LeafLabPublisher: manifest encode failed");
+    PW_LOG_ERROR("FirmwarePublisher: manifest encode failed");
     return;
   }
 
@@ -83,14 +83,14 @@ void LeafLabPublisher::PublishManifest() {
   pw::Status st = net_.Publish(topic.c_str(), buf, stream.bytes_written,
                                 /*retained=*/true);
   if (st.ok()) {
-    PW_LOG_INFO("LeafLabPublisher: manifest published (%zu bytes, %u sensors)",
+    PW_LOG_INFO("FirmwarePublisher: manifest published (%zu bytes, %u sensors)",
                 stream.bytes_written, n);
   } else {
-    PW_LOG_WARN("LeafLabPublisher: manifest publish failed");
+    PW_LOG_WARN("FirmwarePublisher: manifest publish failed");
   }
 }
 
-void LeafLabPublisher::PublishStatus(const char* status) {
+void FirmwarePublisher::PublishStatus(const char* status) {
   pw::StringBuffer<kTopicBufSize> topic;
   topic << "leaflab/" << device_id_.Get() << "/status";
   net_.Publish(topic.c_str(), status);

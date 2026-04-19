@@ -8,13 +8,13 @@
 //   firmware::II2CBus& GetBus()                        — initialised I2C bus
 //   pw::span<firmware::ISensor* const> GetSensors()    — sensor registry
 //   firmware::NetworkManager& GetNetwork()             — lazy-init WiFi+MQTT
-//   firmware::LeafLabPublisher& GetPublisher()         — proto MQTT publisher
+//   firmware::FirmwarePublisher& GetPublisher()         — proto MQTT publisher
 
 #include <Arduino.h>
 
 #include "board_pins.h"
 #include "firmware/i2c/i2c_bus.h"
-#include "firmware/mqtt/leaflab_publisher.h"
+#include "firmware/mqtt/firmware_publisher.h"
 #include "firmware/network/network_manager.h"
 #include "firmware/sensor/sensor.h"
 #include "pw_log/log.h"
@@ -24,7 +24,7 @@
 firmware::II2CBus& GetBus();
 pw::span<firmware::ISensor* const> GetSensors();
 firmware::NetworkManager& GetNetwork();
-firmware::LeafLabPublisher& GetPublisher();
+firmware::FirmwarePublisher& GetPublisher();
 
 // Platform keep-alive from firmware/network/esp32_platform.cc.
 extern void MQTTLoop();

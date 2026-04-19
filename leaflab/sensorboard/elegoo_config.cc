@@ -11,7 +11,7 @@
 #include "firmware/device_id/efuse_device_id.h"
 #include "firmware/i2c/arduino_i2c_bus.h"
 #include "firmware/i2c/i2c_bus.h"
-#include "firmware/mqtt/leaflab_publisher.h"
+#include "firmware/mqtt/firmware_publisher.h"
 #include "firmware/network/esp32_platform.h"
 #include "firmware/network/network_manager.h"
 #include "firmware/sensor/bh1750.h"
@@ -44,7 +44,7 @@ pw::span<firmware::ISensor* const> GetSensors() {
 static firmware::NVSCredentials    creds;
 static firmware::EfuseDeviceId     device_id("leaflab");
 static firmware::NetworkManager*   net       = nullptr;
-static firmware::LeafLabPublisher* publisher = nullptr;
+static firmware::FirmwarePublisher* publisher = nullptr;
 
 firmware::NetworkManager& GetNetwork() {
     if (net != nullptr) return *net;
@@ -76,9 +76,9 @@ firmware::NetworkManager& GetNetwork() {
     return *net;
 }
 
-firmware::LeafLabPublisher& GetPublisher() {
+firmware::FirmwarePublisher& GetPublisher() {
     if (publisher != nullptr) return *publisher;
-    static firmware::LeafLabPublisher local_pub(device_id, GetSensors(), GetNetwork());
+    static firmware::FirmwarePublisher local_pub(device_id, GetSensors(), GetNetwork());
     publisher = &local_pub;
     return *publisher;
 }

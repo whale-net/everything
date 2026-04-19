@@ -13,7 +13,7 @@ cc_library(
     srcs = ["sensorboard_main.cc"],
     deps = [
         "//firmware/i2c:i2c_bus",
-        "//firmware/mqtt:leaflab_publisher",
+        "//firmware/mqtt:firmware_publisher",
         "//firmware/network:network_manager",
         "//firmware/sensor:sensor",
         "//tools/firmware:board_pins",
@@ -36,7 +36,7 @@ esp32_firmware(
         "//firmware/credentials:nvs_credentials",
         "//firmware/device_id:efuse_device_id",
         "//firmware/i2c:arduino_i2c_bus",
-        "//firmware/mqtt:leaflab_publisher",
+        "//firmware/mqtt:firmware_publisher",
         "//firmware/network:esp32_platform",
         "//firmware/sensor:bh1750",
         "@arduino_esp32//:Wire",

@@ -21,12 +21,12 @@ ESP32_COMPAT = [
     "//tools/firmware:cpu_xtensa",
 ]
 
-# LeafLabPublisher — proto serialisation + MQTT publish for LeafLab firmware.
+# FirmwarePublisher — proto serialisation + MQTT publish.
 # Device-only: depends on nanopb-generated code and millis().
 cc_library(
-    name = "leaflab_publisher",
-    srcs = ["leaflab_publisher.cc"],
-    hdrs = ["leaflab_publisher.h"],
+    name = "firmware_publisher",
+    srcs = ["firmware_publisher.cc"],
+    hdrs = ["firmware_publisher.h"],
     target_compatible_with = ESP32_COMPAT,
     deps = [
         "//firmware/device_id:device_id",

@@ -1,6 +1,6 @@
 #pragma once
 
-// LeafLabPublisher — serialises sensor data to proto and publishes over MQTT.
+// FirmwarePublisher — serialises sensor data to proto and publishes over MQTT.
 //
 // Publishes to the LeafLab topic structure:
 //   leaflab/<device_id>/status            — "online" on connect (LWT="offline")
@@ -24,11 +24,11 @@
 
 namespace firmware {
 
-class LeafLabPublisher {
+class FirmwarePublisher {
  public:
-  LeafLabPublisher(const IDeviceId& device_id,
-                   pw::span<ISensor* const> sensors,
-                   NetworkManager& net);
+  FirmwarePublisher(const IDeviceId& device_id,
+                    pw::span<ISensor* const> sensors,
+                    NetworkManager& net);
 
   // Publish "online" to status topic and manifest to manifest topic (retained).
   // Call once each time the network transitions to kReady.
