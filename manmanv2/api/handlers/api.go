@@ -31,6 +31,7 @@ type APIServer struct {
 	patchHandler            *ConfigurationPatchHandler
 	volumeHandler           *GameConfigVolumeHandler
 	actionHandler           *ActionHandler
+	restartScheduleHandler  *RestartScheduleHandler
 }
 
 func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq.Connection, workshopManager workshop.WorkshopManagerInterface) *APIServer {
@@ -64,6 +65,7 @@ func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq
 		patchHandler:            NewConfigurationPatchHandler(repo.ConfigurationPatches),
 		volumeHandler:           NewGameConfigVolumeHandler(repo.GameConfigVolumes),
 		actionHandler:           NewActionHandler(repo.Actions.(*postgres.ActionRepository), repo.Sessions, repo.ServerGameConfigs, repo.GameConfigs, commandPublisher),
+		restartScheduleHandler:  NewRestartScheduleHandler(repo.RestartSchedules),
 	}
 }
 
@@ -343,4 +345,25 @@ func (s *APIServer) ListActionDefinitions(ctx context.Context, req *pb.ListActio
 
 func (s *APIServer) GetActionDefinition(ctx context.Context, req *pb.GetActionDefinitionRequest) (*pb.GetActionDefinitionResponse, error) {
 	return s.actionHandler.GetActionDefinition(ctx, req)
+}
+
+// RestartSchedule RPCs
+func (s *APIServer) CreateRestartSchedule(ctx context.Context, req *pb.CreateRestartScheduleRequest) (*pb.CreateRestartScheduleResponse, error) {
+	return s.restartScheduleHandler.CreateRestartSchedule(ctx, req)
+}
+
+func (s *APIServer) GetRestartSchedule(ctx context.Context, req *pb.GetRestartScheduleRequest) (*pb.GetRestartScheduleResponse, error) {
+	return s.restartScheduleHandler.GetRestartSchedule(ctx, req)
+}
+
+func (s *APIServer) ListRestartSchedules(ctx context.Context, req *pb.ListRestartSchedulesRequest) (*pb.ListRestartSchedulesResponse, error) {
+	return s.restartScheduleHandler.ListRestartSchedules(ctx, req)
+}
+
+func (s *APIServer) UpdateRestartSchedule(ctx context.Context, req *pb.UpdateRestartScheduleRequest) (*pb.UpdateRestartScheduleResponse, error) {
+	return s.restartScheduleHandler.UpdateRestartSchedule(ctx, req)
+}
+
+func (s *APIServer) DeleteRestartSchedule(ctx context.Context, req *pb.DeleteRestartScheduleRequest) (*pb.DeleteRestartScheduleResponse, error) {
+	return s.restartScheduleHandler.DeleteRestartSchedule(ctx, req)
 }

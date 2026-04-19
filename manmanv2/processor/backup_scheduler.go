@@ -19,6 +19,7 @@ import (
 	"github.com/whale-net/everything/manmanv2/api/repository"
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
 	hostrmq "github.com/whale-net/everything/manmanv2/host/rmq"
+	pb "github.com/whale-net/everything/manmanv2/protos"
 )
 
 // ============================================================================
@@ -175,7 +176,7 @@ func (w *scheduledBackupWorker) Work(ctx context.Context, job *river.Job[schedul
 // Startup
 // ============================================================================
 
-func startBackupScheduler(ctx context.Context, dbPool *pgxpool.Pool, repo *repository.Repository, rmqConn *rmq.Connection, s3Client *s3lib.Client, logger *slog.Logger) (*river.Client[pgx.Tx], error) {
+func startScheduler(ctx context.Context, dbPool *pgxpool.Pool, repo *repository.Repository, rmqConn *rmq.Connection, s3Client *s3lib.Client, apiClient pb.ManManAPIClient, stopTimeoutSeconds int, logger *slog.Logger) (*river.Client[pgx.Tx], error) {
 	// Run River schema migrations
 	migrator, err := rivermigrate.New(riverpgxv5.New(dbPool), nil)
 	if err != nil {
@@ -210,6 +211,18 @@ func startBackupScheduler(ctx context.Context, dbPool *pgxpool.Pool, repo *repos
 		logger:     logger,
 	})
 
+	restartScanWkr := &restartScanWorker{
+		repo:   repo,
+		logger: logger,
+	}
+	river.AddWorker(workers, restartScanWkr)
+	river.AddWorker(workers, &scheduledRestartWorker{
+		repo:               repo,
+		apiClient:          apiClient,
+		stopTimeoutSeconds: stopTimeoutSeconds,
+		logger:             logger,
+	})
+
 	riverClient, err = river.NewClient(riverpgxv5.New(dbPool), &river.Config{
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 5},
@@ -223,20 +236,28 @@ func startBackupScheduler(ctx context.Context, dbPool *pgxpool.Pool, repo *repos
 				},
 				&river.PeriodicJobOpts{RunOnStart: true},
 			),
+			river.NewPeriodicJob(
+				river.PeriodicInterval(1*time.Minute),
+				func() (river.JobArgs, *river.InsertOpts) {
+					return restartScanArgs{}, nil
+				},
+				&river.PeriodicJobOpts{RunOnStart: true},
+			),
 		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create river client: %w", err)
 	}
 
-	// Wire the client reference into the scan worker
+	// Wire the client references into scan workers
 	scanWorker.riverClient = riverClient
+	restartScanWkr.riverClient = riverClient
 
 	if err := riverClient.Start(ctx); err != nil {
 		return nil, fmt.Errorf("failed to start river client: %w", err)
 	}
 
-	logger.Info("backup scheduler started")
+	logger.Info("scheduler started")
 	return riverClient, nil
 }
 

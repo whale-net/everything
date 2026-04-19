@@ -175,6 +175,13 @@ func (app *App) handleSGCDetail(w http.ResponseWriter, r *http.Request) {
 		recentBackups = []*manmanpb.Backup{}
 	}
 
+	// Fetch restart schedules for this SGC
+	restartSchedules, err := app.grpc.ListRestartSchedules(ctx, sgcID)
+	if err != nil {
+		log.Printf("Warning: failed to list restart schedules for SGC %d: %v", sgcID, err)
+		restartSchedules = []*manmanpb.RestartSchedule{}
+	}
+
 	// Convert library attachments to templ format
 	var templLibAttachments []pages.LibraryAttachment
 	for _, att := range libraryAttachments {
@@ -225,6 +232,7 @@ func (app *App) handleSGCDetail(w http.ResponseWriter, r *http.Request) {
 		PendingCount:       pendingCount,
 		BackupConfigs:      templBackupConfigs,
 		RecentBackups:      recentBackups,
+		RestartSchedules:   restartSchedules,
 	}
 
 	RenderTempl(w, r, fmt.Sprintf("SGC %d", sgcID), pages.SGCDetail(pageData))

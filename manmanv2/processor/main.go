@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/whale-net/everything/libs/go/grpcauth"
+	grpcclient "github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
 	s3lib "github.com/whale-net/everything/libs/go/s3"
@@ -18,6 +20,7 @@ import (
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
 	"github.com/whale-net/everything/manmanv2/processor/consumer"
 	"github.com/whale-net/everything/manmanv2/processor/handlers"
+	pb "github.com/whale-net/everything/manmanv2/protos"
 )
 
 func main() {
@@ -120,6 +123,7 @@ func run() error {
 		BackupConfigs:      postgres.NewBackupConfigRepository(dbPool),
 		GameConfigVolumes:  postgres.NewGameConfigVolumeRepository(dbPool),
 		ServerPorts:        postgres.NewServerPortRepository(dbPool),
+		RestartSchedules:   postgres.NewRestartScheduleRepository(dbPool),
 	}
 
 	// Initialize publisher for external exchange
@@ -178,7 +182,7 @@ func run() error {
 	// Start stale session checker
 	sessionStatusHandler.StartStaleSessionChecker(appCtx, 10*time.Second, time.Duration(cfg.StaleSessionThreshold)*time.Second)
 
-	// Start backup scheduler (River)
+	// Start backup+restart scheduler (River)
 	s3Client, err := s3lib.NewClient(appCtx, s3lib.Config{
 		Bucket:         os.Getenv("S3_BUCKET"),
 		Region:         os.Getenv("S3_REGION"),
@@ -191,9 +195,34 @@ func run() error {
 		logger.Warn("failed to initialize S3 client, scheduled backups will not run", "error", err)
 		s3Client = nil
 	}
-	riverClient, err := startBackupScheduler(appCtx, dbPool, repo, rmqConn, s3Client, logger)
+
+	// Initialize gRPC client to control-api for restart jobs
+	var apiClient pb.ManManAPIClient
+	authOpt, err := grpcauth.NewServiceAccountDialOption(grpcauth.ClientConfig{
+		Mode:         grpcauth.AuthMode(cfg.GRPCAuthMode),
+		TokenURL:     cfg.GRPCAuthTokenURL,
+		ClientID:     cfg.GRPCAuthClientID,
+		ClientSecret: cfg.GRPCAuthClientSecret,
+	})
 	if err != nil {
-		logger.Warn("failed to start backup scheduler, scheduled backups will not run", "error", err)
+		logger.Warn("failed to create gRPC auth option, restart scheduler will not run", "error", err)
+	} else {
+		grpcConn, err := grpcclient.NewClient(appCtx, cfg.APIAddress, authOpt)
+		if err != nil {
+			logger.Warn("failed to connect to control-api, restart scheduler will not run", "error", err)
+		} else {
+			apiClient = pb.NewManManAPIClient(grpcConn.GetConnection())
+			defer func() {
+				if err := grpcConn.Close(); err != nil {
+					logger.Warn("failed to close gRPC connection", "error", err)
+				}
+			}()
+		}
+	}
+
+	riverClient, err := startScheduler(appCtx, dbPool, repo, rmqConn, s3Client, apiClient, cfg.RestartStopTimeoutSeconds, logger)
+	if err != nil {
+		logger.Warn("failed to start scheduler, scheduled jobs will not run", "error", err)
 	} else {
 		defer riverClient.Stop(context.Background()) //nolint:errcheck
 	}
