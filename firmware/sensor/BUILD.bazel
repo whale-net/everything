@@ -11,7 +11,7 @@ cc_library(
     name = "sensor",
     hdrs = ["sensor.h"],
     deps = [
-        "//proto/leaflab:leaflab_nanopb",
+        "//firmware/proto:firmware_nanopb",
         "@pigweed//pw_status",
     ],
 )

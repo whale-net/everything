@@ -26,7 +26,7 @@ firmware reflashes and unique per chip.
 
 ## Protobuf Schema
 
-Source: `proto/leaflab/leaflab.proto`
+Source: `firmware/proto/firmware.proto`
 
 ### `DeviceManifest` — published retained on connect
 

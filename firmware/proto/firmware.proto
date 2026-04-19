@@ -1,5 +1,5 @@
 syntax = "proto3";
-package leaflab;
+package firmware;
 
 // ── Sensor types ─────────────────────────────────────────────────────────────
 
@@ -11,9 +11,8 @@ enum SensorType {
 }
 
 // ── Device manifest ───────────────────────────────────────────────────────────
-// Published retained to leaflab/<device_id>/manifest on connect.
-// Describes the board's sensor complement so processors can register
-// entities without knowing the firmware source.
+// Published retained on connect. Describes the board's sensor complement so
+// processors can register entities without knowing the firmware source.
 
 message SensorDescriptor {
   string     name = 1;  // unique on this device, e.g. "light_canopy"
@@ -27,7 +26,7 @@ message DeviceManifest {
 }
 
 // ── Sensor reading ────────────────────────────────────────────────────────────
-// Published to leaflab/<device_id>/sensor/<sensor_name> each loop.
+// Published per sensor each loop.
 
 message SensorReading {
   float  value     = 1;

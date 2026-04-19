@@ -7,8 +7,8 @@
 
 #include <Arduino.h>
 
+#include "firmware/proto/firmware.pb.h"
 #include "pb_encode.h"
-#include "proto/leaflab/leaflab.pb.h"
 #include "pw_log/log.h"
 #include "pw_string/string_builder.h"
 
@@ -33,13 +33,13 @@ void LeafLabPublisher::PublishReadings() {
     SensorReading r = s->Read();
     if (!r.valid) continue;
 
-    leaflab_SensorReading msg = leaflab_SensorReading_init_zero;
+    firmware_SensorReading msg = firmware_SensorReading_init_zero;
     msg.value     = r.value;
     msg.uptime_ms = static_cast<uint32_t>(millis());
 
-    uint8_t buf[leaflab_SensorReading_size];
+    uint8_t buf[firmware_SensorReading_size];
     pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
-    if (!pb_encode(&stream, leaflab_SensorReading_fields, &msg)) {
+    if (!pb_encode(&stream, firmware_SensorReading_fields, &msg)) {
       PW_LOG_WARN("LeafLabPublisher: encode failed for '%s'", s->name());
       continue;
     }
@@ -55,7 +55,7 @@ void LeafLabPublisher::PublishReadings() {
 }
 
 void LeafLabPublisher::PublishManifest() {
-  leaflab_DeviceManifest manifest = leaflab_DeviceManifest_init_zero;
+  firmware_DeviceManifest manifest = firmware_DeviceManifest_init_zero;
 
   strncpy(manifest.device_id, device_id_.Get(), sizeof(manifest.device_id) - 1);
 
@@ -63,16 +63,16 @@ void LeafLabPublisher::PublishManifest() {
   for (ISensor* s : sensors_) {
     if (n >= static_cast<pb_size_t>(sizeof(manifest.sensors) /
                                     sizeof(manifest.sensors[0]))) break;
-    leaflab_SensorDescriptor& desc = manifest.sensors[n++];
+    firmware_SensorDescriptor& desc = manifest.sensors[n++];
     strncpy(desc.name, s->name(), sizeof(desc.name) - 1);
     desc.type = s->type();
     strncpy(desc.unit, s->unit(), sizeof(desc.unit) - 1);
   }
   manifest.sensors_count = n;
 
-  uint8_t buf[leaflab_DeviceManifest_size];
+  uint8_t buf[firmware_DeviceManifest_size];
   pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
-  if (!pb_encode(&stream, leaflab_DeviceManifest_fields, &manifest)) {
+  if (!pb_encode(&stream, firmware_DeviceManifest_fields, &manifest)) {
     PW_LOG_ERROR("LeafLabPublisher: manifest encode failed");
     return;
   }

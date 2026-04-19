@@ -34,7 +34,7 @@ class ThermistorSensor final : public ISensor {
 
   const char* name()    const override { return name_; }
   uint8_t address()     const override { return pin_; }
-  leaflab_SensorType type() const override { return leaflab_SensorType_SENSOR_TYPE_TEMPERATURE; }
+  firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_TEMPERATURE; }
   const char* unit()    const override { return "C"; }
 
  private:

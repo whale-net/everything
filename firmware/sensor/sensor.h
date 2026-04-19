@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "proto/leaflab/leaflab.pb.h"
+#include "firmware/proto/firmware.pb.h"
 #include "pw_status/status.h"
 
 namespace firmware {
@@ -51,7 +51,7 @@ class ISensor {
   virtual uint8_t address() const = 0;
 
   // Sensor type and SI unit string, used to populate the device manifest.
-  virtual leaflab_SensorType type() const = 0;
+  virtual firmware_SensorType type() const = 0;
   virtual const char*        unit() const = 0;
 };
 

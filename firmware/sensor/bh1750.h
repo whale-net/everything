@@ -36,7 +36,7 @@ class BH1750Sensor final : public ISensor {
 
   const char* name()    const override { return name_; }
   uint8_t address()     const override { return address_; }
-  leaflab_SensorType type() const override { return leaflab_SensorType_SENSOR_TYPE_ILLUMINANCE; }
+  firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_ILLUMINANCE; }
   const char* unit()    const override { return "lx"; }
 
  private:
