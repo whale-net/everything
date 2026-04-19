@@ -90,6 +90,7 @@ go.work.sum
 .vscode/
 .idea/
 .cursor/
+.claude/worktrees/
 *.swp
 *.swo
 *~
