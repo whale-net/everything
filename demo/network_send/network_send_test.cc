@@ -51,8 +51,12 @@ void reset_stubs() {
 }  // namespace
 
 bool WiFiIsConnected() { return g_wifi_up; }
-bool MQTTConnect(const char*, uint16_t, const char*, const char*, const char*) {
+bool MQTTConnect(const char*, uint16_t, const char*, const char*, const char*,
+                 const char*, const char*) {
     return g_mqtt_up;
+}
+bool MQTTPublishBinary(const char*, const uint8_t*, size_t, bool) {
+    return g_mqtt_publish_ok;
 }
 bool MQTTIsConnected() { return g_mqtt_up; }
 bool MQTTPublish(const char* topic, const char* payload) {

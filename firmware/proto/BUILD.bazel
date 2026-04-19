@@ -17,6 +17,7 @@ genrule(
         "firmware.pb.c",
     ],
     cmd = """
+        export PATH=$$(dirname $(location @protobuf//:protoc)):$$PATH && \
         $(location @protobuf//:protoc) \
           --plugin=protoc-gen-nanopb=$(location @nanopb//:protoc-gen-nanopb) \
           "--nanopb_out=--library-include-format=quote --options-file=$(location firmware.options):$(RULEDIR)" \
