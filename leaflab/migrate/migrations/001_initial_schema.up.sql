@@ -8,7 +8,7 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 CREATE TABLE region (
     region_id       BIGSERIAL PRIMARY KEY,
-    parent_region_id BIGINT REFERENCES region(region_id) ON DELETE SET NULL,
+    parent_region_id BIGINT REFERENCES region(region_id) ON DELETE RESTRICT,
     name            VARCHAR(255) NOT NULL,
     description     TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -47,9 +47,9 @@ INSERT INTO sensor_type (name, default_unit) VALUES
 
 CREATE TABLE sensor (
     sensor_id      BIGSERIAL PRIMARY KEY,
-    board_id       BIGINT NOT NULL REFERENCES board(board_id) ON DELETE CASCADE,
+    board_id       BIGINT NOT NULL REFERENCES board(board_id) ON DELETE RESTRICT,
     sensor_type_id BIGINT NOT NULL REFERENCES sensor_type(sensor_type_id),
-    region_id      BIGINT REFERENCES region(region_id) ON DELETE SET NULL,
+    region_id      BIGINT REFERENCES region(region_id) ON DELETE RESTRICT,
     name           VARCHAR(128) NOT NULL,
     unit           VARCHAR(16) NOT NULL,  -- as reported in manifest
     registered_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -67,8 +67,8 @@ CREATE INDEX idx_sensor_region_id      ON sensor(region_id);
 
 CREATE TABLE sensor_region_history (
     history_id    BIGSERIAL PRIMARY KEY,
-    sensor_id     BIGINT NOT NULL REFERENCES sensor(sensor_id) ON DELETE CASCADE,
-    region_id     BIGINT NOT NULL REFERENCES region(region_id) ON DELETE CASCADE,
+    sensor_id     BIGINT NOT NULL REFERENCES sensor(sensor_id) ON DELETE RESTRICT,
+    region_id     BIGINT NOT NULL REFERENCES region(region_id) ON DELETE RESTRICT,
     assigned_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     unassigned_at TIMESTAMPTZ
 );
@@ -86,8 +86,8 @@ CREATE INDEX idx_sensor_region_history_current       ON sensor_region_history(se
 
 CREATE TABLE sensor_reading (
     reading_id  BIGSERIAL,
-    sensor_id   BIGINT NOT NULL REFERENCES sensor(sensor_id) ON DELETE CASCADE,
-    region_id   BIGINT REFERENCES region(region_id) ON DELETE SET NULL,
+    sensor_id   BIGINT NOT NULL REFERENCES sensor(sensor_id) ON DELETE RESTRICT,
+    region_id   BIGINT REFERENCES region(region_id) ON DELETE RESTRICT,
     value       DOUBLE PRECISION NOT NULL,
     valid       BOOLEAN NOT NULL DEFAULT TRUE,
     uptime_ms   INTEGER NOT NULL,
@@ -112,8 +112,7 @@ CREATE TABLE plant_type (
 );
 
 -- ── Plant ────────────────────────────────────────────────────────────────────
--- removed_at = NULL means still present. RESTRICT on region_id prevents
--- silently deleting plant history by deleting a region.
+-- removed_at = NULL means still present.
 
 CREATE TABLE plant (
     plant_id      BIGSERIAL PRIMARY KEY,
