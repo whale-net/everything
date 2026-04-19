@@ -33,7 +33,7 @@ class FakeSensor final : public ISensor {
   SensorReading Read() override { return SensorReading::Ok(value_); }
   const char* name()    const override { return name_; }
   uint8_t address()     const override { return address_; }
-  SensorType  type()    const override { return SensorType::kUnknown; }
+  leaflab_SensorType type() const override { return leaflab_SensorType_SENSOR_TYPE_UNKNOWN; }
   const char* unit()    const override { return ""; }
 
   // Allow tests to change the reading mid-test.
@@ -66,7 +66,7 @@ class RecordingSensor final : public ISensor {
 
   const char* name()    const override { return name_; }
   uint8_t address()     const override { return address_; }
-  SensorType  type()    const override { return SensorType::kUnknown; }
+  leaflab_SensorType type() const override { return leaflab_SensorType_SENSOR_TYPE_UNKNOWN; }
   const char* unit()    const override { return ""; }
 
   int init_call_count() const { return init_call_count_; }

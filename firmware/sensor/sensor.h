@@ -2,18 +2,10 @@
 
 #include <cstdint>
 
+#include "proto/leaflab/leaflab.pb.h"
 #include "pw_status/status.h"
 
 namespace firmware {
-
-// Matches leaflab.SensorType in proto/leaflab/leaflab.proto.
-// Values must stay in sync with the proto enum.
-enum class SensorType : uint32_t {
-  kUnknown     = 0,
-  kIlluminance = 1,
-  kTemperature = 2,
-  kHumidity    = 3,
-};
 
 // Typed return value from ISensor::Read().
 // Bundles the measured value with a validity flag so callers never need to
@@ -59,8 +51,8 @@ class ISensor {
   virtual uint8_t address() const = 0;
 
   // Sensor type and SI unit string, used to populate the device manifest.
-  virtual SensorType   type() const = 0;
-  virtual const char*  unit() const = 0;
+  virtual leaflab_SensorType type() const = 0;
+  virtual const char*        unit() const = 0;
 };
 
 }  // namespace firmware

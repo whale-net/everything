@@ -65,7 +65,7 @@ void LeafLabPublisher::PublishManifest() {
                                     sizeof(manifest.sensors[0]))) break;
     leaflab_SensorDescriptor& desc = manifest.sensors[n++];
     strncpy(desc.name, s->name(), sizeof(desc.name) - 1);
-    desc.type = static_cast<leaflab_SensorType>(static_cast<uint32_t>(s->type()));
+    desc.type = s->type();
     strncpy(desc.unit, s->unit(), sizeof(desc.unit) - 1);
   }
   manifest.sensors_count = n;

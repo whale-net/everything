@@ -5,10 +5,15 @@ load("@rules_cc//cc:defs.bzl", "cc_test")
 package(default_visibility = ["//visibility:public"])
 
 # ISensor interface — compiles on host and device.
+# Depends on leaflab_nanopb for leaflab_SensorType (nanopb is pure C,
+# host-compilable).
 cc_library(
     name = "sensor",
     hdrs = ["sensor.h"],
-    deps = ["@pigweed//pw_status"],
+    deps = [
+        "//proto/leaflab:leaflab_nanopb",
+        "@pigweed//pw_status",
+    ],
 )
 
 cc_library(
