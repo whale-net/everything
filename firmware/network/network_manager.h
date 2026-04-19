@@ -39,7 +39,6 @@
 
 #include <cstdint>
 
-#include "pw_chrono/system_clock.h"
 #include "pw_log/log.h"
 #include "pw_status/status.h"
 
@@ -59,15 +58,20 @@ class NetworkManager {
   struct Config {
     const char* ssid;
     const char* password;
-    const char* mqtt_host;
+    const char* mqtt_host;           // nullptr or "" = WiFi only, no MQTT
     uint16_t    mqtt_port;
-    const char* device_id;          // Used as MQTT client ID (e.g. eFuse MAC string)
-    const char* mqtt_user;          // nullptr = no auth
-    const char* mqtt_pass;          // nullptr = no auth
+    const char* device_id;           // MQTT client ID (e.g. eFuse MAC string)
+    const char* mqtt_user;           // nullptr = no auth
+    const char* mqtt_pass;           // nullptr = no auth
+    const char* lwt_topic    = nullptr;    // Last-will topic; nullptr = no LWT
+    const char* lwt_payload  = "offline";  // Last-will payload
     uint32_t connect_timeout_ms = 15'000;  // override in tests for fast timeout
   };
 
-  explicit NetworkManager(const Config& config) : config_(config) {}
+  explicit NetworkManager(const Config& config)
+      : config_(config),
+        mqtt_enabled_(config.mqtt_host != nullptr &&
+                      config.mqtt_host[0] != '\0') {}
 
   // Override the device_id after construction.  Call before Connect() so the
   // kConnecting handler uses the updated value.
@@ -80,9 +84,13 @@ class NetworkManager {
   // Returns current state after processing.
   State Poll();
 
-  // Publish a payload to topic.  Returns pw::OkStatus() only when kReady.
-  // Does NOT block; if not ready, caller should buffer or discard.
+  // Publish a string payload.  Returns OK only when kReady.
   pw::Status Publish(const char* topic, const char* payload);
+
+  // Publish a binary payload (e.g. serialised protobuf).
+  // retained=true sets the MQTT retain flag.
+  pw::Status Publish(const char* topic, const uint8_t* data, size_t len,
+                     bool retained = false);
 
   State state() const { return state_; }
 
@@ -98,9 +106,10 @@ class NetworkManager {
   uint32_t NextBackoffMs() const;
 
   Config config_;
+  bool mqtt_enabled_;              // true iff mqtt_host is non-empty at Connect() time.
   State state_ = State::kIdle;
-  pw::chrono::SystemClock::time_point state_entered_;
-  uint32_t backoff_attempt_ = 0;  // Increments on each consecutive failure.
+  uint32_t state_entered_ms_ = 0;  // PlatformNowMs() when state last changed.
+  uint32_t backoff_attempt_ = 0;   // Increments on each consecutive failure.
 };
 
 // Returns human-readable state name for logging.

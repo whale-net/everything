@@ -16,6 +16,30 @@ cc_library(
     ],
 )
 
+ESP32_COMPAT = [
+    "@platforms//os:none",
+    "//tools/firmware:cpu_xtensa",
+]
+
+# FirmwarePublisher — proto serialisation + MQTT publish.
+# Device-only: depends on nanopb-generated code and millis().
+cc_library(
+    name = "firmware_publisher",
+    srcs = ["firmware_publisher.cc"],
+    hdrs = ["firmware_publisher.h"],
+    target_compatible_with = ESP32_COMPAT,
+    deps = [
+        "//firmware/device_id:device_id",
+        "//firmware/network:network_manager",
+        "//firmware/sensor:sensor",
+        "//firmware/proto:firmware_nanopb",
+        "@arduino_esp32//:core_lib",
+        "@pigweed//pw_log",
+        "@pigweed//pw_span",
+        "@pigweed//pw_string:builder",
+    ],
+)
+
 cc_library(
     name = "mock_publisher",
     hdrs = ["mock_publisher.h"],

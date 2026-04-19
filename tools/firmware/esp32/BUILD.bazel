@@ -14,6 +14,7 @@ firmware_board(
     name = "elegoo_esp32",
     cpu_constraint = "//tools/firmware:cpu_xtensa",
     board_constraint = "//tools/firmware:board_elegoo_esp32",
+    extra_constraints = ["@pigweed//pw_build/constraints/rtos:freertos"],
 )
 
 # config_setting: used by //tools/firmware:board_pins alias and any other
@@ -199,4 +200,15 @@ py_binary(
     main = "esptool_wrapper.py",
     deps = ["@pypi//:esptool"],
     tags = ["manual"],  # only built when explicitly requested (e.g. bazel run //demo/blink:flash)
+)
+
+# ── NVS partition decoder ────────────────────────────────────────────────────
+# Reads and decodes an NVS partition binary (e.g. read back via esptool).
+# Usage: bazel run //tools/firmware/esp32:decode_nvs -- /path/to/nvs.bin
+
+py_binary(
+    name = "decode_nvs",
+    srcs = ["decode_nvs.py"],
+    main = "decode_nvs.py",
+    tags = ["manual"],
 )

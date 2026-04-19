@@ -30,9 +30,11 @@ class FakeSensor final : public ISensor {
         init_status_(init_status) {}
 
   pw::Status Init() override { return init_status_; }
-  float Read() override { return value_; }
-  const char* name() const override { return name_; }
-  uint8_t address() const override { return address_; }
+  SensorReading Read() override { return SensorReading::Ok(value_); }
+  const char* name()    const override { return name_; }
+  uint8_t address()     const override { return address_; }
+  firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_UNKNOWN; }
+  const char* unit()    const override { return ""; }
 
   // Allow tests to change the reading mid-test.
   void set_value(float v) { value_ = v; }
@@ -57,13 +59,15 @@ class RecordingSensor final : public ISensor {
     return pw::OkStatus();
   }
 
-  float Read() override {
+  SensorReading Read() override {
     read_call_count_++;
-    return value_;
+    return SensorReading::Ok(value_);
   }
 
-  const char* name() const override { return name_; }
-  uint8_t address() const override { return address_; }
+  const char* name()    const override { return name_; }
+  uint8_t address()     const override { return address_; }
+  firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_UNKNOWN; }
+  const char* unit()    const override { return ""; }
 
   int init_call_count() const { return init_call_count_; }
   int read_call_count() const { return read_call_count_; }

@@ -20,13 +20,23 @@ bool g_mqtt_publish_ok = true;
 }  // namespace
 
 // Declared extern in network_manager.cc
+#include <chrono>
+uint32_t PlatformNowMs() {
+  return static_cast<uint32_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
 bool WiFiIsConnected() { return g_wifi_connected; }
-bool MQTTConnect(const char*, uint16_t, const char*, const char*,
-                 const char*) {
+bool MQTTConnect(const char*, uint16_t, const char*, const char*, const char*,
+                 const char*, const char*) {
   return g_mqtt_connected;
 }
 bool MQTTIsConnected() { return g_mqtt_connected; }
 bool MQTTPublish(const char*, const char*) { return g_mqtt_publish_ok; }
+bool MQTTPublishBinary(const char*, const uint8_t*, size_t, bool) {
+  return g_mqtt_publish_ok;
+}
 void WiFiConnect() {}
 
 // ── Test fixture ──────────────────────────────────────────────────────────────
@@ -134,6 +144,84 @@ TEST_F(NetworkManagerTest, ConnectTimeoutTransitionsToBackoff) {
   nm.Connect();
   nm.Poll();  // state_age_ms() > 0 → backoff
   EXPECT_EQ(nm.state(), NetworkManager::State::kBackoff);
+}
+
+// ── WiFi-only mode (empty mqtt_host) ─────────────────────────────────────────
+
+TEST_F(NetworkManagerTest, WifiOnlyModeReachesReadyWithoutMqtt) {
+  g_wifi_connected = true;
+  g_mqtt_connected = false;  // MQTT never comes up
+
+  auto cfg = TestConfig();
+  cfg.mqtt_host = "";  // WiFi-only
+  NetworkManager nm(cfg);
+  nm.Connect();
+  nm.Poll();  // WiFi up, mqtt_host empty → skip MQTTConnect → kReady
+
+  EXPECT_EQ(nm.state(), NetworkManager::State::kReady);
+}
+
+TEST_F(NetworkManagerTest, WifiOnlyModeStaysReadyWhenMqttDown) {
+  g_wifi_connected = true;
+  g_mqtt_connected = false;
+
+  auto cfg = TestConfig();
+  cfg.mqtt_host = "";
+  NetworkManager nm(cfg);
+  nm.Connect();
+  nm.Poll();  // → kReady
+  nm.Poll();  // PollReady: WiFi up, MQTT disabled → stays kReady
+
+  EXPECT_EQ(nm.state(), NetworkManager::State::kReady);
+}
+
+TEST_F(NetworkManagerTest, WifiOnlyModePublishReturnsUnavailable) {
+  g_wifi_connected = true;
+  g_mqtt_connected = false;
+
+  auto cfg = TestConfig();
+  cfg.mqtt_host = "";
+  NetworkManager nm(cfg);
+  nm.Connect();
+  nm.Poll();  // → kReady
+
+  EXPECT_EQ(nm.Publish("t", "v"), pw::Status::Unavailable());
+}
+
+// ── Binary Publish ────────────────────────────────────────────────────────────
+
+TEST_F(NetworkManagerTest, PublishBinaryFailsWhenNotReady) {
+  auto cfg = TestConfig();
+  NetworkManager nm(cfg);
+  const uint8_t buf[] = {0x01};
+  EXPECT_EQ(nm.Publish("t", buf, 1), pw::Status::Unavailable());
+}
+
+TEST_F(NetworkManagerTest, PublishBinarySucceedsWhenReady) {
+  g_wifi_connected = true;
+  g_mqtt_connected = true;
+
+  auto cfg = TestConfig();
+  NetworkManager nm(cfg);
+  nm.Connect();
+  nm.Poll();  // → kReady
+
+  const uint8_t buf[] = {0xDE, 0xAD};
+  EXPECT_EQ(nm.Publish("t", buf, 2, /*retained=*/true), pw::OkStatus());
+}
+
+TEST_F(NetworkManagerTest, PublishBinaryPropagatesBrokerFailure) {
+  g_wifi_connected = true;
+  g_mqtt_connected = true;
+  g_mqtt_publish_ok = false;
+
+  auto cfg = TestConfig();
+  NetworkManager nm(cfg);
+  nm.Connect();
+  nm.Poll();  // → kReady
+
+  const uint8_t buf[] = {0x01};
+  EXPECT_EQ(nm.Publish("t", buf, 1), pw::Status::Internal());
 }
 
 }  // namespace

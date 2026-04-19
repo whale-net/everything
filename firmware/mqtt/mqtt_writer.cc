@@ -1,5 +1,6 @@
 #include "firmware/mqtt/mqtt_writer.h"
 
+#include "firmware/sensor/sensor.h"
 #include "pw_assert/check.h"
 #include "pw_log/log.h"
 #include "pw_string/string_builder.h"
@@ -37,7 +38,9 @@ int MQTTWriter::PublishAll() {
   int published = 0;
   for (size_t i = 0; i < sensors_.size() && i < kMaxSensors; ++i) {
     if (!sensor_ok_[i]) continue;
-    if (!sensors_[i]->IsValid()) {
+
+    SensorReading reading = sensors_[i]->Read();
+    if (!reading.valid) {
       PW_LOG_WARN("MQTTWriter: '%s' has no valid reading, skipping",
                   sensors_[i]->name());
       continue;
@@ -49,7 +52,7 @@ int MQTTWriter::PublishAll() {
 
     // Format payload: plain float, 2 decimal places, zero heap allocation.
     pw::StringBuffer<kPayloadBufSize> payload;
-    payload.Format("%.2f", static_cast<double>(sensors_[i]->Read()));
+    payload.Format("%.2f", static_cast<double>(reading.value));
 
     pw::Status s = publisher_->Publish(topic.c_str(), payload.c_str());
     if (s.ok()) {

@@ -1,0 +1,28 @@
+"""Device identity — board-agnostic IDeviceId interface and ESP32 implementation."""
+
+package(default_visibility = ["//visibility:public"])
+
+ESP32_COMPAT = [
+    "@platforms//os:none",
+    "//tools/firmware:cpu_xtensa",
+]
+
+# IDeviceId interface + FakeDeviceId — host-compilable.
+cc_library(
+    name = "device_id",
+    hdrs = ["device_id.h"],
+)
+
+# EfuseDeviceId — derives device ID from ESP32 eFuse base MAC.
+# Device-only: depends on esp_efuse / esp_mac from ESP-IDF.
+cc_library(
+    name = "efuse_device_id",
+    srcs = ["efuse_device_id.cc"],
+    hdrs = ["efuse_device_id.h"],
+    target_compatible_with = ESP32_COMPAT,
+    deps = [
+        ":device_id",
+        "@arduino_esp32//:core_lib",
+        "@pigweed//pw_log",
+    ],
+)

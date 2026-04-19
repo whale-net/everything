@@ -370,6 +370,13 @@ cc_library(
         # Flash-mode-specific libspi_flash.a — provides spi_flash_mmap,
         # esp_mspi_pin_init, and other flash driver symbols.
         "dio_qspi/libspi_flash.a",
+        # Binary blobs that ship alongside linker scripts, not in lib/.
+        # libphy.a:    RF PHY (needed by libpp.a + libnet80211.a for WiFi).
+        # libbtdm_app.a: Bluetooth coexistence symbols (coex_bt_high_prio, etc.).
+        # librtc.a:    RTC/temperature sensor stubs (temprature_sens_read, etc.).
+        "ld/libphy.a",
+        "ld/libbtdm_app.a",
+        "ld/librtc.a",
     ],
     hdrs = glob([
         "include/**/*.h",

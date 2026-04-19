@@ -1,0 +1,38 @@
+"""Firmware protobuf schema — nanopb sources for embedded targets.
+
+Generated at build time from firmware.proto via protoc + nanopb plugin.
+firmware.options constrains string/array sizes for heap-free operation.
+"""
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "firmware_pb_gen",
+    srcs = [
+        "firmware.proto",
+        "firmware.options",
+    ],
+    outs = [
+        "firmware.pb.h",
+        "firmware.pb.c",
+    ],
+    cmd = """
+        export PATH=$$(dirname $(location @protobuf//:protoc)):$$PATH && \
+        $(location @protobuf//:protoc) \
+          --plugin=protoc-gen-nanopb=$(location @nanopb//:protoc-gen-nanopb) \
+          "--nanopb_out=--library-include-format=quote --options-file=$(location firmware.options):$(RULEDIR)" \
+          -I $$(dirname $(location firmware.proto)) \
+          $(location firmware.proto)
+    """,
+    tools = [
+        "@nanopb//:protoc-gen-nanopb",
+        "@protobuf//:protoc",
+    ],
+)
+
+cc_library(
+    name = "firmware_nanopb",
+    srcs = [":firmware_pb_gen"],
+    hdrs = [":firmware_pb_gen"],
+    deps = ["@nanopb//:nanopb"],
+)
