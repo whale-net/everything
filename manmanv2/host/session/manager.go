@@ -250,7 +250,30 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 		slog.Info("workshop addons downloaded successfully", "session_id", sessionID)
 	}
 
-	// 4. Create game container
+	// 4. Pull game image (always pull to ensure latest version is used)
+	// TODO: add cache fallback
+	slog.Info("pulling image", "session_id", sessionID, "image", cmd.Image)
+	const maxPullAttempts = 3
+	var pullErr error
+	for attempt := 1; attempt <= maxPullAttempts; attempt++ {
+		pullErr = sm.dockerClient.PullImage(ctx, cmd.Image)
+		if pullErr == nil {
+			break
+		}
+		slog.Warn("failed to pull image, retrying", "session_id", sessionID, "image", cmd.Image, "attempt", attempt, "error", pullErr)
+		if attempt < maxPullAttempts {
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
+	}
+	if pullErr != nil {
+		slog.Error("failed to pull image after retries", "session_id", sessionID, "image", cmd.Image, "error", pullErr)
+		sm.cleanupSession(ctx, state)
+		state.UpdateStatus(manman.SessionStatusCrashed)
+		sm.stateManager.RemoveSession(sessionID)
+		return &rmq.PermanentError{Err: fmt.Errorf("failed to pull image %s: %w", cmd.Image, pullErr)}
+	}
+
+	// 5. Create game container
 	slog.Info("creating container", "session_id", sessionID, "image", cmd.Image)
 	containerID, err := sm.createGameContainer(ctx, state, cmd)
 	if err != nil {
@@ -273,25 +296,6 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 				return fmt.Errorf("failed to handle name conflict: %w", err)
 			}
 			slog.Info("resolved name conflict", "session_id", sessionID, "container_id", containerID)
-		} else if strings.Contains(err.Error(), "No such image") {
-			slog.Info("image not found, pulling", "session_id", sessionID, "image", cmd.Image)
-			if pullErr := sm.dockerClient.PullImage(ctx, cmd.Image); pullErr != nil {
-				slog.Error("failed to pull image", "session_id", sessionID, "image", cmd.Image, "error", pullErr)
-				sm.cleanupSession(ctx, state)
-				state.UpdateStatus(manman.SessionStatusCrashed)
-				sm.stateManager.RemoveSession(sessionID)
-				return &rmq.PermanentError{Err: fmt.Errorf("failed to pull image %s: %w", cmd.Image, pullErr)}
-			}
-
-			slog.Info("retrying container creation after pull", "session_id", sessionID)
-			containerID, err = sm.createGameContainer(ctx, state, cmd)
-			if err != nil {
-				slog.Error("failed to create container after pull", "session_id", sessionID, "error", err)
-				sm.cleanupSession(ctx, state)
-				state.UpdateStatus(manman.SessionStatusCrashed)
-				sm.stateManager.RemoveSession(sessionID)
-				return &rmq.PermanentError{Err: fmt.Errorf("failed to create game container after pull: %w", err)}
-			}
 		} else {
 			slog.Error("failed to create container", "session_id", sessionID, "error", err)
 			sm.cleanupSession(ctx, state)
@@ -303,7 +307,7 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	slog.Info("container created", "session_id", sessionID, "container_id", containerID)
 	state.GameContainerID = containerID
 
-	// 3. Start game container
+	// 6. Start game container
 	slog.Info("starting container", "session_id", sessionID, "container_id", containerID)
 	if err := sm.dockerClient.StartContainer(ctx, containerID); err != nil {
 		if !strings.Contains(err.Error(), "already started") {
@@ -317,7 +321,7 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	}
 	slog.Info("container started", "session_id", sessionID, "container_id", containerID)
 
-	// 4. Stream logs using Docker logs API (doesn't interfere with stdin during startup)
+	// 7. Stream logs using Docker logs API (doesn't interfere with stdin during startup)
 	slog.Info("starting log stream", "session_id", sessionID)
 	logReader, err := sm.dockerClient.GetContainerLogs(ctx, containerID, true, "all")
 	if err != nil {
@@ -331,7 +335,7 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	state.AttachStrategy = "persistent"
 	state.IsTTY = true             // Always use TTY mode
 
-	// 5. Start log reader goroutine
+	// 8. Start log reader goroutine
 	slog.Debug("spawning log reader", "session_id", sessionID)
 	sm.startLogReader(state)
 
