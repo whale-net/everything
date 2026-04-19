@@ -660,6 +660,7 @@ func (sm *SessionManager) startStreamReaderWithFormat(state *State, reader io.Re
 
 		go func() {
 			defer close(done)
+			defer sm.handleContainerExit(state)
 			if isTTY {
 				scanner := bufio.NewScanner(reader)
 				for scanner.Scan() {
@@ -683,7 +684,6 @@ func (sm *SessionManager) startStreamReaderWithFormat(state *State, reader io.Re
 					addMessage(string(data), source)
 				}
 			}
-			sm.handleContainerExit(state)
 		}()
 
 		ticker := time.NewTicker(flushInterval)
