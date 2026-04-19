@@ -109,6 +109,7 @@ erDiagram
         bigint sensor_id FK
         bigint region_id FK "denorm from Sensor.region_id at write"
         double value
+        boolean valid "false on I2C failure or out-of-range"
         int uptime_ms "device uptime for staleness detection"
         timestamp recorded_at "DB time — hypertable partition key"
     }
@@ -144,6 +145,7 @@ Key design decisions:
 - `Sensor.region_id` is nullable — a board can register before being placed anywhere
 - `SensorRegionHistory` records every region assignment with open/closed intervals; `unassigned_at = NULL` means current
 - `SensorReading.region_id` is snapshotted at insert so historical location is preserved when sensors move
+- `SensorReading.valid` — `false` on I2C failure or out-of-range value; rows are always written so gaps in the time series are explicit rather than invisible
 - `SensorReading.recorded_at` is DB-side `NOW()`, not device clock; `uptime_ms` carries the device timestamp
 - `Region.parent_region_id` is self-referential and nullable — supports flat or hierarchical layouts (Room → Shelf → Pot)
 - `Plant.removed_at = NULL` means still present; set on removal rather than hard-deleting
