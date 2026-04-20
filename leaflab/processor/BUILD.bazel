@@ -17,6 +17,7 @@ go_library(
         "//libs/go/db",
         "//libs/go/logging",
         "//libs/go/rmq",
+        "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@org_golang_google_protobuf//proto",
     ],

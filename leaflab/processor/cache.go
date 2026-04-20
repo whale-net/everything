@@ -20,6 +20,20 @@ func NewSensorCache() *SensorCache {
 	return &SensorCache{devices: make(map[string]map[string]SensorInfo)}
 }
 
+// Load bulk-populates the cache, typically called at startup from a DB snapshot.
+func (c *SensorCache) Load(entries map[string]map[string]SensorInfo) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for deviceID, sensors := range entries {
+		if c.devices[deviceID] == nil {
+			c.devices[deviceID] = make(map[string]SensorInfo)
+		}
+		for name, info := range sensors {
+			c.devices[deviceID][name] = info
+		}
+	}
+}
+
 // Set registers or updates a sensor entry for a device.
 func (c *SensorCache) Set(deviceID, sensorName string, info SensorInfo) {
 	c.mu.Lock()

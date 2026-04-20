@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -69,6 +71,54 @@ func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int
 		return 0, nil, fmt.Errorf("upsert sensor %q on board %d: %w", name, boardID, err)
 	}
 	return sensorID, regionID, nil
+}
+
+// GetSensor returns the SensorInfo for a specific device+sensor name, or
+// (zero, false) if not found. Used for cache-miss recovery.
+func (r *Repository) GetSensor(ctx context.Context, deviceID, sensorName string) (SensorInfo, bool, error) {
+	var info SensorInfo
+	err := r.db.QueryRow(ctx, `
+		SELECT s.sensor_id, s.region_id
+		FROM sensor s
+		JOIN board b ON b.board_id = s.board_id
+		WHERE b.device_id = $1 AND s.name = $2
+	`, deviceID, sensorName).Scan(&info.SensorID, &info.RegionID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return SensorInfo{}, false, nil
+		}
+		return SensorInfo{}, false, fmt.Errorf("get sensor %q/%q: %w", deviceID, sensorName, err)
+	}
+	return info, true, nil
+}
+
+// LoadSensorCache queries all boards and their sensors from the DB and
+// returns them as a map of device_id → sensor_name → SensorInfo.
+// Called once at startup to pre-warm the cache before any AMQP messages arrive.
+func (r *Repository) LoadSensorCache(ctx context.Context) (map[string]map[string]SensorInfo, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT b.device_id, s.name, s.sensor_id, s.region_id
+		FROM sensor s
+		JOIN board b ON b.board_id = s.board_id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("load sensor cache: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]map[string]SensorInfo)
+	for rows.Next() {
+		var deviceID, sensorName string
+		var info SensorInfo
+		if err := rows.Scan(&deviceID, &sensorName, &info.SensorID, &info.RegionID); err != nil {
+			return nil, fmt.Errorf("scan sensor row: %w", err)
+		}
+		if out[deviceID] == nil {
+			out[deviceID] = make(map[string]SensorInfo)
+		}
+		out[deviceID][sensorName] = info
+	}
+	return out, rows.Err()
 }
 
 // InsertReading writes a sensor_reading row.

@@ -66,6 +66,16 @@ func run() error {
 
 	repo := NewRepository(dbPool)
 	cache := NewSensorCache()
+
+	// Pre-warm the cache from the DB so readings are accepted immediately,
+	// even if the device connected and sent its manifest before this process started.
+	if entries, err := repo.LoadSensorCache(context.Background()); err != nil {
+		logger.Warn("failed to pre-load sensor cache", "err", err)
+	} else {
+		cache.Load(entries)
+		logger.Info("sensor cache pre-loaded", "devices", len(entries))
+	}
+
 	handler := NewMessageHandler(logger, repo, cache)
 	consumer.RegisterHandler("leaflab.#", handler.Handle)
 

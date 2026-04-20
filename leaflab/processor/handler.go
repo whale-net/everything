@@ -93,11 +93,22 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 func (h *MessageHandler) handleSensorReading(ctx context.Context, deviceID, sensorName string, body []byte) error {
 	info, ok := h.cache.Get(deviceID, sensorName)
 	if !ok {
-		h.logger.Warn("reading dropped — sensor not registered yet",
-			"device_id", deviceID,
-			"sensor", sensorName,
-		)
-		return nil
+		// Cache miss — look up in DB (handles the case where the processor
+		// restarted after the device sent its retained manifest).
+		var err error
+		info, ok, err = h.repo.GetSensor(ctx, deviceID, sensorName)
+		if err != nil {
+			return fmt.Errorf("cache miss DB lookup for %s/%s: %w", deviceID, sensorName, err)
+		}
+		if !ok {
+			h.logger.Warn("reading dropped — sensor not in DB yet, manifest not received",
+				"device_id", deviceID,
+				"sensor", sensorName,
+			)
+			return nil
+		}
+		// Warm the cache so the next reading doesn't hit the DB.
+		h.cache.Set(deviceID, sensorName, info)
 	}
 
 	var reading firmwarepb.SensorReading
