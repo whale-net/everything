@@ -26,7 +26,8 @@ type Config struct {
 	ConnMaxLifetime time.Duration
 }
 
-// DefaultConfig returns a config with defaults from environment variables
+// DefaultConfig returns a config with defaults from environment variables.
+// Used only when PG_DATABASE_URL is not set.
 func DefaultConfig() *Config {
 	return &Config{
 		Host:            getEnv("DB_HOST", "localhost"),
@@ -190,15 +191,18 @@ func truncate(s string, maxLen int) string {
 }
 
 func connect(ctx context.Context, cfg *Config) (*sql.DB, error) {
-	dsn := fmt.Sprintf(
-		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		cfg.Host,
-		cfg.Port,
-		cfg.User,
-		cfg.Password,
-		cfg.Database,
-		cfg.SSLMode,
-	)
+	dsn := os.Getenv("PG_DATABASE_URL")
+	if dsn == "" {
+		dsn = fmt.Sprintf(
+			"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+			cfg.Host,
+			cfg.Port,
+			cfg.User,
+			cfg.Password,
+			cfg.Database,
+			cfg.SSLMode,
+		)
+	}
 
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
