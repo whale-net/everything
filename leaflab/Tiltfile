@@ -50,11 +50,25 @@ rabbitmq_url = 'amqp://{}:{}@{}:{}/'.format(
 )
 
 # PostgreSQL with TimescaleDB extension available
-db_info = setup_postgres(namespace, db_name='leaflab', resource_name='postgres-dev',
+db_info = setup_postgres(namespace, resource_name='postgres-dev',
                          image='timescale/timescaledb:latest-pg16')
-pg_url = 'postgres://{}:{}@{}:{}/{}?sslmode=disable'.format(
+
+local_resource(
+    'leaflab-db-create',
+    cmd='''
+        kubectl exec -n {namespace} postgres-dev-0 -- \
+            psql -U postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'leaflab'" \
+            | grep -q 1 \
+            || kubectl exec -n {namespace} postgres-dev-0 -- \
+               psql -U postgres -c "CREATE DATABASE leaflab"
+    '''.format(namespace=namespace),
+    resource_deps=['postgres-dev'],
+    labels=['leaflab-infrastructure'],
+)
+
+pg_url = 'postgres://{}:{}@{}:{}/leaflab?sslmode=disable'.format(
     db_info['user'], db_info['password'],
-    db_info['host'], db_info['port'], db_info['database'],
+    db_info['host'], db_info['port'],
 )
 
 # ===========================
@@ -115,7 +129,7 @@ spec:
 
 k8s_resource(
     'leaflab-migrate',
-    resource_deps=['postgres-dev'],
+    resource_deps=['leaflab-db-create'],
     labels=['leaflab-infrastructure'],
 )
 
@@ -164,7 +178,7 @@ print("="*60)
 print("  RabbitMQ AMQP:   localhost:5672 (user: rabbit, pass: password)")
 print("  RabbitMQ MQTT:   localhost:1883")
 print("  RabbitMQ Mgmt:   http://localhost:15672")
-print("  TimescaleDB:     localhost:5432 (user: postgres, pass: password, db: leaflab)")
+print("  PostgreSQL:      localhost:5432 (user: postgres, pass: password, db: leaflab)")
 print("="*60)
 print("")
 print("Provision device (use your host IP, not localhost):")
