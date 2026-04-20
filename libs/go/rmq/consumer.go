@@ -163,21 +163,11 @@ func (c *Consumer) RegisterHandler(routingKeyPattern string, handler MessageHand
 	c.handlers[routingKeyPattern] = handler
 }
 
-// Start starts consuming messages
+// Start starts consuming messages. If the AMQP channel closes unexpectedly
+// (connection blip, broker restart, flow-control teardown) it reopens the
+// channel and resumes — so the consumer never silently dies mid-session.
 func (c *Consumer) Start(ctx context.Context) error {
-	c.mu.Lock()
-	ch := c.channel
-	c.mu.Unlock()
-
-	msgs, err := ch.Consume(
-		c.queue, // queue
-		"",      // consumer
-		false,   // auto-ack (we'll ack manually)
-		false,   // exclusive
-		false,   // no-local
-		false,   // no-wait
-		nil,     // args
-	)
+	msgs, err := c.startConsuming()
 	if err != nil {
 		return fmt.Errorf("failed to register consumer: %w", err)
 	}
@@ -189,7 +179,21 @@ func (c *Consumer) Start(ctx context.Context) error {
 				return
 			case msg, ok := <-msgs:
 				if !ok {
-					return
+					// Channel closed — reconnect loop.
+					for {
+						if ctx.Err() != nil {
+							return
+						}
+						log.Printf("consumer channel closed, reconnecting")
+						newMsgs, err := c.startConsuming()
+						if err != nil {
+							log.Printf("consumer reconnect failed: %v, retrying", err)
+							continue
+						}
+						msgs = newMsgs
+						break
+					}
+					continue
 				}
 				c.handleMessage(ctx, msg)
 			}
@@ -197,6 +201,35 @@ func (c *Consumer) Start(ctx context.Context) error {
 	}()
 
 	return nil
+}
+
+// startConsuming (re)opens a channel, sets QoS, and registers a consumer.
+func (c *Consumer) startConsuming() (<-chan amqp.Delivery, error) {
+	ch, err := c.conn.Channel()
+	if err != nil {
+		return nil, fmt.Errorf("failed to open channel: %w", err)
+	}
+	if err := ch.Qos(1, 0, false); err != nil {
+		ch.Close()
+		return nil, fmt.Errorf("failed to set QoS: %w", err)
+	}
+	msgs, err := ch.Consume(
+		c.queue,
+		"",
+		false, // manual ack
+		false,
+		false,
+		false,
+		nil,
+	)
+	if err != nil {
+		ch.Close()
+		return nil, fmt.Errorf("failed to register consumer: %w", err)
+	}
+	c.mu.Lock()
+	c.channel = ch
+	c.mu.Unlock()
+	return msgs, nil
 }
 
 // handleMessage processes a single message
