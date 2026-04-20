@@ -79,12 +79,12 @@ watch_paths = get_watch_paths('leaflab')
 
 APPS = {
     'migrate': {
-        'bazel_target': '//leaflab/migrate:leaflab-migrate_image_load',
-        'image_name': 'leaflab-leaflab-migrate',
+        'bazel_target': '//leaflab/migrate:migrate_image_load',
+        'image_name': 'leaflab-migrate',
     },
     'processor': {
-        'bazel_target': '//leaflab/processor:leaflab-processor_image_load',
-        'image_name': 'leaflab-leaflab-processor',
+        'bazel_target': '//leaflab/processor:processor_image_load',
+        'image_name': 'leaflab-processor',
     },
 }
 
@@ -111,7 +111,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: migrate
-        image: leaflab-leaflab-migrate
+        image: leaflab-migrate
         env:
         - name: PG_DATABASE_URL
           value: "{pg_url}"
@@ -142,7 +142,7 @@ spec:
     spec:
       containers:
       - name: processor
-        image: leaflab-leaflab-processor
+        image: leaflab-processor
         env:
         - name: RABBITMQ_URL
           value: "{rabbitmq_url}"

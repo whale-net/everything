@@ -23,14 +23,14 @@ go_library(
 )
 
 go_binary(
-    name = "leaflab-processor",
+    name = "processor",
     embed = [":processor_lib"],
     visibility = ["//visibility:public"],
 )
 
 release_app(
-    name = "leaflab-processor",
-    binary_name = ":leaflab-processor",
+    name = "processor",
+    binary_name = ":processor",
     language = "go",
     domain = "leaflab",
     description = "LeafLab sensor data processor (RabbitMQ MQTT consumer, DB writer)",
