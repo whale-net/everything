@@ -7,7 +7,9 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	neturl "net/url"
 	"os"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -26,8 +28,17 @@ type Config struct {
 	ConnMaxLifetime time.Duration
 }
 
-// DefaultConfig returns a config with defaults from environment variables
+// DefaultConfig returns a config with defaults from environment variables.
+// PG_DATABASE_URL takes precedence over individual DB_* variables when set.
 func DefaultConfig() *Config {
+	if url := os.Getenv("PG_DATABASE_URL"); url != "" {
+		cfg, err := configFromURL(url)
+		if err == nil {
+			return cfg
+		}
+		// Fall through to DB_* vars if URL is unparseable.
+		log.Printf("migrate: could not parse PG_DATABASE_URL, falling back to DB_* vars: %v", err)
+	}
 	return &Config{
 		Host:            getEnv("DB_HOST", "localhost"),
 		Port:            getEnvInt("DB_PORT", 5432),
@@ -39,6 +50,53 @@ func DefaultConfig() *Config {
 		MaxIdleConns:    5,
 		ConnMaxLifetime: 5 * time.Minute,
 	}
+}
+
+// configFromURL parses a postgres:// URL into a Config.
+func configFromURL(url string) (*Config, error) {
+	// Use pgx's url parser to avoid reimplementing URL parsing.
+	// We open a throwaway connection config just to extract the fields.
+	connStr := url
+	// net/url handles the parsing.
+	u, err := neturl.Parse(connStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid URL: %w", err)
+	}
+
+	host := u.Hostname()
+	portStr := u.Port()
+	port := 5432
+	if portStr != "" {
+		if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
+			return nil, fmt.Errorf("invalid port %q: %w", portStr, err)
+		}
+	}
+
+	user := ""
+	password := ""
+	if u.User != nil {
+		user = u.User.Username()
+		password, _ = u.User.Password()
+	}
+
+	database := strings.TrimPrefix(u.Path, "/")
+
+	sslMode := "disable"
+	if q := u.Query().Get("sslmode"); q != "" {
+		sslMode = q
+	}
+
+	return &Config{
+		Host:            host,
+		Port:            port,
+		User:            user,
+		Password:        password,
+		Database:        database,
+		SSLMode:         sslMode,
+		MaxOpenConns:    25,
+		MaxIdleConns:    5,
+		ConnMaxLifetime: 5 * time.Minute,
+	}, nil
 }
 
 // RunCLI is a convenience function for running migration CLI
