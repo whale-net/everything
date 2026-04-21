@@ -140,10 +140,15 @@ func (h *CommandHandlerImpl) HandleBackup(ctx context.Context, cmd *hostrmq.Back
 // helper container (the same pattern used by the workshop orchestrator for installs).
 func (h *CommandHandlerImpl) resolveBackupSourceDir(ctx context.Context, cmd *hostrmq.BackupCommand) (tarPath string, cleanup func(), err error) {
 	if cmd.VolumeType != "named" {
-		// Bind-mount: derive the internal path from host_subpath.
+		// Bind-mount: derive the internal path from host_subpath. If host_subpath is not
+		// set, fall back to the volume name to match other code paths that treat it as the
+		// default bind-mount subdirectory.
 		subPath := strings.TrimPrefix(cmd.VolumeHostPath, "/")
 		if subPath == "" {
-			return "", nil, fmt.Errorf("volume_host_path is empty for bind-mount backup %d", cmd.BackupID)
+			subPath = strings.TrimPrefix(cmd.VolumeName, "/")
+		}
+		if subPath == "" {
+			return "", nil, fmt.Errorf("volume_host_path and volume_name are empty for bind-mount backup %d", cmd.BackupID)
 		}
 		dirName := fmt.Sprintf("sgc-%d", cmd.SGCID)
 		if h.environment != "" {
@@ -166,9 +171,22 @@ func (h *CommandHandlerImpl) resolveBackupSourceDir(ctx context.Context, cmd *ho
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to create backup staging dir: %w", err)
 	}
+	if err := os.Chmod(stagingInternal, 0777); err != nil {
+		os.RemoveAll(stagingInternal)
+		return "", nil, fmt.Errorf("failed to chmod backup staging dir: %w", err)
+	}
 	cleanup = func() { os.RemoveAll(stagingInternal) }
 
-	stagingHost := strings.Replace(stagingInternal, h.internalDataDir, h.hostDataDir, 1)
+	internalBase := filepath.Clean(h.internalDataDir)
+	stagingPath := filepath.Clean(stagingInternal)
+	relPath, err := filepath.Rel(internalBase, stagingPath)
+	if err != nil {
+		return "", cleanup, fmt.Errorf("failed to resolve backup staging dir %q relative to %q: %w", stagingInternal, h.internalDataDir, err)
+	}
+	if relPath == ".." || strings.HasPrefix(relPath, ".."+string(os.PathSeparator)) {
+		return "", cleanup, fmt.Errorf("backup staging dir %q escapes internal data dir %q", stagingInternal, h.internalDataDir)
+	}
+	stagingHost := filepath.Join(h.hostDataDir, relPath)
 
 	helperConfig := docker.ContainerConfig{
 		Name:    fmt.Sprintf("backup-extract-%d-%d", cmd.SGCID, cmd.BackupID),

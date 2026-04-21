@@ -122,7 +122,7 @@ type BackupCommand struct {
 	BackupID          int64     `json:"backup_id"`
 	SGCID             int64     `json:"sgc_id"`
 	VolumeType        string    `json:"volume_type"`         // "bind" or "named"
-	VolumeHostPath    string    `json:"volume_host_path"`    // host path to volume root (bind volumes only)
+	VolumeHostPath    string    `json:"volume_host_path"`    // bind-volume host subpath under the SGC directory; not an absolute host path
 	VolumeName        string    `json:"volume_name"`         // logical volume name (used to derive Docker named volume)
 	BackupPath        string    `json:"backup_path"`         // relative path within volume to archive
 	S3Key             string    `json:"s3_key"`              // pre-computed: backups/{sgc_id}/{config_id}/{backup_id}.tar.gz
