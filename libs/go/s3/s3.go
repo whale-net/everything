@@ -138,11 +138,15 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, opts *Uplo
 }
 
 // PresignPutURL generates a pre-signed PUT URL for the given key.
-// Always uses the primary (internal) endpoint — presigned URL consumers
-// (e.g. host-manager) are internal infrastructure that reach S3 directly,
-// and the signature must match the endpoint that handles the request.
+// Uses the public endpoint when configured (S3_PUBLIC_ENDPOINT) so that
+// consumers running outside the cluster (e.g. host-manager) can reach the URL.
+// Falls back to the primary endpoint if no public endpoint is set.
 func (c *Client) PresignPutURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
-	req, err := c.presign.PresignPutObject(ctx, &s3.PutObjectInput{
+	presigner := c.presign
+	if c.presignPublic != nil {
+		presigner = c.presignPublic
+	}
+	req, err := presigner.PresignPutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(c.bucket),
 		Key:         aws.String(key),
 		ContentType: aws.String("application/gzip"),
