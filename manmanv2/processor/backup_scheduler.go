@@ -156,7 +156,9 @@ func (w *scheduledBackupWorker) Work(ctx context.Context, job *river.Job[schedul
 		cmd := &hostrmq.BackupCommand{
 			BackupID:          backup.BackupID,
 			SGCID:             sgc.SGCID,
+			VolumeType:        volume.VolumeType,
 			VolumeHostPath:    hostPath,
+			VolumeName:        volume.Name,
 			BackupPath:        cfg.BackupPath,
 			S3Key:             s3Key,
 			PresignedURL:      presignedURL,

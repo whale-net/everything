@@ -8,12 +8,28 @@ SGC_HOST_DATA_PATH="$(pwd)/tmp/manman-data"
 
 # Parse arguments
 DETACH_MODE=""
-if [[ "$1" == "-d" ]] || [[ "$1" == "--detach" ]]; then
-    DETACH_MODE="-d"
-else
+WORKTREE_DIR=""
+for arg in "$@"; do
+    case "$arg" in
+        -d|--detach)
+            DETACH_MODE="-d"
+            ;;
+        --worktree=*)
+            WORKTREE_DIR="${arg#*=}"
+            ;;
+        *)
+            echo "Unknown argument: $arg"
+            echo "Usage: $0 [-d|--detach] [--worktree=PATH]"
+            exit 1
+            ;;
+    esac
+done
+if [[ -z "$DETACH_MODE" ]]; then
     # Interactive mode by default
     DETACH_MODE="-it"
 fi
+
+BAZEL_DIR="${WORKTREE_DIR:-$(pwd)}"
 
 # Ensure host data directory exists
 mkdir -p "$SGC_HOST_DATA_PATH"
@@ -27,8 +43,8 @@ if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
 fi
 
 # Build image
-echo "Building host manager image..."
-bazel run //manmanv2/host:host-manager_image_load
+echo "Building host manager image from: ${BAZEL_DIR}"
+(cd "${BAZEL_DIR}" && bazel run //manmanv2/host:host-manager_image_load)
 
 # Run container
 # We use host.docker.internal to access services running on the host (Tilt/K8s port-forwards)
