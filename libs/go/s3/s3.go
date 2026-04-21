@@ -79,12 +79,13 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 	s3c := s3.NewFromConfig(awsCfg, s3Opts...)
 
 	// If a public endpoint is configured, create a separate presign client using it.
-	// Public endpoints (e.g. OVH's cloud.ovh.us) require virtual-hosted style URLs, not
-	// path-style, so we do not inherit s3Opts here and explicitly leave UsePathStyle false.
+	// Inherit UsePathStyle from the primary endpoint config so that S3-compatible services
+	// (e.g. MinIO) get path-style URLs, while AWS-native services get virtual-hosted style.
 	var presignPublic *s3.PresignClient
 	if cfg.PublicEndpoint != "" {
 		presignPublic = s3.NewPresignClient(s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 			o.BaseEndpoint = aws.String(cfg.PublicEndpoint)
+			o.UsePathStyle = cfg.Endpoint != "" // match primary endpoint's path-style setting
 		}))
 	}
 
@@ -138,11 +139,15 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, opts *Uplo
 }
 
 // PresignPutURL generates a pre-signed PUT URL for the given key.
-// Always uses the primary (internal) endpoint — presigned URL consumers
-// (e.g. host-manager) are internal infrastructure that reach S3 directly,
-// and the signature must match the endpoint that handles the request.
+// Uses the public endpoint when configured (S3_PUBLIC_ENDPOINT) so that
+// consumers running outside the cluster (e.g. host-manager) can reach the URL.
+// Falls back to the primary endpoint if no public endpoint is set.
 func (c *Client) PresignPutURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
-	req, err := c.presign.PresignPutObject(ctx, &s3.PutObjectInput{
+	presigner := c.presign
+	if c.presignPublic != nil {
+		presigner = c.presignPublic
+	}
+	req, err := presigner.PresignPutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(c.bucket),
 		Key:         aws.String(key),
 		ContentType: aws.String("application/gzip"),
