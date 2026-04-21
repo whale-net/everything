@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/whale-net/everything/libs/go/docker"
 	"github.com/whale-net/everything/manmanv2/models"
 	hostrmq "github.com/whale-net/everything/manmanv2/host/rmq"
 )
@@ -22,7 +23,7 @@ func (h *CommandHandlerImpl) HandleBackup(ctx context.Context, cmd *hostrmq.Back
 		return fmt.Errorf("presigned_url is empty for backup %d", cmd.BackupID)
 	}
 
-	slog.Info("processing backup command", "backup_id", cmd.BackupID, "sgc_id", cmd.SGCID, "s3_key", cmd.S3Key)
+	slog.Info("processing backup command", "backup_id", cmd.BackupID, "sgc_id", cmd.SGCID, "s3_key", cmd.S3Key, "volume_type", cmd.VolumeType)
 
 	fail := func(err error) error {
 		msg := err.Error()
@@ -49,23 +50,21 @@ func (h *CommandHandlerImpl) HandleBackup(ctx context.Context, cmd *hostrmq.Back
 		}
 	}
 
-	// 2. Build tar command: stream to stdout
-	// VolumeHostPath is the host_subpath (e.g. "data"); build the full internal path:
-	//   {internalDataDir}/sgc[-{env}]-{sgcID}/{hostSubpath}
-	dirName := fmt.Sprintf("sgc-%d", cmd.SGCID)
-	if h.environment != "" {
-		dirName = fmt.Sprintf("sgc-%s-%d", h.environment, cmd.SGCID)
+	// 2. Resolve the directory to tar; cleanup removes any temp dir used for named volumes.
+	tarPath, cleanup, err := h.resolveBackupSourceDir(ctx, cmd)
+	if err != nil {
+		return fail(err)
 	}
-	subPath := strings.TrimPrefix(cmd.VolumeHostPath, "/")
-	if subPath == "" {
-		return fail(fmt.Errorf("volume_host_path is empty"))
+	if cleanup != nil {
+		defer cleanup()
 	}
-	tarPath := filepath.Join(h.internalDataDir, dirName, subPath)
+
 	backupPath := cmd.BackupPath
 	if backupPath == "" {
 		backupPath = "."
 	}
 
+	// 3. Build tar command: stream to stdout
 	tarCmd := exec.CommandContext(ctx, "tar", "-czf", "-", "-C", tarPath, backupPath)
 	tarReader, err := tarCmd.StdoutPipe()
 	if err != nil {
@@ -75,7 +74,7 @@ func (h *CommandHandlerImpl) HandleBackup(ctx context.Context, cmd *hostrmq.Back
 		return fail(fmt.Errorf("failed to start tar: %w", err))
 	}
 
-	// 3. Buffer tar output to temp file (needed for Content-Length on presigned PUT)
+	// 4. Buffer tar output to temp file (needed for Content-Length on presigned PUT)
 	tmpFile, err := os.CreateTemp("", "backup-*.tar.gz")
 	if err != nil {
 		_ = tarCmd.Process.Kill()
@@ -100,7 +99,7 @@ func (h *CommandHandlerImpl) HandleBackup(ctx context.Context, cmd *hostrmq.Back
 		return fail(fmt.Errorf("failed to rewind temp file: %w", err))
 	}
 
-	// 4. Upload to S3 via pre-signed PUT URL with known Content-Length
+	// 5. Upload to S3 via pre-signed PUT URL with known Content-Length
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, cmd.PresignedURL, io.NopCloser(tmpFile))
 	if err != nil {
 		return fail(fmt.Errorf("failed to create upload request: %w", err))
@@ -117,7 +116,6 @@ func (h *CommandHandlerImpl) HandleBackup(ctx context.Context, cmd *hostrmq.Back
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		_ = tarCmd.Process.Kill()
 		return fail(fmt.Errorf("failed to upload to S3: %w", err))
 	}
 	respBody, _ := io.ReadAll(resp.Body)
@@ -134,4 +132,114 @@ func (h *CommandHandlerImpl) HandleBackup(ctx context.Context, cmd *hostrmq.Back
 		S3URL:    &s3URL,
 		Status:   manman.BackupStatusCompleted,
 	})
+}
+
+// resolveBackupSourceDir returns the directory path to pass to tar and an optional cleanup func.
+// For bind-mount volumes it returns the host-accessible path directly.
+// For named volumes it copies the volume contents into a temporary directory via a busybox
+// helper container (the same pattern used by the workshop orchestrator for installs).
+func (h *CommandHandlerImpl) resolveBackupSourceDir(ctx context.Context, cmd *hostrmq.BackupCommand) (tarPath string, cleanup func(), err error) {
+	if cmd.VolumeType != "named" {
+		// Bind-mount: derive the internal path from host_subpath.
+		subPath := strings.TrimPrefix(cmd.VolumeHostPath, "/")
+		if subPath == "" {
+			return "", nil, fmt.Errorf("volume_host_path is empty for bind-mount backup %d", cmd.BackupID)
+		}
+		dirName := fmt.Sprintf("sgc-%d", cmd.SGCID)
+		if h.environment != "" {
+			dirName = fmt.Sprintf("sgc-%s-%d", h.environment, cmd.SGCID)
+		}
+		return filepath.Join(h.internalDataDir, dirName, subPath), nil, nil
+	}
+
+	// Named volume: Docker manages the storage location, so direct host filesystem access is
+	// not available. Use a busybox helper container to copy the volume contents into a
+	// temporary bind-mount directory that this process can then tar.
+	if cmd.VolumeName == "" {
+		return "", nil, fmt.Errorf("volume_name is empty for named-volume backup %d", cmd.BackupID)
+	}
+	dockerVolumeName := h.getNamedVolumeName(cmd.SGCID, cmd.VolumeName)
+
+	// Create staging dir under internalDataDir so we can read the files directly.
+	// Compute its equivalent host path for use as a Docker bind-mount source.
+	stagingInternal, err := os.MkdirTemp(h.internalDataDir, fmt.Sprintf("backup-%d-*", cmd.BackupID))
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to create backup staging dir: %w", err)
+	}
+	cleanup = func() { os.RemoveAll(stagingInternal) }
+
+	stagingHost := strings.Replace(stagingInternal, h.internalDataDir, h.hostDataDir, 1)
+
+	helperConfig := docker.ContainerConfig{
+		Name:    fmt.Sprintf("backup-extract-%d-%d", cmd.SGCID, cmd.BackupID),
+		Image:   "busybox:latest",
+		Command: []string{"sh", "-c", "cp -a /vol/. /staging/"},
+		Volumes: []string{
+			fmt.Sprintf("%s:/vol", dockerVolumeName),
+			fmt.Sprintf("%s:/staging", stagingHost),
+		},
+	}
+
+	slog.Info("extracting named volume via helper container", "volume", dockerVolumeName, "staging", stagingHost)
+	if err := h.runBackupHelperContainer(ctx, helperConfig); err != nil {
+		return "", cleanup, fmt.Errorf("failed to extract named volume %s: %w", dockerVolumeName, err)
+	}
+
+	return stagingInternal, cleanup, nil
+}
+
+// getNamedVolumeName mirrors the naming convention in the session manager and workshop orchestrator.
+func (h *CommandHandlerImpl) getNamedVolumeName(sgcID int64, volumeName string) string {
+	if h.environment != "" {
+		return fmt.Sprintf("manman-sgc-%s-%d-%s", h.environment, sgcID, volumeName)
+	}
+	return fmt.Sprintf("manman-sgc-%d-%s", sgcID, volumeName)
+}
+
+// runBackupHelperContainer creates, starts, waits for, and removes a short-lived container.
+func (h *CommandHandlerImpl) runBackupHelperContainer(ctx context.Context, config docker.ContainerConfig) error {
+	if existing, err := h.dockerClient.GetContainerStatus(ctx, config.Name); err == nil && existing != nil {
+		_ = h.dockerClient.RemoveContainer(ctx, existing.ContainerID, true)
+	}
+
+	const maxPullAttempts = 3
+	var pullErr error
+	for attempt := 1; attempt <= maxPullAttempts; attempt++ {
+		pullErr = h.dockerClient.PullImage(ctx, config.Image)
+		if pullErr == nil {
+			break
+		}
+		if attempt < maxPullAttempts {
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
+	}
+	if pullErr != nil {
+		return fmt.Errorf("failed to pull helper image %s: %w", config.Image, pullErr)
+	}
+
+	containerID, err := h.dockerClient.CreateContainer(ctx, config)
+	if err != nil {
+		return fmt.Errorf("failed to create helper container: %w", err)
+	}
+
+	if err := h.dockerClient.StartContainer(ctx, containerID); err != nil {
+		_ = h.dockerClient.RemoveContainer(ctx, containerID, true)
+		return fmt.Errorf("failed to start helper container: %w", err)
+	}
+
+	for {
+		status, err := h.dockerClient.GetContainerStatus(ctx, containerID)
+		if err != nil {
+			_ = h.dockerClient.RemoveContainer(ctx, containerID, true)
+			return fmt.Errorf("failed to get helper container status: %w", err)
+		}
+		if !status.Running {
+			_ = h.dockerClient.RemoveContainer(ctx, containerID, true)
+			if status.ExitCode != 0 {
+				return fmt.Errorf("helper container exited with code %d", status.ExitCode)
+			}
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }

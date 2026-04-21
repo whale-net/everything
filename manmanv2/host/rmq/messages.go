@@ -121,7 +121,9 @@ type RemoveAddonCommand struct {
 type BackupCommand struct {
 	BackupID          int64     `json:"backup_id"`
 	SGCID             int64     `json:"sgc_id"`
-	VolumeHostPath    string    `json:"volume_host_path"`    // absolute path on host to the volume root
+	VolumeType        string    `json:"volume_type"`         // "bind" or "named"
+	VolumeHostPath    string    `json:"volume_host_path"`    // host path to volume root (bind volumes only)
+	VolumeName        string    `json:"volume_name"`         // logical volume name (used to derive Docker named volume)
 	BackupPath        string    `json:"backup_path"`         // relative path within volume to archive
 	S3Key             string    `json:"s3_key"`              // pre-computed: backups/{sgc_id}/{config_id}/{backup_id}.tar.gz
 	PresignedURL      string    `json:"presigned_url"`       // pre-signed PUT URL for direct upload

@@ -163,7 +163,9 @@ func run() error {
 		publisher:            rmqPublisher,
 		serverID:             serverID,
 		downloadOrchestrator: downloadOrchestrator,
+		dockerClient:         dockerClient,
 		internalDataDir:      session.InternalDataDir,
+		hostDataDir:          hostDataDir,
 		environment:          environment,
 	}
 
@@ -245,7 +247,9 @@ type CommandHandlerImpl struct {
 	publisher            *rmq.Publisher
 	serverID             int64
 	downloadOrchestrator *workshop.DownloadOrchestrator
+	dockerClient         *docker.Client
 	internalDataDir      string
+	hostDataDir          string
 	environment          string
 }
 
