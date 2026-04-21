@@ -79,12 +79,13 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 	s3c := s3.NewFromConfig(awsCfg, s3Opts...)
 
 	// If a public endpoint is configured, create a separate presign client using it.
-	// Public endpoints (e.g. OVH's cloud.ovh.us) require virtual-hosted style URLs, not
-	// path-style, so we do not inherit s3Opts here and explicitly leave UsePathStyle false.
+	// Inherit UsePathStyle from the primary endpoint config so that S3-compatible services
+	// (e.g. MinIO) get path-style URLs, while AWS-native services get virtual-hosted style.
 	var presignPublic *s3.PresignClient
 	if cfg.PublicEndpoint != "" {
 		presignPublic = s3.NewPresignClient(s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 			o.BaseEndpoint = aws.String(cfg.PublicEndpoint)
+			o.UsePathStyle = cfg.Endpoint != "" // match primary endpoint's path-style setting
 		}))
 	}
 
