@@ -362,6 +362,7 @@ func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameCon
 		volMsg := map[string]interface{}{
 			"name":           vol.Name,
 			"container_path": vol.ContainerPath,
+			"is_enabled":     true,
 		}
 		if vol.HostSubpath != nil {
 			volMsg["host_subpath"] = *vol.HostSubpath
