@@ -105,6 +105,7 @@ message GameConfigVolume {
   string host_subpath = 6;
   bool read_only = 7;
   string volume_type = 8;
+  bool is_enabled = 9;  // Whether this volume is active; defaults to true on create
 }
 
 // ServerGameConfig represents a game configuration deployed on a specific server
