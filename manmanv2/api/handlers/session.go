@@ -353,9 +353,12 @@ func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameCon
 		"command":       commandArray,
 	}
 
-	// Add volume mounts from game_config_volumes
+	// Add volume mounts from game_config_volumes (only enabled volumes)
 	var volumeMsgs []map[string]interface{}
 	for _, vol := range volumes {
+		if !vol.IsEnabled {
+			continue
+		}
 		volMsg := map[string]interface{}{
 			"name":           vol.Name,
 			"container_path": vol.ContainerPath,
