@@ -34,11 +34,12 @@ type Consumer struct {
 
 	// init params — stored so startConsuming can fully reinitialize after a
 	// connection reset (non-durable queues are deleted on connection close).
-	durable     bool
-	autoDelete  bool
-	messageTTL  int
-	maxMessages int
-	bindings    []binding // exchange + routing keys bound at creation time
+	declaredName string // original name passed at creation, used for DLQ/arg derivation
+	durable      bool
+	autoDelete   bool
+	messageTTL   int
+	maxMessages  int
+	bindings     []binding // exchange + routing keys bound at creation time
 }
 
 type binding struct {
@@ -100,14 +101,15 @@ func NewConsumerWithOpts(conn *Connection, queueName string, durable, autoDelete
 	}
 
 	return &Consumer{
-		channel:     ch,
-		queue:       queue.Name,
-		handlers:    make(map[string]MessageHandler),
-		conn:        conn,
-		durable:     durable,
-		autoDelete:  autoDelete,
-		messageTTL:  messageTTL,
-		maxMessages: maxMessages,
+		channel:      ch,
+		queue:        queue.Name,
+		handlers:     make(map[string]MessageHandler),
+		conn:         conn,
+		declaredName: queueName,
+		durable:      durable,
+		autoDelete:   autoDelete,
+		messageTTL:   messageTTL,
+		maxMessages:  maxMessages,
 	}, nil
 }
 
@@ -238,6 +240,7 @@ func (c *Consumer) startConsuming() (<-chan amqp.Delivery, error) {
 	autoDelete := c.autoDelete
 	messageTTL := c.messageTTL
 	maxMessages := c.maxMessages
+	declaredName := c.declaredName
 	bindings := append(c.bindings[:0:0], c.bindings...)
 	for i := range bindings {
 		bindings[i].routingKeys = append(bindings[i].routingKeys[:0:0], bindings[i].routingKeys...)
@@ -245,14 +248,14 @@ func (c *Consumer) startConsuming() (<-chan amqp.Delivery, error) {
 	c.mu.Unlock()
 
 	if durable {
-		dlqName := c.queue + "-dlq"
+		dlqName := declaredName + "-dlq"
 		if _, err := ch.QueueDeclare(dlqName, true, false, false, false, nil); err != nil {
 			ch.Close()
 			return nil, fmt.Errorf("failed to declare DLQ: %w", err)
 		}
 	}
 
-	arguments := buildQueueArguments(c.queue, durable, autoDelete, messageTTL, maxMessages)
+	arguments := buildQueueArguments(declaredName, durable, autoDelete, messageTTL, maxMessages)
 	if _, err := ch.QueueDeclare(c.queue, durable, autoDelete, false, false, arguments); err != nil {
 		ch.Close()
 		return nil, fmt.Errorf("failed to declare queue: %w", err)
