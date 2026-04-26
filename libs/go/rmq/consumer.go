@@ -158,9 +158,10 @@ func buildQueueArguments(queueName string, durable, autoDelete bool, messageTTL,
 // BindExchange binds the consumer's queue to an exchange with routing keys.
 // The binding is stored so it can be reapplied after a connection reset.
 func (c *Consumer) BindExchange(exchange string, routingKeys []string) error {
+	keysCopy := append([]string(nil), routingKeys...)
 	c.mu.Lock()
 	ch := c.channel
-	c.bindings = append(c.bindings, binding{exchange: exchange, routingKeys: routingKeys})
+	c.bindings = append(c.bindings, binding{exchange: exchange, routingKeys: keysCopy})
 	c.mu.Unlock()
 
 	for _, key := range routingKeys {
@@ -237,7 +238,10 @@ func (c *Consumer) startConsuming() (<-chan amqp.Delivery, error) {
 	autoDelete := c.autoDelete
 	messageTTL := c.messageTTL
 	maxMessages := c.maxMessages
-	bindings := c.bindings
+	bindings := append(c.bindings[:0:0], c.bindings...)
+	for i := range bindings {
+		bindings[i].routingKeys = append(bindings[i].routingKeys[:0:0], bindings[i].routingKeys...)
+	}
 	c.mu.Unlock()
 
 	if durable {

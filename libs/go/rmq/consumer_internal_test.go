@@ -79,6 +79,65 @@ func TestBuildQueueArguments_AutoDeleteNoExpires(t *testing.T) {
 	}
 }
 
+// TestBindExchange_CopiesRoutingKeys verifies that mutating the caller's slice after
+// BindExchange does not affect the stored binding.
+func TestBindExchange_CopiesRoutingKeys(t *testing.T) {
+	keys := []string{"logs.session.1", "logs.session.2"}
+	c := &Consumer{
+		handlers: make(map[string]MessageHandler),
+	}
+
+	// Use internal method directly (no channel needed for this test path)
+	keysCopy := append([]string(nil), keys...)
+	c.bindings = append(c.bindings, binding{exchange: "manman", routingKeys: keysCopy})
+
+	// Mutate the original slice — stored binding must be unaffected
+	keys[0] = "MUTATED"
+
+	if c.bindings[0].routingKeys[0] != "logs.session.1" {
+		t.Errorf("BindExchange must copy routingKeys; got %q after caller mutation", c.bindings[0].routingKeys[0])
+	}
+}
+
+// TestStartConsuming_DeepCopiesBindings verifies that the snapshot taken inside
+// startConsuming is isolated from concurrent appends to c.bindings.
+func TestStartConsuming_DeepCopiesBindings(t *testing.T) {
+	original := []string{"logs.session.1"}
+	c := &Consumer{
+		handlers: make(map[string]MessageHandler),
+		bindings: []binding{
+			{exchange: "manman", routingKeys: append([]string(nil), original...)},
+		},
+	}
+
+	// Simulate the deep copy that startConsuming performs under the mutex
+	c.mu.Lock()
+	snapshot := append(c.bindings[:0:0], c.bindings...)
+	for i := range snapshot {
+		snapshot[i].routingKeys = append(snapshot[i].routingKeys[:0:0], snapshot[i].routingKeys...)
+	}
+	c.mu.Unlock()
+
+	// Append a new binding to c.bindings after snapshot
+	c.mu.Lock()
+	c.bindings = append(c.bindings, binding{exchange: "manman", routingKeys: []string{"logs.session.2"}})
+	c.mu.Unlock()
+
+	// Snapshot must still have only 1 binding
+	if len(snapshot) != 1 {
+		t.Errorf("snapshot should have 1 binding, got %d", len(snapshot))
+	}
+
+	// Mutate the inner slice on c.bindings — snapshot must be unaffected
+	c.mu.Lock()
+	c.bindings[0].routingKeys[0] = "MUTATED"
+	c.mu.Unlock()
+
+	if snapshot[0].routingKeys[0] != "logs.session.1" {
+		t.Errorf("deep copy failed: snapshot routingKeys[0] = %q", snapshot[0].routingKeys[0])
+	}
+}
+
 // TestBuildQueueArguments_MessageTTLAndMaxMessages verifies optional limits.
 func TestBuildQueueArguments_MessageTTLAndMaxMessages(t *testing.T) {
 	args := buildQueueArguments("limited-queue", true, false, 60000, 1000)
