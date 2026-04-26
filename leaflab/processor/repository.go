@@ -80,11 +80,12 @@ func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int
 		var regionID *int64
 		err := r.db.QueryRow(ctx, `
 			UPDATE sensor
-			SET name = $3, sensor_type_id = $4, unit = $5
-			WHERE board_id     = $1
-			  AND i2c_address  = $2
-			  AND mux_address  IS NOT DISTINCT FROM $6
-			  AND mux_channel  IS NOT DISTINCT FROM $7
+			SET name = $3, unit = $5
+			WHERE board_id       = $1
+			  AND sensor_type_id = $4
+			  AND i2c_address    = $2
+			  AND mux_address    IS NOT DISTINCT FROM $6
+			  AND mux_channel    IS NOT DISTINCT FROM $7
 			RETURNING sensor_id, region_id
 		`, boardID, hw.I2CAddress, name, sensorTypeID, unit, muxAddr, muxCh).Scan(&sensorID, &regionID)
 		if err == nil {
