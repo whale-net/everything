@@ -29,8 +29,32 @@ firmware::FirmwarePublisher& GetPublisher();
 // Platform keep-alive from firmware/network/esp32_platform.cc.
 extern void MQTTLoop();
 
+// CheckSensorNames halts with an error log if any two sensors share a name.
+// Duplicate names would cause overlapping sensor_reading rows in the database.
+// This runs once at startup from a fixed static array so the loop is trivially small.
+static void CheckSensorNames(pw::span<firmware::ISensor* const> sensors) {
+    for (size_t i = 0; i < sensors.size(); ++i) {
+        for (size_t j = i + 1; j < sensors.size(); ++j) {
+            if (strcmp(sensors[i]->name(), sensors[j]->name()) == 0) {
+                // Log and spin — duplicate names are a config bug, not a runtime error.
+                while (true) {
+                    PW_LOG_ERROR(
+                        "DUPLICATE SENSOR NAME '%s' at indices %u and %u — "
+                        "fix the config and reflash",
+                        sensors[i]->name(),
+                        static_cast<unsigned>(i),
+                        static_cast<unsigned>(j));
+                    delay(5000);
+                }
+            }
+        }
+    }
+}
+
 void setup() {
     Serial.begin(115200);
+
+    CheckSensorNames(GetSensors());
 
     if (!GetBus().Init(board::kSda, board::kScl).ok()) {
         PW_LOG_ERROR("I2C bus init failed");
@@ -48,8 +72,13 @@ void setup() {
     GetNetwork().Connect();
 }
 
+#ifndef SENSOR_POLL_INTERVAL_MS
+#define SENSOR_POLL_INTERVAL_MS 60000
+#endif
+
 void loop() {
     static auto prev_state = firmware::NetworkManager::State::kIdle;
+    static uint32_t last_publish_ms = 0;
 
     auto state = GetNetwork().Poll();
     MQTTLoop();
@@ -61,10 +90,13 @@ void loop() {
     }
     prev_state = state;
 
-    // Publish sensor readings every loop pass while connected.
-    if (state == firmware::NetworkManager::State::kReady) {
+    // Publish sensor readings at the configured interval while connected.
+    uint32_t now = millis();
+    if (state == firmware::NetworkManager::State::kReady &&
+        (now - last_publish_ms) >= SENSOR_POLL_INTERVAL_MS) {
         GetPublisher().PublishReadings();
+        last_publish_ms = now;
     }
 
-    delay(1000);
+    delay(100);
 }

@@ -92,7 +92,15 @@ class FakeI2CBus final : public II2CBus {
       injected_error_ = pw::OkStatus();
   }
 
+  // ── Mux identity (for testing sensors that query bus.mux_address()) ────────
+
+  void set_mux_address(uint8_t a) { mux_address_ = a; }
+  void set_mux_channel(uint8_t c) { mux_channel_ = c; }
+
   // ── II2CBus implementation ─────────────────────────────────────────────────
+
+  uint8_t mux_address() const override { return mux_address_; }
+  uint8_t mux_channel() const override { return mux_channel_; }
 
   pw::Status Init(uint8_t sda_pin, uint8_t scl_pin) override {
       if (pw::Status e = ConsumeError(); !e.ok()) return e;
@@ -180,6 +188,8 @@ class FakeI2CBus final : public II2CBus {
   std::map<uint16_t, std::vector<uint8_t>> register_data_;
   std::map<uint8_t, std::vector<uint8_t>> read_data_;
   pw::Status injected_error_ = pw::OkStatus();
+  uint8_t mux_address_ = 0;
+  uint8_t mux_channel_ = 0;
 };
 
 }  // namespace testing

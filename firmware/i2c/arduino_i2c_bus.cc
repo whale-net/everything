@@ -33,32 +33,55 @@ pw::Status WireStatusToStatus(uint8_t wire_result) {
 }  // namespace
 
 pw::Status ArduinoI2CBus::Init(uint8_t sda_pin, uint8_t scl_pin) {
+    sda_pin_ = sda_pin;
+    scl_pin_ = scl_pin;
     Wire.begin(static_cast<int>(sda_pin), static_cast<int>(scl_pin));
     return pw::OkStatus();
+}
+
+void ArduinoI2CBus::Recover() {
+    Wire.end();
+    Wire.begin(static_cast<int>(sda_pin_), static_cast<int>(scl_pin_));
 }
 
 pw::Status ArduinoI2CBus::Write(uint8_t address,
                                 const uint8_t* data,
                                 size_t len) {
-    Wire.beginTransmission(address);
-    Wire.write(data, len);
-    return WireStatusToStatus(Wire.endTransmission(/*sendStop=*/true));
+    auto attempt = [&]() -> pw::Status {
+        Wire.beginTransmission(address);
+        Wire.write(data, len);
+        return WireStatusToStatus(Wire.endTransmission(/*sendStop=*/true));
+    };
+    pw::Status s = attempt();
+    if (!s.ok()) {
+        Recover();
+        s = attempt();
+    }
+    return s;
 }
 
 pw::Status ArduinoI2CBus::Read(uint8_t address, uint8_t* buf, size_t len) {
-    size_t received = Wire.requestFrom(address, static_cast<size_t>(len),
-                                       /*sendStop=*/true);
-    if (received != len) {
-        return pw::Status::Unavailable();
-    }
-    for (size_t i = 0; i < len; i++) {
-        int byte = Wire.read();
-        if (byte < 0) {
-            return pw::Status::DataLoss();
+    auto attempt = [&]() -> pw::Status {
+        size_t received = Wire.requestFrom(address, static_cast<size_t>(len),
+                                           /*sendStop=*/true);
+        if (received != len) {
+            return pw::Status::Unavailable();
         }
-        buf[i] = static_cast<uint8_t>(byte);
+        for (size_t i = 0; i < len; i++) {
+            int b = Wire.read();
+            if (b < 0) {
+                return pw::Status::DataLoss();
+            }
+            buf[i] = static_cast<uint8_t>(b);
+        }
+        return pw::OkStatus();
+    };
+    pw::Status s = attempt();
+    if (!s.ok()) {
+        Recover();
+        s = attempt();
     }
-    return pw::OkStatus();
+    return s;
 }
 
 pw::Status ArduinoI2CBus::ReadRegister(uint8_t address,
@@ -73,7 +96,11 @@ pw::Status ArduinoI2CBus::ReadRegister(uint8_t address,
     pw::Status s =
         WireStatusToStatus(Wire.endTransmission(/*sendStop=*/false));
     if (!s.ok()) {
-        return s;
+        Recover();
+        Wire.beginTransmission(address);
+        Wire.write(reg);
+        s = WireStatusToStatus(Wire.endTransmission(/*sendStop=*/false));
+        if (!s.ok()) return s;
     }
     return Read(address, buf, len);
 }
@@ -82,10 +109,18 @@ pw::Status ArduinoI2CBus::WriteRegister(uint8_t address,
                                         uint8_t reg,
                                         const uint8_t* data,
                                         size_t len) {
-    Wire.beginTransmission(address);
-    Wire.write(reg);
-    Wire.write(data, len);
-    return WireStatusToStatus(Wire.endTransmission(/*sendStop=*/true));
+    auto attempt = [&]() -> pw::Status {
+        Wire.beginTransmission(address);
+        Wire.write(reg);
+        Wire.write(data, len);
+        return WireStatusToStatus(Wire.endTransmission(/*sendStop=*/true));
+    };
+    pw::Status s = attempt();
+    if (!s.ok()) {
+        Recover();
+        s = attempt();
+    }
+    return s;
 }
 
 }  // namespace firmware

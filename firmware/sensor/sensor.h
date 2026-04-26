@@ -28,6 +28,29 @@ struct SensorReading {
 // Compile-time dependency injection: board config file instantiates the
 // correct concrete types and provides them via GetSensors().
 
+// Canonical SI unit for a sensor measurement.
+// Add new values here when a new physical quantity is introduced.
+// UnitString() maps each value to its wire-format string.
+enum class SensorUnit {
+  kUnknown          = 0,
+  kLux              = 1,  // lx   — illuminance
+  kCelsius          = 2,  // °C   — temperature
+  kRelativeHumidity = 3,  // %RH  — relative humidity
+  kPPM              = 4,  // ppm  — parts per million (eCO2)
+  kPPB              = 5,  // ppb  — parts per billion (TVOC)
+};
+
+inline const char* UnitString(SensorUnit u) {
+  switch (u) {
+    case SensorUnit::kLux:              return "lx";
+    case SensorUnit::kCelsius:          return "\xc2\xb0""C";  // °C (UTF-8)
+    case SensorUnit::kRelativeHumidity: return "%RH";
+    case SensorUnit::kPPM:              return "ppm";
+    case SensorUnit::kPPB:              return "ppb";
+    default:                            return "";
+  }
+}
+
 class ISensor {
  public:
   virtual ~ISensor() = default;
@@ -50,9 +73,16 @@ class ISensor {
   // Used for diagnostics and de-duplication.
   virtual uint8_t address() const = 0;
 
-  // Sensor type and SI unit string, used to populate the device manifest.
+  // Sensor type and unit, used to populate the device manifest.
   virtual firmware_SensorType type() const = 0;
-  virtual const char*        unit() const = 0;
+  virtual SensorUnit           unit() const = 0;
+
+  // I2C mux address this sensor is connected through (0 if not mux-backed).
+  // Override by delegating to bus_.mux_address() in II2CBus-backed sensors.
+  virtual uint8_t mux_address() const { return 0; }
+
+  // Mux channel number (0 if not mux-backed or channel 0).
+  virtual uint8_t mux_channel() const { return 0; }
 };
 
 }  // namespace firmware

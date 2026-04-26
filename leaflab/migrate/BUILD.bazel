@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_binary")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_binary(
+    name = "migrate",
+    srcs = ["main.go"],
+    embedsrcs = glob(["migrations/*.sql"]),
+    deps = [
+        "//libs/go/migrate",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+release_app(
+    name = "migrate",
+    binary_name = ":migrate",
+    language = "go",
+    domain = "leaflab",
+    description = "LeafLab database migration runner",
+    app_type = "job",
+)

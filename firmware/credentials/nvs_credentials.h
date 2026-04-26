@@ -9,6 +9,8 @@
 //   key "wifi_pass"  — WiFi passphrase            (required)
 //   key "mqtt_host"  — MQTT broker IP or hostname (optional; "" if absent)
 //   key "mqtt_port"  — MQTT broker port as string (optional; 1883 if absent)
+//   key "mqtt_user"  — MQTT username              (optional; "" if absent)
+//   key "mqtt_pass"  — MQTT password              (optional; "" if absent)
 //
 // Provision the device:
 //   bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 \
@@ -33,12 +35,16 @@ class NVSCredentials final : public ICredentials {
   const char* wifi_password() const override { return pass_; }
   const char* mqtt_host()     const override { return mqtt_host_; }
   uint16_t    mqtt_port()     const override { return mqtt_port_; }
+  const char* mqtt_user()     const override { return mqtt_user_; }
+  const char* mqtt_pass()     const override { return mqtt_pass_; }
 
  private:
   char     ssid_[64]      = {};
   char     pass_[64]      = {};
   char     mqtt_host_[64] = {};
   uint16_t mqtt_port_     = 1883;
+  char     mqtt_user_[64] = {};
+  char     mqtt_pass_[64] = {};
 };
 
 }  // namespace firmware

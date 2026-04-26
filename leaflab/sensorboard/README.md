@@ -56,6 +56,25 @@ Then swap `NVSCredentials` for `DefineCredentials` in `elegoo_config.cc` and add
 
 ---
 
+## CCS811 WAKE Pin
+
+The CCS811 has a WAKE pin (active-low) that must be held low during I2C communication. In `elegoo_multiplex_config.cc` it is wired to GND (always asserted). This is safe for continuous wall-powered operation — WAKE is purely a power-saving feature for battery devices and has no effect on sensor health or longevity.
+
+If GPIO control is needed (e.g. battery-powered board), pass `wake_assert`/`wake_release` lambdas to `CCS811Sensor` in the config file instead of tying WAKE to GND.
+
+---
+
+## Sensor Poll Interval
+
+Default: **60 seconds** (suitable for production deployment).
+
+To override locally, add to `.bazelrc.local` (gitignored):
+```
+build --copt=-DSENSOR_POLL_INTERVAL_MS=1000
+```
+
+---
+
 ## Build and Flash
 
 ```bash
@@ -77,6 +96,12 @@ INF  light: 141.8
 ```
 
 **WSL2:** If `/dev/ttyUSB0` doesn't appear, see the [USB passthrough setup](../../tools/firmware/README.md#wsl2-usb-setup-one-time) in `tools/firmware/README.md`.
+
+**WSL2 flash failures:** The serial monitoring daemon holds the port. Pause it before flashing and resume after:
+```
+serial_pause → bazel run :flash[_*] → serial_resume
+```
+If you're not using the serial daemon and still see `device disconnected or multiple access on port?`, check for a lingering process: `lsof /dev/ttyUSB0`.
 
 ---
 

@@ -2,6 +2,10 @@
 
 Plant and environment monitoring firmware and data pipeline.
 
+## Local Development
+
+- [Tiltfile](Tiltfile) — Start RabbitMQ with MQTT plugin for local sensor testing (`cd leaflab && tilt up`)
+
 ## Start Here
 
 - [README.md](README.md) — What LeafLab is, quick start commands, relationship to `//firmware`

@@ -22,6 +22,8 @@ pw::Status NVSCredentials::Load() {
     String pass      = prefs.getString("wifi_pass", "");
     String mqtt_host = prefs.getString("mqtt_host", "");
     String mqtt_port = prefs.getString("mqtt_port", "");
+    String mqtt_user = prefs.getString("mqtt_user", "");
+    String mqtt_pass = prefs.getString("mqtt_pass", "");
     prefs.end();
 
     if (ssid.length() == 0) {
@@ -33,13 +35,17 @@ pw::Status NVSCredentials::Load() {
     strncpy(ssid_,      ssid.c_str(),      sizeof(ssid_) - 1);
     strncpy(pass_,      pass.c_str(),      sizeof(pass_) - 1);
     strncpy(mqtt_host_, mqtt_host.c_str(), sizeof(mqtt_host_) - 1);
+    strncpy(mqtt_user_, mqtt_user.c_str(), sizeof(mqtt_user_) - 1);
+    strncpy(mqtt_pass_, mqtt_pass.c_str(), sizeof(mqtt_pass_) - 1);
     if (mqtt_port.length() > 0) {
         mqtt_port_ = static_cast<uint16_t>(mqtt_port.toInt());
     }
 
     PW_LOG_INFO("NVS: loaded wifi_ssid='%s'", ssid_);
     if (mqtt_host_[0] != '\0') {
-        PW_LOG_INFO("NVS: loaded mqtt_host='%s' port=%u", mqtt_host_, mqtt_port_);
+        PW_LOG_INFO("NVS: loaded mqtt_host='%s' port=%u user='%s'",
+                    mqtt_host_, mqtt_port_,
+                    mqtt_user_[0] != '\0' ? mqtt_user_ : "(none)");
     }
     return pw::OkStatus();
 }

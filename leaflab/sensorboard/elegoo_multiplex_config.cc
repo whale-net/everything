@@ -1,9 +1,15 @@
-// Board config for the Elegoo ESP32 dev board.
-// Sensors: BH1750 ambient light at I2C address 0x23.
-// Credentials: read from NVS (provision once with :provision target).
+// Board config for the Elegoo ESP32 with a TCA9548A (HW-617) I2C multiplexer.
+// Mux: address 0x70 (A0/A1/A2 tied low).
 //
-// To add sensors: declare more static instances and add pointers to kSensors[].
-// To add a board: create a new *_config.cc and esp32_firmware() target.
+// Channel SD0: BH1750 ambient light at 0x23 ("light2").
+// Channel SD5: SHT3x temperature + humidity at 0x44.
+// Channel SD6: CCS811 eCO2 + TVOC at 0x5A.
+//   CCS811 WAKE pin: tied to GND (always-on). WAKE is a power-saving feature
+//   for battery devices; continuous operation on wall power is safe and intended.
+// Channel SD7: BH1750 ambient light at 0x23 ("light").
+//
+// To add sensors: declare a TCA9548ABus for its channel, instantiate the
+// sensor against it, and add the pointer to kSensors[].
 
 #include <Arduino.h>
 
@@ -11,19 +17,39 @@
 #include "firmware/device_id/efuse_device_id.h"
 #include "firmware/i2c/arduino_i2c_bus.h"
 #include "firmware/i2c/i2c_bus.h"
+#include "firmware/i2c/tca9548a_bus.h"
 #include "firmware/mqtt/firmware_publisher.h"
 #include "firmware/network/esp32_platform.h"
 #include "firmware/network/network_manager.h"
 #include "firmware/sensor/bh1750.h"
+#include "firmware/sensor/ccs811.h"
 #include "firmware/sensor/sensor.h"
+#include "firmware/sensor/sht3x.h"
 #include "pw_span/span.h"
 
-// ── I2C bus and sensors ──────────────────────────────────────────────────────
+// ── I2C bus, multiplexer channels, and sensors ───────────────────────────────
 
 static firmware::ArduinoI2CBus bus;
-static firmware::BH1750Sensor  bh1750(bus, 0x23, "light", millis);
+static firmware::TCA9548ABus   ch0(bus, 0x70, 0);  // HW-617 SD0
+static firmware::TCA9548ABus   ch5(bus, 0x70, 5);  // HW-617 SD5
+static firmware::TCA9548ABus   ch6(bus, 0x70, 6);  // HW-617 SD6
+static firmware::TCA9548ABus   ch7(bus, 0x70, 7);  // HW-617 SD7
 
-static firmware::ISensor* const kSensors[] = {&bh1750};
+static firmware::BH1750Sensor     bh1750_2(ch0, 0x23, "max-light", millis);
+static firmware::SHT3xDevice      sht3x_dev(ch5, 0x44, millis);
+static firmware::SHT3xTemperature sht3x_temp(sht3x_dev, "board-temp");
+static firmware::SHT3xHumidity    sht3x_humi(sht3x_dev, "board-humidity");
+static firmware::CCS811Device     ccs811_dev(ch6, 0x5A, millis);
+static firmware::CCS811eCO2       ccs811_eco2(ccs811_dev, "board-eco2");
+static firmware::CCS811TVOC       ccs811_tvoc(ccs811_dev, "board-tvoc");
+static firmware::BH1750Sensor     bh1750(ch7, 0x23, "board-light", millis);
+
+static firmware::ISensor* const kSensors[] = {
+    &bh1750_2,
+    &sht3x_temp, &sht3x_humi,
+    &ccs811_eco2, &ccs811_tvoc,
+    &bh1750,
+};
 
 firmware::II2CBus& GetBus() { return bus; }
 
@@ -32,14 +58,6 @@ pw::span<firmware::ISensor* const> GetSensors() {
 }
 
 // ── Network ──────────────────────────────────────────────────────────────────
-// GetNetwork() is called from setup() before Connect(). On first call it:
-//   1. Reads credentials from NVS (wifi_ssid, wifi_pass, mqtt_host, mqtt_port).
-//   2. Initialises WiFi hardware (WiFiInit → WiFi.begin()).
-//   3. Constructs and returns the NetworkManager.
-//
-// Provision with:
-//   bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 \
-//     wifi_ssid=MySSID wifi_pass=MyPass mqtt_host=192.168.1.42
 
 static firmware::NVSCredentials    creds;
 static firmware::EfuseDeviceId     device_id("leaflab");
@@ -56,7 +74,6 @@ firmware::NetworkManager& GetNetwork() {
 
     WiFiInit(creds.wifi_ssid(), creds.wifi_password());
 
-    // LWT topic includes device_id — build into a static buffer.
     static char lwt_topic[64];
     snprintf(lwt_topic, sizeof(lwt_topic), "leaflab/%s/status", device_id.Get());
 

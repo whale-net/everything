@@ -29,6 +29,18 @@ cc_library(
     ],
 )
 
+# TCA9548ABus — channel-selecting wrapper for a TCA9548A I2C multiplexer.
+# Host-compilable; no Arduino dependency. Wraps any II2CBus.
+cc_library(
+    name = "tca9548a_bus",
+    srcs = ["tca9548a_bus.cc"],
+    hdrs = ["tca9548a_bus.h"],
+    deps = [
+        ":i2c_bus",
+        "@pigweed//pw_status",
+    ],
+)
+
 # FakeI2CBus — records transactions; host test double.
 cc_library(
     name = "fake_i2c_bus",
