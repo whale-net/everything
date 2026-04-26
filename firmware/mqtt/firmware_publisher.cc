@@ -8,6 +8,7 @@
 #include <Arduino.h>
 
 #include "firmware/proto/firmware.pb.h"
+#include "firmware/sensor/sensor.h"
 #include "pb_encode.h"
 #include "pw_log/log.h"
 #include "pw_string/string_builder.h"
@@ -66,7 +67,7 @@ void FirmwarePublisher::PublishManifest() {
     firmware_SensorDescriptor& desc = manifest.sensors[n++];
     strncpy(desc.name, s->name(), sizeof(desc.name) - 1);
     desc.type = s->type();
-    strncpy(desc.unit, s->unit(), sizeof(desc.unit) - 1);
+    strncpy(desc.unit, UnitString(s->unit()), sizeof(desc.unit) - 1);
   }
   manifest.sensors_count = n;
 

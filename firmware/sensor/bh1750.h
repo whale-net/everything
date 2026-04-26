@@ -37,7 +37,7 @@ class BH1750Sensor final : public ISensor {
   const char* name()    const override { return name_; }
   uint8_t address()     const override { return address_; }
   firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_ILLUMINANCE; }
-  const char* unit()    const override { return "lx"; }
+  SensorUnit unit()     const override { return SensorUnit::kLux; }
 
  private:
   pw::Status Trigger();

@@ -34,7 +34,7 @@ class FakeSensor final : public ISensor {
   const char* name()    const override { return name_; }
   uint8_t address()     const override { return address_; }
   firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_UNKNOWN; }
-  const char* unit()    const override { return ""; }
+  SensorUnit unit()     const override { return SensorUnit::kUnknown; }
 
   // Allow tests to change the reading mid-test.
   void set_value(float v) { value_ = v; }
@@ -67,7 +67,7 @@ class RecordingSensor final : public ISensor {
   const char* name()    const override { return name_; }
   uint8_t address()     const override { return address_; }
   firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_UNKNOWN; }
-  const char* unit()    const override { return ""; }
+  SensorUnit unit()     const override { return SensorUnit::kUnknown; }
 
   int init_call_count() const { return init_call_count_; }
   int read_call_count() const { return read_call_count_; }

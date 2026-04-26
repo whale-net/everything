@@ -77,7 +77,7 @@ class SHT3xTemperature final : public ISensor {
   const char* name()    const override { return name_; }
   uint8_t address()     const override { return dev_.address(); }
   firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_TEMPERATURE; }
-  const char* unit()    const override { return "°C"; }
+  SensorUnit unit()     const override { return SensorUnit::kCelsius; }
 
  private:
   SHT3xDevice& dev_;
@@ -94,7 +94,7 @@ class SHT3xHumidity final : public ISensor {
   const char* name()    const override { return name_; }
   uint8_t address()     const override { return dev_.address(); }
   firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_HUMIDITY; }
-  const char* unit()    const override { return "%RH"; }
+  SensorUnit unit()     const override { return SensorUnit::kRelativeHumidity; }
 
  private:
   SHT3xDevice& dev_;

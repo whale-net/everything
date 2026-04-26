@@ -89,7 +89,7 @@ class CCS811eCO2 final : public ISensor {
   const char* name()    const override { return name_; }
   uint8_t address()     const override { return dev_.address(); }
   firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_ECO2; }
-  const char* unit()    const override { return "ppm"; }
+  SensorUnit unit()     const override { return SensorUnit::kPPM; }
 
  private:
   CCS811Device& dev_;
@@ -106,7 +106,7 @@ class CCS811TVOC final : public ISensor {
   const char* name()    const override { return name_; }
   uint8_t address()     const override { return dev_.address(); }
   firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_TVOC; }
-  const char* unit()    const override { return "ppb"; }
+  SensorUnit unit()     const override { return SensorUnit::kPPB; }
 
  private:
   CCS811Device& dev_;
