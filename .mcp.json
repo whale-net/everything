@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "postgres-leaflab": {
+      "type": "stdio",
+      "command": "/home/alex/whale_net/everything/.venv/bin/postgres-mcp",
+      "args": ["--access-mode=restricted"],
+      "env": {
+        "DATABASE_URI": "postgresql://postgres:password@localhost:5432/leaflab"
+      }
+    }
+  }
+}
