@@ -58,6 +58,7 @@ esp32_firmware(
         "//firmware/mqtt:firmware_publisher",
         "//firmware/network:esp32_platform",
         "//firmware/sensor:bh1750",
+        "//firmware/sensor:ccs811",
         "//firmware/sensor:sht3x",
         "@arduino_esp32//:Wire",
     ],

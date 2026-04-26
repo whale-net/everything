@@ -88,6 +88,19 @@ cc_library(
     ],
 )
 
+# CCS811 eCO2 + TVOC gas sensor — II2CBus-backed; host-compilable.
+cc_library(
+    name = "ccs811",
+    srcs = ["ccs811.cc"],
+    hdrs = ["ccs811.h"],
+    deps = [
+        ":sensor",
+        "//firmware/i2c:i2c_bus",
+        "@pigweed//pw_log",
+        "@pigweed//pw_status",
+    ],
+)
+
 cc_test(
     name = "bh1750_test",
     srcs = ["bh1750_test.cc"],

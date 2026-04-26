@@ -1,6 +1,11 @@
 // Board config for the Elegoo ESP32 with a TCA9548A (HW-617) I2C multiplexer.
 // Mux: address 0x70 (A0/A1/A2 tied low).
-// Channel SD1: BH1750 ambient light sensor at 0x23.
+//
+// Channel SD0: SHT3x temperature + humidity at 0x44 (ADDR tied low).
+// Channel SD1: BH1750 ambient light at 0x23.
+// Channel SD2: CCS811 eCO2 + TVOC at 0x5A (ADDR tied low).
+//   CCS811 WAKE pin: tied to GND (always-on). WAKE is a power-saving feature
+//   for battery devices; continuous operation on wall power is safe and intended.
 //
 // To add sensors: declare a TCA9548ABus for its channel, instantiate the
 // sensor against it, and add the pointer to kSensors[].
@@ -16,6 +21,7 @@
 #include "firmware/network/esp32_platform.h"
 #include "firmware/network/network_manager.h"
 #include "firmware/sensor/bh1750.h"
+#include "firmware/sensor/ccs811.h"
 #include "firmware/sensor/sensor.h"
 #include "firmware/sensor/sht3x.h"
 #include "pw_span/span.h"
@@ -25,13 +31,18 @@
 static firmware::ArduinoI2CBus bus;
 static firmware::TCA9548ABus   ch0(bus, 0x70, 0);  // HW-617 SD0
 static firmware::TCA9548ABus   ch1(bus, 0x70, 1);  // HW-617 SD1
+static firmware::TCA9548ABus   ch2(bus, 0x70, 2);  // HW-617 SD2
 
 static firmware::SHT3xDevice      sht3x_dev(ch0, 0x44, millis);
 static firmware::SHT3xTemperature sht3x_temp(sht3x_dev, "temp");
 static firmware::SHT3xHumidity    sht3x_humi(sht3x_dev, "humidity");
 static firmware::BH1750Sensor     bh1750(ch1, 0x23, "light", millis);
+static firmware::CCS811Device     ccs811_dev(ch2, 0x5A, millis);
+static firmware::CCS811eCO2       ccs811_eco2(ccs811_dev, "eco2");
+static firmware::CCS811TVOC       ccs811_tvoc(ccs811_dev, "tvoc");
 
-static firmware::ISensor* const kSensors[] = {&sht3x_temp, &sht3x_humi, &bh1750};
+static firmware::ISensor* const kSensors[] = {
+    &sht3x_temp, &sht3x_humi, &bh1750, &ccs811_eco2, &ccs811_tvoc};
 
 firmware::II2CBus& GetBus() { return bus; }
 

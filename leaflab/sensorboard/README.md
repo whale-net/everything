@@ -56,6 +56,14 @@ Then swap `NVSCredentials` for `DefineCredentials` in `elegoo_config.cc` and add
 
 ---
 
+## CCS811 WAKE Pin
+
+The CCS811 has a WAKE pin (active-low) that must be held low during I2C communication. In `elegoo_multiplex_config.cc` it is wired to GND (always asserted). This is safe for continuous wall-powered operation — WAKE is purely a power-saving feature for battery devices and has no effect on sensor health or longevity.
+
+If GPIO control is needed (e.g. battery-powered board), pass `wake_assert`/`wake_release` lambdas to `CCS811Sensor` in the config file instead of tying WAKE to GND.
+
+---
+
 ## Sensor Poll Interval
 
 Default: **60 seconds** (suitable for production deployment).

@@ -7,7 +7,9 @@ enum SensorType {
   SENSOR_TYPE_UNKNOWN     = 0;
   SENSOR_TYPE_ILLUMINANCE = 1;  // lx  — BH1750 and similar
   SENSOR_TYPE_TEMPERATURE = 2;  // °C  — thermistor and similar
-  SENSOR_TYPE_HUMIDITY    = 3;  // %RH — future
+  SENSOR_TYPE_HUMIDITY    = 3;  // %RH
+  SENSOR_TYPE_ECO2        = 4;  // ppm — CCS811 and similar
+  SENSOR_TYPE_TVOC        = 5;  // ppb — CCS811 and similar
 }
 
 // ── Device manifest ───────────────────────────────────────────────────────────
