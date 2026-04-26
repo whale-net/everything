@@ -32,6 +32,14 @@ class ArduinoI2CBus final : public II2CBus {
                            uint8_t reg,
                            const uint8_t* data,
                            size_t len) override;
+
+ private:
+  uint8_t sda_pin_ = 0;
+  uint8_t scl_pin_ = 0;
+
+  // Reinitialise Wire after a bus error leaves the driver in a bad state.
+  // Called automatically on failure; callers retry once after recovery.
+  void Recover();
 };
 
 }  // namespace firmware

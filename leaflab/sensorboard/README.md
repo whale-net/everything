@@ -78,11 +78,11 @@ INF  light: 141.8
 
 **WSL2:** If `/dev/ttyUSB0` doesn't appear, see the [USB passthrough setup](../../tools/firmware/README.md#wsl2-usb-setup-one-time) in `tools/firmware/README.md`.
 
-**WSL2 flash failures:** If flashing fails with `device disconnected or multiple access on port?`, a previous esptool process may still be holding the port:
-```bash
-lsof /dev/ttyUSB0   # find the PID
-kill <pid>
+**WSL2 flash failures:** The serial monitoring daemon holds the port. Pause it before flashing and resume after:
 ```
+serial_pause → bazel run :flash[_*] → serial_resume
+```
+If you're not using the serial daemon and still see `device disconnected or multiple access on port?`, check for a lingering process: `lsof /dev/ttyUSB0`.
 
 ---
 

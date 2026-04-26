@@ -26,7 +26,7 @@ ESP32_COMPAT = [
     "//tools/firmware:cpu_xtensa",
 ]
 
-def esp32_firmware(name, srcs, deps = [], copts = [], flash_config = None, **kwargs):
+def esp32_firmware(name, srcs, deps = [], copts = [], flash_config = None, flash_name = "flash", **kwargs):
     """Creates {name}_lib, {name}_elf, {name}_bin, and :flash targets.
 
     Args:
@@ -153,7 +153,7 @@ def esp32_firmware(name, srcs, deps = [], copts = [], flash_config = None, **kwa
     )
 
     flash_firmware(
-        name = "flash",
+        name = flash_name,
         firmware_name = name,
         board_config = flash_config,
     )

@@ -43,6 +43,25 @@ esp32_firmware(
     ],
 )
 
+# Elegoo ESP32 + HW-617 TCA9548A mux: BH1750 on channel SD1.
+# Flash: bazel run //leaflab/sensorboard:flash_multiplex -- /dev/ttyUSB0
+esp32_firmware(
+    name = "sensorboard_multiplex",
+    srcs = ["elegoo_multiplex_config.cc"],
+    flash_name = "flash_multiplex",
+    deps = [
+        ":sensorboard_main",
+        "//firmware/credentials:nvs_credentials",
+        "//firmware/device_id:efuse_device_id",
+        "//firmware/i2c:arduino_i2c_bus",
+        "//firmware/i2c:tca9548a_bus",
+        "//firmware/mqtt:firmware_publisher",
+        "//firmware/network:esp32_platform",
+        "//firmware/sensor:bh1750",
+        "@arduino_esp32//:Wire",
+    ],
+)
+
 # ── Provision target ─────────────────────────────────────────────────────────
 # Writes WiFi credentials into the ESP32's NVS partition (0x9000).
 # Run once per device, or whenever credentials change.
