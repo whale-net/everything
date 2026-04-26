@@ -87,6 +87,7 @@ firmware::NetworkManager& GetNetwork() {
     cfg.mqtt_pass   = creds.mqtt_pass()[0] != '\0' ? creds.mqtt_pass() : nullptr;
     cfg.lwt_topic   = lwt_topic;
     cfg.lwt_payload = "offline";
+    cfg.mqtt_tls    = creds.mqtt_tls();
 
     static firmware::NetworkManager local_net(cfg);
     net = &local_net;
