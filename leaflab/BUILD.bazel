@@ -1,0 +1,13 @@
+load("//tools/bazel:release.bzl", "release_helm_chart")
+
+release_helm_chart(
+    name = "leaflab_chart",
+    chart_name = "leaflab",
+    domain = "leaflab",
+    namespace = "leaflab",
+    environment = "production",
+    apps = [
+        "//leaflab/migrate:migrate_metadata",
+        "//leaflab/processor:processor_metadata",
+    ],
+)
