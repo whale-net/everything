@@ -17,16 +17,21 @@
 #include "firmware/network/network_manager.h"
 #include "firmware/sensor/bh1750.h"
 #include "firmware/sensor/sensor.h"
+#include "firmware/sensor/sht3x.h"
 #include "pw_span/span.h"
 
 // ── I2C bus, multiplexer channels, and sensors ───────────────────────────────
 
 static firmware::ArduinoI2CBus bus;
+static firmware::TCA9548ABus   ch0(bus, 0x70, 0);  // HW-617 SD0
 static firmware::TCA9548ABus   ch1(bus, 0x70, 1);  // HW-617 SD1
 
-static firmware::BH1750Sensor bh1750(ch1, 0x23, "light", millis);
+static firmware::SHT3xDevice      sht3x_dev(ch0, 0x44, millis);
+static firmware::SHT3xTemperature sht3x_temp(sht3x_dev, "temp");
+static firmware::SHT3xHumidity    sht3x_humi(sht3x_dev, "humidity");
+static firmware::BH1750Sensor     bh1750(ch1, 0x23, "light", millis);
 
-static firmware::ISensor* const kSensors[] = {&bh1750};
+static firmware::ISensor* const kSensors[] = {&sht3x_temp, &sht3x_humi, &bh1750};
 
 firmware::II2CBus& GetBus() { return bus; }
 

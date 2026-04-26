@@ -72,8 +72,13 @@ void setup() {
     GetNetwork().Connect();
 }
 
+#ifndef SENSOR_POLL_INTERVAL_MS
+#define SENSOR_POLL_INTERVAL_MS 60000
+#endif
+
 void loop() {
     static auto prev_state = firmware::NetworkManager::State::kIdle;
+    static uint32_t last_publish_ms = 0;
 
     auto state = GetNetwork().Poll();
     MQTTLoop();
@@ -85,10 +90,13 @@ void loop() {
     }
     prev_state = state;
 
-    // Publish sensor readings every loop pass while connected.
-    if (state == firmware::NetworkManager::State::kReady) {
+    // Publish sensor readings at the configured interval while connected.
+    uint32_t now = millis();
+    if (state == firmware::NetworkManager::State::kReady &&
+        (now - last_publish_ms) >= SENSOR_POLL_INTERVAL_MS) {
         GetPublisher().PublishReadings();
+        last_publish_ms = now;
     }
 
-    delay(1000);
+    delay(100);
 }

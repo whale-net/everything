@@ -56,6 +56,17 @@ Then swap `NVSCredentials` for `DefineCredentials` in `elegoo_config.cc` and add
 
 ---
 
+## Sensor Poll Interval
+
+Default: **60 seconds** (suitable for production deployment).
+
+To override locally, add to `.bazelrc.local` (gitignored):
+```
+build --copt=-DSENSOR_POLL_INTERVAL_MS=1000
+```
+
+---
+
 ## Build and Flash
 
 ```bash
