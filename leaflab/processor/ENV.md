@@ -6,8 +6,13 @@
 
 | Variable | Default | Required | Description |
 |----------|---------|----------|-------------|
-| `RABBITMQ_URL` | — | Yes | AMQP URL, e.g. `amqp://rabbit:password@host:5672/` |
+| `RABBITMQ_URL` | — | Yes | AMQP URL. Use `amqps://` scheme for SSL, e.g. `amqps://rabbit:password@rmq.whalenet.dev:5671/` |
 | `QUEUE_NAME` | `leaflab-processor` | No | AMQP queue name to declare and consume from |
+| `RABBITMQ_SSL_VERIFY` | `true` | No | Set to `false` to skip certificate verification (insecure, dev only) |
+| `RABBITMQ_CA_CERT_PATH` | — | No | Path to a PEM CA certificate for self-signed/private-CA setups |
+| `RABBITMQ_TLS_SERVER_NAME` | — | No | SNI override — set to `rmq.whalenet.dev` when connecting via internal hostname but cert is for the external domain |
+
+SSL is handled automatically when `RABBITMQ_URL` uses the `amqps://` scheme. For local dev the plain `amqp://` scheme is used and no SSL vars are needed.
 
 The processor binds to the `amq.topic` exchange with routing key `leaflab.#`.
 RabbitMQ's MQTT plugin routes MQTT topics to this exchange, converting `/` → `.`

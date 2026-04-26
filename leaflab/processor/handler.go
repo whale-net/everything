@@ -20,7 +20,7 @@ type SensorRepository interface {
 	UpsertSensor(ctx context.Context, boardID, sensorTypeID int64, name, unit string, hw *HardwareAddress) (int64, *int64, error)
 	UpsertSensorHWHistory(ctx context.Context, sensorID int64, hw *HardwareAddress) error
 	GetSensor(ctx context.Context, deviceID, sensorName string) (SensorInfo, bool, error)
-	InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeMs uint32, recordedAt time.Time) error
+	InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time) error
 }
 
 // MessageHandler decodes leaflab MQTT messages and persists them.
@@ -41,7 +41,7 @@ func NewMessageHandler(logger *slog.Logger, repo SensorRepository, cache *Sensor
 func (h *MessageHandler) Handle(ctx context.Context, msg rmq.Message) error {
 	parts := strings.Split(msg.RoutingKey, ".")
 	if len(parts) < 3 || parts[0] != "leaflab" {
-		return fmt.Errorf("unexpected routing key: %s", msg.RoutingKey)
+		return &rmq.PermanentError{Err: fmt.Errorf("unexpected routing key: %s", msg.RoutingKey)}
 	}
 
 	deviceID := parts[1]
@@ -61,7 +61,7 @@ func (h *MessageHandler) Handle(ctx context.Context, msg rmq.Message) error {
 func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, body []byte) error {
 	var manifest firmwarepb.DeviceManifest
 	if err := proto.Unmarshal(body, &manifest); err != nil {
-		return fmt.Errorf("unmarshal DeviceManifest: %w", err)
+		return &rmq.PermanentError{Err: fmt.Errorf("unmarshal DeviceManifest: %w", err)}
 	}
 
 	boardID, err := h.repo.UpsertBoard(ctx, deviceID)
@@ -70,12 +70,16 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 	}
 	h.logger.Info("board registered", "device_id", deviceID, "board_id", boardID)
 
+	var firstErr error
 	for _, sd := range manifest.Sensors {
 		typeName := sensorTypeName(sd.Type)
 
 		sensorTypeID, err := h.repo.UpsertSensorType(ctx, typeName, sd.Unit)
 		if err != nil {
 			h.logger.Error("failed to upsert sensor_type", "name", typeName, "err", err)
+			if firstErr == nil {
+				firstErr = err
+			}
 			continue
 		}
 
@@ -91,6 +95,9 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 		sensorID, regionID, err := h.repo.UpsertSensor(ctx, boardID, sensorTypeID, sd.Name, sd.Unit, hw)
 		if err != nil {
 			h.logger.Error("failed to upsert sensor", "name", sd.Name, "err", err)
+			if firstErr == nil {
+				firstErr = err
+			}
 			continue
 		}
 
@@ -112,7 +119,7 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 		)
 	}
 
-	return nil
+	return firstErr
 }
 
 // handleSensorReading writes a reading row. Drops the message if the sensor is
@@ -140,7 +147,7 @@ func (h *MessageHandler) handleSensorReading(ctx context.Context, deviceID, sens
 
 	var reading firmwarepb.SensorReading
 	if err := proto.Unmarshal(body, &reading); err != nil {
-		return fmt.Errorf("unmarshal SensorReading: %w", err)
+		return &rmq.PermanentError{Err: fmt.Errorf("unmarshal SensorReading: %w", err)}
 	}
 
 	if err := h.repo.InsertReading(
@@ -149,7 +156,7 @@ func (h *MessageHandler) handleSensorReading(ctx context.Context, deviceID, sens
 		info.RegionID,
 		float64(reading.Value),
 		true,
-		reading.UptimeMs,
+		reading.UptimeMs/1000,
 		time.Now(),
 	); err != nil {
 		return err
@@ -159,7 +166,7 @@ func (h *MessageHandler) handleSensorReading(ctx context.Context, deviceID, sens
 		"device_id", deviceID,
 		"sensor", sensorName,
 		"value", reading.Value,
-		"uptime_ms", reading.UptimeMs,
+		"uptime_s", reading.UptimeMs/1000,
 	)
 	return nil
 }

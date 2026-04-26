@@ -56,6 +56,8 @@ class DefineCredentials final : public ICredentials {
   const char* wifi_password() const override { return WIFI_PASSWORD; }
   const char* mqtt_host()     const override { return MQTT_HOST; }
   uint16_t    mqtt_port()     const override { return MQTT_PORT; }
+  const char* mqtt_user()     const override { return ""; }
+  const char* mqtt_pass()     const override { return ""; }
 };
 
 }  // namespace firmware

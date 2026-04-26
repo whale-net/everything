@@ -230,11 +230,12 @@ func nullableUint32Equal(a, b *uint32) bool {
 }
 
 // InsertReading writes a sensor_reading row.
-func (r *Repository) InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeMs uint32, recordedAt time.Time) error {
+// uptimeS is the device uptime in seconds (proto uptime_ms divided by 1000).
+func (r *Repository) InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time) error {
 	_, err := r.db.Exec(ctx, `
-		INSERT INTO sensor_reading (sensor_id, region_id, value, valid, uptime_ms, recorded_at)
+		INSERT INTO sensor_reading (sensor_id, region_id, value, valid, uptime_s, recorded_at)
 		VALUES ($1, $2, $3, $4, $5, $6)
-	`, sensorID, regionID, value, valid, uptimeMs, recordedAt)
+	`, sensorID, regionID, value, valid, uptimeS, recordedAt)
 	if err != nil {
 		return fmt.Errorf("insert reading for sensor %d: %w", sensorID, err)
 	}
