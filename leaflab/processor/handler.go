@@ -18,6 +18,7 @@ type SensorRepository interface {
 	UpsertBoard(ctx context.Context, deviceID string) (int64, error)
 	UpsertSensorType(ctx context.Context, name, unit string) (int64, error)
 	UpsertSensor(ctx context.Context, boardID, sensorTypeID int64, name, unit string, hw *HardwareAddress) (int64, *int64, error)
+	UpsertSensorHWHistory(ctx context.Context, sensorID int64, hw *HardwareAddress) error
 	GetSensor(ctx context.Context, deviceID, sensorName string) (SensorInfo, bool, error)
 	InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeMs uint32, recordedAt time.Time) error
 }
@@ -91,6 +92,10 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 		if err != nil {
 			h.logger.Error("failed to upsert sensor", "name", sd.Name, "err", err)
 			continue
+		}
+
+		if err := h.repo.UpsertSensorHWHistory(ctx, sensorID, hw); err != nil {
+			h.logger.Error("failed to upsert sensor hw history", "name", sd.Name, "err", err)
 		}
 
 		h.cache.Set(deviceID, sd.Name, SensorInfo{SensorID: sensorID, RegionID: regionID})

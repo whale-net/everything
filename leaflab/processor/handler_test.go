@@ -48,6 +48,10 @@ func (s *stubRepo) UpsertSensor(_ context.Context, boardID, sensorTypeID int64, 
 	return s.sensorID, nil, nil
 }
 
+func (s *stubRepo) UpsertSensorHWHistory(_ context.Context, _ int64, _ *HardwareAddress) error {
+	return nil
+}
+
 func (s *stubRepo) GetSensor(_ context.Context, _, _ string) (SensorInfo, bool, error) {
 	return SensorInfo{}, false, nil
 }

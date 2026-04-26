@@ -173,6 +173,62 @@ func (r *Repository) LoadSensorCache(ctx context.Context) (map[string]map[string
 	return out, rows.Err()
 }
 
+// UpsertSensorHWHistory records a new wiring position for a sensor when it
+// changes, closing the previous open row. No-op if wiring is unchanged.
+func (r *Repository) UpsertSensorHWHistory(ctx context.Context, sensorID int64, hw *HardwareAddress) error {
+	var muxAddr, muxCh *uint32
+	if hw != nil && hw.MuxAddress > 0 {
+		muxAddr = &hw.MuxAddress
+		muxCh = &hw.MuxChannel
+	}
+
+	var curMuxAddr, curMuxCh *uint32
+	err := r.db.QueryRow(ctx, `
+		SELECT mux_address, mux_channel
+		FROM sensor_hw_history
+		WHERE sensor_id = $1 AND unassigned_at IS NULL
+	`, sensorID).Scan(&curMuxAddr, &curMuxCh)
+
+	noExisting := errors.Is(err, pgx.ErrNoRows)
+	if err != nil && !noExisting {
+		return fmt.Errorf("get hw history for sensor %d: %w", sensorID, err)
+	}
+
+	unchanged := !noExisting &&
+		nullableUint32Equal(curMuxAddr, muxAddr) &&
+		nullableUint32Equal(curMuxCh, muxCh)
+	if unchanged {
+		return nil
+	}
+
+	if !noExisting {
+		if _, err := r.db.Exec(ctx, `
+			UPDATE sensor_hw_history SET unassigned_at = NOW()
+			WHERE sensor_id = $1 AND unassigned_at IS NULL
+		`, sensorID); err != nil {
+			return fmt.Errorf("close hw history for sensor %d: %w", sensorID, err)
+		}
+	}
+
+	if _, err := r.db.Exec(ctx, `
+		INSERT INTO sensor_hw_history (sensor_id, mux_address, mux_channel)
+		VALUES ($1, $2, $3)
+	`, sensorID, muxAddr, muxCh); err != nil {
+		return fmt.Errorf("insert hw history for sensor %d: %w", sensorID, err)
+	}
+	return nil
+}
+
+func nullableUint32Equal(a, b *uint32) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
 // InsertReading writes a sensor_reading row.
 func (r *Repository) InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeMs uint32, recordedAt time.Time) error {
 	_, err := r.db.Exec(ctx, `
