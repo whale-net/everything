@@ -17,9 +17,12 @@ enum SensorType {
 // processors can register entities without knowing the firmware source.
 
 message SensorDescriptor {
-  string     name = 1;  // unique on this device, e.g. "light_canopy"
-  SensorType type = 2;
-  string     unit = 3;  // SI unit string, e.g. "lx", "°C"
+  string     name        = 1;  // human name, unique per device, e.g. "light_canopy"
+  SensorType type        = 2;
+  string     unit        = 3;  // SI unit string, e.g. "lx", "°C"
+  uint32     i2c_address = 4;  // physical I2C address (0 if unknown)
+  uint32     mux_address = 5;  // TCA9548A I2C address (0 if not mux-backed)
+  uint32     mux_channel = 6;  // TCA9548A channel 0-7 (valid only when mux_address > 0)
 }
 
 message DeviceManifest {

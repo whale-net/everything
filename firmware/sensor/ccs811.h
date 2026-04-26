@@ -44,9 +44,11 @@ class CCS811Device {
   // Returns latest TVOC in ppb.
   float ReadTVOC();
 
-  bool eco2_valid() const { return valid_; }
-  bool tvoc_valid() const { return valid_; }
-  uint8_t address() const { return address_; }
+  bool eco2_valid()      const { return valid_; }
+  bool tvoc_valid()      const { return valid_; }
+  uint8_t address()      const { return address_; }
+  uint8_t mux_address()  const { return bus_.mux_address(); }
+  uint8_t mux_channel()  const { return bus_.mux_channel(); }
 
  private:
   void Poll();
@@ -86,10 +88,12 @@ class CCS811eCO2 final : public ISensor {
 
   pw::Status Init() override;
   SensorReading Read() override;
-  const char* name()    const override { return name_; }
-  uint8_t address()     const override { return dev_.address(); }
+  const char* name()         const override { return name_; }
+  uint8_t address()          const override { return dev_.address(); }
   firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_ECO2; }
-  SensorUnit unit()     const override { return SensorUnit::kPPM; }
+  SensorUnit unit()          const override { return SensorUnit::kPPM; }
+  uint8_t mux_address()      const override { return dev_.mux_address(); }
+  uint8_t mux_channel()      const override { return dev_.mux_channel(); }
 
  private:
   CCS811Device& dev_;
@@ -103,10 +107,12 @@ class CCS811TVOC final : public ISensor {
 
   pw::Status Init() override;
   SensorReading Read() override;
-  const char* name()    const override { return name_; }
-  uint8_t address()     const override { return dev_.address(); }
+  const char* name()         const override { return name_; }
+  uint8_t address()          const override { return dev_.address(); }
   firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_TVOC; }
-  SensorUnit unit()     const override { return SensorUnit::kPPB; }
+  SensorUnit unit()          const override { return SensorUnit::kPPB; }
+  uint8_t mux_address()      const override { return dev_.mux_address(); }
+  uint8_t mux_channel()      const override { return dev_.mux_channel(); }
 
  private:
   CCS811Device& dev_;

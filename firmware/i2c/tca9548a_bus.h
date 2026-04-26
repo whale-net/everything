@@ -50,9 +50,13 @@ class TCA9548ABus final : public II2CBus {
                            const uint8_t* data,
                            size_t len) override;
 
+  uint8_t mux_address() const override { return mux_address_; }
+  uint8_t mux_channel() const override { return channel_; }
+
  private:
   II2CBus& parent_;
   uint8_t mux_address_;
+  uint8_t channel_;       // 0-7
   uint8_t channel_mask_;  // 1 << channel
 
   pw::Status SelectChannel();

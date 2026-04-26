@@ -76,6 +76,13 @@ class ISensor {
   // Sensor type and unit, used to populate the device manifest.
   virtual firmware_SensorType type() const = 0;
   virtual SensorUnit           unit() const = 0;
+
+  // I2C mux address this sensor is connected through (0 if not mux-backed).
+  // Override by delegating to bus_.mux_address() in II2CBus-backed sensors.
+  virtual uint8_t mux_address() const { return 0; }
+
+  // Mux channel number (0 if not mux-backed or channel 0).
+  virtual uint8_t mux_channel() const { return 0; }
 };
 
 }  // namespace firmware

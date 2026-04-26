@@ -54,19 +54,70 @@ func (r *Repository) UpsertSensorType(ctx context.Context, name, unit string) (i
 	return id, nil
 }
 
-// UpsertSensor inserts a sensor row if it doesn't exist (matched on board_id +
-// name). Returns the sensor_id and current region_id (nil if unset).
-func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int64, name, unit string) (int64, *int64, error) {
+// HardwareAddress identifies a sensor by its physical wiring.
+// MuxAddress and MuxChannel are only meaningful when MuxAddress > 0.
+type HardwareAddress struct {
+	I2CAddress uint32
+	MuxAddress uint32
+	MuxChannel uint32
+}
+
+// UpsertSensor upserts a sensor row.
+// When hw is non-nil (hardware address known), it first tries to find an
+// existing row by (board_id, i2c_address, mux_address, mux_channel) and
+// updates its name/type/unit — this preserves identity across renames.
+// Falls back to the name-based UNIQUE(board_id, name) upsert.
+// Returns the sensor_id and current region_id (nil if unset).
+func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int64, name, unit string, hw *HardwareAddress) (int64, *int64, error) {
+	if hw != nil && hw.I2CAddress > 0 {
+		// Nullable mux fields: only set when mux is in use.
+		var muxAddr, muxCh *uint32
+		if hw.MuxAddress > 0 {
+			muxAddr = &hw.MuxAddress
+			muxCh = &hw.MuxChannel
+		}
+		var sensorID int64
+		var regionID *int64
+		err := r.db.QueryRow(ctx, `
+			UPDATE sensor
+			SET name = $3, sensor_type_id = $4, unit = $5
+			WHERE board_id     = $1
+			  AND i2c_address  = $2
+			  AND mux_address  IS NOT DISTINCT FROM $6
+			  AND mux_channel  IS NOT DISTINCT FROM $7
+			RETURNING sensor_id, region_id
+		`, boardID, hw.I2CAddress, name, sensorTypeID, unit, muxAddr, muxCh).Scan(&sensorID, &regionID)
+		if err == nil {
+			return sensorID, regionID, nil // found by hardware address
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return 0, nil, fmt.Errorf("hw-address lookup for sensor %q on board %d: %w", name, boardID, err)
+		}
+		// ErrNoRows: no existing row for this hw address — fall through to name upsert.
+	}
+
+	// Name-based upsert; also persists hw address columns when provided.
+	var i2cAddr, muxAddr, muxCh *uint32
+	if hw != nil && hw.I2CAddress > 0 {
+		i2cAddr = &hw.I2CAddress
+		if hw.MuxAddress > 0 {
+			muxAddr = &hw.MuxAddress
+			muxCh = &hw.MuxChannel
+		}
+	}
 	var sensorID int64
 	var regionID *int64
 	err := r.db.QueryRow(ctx, `
-		INSERT INTO sensor (board_id, sensor_type_id, name, unit, registered_at)
-		VALUES ($1, $2, $3, $4, NOW())
+		INSERT INTO sensor (board_id, sensor_type_id, name, unit, i2c_address, mux_address, mux_channel, registered_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
 		ON CONFLICT (board_id, name) DO UPDATE
 			SET sensor_type_id = EXCLUDED.sensor_type_id,
-			    unit            = EXCLUDED.unit
+			    unit            = EXCLUDED.unit,
+			    i2c_address     = COALESCE(EXCLUDED.i2c_address, sensor.i2c_address),
+			    mux_address     = COALESCE(EXCLUDED.mux_address, sensor.mux_address),
+			    mux_channel     = COALESCE(EXCLUDED.mux_channel, sensor.mux_channel)
 		RETURNING sensor_id, region_id
-	`, boardID, sensorTypeID, name, unit).Scan(&sensorID, &regionID)
+	`, boardID, sensorTypeID, name, unit, i2cAddr, muxAddr, muxCh).Scan(&sensorID, &regionID)
 	if err != nil {
 		return 0, nil, fmt.Errorf("upsert sensor %q on board %d: %w", name, boardID, err)
 	}

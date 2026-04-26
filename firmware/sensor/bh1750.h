@@ -38,6 +38,8 @@ class BH1750Sensor final : public ISensor {
   uint8_t address()     const override { return address_; }
   firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_ILLUMINANCE; }
   SensorUnit unit()     const override { return SensorUnit::kLux; }
+  uint8_t mux_address() const override { return bus_.mux_address(); }
+  uint8_t mux_channel() const override { return bus_.mux_channel(); }
 
  private:
   pw::Status Trigger();

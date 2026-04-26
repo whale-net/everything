@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
 
 go_library(
@@ -27,6 +27,16 @@ go_binary(
     name = "processor",
     embed = [":processor_lib"],
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "processor_test",
+    srcs = ["handler_test.go"],
+    embed = [":processor_lib"],
+    deps = [
+        "//firmware/proto:firmwarepb",
+        "@org_golang_google_protobuf//proto",
+    ],
 )
 
 release_app(

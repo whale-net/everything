@@ -12,6 +12,16 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// SensorRepository is the persistence interface used by MessageHandler.
+// *Repository satisfies this interface; tests use stub implementations.
+type SensorRepository interface {
+	UpsertBoard(ctx context.Context, deviceID string) (int64, error)
+	UpsertSensorType(ctx context.Context, name, unit string) (int64, error)
+	UpsertSensor(ctx context.Context, boardID, sensorTypeID int64, name, unit string, hw *HardwareAddress) (int64, *int64, error)
+	GetSensor(ctx context.Context, deviceID, sensorName string) (SensorInfo, bool, error)
+	InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeMs uint32, recordedAt time.Time) error
+}
+
 // MessageHandler decodes leaflab MQTT messages and persists them.
 // Routing key format (MQTT '/' → AMQP '.'):
 //
@@ -19,11 +29,11 @@ import (
 //	leaflab.<device_id>.sensor.<name>        → SensorReading
 type MessageHandler struct {
 	logger *slog.Logger
-	repo   *Repository
+	repo   SensorRepository
 	cache  *SensorCache
 }
 
-func NewMessageHandler(logger *slog.Logger, repo *Repository, cache *SensorCache) *MessageHandler {
+func NewMessageHandler(logger *slog.Logger, repo SensorRepository, cache *SensorCache) *MessageHandler {
 	return &MessageHandler{logger: logger, repo: repo, cache: cache}
 }
 
@@ -68,7 +78,16 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 			continue
 		}
 
-		sensorID, regionID, err := h.repo.UpsertSensor(ctx, boardID, sensorTypeID, sd.Name, sd.Unit)
+		var hw *HardwareAddress
+		if sd.I2CAddress > 0 {
+			hw = &HardwareAddress{
+				I2CAddress: sd.I2CAddress,
+				MuxAddress: sd.MuxAddress,
+				MuxChannel: sd.MuxChannel,
+			}
+		}
+
+		sensorID, regionID, err := h.repo.UpsertSensor(ctx, boardID, sensorTypeID, sd.Name, sd.Unit, hw)
 		if err != nil {
 			h.logger.Error("failed to upsert sensor", "name", sd.Name, "err", err)
 			continue
@@ -82,6 +101,9 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 			"unit", sd.Unit,
 			"sensor_id", sensorID,
 			"region_id", regionID,
+			"i2c_address", sd.I2CAddress,
+			"mux_address", sd.MuxAddress,
+			"mux_channel", sd.MuxChannel,
 		)
 	}
 

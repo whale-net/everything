@@ -9,6 +9,7 @@ namespace firmware {
 TCA9548ABus::TCA9548ABus(II2CBus& parent, uint8_t mux_address, uint8_t channel)
     : parent_(parent),
       mux_address_(mux_address),
+      channel_(channel),
       channel_mask_(static_cast<uint8_t>(1u << channel)) {}
 
 pw::Status TCA9548ABus::Init(uint8_t /*sda_pin*/, uint8_t /*scl_pin*/) {

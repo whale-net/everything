@@ -43,7 +43,9 @@ class SHT3xDevice {
 
   bool temp_valid()  const { return temp_valid_; }
   bool humi_valid()  const { return humi_valid_; }
-  uint8_t address()  const { return address_; }
+  uint8_t address()      const { return address_; }
+  uint8_t mux_address()  const { return bus_.mux_address(); }
+  uint8_t mux_channel()  const { return bus_.mux_channel(); }
 
  private:
   void Poll();
@@ -74,10 +76,12 @@ class SHT3xTemperature final : public ISensor {
 
   pw::Status Init() override;
   SensorReading Read() override;
-  const char* name()    const override { return name_; }
-  uint8_t address()     const override { return dev_.address(); }
+  const char* name()         const override { return name_; }
+  uint8_t address()          const override { return dev_.address(); }
   firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_TEMPERATURE; }
-  SensorUnit unit()     const override { return SensorUnit::kCelsius; }
+  SensorUnit unit()          const override { return SensorUnit::kCelsius; }
+  uint8_t mux_address()      const override { return dev_.mux_address(); }
+  uint8_t mux_channel()      const override { return dev_.mux_channel(); }
 
  private:
   SHT3xDevice& dev_;
@@ -91,10 +95,12 @@ class SHT3xHumidity final : public ISensor {
 
   pw::Status Init() override;
   SensorReading Read() override;
-  const char* name()    const override { return name_; }
-  uint8_t address()     const override { return dev_.address(); }
+  const char* name()         const override { return name_; }
+  uint8_t address()          const override { return dev_.address(); }
   firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_HUMIDITY; }
-  SensorUnit unit()     const override { return SensorUnit::kRelativeHumidity; }
+  SensorUnit unit()          const override { return SensorUnit::kRelativeHumidity; }
+  uint8_t mux_address()      const override { return dev_.mux_address(); }
+  uint8_t mux_channel()      const override { return dev_.mux_channel(); }
 
  private:
   SHT3xDevice& dev_;

@@ -59,6 +59,13 @@ class II2CBus {
                                    uint8_t reg,
                                    const uint8_t* data,
                                    size_t len) = 0;
+
+  // I2C address of the TCA9548A mux this bus is a channel of, or 0 if not
+  // mux-backed. Used to populate the device manifest hardware address fields.
+  virtual uint8_t mux_address() const { return 0; }
+
+  // Channel number selected on the mux, or 0 if not mux-backed.
+  virtual uint8_t mux_channel() const { return 0; }
 };
 
 }  // namespace firmware
