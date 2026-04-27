@@ -75,6 +75,16 @@ func isChannelClosed(err error) bool {
 		strings.Contains(errStr, "channel closed")
 }
 
+// isPreconditionFailed returns true when RabbitMQ rejects a declare because the
+// queue already exists with different arguments (AMQP 406 PRECONDITION_FAILED).
+func isPreconditionFailed(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "PRECONDITION_FAILED") ||
+		strings.Contains(err.Error(), "Exception (406)")
+}
+
 // Publish publishes a message to an exchange with a routing key
 // It automatically reconnects to RabbitMQ if the channel is closed
 func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, body interface{}) error {
