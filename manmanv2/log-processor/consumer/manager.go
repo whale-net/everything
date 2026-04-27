@@ -191,10 +191,11 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 		return nil, fmt.Errorf("failed to get session info: %w", err)
 	}
 
-	// Create consumer with persistent queue (lifecycle-managed, not auto-deleted)
-	// Apply message TTL and max messages to prevent unbounded growth
+	// Create consumer with durable queue so the queue and accumulated messages
+	// survive log-processor restarts. Lifecycle is managed explicitly:
+	// DeleteConsumerForSession deletes the queue when the session ends.
 	messageTTL := m.config.LogBufferTTL * 1000 // Convert seconds to milliseconds
-	consumer, err := rmq.NewConsumerWithOpts(m.conn, queueName, false, false, messageTTL, m.config.LogBufferMaxMsgs)
+	consumer, err := rmq.NewConsumerWithOpts(m.conn, queueName, true, false, messageTTL, m.config.LogBufferMaxMsgs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create RabbitMQ consumer: %w", err)
 	}
