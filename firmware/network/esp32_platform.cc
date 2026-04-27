@@ -61,6 +61,7 @@ bool MQTTConnect(const char* host, uint16_t port, const char* id,
                  const char* lwt_topic, const char* lwt_payload,
                  bool tls) {
     if (tls) {
+        tls_client.stop();  // force clean state before each attempt
         tls_client.setInsecure();
         g_mqtt = &mqtt_tls_client;
         PW_LOG_INFO("MQTT: using TLS (insecure skip-verify; see #427 for TLS 1.3)");
