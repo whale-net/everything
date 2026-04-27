@@ -130,6 +130,16 @@ func main() {
 	consumerManager := consumer.NewManager(rmqConn, consumerConfig, apiClient, logArchiver)
 	defer consumerManager.Close()
 
+	// On startup, recreate consumers for all sessions that are already running.
+	// Lifecycle events for those sessions fired before this instance started and
+	// will not re-fire, so without this we silently drop logs until a UI client
+	// subscribes and triggers on-demand consumer creation.
+	slog.Info("recovering consumers for active sessions")
+	if err := recoverActiveSessions(ctx, apiClient, consumerManager); err != nil {
+		slog.Warn("failed to fully recover active sessions on startup", "error", err)
+		// Non-fatal: lifecycle events will create consumers as sessions transition.
+	}
+
 	// Create lifecycle handler for session events
 	slog.Info("initializing session lifecycle handler")
 	lifecycleHandler, err := lifecycle.NewHandler(rmqConn, consumerManager)
@@ -221,4 +231,43 @@ func main() {
 	consumerManager.Close()
 
 	slog.Info("log-processor service stopped")
+}
+
+// recoverActiveSessions queries the API for all currently-running sessions and
+// creates a RabbitMQ consumer for each one. This handles the case where the
+// log-processor restarted while sessions were already running — the lifecycle
+// "running" events for those sessions have already been consumed and won't
+// re-fire, so without this any logs published before the first UI subscriber
+// arrives are silently dropped.
+func recoverActiveSessions(ctx context.Context, apiClient manmanpb.ManManAPIClient, mgr *consumer.Manager) error {
+	var pageToken string
+	recovered, failed := 0, 0
+
+	for {
+		resp, err := apiClient.ListSessions(ctx, &manmanpb.ListSessionsRequest{
+			LiveOnly:  true,
+			PageSize:  100,
+			PageToken: pageToken,
+		})
+		if err != nil {
+			return fmt.Errorf("listing active sessions: %w", err)
+		}
+
+		for _, session := range resp.Sessions {
+			if err := mgr.CreateConsumerForSession(ctx, session.SessionId); err != nil {
+				slog.Warn("failed to recover consumer for session", "session_id", session.SessionId, "error", err)
+				failed++
+			} else {
+				recovered++
+			}
+		}
+
+		if resp.NextPageToken == "" {
+			break
+		}
+		pageToken = resp.NextPageToken
+	}
+
+	slog.Info("startup session recovery complete", "recovered", recovered, "failed", failed)
+	return nil
 }
