@@ -6,8 +6,9 @@
 // MQTTPublish, MQTTLoop) for free — no PubSubClient.h or WiFi.h needed.
 //
 // TLS: when MQTTConnect is called with tls=true, the WiFiClientSecure transport
-// is used. setInsecure() skips certificate verification — sufficient for an
-// embedded device that has no CA cert store. Add CA cert support later if needed.
+// is used. setInsecure() skips certificate verification — acceptable while the
+// broker is configured to accept TLS 1.2 (ESP32 mbedTLS does not support TLS 1.3
+// by default; see issue #427 for enabling it).
 
 #include "firmware/network/esp32_platform.h"
 
@@ -60,19 +61,25 @@ bool MQTTConnect(const char* host, uint16_t port, const char* id,
                  const char* lwt_topic, const char* lwt_payload,
                  bool tls) {
     if (tls) {
-        tls_client.setInsecure();  // no CA cert store on device; skip verification
+        tls_client.setInsecure();
         g_mqtt = &mqtt_tls_client;
-        PW_LOG_INFO("MQTT: using TLS (insecure — no cert verification)");
+        PW_LOG_INFO("MQTT: using TLS (insecure skip-verify; see #427 for TLS 1.3)");
     } else {
         g_mqtt = &mqtt_plain;
     }
     g_mqtt->setServer(host, port);
+    bool ok;
     if (lwt_topic != nullptr && lwt_topic[0] != '\0') {
-        return g_mqtt->connect(id, user, pass,
-                               lwt_topic, /*qos=*/0, /*retain=*/true,
-                               lwt_payload);
+        ok = g_mqtt->connect(id, user, pass,
+                             lwt_topic, /*qos=*/0, /*retain=*/true,
+                             lwt_payload);
+    } else {
+        ok = g_mqtt->connect(id, user, pass);
     }
-    return g_mqtt->connect(id, user, pass);
+    if (!ok) {
+        PW_LOG_WARN("MQTT: connect failed, state=%d", g_mqtt->state());
+    }
+    return ok;
 }
 
 bool MQTTIsConnected() { return g_mqtt->connected(); }

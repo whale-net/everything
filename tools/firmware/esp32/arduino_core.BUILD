@@ -155,6 +155,18 @@ cc_library(
 )
 
 cc_library(
+    name = "WiFiClientSecure",
+    srcs = glob(["libraries/NetworkClientSecure/src/**/*.cpp"]),
+    hdrs = glob(["libraries/NetworkClientSecure/src/**/*.h"]),
+    includes = ["libraries/NetworkClientSecure/src"],
+    target_compatible_with = [
+        "@platforms//os:none",
+        "@@//tools/firmware:cpu_xtensa",
+    ],
+    deps = [":core_lib", ":WiFi"],
+)
+
+cc_library(
     name = "Preferences",
     srcs = glob(["libraries/Preferences/src/**/*.cpp"]),
     hdrs = glob(["libraries/Preferences/src/**/*.h"]),
