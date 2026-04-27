@@ -56,6 +56,10 @@ func NewConsumer(conn *Connection, queueName string) (*Consumer, error) {
 // messageTTL is in milliseconds (0 = no limit)
 // maxMessages is the maximum number of messages in the queue (0 = no limit)
 func NewConsumerWithOpts(conn *Connection, queueName string, durable, autoDelete bool, messageTTL, maxMessages int) (*Consumer, error) {
+	if durable && queueName == "" {
+		return nil, fmt.Errorf("durable queues require an explicit queue name")
+	}
+
 	ch, err := conn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open channel: %w", err)
@@ -160,10 +164,8 @@ func buildQueueArguments(queueName string, durable, autoDelete bool, messageTTL,
 // BindExchange binds the consumer's queue to an exchange with routing keys.
 // The binding is stored so it can be reapplied after a connection reset.
 func (c *Consumer) BindExchange(exchange string, routingKeys []string) error {
-	keysCopy := append([]string(nil), routingKeys...)
 	c.mu.Lock()
 	ch := c.channel
-	c.bindings = append(c.bindings, binding{exchange: exchange, routingKeys: keysCopy})
 	c.mu.Unlock()
 
 	for _, key := range routingKeys {
@@ -171,6 +173,11 @@ func (c *Consumer) BindExchange(exchange string, routingKeys []string) error {
 			return fmt.Errorf("failed to bind queue to exchange: %w", err)
 		}
 	}
+
+	keysCopy := append([]string(nil), routingKeys...)
+	c.mu.Lock()
+	c.bindings = append(c.bindings, binding{exchange: exchange, routingKeys: keysCopy})
+	c.mu.Unlock()
 	return nil
 }
 
