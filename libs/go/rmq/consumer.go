@@ -31,6 +31,20 @@ type Consumer struct {
 	queue    string
 	handlers map[string]MessageHandler
 	conn     *Connection
+
+	// init params — stored so startConsuming can fully reinitialize after a
+	// connection reset (non-durable queues are deleted on connection close).
+	declaredName string // original name passed at creation, used for DLQ/arg derivation
+	durable      bool
+	autoDelete   bool
+	messageTTL   int
+	maxMessages  int
+	bindings     []binding // exchange + routing keys bound at creation time
+}
+
+type binding struct {
+	exchange    string
+	routingKeys []string
 }
 
 // NewConsumer creates a new consumer
@@ -42,6 +56,10 @@ func NewConsumer(conn *Connection, queueName string) (*Consumer, error) {
 // messageTTL is in milliseconds (0 = no limit)
 // maxMessages is the maximum number of messages in the queue (0 = no limit)
 func NewConsumerWithOpts(conn *Connection, queueName string, durable, autoDelete bool, messageTTL, maxMessages int) (*Consumer, error) {
+	if durable && queueName == "" {
+		return nil, fmt.Errorf("durable queues require an explicit queue name")
+	}
+
 	ch, err := conn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open channel: %w", err)
@@ -87,10 +105,15 @@ func NewConsumerWithOpts(conn *Connection, queueName string, durable, autoDelete
 	}
 
 	return &Consumer{
-		channel:  ch,
-		queue:    queue.Name,
-		handlers: make(map[string]MessageHandler),
-		conn:     conn,
+		channel:      ch,
+		queue:        queue.Name,
+		handlers:     make(map[string]MessageHandler),
+		conn:         conn,
+		declaredName: queueName,
+		durable:      durable,
+		autoDelete:   autoDelete,
+		messageTTL:   messageTTL,
+		maxMessages:  maxMessages,
 	}, nil
 }
 
@@ -138,23 +161,23 @@ func buildQueueArguments(queueName string, durable, autoDelete bool, messageTTL,
 	return arguments
 }
 
-// BindExchange binds the consumer's queue to an exchange with routing keys
+// BindExchange binds the consumer's queue to an exchange with routing keys.
+// The binding is stored so it can be reapplied after a connection reset.
 func (c *Consumer) BindExchange(exchange string, routingKeys []string) error {
 	c.mu.Lock()
 	ch := c.channel
 	c.mu.Unlock()
 
 	for _, key := range routingKeys {
-		if err := ch.QueueBind(
-			c.queue,    // queue name
-			key,        // routing key
-			exchange,   // exchange
-			false,      // no-wait
-			nil,        // arguments
-		); err != nil {
+		if err := ch.QueueBind(c.queue, key, exchange, false, nil); err != nil {
 			return fmt.Errorf("failed to bind queue to exchange: %w", err)
 		}
 	}
+
+	keysCopy := append([]string(nil), routingKeys...)
+	c.mu.Lock()
+	c.bindings = append(c.bindings, binding{exchange: exchange, routingKeys: keysCopy})
+	c.mu.Unlock()
 	return nil
 }
 
@@ -203,29 +226,63 @@ func (c *Consumer) Start(ctx context.Context) error {
 	return nil
 }
 
-// startConsuming (re)opens a channel, sets QoS, and registers a consumer.
+// startConsuming (re)opens a channel and fully reinitializes the queue and
+// bindings. Both QueueDeclare and QueueBind are idempotent, so this is safe
+// to call on initial setup and after any connection/channel reset. Non-durable
+// queues are deleted by the broker on connection close, so redeclaring them
+// here ensures the consumer always has a queue to receive from.
 func (c *Consumer) startConsuming() (<-chan amqp.Delivery, error) {
 	ch, err := c.conn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open channel: %w", err)
 	}
+
 	if err := ch.Qos(1, 0, false); err != nil {
 		ch.Close()
 		return nil, fmt.Errorf("failed to set QoS: %w", err)
 	}
-	msgs, err := ch.Consume(
-		c.queue,
-		"",
-		false, // manual ack
-		false,
-		false,
-		false,
-		nil,
-	)
+
+	c.mu.Lock()
+	durable := c.durable
+	autoDelete := c.autoDelete
+	messageTTL := c.messageTTL
+	maxMessages := c.maxMessages
+	declaredName := c.declaredName
+	bindings := append(c.bindings[:0:0], c.bindings...)
+	for i := range bindings {
+		bindings[i].routingKeys = append(bindings[i].routingKeys[:0:0], bindings[i].routingKeys...)
+	}
+	c.mu.Unlock()
+
+	if durable {
+		dlqName := declaredName + "-dlq"
+		if _, err := ch.QueueDeclare(dlqName, true, false, false, false, nil); err != nil {
+			ch.Close()
+			return nil, fmt.Errorf("failed to declare DLQ: %w", err)
+		}
+	}
+
+	arguments := buildQueueArguments(declaredName, durable, autoDelete, messageTTL, maxMessages)
+	if _, err := ch.QueueDeclare(c.queue, durable, autoDelete, false, false, arguments); err != nil {
+		ch.Close()
+		return nil, fmt.Errorf("failed to declare queue: %w", err)
+	}
+
+	for _, b := range bindings {
+		for _, key := range b.routingKeys {
+			if err := ch.QueueBind(c.queue, key, b.exchange, false, nil); err != nil {
+				ch.Close()
+				return nil, fmt.Errorf("failed to bind queue: %w", err)
+			}
+		}
+	}
+
+	msgs, err := ch.Consume(c.queue, "", false, false, false, false, nil)
 	if err != nil {
 		ch.Close()
 		return nil, fmt.Errorf("failed to register consumer: %w", err)
 	}
+
 	c.mu.Lock()
 	c.channel = ch
 	c.mu.Unlock()
