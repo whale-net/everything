@@ -153,6 +153,20 @@ void FirmwarePublisher::HandleConfigMessage(const uint8_t* payload,
         return;
     }
 
+    // Reject configs that would cause MQTT topic collisions.
+    for (pb_size_t i = 0; i < cfg.sensors_count; ++i) {
+        if (cfg.sensors[i].name[0] == '\0') continue;
+        for (pb_size_t j = i + 1; j < cfg.sensors_count; ++j) {
+            if (strncmp(cfg.sensors[i].name, cfg.sensors[j].name,
+                        sizeof(cfg.sensors[i].name)) == 0) {
+                PW_LOG_WARN("FirmwarePublisher: duplicate sensor name '%s'",
+                            cfg.sensors[i].name);
+                PublishConfigAck(cfg.version, false, "duplicate_sensor_name");
+                return;
+            }
+        }
+    }
+
     config_applier_.Apply(cfg);
 
     if (!config_store_.Save(cfg).ok()) {

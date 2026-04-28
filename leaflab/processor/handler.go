@@ -24,7 +24,7 @@ type SensorRepository interface {
 	GetSensor(ctx context.Context, deviceID, sensorName string) (SensorInfo, bool, error)
 	InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time) error
 	UpsertDeviceConfig(ctx context.Context, boardID int64, version int64, configJSON []byte) error
-	AckDeviceConfig(ctx context.Context, boardID int64, version int64) error
+	AckDeviceConfig(ctx context.Context, boardID int64, version int64, accepted bool, reason string) error
 }
 
 // MessageHandler decodes leaflab MQTT messages and persists them.
@@ -189,6 +189,11 @@ func (h *MessageHandler) handleConfigPush(ctx context.Context, deviceID string, 
 		return &rmq.PermanentError{Err: fmt.Errorf("unmarshal DeviceConfig: %w", err)}
 	}
 
+	// proto uint64 version stored as DB BIGINT (int64); reject values that overflow.
+	if cfg.Version > 1<<63-1 {
+		return &rmq.PermanentError{Err: fmt.Errorf("DeviceConfig.version %d overflows int64", cfg.Version)}
+	}
+
 	configJSON, err := protojson.Marshal(&cfg)
 	if err != nil {
 		return &rmq.PermanentError{Err: fmt.Errorf("protojson DeviceConfig: %w", err)}
@@ -205,27 +210,30 @@ func (h *MessageHandler) handleConfigPush(ctx context.Context, deviceID string, 
 	return nil
 }
 
-// handleConfigAck marks a config as accepted once the device acknowledges it.
+// handleConfigAck records the device's ack (accepted or rejected) for a config push.
 func (h *MessageHandler) handleConfigAck(ctx context.Context, deviceID string, body []byte) error {
 	var ack configpb.DeviceConfigAck
 	if err := proto.Unmarshal(body, &ack); err != nil {
 		return &rmq.PermanentError{Err: fmt.Errorf("unmarshal DeviceConfigAck: %w", err)}
 	}
-	if !ack.Accepted {
-		h.logger.Warn("device rejected config",
-			"device_id", deviceID,
-			"version", ack.AppliedVersion,
-			"reason", ack.Reason)
-		return nil
+	if ack.AppliedVersion > 1<<63-1 {
+		return &rmq.PermanentError{Err: fmt.Errorf("DeviceConfigAck.applied_version %d overflows int64", ack.AppliedVersion)}
 	}
 	boardID, err := h.repo.UpsertBoard(ctx, deviceID)
 	if err != nil {
 		return err
 	}
-	if err := h.repo.AckDeviceConfig(ctx, boardID, int64(ack.AppliedVersion)); err != nil {
+	if err := h.repo.AckDeviceConfig(ctx, boardID, int64(ack.AppliedVersion), ack.Accepted, ack.Reason); err != nil {
 		return err
 	}
-	h.logger.Info("device_config acked", "device_id", deviceID, "version", ack.AppliedVersion)
+	if ack.Accepted {
+		h.logger.Info("device_config acked", "device_id", deviceID, "version", ack.AppliedVersion)
+	} else {
+		h.logger.Warn("device rejected config",
+			"device_id", deviceID,
+			"version", ack.AppliedVersion,
+			"reason", ack.Reason)
+	}
 	return nil
 }
 

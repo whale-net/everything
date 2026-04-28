@@ -16,7 +16,7 @@ message SensorConfig {
   repeated MuxHop mux_path    = 1;  // empty = sensor directly on root bus
   uint32 i2c_address          = 2;
   string name                 = 3;  // override name for MQTT topic + manifest
-  bool   enabled              = 4;
+  optional bool enabled       = 4;
   uint32 poll_interval_ms     = 5;  // 0 = use device default
 }
 

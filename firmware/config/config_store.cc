@@ -3,6 +3,7 @@
 #include "firmware/config/config_store.h"
 
 #include <Preferences.h>
+#include <cinttypes>
 
 #include "pb_decode.h"
 #include "pb_encode.h"

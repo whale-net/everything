@@ -100,6 +100,7 @@ void loop() {
     }
     prev_state = state;
 
+    // TODO: use ConfigApplier::PollIntervalMs() for per-sensor scheduling.
     uint32_t now = millis();
     if (state == firmware::NetworkManager::State::kReady &&
         (now - last_publish_ms) >= SENSOR_POLL_INTERVAL_MS) {

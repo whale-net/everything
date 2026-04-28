@@ -131,7 +131,7 @@ pw::Status NetworkManager::Publish(const char* topic, const uint8_t* data,
 
 void NetworkManager::SetMessageCallback(MessageCallback cb) {
   message_callback_ = cb;
-  if (cb) MQTTSetCallback(cb);
+  MQTTSetCallback(cb);
 }
 
 pw::Status NetworkManager::Subscribe(const char* topic) {

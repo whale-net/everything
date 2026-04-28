@@ -98,8 +98,9 @@ class NetworkManager {
                                   const uint8_t* payload,
                                   size_t length);
 
-  // Register a callback for incoming MQTT messages. Call before Connect().
-  // There is only one active callback at a time.
+  // Register a callback for incoming MQTT messages.
+  // May be called before or after Connect(); set before any incoming messages
+  // are expected. Passing nullptr clears the callback. One active callback at a time.
   void SetMessageCallback(MessageCallback cb);
 
   // Subscribe to an MQTT topic. Returns Unavailable() if not kReady.

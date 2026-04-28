@@ -12,9 +12,10 @@ CREATE TABLE device_config (
     board_id     BIGINT      NOT NULL REFERENCES board(board_id) ON DELETE RESTRICT,
     version      BIGINT      NOT NULL,
     config_json  JSONB       NOT NULL,   -- protojson-encoded DeviceConfig
-    accepted     BOOLEAN     NOT NULL DEFAULT FALSE,
-    pushed_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    acked_at     TIMESTAMPTZ,            -- NULL until ack received from device
+    accepted         BOOLEAN     NOT NULL DEFAULT FALSE,
+    pushed_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    acked_at         TIMESTAMPTZ,            -- NULL until ack received from device
+    rejection_reason TEXT,                   -- set on rejected acks; NULL when accepted or pending
     UNIQUE (board_id, version)
 );
 

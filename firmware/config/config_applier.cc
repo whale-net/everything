@@ -8,12 +8,17 @@ namespace firmware {
 
 namespace {
 
+static bool FitsInUint8(uint32_t v) { return v <= 0xFFu; }
+
 // Returns true if the sensor's mux path matches the SensorConfig's mux_path
-// and i2c_address exactly. Path comparison is depth-first, outer to inner.
+// and i2c_address exactly. Out-of-range address/channel values never match.
 bool PathsMatch(const ISensor* s, const firmware_SensorConfig& sc) {
+    if (!FitsInUint8(sc.i2c_address)) return false;
     if (s->address() != static_cast<uint8_t>(sc.i2c_address)) return false;
     if (s->mux_depth() != static_cast<size_t>(sc.mux_path_count)) return false;
     for (size_t i = 0; i < s->mux_depth(); ++i) {
+        if (!FitsInUint8(sc.mux_path[i].mux_address)) return false;
+        if (!FitsInUint8(sc.mux_path[i].mux_channel)) return false;
         MuxHop hop = s->mux_hop(i);
         if (hop.address != static_cast<uint8_t>(sc.mux_path[i].mux_address))
             return false;
@@ -45,7 +50,7 @@ void ConfigApplier::Apply(const firmware_DeviceConfig& cfg) {
         for (size_t i = 0; i < sensors_.size() && i < kMaxSensors; ++i) {
             if (!PathsMatch(sensors_[i], sc)) continue;
             if (sc.name[0] != '\0') sensors_[i]->SetName(sc.name);
-            enabled_[i] = sc.enabled;
+            if (sc.has_enabled) enabled_[i] = sc.enabled;
             poll_ms_[i] = sc.poll_interval_ms;
             break;
         }

@@ -64,7 +64,7 @@ func (s *stubRepo) UpsertDeviceConfig(_ context.Context, _ int64, _ int64, _ []b
 	return nil
 }
 
-func (s *stubRepo) AckDeviceConfig(_ context.Context, _ int64, _ int64) error {
+func (s *stubRepo) AckDeviceConfig(_ context.Context, _ int64, _ int64, _ bool, _ string) error {
 	return nil
 }
 

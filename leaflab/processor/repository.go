@@ -244,15 +244,18 @@ func (r *Repository) UpsertDeviceConfig(ctx context.Context, boardID, version in
 	return nil
 }
 
-// AckDeviceConfig marks a config row as accepted and records the ack timestamp.
-func (r *Repository) AckDeviceConfig(ctx context.Context, boardID, version int64) error {
-	_, err := r.db.Exec(ctx, `
+// AckDeviceConfig records the device's ack for a config push (accepted or rejected).
+func (r *Repository) AckDeviceConfig(ctx context.Context, boardID, version int64, accepted bool, reason string) error {
+	tag, err := r.db.Exec(ctx, `
 		UPDATE device_config
-		SET accepted = TRUE, acked_at = NOW()
+		SET accepted = $3, acked_at = NOW(), rejection_reason = $4
 		WHERE board_id = $1 AND version = $2
-	`, boardID, version)
+	`, boardID, version, accepted, reason)
 	if err != nil {
 		return fmt.Errorf("ack device_config board=%d version=%d: %w", boardID, version, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("ack device_config board=%d version=%d: no matching row", boardID, version)
 	}
 	return nil
 }

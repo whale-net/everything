@@ -36,6 +36,7 @@ firmware_SensorConfig MakeSensorConfig(uint8_t i2c_addr, const char* name,
                                         uint32_t poll_ms = 0) {
     firmware_SensorConfig sc = firmware_SensorConfig_init_zero;
     sc.i2c_address = i2c_addr;
+    sc.has_enabled = true;
     sc.enabled = enabled;
     sc.poll_interval_ms = poll_ms;
     strncpy(sc.name, name, sizeof(sc.name) - 1);
