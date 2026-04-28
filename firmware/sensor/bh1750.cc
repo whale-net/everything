@@ -3,6 +3,8 @@
 
 #include "firmware/sensor/bh1750.h"
 
+#include <cstring>
+
 #include "pw_log/log.h"
 #include "pw_status/status.h"
 
@@ -10,13 +12,22 @@ namespace firmware {
 
 BH1750Sensor::BH1750Sensor(II2CBus& bus, uint8_t address, const char* name,
                            uint32_t (*clock_fn)())
-    : bus_(bus), address_(address), name_(name), clock_fn_(clock_fn) {}
+    : bus_(bus), address_(address), clock_fn_(clock_fn) {
+    strncpy(name_buf_, name, sizeof(name_buf_) - 1);
+    name_buf_[sizeof(name_buf_) - 1] = '\0';
+}
+
+bool BH1750Sensor::SetName(const char* name) {
+    strncpy(name_buf_, name, sizeof(name_buf_) - 1);
+    name_buf_[sizeof(name_buf_) - 1] = '\0';
+    return true;
+}
 
 pw::Status BH1750Sensor::Init() {
     uint8_t cmd = kCmdPowerOn;
     pw::Status s = bus_.Write(address_, &cmd, 1);
     if (!s.ok()) {
-        PW_LOG_ERROR("BH1750 '%s': power-on failed", name_);
+        PW_LOG_ERROR("BH1750 '%s': power-on failed", name_buf_);
         return s;
     }
     s = Trigger();
@@ -33,7 +44,7 @@ SensorReading BH1750Sensor::Read() {
             last_lux_ = ((uint16_t(buf[0]) << 8) | buf[1]) / 1.2f;
             valid_ = true;
         } else {
-            PW_LOG_WARN("BH1750 '%s': read failed", name_);
+            PW_LOG_WARN("BH1750 '%s': read failed", name_buf_);
         }
         Trigger();
     }
@@ -45,7 +56,7 @@ pw::Status BH1750Sensor::Trigger() {
     uint8_t cmd = kCmdOneShot;
     pw::Status s = bus_.Write(address_, &cmd, 1);
     if (!s.ok()) {
-        PW_LOG_ERROR("BH1750 '%s': trigger failed", name_);
+        PW_LOG_ERROR("BH1750 '%s': trigger failed", name_buf_);
     }
     return s;
 }

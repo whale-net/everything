@@ -60,6 +60,14 @@ func (s *stubRepo) InsertReading(_ context.Context, _ int64, _ *int64, _ float64
 	return nil
 }
 
+func (s *stubRepo) UpsertDeviceConfig(_ context.Context, _ int64, _ int64, _ []byte) error {
+	return nil
+}
+
+func (s *stubRepo) AckDeviceConfig(_ context.Context, _ int64, _ int64) error {
+	return nil
+}
+
 // marshalManifest encodes a DeviceManifest to wire bytes.
 func marshalManifest(t *testing.T, m *firmwarepb.DeviceManifest) []byte {
 	t.Helper()

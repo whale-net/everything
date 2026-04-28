@@ -1,5 +1,7 @@
 #include "firmware/sensor/ccs811.h"
 
+#include <cstring>
+
 #include "pw_log/log.h"
 #include "pw_status/status.h"
 
@@ -88,7 +90,16 @@ float CCS811Device::ReadTVOC() {
 // ── CCS811eCO2 ───────────────────────────────────────────────────────────────
 
 CCS811eCO2::CCS811eCO2(CCS811Device& dev, const char* name)
-    : dev_(dev), name_(name) {}
+    : dev_(dev) {
+    strncpy(name_buf_, name, sizeof(name_buf_) - 1);
+    name_buf_[sizeof(name_buf_) - 1] = '\0';
+}
+
+bool CCS811eCO2::SetName(const char* name) {
+    strncpy(name_buf_, name, sizeof(name_buf_) - 1);
+    name_buf_[sizeof(name_buf_) - 1] = '\0';
+    return true;
+}
 
 pw::Status CCS811eCO2::Init() {
     return dev_.Init();
@@ -102,7 +113,16 @@ SensorReading CCS811eCO2::Read() {
 // ── CCS811TVOC ───────────────────────────────────────────────────────────────
 
 CCS811TVOC::CCS811TVOC(CCS811Device& dev, const char* name)
-    : dev_(dev), name_(name) {}
+    : dev_(dev) {
+    strncpy(name_buf_, name, sizeof(name_buf_) - 1);
+    name_buf_[sizeof(name_buf_) - 1] = '\0';
+}
+
+bool CCS811TVOC::SetName(const char* name) {
+    strncpy(name_buf_, name, sizeof(name_buf_) - 1);
+    name_buf_[sizeof(name_buf_) - 1] = '\0';
+    return true;
+}
 
 pw::Status CCS811TVOC::Init() {
     return pw::OkStatus();  // Init is driven by CCS811eCO2

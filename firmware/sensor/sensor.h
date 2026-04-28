@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "firmware/i2c/i2c_bus.h"
 #include "firmware/proto/firmware.pb.h"
 #include "pw_status/status.h"
 
@@ -66,23 +67,35 @@ class ISensor {
 
   // Human-readable identifier, unique per device (e.g. "light_canopy").
   // Used as the MQTT sub-topic and manifest sensor name.
-  // Must be a string literal with static lifetime (no heap allocation).
   virtual const char* name() const = 0;
 
+  // Override the logical name at runtime (from a DeviceConfig push).
+  // Returns true if the sensor has a mutable name buffer and the override
+  // was applied. Returns false if the name is a compile-time constant.
+  virtual bool SetName(const char* /*name*/) { return false; }
+
   // Unique hardware address or channel identifier (e.g. I2C address).
-  // Used for diagnostics and de-duplication.
   virtual uint8_t address() const = 0;
 
   // Sensor type and unit, used to populate the device manifest.
   virtual firmware_SensorType type() const = 0;
   virtual SensorUnit           unit() const = 0;
 
-  // I2C mux address this sensor is connected through (0 if not mux-backed).
-  // Override by delegating to bus_.mux_address() in II2CBus-backed sensors.
-  virtual uint8_t mux_address() const { return 0; }
+  // Depth of the mux chain from root bus to this sensor.
+  // 0 = sensor is directly on the root bus.
+  virtual size_t mux_depth() const { return 0; }
 
-  // Mux channel number (0 if not mux-backed or channel 0).
-  virtual uint8_t mux_channel() const { return 0; }
+  // Returns the MuxHop at the given depth (0 = outermost mux).
+  // Undefined if depth >= mux_depth().
+  virtual MuxHop mux_hop(size_t /*depth*/) const { return {0, 0}; }
+
+  // Convenience: innermost mux address/channel (single-level compat).
+  uint8_t mux_address() const {
+    return mux_depth() > 0 ? mux_hop(mux_depth() - 1).address : 0;
+  }
+  uint8_t mux_channel() const {
+    return mux_depth() > 0 ? mux_hop(mux_depth() - 1).channel : 0;
+  }
 };
 
 }  // namespace firmware

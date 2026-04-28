@@ -7,8 +7,10 @@ import (
 	"strings"
 	"time"
 
+	configpb "github.com/whale-net/everything/firmware/proto/config"
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	"github.com/whale-net/everything/libs/go/rmq"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -21,6 +23,8 @@ type SensorRepository interface {
 	UpsertSensorHWHistory(ctx context.Context, sensorID int64, hw *HardwareAddress) error
 	GetSensor(ctx context.Context, deviceID, sensorName string) (SensorInfo, bool, error)
 	InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time) error
+	UpsertDeviceConfig(ctx context.Context, boardID int64, version int64, configJSON []byte) error
+	AckDeviceConfig(ctx context.Context, boardID int64, version int64) error
 }
 
 // MessageHandler decodes leaflab MQTT messages and persists them.
@@ -28,6 +32,8 @@ type SensorRepository interface {
 //
 //	leaflab.<device_id>.manifest             → DeviceManifest
 //	leaflab.<device_id>.sensor.<name>        → SensorReading
+//	leaflab.<device_id>.config               → DeviceConfig (push observed)
+//	leaflab.<device_id>.config.ack           → DeviceConfigAck
 type MessageHandler struct {
 	logger *slog.Logger
 	repo   SensorRepository
@@ -51,6 +57,10 @@ func (h *MessageHandler) Handle(ctx context.Context, msg rmq.Message) error {
 		return h.handleManifest(ctx, deviceID, msg.Body)
 	case len(parts) == 4 && parts[2] == "sensor":
 		return h.handleSensorReading(ctx, deviceID, parts[3], msg.Body)
+	case len(parts) == 3 && parts[2] == "config":
+		return h.handleConfigPush(ctx, deviceID, msg.Body)
+	case len(parts) == 4 && parts[2] == "config" && parts[3] == "ack":
+		return h.handleConfigAck(ctx, deviceID, msg.Body)
 	default:
 		h.logger.Warn("unhandled routing key", "key", msg.RoutingKey)
 		return nil
@@ -168,6 +178,54 @@ func (h *MessageHandler) handleSensorReading(ctx context.Context, deviceID, sens
 		"value", reading.Value,
 		"uptime_s", reading.UptimeMs/1000,
 	)
+	return nil
+}
+
+// handleConfigPush records a DeviceConfig push observed on the broker.
+// The processor observes this because it binds leaflab.# on the AMQP exchange.
+func (h *MessageHandler) handleConfigPush(ctx context.Context, deviceID string, body []byte) error {
+	var cfg configpb.DeviceConfig
+	if err := proto.Unmarshal(body, &cfg); err != nil {
+		return &rmq.PermanentError{Err: fmt.Errorf("unmarshal DeviceConfig: %w", err)}
+	}
+
+	configJSON, err := protojson.Marshal(&cfg)
+	if err != nil {
+		return &rmq.PermanentError{Err: fmt.Errorf("protojson DeviceConfig: %w", err)}
+	}
+
+	boardID, err := h.repo.UpsertBoard(ctx, deviceID)
+	if err != nil {
+		return err
+	}
+	if err := h.repo.UpsertDeviceConfig(ctx, boardID, int64(cfg.Version), configJSON); err != nil {
+		return err
+	}
+	h.logger.Info("device_config recorded", "device_id", deviceID, "version", cfg.Version)
+	return nil
+}
+
+// handleConfigAck marks a config as accepted once the device acknowledges it.
+func (h *MessageHandler) handleConfigAck(ctx context.Context, deviceID string, body []byte) error {
+	var ack configpb.DeviceConfigAck
+	if err := proto.Unmarshal(body, &ack); err != nil {
+		return &rmq.PermanentError{Err: fmt.Errorf("unmarshal DeviceConfigAck: %w", err)}
+	}
+	if !ack.Accepted {
+		h.logger.Warn("device rejected config",
+			"device_id", deviceID,
+			"version", ack.AppliedVersion,
+			"reason", ack.Reason)
+		return nil
+	}
+	boardID, err := h.repo.UpsertBoard(ctx, deviceID)
+	if err != nil {
+		return err
+	}
+	if err := h.repo.AckDeviceConfig(ctx, boardID, int64(ack.AppliedVersion)); err != nil {
+		return err
+	}
+	h.logger.Info("device_config acked", "device_id", deviceID, "version", ack.AppliedVersion)
 	return nil
 }
 
