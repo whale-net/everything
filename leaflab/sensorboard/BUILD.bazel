@@ -86,7 +86,6 @@ esp32_firmware(
         "//firmware/sensor:bh1750",
         "//firmware/sensor:ccs811",
         "//firmware/sensor:sht3x",
-        "//tools/firmware:board_pins",
         "@arduino_esp32//:Wire",
         "@pigweed//pw_log",
         "@pigweed//pw_span",
