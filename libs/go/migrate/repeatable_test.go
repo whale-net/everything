@@ -33,7 +33,8 @@ func (m *mockRepeatableStore) GetLastSuccessfulChecksum(name string) (string, er
 
 func (m *mockRepeatableStore) RecordStart(name, checksum string) (int64, error) {
 	args := m.Called(name, checksum)
-	return args.Get(0).(int64), args.Error(1)
+	id, _ := args.Get(0).(int64) // safe zero value when no ID was returned
+	return id, args.Error(1)
 }
 
 func (m *mockRepeatableStore) RecordSuccess(historyID int64, startTime time.Time) error {
@@ -485,7 +486,9 @@ func TestRunRepeatableMigrations_ZeroHistoryIDSkipsSuccessRecord(t *testing.T) {
 
 	store := &mockRepeatableStore{}
 	store.On("GetLastSuccessfulChecksum", "R__foo.sql").Return("", nil)
-	// RecordStart returns 0 (simulates a failure to obtain history ID)
+	// RecordStart returns historyID=0 along with an error (simulates a tracking DB failure).
+	// The SQL execution should still proceed; RecordSuccess/Failure must NOT be called
+	// because historyID == 0 is the sentinel "no valid history row" value.
 	store.On("RecordStart", "R__foo.sql", checksum).Return(int64(0), fmt.Errorf("db error"))
 
 	exec := &mockSQLExecutor{}

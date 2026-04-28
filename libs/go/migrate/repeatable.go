@@ -10,6 +10,9 @@ import (
 	"time"
 )
 
+// migrationAppliedBy is the default value recorded in history tables for the applied_by column.
+const migrationAppliedBy = "migration-binary"
+
 // RepeatableMigration represents a single repeatable migration file loaded from the filesystem.
 // Files must be named with the "R__" prefix and end in ".sql" (e.g. "R__seed_views.sql").
 type RepeatableMigration struct {
@@ -72,10 +75,6 @@ func (r *RepeatableTracker) EnsureRepeatableHistoryTable() error {
 		duration_ms  INTEGER,
 		error_message TEXT,
 		applied_by   VARCHAR(255) DEFAULT 'migration-binary',
-		created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
-	);
-
-	CREATE INDEX IF NOT EXISTS idx_repeatable_migration_history_name
 		ON repeatable_migration_history(name);
 	CREATE INDEX IF NOT EXISTS idx_repeatable_migration_history_status
 		ON repeatable_migration_history(status);
@@ -117,12 +116,12 @@ func (r *RepeatableTracker) GetLastSuccessfulChecksum(name string) (string, erro
 func (r *RepeatableTracker) RecordStart(name, checksum string) (int64, error) {
 	query := `
 		INSERT INTO repeatable_migration_history (name, checksum, status, started_at, applied_by)
-		VALUES ($1, $2, 'started', $3, 'migration-binary')
+		VALUES ($1, $2, 'started', $3, $4)
 		RETURNING history_id
 	`
 
 	var historyID int64
-	err := r.db.QueryRow(query, name, checksum, time.Now()).Scan(&historyID)
+	err := r.db.QueryRow(query, name, checksum, time.Now(), migrationAppliedBy).Scan(&historyID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to record repeatable migration start: %w", err)
 	}
