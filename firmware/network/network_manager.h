@@ -65,6 +65,7 @@ class NetworkManager {
     const char* mqtt_pass;           // nullptr = no auth
     const char* lwt_topic    = nullptr;    // Last-will topic; nullptr = no LWT
     const char* lwt_payload  = "offline";  // Last-will payload
+    bool        mqtt_tls     = false;      // true = TLS (WiFiClientSecure)
     uint32_t connect_timeout_ms = 15'000;  // override in tests for fast timeout
   };
 

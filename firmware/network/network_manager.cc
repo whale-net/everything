@@ -17,7 +17,8 @@
 extern bool WiFiIsConnected();
 extern bool MQTTConnect(const char* host, uint16_t port, const char* id,
                         const char* user, const char* pass,
-                        const char* lwt_topic, const char* lwt_payload);
+                        const char* lwt_topic, const char* lwt_payload,
+                        bool tls);
 extern bool MQTTIsConnected();
 extern bool MQTTPublish(const char* topic, const char* payload);
 extern bool MQTTPublishBinary(const char* topic, const uint8_t* data,
@@ -75,7 +76,8 @@ void NetworkManager::PollConnecting() {
     bool mqtt_ok = MQTTConnect(config_.mqtt_host, config_.mqtt_port,
                                 config_.device_id,
                                 config_.mqtt_user, config_.mqtt_pass,
-                                config_.lwt_topic, config_.lwt_payload);
+                                config_.lwt_topic, config_.lwt_payload,
+                                config_.mqtt_tls);
     if (!mqtt_ok) return;  // MQTT handshake still in progress.
   }
 

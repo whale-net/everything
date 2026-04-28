@@ -29,7 +29,7 @@ uint32_t PlatformNowMs() {
 }
 bool WiFiIsConnected() { return g_wifi_connected; }
 bool MQTTConnect(const char*, uint16_t, const char*, const char*, const char*,
-                 const char*, const char*) {
+                 const char*, const char*, bool) {
   return g_mqtt_connected;
 }
 bool MQTTIsConnected() { return g_mqtt_connected; }
