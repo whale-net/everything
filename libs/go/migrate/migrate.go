@@ -13,10 +13,12 @@ import (
 
 // Runner provides database migration functionality
 type Runner struct {
-	db         *sql.DB
-	migrations embed.FS
-	migrateDir string
-	tracker    *HistoryTracker
+	db              *sql.DB
+	migrations      embed.FS
+	migrateDir      string
+	tracker         *HistoryTracker
+	repeatableDir   string
+	repeatableStore RepeatableStore
 }
 
 // NewRunner creates a new migration runner
@@ -28,6 +30,17 @@ func NewRunner(db *sql.DB, migrations embed.FS, migrateDir string) *Runner {
 		migrateDir: migrateDir,
 		tracker:    NewHistoryTracker(db),
 	}
+}
+
+// WithRepeatableMigrations configures the runner to also execute repeatable migrations
+// from repeatableDir after all versioned migrations have been applied.
+// Repeatable migrations are files named "R__<description>.sql" inside repeatableDir.
+// A migration is only (re-)run when its content has changed since the last successful run.
+// WithRepeatableMigrations returns the receiver to allow method chaining.
+func (r *Runner) WithRepeatableMigrations(repeatableDir string) *Runner {
+	r.repeatableDir = repeatableDir
+	r.repeatableStore = NewRepeatableTracker(r.db)
+	return r
 }
 
 // History returns a simplified repository interface for accessing migration history
@@ -215,10 +228,33 @@ func (r *Runner) UpWithTracking() error {
 
 		nextVersion++
 	}
+
+	// Versioned migrations are all up-to-date.  Now run repeatable migrations.
+	if r.repeatableDir != "" && r.repeatableStore != nil {
+		if err := r.runRepeatableMigrations(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// runRepeatableMigrations ensures the tracking table exists, loads all repeatable migration files
+// from r.repeatableDir, and executes any whose content has changed since the last successful run.
+func (r *Runner) runRepeatableMigrations() error {
+	if err := r.repeatableStore.EnsureRepeatableHistoryTable(); err != nil {
+		return fmt.Errorf("failed to ensure repeatable history table: %w", err)
+	}
+
+	migrations, err := loadRepeatableMigrations(r.migrations, r.repeatableDir)
+	if err != nil {
+		return fmt.Errorf("failed to load repeatable migrations: %w", err)
+	}
+
+	return runRepeatableMigrationsWithStore(r.db, r.repeatableStore, migrations)
 }
 
 func (r *Runner) createMigrator() (*migrate.Migrate, error) {
-	// Create source driver from embedded files
 	sourceDriver, err := iofs.New(r.migrations, r.migrateDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create migration source: %w", err)
