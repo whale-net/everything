@@ -1,5 +1,7 @@
 """Firmware runtime config — NVS persistence and sensor config applier."""
 
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
 package(default_visibility = ["//visibility:public"])
 
 ESP32_COMPAT = [
@@ -33,5 +35,17 @@ cc_library(
         "//firmware/sensor:sensor",
         "@nanopb//:nanopb",
         "@pigweed//pw_span",
+    ],
+)
+
+cc_test(
+    name = "config_applier_test",
+    srcs = ["config_applier_test.cc"],
+    deps = [
+        ":config_applier",
+        "//firmware/sensor:mock_sensor",
+        "@pigweed//pw_span",
+        "@pigweed//pw_unit_test",
+        "@pigweed//pw_unit_test:logging_main",
     ],
 )
