@@ -1,6 +1,7 @@
 """LeafLab gRPC API — device config push and board management."""
 
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
 
 go_library(
     name = "api_lib",
@@ -32,4 +33,15 @@ go_binary(
     name = "api",
     embed = [":api_lib"],
     visibility = ["//visibility:public"],
+)
+
+release_app(
+    name = "leaflab-api",
+    binary_name = ":api",
+    language = "go",
+    domain = "leaflab",
+    description = "LeafLab gRPC API — device config push and board management",
+    app_type = "internal-api",
+    port = 50051,
+    replicas = 1,
 )
