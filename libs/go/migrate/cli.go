@@ -44,8 +44,12 @@ func DefaultConfig() *Config {
 
 // RunCLI is a convenience function for running migration CLI
 // migrations: embedded filesystem with migration files
-// migrateDir: subdirectory within migrations (e.g., "migrations")
-func RunCLI(migrations embed.FS, migrateDir string) {
+// migrateDir: subdirectory within migrations for versioned migrations (e.g., "migrations")
+// repeatableDir: optional subdirectory for repeatable migrations (e.g., "repeatable").
+//
+// Repeatable migrations are files named "R__<description>.sql" inside repeatableDir.
+// Pass an empty string (or omit) to disable repeatable migration support.
+func RunCLI(migrations embed.FS, migrateDir string, repeatableDir ...string) {
 	var (
 		down           = flag.Bool("down", false, "Rollback all migrations")
 		steps          = flag.Int("steps", 0, "Run N migrations (positive=up, negative=down)")
@@ -66,6 +70,11 @@ func RunCLI(migrations embed.FS, migrateDir string) {
 	defer db.Close()
 
 	runner := NewRunner(db, migrations, migrateDir)
+
+	// Wire up repeatable migrations if a directory was provided.
+	if len(repeatableDir) > 0 && repeatableDir[0] != "" {
+		runner = runner.WithRepeatableMigrations(repeatableDir[0])
+	}
 
 	// Handle history flag
 	if *history {
