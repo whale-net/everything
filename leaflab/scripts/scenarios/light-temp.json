@@ -1,0 +1,21 @@
+{
+  "description": "BH1750 light + SHT3x temp/humidity on root I2C bus (no mux)",
+  "hardware": "BH1750 at 0x23, SHT3x at 0x44, both direct on root bus",
+  "notes": [
+    "SHT3x temperature and humidity share I2C address 0x44.",
+    "The path matcher matches the first sensor with that path (temperature).",
+    "Humidity keeps its compile-time name."
+  ],
+  "sensors": [
+    {
+      "i2cAddress": 35,
+      "name": "light",
+      "enabled": true
+    },
+    {
+      "i2cAddress": 68,
+      "name": "temperature",
+      "enabled": true
+    }
+  ]
+}
