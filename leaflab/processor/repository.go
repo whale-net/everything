@@ -229,6 +229,37 @@ func nullableUint32Equal(a, b *uint32) bool {
 	return *a == *b
 }
 
+// UpsertDeviceConfig records a DeviceConfig push. configJSON is a
+// protojson-encoded DeviceConfig. ON CONFLICT DO NOTHING is intentional —
+// the same version should never be pushed twice to the same board.
+func (r *Repository) UpsertDeviceConfig(ctx context.Context, boardID, version int64, configJSON []byte) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO device_config (board_id, version, config_json)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (board_id, version) DO NOTHING
+	`, boardID, version, configJSON)
+	if err != nil {
+		return fmt.Errorf("upsert device_config board=%d version=%d: %w", boardID, version, err)
+	}
+	return nil
+}
+
+// AckDeviceConfig records the device's ack for a config push (accepted or rejected).
+func (r *Repository) AckDeviceConfig(ctx context.Context, boardID, version int64, accepted bool, reason string) error {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE device_config
+		SET accepted = $3, acked_at = NOW(), rejection_reason = $4
+		WHERE board_id = $1 AND version = $2
+	`, boardID, version, accepted, reason)
+	if err != nil {
+		return fmt.Errorf("ack device_config board=%d version=%d: %w", boardID, version, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("ack device_config board=%d version=%d: no matching row", boardID, version)
+	}
+	return nil
+}
+
 // InsertReading writes a sensor_reading row.
 // uptimeS is the device uptime in seconds (proto uptime_ms divided by 1000).
 func (r *Repository) InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time) error {

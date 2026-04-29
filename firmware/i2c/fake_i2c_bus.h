@@ -92,15 +92,17 @@ class FakeI2CBus final : public II2CBus {
       injected_error_ = pw::OkStatus();
   }
 
-  // ── Mux identity (for testing sensors that query bus.mux_address()) ────────
+  // ── Mux identity (for testing sensors that query mux path) ──────────────────
 
   void set_mux_address(uint8_t a) { mux_address_ = a; }
   void set_mux_channel(uint8_t c) { mux_channel_ = c; }
 
   // ── II2CBus implementation ─────────────────────────────────────────────────
 
-  uint8_t mux_address() const override { return mux_address_; }
-  uint8_t mux_channel() const override { return mux_channel_; }
+  size_t mux_depth() const override { return mux_address_ != 0 ? 1 : 0; }
+  MuxHop mux_hop_at(size_t /*depth*/) const override {
+      return {mux_address_, mux_channel_};
+  }
 
   pw::Status Init(uint8_t sda_pin, uint8_t scl_pin) override {
       if (pw::Status e = ConsumeError(); !e.ok()) return e;

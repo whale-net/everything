@@ -14,3 +14,12 @@ void WiFiInit(const char* ssid, const char* password);
 // NetworkManager is kReady, or unconditionally — it is a no-op when
 // disconnected.
 void MQTTLoop();
+
+// Subscribe to an MQTT topic. Returns true on success.
+// Call after MQTTConnect succeeds (i.e. from within OnConnect handling).
+bool MQTTSubscribe(const char* topic);
+
+// Register a callback for incoming MQTT messages.
+// PubSubClient's callback signature differs from ours, so an internal adapter
+// bridges the types. Call before MQTTConnect.
+void MQTTSetCallback(void (*cb)(const char*, const uint8_t*, size_t));

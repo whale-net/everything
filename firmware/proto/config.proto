@@ -1,0 +1,37 @@
+syntax = "proto3";
+package firmware;
+
+// One step in a cascaded I2C mux chain.
+// Path is ordered outer → inner: mux_path[0] is the first mux from the root
+// bus; mux_path[len-1] is the mux the sensor hangs off directly.
+message MuxHop {
+  uint32 mux_address = 1;
+  uint32 mux_channel = 2;
+}
+
+// Logical configuration for one physical sensor, identified by hardware path.
+// Matched to a compile-time sensor by (mux_path, i2c_address) at runtime.
+// Sensors with no matching entry keep their compile-time defaults.
+message SensorConfig {
+  repeated MuxHop mux_path    = 1;  // empty = sensor directly on root bus
+  uint32 i2c_address          = 2;
+  string name                 = 3;  // override name for MQTT topic + manifest
+  optional bool enabled       = 4;
+  uint32 poll_interval_ms     = 5;  // 0 = use device default
+}
+
+// Pushed from server to device via MQTT topic leaflab/<device_id>/config.
+message DeviceConfig {
+  string device_id              = 1;
+  uint64 version                = 2;  // monotonic; device rejects version <= current
+  repeated SensorConfig sensors = 3;
+}
+
+// Published by device after applying or rejecting a DeviceConfig push.
+// Topic: leaflab/<device_id>/config/ack
+message DeviceConfigAck {
+  string device_id       = 1;
+  uint64 applied_version = 2;
+  bool   accepted        = 3;
+  string reason          = 4;  // human-readable rejection reason when accepted=false
+}

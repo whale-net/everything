@@ -47,8 +47,8 @@ class CCS811Device {
   bool eco2_valid()      const { return valid_; }
   bool tvoc_valid()      const { return valid_; }
   uint8_t address()      const { return address_; }
-  uint8_t mux_address()  const { return bus_.mux_address(); }
-  uint8_t mux_channel()  const { return bus_.mux_channel(); }
+  size_t mux_depth()     const { return bus_.mux_depth(); }
+  MuxHop mux_hop_at(size_t depth) const { return bus_.mux_hop_at(depth); }
 
  private:
   void Poll();
@@ -88,16 +88,17 @@ class CCS811eCO2 final : public ISensor {
 
   pw::Status Init() override;
   SensorReading Read() override;
-  const char* name()         const override { return name_; }
+  const char* name()         const override { return name_buf_; }
+  bool SetName(const char* name) override;
   uint8_t address()          const override { return dev_.address(); }
   firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_ECO2; }
   SensorUnit unit()          const override { return SensorUnit::kPPM; }
-  uint8_t mux_address()      const override { return dev_.mux_address(); }
-  uint8_t mux_channel()      const override { return dev_.mux_channel(); }
+  size_t mux_depth()         const override { return dev_.mux_depth(); }
+  MuxHop mux_hop(size_t depth) const override { return dev_.mux_hop_at(depth); }
 
  private:
   CCS811Device& dev_;
-  const char* name_;
+  char name_buf_[32];
 };
 
 // ISensor wrapper for TVOC.
@@ -107,16 +108,17 @@ class CCS811TVOC final : public ISensor {
 
   pw::Status Init() override;
   SensorReading Read() override;
-  const char* name()         const override { return name_; }
+  const char* name()         const override { return name_buf_; }
+  bool SetName(const char* name) override;
   uint8_t address()          const override { return dev_.address(); }
   firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_TVOC; }
   SensorUnit unit()          const override { return SensorUnit::kPPB; }
-  uint8_t mux_address()      const override { return dev_.mux_address(); }
-  uint8_t mux_channel()      const override { return dev_.mux_channel(); }
+  size_t mux_depth()         const override { return dev_.mux_depth(); }
+  MuxHop mux_hop(size_t depth) const override { return dev_.mux_hop_at(depth); }
 
  private:
   CCS811Device& dev_;
-  const char* name_;
+  char name_buf_[32];
 };
 
 }  // namespace firmware

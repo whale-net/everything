@@ -64,6 +64,34 @@ esp32_firmware(
     ],
 )
 
+# Elegoo ESP32 + HW-617 mux with runtime MQTT config (DeviceConfig push).
+# Flash: bazel run //leaflab/sensorboard:flash_dynamic -- /dev/ttyUSB0
+esp32_firmware(
+    name = "sensorboard_dynamic",
+    srcs = [
+        "elegoo_dynamic_config.cc",
+        "sensorboard_dynamic_main.cc",
+    ],
+    flash_name = "flash_dynamic",
+    deps = [
+        "//firmware/config:config_applier",
+        "//firmware/config:config_store",
+        "//firmware/credentials:nvs_credentials",
+        "//firmware/device_id:efuse_device_id",
+        "//firmware/i2c:arduino_i2c_bus",
+        "//firmware/i2c:tca9548a_bus",
+        "//firmware/mqtt:firmware_publisher",
+        "//firmware/network:esp32_platform",
+        "//firmware/proto:config_nanopb",
+        "//firmware/sensor:bh1750",
+        "//firmware/sensor:ccs811",
+        "//firmware/sensor:sht3x",
+        "@arduino_esp32//:Wire",
+        "@pigweed//pw_log",
+        "@pigweed//pw_span",
+    ],
+)
+
 # ── Provision target ─────────────────────────────────────────────────────────
 # Writes WiFi credentials into the ESP32's NVS partition (0x9000).
 # Run once per device, or whenever credentials change.

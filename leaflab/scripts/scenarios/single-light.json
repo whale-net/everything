@@ -1,0 +1,11 @@
+{
+  "description": "Single BH1750 light sensor on root I2C bus (0x23, no mux)",
+  "hardware": "elegoo_config — BH1750 at 0x23 direct",
+  "sensors": [
+    {
+      "i2cAddress": 35,
+      "name": "light",
+      "enabled": true
+    }
+  ]
+}
