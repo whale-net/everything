@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "migrate",
@@ -7,6 +7,7 @@ go_library(
         "history.go",
         "history_repo.go",
         "migrate.go",
+        "repeatable.go",
     ],
     importpath = "github.com/whale-net/everything/libs/go/migrate",
     visibility = ["//visibility:public"],
@@ -15,5 +16,16 @@ go_library(
         "@com_github_golang_migrate_migrate_v4//database/postgres",
         "@com_github_golang_migrate_migrate_v4//source/iofs",
         "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
+go_test(
+    name = "migrate_test",
+    srcs = ["repeatable_test.go"],
+    embed = [":migrate"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//mock",
+        "@com_github_stretchr_testify//require",
     ],
 )
