@@ -72,6 +72,10 @@ func (s *stubRepo) SetSensorChipID(_ context.Context, _ int64, _ string) error {
 	return nil
 }
 
+func (s *stubRepo) IsKnownChipAddress(_ context.Context, _ string, _ uint32) (bool, error) {
+	return true, nil
+}
+
 // marshalManifest encodes a DeviceManifest to wire bytes.
 func marshalManifest(t *testing.T, m *firmwarepb.DeviceManifest) []byte {
 	t.Helper()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
@@ -14,6 +15,20 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
+
+// validDeviceID allows alphanumeric, hyphens, and underscores.
+// Excludes MQTT wildcard characters (+, #) and path separators (/, .).
+var validDeviceID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+func validateDeviceID(id string) error {
+	if id == "" {
+		return fmt.Errorf("device_id is required")
+	}
+	if !validDeviceID.MatchString(id) {
+		return fmt.Errorf("device_id %q contains invalid characters: only a-z, A-Z, 0-9, - and _ are allowed", id)
+	}
+	return nil
+}
 
 const mqttExchange = "amq.topic"
 
@@ -33,8 +48,8 @@ func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, logger *slo
 }
 
 func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDeviceConfigRequest) (*pb.PushDeviceConfigResponse, error) {
-	if req.DeviceId == "" {
-		return nil, status.Error(codes.InvalidArgument, "device_id is required")
+	if err := validateDeviceID(req.DeviceId); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	boardID, err := s.repo.GetOrCreateBoard(ctx, req.DeviceId)
@@ -42,18 +57,27 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		return nil, status.Errorf(codes.Internal, "board lookup: %v", err)
 	}
 
-	version, err := s.repo.NextVersion(ctx, boardID)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "version assignment: %v", err)
-	}
-
-	cfg := &configpb.DeviceConfig{
+	// Build the proto with a placeholder version; we need configJSON for the
+	// atomic insert that returns the real version, so marshal without version first.
+	cfgProto := &configpb.DeviceConfig{
 		DeviceId: req.DeviceId,
-		Version:  uint64(version),
 		Sensors:  req.Sensors,
 	}
+	configJSON, err := protojson.Marshal(cfgProto)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "protojson marshal: %v", err)
+	}
 
-	wire, err := proto.Marshal(cfg)
+	// Atomically assign version and record the pending push before publishing.
+	// This ensures the DB row always exists before the device can ack.
+	version, err := s.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "record config push: %v", err)
+	}
+
+	// Re-marshal with the real version for the wire payload.
+	cfgProto.Version = uint64(version)
+	wire, err := proto.Marshal(cfgProto)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "proto marshal: %v", err)
 	}
@@ -61,16 +85,9 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	// MQTT '/' → AMQP '.'; device_id should not contain '/' but sanitize to be safe.
 	routingKey := fmt.Sprintf("leaflab.%s.config", strings.ReplaceAll(req.DeviceId, "/", "."))
 	if err := s.publisher.Publish(ctx, mqttExchange, routingKey, wire); err != nil {
+		// Row is in DB but publish failed — device never received the push.
+		// The row stays accepted=FALSE, which is correct: no ack will arrive.
 		return nil, status.Errorf(codes.Internal, "publish config: %v", err)
-	}
-
-	configJSON, err := protojson.Marshal(cfg)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "protojson marshal: %v", err)
-	}
-	if err := s.repo.InsertDeviceConfig(ctx, boardID, version, configJSON); err != nil {
-		// Non-fatal: the push already reached the device; log and continue.
-		s.logger.Warn("failed to record config push in DB", "err", err)
 	}
 
 	s.logger.Info("device config pushed",
@@ -82,8 +99,8 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 }
 
 func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDeviceConfigRequest) (*pb.GetDeviceConfigResponse, error) {
-	if req.DeviceId == "" {
-		return nil, status.Error(codes.InvalidArgument, "device_id is required")
+	if err := validateDeviceID(req.DeviceId); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	cfg, err := s.repo.GetLatestAcceptedConfig(ctx, req.DeviceId)

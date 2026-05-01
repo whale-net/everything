@@ -33,12 +33,14 @@ ConfigApplier MakeApplier(ISensor* (&arr)[N]) {
 
 firmware_SensorConfig MakeSensorConfig(uint8_t i2c_addr, const char* name,
                                         bool enabled = true,
-                                        uint32_t poll_ms = 0) {
+                                        uint32_t poll_ms = 0,
+                                        firmware_SensorType type = firmware_SensorType_SENSOR_TYPE_UNKNOWN) {
     firmware_SensorConfig sc = firmware_SensorConfig_init_zero;
     sc.i2c_address = i2c_addr;
     sc.has_enabled = true;
     sc.enabled = enabled;
     sc.poll_interval_ms = poll_ms;
+    sc.sensor_type = type;
     strncpy(sc.name, name, sizeof(sc.name) - 1);
     return sc;
 }
@@ -193,6 +195,83 @@ TEST_F(DirectSensorsTest, ApplyResetsPreviousState) {
     cfg2.sensors_count = 0;
     applier.Apply(cfg2);
     EXPECT_TRUE(applier.IsEnabled(1));  // reset to default
+}
+
+// ── SharedAddressSensors — two virtual ISensors at the same I2C address ──────
+//
+// Models SHT3x: temperature and humidity share address 0x44 but have distinct
+// SensorTypes. Without sensor_type discrimination, Apply() would apply the
+// first matching SensorConfig entry to both sensors.
+
+class SharedAddressSensorsTest : public ::testing::Test {
+ protected:
+    void SetUp() override {
+        sensors[0] = &temp;
+        sensors[1] = &humid;
+    }
+
+    FakeSensor temp {"sht3x-temp",  0x44, 22.0f,
+                     pw::OkStatus(),
+                     firmware_SensorType_SENSOR_TYPE_TEMPERATURE};
+    FakeSensor humid{"sht3x-humid", 0x44, 60.0f,
+                     pw::OkStatus(),
+                     firmware_SensorType_SENSOR_TYPE_HUMIDITY};
+    ISensor* sensors[2];
+};
+
+TEST_F(SharedAddressSensorsTest, TypeDiscriminatorTargetsTemperatureOnly) {
+    auto cfg = MakeDeviceConfig(1);
+    cfg.sensors_count = 1;
+    cfg.sensors[0] = MakeSensorConfig(0x44, "renamed-temp", true, 0,
+                                      firmware_SensorType_SENSOR_TYPE_TEMPERATURE);
+
+    auto applier = MakeApplier(sensors);
+    applier.Apply(cfg);
+
+    EXPECT_STREQ(temp.name(),  "renamed-temp");
+    EXPECT_STREQ(humid.name(), "sht3x-humid");  // unchanged
+}
+
+TEST_F(SharedAddressSensorsTest, TypeDiscriminatorTargetsHumidityOnly) {
+    auto cfg = MakeDeviceConfig(1);
+    cfg.sensors_count = 1;
+    cfg.sensors[0] = MakeSensorConfig(0x44, "renamed-humid", true, 0,
+                                      firmware_SensorType_SENSOR_TYPE_HUMIDITY);
+
+    auto applier = MakeApplier(sensors);
+    applier.Apply(cfg);
+
+    EXPECT_STREQ(temp.name(),  "sht3x-temp");   // unchanged
+    EXPECT_STREQ(humid.name(), "renamed-humid");
+}
+
+TEST_F(SharedAddressSensorsTest, UnknownTypeMatchesBothVirtualSensors) {
+    // sensor_type = UNKNOWN is the legacy "match all at this address" path.
+    auto cfg = MakeDeviceConfig(1);
+    cfg.sensors_count = 1;
+    cfg.sensors[0] = MakeSensorConfig(0x44, "shared-name");  // UNKNOWN type
+
+    auto applier = MakeApplier(sensors);
+    applier.Apply(cfg);
+
+    // The first matched sensor gets renamed; Apply() stops at first match per
+    // config entry, so only temp is renamed.
+    EXPECT_STREQ(temp.name(),  "shared-name");
+}
+
+TEST_F(SharedAddressSensorsTest, BothTargetedWithSeparateEntries) {
+    auto cfg = MakeDeviceConfig(1);
+    cfg.sensors_count = 2;
+    cfg.sensors[0] = MakeSensorConfig(0x44, "plant-temp", true, 0,
+                                      firmware_SensorType_SENSOR_TYPE_TEMPERATURE);
+    cfg.sensors[1] = MakeSensorConfig(0x44, "plant-humid", true, 0,
+                                      firmware_SensorType_SENSOR_TYPE_HUMIDITY);
+
+    auto applier = MakeApplier(sensors);
+    applier.Apply(cfg);
+
+    EXPECT_STREQ(temp.name(),  "plant-temp");
+    EXPECT_STREQ(humid.name(), "plant-humid");
 }
 
 // ── SingleMuxSensors — one TCA9548A ──────────────────────────────────────────

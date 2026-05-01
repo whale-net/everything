@@ -24,10 +24,12 @@ namespace testing {
 class FakeSensor final : public ISensor {
  public:
   FakeSensor(const char* name, uint8_t address, float value,
-             pw::Status init_status = pw::OkStatus())
+             pw::Status init_status = pw::OkStatus(),
+             firmware_SensorType type = firmware_SensorType_SENSOR_TYPE_UNKNOWN)
       : address_(address),
         value_(value),
         init_status_(init_status),
+        type_(type),
         mux_depth_(0) {
       strncpy(name_buf_, name, sizeof(name_buf_) - 1);
       name_buf_[sizeof(name_buf_) - 1] = '\0';
@@ -42,8 +44,10 @@ class FakeSensor final : public ISensor {
       return true;
   }
   uint8_t address()     const override { return address_; }
-  firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_UNKNOWN; }
+  firmware_SensorType type() const override { return type_; }
   SensorUnit unit()     const override { return SensorUnit::kUnknown; }
+
+  void set_type(firmware_SensorType t) { type_ = t; }
   size_t mux_depth()    const override { return mux_depth_; }
   MuxHop mux_hop(size_t depth) const override {
       return depth < mux_depth_ ? mux_hops_[depth] : MuxHop{0, 0};
@@ -67,6 +71,7 @@ class FakeSensor final : public ISensor {
   uint8_t address_;
   float value_;
   pw::Status init_status_;
+  firmware_SensorType type_;
   size_t mux_depth_;
   MuxHop mux_hops_[kMaxHops] = {};
 };

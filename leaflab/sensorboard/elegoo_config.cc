@@ -15,13 +15,16 @@
 #include "firmware/network/esp32_platform.h"
 #include "firmware/network/network_manager.h"
 #include "firmware/sensor/bh1750.h"
+#include "firmware/sensor/catalog/chip_catalog.h"
 #include "firmware/sensor/sensor.h"
 #include "pw_span/span.h"
+
+using namespace firmware::chip_addr;
 
 // ── I2C bus and sensors ──────────────────────────────────────────────────────
 
 static firmware::ArduinoI2CBus bus;
-static firmware::BH1750Sensor  bh1750(bus, 0x23, "light", millis);
+static firmware::BH1750Sensor  bh1750(bus, kBH1750Default, "light", millis);
 
 static firmware::ISensor* const kSensors[] = {&bh1750};
 

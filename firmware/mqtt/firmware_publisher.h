@@ -48,6 +48,7 @@ class FirmwarePublisher {
  private:
   void PublishManifest();
   void PublishStatus(const char* status);
+  void TryConfigSubscribe();
   void HandleConfigMessage(const uint8_t* payload, size_t length);
   void PublishConfigAck(uint64_t version, bool accepted, const char* reason);
 
@@ -56,6 +57,10 @@ class FirmwarePublisher {
   static FirmwarePublisher* instance_;
   static void OnMQTTMessage(const char* topic, const uint8_t* payload,
                              size_t length);
+
+  // True until the config topic subscription is confirmed. PublishReadings()
+  // retries Subscribe() on each call until it succeeds.
+  bool config_subscribe_pending_ = true;
 
   const IDeviceId& device_id_;
   pw::span<ISensor* const> sensors_;

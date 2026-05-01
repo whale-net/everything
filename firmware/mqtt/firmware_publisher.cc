@@ -39,17 +39,25 @@ FirmwarePublisher::FirmwarePublisher(const IDeviceId& device_id,
 }
 
 void FirmwarePublisher::OnConnect() {
-    // Subscribe to config push topic before announcing presence.
-    pw::StringBuffer<kTopicBufSize> cfg_topic;
-    cfg_topic << "leaflab/" << device_id_.Get() << "/config";
-    if (!net_.Subscribe(cfg_topic.c_str()).ok()) {
-        PW_LOG_WARN("FirmwarePublisher: failed to subscribe to config topic");
-    }
+    config_subscribe_pending_ = true;  // (re-)arm on every reconnect
+    TryConfigSubscribe();
     PublishStatus("online");
     PublishManifest();
 }
 
+void FirmwarePublisher::TryConfigSubscribe() {
+    pw::StringBuffer<kTopicBufSize> cfg_topic;
+    cfg_topic << "leaflab/" << device_id_.Get() << "/config";
+    if (net_.Subscribe(cfg_topic.c_str()).ok()) {
+        config_subscribe_pending_ = false;
+    } else {
+        PW_LOG_WARN("FirmwarePublisher: config topic subscribe failed, will retry");
+    }
+}
+
 void FirmwarePublisher::PublishReadings() {
+    if (config_subscribe_pending_) TryConfigSubscribe();
+
     for (size_t i = 0; i < sensors_.size(); ++i) {
         if (!config_applier_.IsEnabled(i)) continue;
 

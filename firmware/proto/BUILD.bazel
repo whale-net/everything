@@ -62,6 +62,8 @@ genrule(
     srcs = [
         "config.proto",
         "config.options",
+        "firmware.proto",
+        "firmware.options",
     ],
     outs = [
         "config.pb.h",
@@ -73,6 +75,7 @@ genrule(
           --plugin=protoc-gen-nanopb=$(location @nanopb//:protoc-gen-nanopb) \
           "--nanopb_out=--library-include-format=quote --options-file=$(location config.options):$(RULEDIR)" \
           -I $$(dirname $(location config.proto)) \
+          -I . \
           $(location config.proto)
     """,
     tools = [
@@ -85,16 +88,21 @@ cc_library(
     name = "config_nanopb",
     srcs = [":config_pb_gen"],
     hdrs = [":config_pb_gen"],
-    deps = ["@nanopb//:nanopb"],
+    deps = [
+        ":firmware_nanopb",
+        "@nanopb//:nanopb",
+    ],
 )
 
 proto_library(
     name = "config_proto",
     srcs = ["config.proto"],
+    deps = [":firmware_proto"],
 )
 
 go_proto_library(
     name = "configpb",
     importpath = "github.com/whale-net/everything/firmware/proto/config",
     proto = ":config_proto",
+    deps = [":firmwarepb"],
 )

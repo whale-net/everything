@@ -260,6 +260,29 @@ func (r *Repository) AckDeviceConfig(ctx context.Context, boardID, version int64
 	return nil
 }
 
+// IsKnownChipAddress returns true if i2cAddress is a registered address for the
+// named chip in sensor_chip_address. Returns (true, nil) if the chip is not in
+// the catalog at all (no data to contradict the claim), so callers only warn on
+// (false, nil) — a chip that IS in the catalog but lacks this address.
+func (r *Repository) IsKnownChipAddress(ctx context.Context, chipModel string, i2cAddress uint32) (bool, error) {
+	if chipModel == "" {
+		return true, nil
+	}
+	var exists bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM sensor_chip_address sca
+			JOIN sensor_chip sc ON sc.sensor_chip_id = sca.sensor_chip_id
+			WHERE sc.name = $1 AND sca.i2c_address = $2
+		)
+	`, chipModel, int16(i2cAddress)).Scan(&exists)
+	if err != nil {
+		return true, fmt.Errorf("check chip address for %q 0x%02x: %w", chipModel, i2cAddress, err)
+	}
+	return exists, nil
+}
+
 // SetSensorChipID looks up a sensor_chip by name and sets sensor.sensor_chip_id.
 // No-op (no error) if the chip name is empty or not found in the catalog.
 func (r *Repository) SetSensorChipID(ctx context.Context, sensorID int64, chipModel string) error {

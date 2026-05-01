@@ -1,6 +1,8 @@
 syntax = "proto3";
 package firmware;
 
+import "firmware/proto/firmware.proto";
+
 // One step in a cascaded I2C mux chain.
 // Path is ordered outer → inner: mux_path[0] is the first mux from the root
 // bus; mux_path[len-1] is the mux the sensor hangs off directly.
@@ -10,14 +12,21 @@ message MuxHop {
 }
 
 // Logical configuration for one physical sensor, identified by hardware path.
-// Matched to a compile-time sensor by (mux_path, i2c_address) at runtime.
-// Sensors with no matching entry keep their compile-time defaults.
+// Matched to a compile-time sensor by (mux_path, i2c_address[, sensor_type])
+// at runtime. Sensors with no matching entry keep their compile-time defaults.
+//
+// sensor_type is required when multiple virtual sensors share the same I2C
+// address (e.g. SHT3x exposes separate temperature and humidity ISensors at
+// the same address). When sensor_type is SENSOR_TYPE_UNKNOWN (0, the default),
+// the entry matches all sensors at that hardware path — preserving backwards
+// compatibility for chips with a single ISensor.
 message SensorConfig {
   repeated MuxHop mux_path    = 1;  // empty = sensor directly on root bus
   uint32 i2c_address          = 2;
   string name                 = 3;  // override name for MQTT topic + manifest
   optional bool enabled       = 4;
   uint32 poll_interval_ms     = 5;  // 0 = use device default
+  SensorType sensor_type      = 6;  // discriminator for multi-virtual chips
 }
 
 // Pushed from server to device via MQTT topic leaflab/<device_id>/config.

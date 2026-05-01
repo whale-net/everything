@@ -22,10 +22,13 @@
 #include "firmware/network/esp32_platform.h"
 #include "firmware/network/network_manager.h"
 #include "firmware/sensor/bh1750.h"
+#include "firmware/sensor/catalog/chip_catalog.h"
 #include "firmware/sensor/ccs811.h"
 #include "firmware/sensor/sensor.h"
 #include "firmware/sensor/sht3x.h"
 #include "pw_span/span.h"
+
+using namespace firmware::chip_addr;
 
 // ── I2C bus, multiplexer channels, and sensors ───────────────────────────────
 
@@ -35,14 +38,14 @@ static firmware::TCA9548ABus   ch5(bus, 0x70, 5);  // HW-617 SD5
 static firmware::TCA9548ABus   ch6(bus, 0x70, 6);  // HW-617 SD6
 static firmware::TCA9548ABus   ch7(bus, 0x70, 7);  // HW-617 SD7
 
-static firmware::BH1750Sensor     bh1750_2(ch0, 0x23, "max-light", millis);
-static firmware::SHT3xDevice      sht3x_dev(ch5, 0x44, millis);
+static firmware::BH1750Sensor     bh1750_2(ch0, kBH1750Default, "max-light", millis);
+static firmware::SHT3xDevice      sht3x_dev(ch5, kSHT3xDefault, millis);
 static firmware::SHT3xTemperature sht3x_temp(sht3x_dev, "board-temp");
 static firmware::SHT3xHumidity    sht3x_humi(sht3x_dev, "board-humidity");
-static firmware::CCS811Device     ccs811_dev(ch6, 0x5A, millis);
+static firmware::CCS811Device     ccs811_dev(ch6, kCCS811Default, millis);
 static firmware::CCS811eCO2       ccs811_eco2(ccs811_dev, "board-eco2");
 static firmware::CCS811TVOC       ccs811_tvoc(ccs811_dev, "board-tvoc");
-static firmware::BH1750Sensor     bh1750(ch7, 0x23, "board-light", millis);
+static firmware::BH1750Sensor     bh1750(ch7, kBH1750Default, "board-light", millis);
 
 static firmware::ISensor* const kSensors[] = {
     &bh1750_2,

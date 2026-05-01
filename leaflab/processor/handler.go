@@ -26,6 +26,7 @@ type SensorRepository interface {
 	UpsertDeviceConfig(ctx context.Context, boardID int64, version int64, configJSON []byte) error
 	AckDeviceConfig(ctx context.Context, boardID int64, version int64, accepted bool, reason string) error
 	SetSensorChipID(ctx context.Context, sensorID int64, chipModel string) error
+	IsKnownChipAddress(ctx context.Context, chipModel string, i2cAddress uint32) (bool, error)
 }
 
 // MessageHandler decodes leaflab MQTT messages and persists them.
@@ -118,6 +119,18 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 
 		if err := h.repo.SetSensorChipID(ctx, sensorID, sd.ChipModel); err != nil {
 			h.logger.Warn("failed to set sensor_chip_id", "name", sd.Name, "chip_model", sd.ChipModel, "err", err)
+		}
+
+		if sd.ChipModel != "" && sd.I2CAddress > 0 {
+			if ok, err := h.repo.IsKnownChipAddress(ctx, sd.ChipModel, sd.I2CAddress); err != nil {
+				h.logger.Warn("chip address check failed", "name", sd.Name, "err", err)
+			} else if !ok {
+				h.logger.Warn("sensor reports unrecognised address for chip — possible misconfiguration",
+					"name", sd.Name,
+					"chip_model", sd.ChipModel,
+					"i2c_address", fmt.Sprintf("0x%02x", sd.I2CAddress),
+				)
+			}
 		}
 
 		h.cache.Set(deviceID, sd.Name, SensorInfo{SensorID: sensorID, RegionID: regionID})
