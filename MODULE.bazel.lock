@@ -32,10 +32,8 @@
     "https://bcr.bazel.build/modules/aspect_bazel_lib/1.31.2/MODULE.bazel": "7bee702b4862612f29333590f4b658a5832d433d6f8e4395f090e8f4e85d442f",
     "https://bcr.bazel.build/modules/aspect_bazel_lib/1.38.0/MODULE.bazel": "6307fec451ba9962c1c969eb516ebfe1e46528f7fa92e1c9ac8646bef4cdaa3f",
     "https://bcr.bazel.build/modules/aspect_bazel_lib/1.40.3/MODULE.bazel": "668e6bcb4d957fc0e284316dba546b705c8d43c857f87119619ee83c4555b859",
-    "https://bcr.bazel.build/modules/aspect_bazel_lib/2.0.0/MODULE.bazel": "e118477db5c49419a88d78ebc7a2c2cea9d49600fe0f490c1903324a2c16ecd9",
     "https://bcr.bazel.build/modules/aspect_bazel_lib/2.11.0/MODULE.bazel": "cb1ba9f9999ed0bc08600c221f532c1ddd8d217686b32ba7d45b0713b5131452",
     "https://bcr.bazel.build/modules/aspect_bazel_lib/2.14.0/MODULE.bazel": "2b31ffcc9bdc8295b2167e07a757dbbc9ac8906e7028e5170a3708cecaac119f",
-    "https://bcr.bazel.build/modules/aspect_bazel_lib/2.16.0/MODULE.bazel": "852f9ebbda017572a7c113a2434592dd3b2f55cd9a0faea3d4be5a09a59e4900",
     "https://bcr.bazel.build/modules/aspect_bazel_lib/2.19.3/MODULE.bazel": "253d739ba126f62a5767d832765b12b59e9f8d2bc88cc1572f4a73e46eb298ca",
     "https://bcr.bazel.build/modules/aspect_bazel_lib/2.21.1/MODULE.bazel": "07e3ce3eaaa50dbd0be7fa0094e36890478937adc780ec53e77fd9fe543af8b1",
     "https://bcr.bazel.build/modules/aspect_bazel_lib/2.21.1/source.json": "cb7d22ce044efa47c6e251107a35b8a919f5cd35254190d825adff1b7ae21e6e",
@@ -52,12 +50,12 @@
     "https://bcr.bazel.build/modules/aspect_rules_js/2.1.3/MODULE.bazel": "47cc48eec374d69dced3cf9b9e5926beac2f927441acfb1a3568bbb709b25666",
     "https://bcr.bazel.build/modules/aspect_rules_js/2.1.3/source.json": "6b0fe67780c101430be087381b7a79d75eeebe1a1eae6a2cee937713603634ac",
     "https://bcr.bazel.build/modules/aspect_rules_lint/0.12.0/MODULE.bazel": "e767c5dbfeb254ec03275a7701b5cfde2c4d2873676804bc7cb27ddff3728fed",
-    "https://bcr.bazel.build/modules/aspect_rules_py/1.6.4-rc1/MODULE.bazel": "5aa5b8c050fc7b49381283bc61ba835caa205eb7f474121f0283175135185062",
-    "https://bcr.bazel.build/modules/aspect_rules_py/1.6.4-rc1/source.json": "5699e6ecf68e03db98b953a7bfd1fa87bb8647fa9495fac4f0980cc00c90fbd7",
+    "https://bcr.bazel.build/modules/aspect_rules_py/1.11.2/MODULE.bazel": "341ac79adc5a8ae6ec3ae6a3bae687737f9f9524f7e2a6c210f549151ab70f5d",
+    "https://bcr.bazel.build/modules/aspect_rules_py/1.11.2/source.json": "43f09c5c8f35940c590159bdf496e99c260898b1d91c15400734b1ad787687aa",
     "https://bcr.bazel.build/modules/aspect_rules_ts/3.4.0/MODULE.bazel": "5b554d5de90d96ee14117527c0519037713dd33884f3212eae391beccb2e94ff",
     "https://bcr.bazel.build/modules/aspect_rules_ts/3.4.0/source.json": "9ada3722b716853b6dccdb7b650d8e776a23bc8a190de0c59bd15f21afea6f8a",
-    "https://bcr.bazel.build/modules/aspect_tools_telemetry/0.2.6/MODULE.bazel": "cafb8781ad591bc57cc765dca5fefab08cf9f65af363d162b79d49205c7f8af7",
-    "https://bcr.bazel.build/modules/aspect_tools_telemetry/0.2.6/source.json": "4d98137d5f74f01e00c6efa8bf591c02718e6c5f31f0bcc73983ea514dd02a12",
+    "https://bcr.bazel.build/modules/aspect_tools_telemetry/0.3.3/MODULE.bazel": "37c764292861c2f70314efa9846bb6dbb44fc0308903b3285da6528305450183",
+    "https://bcr.bazel.build/modules/aspect_tools_telemetry/0.3.3/source.json": "605086bbc197743a0d360f7ddc550a1d4dfa0441bc807236e17170f636153348",
     "https://bcr.bazel.build/modules/bazel_features/0.1.0/MODULE.bazel": "47011d645b0f949f42ee67f2e8775188a9cf4a0a1528aa2fa4952f2fd00906fd",
     "https://bcr.bazel.build/modules/bazel_features/1.1.0/MODULE.bazel": "cfd42ff3b815a5f39554d97182657f8c4b9719568eb7fded2b9135f084bf760b",
     "https://bcr.bazel.build/modules/bazel_features/1.1.1/MODULE.bazel": "27b8c79ef57efe08efccbd9dd6ef70d61b4798320b8d3c134fd571f78963dbcd",
@@ -70,17 +68,22 @@
     "https://bcr.bazel.build/modules/bazel_features/1.19.0/MODULE.bazel": "59adcdf28230d220f0067b1f435b8537dd033bfff8db21335ef9217919c7fb58",
     "https://bcr.bazel.build/modules/bazel_features/1.21.0/MODULE.bazel": "675642261665d8eea09989aa3b8afb5c37627f1be178382c320d1b46afba5e3b",
     "https://bcr.bazel.build/modules/bazel_features/1.23.0/MODULE.bazel": "fd1ac84bc4e97a5a0816b7fd7d4d4f6d837b0047cf4cbd81652d616af3a6591a",
+    "https://bcr.bazel.build/modules/bazel_features/1.24.0/MODULE.bazel": "4796b4c25b47053e9bbffa792b3792d07e228ff66cd0405faef56a978708acd4",
     "https://bcr.bazel.build/modules/bazel_features/1.27.0/MODULE.bazel": "621eeee06c4458a9121d1f104efb80f39d34deff4984e778359c60eaf1a8cb65",
     "https://bcr.bazel.build/modules/bazel_features/1.28.0/MODULE.bazel": "4b4200e6cbf8fa335b2c3f43e1d6ef3e240319c33d43d60cc0fbd4b87ece299d",
     "https://bcr.bazel.build/modules/bazel_features/1.3.0/MODULE.bazel": "cdcafe83ec318cda34e02948e81d790aab8df7a929cec6f6969f13a489ccecd9",
     "https://bcr.bazel.build/modules/bazel_features/1.30.0/MODULE.bazel": "a14b62d05969a293b80257e72e597c2da7f717e1e69fa8b339703ed6731bec87",
     "https://bcr.bazel.build/modules/bazel_features/1.32.0/MODULE.bazel": "095d67022a58cb20f7e20e1aefecfa65257a222c18a938e2914fd257b5f1ccdc",
     "https://bcr.bazel.build/modules/bazel_features/1.33.0/MODULE.bazel": "8b8dc9d2a4c88609409c3191165bccec0e4cb044cd7a72ccbe826583303459f6",
+    "https://bcr.bazel.build/modules/bazel_features/1.34.0/MODULE.bazel": "e8475ad7c8965542e0c7aac8af68eb48c4af904be3d614b6aa6274c092c2ea1e",
     "https://bcr.bazel.build/modules/bazel_features/1.36.0/MODULE.bazel": "596cb62090b039caf1cad1d52a8bc35cf188ca9a4e279a828005e7ee49a1bec3",
-    "https://bcr.bazel.build/modules/bazel_features/1.36.0/source.json": "279625cafa5b63cc0a8ee8448d93bc5ac1431f6000c50414051173fd22a6df3c",
+    "https://bcr.bazel.build/modules/bazel_features/1.38.0/MODULE.bazel": "f9b8a9c890ebd216b4049fd12a31d3c2602e3403c7af636b04fbbd7453edc9c9",
+    "https://bcr.bazel.build/modules/bazel_features/1.38.0/source.json": "31ba776c122b54a2885e23651642e32f087a87bf025465f8040751894b571277",
     "https://bcr.bazel.build/modules/bazel_features/1.4.1/MODULE.bazel": "e45b6bb2350aff3e442ae1111c555e27eac1d915e77775f6fdc4b351b758b5d7",
     "https://bcr.bazel.build/modules/bazel_features/1.9.0/MODULE.bazel": "885151d58d90d8d9c811eb75e3288c11f850e1d6b481a8c9f766adee4712358b",
     "https://bcr.bazel.build/modules/bazel_features/1.9.1/MODULE.bazel": "8f679097876a9b609ad1f60249c49d68bfab783dd9be012faf9d82547b14815a",
+    "https://bcr.bazel.build/modules/bazel_lib/3.0.0/MODULE.bazel": "22b70b80ac89ad3f3772526cd9feee2fa412c2b01933fea7ed13238a448d370d",
+    "https://bcr.bazel.build/modules/bazel_lib/3.0.0/source.json": "895f21909c6fba01d7c17914bb6c8e135982275a1b18cdaa4e62272217ef1751",
     "https://bcr.bazel.build/modules/bazel_skylib/1.0.3/MODULE.bazel": "bcb0fd896384802d1ad283b4e4eb4d718eebd8cb820b0a2c3a347fb971afd9d8",
     "https://bcr.bazel.build/modules/bazel_skylib/1.1.1/MODULE.bazel": "1add3e7d93ff2e6998f9e118022c84d163917d912f5afafb3058e3d2f1545b5e",
     "https://bcr.bazel.build/modules/bazel_skylib/1.2.0/MODULE.bazel": "44fe84260e454ed94ad326352a698422dbe372b21a1ac9f3eab76eb531223686",
@@ -375,7 +378,8 @@
     "https://bcr.bazel.build/modules/rules_oci/2.2.6/source.json": "94e7decb8f95d9465b0bbea71c65064cd16083be1350c7468f131818641dc4a5",
     "https://bcr.bazel.build/modules/rules_pkg/0.7.0/MODULE.bazel": "df99f03fc7934a4737122518bb87e667e62d780b610910f0447665a7e2be62dc",
     "https://bcr.bazel.build/modules/rules_pkg/1.0.1/MODULE.bazel": "5b1df97dbc29623bccdf2b0dcd0f5cb08e2f2c9050aab1092fd39a41e82686ff",
-    "https://bcr.bazel.build/modules/rules_pkg/1.0.1/source.json": "bd82e5d7b9ce2d31e380dd9f50c111d678c3bdaca190cb76b0e1c71b05e1ba8a",
+    "https://bcr.bazel.build/modules/rules_pkg/1.1.0/MODULE.bazel": "9db8031e71b6ef32d1846106e10dd0ee2deac042bd9a2de22b4761b0c3036453",
+    "https://bcr.bazel.build/modules/rules_pkg/1.1.0/source.json": "fef768df13a92ce6067e1cd0cdc47560dace01354f1d921cfb1d632511f7d608",
     "https://bcr.bazel.build/modules/rules_platform/0.1.0/MODULE.bazel": "1fe546d3ced195ad1632ed3621446d3c0bb4757e5becc44b12303a4ac23d6058",
     "https://bcr.bazel.build/modules/rules_platform/0.1.0/source.json": "98becf9569572719b65f639133510633eb3527fb37d347d7ef08447f3ebcf1c9",
     "https://bcr.bazel.build/modules/rules_probe_rs/0.0.6/MODULE.bazel": "f4ec93cffed7b5db1f2adc49b4b7e9cb232f18a731b0826e9aafa630e2f3d77d",
@@ -447,13 +451,16 @@
     "https://bcr.bazel.build/modules/swift_argument_parser/1.3.1.1/source.json": "32bd87e5f4d7acc57c5b2ff7c325ae3061d5e242c0c4c214ae87e0f1c13e54cb",
     "https://bcr.bazel.build/modules/tar.bzl/0.2.1/MODULE.bazel": "52d1c00a80a8cc67acbd01649e83d8dd6a9dc426a6c0b754a04fe8c219c76468",
     "https://bcr.bazel.build/modules/tar.bzl/0.5.1/MODULE.bazel": "7c2eb3dcfc53b0f3d6f9acdfd911ca803eaf92aadf54f8ca6e4c1f3aee288351",
-    "https://bcr.bazel.build/modules/tar.bzl/0.5.1/source.json": "deed3094f7cc779ed1d37a68403847b0e38d9dd9d931e03cb90825f3368b515f",
+    "https://bcr.bazel.build/modules/tar.bzl/0.5.5/MODULE.bazel": "4bfab9bbc7a1966c2c5f7371f5848f5e2d27c465951b4435adc9aaf00ed681da",
+    "https://bcr.bazel.build/modules/tar.bzl/0.5.5/source.json": "67c322bd9f9a6714b9d55d4df36ddc222976a7fbb2070410ef036f68cdf2eeb7",
     "https://bcr.bazel.build/modules/toolchains_protoc/0.3.1/MODULE.bazel": "b6574a2a314cbd40cafb5ed87b03d1996e015315f80a7e33116c8b2e209cb5cf",
     "https://bcr.bazel.build/modules/toolchains_protoc/0.3.1/source.json": "b589ee1faec4c789c680afa9d500b5ccbea25422560b8b9dc4e0e6b26471f13b",
     "https://bcr.bazel.build/modules/upb/0.0.0-20211020-160625a/MODULE.bazel": "6cced416be2dc5b9c05efd5b997049ba795e5e4e6fafbe1624f4587767638928",
     "https://bcr.bazel.build/modules/upb/0.0.0-20220923-a547704/MODULE.bazel": "7298990c00040a0e2f121f6c32544bab27d4452f80d9ce51349b1a28f3005c43",
     "https://bcr.bazel.build/modules/upb/0.0.0-20230516-61a97ef/MODULE.bazel": "c0df5e35ad55e264160417fd0875932ee3c9dda63d9fccace35ac62f45e1b6f9",
     "https://bcr.bazel.build/modules/upb/0.0.0-20230907-e7430e6/MODULE.bazel": "3a7dedadf70346e678dc059dbe44d05cbf3ab17f1ce43a1c7a42edc7cbf93fd9",
+    "https://bcr.bazel.build/modules/with_cfg.bzl/0.14.1/MODULE.bazel": "aa0ef3f6c67dd35db7ac38c76785dc02f48b53f34e16b20487e70f51b5324d0a",
+    "https://bcr.bazel.build/modules/with_cfg.bzl/0.14.1/source.json": "4666d3035f69063ecd136f3f0c68e424f1b1dd97ffc9cceb679522c0be38761b",
     "https://bcr.bazel.build/modules/xds/0.0.0-20240423-555b57e/MODULE.bazel": "cea509976a77e34131411684ef05a1d6ad194dd71a8d5816643bc5b0af16dc0f",
     "https://bcr.bazel.build/modules/xds/0.0.0-20240423-555b57e/source.json": "7227e1fcad55f3f3cab1a08691ecd753cb29cc6380a47bc650851be9f9ad6d20",
     "https://bcr.bazel.build/modules/xz/5.4.5.bcr.1/MODULE.bazel": "c037f75fa1b7e1ff15fbd15d807a8ce545e9b02f02df0a9777aa9aa7d8b268bb",
@@ -719,54 +726,12 @@
     },
     "@@aspect_rules_py+//py:extensions.bzl%py_tools": {
       "general": {
-        "bzlTransitiveDigest": "T5D3DsThMz+BRXwZGspnR6hy5pc8fqPw9SUd+x2HTQo=",
-        "usagesDigest": "VBHFHtCiwxyVIl8kieYr15ilzKgaXgX5dGqyY6GOhs8=",
+        "bzlTransitiveDigest": "E0I0AS2gGWKJ4HvrbhSpLbxLaoiZd5mnPoKR37aHuAE=",
+        "usagesDigest": "vUZlUUgF3IKnrOqjiOX8WkCPfeOp+bm7h4MrLFcey6E=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
         "generatedRepoSpecs": {
-          "bsd_tar_darwin_amd64": {
-            "repoRuleId": "@@aspect_bazel_lib+//lib/private:tar_toolchain.bzl%bsdtar_binary_repo",
-            "attributes": {
-              "platform": "darwin_amd64"
-            }
-          },
-          "bsd_tar_darwin_arm64": {
-            "repoRuleId": "@@aspect_bazel_lib+//lib/private:tar_toolchain.bzl%bsdtar_binary_repo",
-            "attributes": {
-              "platform": "darwin_arm64"
-            }
-          },
-          "bsd_tar_linux_amd64": {
-            "repoRuleId": "@@aspect_bazel_lib+//lib/private:tar_toolchain.bzl%bsdtar_binary_repo",
-            "attributes": {
-              "platform": "linux_amd64"
-            }
-          },
-          "bsd_tar_linux_arm64": {
-            "repoRuleId": "@@aspect_bazel_lib+//lib/private:tar_toolchain.bzl%bsdtar_binary_repo",
-            "attributes": {
-              "platform": "linux_arm64"
-            }
-          },
-          "bsd_tar_windows_amd64": {
-            "repoRuleId": "@@aspect_bazel_lib+//lib/private:tar_toolchain.bzl%bsdtar_binary_repo",
-            "attributes": {
-              "platform": "windows_amd64"
-            }
-          },
-          "bsd_tar_windows_arm64": {
-            "repoRuleId": "@@aspect_bazel_lib+//lib/private:tar_toolchain.bzl%bsdtar_binary_repo",
-            "attributes": {
-              "platform": "windows_arm64"
-            }
-          },
-          "bsd_tar_toolchains": {
-            "repoRuleId": "@@aspect_bazel_lib+//lib/private:tar_toolchain.bzl%tar_toolchains_repo",
-            "attributes": {
-              "user_repository_name": "bsd_tar"
-            }
-          },
           "rules_py_tools.darwin_amd64": {
             "repoRuleId": "@@aspect_rules_py+//py/private/toolchain:repo.bzl%prebuilt_tool_repo",
             "attributes": {
@@ -810,24 +775,9 @@
         },
         "recordedRepoMappingEntries": [
           [
-            "aspect_bazel_lib+",
-            "bazel_tools",
-            "bazel_tools"
-          ],
-          [
-            "aspect_rules_py+",
-            "aspect_bazel_lib",
-            "aspect_bazel_lib+"
-          ],
-          [
             "aspect_rules_py+",
             "aspect_tools_telemetry_report",
             "aspect_tools_telemetry++telemetry+aspect_tools_telemetry_report"
-          ],
-          [
-            "aspect_rules_py+",
-            "bazel_skylib",
-            "bazel_skylib+"
           ],
           [
             "aspect_rules_py+",
@@ -835,6 +785,361 @@
             "bazel_tools"
           ]
         ]
+      }
+    },
+    "@@aspect_rules_py+//py/unstable:extension.bzl%python_interpreters": {
+      "general": {
+        "bzlTransitiveDigest": "38T8ePMB4kdzOilmSfMGgOaNYtGupswrqu8TMnd1Q+I=",
+        "usagesDigest": "KHT/oPstUAUMxphSJpnV0Q5NXz//2Fcj7fejaHIsG7s=",
+        "recordedFileInputs": {},
+        "recordedDirentsInputs": {},
+        "envVariables": {},
+        "generatedRepoSpecs": {
+          "python_3_13_aarch64_apple_darwin": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "aarch64-apple-darwin",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-aarch64-apple-darwin-install_only.tar.gz",
+              "sha256": "267592285674e21982d84f2cd0b56e13e63ce60c3e85ffb0d67a842edaf5b5e9",
+              "strip_prefix": "python",
+              "freethreaded": false
+            }
+          },
+          "python_3_13_aarch64_unknown_linux_gnu": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "aarch64-unknown-linux-gnu",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-aarch64-unknown-linux-gnu-install_only.tar.gz",
+              "sha256": "3b88fc6dd6f0290f075353ca860b9dc48faca0d849a0a03c088883507ed63881",
+              "strip_prefix": "python",
+              "freethreaded": false
+            }
+          },
+          "python_3_13_aarch64_unknown_linux_musl": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "aarch64-unknown-linux-musl",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-aarch64-unknown-linux-musl-install_only.tar.gz",
+              "sha256": "c8f2e10261f327b3b9606c23c79788e1c909f0d703c4b06ebd59b318fa271c77",
+              "strip_prefix": "python",
+              "freethreaded": false
+            }
+          },
+          "python_3_13_x86_64_apple_darwin": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "x86_64-apple-darwin",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-x86_64-apple-darwin-install_only.tar.gz",
+              "sha256": "07833bcaf50c80065db8a21d7ae0459939d95e3cf399ce8f7df908ddfc4d275f",
+              "strip_prefix": "python",
+              "freethreaded": false
+            }
+          },
+          "python_3_13_x86_64_unknown_linux_gnu": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "x86_64-unknown-linux-gnu",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-x86_64-unknown-linux-gnu-install_only.tar.gz",
+              "sha256": "ee1d08c3e6149343077d410d7de835a7a7dda8e2cec80df94f393e858a300055",
+              "strip_prefix": "python",
+              "freethreaded": false
+            }
+          },
+          "python_3_13_x86_64_unknown_linux_musl": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "x86_64-unknown-linux-musl",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-x86_64-unknown-linux-musl-install_only.tar.gz",
+              "sha256": "36f73e0b72ac670bd56c927a078e3e2ef0b1fef1d89a792088766bf1236815b7",
+              "strip_prefix": "python",
+              "freethreaded": false
+            }
+          },
+          "python_3_13_x86_64_pc_windows_msvc": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "x86_64-pc-windows-msvc",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-x86_64-pc-windows-msvc-install_only.tar.gz",
+              "sha256": "61d5f9750e6971cf3bc91a1c8e7ab2eed1c22a34067f0762917bfde12b121f9f",
+              "strip_prefix": "python",
+              "freethreaded": false
+            }
+          },
+          "python_3_13_aarch64_pc_windows_msvc": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "aarch64-pc-windows-msvc",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-aarch64-pc-windows-msvc-install_only.tar.gz",
+              "sha256": "4cb0d143eeaf51582fa8292d00061fc201e41bf3ce5e2de814d0b273f73d4c25",
+              "strip_prefix": "python",
+              "freethreaded": false
+            }
+          },
+          "python_3_13_i686_pc_windows_msvc": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "i686-pc-windows-msvc",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-i686-pc-windows-msvc-install_only.tar.gz",
+              "sha256": "202a933d5435eced5e92f474fac9480a82959de2b3ea5555569de9bda6f4af4f",
+              "strip_prefix": "python",
+              "freethreaded": false
+            }
+          },
+          "python_3_13_aarch64_apple_darwin_install_only_stripped": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "aarch64-apple-darwin",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-aarch64-apple-darwin-install_only_stripped.tar.gz",
+              "sha256": "0103ab534b93472b1e2036fbb127a0dd4df73f437a4d8d7ce6fbe7e3d1f4fbbd",
+              "strip_prefix": "python",
+              "freethreaded": false
+            }
+          },
+          "python_3_13_aarch64_unknown_linux_gnu_install_only_stripped": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "aarch64-unknown-linux-gnu",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+              "sha256": "207c5504dfd2627949be652f2740bddab5ba6e6bea6ce45de9db1858f67c9b42",
+              "strip_prefix": "python",
+              "freethreaded": false
+            }
+          },
+          "python_3_13_aarch64_unknown_linux_musl_install_only_stripped": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "aarch64-unknown-linux-musl",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-aarch64-unknown-linux-musl-install_only_stripped.tar.gz",
+              "sha256": "19ccbf96c1083eb7550a13097f57d269b623dd5329c2a3489a994c8f67a684ee",
+              "strip_prefix": "python",
+              "freethreaded": false
+            }
+          },
+          "python_3_13_x86_64_apple_darwin_install_only_stripped": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "x86_64-apple-darwin",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-x86_64-apple-darwin-install_only_stripped.tar.gz",
+              "sha256": "ca97cdd8338716dac48204f1b33e51ec4f072eeeb91cecdb9ea3bfecae1c538a",
+              "strip_prefix": "python",
+              "freethreaded": false
+            }
+          },
+          "python_3_13_x86_64_unknown_linux_gnu_install_only_stripped": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "x86_64-unknown-linux-gnu",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+              "sha256": "4ecfaffe0db6d4363c2bca7a40f017c56fdad1f399d6218b7ddc1f47f071ffc6",
+              "strip_prefix": "python",
+              "freethreaded": false
+            }
+          },
+          "python_3_13_x86_64_unknown_linux_musl_install_only_stripped": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "x86_64-unknown-linux-musl",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-x86_64-unknown-linux-musl-install_only_stripped.tar.gz",
+              "sha256": "2bd8e7e85011ad8d8c0ff8238ad28c20781a69ad0d0737f6793901c10442b0d9",
+              "strip_prefix": "python",
+              "freethreaded": false
+            }
+          },
+          "python_3_13_x86_64_pc_windows_msvc_install_only_stripped": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "x86_64-pc-windows-msvc",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+              "sha256": "eb1e212b97b001efc1281bb01fd26ca1ecdfe9ef2875b52c58d39e9719ab75df",
+              "strip_prefix": "python",
+              "freethreaded": false
+            }
+          },
+          "python_3_13_aarch64_pc_windows_msvc_install_only_stripped": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "aarch64-pc-windows-msvc",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-aarch64-pc-windows-msvc-install_only_stripped.tar.gz",
+              "sha256": "f7d43d6afab4f08df78427015f4fb4ad231abcce472302e9a1f72cdf8bce908a",
+              "strip_prefix": "python",
+              "freethreaded": false
+            }
+          },
+          "python_3_13_i686_pc_windows_msvc_install_only_stripped": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "i686-pc-windows-msvc",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-i686-pc-windows-msvc-install_only_stripped.tar.gz",
+              "sha256": "eb8c0733331f25eeb9dcd1c730b7cfe0e5d881689fe089b7c3d02d3d5412235f",
+              "strip_prefix": "python",
+              "freethreaded": false
+            }
+          },
+          "python_3_13_aarch64_apple_darwin_freethreaded_pgo_lto": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "aarch64-apple-darwin",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-aarch64-apple-darwin-freethreaded+pgo+lto-full.tar.zst",
+              "sha256": "d152a8ec3a31a7b49772e70ff7fed1e7f6ec721497151b104532957744703d86",
+              "strip_prefix": "python/install",
+              "freethreaded": true
+            }
+          },
+          "python_3_13_aarch64_unknown_linux_gnu_freethreaded_pgo_lto": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "aarch64-unknown-linux-gnu",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-aarch64-unknown-linux-gnu-freethreaded+pgo+lto-full.tar.zst",
+              "sha256": "a2e320b8b7ec76f538f4414bb56927e0a35fb169a4748594b3b0946df0d8942b",
+              "strip_prefix": "python/install",
+              "freethreaded": true
+            }
+          },
+          "python_3_13_x86_64_apple_darwin_freethreaded_pgo_lto": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "x86_64-apple-darwin",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-x86_64-apple-darwin-freethreaded+pgo+lto-full.tar.zst",
+              "sha256": "d603daefc04db99a764942a835497e52beebeb8797f7ac828826969e6f8ea165",
+              "strip_prefix": "python/install",
+              "freethreaded": true
+            }
+          },
+          "python_3_13_x86_64_unknown_linux_gnu_freethreaded_pgo_lto": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "x86_64-unknown-linux-gnu",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-x86_64-unknown-linux-gnu-freethreaded+pgo+lto-full.tar.zst",
+              "sha256": "8f1a00de7342d161bfefcb6bb90f50076b0c49e1ac4d4faa7fb303015369f310",
+              "strip_prefix": "python/install",
+              "freethreaded": true
+            }
+          },
+          "python_3_13_aarch64_apple_darwin_freethreaded_debug": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "aarch64-apple-darwin",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-aarch64-apple-darwin-freethreaded+debug-full.tar.zst",
+              "sha256": "4fbb1d602cc4a79e6cd1035385d12608845194ce076fc1c66d77bac19a2a273e",
+              "strip_prefix": "python/install",
+              "freethreaded": true
+            }
+          },
+          "python_3_13_aarch64_unknown_linux_gnu_freethreaded_debug": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "aarch64-unknown-linux-gnu",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-aarch64-unknown-linux-gnu-freethreaded+debug-full.tar.zst",
+              "sha256": "99d6afc72b3fbd0a9541a6c26d6368cff9b978c7e4497a5d874119ec08025135",
+              "strip_prefix": "python/install",
+              "freethreaded": true
+            }
+          },
+          "python_3_13_aarch64_unknown_linux_musl_freethreaded_debug": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "aarch64-unknown-linux-musl",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-aarch64-unknown-linux-musl-freethreaded+debug-full.tar.zst",
+              "sha256": "c1574a08dffc392bb88a92416dedf810b9be434adbb43db694cd6220c1a63362",
+              "strip_prefix": "python/install",
+              "freethreaded": true
+            }
+          },
+          "python_3_13_x86_64_apple_darwin_freethreaded_debug": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "x86_64-apple-darwin",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-x86_64-apple-darwin-freethreaded+debug-full.tar.zst",
+              "sha256": "3ea12e4514bc9225f29e7452b39b61aa8a3396bef7206b601c4b4f3b587b29de",
+              "strip_prefix": "python/install",
+              "freethreaded": true
+            }
+          },
+          "python_3_13_x86_64_unknown_linux_gnu_freethreaded_debug": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "x86_64-unknown-linux-gnu",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-x86_64-unknown-linux-gnu-freethreaded+debug-full.tar.zst",
+              "sha256": "f84db3c320d11e5109ba817a9d42c98c56bd55c789f2d83e416b63ada5eb36be",
+              "strip_prefix": "python/install",
+              "freethreaded": true
+            }
+          },
+          "python_3_13_x86_64_unknown_linux_musl_freethreaded_debug": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_interpreter",
+            "attributes": {
+              "python_version": "3.13.12",
+              "platform": "x86_64-unknown-linux-musl",
+              "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.13.12+20260303-x86_64-unknown-linux-musl-freethreaded+debug-full.tar.zst",
+              "sha256": "187e5fc2c7daaaba94c877b7f0824c59564347bd94d4b2672ced50c0467a873b",
+              "strip_prefix": "python/install",
+              "freethreaded": true
+            }
+          },
+          "python_interpreters": {
+            "repoRuleId": "@@aspect_rules_py+//py/private/interpreter:repository.bzl%python_toolchains",
+            "attributes": {
+              "toolchains": [
+                "{\"compatible_with\":[\"@platforms//os:macos\",\"@platforms//cpu:aarch64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":false,\"name\":\"python_3_13_aarch64_apple_darwin\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"libsystem\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_aarch64_apple_darwin\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:linux\",\"@platforms//cpu:aarch64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":false,\"name\":\"python_3_13_aarch64_unknown_linux_gnu\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"glibc\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_aarch64_unknown_linux_gnu\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:linux\",\"@platforms//cpu:aarch64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":false,\"name\":\"python_3_13_aarch64_unknown_linux_musl\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"musl\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_aarch64_unknown_linux_musl\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:macos\",\"@platforms//cpu:x86_64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":false,\"name\":\"python_3_13_x86_64_apple_darwin\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"libsystem\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_x86_64_apple_darwin\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:linux\",\"@platforms//cpu:x86_64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":false,\"name\":\"python_3_13_x86_64_unknown_linux_gnu\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"glibc\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_x86_64_unknown_linux_gnu\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:linux\",\"@platforms//cpu:x86_64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":false,\"name\":\"python_3_13_x86_64_unknown_linux_musl\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"musl\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_x86_64_unknown_linux_musl\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:windows\",\"@platforms//cpu:x86_64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":false,\"name\":\"python_3_13_x86_64_pc_windows_msvc\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"msvc\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_x86_64_pc_windows_msvc\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:windows\",\"@platforms//cpu:aarch64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":false,\"name\":\"python_3_13_aarch64_pc_windows_msvc\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"msvc\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_aarch64_pc_windows_msvc\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:windows\",\"@platforms//cpu:x86_32\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":false,\"name\":\"python_3_13_i686_pc_windows_msvc\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"msvc\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_i686_pc_windows_msvc\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:macos\",\"@platforms//cpu:aarch64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":false,\"name\":\"python_3_13_aarch64_apple_darwin_install_only_stripped\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"libsystem\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_aarch64_apple_darwin_install_only_stripped\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:linux\",\"@platforms//cpu:aarch64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":false,\"name\":\"python_3_13_aarch64_unknown_linux_gnu_install_only_stripped\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"glibc\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_aarch64_unknown_linux_gnu_install_only_stripped\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:linux\",\"@platforms//cpu:aarch64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":false,\"name\":\"python_3_13_aarch64_unknown_linux_musl_install_only_stripped\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"musl\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_aarch64_unknown_linux_musl_install_only_stripped\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:macos\",\"@platforms//cpu:x86_64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":false,\"name\":\"python_3_13_x86_64_apple_darwin_install_only_stripped\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"libsystem\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_x86_64_apple_darwin_install_only_stripped\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:linux\",\"@platforms//cpu:x86_64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":false,\"name\":\"python_3_13_x86_64_unknown_linux_gnu_install_only_stripped\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"glibc\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_x86_64_unknown_linux_gnu_install_only_stripped\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:linux\",\"@platforms//cpu:x86_64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":false,\"name\":\"python_3_13_x86_64_unknown_linux_musl_install_only_stripped\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"musl\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_x86_64_unknown_linux_musl_install_only_stripped\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:windows\",\"@platforms//cpu:x86_64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":false,\"name\":\"python_3_13_x86_64_pc_windows_msvc_install_only_stripped\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"msvc\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_x86_64_pc_windows_msvc_install_only_stripped\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:windows\",\"@platforms//cpu:aarch64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":false,\"name\":\"python_3_13_aarch64_pc_windows_msvc_install_only_stripped\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"msvc\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_aarch64_pc_windows_msvc_install_only_stripped\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:windows\",\"@platforms//cpu:x86_32\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":false,\"name\":\"python_3_13_i686_pc_windows_msvc_install_only_stripped\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"msvc\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_i686_pc_windows_msvc_install_only_stripped\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:macos\",\"@platforms//cpu:aarch64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":true,\"name\":\"python_3_13_aarch64_apple_darwin_freethreaded_pgo_lto\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"libsystem\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_aarch64_apple_darwin_freethreaded_pgo_lto\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:linux\",\"@platforms//cpu:aarch64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":true,\"name\":\"python_3_13_aarch64_unknown_linux_gnu_freethreaded_pgo_lto\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"glibc\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_aarch64_unknown_linux_gnu_freethreaded_pgo_lto\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:macos\",\"@platforms//cpu:x86_64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":true,\"name\":\"python_3_13_x86_64_apple_darwin_freethreaded_pgo_lto\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"libsystem\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_x86_64_apple_darwin_freethreaded_pgo_lto\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:linux\",\"@platforms//cpu:x86_64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":true,\"name\":\"python_3_13_x86_64_unknown_linux_gnu_freethreaded_pgo_lto\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"glibc\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_x86_64_unknown_linux_gnu_freethreaded_pgo_lto\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:macos\",\"@platforms//cpu:aarch64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":true,\"name\":\"python_3_13_aarch64_apple_darwin_freethreaded_debug\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"libsystem\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_aarch64_apple_darwin_freethreaded_debug\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:linux\",\"@platforms//cpu:aarch64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":true,\"name\":\"python_3_13_aarch64_unknown_linux_gnu_freethreaded_debug\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"glibc\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_aarch64_unknown_linux_gnu_freethreaded_debug\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:linux\",\"@platforms//cpu:aarch64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":true,\"name\":\"python_3_13_aarch64_unknown_linux_musl_freethreaded_debug\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"musl\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_aarch64_unknown_linux_musl_freethreaded_debug\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:macos\",\"@platforms//cpu:x86_64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":true,\"name\":\"python_3_13_x86_64_apple_darwin_freethreaded_debug\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"libsystem\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_x86_64_apple_darwin_freethreaded_debug\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:linux\",\"@platforms//cpu:x86_64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":true,\"name\":\"python_3_13_x86_64_unknown_linux_gnu_freethreaded_debug\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"glibc\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_x86_64_unknown_linux_gnu_freethreaded_debug\",\"target_compatible_with\":[]}",
+                "{\"compatible_with\":[\"@platforms//os:linux\",\"@platforms//cpu:x86_64\"],\"config_settings\":[],\"exec_compatible_with\":[],\"freethreaded\":true,\"name\":\"python_3_13_x86_64_unknown_linux_musl_freethreaded_debug\",\"platform_target_settings\":{\"@aspect_rules_py//uv/private/constraints/platform:platform_libc\":\"musl\"},\"python_version\":\"3.13\",\"repo\":\"python_3_13_x86_64_unknown_linux_musl_freethreaded_debug\",\"target_compatible_with\":[]}"
+              ]
+            }
+          }
+        },
+        "recordedRepoMappingEntries": []
       }
     },
     "@@aspect_rules_ts+//ts:extensions.bzl%ext": {
@@ -873,8 +1178,8 @@
     },
     "@@aspect_tools_telemetry+//:extension.bzl%telemetry": {
       "general": {
-        "bzlTransitiveDigest": "9U/UW6moiJI22q2ERFWJSK1omQJqmQgMYfWCWNL+SXk=",
-        "usagesDigest": "+8i+fMEv5tLYZsIqIxKkj2t5VYaLvPcpy3y74acebvo=",
+        "bzlTransitiveDigest": "cl5A2O84vDL6Tt+Qga8FCj1DUDGqn+e7ly5rZ+4xvcc=",
+        "usagesDigest": "eBFtkHmGpY4N+qX02aahAN0hvakq3l4hgpuDgmxHz2k=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -883,8 +1188,8 @@
             "repoRuleId": "@@aspect_tools_telemetry+//:extension.bzl%tel_repository",
             "attributes": {
               "deps": {
-                "aspect_rules_py": "1.6.4-rc1",
-                "aspect_tools_telemetry": "0.2.6"
+                "aspect_rules_py": "1.11.2",
+                "aspect_tools_telemetry": "0.3.3"
               }
             }
           }
@@ -892,8 +1197,8 @@
         "recordedRepoMappingEntries": [
           [
             "aspect_tools_telemetry+",
-            "aspect_bazel_lib",
-            "aspect_bazel_lib+"
+            "bazel_lib",
+            "bazel_lib+"
           ],
           [
             "aspect_tools_telemetry+",
@@ -2567,7 +2872,7 @@
     },
     "@@rules_oci+//oci:extensions.bzl%oci": {
       "general": {
-        "bzlTransitiveDigest": "MObYeJgeRukG0C/KOeHNd02huv38P3KnpPsNX1OgrI4=",
+        "bzlTransitiveDigest": "QFOEeZuFT+oxdKHdAkb5iuXkL8+dtGOMtF7akO6+dKQ=",
         "usagesDigest": "UCQz651P4MtdS+yOiO/0Zv6Q5XkCBSgmfscke0++Vp0=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -8904,8 +9209,8 @@
     },
     "@@tar.bzl+//tar:extensions.bzl%toolchains": {
       "general": {
-        "bzlTransitiveDigest": "/2afh6fPjq/rcyE/jztQDK3ierehmFFngfvmqyRv72M=",
-        "usagesDigest": "maF8qsAIqeH1ey8pxP0gNZbvJt34kLZvTFeQ0ntrJVA=",
+        "bzlTransitiveDigest": "x8T4avQwaccwFRDkBObSMray93ZBHwpcjsZTPQOyII0=",
+        "usagesDigest": "qmrNz7hA3uU3P8JCXDEJuMX6uDZDr9Zn5EN16kXmxo8=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},

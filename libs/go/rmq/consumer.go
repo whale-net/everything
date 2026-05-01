@@ -227,10 +227,11 @@ func (c *Consumer) Start(ctx context.Context) error {
 }
 
 // startConsuming (re)opens a channel and fully reinitializes the queue and
-// bindings. Both QueueDeclare and QueueBind are idempotent, so this is safe
-// to call on initial setup and after any connection/channel reset. Non-durable
-// queues are deleted by the broker on connection close, so redeclaring them
-// here ensures the consumer always has a queue to receive from.
+// bindings. Called on initial setup and after any connection/channel reset.
+// For durable queues, QueueDeclare is idempotent when args match. On
+// PRECONDITION_FAILED (args changed between deploys) we log a warning and
+// proceed — the existing queue is still usable and will be replaced naturally
+// as sessions end and new ones start with the updated args.
 func (c *Consumer) startConsuming() (<-chan amqp.Delivery, error) {
 	ch, err := c.conn.Channel()
 	if err != nil {
@@ -257,15 +258,21 @@ func (c *Consumer) startConsuming() (<-chan amqp.Delivery, error) {
 	if durable {
 		dlqName := declaredName + "-dlq"
 		if _, err := ch.QueueDeclare(dlqName, true, false, false, false, nil); err != nil {
-			ch.Close()
-			return nil, fmt.Errorf("failed to declare DLQ: %w", err)
+			if !isPreconditionFailed(err) {
+				ch.Close()
+				return nil, fmt.Errorf("failed to declare DLQ: %w", err)
+			}
+			log.Printf("DLQ %s already exists with different args, using as-is: %v", dlqName, err)
 		}
 	}
 
 	arguments := buildQueueArguments(declaredName, durable, autoDelete, messageTTL, maxMessages)
 	if _, err := ch.QueueDeclare(c.queue, durable, autoDelete, false, false, arguments); err != nil {
-		ch.Close()
-		return nil, fmt.Errorf("failed to declare queue: %w", err)
+		if !isPreconditionFailed(err) {
+			ch.Close()
+			return nil, fmt.Errorf("failed to declare queue: %w", err)
+		}
+		log.Printf("queue %s already exists with different args, using as-is: %v", c.queue, err)
 	}
 
 	for _, b := range bindings {
