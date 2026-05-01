@@ -93,6 +93,7 @@ void FirmwarePublisher::PublishManifest() {
         desc.i2c_address = s->address();
         desc.mux_address = s->mux_address();
         desc.mux_channel = s->mux_channel();
+        strncpy(desc.chip_model, s->chip_model(), sizeof(desc.chip_model) - 1);
     }
     manifest.sensors_count = n;
 

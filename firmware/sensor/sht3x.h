@@ -81,6 +81,7 @@ class SHT3xTemperature final : public ISensor {
   uint8_t address()          const override { return dev_.address(); }
   firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_TEMPERATURE; }
   SensorUnit unit()          const override { return SensorUnit::kCelsius; }
+  const char* chip_model()   const override { return "SHT3x"; }
   size_t mux_depth()         const override { return dev_.mux_depth(); }
   MuxHop mux_hop(size_t depth) const override { return dev_.mux_hop_at(depth); }
 
@@ -101,6 +102,7 @@ class SHT3xHumidity final : public ISensor {
   uint8_t address()          const override { return dev_.address(); }
   firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_HUMIDITY; }
   SensorUnit unit()          const override { return SensorUnit::kRelativeHumidity; }
+  const char* chip_model()   const override { return "SHT3x"; }
   size_t mux_depth()         const override { return dev_.mux_depth(); }
   MuxHop mux_hop(size_t depth) const override { return dev_.mux_hop_at(depth); }
 

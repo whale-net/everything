@@ -93,6 +93,7 @@ class CCS811eCO2 final : public ISensor {
   uint8_t address()          const override { return dev_.address(); }
   firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_ECO2; }
   SensorUnit unit()          const override { return SensorUnit::kPPM; }
+  const char* chip_model()   const override { return "CCS811"; }
   size_t mux_depth()         const override { return dev_.mux_depth(); }
   MuxHop mux_hop(size_t depth) const override { return dev_.mux_hop_at(depth); }
 
@@ -113,6 +114,7 @@ class CCS811TVOC final : public ISensor {
   uint8_t address()          const override { return dev_.address(); }
   firmware_SensorType type() const override { return firmware_SensorType_SENSOR_TYPE_TVOC; }
   SensorUnit unit()          const override { return SensorUnit::kPPB; }
+  const char* chip_model()   const override { return "CCS811"; }
   size_t mux_depth()         const override { return dev_.mux_depth(); }
   MuxHop mux_hop(size_t depth) const override { return dev_.mux_hop_at(depth); }
 

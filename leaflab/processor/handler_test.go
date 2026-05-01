@@ -68,6 +68,10 @@ func (s *stubRepo) AckDeviceConfig(_ context.Context, _ int64, _ int64, _ bool, 
 	return nil
 }
 
+func (s *stubRepo) SetSensorChipID(_ context.Context, _ int64, _ string) error {
+	return nil
+}
+
 // marshalManifest encodes a DeviceManifest to wire bytes.
 func marshalManifest(t *testing.T, m *firmwarepb.DeviceManifest) []byte {
 	t.Helper()

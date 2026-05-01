@@ -23,6 +23,7 @@ message SensorDescriptor {
   uint32     i2c_address = 4;  // physical I2C address (0 if unknown)
   uint32     mux_address = 5;  // TCA9548A I2C address (0 if not mux-backed)
   uint32     mux_channel = 6;  // TCA9548A channel 0-7 (valid only when mux_address > 0)
+  string     chip_model  = 7;  // IC model name matching sensor_chip.name, e.g. "BH1750"
 }
 
 message DeviceManifest {

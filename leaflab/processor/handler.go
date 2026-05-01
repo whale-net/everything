@@ -25,6 +25,7 @@ type SensorRepository interface {
 	InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time) error
 	UpsertDeviceConfig(ctx context.Context, boardID int64, version int64, configJSON []byte) error
 	AckDeviceConfig(ctx context.Context, boardID int64, version int64, accepted bool, reason string) error
+	SetSensorChipID(ctx context.Context, sensorID int64, chipModel string) error
 }
 
 // MessageHandler decodes leaflab MQTT messages and persists them.
@@ -115,6 +116,10 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 			h.logger.Error("failed to upsert sensor hw history", "name", sd.Name, "err", err)
 		}
 
+		if err := h.repo.SetSensorChipID(ctx, sensorID, sd.ChipModel); err != nil {
+			h.logger.Warn("failed to set sensor_chip_id", "name", sd.Name, "chip_model", sd.ChipModel, "err", err)
+		}
+
 		h.cache.Set(deviceID, sd.Name, SensorInfo{SensorID: sensorID, RegionID: regionID})
 		h.logger.Info("sensor registered",
 			"device_id", deviceID,
@@ -126,6 +131,7 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 			"i2c_address", sd.I2CAddress,
 			"mux_address", sd.MuxAddress,
 			"mux_channel", sd.MuxChannel,
+			"chip_model", sd.ChipModel,
 		)
 	}
 

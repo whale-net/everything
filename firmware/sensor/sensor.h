@@ -81,6 +81,10 @@ class ISensor {
   virtual firmware_SensorType type() const = 0;
   virtual SensorUnit           unit() const = 0;
 
+  // IC model name matching sensor_chip.name in the DB (e.g. "BH1750").
+  // Empty string if unknown.
+  virtual const char* chip_model() const { return ""; }
+
   // Depth of the mux chain from root bus to this sensor.
   // 0 = sensor is directly on the root bus.
   virtual size_t mux_depth() const { return 0; }

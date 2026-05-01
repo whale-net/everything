@@ -260,6 +260,24 @@ func (r *Repository) AckDeviceConfig(ctx context.Context, boardID, version int64
 	return nil
 }
 
+// SetSensorChipID looks up a sensor_chip by name and sets sensor.sensor_chip_id.
+// No-op (no error) if the chip name is empty or not found in the catalog.
+func (r *Repository) SetSensorChipID(ctx context.Context, sensorID int64, chipModel string) error {
+	if chipModel == "" {
+		return nil
+	}
+	_, err := r.db.Exec(ctx, `
+		UPDATE sensor
+		SET sensor_chip_id = (SELECT sensor_chip_id FROM sensor_chip WHERE name = $2)
+		WHERE sensor_id = $1
+		  AND (sensor_chip_id IS NULL OR sensor_chip_id != (SELECT sensor_chip_id FROM sensor_chip WHERE name = $2))
+	`, sensorID, chipModel)
+	if err != nil {
+		return fmt.Errorf("set sensor_chip_id for sensor %d chip %q: %w", sensorID, chipModel, err)
+	}
+	return nil
+}
+
 // InsertReading writes a sensor_reading row.
 // uptimeS is the device uptime in seconds (proto uptime_ms divided by 1000).
 func (r *Repository) InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time) error {
