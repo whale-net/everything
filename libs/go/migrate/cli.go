@@ -42,10 +42,12 @@ func DefaultConfig() *Config {
 	}
 }
 
-// RunCLI is a convenience function for running migration CLI
+// RunCLI is a convenience function for running migration CLI.
 // migrations: embedded filesystem with migration files
 // migrateDir: subdirectory within migrations (e.g., "migrations")
-func RunCLI(migrations embed.FS, migrateDir string) {
+// opts: optional Option values — e.g. WithSeeder(fn) to seed reference data after up.
+// Callers that pass no opts retain identical behaviour.
+func RunCLI(migrations embed.FS, migrateDir string, opts ...Option) {
 	var (
 		down           = flag.Bool("down", false, "Rollback all migrations")
 		steps          = flag.Int("steps", 0, "Run N migrations (positive=up, negative=down)")
@@ -66,6 +68,7 @@ func RunCLI(migrations embed.FS, migrateDir string) {
 	defer db.Close()
 
 	runner := NewRunner(db, migrations, migrateDir)
+	o := applyOptions(opts)
 
 	// Handle history flag
 	if *history {
@@ -143,6 +146,17 @@ func RunCLI(migrations embed.FS, migrateDir string) {
 		log.Fatalf("Failed to get final version: %v", err)
 	}
 	log.Printf("Migration completed successfully. Version: %d (dirty: %v)", v, dirty)
+
+	// Run seeders (up only — already returned above for down/steps/etc.)
+	for i, seeder := range o.seeders {
+		log.Printf("Running seeder %d/%d...", i+1, len(o.seeders))
+		if err := seeder(context.Background(), db); err != nil {
+			log.Fatalf("Seeder %d failed: %v", i+1, err)
+		}
+	}
+	if len(o.seeders) > 0 {
+		log.Printf("All seeders completed successfully")
+	}
 }
 
 // printHistory prints migration history in a formatted table

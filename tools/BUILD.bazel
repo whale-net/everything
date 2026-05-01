@@ -2,6 +2,7 @@
 
 # Load platform definitions
 load("//tools/bazel:platforms.bzl", "define_platforms")
+load("@rules_python//python:defs.bzl", "py_binary")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -85,5 +86,17 @@ alias(
 alias(
     name = "openapi_gen_wrapper",
     actual = "//tools/openapi:openapi_gen_wrapper",
+    visibility = ["//visibility:public"],
+)
+
+# Code generator: chips.yaml → chip_catalog.h
+py_binary(
+    name = "gen_chip_catalog",
+    srcs = ["gen_chip_catalog.py"],
+    main = "gen_chip_catalog.py",
+    deps = [
+        "@pypi//:pyyaml",
+        "@rules_python//python/runfiles",
+    ],
     visibility = ["//visibility:public"],
 )
