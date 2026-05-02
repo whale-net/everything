@@ -383,13 +383,16 @@ func (c *Consumer) handleMessage(ctx context.Context, delivery amqp.Delivery) {
 		retryCount := getRetryCount(delivery)
 		maxRetries := 3
 
-		// Check if it's a permanent error or max retries exceeded
+		// Check if it's a permanent error or max retries exceeded.
+		// Note: whether the message reaches a DLQ depends on whether the queue
+		// was declared with dead-letter routing. Queues with TTL/max-length limits
+		// do not have DLQ routing and will discard the message on Nack.
 		if IsPermanentError(err) {
-			log.Printf("Permanent error - sending to DLQ: %v", err)
-			delivery.Nack(false, false) // Reject and send to DLQ
+			log.Printf("Permanent error - discarding message (DLQ if configured): %v", err)
+			delivery.Nack(false, false)
 		} else if retryCount >= maxRetries {
-			log.Printf("Max retries (%d) exceeded - sending to DLQ", maxRetries)
-			delivery.Nack(false, false) // Reject and send to DLQ
+			log.Printf("Max retries (%d) exceeded - discarding message (DLQ if configured)", maxRetries)
+			delivery.Nack(false, false)
 		} else {
 			log.Printf("Transient error (retry %d/%d) - requeuing", retryCount+1, maxRetries)
 			delivery.Nack(false, true) // Reject and requeue for retry
