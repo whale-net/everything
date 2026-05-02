@@ -28,6 +28,53 @@ func TestMatchesRoutingKey(t *testing.T) {
 	}
 }
 
+// TestBuildQueueArguments_DurableWithLimits_NoDLQ verifies that durable queues
+// with TTL or max-length do NOT get dead-letter routing. These are high-throughput
+// queues (e.g. log streams) where TTL expiry and overflow are expected operational
+// conditions — routing them to the DLQ would flood it.
+func TestBuildQueueArguments_DurableWithLimits_NoDLQ(t *testing.T) {
+	cases := []struct {
+		name        string
+		messageTTL  int
+		maxMessages int
+	}{
+		{"ttl only", 60000, 0},
+		{"max-messages only", 0, 1000},
+		{"both", 60000, 1000},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args := buildQueueArguments("logs.session.1", true, false, tc.messageTTL, tc.maxMessages)
+			if args == nil {
+				return // no args at all is also fine — no DLQ
+			}
+			if _, ok := args["x-dead-letter-exchange"]; ok {
+				t.Errorf("durable queue with limits must not have x-dead-letter-exchange")
+			}
+			if _, ok := args["x-dead-letter-routing-key"]; ok {
+				t.Errorf("durable queue with limits must not have x-dead-letter-routing-key")
+			}
+		})
+	}
+}
+
+// TestBuildQueueArguments_DurableUnlimited_HasDLQ verifies that unlimited durable
+// queues (e.g. lifecycle event queues) still get dead-letter routing.
+func TestBuildQueueArguments_DurableUnlimited_HasDLQ(t *testing.T) {
+	args := buildQueueArguments("log-processor-lifecycle", true, false, 0, 0)
+
+	if args == nil {
+		t.Fatal("expected non-nil arguments for unlimited durable queue")
+	}
+	if _, ok := args["x-dead-letter-exchange"]; !ok {
+		t.Error("unlimited durable queue should have x-dead-letter-exchange")
+	}
+	if v, ok := args["x-dead-letter-routing-key"]; !ok || v != "log-processor-lifecycle-dlq" {
+		t.Errorf("expected x-dead-letter-routing-key = 'log-processor-lifecycle-dlq', got %v", v)
+	}
+}
+
 // TestBuildQueueArguments_DurableQueueNoExpires verifies that durable queues
 // do not get x-expires. This was the root cause of a production failure where
 // re-declaring an existing durable queue with x-expires caused a
