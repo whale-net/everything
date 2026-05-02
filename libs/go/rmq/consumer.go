@@ -71,37 +71,48 @@ func NewConsumerWithOpts(conn *Connection, queueName string, durable, autoDelete
 		return nil, fmt.Errorf("failed to set QoS: %w", err)
 	}
 
-	if durable {
-		// Declare dead letter queue first
-		dlqName := queueName + "-dlq"
-		_, err = ch.QueueDeclare(
-			dlqName, // name
-			true,    // durable
-			false,   // delete when unused
-			false,   // exclusive
-			false,   // no-wait
-			nil,     // arguments
-		)
+	// reopenCh closes ch and returns a fresh channel with QoS set.
+	// Needed after PRECONDITION_FAILED (406) which closes the channel server-side.
+	reopenCh := func() error {
+		ch.Close()
+		ch, err = conn.Channel()
 		if err != nil {
+			return fmt.Errorf("failed to reopen channel: %w", err)
+		}
+		if err := ch.Qos(1, 0, false); err != nil {
 			ch.Close()
-			return nil, fmt.Errorf("failed to declare DLQ: %w", err)
+			return fmt.Errorf("failed to set QoS: %w", err)
+		}
+		return nil
+	}
+
+	if durable && messageTTL == 0 && maxMessages == 0 {
+		dlqName := queueName + "-dlq"
+		if _, err = ch.QueueDeclare(dlqName, true, false, false, false, nil); err != nil {
+			if !isPreconditionFailed(err) {
+				ch.Close()
+				return nil, fmt.Errorf("failed to declare DLQ: %w", err)
+			}
+			log.Printf("DLQ %s already exists with different args, using as-is: %v", dlqName, err)
+			if err := reopenCh(); err != nil {
+				return nil, err
+			}
 		}
 	}
 
 	arguments := buildQueueArguments(queueName, durable, autoDelete, messageTTL, maxMessages)
 
-	// Declare main queue
-	queue, err := ch.QueueDeclare(
-		queueName,  // name
-		durable,    // durable
-		autoDelete, // delete when unused
-		false,      // exclusive
-		false,      // no-wait
-		arguments,  // arguments
-	)
+	queue, err := ch.QueueDeclare(queueName, durable, autoDelete, false, false, arguments)
 	if err != nil {
-		ch.Close()
-		return nil, fmt.Errorf("failed to declare queue: %w", err)
+		if !isPreconditionFailed(err) {
+			ch.Close()
+			return nil, fmt.Errorf("failed to declare queue: %w", err)
+		}
+		log.Printf("queue %s already exists with different args, using as-is: %v", queueName, err)
+		if err := reopenCh(); err != nil {
+			return nil, err
+		}
+		queue.Name = queueName
 	}
 
 	return &Consumer{
@@ -118,13 +129,16 @@ func NewConsumerWithOpts(conn *Connection, queueName string, durable, autoDelete
 }
 
 // buildQueueArguments constructs the amqp.Table of arguments for queue declaration.
-// Durable queues get DLQ routing. Non-durable, non-auto-delete queues get x-expires
-// as a safety net for orphan cleanup. Durable queues must NOT get x-expires because
-// they are long-lived and would be incorrectly deleted during brief consumer absence.
+// DLQ routing is only added for durable queues without TTL or max-length limits.
+// Queues with those limits are high-throughput (e.g. log streams) where TTL expiry
+// and overflow are expected operational conditions — routing them to the DLQ would
+// flood it. Low-volume, critical queues (e.g. lifecycle events) have no limits and
+// should dead-letter on failure.
+// Non-durable, non-auto-delete queues get x-expires as a safety net for orphan cleanup.
 func buildQueueArguments(queueName string, durable, autoDelete bool, messageTTL, maxMessages int) amqp.Table {
 	var arguments amqp.Table
 
-	if durable {
+	if durable && messageTTL == 0 && maxMessages == 0 {
 		dlqName := queueName + "-dlq"
 		arguments = amqp.Table{
 			"x-dead-letter-exchange":    "", // Use default exchange
@@ -255,6 +269,22 @@ func (c *Consumer) startConsuming() (<-chan amqp.Delivery, error) {
 	}
 	c.mu.Unlock()
 
+	// reopenChannel closes ch and opens a fresh one with QoS applied.
+	// Required after PRECONDITION_FAILED because RabbitMQ closes the channel on 406.
+	reopenChannel := func() error {
+		ch.Close()
+		var err error
+		ch, err = c.conn.Channel()
+		if err != nil {
+			return fmt.Errorf("failed to reopen channel: %w", err)
+		}
+		if err := ch.Qos(1, 0, false); err != nil {
+			ch.Close()
+			return fmt.Errorf("failed to set QoS: %w", err)
+		}
+		return nil
+	}
+
 	if durable {
 		dlqName := declaredName + "-dlq"
 		if _, err := ch.QueueDeclare(dlqName, true, false, false, false, nil); err != nil {
@@ -263,6 +293,9 @@ func (c *Consumer) startConsuming() (<-chan amqp.Delivery, error) {
 				return nil, fmt.Errorf("failed to declare DLQ: %w", err)
 			}
 			log.Printf("DLQ %s already exists with different args, using as-is: %v", dlqName, err)
+			if err := reopenChannel(); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -273,6 +306,9 @@ func (c *Consumer) startConsuming() (<-chan amqp.Delivery, error) {
 			return nil, fmt.Errorf("failed to declare queue: %w", err)
 		}
 		log.Printf("queue %s already exists with different args, using as-is: %v", c.queue, err)
+		if err := reopenChannel(); err != nil {
+			return nil, err
+		}
 	}
 
 	for _, b := range bindings {
