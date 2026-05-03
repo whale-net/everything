@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+
 // ESP32 platform functions for NetworkManager.
 // Include this from board config files that initialize WiFi on ESP32.
 // The implementations live in esp32_platform.cc and link WiFi.h + PubSubClient.
