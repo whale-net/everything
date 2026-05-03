@@ -108,11 +108,20 @@ func NewConsumerWithOpts(conn *Connection, queueName string, durable, autoDelete
 			ch.Close()
 			return nil, fmt.Errorf("failed to declare queue: %w", err)
 		}
-		log.Printf("queue %s already exists with different args, using as-is: %v", queueName, err)
+		log.Printf("queue %s exists with stale args, deleting and redeclaring: %v", queueName, err)
 		if err := reopenCh(); err != nil {
 			return nil, err
 		}
-		queue.Name = queueName
+		if _, delErr := ch.QueueDelete(queueName, false, false, false); delErr != nil {
+			log.Printf("failed to delete stale queue %s, using as-is: %v", queueName, delErr)
+			queue.Name = queueName
+		} else {
+			queue, err = ch.QueueDeclare(queueName, durable, autoDelete, false, false, arguments)
+			if err != nil {
+				ch.Close()
+				return nil, fmt.Errorf("failed to redeclare queue after delete: %w", err)
+			}
+		}
 	}
 
 	return &Consumer{
@@ -240,12 +249,15 @@ func (c *Consumer) Start(ctx context.Context) error {
 	return nil
 }
 
-// startConsuming (re)opens a channel and fully reinitializes the queue and
-// bindings. Called on initial setup and after any connection/channel reset.
-// For durable queues, QueueDeclare is idempotent when args match. On
-// PRECONDITION_FAILED (args changed between deploys) we log a warning and
-// proceed — the existing queue is still usable and will be replaced naturally
-// as sessions end and new ones start with the updated args.
+// startConsuming (re)opens a channel and attaches a consumer to the queue.
+//
+// For durable queues, the queue already exists in RabbitMQ after the initial
+// setup, so we try to consume directly without redeclaring. Redeclaring on
+// every reconnect causes PRECONDITION_FAILED when queue args have changed
+// between deploys, which closes the channel and prevents consumption.
+//
+// For non-durable queues (deleted by the broker on connection close), we must
+// redeclare and rebind every time.
 func (c *Consumer) startConsuming() (<-chan amqp.Delivery, error) {
 	ch, err := c.conn.Channel()
 	if err != nil {
@@ -269,46 +281,49 @@ func (c *Consumer) startConsuming() (<-chan amqp.Delivery, error) {
 	}
 	c.mu.Unlock()
 
-	// reopenChannel closes ch and opens a fresh one with QoS applied.
-	// Required after PRECONDITION_FAILED because RabbitMQ closes the channel on 406.
-	reopenChannel := func() error {
+	// For durable queues, try to re-attach directly. The queue persists across
+	// reconnects so there is nothing to redeclare — just consume.
+	if durable {
+		msgs, err := ch.Consume(c.queue, "", false, false, false, false, nil)
+		if err == nil {
+			c.mu.Lock()
+			c.channel = ch
+			c.mu.Unlock()
+			return msgs, nil
+		}
+		// Queue doesn't exist yet (first start after explicit deletion or broker wipe).
+		// Fall through to declare+bind below. Any other error is fatal.
+		if !isNotFound(err) {
+			ch.Close()
+			return nil, fmt.Errorf("failed to consume from queue: %w", err)
+		}
+		// NOT_FOUND closes the channel — reopen before declaring.
 		ch.Close()
-		var err error
 		ch, err = c.conn.Channel()
 		if err != nil {
-			return fmt.Errorf("failed to reopen channel: %w", err)
+			return nil, fmt.Errorf("failed to reopen channel: %w", err)
 		}
 		if err := ch.Qos(1, 0, false); err != nil {
 			ch.Close()
-			return fmt.Errorf("failed to set QoS: %w", err)
+			return nil, fmt.Errorf("failed to set QoS: %w", err)
 		}
-		return nil
 	}
 
-	if durable {
+	// Queue doesn't exist: declare it, bind exchange, then consume.
+	// For non-durable queues this runs on every reconnect (broker deletes them).
+	// For durable queues this only runs on first start or after an explicit delete.
+	if durable && messageTTL == 0 && maxMessages == 0 {
 		dlqName := declaredName + "-dlq"
 		if _, err := ch.QueueDeclare(dlqName, true, false, false, false, nil); err != nil {
-			if !isPreconditionFailed(err) {
-				ch.Close()
-				return nil, fmt.Errorf("failed to declare DLQ: %w", err)
-			}
-			log.Printf("DLQ %s already exists with different args, using as-is: %v", dlqName, err)
-			if err := reopenChannel(); err != nil {
-				return nil, err
-			}
+			ch.Close()
+			return nil, fmt.Errorf("failed to declare DLQ: %w", err)
 		}
 	}
 
 	arguments := buildQueueArguments(declaredName, durable, autoDelete, messageTTL, maxMessages)
 	if _, err := ch.QueueDeclare(c.queue, durable, autoDelete, false, false, arguments); err != nil {
-		if !isPreconditionFailed(err) {
-			ch.Close()
-			return nil, fmt.Errorf("failed to declare queue: %w", err)
-		}
-		log.Printf("queue %s already exists with different args, using as-is: %v", c.queue, err)
-		if err := reopenChannel(); err != nil {
-			return nil, err
-		}
+		ch.Close()
+		return nil, fmt.Errorf("failed to declare queue: %w", err)
 	}
 
 	for _, b := range bindings {
