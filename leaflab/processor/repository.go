@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // Repository holds all DB write operations for the processor.
@@ -37,8 +40,6 @@ func (r *Repository) UpsertBoard(ctx context.Context, deviceID string) (int64, e
 }
 
 // UpsertSensorType inserts a sensor_type by name if it doesn't exist.
-// Returns the sensor_type_id. The name should already be normalised
-// (stripped of SENSOR_TYPE_ prefix, lowercased).
 func (r *Repository) UpsertSensorType(ctx context.Context, name, unit string) (int64, error) {
 	var id int64
 	err := r.db.QueryRow(ctx, `
@@ -54,40 +55,52 @@ func (r *Repository) UpsertSensorType(ctx context.Context, name, unit string) (i
 	return id, nil
 }
 
+// MuxHop is one step in a cascaded I2C mux chain, ordered outer→inner.
+type MuxHop struct {
+	MuxAddress uint32 `json:"muxAddress"`
+	MuxChannel uint32 `json:"muxChannel"`
+}
+
 // HardwareAddress identifies a sensor by its physical wiring.
-// MuxAddress and MuxChannel are only meaningful when MuxAddress > 0.
+// MuxPath is empty when the sensor is directly on the root I2C bus.
 type HardwareAddress struct {
 	I2CAddress uint32
-	MuxAddress uint32
-	MuxChannel uint32
+	MuxPath    []MuxHop // ordered outer→inner; nil/empty = no mux
+}
+
+// muxHops returns the mux path as a non-nil slice (safe for json.Marshal).
+func (h *HardwareAddress) muxHops() []MuxHop {
+	if h == nil || len(h.MuxPath) == 0 {
+		return []MuxHop{}
+	}
+	return h.MuxPath
 }
 
 // UpsertSensor upserts a sensor row.
-// When hw is non-nil (hardware address known), it first tries to find an
-// existing row by (board_id, i2c_address, mux_address, mux_channel) and
-// updates its name/type/unit — this preserves identity across renames.
-// Falls back to the name-based UNIQUE(board_id, name) upsert.
+//
+// When hw is non-nil and I2CAddress > 0, it first attempts to find an existing
+// row by (board_id, sensor_type_id, i2c_address, mux_path) and updates its
+// name/unit — preserving sensor_id (and thus reading history) across renames.
+// Falls back to the UNIQUE(board_id, name) upsert.
+//
 // Returns the sensor_id and current region_id (nil if unset).
 func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int64, name, unit string, hw *HardwareAddress) (int64, *int64, error) {
 	if hw != nil && hw.I2CAddress > 0 {
-		// Nullable mux fields: only set when mux is in use.
-		var muxAddr, muxCh *uint32
-		if hw.MuxAddress > 0 {
-			muxAddr = &hw.MuxAddress
-			muxCh = &hw.MuxChannel
+		muxJSON, err := json.Marshal(hw.muxHops())
+		if err != nil {
+			return 0, nil, fmt.Errorf("marshal mux_path: %w", err)
 		}
 		var sensorID int64
 		var regionID *int64
-		err := r.db.QueryRow(ctx, `
+		err = r.db.QueryRow(ctx, `
 			UPDATE sensor
 			SET name = $3, unit = $5
 			WHERE board_id       = $1
 			  AND sensor_type_id = $4
 			  AND i2c_address    = $2
-			  AND mux_address    IS NOT DISTINCT FROM $6
-			  AND mux_channel    IS NOT DISTINCT FROM $7
+			  AND mux_path       = $6::jsonb
 			RETURNING sensor_id, region_id
-		`, boardID, hw.I2CAddress, name, sensorTypeID, unit, muxAddr, muxCh).Scan(&sensorID, &regionID)
+		`, boardID, hw.I2CAddress, name, sensorTypeID, unit, muxJSON).Scan(&sensorID, &regionID)
 		if err == nil {
 			return sensorID, regionID, nil // found by hardware address
 		}
@@ -97,32 +110,69 @@ func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int
 		// ErrNoRows: no existing row for this hw address — fall through to name upsert.
 	}
 
-	// Name-based upsert; also persists hw address columns when provided.
-	var i2cAddr, muxAddr, muxCh *uint32
+	// Name-based upsert; persists i2c_address and mux_path when provided.
+	var i2cAddr *uint32
+	muxJSON := []byte(`[]`)
 	if hw != nil && hw.I2CAddress > 0 {
 		i2cAddr = &hw.I2CAddress
-		if hw.MuxAddress > 0 {
-			muxAddr = &hw.MuxAddress
-			muxCh = &hw.MuxChannel
+		var err error
+		muxJSON, err = json.Marshal(hw.muxHops())
+		if err != nil {
+			return 0, nil, fmt.Errorf("marshal mux_path: %w", err)
 		}
 	}
 	var sensorID int64
 	var regionID *int64
 	err := r.db.QueryRow(ctx, `
-		INSERT INTO sensor (board_id, sensor_type_id, name, unit, i2c_address, mux_address, mux_channel, registered_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+		INSERT INTO sensor (board_id, sensor_type_id, name, unit, i2c_address, mux_path, registered_at)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW())
 		ON CONFLICT (board_id, name) DO UPDATE
 			SET sensor_type_id = EXCLUDED.sensor_type_id,
 			    unit            = EXCLUDED.unit,
 			    i2c_address     = COALESCE(EXCLUDED.i2c_address, sensor.i2c_address),
-			    mux_address     = COALESCE(EXCLUDED.mux_address, sensor.mux_address),
-			    mux_channel     = COALESCE(EXCLUDED.mux_channel, sensor.mux_channel)
+			    mux_path        = CASE
+			        WHEN EXCLUDED.i2c_address IS NOT NULL THEN EXCLUDED.mux_path
+			        ELSE sensor.mux_path
+			    END
 		RETURNING sensor_id, region_id
-	`, boardID, sensorTypeID, name, unit, i2cAddr, muxAddr, muxCh).Scan(&sensorID, &regionID)
+	`, boardID, sensorTypeID, name, unit, i2cAddr, muxJSON).Scan(&sensorID, &regionID)
 	if err != nil {
 		return 0, nil, fmt.Errorf("upsert sensor %q on board %d: %w", name, boardID, err)
 	}
 	return sensorID, regionID, nil
+}
+
+// UpsertSensorLabel records a name in sensor_label history.
+// If the current open label already has this name, it is a no-op.
+// Otherwise it closes the open label and opens a new one.
+func (r *Repository) UpsertSensorLabel(ctx context.Context, sensorID int64, name string) error {
+	var currentName string
+	err := r.db.QueryRow(ctx, `
+		SELECT name FROM sensor_label WHERE sensor_id = $1 AND valid_to IS NULL
+	`, sensorID).Scan(&currentName)
+
+	if err == nil && currentName == name {
+		return nil // unchanged
+	}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("get current label for sensor %d: %w", sensorID, err)
+	}
+
+	// Close current open label if one exists.
+	if err == nil {
+		if _, err := r.db.Exec(ctx, `
+			UPDATE sensor_label SET valid_to = NOW() WHERE sensor_id = $1 AND valid_to IS NULL
+		`, sensorID); err != nil {
+			return fmt.Errorf("close label for sensor %d: %w", sensorID, err)
+		}
+	}
+
+	if _, err := r.db.Exec(ctx, `
+		INSERT INTO sensor_label (sensor_id, name) VALUES ($1, $2)
+	`, sensorID, name); err != nil {
+		return fmt.Errorf("insert label for sensor %d: %w", sensorID, err)
+	}
+	return nil
 }
 
 // GetSensor returns the SensorInfo for a specific device+sensor name, or
@@ -146,7 +196,6 @@ func (r *Repository) GetSensor(ctx context.Context, deviceID, sensorName string)
 
 // LoadSensorCache queries all boards and their sensors from the DB and
 // returns them as a map of device_id → sensor_name → SensorInfo.
-// Called once at startup to pre-warm the cache before any AMQP messages arrive.
 func (r *Repository) LoadSensorCache(ctx context.Context) (map[string]map[string]SensorInfo, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT b.device_id, s.name, s.sensor_id, s.region_id
@@ -173,65 +222,111 @@ func (r *Repository) LoadSensorCache(ctx context.Context) (map[string]map[string
 	return out, rows.Err()
 }
 
-// UpsertSensorHWHistory records a new wiring position for a sensor when it
-// changes, closing the previous open row. No-op if wiring is unchanged.
+// LoadConfigVersionCache returns the latest accepted config version per device.
+func (r *Repository) LoadConfigVersionCache(ctx context.Context) (map[string]int64, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT b.device_id, MAX(dc.version)
+		FROM device_config dc
+		JOIN board b ON b.board_id = dc.board_id
+		WHERE dc.accepted = TRUE
+		GROUP BY b.device_id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("load config version cache: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]int64)
+	for rows.Next() {
+		var deviceID string
+		var version int64
+		if err := rows.Scan(&deviceID, &version); err != nil {
+			return nil, fmt.Errorf("scan config version row: %w", err)
+		}
+		out[deviceID] = version
+	}
+	return out, rows.Err()
+}
+
+// UpsertSensorHWHistory records the current mux_path for a sensor.
+// Closes the previous open row when the path has changed.
 func (r *Repository) UpsertSensorHWHistory(ctx context.Context, sensorID int64, hw *HardwareAddress) error {
-	var muxAddr, muxCh *uint32
-	if hw != nil && hw.MuxAddress > 0 {
-		muxAddr = &hw.MuxAddress
-		muxCh = &hw.MuxChannel
+	muxJSON, err := json.Marshal(hw.muxHops())
+	if err != nil {
+		return fmt.Errorf("marshal mux_path for hw history: %w", err)
 	}
 
-	var curMuxAddr, curMuxCh *uint32
-	err := r.db.QueryRow(ctx, `
-		SELECT mux_address, mux_channel
-		FROM sensor_hw_history
-		WHERE sensor_id = $1 AND unassigned_at IS NULL
-	`, sensorID).Scan(&curMuxAddr, &curMuxCh)
-
-	noExisting := errors.Is(err, pgx.ErrNoRows)
-	if err != nil && !noExisting {
-		return fmt.Errorf("get hw history for sensor %d: %w", sensorID, err)
+	// If an open row with this exact path already exists, nothing to do.
+	var unchanged bool
+	err = r.db.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM sensor_hw_history
+			WHERE sensor_id = $1 AND unassigned_at IS NULL AND mux_path = $2::jsonb
+		)
+	`, sensorID, muxJSON).Scan(&unchanged)
+	if err != nil {
+		return fmt.Errorf("check hw history for sensor %d: %w", sensorID, err)
 	}
-
-	unchanged := !noExisting &&
-		nullableUint32Equal(curMuxAddr, muxAddr) &&
-		nullableUint32Equal(curMuxCh, muxCh)
 	if unchanged {
 		return nil
 	}
 
-	if !noExisting {
-		if _, err := r.db.Exec(ctx, `
-			UPDATE sensor_hw_history SET unassigned_at = NOW()
-			WHERE sensor_id = $1 AND unassigned_at IS NULL
-		`, sensorID); err != nil {
-			return fmt.Errorf("close hw history for sensor %d: %w", sensorID, err)
-		}
+	// Close the previous open row (if any).
+	if _, err := r.db.Exec(ctx, `
+		UPDATE sensor_hw_history SET unassigned_at = NOW()
+		WHERE sensor_id = $1 AND unassigned_at IS NULL
+	`, sensorID); err != nil {
+		return fmt.Errorf("close hw history for sensor %d: %w", sensorID, err)
 	}
 
 	if _, err := r.db.Exec(ctx, `
-		INSERT INTO sensor_hw_history (sensor_id, mux_address, mux_channel)
-		VALUES ($1, $2, $3)
-	`, sensorID, muxAddr, muxCh); err != nil {
+		INSERT INTO sensor_hw_history (sensor_id, mux_path) VALUES ($1, $2::jsonb)
+	`, sensorID, muxJSON); err != nil {
 		return fmt.Errorf("insert hw history for sensor %d: %w", sensorID, err)
 	}
 	return nil
 }
 
-func nullableUint32Equal(a, b *uint32) bool {
-	if a == nil && b == nil {
-		return true
+// ApplyConfigRegions applies region_id assignments from an accepted config.
+// For each SensorConfig entry with region_id > 0, finds the matching sensor
+// by (board_id, i2c_address, mux_path) and updates sensor.region_id.
+func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version int64) error {
+	var configJSON []byte
+	err := r.db.QueryRow(ctx, `
+		SELECT config_json FROM device_config WHERE board_id = $1 AND version = $2
+	`, boardID, version).Scan(&configJSON)
+	if err != nil {
+		return fmt.Errorf("get config for region apply board=%d v=%d: %w", boardID, version, err)
 	}
-	if a == nil || b == nil {
-		return false
+
+	var cfg configpb.DeviceConfig
+	if err := protojson.Unmarshal(configJSON, &cfg); err != nil {
+		return fmt.Errorf("unmarshal config for region apply: %w", err)
 	}
-	return *a == *b
+
+	for _, sc := range cfg.Sensors {
+		if sc.RegionId == 0 {
+			continue
+		}
+		hops := make([]MuxHop, len(sc.MuxPath))
+		for i, hop := range sc.MuxPath {
+			hops[i] = MuxHop{MuxAddress: hop.MuxAddress, MuxChannel: hop.MuxChannel}
+		}
+		muxJSON, err := json.Marshal(hops)
+		if err != nil {
+			return fmt.Errorf("marshal mux_path for region apply: %w", err)
+		}
+		if _, err := r.db.Exec(ctx, `
+			UPDATE sensor SET region_id = $4
+			WHERE board_id = $1 AND i2c_address = $2 AND mux_path = $3::jsonb
+		`, boardID, sc.I2CAddress, muxJSON, sc.RegionId); err != nil {
+			return fmt.Errorf("set region for i2c 0x%02x on board %d: %w", sc.I2CAddress, boardID, err)
+		}
+	}
+	return nil
 }
 
-// UpsertDeviceConfig records a DeviceConfig push. configJSON is a
-// protojson-encoded DeviceConfig. ON CONFLICT DO NOTHING is intentional —
-// the same version should never be pushed twice to the same board.
+// UpsertDeviceConfig records a DeviceConfig push.
 func (r *Repository) UpsertDeviceConfig(ctx context.Context, boardID, version int64, configJSON []byte) error {
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO device_config (board_id, version, config_json)
@@ -244,7 +339,7 @@ func (r *Repository) UpsertDeviceConfig(ctx context.Context, boardID, version in
 	return nil
 }
 
-// AckDeviceConfig records the device's ack for a config push (accepted or rejected).
+// AckDeviceConfig records the device's ack for a config push.
 func (r *Repository) AckDeviceConfig(ctx context.Context, boardID, version int64, accepted bool, reason string) error {
 	tag, err := r.db.Exec(ctx, `
 		UPDATE device_config
@@ -261,9 +356,7 @@ func (r *Repository) AckDeviceConfig(ctx context.Context, boardID, version int64
 }
 
 // IsKnownChipAddress returns true if i2cAddress is a registered address for the
-// named chip in sensor_chip_address. Returns (true, nil) if the chip is not in
-// the catalog at all (no data to contradict the claim), so callers only warn on
-// (false, nil) — a chip that IS in the catalog but lacks this address.
+// named chip. Returns (true, nil) when chip is unknown to the catalog.
 func (r *Repository) IsKnownChipAddress(ctx context.Context, chipModel string, i2cAddress uint32) (bool, error) {
 	if chipModel == "" {
 		return true, nil
@@ -284,7 +377,7 @@ func (r *Repository) IsKnownChipAddress(ctx context.Context, chipModel string, i
 }
 
 // SetSensorChipID looks up a sensor_chip by name and sets sensor.sensor_chip_id.
-// No-op (no error) if the chip name is empty or not found in the catalog.
+// No-op if chip name is empty or not found in catalog.
 func (r *Repository) SetSensorChipID(ctx context.Context, sensorID int64, chipModel string) error {
 	if chipModel == "" {
 		return nil
@@ -302,12 +395,12 @@ func (r *Repository) SetSensorChipID(ctx context.Context, sensorID int64, chipMo
 }
 
 // InsertReading writes a sensor_reading row.
-// uptimeS is the device uptime in seconds (proto uptime_ms divided by 1000).
-func (r *Repository) InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time) error {
+// configVersion is nil when no config has been accepted for this device yet.
+func (r *Repository) InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time, configVersion *int64) error {
 	_, err := r.db.Exec(ctx, `
-		INSERT INTO sensor_reading (sensor_id, region_id, value, valid, uptime_s, recorded_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, sensorID, regionID, value, valid, uptimeS, recordedAt)
+		INSERT INTO sensor_reading (sensor_id, region_id, value, valid, uptime_s, recorded_at, config_version)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, sensorID, regionID, value, valid, uptimeS, recordedAt, configVersion)
 	if err != nil {
 		return fmt.Errorf("insert reading for sensor %d: %w", sensorID, err)
 	}

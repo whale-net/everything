@@ -1,0 +1,12 @@
+{
+  "description": "BH1750 light sensor through TCA9548A mux (0x70 ch6, 0x23)",
+  "hardware": "elegoo_dynamic — BH1750 on ch6 of HW-617 mux",
+  "sensors": [
+    {
+      "muxPath": [{"muxAddress": 112, "muxChannel": 6}],
+      "i2cAddress": 35,
+      "name": "mux-light",
+      "enabled": true
+    }
+  ]
+}

@@ -27,6 +27,7 @@ message SensorConfig {
   optional bool enabled       = 4;
   uint32 poll_interval_ms     = 5;  // 0 = use device default
   SensorType sensor_type      = 6;  // discriminator for multi-virtual chips
+  uint32 region_id            = 7;  // server-side region assignment; device ignores this field
 }
 
 // Pushed from server to device via MQTT topic leaflab/<device_id>/config.
