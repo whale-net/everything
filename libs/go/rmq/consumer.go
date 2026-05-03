@@ -226,11 +226,11 @@ func (c *Consumer) Start(ctx context.Context) error {
 			case msg, ok := <-msgs:
 				if !ok {
 					// Channel closed — reconnect loop.
+					log.Printf("WARNING: consumer channel closed for queue %s, reconnecting", c.queue)
 					for {
 						if ctx.Err() != nil {
 							return
 						}
-						log.Printf("consumer channel closed, reconnecting")
 						newMsgs, err := c.startConsuming()
 						if err != nil {
 							log.Printf("consumer reconnect failed: %v, retrying", err)
@@ -286,6 +286,7 @@ func (c *Consumer) startConsuming() (<-chan amqp.Delivery, error) {
 	if durable {
 		msgs, err := ch.Consume(c.queue, "", false, false, false, false, nil)
 		if err == nil {
+			log.Printf("re-attached to existing queue %s", c.queue)
 			c.mu.Lock()
 			c.channel = ch
 			c.mu.Unlock()
@@ -297,6 +298,7 @@ func (c *Consumer) startConsuming() (<-chan amqp.Delivery, error) {
 			ch.Close()
 			return nil, fmt.Errorf("failed to consume from queue: %w", err)
 		}
+		log.Printf("queue %s not found, will declare fresh", c.queue)
 		// NOT_FOUND closes the channel — reopen before declaring.
 		ch.Close()
 		ch, err = c.conn.Channel()
