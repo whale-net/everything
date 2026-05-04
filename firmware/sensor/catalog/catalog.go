@@ -22,6 +22,7 @@ var chipsYAML []byte
 type Chip struct {
 	Name        string    `yaml:"name"`
 	Description string    `yaml:"description"`
+	SensorTypes []string  `yaml:"sensor_types"` // sensor_type.name values this chip produces
 	Addresses   []Address `yaml:"addresses"`
 }
 
@@ -94,6 +95,17 @@ func seed(ctx context.Context, db *sql.DB, chips []Chip) error {
 			if err != nil {
 				return fmt.Errorf("upsert address 0x%02X for chip %s: %w",
 					addr.I2CAddress, chip.Name, err)
+			}
+		}
+
+		for _, stName := range chip.SensorTypes {
+			_, err := tx.ExecContext(ctx, `
+				INSERT INTO sensor_chip_type (sensor_chip_id, sensor_type_id)
+				SELECT $1, sensor_type_id FROM sensor_type WHERE name = $2
+				ON CONFLICT DO NOTHING
+			`, chipID, stName)
+			if err != nil {
+				return fmt.Errorf("upsert sensor_chip_type %s→%s: %w", chip.Name, stName, err)
 			}
 		}
 	}

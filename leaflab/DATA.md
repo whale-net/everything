@@ -86,25 +86,35 @@ erDiagram
     sensor_chip {
         bigserial sensor_chip_id PK
         varchar   name UK
+        text      description
     }
 
     sensor_chip_address {
         bigserial sensor_chip_address_id PK
         bigint    sensor_chip_id FK
         int       i2c_address
+        boolean   is_default
+        varchar   addr_config
     }
 
-    board         ||--o{ sensor               : "hosts"
-    sensor_type   ||--o{ sensor               : "classifies"
-    region        |o--o{ sensor               : "current placement"
-    region        |o--o{ region               : "parent of"
-    sensor        ||--o{ sensor_label         : "name history"
-    sensor        ||--o{ sensor_hw_history    : "wiring history"
-    sensor        ||--o{ sensor_region_history: "location history"
-    region        ||--o{ sensor_region_history: "hosts"
-    sensor        ||--o{ sensor_reading       : "produces"
-    board         ||--o{ device_config        : "configured by"
-    sensor_chip   ||--o{ sensor_chip_address  : "known addresses"
+    sensor_chip_type {
+        bigint sensor_chip_id FK
+        bigint sensor_type_id FK
+    }
+
+    board            ||--o{ sensor               : "hosts"
+    sensor_type      ||--o{ sensor               : "classifies"
+    region           |o--o{ sensor               : "current placement"
+    region           |o--o{ region               : "parent of"
+    sensor           ||--o{ sensor_label         : "name history"
+    sensor           ||--o{ sensor_hw_history    : "wiring history"
+    sensor           ||--o{ sensor_region_history: "location history"
+    region           ||--o{ sensor_region_history: "hosts"
+    sensor           ||--o{ sensor_reading       : "produces"
+    board            ||--o{ device_config        : "configured by"
+    sensor_chip      ||--o{ sensor_chip_address  : "known addresses"
+    sensor_chip      ||--o{ sensor_chip_type     : "produces"
+    sensor_type      ||--o{ sensor_chip_type     : "produced by"
 ```
 
 ---

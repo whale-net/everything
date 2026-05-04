@@ -19,6 +19,7 @@
 chips:
   - name: BH1750
     description: Ambient light sensor (lux)
+    sensor_types: [illuminance]
     addresses:
       - i2c_address: 35   # 0x23
         is_default: true
@@ -31,6 +32,7 @@ chips:
 
   - name: SHT3x
     description: Temperature and humidity sensor
+    sensor_types: [temperature, humidity]
     addresses:
       - i2c_address: 68   # 0x44
         is_default: true
@@ -43,6 +45,7 @@ chips:
 
   - name: CCS811
     description: eCO2 and TVOC air quality sensor
+    sensor_types: [eco2, tvoc]
     addresses:
       - i2c_address: 90   # 0x5A
         is_default: true
