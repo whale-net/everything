@@ -31,9 +31,15 @@ cc_library(
     srcs = ["config_applier.cc"],
     hdrs = ["config_applier.h"],
     deps = [
+        "//firmware/i2c:i2c_bus",
+        "//firmware/i2c:tca9548a_bus",
         "//firmware/proto:config_nanopb",
+        "//firmware/sensor:bh1750",
+        "//firmware/sensor:ccs811",
         "//firmware/sensor:sensor",
+        "//firmware/sensor:sht3x",
         "@nanopb//:nanopb",
+        "@pigweed//pw_log",
         "@pigweed//pw_span",
     ],
 )

@@ -25,15 +25,13 @@ constexpr size_t kTopicBufSize = 80;
 FirmwarePublisher* FirmwarePublisher::instance_ = nullptr;
 
 FirmwarePublisher::FirmwarePublisher(const IDeviceId& device_id,
-                                     pw::span<ISensor* const> sensors,
                                      NetworkManager& net,
-                                     ConfigStore& config_store,
-                                     ConfigApplier& config_applier)
+                                     ConfigApplier& config_applier,
+                                     ConfigStore* config_store)
     : device_id_(device_id),
-      sensors_(sensors),
       net_(net),
-      config_store_(config_store),
-      config_applier_(config_applier) {
+      config_applier_(config_applier),
+      config_store_(config_store) {
     instance_ = this;
     net_.SetMessageCallback(&FirmwarePublisher::OnMQTTMessage);
 }
@@ -58,10 +56,11 @@ void FirmwarePublisher::TryConfigSubscribe() {
 void FirmwarePublisher::PublishReadings() {
     if (config_subscribe_pending_) TryConfigSubscribe();
 
-    for (size_t i = 0; i < sensors_.size(); ++i) {
+    auto sensors = config_applier_.sensors();
+    for (size_t i = 0; i < sensors.size(); ++i) {
         if (!config_applier_.IsEnabled(i)) continue;
 
-        ISensor* s = sensors_[i];
+        ISensor* s = sensors[i];
         SensorReading r = s->Read();
         if (!r.valid) continue;
 
@@ -89,11 +88,12 @@ void FirmwarePublisher::PublishManifest() {
     firmware_DeviceManifest manifest = firmware_DeviceManifest_init_zero;
     strncpy(manifest.device_id, device_id_.Get(), sizeof(manifest.device_id) - 1);
 
+    auto sensors = config_applier_.sensors();
     pb_size_t n = 0;
-    for (size_t i = 0; i < sensors_.size(); ++i) {
+    for (size_t i = 0; i < sensors.size(); ++i) {
         if (n >= static_cast<pb_size_t>(sizeof(manifest.sensors) /
                                         sizeof(manifest.sensors[0]))) break;
-        ISensor* s = sensors_[i];
+        ISensor* s = sensors[i];
         firmware_SensorDescriptor& desc = manifest.sensors[n++];
         strncpy(desc.name, s->name(), sizeof(desc.name) - 1);
         desc.type        = s->type();
@@ -154,10 +154,11 @@ void FirmwarePublisher::HandleConfigMessage(const uint8_t* payload,
         return;
     }
 
-    if (cfg.version <= config_store_.current_version()) {
+    uint64_t current_ver = config_store_ ? config_store_->current_version() : 0;
+    if (cfg.version <= current_ver) {
         PW_LOG_WARN("FirmwarePublisher: stale config v%" PRIu64
                     " <= current v%" PRIu64 ", rejecting",
-                    cfg.version, config_store_.current_version());
+                    cfg.version, current_ver);
         PublishConfigAck(cfg.version, false, "stale_version");
         return;
     }
@@ -178,7 +179,7 @@ void FirmwarePublisher::HandleConfigMessage(const uint8_t* payload,
 
     config_applier_.Apply(cfg);
 
-    if (!config_store_.Save(cfg).ok()) {
+    if (config_store_ && !config_store_->Save(cfg).ok()) {
         PW_LOG_ERROR("FirmwarePublisher: failed to persist config to NVS");
         // Apply succeeded — continue anyway.
     }

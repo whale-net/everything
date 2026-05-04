@@ -1,6 +1,6 @@
 """Sensor chip catalog — chips.yaml source of truth and Go seeder."""
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 load("@bazel_skylib//rules:run_binary.bzl", "run_binary")
 
 go_library(
@@ -11,6 +11,15 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "@in_gopkg_yaml_v3//:yaml_v3",
+    ],
+)
+
+go_test(
+    name = "catalog_sync_test",
+    srcs = ["catalog_sync_test.go"],
+    deps = [
+        ":catalog",
+        "//firmware/proto:configpb",
     ],
 )
 

@@ -31,11 +31,12 @@ namespace firmware {
 
 class FirmwarePublisher {
  public:
+  // sensors: compile-time sensor list (static board targets).
+  //          Pass an empty span for dynamic targets — sensors come from config_applier.
   FirmwarePublisher(const IDeviceId& device_id,
-                    pw::span<ISensor* const> sensors,
                     NetworkManager& net,
-                    ConfigStore& config_store,
-                    ConfigApplier& config_applier);
+                    ConfigApplier& config_applier,
+                    ConfigStore* config_store = nullptr);
 
   // Subscribe to the config topic, publish "online" status, and publish
   // the device manifest. Call once each time the network transitions to kReady.
@@ -63,10 +64,9 @@ class FirmwarePublisher {
   bool config_subscribe_pending_ = true;
 
   const IDeviceId& device_id_;
-  pw::span<ISensor* const> sensors_;
-  NetworkManager& net_;
-  ConfigStore& config_store_;
-  ConfigApplier& config_applier_;
+  NetworkManager&  net_;
+  ConfigApplier&   config_applier_;
+  ConfigStore*     config_store_;
 };
 
 }  // namespace firmware

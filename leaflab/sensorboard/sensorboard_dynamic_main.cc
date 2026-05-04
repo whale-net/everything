@@ -1,10 +1,14 @@
 // Sensorboard main loop — dynamic config variant.
 //
-// Extends the standard sensorboard_main by loading any persisted DeviceConfig
-// from NVS at boot and applying name/enabled overrides before the first sensor
-// readings are published.
+// On boot: init I2C bus, load any persisted DeviceConfig from NVS, apply it
+// (which instantiates and inits sensors from chip_type), then connect to MQTT.
+// On config push: FirmwarePublisher calls ConfigApplier::Apply() which
+// destroys old sensor instances and creates new ones from the incoming config.
 //
-// The config file (elegoo_dynamic_config.cc) additionally provides:
+// No sensors are compiled in — all sensor instances are factory-created by
+// ConfigApplier from the DeviceConfig pushed over MQTT.
+//
+// The config file (elegoo_*_dynamic_config.cc) additionally provides:
 //   firmware::ConfigStore&   GetConfigStore()
 //   firmware::ConfigApplier& GetConfigApplier()
 
@@ -52,32 +56,29 @@ static void CheckSensorNames(pw::span<firmware::ISensor* const> sensors) {
 void setup() {
     Serial.begin(115200);
 
-    // Load persisted config and apply name overrides before sensor init so
-    // the first manifest broadcast uses the correct logical names.
+    // Bus must be up before Apply() — it calls sensor->Init() which does I2C.
+    if (!GetBus().Init(board::kSda, board::kScl).ok()) {
+        PW_LOG_ERROR("I2C bus init failed");
+    }
+
+    // Load persisted config and instantiate sensors from chip_type entries.
+    // On a fresh device with no NVS config, sensor list stays empty until
+    // the first DeviceConfig is pushed over MQTT.
     {
         firmware_DeviceConfig stored = firmware_DeviceConfig_init_zero;
         if (GetConfigStore().Load(&stored).ok()) {
             GetConfigApplier().Apply(stored);
-            PW_LOG_INFO("Dynamic config v%" PRIu64 " loaded from NVS",
-                        stored.version);
+            PW_LOG_INFO("Dynamic config v%" PRIu64 " loaded: %zu sensors",
+                        stored.version, GetSensors().size());
         } else {
-            PW_LOG_INFO("No persisted config — using compile-time defaults");
+            PW_LOG_INFO("No persisted config — waiting for DeviceConfig push");
         }
     }
 
     CheckSensorNames(GetSensors());
 
-    if (!GetBus().Init(board::kSda, board::kScl).ok()) {
-        PW_LOG_ERROR("I2C bus init failed");
-    }
-
     for (firmware::ISensor* s : GetSensors()) {
-        pw::Status st = s->Init();
-        if (!st.ok()) {
-            PW_LOG_ERROR("Sensor init failed: %s", s->name());
-        } else {
-            PW_LOG_INFO("Sensor ready: %s @ 0x%02x", s->name(), s->address());
-        }
+        PW_LOG_INFO("Sensor ready: %s @ 0x%02x", s->name(), s->address());
     }
 
     GetNetwork().Connect();

@@ -7,10 +7,11 @@ import (
 	"time"
 
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
+	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"google.golang.org/protobuf/proto"
 )
 
-// stubRepo records UpsertSensor calls so tests can assert on hw address behaviour.
+// stubRepo records UpsertSensor and ApplyConfigRegions calls so tests can assert behaviour.
 type stubRepo struct {
 	// Configurable return values.
 	boardID      int64
@@ -18,7 +19,13 @@ type stubRepo struct {
 	sensorID     int64
 
 	// Recorded call arguments.
-	upsertSensorCalls []upsertSensorCall
+	upsertSensorCalls       []upsertSensorCall
+	applyConfigRegionsCalls []applyConfigRegionsCall
+}
+
+type applyConfigRegionsCall struct {
+	boardID int64
+	version int64
 }
 
 type upsertSensorCall struct {
@@ -70,7 +77,10 @@ func (s *stubRepo) AckDeviceConfig(_ context.Context, _ int64, _ int64, _ bool, 
 	return nil
 }
 
-func (s *stubRepo) ApplyConfigRegions(_ context.Context, _ int64, _ int64) error { return nil }
+func (s *stubRepo) ApplyConfigRegions(_ context.Context, boardID, version int64) error {
+	s.applyConfigRegionsCalls = append(s.applyConfigRegionsCalls, applyConfigRegionsCall{boardID: boardID, version: version})
+	return nil
+}
 
 func (s *stubRepo) SetSensorChipID(_ context.Context, _ int64, _ string) error { return nil }
 
@@ -317,5 +327,76 @@ func TestHandleManifest_DirectSensorEmptyMuxPath(t *testing.T) {
 	}
 	if len(call.hw.MuxPath) != 0 {
 		t.Errorf("expected empty MuxPath for direct sensor, got %v", call.hw.MuxPath)
+	}
+}
+
+// TestHandleConfigAck_AcceptedCallsApplyRegionsAndSetsCache verifies that an
+// accepted DeviceConfigAck triggers ApplyConfigRegions and updates the config
+// version cache; a rejected ack does neither.
+func TestHandleConfigAck_AcceptedCallsApplyRegionsAndSetsCache(t *testing.T) {
+	repo := &stubRepo{boardID: 7}
+	h := newTestHandler(repo)
+
+	ack := &configpb.DeviceConfigAck{
+		DeviceId:       "leaflab-aabbccdd",
+		AppliedVersion: 3,
+		Accepted:       true,
+	}
+	body, err := proto.Marshal(ack)
+	if err != nil {
+		t.Fatalf("marshal ack: %v", err)
+	}
+
+	if err := h.handleConfigAck(context.Background(), "leaflab-aabbccdd", body); err != nil {
+		t.Fatalf("handleConfigAck: %v", err)
+	}
+
+	if len(repo.applyConfigRegionsCalls) != 1 {
+		t.Fatalf("expected 1 ApplyConfigRegions call, got %d", len(repo.applyConfigRegionsCalls))
+	}
+	call := repo.applyConfigRegionsCalls[0]
+	if call.boardID != 7 {
+		t.Errorf("ApplyConfigRegions boardID: want 7, got %d", call.boardID)
+	}
+	if call.version != 3 {
+		t.Errorf("ApplyConfigRegions version: want 3, got %d", call.version)
+	}
+
+	v, ok := h.cache.GetConfigVersion("leaflab-aabbccdd")
+	if !ok {
+		t.Fatal("config version not set in cache after accepted ack")
+	}
+	if v != 3 {
+		t.Errorf("cache config version: want 3, got %d", v)
+	}
+}
+
+// TestHandleConfigAck_RejectedSkipsApplyRegions verifies that a rejected ack
+// does not call ApplyConfigRegions and does not update the config version cache.
+func TestHandleConfigAck_RejectedSkipsApplyRegions(t *testing.T) {
+	repo := &stubRepo{boardID: 7}
+	h := newTestHandler(repo)
+
+	ack := &configpb.DeviceConfigAck{
+		DeviceId:       "leaflab-aabbccdd",
+		AppliedVersion: 2,
+		Accepted:       false,
+		Reason:         "stale_version",
+	}
+	body, err := proto.Marshal(ack)
+	if err != nil {
+		t.Fatalf("marshal ack: %v", err)
+	}
+
+	if err := h.handleConfigAck(context.Background(), "leaflab-aabbccdd", body); err != nil {
+		t.Fatalf("handleConfigAck: %v", err)
+	}
+
+	if len(repo.applyConfigRegionsCalls) != 0 {
+		t.Errorf("expected 0 ApplyConfigRegions calls on rejection, got %d", len(repo.applyConfigRegionsCalls))
+	}
+
+	if _, ok := h.cache.GetConfigVersion("leaflab-aabbccdd"); ok {
+		t.Error("config version should not be set in cache after rejected ack")
 	}
 }

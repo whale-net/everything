@@ -289,7 +289,8 @@ func (r *Repository) UpsertSensorHWHistory(ctx context.Context, sensorID int64, 
 
 // ApplyConfigRegions applies region_id assignments from an accepted config.
 // For each SensorConfig entry with region_id > 0, finds the matching sensor
-// by (board_id, i2c_address, mux_path) and updates sensor.region_id.
+// by (board_id, i2c_address, mux_path), updates sensor.region_id, and records
+// the change in sensor_region_history (SCD-2: close old open row, insert new).
 func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version int64) error {
 	var configJSON []byte
 	err := r.db.QueryRow(ctx, `
@@ -316,11 +317,47 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 		if err != nil {
 			return fmt.Errorf("marshal mux_path for region apply: %w", err)
 		}
-		if _, err := r.db.Exec(ctx, `
-			UPDATE sensor SET region_id = $4
+
+		newRegionID := int64(sc.RegionId)
+
+		// Read current assignment before updating so we can detect changes.
+		var sensorID int64
+		var oldRegionID *int64
+		err = r.db.QueryRow(ctx, `
+			SELECT sensor_id, region_id FROM sensor
 			WHERE board_id = $1 AND i2c_address = $2 AND mux_path = $3::jsonb
-		`, boardID, sc.I2CAddress, muxJSON, sc.RegionId); err != nil {
-			return fmt.Errorf("set region for i2c 0x%02x on board %d: %w", sc.I2CAddress, boardID, err)
+		`, boardID, sc.I2CAddress, muxJSON).Scan(&sensorID, &oldRegionID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue // sensor not yet registered — skip silently
+		}
+		if err != nil {
+			return fmt.Errorf("find sensor for region apply i2c=0x%02x board=%d: %w", sc.I2CAddress, boardID, err)
+		}
+
+		// Skip if region is unchanged.
+		if oldRegionID != nil && *oldRegionID == newRegionID {
+			continue
+		}
+
+		if _, err := r.db.Exec(ctx, `
+			UPDATE sensor SET region_id = $2 WHERE sensor_id = $1
+		`, sensorID, newRegionID); err != nil {
+			return fmt.Errorf("set region for sensor %d: %w", sensorID, err)
+		}
+
+		// Close any open history row for this sensor.
+		if _, err := r.db.Exec(ctx, `
+			UPDATE sensor_region_history SET unassigned_at = NOW()
+			WHERE sensor_id = $1 AND unassigned_at IS NULL
+		`, sensorID); err != nil {
+			return fmt.Errorf("close region history for sensor %d: %w", sensorID, err)
+		}
+
+		// Record the new assignment.
+		if _, err := r.db.Exec(ctx, `
+			INSERT INTO sensor_region_history (sensor_id, region_id) VALUES ($1, $2)
+		`, sensorID, newRegionID); err != nil {
+			return fmt.Errorf("insert region history for sensor %d: %w", sensorID, err)
 		}
 	}
 	return nil

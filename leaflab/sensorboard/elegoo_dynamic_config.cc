@@ -1,13 +1,15 @@
-// Board config for the Elegoo ESP32 with TCA9548A mux — dynamic MQTT config.
+// Board config for the Elegoo ESP32 dev board — fully dynamic sensor config.
 //
-// Identical hardware layout to elegoo_multiplex_config.cc:
-//   Channel SD0: BH1750 ambient light at 0x23 ("max-light")
-//   Channel SD5: SHT3x temperature + humidity at 0x44
-//   Channel SD6: CCS811 eCO2 + TVOC at 0x5A
-//   Channel SD7: BH1750 ambient light at 0x23 ("board-light")
+// Hardware: ArduinoI2CBus on the native I2C pins, with optional TCA9548A mux.
+// No sensors are compiled in. Push a DeviceConfig proto to
+// leaflab/<device_id>/config to declare what chips are wired.
 //
-// Adds ConfigStore (NVS persistence) and ConfigApplier (runtime name overrides)
-// so sensor names and enabled state can be updated via MQTT without reflashing.
+// Mux channels are allocated on demand — no compile-time topology needed.
+//
+// Examples:
+//   Direct:  {chip_type: CHIP_TYPE_BH1750, i2c_address: 0x23, name: "light"}
+//   Via mux: {chip_type: CHIP_TYPE_SHT3X, i2c_address: 0x44,
+//             mux_path: [{mux_address: 0x70, mux_channel: 2}], name: "temp"}
 
 #include <Arduino.h>
 
@@ -17,71 +19,41 @@
 #include "firmware/device_id/efuse_device_id.h"
 #include "firmware/i2c/arduino_i2c_bus.h"
 #include "firmware/i2c/i2c_bus.h"
-#include "firmware/i2c/tca9548a_bus.h"
 #include "firmware/mqtt/firmware_publisher.h"
 #include "firmware/network/esp32_platform.h"
 #include "firmware/network/network_manager.h"
-#include "firmware/sensor/bh1750.h"
-#include "firmware/sensor/catalog/chip_catalog.h"
-#include "firmware/sensor/ccs811.h"
 #include "firmware/sensor/sensor.h"
-#include "firmware/sensor/sht3x.h"
 #include "pw_span/span.h"
 
-using namespace firmware::chip_addr;
-
-// ── I2C bus, multiplexer channels, and sensors ───────────────────────────────
+// ── I2C bus ───────────────────────────────────────────────────────────────────
 
 static firmware::ArduinoI2CBus bus;
-static firmware::TCA9548ABus   ch0(bus, 0x70, 0);  // HW-617 SD0
-static firmware::TCA9548ABus   ch5(bus, 0x70, 5);  // HW-617 SD5
-static firmware::TCA9548ABus   ch6(bus, 0x70, 6);  // HW-617 SD6
-static firmware::TCA9548ABus   ch7(bus, 0x70, 7);  // HW-617 SD7
-
-static firmware::BH1750Sensor     bh1750_2(ch0, kBH1750Default, "max-light", millis);
-static firmware::SHT3xDevice      sht3x_dev(ch5, kSHT3xDefault, millis);
-static firmware::SHT3xTemperature sht3x_temp(sht3x_dev, "board-temp");
-static firmware::SHT3xHumidity    sht3x_humi(sht3x_dev, "board-humidity");
-static firmware::CCS811Device     ccs811_dev(ch6, kCCS811Default, millis);
-static firmware::CCS811eCO2       ccs811_eco2(ccs811_dev, "board-eco2");
-static firmware::CCS811TVOC       ccs811_tvoc(ccs811_dev, "board-tvoc");
-static firmware::BH1750Sensor     bh1750(ch7, kBH1750Default, "board-light", millis);
-
-static firmware::ISensor* const kSensors[] = {
-    &bh1750_2,
-    &sht3x_temp, &sht3x_humi,
-    &ccs811_eco2, &ccs811_tvoc,
-    &bh1750,
-};
 
 firmware::II2CBus& GetBus() { return bus; }
 
 pw::span<firmware::ISensor* const> GetSensors() {
-    return pw::span<firmware::ISensor* const>(kSensors);
+    return GetConfigApplier().sensors();
 }
 
-// ── Config (runtime overrides) ────────────────────────────────────────────────
+// ── Config (factory — all sensor instances created from DeviceConfig proto) ──
 
+static firmware::ConfigApplier config_applier(&bus, millis);
 static firmware::ConfigStore   config_store;
-static firmware::ConfigApplier config_applier(GetSensors());
 
-firmware::ConfigStore&   GetConfigStore()   { return config_store; }
 firmware::ConfigApplier& GetConfigApplier() { return config_applier; }
+firmware::ConfigStore&   GetConfigStore()   { return config_store; }
 
 // ── Network ───────────────────────────────────────────────────────────────────
 
-static firmware::NVSCredentials    creds;
-static firmware::EfuseDeviceId     device_id("leaflab");
-static firmware::NetworkManager*   net       = nullptr;
+static firmware::NVSCredentials     creds;
+static firmware::EfuseDeviceId      device_id("leaflab");
+static firmware::NetworkManager*    net       = nullptr;
 static firmware::FirmwarePublisher* publisher = nullptr;
 
 firmware::NetworkManager& GetNetwork() {
     if (net != nullptr) return *net;
 
-    pw::Status s = creds.Load();
-    if (!s.ok()) {
-        // Credentials not found — device will still start but WiFi won't connect.
-    }
+    creds.Load();
 
     WiFiInit(creds.wifi_ssid(), creds.wifi_password());
 
@@ -108,8 +80,7 @@ firmware::NetworkManager& GetNetwork() {
 firmware::FirmwarePublisher& GetPublisher() {
     if (publisher != nullptr) return *publisher;
     static firmware::FirmwarePublisher local_pub(
-        device_id, GetSensors(), GetNetwork(),
-        GetConfigStore(), GetConfigApplier());
+        device_id, GetNetwork(), GetConfigApplier(), &GetConfigStore());
     publisher = &local_pub;
     return *publisher;
 }
