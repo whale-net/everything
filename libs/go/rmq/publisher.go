@@ -85,6 +85,15 @@ func isPreconditionFailed(err error) bool {
 		strings.Contains(err.Error(), "Exception (406)")
 }
 
+// isNotFound returns true when RabbitMQ reports the queue does not exist (AMQP 404).
+func isNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "NOT_FOUND") ||
+		strings.Contains(err.Error(), "Exception (404)")
+}
+
 // Publish publishes a message to an exchange with a routing key
 // It automatically reconnects to RabbitMQ if the channel is closed
 func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, body interface{}) error {
