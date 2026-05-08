@@ -54,3 +54,55 @@ go_proto_library(
     importpath = "github.com/whale-net/everything/firmware/proto",
     proto = ":firmware_proto",
 )
+
+# ── Config proto (device dynamic configuration) ───────────────────────────────
+
+genrule(
+    name = "config_pb_gen",
+    srcs = [
+        "config.proto",
+        "config.options",
+        "firmware.proto",
+        "firmware.options",
+    ],
+    outs = [
+        "config.pb.h",
+        "config.pb.c",
+    ],
+    cmd = """
+        export PATH=$$(dirname $(location @protobuf//:protoc)):$$PATH && \
+        $(location @protobuf//:protoc) \
+          --plugin=protoc-gen-nanopb=$(location @nanopb//:protoc-gen-nanopb) \
+          "--nanopb_out=--library-include-format=quote --options-file=$(location config.options):$(RULEDIR)" \
+          -I $$(dirname $(location config.proto)) \
+          -I . \
+          $(location config.proto)
+    """,
+    tools = [
+        "@nanopb//:protoc-gen-nanopb",
+        "@protobuf//:protoc",
+    ],
+)
+
+cc_library(
+    name = "config_nanopb",
+    srcs = [":config_pb_gen"],
+    hdrs = [":config_pb_gen"],
+    deps = [
+        ":firmware_nanopb",
+        "@nanopb//:nanopb",
+    ],
+)
+
+proto_library(
+    name = "config_proto",
+    srcs = ["config.proto"],
+    deps = [":firmware_proto"],
+)
+
+go_proto_library(
+    name = "configpb",
+    importpath = "github.com/whale-net/everything/firmware/proto/config",
+    proto = ":config_proto",
+    deps = [":firmwarepb"],
+)

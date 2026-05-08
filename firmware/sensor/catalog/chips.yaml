@@ -1,0 +1,57 @@
+# Sensor chip catalog — single source of truth.
+#
+# Used to generate:
+#   firmware/sensor/catalog/chip_catalog.h  (C++ address constants)
+#   DB seed data via the catalog.Seeder function (loaded by migrate apps)
+#
+# Adding a chip: add an entry here, regenerate chip_catalog.h, and the next
+# migrate run will upsert the new rows automatically.
+#
+# Fields:
+#   name         Chip model name — must be unique and stable (used as DB key)
+#   description  Human-readable description shown in UI
+#   addresses    List of possible I2C addresses for this chip
+#     i2c_address  Decimal I2C address (7-bit)
+#     is_default   True for the unmodified / ADDR=GND variant
+#     addr_config  Human-readable wiring description for UI
+#     cpp_label    Suffix for the generated C++ constant, e.g. Default → kBH1750Default
+
+chips:
+  - name: BH1750
+    description: Ambient light sensor (lux)
+    sensor_types: [illuminance]
+    addresses:
+      - i2c_address: 35   # 0x23
+        is_default: true
+        addr_config: ADDR=GND
+        cpp_label: Default
+      - i2c_address: 92   # 0x5C
+        is_default: false
+        addr_config: ADDR=VCC
+        cpp_label: AltVCC
+
+  - name: SHT3x
+    description: Temperature and humidity sensor
+    sensor_types: [temperature, humidity]
+    addresses:
+      - i2c_address: 68   # 0x44
+        is_default: true
+        addr_config: ADDR=GND
+        cpp_label: Default
+      - i2c_address: 69   # 0x45
+        is_default: false
+        addr_config: ADDR=VCC
+        cpp_label: AltVCC
+
+  - name: CCS811
+    description: eCO2 and TVOC air quality sensor
+    sensor_types: [eco2, tvoc]
+    addresses:
+      - i2c_address: 90   # 0x5A
+        is_default: true
+        addr_config: ADDR=GND
+        cpp_label: Default
+      - i2c_address: 91   # 0x5B
+        is_default: false
+        addr_config: ADDR=VCC
+        cpp_label: AltVCC

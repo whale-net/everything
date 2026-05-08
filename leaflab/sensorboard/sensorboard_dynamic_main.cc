@@ -1,18 +1,23 @@
-// Sensorboard main loop — board-agnostic.
+// Sensorboard main loop — dynamic config variant.
 //
-// This file never changes. Board-specific wiring and sensor choices live in
-// a separate config file (e.g. elegoo_config.cc) that is linked into the
-// esp32_firmware() target.
+// On boot: init I2C bus, load any persisted DeviceConfig from NVS, apply it
+// (which instantiates and inits sensors from chip_type), then connect to MQTT.
+// On config push: FirmwarePublisher calls ConfigApplier::Apply() which
+// destroys old sensor instances and creates new ones from the incoming config.
 //
-// The config file provides:
-//   firmware::II2CBus& GetBus()                        — initialised I2C bus
-//   pw::span<firmware::ISensor* const> GetSensors()    — sensor registry
-//   firmware::NetworkManager& GetNetwork()             — lazy-init WiFi+MQTT
-//   firmware::FirmwarePublisher& GetPublisher()         — proto MQTT publisher
+// No sensors are compiled in — all sensor instances are factory-created by
+// ConfigApplier from the DeviceConfig pushed over MQTT.
+//
+// The config file (elegoo_*_dynamic_config.cc) additionally provides:
+//   firmware::ConfigStore&   GetConfigStore()
+//   firmware::ConfigApplier& GetConfigApplier()
 
 #include <Arduino.h>
 
 #include "board_pins.h"
+#include "firmware/proto/config.pb.h"
+#include "firmware/config/config_applier.h"
+#include "firmware/config/config_store.h"
 #include "firmware/i2c/i2c_bus.h"
 #include "firmware/mqtt/firmware_publisher.h"
 #include "firmware/network/network_manager.h"
@@ -20,23 +25,20 @@
 #include "pw_log/log.h"
 #include "pw_span/span.h"
 
-// Provided by the linked config file.
+// Provided by elegoo_dynamic_config.cc
 firmware::II2CBus& GetBus();
 pw::span<firmware::ISensor* const> GetSensors();
 firmware::NetworkManager& GetNetwork();
 firmware::FirmwarePublisher& GetPublisher();
+firmware::ConfigStore& GetConfigStore();
+firmware::ConfigApplier& GetConfigApplier();
 
-// Platform keep-alive from firmware/network/esp32_platform.cc.
 extern void MQTTLoop();
 
-// CheckSensorNames halts with an error log if any two sensors share a name.
-// Duplicate names would cause overlapping sensor_reading rows in the database.
-// This runs once at startup from a fixed static array so the loop is trivially small.
 static void CheckSensorNames(pw::span<firmware::ISensor* const> sensors) {
     for (size_t i = 0; i < sensors.size(); ++i) {
         for (size_t j = i + 1; j < sensors.size(); ++j) {
             if (strcmp(sensors[i]->name(), sensors[j]->name()) == 0) {
-                // Log and spin — duplicate names are a config bug, not a runtime error.
                 while (true) {
                     PW_LOG_ERROR(
                         "DUPLICATE SENSOR NAME '%s' at indices %u and %u — "
@@ -54,19 +56,29 @@ static void CheckSensorNames(pw::span<firmware::ISensor* const> sensors) {
 void setup() {
     Serial.begin(115200);
 
-    CheckSensorNames(GetSensors());
-
+    // Bus must be up before Apply() — it calls sensor->Init() which does I2C.
     if (!GetBus().Init(board::kSda, board::kScl).ok()) {
         PW_LOG_ERROR("I2C bus init failed");
     }
 
-    for (firmware::ISensor* s : GetSensors()) {
-        pw::Status st = s->Init();
-        if (!st.ok()) {
-            PW_LOG_ERROR("Sensor init failed: %s", s->name());
+    // Load persisted config and instantiate sensors from chip_type entries.
+    // On a fresh device with no NVS config, sensor list stays empty until
+    // the first DeviceConfig is pushed over MQTT.
+    {
+        firmware_DeviceConfig stored = firmware_DeviceConfig_init_zero;
+        if (GetConfigStore().Load(&stored).ok()) {
+            GetConfigApplier().Apply(stored);
+            PW_LOG_INFO("Dynamic config v%" PRIu64 " loaded: %zu sensors",
+                        stored.version, GetSensors().size());
         } else {
-            PW_LOG_INFO("Sensor ready: %s @ 0x%02x", s->name(), s->address());
+            PW_LOG_INFO("No persisted config — waiting for DeviceConfig push");
         }
+    }
+
+    CheckSensorNames(GetSensors());
+
+    for (firmware::ISensor* s : GetSensors()) {
+        PW_LOG_INFO("Sensor ready: %s @ 0x%02x", s->name(), s->address());
     }
 
     GetNetwork().Connect();
@@ -83,14 +95,13 @@ void loop() {
     auto state = GetNetwork().Poll();
     MQTTLoop();
 
-    // On each transition into kReady: publish "online" + manifest.
     if (state == firmware::NetworkManager::State::kReady &&
         prev_state != firmware::NetworkManager::State::kReady) {
         GetPublisher().OnConnect();
     }
     prev_state = state;
 
-    // Publish sensor readings at the configured interval while connected.
+    // TODO: use ConfigApplier::PollIntervalMs() for per-sensor scheduling.
     uint32_t now = millis();
     if (state == firmware::NetworkManager::State::kReady &&
         (now - last_publish_ms) >= SENSOR_POLL_INTERVAL_MS) {

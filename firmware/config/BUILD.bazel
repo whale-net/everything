@@ -1,0 +1,57 @@
+"""Firmware runtime config — NVS persistence and sensor config applier."""
+
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ESP32_COMPAT = [
+    "@platforms//os:none",
+    "//tools/firmware:cpu_xtensa",
+]
+
+# ConfigStore — NVS load/save for DeviceConfig proto. ESP32 only.
+cc_library(
+    name = "config_store",
+    srcs = ["config_store.cc"],
+    hdrs = ["config_store.h"],
+    target_compatible_with = ESP32_COMPAT,
+    deps = [
+        "//firmware/proto:config_nanopb",
+        "@arduino_esp32//:Preferences",
+        "@nanopb//:nanopb",
+        "@pigweed//pw_log",
+        "@pigweed//pw_status",
+    ],
+)
+
+# ConfigApplier — matches DeviceConfig entries to sensors by hardware path.
+# Host-compilable (no Arduino dependency), so it can be unit-tested on host.
+cc_library(
+    name = "config_applier",
+    srcs = ["config_applier.cc"],
+    hdrs = ["config_applier.h"],
+    deps = [
+        "//firmware/i2c:i2c_bus",
+        "//firmware/i2c:tca9548a_bus",
+        "//firmware/proto:config_nanopb",
+        "//firmware/sensor:bh1750",
+        "//firmware/sensor:ccs811",
+        "//firmware/sensor:sensor",
+        "//firmware/sensor:sht3x",
+        "@nanopb//:nanopb",
+        "@pigweed//pw_log",
+        "@pigweed//pw_span",
+    ],
+)
+
+cc_test(
+    name = "config_applier_test",
+    srcs = ["config_applier_test.cc"],
+    deps = [
+        ":config_applier",
+        "//firmware/sensor:mock_sensor",
+        "@pigweed//pw_span",
+        "@pigweed//pw_unit_test",
+        "@pigweed//pw_unit_test:logging_main",
+    ],
+)

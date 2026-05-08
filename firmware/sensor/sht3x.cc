@@ -1,5 +1,7 @@
 #include "firmware/sensor/sht3x.h"
 
+#include <cstring>
+
 #include "pw_log/log.h"
 #include "pw_status/status.h"
 
@@ -65,7 +67,16 @@ float SHT3xDevice::ReadHumidity() {
 // ── SHT3xTemperature ─────────────────────────────────────────────────────────
 
 SHT3xTemperature::SHT3xTemperature(SHT3xDevice& dev, const char* name)
-    : dev_(dev), name_(name) {}
+    : dev_(dev) {
+    strncpy(name_buf_, name, sizeof(name_buf_) - 1);
+    name_buf_[sizeof(name_buf_) - 1] = '\0';
+}
+
+bool SHT3xTemperature::SetName(const char* name) {
+    strncpy(name_buf_, name, sizeof(name_buf_) - 1);
+    name_buf_[sizeof(name_buf_) - 1] = '\0';
+    return true;
+}
 
 pw::Status SHT3xTemperature::Init() {
     return dev_.Init();
@@ -79,7 +90,16 @@ SensorReading SHT3xTemperature::Read() {
 // ── SHT3xHumidity ────────────────────────────────────────────────────────────
 
 SHT3xHumidity::SHT3xHumidity(SHT3xDevice& dev, const char* name)
-    : dev_(dev), name_(name) {}
+    : dev_(dev) {
+    strncpy(name_buf_, name, sizeof(name_buf_) - 1);
+    name_buf_[sizeof(name_buf_) - 1] = '\0';
+}
+
+bool SHT3xHumidity::SetName(const char* name) {
+    strncpy(name_buf_, name, sizeof(name_buf_) - 1);
+    name_buf_[sizeof(name_buf_) - 1] = '\0';
+    return true;
+}
 
 pw::Status SHT3xHumidity::Init() {
     return pw::OkStatus();  // Init is driven by SHT3xTemperature

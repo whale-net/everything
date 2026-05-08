@@ -7,6 +7,7 @@ go_library(
         "history.go",
         "history_repo.go",
         "migrate.go",
+        "seeder.go",
     ],
     importpath = "github.com/whale-net/everything/libs/go/migrate",
     visibility = ["//visibility:public"],

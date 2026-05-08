@@ -50,8 +50,16 @@ class TCA9548ABus final : public II2CBus {
                            const uint8_t* data,
                            size_t len) override;
 
-  uint8_t mux_address() const override { return mux_address_; }
-  uint8_t mux_channel() const override { return channel_; }
+  // Depth is 1 + however many mux hops the parent has.
+  size_t mux_depth() const override { return 1 + parent_.mux_depth(); }
+
+  // Hops 0..parent_depth-1 are delegated to the parent chain.
+  // Hop at index mux_depth()-1 is this mux.
+  MuxHop mux_hop_at(size_t depth) const override {
+    size_t parent_depth = parent_.mux_depth();
+    if (depth < parent_depth) return parent_.mux_hop_at(depth);
+    return {mux_address_, channel_};
+  }
 
  private:
   II2CBus& parent_;

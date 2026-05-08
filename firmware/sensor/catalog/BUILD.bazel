@@ -1,0 +1,48 @@
+"""Sensor chip catalog — chips.yaml source of truth and Go seeder."""
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+load("@bazel_skylib//rules:run_binary.bzl", "run_binary")
+
+go_library(
+    name = "catalog",
+    srcs = ["catalog.go"],
+    embedsrcs = ["chips.yaml"],
+    importpath = "github.com/whale-net/everything/firmware/sensor/catalog",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@in_gopkg_yaml_v3//:yaml_v3",
+    ],
+)
+
+go_test(
+    name = "catalog_sync_test",
+    srcs = ["catalog_sync_test.go"],
+    deps = [
+        ":catalog",
+        "//firmware/proto:configpb",
+    ],
+)
+
+# Generate chip_catalog.h from chips.yaml.
+run_binary(
+    name = "chip_catalog_h_gen",
+    srcs = ["chips.yaml"],
+    outs = ["chip_catalog.h"],
+    args = [
+        "$(location chips.yaml)",
+        "$(location chip_catalog.h)",
+    ],
+    tool = "//tools:gen_chip_catalog",
+    visibility = ["//visibility:public"],
+)
+
+# C++ header-only library wrapping the generated chip_catalog.h.
+# Add this as a dep to any cc_library or esp32_firmware that
+# #includes "firmware/sensor/catalog/chip_catalog.h".
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "chip_catalog_cc",
+    hdrs = [":chip_catalog_h_gen"],
+    visibility = ["//visibility:public"],
+)

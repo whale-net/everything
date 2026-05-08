@@ -1,0 +1,47 @@
+"""LeafLab gRPC API — device config push and board management."""
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "api_lib",
+    srcs = [
+        "main.go",
+        "repository.go",
+        "server.go",
+    ],
+    importpath = "github.com/whale-net/everything/leaflab/api",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//firmware/proto:configpb",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/db",
+        "//libs/go/logging",
+        "//libs/go/rmq",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//reflection",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//encoding/protojson",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
+
+go_binary(
+    name = "api",
+    embed = [":api_lib"],
+    visibility = ["//visibility:public"],
+)
+
+release_app(
+    name = "leaflab-api",
+    binary_name = ":api",
+    language = "go",
+    domain = "leaflab",
+    description = "LeafLab gRPC API — device config push and board management",
+    app_type = "internal-api",
+    port = 50051,
+    replicas = 1,
+)

@@ -11,6 +11,7 @@ cc_library(
     name = "sensor",
     hdrs = ["sensor.h"],
     deps = [
+        "//firmware/i2c:i2c_bus",
         "//firmware/proto:firmware_nanopb",
         "@pigweed//pw_status",
     ],

@@ -19,21 +19,19 @@ LeafLab devices read sensors (light, temperature, soil moisture, etc.), publish 
 ## Quick Start
 
 ```bash
-# Build sensorboard firmware
-bazel build //leaflab/sensorboard:sensorboard_bin --config=esp32
+# Build sensorboard firmware (simple dynamic — single BH1750)
+bazel build //leaflab/sensorboard:sensorboard_simple_dynamic --config=esp32
 
 # Flash to a connected ESP32 over USB
-bazel run //leaflab/sensorboard:flash -- /dev/ttyUSB0
+bazel run //leaflab/sensorboard:flash_simple_dynamic -- /dev/ttyUSB0
 
 # Monitor serial output
-screen /dev/ttyUSB0 115200
-```
+bazel run //leaflab/sensorboard:serial
 
-Expected output:
-```
-INF  Sensor ready: light @ 0x23
-INF  light: 142.5
-INF  light: 141.8
+# Provision Wi-Fi + MQTT credentials (first time)
+bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 \
+  wifi_ssid=MySSID wifi_pass=MyPass \
+  mqtt_host=192.168.1.42 mqtt_port=1883
 ```
 
 See [`sensorboard/README.md`](sensorboard/README.md) for full build, flash, and extension instructions.
@@ -82,15 +80,33 @@ erDiagram
         bigint board_id FK
         bigint sensor_type_id FK
         bigint region_id FK "nullable — current region"
-        varchar name "e.g. light_canopy from manifest"
-        varchar unit "as reported in manifest"
+        varchar name "current logical name"
+        varchar unit
+        int i2c_address "nullable"
+        jsonb mux_path "[] = direct; [{muxAddress,muxChannel},...] outer→inner"
         timestamp registered_at
         timestamp last_seen_at
     }
 
+    SensorLabel {
+        bigserial sensor_label_id PK
+        bigint sensor_id FK
+        varchar name
+        timestamp valid_from
+        timestamp valid_to "null if current"
+    }
+
+    SensorHWHistory {
+        bigserial history_id PK
+        bigint sensor_id FK
+        int i2c_address
+        jsonb mux_path
+        timestamp recorded_at
+    }
+
     Region {
         bigserial region_id PK
-        bigint parent_region_id FK "nullable — e.g. Room > Shelf > Pot"
+        bigint parent_region_id FK "nullable"
         varchar name
         text description
         timestamp created_at
@@ -104,52 +120,46 @@ erDiagram
         timestamp unassigned_at "null if current"
     }
 
+    DeviceConfig {
+        bigserial config_id PK
+        bigint board_id FK
+        bigint version
+        jsonb config_json "protojson DeviceConfig"
+        boolean accepted
+        timestamp pushed_at
+        timestamp acked_at
+    }
+
     SensorReading {
         bigserial reading_id PK
         bigint sensor_id FK
-        bigint region_id FK "denorm from Sensor.region_id at write"
+        bigint region_id FK "snapshot at insert"
+        bigint config_version "nullable — active config version at insert"
         double value
-        boolean valid "false on I2C failure or out-of-range"
-        int uptime_ms "device uptime for staleness detection"
-        timestamp recorded_at "DB time — hypertable partition key"
-    }
-
-    Plant {
-        bigserial plant_id PK
-        bigint region_id FK
-        bigint plant_type_id FK
-        varchar name
-        timestamp created_at
-        timestamp removed_at "null if still present"
-    }
-
-    PlantType {
-        bigserial plant_type_id PK
-        varchar common_name
-        varchar species
+        boolean valid
+        int uptime_s
+        timestamp recorded_at "hypertable partition key"
     }
 
     Board ||--o{ Sensor : "hosts"
     SensorType ||--o{ Sensor : "types"
     Region |o--o{ Sensor : "currently at"
     Region |o--o{ Region : "parent of"
-    Sensor ||--o{ SensorRegionHistory : "tracks moves"
+    Sensor ||--o{ SensorLabel : "name history"
+    Sensor ||--o{ SensorHWHistory : "hw address history"
+    Sensor ||--o{ SensorRegionHistory : "region history"
     Region ||--o{ SensorRegionHistory : "recorded in"
     Sensor ||--o{ SensorReading : "produces"
-    Region ||--o{ SensorReading : "was at (denorm snapshot)"
-    Region ||--o{ Plant : "contains"
-    PlantType ||--o{ Plant : "classifies"
+    Board ||--o{ DeviceConfig : "configs"
 ```
 
 Key design decisions:
-- `Sensor.region_id` is nullable — a board can register before being placed anywhere
-- `SensorRegionHistory` records every region assignment with open/closed intervals; `unassigned_at = NULL` means current
-- `SensorReading.region_id` is snapshotted at insert so historical location is preserved when sensors move
-- `SensorReading.valid` — `false` on I2C failure or out-of-range value; rows are always written so gaps in the time series are explicit rather than invisible
-- `SensorReading.recorded_at` is DB-side `NOW()`, not device clock; `uptime_ms` carries the device timestamp
-- `Region.parent_region_id` is self-referential and nullable — supports flat or hierarchical layouts (Room → Shelf → Pot)
-- `Plant.removed_at = NULL` means still present; set on removal rather than hard-deleting
-- `Board` and `Sensor` self-register via device manifests published on connect
+- `sensor` is a stable dimension anchor — rename via config closes old `sensor_label` row, opens new; `sensor_id` and reading history are unchanged
+- `sensor.region_id` is a current-value cache; `sensor_region_history` records every assignment (SCD-2)
+- `sensor_reading.region_id` is snapshotted at insert so historical location is preserved when sensors move
+- `sensor_reading.config_version` records which `DeviceConfig` was active at write time
+- `sensor.mux_path` is JSONB supporting arbitrary mux cascade depth
+- `device_config.config_json` stores protojson for human-readable SQL queries; device NVS uses binary nanopb
 
 ---
 
