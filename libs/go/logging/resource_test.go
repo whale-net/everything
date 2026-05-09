@@ -127,6 +127,11 @@ func TestBuildResource_OTELEnvOverride(t *testing.T) {
 // TestJSONHandler_WithAttrs_PreservesTypes ensures that attributes attached via
 // slog.Default().With(...) preserve their native types (int, float, bool)
 // rather than being serialised as strings.
+//
+// The assertion uses float64 because json.Unmarshal always decodes JSON numbers
+// into float64 in interface{} maps.  The meaningful invariant is that the value
+// is NOT a string like "42" — if resolveAttrValue were absent the JSON output
+// would be the string "42", causing assert.Equal(float64(42), "42") to fail.
 func TestJSONHandler_WithAttrs_PreservesTypes(t *testing.T) {
 	buf := configureFresh(t, Config{
 		ServiceName: "test-app",
