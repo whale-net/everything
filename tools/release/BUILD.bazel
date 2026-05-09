@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# Go library for release tooling
+go_library(
+    name = "release_lib",
+    srcs = [
+        "tag.go",
+        "version.go",
+    ],
+    importpath = "github.com/whale-net/everything/tools/release",
+    visibility = ["//visibility:public"],
+)
+
+# Unit tests for semantic version utilities
+go_test(
+    name = "version_test",
+    size = "small",
+    srcs = ["version_test.go"],
+    embed = [":release_lib"],
+)
+
+# Unit tests for tag formatting utilities
+go_test(
+    name = "tag_test",
+    size = "small",
+    srcs = ["tag_test.go"],
+    embed = [":release_lib"],
+)
