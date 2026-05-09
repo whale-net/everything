@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// semverSuffix matches a semantic version at the end of a tag (e.g. ".v1.2.3" or ".v1.2.3-beta1").
-var semverSuffix = regexp.MustCompile(`^v\d+\.\d+\.\d+(?:-[a-zA-Z0-9\-\.]+)?$`)
+// versionPattern matches a full semantic version string (e.g. "v1.2.3" or "v1.2.3-beta1").
+var versionPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+(?:-[a-zA-Z0-9\-\.]+)?$`)
 
 // FormatGitTag returns the canonical Git tag for an app release.
 // Format: "{domain}-{appName}.{version}" (e.g. "demo-hello_python.v1.2.3").
@@ -31,14 +31,14 @@ func ParseVersionFromTag(tag, domain, appName string) string {
 		return ""
 	}
 	version := tag[len(prefix):]
-	if semverSuffix.MatchString(version) {
+	if versionPattern.MatchString(version) {
 		return version
 	}
 	return ""
 }
 
 // ParseVersionFromHelmChartTag extracts the semantic version from a Helm chart Git tag.
-// chartName already includes the "helm-namespace-" prefix.
+// chartName already includes the "helm-{domain}-" prefix (e.g. "helm-demo-hello-fastapi").
 // Returns the version string or an empty string if the tag is not a valid chart tag.
 func ParseVersionFromHelmChartTag(tag, chartName string) string {
 	prefix := chartName + "."
@@ -46,7 +46,7 @@ func ParseVersionFromHelmChartTag(tag, chartName string) string {
 		return ""
 	}
 	version := tag[len(prefix):]
-	if semverSuffix.MatchString(version) {
+	if versionPattern.MatchString(version) {
 		return version
 	}
 	return ""
