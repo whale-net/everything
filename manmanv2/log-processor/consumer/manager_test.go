@@ -59,7 +59,7 @@ func TestStartRetryConstants(t *testing.T) {
 	}
 }
 
-
+// TestNewSubscriberGetsBacklog verifies that messages added to the ring buffer
 // before subscribing are returned in the backlog.
 func TestNewSubscriberGetsBacklog(t *testing.T) {
 	sc := newTestConsumer(1, 10)

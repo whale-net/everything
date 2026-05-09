@@ -201,16 +201,16 @@ func TestReconnectDelayConstants(t *testing.T) {
 // up to the cap. This mirrors the arithmetic in Start()'s reconnect loop.
 func TestReconnectBackoffGrowth(t *testing.T) {
 	delay := reconnectMinDelay
-	for i := range 10 {
+	for range 10 {
 		next := delay * 2
 		if next > reconnectMaxDelay {
 			next = reconnectMaxDelay
 		}
 		if next < delay && delay < reconnectMaxDelay {
-			t.Errorf("step %d: delay did not grow (%s -> %s)", i, delay, next)
+			t.Errorf("delay did not grow (%s -> %s)", delay, next)
 		}
 		if next > reconnectMaxDelay {
-			t.Errorf("step %d: delay exceeded cap: %s > %s", i, next, reconnectMaxDelay)
+			t.Errorf("delay exceeded cap: %s > %s", next, reconnectMaxDelay)
 		}
 		delay = next
 	}
