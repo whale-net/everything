@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -33,7 +32,7 @@ const DefaultMetricExportInterval = 60 * time.Second
 
 // setupMetrics creates an OTLP gRPC metric exporter and registers it as
 // the global MeterProvider with periodic export.
-func setupMetrics(cfg Config) error {
+func setupMetrics(cfg Config, res *resource.Resource) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -43,17 +42,6 @@ func setupMetrics(cfg Config) error {
 	)
 	if err != nil {
 		return fmt.Errorf("create OTLP metric exporter: %w", err)
-	}
-
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			attribute.String("service.name", cfg.ServiceName),
-			attribute.String("service.version", cfg.Version),
-			attribute.String("deployment.environment", cfg.Environment),
-		),
-	)
-	if err != nil {
-		return fmt.Errorf("create metric resource: %w", err)
 	}
 
 	interval := DefaultMetricExportInterval

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -30,7 +29,7 @@ func Tracer(name string) trace.Tracer {
 
 // setupTracing creates an OTLP gRPC trace exporter and registers it as the
 // global TracerProvider. Also sets up W3C trace context propagation.
-func setupTracing(cfg Config) error {
+func setupTracing(cfg Config, res *resource.Resource) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -40,17 +39,6 @@ func setupTracing(cfg Config) error {
 	)
 	if err != nil {
 		return fmt.Errorf("create OTLP trace exporter: %w", err)
-	}
-
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			attribute.String("service.name", cfg.ServiceName),
-			attribute.String("service.version", cfg.Version),
-			attribute.String("deployment.environment", cfg.Environment),
-		),
-	)
-	if err != nil {
-		return fmt.Errorf("create trace resource: %w", err)
 	}
 
 	tp := sdktrace.NewTracerProvider(

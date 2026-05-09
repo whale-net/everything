@@ -87,6 +87,21 @@ These variables take priority over any `Config` field and allow disabling OTEL s
 
 Values are case-insensitive (`true`, `TRUE`, `True` all work).
 
+## OTel Resource Attributes
+
+All three signal providers (logs, traces, metrics) share a single enriched resource built at `Configure()` time. The resource includes:
+
+| Source | Attributes added |
+|--------|-----------------|
+| `resource.WithTelemetrySDK()` | `telemetry.sdk.name`, `telemetry.sdk.language`, `telemetry.sdk.version` |
+| `resource.WithProcess()` | `process.pid`, `process.executable.name`, `process.runtime.name` (`go`), `process.runtime.version` |
+| `resource.WithHost()` | `host.name` |
+| `resource.WithOS()` | `os.type`, `os.description` |
+| `resource.WithFromEnv()` | reads `OTEL_RESOURCE_ATTRIBUTES` / `OTEL_SERVICE_NAME` |
+| Config fields | `service.name`, `service.version`, `deployment.environment`, `service.domain`, `service.type`, `service.instance.id` (= `PodName`), `k8s.pod.name`, `k8s.namespace.name`, `k8s.node.name`, `vcs.repository.ref.revision` (= `CommitSHA`) |
+
+Config-derived attributes are applied last so they always win over auto-detected values.
+
 ## JSON Output Format
 
 Matches the Python `StructuredFormatter`. When a span is active, `trace_id` and `span_id` are injected automatically:

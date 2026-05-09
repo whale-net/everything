@@ -33,6 +33,7 @@ go_test(
     srcs = [
         "logging_test.go",
         "metrics_test.go",
+        "resource_test.go",
         "tracing_test.go",
     ],
     embed = [":logging"],

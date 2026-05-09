@@ -137,23 +137,29 @@ func Configure(cfg Config) {
 
 	slog.SetDefault(slog.New(handler))
 
+	// Build a single shared OTel resource when any signal is enabled.
+	var sharedRes *resource.Resource
+	if cfg.EnableOTLP || cfg.EnableTracing || cfg.EnableMetrics {
+		sharedRes = buildSharedResource(cfg)
+	}
+
 	// Set up OTLP log export if requested.
 	if cfg.EnableOTLP {
-		if err := setupOTLP(cfg); err != nil {
+		if err := setupOTLP(cfg, sharedRes); err != nil {
 			slog.Error("failed to initialize OTLP log exporter", "error", err)
 		}
 	}
 
 	// Set up distributed tracing if requested.
 	if cfg.EnableTracing {
-		if err := setupTracing(cfg); err != nil {
+		if err := setupTracing(cfg, sharedRes); err != nil {
 			slog.Error("failed to initialize OTLP trace exporter", "error", err)
 		}
 	}
 
 	// Set up metrics if requested.
 	if cfg.EnableMetrics {
-		if err := setupMetrics(cfg); err != nil {
+		if err := setupMetrics(cfg, sharedRes); err != nil {
 			slog.Error("failed to initialize OTLP metric exporter", "error", err)
 		}
 	}
@@ -169,6 +175,23 @@ func Configure(cfg Config) {
 		"tracing_enabled", cfg.EnableTracing,
 		"metrics_enabled", cfg.EnableMetrics,
 	)
+}
+
+// buildSharedResource builds the OTel resource once and logs warnings for any
+// partial-detection failures.  It is called from Configure when at least one
+// OTEL signal is enabled.
+func buildSharedResource(cfg Config) *resource.Resource {
+	resCtx, resCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer resCancel()
+
+	res, err := buildResource(resCtx, cfg)
+	if err != nil {
+		slog.Warn("OTel resource detection partially failed; using partial result", "error", err)
+	}
+	if res == nil {
+		res = resource.Default()
+	}
+	return res
 }
 
 // Shutdown flushes pending OTLP logs, traces, and metrics. Call before
@@ -276,9 +299,53 @@ func stripScheme(endpoint string) string {
 	return endpoint
 }
 
+// buildResource constructs a shared OTel resource for all three signal
+// providers (logs, traces, metrics).  It merges automatic environment
+// detectors — OS, host, process, telemetry SDK, and env-var overrides — with
+// the service-specific metadata from cfg.  Explicit cfg values are added last
+// so they take the highest priority in the merge.
+func buildResource(ctx context.Context, cfg Config) (*resource.Resource, error) {
+	// Attributes derived from Config — explicit values always win.
+	attrs := []attribute.KeyValue{
+		attribute.String("service.name", cfg.ServiceName),
+		attribute.String("service.version", cfg.Version),
+		attribute.String("deployment.environment", cfg.Environment),
+	}
+	if cfg.Domain != "" {
+		attrs = append(attrs, attribute.String("service.domain", cfg.Domain))
+	}
+	if cfg.AppType != "" {
+		attrs = append(attrs, attribute.String("service.type", cfg.AppType))
+	}
+	if cfg.CommitSHA != "" {
+		// OTel semantic convention for a VCS commit reference.
+		attrs = append(attrs, attribute.String("vcs.repository.ref.revision", cfg.CommitSHA))
+	}
+	if cfg.PodName != "" {
+		// service.instance.id uniquely identifies this running instance.
+		attrs = append(attrs, attribute.String("service.instance.id", cfg.PodName))
+		attrs = append(attrs, attribute.String("k8s.pod.name", cfg.PodName))
+	}
+	if cfg.Namespace != "" {
+		attrs = append(attrs, attribute.String("k8s.namespace.name", cfg.Namespace))
+	}
+	if cfg.NodeName != "" {
+		attrs = append(attrs, attribute.String("k8s.node.name", cfg.NodeName))
+	}
+
+	return resource.New(ctx,
+		resource.WithFromEnv(),      // reads OTEL_RESOURCE_ATTRIBUTES / OTEL_SERVICE_NAME
+		resource.WithTelemetrySDK(), // telemetry.sdk.name / language / version
+		resource.WithProcess(),      // process.pid, process.executable.*, process.runtime.*
+		resource.WithHost(),         // host.name
+		resource.WithOS(),           // os.type, os.description
+		resource.WithAttributes(attrs...), // cfg overrides; placed last = highest priority
+	)
+}
+
 // setupOTLP creates an OTLP gRPC log exporter and registers it as the
 // global OTel LoggerProvider.
-func setupOTLP(cfg Config) error {
+func setupOTLP(cfg Config, res *resource.Resource) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -288,17 +355,6 @@ func setupOTLP(cfg Config) error {
 	)
 	if err != nil {
 		return fmt.Errorf("create OTLP log exporter: %w", err)
-	}
-
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			attribute.String("service.name", cfg.ServiceName),
-			attribute.String("service.version", cfg.Version),
-			attribute.String("deployment.environment", cfg.Environment),
-		),
-	)
-	if err != nil {
-		return fmt.Errorf("create OTLP resource: %w", err)
 	}
 
 	provider := sdklog.NewLoggerProvider(
@@ -431,9 +487,9 @@ func (h *jsonHandler) Handle(ctx context.Context, r slog.Record) error {
 		m["node_name"] = h.cfg.NodeName
 	}
 
-	// Pre-attached attrs (from With())
+	// Pre-attached attrs (from With()) — use resolveAttrValue to preserve types.
 	for _, a := range h.attrs {
-		m[a.Key] = a.Value.String()
+		m[a.Key] = resolveAttrValue(a.Value)
 	}
 
 	// Per-record attrs
