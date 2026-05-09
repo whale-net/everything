@@ -468,10 +468,27 @@ func (sc *SessionConsumer) consumeLoop(ctx context.Context, debugOutput bool, ar
 		return nil
 	})
 
-	// Start consuming
-	if err := sc.consumer.Start(ctx); err != nil {
-		log.Printf("[log-processor] failed to start consuming for session %d: %v", sc.sessionID, err)
-		return
+	// Start consuming with retry on initial failure.
+	// Start() is non-blocking (it launches an internal goroutine), so retrying
+	// here is safe: a failed Start() call leaves no goroutines behind.
+	retryDelay := startRetryMinDelay
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if err := sc.consumer.Start(ctx); err == nil {
+			break
+		} else {
+			log.Printf("[log-processor] failed to start consuming for session %d: %v, retrying in %s", sc.sessionID, err, retryDelay)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(retryDelay):
+		}
+		if retryDelay < startRetryMaxDelay {
+			retryDelay *= 2
+		}
 	}
 
 	// Wait for context cancellation
@@ -507,6 +524,12 @@ const (
 	// retainLogCount is the number of recent log messages preserved in memory after
 	// a consumer is reaped, so reconnecting clients still receive recent context.
 	retainLogCount = 50
+
+	// startRetryMinDelay is the initial backoff when the first Start() call fails
+	// (e.g. connection dropped between queue creation and goroutine launch).
+	startRetryMinDelay = 1 * time.Second
+	// startRetryMaxDelay caps exponential backoff for Start() retry attempts.
+	startRetryMaxDelay = 30 * time.Second
 )
 
 // reapIdleConsumers closes and removes on-demand consumers that have had no

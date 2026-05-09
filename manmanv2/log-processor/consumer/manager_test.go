@@ -47,7 +47,19 @@ func timestamps(msgs []*manmanpb.LogMessage) []int64 {
 	return ts
 }
 
-// TestNewSubscriberGetsBacklog verifies that messages added to the ring buffer
+// TestStartRetryConstants verifies that the Start() retry backoff constants are
+// sane: min > 0, max >= min. consumeLoop uses these when the initial Start()
+// call fails (connection drop between queue creation and goroutine launch).
+func TestStartRetryConstants(t *testing.T) {
+	if startRetryMinDelay <= 0 {
+		t.Errorf("startRetryMinDelay must be > 0, got %s", startRetryMinDelay)
+	}
+	if startRetryMaxDelay < startRetryMinDelay {
+		t.Errorf("startRetryMaxDelay (%s) must be >= startRetryMinDelay (%s)", startRetryMaxDelay, startRetryMinDelay)
+	}
+}
+
+
 // before subscribing are returned in the backlog.
 func TestNewSubscriberGetsBacklog(t *testing.T) {
 	sc := newTestConsumer(1, 10)

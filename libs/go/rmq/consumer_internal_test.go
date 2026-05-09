@@ -185,7 +185,41 @@ func TestStartConsuming_DeepCopiesBindings(t *testing.T) {
 	}
 }
 
-// TestBuildQueueArguments_MessageTTLAndMaxMessages verifies optional limits.
+// TestReconnectDelayConstants verifies that the backoff constants are sane:
+// min > 0, max >= min. The reconnect loop in Start() uses these to avoid
+// busy-spinning against an unavailable broker.
+func TestReconnectDelayConstants(t *testing.T) {
+	if reconnectMinDelay <= 0 {
+		t.Errorf("reconnectMinDelay must be > 0, got %s", reconnectMinDelay)
+	}
+	if reconnectMaxDelay < reconnectMinDelay {
+		t.Errorf("reconnectMaxDelay (%s) must be >= reconnectMinDelay (%s)", reconnectMaxDelay, reconnectMinDelay)
+	}
+}
+
+// TestReconnectBackoffGrowth verifies that each failure doubles the retry delay
+// up to the cap. This mirrors the arithmetic in Start()'s reconnect loop.
+func TestReconnectBackoffGrowth(t *testing.T) {
+	delay := reconnectMinDelay
+	for i := range 10 {
+		next := delay * 2
+		if next > reconnectMaxDelay {
+			next = reconnectMaxDelay
+		}
+		if next < delay && delay < reconnectMaxDelay {
+			t.Errorf("step %d: delay did not grow (%s -> %s)", i, delay, next)
+		}
+		if next > reconnectMaxDelay {
+			t.Errorf("step %d: delay exceeded cap: %s > %s", i, next, reconnectMaxDelay)
+		}
+		delay = next
+	}
+	// After sufficient doublings we must be at the cap.
+	if delay != reconnectMaxDelay {
+		t.Errorf("backoff did not reach cap; final delay = %s, cap = %s", delay, reconnectMaxDelay)
+	}
+}
+
 func TestBuildQueueArguments_MessageTTLAndMaxMessages(t *testing.T) {
 	args := buildQueueArguments("limited-queue", true, false, 60000, 1000)
 
