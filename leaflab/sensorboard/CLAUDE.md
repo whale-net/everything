@@ -26,6 +26,14 @@ bazel run //leaflab/sensorboard:flash --config=esp32 -- /dev/ttyUSB0
 mcp__serial-mcp__serial_resume  → resume
 ```
 
+### Dev flash — fast poll interval
+
+Default publish cycle is 60 s. For dev/testing use 5 s:
+```
+bazel run //leaflab/sensorboard:flash --config=esp32 \
+  --copt=-DSENSOR_POLL_INTERVAL_MS=5000 -- /dev/ttyUSB0
+```
+
 ## Provision NVS credentials (one-time per device)
 
 ```

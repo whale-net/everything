@@ -1,0 +1,29 @@
+{
+  "description": "BH1750 light on ch1 + SHT3x temp/humidity on ch0 through TCA9548A mux",
+  "hardware": "elegoo_dynamic — BH1750 on ch1, SHT3x on ch0 of HW-617 mux",
+  "sensors": [
+    {
+      "chipType": "CHIP_TYPE_BH1750",
+      "muxPath": [{"muxAddress": 112, "muxChannel": 1}],
+      "i2cAddress": 35,
+      "name": "mux-light",
+      "enabled": true
+    },
+    {
+      "chipType": "CHIP_TYPE_SHT3X",
+      "muxPath": [{"muxAddress": 112, "muxChannel": 0}],
+      "i2cAddress": 68,
+      "sensorType": "SENSOR_TYPE_TEMPERATURE",
+      "name": "temperature",
+      "enabled": true
+    },
+    {
+      "chipType": "CHIP_TYPE_SHT3X",
+      "muxPath": [{"muxAddress": 112, "muxChannel": 0}],
+      "i2cAddress": 68,
+      "sensorType": "SENSOR_TYPE_HUMIDITY",
+      "name": "humidity",
+      "enabled": true
+    }
+  ]
+}
