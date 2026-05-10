@@ -49,6 +49,7 @@ cc_test(
     srcs = ["config_applier_test.cc"],
     deps = [
         ":config_applier",
+        "//firmware/i2c:fake_i2c_bus",
         "//firmware/sensor:mock_sensor",
         "@pigweed//pw_span",
         "@pigweed//pw_unit_test",

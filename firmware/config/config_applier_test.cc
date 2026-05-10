@@ -1,9 +1,13 @@
 // Unit tests for ConfigApplier.
 //
-// Three fixture groups:
-//   DirectSensors    — sensors directly on root bus (no mux)
-//   SingleMuxSensors — sensors behind one TCA9548A
-//   ChainedMuxSensors — sensors behind two cascaded TCA9548As
+// Legacy fixture groups (wrapper mode — pre-existing sensor spans):
+//   DirectSensors      — sensors directly on root bus (no mux)
+//   SingleMuxSensors   — sensors behind one TCA9548A
+//   ChainedMuxSensors  — sensors behind two cascaded TCA9548As
+//
+// Factory fixture groups (dynamic mode — chip_type drives instantiation):
+//   FactoryDirect  — sensors on root bus, no mux
+//   FactoryMux     — mux buses created on demand from mux_path
 //
 //   bazel test //firmware/config:config_applier_test
 
@@ -11,6 +15,7 @@
 
 #include <cstring>
 
+#include "firmware/i2c/fake_i2c_bus.h"
 #include "firmware/proto/config.pb.h"
 #include "firmware/sensor/mock_sensor.h"
 #include "pw_span/span.h"
@@ -21,12 +26,22 @@ namespace {
 
 using testing::FakeSensor;
 
-// ── Factory helper (avoids most-vexing parse) ─────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
+// Legacy (wrapper) mode helper — avoids most-vexing parse.
 template <size_t N>
 ConfigApplier MakeApplier(ISensor* (&arr)[N]) {
     return ConfigApplier(pw::span<ISensor* const>(
         reinterpret_cast<ISensor* const*>(arr), N));
+}
+
+static uint32_t FakeMillis() { return 0; }
+
+// Adds chip_type to an existing SensorConfig without mux.
+firmware_SensorConfig WithChipType(firmware_SensorConfig sc,
+                                    firmware_ChipType ct) {
+    sc.chip_type = ct;
+    return sc;
 }
 
 // ── Config builder helpers ────────────────────────────────────────────────────
@@ -470,6 +485,178 @@ TEST_F(ChainedMuxSensorsTest, AllThreeSensorsConfigured) {
     EXPECT_FALSE(applier.IsEnabled(1));
     EXPECT_TRUE(applier.IsEnabled(2));
     EXPECT_EQ(applier.PollIntervalMs(2), static_cast<uint32_t>(5000));
+}
+
+// ── Factory mode — direct (no mux) ───────────────────────────────────────────
+//
+// ConfigApplier(root_bus, millis_fn) allocates sensor instances from chip_type.
+// FakeI2CBus absorbs all I2C traffic so Init() succeeds without real hardware.
+
+class FactoryDirectTest : public ::testing::Test {
+ protected:
+    firmware::testing::FakeI2CBus bus;
+};
+
+TEST_F(FactoryDirectTest, EmptyConfigProducesNoSensors) {
+    ConfigApplier applier(&bus, FakeMillis);
+    applier.Apply(MakeDeviceConfig(1));
+    EXPECT_EQ(applier.sensors().size(), 0u);
+}
+
+TEST_F(FactoryDirectTest, UnknownChipTypeSkipped) {
+    ConfigApplier applier(&bus, FakeMillis);
+    auto cfg = MakeDeviceConfig(1);
+    cfg.sensors_count = 1;
+    cfg.sensors[0] = WithChipType(MakeSensorConfig(0x23, "skip-me"),
+                                   firmware_ChipType_CHIP_TYPE_UNKNOWN);
+    applier.Apply(cfg);
+    EXPECT_EQ(applier.sensors().size(), 0u);
+}
+
+TEST_F(FactoryDirectTest, BH1750AllocatedWithName) {
+    ConfigApplier applier(&bus, FakeMillis);
+    auto cfg = MakeDeviceConfig(1);
+    cfg.sensors_count = 1;
+    cfg.sensors[0] = WithChipType(MakeSensorConfig(0x23, "canopy-light"),
+                                   firmware_ChipType_CHIP_TYPE_BH1750);
+    applier.Apply(cfg);
+    ASSERT_EQ(applier.sensors().size(), 1u);
+    EXPECT_STREQ(applier.sensors()[0]->name(), "canopy-light");
+}
+
+TEST_F(FactoryDirectTest, SHT3xTwoVirtualSensors) {
+    ConfigApplier applier(&bus, FakeMillis);
+    auto cfg = MakeDeviceConfig(1);
+    cfg.sensors_count = 2;
+    cfg.sensors[0] = WithChipType(
+        MakeSensorConfig(0x44, "plant-temp", true, 0,
+                         firmware_SensorType_SENSOR_TYPE_TEMPERATURE),
+        firmware_ChipType_CHIP_TYPE_SHT3X);
+    cfg.sensors[1] = WithChipType(
+        MakeSensorConfig(0x44, "plant-humid", true, 0,
+                         firmware_SensorType_SENSOR_TYPE_HUMIDITY),
+        firmware_ChipType_CHIP_TYPE_SHT3X);
+    applier.Apply(cfg);
+    ASSERT_EQ(applier.sensors().size(), 2u);
+    EXPECT_STREQ(applier.sensors()[0]->name(), "plant-temp");
+    EXPECT_STREQ(applier.sensors()[1]->name(), "plant-humid");
+}
+
+TEST_F(FactoryDirectTest, CCS811TwoVirtualSensors) {
+    ConfigApplier applier(&bus, FakeMillis);
+    auto cfg = MakeDeviceConfig(1);
+    cfg.sensors_count = 2;
+    cfg.sensors[0] = WithChipType(
+        MakeSensorConfig(0x5A, "room-eco2", true, 0,
+                         firmware_SensorType_SENSOR_TYPE_ECO2),
+        firmware_ChipType_CHIP_TYPE_CCS811);
+    cfg.sensors[1] = WithChipType(
+        MakeSensorConfig(0x5A, "room-tvoc", true, 0,
+                         firmware_SensorType_SENSOR_TYPE_TVOC),
+        firmware_ChipType_CHIP_TYPE_CCS811);
+    applier.Apply(cfg);
+    ASSERT_EQ(applier.sensors().size(), 2u);
+    EXPECT_STREQ(applier.sensors()[0]->name(), "room-eco2");
+    EXPECT_STREQ(applier.sensors()[1]->name(), "room-tvoc");
+}
+
+TEST_F(FactoryDirectTest, EnabledAndPollFromConfig) {
+    ConfigApplier applier(&bus, FakeMillis);
+    auto cfg = MakeDeviceConfig(1);
+    cfg.sensors_count = 1;
+    cfg.sensors[0] = WithChipType(
+        MakeSensorConfig(0x23, "light", /*enabled=*/false, /*poll_ms=*/60000),
+        firmware_ChipType_CHIP_TYPE_BH1750);
+    applier.Apply(cfg);
+    ASSERT_EQ(applier.sensors().size(), 1u);
+    EXPECT_FALSE(applier.IsEnabled(0));
+    EXPECT_EQ(applier.PollIntervalMs(0), static_cast<uint32_t>(60000));
+}
+
+TEST_F(FactoryDirectTest, SecondApplyReplacesSensors) {
+    ConfigApplier applier(&bus, FakeMillis);
+
+    auto cfg1 = MakeDeviceConfig(1);
+    cfg1.sensors_count = 1;
+    cfg1.sensors[0] = WithChipType(MakeSensorConfig(0x23, "old-light"),
+                                    firmware_ChipType_CHIP_TYPE_BH1750);
+    applier.Apply(cfg1);
+    ASSERT_EQ(applier.sensors().size(), 1u);
+
+    // Second apply with different sensor.
+    auto cfg2 = MakeDeviceConfig(2);
+    cfg2.sensors_count = 1;
+    cfg2.sensors[0] = WithChipType(MakeSensorConfig(0x44, "new-temp", true, 0,
+                                                     firmware_SensorType_SENSOR_TYPE_TEMPERATURE),
+                                    firmware_ChipType_CHIP_TYPE_SHT3X);
+    applier.Apply(cfg2);
+    ASSERT_EQ(applier.sensors().size(), 1u);
+    EXPECT_STREQ(applier.sensors()[0]->name(), "new-temp");
+}
+
+// ── Factory mode — mux buses created on demand ───────────────────────────────
+
+class FactoryMuxTest : public ::testing::Test {
+ protected:
+    firmware::testing::FakeI2CBus root_bus;
+};
+
+TEST_F(FactoryMuxTest, SingleHopMuxBusCreatedOnDemand) {
+    ConfigApplier applier(&root_bus, FakeMillis);
+    auto cfg = MakeDeviceConfig(1);
+    cfg.sensors_count = 1;
+    cfg.sensors[0] = WithChipType(MakeMuxSensorConfig(0x70, 3, 0x23, "mux-light"),
+                                   firmware_ChipType_CHIP_TYPE_BH1750);
+    applier.Apply(cfg);
+    ASSERT_EQ(applier.sensors().size(), 1u);
+    EXPECT_STREQ(applier.sensors()[0]->name(), "mux-light");
+}
+
+TEST_F(FactoryMuxTest, TwoSensorsOnDifferentChannelsSameMux) {
+    ConfigApplier applier(&root_bus, FakeMillis);
+    auto cfg = MakeDeviceConfig(1);
+    cfg.sensors_count = 2;
+    cfg.sensors[0] = WithChipType(MakeMuxSensorConfig(0x70, 0, 0x23, "ch0-light"),
+                                   firmware_ChipType_CHIP_TYPE_BH1750);
+    cfg.sensors[1] = WithChipType(MakeMuxSensorConfig(0x70, 5, 0x44, "ch5-temp", true),
+                                   firmware_ChipType_CHIP_TYPE_SHT3X);
+    cfg.sensors[1].sensor_type = firmware_SensorType_SENSOR_TYPE_TEMPERATURE;
+    applier.Apply(cfg);
+    ASSERT_EQ(applier.sensors().size(), 2u);
+    EXPECT_STREQ(applier.sensors()[0]->name(), "ch0-light");
+    EXPECT_STREQ(applier.sensors()[1]->name(), "ch5-temp");
+}
+
+TEST_F(FactoryMuxTest, CascadedTwoHopMux) {
+    ConfigApplier applier(&root_bus, FakeMillis);
+    auto cfg = MakeDeviceConfig(1);
+    cfg.sensors_count = 1;
+    cfg.sensors[0] = WithChipType(
+        MakeChainedMuxSensorConfig(0x70, 3, 0x71, 1, 0x23, "deep-light"),
+        firmware_ChipType_CHIP_TYPE_BH1750);
+    applier.Apply(cfg);
+    ASSERT_EQ(applier.sensors().size(), 1u);
+    EXPECT_STREQ(applier.sensors()[0]->name(), "deep-light");
+}
+
+TEST_F(FactoryMuxTest, MuxBusesResetBetweenApplies) {
+    ConfigApplier applier(&root_bus, FakeMillis);
+
+    auto cfg1 = MakeDeviceConfig(1);
+    cfg1.sensors_count = 1;
+    cfg1.sensors[0] = WithChipType(MakeMuxSensorConfig(0x70, 0, 0x23, "v1"),
+                                    firmware_ChipType_CHIP_TYPE_BH1750);
+    applier.Apply(cfg1);
+    ASSERT_EQ(applier.sensors().size(), 1u);
+
+    // Apply empty config — sensors and mux buses must be released.
+    applier.Apply(MakeDeviceConfig(2));
+    EXPECT_EQ(applier.sensors().size(), 0u);
+
+    // Re-apply with the same topology — must work without pool exhaustion.
+    applier.Apply(cfg1);
+    ASSERT_EQ(applier.sensors().size(), 1u);
+    EXPECT_STREQ(applier.sensors()[0]->name(), "v1");
 }
 
 }  // namespace
