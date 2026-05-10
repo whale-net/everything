@@ -37,24 +37,34 @@ FirmwarePublisher::FirmwarePublisher(const IDeviceId& device_id,
 }
 
 void FirmwarePublisher::OnConnect() {
-    config_subscribe_pending_ = true;  // (re-)arm on every reconnect
-    TryConfigSubscribe();
+    subscriptions_pending_ = true;  // (re-)arm on every reconnect
+    TrySubscriptions();
     PublishStatus("online");
     PublishManifest();
 }
 
-void FirmwarePublisher::TryConfigSubscribe() {
+void FirmwarePublisher::TrySubscriptions() {
+    bool ok = true;
+
     pw::StringBuffer<kTopicBufSize> cfg_topic;
     cfg_topic << "leaflab/" << device_id_.Get() << "/config";
-    if (net_.Subscribe(cfg_topic.c_str()).ok()) {
-        config_subscribe_pending_ = false;
-    } else {
-        PW_LOG_WARN("FirmwarePublisher: config topic subscribe failed, will retry");
+    if (!net_.Subscribe(cfg_topic.c_str()).ok()) {
+        PW_LOG_WARN("FirmwarePublisher: config subscribe failed, will retry");
+        ok = false;
     }
+
+    pw::StringBuffer<kTopicBufSize> cmd_topic;
+    cmd_topic << "leaflab/" << device_id_.Get() << "/command";
+    if (!net_.Subscribe(cmd_topic.c_str()).ok()) {
+        PW_LOG_WARN("FirmwarePublisher: command subscribe failed, will retry");
+        ok = false;
+    }
+
+    if (ok) subscriptions_pending_ = false;
 }
 
 void FirmwarePublisher::PublishReadings() {
-    if (config_subscribe_pending_) TryConfigSubscribe();
+    if (subscriptions_pending_) TrySubscriptions();
 
     auto sensors = config_applier_.sensors();
     for (size_t i = 0; i < sensors.size(); ++i) {
@@ -131,11 +141,17 @@ void FirmwarePublisher::PublishStatus(const char* status) {
     net_.Publish(topic.c_str(), status);
 }
 
-void FirmwarePublisher::OnMQTTMessage(const char* /*topic*/,
+void FirmwarePublisher::OnMQTTMessage(const char* topic,
                                        const uint8_t* payload,
                                        size_t length) {
-    // We only subscribe to one topic; topic discrimination not needed yet.
-    if (instance_) instance_->HandleConfigMessage(payload, length);
+    if (!instance_) return;
+    // Route by topic suffix.
+    const char* suffix = strrchr(topic, '/');
+    if (suffix && strcmp(suffix, "/command") == 0) {
+        instance_->HandleCommandMessage(payload, length);
+    } else {
+        instance_->HandleConfigMessage(payload, length);
+    }
 }
 
 void FirmwarePublisher::HandleConfigMessage(const uint8_t* payload,
@@ -177,16 +193,47 @@ void FirmwarePublisher::HandleConfigMessage(const uint8_t* payload,
         }
     }
 
-    config_applier_.Apply(cfg);
+    // Queue — Apply() does I2C and must not run inside an MQTT callback.
+    pending_config_ = cfg;
+    config_pending_ = true;
+    PW_LOG_INFO("FirmwarePublisher: config v%" PRIu64 " queued, will apply from loop()",
+                cfg.version);
+}
 
-    if (config_store_ && !config_store_->Save(cfg).ok()) {
-        PW_LOG_ERROR("FirmwarePublisher: failed to persist config to NVS");
-        // Apply succeeded — continue anyway.
+void FirmwarePublisher::HandleCommandMessage(const uint8_t* payload,
+                                              size_t length) {
+    char cmd[32] = {};
+    size_t copy_len = length < sizeof(cmd) - 1 ? length : sizeof(cmd) - 1;
+    memcpy(cmd, payload, copy_len);
+
+    if (strcmp(cmd, "factory_reset") == 0) {
+        PW_LOG_INFO("FirmwarePublisher: factory_reset command received");
+        pending_reset_ = PendingReset::kFactory;
+    } else if (strcmp(cmd, "reset") == 0) {
+        PW_LOG_INFO("FirmwarePublisher: reset command received");
+        pending_reset_ = PendingReset::kSoft;
+    } else {
+        PW_LOG_WARN("FirmwarePublisher: unknown command '%s'", cmd);
+    }
+}
+
+FirmwarePublisher::PendingReset FirmwarePublisher::ProcessPending() {
+    if (config_pending_) {
+        config_pending_ = false;
+        config_applier_.Apply(pending_config_);
+        if (config_store_ && !config_store_->Save(pending_config_).ok()) {
+            PW_LOG_ERROR("FirmwarePublisher: failed to persist config to NVS");
+        }
+        PublishManifest();
+        PublishConfigAck(pending_config_.version, true, "");
+        PW_LOG_INFO("FirmwarePublisher: config v%" PRIu64 " applied",
+                    pending_config_.version);
+        pending_config_ = firmware_DeviceConfig_init_zero;
     }
 
-    PublishManifest();
-    PublishConfigAck(cfg.version, true, "");
-    PW_LOG_INFO("FirmwarePublisher: config v%" PRIu64 " applied", cfg.version);
+    PendingReset reset = pending_reset_;
+    pending_reset_ = PendingReset::kNone;
+    return reset;
 }
 
 void FirmwarePublisher::PublishConfigAck(uint64_t version, bool accepted,

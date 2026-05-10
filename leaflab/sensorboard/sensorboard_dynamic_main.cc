@@ -1,18 +1,17 @@
 // Sensorboard main loop — dynamic config variant.
 //
-// On boot: init I2C bus, load any persisted DeviceConfig from NVS, apply it
-// (which instantiates and inits sensors from chip_type), then connect to MQTT.
-// On config push: FirmwarePublisher calls ConfigApplier::Apply() which
-// destroys old sensor instances and creates new ones from the incoming config.
+// Reset lifecycle:
+//   - Power cycle / normal boot: load NVS config → apply → connect.
+//   - MQTT config push: queued in callback, applied from loop() (I2C-safe).
+//   - MQTT "reset" command: soft restart, config preserved.
+//   - MQTT "factory_reset" command: clear NVS config → restart (blank slate).
+//   - GPIO 0 (BOOT button, active-low): soft restart.
 //
 // No sensors are compiled in — all sensor instances are factory-created by
 // ConfigApplier from the DeviceConfig pushed over MQTT.
-//
-// The config file (elegoo_*_dynamic_config.cc) additionally provides:
-//   firmware::ConfigStore&   GetConfigStore()
-//   firmware::ConfigApplier& GetConfigApplier()
 
 #include <Arduino.h>
+#include <esp_system.h>
 
 #include "board_pins.h"
 #include "firmware/proto/config.pb.h"
@@ -24,6 +23,9 @@
 #include "firmware/sensor/sensor.h"
 #include "pw_log/log.h"
 #include "pw_span/span.h"
+
+// GPIO 0 is the BOOT button on most ESP32 boards (active-low).
+static constexpr int kResetPin = 0;
 
 // Provided by elegoo_dynamic_config.cc
 firmware::II2CBus& GetBus();
@@ -53,8 +55,22 @@ static void CheckSensorNames(pw::span<firmware::ISensor* const> sensors) {
     }
 }
 
+static void DoReset(firmware::FirmwarePublisher::PendingReset reset) {
+    GetPublisher().PublishOffline();
+    delay(200);
+    if (reset == firmware::FirmwarePublisher::PendingReset::kFactory) {
+        PW_LOG_INFO("Factory reset: clearing NVS config");
+        GetConfigStore().Clear();
+        delay(100);
+    }
+    PW_LOG_INFO("Restarting...");
+    delay(100);
+    esp_restart();
+}
+
 void setup() {
     Serial.begin(115200);
+    pinMode(kResetPin, INPUT_PULLUP);
 
     // Bus must be up before Apply() — it calls sensor->Init() which does I2C.
     if (!GetBus().Init(board::kSda, board::kScl).ok()) {
@@ -100,6 +116,22 @@ void loop() {
         GetPublisher().OnConnect();
     }
     prev_state = state;
+
+    // Apply queued config and handle reset requests. Safe to do I2C here.
+    auto reset = GetPublisher().ProcessPending();
+    if (reset != firmware::FirmwarePublisher::PendingReset::kNone) {
+        DoReset(reset);
+        return;  // unreachable, but keeps the compiler happy
+    }
+
+    // GPIO 0 (BOOT button, active-low): soft reset on long press.
+    if (digitalRead(kResetPin) == LOW) {
+        delay(50);  // debounce
+        if (digitalRead(kResetPin) == LOW) {
+            PW_LOG_INFO("GPIO reset button held");
+            DoReset(firmware::FirmwarePublisher::PendingReset::kSoft);
+        }
+    }
 
     // TODO: use ConfigApplier::PollIntervalMs() for per-sensor scheduling.
     uint32_t now = millis();

@@ -71,6 +71,22 @@ Scenarios are JSON files in `leaflab/scripts/scenarios/`. Each entry needs `chip
      -t 'leaflab/<device_id>/config/ack' -v
    ```
 
+## Reset lifecycle
+
+| Trigger | Effect |
+|---------|--------|
+| Power cycle / normal boot | Load NVS config → apply → connect |
+| MQTT config push (`leaflab/<device_id>/config`) | Queued in callback, applied from `loop()` (I2C-safe) |
+| MQTT command `"reset"` (`leaflab/<device_id>/command`) | Publish offline → soft restart (config preserved) |
+| MQTT command `"factory_reset"` | Publish offline → erase NVS config → restart |
+| GPIO 0 (BOOT button, hold) | Soft restart (config preserved) |
+
+Send a reset command:
+```
+mosquitto_pub -h localhost -p 1883 -u rabbit -P password \
+  -t 'leaflab/<device_id>/command' -m 'reset'
+```
+
 ## I2C hardware notes
 
 - SDA = GPIO 21, SCL = GPIO 22

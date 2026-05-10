@@ -67,4 +67,17 @@ pw::Status ConfigStore::Save(const firmware_DeviceConfig& cfg) {
     return pw::OkStatus();
 }
 
+pw::Status ConfigStore::Clear() {
+    Preferences prefs;
+    if (!prefs.begin("config", /*readOnly=*/false)) {
+        PW_LOG_ERROR("ConfigStore: failed to open NVS namespace 'config'");
+        return pw::Status::Internal();
+    }
+    prefs.remove("device_cfg");
+    prefs.end();
+    version_ = 0;
+    PW_LOG_INFO("ConfigStore: cleared");
+    return pw::OkStatus();
+}
+
 }  // namespace firmware

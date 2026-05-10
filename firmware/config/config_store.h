@@ -23,6 +23,9 @@ class ConfigStore {
   // Persist cfg to NVS, overwriting any previous config.
   pw::Status Save(const firmware_DeviceConfig& cfg);
 
+  // Erase the stored config from NVS. version_ is reset to 0.
+  pw::Status Clear();
+
   // Version of the last successfully loaded or saved config.
   // Returns 0 if neither Load nor Save has succeeded this boot.
   uint64_t current_version() const { return version_; }
