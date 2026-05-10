@@ -6,10 +6,19 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
+)
+
+const (
+	// reconnectMinDelay is the initial backoff after a channel closure.
+	// Subsequent failures double the delay up to reconnectMaxDelay.
+	reconnectMinDelay = 1 * time.Second
+	// reconnectMaxDelay caps the exponential backoff between reconnect attempts.
+	reconnectMaxDelay = 30 * time.Second
 )
 
 // Message contains all information about an incoming message
@@ -225,17 +234,26 @@ func (c *Consumer) Start(ctx context.Context) error {
 				return
 			case msg, ok := <-msgs:
 				if !ok {
-					// Channel closed — reconnect loop.
+					// Channel closed — reconnect with exponential backoff.
 					log.Printf("WARNING: consumer channel closed for queue %s, reconnecting", c.queue)
+					retryDelay := reconnectMinDelay
 					for {
-						if ctx.Err() != nil {
+						select {
+						case <-ctx.Done():
 							return
+						case <-time.After(retryDelay):
 						}
 						newMsgs, err := c.startConsuming()
 						if err != nil {
-							log.Printf("consumer reconnect failed: %v, retrying", err)
+							nextDelay := retryDelay * 2
+							if nextDelay > reconnectMaxDelay {
+								nextDelay = reconnectMaxDelay
+							}
+							log.Printf("consumer reconnect failed for queue %s: %v, retrying in %s", c.queue, err, nextDelay)
+							retryDelay = nextDelay
 							continue
 						}
+						log.Printf("consumer reconnected to queue %s", c.queue)
 						msgs = newMsgs
 						break
 					}
