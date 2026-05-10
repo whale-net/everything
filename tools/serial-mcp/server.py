@@ -125,6 +125,14 @@ def _read_lines(path: Path) -> list[str]:
 
 # ── MCP tools ─────────────────────────────────────────────────────────────────
 
+def _mtime_age_s(path: Path) -> float | None:
+    """Seconds since path was last modified, or None if it doesn't exist."""
+    try:
+        return time.time() - path.stat().st_mtime
+    except OSError:
+        return None
+
+
 @mcp.tool()
 def serial_tail(lines: int = 50) -> dict[str, Any]:
     """Return the last N lines of clean serial output (ANSI stripped, binary filtered).
@@ -135,7 +143,9 @@ def serial_tail(lines: int = 50) -> dict[str, Any]:
         lines: Number of lines to return (default 50, capped at 500).
 
     Returns:
-        dict with 'lines' list, 'returned' count, and 'total_lines' count.
+        dict with 'lines' list, 'returned' count, 'total_lines' count, and
+        'log_age_s' (seconds since the last byte was written — None if no log).
+        A large log_age_s means the device is silent or the daemon lost the port.
     """
     _ensure_daemon()
     lines = min(max(lines, 1), 500)
@@ -145,6 +155,7 @@ def serial_tail(lines: int = 50) -> dict[str, Any]:
         "lines": tail,
         "returned": len(tail),
         "total_lines": len(all_lines),
+        "log_age_s": _mtime_age_s(OUTPUT_LOG),
     }
 
 
@@ -223,6 +234,7 @@ def serial_status() -> dict[str, Any]:
         "daemon_alive": daemon_alive,
         "daemon_pid": pid,
         "output_log_bytes": output_size,
+        "log_age_s": _mtime_age_s(OUTPUT_LOG),
         "last_serial_line": last_serial_line,
         "last_state_change": last_state_change,
     }

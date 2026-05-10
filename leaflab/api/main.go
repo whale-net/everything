@@ -9,10 +9,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
-	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
@@ -31,7 +31,7 @@ func run() error {
 		ServiceName: "leaflab-api",
 		Domain:      "leaflab",
 		JSONFormat:  true,
-		EnableOTLP:  false,
+		EnableOTLP:  true,
 	})
 	defer logging.Shutdown(ctx) //nolint:errcheck
 
