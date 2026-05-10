@@ -15,6 +15,7 @@ Plant and environment monitoring firmware and data pipeline.
 ## Projects
 
 - [sensorboard/README.md](sensorboard/README.md) — Build, flash, extend the sensorboard firmware; how to add sensors and board configs
+- [sensorboard/CLAUDE.md](sensorboard/CLAUDE.md) — Agent instructions: flash/validate workflow, I2C hardware notes, config push, DB validation
 
 ## Related Docs
 

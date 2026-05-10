@@ -36,7 +36,9 @@ pw::Status BH1750Sensor::Init() {
 }
 
 SensorReading BH1750Sensor::Read() {
-    if (!init_ok_) return SensorReading::Invalid();
+    if (!init_ok_) {
+        if (!Init().ok()) return SensorReading::Invalid();
+    }
     uint32_t now = clock_fn_();
     if (now - trigger_ms_ >= kMeasureTimeMs) {
         uint8_t buf[2] = {};

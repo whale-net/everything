@@ -30,7 +30,9 @@ pw::Status SHT3xDevice::Trigger() {
 }
 
 void SHT3xDevice::Poll() {
-    if (!init_ok_) return;
+    if (!init_ok_) {
+        if (!Init().ok()) return;
+    }
     uint32_t now = clock_fn_();
     if (now - trigger_ms_ < kMeasureTimeMs) return;
 

@@ -138,7 +138,6 @@ void ConfigApplier::ApplyFactory(const firmware_DeviceConfig& cfg) {
         auto* s = bh1750_pool_.Alloc(*bus, addr,
                                       name ? name : "light", millis_fn_);
         if (!s) { PW_LOG_WARN("ConfigApplier: BH1750 pool exhausted"); break; }
-        (void)s->Init();
         AddSensor(s, sc);
         break;
       }
@@ -151,7 +150,6 @@ void ConfigApplier::ApplyFactory(const firmware_DeviceConfig& cfg) {
         if (!dev) {
           dev = sht3x_dev_pool_.Alloc(*bus, addr, millis_fn_);
           if (!dev) { PW_LOG_WARN("ConfigApplier: SHT3x device pool exhausted"); break; }
-          (void)dev->Init();
           (void)depth;
         }
         if (sc.sensor_type == firmware_SensorType_SENSOR_TYPE_HUMIDITY) {
@@ -174,7 +172,6 @@ void ConfigApplier::ApplyFactory(const firmware_DeviceConfig& cfg) {
         if (!dev) {
           dev = ccs811_dev_pool_.Alloc(*bus, addr, millis_fn_);
           if (!dev) { PW_LOG_WARN("ConfigApplier: CCS811 device pool exhausted"); break; }
-          (void)dev->Init();
           (void)depth;
         }
         if (sc.sensor_type == firmware_SensorType_SENSOR_TYPE_TVOC) {

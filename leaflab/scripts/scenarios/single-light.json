@@ -3,6 +3,7 @@
   "hardware": "elegoo_config — BH1750 at 0x23 direct",
   "sensors": [
     {
+      "chipType": "CHIP_TYPE_BH1750",
       "i2cAddress": 35,
       "name": "light",
       "enabled": true

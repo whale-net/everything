@@ -54,7 +54,9 @@ pw::Status CCS811Device::Init() {
 }
 
 void CCS811Device::Poll() {
-    if (!init_ok_) return;
+    if (!init_ok_) {
+        if (!Init().ok()) return;
+    }
     uint32_t now = clock_fn_();
     if (now - last_poll_ms_ < kPollIntervalMs) return;
     last_poll_ms_ = now;

@@ -3,6 +3,7 @@
   "hardware": "elegoo_dynamic — BH1750 on ch6 of HW-617 mux",
   "sensors": [
     {
+      "chipType": "CHIP_TYPE_BH1750",
       "muxPath": [{"muxAddress": 112, "muxChannel": 6}],
       "i2cAddress": 35,
       "name": "mux-light",
