@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	pb "github.com/whale-net/everything/leaflab/api/proto"
@@ -75,17 +77,24 @@ func run() error {
 	logger.Info("leaflab-api listening", "port", port)
 
 	done := make(chan error, 1)
+	var once sync.Once
+	sendDone := func(err error) { once.Do(func() { done <- err }) }
+
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		<-sig
 		logger.Info("shutting down")
 		grpcServer.GracefulStop()
-		done <- nil
+		sendDone(nil)
 	}()
 	go func() {
 		if err := grpcServer.Serve(listener); err != nil {
-			done <- fmt.Errorf("grpc serve: %w", err)
+			if errors.Is(err, grpc.ErrServerStopped) {
+				sendDone(nil)
+				return
+			}
+			sendDone(fmt.Errorf("grpc serve: %w", err))
 		}
 	}()
 

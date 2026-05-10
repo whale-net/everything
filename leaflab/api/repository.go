@@ -34,26 +34,33 @@ func (r *Repository) GetOrCreateBoard(ctx context.Context, deviceID string) (int
 	return id, nil
 }
 
-// InsertDeviceConfigNextVersion atomically assigns the next version for the
-// board and inserts the pending config row. Returns the assigned version.
-// The INSERT uses a CTE to compute MAX(version)+1 inside the same statement,
-// eliminating the TOCTOU race between a separate SELECT and INSERT.
+// InsertDeviceConfigNextVersion assigns the next version for the board and
+// inserts the pending config row. ON CONFLICT DO NOTHING retries when two
+// concurrent writers compute the same MAX(version)+1; the unique constraint on
+// (board_id, version) guarantees only one wins per version number.
 func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte) (int64, error) {
-	var version int64
-	err := r.db.QueryRow(ctx, `
-		WITH next AS (
-			SELECT COALESCE(MAX(version), 0) + 1 AS v
-			FROM device_config
-			WHERE board_id = $1
-		)
-		INSERT INTO device_config (board_id, version, config_json)
-		SELECT $1, next.v, $2 FROM next
-		RETURNING version
-	`, boardID, configJSON).Scan(&version)
-	if err != nil {
+	for {
+		var version int64
+		err := r.db.QueryRow(ctx, `
+			WITH next AS (
+				SELECT COALESCE(MAX(version), 0) + 1 AS v
+				FROM device_config
+				WHERE board_id = $1
+			)
+			INSERT INTO device_config (board_id, version, config_json)
+			SELECT $1, next.v, $2 FROM next
+			ON CONFLICT (board_id, version) DO NOTHING
+			RETURNING version
+		`, boardID, configJSON).Scan(&version)
+		if err == nil {
+			return version, nil
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			// another writer claimed this version; retry with the new MAX
+			continue
+		}
 		return 0, fmt.Errorf("insert device_config for board %d: %w", boardID, err)
 	}
-	return version, nil
 }
 
 // GetLatestAcceptedConfig returns the highest-version accepted config for a board.
