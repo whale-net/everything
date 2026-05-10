@@ -1,12 +1,14 @@
 #!/bin/bash
 # Integration tests for the release helper CLI that require a live Bazel environment.
-# Tests list-apps, plan, and changes commands which internally run Bazel queries.
+# These tests cover commands that internally run Bazel queries (list-apps, plan, etc.)
+# and commands that interact with the repository (changes, release-notes).
 #
-# These tests are tagged "manual" and must be run explicitly:
+# Tagged "manual" — must be run explicitly:
 #   bazel test //tools/release_helper:test_cli_integration_bazel
 #
-# The script invokes `bazel run //tools:release` so that Bazel can resolve the
-# workspace and its targets.
+# Coverage (mirrors CI/CD workflow usage):
+#   list-apps, list (alias), plan, plan-openapi-builds, changes,
+#   release-notes, list-helm-charts, plan-helm-release
 
 set -euo pipefail
 
@@ -91,6 +93,7 @@ echo "Workspace: $WORKSPACE_ROOT"
 echo ""
 
 # ── list-apps ─────────────────────────────────────────────────────────────────
+# Used by: release.yml (create-combined step, release-notes-all step)
 
 assert_exit 0 "list-apps exits 0" \
     list-apps --format json
@@ -133,6 +136,7 @@ else
 fi
 
 # ── plan: workflow_dispatch ───────────────────────────────────────────────────
+# Used in ci.yml (event-type pull_request/push) and release.yml (workflow_dispatch).
 
 plan_output=$(capture plan --event-type workflow_dispatch --apps all --version v1.0.0 --format json)
 
@@ -149,9 +153,25 @@ assert 'matrix' in data, 'missing matrix key'
 assert 'apps' in data, 'missing apps key'
 assert 'include' in data['matrix'], 'missing matrix.include'
 " 2>/dev/null; then
-    pass "plan JSON has required keys (matrix, apps)"
+    pass "plan JSON has required keys (matrix, apps, matrix.include)"
 else
-    fail "plan JSON has required keys (matrix, apps) (got: $plan_output)"
+    fail "plan JSON has required keys (matrix, apps, matrix.include) (got: $plan_output)"
+fi
+
+if echo "$plan_output" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+# Each include item must have app, domain, and version
+items = data['matrix']['include']
+assert len(items) > 0, 'no items'
+first = items[0]
+assert 'app' in first, 'missing app'
+assert 'domain' in first, 'missing domain'
+assert 'version' in first, 'missing version'
+" 2>/dev/null; then
+    pass "plan matrix items have required fields (app, domain, version)"
+else
+    fail "plan matrix items have required fields (got: $plan_output)"
 fi
 
 assert_exit 0 "plan --format github exits 0" \
@@ -159,19 +179,36 @@ assert_exit 0 "plan --format github exits 0" \
 
 github_output=$(capture plan --event-type workflow_dispatch --apps all --version v1.0.0 --format github)
 if echo "$github_output" | grep -q "^matrix="; then
-    pass "plan --format github outputs 'matrix=...'"
+    pass "plan --format github outputs 'matrix=...' line"
 else
-    fail "plan --format github outputs 'matrix=...' (got: $github_output)"
+    fail "plan --format github outputs 'matrix=...' line (got: $github_output)"
+fi
+if echo "$github_output" | grep -q "^apps="; then
+    pass "plan --format github outputs 'apps=...' line"
+else
+    fail "plan --format github outputs 'apps=...' line (got: $github_output)"
 fi
 
-# ── plan: pull_request (change detection, no apps required) ──────────────────
+# ── plan: pull_request event (change detection) ───────────────────────────────
+# Used in ci.yml to detect which apps changed on a PR/push.
 
-assert_exit 0 "plan accepts pull_request event without explicit apps" \
+assert_exit 0 "plan accepts pull_request event-type" \
     plan --event-type pull_request --format json
+
+assert_exit 0 "plan accepts push event-type" \
+    plan --event-type push --format json
+
+assert_exit 0 "plan accepts fallback event-type" \
+    plan --event-type fallback --format json
+
+# ── plan: --include-demo flag ─────────────────────────────────────────────────
+# Release.yml supports --include-demo to include demo domain apps.
+
+assert_exit 0 "plan accepts --include-demo flag" \
+    plan --event-type workflow_dispatch --apps all --version v1.0.0 --include-demo --format json
 
 # ── plan: specific app ───────────────────────────────────────────────────────
 
-# Pick the first known app from list-apps and confirm plan handles it.
 first_app=$(capture list-apps --format json | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
@@ -200,6 +237,91 @@ assert len(apps) >= 1, 'expected at least one app'
     fi
 else
     echo "SKIP: no apps found in list-apps, skipping specific-app plan test"
+fi
+
+# ── plan-openapi-builds ───────────────────────────────────────────────────────
+# Used in release.yml to find apps with OpenAPI spec targets.
+# Only apps with fastapi_app/openapi_spec_target configured will appear.
+
+assert_exit 0 "plan-openapi-builds exits 0 with valid apps" \
+    plan-openapi-builds --apps all --format json
+
+openapi_output=$(capture plan-openapi-builds --apps all --format json)
+if echo "$openapi_output" | python3 -c "import sys, json; data=json.load(sys.stdin); assert 'apps_with_specs' in data and 'count' in data" 2>/dev/null; then
+    pass "plan-openapi-builds JSON output has expected fields (apps_with_specs, count)"
+else
+    fail "plan-openapi-builds JSON output has expected fields (got: $openapi_output)"
+fi
+
+assert_exit 0 "plan-openapi-builds --format github exits 0" \
+    plan-openapi-builds --apps all --format github
+
+github_openapi=$(capture plan-openapi-builds --apps all --format github)
+if echo "$github_openapi" | grep -q "^matrix="; then
+    pass "plan-openapi-builds --format github outputs 'matrix=...' line"
+else
+    fail "plan-openapi-builds --format github outputs 'matrix=...' line (got: $github_openapi)"
+fi
+
+# ── changes ───────────────────────────────────────────────────────────────────
+# Used in ci.yml via plan --base-commit to detect changed apps.
+
+assert_exit 0 "changes exits 0 with no base-commit" \
+    changes
+
+# ── list-helm-charts ──────────────────────────────────────────────────────────
+# Used implicitly by plan-helm-release and build-helm-chart.
+
+assert_exit 0 "list-helm-charts exits 0" \
+    list-helm-charts
+
+helm_output=$(capture list-helm-charts)
+if echo "$helm_output" | grep -qE "\(domain:"; then
+    pass "list-helm-charts output includes domain information"
+else
+    fail "list-helm-charts output includes domain information (got: $helm_output)"
+fi
+
+# ── plan-helm-release ────────────────────────────────────────────────────────
+# Used in release.yml to build helm chart release matrix.
+
+assert_exit 0 "plan-helm-release exits 0 (all charts, json)" \
+    plan-helm-release --format json
+
+helm_plan_output=$(capture plan-helm-release --format json)
+if echo "$helm_plan_output" | python3 -c "import sys, json; data=json.load(sys.stdin); assert 'matrix' in data and 'charts' in data" 2>/dev/null; then
+    pass "plan-helm-release JSON has required keys (matrix, charts)"
+else
+    fail "plan-helm-release JSON has required keys (got: $helm_plan_output)"
+fi
+
+assert_exit 0 "plan-helm-release --format github exits 0" \
+    plan-helm-release --format github
+
+github_helm=$(capture plan-helm-release --format github)
+if echo "$github_helm" | grep -q "^matrix="; then
+    pass "plan-helm-release --format github outputs 'matrix=...' line"
+else
+    fail "plan-helm-release --format github outputs 'matrix=...' line (got: $github_helm)"
+fi
+if echo "$github_helm" | grep -q "^charts="; then
+    pass "plan-helm-release --format github outputs 'charts=...' line"
+else
+    fail "plan-helm-release --format github outputs 'charts=...' line (got: $github_helm)"
+fi
+
+# ── release-notes: with current-tag=HEAD ──────────────────────────────────────
+# Used in release.yml to generate per-app markdown release notes.
+# With --current-tag HEAD and no previous tags, the command may produce empty/minimal notes.
+
+if [ -n "$first_app" ]; then
+    assert_exit 0 "release-notes exits 0 for valid app with --current-tag HEAD (--format markdown)" \
+        release-notes "$first_app" --current-tag HEAD --format markdown
+
+    assert_exit 0 "release-notes exits 0 for valid app with --current-tag HEAD (--format json)" \
+        release-notes "$first_app" --current-tag HEAD --format json
+else
+    echo "SKIP: no apps found, skipping release-notes tests"
 fi
 
 # ─── summary ──────────────────────────────────────────────────────────────────
