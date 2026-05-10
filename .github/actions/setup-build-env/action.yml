@@ -78,9 +78,13 @@ runs:
         bazelisk-cache: true
         # Enable repository cache for all external dependencies (single consolidated cache)
         repository-cache: true
-        # Disable external-cache to avoid many small cache requests
-        # The repository-cache already handles external dependencies efficiently
-        external-cache: false
+        # Enable external-cache to avoid re-running all repository rules on every CI run.
+        # Without this, Bazel re-evaluates ~200+ repo rules (Go gazelle, pigweed, Python
+        # toolchain, OCI image manifests) from scratch each run, costing ~125s of analysis
+        # time before any build actions run. With this enabled, the external/ output-base
+        # directories are cached; combined with --noexperimental_check_external_repository_files
+        # in .bazelrc:ci, Bazel skips all repo-rule re-evaluation on cache hits.
+        external-cache: true
         # Disk cache - isolated by cache suffix for better hit rates
         disk-cache: ${{ inputs.cache-suffix || 'true' }}
 
