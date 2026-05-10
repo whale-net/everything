@@ -25,23 +25,19 @@
 #include "firmware/sensor/sensor.h"
 #include "pw_span/span.h"
 
-// ── I2C bus ───────────────────────────────────────────────────────────────────
+// ── I2C bus + config ─────────────────────────────────────────────────────────
 
 static firmware::ArduinoI2CBus bus;
+static firmware::ConfigApplier config_applier(&bus, millis);
+static firmware::ConfigStore   config_store;
 
-firmware::II2CBus& GetBus() { return bus; }
+firmware::II2CBus&        GetBus()           { return bus; }
+firmware::ConfigApplier&  GetConfigApplier() { return config_applier; }
+firmware::ConfigStore&    GetConfigStore()   { return config_store; }
 
 pw::span<firmware::ISensor* const> GetSensors() {
     return GetConfigApplier().sensors();
 }
-
-// ── Config (factory — all sensor instances created from DeviceConfig proto) ──
-
-static firmware::ConfigApplier config_applier(&bus, millis);
-static firmware::ConfigStore   config_store;
-
-firmware::ConfigApplier& GetConfigApplier() { return config_applier; }
-firmware::ConfigStore&   GetConfigStore()   { return config_store; }
 
 // ── Network ───────────────────────────────────────────────────────────────────
 
@@ -53,7 +49,7 @@ static firmware::FirmwarePublisher* publisher = nullptr;
 firmware::NetworkManager& GetNetwork() {
     if (net != nullptr) return *net;
 
-    creds.Load();
+    (void)creds.Load();
 
     WiFiInit(creds.wifi_ssid(), creds.wifi_password());
 

@@ -144,7 +144,6 @@ void ConfigApplier::ApplyFactory(const firmware_DeviceConfig& cfg) {
       }
 
       case firmware_ChipType_CHIP_TYPE_SHT3X: {
-        // Find or create the shared SHT3xDevice for this address+path.
         size_t depth = static_cast<size_t>(sc.mux_path_count);
         SHT3xDevice* dev = sht3x_dev_pool_.FindIf([&](SHT3xDevice* d) {
           return DevicePathsMatch(d->address(), d->mux_depth(), sc);
@@ -160,7 +159,6 @@ void ConfigApplier::ApplyFactory(const firmware_DeviceConfig& cfg) {
           if (!s) { PW_LOG_WARN("ConfigApplier: SHT3x humidity pool exhausted"); break; }
           AddSensor(s, sc);
         } else {
-          // TEMPERATURE or UNKNOWN → temperature virtual sensor
           auto* s = sht3x_temp_pool_.Alloc(*dev, name ? name : "temp");
           if (!s) { PW_LOG_WARN("ConfigApplier: SHT3x temperature pool exhausted"); break; }
           AddSensor(s, sc);
@@ -184,7 +182,6 @@ void ConfigApplier::ApplyFactory(const firmware_DeviceConfig& cfg) {
           if (!s) { PW_LOG_WARN("ConfigApplier: CCS811 TVOC pool exhausted"); break; }
           AddSensor(s, sc);
         } else {
-          // ECO2 or UNKNOWN → eCO2 virtual sensor
           auto* s = ccs811_eco2_pool_.Alloc(*dev, name ? name : "eco2");
           if (!s) { PW_LOG_WARN("ConfigApplier: CCS811 eCO2 pool exhausted"); break; }
           AddSensor(s, sc);
@@ -193,7 +190,7 @@ void ConfigApplier::ApplyFactory(const firmware_DeviceConfig& cfg) {
       }
 
       case firmware_ChipType_CHIP_TYPE_UNKNOWN:
-        break;  // patch-only mode — no sensor instantiated
+        break;
     }
   }
 
