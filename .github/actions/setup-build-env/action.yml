@@ -34,6 +34,18 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Cache Bazel External Repositories (all sizes)
+      uses: actions/cache@v4
+      with:
+        # Cache the entire external/ directory — this complements setup-bazel's
+        # per-repo external-cache (which only caches repos >=10MB) by also
+        # capturing all the small Go module repos that fall below that threshold.
+        # Key includes MODULE.bazel so the cache is invalidated on any dep change.
+        path: ~/.bazel/external
+        key: bazel-external-v1-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'WORKSPACE.bazel', 'WORKSPACE.bzlmod', 'WORKSPACE') }}
+        restore-keys: |
+          bazel-external-v1-${{ runner.os }}-
+
     - name: Setup Remote Cache Environment
       shell: bash
       run: |
