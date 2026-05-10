@@ -83,6 +83,39 @@ Update documentation as part of the same task that changes the code — not as a
 
 **New files:** If you create a doc that isn't one of the four standard files (e.g. a component-specific guide or style doc), add an entry to the domain's `TOC.md` so it is discoverable.
 
+## SCD2 (Slowly Changing Dimensions Type 2)
+
+**Column convention — always use `valid_from` / `valid_to`:**
+- `valid_from TIMESTAMPTZ NOT NULL DEFAULT NOW()` — when this row became the current value
+- `valid_to TIMESTAMPTZ` — when it was superseded; `NULL` = still current
+
+Do not use synonyms (`assigned_at`/`unassigned_at`, `start_at`/`end_at`, etc.).
+
+**Write path — close and open:**
+```sql
+UPDATE <table> SET valid_to = NOW() WHERE <entity_id> = $1 AND valid_to IS NULL;
+INSERT INTO <table> (<entity_id>, <data_cols>) VALUES ($1, $2);
+```
+
+**Current value:**
+```sql
+SELECT * FROM <table> WHERE <entity_id> = $1 AND valid_to IS NULL;
+```
+Always back this with a partial index: `CREATE INDEX ON <table>(<entity_id>) WHERE valid_to IS NULL`.
+
+**Value at time T** (e.g. joining a fact table to a history table at event time):
+```sql
+SELECT * FROM <table>
+WHERE <entity_id> = $1
+  AND valid_from <= $t
+  AND (valid_to IS NULL OR valid_to > $t);
+-- Example: leaflab's v_sensor_reading_with_plant joins plants active at recorded_at this way.
+```
+
+**Do not apply SCD2 to** append-only event logs or soft-delete tables — those have different semantics. If a table needs a SCD2-shaped view over it, derive one with a window function (`LEAD(valid_from) OVER (PARTITION BY entity_id ORDER BY version)`).
+
+**Views:** Pre-join SCD2 history tables in `v_` views so downstream consumers (dashboards, APIs) never replicate the join logic. See `leaflab/` for a worked example.
+
 ## Domains
 
 | Domain | Description | Reference |

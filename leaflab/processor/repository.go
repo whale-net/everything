@@ -142,13 +142,13 @@ func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int
 	return sensorID, regionID, nil
 }
 
-// UpsertSensorLabel records a name in sensor_label history.
+// UpsertSensorLabel records a name in sensor_name_history.
 // If the current open label already has this name, it is a no-op.
 // Otherwise it closes the open label and opens a new one.
 func (r *Repository) UpsertSensorLabel(ctx context.Context, sensorID int64, name string) error {
 	var currentName string
 	err := r.db.QueryRow(ctx, `
-		SELECT name FROM sensor_label WHERE sensor_id = $1 AND valid_to IS NULL
+		SELECT name FROM sensor_name_history WHERE sensor_id = $1 AND valid_to IS NULL
 	`, sensorID).Scan(&currentName)
 
 	if err == nil && currentName == name {
@@ -161,14 +161,14 @@ func (r *Repository) UpsertSensorLabel(ctx context.Context, sensorID int64, name
 	// Close current open label if one exists.
 	if err == nil {
 		if _, err := r.db.Exec(ctx, `
-			UPDATE sensor_label SET valid_to = NOW() WHERE sensor_id = $1 AND valid_to IS NULL
+			UPDATE sensor_name_history SET valid_to = NOW() WHERE sensor_id = $1 AND valid_to IS NULL
 		`, sensorID); err != nil {
 			return fmt.Errorf("close label for sensor %d: %w", sensorID, err)
 		}
 	}
 
 	if _, err := r.db.Exec(ctx, `
-		INSERT INTO sensor_label (sensor_id, name) VALUES ($1, $2)
+		INSERT INTO sensor_name_history (sensor_id, name) VALUES ($1, $2)
 	`, sensorID, name); err != nil {
 		return fmt.Errorf("insert label for sensor %d: %w", sensorID, err)
 	}
@@ -261,7 +261,7 @@ func (r *Repository) UpsertSensorHWHistory(ctx context.Context, sensorID int64, 
 	err = r.db.QueryRow(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM sensor_hw_history
-			WHERE sensor_id = $1 AND unassigned_at IS NULL AND mux_path = $2::jsonb
+			WHERE sensor_id = $1 AND valid_to IS NULL AND mux_path = $2::jsonb
 		)
 	`, sensorID, muxJSON).Scan(&unchanged)
 	if err != nil {
@@ -273,8 +273,8 @@ func (r *Repository) UpsertSensorHWHistory(ctx context.Context, sensorID int64, 
 
 	// Close the previous open row (if any).
 	if _, err := r.db.Exec(ctx, `
-		UPDATE sensor_hw_history SET unassigned_at = NOW()
-		WHERE sensor_id = $1 AND unassigned_at IS NULL
+		UPDATE sensor_hw_history SET valid_to = NOW()
+		WHERE sensor_id = $1 AND valid_to IS NULL
 	`, sensorID); err != nil {
 		return fmt.Errorf("close hw history for sensor %d: %w", sensorID, err)
 	}
@@ -347,8 +347,8 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 
 		// Close any open history row for this sensor.
 		if _, err := r.db.Exec(ctx, `
-			UPDATE sensor_region_history SET unassigned_at = NOW()
-			WHERE sensor_id = $1 AND unassigned_at IS NULL
+			UPDATE sensor_region_history SET valid_to = NOW()
+			WHERE sensor_id = $1 AND valid_to IS NULL
 		`, sensorID); err != nil {
 			return fmt.Errorf("close region history for sensor %d: %w", sensorID, err)
 		}

@@ -137,25 +137,29 @@ FirmwarePublisher.HandleConfigMessage():
 ## Database Schema
 
 ```
-board                     — one row per physical device (device_id = eFuse MAC)
-  └── sensor              — one row per physical sensor; stable across renames
-        ├── sensor_label  — SCD-2 name history (valid_from / valid_to)
-        ├── sensor_hw_history — physical address history (i2c + mux_path)
-        ├── sensor_region_history — region assignment history (assigned_at / unassigned_at)
-        └── sensor_reading — time-series fact table (TimescaleDB hypertable)
+board                       — one row per physical device (device_id = eFuse MAC)
+  └── sensor                — one row per physical sensor; stable across renames
+        ├── sensor_name_history   — SCD-2 name history (valid_from / valid_to)
+        ├── sensor_hw_history     — physical address history (valid_from / valid_to)
+        ├── sensor_region_history — region assignment history (valid_from / valid_to)
+        └── sensor_reading        — time-series fact table (TimescaleDB hypertable)
 
 sensor_type               — illuminance / temperature / humidity / etc.
 region                    — hierarchical location tree (Room → Shelf → Pot)
+plant / plant_type        — plant instances and their taxonomy (soft-delete via removed_at)
 device_config             — pushed DeviceConfig blobs as JSONB, with accepted flag
 sensor_chip               — known chip models (BH1750, SHT3x, ...)
 sensor_chip_address       — known valid I2C addresses per chip (for manifest validation)
+sensor_chip_type          — many-to-many: which measurement types each chip produces
 ```
+
+All three `*_history` tables are SCD-2 using the uniform `valid_from` / `valid_to` column convention. `valid_to IS NULL` is the current open row; a partial index makes that lookup O(1).
 
 ### Key Design Decisions
 
-- **`sensor` is a stable dimension anchor.** A rename via `DeviceConfig` closes the old `sensor_label` row and opens a new one — the `sensor_id` (and all reading history) is unchanged. Continuity of data across renames is the primary reason the sensor table exists as a separate entity rather than denormalizing into readings.
+- **`sensor` is a stable dimension anchor.** A rename via `DeviceConfig` closes the old `sensor_name_history` row and opens a new one — the `sensor_id` (and all reading history) is unchanged. Continuity of data across renames is the primary reason the sensor table exists as a separate entity rather than denormalizing into readings.
 
-- **`sensor.region_id` is a current-value cache.** `sensor_region_history` records every assignment with open/closed intervals (`unassigned_at = NULL` means current). Historical readings carry a snapshotted `region_id` at insert time, so location is preserved even when the sensor moves.
+- **`sensor.region_id` is a current-value cache.** `sensor_region_history` records every assignment with open/closed intervals (`valid_to IS NULL` means current). Historical readings carry a snapshotted `region_id` at insert time, so location is preserved even when the sensor moves.
 
 - **`sensor.mux_path` is JSONB.** Supports arbitrary-depth mux cascades (`[]` = direct on root bus, `[{muxAddress, muxChannel}, ...]` ordered outer→inner). A functional unique index on `(board_id, i2c_address, sensor_type_id, mux_path::text)` prevents duplicates.
 
@@ -164,6 +168,28 @@ sensor_chip_address       — known valid I2C addresses per chip (for manifest v
 - **Config version stamped on readings.** `sensor_reading.config_version` records which `DeviceConfig` was active when the reading was written, enabling queries like "show me readings taken under this config version."
 
 - **`sensor_reading.valid` is always `true` today** but reserved for future anomaly marking (e.g. I2C failure rows, out-of-range flags). Rows are always inserted so gaps in the time series are explicit rather than invisible.
+
+- **`device_config` is the board-state history.** Each accepted config version represents a "validity window" for the board's running configuration. The view `v_board_state_history` flattens this into a SCD-2-shaped representation (`valid_from` / `valid_to`) using a window function.
+
+---
+
+## Query Layer — Analytical Views
+
+Seven `v_` views (defined in migration 012) are the contract between the processor's write path and downstream consumers (Grafana panels, ad-hoc SQL). **All join logic lives in these views; consumers should not replicate it.**
+
+```
+v_region_path                  — recursive region hierarchy (path_ids[], path_name)
+v_sensor_current               — current sensor state (name, type, chip, board, region)
+v_board_state_history          — SCD-2 shaped device config history
+v_board_state_current          — latest accepted config per board
+v_sensor_reading_enriched      — workhorse: reading + all dimensions (no fanout)
+v_sensor_reading_with_plant    — reading × active plants at recorded_at (may fanout)
+v_sensor_reading_with_config_debug — reading + full config_json (debug)
+```
+
+The enriched view uses `sensor_reading.region_id` (the insert-time snapshot), not the sensor's current region — reads are historically accurate for region even when sensors move.
+
+See [DATA.md](DATA.md#analytical-views) for the full view reference and example queries.
 
 ---
 

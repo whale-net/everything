@@ -88,12 +88,12 @@ erDiagram
         timestamp last_seen_at
     }
 
-    SensorLabel {
-        bigserial sensor_label_id PK
+    SensorNameHistory {
+        bigserial sensor_name_history_id PK
         bigint sensor_id FK
         varchar name
-        timestamp valid_from
-        timestamp valid_to "null if current"
+        timestamptz valid_from
+        timestamptz valid_to "null if current"
     }
 
     SensorHWHistory {
@@ -101,7 +101,8 @@ erDiagram
         bigint sensor_id FK
         int i2c_address
         jsonb mux_path
-        timestamp recorded_at
+        timestamptz valid_from
+        timestamptz valid_to "null if current"
     }
 
     Region {
@@ -116,8 +117,8 @@ erDiagram
         bigserial history_id PK
         bigint sensor_id FK
         bigint region_id FK
-        timestamp assigned_at
-        timestamp unassigned_at "null if current"
+        timestamptz valid_from
+        timestamptz valid_to "null if current"
     }
 
     DeviceConfig {
@@ -145,7 +146,7 @@ erDiagram
     SensorType ||--o{ Sensor : "types"
     Region |o--o{ Sensor : "currently at"
     Region |o--o{ Region : "parent of"
-    Sensor ||--o{ SensorLabel : "name history"
+    Sensor ||--o{ SensorNameHistory : "name history"
     Sensor ||--o{ SensorHWHistory : "hw address history"
     Sensor ||--o{ SensorRegionHistory : "region history"
     Region ||--o{ SensorRegionHistory : "recorded in"
@@ -154,12 +155,13 @@ erDiagram
 ```
 
 Key design decisions:
-- `sensor` is a stable dimension anchor — rename via config closes old `sensor_label` row, opens new; `sensor_id` and reading history are unchanged
-- `sensor.region_id` is a current-value cache; `sensor_region_history` records every assignment (SCD-2)
+- `sensor` is a stable dimension anchor — rename via config closes the old `sensor_name_history` row, opens new; `sensor_id` and reading history are unchanged
+- `sensor.region_id` is a current-value cache; `sensor_region_history` records every assignment (SCD-2, `valid_from`/`valid_to`)
 - `sensor_reading.region_id` is snapshotted at insert so historical location is preserved when sensors move
 - `sensor_reading.config_version` records which `DeviceConfig` was active at write time
 - `sensor.mux_path` is JSONB supporting arbitrary mux cascade depth
 - `device_config.config_json` stores protojson for human-readable SQL queries; device NVS uses binary nanopb
+- Seven `v_` views expose all join logic for Grafana panels — see [DATA.md](DATA.md#analytical-views)
 
 ---
 
