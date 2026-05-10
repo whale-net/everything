@@ -84,13 +84,6 @@ II2CBus* ConfigApplier::FindBus(const firmware_SensorConfig& sc) {
 // Returns true when (i2c_address, mux_depth, mux_hops) of an already-allocated
 // compound device (SHT3x/CCS811) matches a config entry.  Used to find the
 // shared device instance for the second virtual sensor.
-bool ConfigApplier::DevicePathsMatch(uint8_t addr, size_t mux_depth_val,
-                                     const firmware_SensorConfig& sc) const {
-  if (!FitsInUint8(sc.i2c_address)) return false;
-  if (addr != static_cast<uint8_t>(sc.i2c_address)) return false;
-  if (mux_depth_val != static_cast<size_t>(sc.mux_path_count)) return false;
-  return true;  // mux_depth match is sufficient for single-hop hardware
-}
 
 void ConfigApplier::AddSensor(ISensor* s, const firmware_SensorConfig& sc) {
   if (!s || active_count_ >= kMaxSensors) return;
@@ -145,7 +138,8 @@ void ConfigApplier::ApplyFactory(const firmware_DeviceConfig& cfg) {
       case firmware_ChipType_CHIP_TYPE_SHT3X: {
         size_t depth = static_cast<size_t>(sc.mux_path_count);
         SHT3xDevice* dev = sht3x_dev_pool_.FindIf([&](SHT3xDevice* d) {
-          return DevicePathsMatch(d->address(), d->mux_depth(), sc);
+          return DevicePathsMatch(d->address(), d->mux_depth(),
+                                  [&](size_t i) { return d->mux_hop_at(i); }, sc);
         });
         if (!dev) {
           dev = sht3x_dev_pool_.Alloc(*bus, addr, millis_fn_);
@@ -167,7 +161,8 @@ void ConfigApplier::ApplyFactory(const firmware_DeviceConfig& cfg) {
       case firmware_ChipType_CHIP_TYPE_CCS811: {
         size_t depth = static_cast<size_t>(sc.mux_path_count);
         CCS811Device* dev = ccs811_dev_pool_.FindIf([&](CCS811Device* d) {
-          return DevicePathsMatch(d->address(), d->mux_depth(), sc);
+          return DevicePathsMatch(d->address(), d->mux_depth(),
+                                  [&](size_t i) { return d->mux_hop_at(i); }, sc);
         });
         if (!dev) {
           dev = ccs811_dev_pool_.Alloc(*bus, addr, millis_fn_);

@@ -52,26 +52,21 @@ Bazel selects the right config — no `#ifdef`, no runtime config, no YAML.
 
 | Target | Config file | Description |
 |--------|-------------|-------------|
-| `sensorboard` | `elegoo_config.cc` | Single BH1750, static names |
-| `sensorboard_multiplex` | `elegoo_multiplex_config.cc` | 4 sensors via TCA9548A, static names |
-| `sensorboard_simple_dynamic` | `elegoo_simple_dynamic_config.cc` | Single BH1750, runtime name overrides |
-| `sensorboard_dynamic` | `elegoo_dynamic_config.cc` | 4 sensors via TCA9548A, runtime name overrides |
+| `sensorboard` | `elegoo_dynamic_config.cc` | Single unified image — any Elegoo ESP32 wiring; sensors provisioned via `DeviceConfig` push |
+
+Build: `bazel build //leaflab/sensorboard:sensorboard --config=esp32`
+Flash: `bazel run   //leaflab/sensorboard:flash -- /dev/ttyUSB0`
 
 ### Hardware vs. Logical Configuration
 
-**Compile-time (hardware facts):**
-- Which IC driver to instantiate (BH1750, SHT3x, CCS811)
-- I2C address of each sensor
-- Mux bus and channel for each sensor
-- These cannot change without a reflash — they describe physical wiring
-
-**Runtime (logical config, via MQTT `DeviceConfig`):**
-- Sensor name used in MQTT topics and the manifest
+**Runtime (via MQTT `DeviceConfig` push):**
+- Which IC driver to instantiate (`chip_type`) and its I2C address + mux path
+- Sensor logical name in MQTT topics and manifest
 - Enabled/disabled per sensor
 - Poll interval per sensor
-- Region assignment (stored server-side; firmware uses `region_id` field for DB tagging only)
+- Region assignment (stored server-side; firmware forwards `region_id` to the processor)
 
-Config is persisted to NVS and loaded on boot. See [`MQTT.md`](MQTT.md) for the full config flow.
+Config is persisted to NVS and loaded on boot — no reflash needed to add sensors or change names. See [`MQTT.md`](MQTT.md) for the full config flow.
 
 ### Non-Blocking Sensor Reads
 

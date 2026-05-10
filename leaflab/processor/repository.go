@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -321,17 +323,31 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 		newRegionID := int64(sc.RegionId)
 
 		// Read current assignment before updating so we can detect changes.
+		// For multi-virtual chips (SHT3x, CCS811) the same i2c_address+mux_path
+		// can map to multiple sensor rows with different sensor_type_id — include
+		// the sensor type in the lookup to disambiguate.
 		var sensorID int64
 		var oldRegionID *int64
-		err = r.db.QueryRow(ctx, `
-			SELECT sensor_id, region_id FROM sensor
-			WHERE board_id = $1 AND i2c_address = $2 AND mux_path = $3::jsonb
-		`, boardID, sc.I2CAddress, muxJSON).Scan(&sensorID, &oldRegionID)
-		if errors.Is(err, pgx.ErrNoRows) {
+		typeName := sensorTypeNameFromConfig(sc.SensorType)
+		var lookupErr error
+		if typeName != "" {
+			lookupErr = r.db.QueryRow(ctx, `
+				SELECT s.sensor_id, s.region_id FROM sensor s
+				JOIN sensor_type st ON st.sensor_type_id = s.sensor_type_id
+				WHERE s.board_id = $1 AND s.i2c_address = $2 AND s.mux_path = $3::jsonb
+				  AND st.name = $4
+			`, boardID, sc.I2CAddress, muxJSON, typeName).Scan(&sensorID, &oldRegionID)
+		} else {
+			lookupErr = r.db.QueryRow(ctx, `
+				SELECT sensor_id, region_id FROM sensor
+				WHERE board_id = $1 AND i2c_address = $2 AND mux_path = $3::jsonb
+			`, boardID, sc.I2CAddress, muxJSON).Scan(&sensorID, &oldRegionID)
+		}
+		if errors.Is(lookupErr, pgx.ErrNoRows) {
 			continue // sensor not yet registered — skip silently
 		}
-		if err != nil {
-			return fmt.Errorf("find sensor for region apply i2c=0x%02x board=%d: %w", sc.I2CAddress, boardID, err)
+		if lookupErr != nil {
+			return fmt.Errorf("find sensor for region apply i2c=0x%02x board=%d: %w", sc.I2CAddress, boardID, lookupErr)
 		}
 
 		// Skip if region is unchanged.
@@ -429,6 +445,17 @@ func (r *Repository) SetSensorChipID(ctx context.Context, sensorID int64, chipMo
 		return fmt.Errorf("set sensor_chip_id for sensor %d chip %q: %w", sensorID, chipModel, err)
 	}
 	return nil
+}
+
+// sensorTypeNameFromConfig converts a proto SensorType to the sensor_type.name
+// used in the DB. Returns "" for UNKNOWN (single-virtual chips like BH1750).
+func sensorTypeNameFromConfig(t firmwarepb.SensorType) string {
+	raw := t.String()
+	name, ok := strings.CutPrefix(raw, "SENSOR_TYPE_")
+	if !ok || name == "UNKNOWN" {
+		return ""
+	}
+	return strings.ToLower(name)
 }
 
 // InsertReading writes a sensor_reading row.

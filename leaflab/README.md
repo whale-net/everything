@@ -19,11 +19,11 @@ LeafLab devices read sensors (light, temperature, soil moisture, etc.), publish 
 ## Quick Start
 
 ```bash
-# Build sensorboard firmware (simple dynamic — single BH1750)
-bazel build //leaflab/sensorboard:sensorboard_simple_dynamic --config=esp32
+# Build sensorboard firmware
+bazel build //leaflab/sensorboard:sensorboard --config=esp32
 
 # Flash to a connected ESP32 over USB
-bazel run //leaflab/sensorboard:flash_simple_dynamic -- /dev/ttyUSB0
+bazel run //leaflab/sensorboard:flash -- /dev/ttyUSB0
 
 # Monitor serial output
 bazel run //leaflab/sensorboard:serial
@@ -99,7 +99,6 @@ erDiagram
     SensorHWHistory {
         bigserial history_id PK
         bigint sensor_id FK
-        int i2c_address
         jsonb mux_path
         timestamptz valid_from
         timestamptz valid_to "null if current"

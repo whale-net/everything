@@ -193,12 +193,16 @@ func (h *MessageHandler) handleSensorReading(ctx context.Context, deviceID, sens
 		return err
 	}
 
+	var cvLog any = "none"
+	if configVersion != nil {
+		cvLog = *configVersion
+	}
 	h.logger.Debug("reading written",
 		"device_id", deviceID,
 		"sensor", sensorName,
 		"value", reading.Value,
 		"uptime_s", reading.UptimeMs/1000,
-		"config_version", configVersion,
+		"config_version", cvLog,
 	)
 	return nil
 }

@@ -102,7 +102,7 @@ mosquitto_pub -h localhost -p 1883 -u rabbit -P password \
 - BH1750 default address: 0x23 (ADDR pin low)
 - If the I2C bus is stuck (no devices found on scanner): the slave device needs a full power cycle (not just MCU reset) to clear a mid-transaction state
 - Sensor init is deferred to first Read() — a failed init at config-push time is retried automatically
-- Config is applied in the MQTT callback; I2C init inside the callback can fail if WiFi just connected (transient ESP_ERR_INVALID_STATE). The lazy-init retry at poll time recovers from this.
+- Config is queued in the MQTT callback and applied from `loop()` via `FirmwarePublisher::ProcessPending()`. This avoids I2C/WiFi contention that can cause `ESP_ERR_INVALID_STATE` when WiFi has just connected. Lazy sensor init at poll time handles any remaining transient failures.
 
 ## I2C scanner
 

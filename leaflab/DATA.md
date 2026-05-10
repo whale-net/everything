@@ -41,7 +41,6 @@ erDiagram
     sensor_hw_history {
         bigserial   history_id PK
         bigint      sensor_id FK
-        int         i2c_address
         jsonb       mux_path
         timestamptz valid_from
         timestamptz valid_to

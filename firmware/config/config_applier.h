@@ -129,8 +129,24 @@ class ConfigApplier {
   // ── Helpers ───────────────────────────────────────────────────────────────
   II2CBus* FindBus(const firmware_SensorConfig& sc);  // may alloc mux bus entries
   bool     PathsMatch(const ISensor* s, const firmware_SensorConfig& sc) const;
-  bool     DevicePathsMatch(uint8_t addr, size_t mux_depth_val,
-                            const firmware_SensorConfig& sc) const;
+  // Matches a shared device instance against a SensorConfig entry by checking
+  // i2c_address, mux_path depth, and every hop's address+channel.
+  // mux_hop_fn(i) returns the device's MuxHop at index i.
+  template <typename F>
+  bool DevicePathsMatch(uint8_t addr, size_t mux_depth_val, F mux_hop_fn,
+                        const firmware_SensorConfig& sc) const {
+    if (sc.i2c_address > 0xFFu) return false;
+    if (addr != static_cast<uint8_t>(sc.i2c_address)) return false;
+    if (mux_depth_val != static_cast<size_t>(sc.mux_path_count)) return false;
+    for (size_t i = 0; i < mux_depth_val; ++i) {
+      if (sc.mux_path[i].mux_address > 0xFFu) return false;
+      if (sc.mux_path[i].mux_channel > 0xFFu) return false;
+      MuxHop hop = mux_hop_fn(i);
+      if (hop.address != static_cast<uint8_t>(sc.mux_path[i].mux_address)) return false;
+      if (hop.channel != static_cast<uint8_t>(sc.mux_path[i].mux_channel)) return false;
+    }
+    return true;
+  }
   void     AddSensor(ISensor* s, const firmware_SensorConfig& sc);
   void     ApplyFactory(const firmware_DeviceConfig& cfg);
   void     ApplyLegacy(const firmware_DeviceConfig& cfg);
