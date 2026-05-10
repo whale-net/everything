@@ -1,65 +1,29 @@
-"""Sensorboard firmware — sensor registry via build-time config files."""
+"""Sensorboard firmware — dynamic sensor config via MQTT push."""
 
 load("//tools/bazel:esp32.bzl", "esp32_firmware")
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
 
-# Build:  bazel build //leaflab/sensorboard:sensorboard_bin --config=esp32
-# Flash:  bazel run  //leaflab/sensorboard:flash -- /dev/ttyUSB0
-
-# Generic main loop — board-agnostic; calls GetBus()/GetSensors()/GetNetwork().
-# Never needs to change when sensors or boards are added.
-cc_library(
-    name = "sensorboard_main",
-    srcs = ["sensorboard_main.cc"],
-    deps = [
-        "//firmware/i2c:i2c_bus",
-        "//firmware/mqtt:firmware_publisher",
-        "//firmware/network:network_manager",
-        "//firmware/sensor:sensor",
-        "//tools/firmware:board_pins",
-        "@arduino_esp32//:core_lib",
-        "@pigweed//pw_log",
-        "@pigweed//pw_span",
-    ],
-    target_compatible_with = [
-        "@platforms//os:none",
-        "//tools/firmware:cpu_xtensa",
-    ],
-)
-
-# Elegoo ESP32 devkit: one BH1750 at 0x23, ArduinoI2CBus, NVSCredentials.
+# Single firmware image for any Elegoo ESP32 wiring.
+# Supports direct I2C and any TCA9548A mux topology — no reflash needed to
+# add sensors or change mux channels.  Push a DeviceConfig proto via MQTT.
+#
+# Build: bazel build //leaflab/sensorboard:sensorboard --config=esp32
+# Flash: bazel run   //leaflab/sensorboard:flash -- /dev/ttyUSB0
 esp32_firmware(
     name = "sensorboard",
-    srcs = ["elegoo_config.cc"],
-    deps = [
-        ":sensorboard_main",
-        "//firmware/credentials:nvs_credentials",
-        "//firmware/device_id:efuse_device_id",
-        "//firmware/i2c:arduino_i2c_bus",
-        "//firmware/mqtt:firmware_publisher",
-        "//firmware/network:esp32_platform",
-        "//firmware/sensor:bh1750",
-        "@arduino_esp32//:Wire",
+    srcs = [
+        "elegoo_dynamic_config.cc",
+        "sensorboard_dynamic_main.cc",
     ],
-)
-
-# Elegoo ESP32 + HW-617 TCA9548A mux: BH1750 on channel SD1.
-# Flash: bazel run //leaflab/sensorboard:flash_multiplex -- /dev/ttyUSB0
-esp32_firmware(
-    name = "sensorboard_multiplex",
-    srcs = ["elegoo_multiplex_config.cc"],
-    flash_name = "flash_multiplex",
     deps = [
-        ":sensorboard_main",
+        "//firmware/config:config_applier",
+        "//firmware/config:config_store",
         "//firmware/credentials:nvs_credentials",
         "//firmware/device_id:efuse_device_id",
         "//firmware/i2c:arduino_i2c_bus",
         "//firmware/i2c:tca9548a_bus",
         "//firmware/mqtt:firmware_publisher",
         "//firmware/network:esp32_platform",
-        "//firmware/sensor:bh1750",
-        "//firmware/sensor:ccs811",
-        "//firmware/sensor:sht3x",
         "@arduino_esp32//:Wire",
     ],
 )

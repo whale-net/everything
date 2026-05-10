@@ -23,6 +23,8 @@ extern bool MQTTIsConnected();
 extern bool MQTTPublish(const char* topic, const char* payload);
 extern bool MQTTPublishBinary(const char* topic, const uint8_t* data,
                                size_t len, bool retained);
+extern bool MQTTSubscribe(const char* topic);
+extern void MQTTSetCallback(void (*cb)(const char*, const uint8_t*, size_t));
 // Called when transitioning to kConnecting to (re-)initiate the Wi-Fi
 // association.  On ESP32 with setAutoReconnect(true), this is a no-op for
 // the initial connect; the hook exists so the state machine can explicitly
@@ -125,6 +127,18 @@ pw::Status NetworkManager::Publish(const char* topic, const uint8_t* data,
     return pw::Status::Internal();
   }
   return pw::OkStatus();
+}
+
+void NetworkManager::SetMessageCallback(MessageCallback cb) {
+  message_callback_ = cb;
+  MQTTSetCallback(cb);
+}
+
+pw::Status NetworkManager::Subscribe(const char* topic) {
+  if (state_ != State::kReady || !mqtt_enabled_) {
+    return pw::Status::Unavailable();
+  }
+  return MQTTSubscribe(topic) ? pw::OkStatus() : pw::Status::Internal();
 }
 
 uint32_t NetworkManager::state_age_ms() const {

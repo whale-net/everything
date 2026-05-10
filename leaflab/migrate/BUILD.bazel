@@ -6,6 +6,7 @@ go_binary(
     srcs = ["main.go"],
     embedsrcs = glob(["migrations/*.sql"]),
     deps = [
+        "//firmware/sensor/catalog",
         "//libs/go/migrate",
     ],
     visibility = ["//visibility:public"],

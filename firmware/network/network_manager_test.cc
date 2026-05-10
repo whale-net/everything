@@ -38,6 +38,8 @@ bool MQTTPublishBinary(const char*, const uint8_t*, size_t, bool) {
   return g_mqtt_publish_ok;
 }
 void WiFiConnect() {}
+bool MQTTSubscribe(const char*) { return true; }
+void MQTTSetCallback(void (*)(const char*, const uint8_t*, size_t)) {}
 
 // ── Test fixture ──────────────────────────────────────────────────────────────
 

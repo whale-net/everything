@@ -97,4 +97,24 @@ bool MQTTPublishBinary(const char* topic, const uint8_t* data, size_t len,
 
 void MQTTLoop() { g_mqtt->loop(); }
 
+static void (*g_mqtt_cb)(const char*, const uint8_t*, size_t) = nullptr;
+
+// Adapter: PubSubClient callback is (char*, byte*, unsigned int).
+// byte* is uint8_t* on Arduino; unsigned int vs size_t is safe to widen.
+static void mqtt_callback_adapter(char* topic, byte* payload,
+                                   unsigned int length) {
+    if (g_mqtt_cb) {
+        g_mqtt_cb(topic, payload, static_cast<size_t>(length));
+    }
+}
+
+bool MQTTSubscribe(const char* topic) {
+    return g_mqtt->subscribe(topic, /*qos=*/0);
+}
+
+void MQTTSetCallback(void (*cb)(const char*, const uint8_t*, size_t)) {
+    g_mqtt_cb = cb;
+    g_mqtt->setCallback(mqtt_callback_adapter);
+}
+
 uint32_t PlatformNowMs() { return millis(); }

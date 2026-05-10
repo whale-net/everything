@@ -1,0 +1,24 @@
+{
+  "description": "BH1750 light + SHT3x temp/humidity through TCA9548A mux",
+  "hardware": "elegoo_dynamic — BH1750 on ch7, SHT3x on ch5 of HW-617 mux",
+  "notes": [
+    "SHT3x temperature and humidity share I2C address 0x44 on the same mux channel.",
+    "The path matcher matches the first sensor with that path (temperature).",
+    "Humidity keeps its compile-time name. This is a known limitation of",
+    "path-only matching when virtual sensors share an address."
+  ],
+  "sensors": [
+    {
+      "muxPath": [{"muxAddress": 112, "muxChannel": 7}],
+      "i2cAddress": 35,
+      "name": "light",
+      "enabled": true
+    },
+    {
+      "muxPath": [{"muxAddress": 112, "muxChannel": 5}],
+      "i2cAddress": 68,
+      "name": "temperature",
+      "enabled": true
+    }
+  ]
+}

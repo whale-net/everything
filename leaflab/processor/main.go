@@ -76,6 +76,13 @@ func run() error {
 		logger.Info("sensor cache pre-loaded", "devices", len(entries))
 	}
 
+	if versions, err := repo.LoadConfigVersionCache(context.Background()); err != nil {
+		logger.Warn("failed to pre-load config version cache", "err", err)
+	} else {
+		cache.LoadConfigVersions(versions)
+		logger.Info("config version cache pre-loaded", "devices", len(versions))
+	}
+
 	handler := NewMessageHandler(logger, repo, cache)
 	consumer.RegisterHandler("leaflab.#", handler.Handle)
 

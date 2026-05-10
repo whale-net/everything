@@ -7,27 +7,30 @@ import (
 	"strings"
 	"time"
 
+	configpb "github.com/whale-net/everything/firmware/proto/config"
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	"github.com/whale-net/everything/libs/go/rmq"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
 // SensorRepository is the persistence interface used by MessageHandler.
-// *Repository satisfies this interface; tests use stub implementations.
 type SensorRepository interface {
 	UpsertBoard(ctx context.Context, deviceID string) (int64, error)
 	UpsertSensorType(ctx context.Context, name, unit string) (int64, error)
 	UpsertSensor(ctx context.Context, boardID, sensorTypeID int64, name, unit string, hw *HardwareAddress) (int64, *int64, error)
+	UpsertSensorLabel(ctx context.Context, sensorID int64, name string) error
 	UpsertSensorHWHistory(ctx context.Context, sensorID int64, hw *HardwareAddress) error
 	GetSensor(ctx context.Context, deviceID, sensorName string) (SensorInfo, bool, error)
-	InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time) error
+	InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time, configVersion *int64) error
+	UpsertDeviceConfig(ctx context.Context, boardID int64, version int64, configJSON []byte) error
+	AckDeviceConfig(ctx context.Context, boardID int64, version int64, accepted bool, reason string) error
+	ApplyConfigRegions(ctx context.Context, boardID int64, version int64) error
+	SetSensorChipID(ctx context.Context, sensorID int64, chipModel string) error
+	IsKnownChipAddress(ctx context.Context, chipModel string, i2cAddress uint32) (bool, error)
 }
 
 // MessageHandler decodes leaflab MQTT messages and persists them.
-// Routing key format (MQTT '/' → AMQP '.'):
-//
-//	leaflab.<device_id>.manifest             → DeviceManifest
-//	leaflab.<device_id>.sensor.<name>        → SensorReading
 type MessageHandler struct {
 	logger *slog.Logger
 	repo   SensorRepository
@@ -51,6 +54,10 @@ func (h *MessageHandler) Handle(ctx context.Context, msg rmq.Message) error {
 		return h.handleManifest(ctx, deviceID, msg.Body)
 	case len(parts) == 4 && parts[2] == "sensor":
 		return h.handleSensorReading(ctx, deviceID, parts[3], msg.Body)
+	case len(parts) == 3 && parts[2] == "config":
+		return h.handleConfigPush(ctx, deviceID, msg.Body)
+	case len(parts) == 4 && parts[2] == "config" && parts[3] == "ack":
+		return h.handleConfigAck(ctx, deviceID, msg.Body)
 	default:
 		h.logger.Warn("unhandled routing key", "key", msg.RoutingKey)
 		return nil
@@ -83,12 +90,13 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 			continue
 		}
 
+		// Build hardware address. Firmware currently sends single-hop mux via
+		// scalar fields; multi-hop will be added when the firmware proto is updated.
 		var hw *HardwareAddress
 		if sd.I2CAddress > 0 {
-			hw = &HardwareAddress{
-				I2CAddress: sd.I2CAddress,
-				MuxAddress: sd.MuxAddress,
-				MuxChannel: sd.MuxChannel,
+			hw = &HardwareAddress{I2CAddress: sd.I2CAddress}
+			if sd.MuxAddress > 0 {
+				hw.MuxPath = []MuxHop{{MuxAddress: sd.MuxAddress, MuxChannel: sd.MuxChannel}}
 			}
 		}
 
@@ -101,8 +109,28 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 			continue
 		}
 
+		if err := h.repo.UpsertSensorLabel(ctx, sensorID, sd.Name); err != nil {
+			h.logger.Warn("failed to upsert sensor label", "name", sd.Name, "err", err)
+		}
+
 		if err := h.repo.UpsertSensorHWHistory(ctx, sensorID, hw); err != nil {
 			h.logger.Error("failed to upsert sensor hw history", "name", sd.Name, "err", err)
+		}
+
+		if err := h.repo.SetSensorChipID(ctx, sensorID, sd.ChipModel); err != nil {
+			h.logger.Warn("failed to set sensor_chip_id", "name", sd.Name, "chip_model", sd.ChipModel, "err", err)
+		}
+
+		if sd.ChipModel != "" && sd.I2CAddress > 0 {
+			if ok, err := h.repo.IsKnownChipAddress(ctx, sd.ChipModel, sd.I2CAddress); err != nil {
+				h.logger.Warn("chip address check failed", "name", sd.Name, "err", err)
+			} else if !ok {
+				h.logger.Warn("sensor reports unrecognised address for chip — possible misconfiguration",
+					"name", sd.Name,
+					"chip_model", sd.ChipModel,
+					"i2c_address", fmt.Sprintf("0x%02x", sd.I2CAddress),
+				)
+			}
 		}
 
 		h.cache.Set(deviceID, sd.Name, SensorInfo{SensorID: sensorID, RegionID: regionID})
@@ -116,19 +144,17 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 			"i2c_address", sd.I2CAddress,
 			"mux_address", sd.MuxAddress,
 			"mux_channel", sd.MuxChannel,
+			"chip_model", sd.ChipModel,
 		)
 	}
 
 	return firstErr
 }
 
-// handleSensorReading writes a reading row. Drops the message if the sensor is
-// not yet in the cache (manifest not yet received for this device).
+// handleSensorReading writes a reading row.
 func (h *MessageHandler) handleSensorReading(ctx context.Context, deviceID, sensorName string, body []byte) error {
 	info, ok := h.cache.Get(deviceID, sensorName)
 	if !ok {
-		// Cache miss — look up in DB (handles the case where the processor
-		// restarted after the device sent its retained manifest).
 		var err error
 		info, ok, err = h.repo.GetSensor(ctx, deviceID, sensorName)
 		if err != nil {
@@ -141,13 +167,17 @@ func (h *MessageHandler) handleSensorReading(ctx context.Context, deviceID, sens
 			)
 			return nil
 		}
-		// Warm the cache so the next reading doesn't hit the DB.
 		h.cache.Set(deviceID, sensorName, info)
 	}
 
 	var reading firmwarepb.SensorReading
 	if err := proto.Unmarshal(body, &reading); err != nil {
 		return &rmq.PermanentError{Err: fmt.Errorf("unmarshal SensorReading: %w", err)}
+	}
+
+	var configVersion *int64
+	if v, ok := h.cache.GetConfigVersion(deviceID); ok {
+		configVersion = &v
 	}
 
 	if err := h.repo.InsertReading(
@@ -158,6 +188,7 @@ func (h *MessageHandler) handleSensorReading(ctx context.Context, deviceID, sens
 		true,
 		reading.UptimeMs/1000,
 		time.Now(),
+		configVersion,
 	); err != nil {
 		return err
 	}
@@ -167,15 +198,73 @@ func (h *MessageHandler) handleSensorReading(ctx context.Context, deviceID, sens
 		"sensor", sensorName,
 		"value", reading.Value,
 		"uptime_s", reading.UptimeMs/1000,
+		"config_version", configVersion,
 	)
 	return nil
 }
 
-// sensorTypeName converts a proto SensorType enum value to the DB name.
-// Strips the "SENSOR_TYPE_" prefix and lowercases the result.
-// e.g. SENSOR_TYPE_ILLUMINANCE → "illuminance"
+// handleConfigPush records a DeviceConfig push observed on the broker.
+func (h *MessageHandler) handleConfigPush(ctx context.Context, deviceID string, body []byte) error {
+	var cfg configpb.DeviceConfig
+	if err := proto.Unmarshal(body, &cfg); err != nil {
+		return &rmq.PermanentError{Err: fmt.Errorf("unmarshal DeviceConfig: %w", err)}
+	}
+
+	if cfg.Version > 1<<63-1 {
+		return &rmq.PermanentError{Err: fmt.Errorf("DeviceConfig.version %d overflows int64", cfg.Version)}
+	}
+
+	configJSON, err := protojson.Marshal(&cfg)
+	if err != nil {
+		return &rmq.PermanentError{Err: fmt.Errorf("protojson DeviceConfig: %w", err)}
+	}
+
+	boardID, err := h.repo.UpsertBoard(ctx, deviceID)
+	if err != nil {
+		return err
+	}
+	if err := h.repo.UpsertDeviceConfig(ctx, boardID, int64(cfg.Version), configJSON); err != nil {
+		return err
+	}
+	h.logger.Info("device_config recorded", "device_id", deviceID, "version", cfg.Version)
+	return nil
+}
+
+// handleConfigAck records the device's ack for a config push.
+// On acceptance, applies region assignments and updates the config version cache.
+func (h *MessageHandler) handleConfigAck(ctx context.Context, deviceID string, body []byte) error {
+	var ack configpb.DeviceConfigAck
+	if err := proto.Unmarshal(body, &ack); err != nil {
+		return &rmq.PermanentError{Err: fmt.Errorf("unmarshal DeviceConfigAck: %w", err)}
+	}
+	if ack.AppliedVersion > 1<<63-1 {
+		return &rmq.PermanentError{Err: fmt.Errorf("DeviceConfigAck.applied_version %d overflows int64", ack.AppliedVersion)}
+	}
+	boardID, err := h.repo.UpsertBoard(ctx, deviceID)
+	if err != nil {
+		return err
+	}
+	if err := h.repo.AckDeviceConfig(ctx, boardID, int64(ack.AppliedVersion), ack.Accepted, ack.Reason); err != nil {
+		return err
+	}
+	if ack.Accepted {
+		if err := h.repo.ApplyConfigRegions(ctx, boardID, int64(ack.AppliedVersion)); err != nil {
+			h.logger.Warn("failed to apply config regions", "device_id", deviceID, "version", ack.AppliedVersion, "err", err)
+		}
+		h.cache.SetConfigVersion(deviceID, int64(ack.AppliedVersion))
+		h.logger.Info("device_config acked", "device_id", deviceID, "version", ack.AppliedVersion)
+	} else {
+		h.logger.Warn("device rejected config",
+			"device_id", deviceID,
+			"version", ack.AppliedVersion,
+			"reason", ack.Reason)
+	}
+	return nil
+}
+
+// sensorTypeName converts a proto SensorType to the DB name.
 func sensorTypeName(t firmwarepb.SensorType) string {
-	raw := t.String() // e.g. "SENSOR_TYPE_ILLUMINANCE"
+	raw := t.String()
 	name, _ := strings.CutPrefix(raw, "SENSOR_TYPE_")
 	return strings.ToLower(name)
 }

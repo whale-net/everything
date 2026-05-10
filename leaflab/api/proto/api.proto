@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package leaflab.api.v1;
+
+option go_package = "github.com/whale-net/everything/leaflab/api/proto;leaflabapipb";
+
+import "firmware/proto/config.proto";
+
+// LeafLabAPI is the control-plane API for managing leaflab sensor boards.
+service LeafLabAPI {
+  // Push a new DeviceConfig to a board over MQTT.
+  // The server assigns a monotonically increasing version; the caller supplies
+  // only the sensor overrides (names, enabled state, poll interval).
+  rpc PushDeviceConfig(PushDeviceConfigRequest) returns (PushDeviceConfigResponse);
+
+  // Get the latest config that was accepted by a board.
+  rpc GetDeviceConfig(GetDeviceConfigRequest) returns (GetDeviceConfigResponse);
+
+  // List all known boards (boards that have sent at least one manifest).
+  rpc ListBoards(ListBoardsRequest) returns (ListBoardsResponse);
+}
+
+message PushDeviceConfigRequest {
+  string device_id = 1;
+  // Sensor overrides — each entry is matched to a hardware sensor by
+  // (mux_path, i2c_address). Sensors with no matching entry are unchanged.
+  repeated firmware.SensorConfig sensors = 2;
+}
+
+message PushDeviceConfigResponse {
+  // Version assigned to this push.
+  uint64 version = 1;
+}
+
+message GetDeviceConfigRequest {
+  string device_id = 1;
+}
+
+message GetDeviceConfigResponse {
+  firmware.DeviceConfig config = 1;
+  // True if a config has been accepted by the board.
+  bool found = 2;
+}
+
+message BoardInfo {
+  string device_id = 1;
+  int64  board_id  = 2;
+}
+
+message ListBoardsRequest {}
+
+message ListBoardsResponse {
+  repeated BoardInfo boards = 1;
+}
