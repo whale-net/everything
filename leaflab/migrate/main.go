@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 
+	"github.com/whale-net/everything/firmware/sensor/catalog"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
@@ -10,5 +11,7 @@ import (
 var migrations embed.FS
 
 func main() {
-	migrate.RunCLI(migrations, "migrations")
+	migrate.RunCLI(migrations, "migrations",
+		migrate.WithSeeder(catalog.Seeder()),
+	)
 }

@@ -4,15 +4,24 @@
 // Applications depend on //firmware/network:esp32_platform and get the 6
 // platform hooks (WiFiIsConnected, WiFiConnect, MQTTConnect, MQTTIsConnected,
 // MQTTPublish, MQTTLoop) for free — no PubSubClient.h or WiFi.h needed.
+//
+// TLS: when MQTTConnect is called with tls=true, the WiFiClientSecure transport
+// is used. setInsecure() skips certificate verification — acceptable while the
+// broker is configured to accept TLS 1.2 (ESP32 mbedTLS does not support TLS 1.3
+// by default; see issue #427 for enabling it).
 
 #include "firmware/network/esp32_platform.h"
 
 #include <PubSubClient.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include "pw_log/log.h"
 
-static WiFiClient   wifi_client;
-static PubSubClient mqtt_client(wifi_client);
+static WiFiClient        plain_client;
+static WiFiClientSecure  tls_client;
+static PubSubClient      mqtt_plain(plain_client);
+static PubSubClient      mqtt_tls_client(tls_client);
+static PubSubClient*     g_mqtt = &mqtt_plain;
 
 static const char* g_ssid     = nullptr;
 static const char* g_password = nullptr;
@@ -49,28 +58,68 @@ void WiFiConnect() {
 
 bool MQTTConnect(const char* host, uint16_t port, const char* id,
                  const char* user, const char* pass,
-                 const char* lwt_topic, const char* lwt_payload) {
-    mqtt_client.setServer(host, port);
-    if (lwt_topic != nullptr && lwt_topic[0] != '\0') {
-        return mqtt_client.connect(id, user, pass,
-                                   lwt_topic, /*qos=*/0, /*retain=*/true,
-                                   lwt_payload);
+                 const char* lwt_topic, const char* lwt_payload,
+                 bool tls) {
+    static bool s_tls_active = false;
+    if (tls) {
+        tls_client.stop();  // force clean state before each attempt
+        tls_client.setInsecure();
+        g_mqtt = &mqtt_tls_client;
+        if (!s_tls_active) {
+            PW_LOG_INFO("MQTT: using TLS (insecure skip-verify; see #427 for TLS 1.3)");
+            s_tls_active = true;
+        }
+    } else {
+        g_mqtt = &mqtt_plain;
+        s_tls_active = false;
     }
-    return mqtt_client.connect(id, user, pass);
+    g_mqtt->setServer(host, port);
+    bool ok;
+    if (lwt_topic != nullptr && lwt_topic[0] != '\0') {
+        ok = g_mqtt->connect(id, user, pass,
+                             lwt_topic, /*qos=*/0, /*retain=*/true,
+                             lwt_payload);
+    } else {
+        ok = g_mqtt->connect(id, user, pass);
+    }
+    if (!ok) {
+        PW_LOG_WARN("MQTT: connect failed, state=%d", g_mqtt->state());
+    }
+    return ok;
 }
 
-bool MQTTIsConnected() { return mqtt_client.connected(); }
+bool MQTTIsConnected() { return g_mqtt->connected(); }
 
 bool MQTTPublish(const char* topic, const char* payload) {
-    return mqtt_client.publish(topic, payload);
+    return g_mqtt->publish(topic, payload);
 }
 
 bool MQTTPublishBinary(const char* topic, const uint8_t* data, size_t len,
                         bool retained) {
-    return mqtt_client.publish(topic, data, static_cast<unsigned int>(len),
-                               retained);
+    return g_mqtt->publish(topic, data, static_cast<unsigned int>(len),
+                           retained);
 }
 
-void MQTTLoop() { mqtt_client.loop(); }
+void MQTTLoop() { g_mqtt->loop(); }
+
+static void (*g_mqtt_cb)(const char*, const uint8_t*, size_t) = nullptr;
+
+// Adapter: PubSubClient callback is (char*, byte*, unsigned int).
+// byte* is uint8_t* on Arduino; unsigned int vs size_t is safe to widen.
+static void mqtt_callback_adapter(char* topic, byte* payload,
+                                   unsigned int length) {
+    if (g_mqtt_cb) {
+        g_mqtt_cb(topic, payload, static_cast<size_t>(length));
+    }
+}
+
+bool MQTTSubscribe(const char* topic) {
+    return g_mqtt->subscribe(topic, /*qos=*/0);
+}
+
+void MQTTSetCallback(void (*cb)(const char*, const uint8_t*, size_t)) {
+    g_mqtt_cb = cb;
+    g_mqtt->setCallback(mqtt_callback_adapter);
+}
 
 uint32_t PlatformNowMs() { return millis(); }

@@ -65,6 +65,7 @@ class NetworkManager {
     const char* mqtt_pass;           // nullptr = no auth
     const char* lwt_topic    = nullptr;    // Last-will topic; nullptr = no LWT
     const char* lwt_payload  = "offline";  // Last-will payload
+    bool        mqtt_tls     = false;      // true = TLS (WiFiClientSecure)
     uint32_t connect_timeout_ms = 15'000;  // override in tests for fast timeout
   };
 
@@ -92,6 +93,21 @@ class NetworkManager {
   pw::Status Publish(const char* topic, const uint8_t* data, size_t len,
                      bool retained = false);
 
+  // Callback type for incoming MQTT messages.
+  using MessageCallback = void(*)(const char* topic,
+                                  const uint8_t* payload,
+                                  size_t length);
+
+  // Register a callback for incoming MQTT messages.
+  // May be called before or after Connect(); set before any incoming messages
+  // are expected. Passing nullptr clears the callback. One active callback at a time.
+  void SetMessageCallback(MessageCallback cb);
+
+  // Subscribe to an MQTT topic. Returns Unavailable() if not kReady.
+  // FirmwarePublisher calls this from OnConnect() on every kReady transition,
+  // so NetworkManager does not need to remember subscriptions across reconnects.
+  pw::Status Subscribe(const char* topic);
+
   State state() const { return state_; }
 
   // Milliseconds spent in the current state (for diagnostics).
@@ -106,7 +122,8 @@ class NetworkManager {
   uint32_t NextBackoffMs() const;
 
   Config config_;
-  bool mqtt_enabled_;              // true iff mqtt_host is non-empty at Connect() time.
+  bool mqtt_enabled_;
+  MessageCallback message_callback_ = nullptr;
   State state_ = State::kIdle;
   uint32_t state_entered_ms_ = 0;  // PlatformNowMs() when state last changed.
   uint32_t backoff_attempt_ = 0;   // Increments on each consecutive failure.

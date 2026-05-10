@@ -1,0 +1,6 @@
+firmware.DeviceConfig.device_id        max_size:32
+firmware.DeviceConfig.sensors          max_count:16
+firmware.SensorConfig.mux_path         max_count:4
+firmware.SensorConfig.name             max_size:32
+firmware.DeviceConfigAck.device_id     max_size:32
+firmware.DeviceConfigAck.reason        max_size:64

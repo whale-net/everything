@@ -3,5 +3,6 @@
 
 firmware.DeviceManifest.device_id   max_size:32
 firmware.DeviceManifest.sensors     max_count:16
-firmware.SensorDescriptor.name      max_size:32
-firmware.SensorDescriptor.unit      max_size:8
+firmware.SensorDescriptor.name       max_size:32
+firmware.SensorDescriptor.unit       max_size:8
+firmware.SensorDescriptor.chip_model max_size:16

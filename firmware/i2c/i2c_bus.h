@@ -30,6 +30,13 @@
 
 namespace firmware {
 
+// One step in a cascaded I2C mux chain.
+// Defined here so both II2CBus and ISensor can use the same type.
+struct MuxHop {
+  uint8_t address;
+  uint8_t channel;
+};
+
 class II2CBus {
  public:
   virtual ~II2CBus() = default;
@@ -60,12 +67,22 @@ class II2CBus {
                                    const uint8_t* data,
                                    size_t len) = 0;
 
-  // I2C address of the TCA9548A mux this bus is a channel of, or 0 if not
-  // mux-backed. Used to populate the device manifest hardware address fields.
-  virtual uint8_t mux_address() const { return 0; }
+  // Number of mux hops from the root bus to this bus.
+  // 0 = this is the root bus (not mux-backed).
+  // 1 = one TCA9548A between root and this bus, etc.
+  virtual size_t mux_depth() const { return 0; }
 
-  // Channel number selected on the mux, or 0 if not mux-backed.
-  virtual uint8_t mux_channel() const { return 0; }
+  // Returns the MuxHop at the given depth (0 = outermost mux).
+  // Undefined behaviour if depth >= mux_depth().
+  virtual MuxHop mux_hop_at(size_t /*depth*/) const { return {0, 0}; }
+
+  // Convenience accessors for single-level mux (innermost hop).
+  uint8_t mux_address() const {
+    return mux_depth() > 0 ? mux_hop_at(mux_depth() - 1).address : 0;
+  }
+  uint8_t mux_channel() const {
+    return mux_depth() > 0 ? mux_hop_at(mux_depth() - 1).channel : 0;
+  }
 };
 
 }  // namespace firmware
