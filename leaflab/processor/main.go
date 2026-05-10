@@ -29,7 +29,7 @@ func run() error {
 		ServiceName: "leaflab-processor",
 		Domain:      "leaflab",
 		JSONFormat:  true,
-		EnableOTLP:  false,
+		EnableOTLP:  true,
 	})
 	defer logging.Shutdown(context.Background()) //nolint:errcheck
 
