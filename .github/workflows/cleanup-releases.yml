@@ -57,7 +57,7 @@ jobs:
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          bazel run //tools:release -- cleanup-releases \
+          bazel run //tools/release_helper_go:release_helper_go -- cleanup-releases \
             --keep-minor-versions ${{ inputs.keep_minor_versions }} \
             --min-age-days ${{ inputs.min_age_days }} \
             --dry-run \
@@ -70,7 +70,7 @@ jobs:
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          bazel run //tools:release -- cleanup-releases \
+          bazel run //tools/release_helper_go:release_helper_go -- cleanup-releases \
             --keep-minor-versions ${{ inputs.keep_minor_versions }} \
             --min-age-days ${{ inputs.min_age_days }} \
             --no-dry-run \

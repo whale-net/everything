@@ -36,5 +36,8 @@ func init() {
 		newListAppsCmd(),
 		newListCmd(),
 		newChangesCmd(),
+		newBuildCmd(),
+		newReleaseMultiarchCmd(),
+		newCreateCombinedGithubReleaseCmd(),
 	)
 }
