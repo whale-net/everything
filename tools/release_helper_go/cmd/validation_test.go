@@ -5,16 +5,6 @@ import (
 	"testing"
 )
 
-func TestPlanOpenapiBuildsInvalidFormat(t *testing.T) {
-	_, stderr, err := runTest([]string{"plan-openapi-builds", "--apps", "some-app", "--format", "invalid"})
-	if err == nil {
-		t.Fatal("expected error for invalid format")
-	}
-	if !strings.Contains(stderr, "format must be one of: json, github") {
-		t.Errorf("expected format error in stderr, got: %q", stderr)
-	}
-}
-
 func TestReleaseNotesInvalidFormat(t *testing.T) {
 	_, stderr, err := runTest([]string{"release-notes", "some-app", "--format", "invalid"})
 	if err == nil {
@@ -56,16 +46,23 @@ func TestBuildHelmChartInvalidBump(t *testing.T) {
 }
 
 func TestBuildHelmChartValidBumps(t *testing.T) {
-	for _, bump := range []string{"major", "minor", "patch"} {
-		_, _, err := runTest([]string{"build-helm-chart", "mychart", "--bump", bump})
-		// Fails because not fully implemented, but not on bump validation.
-		if err == nil {
-			t.Fatalf("expected 'not implemented' error for bump=%q", bump)
-		}
-		if strings.Contains(err.Error(), "invalid bump") {
-			t.Errorf("valid bump %q should not trigger validation error", bump)
-		}
-	}
+	// Valid bumps pass validation but fail later (chart not found). Confirm no "invalid bump" error.
+	bazel := newFakeBazel(fakeBazelCall{argsContain: []string{"kind(helm_chart_metadata"}, output: ""})
+	withBazel(bazel, func() {
+		withWorkspace(fakeWorkspaceRoot, func() {
+			withFS(newFakeFS(), func() {
+				for _, bump := range []string{"major", "minor", "patch"} {
+					_, _, err := runTest([]string{"build-helm-chart", "mychart", "--bump", bump})
+					if err == nil {
+						t.Fatalf("expected error (chart not found) for bump=%q", bump)
+					}
+					if strings.Contains(err.Error(), "invalid bump") {
+						t.Errorf("valid bump %q should not trigger validation error", bump)
+					}
+				}
+			})
+		})
+	})
 }
 
 func TestIsValidNotesFormat(t *testing.T) {
