@@ -1,0 +1,45 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+package(default_visibility = ["//visibility:public"])
+
+go_library(
+    name = "cmd",
+    srcs = glob(
+        ["cmd/*.go"],
+        exclude = ["cmd/*_test.go"],
+    ),
+    importpath = "github.com/whale-net/everything/tools/release_helper_go/cmd",
+    deps = [
+        "@com_github_spf13_cobra//:cobra",
+    ],
+)
+
+go_binary(
+    name = "release_helper_go",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/tools/release_helper_go",
+    deps = [":cmd"],
+)
+
+go_test(
+    name = "cmd_test",
+    size = "small",
+    srcs = glob(["cmd/*_test.go"]),
+    embed = [":cmd"],
+    deps = [
+        "@com_github_spf13_cobra//:cobra",
+    ],
+)
+
+# CLI integration tests for the Go rewrite — delegates to the shared
+# test_cli_integration.sh with the Go binary substituted in.
+sh_test(
+    name = "test_cli_integration_go",
+    size = "small",
+    srcs = ["test_cli_integration_go.sh"],
+    data = [
+        ":release_helper_go",
+        "//tools/release_helper:test_cli_integration.sh",
+    ],
+    tags = ["integration"],
+)

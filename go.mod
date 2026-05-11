@@ -37,6 +37,12 @@ require (
 )
 
 require (
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/spf13/cobra v1.8.1 // indirect
+	github.com/spf13/pflag v1.0.5 // indirect
+)
+
+require (
 	github.com/Oudwins/tailwind-merge-go v0.2.1 // indirect
 	github.com/a-h/parse v0.0.0-20250122154542-74294addb73e // indirect
 	github.com/a-h/templ v0.3.1001 // indirect

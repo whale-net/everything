@@ -623,7 +623,7 @@
     },
     "@@aspect_rules_js+//npm:extensions.bzl%pnpm": {
       "general": {
-        "bzlTransitiveDigest": "UiBTL/i4GW7WKtN0xoaZdqG9WGtp8YmjDjdm6/EI8sQ=",
+        "bzlTransitiveDigest": "5CZGtP1Aa3HW5dURndQBhPQ0LDdDqxScpAme2kxfwUU=",
         "usagesDigest": "F8VFCSwABhytH7SYEy3ZjFlzPvPCH8zJw2xVsTtTWP0=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -1140,6 +1140,72 @@
           }
         },
         "recordedRepoMappingEntries": []
+      }
+    },
+    "@@aspect_rules_py+//uv/private/tomltool:extension.bzl%tomltool": {
+      "general": {
+        "bzlTransitiveDigest": "mZ10B/DROBl9J9aLx4XLI5omzTs5mqHMfmvFAhuKZDk=",
+        "usagesDigest": "CkvxDNVTZBT1aEe3FlVIKKzFH1uuXn6wd1xpALt8W6A=",
+        "recordedFileInputs": {},
+        "recordedDirentsInputs": {},
+        "envVariables": {},
+        "generatedRepoSpecs": {
+          "toml2json_aarch64_osx_libsystem": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_file",
+            "attributes": {
+              "url": "https://github.com/hermeticbuild/toml2json/releases/download/v0.0.23/toml2json_darwin_arm64",
+              "sha256": "6d9ac7a19c738771233192db058f74af1e6963e78147adef68d3463b6736fdd1",
+              "executable": true
+            }
+          },
+          "toml2json_x86_64_osx_libsystem": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_file",
+            "attributes": {
+              "url": "https://github.com/hermeticbuild/toml2json/releases/download/v0.0.23/toml2json_darwin_amd64",
+              "sha256": "3fad1d4314fec5074b635ba3e5b31d578e2539137a017092bf364672a3c9676a",
+              "executable": true
+            }
+          },
+          "toml2json_aarch64_linux_gnu": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_file",
+            "attributes": {
+              "url": "https://github.com/hermeticbuild/toml2json/releases/download/v0.0.23/toml2json_linux_arm64",
+              "sha256": "c64706324f99ad7109c62ef9475c58a6a7c6efc2f9c5fa1ce7750eb0cd9e8d02",
+              "executable": true
+            }
+          },
+          "toml2json_x86_64_linux_gnu": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_file",
+            "attributes": {
+              "url": "https://github.com/hermeticbuild/toml2json/releases/download/v0.0.23/toml2json_linux_amd64",
+              "sha256": "fa7ce4deb4292a3ee93f4e47726ced6bb4e8483205e43e8daa4b05a4b77ec286",
+              "executable": true
+            }
+          },
+          "toml2json_x86_64_windows_msvc": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_file",
+            "attributes": {
+              "url": "https://github.com/hermeticbuild/toml2json/releases/download/v0.0.23/toml2json_windows_amd64.exe",
+              "sha256": "bbc61cd6a081e490223b44f33003cb02e00301306d84fcba0cb3eaee8fb70396",
+              "executable": true
+            }
+          },
+          "toml2json_aarch64_windows_msvc": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_file",
+            "attributes": {
+              "url": "https://github.com/hermeticbuild/toml2json/releases/download/v0.0.23/toml2json_windows_arm64.exe",
+              "sha256": "00a7101da6260926e8c23af3b802f82d3f820054fae3d86c29886545f5985a92",
+              "executable": true
+            }
+          }
+        },
+        "recordedRepoMappingEntries": [
+          [
+            "aspect_rules_py+",
+            "bazel_tools",
+            "bazel_tools"
+          ]
+        ]
       }
     },
     "@@aspect_rules_ts+//ts:extensions.bzl%ext": {
@@ -3912,7 +3978,7 @@
     },
     "@@rules_rust+//crate_universe:extension.bzl%crate": {
       "general": {
-        "bzlTransitiveDigest": "R2mtRb5zEuDt1Q2FG4HuLMUT3l4DSC1/oiLlc1XiYlc=",
+        "bzlTransitiveDigest": "rJIAUqUazj3qiaczIa0PNFeUVj+dteycd2EQDn8inLM=",
         "usagesDigest": "xseUhU/YuAN7VY67swMdqgUK5aOCAHlqBV8aEpAmJ9A=",
         "recordedFileInputs": {
           "@@pigweed+//third_party/crates_io/crates_no_std/Cargo.lock": "d38da5fa5f942b59a8017730285afe69aaf6f741b6171f361d66202de3473bc2",
@@ -8898,7 +8964,7 @@
     },
     "@@rules_rust+//crate_universe/private:internal_extensions.bzl%cu_nr": {
       "general": {
-        "bzlTransitiveDigest": "eLoVLchy4+RmaWbs47OjNRYoXRMS66kXbsziip4h7cw=",
+        "bzlTransitiveDigest": "+hL8QPwRjR79lEnu0CkBxpQynbSNlgHQO7S3lahhH5k=",
         "usagesDigest": "v4We18mWSPeKV4GPp9Gne78W+jZOgP2pC1i4UN9br1g=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
