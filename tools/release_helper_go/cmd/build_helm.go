@@ -8,9 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"regexp"
-
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 func newBuildHelmChartCmd() *cobra.Command {
@@ -232,24 +231,36 @@ func packageChartWithVersion(chartDir, chartName, version, outDir string, appVer
 		return os.Chmod(p, 0644)
 	})
 
-	// Update Chart.yaml version field via regex line replacement.
+	// Update Chart.yaml version
 	chartYaml := filepath.Join(tmpChartDir, "Chart.yaml")
 	if data, err := os.ReadFile(chartYaml); err == nil {
-		re := regexp.MustCompile(`(?m)^(version:\s*).*$`)
-		updated := re.ReplaceAll(data, []byte("${1}"+version))
-		_ = os.WriteFile(chartYaml, updated, 0644)
+		var chartData map[string]interface{}
+		if err := yaml.Unmarshal(data, &chartData); err == nil {
+			chartData["version"] = version
+			if out, err := yaml.Marshal(chartData); err == nil {
+				_ = os.WriteFile(chartYaml, out, 0644)
+			}
+		}
 	}
 
-	// Update values.yaml imageTag entries for resolved app versions.
+	// Update values.yaml imageTag for resolved app versions
 	valuesYaml := filepath.Join(tmpChartDir, "values.yaml")
 	if len(appVersions) > 0 {
 		if data, err := os.ReadFile(valuesYaml); err == nil {
-			content := string(data)
-			for appKey, ver := range appVersions {
-				content = setYAMLImageTag(content, appKey, ver)
-				fmt.Printf("Updated %s imageTag to %s\n", appKey, ver)
+			var values map[string]interface{}
+			if err := yaml.Unmarshal(data, &values); err == nil {
+				if apps, ok := values["apps"].(map[string]interface{}); ok {
+					for appKey, ver := range appVersions {
+						if appEntry, ok := apps[appKey].(map[string]interface{}); ok {
+							appEntry["imageTag"] = ver
+							fmt.Printf("Updated %s imageTag to %s\n", appKey, ver)
+						}
+					}
+				}
+				if out, err := yaml.Marshal(values); err == nil {
+					_ = os.WriteFile(valuesYaml, out, 0644)
+				}
 			}
-			_ = os.WriteFile(valuesYaml, []byte(content), 0644)
 		}
 	}
 
@@ -277,36 +288,6 @@ func copyDir(src, dst string) error {
 		}
 		return copyFile(path, target)
 	})
-}
-
-// setYAMLImageTag updates `imageTag:` under an app key in a values.yaml string.
-// It does a simple line-based replacement scoped to the app's subsection.
-func setYAMLImageTag(content, appKey, ver string) string {
-	lines := strings.Split(content, "\n")
-	appHeader := "  " + appKey + ":"
-	inApp := false
-	for i, line := range lines {
-		if line == appHeader {
-			inApp = true
-			continue
-		}
-		if inApp {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "imageTag:") {
-				indent := strings.Repeat(" ", len(line)-len(strings.TrimLeft(line, " ")))
-				lines[i] = indent + "imageTag: " + ver
-				break
-			}
-			// End of this app's section if we hit a same- or lower-indent key
-			if len(line) > 0 && line[0] != ' ' {
-				break
-			}
-			if len(line) >= 2 && line[0] == ' ' && line[1] == ' ' && len(line) > 2 && line[2] != ' ' {
-				break
-			}
-		}
-	}
-	return strings.Join(lines, "\n")
 }
 
 func copyFile(src, dst string) error {

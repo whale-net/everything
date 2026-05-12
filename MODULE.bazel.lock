@@ -3324,7 +3324,7 @@
     "@@rules_pycross+//pycross/extensions:environments.bzl%environments": {
       "general": {
         "bzlTransitiveDigest": "G+ShbGQ5+RoC4MrJhOg/2+dxbYymg1Bh3yem4mRdKcA=",
-        "usagesDigest": "kyI2AP+6tbitfuvF7s8qnOZnvzLFtZDJP9teEuz8HQU=",
+        "usagesDigest": "ioB3S1ajFz36W/k69nP5wO7JBQHyYbHo09Vug5lNKtw=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
