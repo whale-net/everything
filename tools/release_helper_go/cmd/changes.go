@@ -93,7 +93,11 @@ func DetectChangedApps(baseCommit string, bazel BazelRunner, git GitRunner, fs F
 	}
 	expr := strings.Join(queryParts, " + ")
 
-	rdepsOut, err := bazel.Run("query", fmt.Sprintf("rdeps(//..., %s)", expr), "--output=label")
+	rdepsQuery := expr
+	if strings.Contains(expr, " ") {
+		rdepsQuery = "(" + expr + ")"
+	}
+	rdepsOut, err := bazel.Run("query", fmt.Sprintf("rdeps(//..., %s)", rdepsQuery), "--output=label")
 	if err != nil {
 		return nil, fmt.Errorf("bazel rdeps query: %w", err)
 	}
@@ -109,7 +113,10 @@ func DetectChangedApps(baseCommit string, bazel BazelRunner, git GitRunner, fs F
 	}
 
 	metaExpr := strings.Join(metaTargets, " + ")
-	affectedMetaOut, err := bazel.Run("query", fmt.Sprintf("rdeps(%s, %s)", metaExpr, expr), "--output=label")
+	if strings.Contains(metaExpr, " ") {
+		metaExpr = "(" + metaExpr + ")"
+	}
+	affectedMetaOut, err := bazel.Run("query", fmt.Sprintf("rdeps(%s, %s)", metaExpr, rdepsQuery), "--output=label")
 	if err != nil {
 		return nil, fmt.Errorf("bazel rdeps query for metadata: %w", err)
 	}
