@@ -123,7 +123,7 @@ jobs:
         # Only plan app release if apps are specified
         if [[ -n "$APPS_INPUT" ]]; then
           # Build the command based on the selected option
-          CMD="bazel run --config=ci //tools:release -- plan --event-type \"$EVENT_TYPE\" --apps \"$APPS_INPUT\" --format github"
+          CMD="bazel run --config=ci //tools/release_helper_go:release_helper_go -- plan --event-type \"$EVENT_TYPE\" --apps \"$APPS_INPUT\" --format github"
           
           # Add --include-demo flag if checkbox is selected
           if [[ "$INCLUDE_DEMO" == "true" ]]; then
@@ -196,7 +196,7 @@ jobs:
         echo "Planning OpenAPI spec builds for apps: $APPS"
         
         # Use release helper to identify apps with OpenAPI specs
-        PLAN_OUTPUT=$(bazel run --config=ci //tools:release -- plan-openapi-builds --apps "$APPS" --format github)
+        PLAN_OUTPUT=$(bazel run --config=ci //tools/release_helper_go:release_helper_go -- plan-openapi-builds --apps "$APPS" --format github)
         
         # Parse output
         echo "$PLAN_OUTPUT" | while IFS= read -r line; do
@@ -353,11 +353,11 @@ jobs:
         # Build the release helper binary first (avoids nested Bazel invocations)
         # Use ci-release config: builds from source (no remote cache reads) to prevent cache poisoning
         echo "Building release helper..."
-        bazel build --config=ci-release //tools:release
-        
+        bazel build --config=ci-release //tools/release_helper_go:release_helper_go
+
         # Execute the release helper directly (not via 'bazel run' to avoid deadlocks)
-        RELEASE_HELPER="$(bazel info bazel-bin --config=ci-release)/tools/release_helper/release_helper"
-        
+        RELEASE_HELPER="$(bazel info bazel-bin --config=ci-release)/tools/release_helper_go/release_helper_go_/release_helper_go"
+
         # Use release-multiarch with full domain-app name to ensure correct artifact is released
         if [[ "$DRY_RUN" == "true" ]]; then
           echo "DRY RUN: Building multiarch images without publishing"
@@ -411,7 +411,7 @@ jobs:
         echo "" >> $GITHUB_STEP_SUMMARY
         
         # Generate release notes using the release helper with full app name
-        RELEASE_NOTES=$(bazel run --config=ci //tools:release -- release-notes "$FULL_APP_NAME" \
+        RELEASE_NOTES=$(bazel run --config=ci //tools/release_helper_go:release_helper_go -- release-notes "$FULL_APP_NAME" \
           --current-tag "$TAG_NAME" \
           --format markdown 2>/dev/null || echo "Release notes generation skipped - no previous tags found")
         
@@ -496,7 +496,7 @@ jobs:
           ls -la /tmp/openapi-specs/ || echo "No OpenAPI spec files found"
           
           # Create releases for all apps at once, using pre-generated release notes
-          if bazel run --config=ci //tools:release -- create-combined-github-release-with-notes "$VERSION" \
+          if bazel run --config=ci //tools/release_helper_go:release_helper_go -- create-combined-github-release-with-notes "$VERSION" \
             --owner "$GITHUB_REPOSITORY_OWNER" \
             --repo "$GITHUB_REPOSITORY_NAME" \
             --commit "${{ github.sha }}" \
@@ -536,7 +536,7 @@ jobs:
         EVENT_TYPE="workflow_dispatch"
         DRY_RUN="${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}"
         
-        SUMMARY=$(bazel run //tools:release -- summary \
+        SUMMARY=$(bazel run //tools/release_helper_go:release_helper_go -- summary \
           --matrix "$MATRIX" \
           --version "${{ needs.plan-release.outputs.version }}" \
           --event-type "$EVENT_TYPE" \
@@ -661,7 +661,7 @@ jobs:
         echo "Using version: $VERSION"
         
         # Build the command with optional --include-demo flag
-        CMD="bazel run --config=ci //tools:release -- plan-helm-release --charts \"$CHARTS_INPUT\" --version \"$VERSION\" --format github"
+        CMD="bazel run --config=ci //tools/release_helper_go:release_helper_go -- plan-helm-release --charts \"$CHARTS_INPUT\" --version \"$VERSION\" --format github"
         
         if [[ "$INCLUDE_DEMO" == "true" ]]; then
           CMD="$CMD --include-demo"
@@ -712,8 +712,8 @@ jobs:
         
         # Build the release helper binary first (avoids nested Bazel invocations)
         echo "Building release helper..."
-        bazel build --config=ci //tools:release
-        RELEASE_HELPER="$(bazel info bazel-bin --config=ci)/tools/release_helper/release_helper"
+        bazel build --config=ci //tools/release_helper_go:release_helper_go
+        RELEASE_HELPER="$(bazel info bazel-bin --config=ci)/tools/release_helper_go/release_helper_go_/release_helper_go"
         
         # Parse chart list and build each chart with proper versioning
         CHARTS="${{ steps.plan.outputs.charts }}"

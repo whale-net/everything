@@ -148,7 +148,7 @@ jobs:
         
         # Use release helper to plan the Docker builds
         echo "Planning Docker builds using release tool..."
-        PLAN_OUTPUT=$(bazel run --config=ci //tools:release -- plan \
+        PLAN_OUTPUT=$(bazel run --config=ci //tools/release_helper_go:release_helper_go -- plan \
           --event-type "$EVENT_TYPE" \
           --base-commit="$BASE_COMMIT" \
           --format github)
@@ -207,7 +207,7 @@ jobs:
         # Use full domain-app format to avoid ambiguity
         FULL_APP_NAME="${DOMAIN}-${APP}"
         echo "Building Docker image for $FULL_APP_NAME using release tool..."
-        bazel run --config=ci-images //tools:release -- build "$FULL_APP_NAME"
+        bazel run --config=ci-images //tools/release_helper_go:release_helper_go -- build "$FULL_APP_NAME"
         
         # Show the built Docker image
         echo "Built Docker image for $FULL_APP_NAME:"
