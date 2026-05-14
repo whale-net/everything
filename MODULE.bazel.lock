@@ -412,7 +412,6 @@
     "https://bcr.bazel.build/modules/rules_python/1.0.0/MODULE.bazel": "898a3d999c22caa585eb062b600f88654bf92efb204fa346fb55f6f8edffca43",
     "https://bcr.bazel.build/modules/rules_python/1.5.1/MODULE.bazel": "acfe65880942d44a69129d4c5c3122d57baaf3edf58ae5a6bd4edea114906bf5",
     "https://bcr.bazel.build/modules/rules_python/1.6.0/MODULE.bazel": "7e04ad8f8d5bea40451cf80b1bd8262552aa73f841415d20db96b7241bd027d8",
-    "https://bcr.bazel.build/modules/rules_python/1.6.1/MODULE.bazel": "0dd0dd858e4480a7dc0cecb21d2131a476cdd520bdb42d9fae64a50965a50082",
     "https://bcr.bazel.build/modules/rules_python/1.6.3/MODULE.bazel": "a7b80c42cb3de5ee2a5fa1abc119684593704fcd2fec83165ebe615dec76574f",
     "https://bcr.bazel.build/modules/rules_python/1.8.3/MODULE.bazel": "f343e159b59701334be3914416b9f1b72845801ba47920fcb288af4ce8c5cce3",
     "https://bcr.bazel.build/modules/rules_python/1.8.3/source.json": "e5439f308e3c6f79f318a0f87108db46fc575be89370c3dfb3f7e0eaa571a3f8",
