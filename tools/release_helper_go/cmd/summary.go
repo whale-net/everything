@@ -61,6 +61,18 @@ type releaseMatrix struct {
 	Include []matrixItem `json:"include"`
 }
 
+func uniqueStrings(ss []string) []string {
+	seen := make(map[string]bool, len(ss))
+	var out []string
+	for _, s := range ss {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func generateSummary(matrixJSON, version, eventType string, dryRun bool, repositoryOwner string) string {
 	var m releaseMatrix
 	if err := json.Unmarshal([]byte(matrixJSON), &m); err != nil {
@@ -82,7 +94,25 @@ func generateSummary(matrixJSON, version, eventType string, dryRun bool, reposit
 		apps = append(apps, item.App)
 	}
 	sb.WriteString(fmt.Sprintf("📦 **Apps:** %s\n", strings.Join(apps, ", ")))
-	sb.WriteString(fmt.Sprintf("🏷️  **Version:** %s\n", version))
+
+	// Derive displayed version(s) from matrix items to handle increment/mixed modes.
+	itemVersions := make([]string, len(m.Include))
+	for i, item := range m.Include {
+		v := item.Version
+		if v == "" {
+			v = version
+		}
+		itemVersions[i] = v
+	}
+	uniqueVersions := uniqueStrings(itemVersions)
+	if len(uniqueVersions) == 1 {
+		sb.WriteString(fmt.Sprintf("🏷️  **Version:** %s\n", uniqueVersions[0]))
+	} else {
+		sb.WriteString("🏷️  **Versions:**\n")
+		for i, item := range m.Include {
+			sb.WriteString(fmt.Sprintf("   - %s: %s\n", item.App, itemVersions[i]))
+		}
+	}
 	sb.WriteString("🛠️ **System:** Consolidated Release + OCI\n")
 
 	if eventType == "workflow_dispatch" {
@@ -118,6 +148,15 @@ func generateSummary(matrixJSON, version, eventType string, dryRun bool, reposit
 	sb.WriteString("```bash\n")
 	sb.WriteString("# List all apps\n")
 	sb.WriteString("bazel run //tools:release -- list\n")
+	sb.WriteString("\n")
+	sb.WriteString("# Build and test an app locally\n")
+	limit := len(apps)
+	if limit > 2 {
+		limit = 2
+	}
+	for _, app := range apps[:limit] {
+		sb.WriteString(fmt.Sprintf("bazel run //tools:release -- build %s\n", app))
+	}
 	sb.WriteString("```\n")
 
 	return sb.String()

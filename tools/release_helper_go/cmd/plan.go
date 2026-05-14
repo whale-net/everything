@@ -52,6 +52,10 @@ func newPlanCmd() *cobra.Command {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Error: --version, --increment-minor, and --increment-patch are mutually exclusive\n")
 				return fmt.Errorf("mutually exclusive options")
 			}
+			if eventType == "workflow_dispatch" && versionOpts == 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Error: manual releases require --version, --increment-minor, or --increment-patch\n")
+				return fmt.Errorf("missing version option")
+			}
 			if version != "" && version != "latest" && !semverRE.MatchString(version) {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Error: version %q does not follow semantic versioning (vMAJOR.MINOR.PATCH)\n", version)
 				return fmt.Errorf("invalid version")
@@ -344,7 +348,24 @@ func resolveApps(requested []string, allApps []AppMetadata) ([]AppMetadata, erro
 	if len(invalid) > 0 {
 		return nil, fmt.Errorf("invalid apps: %s", strings.Join(invalid, "; "))
 	}
-	return result, nil
+
+	// Detect duplicates (e.g. domain name + specific app from that domain).
+	seen := make(map[string]bool, len(result))
+	deduped := make([]AppMetadata, 0, len(result))
+	var dups []string
+	for _, app := range result {
+		full := app.FullName()
+		if seen[full] {
+			dups = append(dups, full)
+			continue
+		}
+		seen[full] = true
+		deduped = append(deduped, app)
+	}
+	if len(dups) > 0 {
+		return nil, fmt.Errorf("duplicate apps in request: %s", strings.Join(dups, ", "))
+	}
+	return deduped, nil
 }
 
 func filterOutDemo(apps []AppMetadata) []AppMetadata {

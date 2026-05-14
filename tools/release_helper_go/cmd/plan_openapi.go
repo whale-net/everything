@@ -35,6 +35,10 @@ func newPlanOpenapiBuildsCmd() *cobra.Command {
 			}
 
 			requested := parseAppList(apps)
+			if len(requested) == 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Error: --apps is required and cannot be empty\n")
+				return fmt.Errorf("app list cannot be empty")
+			}
 			resolved, err := resolveApps(requested, allApps)
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Error validating apps: %v\n", err)

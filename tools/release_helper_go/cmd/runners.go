@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os/exec"
 	"strings"
 )
@@ -12,8 +13,11 @@ type realBazelRunner struct {
 func (r *realBazelRunner) Run(args ...string) (string, error) {
 	cmd := exec.Command("bazel", args...)
 	cmd.Dir = r.workspaceRoot
-	out, err := cmd.Output()
-	return strings.TrimSpace(string(out)), err
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%w\n%s", err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 type realGitRunner struct {
@@ -23,8 +27,11 @@ type realGitRunner struct {
 func (r *realGitRunner) Run(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = r.workspaceRoot
-	out, err := cmd.Output()
-	return strings.TrimSpace(string(out)), err
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%w\n%s", err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func init() {

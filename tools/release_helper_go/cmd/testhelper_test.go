@@ -87,6 +87,11 @@ func (f *fakeFS) ReadFile(path string) ([]byte, error) {
 	return nil, &os.PathError{Op: "open", Path: path, Err: syscall.ENOENT}
 }
 
+func (f *fakeFS) WriteFile(path string, data []byte, _ os.FileMode) error {
+	f.files[path] = data
+	return nil
+}
+
 type fakeFileInfo struct{}
 
 func (fakeFileInfo) Name() string       { return "" }

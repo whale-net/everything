@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -53,7 +52,7 @@ func newUnpublishHelmChartCmd() *cobra.Command {
 				return nil
 			}
 
-			if err := os.WriteFile(indexFile, updated, 0644); err != nil {
+			if err := defaultFS.WriteFile(indexFile, updated, 0644); err != nil {
 				return fmt.Errorf("write index: %w", err)
 			}
 

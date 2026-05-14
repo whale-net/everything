@@ -18,7 +18,9 @@ func newCleanupReleasesCmd() *cobra.Command {
 		keepMinorVersions int
 		minAgeDays        int
 		dryRun            bool
+		noDryRun          bool
 		deletePackages    bool
+		noDeletePackages  bool
 	)
 
 	cmd := &cobra.Command{
@@ -26,6 +28,13 @@ func newCleanupReleasesCmd() *cobra.Command {
 		Short:        "Clean up old Git tags and optionally their corresponding GHCR packages",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if noDryRun {
+				dryRun = false
+			}
+			if noDeletePackages {
+				deletePackages = false
+			}
+
 			token := defaultEnv("GITHUB_TOKEN")
 			if token == "" {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Error: GITHUB_TOKEN environment variable not set\n")
@@ -142,7 +151,9 @@ func newCleanupReleasesCmd() *cobra.Command {
 	cmd.Flags().IntVar(&keepMinorVersions, "keep-minor-versions", 2, "Number of recent minor versions to keep")
 	cmd.Flags().IntVar(&minAgeDays, "min-age-days", 14, "Minimum age in days for deletion")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", true, "Preview changes without executing")
+	cmd.Flags().BoolVar(&noDryRun, "no-dry-run", false, "Actually execute deletions")
 	cmd.Flags().BoolVar(&deletePackages, "delete-packages", true, "Also delete corresponding GHCR packages")
+	cmd.Flags().BoolVar(&noDeletePackages, "no-delete-packages", false, "Skip GHCR package deletion")
 
 	return cmd
 }
@@ -329,14 +340,16 @@ func (g *githubClient) findReleasesByTags(tags []string) (map[string]int, error)
 			}
 			continue
 		}
-		defer resp.Body.Close()
 		if resp.StatusCode != 200 {
+			resp.Body.Close()
 			continue
 		}
 		var data map[string]interface{}
 		if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+			resp.Body.Close()
 			continue
 		}
+		resp.Body.Close()
 		if id, ok := data["id"].(float64); ok {
 			result[tag] = int(id)
 		}

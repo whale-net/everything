@@ -85,13 +85,17 @@ func DetectChangedApps(baseCommit string, bazel BazelRunner, git GitRunner, fs F
 		queryParts = append(queryParts, strings.Join(validLabels, " + "))
 	}
 	for pkg := range changedPkgs {
-		queryParts = append(queryParts, pkg+"/...")
+		if pkg == "//" {
+			queryParts = append(queryParts, "//...")
+		} else {
+			queryParts = append(queryParts, pkg+"/...")
+		}
 	}
 	expr := strings.Join(queryParts, " + ")
 
 	rdepsOut, err := bazel.Run("query", fmt.Sprintf("rdeps(//..., %s)", expr), "--output=label")
 	if err != nil {
-		return nil, nil // no affected targets
+		return nil, fmt.Errorf("bazel rdeps query: %w", err)
 	}
 	affected := labelSet(rdepsOut)
 
@@ -107,7 +111,7 @@ func DetectChangedApps(baseCommit string, bazel BazelRunner, git GitRunner, fs F
 	metaExpr := strings.Join(metaTargets, " + ")
 	affectedMetaOut, err := bazel.Run("query", fmt.Sprintf("rdeps(%s, %s)", metaExpr, expr), "--output=label")
 	if err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("bazel rdeps query for metadata: %w", err)
 	}
 	affectedMeta := labelSet(affectedMetaOut)
 

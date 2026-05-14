@@ -75,8 +75,7 @@ func newBuildHelmChartCmd() *cobra.Command {
 				}
 			} else {
 				for _, appName := range chart.Apps {
-					key := chart.Domain + "-" + appName
-					appVersions[key] = "latest"
+					appVersions[appName] = "latest"
 				}
 			}
 
@@ -180,8 +179,7 @@ func resolveChartAppVersions(chart HelmChartMetadata, allApps []AppMetadata, git
 		if err != nil || ver == "" {
 			return nil, fmt.Errorf("no released version for app %q in domain %q", matched.Name, matched.Domain)
 		}
-		key := matched.Domain + "-" + matched.Name
-		versions[key] = ver
+		versions[matched.Name] = ver
 	}
 	return versions, nil
 }

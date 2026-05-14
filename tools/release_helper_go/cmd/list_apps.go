@@ -39,8 +39,8 @@ func newListCmd() *cobra.Command {
 
 func runListApps(cmd *cobra.Command, format string) error {
 	if format != "text" && format != "json" {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Error: format must be one of: text, json\n")
-		return fmt.Errorf("invalid format")
+		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: unknown format %q, defaulting to text\n", format)
+		format = "text"
 	}
 	workspaceRoot, err := defaultWorkspaceRoot()
 	if err != nil {

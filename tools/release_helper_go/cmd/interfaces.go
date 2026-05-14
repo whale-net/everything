@@ -16,6 +16,7 @@ type GitRunner interface {
 type FileSystem interface {
 	Stat(path string) (os.FileInfo, error)
 	ReadFile(path string) ([]byte, error)
+	WriteFile(path string, data []byte, perm os.FileMode) error
 }
 
 // EnvLookup reads environment variables. Replaced in tests with a fake.
