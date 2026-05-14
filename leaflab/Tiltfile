@@ -1,8 +1,8 @@
 # LeafLab Tiltfile
 # Local development environment for LeafLab data pipeline.
 #
-# Starts RabbitMQ (with MQTT plugin), TimescaleDB, and the Go processor.
-# ESP32 sensorboards publish via MQTT; the processor consumes from AMQP.
+# Starts RabbitMQ (with MQTT plugin), TimescaleDB, the Go processor,
+# and the gRPC API for pushing device configs.
 #
 # Usage:
 #   cd leaflab && tilt up
@@ -86,6 +86,10 @@ APPS = {
         'bazel_target': '//leaflab/processor:processor_image_load',
         'image_name': 'leaflab-processor',
     },
+    'api': {
+        'bazel_target': '//leaflab/api:leaflab-api_image_load',
+        'image_name': 'leaflab-leaflab-api',
+    },
 }
 
 build_images_from_apps(APPS, watch_paths, platform)
@@ -158,6 +162,58 @@ k8s_resource(
     labels=['leaflab'],
 )
 
+# gRPC API — device config push
+k8s_yaml(blob("""
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: leaflab-api
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: leaflab-api
+  template:
+    metadata:
+      labels:
+        app: leaflab-api
+    spec:
+      containers:
+      - name: api
+        image: leaflab-leaflab-api
+        ports:
+        - containerPort: 50051
+        env:
+        - name: PORT
+          value: "50051"
+        - name: RABBITMQ_URL
+          value: "{rabbitmq_url}"
+        - name: PG_DATABASE_URL
+          value: "{pg_url}"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: leaflab-api
+  namespace: {namespace}
+spec:
+  type: NodePort
+  selector:
+    app: leaflab-api
+  ports:
+  - port: 50051
+    targetPort: 50051
+    nodePort: 30051
+""".format(namespace=namespace, rabbitmq_url=rabbitmq_url, pg_url=pg_url)))
+
+k8s_resource(
+    'leaflab-api',
+    resource_deps=['rabbitmq-dev-mqtt-plugin', 'leaflab-migrate'],
+    labels=['leaflab'],
+    port_forwards=['50051:50051'],
+)
+
 # ===========================
 # Access Information
 # ===========================
@@ -169,7 +225,12 @@ print("  RabbitMQ AMQP:   localhost:5672 (user: rabbit, pass: password)")
 print("  RabbitMQ MQTT:   localhost:1883")
 print("  RabbitMQ Mgmt:   http://localhost:15672")
 print("  PostgreSQL:      localhost:5432 (user: postgres, pass: password, db: leaflab)")
+print("  LeafLab gRPC:   localhost:50051 (grpcurl -plaintext)")
 print("="*60)
+print("")
+print("Push a device config:")
+print("  grpcurl -plaintext -d '{\"device_id\":\"<id>\",\"sensors\":[{\"i2c_address\":35,\"name\":\"my_light\"}]}' \\")
+print("    localhost:50051 leaflab.api.v1.LeafLabAPI/PushDeviceConfig")
 print("")
 print("Provision device (use your host IP, not localhost):")
 print("  bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 \\")

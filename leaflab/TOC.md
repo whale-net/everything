@@ -9,11 +9,13 @@ Plant and environment monitoring firmware and data pipeline.
 ## Start Here
 
 - [README.md](README.md) — What LeafLab is, quick start commands, relationship to `//firmware`
-- [ARCHITECTURE.md](ARCHITECTURE.md) — Link-seam board config pattern, sensor registry, data flow, future directions
+- [ARCHITECTURE.md](ARCHITECTURE.md) — Link-seam board config pattern, dynamic sensor factory, pipeline overview
+- [DATA.md](DATA.md) — ER diagram, sensor identity model, SCD2 convention, config push flow, reading write path, mux_path format, analytical views reference
 
 ## Projects
 
 - [sensorboard/README.md](sensorboard/README.md) — Build, flash, extend the sensorboard firmware; how to add sensors and board configs
+- [sensorboard/CLAUDE.md](sensorboard/CLAUDE.md) — Agent instructions: flash/validate workflow, I2C hardware notes, config push, DB validation
 
 ## Related Docs
 

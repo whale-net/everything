@@ -11,6 +11,7 @@
 //   key "mqtt_port"  — MQTT broker port as string (optional; 1883 if absent)
 //   key "mqtt_user"  — MQTT username              (optional; "" if absent)
 //   key "mqtt_pass"  — MQTT password              (optional; "" if absent)
+//   key "mqtt_tls"   — "1" to enable TLS          (optional; false if absent)
 //
 // Provision the device:
 //   bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 \
@@ -37,6 +38,7 @@ class NVSCredentials final : public ICredentials {
   uint16_t    mqtt_port()     const override { return mqtt_port_; }
   const char* mqtt_user()     const override { return mqtt_user_; }
   const char* mqtt_pass()     const override { return mqtt_pass_; }
+  bool        mqtt_tls()      const override { return mqtt_tls_; }
 
  private:
   char     ssid_[64]      = {};
@@ -45,6 +47,7 @@ class NVSCredentials final : public ICredentials {
   uint16_t mqtt_port_     = 1883;
   char     mqtt_user_[64] = {};
   char     mqtt_pass_[64] = {};
+  bool     mqtt_tls_      = false;
 };
 
 }  // namespace firmware

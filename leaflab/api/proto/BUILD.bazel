@@ -1,0 +1,12 @@
+"""LeafLab API proto — gRPC service definition."""
+
+load("//tools/bazel:grpc.bzl", "go_grpc_library")
+
+go_grpc_library(
+    name = "leaflabapipb",
+    srcs = ["api.proto"],
+    importpath = "github.com/whale-net/everything/leaflab/api/proto",
+    proto_deps = ["//firmware/proto:config_proto"],
+    go_deps = ["//firmware/proto:configpb"],
+    visibility = ["//visibility:public"],
+)

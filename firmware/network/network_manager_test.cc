@@ -17,6 +17,7 @@ namespace {
 bool g_wifi_connected = false;
 bool g_mqtt_connected = false;
 bool g_mqtt_publish_ok = true;
+bool g_last_mqtt_tls = false;
 }  // namespace
 
 // Declared extern in network_manager.cc
@@ -29,7 +30,8 @@ uint32_t PlatformNowMs() {
 }
 bool WiFiIsConnected() { return g_wifi_connected; }
 bool MQTTConnect(const char*, uint16_t, const char*, const char*, const char*,
-                 const char*, const char*) {
+                 const char*, const char*, bool tls) {
+  g_last_mqtt_tls = tls;
   return g_mqtt_connected;
 }
 bool MQTTIsConnected() { return g_mqtt_connected; }
@@ -38,6 +40,8 @@ bool MQTTPublishBinary(const char*, const uint8_t*, size_t, bool) {
   return g_mqtt_publish_ok;
 }
 void WiFiConnect() {}
+bool MQTTSubscribe(const char*) { return true; }
+void MQTTSetCallback(void (*)(const char*, const uint8_t*, size_t)) {}
 
 // ── Test fixture ──────────────────────────────────────────────────────────────
 
@@ -63,6 +67,7 @@ class NetworkManagerTest : public ::testing::Test {
     g_wifi_connected = false;
     g_mqtt_connected = false;
     g_mqtt_publish_ok = true;
+    g_last_mqtt_tls = false;
   }
 };
 
@@ -222,6 +227,34 @@ TEST_F(NetworkManagerTest, PublishBinaryPropagatesBrokerFailure) {
 
   const uint8_t buf[] = {0x01};
   EXPECT_EQ(nm.Publish("t", buf, 1), pw::Status::Internal());
+}
+
+// ── mqtt_tls propagation ──────────────────────────────────────────────────────
+
+TEST_F(NetworkManagerTest, MqttTlsTruePropagatedToConnect) {
+  g_wifi_connected = true;
+  g_mqtt_connected = true;
+
+  auto cfg = TestConfig();
+  cfg.mqtt_tls = true;
+  NetworkManager nm(cfg);
+  nm.Connect();
+  nm.Poll();  // → kReady, calls MQTTConnect with tls=true
+
+  EXPECT_TRUE(g_last_mqtt_tls);
+}
+
+TEST_F(NetworkManagerTest, MqttTlsFalseByDefault) {
+  g_wifi_connected = true;
+  g_mqtt_connected = true;
+
+  auto cfg = TestConfig();
+  // mqtt_tls not set → zero-initialised to false
+  NetworkManager nm(cfg);
+  nm.Connect();
+  nm.Poll();  // → kReady, calls MQTTConnect with tls=false
+
+  EXPECT_FALSE(g_last_mqtt_tls);
 }
 
 }  // namespace

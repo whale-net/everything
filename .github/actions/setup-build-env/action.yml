@@ -34,6 +34,18 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Cache Bazel External Repositories (all sizes)
+      uses: actions/cache@v4
+      with:
+        # Cache the entire external/ directory — this complements setup-bazel's
+        # per-repo external-cache (which only caches repos >=10MB) by also
+        # capturing all the small Go module repos that fall below that threshold.
+        # Key includes MODULE.bazel so the cache is invalidated on any dep change.
+        path: ~/.bazel/external
+        key: bazel-external-v1-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'WORKSPACE.bazel', 'WORKSPACE.bzlmod', 'WORKSPACE') }}
+        restore-keys: |
+          bazel-external-v1-${{ runner.os }}-
+
     - name: Setup Remote Cache Environment
       shell: bash
       run: |
@@ -78,9 +90,13 @@ runs:
         bazelisk-cache: true
         # Enable repository cache for all external dependencies (single consolidated cache)
         repository-cache: true
-        # Disable external-cache to avoid many small cache requests
-        # The repository-cache already handles external dependencies efficiently
-        external-cache: false
+        # Enable external-cache to avoid re-running all repository rules on every CI run.
+        # Without this, Bazel re-evaluates ~200+ repo rules (Go gazelle, pigweed, Python
+        # toolchain, OCI image manifests) from scratch each run, costing ~125s of analysis
+        # time before any build actions run. With this enabled, the external/ output-base
+        # directories are cached; combined with --noexperimental_check_external_repository_files
+        # in .bazelrc:ci, Bazel skips all repo-rule re-evaluation on cache hits.
+        external-cache: true
         # Disk cache - isolated by cache suffix for better hit rates
         disk-cache: ${{ inputs.cache-suffix || 'true' }}
 

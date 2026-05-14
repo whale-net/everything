@@ -9,18 +9,22 @@ type SensorInfo struct {
 }
 
 // SensorCache is an in-memory lookup of registered sensors, keyed by
-// device_id → sensor_name → SensorInfo. Populated on manifest receipt;
-// consulted on every reading.
+// device_id → sensor_name → SensorInfo. Also tracks the latest accepted
+// config version per device so readings can be stamped at write time.
 type SensorCache struct {
-	mu      sync.RWMutex
-	devices map[string]map[string]SensorInfo // device_id → name → info
+	mu             sync.RWMutex
+	devices        map[string]map[string]SensorInfo // device_id → name → info
+	configVersions map[string]int64                 // device_id → latest accepted version
 }
 
 func NewSensorCache() *SensorCache {
-	return &SensorCache{devices: make(map[string]map[string]SensorInfo)}
+	return &SensorCache{
+		devices:        make(map[string]map[string]SensorInfo),
+		configVersions: make(map[string]int64),
+	}
 }
 
-// Load bulk-populates the cache, typically called at startup from a DB snapshot.
+// Load bulk-populates the sensor entries, typically called at startup from a DB snapshot.
 func (c *SensorCache) Load(entries map[string]map[string]SensorInfo) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -31,6 +35,15 @@ func (c *SensorCache) Load(entries map[string]map[string]SensorInfo) {
 		for name, info := range sensors {
 			c.devices[deviceID][name] = info
 		}
+	}
+}
+
+// LoadConfigVersions bulk-populates config version entries at startup.
+func (c *SensorCache) LoadConfigVersions(versions map[string]int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for deviceID, v := range versions {
+		c.configVersions[deviceID] = v
 	}
 }
 
@@ -54,4 +67,21 @@ func (c *SensorCache) Get(deviceID, sensorName string) (SensorInfo, bool) {
 	}
 	info, ok := sensors[sensorName]
 	return info, ok
+}
+
+// SetConfigVersion records the latest accepted config version for a device.
+func (c *SensorCache) SetConfigVersion(deviceID string, version int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.configVersions[deviceID] = version
+}
+
+// GetConfigVersion returns the latest accepted config version for a device,
+// and whether one has been recorded. Returns (0, false) if no config has been
+// pushed and accepted for this device.
+func (c *SensorCache) GetConfigVersion(deviceID string) (int64, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	v, ok := c.configVersions[deviceID]
+	return v, ok
 }

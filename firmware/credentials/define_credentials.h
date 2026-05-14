@@ -58,6 +58,7 @@ class DefineCredentials final : public ICredentials {
   uint16_t    mqtt_port()     const override { return MQTT_PORT; }
   const char* mqtt_user()     const override { return ""; }
   const char* mqtt_pass()     const override { return ""; }
+  bool        mqtt_tls()      const override { return false; }
 };
 
 }  // namespace firmware

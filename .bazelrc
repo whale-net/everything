@@ -14,6 +14,8 @@ build --experimental_merged_skyframe_analysis_execution
 # CI optimizations  
 # Note: Cache paths are managed by bazel-contrib/setup-bazel action
 # and should not be overridden here to avoid conflicts
+# Retry transient download failures (e.g. 502 Bad Gateway from GitHub/BCR mirrors)
+build:ci --experimental_repository_downloader_retries=3
 build:ci --noshow_progress
 build:ci --jobs=auto
 build:ci --verbose_failures

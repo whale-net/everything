@@ -19,6 +19,7 @@ cc_library(
     target_compatible_with = ESP32_COMPAT,
     deps = [
         "@arduino_esp32//:WiFi",
+        "@arduino_esp32//:WiFiClientSecure",
         "@arduino_esp32//:core_lib",
         "@pubsubclient//:pubsubclient",
         "@pigweed//pw_log",
