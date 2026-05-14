@@ -288,8 +288,10 @@ go_deps.gazelle_override(
     path = "github.com/riverqueue/river/riverdriver/riverpgxv5",
 )
 
-# NOTE: Do not run 'bazel mod tidy' - it will remove com_github_a_h_templ
-# which is needed for genrule tools (not deps)
+# NOTE: Some entries below are marked indirect in go.mod but are needed by BUILD files.
+# bazel mod tidy will remove them — restore manually after running tidy if needed.
+# com_github_a_h_templ: templ genrule tools (not a Go import)
+# com_github_aws_aws_sdk_go_v2_feature_s3_manager, com_github_riverqueue_river*: used by other packages
 use_repo(
     go_deps,
     "com_github_a_h_templ",  # Required for templ genrule tools
