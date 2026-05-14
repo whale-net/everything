@@ -79,7 +79,7 @@ func DetectChangedApps(baseCommit string, bazel BazelRunner, git GitRunner, fs F
 		return nil, nil
 	}
 
-	// Build rdeps expression
+	// Build rdeps seed expression, wrapping multi-part unions in parens for Bazel query syntax.
 	queryParts := make([]string, 0, len(validLabels)+len(changedPkgs))
 	if len(validLabels) > 0 {
 		queryParts = append(queryParts, strings.Join(validLabels, " + "))
@@ -92,18 +92,11 @@ func DetectChangedApps(baseCommit string, bazel BazelRunner, git GitRunner, fs F
 		}
 	}
 	expr := strings.Join(queryParts, " + ")
-
-	rdepsQuery := expr
-	if strings.Contains(expr, " ") {
-		rdepsQuery = "(" + expr + ")"
+	if len(queryParts) > 1 {
+		expr = "(" + expr + ")"
 	}
-	rdepsOut, err := bazel.Run("query", fmt.Sprintf("rdeps(//..., %s)", rdepsQuery), "--output=label")
-	if err != nil {
-		return nil, fmt.Errorf("bazel rdeps query: %w", err)
-	}
-	affected := labelSet(rdepsOut)
 
-	// Find which app_metadata targets are within the affected set
+	// Find which app_metadata targets are affected by the changed files.
 	metaTargets := make([]string, 0, len(allApps))
 	for _, app := range allApps {
 		metaTargets = append(metaTargets, app.BazelTarget)
@@ -113,16 +106,14 @@ func DetectChangedApps(baseCommit string, bazel BazelRunner, git GitRunner, fs F
 	}
 
 	metaExpr := strings.Join(metaTargets, " + ")
-	if strings.Contains(metaExpr, " ") {
+	if len(metaTargets) > 1 {
 		metaExpr = "(" + metaExpr + ")"
 	}
-	affectedMetaOut, err := bazel.Run("query", fmt.Sprintf("rdeps(%s, %s)", metaExpr, rdepsQuery), "--output=label")
+	affectedMetaOut, err := bazel.Run("query", fmt.Sprintf("rdeps(%s, %s)", metaExpr, expr), "--output=label")
 	if err != nil {
 		return nil, fmt.Errorf("bazel rdeps query for metadata: %w", err)
 	}
 	affectedMeta := labelSet(affectedMetaOut)
-
-	_ = affected // used via affectedMeta below
 
 	var result []AppMetadata
 	for _, app := range allApps {
