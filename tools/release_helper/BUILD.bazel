@@ -219,3 +219,27 @@ py_test(
         "@pypi//:pytest",
     ],
 )
+
+# CLI integration tests — argument validation, exit codes, and output formatting.
+# These tests invoke the release_helper binary directly and do not require Bazel
+# to be available inside the sandbox (no list_all_apps / bazel query calls).
+sh_test(
+    name = "test_cli_integration",
+    size = "small",
+    srcs = ["test_cli_integration.sh"],
+    data = [":release_helper"],
+    tags = ["integration"],
+)
+
+# CLI integration tests that exercise commands requiring a live Bazel environment
+# (list-apps, plan with app discovery, etc.).  Run explicitly:
+#   bazel test //tools/release_helper:test_cli_integration_bazel
+sh_test(
+    name = "test_cli_integration_bazel",
+    size = "medium",
+    srcs = ["test_cli_integration_bazel.sh"],
+    tags = [
+        "integration",
+        "manual",
+    ],
+)
