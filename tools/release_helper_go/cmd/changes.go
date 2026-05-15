@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -109,9 +110,18 @@ func DetectChangedApps(baseCommit string, bazel BazelRunner, git GitRunner, fs F
 	if len(metaTargets) > 1 {
 		metaExpr = "(" + metaExpr + ")"
 	}
-	affectedMetaOut, err := bazel.Run("query", fmt.Sprintf("rdeps(%s, %s)", metaExpr, expr), "--output=label")
-	if err != nil {
-		return nil, fmt.Errorf("bazel rdeps query for metadata: %w", err)
+	// `--keep_going` so a broken transitive closure elsewhere in `//...`
+	// (e.g. a stale Go module reference) doesn't prevent us from learning
+	// which metadata targets the diff actually touches. Bazel exits non-zero
+	// in that case but still prints any matched labels to stdout, plus a
+	// `WARNING: Results may be inaccurate` line on stderr. We surface the
+	// warning and continue — for change detection, treating "unknown" as
+	// "no apps affected" is the safe direction: PR images aren't pushed,
+	// and the main-branch path runs again on push with a fresh universe.
+	rdepsExpr := fmt.Sprintf("rdeps(%s, %s)", metaExpr, expr)
+	affectedMetaOut, rdepsErr := bazel.Run("query", rdepsExpr, "--output=label", "--keep_going")
+	if rdepsErr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: bazel rdeps query returned non-zero (%v); continuing with partial results\n", rdepsErr)
 	}
 	affectedMeta := labelSet(affectedMetaOut)
 

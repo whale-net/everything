@@ -4,6 +4,15 @@ load("//tools/bazel:container_image.bzl", "multiplatform_image")
 load("//tools/helm:helm.bzl", "helm_chart")
 load("//tools/openapi:openapi.bzl", "openapi_spec")
 
+# Exposes app_metadata fields as structured data so consumers can read them via
+# `bazel cquery --output=starlark` without building the JSON file output.
+AppMetadataInfo = provider(
+    doc = "Release metadata for an app, suitable for discovery via cquery.",
+    fields = {
+        "metadata": "dict of metadata fields (same shape as the JSON file output)",
+    },
+)
+
 def _app_metadata_impl(ctx):
     """Implementation for app_metadata rule."""
     # Create a JSON file with app metadata
@@ -65,8 +74,11 @@ def _app_metadata_impl(ctx):
         output = output,
         content = json.encode(metadata),
     )
-    
-    return [DefaultInfo(files = depset([output]))]
+
+    return [
+        DefaultInfo(files = depset([output])),
+        AppMetadataInfo(metadata = metadata),
+    ]
 
 app_metadata = rule(
     implementation = _app_metadata_impl,
@@ -277,6 +289,13 @@ def get_image_targets(app_name):
         "push": "//" + app_name + ":" + base_name + "_push",
     }
 
+HelmChartMetadataInfo = provider(
+    doc = "Release metadata for a helm chart, suitable for discovery via cquery.",
+    fields = {
+        "metadata": "dict of helm chart metadata fields (same shape as JSON output)",
+    },
+)
+
 def _helm_chart_metadata_impl(ctx):
     """Implementation for helm_chart_metadata rule."""
     # Create a JSON file with helm chart metadata
@@ -289,14 +308,17 @@ def _helm_chart_metadata_impl(ctx):
         "apps": ctx.attr.app_names,  # List of app names this chart includes
         "chart_target": ctx.attr.chart_target,  # The actual helm_chart target
     }
-    
+
     output = ctx.actions.declare_file(ctx.label.name + "_chart_metadata.json")
     ctx.actions.write(
         output = output,
         content = json.encode(metadata),
     )
-    
-    return [DefaultInfo(files = depset([output]))]
+
+    return [
+        DefaultInfo(files = depset([output])),
+        HelmChartMetadataInfo(metadata = metadata),
+    ]
 
 helm_chart_metadata = rule(
     implementation = _helm_chart_metadata_impl,

@@ -133,12 +133,12 @@ func TestListAllAppsQueryError(t *testing.T) {
 
 	_, err := ListAllApps(bazel, fs, fakeWorkspaceRoot)
 	if err == nil {
-		t.Fatal("expected error when bazel query fails")
+		t.Fatal("expected error when bazel cquery fails")
 	}
 }
 
 func TestListAllAppsEmptyResult(t *testing.T) {
-	bazel := newFakeBazel(fakeBazelCall{argsContain: []string{"kind(app_metadata"}, output: ""})
+	bazel := newFakeBazel(fakeBazelCall{argsContain: []string{"query", "kind(app_metadata"}, argsNotContain: []string{"cquery"}, output: ""})
 	fs := newFakeFS()
 
 	result, err := ListAllApps(bazel, fs, fakeWorkspaceRoot)
@@ -147,6 +147,33 @@ func TestListAllAppsEmptyResult(t *testing.T) {
 	}
 	if len(result) != 0 {
 		t.Errorf("expected 0 apps, got %d", len(result))
+	}
+}
+
+func TestListAllAppsCanonicalizesLabels(t *testing.T) {
+	// cquery emits labels in @@//pkg:name canonical form; ListAllApps must
+	// strip the @@ prefix so downstream rdeps queries get plain //pkg:name.
+	bazel := newFakeBazel(
+		fakeBazelCall{argsContain: []string{"query", "kind(app_metadata"}, argsNotContain: []string{"cquery"}, output: "//demo/hello_go:hello-go_metadata"},
+		fakeBazelCall{argsContain: []string{"cquery"}, output: "@@//demo/hello_go:hello-go_metadata\t" +
+			`{"name":"hello-go","domain":"demo","binary_target":"@@//demo/hello_go:hello-go","image_target":"@@//demo/hello_go:hello-go_image"}`},
+	)
+
+	result, err := ListAllApps(bazel, newFakeFS(), fakeWorkspaceRoot)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 app, got %d", len(result))
+	}
+	if got := result[0].BazelTarget; got != "//demo/hello_go:hello-go_metadata" {
+		t.Errorf("BazelTarget = %q, want stripped form", got)
+	}
+	if got := result[0].BinaryTarget; got != "//demo/hello_go:hello-go" {
+		t.Errorf("BinaryTarget = %q, want stripped form", got)
+	}
+	if got := result[0].ImageTarget; got != "//demo/hello_go:hello-go_image" {
+		t.Errorf("ImageTarget = %q, want stripped form", got)
 	}
 }
 

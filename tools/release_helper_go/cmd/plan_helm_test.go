@@ -38,22 +38,17 @@ type fakeHelmChart struct {
 func buildFakeHelmInfra(charts []fakeHelmChart) (*fakeFS, *fakeBazelRunner) {
 	fs := newFakeFS()
 
-	labels := make([]string, len(charts))
+	queryLines := make([]string, len(charts))
+	cqueryLines := make([]string, len(charts))
 	for i, c := range charts {
-		labels[i] = "//" + c.pkg + ":" + c.targetName
+		plain := "//" + c.pkg + ":" + c.targetName
+		queryLines[i] = plain
+		cqueryLines[i] = "@@" + plain + "\t" + string(sampleHelmMetaJSON(c.name, c.domain, c.apps))
 	}
-	queryOut := strings.Join(labels, "\n")
 
 	bazelCalls := []fakeBazelCall{
-		{argsContain: []string{"kind(helm_chart_metadata"}, output: queryOut},
-	}
-	for _, c := range charts {
-		target := "//" + c.pkg + ":" + c.targetName
-		bazelCalls = append(bazelCalls, fakeBazelCall{
-			argsContain: []string{"build", target},
-		})
-		path := helmMetaPath(c.pkg, c.targetName)
-		fs.add(path, sampleHelmMetaJSON(c.name, c.domain, c.apps))
+		{argsContain: []string{"query", "kind(helm_chart_metadata"}, argsNotContain: []string{"cquery"}, output: strings.Join(queryLines, "\n")},
+		{argsContain: []string{"cquery"}, output: strings.Join(cqueryLines, "\n")},
 	}
 	return fs, newFakeBazel(bazelCalls...)
 }
@@ -156,12 +151,12 @@ func TestListAllHelmChartsQueryError(t *testing.T) {
 	fs := newFakeFS()
 	_, err := ListAllHelmCharts(bazel, fs, fakeWorkspaceRoot)
 	if err == nil {
-		t.Fatal("expected error when bazel query fails")
+		t.Fatal("expected error when bazel cquery fails")
 	}
 }
 
 func TestListAllHelmChartsEmpty(t *testing.T) {
-	bazel := newFakeBazel(fakeBazelCall{argsContain: []string{"kind(helm_chart_metadata"}, output: ""})
+	bazel := newFakeBazel(fakeBazelCall{argsContain: []string{"query", "kind(helm_chart_metadata"}, argsNotContain: []string{"cquery"}, output: ""})
 	fs := newFakeFS()
 	result, err := ListAllHelmCharts(bazel, fs, fakeWorkspaceRoot)
 	if err != nil {
