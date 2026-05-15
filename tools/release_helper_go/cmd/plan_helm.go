@@ -70,9 +70,11 @@ func ListAllHelmCharts(bazel BazelRunner, _ FileSystem, _ string) ([]HelmChartMe
 		return nil, nil
 	}
 
+	// `--keep_going` for parity with ListAllApps: don't let an unrelated
+	// analysis error block helm chart discovery.
 	out, err := bazel.Run("cquery", strings.Join(labels, " + "), "--output=starlark",
-		"--starlark:expr="+helmChartMetadataStarlarkExpr)
-	if err != nil {
+		"--starlark:expr="+helmChartMetadataStarlarkExpr, "--keep_going")
+	if err != nil && out == "" {
 		return nil, fmt.Errorf("bazel cquery helm_chart_metadata: %w", err)
 	}
 	var charts []HelmChartMetadata

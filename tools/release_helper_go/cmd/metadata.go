@@ -94,9 +94,13 @@ func ListAllApps(bazel BazelRunner, _ FileSystem, _ string) ([]AppMetadata, erro
 		return nil, nil
 	}
 
+	// `--keep_going` lets us survive transitive analysis errors elsewhere in
+	// the workspace (a sibling rule with a stale macro, a missing repo, etc.).
+	// Bazel still prints the labels it successfully analyzed; we only fail
+	// hard if the output is empty.
 	out, err := bazel.Run("cquery", strings.Join(labels, " + "), "--output=starlark",
-		"--starlark:expr="+appMetadataStarlarkExpr)
-	if err != nil {
+		"--starlark:expr="+appMetadataStarlarkExpr, "--keep_going")
+	if err != nil && out == "" {
 		return nil, fmt.Errorf("bazel cquery app_metadata: %w", err)
 	}
 

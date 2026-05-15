@@ -14,13 +14,19 @@ type realBazelRunner struct {
 func (r *realBazelRunner) Run(args ...string) (string, error) {
 	cmd := exec.Command("bazel", args...)
 	cmd.Dir = r.workspaceRoot
-	var stderr bytes.Buffer
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	err := cmd.Run()
+	out := strings.TrimSpace(stdout.String())
 	if err != nil {
-		return "", fmt.Errorf("%w\n%s", err, strings.TrimSpace(stderr.String()))
+		// Bazel emits exit code 7 (and others) for partial results when
+		// `--keep_going` is set; callers that opt into that mode rely on
+		// the captured stdout so we surface both the partial output and
+		// the wrapped error.
+		return out, fmt.Errorf("%w\n%s", err, strings.TrimSpace(stderr.String()))
 	}
-	return strings.TrimSpace(string(out)), nil
+	return out, nil
 }
 
 type realGitRunner struct {
