@@ -233,44 +233,47 @@ func sampleMetaJSON(name, domain string) []byte {
 }
 
 // metaPath returns the expected file path for a metadata target in fakeFS.
+// Retained for unit tests that still exercise the per-target build/read path.
 func metaPath(pkg, targetName string) string {
 	return fakeWorkspaceRoot + "/bazel-bin/" + pkg + "/" + targetName + "_metadata.json"
 }
 
-// standardFakeInfra returns a fakeFS and fakeBazelRunner for a set of apps.
-// Each app is identified as "domain/name" (e.g., "demo/hello_go").
-// labelSuffix is the suffix appended to the app name to form the target name
-// (e.g., if the target is //demo/hello_go:hello-go_metadata, suffix = "hello-go_metadata").
+// fakeApp describes a single app for buildFakeInfra. Discovery is driven by
+// cquery output, so we no longer fake per-target builds and JSON files.
+//
+// customJSON, if non-empty, replaces the default sample JSON for this app —
+// useful for tests that need to exercise specific metadata fields.
 type fakeApp struct {
-	pkg        string // e.g., "demo/hello_go"
+	pkg          string // e.g., "demo/hello_go"
 	targetSuffix string // e.g., "hello-go_metadata"
-	name       string // e.g., "hello-go"
-	domain     string // e.g., "demo"
+	name         string // e.g., "hello-go"
+	domain       string // e.g., "demo"
+	customJSON   []byte // optional: overrides sampleMetaJSON
 }
 
+// buildFakeInfra wires a fake bazel that responds to the two-step Bazel
+// dance used by ListAllApps:
+//   - `bazel query kind(app_metadata, //...)` returns plain `//pkg:name` labels
+//   - `bazel cquery <label1> + <label2> + ...` returns "<label>\t<json>" lines
 func buildFakeInfra(apps []fakeApp) (*fakeFS, *fakeBazelRunner) {
 	fs := newFakeFS()
 
-	// Build query response (all metadata labels)
-	labels := make([]string, len(apps))
+	queryLines := make([]string, len(apps))
+	cqueryLines := make([]string, len(apps))
 	for i, app := range apps {
-		labels[i] = "//" + app.pkg + ":" + app.targetSuffix
+		plainLabel := "//" + app.pkg + ":" + app.targetSuffix
+		canonicalLabel := "@@" + plainLabel
+		queryLines[i] = plainLabel
+		body := app.customJSON
+		if len(body) == 0 {
+			body = sampleMetaJSON(app.name, app.domain)
+		}
+		cqueryLines[i] = canonicalLabel + "\t" + string(body)
 	}
-	queryOut := strings.Join(labels, "\n")
 
 	bazelCalls := []fakeBazelCall{
-		{argsContain: []string{"kind(app_metadata"}, output: queryOut},
-	}
-
-	for _, app := range apps {
-		target := "//" + app.pkg + ":" + app.targetSuffix
-		// build succeeds
-		bazelCalls = append(bazelCalls, fakeBazelCall{
-			argsContain: []string{"build", target},
-		})
-		// add file to FS
-		path := metaPath(app.pkg, app.targetSuffix)
-		fs.add(path, sampleMetaJSON(app.name, app.domain))
+		{argsContain: []string{"query", "kind(app_metadata"}, argsNotContain: []string{"cquery"}, output: strings.Join(queryLines, "\n")},
+		{argsContain: []string{"cquery"}, output: strings.Join(cqueryLines, "\n")},
 	}
 
 	return fs, newFakeBazel(bazelCalls...)

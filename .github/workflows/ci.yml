@@ -53,9 +53,9 @@ jobs:
         
     - name: Build and test all targets
       run: |
-        # Build all targets first to verify compilation
-        bazel build --config=ci //...
-        # Run all tests - reuses warm Bazel server, analysis is near-instant
+        # `bazel test //...` analyzes every target in //... and builds whatever
+        # is needed to run the tests, so a separate `bazel build //...` step
+        # would only duplicate analysis without adding coverage.
         bazel test --config=ci //...
         # Shutdown Bazel server to prevent hanging
         bazel shutdown

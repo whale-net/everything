@@ -31,12 +31,13 @@ func TestPlanOpenapiBuildsFiltersToSpecs(t *testing.T) {
 	// hello-go has no OpenAPI spec; hello-fastapi has one
 	apps := []fakeApp{
 		{pkg: "demo/hello_go", targetSuffix: "hello-go_metadata", name: "hello-go", domain: "demo"},
-		{pkg: "demo/hello_fastapi", targetSuffix: "hello-fastapi_metadata", name: "hello-fastapi", domain: "demo"},
+		{
+			pkg: "demo/hello_fastapi", targetSuffix: "hello-fastapi_metadata",
+			name: "hello-fastapi", domain: "demo",
+			customJSON: sampleMetaJSONWithOpenAPI("hello-fastapi", "demo"),
+		},
 	}
 	fs, bazel := buildFakeInfra(apps)
-	// Override hello-fastapi metadata to include openapi_spec_target
-	fastapiPath := metaPath("demo/hello_fastapi", "hello-fastapi_metadata")
-	fs.add(fastapiPath, sampleMetaJSONWithOpenAPI("hello-fastapi", "demo"))
 
 	withFS(fs, func() {
 		withBazel(bazel, func() {
@@ -62,11 +63,13 @@ func TestPlanOpenapiBuildsFiltersToSpecs(t *testing.T) {
 
 func TestPlanOpenapiBuildsGithubFormat(t *testing.T) {
 	apps := []fakeApp{
-		{pkg: "demo/hello_fastapi", targetSuffix: "hello-fastapi_metadata", name: "hello-fastapi", domain: "demo"},
+		{
+			pkg: "demo/hello_fastapi", targetSuffix: "hello-fastapi_metadata",
+			name: "hello-fastapi", domain: "demo",
+			customJSON: sampleMetaJSONWithOpenAPI("hello-fastapi", "demo"),
+		},
 	}
 	fs, bazel := buildFakeInfra(apps)
-	fastapiPath := metaPath("demo/hello_fastapi", "hello-fastapi_metadata")
-	fs.add(fastapiPath, sampleMetaJSONWithOpenAPI("hello-fastapi", "demo"))
 
 	withFS(fs, func() {
 		withBazel(bazel, func() {

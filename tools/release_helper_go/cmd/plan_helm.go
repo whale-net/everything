@@ -53,22 +53,45 @@ func GetHelmChartMetadata(targetLabel string, bazel BazelRunner, fs FileSystem, 
 	return m, nil
 }
 
-func ListAllHelmCharts(bazel BazelRunner, fs FileSystem, workspaceRoot string) ([]HelmChartMetadata, error) {
-	out, err := bazel.Run("query", "kind(helm_chart_metadata, //...)", "--output=label")
+// helmChartMetadataStarlarkExpr extracts helm chart metadata in one cquery
+// call by reading the HelmChartMetadataInfo provider.
+const helmChartMetadataStarlarkExpr = `str(target.label) + "\t" + json.encode(providers(target)["//tools/bazel:release.bzl%HelmChartMetadataInfo"].metadata)`
+
+// ListAllHelmCharts mirrors ListAllApps: a loading-phase query lists targets
+// so cquery analysis can be scoped, keeping discovery robust to unrelated
+// analysis failures elsewhere in `//...`.
+func ListAllHelmCharts(bazel BazelRunner, _ FileSystem, _ string) ([]HelmChartMetadata, error) {
+	labelsOut, err := bazel.Run("query", "kind(helm_chart_metadata, //...)", "--output=label")
 	if err != nil {
 		return nil, fmt.Errorf("bazel query helm_chart_metadata: %w", err)
 	}
+	labels := splitNonEmpty(labelsOut)
+	if len(labels) == 0 {
+		return nil, nil
+	}
+
+	out, err := bazel.Run("cquery", strings.Join(labels, " + "), "--output=starlark",
+		"--starlark:expr="+helmChartMetadataStarlarkExpr)
+	if err != nil {
+		return nil, fmt.Errorf("bazel cquery helm_chart_metadata: %w", err)
+	}
 	var charts []HelmChartMetadata
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" || !strings.Contains(line, "_chart_metadata") {
+		if line == "" {
 			continue
 		}
-		m, err := GetHelmChartMetadata(line, bazel, fs, workspaceRoot)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not get metadata for %s: %v\n", line, err)
+		label, jsonPart, ok := strings.Cut(line, "\t")
+		if !ok {
+			fmt.Fprintf(os.Stderr, "Warning: malformed cquery line: %q\n", line)
 			continue
 		}
+		var m HelmChartMetadata
+		if err := json.Unmarshal([]byte(jsonPart), &m); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: parse helm metadata for %s: %v\n", label, err)
+			continue
+		}
+		m.BazelTarget = canonicalLabel(label)
 		charts = append(charts, m)
 	}
 	sort.Slice(charts, func(i, j int) bool { return charts[i].Name < charts[j].Name })
