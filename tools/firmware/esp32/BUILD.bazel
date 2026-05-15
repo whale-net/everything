@@ -162,6 +162,11 @@ toolchain(
 # gen_esp32part.py is bundled in the Arduino ESP32 core archive; it uses only
 # Python stdlib so we can invoke it directly without a py_binary wrapper.
 
+# These flash artefacts are only consumed by flash_firmware() targets, which
+# are themselves tagged "manual" (hardware-flashing is opt-in). Tagging them
+# "manual" keeps `bazel build/test //...` from materialising flash binaries
+# that no test or CI step uses.
+
 genrule(
     name = "max_app_4MB_bin",
     srcs = [
@@ -170,6 +175,7 @@ genrule(
     ],
     outs = ["max_app_4MB.bin"],
     cmd = "python3 $(location @arduino_esp32//:tools/gen_esp32part.py) $(location @arduino_esp32//:tools/partitions/max_app_4MB.csv) $@",
+    tags = ["manual"],
 )
 
 # ── Bootloader conversion: ELF → BIN ────────────────────────────────────────
@@ -182,6 +188,7 @@ genrule(
     outs = ["bootloader_dio_80m.bin"],
     cmd = "$(location :esptool_wrapper) --chip esp32 elf2image --flash-mode dio --flash-freq 80m --flash-size 4MB -o $@ $<",
     tools = [":esptool_wrapper"],
+    tags = ["manual"],
 )
 
 genrule(
@@ -190,6 +197,7 @@ genrule(
     outs = ["bootloader_qio_80m.bin"],
     cmd = "$(location :esptool_wrapper) --chip esp32 elf2image --flash-mode qio --flash-freq 80m --flash-size 4MB -o $@ $<",
     tools = [":esptool_wrapper"],
+    tags = ["manual"],
 )
 
 # ── esptool flash utility ────────────────────────────────────────────────────

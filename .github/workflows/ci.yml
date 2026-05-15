@@ -52,11 +52,19 @@ jobs:
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
         
     - name: Build and test all targets
+      env:
+        EVENT_NAME: ${{ github.event_name }}
       run: |
-        # `bazel test //...` analyzes every target in //... and builds whatever
-        # is needed to run the tests, so a separate `bazel build //...` step
-        # would only duplicate analysis without adding coverage.
-        bazel test --config=ci //...
+        # On PRs we narrow to test-only builds so we don't pay for non-test
+        # leaf targets (firmware bins, container image layers, etc.) that
+        # contribute nothing to the test signal but still cost cache fetches
+        # and analysis time. On main we keep the full //... scope so any
+        # untested target whose build breaks still gets caught before release.
+        if [ "$EVENT_NAME" = "pull_request" ]; then
+          bazel test --config=ci --build_tests_only //...
+        else
+          bazel test --config=ci //...
+        fi
         # Shutdown Bazel server to prevent hanging
         bazel shutdown
         
