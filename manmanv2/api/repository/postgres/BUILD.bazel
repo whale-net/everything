@@ -12,6 +12,7 @@ go_library(
         "log_reference.go",
         "patch.go",
         "repository.go",
+        "restart_schedule.go",
         "server.go",
         "server_capability.go",
         "server_port.go",

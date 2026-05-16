@@ -797,3 +797,51 @@ func (c *ControlClient) ListBackups(ctx context.Context, sgcID int64) ([]*manman
 	}
 	return resp.Backups, nil
 }
+
+// ListRestartSchedules returns restart schedules for a ServerGameConfig
+func (c *ControlClient) ListRestartSchedules(ctx context.Context, sgcID int64) ([]*manmanpb.RestartSchedule, error) {
+	resp, err := c.api.ListRestartSchedules(ctx, &manmanpb.ListRestartSchedulesRequest{
+		ServerGameConfigId: sgcID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list restart schedules: %w", err)
+	}
+	return resp.Schedules, nil
+}
+
+// CreateRestartSchedule creates a new restart schedule
+func (c *ControlClient) CreateRestartSchedule(ctx context.Context, sgcID int64, cadenceMinutes int32, enabled bool) (*manmanpb.RestartSchedule, error) {
+	resp, err := c.api.CreateRestartSchedule(ctx, &manmanpb.CreateRestartScheduleRequest{
+		ServerGameConfigId: sgcID,
+		CadenceMinutes:     cadenceMinutes,
+		Enabled:            enabled,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create restart schedule: %w", err)
+	}
+	return resp.Schedule, nil
+}
+
+// UpdateRestartSchedule updates an existing restart schedule
+func (c *ControlClient) UpdateRestartSchedule(ctx context.Context, id int64, cadenceMinutes int32, enabled bool) (*manmanpb.RestartSchedule, error) {
+	resp, err := c.api.UpdateRestartSchedule(ctx, &manmanpb.UpdateRestartScheduleRequest{
+		RestartScheduleId: id,
+		CadenceMinutes:    cadenceMinutes,
+		Enabled:           enabled,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update restart schedule: %w", err)
+	}
+	return resp.Schedule, nil
+}
+
+// DeleteRestartSchedule deletes a restart schedule
+func (c *ControlClient) DeleteRestartSchedule(ctx context.Context, id int64) error {
+	_, err := c.api.DeleteRestartSchedule(ctx, &manmanpb.DeleteRestartScheduleRequest{
+		RestartScheduleId: id,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete restart schedule: %w", err)
+	}
+	return nil
+}

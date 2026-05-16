@@ -10,6 +10,7 @@ import "manmanv2/protos/api_messages_config.proto";
 import "manmanv2/protos/api_messages_deployment.proto";
 import "manmanv2/protos/api_messages_game.proto";
 import "manmanv2/protos/api_messages_infra.proto";
+import "manmanv2/protos/api_messages_restart.proto";
 import "manmanv2/protos/api_messages_server.proto";
 import "manmanv2/protos/api_messages_session.proto";
 
@@ -66,6 +67,13 @@ service ManManAPI {
   rpc AddBackupConfigAction(AddBackupConfigActionRequest) returns (AddBackupConfigActionResponse);
   rpc RemoveBackupConfigAction(RemoveBackupConfigActionRequest) returns (RemoveBackupConfigActionResponse);
   rpc ListBackupConfigActions(ListBackupConfigActionsRequest) returns (ListBackupConfigActionsResponse);
+
+  // RestartSchedule management
+  rpc CreateRestartSchedule(CreateRestartScheduleRequest) returns (CreateRestartScheduleResponse);
+  rpc GetRestartSchedule(GetRestartScheduleRequest) returns (GetRestartScheduleResponse);
+  rpc ListRestartSchedules(ListRestartSchedulesRequest) returns (ListRestartSchedulesResponse);
+  rpc UpdateRestartSchedule(UpdateRestartScheduleRequest) returns (UpdateRestartScheduleResponse);
+  rpc DeleteRestartSchedule(DeleteRestartScheduleRequest) returns (DeleteRestartScheduleResponse);
 
   // Server registration
   rpc RegisterServer(RegisterServerRequest) returns (RegisterServerResponse);

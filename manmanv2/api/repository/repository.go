@@ -213,24 +213,37 @@ type AddonPathPresetRepository interface {
 	Delete(ctx context.Context, presetID int64) error
 }
 
+// RestartScheduleRepository defines operations for RestartSchedule entities
+type RestartScheduleRepository interface {
+	Create(ctx context.Context, s *manman.RestartSchedule) (*manman.RestartSchedule, error)
+	Get(ctx context.Context, restartScheduleID int64) (*manman.RestartSchedule, error)
+	ListBySGC(ctx context.Context, sgcID int64) ([]*manman.RestartSchedule, error)
+	// ListDue returns enabled schedules whose cadence has elapsed (or never run)
+	ListDue(ctx context.Context, now time.Time) ([]*manman.RestartSchedule, error)
+	Update(ctx context.Context, s *manman.RestartSchedule) error
+	SetLastRestartAt(ctx context.Context, restartScheduleID int64, t time.Time) error
+	Delete(ctx context.Context, restartScheduleID int64) error
+}
+
 // Repository aggregates all repository interfaces
 type Repository struct {
-	Servers                ServerRepository
-	Games                  GameRepository
-	GameConfigs            GameConfigRepository
-	ServerGameConfigs      ServerGameConfigRepository
-	Sessions               SessionRepository
-	ServerCapabilities     ServerCapabilityRepository
-	LogReferences          LogReferenceRepository
-	Backups                BackupRepository
-	BackupConfigs          BackupConfigRepository
-	ServerPorts            ServerPortRepository
+	Servers                 ServerRepository
+	Games                   GameRepository
+	GameConfigs             GameConfigRepository
+	ServerGameConfigs       ServerGameConfigRepository
+	Sessions                SessionRepository
+	ServerCapabilities      ServerCapabilityRepository
+	LogReferences           LogReferenceRepository
+	Backups                 BackupRepository
+	BackupConfigs           BackupConfigRepository
+	ServerPorts             ServerPortRepository
 	ConfigurationStrategies ConfigurationStrategyRepository
-	ConfigurationPatches   ConfigurationPatchRepository
-	GameConfigVolumes      GameConfigVolumeRepository
-	WorkshopAddons         WorkshopAddonRepository
-	WorkshopInstallations  WorkshopInstallationRepository
-	WorkshopLibraries      WorkshopLibraryRepository
-	AddonPathPresets       AddonPathPresetRepository
-	Actions                interface{} // ActionRepository from postgres package
+	ConfigurationPatches    ConfigurationPatchRepository
+	GameConfigVolumes       GameConfigVolumeRepository
+	WorkshopAddons          WorkshopAddonRepository
+	WorkshopInstallations   WorkshopInstallationRepository
+	WorkshopLibraries       WorkshopLibraryRepository
+	AddonPathPresets        AddonPathPresetRepository
+	RestartSchedules        RestartScheduleRepository
+	Actions                 interface{} // ActionRepository from postgres package
 }

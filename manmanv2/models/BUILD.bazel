@@ -7,6 +7,7 @@ go_library(
         "models_backup.go",
         "models_config.go",
         "models_game.go",
+        "models_restart.go",
         "models_server.go",
         "models_session.go",
         "models_workshop.go",

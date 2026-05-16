@@ -9,6 +9,7 @@ go_library(
         "handlers_backup.go",
         "handlers_games.go",
         "handlers_home.go",
+        "handlers_restart_schedule.go",
         "handlers_sessions.go",
         "handlers_servers.go",
         "handlers_sgc.go",
