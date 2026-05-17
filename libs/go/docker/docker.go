@@ -43,6 +43,12 @@ func (c *Client) Close() error {
 	return c.cli.Close()
 }
 
+// Ping checks if the Docker daemon is reachable.
+func (c *Client) Ping(ctx context.Context) error {
+	_, err := c.cli.Ping(ctx)
+	return err
+}
+
 // GetClient returns the underlying Docker client (for advanced operations)
 func (c *Client) GetClient() *client.Client {
 	return c.cli
