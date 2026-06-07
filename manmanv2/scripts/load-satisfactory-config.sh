@@ -129,8 +129,8 @@ if [[ -z "${config_id}" ]]; then
     "MAXTICKRATE": "30",
     "PGID": "1000",
     "PUID": "1000",
-    "SERVERGAMEPORT": "7777",
-    "SERVERMESSAGINGPORT": "8888",
+    "SERVERGAMEPORT": "38225",
+    "SERVERMESSAGINGPORT": "38226",
     "SKIPUPDATE": "false",
     "STEAMBETA": "false",
     "TIMEOUT": "30"
@@ -188,17 +188,17 @@ if [[ -z "${sgc_id}" ]]; then
   "game_config_id": ${config_id},
   "port_bindings": [
     {
-      "container_port": 7777,
+      "container_port": 38225,
       "host_port": 38225,
       "protocol": "TCP"
     },
     {
-      "container_port": 7777,
+      "container_port": 38225,
       "host_port": 38225,
       "protocol": "UDP"
     },
     {
-      "container_port": 8888,
+      "container_port": 38226,
       "host_port": 38226,
       "protocol": "TCP"
     }
@@ -230,17 +230,17 @@ else
   "server_game_config_id": ${sgc_id},
   "port_bindings": [
     {
-      "container_port": 7777,
+      "container_port": 38225,
       "host_port": 38225,
       "protocol": "TCP"
     },
     {
-      "container_port": 7777,
+      "container_port": 38225,
       "host_port": 38225,
       "protocol": "UDP"
     },
     {
-      "container_port": 8888,
+      "container_port": 38226,
       "host_port": 38226,
       "protocol": "TCP"
     }
@@ -267,9 +267,9 @@ if [[ -n "${sgc_id}" && "${sgc_id}" != "null" ]]; then
   echo "  SGC ID:    ${sgc_id}"
   echo ""
   echo "Port Bindings:"
-  echo "  7777/TCP (container) → 38225/TCP (host) — Satisfactory game port"
-  echo "  7777/UDP (container) → 38225/UDP (host) — Satisfactory game port"
-  echo "  8888/TCP (container) → 38226/TCP (host) — Satisfactory messaging port"
+  echo "  38225/TCP — Satisfactory game port"
+  echo "  38225/UDP — Satisfactory game port"
+  echo "  38226/TCP — Satisfactory messaging port"
 else
   echo "  SGC ID:    (not created - may already exist or port conflict)"
 fi
