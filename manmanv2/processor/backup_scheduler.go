@@ -87,6 +87,9 @@ func (w *scheduledBackupWorker) Work(ctx context.Context, job *river.Job[schedul
 	if err != nil {
 		return fmt.Errorf("volume %d not found: %w", cfg.VolumeID, err)
 	}
+	if !volume.IsEnabled {
+		return nil
+	}
 
 	sgcs, err := w.repo.ServerGameConfigs.List(ctx, nil, 100, 0)
 	if err != nil {
