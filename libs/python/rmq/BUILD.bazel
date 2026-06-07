@@ -6,6 +6,7 @@ py_library(
         "__init__.py",
         "config.py",
         "connection.py",
+        "connection_wrapper.py",
         "interface.py",
         "publisher.py",
         "subscriber.py",
@@ -26,4 +27,24 @@ py_test(
         ":rmq",
         "@pypi//:pytest",
     ],
+)
+
+py_test(
+    name = "connection_wrapper_test",
+    srcs = ["connection_wrapper_test.py"],
+    deps = [
+        ":rmq",
+        "@pypi//:pytest",
+    ],
+    size = "small",
+)
+
+py_test(
+    name = "publisher_test",
+    srcs = ["publisher_test.py"],
+    deps = [
+        ":rmq",
+        "@pypi//:pytest",
+    ],
+    size = "small",
 )
