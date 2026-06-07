@@ -236,8 +236,14 @@ def list_all_helm_charts() -> List[Dict[str, str]]:
 def find_helm_chart_bazel_target(chart_name: str) -> str:
     """Find the bazel target for a helm chart by name.
     
+    Chart names are stored internally with a "helm-" prefix
+    (e.g., "helm-manmanv2-control-services"), but callers typically use the
+    name WITHOUT that prefix (e.g., "manmanv2-control-services").  Both forms
+    are accepted.
+    
     Args:
-        chart_name: Name of the helm chart (e.g., "hello-fastapi")
+        chart_name: Name of the helm chart, with or without the "helm-" prefix
+                    (e.g., "hello-fastapi" or "helm-demo-hello-fastapi")
         
     Returns:
         Bazel target path (e.g., "//demo:fastapi_chart_chart_metadata")
@@ -247,8 +253,12 @@ def find_helm_chart_bazel_target(chart_name: str) -> str:
     """
     all_charts = list_all_helm_charts()
     
-    # Filter by exact chart name match
-    matching_charts = [c for c in all_charts if c['name'] == chart_name]
+    # Match by exact name OR by name with "helm-" prefix added (to support
+    # workflow inputs that omit the prefix).
+    matching_charts = [
+        c for c in all_charts
+        if c['name'] == chart_name or c['name'] == f"helm-{chart_name}"
+    ]
     
     if not matching_charts:
         raise ValueError(f"No helm chart found with name '{chart_name}'")
