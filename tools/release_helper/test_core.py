@@ -113,14 +113,15 @@ class TestRunBazel:
         
         result = run_bazel(["build", "//demo:hello_python"])
         
-        # Verify subprocess.run was called correctly
+        # Verify subprocess.run was called correctly with timeout
         mock_subprocess_run.assert_called_once_with(
             ["bazel", "build", "//demo:hello_python"],
             capture_output=True,
             text=True,
             check=True,
             cwd=workspace_path,
-            env=os.environ.copy()
+            env=os.environ.copy(),
+            timeout=600
         )
         
         assert result == expected_result
@@ -138,14 +139,15 @@ class TestRunBazel:
         custom_env = {"CUSTOM_VAR": "custom_value"}
         result = run_bazel(["test", "//tools:test"], env=custom_env)
         
-        # Verify subprocess.run was called with custom environment
+        # Verify subprocess.run was called with custom environment and timeout
         mock_subprocess_run.assert_called_once_with(
             ["bazel", "test", "//tools:test"],
             capture_output=True,
             text=True,
             check=True,
             cwd=workspace_path,
-            env=custom_env
+            env=custom_env,
+            timeout=600
         )
         
         assert result == expected_result
@@ -162,14 +164,15 @@ class TestRunBazel:
         
         result = run_bazel(["run", "//demo:hello_python"], capture_output=False)
         
-        # Verify subprocess.run was called with capture_output=False
+        # Verify subprocess.run was called with capture_output=False and timeout
         mock_subprocess_run.assert_called_once_with(
             ["bazel", "run", "//demo:hello_python"],
             capture_output=False,
             text=True,
             check=True,
             cwd=workspace_path,
-            env=os.environ.copy()
+            env=os.environ.copy(),
+            timeout=600
         )
         
         assert result == expected_result
@@ -242,7 +245,8 @@ class TestRunBazel:
             text=True,
             check=True,
             cwd=workspace_path,
-            env=os.environ.copy()
+            env=os.environ.copy(),
+            timeout=600
         )
         
         assert result == expected_result
@@ -274,7 +278,55 @@ class TestRunBazel:
             text=True,
             check=True,
             cwd=workspace_path,
-            env=os.environ.copy()
+            env=os.environ.copy(),
+            timeout=600
         )
         
         assert result == expected_result
+
+    @patch('tools.release_helper.core.find_workspace_root')
+    @patch('subprocess.run')
+    def test_run_bazel_with_custom_timeout(self, mock_subprocess_run, mock_find_workspace_root):
+        """Test bazel command execution with custom timeout."""
+        workspace_path = Path("/workspace/root")
+        mock_find_workspace_root.return_value = workspace_path
+        
+        expected_result = Mock(returncode=0, stdout="success", stderr="")
+        mock_subprocess_run.return_value = expected_result
+        
+        result = run_bazel(["build", "//demo:hello_python"], timeout=300)
+        
+        # Verify subprocess.run was called with custom timeout
+        mock_subprocess_run.assert_called_once_with(
+            ["bazel", "build", "//demo:hello_python"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=workspace_path,
+            env=os.environ.copy(),
+            timeout=300
+        )
+        
+        assert result == expected_result
+    
+    @patch('tools.release_helper.core.find_workspace_root')
+    @patch('subprocess.run')
+    def test_run_bazel_timeout_expired(self, mock_subprocess_run, mock_find_workspace_root, mock_print):
+        """Test bazel command execution with timeout expiration."""
+        workspace_path = Path("/workspace/root")
+        mock_find_workspace_root.return_value = workspace_path
+        
+        # Mock subprocess.TimeoutExpired
+        error = subprocess.TimeoutExpired(
+            cmd=["bazel", "build", "//slow:target"],
+            timeout=10
+        )
+        mock_subprocess_run.side_effect = error
+        
+        with pytest.raises(subprocess.TimeoutExpired):
+            run_bazel(["build", "//slow:target"], timeout=10)
+        
+        # Verify timeout error information was printed
+        assert mock_print.call_count >= 1
+        print_calls = [call[0][0] for call in mock_print.call_args_list]
+        assert any("timed out" in call for call in print_calls)
