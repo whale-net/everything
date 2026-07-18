@@ -29,8 +29,17 @@ reads its port from env, so the container side still forces duplication.
   - Host renderer handles `env_vars` (`host/config/renderer.go:69`).
   - `RenderedConfiguration`/`PatchLayer` already model "show me the
     layering" for UI.
+- **A third, dormant system exists**: migration
+  `006_normalize_parameters` created typed per-game
+  `parameter_definitions` with values at both GC
+  (`game_config_parameter_values`) and SGC
+  (`server_game_config_parameter_values`) levels — exactly per-instance
+  overrides, with types/validation/defaults. **No Go code references
+  these tables**; it is schema-only. `server_game_configs.parameters
+  JSONB` (001) is likewise unused.
 - **The gap**: the `env_vars` strategy output is never merged into the
-  container env at session start. Two parallel env systems, one unwired.
+  container env at session start. Three env/param systems: one live and
+  flat, one coded but unwired, one schema-only.
 
 ## Options
 
@@ -136,14 +145,23 @@ inherit). Save calls `SetSGCEnvOverrides`. A count chip on the row
 
 ### 5. Cleanup
 
-Existing duplicated GCs (`vanilla-2456`-style) are merged by hand after
-the feature ships; no automated migration.
+- Existing duplicated GCs (`vanilla-2456`-style) are merged by hand after
+  the feature ships; no automated migration.
+- Drop the dead migration-006 parameter tables
+  (`parameter_definitions`, `game_config_parameter_values`,
+  `server_game_config_parameter_values`) and
+  `server_game_configs.parameters` in a cleanup migration, so B leaves
+  exactly one override mechanism standing. If typed/validated params
+  are ever wanted, that's a future layer on top of patches — don't keep
+  the dead schema around as an implicit promise.
 
 ## Open questions
 
-- Does deploying the *same* GC twice to one server work today, or is there
-  a uniqueness constraint on (server, config)? If constrained, relaxing it
-  is part of phase 1. **Verify before implementation.**
+- ~~Does deploying the *same* GC twice to one server work today?~~
+  **Answered 2026-07-18**: yes — `server_game_configs` (001) has no
+  UNIQUE on (server_id, game_config_id). The practical guard is port
+  conflicts (`008_server_ports`: UNIQUE (sgc_id, server_id, port,
+  protocol)), which phase 3's `{{ .HostPort }}` templating handles.
 - Should `GetEffectiveEnv` also surface `game_config`-level patches
   distinctly, or collapse template+GC-patches into one "config" column?
   (UI currently assumes two columns.)
