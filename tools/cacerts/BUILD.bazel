@@ -24,7 +24,13 @@ genrule(
         cat $$TMPDIR/usr/share/ca-certificates/mozilla/*.crt > $$TMPDIR/etc/ssl/certs/ca-certificates.crt
         
         # Create tar.gz with fixed timestamp for reproducibility
-        tar --mtime='@0' -czf $@ -C $$TMPDIR etc/ssl/certs/ca-certificates.crt
+        # Use gtar if available (Homebrew), otherwise use standard tar without --mtime
+        if command -v gtar &> /dev/null; then
+            GTAR=gtar
+        else
+            GTAR=tar
+        fi
+        $$GTAR -czf $@ -C $$TMPDIR --mtime='1970-01-01 00:00:00' etc/ssl/certs/ca-certificates.crt
         
         # Cleanup
         rm -rf $$TMPDIR data.tar.xz

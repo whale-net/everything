@@ -38,7 +38,8 @@ Active game server orchestration platform. Split-plane architecture: cloud contr
 
 ## Design Docs
 
-- [docs/DESIGN_SGC_ENV_OVERRIDES.md](docs/DESIGN_SGC_ENV_OVERRIDES.md) — Per-instance env var overrides: options for fixing GameConfig duplication (draft, not scheduled)
+- [docs/DESIGN_UI_REDESIGN.md](docs/DESIGN_UI_REDESIGN.md) — UI redesign: decisions, assumed-but-unbuilt functionality, TBDs (draft; wireframes are layout source of truth)
+- [docs/DESIGN_SGC_ENV_OVERRIDES.md](docs/DESIGN_SGC_ENV_OVERRIDES.md) — Per-deployment env var overrides: Option B accepted, not scheduled
 
 ## Archive
 
