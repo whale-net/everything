@@ -1,0 +1,107 @@
+<!-- wf: name="v2-game-workspace" title="Proposal: Game Workspace" -->
+<div class="breadcrumbs text-sm mb-4">
+  <ul><li><a href="#/v2-games">Games</a></li><li>Valheim</li></ul>
+</div>
+
+<div class="flex flex-col md:flex-row justify-between md:items-center gap-3 mb-6">
+  <div class="flex items-center gap-3">
+    <h1 class="text-2xl md:text-3xl font-bold">Valheim</h1>
+    <span class="badge badge-soft badge-success">2 running</span>
+  </div>
+  <button class="btn btn-primary">Edit Game</button>
+</div>
+
+<div role="tablist" class="tabs tabs-box mb-6 w-fit">
+  <a role="tab" class="tab tab-active">Overview</a>
+  <a role="tab" class="tab">Actions</a>
+  <a role="tab" class="tab">Workshop</a>
+  <a role="tab" class="tab">Settings</a>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <div class="p-4 border-b border-base-300 flex justify-between items-center">
+      <h2 class="text-lg font-semibold">Instances</h2>
+      <span class="wf-note">was: SGC pages + sessions picker — now one table, no SGC IDs</span>
+    </div>
+    <table class="table">
+      <thead><tr><th>Server</th><th>Config</th><th>Status</th><th>Players</th><th>Connect</th><th class="text-right">Actions</th></tr></thead>
+      <tbody>
+        <tr class="hover">
+          <td>host-01</td><td>vanilla</td>
+          <td><span class="badge badge-soft badge-success badge-sm">Running</span></td>
+          <td>4/10</td>
+          <td><span class="font-mono text-sm">203.0.113.7:2456</span> <button class="btn btn-xs btn-secondary">Copy</button></td>
+          <td class="text-right"><a href="#/session-detail" class="btn btn-sm btn-primary">Logs</a> <button class="btn btn-sm btn-error">Stop</button></td>
+        </tr>
+        <tr class="hover">
+          <td>host-03</td><td>modded-plus</td>
+          <td><span class="badge badge-soft badge-success badge-sm">Running</span></td>
+          <td>2/10</td>
+          <td><span class="font-mono text-sm">203.0.113.9:2456</span> <button class="btn btn-xs btn-secondary">Copy</button></td>
+          <td class="text-right"><a href="#/session-detail" class="btn btn-sm btn-primary">Logs</a> <button class="btn btn-sm btn-error">Stop</button></td>
+        </tr>
+        <tr class="hover opacity-70">
+          <td>host-02</td><td>vanilla</td>
+          <td><span class="badge badge-soft badge-neutral badge-sm">Stopped</span></td>
+          <td>—</td>
+          <td class="opacity-50">—</td>
+          <td class="text-right"><button class="btn btn-sm btn-success">Start</button> <button class="btn btn-sm btn-error">Remove</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="flex justify-between items-center mb-3">
+  <h2 class="text-lg font-semibold">Configurations</h2>
+  <button class="btn btn-sm btn-primary">+ New Config</button>
+</div>
+<div class="grid md:grid-cols-2 gap-4 mb-6">
+  <div class="card bg-base-100 shadow-md">
+    <div class="card-body gap-2">
+      <div class="flex justify-between items-start">
+        <h3 class="card-title text-base">vanilla</h3>
+        <span class="text-xs opacity-60">2 instances</span>
+      </div>
+      <table class="table table-xs">
+        <tbody>
+          <tr><td class="opacity-60 w-24">Image</td><td class="font-mono">lloesche/valheim-server:latest</td></tr>
+          <tr><td class="opacity-60">Ports</td><td class="font-mono">2456-2458/udp</td></tr>
+          <tr><td class="opacity-60">Env</td><td>4 vars · 1 volume · hourly backups</td></tr>
+        </tbody>
+      </table>
+      <div class="card-actions justify-end">
+        <button class="btn btn-sm btn-secondary">Edit</button>
+        <div class="join">
+          <select class="select select-bordered select-sm join-item"><option>host-02</option><option>host-04</option></select>
+          <button class="btn btn-sm btn-success join-item">Deploy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="card bg-base-100 shadow-md">
+    <div class="card-body gap-2">
+      <div class="flex justify-between items-start">
+        <h3 class="card-title text-base">modded-plus</h3>
+        <span class="text-xs opacity-60">1 instance</span>
+      </div>
+      <table class="table table-xs">
+        <tbody>
+          <tr><td class="opacity-60 w-24">Image</td><td class="font-mono">lloesche/valheim-server:latest</td></tr>
+          <tr><td class="opacity-60">Ports</td><td class="font-mono">2456-2458/udp</td></tr>
+          <tr><td class="opacity-60">Env</td><td>7 vars · 1 volume · QoL Plugins library</td></tr>
+        </tbody>
+      </table>
+      <div class="card-actions justify-end">
+        <button class="btn btn-sm btn-secondary">Edit</button>
+        <div class="join">
+          <select class="select select-bordered select-sm join-item"><option>host-02</option><option>host-04</option></select>
+          <button class="btn btn-sm btn-success join-item">Deploy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="wf-note">notes: config Edit opens inline (ports editable — new); Deploy adds an Instances row and can auto-start; Actions tab replaces seed scripts; Settings tab holds presets + danger zone.</p>

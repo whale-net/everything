@@ -1,0 +1,74 @@
+<!-- wf: name="v2-games" title="Proposal: Games Hub" -->
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg flex flex-col md:flex-row justify-between md:items-center gap-4">
+  <div>
+    <h1 class="text-2xl md:text-3xl font-bold mb-2">Games</h1>
+    <p class="text-sm opacity-80">What's available and how to connect</p>
+  </div>
+  <button class="btn bg-base-100 text-primary border-0 shadow-md">+ Add Game</button>
+</div>
+
+<p class="wf-note mb-4">proposal: game cards lead with status + connect; GC/SGC/servers are hidden behind "Manage". Connect address needs the public-IP backend work.</p>
+
+<div class="grid md:grid-cols-2 gap-4">
+  <div class="card bg-base-100 shadow-md">
+    <div class="card-body gap-3">
+      <div class="flex justify-between items-start">
+        <h2 class="card-title">Valheim</h2>
+        <span class="badge badge-soft badge-success">2 running</span>
+      </div>
+      <div class="text-sm opacity-70">6 players across 2 instances</div>
+      <div class="flex items-center gap-2 bg-base-200 rounded-field px-3 py-2">
+        <span class="font-mono text-sm flex-1">203.0.113.7:2456</span>
+        <button class="btn btn-xs btn-secondary">Copy</button>
+      </div>
+      <div class="flex items-center gap-2 bg-base-200 rounded-field px-3 py-2">
+        <span class="font-mono text-sm flex-1">203.0.113.9:2456</span>
+        <button class="btn btn-xs btn-secondary">Copy</button>
+      </div>
+      <div class="card-actions justify-end mt-1">
+        <a href="#/v2-game-workspace" class="btn btn-sm btn-primary">Manage</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="card bg-base-100 shadow-md">
+    <div class="card-body gap-3">
+      <div class="flex justify-between items-start">
+        <h2 class="card-title">Counter-Strike 2</h2>
+        <span class="badge badge-soft badge-error">Crashed</span>
+      </div>
+      <div class="text-sm opacity-70">Last up 14m ago on host-02</div>
+      <div class="card-actions justify-end mt-auto">
+        <button class="btn btn-sm btn-success">Restart</button>
+        <a href="#/v2-game-workspace" class="btn btn-sm btn-primary">Manage</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="card bg-base-100 shadow-md">
+    <div class="card-body gap-3">
+      <div class="flex justify-between items-start">
+        <h2 class="card-title">Palworld</h2>
+        <span class="badge badge-soft badge-neutral">Not running</span>
+      </div>
+      <div class="text-sm opacity-70">2 configs ready · last played Jul 15</div>
+      <div class="card-actions justify-end mt-auto">
+        <button class="btn btn-sm btn-success">Start</button>
+        <a href="#/v2-game-workspace" class="btn btn-sm btn-primary">Manage</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="card bg-base-100 shadow-md">
+    <div class="card-body gap-3">
+      <div class="flex justify-between items-start">
+        <h2 class="card-title">Left 4 Dead 2</h2>
+        <span class="badge badge-soft badge-warning">Starting</span>
+      </div>
+      <div class="text-sm opacity-70">host-03 · Coop campaign</div>
+      <div class="card-actions justify-end mt-auto">
+        <a href="#/v2-game-workspace" class="btn btn-sm btn-primary">Manage</a>
+      </div>
+    </div>
+  </div>
+</div>
