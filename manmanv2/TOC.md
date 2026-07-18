@@ -36,6 +36,10 @@ Active game server orchestration platform. Split-plane architecture: cloud contr
 - [testdata/README.md](testdata/README.md) — Test fixtures and test data patterns
 - [testdata/BAZEL_LIMITATION.md](testdata/BAZEL_LIMITATION.md) — Known Bazel limitation with testdata
 
+## Design Docs
+
+- [docs/DESIGN_SGC_ENV_OVERRIDES.md](docs/DESIGN_SGC_ENV_OVERRIDES.md) — Per-instance env var overrides: options for fixing GameConfig duplication (draft, not scheduled)
+
 ## Archive
 
 Self-registration feature docs in [docs/ARCHIVE/](docs/ARCHIVE/) — feature complete, archived for reference.
