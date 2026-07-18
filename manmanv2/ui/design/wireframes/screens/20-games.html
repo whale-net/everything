@@ -1,0 +1,38 @@
+<!-- wf: name="games" title="Games" -->
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg flex flex-col md:flex-row justify-between md:items-center gap-4">
+  <div>
+    <h1 class="text-2xl md:text-3xl font-bold mb-2">Games</h1>
+    <p class="text-sm opacity-80">Game definitions and their configurations</p>
+  </div>
+  <a href="#/game-form" class="btn bg-base-100 text-primary border-0 shadow-md">+ Create Game</a>
+</div>
+
+<div class="card bg-base-100 shadow-md overflow-x-auto">
+  <table class="table">
+    <thead>
+      <tr><th>Name</th><th>Steam App ID</th><th>Genre</th><th>Publisher</th><th>Tags</th><th class="text-right">Actions</th></tr>
+    </thead>
+    <tbody>
+      <tr class="hover">
+        <td class="font-medium">Valheim</td><td class="font-mono text-sm">896660</td><td>Survival</td><td>Iron Gate</td>
+        <td><span class="badge badge-ghost badge-sm">multiplayer</span> <span class="badge badge-ghost badge-sm">viking</span></td>
+        <td class="text-right"><a href="#/game-detail" class="btn btn-sm btn-primary">View</a></td>
+      </tr>
+      <tr class="hover">
+        <td class="font-medium">Counter-Strike 2</td><td class="font-mono text-sm">730</td><td>FPS</td><td>Valve</td>
+        <td><span class="badge badge-ghost badge-sm">competitive</span></td>
+        <td class="text-right"><a href="#/game-detail" class="btn btn-sm btn-primary">View</a></td>
+      </tr>
+      <tr class="hover">
+        <td class="font-medium">Palworld</td><td class="font-mono text-sm">1623730</td><td>Survival</td><td>Pocketpair</td>
+        <td><span class="badge badge-ghost badge-sm">multiplayer</span> <span class="badge badge-ghost badge-sm">open-world</span></td>
+        <td class="text-right"><a href="#/game-detail" class="btn btn-sm btn-primary">View</a></td>
+      </tr>
+      <tr class="hover">
+        <td class="font-medium">Left 4 Dead 2</td><td class="font-mono text-sm">550</td><td>Co-op</td><td>Valve</td>
+        <td><span class="badge badge-ghost badge-sm">zombies</span></td>
+        <td class="text-right"><a href="#/game-detail" class="btn btn-sm btn-primary">View</a></td>
+      </tr>
+    </tbody>
+  </table>
+</div>

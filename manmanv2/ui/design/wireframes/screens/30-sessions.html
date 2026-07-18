@@ -1,0 +1,49 @@
+<!-- wf: name="sessions" title="Sessions" -->
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg">
+  <h1 class="text-2xl md:text-3xl font-bold mb-2">Sessions</h1>
+  <p class="text-sm opacity-80">Running and historical game server sessions</p>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body">
+    <h2 class="card-title text-lg">Start Session</h2>
+    <div class="flex flex-col md:flex-row gap-3">
+      <select class="select select-bordered flex-1">
+        <option>SGC-101 · host-01 · Valheim / vanilla</option>
+        <option>SGC-102 · host-02 · CS2 / competitive</option>
+      </select>
+      <button class="btn btn-success">Start Session</button>
+    </div>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <div class="p-4 border-b border-base-300"><h2 class="text-lg font-semibold">Game Server Containers (GSCs)</h2></div>
+    <table class="table">
+      <thead><tr><th>GSC (Server Game Config)</th><th>Status</th><th>Live Session</th></tr></thead>
+      <tbody>
+        <tr class="hover"><td><a href="#/sgc-detail" class="link link-primary">SGC-101 · host-01 · Valheim / vanilla</a></td><td><span class="badge badge-soft badge-success">Running</span></td><td><a href="#/session-detail" class="link">#8841</a></td></tr>
+        <tr class="hover"><td><a href="#/sgc-detail" class="link link-primary">SGC-102 · host-02 · CS2 / competitive</a></td><td><span class="badge badge-soft badge-error">Crashed</span></td><td><a href="#/session-detail" class="link">#8838</a></td></tr>
+        <tr class="hover"><td><a href="#/sgc-detail" class="link link-primary">SGC-103 · host-02 · Palworld / pvp-s3</a></td><td><span class="badge badge-soft badge-neutral">Stopped</span></td><td class="opacity-50">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md">
+  <div class="card-body p-0">
+    <div class="flex justify-between items-center p-4 border-b border-base-300">
+      <h2 class="text-lg font-semibold">Session History</h2>
+      <input type="text" class="input input-bordered input-sm w-56" placeholder="running, stopped, crashed">
+    </div>
+    <table class="table">
+      <thead><tr><th>ID</th><th>Status</th><th>Config</th><th>Started</th><th>Ended</th></tr></thead>
+      <tbody>
+        <tr class="hover"><td><a href="#/session-detail" class="link link-primary font-mono">#8841</a></td><td><span class="badge badge-soft badge-success badge-sm">Running</span></td><td>Valheim / vanilla</td><td>Today 14:02</td><td class="opacity-50">—</td></tr>
+        <tr class="hover"><td><a href="#/session-detail" class="link link-primary font-mono">#8838</a></td><td><span class="badge badge-soft badge-error badge-sm">Crashed</span></td><td>CS2 / competitive</td><td>Today 11:47</td><td>Today 13:51</td></tr>
+        <tr class="hover"><td><a href="#/session-detail" class="link link-primary font-mono">#8830</a></td><td><span class="badge badge-soft badge-neutral badge-sm">Stopped</span></td><td>Palworld / pvp-s3</td><td>Yesterday 19:10</td><td>Today 02:33</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>

@@ -1,0 +1,72 @@
+<!-- wf: name="game-detail" title="Game: Valheim" -->
+<div class="breadcrumbs text-sm mb-4">
+  <ul><li><a href="#/games">Games</a></li><li>Valheim</li></ul>
+</div>
+
+<div class="flex justify-between items-center mb-6">
+  <h1 class="text-2xl md:text-3xl font-bold">Valheim</h1>
+  <button class="btn btn-primary">Edit Game</button>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body">
+    <h2 class="card-title text-lg">Game Information</h2>
+    <table class="table table-sm">
+      <tbody>
+        <tr><td class="opacity-60 w-40">Steam App ID</td><td class="font-mono">896660</td></tr>
+        <tr><td class="opacity-60">Genre</td><td>Survival</td></tr>
+        <tr><td class="opacity-60">Publisher</td><td>Iron Gate</td></tr>
+        <tr><td class="opacity-60">Tags</td><td><span class="badge badge-ghost badge-sm">multiplayer</span> <span class="badge badge-ghost badge-sm">viking</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <div class="flex justify-between items-center p-4 border-b border-base-300">
+      <h2 class="text-lg font-semibold">Game Configurations</h2>
+      <a href="#/config-form" class="btn btn-sm btn-primary">+ New Config</a>
+    </div>
+    <table class="table">
+      <thead><tr><th>Name</th><th>Docker Image</th><th>SGCs</th><th class="text-right">Actions</th></tr></thead>
+      <tbody>
+        <tr class="hover">
+          <td class="font-medium">vanilla</td><td class="font-mono text-sm">lloesche/valheim-server:latest</td><td>2</td>
+          <td class="text-right"><a href="#/config-detail" class="btn btn-sm btn-primary">View</a></td>
+        </tr>
+        <tr class="hover">
+          <td class="font-medium">modded-plus</td><td class="font-mono text-sm">lloesche/valheim-server:latest</td><td>1</td>
+          <td class="text-right"><a href="#/config-detail" class="btn btn-sm btn-primary">View</a></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <div class="flex justify-between items-center p-4 border-b border-base-300">
+      <h2 class="text-lg font-semibold">Addon Path Presets</h2>
+      <button class="btn btn-sm btn-primary">+ Add Preset</button>
+    </div>
+    <table class="table">
+      <thead><tr><th>Name</th><th>Volume</th><th>Installation Path</th><th class="text-right">Actions</th></tr></thead>
+      <tbody>
+        <tr class="hover"><td>Maps</td><td class="font-mono text-sm">data</td><td class="font-mono text-sm">valheim/maps/</td><td class="text-right"><button class="btn btn-sm btn-error">Remove</button></td></tr>
+        <tr class="hover"><td>Plugins</td><td class="font-mono text-sm">data</td><td class="font-mono text-sm">valheim/BepInEx/plugins/</td><td class="text-right"><button class="btn btn-sm btn-error">Remove</button></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card bg-base-100 border-2 border-error/40 shadow-md mt-8">
+  <div class="bg-error/10 px-6 py-4 border-b-2 border-error/40 rounded-t-box">
+    <h3 class="text-lg font-semibold text-error">⚠️ Danger Zone</h3>
+  </div>
+  <div class="card-body">
+    <h4 class="font-semibold">Delete this game</h4>
+    <p class="text-sm opacity-70 mb-2">Deletes Valheim, its configs, and path presets. This cannot be undone.</p>
+    <div><button class="btn btn-error">Delete Game</button></div>
+  </div>
+</div>

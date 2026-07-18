@@ -1,0 +1,40 @@
+<!-- wf: name="workshop-installations" title="Workshop Installations" -->
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg">
+  <h1 class="text-2xl md:text-3xl font-bold mb-2">Workshop Installations</h1>
+  <p class="text-sm opacity-80">Addon installations across servers</p>
+</div>
+
+<div role="tablist" class="tabs tabs-box mb-6 w-fit">
+  <a href="#/workshop" role="tab" class="tab">Library</a>
+  <a href="#/workshop-installations" role="tab" class="tab tab-active">Installations</a>
+  <a href="#/workshop-search" role="tab" class="tab">Search</a>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <div class="p-4 border-b border-base-300"><h2 class="text-lg font-semibold">Installed Addons</h2></div>
+    <table class="table">
+      <thead><tr><th>Addon</th><th>Status</th><th>Progress</th><th>Path</th><th class="text-right">Actions</th></tr></thead>
+      <tbody>
+        <tr class="hover"><td><a href="#/workshop-addon-detail" class="link link-primary">BetterUI Reforged</a></td><td><span class="badge badge-soft badge-success badge-sm">Installed</span></td><td><progress class="progress progress-success w-24" value="100" max="100"></progress></td><td class="font-mono text-sm">valheim/BepInEx/plugins/</td><td class="text-right"><button class="btn btn-sm btn-error">Uninstall</button></td></tr>
+        <tr class="hover"><td><a href="#/workshop-addon-detail" class="link link-primary">Dead Center Remix</a></td><td><span class="badge badge-soft badge-warning badge-sm">Installing</span></td><td><progress class="progress progress-warning w-24" value="62" max="100"></progress></td><td class="font-mono text-sm">left4dead2/maps/</td><td class="text-right"><button class="btn btn-sm btn-secondary" disabled>Uninstall</button></td></tr>
+        <tr class="hover"><td><a href="#/workshop-addon-detail" class="link link-primary">Ashlands Preview</a></td><td><span class="badge badge-soft badge-error badge-sm">Failed</span></td><td><progress class="progress progress-error w-24" value="18" max="100"></progress></td><td class="font-mono text-sm">valheim/maps/</td><td class="text-right"><button class="btn btn-sm btn-primary">Retry</button></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md max-w-2xl">
+  <div class="card-body gap-4">
+    <h2 class="card-title text-lg">Install Workshop Addon</h2>
+    <div class="grid md:grid-cols-2 gap-4">
+      <select class="select select-bordered"><option>Choose addon…</option><option>BetterUI Reforged</option></select>
+      <select class="select select-bordered"><option>Target SGC…</option><option>SGC-101 · host-01</option></select>
+    </div>
+    <label class="form-control">
+      <span class="label-text font-medium mb-1">Install path</span>
+      <input type="text" class="input input-bordered font-mono" placeholder="/path/to/install">
+    </label>
+    <div><button class="btn btn-success">Install</button></div>
+  </div>
+</div>

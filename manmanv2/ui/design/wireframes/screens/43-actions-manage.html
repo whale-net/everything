@@ -1,0 +1,41 @@
+<!-- wf: name="actions-manage" title="Manage Actions" -->
+<div class="breadcrumbs text-sm mb-4">
+  <ul><li><a href="#/games">Games</a></li><li><a href="#/game-detail">Valheim</a></li><li>Actions</li></ul>
+</div>
+
+<h1 class="text-2xl md:text-3xl font-bold mb-6">Game Actions</h1>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <div class="p-4 border-b border-base-300"><h2 class="text-lg font-semibold">Defined Actions</h2></div>
+    <table class="table">
+      <thead><tr><th>Name</th><th>Command</th><th>Confirm?</th><th class="text-right">Actions</th></tr></thead>
+      <tbody>
+        <tr class="hover"><td class="font-medium">Save World</td><td class="font-mono text-sm">save</td><td><input type="checkbox" class="checkbox checkbox-sm" disabled></td><td class="text-right"><button class="btn btn-sm btn-primary">Edit</button> <button class="btn btn-sm btn-error">Remove</button></td></tr>
+        <tr class="hover"><td class="font-medium">Broadcast</td><td class="font-mono text-sm">say {message}</td><td><input type="checkbox" class="checkbox checkbox-sm" disabled></td><td class="text-right"><button class="btn btn-sm btn-primary">Edit</button> <button class="btn btn-sm btn-error">Remove</button></td></tr>
+        <tr class="hover"><td class="font-medium">Force Restart</td><td class="font-mono text-sm">restart --force</td><td><input type="checkbox" class="checkbox checkbox-sm" checked disabled></td><td class="text-right"><button class="btn btn-sm btn-primary">Edit</button> <button class="btn btn-sm btn-error">Remove</button></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md max-w-2xl">
+  <div class="card-body gap-4">
+    <h2 class="card-title text-lg">Add Action</h2>
+    <div class="grid md:grid-cols-2 gap-4">
+      <label class="form-control">
+        <span class="label-text font-medium mb-1">Name</span>
+        <input type="text" class="input input-bordered" placeholder="e.g., Save World">
+      </label>
+      <label class="form-control">
+        <span class="label-text font-medium mb-1">Command</span>
+        <input type="text" class="input input-bordered font-mono" placeholder="e.g., save">
+      </label>
+    </div>
+    <label class="label cursor-pointer justify-start gap-3">
+      <input type="checkbox" class="checkbox">
+      <span class="label-text">Require confirmation before running</span>
+    </label>
+    <div><button class="btn btn-success">Add Action</button></div>
+  </div>
+</div>

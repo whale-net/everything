@@ -1,0 +1,65 @@
+<!-- wf: name="session-detail" title="Session #8841" -->
+<div class="breadcrumbs text-sm mb-4">
+  <ul><li><a href="#/sessions">Sessions</a></li><li>#8841</li></ul>
+</div>
+
+<div class="flex flex-col md:flex-row justify-between md:items-center gap-3 mb-6">
+  <div class="flex items-center gap-3">
+    <h1 class="text-2xl md:text-3xl font-bold">Session #8841</h1>
+    <span class="badge badge-soft badge-success">Running</span>
+  </div>
+  <div class="flex gap-2">
+    <button class="btn btn-error">Stop Session</button>
+  </div>
+</div>
+
+<div class="grid lg:grid-cols-3 gap-6 mb-6">
+  <div class="card bg-base-100 shadow-md">
+    <div class="card-body">
+      <h2 class="card-title text-lg">Session Details</h2>
+      <table class="table table-sm">
+        <tbody>
+          <tr><td class="opacity-60">SGC</td><td><a href="#/sgc-detail" class="link link-primary">SGC-101</a></td></tr>
+          <tr><td class="opacity-60">Server</td><td><a href="#/server-detail" class="link link-primary">host-01</a></td></tr>
+          <tr><td class="opacity-60">Config</td><td><a href="#/config-detail" class="link link-primary">Valheim / vanilla</a></td></tr>
+          <tr><td class="opacity-60">Started</td><td>Today 14:02</td></tr>
+          <tr><td class="opacity-60">Players</td><td>6 / 10</td></tr>
+        </tbody>
+      </table>
+      <h2 class="card-title text-lg mt-2">Available Actions</h2>
+      <div class="flex flex-wrap gap-2">
+        <button class="btn btn-sm btn-primary">Save World</button>
+        <button class="btn btn-sm btn-primary">Broadcast</button>
+        <button class="btn btn-sm btn-error">Force Restart</button>
+      </div>
+    </div>
+  </div>
+  <div class="card bg-base-100 shadow-md lg:col-span-2">
+    <div class="card-body">
+      <h2 class="card-title text-lg">Live Logs</h2>
+      <div class="mockup-code text-xs max-h-64 overflow-y-auto">
+        <pre data-prefix="14:02:11"><code>Server starting on port 2456</code></pre>
+        <pre data-prefix="14:02:14"><code>World "midgard" loaded (seed 8H2kf)</code></pre>
+        <pre data-prefix="14:05:01"><code>Player connected: skeletor (76561198...)</code></pre>
+        <pre data-prefix="14:19:44"><code>Autosave complete (2.3s)</code></pre>
+      </div>
+      <div class="flex gap-2 mt-2">
+        <input type="text" class="input input-bordered input-sm flex-1 font-mono" placeholder="Send command to server...">
+        <button class="btn btn-sm btn-primary">Send</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md">
+  <div class="card-body p-0">
+    <div class="p-4 border-b border-base-300"><h2 class="text-lg font-semibold">Workshop Addons</h2></div>
+    <table class="table">
+      <thead><tr><th>Addon ID</th><th>Status</th><th>Progress</th><th>Path</th></tr></thead>
+      <tbody>
+        <tr class="hover"><td><a href="#/workshop-addon-detail" class="link link-primary font-mono">2938285337</a></td><td><span class="badge badge-soft badge-success badge-sm">Installed</span></td><td><progress class="progress progress-success w-24" value="100" max="100"></progress></td><td class="font-mono text-sm">valheim/BepInEx/plugins/</td></tr>
+        <tr class="hover"><td><a href="#/workshop-addon-detail" class="link link-primary font-mono">3011224407</a></td><td><span class="badge badge-soft badge-warning badge-sm">Installing</span></td><td><progress class="progress progress-warning w-24" value="62" max="100"></progress></td><td class="font-mono text-sm">valheim/maps/</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
