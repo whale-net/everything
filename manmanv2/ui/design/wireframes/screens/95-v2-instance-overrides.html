@@ -1,7 +1,7 @@
-<!-- wf: name="v2-instance-overrides" title="Proposal: Instance Overrides" parent="v2-game-workspace" -->
+<!-- wf: name="v2-instance-overrides" title="Proposal: Instance Settings" parent="v2-game-workspace" -->
 <div class="flex justify-between items-center mb-6">
   <div>
-    <h1 class="text-2xl font-bold">Instance Overrides</h1>
+    <h1 class="text-2xl font-bold">Instance Settings</h1>
     <p class="text-sm opacity-70 mt-1">vanilla on host-01 · <span class="badge badge-soft badge-primary badge-sm">2 overrides</span></p>
   </div>
   <div class="flex gap-2">
@@ -50,6 +50,32 @@
     <div class="p-4 border-t border-base-300">
       <button class="btn btn-sm btn-primary">+ Add instance-only variable</button>
     </div>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <div class="flex justify-between items-center p-4 border-b border-base-300">
+      <h2 class="text-lg font-semibold">Extra Addons <span class="badge badge-soft badge-primary badge-sm">new</span></h2>
+      <span class="text-sm opacity-60">on top of the config's libraries</span>
+    </div>
+    <table class="table table-sm">
+      <thead><tr><th>Addon</th><th>Install Target</th><th>Status</th><th class="text-right"></th></tr></thead>
+      <tbody>
+        <tr class="hover">
+          <td><a href="#/workshop-addon-detail" class="link link-primary">Dead Center Remix</a></td>
+          <td><span class="badge badge-ghost badge-sm font-mono">data</span> <span class="font-mono text-sm">valheim/maps/</span></td>
+          <td><span class="badge badge-soft badge-success badge-sm">Installed</span></td>
+          <td class="text-right"><button class="btn btn-xs btn-error">Remove</button></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="p-4 border-t border-base-300 flex flex-wrap gap-2 items-center">
+      <select class="select select-bordered select-sm"><option>Add addon…</option><option>Ashlands Preview</option></select>
+      <select class="select select-bordered select-sm"><option>Target: Maps (data · valheim/maps/)</option><option>Custom volume + path…</option></select>
+      <button class="btn btn-sm btn-success">Add</button>
+    </div>
+    <p class="wf-note m-4 mt-0">model change: libraries live on the config; single addons can be added per instance here — replaces today's SGC-level library attach.</p>
   </div>
 </div>
 

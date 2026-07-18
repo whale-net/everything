@@ -167,3 +167,17 @@ inherit). Save calls `SetSGCEnvOverrides`. A count chip on the row
   (UI currently assumes two columns.)
 - Session-level overrides ("start once with a different world"): deferred;
   the patch system already models the level, so nothing here blocks it.
+
+## Related: SGC as a general customization layer
+
+Agreed direction (2026-07-18): the SGC is the *customization layer* over
+the GC baseline — "deploy a common GC, then configure further per SGC".
+Env overrides (this doc) are one instance of that model; workshop
+libraries are another: libraries move from SGC-level to **GC-level**
+(inherited by all instances of the config), with **individual addons
+addable per SGC** as one-off extras. UI: both live in the game
+workspace's per-instance "Instance Settings" layer
+(`ui/design/wireframes/screens/95-v2-instance-overrides.html`). The
+workshop change needs its own schema/API work (today:
+`/sgc/add-library`, `workshop_installations UNIQUE(sgc_id, addon_id)`)
+and is not covered by this doc's work plan.

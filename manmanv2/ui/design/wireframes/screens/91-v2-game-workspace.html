@@ -19,14 +19,14 @@
           <td><span class="badge badge-soft badge-success badge-sm">Running</span></td>
           <td>4/10</td>
           <td><span class="font-mono text-sm">203.0.113.7:2456</span> <button class="btn btn-xs btn-secondary">Copy</button></td>
-          <td class="text-right"><a href="#/v2-instance-overrides" class="btn btn-xs btn-secondary">Overrides</a> <a href="#/session-detail" class="btn btn-xs btn-primary">Logs</a> <button class="btn btn-xs btn-error">Stop</button></td>
+          <td class="text-right"><a href="#/v2-instance-overrides" class="btn btn-xs btn-secondary">Customize</a> <a href="#/session-detail" class="btn btn-xs btn-primary">Logs</a> <button class="btn btn-xs btn-error">Stop</button></td>
         </tr>
         <tr class="hover">
           <td>host-03</td><td>modded-plus</td>
           <td><span class="badge badge-soft badge-success badge-sm">Running</span></td>
           <td>2/10</td>
           <td><span class="font-mono text-sm">203.0.113.9:2456</span> <button class="btn btn-xs btn-secondary">Copy</button></td>
-          <td class="text-right"><a href="#/v2-instance-overrides" class="btn btn-xs btn-secondary">Overrides</a> <a href="#/session-detail" class="btn btn-xs btn-primary">Logs</a> <button class="btn btn-xs btn-error">Stop</button></td>
+          <td class="text-right"><a href="#/v2-instance-overrides" class="btn btn-xs btn-secondary">Customize</a> <a href="#/session-detail" class="btn btn-xs btn-primary">Logs</a> <button class="btn btn-xs btn-error">Stop</button></td>
         </tr>
         <tr class="hover opacity-70">
           <td>host-02</td><td>vanilla</td>
@@ -75,28 +75,37 @@
 
 <div class="card bg-base-100 shadow-md mb-5">
   <div class="card-body p-0">
-    <div class="p-4 border-b border-base-300"><h2 class="text-lg font-semibold">Workshop Libraries</h2></div>
+    <div class="flex justify-between items-center p-4 border-b border-base-300">
+      <h2 class="text-lg font-semibold">Workshop Libraries</h2>
+      <span class="wf-note">model change: libraries attach at the config (GC), inherited by its instances — was SGC-level; per-instance extras live in the instance Overrides layer</span>
+    </div>
     <table class="table table-sm">
-      <thead><tr><th>Library</th><th>Install Target</th><th>Applied To</th><th class="text-right"></th></tr></thead>
+      <thead><tr><th>Library</th><th>Config</th><th>Install Target</th><th class="text-right"></th></tr></thead>
       <tbody>
         <tr class="hover">
           <td><a href="#/workshop-library-detail" class="link link-primary">Essential Maps</a></td>
+          <td>vanilla</td>
           <td><span class="badge badge-ghost badge-sm font-mono">data</span> <span class="font-mono text-sm">valheim/maps/</span></td>
-          <td>all instances</td>
+          <td class="text-right"><button class="btn btn-xs btn-error">Detach</button></td>
+        </tr>
+        <tr class="hover">
+          <td><a href="#/workshop-library-detail" class="link link-primary">Essential Maps</a></td>
+          <td>modded-plus</td>
+          <td><span class="badge badge-ghost badge-sm font-mono">data</span> <span class="font-mono text-sm">valheim/maps/</span></td>
           <td class="text-right"><button class="btn btn-xs btn-error">Detach</button></td>
         </tr>
         <tr class="hover">
           <td><a href="#/workshop-library-detail" class="link link-primary">QoL Plugins</a></td>
+          <td>modded-plus</td>
           <td><span class="badge badge-ghost badge-sm font-mono">data</span> <span class="font-mono text-sm">valheim/BepInEx/plugins/</span></td>
-          <td>modded-plus only</td>
           <td class="text-right"><button class="btn btn-xs btn-error">Detach</button></td>
         </tr>
       </tbody>
     </table>
     <div class="p-4 border-t border-base-300 flex flex-wrap gap-2 items-center">
       <select class="select select-bordered select-sm"><option>Attach library…</option><option>L4D2 Campaigns</option></select>
+      <select class="select select-bordered select-sm"><option>To config: vanilla</option><option>To config: modded-plus</option></select>
       <select class="select select-bordered select-sm"><option>Target: Maps (data · valheim/maps/)</option><option>Target: Plugins (data · valheim/BepInEx/plugins/)</option><option>Custom volume + path…</option></select>
-      <select class="select select-bordered select-sm"><option>All instances</option><option>vanilla</option><option>modded-plus</option></select>
       <button class="btn btn-sm btn-success">Attach</button>
     </div>
   </div>
