@@ -28,6 +28,22 @@ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 
 ## Component Patterns
 
+### Navigation Bar
+
+**Dark slate in all themes** (including light mode) — this is the "gaming
+accent" against the otherwise business-like UI:
+
+```html
+<nav class="bg-slate-800 dark:bg-slate-900 shadow-lg sticky top-0 z-50">
+```
+
+- Sticky at the top, `z-50`
+- Link hover states use `bg-slate-700`
+- Collapses to a hamburger menu on mobile
+- Implementation: `Nav()` in `components/layout.templ`
+
+---
+
 ### Hero Headers
 
 **Usage**: Main section pages (Games, Servers, Sessions, Workshop)  
@@ -383,9 +399,24 @@ Use Tailwind's spacing scale consistently:
 
 ### Three Themes
 
-1. **Light**: Clean white backgrounds (#ffffff)
-2. **Night**: Dark slate (#1e293b)
-3. **OLED Night**: Pure black (#000000) for OLED power savings
+| Theme | Page background | Cards / surfaces |
+|-------|-----------------|------------------|
+| **Light** | `bg-gray-100` (#f3f4f6) | White (#ffffff) |
+| **Night** | `dark:bg-slate-900` (#0f172a) | Slate-800 (#1e293b) |
+| **OLED Night** | ⚠️ Currently identical to Night | — |
+
+> **Note**: OLED is intended to be pure black (#000000) for OLED power
+> savings, but no black overrides are implemented — selecting it only adds
+> the same `.dark` class as Night. Pure-black surfaces are an open TODO.
+
+### Mechanism
+
+- The theme is stored in `localStorage['manman-theme']` and falls back to
+  `prefers-color-scheme`. On load, `themeScript()` (in
+  `components/layout.templ`) sets `data-theme` on `<html>` and adds the
+  `.dark` class for `night`/`oled`.
+- Switching themes triggers `location.reload()` because the Tailwind CDN
+  build must re-scan classes.
 
 ### Dark Mode Classes
 
@@ -471,6 +502,29 @@ When updating a page to the design system:
 
 ---
 
+## Future Direction: daisyUI
+
+daisyUI is the agreed future styling layer for this UI — adoption is
+pending a go decision, and no production code uses it yet. Until then this
+document describes the current utility-class implementation.
+
+- The wireframes (`design/wireframes/`) are already written in daisyUI
+  semantic classes and are the reference for what adoption looks like.
+- `tools/wireframe/themes.css` is the canonical mapping of this design
+  system onto daisyUI theme variables (light/night/oled, primary=indigo,
+  success=green, error=red, neutral=slate — including the pure-black OLED
+  surfaces the current app lacks).
+- Semantic equivalents: `btn-primary`/`btn-success`/`btn-error`/
+  `btn-secondary` for the button variants, `badge-soft badge-*` for the
+  soft-tint status badges, `card bg-base-100` for cards.
+- Adopting means swapping `cdn.tailwindcss.com` in `templ_render.go` for
+  the pinned daisyUI + Tailwind CDN builds plus `themes.css`, then
+  migrating components to the semantic classes. This also removes the
+  theme-switch `location.reload()` (daisyUI themes are CSS variables under
+  `data-theme`, no re-scan needed).
+
+---
+
 ## Resources
 
 - **Wireframes**: `manmanv2/ui/design/wireframes/` — clickable design mockups (assembled by `//tools/wireframe`; workflow in `.claude/skills/wireframe/SKILL.md`)
@@ -481,6 +535,6 @@ When updating a page to the design system:
 
 ---
 
-**Last Updated**: March 2026  
-**Version**: 2.0 (Templ Migration)  
+**Last Updated**: July 2026  
+**Version**: 2.1 (matched to actual app rendering; daisyUI noted as future direction)  
 **Status**: Production Ready
