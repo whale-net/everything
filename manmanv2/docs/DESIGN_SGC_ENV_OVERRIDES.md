@@ -1,6 +1,7 @@
 # Design: Per-Instance (SGC) Env Var Overrides
 
-**Status**: Draft — design only, not scheduled.
+**Status**: Accepted 2026-07-18 — **Option B** (expand the patch system
+behind the convenience API). Not yet scheduled for implementation.
 **Problem owner**: Alex. **Written**: 2026-07-18.
 
 ## Problem
@@ -81,7 +82,7 @@ mechanism for all config (env, files, args) with explicit layers
   highest risk of stalling at the design stage while GC duplication
   continues.
 
-### Recommendation
+### Recommendation (accepted)
 
 **B, behind the thin convenience API below** — the UI and callers see
 "per-instance env overrides", the patch system is an implementation
@@ -130,8 +131,8 @@ On each Instances row in the game workspace (`91-v2-game-workspace`): an
 **Overrides** control opening an effective-env panel — three columns:
 key, config value (muted), instance override (editable input, empty = 
 inherit). Save calls `SetSGCEnvOverrides`. A count chip on the row
-(`2 overrides`) signals divergence from the config. Wireframe as
-`95-v2-instance-overrides` once this doc is agreed.
+(`2 overrides`) signals divergence from the config. Wireframed as
+`ui/design/wireframes/screens/95-v2-instance-overrides.html`.
 
 ### 5. Cleanup
 

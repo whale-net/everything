@@ -1,0 +1,71 @@
+<!-- wf: name="v2-instance-overrides" title="Proposal: Instance Overrides" -->
+<div class="breadcrumbs text-sm mb-4">
+  <ul><li><a href="#/v2-games">Games</a></li><li><a href="#/v2-game-workspace">Valheim</a></li><li>host-01 · vanilla</li></ul>
+</div>
+
+<div class="flex flex-col md:flex-row justify-between md:items-center gap-3 mb-6">
+  <div>
+    <h1 class="text-2xl md:text-3xl font-bold">Instance Overrides</h1>
+    <p class="text-sm opacity-70 mt-1">vanilla on host-01 · <span class="badge badge-soft badge-primary badge-sm">2 overrides</span></p>
+  </div>
+  <div class="flex gap-2">
+    <a href="#/v2-game-workspace" class="btn btn-success">Save</a>
+    <a href="#/v2-game-workspace" class="btn btn-secondary">Cancel</a>
+  </div>
+</div>
+
+<p class="wf-note mb-4">design: DESIGN_SGC_ENV_OVERRIDES.md (Option B) — edits write one env_vars patch at server_game_config level via SetSGCEnvOverrides; empty override = inherit config value. Restart required to apply.</p>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <div class="p-4 border-b border-base-300 flex justify-between items-center">
+      <h2 class="text-lg font-semibold">Environment</h2>
+      <span class="text-sm opacity-60">override wins over config value</span>
+    </div>
+    <table class="table">
+      <thead><tr><th>Key</th><th>Config value</th><th>Instance override</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="font-mono">SERVER_PORT</td>
+          <td class="font-mono opacity-50">2456</td>
+          <td><input type="text" class="input input-bordered input-sm font-mono w-44" value="2466"></td>
+          <td><span class="badge badge-soft badge-primary badge-sm">overridden</span></td>
+        </tr>
+        <tr>
+          <td class="font-mono">WORLD_NAME</td>
+          <td class="font-mono opacity-50">Midgard</td>
+          <td><input type="text" class="input input-bordered input-sm font-mono w-44" value="Midgard-2"></td>
+          <td><span class="badge badge-soft badge-primary badge-sm">overridden</span></td>
+        </tr>
+        <tr>
+          <td class="font-mono">SERVER_PUBLIC</td>
+          <td class="font-mono opacity-50">false</td>
+          <td><input type="text" class="input input-bordered input-sm font-mono w-44" placeholder="inherit"></td>
+          <td></td>
+        </tr>
+        <tr>
+          <td class="font-mono">PASSWORD</td>
+          <td class="font-mono opacity-50">****</td>
+          <td><input type="text" class="input input-bordered input-sm font-mono w-44" placeholder="inherit"></td>
+          <td></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="p-4 border-t border-base-300">
+      <button class="btn btn-sm btn-primary">+ Add instance-only variable</button>
+    </div>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md max-w-3xl">
+  <div class="card-body">
+    <h2 class="card-title text-lg">Effective environment <span class="text-sm font-normal opacity-60">(what the container gets)</span></h2>
+    <div class="mockup-code text-xs">
+      <pre><code>SERVER_PORT=2466    # instance override</code></pre>
+      <pre><code>WORLD_NAME=Midgard-2  # instance override</code></pre>
+      <pre><code>SERVER_PUBLIC=false</code></pre>
+      <pre><code>PASSWORD=****</code></pre>
+    </div>
+    <p class="wf-note mt-2">stretch (work plan §3): SERVER_PORT could be {{ .HostPort 2456 }} on the config, resolved per instance from port bindings — then this screen is rarely needed at all.</p>
+  </div>
+</div>
