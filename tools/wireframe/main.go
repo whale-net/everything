@@ -34,9 +34,12 @@ var pageTemplate string
 var themesCSS string
 
 type screen struct {
-	Name  string
-	Title string
-	Body  string
+	Name   string
+	Title  string
+	Body   string
+	Parent string // non-empty = rendered as a layer panel over the parent screen
+	Depth  int
+	Root   string // top-most base ancestor (for nav highlighting)
 }
 
 type pageData struct {
@@ -111,8 +114,15 @@ func run(dir, out, title string) error {
 			return fmt.Errorf("%s: screen name %q already used by %s", filepath.Base(p), s.Name, prev)
 		}
 		seen[s.Name] = filepath.Base(p)
-		s.Body = strings.Replace(shell, "<!-- wf:screen -->", s.Body, 1)
+		// Base screens get the app shell; layers render as panels over their
+		// parent, so the shell (nav etc.) must not repeat inside them.
+		if s.Parent == "" {
+			s.Body = strings.Replace(shell, "<!-- wf:screen -->", s.Body, 1)
+		}
 		screens = append(screens, s)
+	}
+	if err := resolveLayers(screens); err != nil {
+		return err
 	}
 
 	tmpl, err := template.New("page").Parse(pageTemplate)
@@ -154,8 +164,36 @@ func parseScreen(src string) (screen, error) {
 		title = name
 	}
 	return screen{
-		Name:  name,
-		Title: html.EscapeString(title),
-		Body:  strings.TrimSpace(strings.Replace(src, m[0], "", 1)),
+		Name:   name,
+		Title:  html.EscapeString(title),
+		Parent: attrs["parent"],
+		Body:   strings.TrimSpace(strings.Replace(src, m[0], "", 1)),
 	}, nil
+}
+
+// resolveLayers validates parent references and computes each layer's depth
+// and root base screen.
+func resolveLayers(screens []screen) error {
+	byName := map[string]*screen{}
+	for i := range screens {
+		byName[screens[i].Name] = &screens[i]
+	}
+	for i := range screens {
+		s := &screens[i]
+		depth, cur := 0, s
+		for cur.Parent != "" {
+			next, ok := byName[cur.Parent]
+			if !ok {
+				return fmt.Errorf("screen %q: parent %q does not exist", s.Name, cur.Parent)
+			}
+			depth++
+			if depth > len(screens) {
+				return fmt.Errorf("screen %q: parent cycle", s.Name)
+			}
+			cur = next
+		}
+		s.Depth = depth
+		s.Root = cur.Name
+	}
+	return nil
 }

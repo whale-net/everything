@@ -22,6 +22,12 @@ then terse daisyUI markup (`btn btn-primary`, `card`, `table`, `badge`,
 number-prefixes control ordering; first file is the default route. Annotate
 open design questions with `<p class="wf-note">…</p>`.
 
+Layering: `parent="other-screen"` in the metadata renders the screen as a
+panel over its parent (scrim/Esc closes). Design rule: keep few, dense
+base screens — routine operations inline; only complex editing gets a
+`parent=` drill-in layer. Layers skip the shell, so give them a heading
+and a close link to `#/<parent>`.
+
 ## Design standards (from manmanv2/ui/DESIGN_SYSTEM.md)
 
 - Action colors: create/edit/view = `btn-primary` (indigo); start/save/deploy =

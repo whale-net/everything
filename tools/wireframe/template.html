@@ -10,16 +10,22 @@
 <style>{{.ThemesCSS}}</style>
 </head>
 <body class="min-h-screen bg-base-200 text-base-content">
-{{range .Screens}}<section class="wf-screen" data-wf="{{.Name}}" data-wf-title="{{.Title}}" hidden>
+{{range .Screens}}{{if .Parent}}<section class="wf-screen wf-layer" data-wf="{{.Name}}" data-wf-title="{{.Title}}" data-wf-parent="{{.Parent}}" data-wf-root="{{.Root}}" style="--wf-depth: {{.Depth}}" hidden>
+<a class="wf-scrim" href="#/{{.Parent}}" aria-label="Close panel"></a>
+<div class="wf-panel">
+{{.Body}}
+</div>
+</section>
+{{else}}<section class="wf-screen" data-wf="{{.Name}}" data-wf-title="{{.Title}}" hidden>
 {{.Body}}
 </section>
-{{end}}
+{{end}}{{end}}
 <!-- kit chrome: screen index + theme cycle -->
 <div class="fixed bottom-4 right-4 z-50 flex gap-2">
   <div class="dropdown dropdown-top dropdown-end">
     <div tabindex="0" role="button" class="btn btn-sm btn-neutral shadow-lg">Screens</div>
-    <ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-box z-50 w-56 p-2 shadow-lg border border-base-300">
-      {{range .Screens}}<li><a href="#/{{.Name}}">{{.Title}}</a></li>
+    <ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-box z-[60] w-64 p-2 shadow-lg border border-base-300">
+      {{range .Screens}}<li><a href="#/{{.Name}}"{{if .Parent}} class="pl-6 opacity-80"{{end}}>{{if .Parent}}↳ {{end}}{{.Title}}</a></li>
       {{end}}
     </ul>
   </div>
@@ -28,18 +34,35 @@
 <script>
 (function () {
   var screens = Array.prototype.slice.call(document.querySelectorAll('.wf-screen'));
-  function show() {
+  var byName = {};
+  screens.forEach(function (s) { byName[s.dataset.wf] = s; });
+  function current() {
     var n = location.hash.replace(/^#\//, '');
-    var t = screens[0];
-    for (var i = 0; i < screens.length; i++) if (screens[i].dataset.wf === n) t = screens[i];
-    screens.forEach(function (s) { s.hidden = s !== t; });
+    return byName[n] || screens[0];
+  }
+  function show() {
+    var t = current();
+    // A layer renders over its ancestor chain, so unhide every ancestor too.
+    var visible = [t], p = t;
+    while (p.dataset.wfParent && byName[p.dataset.wfParent]) {
+      p = byName[p.dataset.wfParent];
+      visible.push(p);
+    }
+    screens.forEach(function (s) { s.hidden = visible.indexOf(s) < 0; });
     document.title = t.dataset.wfTitle + ' — ' + {{printf "%q" .Title}};
+    var active = '#/' + (t.dataset.wfRoot || t.dataset.wf);
     document.querySelectorAll('a[href^="#/"]').forEach(function (a) {
-      a.classList.toggle('menu-active', a.getAttribute('href') === '#/' + t.dataset.wf);
+      a.classList.toggle('menu-active', a.getAttribute('href') === active);
     });
-    window.scrollTo(0, 0);
+    if (t.classList.contains('wf-layer')) { t.scrollTop = 0; } else { window.scrollTo(0, 0); }
   }
   window.addEventListener('hashchange', show);
+  window.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      var t = current();
+      if (t.dataset.wfParent) location.hash = '#/' + t.dataset.wfParent;
+    }
+  });
   show();
 
   var themes = ['light', 'night', 'oled'];

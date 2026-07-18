@@ -37,6 +37,12 @@ Each fragment starts with a metadata comment, then plain daisyUI markup:
 Link between screens with `href="#/<name>"`. The assembler adds a floating
 screen index and theme switcher automatically.
 
+**Layers** (xbox-blade drill-ins): add `parent="other-screen"` to the
+metadata and the screen renders as a panel sliding over its parent instead
+of a full page — no app shell, scrim click or Esc tabs back out. Layers
+nest (a layer's parent may itself be a layer). Give the panel its own
+heading and a close link to `#/<parent>`.
+
 ## Adopting for a new app
 
 Create `<app>/design/wireframes/screens/` (plus `_shell.html`), write
