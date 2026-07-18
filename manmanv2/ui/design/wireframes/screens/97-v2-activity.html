@@ -1,0 +1,63 @@
+<!-- wf: name="v2-activity" title="Proposal: Activity" -->
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg">
+  <h1 class="text-2xl md:text-3xl font-bold mb-2">Activity</h1>
+  <p class="text-sm opacity-80">Live sessions and history across all games</p>
+</div>
+
+<p class="wf-note mb-4">proposal: replaces the Sessions section — starting happens in the game workspace, so this page is observation only. In the v2 nav: Dashboard · Games · Activity · Infrastructure · Workshop.</p>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <div class="p-4 border-b border-base-300"><h2 class="text-lg font-semibold">Live now</h2></div>
+    <table class="table">
+      <thead><tr><th>Game</th><th>Server</th><th>Config</th><th>Players</th><th>Uptime</th><th class="text-right">Actions</th></tr></thead>
+      <tbody>
+        <tr class="hover">
+          <td><a href="#/v2-game-workspace" class="link link-primary">Valheim</a></td>
+          <td>host-01</td><td>vanilla</td><td>4/10</td><td>4h 12m</td>
+          <td class="text-right"><a href="#/session-detail" class="btn btn-sm btn-primary">Logs</a> <button class="btn btn-sm btn-error">Stop</button></td>
+        </tr>
+        <tr class="hover">
+          <td><a href="#/v2-game-workspace" class="link link-primary">Valheim</a></td>
+          <td>host-03</td><td>modded-plus</td><td>2/10</td><td>1h 03m</td>
+          <td class="text-right"><a href="#/session-detail" class="btn btn-sm btn-primary">Logs</a> <button class="btn btn-sm btn-error">Stop</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md">
+  <div class="card-body p-0">
+    <div class="flex flex-col md:flex-row justify-between md:items-center gap-3 p-4 border-b border-base-300">
+      <h2 class="text-lg font-semibold">History</h2>
+      <div class="flex gap-2">
+        <select class="select select-bordered select-sm"><option>All games</option><option>Valheim</option><option>CS2</option></select>
+        <select class="select select-bordered select-sm"><option>Any status</option><option>Stopped</option><option>Crashed</option></select>
+      </div>
+    </div>
+    <table class="table">
+      <thead><tr><th>Game</th><th>Server · Config</th><th>Status</th><th>Started</th><th>Duration</th><th class="text-right"></th></tr></thead>
+      <tbody>
+        <tr class="hover">
+          <td>CS2</td><td>host-02 · competitive</td>
+          <td><span class="badge badge-soft badge-error badge-sm">Crashed</span></td>
+          <td>Today 11:47</td><td>2h 04m</td>
+          <td class="text-right"><a href="#/session-detail" class="btn btn-sm btn-primary">Details</a></td>
+        </tr>
+        <tr class="hover">
+          <td>Palworld</td><td>host-02 · pvp-s3</td>
+          <td><span class="badge badge-soft badge-neutral badge-sm">Stopped</span></td>
+          <td>Yesterday 19:10</td><td>7h 23m</td>
+          <td class="text-right"><a href="#/session-detail" class="btn btn-sm btn-primary">Details</a></td>
+        </tr>
+        <tr class="hover">
+          <td>Valheim</td><td>host-01 · vanilla</td>
+          <td><span class="badge badge-soft badge-neutral badge-sm">Stopped</span></td>
+          <td>Jul 14 09:12</td><td>1d 13h</td>
+          <td class="text-right"><a href="#/session-detail" class="btn btn-sm btn-primary">Details</a></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
