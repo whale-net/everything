@@ -1,0 +1,46 @@
+<!-- wf: name="servers" title="Servers" -->
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg flex flex-col md:flex-row justify-between md:items-center gap-4">
+  <div>
+    <h1 class="text-2xl md:text-3xl font-bold mb-2">Servers</h1>
+    <p class="text-sm opacity-80">Bare-metal hosts running the manman host manager</p>
+  </div>
+  <button class="btn bg-base-100 text-primary border-0 shadow-md">+ Register Server</button>
+</div>
+
+<div class="card bg-base-100 shadow-md overflow-x-auto">
+  <table class="table">
+    <thead>
+      <tr><th>Name</th><th>Host</th><th>Status</th><th>Sessions</th><th class="text-right">Actions</th></tr>
+    </thead>
+    <tbody>
+      <tr class="hover">
+        <td class="font-medium">host-01</td>
+        <td class="font-mono text-sm">10.0.1.10</td>
+        <td><span class="badge badge-success">Online</span></td>
+        <td>3</td>
+        <td class="text-right"><a href="#/server-detail" class="btn btn-sm btn-primary">View</a></td>
+      </tr>
+      <tr class="hover">
+        <td class="font-medium">host-02</td>
+        <td class="font-mono text-sm">10.0.1.11</td>
+        <td><span class="badge badge-success">Online</span></td>
+        <td>4</td>
+        <td class="text-right"><a href="#/server-detail" class="btn btn-sm btn-primary">View</a></td>
+      </tr>
+      <tr class="hover">
+        <td class="font-medium">host-03</td>
+        <td class="font-mono text-sm">10.0.1.12</td>
+        <td><span class="badge badge-warning">Starting</span></td>
+        <td>0</td>
+        <td class="text-right"><a href="#/server-detail" class="btn btn-sm btn-primary">View</a></td>
+      </tr>
+      <tr class="hover">
+        <td class="font-medium">host-04</td>
+        <td class="font-mono text-sm">10.0.1.13</td>
+        <td><span class="badge badge-neutral">Offline</span></td>
+        <td>—</td>
+        <td class="text-right"><a href="#/server-detail" class="btn btn-sm btn-primary">View</a></td>
+      </tr>
+    </tbody>
+  </table>
+</div>

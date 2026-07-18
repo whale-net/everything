@@ -1,0 +1,13 @@
+load("@rules_go//go:def.bzl", "go_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+go_binary(
+    name = "wireframe",
+    srcs = ["main.go"],
+    embedsrcs = [
+        "template.html",
+        "themes.css",
+    ],
+    importpath = "github.com/whale-net/everything/tools/wireframe",
+)

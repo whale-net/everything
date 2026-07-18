@@ -12,6 +12,7 @@ Active game server orchestration platform. Split-plane architecture: cloud contr
 
 - [ui/README.md](ui/README.md) — UI overview and handler patterns
 - [ui/DESIGN_SYSTEM.md](ui/DESIGN_SYSTEM.md) — HTMX + Go template design system and component library
+- [ui/design/wireframes/README.md](ui/design/wireframes/README.md) — Clickable design wireframes for the UI redesign (assembled by `//tools/wireframe`)
 - [ui/HANDLER_MIGRATION.md](ui/HANDLER_MIGRATION.md) — Migrating handlers to the current pattern
 - [processor/README.md](processor/README.md) — Event processor overview
 - [processor/VERIFICATION.md](processor/VERIFICATION.md) — Verifying processor behavior

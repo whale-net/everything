@@ -473,6 +473,7 @@ When updating a page to the design system:
 
 ## Resources
 
+- **Wireframes**: `manmanv2/ui/design/wireframes/` — clickable design mockups (assembled by `//tools/wireframe`; workflow in `.claude/skills/wireframe/SKILL.md`)
 - **Component Library**: `manmanv2/ui/components/ui.templ`
 - **Example Pages**: `manmanv2/ui/pages/*.templ`
 - **README**: `manmanv2/ui/README.md` (includes critical gotchas)
