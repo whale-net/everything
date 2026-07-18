@@ -170,6 +170,11 @@ inherit). Save calls `SetSGCEnvOverrides`. A count chip on the row
 
 ## Related: SGC as a general customization layer
 
+**Terminology (agreed 2026-07-18)**: SGC is rebranded **"Deployment"**
+in all user-facing surfaces — the entity trio is *Game → Game Config →
+Deployment*. Code, schema, and this doc keep `sgc` as the internal
+name; rename opportunistically, don't mass-migrate.
+
 Agreed direction (2026-07-18): the SGC is the *customization layer* over
 the GC baseline — "deploy a common GC, then configure further per SGC".
 Env overrides (this doc) are one instance of that model; workshop
