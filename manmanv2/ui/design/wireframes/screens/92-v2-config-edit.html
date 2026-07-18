@@ -1,0 +1,107 @@
+<!-- wf: name="v2-config-edit" title="Proposal: Config Editor" -->
+<div class="breadcrumbs text-sm mb-4">
+  <ul><li><a href="#/v2-games">Games</a></li><li><a href="#/v2-game-workspace">Valheim</a></li><li>vanilla</li></ul>
+</div>
+
+<div class="flex justify-between items-center mb-6">
+  <h1 class="text-2xl md:text-3xl font-bold">Edit Configuration: vanilla</h1>
+  <div class="flex gap-2">
+    <a href="#/v2-game-workspace" class="btn btn-success">Save</a>
+    <a href="#/v2-game-workspace" class="btn btn-secondary">Cancel</a>
+  </div>
+</div>
+
+<p class="wf-note mb-4">proposal: everything editable in one place — today env/volumes are editable but ports are not, and this all lives on a separate config-detail page.</p>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body gap-4">
+    <h2 class="card-title text-lg">Basics</h2>
+    <div class="grid md:grid-cols-2 gap-4">
+      <label class="form-control">
+        <span class="label-text font-medium mb-1">Name</span>
+        <input type="text" class="input input-bordered" value="vanilla">
+      </label>
+      <label class="form-control">
+        <span class="label-text font-medium mb-1">Docker Image</span>
+        <input type="text" class="input input-bordered font-mono" value="lloesche/valheim-server:latest">
+      </label>
+    </div>
+    <label class="form-control">
+      <span class="label-text font-medium mb-1">Args Template</span>
+      <textarea class="textarea textarea-bordered font-mono" rows="2">-name midgard -world Midgard -password ****</textarea>
+    </label>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body">
+    <h2 class="card-title text-lg">Ports <span class="badge badge-soft badge-primary badge-sm">new</span></h2>
+    <table class="table table-sm">
+      <thead><tr><th>Container Port(s)</th><th>Protocol</th><th class="text-right"></th></tr></thead>
+      <tbody>
+        <tr>
+          <td><input type="text" class="input input-bordered input-sm font-mono w-36" value="2456-2458"></td>
+          <td><select class="select select-bordered select-sm w-24"><option>udp</option><option>tcp</option><option>both</option></select></td>
+          <td class="text-right"><button class="btn btn-sm btn-error">Remove</button></td>
+        </tr>
+      </tbody>
+    </table>
+    <div><button class="btn btn-sm btn-primary">+ Add Port</button></div>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body">
+    <h2 class="card-title text-lg">Environment Variables</h2>
+    <table class="table table-sm">
+      <tbody>
+        <tr>
+          <td><input type="text" class="input input-bordered input-sm font-mono" value="SERVER_PUBLIC"></td>
+          <td><input type="text" class="input input-bordered input-sm font-mono" value="false"></td>
+          <td class="text-right"><button class="btn btn-sm btn-error">Remove</button></td>
+        </tr>
+        <tr>
+          <td><input type="text" class="input input-bordered input-sm font-mono" value="WORLD_NAME"></td>
+          <td><input type="text" class="input input-bordered input-sm font-mono" value="Midgard"></td>
+          <td class="text-right"><button class="btn btn-sm btn-error">Remove</button></td>
+        </tr>
+      </tbody>
+    </table>
+    <div><button class="btn btn-sm btn-primary">+ Add Variable</button></div>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body">
+    <h2 class="card-title text-lg">Volumes</h2>
+    <div class="border border-base-300 rounded-box p-4 mb-3">
+      <div class="grid md:grid-cols-4 gap-3 items-end">
+        <label class="form-control">
+          <span class="label-text font-medium mb-1">Name</span>
+          <input type="text" class="input input-bordered input-sm" value="data">
+        </label>
+        <label class="form-control">
+          <span class="label-text font-medium mb-1">Container Path</span>
+          <input type="text" class="input input-bordered input-sm font-mono" value="/config">
+        </label>
+        <label class="form-control">
+          <span class="label-text font-medium mb-1">Host Subpath</span>
+          <input type="text" class="input input-bordered input-sm font-mono" value="valheim/vanilla">
+        </label>
+        <label class="label cursor-pointer justify-start gap-2">
+          <input type="checkbox" class="checkbox checkbox-sm">
+          <span class="label-text">Read-only</span>
+        </label>
+      </div>
+      <div class="divider my-2 text-xs opacity-60">Backups for this volume</div>
+      <div class="flex flex-wrap items-end gap-3">
+        <select class="select select-bordered select-sm"><option>hourly</option><option>daily</option><option>weekly</option></select>
+        <input type="text" class="input input-bordered input-sm font-mono w-40" value="worlds/" placeholder="path within volume">
+        <label class="label cursor-pointer gap-2"><input type="checkbox" class="toggle toggle-success toggle-sm" checked><span class="label-text">Enabled</span></label>
+        <button class="btn btn-sm btn-error ml-auto">Remove Volume</button>
+      </div>
+    </div>
+    <div><button class="btn btn-sm btn-primary">+ Add Volume</button></div>
+    <p class="wf-note mt-2">volumes carry their backup config inline — no separate backup-configs page; workshop install targets reference these volumes by name (see Workshop tab).</p>
+  </div>
+</div>

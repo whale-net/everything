@@ -1,0 +1,78 @@
+<!-- wf: name="v2-game-workshop" title="Proposal: Game Workshop Tab" -->
+<div class="breadcrumbs text-sm mb-4">
+  <ul><li><a href="#/v2-games">Games</a></li><li>Valheim</li></ul>
+</div>
+
+<div class="flex flex-col md:flex-row justify-between md:items-center gap-3 mb-6">
+  <div class="flex items-center gap-3">
+    <h1 class="text-2xl md:text-3xl font-bold">Valheim</h1>
+    <span class="badge badge-soft badge-success">2 running</span>
+  </div>
+  <button class="btn btn-primary">Edit Game</button>
+</div>
+
+<div role="tablist" class="tabs tabs-box mb-6 w-fit">
+  <a href="#/v2-game-workspace" role="tab" class="tab">Overview</a>
+  <a role="tab" class="tab">Actions</a>
+  <a href="#/v2-game-workshop" role="tab" class="tab tab-active">Workshop</a>
+  <a role="tab" class="tab">Settings</a>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <div class="p-4 border-b border-base-300"><h2 class="text-lg font-semibold">Attached Libraries</h2></div>
+    <table class="table">
+      <thead><tr><th>Library</th><th>Install Target</th><th>Applied To</th><th class="text-right">Actions</th></tr></thead>
+      <tbody>
+        <tr class="hover">
+          <td><a href="#/workshop-library-detail" class="link link-primary">Essential Maps</a> <span class="opacity-60 text-sm">12 addons</span></td>
+          <td><span class="badge badge-ghost badge-sm font-mono">data</span> <span class="font-mono text-sm">valheim/maps/</span></td>
+          <td>all instances</td>
+          <td class="text-right"><button class="btn btn-sm btn-secondary">Change Target</button> <button class="btn btn-sm btn-error">Detach</button></td>
+        </tr>
+        <tr class="hover">
+          <td><a href="#/workshop-library-detail" class="link link-primary">QoL Plugins</a> <span class="opacity-60 text-sm">7 addons</span></td>
+          <td><span class="badge badge-ghost badge-sm font-mono">data</span> <span class="font-mono text-sm">valheim/BepInEx/plugins/</span></td>
+          <td>modded-plus only</td>
+          <td class="text-right"><button class="btn btn-sm btn-secondary">Change Target</button> <button class="btn btn-sm btn-error">Detach</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md max-w-3xl">
+  <div class="card-body gap-4">
+    <h2 class="card-title text-lg">Attach Library</h2>
+    <div class="grid md:grid-cols-2 gap-4">
+      <label class="form-control">
+        <span class="label-text font-medium mb-1">Library</span>
+        <select class="select select-bordered"><option>Choose library…</option><option>Essential Maps</option><option>QoL Plugins</option><option>L4D2 Campaigns</option></select>
+      </label>
+      <label class="form-control">
+        <span class="label-text font-medium mb-1">Apply to</span>
+        <select class="select select-bordered"><option>All instances</option><option>Config: vanilla</option><option>Config: modded-plus</option></select>
+      </label>
+    </div>
+    <fieldset class="border border-base-300 rounded-box p-4">
+      <legend class="text-sm font-medium px-2">Install target <span class="badge badge-soft badge-primary badge-sm">new</span></legend>
+      <label class="label cursor-pointer justify-start gap-3">
+        <input type="radio" name="target" class="radio radio-sm" checked>
+        <span class="label-text">Path preset: <b>Maps</b> — <span class="badge badge-ghost badge-sm font-mono">data</span> <span class="font-mono text-sm">valheim/maps/</span></span>
+      </label>
+      <label class="label cursor-pointer justify-start gap-3">
+        <input type="radio" name="target" class="radio radio-sm">
+        <span class="label-text">Path preset: <b>Plugins</b> — <span class="badge badge-ghost badge-sm font-mono">data</span> <span class="font-mono text-sm">valheim/BepInEx/plugins/</span></span>
+      </label>
+      <label class="label cursor-pointer justify-start gap-3">
+        <input type="radio" name="target" class="radio radio-sm">
+        <span class="label-text flex items-center gap-2">Custom:
+          <select class="select select-bordered select-sm w-28"><option>data</option></select>
+          <input type="text" class="input input-bordered input-sm font-mono w-52" placeholder="path within volume">
+        </span>
+      </label>
+    </fieldset>
+    <div><button class="btn btn-success">Attach</button></div>
+    <p class="wf-note">gap being fixed: today add-library on an SGC has no volume/path selection — install target is implicit. Here it's an explicit volume + path choice, defaulting to the game's path presets; volumes come from the config editor.</p>
+  </div>
+</div>
