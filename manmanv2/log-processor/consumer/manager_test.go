@@ -10,6 +10,12 @@ import (
 
 // newTestConsumer builds a SessionConsumer without RabbitMQ for unit testing.
 func newTestConsumer(sessionID int64, bufferSize int) *SessionConsumer {
+	return newTestConsumerWithLifecycle(sessionID, bufferSize, false)
+}
+
+// newTestConsumerWithLifecycle builds a SessionConsumer without RabbitMQ, allowing
+// the lifecycleManaged flag to be set explicitly for reap-exemption tests.
+func newTestConsumerWithLifecycle(sessionID int64, bufferSize int, lifecycleManaged bool) *SessionConsumer {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -17,12 +23,13 @@ func newTestConsumer(sessionID int64, bufferSize int) *SessionConsumer {
 		close(done)
 	}()
 	return &SessionConsumer{
-		sessionID:   sessionID,
-		subscribers: make(map[chan *manmanpb.LogMessage]struct{}),
-		cancel:      cancel,
-		done:        done,
-		logBuffer:   make([]*manmanpb.LogMessage, bufferSize),
-		bufferSize:  bufferSize,
+		sessionID:        sessionID,
+		subscribers:      make(map[chan *manmanpb.LogMessage]struct{}),
+		cancel:           cancel,
+		done:             done,
+		logBuffer:        make([]*manmanpb.LogMessage, bufferSize),
+		bufferSize:       bufferSize,
+		lifecycleManaged: lifecycleManaged,
 	}
 }
 
@@ -217,6 +224,27 @@ func TestReapIdleConsumers(t *testing.T) {
 	}
 	if _, exists := m.consumers[3]; !exists {
 		t.Error("active consumer should not have been reaped")
+	}
+}
+
+// TestLifecycleManagedConsumerNotReaped verifies that a consumer created for a
+// still-running session is never reaped on viewer idleness alone, even when
+// idle far beyond idleConsumerTTL. Lifecycle-managed consumers are only
+// removed via the explicit DeleteConsumerForSession call on session end, so
+// the RabbitMQ queue stays actively drained (and its TTL never races a
+// reconnect) for as long as the session is alive.
+func TestLifecycleManagedConsumerNotReaped(t *testing.T) {
+	m := newTestManager()
+
+	longIdle := newTestConsumerWithLifecycle(1, 10, true)
+	longIdle.idleSince = time.Now().Add(-24 * time.Hour)
+
+	m.consumers[1] = longIdle
+
+	m.reapIdleConsumers()
+
+	if _, exists := m.consumers[1]; !exists {
+		t.Error("lifecycle-managed consumer should not have been reaped regardless of idle duration")
 	}
 }
 

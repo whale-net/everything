@@ -37,6 +37,13 @@ type SessionConsumer struct {
 	// Zero value means the consumer has active subscribers.
 	idleSince time.Time
 
+	// lifecycleManaged is true if the session was "running" at consumer-creation
+	// time. Such consumers are exempt from reapIdleConsumers: they are only
+	// removed via the explicit DeleteConsumerForSession call on session end,
+	// so the RabbitMQ queue is always being actively drained while the game
+	// session is alive, regardless of whether any UI viewer is subscribed.
+	lifecycleManaged bool
+
 	// Ring buffer for recent logs
 	logBuffer       []*manmanpb.LogMessage
 	bufferSize      int
@@ -54,7 +61,7 @@ type Manager struct {
 	config        *ConsumerConfig
 	grpcClient    manmanpb.ManManAPIClient
 	archiver      Archiver
-	logsProcessed int64      // Total logs processed (atomic)
+	logsProcessed int64 // Total logs processed (atomic)
 	statsCtx      context.Context
 	statsCancel   context.CancelFunc
 	statsWg       sync.WaitGroup
@@ -208,18 +215,19 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 
 	bufferSize := 500 // Keep last 500 log messages in memory
 	sc := &SessionConsumer{
-		sessionID:     sessionID,
-		sgcID:         sessionResp.Session.ServerGameConfigId,
-		queueName:     queueName,
-		consumer:      consumer,
-		subscribers:   make(map[chan *manmanpb.LogMessage]struct{}),
-		cancel:        cancel, // This cancel is for the consumerCtx
-		done:          make(chan struct{}),
-		logsProcessed: &m.logsProcessed,
-		logBuffer:     make([]*manmanpb.LogMessage, bufferSize),
-		bufferSize:    bufferSize,
-		bufferIndex:   0,
-		bufferFull:    false,
+		sessionID:        sessionID,
+		sgcID:            sessionResp.Session.ServerGameConfigId,
+		queueName:        queueName,
+		consumer:         consumer,
+		subscribers:      make(map[chan *manmanpb.LogMessage]struct{}),
+		cancel:           cancel, // This cancel is for the consumerCtx
+		done:             make(chan struct{}),
+		logsProcessed:    &m.logsProcessed,
+		lifecycleManaged: sessionResp.Session.Status == "running",
+		logBuffer:        make([]*manmanpb.LogMessage, bufferSize),
+		bufferSize:       bufferSize,
+		bufferIndex:      0,
+		bufferFull:       false,
 	}
 
 	// Seed with any logs retained from a previous consumer reap so reconnecting
@@ -228,7 +236,6 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 		sc.seedBuffer(retained)
 		delete(m.retainedLogs, sessionID)
 	}
-
 
 	// Start consuming in background using the detached context
 	go sc.consumeLoop(consumerCtx, m.config.DebugLogOutput, m.archiver)
@@ -541,6 +548,9 @@ func (m *Manager) reapIdleConsumers() {
 
 	now := time.Now()
 	for sessionID, c := range m.consumers {
+		if c.lifecycleManaged {
+			continue
+		}
 		c.mu.RLock()
 		idle := !c.idleSince.IsZero() && now.Sub(c.idleSince) > idleConsumerTTL
 		c.mu.RUnlock()
