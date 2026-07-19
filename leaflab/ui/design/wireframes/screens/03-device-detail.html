@@ -1,0 +1,95 @@
+<!-- wf: name="device-detail" title="Device: leaflab-a4cf1234abcd" -->
+<div class="breadcrumbs text-sm mb-4">
+  <ul><li><a href="#/devices">Devices</a></li><li>leaflab-a4cf1234abcd</li></ul>
+</div>
+
+<div class="flex justify-between items-center mb-6">
+  <h1 class="text-2xl md:text-3xl font-bold">leaflab-a4cf1234abcd</h1>
+  <a href="#/device-edit-config" class="btn btn-primary btn-sm">Edit Config</a>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body">
+    <h2 class="card-title text-lg">Device Manifest</h2>
+    <table class="table table-sm">
+      <tbody>
+        <tr><td class="opacity-60 w-48">Status</td><td><span class="badge badge-soft badge-success badge-sm">Online</span></td></tr>
+        <tr><td class="opacity-60">Device ID</td><td class="font-mono text-xs">leaflab-a4cf1234abcd</td></tr>
+        <tr><td class="opacity-60">Board Type</td><td>ESP32-S3 (WROOM)</td></tr>
+        <tr><td class="opacity-60">Firmware</td><td class="font-mono text-xs">v1.4.2+build.876</td></tr>
+        <tr><td class="opacity-60">Last Seen</td><td class="opacity-70 text-sm">now</td></tr>
+        <tr><td class="opacity-60">Region</td><td><a href="#/regions" class="link link-primary">Greenhouse A / Shelf 1 / Pot Row B</a></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <div class="flex justify-between items-center p-4 border-b border-base-300">
+      <h2 class="text-lg font-semibold">Sensor Configurations</h2>
+      <span class="text-sm opacity-60">active via DeviceConfig</span>
+    </div>
+    <table class="table">
+      <thead><tr><th>Sensor ID</th><th>Type</th><th>Name</th><th>Enabled</th><th>Poll Interval</th></tr></thead>
+      <tbody>
+        <tr class="hover"><td class="font-mono text-xs">bh1750-1</td><td>BH1750</td><td>Illuminance</td><td><span class="badge badge-soft badge-success badge-sm">Yes</span></td><td>2000 ms</td></tr>
+        <tr class="hover"><td class="font-mono text-xs">sht3x-temp-1</td><td>SHT3x</td><td>Temp – Pot A</td><td><span class="badge badge-soft badge-success badge-sm">Yes</span></td><td>5000 ms</td></tr>
+        <tr class="hover"><td class="font-mono text-xs">sht3x-hum-1</td><td>SHT3x</td><td>Humidity – Pot A</td><td><span class="badge badge-soft badge-success badge-sm">Yes</span></td><td>5000 ms</td></tr>
+        <tr class="hover"><td class="font-mono text-xs">sht3x-temp-2</td><td>SHT3x</td><td>Temp – Shelf 1</td><td><span class="badge badge-soft badge-success badge-sm">Yes</span></td><td>5000 ms</td></tr>
+        <tr class="hover"><td class="font-mono text-xs">sht3x-hum-2</td><td>SHT3x</td><td>Humidity – Shelf 1</td><td><span class="badge badge-soft badge-warning badge-sm">No</span></td><td>—</td></tr>
+        <tr class="hover"><td class="font-mono text-xs">sht3x-temp-3</td><td>SHT3x</td><td>Temp – Ambient</td><td><span class="badge badge-soft badge-success badge-sm">Yes</span></td><td>10000 ms</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <div class="p-4 border-b border-base-300"><h2 class="text-lg font-semibold">Config History (SCD2)</h2></div>
+    <table class="table table-sm">
+      <thead><tr><th>Version</th><th>Applied</th><th>Sensors enabled</th><th>Changes</th></tr></thead>
+      <tbody>
+        <tr><td class="font-mono text-xs">#5</td><td>2026-07-19 08:34</td><td>4 / 5</td><td>Disabled sht3x-hum-2</td></tr>
+        <tr><td class="font-mono text-xs">#4</td><td>2026-07-15 14:22</td><td>5 / 5</td><td>Poll interval → 2 s (BH1750)</td></tr>
+        <tr><td class="font-mono text-xs">#3</td><td>2026-07-10 09:01</td><td>4 / 5</td><td>Simplified config, removed mock-sensor</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <div class="flex justify-between items-center p-4 border-b border-base-300">
+      <h2 class="text-lg font-semibold">Recent Readings</h2>
+      <a href="#/readings" class="btn btn-sm btn-primary">All readings</a>
+    </div>
+    <table class="table table-sm">
+      <thead><tr><th>Sensor</th><th>Type</th><th>Value</th><th>Timestamp</th></tr></thead>
+      <tbody>
+        <tr><td class="font-mono text-xs">bh1750-1</td><td>BH1750</td><td>423.7 lux</td><td class="opacity-60 text-xs">now</td></tr>
+        <tr><td class="font-mono text-xs">sht3x-temp-1</td><td>SHT3x</td><td>22.4 °C</td><td class="opacity-60 text-xs">now</td></tr>
+        <tr><td class="font-mono text-xs">sht3x-hum-1</td><td>SHT3x</td><td>68.1 %</td><td class="opacity-60 text-xs">now</td></tr>
+        <tr><td class="font-mono text-xs">sht3x-temp-2</td><td>SHT3x</td><td>24.1 °C</td><td class="opacity-60 text-xs">3s ago</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card bg-base-100 border-2 border-error/40 shadow-md mt-8">
+  <div class="bg-error/10 px-6 py-4 border-b-2 border-error/40 rounded-t-box">
+    <h3 class="text-lg font-semibold text-error">Danger Zone</h3>
+  </div>
+  <div class="card-body gap-3">
+    <div>
+      <h4 class="font-semibold">Delete this device</h4>
+      <p class="text-sm opacity-70 mb-2">Removes the device and all its sensor configs. This cannot be undone.</p>
+      <button class="btn btn-error btn-sm">Delete Device</button>
+    </div>
+    <div>
+      <h4 class="font-semibold">Reset config to defaults</h4>
+      <p class="text-sm opacity-70 mb-2">Reverts all sensor configs to factory defaults for this board.</p>
+      <button class="btn btn-error btn-outline btn-sm">Reset Config</button>
+    </div>
+  </div>
+</div>
