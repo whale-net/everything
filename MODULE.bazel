@@ -312,6 +312,7 @@ use_repo(
     "com_github_gorilla_sessions",
     "com_github_inconshreveable_mousetrap",
     "com_github_jackc_pgx_v5",
+    "com_github_microsoft_go_winio",
     "com_github_moby_docker_image_spec",
     "com_github_opencontainers_go_digest",
     "com_github_opencontainers_image_spec",
