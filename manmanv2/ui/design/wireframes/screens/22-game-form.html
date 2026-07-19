@@ -1,0 +1,37 @@
+<!-- wf: name="game-form" title="Create Game" -->
+<div class="breadcrumbs text-sm mb-4">
+  <ul><li><a href="#/games">Games</a></li><li>Create Game</li></ul>
+</div>
+
+<h1 class="text-2xl md:text-3xl font-bold mb-6">Create Game</h1>
+
+<div class="card bg-base-100 shadow-md max-w-2xl">
+  <div class="card-body gap-4">
+    <label class="form-control">
+      <span class="label-text font-medium mb-1">Name</span>
+      <input type="text" class="input input-bordered" placeholder="e.g., Valheim">
+    </label>
+    <label class="form-control">
+      <span class="label-text font-medium mb-1">Steam App ID</span>
+      <input type="text" class="input input-bordered" placeholder="Optional">
+    </label>
+    <div class="grid md:grid-cols-2 gap-4">
+      <label class="form-control">
+        <span class="label-text font-medium mb-1">Genre</span>
+        <input type="text" class="input input-bordered" placeholder="e.g., Survival, RPG, FPS">
+      </label>
+      <label class="form-control">
+        <span class="label-text font-medium mb-1">Publisher</span>
+        <input type="text" class="input input-bordered" placeholder="Optional">
+      </label>
+    </div>
+    <label class="form-control">
+      <span class="label-text font-medium mb-1">Tags</span>
+      <input type="text" class="input input-bordered" placeholder="e.g., multiplayer, sandbox, open-world">
+    </label>
+    <div class="flex gap-2 mt-2">
+      <a href="#/game-detail" class="btn btn-success">Save Game</a>
+      <a href="#/games" class="btn btn-secondary">Cancel</a>
+    </div>
+  </div>
+</div>

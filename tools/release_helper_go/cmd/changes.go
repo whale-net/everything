@@ -158,6 +158,15 @@ func filterBuildFiles(files []string) []string {
 			strings.HasSuffix(f, "copilot-instructions.md") {
 			continue
 		}
+		switch f {
+		case "MODULE.bazel", "MODULE.bazel.lock",
+			"WORKSPACE", "WORKSPACE.bzlmod", "WORKSPACE.bazel":
+			continue
+		}
+		if strings.HasPrefix(f, ".bazel") || strings.HasSuffix(f, ".bzl") ||
+			strings.HasSuffix(f, ".lock") {
+			continue
+		}
 		out = append(out, f)
 	}
 	return out

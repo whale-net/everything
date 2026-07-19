@@ -1,0 +1,46 @@
+<!-- wf: name="dashboard" title="Dashboard" -->
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg">
+  <h1 class="text-2xl md:text-3xl font-bold mb-2">Dashboard</h1>
+  <p class="text-sm opacity-80">Fleet overview across all hosts</p>
+</div>
+
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">Servers</div>
+    <div class="stat-value text-primary">4</div>
+    <div class="stat-desc">3 online</div>
+  </div>
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">Active sessions</div>
+    <div class="stat-value text-success">7</div>
+    <div class="stat-desc">2 starting</div>
+  </div>
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">Games</div>
+    <div class="stat-value">12</div>
+    <div class="stat-desc">31 configs</div>
+  </div>
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">Alerts</div>
+    <div class="stat-value text-error">1</div>
+    <div class="stat-desc">cs2-comp crashed</div>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md">
+  <div class="card-body p-0">
+    <div class="flex justify-between items-center p-4 border-b border-base-300">
+      <h2 class="text-lg font-semibold">Recent activity</h2>
+      <a href="#/sessions" class="btn btn-sm btn-primary">All sessions</a>
+    </div>
+    <table class="table">
+      <tbody>
+        <tr><td>valheim-main started on <span class="font-mono">host-01</span></td><td class="text-right opacity-60">2m ago</td></tr>
+        <tr><td>cs2-comp crashed — <a href="#/server-detail" class="link link-error">view server</a></td><td class="text-right opacity-60">14m ago</td></tr>
+        <tr><td>Palworld config <span class="font-mono">pvp-s3</span> deployed</td><td class="text-right opacity-60">1h ago</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="wf-note mt-4">note: stat tiles could deep-link to filtered views — TBD</p>

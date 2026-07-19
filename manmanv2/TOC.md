@@ -12,6 +12,7 @@ Active game server orchestration platform. Split-plane architecture: cloud contr
 
 - [ui/README.md](ui/README.md) — UI overview and handler patterns
 - [ui/DESIGN_SYSTEM.md](ui/DESIGN_SYSTEM.md) — HTMX + Go template design system and component library
+- [ui/design/wireframes/README.md](ui/design/wireframes/README.md) — Clickable design wireframes for the UI redesign (assembled by `//tools/wireframe`)
 - [ui/HANDLER_MIGRATION.md](ui/HANDLER_MIGRATION.md) — Migrating handlers to the current pattern
 - [processor/README.md](processor/README.md) — Event processor overview
 - [processor/VERIFICATION.md](processor/VERIFICATION.md) — Verifying processor behavior
@@ -34,6 +35,11 @@ Active game server orchestration platform. Split-plane architecture: cloud contr
 
 - [testdata/README.md](testdata/README.md) — Test fixtures and test data patterns
 - [testdata/BAZEL_LIMITATION.md](testdata/BAZEL_LIMITATION.md) — Known Bazel limitation with testdata
+
+## Design Docs
+
+- [docs/DESIGN_UI_REDESIGN.md](docs/DESIGN_UI_REDESIGN.md) — UI redesign: decisions, assumed-but-unbuilt functionality, TBDs (draft; wireframes are layout source of truth)
+- [docs/DESIGN_SGC_ENV_OVERRIDES.md](docs/DESIGN_SGC_ENV_OVERRIDES.md) — Per-deployment env var overrides: Option B accepted, not scheduled
 
 ## Archive
 

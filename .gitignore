@@ -182,3 +182,6 @@ dmypy.json
 
 # profiling data
 .prof
+
+# Wireframe kit output (regenerate with: bazel run //tools/wireframe)
+**/design/wireframes/preview.html

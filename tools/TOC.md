@@ -10,6 +10,7 @@ Build, release, and development tooling.
 
 ## Local Development
 
+- [wireframe/README.md](wireframe/README.md) — UI wireframe kit: assembles daisyUI screen fragments into a clickable preview.html for design iteration
 - [tilt/README.md](tilt/README.md) — Tilt configuration for local Kubernetes development
 - [tilt-mcp/README.md](tilt-mcp/README.md) — Tilt MCP integration for AI-assisted development
 - [tilt-mcp/CURSOR_INSTALL.md](tilt-mcp/CURSOR_INSTALL.md) — Cursor IDE integration setup

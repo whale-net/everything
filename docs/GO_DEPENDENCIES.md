@@ -466,15 +466,30 @@ bazel build //your/proto:target
 
 ## Known Issues
 
+### A dependency keeps disappearing from `use_repo()` after `bazel mod tidy`
+
+**Symptom:** `bazel mod tidy` silently drops an entry from `use_repo(go_deps, ...)`, and a later `bazel build`/`bazel query` fails with something like:
+
+```
+No repository visible as '@com_github_foo_bar' from repository '@@gazelle++go_deps+...'
+```
+
+or a WARNING that a repo is "reported as indirect dependencies by the extension."
+
+**Cause:** Gazelle's `go_deps` extension decides what belongs in `use_repo()` purely from whether `go.mod` marks the requirement `// indirect`. If nothing in *our* Go source imports the package directly, plain `go mod tidy`/`go get` correctly leaves it indirect — even when a Gazelle-generated `BUILD.bazel` file for some third-party module references it unconditionally or behind a platform `select()` (e.g. `docker/go-connections`'s Windows-only branch pulling in `github.com/Microsoft/go-winio`, which `bazel query`/`rdeps` must resolve regardless of host OS).
+
+**Fix:** promote it to a direct requirement using the **rules_go-wrapped** `go get`, not the plain `go` binary — rules_go force-marks explicit `get`s as direct as a workaround for this exact usability gap:
+
+```bash
+bazel run @rules_go//go -- get github.com/Microsoft/go-winio@v0.6.2
+bazel mod tidy
+```
+
+After this, `bazel mod tidy` keeps the entry in `use_repo()` permanently and stops stripping it — no hand-maintained restoration list needed. See [bazel-contrib/bazel-gazelle#1983](https://github.com/bazel-contrib/bazel-gazelle/issues/1983) for the upstream discussion of this behavior.
+
 ### Docker Library
 
-The `github.com/docker/docker` library has complex transitive dependencies that may not be fully resolved by the automated workflow. If you encounter build errors related to Docker client dependencies:
-
-1. The core Docker wrapper (`libs/go/docker`) works for basic operations
-2. Advanced Docker features may require additional manual dependency management
-3. Consider using a Docker client library alternative if you need advanced features
-
-This is a known limitation with the Docker SDK's dependency graph and is being tracked.
+The `github.com/docker/docker` library previously had transitive dependencies (notably `go-winio`, Windows-only) that `bazel mod tidy` would repeatedly strip from `use_repo()`. This is resolved by pinning them as direct requirements per the pattern above — see the `require` block in `go.mod` and the corresponding entries in `MODULE.bazel`'s `use_repo(go_deps, ...)`.
 
 ## Migration Note
 

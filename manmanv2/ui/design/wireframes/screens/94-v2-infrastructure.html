@@ -1,0 +1,39 @@
+<!-- wf: name="v2-infrastructure" title="Proposal: Infrastructure" -->
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg">
+  <h1 class="text-2xl md:text-3xl font-bold mb-2">Infrastructure</h1>
+  <p class="text-sm opacity-80">Host health and capacity — admin only. Hosts register automatically on start.</p>
+</div>
+
+<div class="card bg-base-100 shadow-md overflow-x-auto">
+  <table class="table">
+    <thead><tr><th>Host</th><th>Status</th><th>Sessions</th><th>Manager</th><th>Heartbeat</th><th class="text-right">Actions</th></tr></thead>
+    <tbody>
+      <tr class="hover">
+        <td class="font-medium">host-01</td>
+        <td><span class="badge badge-soft badge-success">Online</span></td>
+        <td>3</td>
+        <td class="font-mono text-sm">v2.4.1</td>
+        <td>8s ago</td>
+        <td class="text-right"><a href="#/server-detail" class="btn btn-sm btn-primary">View</a> <button class="btn btn-sm btn-secondary">Drain</button></td>
+      </tr>
+      <tr class="hover">
+        <td class="font-medium">host-02</td>
+        <td><span class="badge badge-soft badge-warning">Draining</span></td>
+        <td>1 <span class="opacity-60 text-sm">(finishing)</span></td>
+        <td class="font-mono text-sm">v2.4.1</td>
+        <td>4s ago</td>
+        <td class="text-right"><a href="#/server-detail" class="btn btn-sm btn-primary">View</a> <button class="btn btn-sm btn-success">Undrain</button></td>
+      </tr>
+      <tr class="hover">
+        <td class="font-medium">host-04</td>
+        <td><span class="badge badge-soft badge-neutral">Offline</span></td>
+        <td>—</td>
+        <td class="font-mono text-sm">v2.3.0</td>
+        <td>2d ago</td>
+        <td class="text-right"><a href="#/server-detail" class="btn btn-sm btn-primary">View</a></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<p class="wf-note mt-4">drain (new): host finishes running sessions and refuses new deploys/starts; draining hosts drop out of Deploy pickers in the game workspace. No register/deregister UI — registration is automatic.</p>

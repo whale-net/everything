@@ -1,0 +1,64 @@
+<!-- wf: name="workshop" title="Workshop Library" -->
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg">
+  <h1 class="text-2xl md:text-3xl font-bold mb-2">Workshop Library</h1>
+  <p class="text-sm opacity-80">Steam Workshop addons and reusable libraries</p>
+</div>
+
+<div role="tablist" class="tabs tabs-box mb-6 w-fit">
+  <a href="#/workshop" role="tab" class="tab tab-active">Library</a>
+  <a href="#/workshop-installations" role="tab" class="tab">Installations</a>
+  <a href="#/workshop-search" role="tab" class="tab">Search</a>
+</div>
+
+<div class="grid md:grid-cols-2 gap-6 mb-6">
+  <div class="card bg-base-100 shadow-md">
+    <div class="card-body">
+      <h2 class="card-title text-lg">Fetch Addon from Steam Workshop</h2>
+      <div class="flex gap-2">
+        <input type="text" class="input input-bordered flex-1 font-mono" placeholder="e.g., 2938285337">
+        <button class="btn btn-primary">Fetch</button>
+      </div>
+    </div>
+  </div>
+  <div class="card bg-base-100 shadow-md">
+    <div class="card-body">
+      <h2 class="card-title text-lg">Create New Library</h2>
+      <div class="flex gap-2">
+        <input type="text" class="input input-bordered flex-1" placeholder="e.g., Essential Maps">
+        <button class="btn btn-success">Create</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2 class="text-xl font-bold mb-3">Libraries <span class="badge badge-ghost">3</span></h2>
+<div class="grid md:grid-cols-3 gap-4 mb-6">
+  <a href="#/workshop-library-detail" class="card bg-base-100 shadow-md hover:shadow-lg transition-shadow">
+    <div class="card-body">
+      <h3 class="card-title text-base">Essential Maps</h3>
+      <p class="text-sm opacity-70">12 addons · Valheim</p>
+    </div>
+  </a>
+  <a href="#/workshop-library-detail" class="card bg-base-100 shadow-md hover:shadow-lg transition-shadow">
+    <div class="card-body">
+      <h3 class="card-title text-base">QoL Plugins</h3>
+      <p class="text-sm opacity-70">7 addons · Valheim</p>
+    </div>
+  </a>
+  <a href="#/workshop-library-detail" class="card bg-base-100 shadow-md hover:shadow-lg transition-shadow">
+    <div class="card-body">
+      <h3 class="card-title text-base">L4D2 Campaigns</h3>
+      <p class="text-sm opacity-70">23 addons · Left 4 Dead 2</p>
+    </div>
+  </a>
+</div>
+
+<h2 class="text-xl font-bold mb-3">Recent Addons <span class="badge badge-ghost">2</span></h2>
+<div class="card bg-base-100 shadow-md">
+  <table class="table">
+    <tbody>
+      <tr class="hover"><td><a href="#/workshop-addon-detail" class="link link-primary">BetterUI Reforged</a></td><td class="font-mono text-sm">2938285337</td><td class="text-right opacity-60">fetched 2h ago</td></tr>
+      <tr class="hover"><td><a href="#/workshop-addon-detail" class="link link-primary">Dead Center Remix</a></td><td class="font-mono text-sm">3011224407</td><td class="text-right opacity-60">fetched yesterday</td></tr>
+    </tbody>
+  </table>
+</div>

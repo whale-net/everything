@@ -1,0 +1,27 @@
+<!-- wf: name="config-form" title="New Config" -->
+<div class="breadcrumbs text-sm mb-4">
+  <ul><li><a href="#/games">Games</a></li><li><a href="#/game-detail">Valheim</a></li><li>New Config</li></ul>
+</div>
+
+<h1 class="text-2xl md:text-3xl font-bold mb-6">New Configuration</h1>
+
+<div class="card bg-base-100 shadow-md max-w-2xl">
+  <div class="card-body gap-4">
+    <label class="form-control">
+      <span class="label-text font-medium mb-1">Name</span>
+      <input type="text" class="input input-bordered" placeholder="e.g., Vanilla Server, Modded Setup">
+    </label>
+    <label class="form-control">
+      <span class="label-text font-medium mb-1">Docker Image</span>
+      <input type="text" class="input input-bordered font-mono" placeholder="e.g., itzg/minecraft-server:latest">
+    </label>
+    <label class="form-control">
+      <span class="label-text font-medium mb-1">Args Template</span>
+      <textarea class="textarea textarea-bordered font-mono" rows="3" placeholder="Optional command line arguments template"></textarea>
+    </label>
+    <div class="flex gap-2 mt-2">
+      <a href="#/config-detail" class="btn btn-success">Save Config</a>
+      <a href="#/game-detail" class="btn btn-secondary">Cancel</a>
+    </div>
+  </div>
+</div>

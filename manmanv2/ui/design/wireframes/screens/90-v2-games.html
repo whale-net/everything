@@ -1,0 +1,154 @@
+<!-- wf: name="v2-games" title="Proposal: Games" -->
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg flex flex-col md:flex-row justify-between md:items-center gap-4">
+  <div>
+    <h1 class="text-2xl md:text-3xl font-bold mb-2">Games</h1>
+    <p class="text-sm opacity-80">What's available and how to connect</p>
+  </div>
+  <button class="btn bg-base-100 text-primary border-0 shadow-md">+ Add Game</button>
+</div>
+
+<p class="wf-note mb-4">proposal: a list, one game expands in place (no page change). Blade layers are reserved for deployment-level editing: Customize → Deployment Settings, Edit → Config Editor — only ever one layer deep.</p>
+
+<div class="space-y-2">
+
+  <!-- expanded game -->
+  <div class="collapse collapse-arrow bg-base-100 shadow-md">
+    <input type="checkbox" checked>
+    <div class="collapse-title flex items-center gap-3 pr-12">
+      <span class="text-lg font-bold">Valheim</span>
+      <span class="badge badge-soft badge-success">2 running</span>
+      <span class="text-sm opacity-60 ml-auto">6 players · <span class="font-mono">203.0.113.7:2456</span></span>
+    </div>
+    <div class="collapse-content space-y-4">
+
+      <div class="border border-base-300 rounded-box overflow-hidden">
+        <div class="p-3 border-b border-base-300 bg-base-200"><h3 class="font-semibold">Deployments</h3></div>
+        <table class="table table-sm">
+          <thead><tr><th>Server</th><th>Config</th><th>Status</th><th>Players</th><th>Connect</th><th class="text-right">Actions</th></tr></thead>
+          <tbody>
+            <tr class="hover">
+              <td>host-01</td><td>vanilla</td>
+              <td><span class="badge badge-soft badge-success badge-sm">Running</span></td>
+              <td>4/10</td>
+              <td><span class="font-mono text-sm">203.0.113.7:2456</span> <button class="btn btn-xs btn-secondary">Copy</button></td>
+              <td class="text-right"><a href="#/v2-instance-overrides" class="btn btn-xs btn-secondary">Customize</a> <a href="#/session-detail" class="btn btn-xs btn-primary">Logs</a> <button class="btn btn-xs btn-error">Stop</button></td>
+            </tr>
+            <tr class="hover">
+              <td>host-03</td><td>modded-plus</td>
+              <td><span class="badge badge-soft badge-success badge-sm">Running</span></td>
+              <td>2/10</td>
+              <td><span class="font-mono text-sm">203.0.113.9:2456</span> <button class="btn btn-xs btn-secondary">Copy</button></td>
+              <td class="text-right"><a href="#/v2-instance-overrides" class="btn btn-xs btn-secondary">Customize</a> <a href="#/session-detail" class="btn btn-xs btn-primary">Logs</a> <button class="btn btn-xs btn-error">Stop</button></td>
+            </tr>
+            <tr class="hover opacity-70">
+              <td>host-02</td><td>vanilla</td>
+              <td><span class="badge badge-soft badge-neutral badge-sm">Stopped</span></td>
+              <td>—</td><td class="opacity-50">—</td>
+              <td class="text-right"><button class="btn btn-xs btn-success">Start</button> <button class="btn btn-xs btn-error">Remove</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="border border-base-300 rounded-box overflow-hidden">
+        <div class="flex justify-between items-center p-3 border-b border-base-300 bg-base-200">
+          <h3 class="font-semibold">Configurations</h3>
+          <button class="btn btn-xs btn-primary">+ New Config</button>
+        </div>
+        <table class="table table-sm">
+          <thead><tr><th>Name</th><th>Image</th><th>Ports</th><th>Deployments</th><th class="text-right">Actions</th></tr></thead>
+          <tbody>
+            <tr class="hover">
+              <td class="font-medium">vanilla</td>
+              <td class="font-mono text-sm">lloesche/valheim-server:latest</td>
+              <td class="font-mono text-sm">2456-2458/udp</td>
+              <td>2</td>
+              <td class="text-right">
+                <a href="#/v2-config-edit" class="btn btn-xs btn-secondary">Edit</a>
+                <span class="join"><select class="select select-bordered select-xs join-item"><option>host-02</option><option>host-04</option></select><button class="btn btn-xs btn-success join-item">Deploy</button></span>
+              </td>
+            </tr>
+            <tr class="hover">
+              <td class="font-medium">modded-plus</td>
+              <td class="font-mono text-sm">lloesche/valheim-server:latest</td>
+              <td class="font-mono text-sm">2456-2458/udp</td>
+              <td>1</td>
+              <td class="text-right">
+                <a href="#/v2-config-edit" class="btn btn-xs btn-secondary">Edit</a>
+                <span class="join"><select class="select select-bordered select-xs join-item"><option>host-02</option><option>host-04</option></select><button class="btn btn-xs btn-success join-item">Deploy</button></span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="border border-base-300 rounded-box overflow-hidden">
+        <div class="flex justify-between items-center p-3 border-b border-base-300 bg-base-200">
+          <h3 class="font-semibold">Workshop Libraries</h3>
+          <span class="wf-note">libraries attach at the config, inherited by its deployments; one-off extras live in Deployment Settings</span>
+        </div>
+        <table class="table table-sm">
+          <thead><tr><th>Library</th><th>Config</th><th>Install Target</th><th class="text-right"></th></tr></thead>
+          <tbody>
+            <tr class="hover">
+              <td><a href="#/workshop-library-detail" class="link link-primary">Essential Maps</a></td>
+              <td>vanilla</td>
+              <td><span class="badge badge-ghost badge-sm font-mono">data</span> <span class="font-mono text-sm">valheim/maps/</span></td>
+              <td class="text-right"><button class="btn btn-xs btn-error">Detach</button></td>
+            </tr>
+            <tr class="hover">
+              <td><a href="#/workshop-library-detail" class="link link-primary">QoL Plugins</a></td>
+              <td>modded-plus</td>
+              <td><span class="badge badge-ghost badge-sm font-mono">data</span> <span class="font-mono text-sm">valheim/BepInEx/plugins/</span></td>
+              <td class="text-right"><button class="btn btn-xs btn-error">Detach</button></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="p-3 border-t border-base-300 flex flex-wrap gap-2 items-center">
+          <select class="select select-bordered select-sm"><option>Attach library…</option><option>L4D2 Campaigns</option></select>
+          <select class="select select-bordered select-sm"><option>To config: vanilla</option><option>To config: modded-plus</option></select>
+          <select class="select select-bordered select-sm"><option>Target: Maps (data · valheim/maps/)</option><option>Target: Plugins (data · valheim/BepInEx/plugins/)</option><option>Custom volume + path…</option></select>
+          <button class="btn btn-sm btn-success">Attach</button>
+        </div>
+      </div>
+
+      <div class="flex gap-2 text-sm">
+        <button class="btn btn-xs btn-secondary">Game settings &amp; presets…</button>
+        <button class="btn btn-xs btn-error ml-auto">Delete Game…</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- collapsed games -->
+  <div class="collapse collapse-arrow bg-base-100 shadow-md">
+    <input type="checkbox">
+    <div class="collapse-title flex items-center gap-3 pr-12">
+      <span class="text-lg font-bold">Counter-Strike 2</span>
+      <span class="badge badge-soft badge-error">Crashed</span>
+      <span class="text-sm opacity-60 ml-auto">last up 14m ago on host-02</span>
+    </div>
+    <div class="collapse-content"><p class="text-sm opacity-60">…expands like Valheim above…</p></div>
+  </div>
+
+  <div class="collapse collapse-arrow bg-base-100 shadow-md">
+    <input type="checkbox">
+    <div class="collapse-title flex items-center gap-3 pr-12">
+      <span class="text-lg font-bold">Palworld</span>
+      <span class="badge badge-soft badge-neutral">Not running</span>
+      <span class="text-sm opacity-60 ml-auto">2 configs ready · last played Jul 15</span>
+    </div>
+    <div class="collapse-content"><p class="text-sm opacity-60">…</p></div>
+  </div>
+
+  <div class="collapse collapse-arrow bg-base-100 shadow-md">
+    <input type="checkbox">
+    <div class="collapse-title flex items-center gap-3 pr-12">
+      <span class="text-lg font-bold">Left 4 Dead 2</span>
+      <span class="badge badge-soft badge-warning">Starting</span>
+      <span class="text-sm opacity-60 ml-auto">host-03 · Coop campaign</span>
+    </div>
+    <div class="collapse-content"><p class="text-sm opacity-60">…</p></div>
+  </div>
+
+</div>
