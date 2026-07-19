@@ -37,11 +37,16 @@ type SessionConsumer struct {
 	// Zero value means the consumer has active subscribers.
 	idleSince time.Time
 
-	// lifecycleManaged is true if the session was "running" at consumer-creation
-	// time. Such consumers are exempt from reapIdleConsumers: they are only
-	// removed via the explicit DeleteConsumerForSession call on session end,
-	// so the RabbitMQ queue is always being actively drained while the game
-	// session is alive, regardless of whether any UI viewer is subscribed.
+	// lifecycleManaged is true if the session was in a live (non-terminal) status
+	// at consumer-creation time. Such consumers are exempt from reapIdleConsumers:
+	// they are only removed via the explicit DeleteConsumerForSession call on
+	// session end, so the RabbitMQ queue is always being actively drained while
+	// the game session is alive, regardless of whether any UI viewer is
+	// subscribed. This must match (or be broader than) the set of statuses
+	// recoverActiveSessions treats as live (see isLiveSessionStatus): since
+	// CreateConsumerForSession is idempotent, a consumer created while a
+	// session is still starting/stopping never gets a second chance to set
+	// this flag once the session reaches "running".
 	lifecycleManaged bool
 
 	// Ring buffer for recent logs
@@ -181,6 +186,22 @@ func (m *Manager) Subscribe(ctx context.Context, sessionID int64, afterSequence 
 	}, nil
 }
 
+// isLiveSessionStatus reports whether a session status means the session is
+// still expected to produce logs. Mirrors the status set the API's LiveOnly
+// filter treats as live (postgres session repository), so a session recovered
+// mid-startup/mid-shutdown (main.go's recoverActiveSessions uses LiveOnly) is
+// marked lifecycleManaged from the start rather than only once it reaches
+// "running" — CreateConsumerForSession is idempotent and won't get a second
+// chance to set the flag on the running transition.
+func isLiveSessionStatus(status string) bool {
+	switch status {
+	case "pending", "starting", "running", "stopping":
+		return true
+	default:
+		return false
+	}
+}
+
 // createConsumer creates a new RabbitMQ consumer for a session
 func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*SessionConsumer, error) {
 	queueName := fmt.Sprintf("logs.session.%d", sessionID)
@@ -223,7 +244,7 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 		cancel:           cancel, // This cancel is for the consumerCtx
 		done:             make(chan struct{}),
 		logsProcessed:    &m.logsProcessed,
-		lifecycleManaged: sessionResp.Session.Status == "running",
+		lifecycleManaged: isLiveSessionStatus(sessionResp.Session.Status),
 		logBuffer:        make([]*manmanpb.LogMessage, bufferSize),
 		bufferSize:       bufferSize,
 		bufferIndex:      0,

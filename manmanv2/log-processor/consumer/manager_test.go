@@ -248,6 +248,26 @@ func TestLifecycleManagedConsumerNotReaped(t *testing.T) {
 	}
 }
 
+// TestIsLiveSessionStatus verifies the status set treated as "still expected to
+// produce logs" matches what recoverActiveSessions' LiveOnly filter trusts as
+// live (pending/starting/running/stopping), since createConsumer only gets one
+// chance to set lifecycleManaged and CreateConsumerForSession is idempotent.
+func TestIsLiveSessionStatus(t *testing.T) {
+	live := []string{"pending", "starting", "running", "stopping"}
+	for _, s := range live {
+		if !isLiveSessionStatus(s) {
+			t.Errorf("status %q should be treated as live", s)
+		}
+	}
+
+	terminal := []string{"stopped", "crashed", "completed", "lost", ""}
+	for _, s := range terminal {
+		if isLiveSessionStatus(s) {
+			t.Errorf("status %q should not be treated as live", s)
+		}
+	}
+}
+
 // TestRingBufferWrapAround verifies that when the buffer is full the oldest
 // messages are overwritten and getBufferedLogs returns messages in chronological
 // order (oldest surviving → newest).
