@@ -1,0 +1,107 @@
+<!-- wf: name="register-verify" title="Register Device — Step 4: Verify & Assign" parent="dashboard" -->
+
+<div class="breadcrumbs text-sm mb-4">
+  <ul><li><a href="#/devices">Devices</a></li><li>New Device Provisioning → Verify</li></ul>
+</div>
+
+<div class="flex justify-between items-center mb-6">
+  <h1 class="text-2xl md:text-3xl font-bold">Step 4 — Verify &amp; Assign to Region</h1>
+  <a href="#/register-mqtt" class="btn btn-secondary btn-sm">< Back to MQTT</a>
+</div>
+
+<!-- Progress stepper -->
+<div class="flex items-center gap-4 mb-8 px-4">
+  <div class="flex items-center gap-2 opacity-50">
+    <span class="w-7 h-7 rounded-full bg-success text-success-content flex items-center justify-center font-bold text-sm"><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg></span>
+    <span class="text-sm font-medium">Serial Number</span>
+  </div>
+  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+  <div class="flex items-center gap-2 opacity-50">
+    <span class="w-7 h-7 rounded-full bg-success text-success-content flex items-center justify-center font-bold text-sm"><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg></span>
+    <span class="text-sm font-medium">Wi-Fi Credentials</span>
+  </div>
+  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+  <div class="flex items-center gap-2 opacity-50">
+    <span class="w-7 h-7 rounded-full bg-success text-success-content flex items-center justify-center font-bold text-sm"><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg></span>
+    <span class="text-sm font-medium">MQTT Broker</span>
+  </div>
+  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+  <div class="flex items-center gap-2">
+    <span class="w-7 h-7 rounded-full bg-primary text-primary-content flex items-center justify-center font-bold text-sm">4</span>
+    <span class="text-sm font-medium">Verify &amp; Assign</span>
+  </div>
+</div>
+
+<!-- Provisioning summary -->
+<div class="card bg-base-100 shadow-md mb-6 border-success/30">
+  <div class="card-body p-4">
+    <h2 class="text-lg font-semibold mb-3 border-b border-base-300 pb-1 flex items-center gap-2 text-success">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      Provisioning Summary — Ready to Deploy
+    </h2>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <!-- Device info -->
+      <div class="bg-base-200 rounded-box p-3 space-y-1 text-sm">
+        <p><span class="opacity-60">Device ID:</span> <span class="font-mono font-medium">leaflab-ccdba79f5fac</span></p>
+        <p><span class="opacity-60">Board Type:</span> Elegoo ESP32-S3</p>
+        <p><span class="opacity-60">eFuse MAC:</span> CC:DB:A7:9F:5F:AC</p>
+      </div>
+
+      <!-- Connection info -->
+      <div class="bg-base-200 rounded-box p-3 space-y-1 text-sm">
+        <p><span class="opacity-60">Wi-Fi:</span> Greenhouse-WiFi</p>
+        <p><span class="opacity-60">MQTT Broker:</span> 192.168.1.42:1883 (leaflab-ccdba79f5fac)</p>
+      </div>
+
+      <!-- Detected sensors -->
+      <div class="md:col-span-2 bg-base-200 rounded-box p-3">
+        <h3 class="text-sm font-semibold mb-2 opacity-60 uppercase tracking-wide">Detected Sensors</h3>
+        <table class="table table-sm w-full">
+          <thead><tr><th>I2C Address</th><th>Device</th><th>Suggested Name</th></tr></thead>
+          <tbody>
+            <tr><td class="font-mono text-xs">0x68 (98)</td><td>BH1750 Ambient Light Sensor</td><td class="text-sm opacity-70">BH1750-A1 (auto-suggested)</td></tr>
+            <tr><td class="font-mono text-xs">0x40 (64)</td><td>SHT3x Temperature/Humidity Sensor</td><td class="text-sm opacity-70">SHT3x-T1, SHT3x-H1 (auto-suggested)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Default config preview -->
+    </div>
+  </div>
+</div>
+
+<!-- Sensor assignment form -->
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-4">
+    <h2 class="text-lg font-semibold mb-3 border-b border-base-300 pb-1">Sensor Name &amp; Region Assignment</h2>
+    <p class="text-sm opacity-70 mb-4">Assign logical names and physical locations for each detected sensor. You can change these later in the device config.</p>
+
+    <!-- Sensor 1: BH1750 -->
+    <div class="bg-base-200 rounded-box p-3 mb-3 space-y-3">
+      <h3 class="text-sm font-semibold flex items-center gap-2"><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-3.5-3.5z"/></svg>BH1750 (I2C 0x68) — Illuminance</h3>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <input type="text" value="" placeholder="BH1750-A1" class="border-b border-base-300 focus:border-primary outline-none py-2 w-full text-sm"><select class="border-b border-base-300 focus:border-primary outline-none py-2 w-full text-sm bg-transparent md:col-span-2"><option value="">— No region assigned —</option><optgroup label="Room A"><option>&nbsp;&nbsp;└ Room A (main greenhouse section)</option><option>&nbsp;&nbsp;├ Shelf 1 (top shelf by window)</option><option>&nbsp;&nbsp;└ Shelf 2 (middle shelf, ambient)</option></optgroup><optgroup label="Room B"><option>&nbsp;&nbsp;└ Room B (secondary section)</option><option>&nbsp;&nbsp;├ Shelf 1 (near door, variable temp)</option><option>&nbsp;&nbsp;└ Shelf 2 (away from window)</option></optgroup><optgroup label="Potting Area"><option>&nbsp;&nbsp;└ Potting Area (covered potting station)</option></optgroup></select>
+      </div>
+
+      <!-- Sensor names will be auto-suggested based on detected I2C devices. -->
+    </div>
+
+    <!-- Sensor 2: SHT3x -->
+    <div class="bg-base-200 rounded-box p-3 mb-3 space-y-3">
+      <h3 class="text-sm font-semibold flex items-center gap-2"><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-3.5-3.5z"/></svg>SHT3x (I2C 0x40) — Temperature &amp; Humidity</h3>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <!-- Temp sensor -->
+        <input type="text" value="" placeholder="SHT3x-T1 (temperature)" class="border-b border-base-300 focus:border-primary outline-none py-2 w-full text-sm"><input type="number" value="5000" min="250" step="250" class="border-b border-base-300 focus:border-primary outline-none py-2 w-full font-mono text-sm md:col-span-2">
+        <!-- Humidity sensor -->
+      </div>
+    </div>
+
+    <p class="wf-note mt-4">note: auto-suggested names help avoid duplicates. Polling interval defaults to 5000ms for SHT3x, 2000ms for BH1750.</p>
+
+    <!-- Final actions -->
+    <div class="flex gap-2 justify-end mt-6"><a href="#/register-mqtt" class="btn btn-secondary btn-sm">Back</a><button class="btn btn-success btn-sm gap-1"><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>Provision &amp; Connect Device</button></div>
+  </div>
+</div>
+
+<p class="wf-note mt-4">note: "Provision & Connect" pushes Wi-Fi + MQTT credentials to the ESP32 via USB, then waits for it to connect and start publishing. If USB provisioning fails, there's a fallback to manual config file drop.</p>
