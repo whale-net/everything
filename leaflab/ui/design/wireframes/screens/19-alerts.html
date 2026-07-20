@@ -1,0 +1,114 @@
+<!-- wf: name="alerts" title="Alerts — Alert Management" -->
+
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg bg-gradient-to-br from-green-900 via-emerald-800 to-teal-900 text-green-50">
+  <h1 class="text-2xl md:text-3xl font-bold mb-2">Alert Management</h1>
+  <p class="text-sm opacity-80">View, acknowledge, and resolve alerts across all sensorboard setups</p>
+</div>
+
+<!-- Alert stats -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+  <div class="stat bg-base-100 rounded-box shadow-md border-error/30">
+    <div class="stat-title">Unacknowledged</div>
+    <div class="stat-value text-error">2</div>
+  </div>
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">Acknowledged</div>
+    <div class="stat-value">1</div>
+  </div>
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">Resolved (24h)</div>
+    <div class="stat-value text-success">5</div>
+  </div>
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">Total All Time</div>
+    <div class="stat-value">47</div>
+  </div>
+</div>
+
+<!-- Alert filters -->
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-3 flex flex-col md:flex-row gap-3 items-center justify-between">
+    <div class="flex flex-wrap gap-2">
+      <button class="btn btn-sm btn-primary">All (8)</button>
+      <button class="btn btn-sm btn-outline">Unacked (3)</button>
+      <button class="btn btn-sm btn-outline">Acknowledged (1)</button>
+      <button class="btn btn-sm btn-outline">Resolved (4)</button>
+    </div>
+    <div class="flex gap-2 items-center text-sm opacity-60">
+      <span>Filter:</span>
+      <select class="border-b border-base-300 focus:border-primary outline-none py-1 px-2 text-sm bg-transparent"><option>All devices</option><option>leaflab-ccdba79f5fac</option><option>leaflab-a1b2c3d4e5f6</option><option>leaflab-9f8e7d6c5b4a (offline)</option></select>
+    </div>
+  </div>
+</div>
+
+<!-- Active alerts -->
+<div class="card bg-base-100 shadow-md mb-6 border-error/20">
+  <div class="card-body p-0">
+    <!-- Critical: device offline -->
+    <h2 class="text-lg font-semibold p-4 border-b border-base-300 text-error flex items-center gap-2">Active Alerts</h2>
+
+    <!-- Critical: device offline -->
+    <div class="p-4 border-b hover:bg-base-50 transition-colors flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
+      <div class="flex items-start gap-3 flex-1">
+        <span class="badge badge-error badge-sm mt-1"><svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 0l4-4m-4 4l-4-4"/></svg></span>
+        <div class="flex-1">
+          <p class="font-semibold text-sm">Device Offline — leaflab-9f8e7d6c5b4a</p>
+          <p class="text-xs opacity-60 mt-1">No heartbeat for 3 hours. Last known state: online, 2 sensors reporting.</p>
+        </div>
+      </div>
+      <div class="flex flex-col items-end gap-1 text-sm whitespace-nowrap">
+        <span class="text-xs opacity-50">Started 3h ago · leaflab-a1b2c3d4e5f6</span>
+        <div class="flex gap-1"><button class="btn btn-warning btn-xs">Acknowledge</button><button class="btn btn-sm btn-outline">Dismiss</button></div>
+      </div>
+    </div>
+
+    <!-- Warning: invalid reading -->
+    <div class="p-4 border-b hover:bg-base-50 transition-colors flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
+      <div class="flex items-start gap-3 flex-1">
+        <span class="badge badge-warning badge-sm mt-1"><svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01"/></svg></span>
+        <div class="flex-1">
+          <p class="font-semibold text-sm">Invalid Sensor Reading — BH1750-A1</p>
+          <p class="text-xs opacity-60 mt-1">Reported value 99,999 lux (out of range: 0–100,000). Possible sensor fault or obstruction.</p>
+        </div>
+      </div>
+      <div class="flex flex-col items-end gap-1 text-sm whitespace-nowrap">
+        <span class="text-xs opacity-50">Started 42m ago · leaflab-ccdba79f5fac</span>
+        <div class="flex gap-1"><button class="btn btn-warning btn-xs">Acknowledge</button><button class="btn btn-sm btn-outline">Dismiss</button></div>
+      </div>
+    </div>
+
+    <!-- Info: config not yet pushed -->
+    <div class="p-4 hover:bg-base-50 transition-colors flex flex-col md:flex-row gap-4 items-start md:items-center justify-between bg-info/10">
+      <div class="flex items-start gap-3 flex-1">
+        <span class="badge badge-info badge-sm mt-1"><svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01"/></svg></span>
+        <div class="flex-1">
+          <p class="font-semibold text-sm">Config Not Yet Pushed — leaflab-a1b2c3d4e5f6</p>
+          <p class="text-xs opacity-60 mt-1">Device registered but no config has been pushed. Running on default factory config.</p>
+        </div>
+      </div>
+      <div class="flex flex-col items-end gap-1 text-sm whitespace-nowrap">
+        <span class="text-xs opacity-50">Started 1d ago · leaflab-a1b2c3d4e5f6</span>
+        <div class="flex gap-1"><button class="btn btn-primary btn-xs">Push Config #13</button><button class="btn btn-sm btn-outline">Dismiss</button></div>
+      </div>
+    </div>
+
+  <!-- Acknowledged / resolved alerts (collapsed by default) -->
+  <details class="collapse collapse-arrow bg-base-200 rounded-box mx-4 mb-4 mt-6">
+    <summary class="collapse-title text-sm font-medium opacity-60 flex items-center gap-1">Acknowledged &amp; Resolved (5 shown)</summary>
+
+    <!-- Acknowledged alert -->
+    <div class="card-body p-4"><table class="table table-sm mt-2">
+        <thead><tr><th>Alert</th><th>Device</th><th>Acknowledged By</th><th>Time</th></tr></thead>
+
+  <!-- Resolved alert -->
+      <tbody>
+        <tr class="opacity-60"><td class="text-sm">Config pushed successfully — leaflab-a1b2c3d4e5f6</td><td class="font-mono text-xs">leaflab-a1b2c3d4e5f6</td><td>admin</td><td class="opacity-60">1h ago</td></tr>
+        <tr class="opacity-60"><td class="text-sm">Sensor added — SHT3x-H2 → leaflab-ccdba79f5fac</td><td class="font-mono text-xs">leaflab-ccdba79f5fac</td><td>tinkerer</td><td class="opacity-60">1d ago</td></tr>
+        <tr class="opacity-60"><td class="text-sm">Device came online — leaflab-a1b2c3d4e5f6</td><td class="font-mono text-xs">leaflab-a1b2c3d4e5f6</td><td>auto</td><td class="opacity-60">2h ago</td></tr>
+        <tr class="opacity-60"><td class="text-sm">Sensor reading restored — BH1750-A1 → leaflab-ccdba79f5fac</td><td class="font-mono text-xs">leaflab-ccdba79f5fac</td><td>auto</td><td class="opacity-60">2h ago</td></tr>
+      </tbody>
+
+    <!-- Alert actions -->
+  </table></div>
+
+<p class="wf-note mt-4">note: alerts can be acknowledged (clears the unacked count, keeps visible), dismissed (removes from active view but logs it), or resolved (mark as fixed). Acknowledged/resolved history is in a collapsed section. Future work: alert rules config per device/region.</p>
