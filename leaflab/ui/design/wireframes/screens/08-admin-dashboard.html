@@ -1,0 +1,120 @@
+<!-- wf: name="admin-dashboard" title="Admin Dashboard — Fleet Management" -->
+
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg bg-gradient-to-br from-green-900 via-emerald-800 to-teal-900 text-green-50">
+  <h1 class="text-2xl md:text-3xl font-bold mb-2">LeafLab — Fleet Management</h1>
+  <p class="text-sm opacity-80">Admin overview of all sensorboard setups, devices, and alerts</p>
+</div>
+
+<!-- Quick actions bar (admin only) -->
+<div class="flex flex-wrap gap-2 mb-6">
+  <button class="btn btn-primary btn-sm">+ Register Device</button>
+  <button class="btn btn-secondary btn-sm">Push Config to All</button>
+  <a href="#/device-edit-config" class="btn btn-info btn-sm">Config History</a>
+  <button class="btn btn-outline btn-sm">Export Readings CSV</button>
+</div>
+
+<!-- Fleet health -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">Devices</div>
+    <div class="stat-value text-primary">3</div>
+    <div class="stat-desc">2 online · 1 offline</div>
+  </div>
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">Sensors</div>
+    <div class="stat-value">14</div>
+    <div class="stat-desc">12 active · 2 disabled</div>
+  </div>
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">Regions</div>
+    <div class="stat-value">4</div>
+    <div class="stat-desc">3 rooms · 1 potting area</div>
+  </div>
+  <!-- Alerts: admin-only stat -->
+  <div class="stat bg-base-100 rounded-box shadow-md border-error/30">
+    <div class="stat-title">Alerts</div>
+    <div class="stat-value text-error">2</div>
+    <div class="stat-desc">leaflab-9f8e... offline · BH1750-A1 invalid reading</div>
+  </div>
+</div>
+
+<!-- Alerts panel (admin only) -->
+<div class="card bg-base-100 shadow-md mb-6 border-error/20">
+  <div class="card-body p-0">
+    <h2 class="text-lg font-semibold p-4 border-b border-base-300 text-error flex items-center gap-2">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 0l4 4m-4-4l-4 4M8.56 13a5 5 0 01-.775.058l-.074.01A5.72 5.72 0 019.5 21a5.72 5.72 0 01-4.136-1.625H5A5.007 5.007 0 010 14.375v-.75C0 12.586.9 11.7 1.99 11.7h.02c.89 0 1.67-.52 2.09-1.28l.64-1.03a1.32 1.32 0 012.16 0l.64 1.03c.42.76 1.2 1.28 2.09 1.28H12.5 14.375A5.007 5.007 0 019.375 20h-.75C8.16 20 7.5 19.25 7.5 18.5a5.72 5.72 0 014.44-2.625c.033-.002.065-.005.097-.005a5 5 0 01.775.058l.074.01A5.72 5.72 0 0112.5 21a5.72 5.72 0 01-3.94-1.575"/></svg>
+      Active Alerts
+    </h2>
+    <table class="table table-sm">
+      <thead><tr><th>Severity</th><th>Device</th><th>Message</th><th>Since</th></tr></thead>
+      <tbody>
+        <tr class="hover"><td><span class="badge badge-error badge-sm">Critical</span></td><td class="font-mono text-xs">leaflab-9f8e7d6c5b4a</td><td>Device offline — last heartbeat 3h ago</td><td class="opacity-60">3h ago</td></tr>
+        <tr class="hover"><td><span class="badge badge-warning badge-sm">Warning</span></td><td class="font-mono text-xs">leaflab-ccdba79f5fac</td><td>BH1750-A1 reported invalid reading (out of range)</td><td class="opacity-60">42m ago</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Devices table (admin: full controls) -->
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <h2 class="text-lg font-semibold p-4 border-b border-base-300">Devices</h2>
+    <table class="table">
+      <thead><tr class="bg-base-200"><th>Device ID</th><th>Status</th><th>Firmware</th><th>Sensors</th><th>Last Seen</th><th>Actions</th></tr></thead>
+      <tbody>
+        <tr class="hover">
+          <td><span class="font-mono text-xs">leaflab-ccdba79f5fac</span></td>
+          <td><span class="badge badge-success badge-sm gap-1"><svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Online</span></td>
+          <td class="font-mono text-xs">v1.2.0</td><td>6 sensors</td><td class="opacity-60">12s ago</td>
+          <td>
+            <div class="flex gap-1">
+              <a href="#/device-detail" class="btn btn-sm btn-primary">View</a>
+              <a href="#/device-edit-config" class="btn btn-sm btn-secondary">Edit Config</a>
+              <button class="btn btn-xs btn-outline">Reboot</button>
+            </div>
+          </td>
+        </tr>
+        <tr class="hover">
+          <td><span class="font-mono text-xs">leaflab-a1b2c3d4e5f6</span></td>
+          <td><span class="badge badge-success badge-sm gap-1"><svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Online</span></td>
+          <td class="font-mono text-xs">v1.2.0</td><td>4 sensors</td><td class="opacity-60">8s ago</td>
+          <td>
+            <div class="flex gap-1">
+              <a href="#/device-detail" class="btn btn-sm btn-primary">View</a>
+              <a href="#/device-edit-config" class="btn btn-sm btn-secondary">Edit Config</a>
+              <button class="btn btn-xs btn-outline">Reboot</button>
+            </div>
+          </td>
+        </tr>
+        <tr class="hover">
+          <td><span class="font-mono text-xs">leaflab-9f8e7d6c5b4a</span></td>
+          <td><span class="badge badge-neutral badge-sm gap-1"><svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l4 4"/></svg>Offline</span></td>
+          <td class="font-mono text-xs">v1.1.3</td><td>4 sensors</td><td class="opacity-60">3h ago</td>
+          <td>
+            <div class="flex gap-1 opacity-50">
+              <a href="#/device-detail" class="btn btn-sm btn-primary">View</a>
+              <span class="text-xs opacity-40 ml-1">Offline — controls disabled</span>
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Config history (admin only) -->
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <h2 class="text-lg font-semibold p-4 border-b border-base-300">Config History</h2>
+    <table class="table table-sm">
+      <thead><tr><th>Device</th><th>#</th><th>Sensors enabled / total</th><th>Last applied</th></tr></thead>
+      <tbody>
+        <tr><td class="font-mono text-xs">leaflab-ccdba79f5fac</td><td>#47</td><td>6/6</td><td class="opacity-60">2h ago</td></tr>
+        <tr><td class="font-mono text-xs">leaflab-a1b2c3d4e5f6</td><td>#12</td><td>4/4</td><td class="opacity-60">1d ago</td></tr>
+        <tr><td class="font-mono text-xs">leaflab-9f8e7d6c5b4a</td><td>#3</td><td>2/4</td><td class="opacity-60">3h ago</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="wf-note mt-4">note: this is the admin-only dashboard. Regular users see a trimmed version (fewer stats, no reboot/config-push buttons). Gawkers never see this page at all.</p>

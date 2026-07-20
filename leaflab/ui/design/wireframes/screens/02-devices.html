@@ -1,0 +1,57 @@
+<!-- wf: name="devices-list" title="Devices — List (legacy)" -->
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg bg-gradient-to-br from-green-900 via-emerald-800 to-teal-900 text-green-50">
+  <h1 class="text-2xl md:text-3xl font-bold mb-2">Devices</h1>
+  <p class="text-sm opacity-80">All sensorboard setups — register, provision, and manage ESP32 nodes</p>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <table class="table">
+      <thead><tr class="bg-base-200"><th>Device ID</th><th>Status</th><th>Firmware</th><th>Sensors</th><th>Last Seen</th><th></th></tr></thead>
+      <tbody>
+        <tr class="hover">
+          <td><span class="font-mono text-xs">leaflab-ccdba79f5fac</span></td>
+          <td><span class="badge badge-success badge-sm gap-1"><svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Online</span></td>
+          <td class="font-mono text-xs">v1.2.0</td>
+          <td>6 sensors</td>
+          <td class="opacity-60">12s ago</td>
+          <td><a href="#/device-detail" class="btn btn-sm btn-primary">View</a></td>
+        </tr>
+        <tr class="hover">
+          <td><span class="font-mono text-xs">leaflab-a1b2c3d4e5f6</span></td>
+          <td><span class="badge badge-success badge-sm gap-1"><svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Online</span></td>
+          <td class="font-mono text-xs">v1.2.0</td>
+          <td>4 sensors</td>
+          <td class="opacity-60">8s ago</td>
+          <td><a href="#/device-detail" class="btn btn-sm btn-primary">View</a></td>
+        </tr>
+        <tr class="hover">
+          <td><span class="font-mono text-xs">leaflab-9f8e7d6c5b4a</span></td>
+          <td><span class="badge badge-neutral badge-sm gap-1"><svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l4 4"/></svg>Offline</span></td>
+          <td class="font-mono text-xs">v1.1.3</td>
+          <td>4 sensors</td>
+          <td class="opacity-60">3h ago</td>
+          <td><a href="#/device-detail" class="btn btn-sm btn-primary">View</a></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <div class="flex justify-between items-center p-4 border-b border-base-300"><h2 class="text-lg font-semibold">Config History</h2></div>
+    <table class="table table-sm">
+      <thead><tr><th>Device</th><th>#</th><th>Sensors enabled / total</th><th>Last applied</th></tr></thead>
+      <tbody>
+        <tr><td class="font-mono text-xs">leaflab-ccdba79f5fac</td><td>#47</td><td>6/6</td><td class="opacity-60">2h ago</td></tr>
+        <tr><td class="font-mono text-xs">leaflab-a1b2c3d4e5f6</td><td>#12</td><td>4/4</td><td class="opacity-60">1d ago</td></tr>
+        <tr><td class="font-mono text-xs">leaflab-9f8e7d6c5b4a</td><td>#3</td><td>2/4</td><td class="opacity-60">3h ago</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="flex gap-2 mt-4"><a href="#/device-edit-config" class="btn btn-primary btn-sm">Edit Config</a><button class="btn btn-secondary btn-sm">Register New Device</button></div>
+
+<p class="wf-note mt-4">note: register new device would open a provision wizard (Wi-Fi + MQTT creds). Config edit links to the per-device config form below.</p>

@@ -1,0 +1,232 @@
+<!-- wf: name="device-edit-config" title="Edit Config — leaflab-ccdba79f5fac" -->
+<div class="breadcrumbs text-sm mb-4">
+  <ul><li><a href="#/devices">Devices</a></li><li><a href="#/device-detail">leaflab-ccdba79f5fac</a></li><li>Edit Config</li></ul>
+</div>
+
+<div class="flex justify-between items-center mb-6">
+  <h1 class="text-2xl md:text-3xl font-bold">Edit Config — leaflab-ccdba79f5fac</h1>
+  <div class="flex gap-2">
+    <a href="#/device-detail" class="btn btn-secondary btn-sm">Cancel</a>
+    <button class="btn btn-primary btn-sm">Push Config #48</button>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <div class="flex justify-between items-center p-4 border-b border-base-300"><h2 class="text-lg font-semibold">Sensor Configurations</h2></div>
+
+    <!-- Sensor row: BH1750-A1 -->
+    <div class="p-4 border-b hover:bg-base-50 transition-colors" id="sensor-row-1">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div class="flex items-center gap-3 flex-1">
+          <label class="relative inline-flex items-center cursor-pointer">
+            <input type="checkbox" checked class="peer sr-only">
+            <span class="w-5 h-5 border-2 peer-checked:border-primary peer-checked:bg-primary rounded-[4px] transition-all"></span>
+          </label>
+          <div>
+            <input type="text" value="BH1750-A1" class="font-medium bg-transparent outline-none border-b border-transparent focus:border-primary w-32 text-sm">
+            <span class="text-xs opacity-60 ml-2">BH1750 · Illuminance</span>
+          </div>
+        </div>
+
+        <!-- sensor-name-form -->
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-4">
+          <label class="inline-flex items-center gap-2 text-sm"><input type="text" value="BH1750-A1" class="bg-transparent border-b border-base-300 focus:border-primary outline-none w-28 py-0.5"></label>
+        </div>
+
+        <!-- sensor-id-form -->
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-4">
+          <span class="text-sm opacity-60">I2C</span><input type="number" value="98" min="0" max="126" class="bg-transparent border-b border-base-300 focus:border-primary outline-none w-14 py-0.5 text-right font-mono text-xs"><span class="text-xs opacity-60">addr</span>
+        </div>
+
+        <!-- poll-interval-form -->
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-2">
+          <label class="text-sm opacity-60 w-16 text-right">Poll</label><input type="number" value="2000" step="500" min="250" class="bg-transparent border-b border-base-300 focus:border-primary outline-none w-16 py-0.5 font-mono text-xs"><span class="text-sm opacity-60">ms</span>
+        </div>
+
+        <!-- region-form -->
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-2">
+          <label class="text-sm opacity-60 w-14 text-right">Region</label><select class="bg-transparent border-b border-base-300 focus:border-primary outline-none py-0.5 pr-4 text-xs"><option>Room A · Shelf 1</option></select>
+        </div>
+
+        <button class="btn btn-sm btn-outline btn-circle md:hidden">...</button>
+      </div>
+    </div>
+
+    <!-- Sensor row: SHT3x-T1 -->
+    <div class="p-4 border-b hover:bg-base-50 transition-colors" id="sensor-row-2">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div class="flex items-center gap-3 flex-1">
+          <label class="relative inline-flex items-center cursor-pointer">
+            <input type="checkbox" checked class="peer sr-only">
+            <span class="w-5 h-5 border-2 peer-checked:border-primary peer-checked:bg-primary rounded-[4px] transition-all"></span>
+          </label>
+          <div>
+            <input type="text" value="SHT3x-T1" class="font-medium bg-transparent outline-none border-b border-transparent focus:border-primary w-28 text-sm">
+            <span class="text-xs opacity-60 ml-2">SHT3x · Temperature</span>
+          </div>
+        </div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-4">
+          <label class="inline-flex items-center gap-2 text-sm"><input type="text" value="SHT3x-T1" class="bg-transparent border-b border-base-300 focus:border-primary outline-none w-28 py-0.5"></label>
+        </div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-4">
+          <span class="text-sm opacity-60">I2C</span><input type="number" value="68" min="0" max="126" class="bg-transparent border-b border-base-300 focus:border-primary outline-none w-14 py-0.5 text-right font-mono text-xs"><span class="text-xs opacity-60">addr</span>
+        </div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-2">
+          <label class="text-sm opacity-60 w-16 text-right">Poll</label><input type="number" value="5000" step="500" min="250" class="bg-transparent border-b border-base-300 focus:border-primary outline-none w-16 py-0.5 font-mono text-xs"><span class="text-sm opacity-60">ms</span>
+        </div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-2">
+          <label class="text-sm opacity-60 w-14 text-right">Region</label><select class="bg-transparent border-b border-base-300 focus:border-primary outline-none py-0.5 pr-4 text-xs"><option>Room A · Shelf 1</option></select>
+        </div>
+
+        <button class="btn btn-sm btn-outline btn-circle md:hidden">...</button>
+      </div>
+    </div>
+
+    <!-- Sensor row: SHT3x-H1 (disabled) -->
+    <div class="p-4 border-b hover:bg-base-50 transition-colors opacity-50 bg-base-100" id="sensor-row-3">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div class="flex items-center gap-3 flex-1">
+          <label class="relative inline-flex items-center cursor-pointer">
+            <input type="checkbox" class="peer sr-only">
+            <span class="w-5 h-5 border-2 rounded-[4px] transition-all"></span>
+          </label>
+          <div>
+            <input type="text" value="SHT3x-H1" class="font-medium bg-transparent outline-none border-b border-transparent focus:border-primary w-28 text-sm">
+            <span class="text-xs opacity-60 ml-2">SHT3x · Humidity</span>
+          </div>
+        </div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-4">
+          <label class="inline-flex items-center gap-2 text-sm"><input type="text" value="SHT3x-H1" class="bg-transparent border-b border-base-300 focus:border-primary outline-none w-28 py-0.5"></label>
+        </div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-4">
+          <span class="text-sm opacity-60">I2C</span><input type="number" value="68" min="0" max="126" class="bg-transparent border-b border-base-300 focus:border-primary outline-none w-14 py-0.5 text-right font-mono text-xs"><span class="text-xs opacity-60">addr</span>
+        </div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-2"></div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-2">
+          <label class="text-sm opacity-60 w-14 text-right">Region</label><select class="bg-transparent border-b border-base-300 focus:border-primary outline-none py-0.5 pr-4 text-xs"><option>Room A · Shelf 1</option></select>
+        </div>
+
+        <button class="btn btn-sm btn-outline btn-circle md:hidden">...</button>
+      </div>
+    </div>
+
+    <!-- Sensor row: BH1750-A2 -->
+    <div class="p-4 border-b hover:bg-base-50 transition-colors" id="sensor-row-4">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div class="flex items-center gap-3 flex-1">
+          <label class="relative inline-flex items-center cursor-pointer">
+            <input type="checkbox" checked class="peer sr-only">
+            <span class="w-5 h-5 border-2 peer-checked:border-primary peer-checked:bg-primary rounded-[4px] transition-all"></span>
+          </label>
+          <div>
+            <input type="text" value="BH1750-A2" class="font-medium bg-transparent outline-none border-b border-transparent focus:border-primary w-32 text-sm">
+            <span class="text-xs opacity-60 ml-2">BH1750 · Illuminance</span>
+          </div>
+        </div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-4">
+          <label class="inline-flex items-center gap-2 text-sm"><input type="text" value="BH1750-A2" class="bg-transparent border-b border-base-300 focus:border-primary outline-none w-28 py-0.5"></label>
+        </div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-4">
+          <span class="text-sm opacity-60">I2C</span><input type="number" value="98" min="0" max="126" class="bg-transparent border-b border-base-300 focus:border-primary outline-none w-14 py-0.5 text-right font-mono text-xs"><span class="text-xs opacity-60">addr</span>
+        </div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-2">
+          <label class="text-sm opacity-60 w-16 text-right">Poll</label><input type="number" value="2000" step="500" min="250" class="bg-transparent border-b border-base-300 focus:border-primary outline-none w-16 py-0.5 font-mono text-xs"><span class="text-sm opacity-60">ms</span>
+        </div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-2">
+          <label class="text-sm opacity-60 w-14 text-right">Region</label><select class="bg-transparent border-b border-base-300 focus:border-primary outline-none py-0.5 pr-4 text-xs"><option>Room B · Shelf 2</option></select>
+        </div>
+
+        <button class="btn btn-sm btn-outline btn-circle md:hidden">...</button>
+      </div>
+    </div>
+
+    <!-- Sensor row: SHT3x-T2 -->
+    <div class="p-4 border-b hover:bg-base-50 transition-colors" id="sensor-row-5">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div class="flex items-center gap-3 flex-1">
+          <label class="relative inline-flex items-center cursor-pointer">
+            <input type="checkbox" checked class="peer sr-only">
+            <span class="w-5 h-5 border-2 peer-checked:border-primary peer-checked:bg-primary rounded-[4px] transition-all"></span>
+          </label>
+          <div>
+            <input type="text" value="SHT3x-T2" class="font-medium bg-transparent outline-none border-b border-transparent focus:border-primary w-32 text-sm">
+            <span class="text-xs opacity-60 ml-2">SHT3x · Temperature</span>
+          </div>
+        </div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-4">
+          <label class="inline-flex items-center gap-2 text-sm"><input type="text" value="SHT3x-T2" class="bg-transparent border-b border-base-300 focus:border-primary outline-none w-28 py-0.5"></label>
+        </div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-4">
+          <span class="text-sm opacity-60">I2C</span><input type="number" value="68" min="0" max="126" class="bg-transparent border-b border-base-300 focus:border-primary outline-none w-14 py-0.5 text-right font-mono text-xs"><span class="text-xs opacity-60">addr</span>
+        </div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-2">
+          <label class="text-sm opacity-60 w-16 text-right">Poll</label><input type="number" value="5000" step="500" min="250" class="bg-transparent border-b border-base-300 focus:border-primary outline-none w-16 py-0.5 font-mono text-xs"><span class="text-sm opacity-60">ms</span>
+        </div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-2">
+          <label class="text-sm opacity-60 w-14 text-right">Region</label><select class="bg-transparent border-b border-base-300 focus:border-primary outline-none py-0.5 pr-4 text-xs"><option>Room B · Shelf 2</option></select>
+        </div>
+
+        <button class="btn btn-sm btn-outline btn-circle md:hidden">...</button>
+      </div>
+    </div>
+
+    <!-- Sensor row: SHT3x-H2 -->
+    <div class="p-4 hover:bg-base-50 transition-colors" id="sensor-row-6">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div class="flex items-center gap-3 flex-1">
+          <label class="relative inline-flex items-center cursor-pointer">
+            <input type="checkbox" checked class="peer sr-only">
+            <span class="w-5 h-5 border-2 peer-checked:border-primary peer-checked:bg-primary rounded-[4px] transition-all"></span>
+          </label>
+          <div>
+            <input type="text" value="SHT3x-H2" class="font-medium bg-transparent outline-none border-b border-transparent focus:border-primary w-32 text-sm">
+            <span class="text-xs opacity-60 ml-2">SHT3x · Humidity</span>
+          </div>
+        </div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-4">
+          <label class="inline-flex items-center gap-2 text-sm"><input type="text" value="SHT3x-H2" class="bg-transparent border-b border-base-300 focus:border-primary outline-none w-28 py-0.5"></label>
+        </div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-4">
+          <span class="text-sm opacity-60">I2C</span><input type="number" value="68" min="0" max="126" class="bg-transparent border-b border-base-300 focus:border-primary outline-none w-14 py-0.5 text-right font-mono text-xs"><span class="text-xs opacity-60">addr</span>
+        </div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-2">
+          <label class="text-sm opacity-60 w-16 text-right">Poll</label><input type="number" value="5000" step="500" min="250" class="bg-transparent border-b border-base-300 focus:border-primary outline-none w-16 py-0.5 font-mono text-xs"><span class="text-sm opacity-60">ms</span>
+        </div>
+
+        <div class="flex flex-col gap-1 md:flex-row md:items-center gap-x-2">
+          <label class="text-sm opacity-60 w-14 text-right">Region</label><select class="bg-transparent border-b border-base-300 focus:border-primary outline-none py-0.5 pr-4 text-xs"><option>Room B · Shelf 2</option></select>
+        </div>
+
+        <button class="btn btn-sm btn-outline btn-circle md:hidden">...</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="flex gap-2 mt-4">
+  <button class="btn btn-secondary btn-sm">Add Sensor (from manifest)</button>
+  <a href="#/device-detail" class="btn btn-secondary btn-sm">Cancel</a>
+  <button class="btn btn-primary btn-sm">Push Config #48</button>
+</div>
+
+<p class="wf-note mt-4">note: toggling a checkbox off should disable the sensor on device (config_applier destroys it). "Add Sensor" would list sensors from the device manifest not yet in config. Poll interval disabled when row is unchecked.</p>

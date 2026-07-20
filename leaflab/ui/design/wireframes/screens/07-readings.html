@@ -1,0 +1,60 @@
+<!-- wf: name="readings" title="Sensor Readings" -->
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg bg-gradient-to-br from-green-900 via-emerald-800 to-teal-900 text-green-50">
+  <h1 class="text-2xl md:text-3xl font-bold mb-2">Sensor Readings</h1>
+  <p class="text-sm opacity-80">Time-series data from all sensorboards — view latest values and historical trends</p>
+</div>
+
+<div class="flex flex-col md:flex-row gap-4 mb-6">
+  <!-- Filter bar -->
+  <div class="card bg-base-100 shadow-md flex-1">
+    <div class="card-body p-4 gap-3">
+      <h2 class="text-sm font-semibold opacity-60 uppercase tracking-wide">Filters</h2>
+      <div class="flex flex-col md:flex-row gap-3">
+        <!-- device selector -->
+        <select class="border-b border-base-300 focus:border-primary outline-none py-1 px-2 text-sm bg-transparent"><option>All devices (3)</option><option>leaflab-ccdba79f5fac</option><option>leaflab-a1b2c3d4e5f6</option><option>leaflab-9f8e7d6c5b4a (offline)</option></select>
+        <!-- sensor type -->
+        <select class="border-b border-base-300 focus:border-primary outline-none py-1 px-2 text-sm bg-transparent"><option>All types</option><option>BH1750 · Illuminance</option><option>SHT3x · Temperature</option><option>SHT3x · Humidity</option></select>
+        <!-- sensor name -->
+        <input type="text" placeholder="Sensor name…" class="border-b border-base-300 focus:border-primary outline-none py-1 px-2 text-sm bg-transparent w-full md:w-auto">
+      </div>
+    </div>
+  </div>
+
+  <!-- Time range -->
+  <div class="card bg-base-100 shadow-md md:w-56 shrink-0">
+    <div class="card-body p-4 gap-2">
+      <h2 class="text-sm font-semibold opacity-60 uppercase tracking-wide">Time Range</h2>
+      <select class="border-b border-base-300 focus:border-primary outline-none py-1 px-2 text-sm bg-transparent w-full"><option>Last 5 minutes</option><option>Last 30 minutes</option><option>Last hour</option><option>Last day</option><option>Custom range…</option></select>
+    </div>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-4 gap-2">
+    <!-- Placeholder chart area -->
+    <div class="border-2 border-dashed border-base-300 rounded-box h-64 flex items-center justify-center text-sm opacity-50">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 mr-2 inline opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6m4 0l4-4m0 0l4 4m-4-4V3"/></svg>
+      Interactive chart — time-series line graph (lux / °C / %) with zoom &amp; cross-hair
+    </div>
+
+    <!-- Legend -->
+    <div class="flex flex-wrap gap-3 mt-2 pt-2 border-t border-base-200">
+      <span class="badge badge-sm bg-teal-500 text-white">● Illuminance (BH1750-A1)</span>
+      <span class="badge badge-sm bg-blue-400 text-white">● Temperature SHT3x-T1</span>
+      <span class="badge badge-sm bg-cyan-400 text-white">● Humidity SHT3x-H1</span>
+    </div>
+
+    <!-- Data table -->
+    <table class="table mt-6">
+      <thead><tr><th>Sensor</th><th>Type</th><th>Region</th><th>Lux</th><th>°C</th><th>% RH</th><th>Last Updated</th></tr></thead>
+      <tbody>
+        <tr class="hover"><td class="font-mono text-xs">BH1750-A1</td><td>Illuminance</td><td><a href="#/region-edit" class="link link-primary text-xs">Room A · Shelf 1</a></td><td>423 lux</td><td>24.7 °C</td><td>62.1 %</td><td class="opacity-60 text-xs">now</td></tr>
+        <tr class="hover"><td class="font-mono text-xs">BH1750-A2</td><td>Illuminance</td><td><a href="#/region-edit" class="link link-primary text-xs">Room B · Shelf 2</a></td><td>387 lux</td><td>25.3 °C</td><td>58.9 %</td><td class="opacity-60 text-xs">now</td></tr>
+        <tr class="hover"><td class="font-mono text-xs">SHT3x-T2</td><td>Temperature</td><td><a href="#/region-edit" class="link link-primary text-xs">Room B · Shelf 2</a></td><td>—</td><td>25.3 °C</td><td>58.9 %</td><td class="opacity-60 text-xs">now</td></tr>
+        <tr class="hover"><td class="font-mono text-xs">SHT3x-H1</td><td>Humidity</td><td><a href="#/region-edit" class="link link-primary text-xs">Room A · Shelf 1</a></td><td>—</td><td>24.7 °C</td><td>62.1 %</td><td class="opacity-60 text-xs">now</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="wf-note mt-4">note: chart needs JS + canvas/SVG library — wireframe shows placeholder. Chart would support toggling sensor lines, zooming time range, and hovering for exact values.</p>

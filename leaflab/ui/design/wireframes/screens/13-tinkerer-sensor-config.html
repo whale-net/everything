@@ -1,0 +1,110 @@
+<!-- wf: name="sensor-edit" title="Edit Sensor — BH1750-A1 (Tinkering)" parent="device-edit-config" -->
+
+<div class="breadcrumbs text-sm mb-4">
+  <ul><li><a href="#/devices">Devices</a></li><li><a href="#/device-detail">leaflab-ccdba79f5fac</a></li><li>BH1750-A1 — Edit Sensor</li></ul>
+</div>
+
+<div class="flex justify-between items-center mb-6">
+  <h1 class="text-2xl md:text-3xl font-bold">Edit Sensor — BH1750-A1</h1>
+  <div class="flex gap-2"><a href="#/device-edit-config" class="btn btn-secondary btn-sm">Cancel</a><button class="btn btn-primary btn-sm">Apply Changes</button></div>
+</div>
+
+<div class="grid md:grid-cols-3 gap-6 mb-6">
+  <!-- Sensor identity -->
+  <div class="card bg-base-100 shadow-md md:col-span-2">
+    <div class="card-body p-4">
+      <h2 class="text-lg font-semibold mb-3 border-b border-base-300 pb-1">Sensor Identity</h2>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <!-- Name -->
+        <div class="flex flex-col gap-1">
+          <label class="text-sm opacity-60">Logical Name</label>
+          <input type="text" value="BH1750-A1" placeholder="e.g. BH1750-A3" class="border-b border-base-300 focus:border-primary outline-none py-2 w-full text-sm">
+        </div>
+
+        <!-- Sensor ID (immutable) -->
+        <div class="flex flex-col gap-1 opacity-60">
+          <label class="text-sm">Sensor ID</label>
+          <span class="font-mono text-xs bg-base-200 rounded-box px-3 py-2 w-full select-all">bh1750-1</span>
+        </div>
+
+        <!-- I2C Address -->
+        <div class="flex flex-col gap-1">
+          <label class="text-sm opacity-60">I2C Address</label>
+          <select class="border-b border-base-300 focus:border-primary outline-none py-2 w-full text-sm bg-transparent"><option>0x68 (98) — BH1750</option><option>0x3C (60) — OLED Display</option><option>0x40 (64) — SHT3x Temp/Humidity</option><option>0x23 (35) — TSL2591 Ambient Light</option></select>
+          <span class="text-xs opacity-40 mt-1">Matches detected hardware address on I2C bus</span>
+        </div>
+
+        <!-- Polling interval -->
+        <div class="flex flex-col gap-1">
+          <label class="text-sm opacity-60">Polling Interval (ms)</label>
+          <input type="number" value="2000" min="250" step="250" class="border-b border-base-300 focus:border-primary outline-none py-2 w-full font-mono text-sm">
+        </div>
+
+        <!-- Region -->
+        <div class="flex flex-col gap-1 md:col-span-2">
+          <label class="text-sm opacity-60 mb-1">Physical Location (Region)</label>
+          <!-- Nested select tree for tinkering — shows full path -->
+          <select class="border-b border-base-300 focus:border-primary outline-none py-2 w-full text-sm bg-transparent md:col-span-2">
+            <option value="">— No region assigned —</option>
+            <optgroup label="Room A">
+              <option value="roomA" selected>&nbsp;&nbsp;└ Room A (main greenhouse section)</option>
+              <option value="shelf1">&nbsp;&nbsp;&nbsp;&nbsp;├ Shelf 1 (top shelf by window)</option>
+              <option value="shelf2">&nbsp;&nbsp;&nbsp;&nbsp;└ Shelf 2 (middle shelf, ambient)</option>
+            </optgroup>
+            <optgroup label="Room B">
+              <option value="roomB">&nbsp;&nbsp;└ Room B (secondary section)</option>
+              <option value="shelf3">&nbsp;&nbsp;&nbsp;&nbsp;├ Shelf 1 (near door, variable temp)</option>
+              <option value="shelf4">&nbsp;&nbsp;&nbsp;&nbsp;└ Shelf 2 (away from window)</option>
+            </optgroup>
+            <optgroup label="Potting Area">
+              <option value="pots">&nbsp;&nbsp;└ Potting Area (covered potting station)</option>
+            </optgroup>
+          </select>
+        </div>
+
+        <!-- Enable/disable -->
+        <div class="flex flex-col gap-1 md:col-span-2">
+          <label class="inline-flex items-center gap-3 text-sm cursor-pointer">
+            <input type="checkbox" checked class="peer sr-only">
+            <span class="w-5 h-5 border-2 peer-checked:border-primary peer-checked:bg-primary rounded-[4px] transition-all"></span>
+            <span><strong>Enabled</strong> — sensor will be instantiated on device and begin reporting readings</span>
+          </label>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Hardware info panel -->
+  <div class="card bg-base-100 shadow-md">
+    <div class="card-body p-4">
+      <h2 class="text-lg font-semibold mb-3 border-b border-base-300 pb-1">Hardware Info</h2>
+
+      <!-- Detected chip -->
+      <table class="table table-sm">
+        <tbody>
+          <tr><td class="opacity-60 w-24">Chip</td><td>BH1750FVC</td></tr>
+          <tr><td class="opacity-60">Manufacturer</td><td>Rohm Semiconductor</td></tr>
+          <tr><td class="opacity-60">Range</td><td class="text-xs">0.1 – 100,000 lux</td></tr>
+          <tr><td class="opacity-60">Default addr</td><td class="font-mono text-xs">0x23 (35)</td></tr>
+        </tbody>
+      </table>
+
+      <!-- Config version info -->
+      <div class="mt-4 p-3 bg-base-200 rounded-box">
+        <h3 class="text-sm font-semibold mb-1 opacity-60 uppercase tracking-wide">Config Version</h3>
+        <p class="text-xs opacity-70">Current device config: <span class="font-mono">#47</span></p>
+        <p class="text-xs opacity-70 mt-1">Pending changes will push <span class="font-mono text-primary font-semibold">#48</span></p>
+      </div>
+
+      <!-- Quick actions -->
+      <div class="mt-4 flex flex-col gap-2">
+        <button class="btn btn-secondary btn-sm justify-start gap-1"><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>Export Config JSON</button>
+        <button class="btn btn-outline btn-sm justify-start gap-1 text-error"><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-8 8-4-4-1 1"/></svg>Remove from Device</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="wf-note mt-4">note: tinkering screen exposes all sensor knobs — I2C address, poll interval, region nesting, enable/disable. "Apply Changes" pushes config #48 to the device via MQTT. Remove from Device destroys the sensor at hardware level.</p>
