@@ -37,6 +37,18 @@ type SessionConsumer struct {
 	// Zero value means the consumer has active subscribers.
 	idleSince time.Time
 
+	// lifecycleManaged is true if the session was in a live (non-terminal) status
+	// at consumer-creation time. Such consumers are exempt from reapIdleConsumers:
+	// they are only removed via the explicit DeleteConsumerForSession call on
+	// session end, so the RabbitMQ queue is always being actively drained while
+	// the game session is alive, regardless of whether any UI viewer is
+	// subscribed. This must match (or be broader than) the set of statuses
+	// recoverActiveSessions treats as live (see isLiveSessionStatus): since
+	// CreateConsumerForSession is idempotent, a consumer created while a
+	// session is still starting/stopping never gets a second chance to set
+	// this flag once the session reaches "running".
+	lifecycleManaged bool
+
 	// Ring buffer for recent logs
 	logBuffer       []*manmanpb.LogMessage
 	bufferSize      int
@@ -54,7 +66,7 @@ type Manager struct {
 	config        *ConsumerConfig
 	grpcClient    manmanpb.ManManAPIClient
 	archiver      Archiver
-	logsProcessed int64      // Total logs processed (atomic)
+	logsProcessed int64 // Total logs processed (atomic)
 	statsCtx      context.Context
 	statsCancel   context.CancelFunc
 	statsWg       sync.WaitGroup
@@ -174,6 +186,22 @@ func (m *Manager) Subscribe(ctx context.Context, sessionID int64, afterSequence 
 	}, nil
 }
 
+// isLiveSessionStatus reports whether a session status means the session is
+// still expected to produce logs. Mirrors the status set the API's LiveOnly
+// filter treats as live (postgres session repository), so a session recovered
+// mid-startup/mid-shutdown (main.go's recoverActiveSessions uses LiveOnly) is
+// marked lifecycleManaged from the start rather than only once it reaches
+// "running" — CreateConsumerForSession is idempotent and won't get a second
+// chance to set the flag on the running transition.
+func isLiveSessionStatus(status string) bool {
+	switch status {
+	case "pending", "starting", "running", "stopping":
+		return true
+	default:
+		return false
+	}
+}
+
 // createConsumer creates a new RabbitMQ consumer for a session
 func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*SessionConsumer, error) {
 	queueName := fmt.Sprintf("logs.session.%d", sessionID)
@@ -208,18 +236,19 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 
 	bufferSize := 500 // Keep last 500 log messages in memory
 	sc := &SessionConsumer{
-		sessionID:     sessionID,
-		sgcID:         sessionResp.Session.ServerGameConfigId,
-		queueName:     queueName,
-		consumer:      consumer,
-		subscribers:   make(map[chan *manmanpb.LogMessage]struct{}),
-		cancel:        cancel, // This cancel is for the consumerCtx
-		done:          make(chan struct{}),
-		logsProcessed: &m.logsProcessed,
-		logBuffer:     make([]*manmanpb.LogMessage, bufferSize),
-		bufferSize:    bufferSize,
-		bufferIndex:   0,
-		bufferFull:    false,
+		sessionID:        sessionID,
+		sgcID:            sessionResp.Session.ServerGameConfigId,
+		queueName:        queueName,
+		consumer:         consumer,
+		subscribers:      make(map[chan *manmanpb.LogMessage]struct{}),
+		cancel:           cancel, // This cancel is for the consumerCtx
+		done:             make(chan struct{}),
+		logsProcessed:    &m.logsProcessed,
+		lifecycleManaged: isLiveSessionStatus(sessionResp.Session.Status),
+		logBuffer:        make([]*manmanpb.LogMessage, bufferSize),
+		bufferSize:       bufferSize,
+		bufferIndex:      0,
+		bufferFull:       false,
 	}
 
 	// Seed with any logs retained from a previous consumer reap so reconnecting
@@ -228,7 +257,6 @@ func (m *Manager) createConsumer(ctx context.Context, sessionID int64) (*Session
 		sc.seedBuffer(retained)
 		delete(m.retainedLogs, sessionID)
 	}
-
 
 	// Start consuming in background using the detached context
 	go sc.consumeLoop(consumerCtx, m.config.DebugLogOutput, m.archiver)
@@ -541,6 +569,9 @@ func (m *Manager) reapIdleConsumers() {
 
 	now := time.Now()
 	for sessionID, c := range m.consumers {
+		if c.lifecycleManaged {
+			continue
+		}
 		c.mu.RLock()
 		idle := !c.idleSince.IsZero() && now.Sub(c.idleSince) > idleConsumerTTL
 		c.mu.RUnlock()
