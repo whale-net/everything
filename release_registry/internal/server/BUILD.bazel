@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+# Registry server package — RPC implementations backed by Postgres.
+go_library(
+    name = "server",
+    srcs = ["db.go", "server.go"],
+    importpath = "github.com/whale-net/everything/release_registry/internal/server",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@org_golang_google_grpc//:grpc",
+        "//proto/gen",
+        "//libs/go/db",
+    ],
+)
