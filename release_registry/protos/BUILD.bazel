@@ -1,0 +1,19 @@
+load("@rules_go//proto:def.bzl", "go_proto_library")
+load("@rules_proto//proto:defs.bzl", "proto_library")
+
+# Generate Go client/server code from registry.proto.
+# Produces: registrypb (alias -> registrypb_go_proto) with gRPC stubs.
+
+go_proto_library(
+    name = "registrypb",
+    compilers = ["@rules_go//proto:go_grpc"],
+    importpath = "github.com/whale-net/everything/release_registry/protos",
+    proto = ":registrypb_proto",
+    visibility = ["//visibility:public"],
+)
+
+proto_library(
+    name = "registrypb_proto",
+    srcs = ["registry.proto"],
+    visibility = ["//visibility:public"],
+)
