@@ -76,6 +76,46 @@ WHERE app = $1 AND env = $2 AND kind = $3
 | `Promote` | Service account | Promote a version to an environment; SCD2 close+open on promotion_log |
 | `Resolve` | Open (no auth) | Return the active artifact for app + env + kind |
 
+## Auth Interceptor
+
+The registry uses a gRPC server-side interceptor (`//release_registry/internal/auth`) that wraps
+the shared `libs/go/grpcauth` library. The interceptor is wired into `grpc.NewServer()` at startup:
+
+```go
+unaryInt, streamInt, err := auth.NewServerInterceptors(ctx)
+server := grpc.NewServer(
+    grpc.UnaryInterceptor(unaryInt),
+    grpc.StreamInterceptor(streamInt),
+)
+```
+
+### Auth Modes
+
+| Mode | Behavior |
+|------|----------|
+| `none` (default) | Injects fake `Claims{Subject: "dev-user", Roles: ["admin"]}` — no token required. Enables local dev with zero Keycloak setup. |
+| `oidc` | Validates the `Authorization: Bearer <token>` header via the go-oidc verifier against the configured Keycloak issuer URL (`GRPC_OIDC_ISSUER`). The verifier checks `iss`, `aud` (matches `GRPC_OIDC_CLIENT_ID`), and `exp`. Invalid tokens return `codes.Unauthenticated`. |
+
+### Flow
+
+```
+Client → "authorization: Bearer <jwt>" metadata header
+     → auth.NewServerInterceptors() extracts & verifies token
+       ├── oidcVerifier.Verify() — go-oidc JWKS-backed RSA verification
+         ├── checks issuer == GRPC_OIDC_ISSUER
+         ├── checks audience contains GRPC OIDC_CLIENT_ID
+         └── checks exp not expired
+     → Claims injected into gRPC context via context.WithValue
+     → RPC handler reads via grpcauth.ClaimsFromContext(ctx)
+```
+
+### Client Credentials (service account)
+
+Service-to-service calls use the client-credentials grant flow from `libs/go/grpcauth`:
+the client fetches a token once and auto-refreshes it, passing it in every gRPC call.
+
+See [libs/go/grpcauth/README.md](../libs/go/grpcauth/README.md) for full usage patterns.
+
 ---
 
 ## Deployment Pattern

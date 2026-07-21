@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -12,6 +13,8 @@ import (
 
 	pb "github.com/whale-net/everything/release_registry/proto/gen"
 
+	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/release_registry/internal/auth"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
@@ -36,7 +39,25 @@ func main() {
 		log.Fatalf("failed to listen on port %d: %v", port, err)
 	}
 
-	srv := grpc.NewServer(reflection.ServerOption())
+	ctx := context.Background()
+
+	var opts []grpc.ServerOption
+	if mode := grpcauth.AuthMode(os.Getenv("GRPC_AUTH_MODE")); mode == "oidc" {
+		log.Println("registry-server: OIDC auth enabled (Keycloak)")
+	} else {
+		log.Println("registry-server: auth disabled — dev mode (no Keycloak required)")
+	}
+
+	unaryInt, streamInt, err := auth.NewServerInterceptors(ctx)
+	if err != nil {
+		log.Fatalf("failed to create auth interceptors: %v", err)
+	}
+
+	opts = append(opts, grpc.StreamInterceptor(streamInt))
+	opts = append(opts, grpc.UnaryInterceptor(unaryInt))
+	opts = append(opts, reflection.ServerOption())
+
+	srv := grpc.NewServer(opts...)
 	pb.RegisterRegistryServiceServer(srv, &server{})
 
 	go func() {

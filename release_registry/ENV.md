@@ -26,8 +26,17 @@ All gRPC endpoints support JWT authentication via Keycloak. Default is `none` (d
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GRPC_AUTH_MODE` | `none` | `none` or `oidc` |
-| `GRPC_OIDC_ISSUER` | `""` | Keycloak realm URL, e.g. `https://auth.company.com/realms/myrealm` |
-| `GRPC_OIDC_CLIENT_ID` | `""` | Expected audience / client ID in token |
+| `GRPC_OIDC_ISSUER` | `""` | Keycloak realm URL, e.g. `https://auth.company.com/realms/myrealm` (required for `oidc`) |
+| `GRPC_OIDC_CLIENT_ID` | `""` | Expected audience / client ID in token (required for `oidc`) |
+
+### Client Side (service account — outgoing calls)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GRPC_AUTH_MODE` | `none` | `none` or `oidc` |
+| `GRPC_AUTH_TOKEN_URL` | `""` | Keycloak token endpoint URL (required for `oidc`) |
+| `GRPC_AUTH_CLIENT_ID` | `""` | Service account client ID |
+| `GRPC_AUTH_CLIENT_SECRET` | `""` | Service account client secret |
 
 See [manmanv2/ENV.md](../manmanv2/ENV.md) for the full gRPC auth policy across the platform.
 
