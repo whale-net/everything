@@ -126,7 +126,9 @@ WHERE <entity_id> = $1
 | `tools/` | Build, release, Helm, and development tooling | [TOC](tools/TOC.md) |
 | `friendly_computing_machine/` | Slack bot with Temporal workflows | [TOC](friendly_computing_machine/TOC.md) |
 | `docs/` | Cross-cutting infrastructure and build system docs | [TOC](docs/TOC.md) |
+| `release_registry/` | Application release registry: gRPC service for artifact tracking and environment promotions | [TOC](release_registry/TOC.md) |
 | `firmware/` | Board-agnostic C++ sensor libraries (ISensor, II2CBus, MQTTWriter) | [TOC](firmware/TOC.md) |
 | `leaflab/` | Plant monitoring firmware and data pipeline | [TOC](leaflab/TOC.md) |
+| `release_registry/` | Version registry service — commits, artifacts, promotions + ArgoCD plugin adapter | [TOC](release_registry/TOC.md) |
 | `demo/` | Example applications — see individual READMEs | — |
 | `generated/` | Auto-generated OpenAPI clients — do not edit manually | — |
