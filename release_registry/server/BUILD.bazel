@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_binary")
+load("//tools/bazel:release.bzl", "release_app")
+
+# Registry server binary and release metadata.
+# NOTE: import path in main.go is github.com/whale-net/everything/release_registry/proto/gen
+# which matches the proto BUILD.bazel go_proto_library importpath.
+
+go_binary(
+    name = "registry-server",
+    srcs = ["main.go"],
+    deps = [
+        "//release_registry/protos:registrypb",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//reflection",
+        "//libs/go/grpcauth",
+        "//release_registry/internal/auth",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata and OCI images for this app.
+release_app(
+    name = "registry-server",
+    language = "go",
+    domain = "release_registry",
+    description = "Version registry gRPC service — commits, artifacts, promotions + ArgoCD plugin adapter",
+    app_type = "internal-api",
+    port = 50054,
+)

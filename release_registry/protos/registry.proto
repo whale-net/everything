@@ -1,0 +1,111 @@
+syntax = "proto3";
+
+package release_registry;
+
+option go_package = "github.com/whale-net/everything/release_registry/proto/gen";
+
+// ============================================================================
+// Registry Service — version registry API
+//
+// The release registry tracks application metadata, git commits, container
+// artifacts and promotes them to environments.  Consumers (ArgoCD plugin,
+// dashboard) use Resolve() to discover which artifact version is active for a
+// given app + environment.
+// ============================================================================
+
+service RegistryService {
+  // RegisterApp registers an application with the release registry.
+  rpc RegisterApp(RegisterAppRequest) returns (RegisterAppResponse);
+
+  // RegisterCommit records a git commit so the registry can map commits to versions.
+  rpc RegisterCommit(RegisterCommitRequest) returns (RegisterCommitResponse);
+
+  // RegisterArtifact binds an artifact (image or helm chart) to an app + version.
+  rpc RegisterArtifact(RegisterArtifactRequest) returns (RegisterArtifactResponse);
+
+  // Promote promotes a version of an artifact into the given environment.
+  rpc Promote(PromoteRequest) returns (PromoteResponse);
+
+  // Resolve returns the active version and commit for an app in an environment.
+  rpc Resolve(ResolveRequest) returns (ResolveResponse);
+}
+
+// ---------------------------------------------------------------------------
+// Application metadata
+// ---------------------------------------------------------------------------
+
+message AppMetadata {
+  string app_key = 1;       // domain-app format, e.g. "manmanv2-host-manager"
+  string domain  = 2;
+  string name    = 3;
+  optional string registry   = 4;
+  optional string organization = 5;
+}
+
+// ---------------------------------------------------------------------------
+// RPC: RegisterApp
+// ---------------------------------------------------------------------------
+
+message RegisterAppRequest { AppMetadata metadata = 1; }
+message RegisterAppResponse { bool success = 1; }
+
+// ---------------------------------------------------------------------------
+// RPC: RegisterCommit
+// ---------------------------------------------------------------------------
+
+message CommitRecord {
+  string repo    = 1;         // git remote URL or short name
+  string sha     = 2;         // full commit SHA (hex)
+  string ref     = 3;         // branch / tag / ref name
+  string timestamp = 4;       // RFC3339 or similar
+}
+
+message RegisterCommitRequest { CommitRecord record = 1; }
+message RegisterCommitResponse { bool success = 1; }
+
+// ---------------------------------------------------------------------------
+// RPC: RegisterArtifact
+// ---------------------------------------------------------------------------
+
+enum ArtifactKind { IMAGE = 0; HELM_CHART = 1; }
+
+message RegisterArtifactRequest {
+  string app_key   = 1;
+  ArtifactKind kind    = 2;
+  string version     = 3;
+  string commit_sha  = 4;
+}
+
+message RegisterArtifactResponse {
+  bool success  = 1;
+  string version = 2;       // registry-computed version for FR3/FR8
+}
+
+// ---------------------------------------------------------------------------
+// RPC: Promote
+// ---------------------------------------------------------------------------
+
+message PromoteRequest {
+  string app_key = 1;
+  string env     = 2;         // e.g. "dev", "staging", "prod"
+  string kind    = 3;         // artifact kind (IMAGE or HELM_CHART)
+  string version = 4;
+}
+
+message PromoteResponse { bool success = 1; }
+
+// ---------------------------------------------------------------------------
+// RPC: Resolve
+// ---------------------------------------------------------------------------
+
+message ResolveRequest {
+  string app_key   = 1;
+  string env       = 2;
+  ArtifactKind kind    = 3;
+}
+
+message ResolveResponse {
+  string version     = 1;
+  string commit_sha  = 2;
+  AppMetadata metadata = 3;
+}

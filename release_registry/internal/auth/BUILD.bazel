@@ -1,0 +1,12 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "auth",
+    srcs = ["interceptor.go"],
+    importpath = "github.com/whale-net/everything/release_registry/internal/auth",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@org_golang_google_grpc//:grpc",
+        "//libs/go/grpcauth",
+    ],
+)
