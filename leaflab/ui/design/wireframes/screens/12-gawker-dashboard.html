@@ -1,0 +1,78 @@
+<!-- wf: name="gawker-dashboard" title="LeafLab — Sensor Dashboard" -->
+
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg bg-gradient-to-br from-green-900 via-emerald-800 to-teal-900 text-green-50">
+  <h1 class="text-2xl md:text-3xl font-bold mb-2">LeafLab — Sensor Dashboard</h1>
+  <p class="text-sm opacity-80">Real-time greenhouse sensor readings</p>
+</div>
+
+<!-- Only the essential stats — no device management -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">Active Sensors</div>
+    <div class="stat-value text-success">10</div>
+    <div class="stat-desc">All reporting normally</div>
+  </div>
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">Avg Illuminance</div>
+    <div class="stat-value text-teal-500">405</div>
+    <div class="stat-desc">lux · range 280–530</div>
+  </div>
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">Avg Temperature</div>
+    <div class="stat-value text-blue-400">24.9°C</div>
+    <div class="stat-desc">range 23.5–26.1°C</div>
+  </div>
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">Avg Humidity</div>
+    <div class="stat-value text-cyan-400">61.8%</div>
+    <div class="stat-desc">range 57–66%</div>
+  </div>
+</div>
+
+<!-- Readings table — read-only, no edit buttons -->
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <h2 class="text-lg font-semibold p-4 border-b border-base-300">Current Sensor Readings</h2>
+    <table class="table">
+      <thead><tr class="bg-base-200"><th>Sensor</th><th>Type</th><th>Location</th><th>Value</th><th>Last Updated</th></tr></thead>
+      <tbody>
+        <tr><td class="font-mono">BH1750-A1</td><td>Illuminance</td><td>Room A · Shelf 1</td><td class="text-teal-600 font-semibold">423 lux</td><td class="opacity-60">now</td></tr>
+        <tr><td class="font-mono">SHT3x-T1</td><td>Temperature</td><td>Room A · Shelf 1</td><td class="text-blue-400 font-semibold">24.7 °C</td><td class="opacity-60">5s ago</td></tr>
+        <tr><td class="font-mono">SHT3x-H1</td><td>Humidity</td><td>Room A · Shelf 1</td><td class="text-cyan-400 font-semibold">62.1 %</td><td class="opacity-60">5s ago</td></tr>
+        <tr><td class="font-mono">BH1750-A2</td><td>Illuminance</td><td>Room B · Shelf 2</td><td class="text-teal-600 font-semibold">387 lux</td><td class="opacity-60">4s ago</td></tr>
+        <tr><td class="font-mono">SHT3x-T2</td><td>Temperature</td><td>Room B · Shelf 2</td><td class="text-blue-400 font-semibold">25.3 °C</td><td class="opacity-60">7s ago</td></tr>
+        <tr><td class="font-mono">SHT3x-H2</td><td>Humidity</td><td>Room B · Shelf 2</td><td class="text-cyan-400 font-semibold">58.9 %</td><td class="opacity-60">7s ago</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Mini sparklines — read-only, no drill-in controls -->
+<div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
+  <div class="card bg-base-100 shadow-md">
+    <div class="card-body p-4">
+      <h3 class="text-sm font-semibold opacity-70 mb-2">Illuminance Trend</h3>
+      <div class="border-2 border-dashed border-base-300 rounded-box h-28 flex items-center justify-center text-xs opacity-50">
+        [sparkline chart]
+      </div>
+    </div>
+  </div>
+  <div class="card bg-base-100 shadow-md">
+    <div class="card-body p-4">
+      <h3 class="text-sm font-semibold opacity-70 mb-2">Temperature Trend</h3>
+      <div class="border-2 border-dashed border-base-300 rounded-box h-28 flex items-center justify-center text-xs opacity-50">
+        [sparkline chart]
+      </div>
+    </div>
+  </div>
+  <div class="card bg-base-100 shadow-md">
+    <div class="card-body p-4">
+      <h3 class="text-sm font-semibold opacity-70 mb-2">Humidity Trend</h3>
+      <div class="border-2 border-dashed border-base-300 rounded-box h-28 flex items-center justify-center text-xs opacity-50">
+        [sparkline chart]
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="wf-note mt-4">note: gawker dashboard is pure read-only — no device management, config editing, or admin controls. This view could be embedded in a public kiosk or shared via a simple URL.</p>

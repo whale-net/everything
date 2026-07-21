@@ -1,0 +1,13 @@
+{
+  "name": "everything-marketplace",
+  "owner": {
+    "name": "whale_net"
+  },
+  "plugins": [
+    {
+      "name": "project-manager",
+      "description": "Multi-persona, GitHub-tracked project management pipeline (producer/architect/planner/workers/system-validator)",
+      "source": "./tools/project-manager"
+    }
+  ]
+}

@@ -15,6 +15,8 @@ Build, release, and development tooling.
 - [tilt-mcp/README.md](tilt-mcp/README.md) — Tilt MCP integration for AI-assisted development
 - [tilt-mcp/CURSOR_INSTALL.md](tilt-mcp/CURSOR_INSTALL.md) — Cursor IDE integration setup
 - [serial-mcp/README.md](serial-mcp/README.md) — ESP32 serial monitor MCP server (serial_tail, serial_grep, serial_status)
+- [project-manager/README.md](project-manager/README.md) — Claude Code plugin: multi-persona GitHub-tracked planning pipeline (producer/architect/planner/writer/tester/validator/system-validator)
+- [project-manager/CONVENTIONS.md](project-manager/CONVENTIONS.md) — the plugin's GitHub label/workflow contract (issue kinds, lifecycle, worker unblock procedure) — every persona file follows this exactly
 
 ## Code Generation
 

@@ -1,0 +1,73 @@
+<!-- wf: name="regions" title="Regions" -->
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg bg-gradient-to-br from-green-900 via-emerald-800 to-teal-900 text-green-50">
+  <h1 class="text-2xl md:text-3xl font-bold mb-2">Regions</h1>
+  <p class="text-sm opacity-80">Hierarchical region definitions — physical placements for sensors</p>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <div class="flex justify-between items-center p-4 border-b border-base-300"><h2 class="text-lg font-semibold">Region Tree</h2><button class="btn btn-primary btn-sm">New Region</button></div>
+
+    <!-- Parent: Room A -->
+    <table class="table table-sm">
+      <thead><tr><th>Name</th><th>Description</th><th>Children</th><th>Sensors Here</th></tr></thead>
+      <tbody>
+        <tr class="hover"><td colspan="4" class="p-0">
+          <!-- Expandable row: Room A -->
+          <div>
+            <table class="w-full">
+              <tr class="hover cursor-pointer" onclick="location.href='#/region-edit'">
+                <td class="font-medium"><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline mr-1 opacity-60" viewBox="0 0 20 20" fill="currentColor"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"/></svg>Room A</td>
+                <td class="opacity-60">Main greenhouse section</td><td>2 children</td><td>6 sensors</td>
+              </tr>
+              <!-- Children of Room A -->
+              <tr class="hover cursor-pointer" onclick="location.href='#/region-edit'"><td class="pl-8">&nbsp;&nbsp;Shelf 1</td><td class="opacity-60">Top shelf by window</td><td>—</td><td>4 sensors</td></tr>
+              <tr class="hover cursor-pointer" onclick="location.href='#/region-edit'"><td class="pl-8">&nbsp;&nbsp;Shelf 2</td><td class="opacity-60">Middle shelf, ambient</td><td>—</td><td>2 sensors</td></tr>
+            </table>
+          </div>
+        </td></tr>
+
+        <!-- Parent: Room B -->
+        <tr class="hover"><td colspan="4" class="p-0">
+          <div>
+            <table class="w-full">
+              <tr class="hover cursor-pointer" onclick="location.href='#/region-edit'">
+                <td class="font-medium"><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline mr-1 opacity-60" viewBox="0 0 20 20" fill="currentColor"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"/></svg>Room B</td>
+                <td class="opacity-60">Secondary greenhouse section</td><td>2 children</td><td>4 sensors</td>
+              </tr>
+              <tr class="hover cursor-pointer" onclick="location.href='#/region-edit'"><td class="pl-8">&nbsp;&nbsp;Shelf 1</td><td class="opacity-60">Near door, variable temp</td><td>—</td><td>2 sensors</td></tr>
+              <tr class="hover cursor-pointer" onclick="location.href='#/region-edit'"><td class="pl-8">&nbsp;&nbsp;Shelf 2</td><td class="opacity-60">Away from window</td><td>—</td><td>2 sensors</td></tr>
+            </table>
+          </div>
+        </td></tr>
+
+        <!-- Parent: Potting Area -->
+        <tr class="hover"><td colspan="4" class="p-0">
+          <div>
+            <table class="w-full">
+              <tr class="hover cursor-pointer" onclick="location.href='#/region-edit'">
+                <td class="font-medium"><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline mr-1 opacity-60" viewBox="0 0 20 20" fill="currentColor"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"/></svg>Potting Area</td>
+                <td class="opacity-60">Covered potting station</td><td>—</td><td>4 sensors</td>
+              </tr>
+            </table>
+          </div>
+        </td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <div class="flex justify-between items-center p-4 border-b border-base-300"><h2 class="text-lg font-semibold">Region Rules</h2></div>
+    <table class="table table-sm">
+      <thead><tr><th>Rule</th><th>Value</th></tr></thead>
+      <tbody>
+        <tr><td class="opacity-60">Max children per parent</td><td>12</td></tr>
+        <tr><td class="opacity-60">Min region depth</td><td>3 levels (e.g. Room → Shelf → Pot)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="wf-note mt-4">note: expanding/collapsing tree rows needs JS — wireframe uses onclick for now. Region edit screen shows a form with parent selector, name, description.</p>

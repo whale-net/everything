@@ -1,0 +1,94 @@
+<!-- wf: name="devices" title="Devices — Fleet Overview" -->
+
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg bg-gradient-to-br from-green-900 via-emerald-800 to-teal-900 text-green-50">
+  <h1 class="text-2xl md:text-3xl font-bold mb-2">Devices — Fleet Overview</h1>
+  <p class="text-sm opacity-80">Manage all sensorboard setups — register, provision, monitor health</p>
+</div>
+
+<!-- Quick stats -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">Total Devices</div>
+    <div class="stat-value text-primary">3</div>
+  </div>
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">Online Now</div>
+    <div class="stat-value text-success">2</div>
+  </div>
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">Offline (24h+)</div>
+    <div class="stat-value text-error">1</div>
+  </div>
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">Total Sensors</div>
+    <div class="stat-value">14</div>
+  </div>
+</div>
+
+<!-- Fleet table -->
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <table class="table">
+      <thead><tr class="bg-base-200"><th>Device ID</th><th>Status</th><th>Firmware</th><th>Sensors</th><th>Last Seen</th><th></th></tr></thead>
+      <tbody>
+        <!-- Online device 1 -->
+        <tr class="hover">
+          <td colspan="5" class="p-0"><table class="w-full">
+            <tr class="cursor-pointer hover:bg-base-50/60 transition-colors" onclick="location.href='#/device-detail'">
+              <td><span class="font-mono text-xs">leaflab-ccdba79f5fac</span></td>
+              <td><span class="badge badge-success badge-sm gap-1"><svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Online</span></td>
+              <td class="font-mono text-xs">v1.2.0</td><td>6 sensors</td><td class="opacity-60">12s ago</td>
+            </tr>
+          </table></td>
+        </tr>
+
+        <!-- Online device 2 -->
+        <tr class="hover">
+          <td colspan="5" class="p-0"><table class="w-full">
+            <tr class="cursor-pointer hover:bg-base-50/60 transition-colors" onclick="location.href='#/device-detail'">
+              <td><span class="font-mono text-xs">leaflab-a1b2c3d4e5f6</span></td>
+              <td><span class="badge badge-success badge-sm gap-1"><svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Online</span></td>
+              <td class="font-mono text-xs">v1.2.0</td><td>4 sensors</td><td class="opacity-60">8s ago</td>
+            </tr>
+          </table></td>
+        </tr>
+
+        <!-- Offline device -->
+        <tr class="hover opacity-50 bg-base-100/30">
+          <td colspan="5" class="p-0"><table class="w-full">
+            <tr class="cursor-pointer hover:bg-base-50/60 transition-colors" onclick="location.href='#/device-detail'">
+              <td><span class="font-mono text-xs">leaflab-9f8e7d6c5b4a</span></td>
+              <td><span class="badge badge-neutral badge-sm gap-1"><svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l4 4"/></svg>Offline</span></td>
+              <td class="font-mono text-xs">v1.1.3</td><td>4 sensors</td><td class="opacity-60">3h ago</td>
+            </tr>
+          </table></td>
+        </tr>
+
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Config history -->
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <h2 class="text-lg font-semibold p-4 border-b border-base-300">Config History</h2>
+    <table class="table table-sm">
+      <thead><tr><th>Device</th><th>#</th><th>Sensors enabled / total</th><th>Last applied</th></tr></thead>
+      <tbody>
+        <tr><td class="font-mono text-xs">leaflab-ccdba79f5fac</td><td>#47</td><td>6/6</td><td class="opacity-60">2h ago</td></tr>
+        <tr><td class="font-mono text-xs">leaflab-a1b2c3d4e5f6</td><td>#12</td><td>4/4</td><td class="opacity-60">1d ago</td></tr>
+        <tr><td class="font-mono text-xs">leaflab-9f8e7d6c5b4a</td><td>#3</td><td>2/4</td><td class="opacity-60">3h ago</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Actions -->
+<div class="flex flex-wrap gap-2 mt-4 mb-8">
+  <button class="btn btn-primary btn-sm" onclick="location.href='#/register-device'">+ Register Device</button>
+  <a href="#/device-edit-config" class="btn btn-secondary btn-sm">Edit Config — leaflab-ccdba79f5fac</a>
+  <button class="btn btn-outline btn-sm">Export Fleet Report</button>
+</div>
+
+<p class="wf-note mt-4">note: clicking a row drills into device-detail. Register Device opens the provision wizard (register-device). Config edit links to per-device config form.</p>

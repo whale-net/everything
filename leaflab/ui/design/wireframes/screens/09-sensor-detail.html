@@ -1,0 +1,95 @@
+<!-- wf: name="sensor-detail" title="Sensor — BH1750-A1" -->
+
+<div class="breadcrumbs text-sm mb-4">
+  <ul><li><a href="#/device-edit-config">Edit Config</a></li><li>BH1750-A1</li></ul>
+</div>
+
+<div class="flex justify-between items-center mb-6">
+  <h1 class="text-2xl md:text-3xl font-bold">BH1750-A1 — Illuminance Sensor</h1>
+  <a href="#/device-edit-config" class="btn btn-secondary btn-sm">Back to Config</a>
+</div>
+
+<div class="grid md:grid-cols-2 gap-6 mb-6">
+  <!-- Current state card -->
+  <div class="card bg-base-100 shadow-md">
+    <div class="card-body p-4">
+      <h2 class="text-lg font-semibold mb-3 border-b border-base-300 pb-1">Current State</h2>
+      <table class="table table-sm">
+        <tbody>
+          <tr><td class="opacity-60 w-32">Status</td><td><span class="badge badge-success badge-sm gap-1"><svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Active</span></td></tr>
+          <tr><td class="opacity-60">Sensor ID</td><td class="font-mono text-xs">bh1750-1</td></tr>
+          <tr><td class="opacity-60">I2C Address</td><td class="font-mono">0x68 (98)</td></tr>
+          <tr><td class="opacity-60">Polling Interval</td><td class="font-mono">2000 ms</td></tr>
+          <tr><td class="opacity-60">Region</td><td><a href="#/region-edit" class="link link-primary text-sm">Room A · Shelf 1</a></td></tr>
+          <tr><td class="opacity-60">Latest Value</td><td class="text-lg font-semibold"><span class="text-teal-600">423</span> <span class="text-xs opacity-60">lux</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Latest reading -->
+  <div class="card bg-base-100 shadow-md">
+    <div class="card-body p-4">
+      <h2 class="text-lg font-semibold mb-3 border-b border-base-300 pb-1">Latest Reading</h2>
+      <table class="table table-sm">
+        <tbody>
+          <tr><td class="opacity-60 w-32">Recorded at</td><td class="opacity-70 text-sm">2026-07-19 14:32:18 UTC</td></tr>
+          <tr><td class="opacity-60">Value</td><td class="font-mono font-semibold text-teal-600">423 lux (valid)</td></tr>
+          <tr><td class="opacity-60">Uptime at reading</td><td class="font-mono text-xs">14h 23m</td></tr>
+        </tbody>
+      </table>
+
+      <!-- Quick chart placeholder -->
+      <div class="border-2 border-dashed border-base-300 rounded-box h-36 mt-3 flex items-center justify-center text-sm opacity-50">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 mr-2 inline opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6m4 0l4-4m0 0l4 4m-4-4V3"/></svg>
+        Mini sparkline — last hour trend
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Name change history (SCD2) -->
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <h2 class="text-lg font-semibold p-4 border-b border-base-300">Name History</h2>
+    <table class="table table-sm">
+      <thead><tr><th>Name</th><th>Valid From</th><th>Valid To</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr class="bg-base-100/50"><td class="font-medium font-mono">BH1750-A1</td><td>2026-07-01 09:00</td><td class="opacity-60">— (current)</td><td>Initial name after register</td></tr>
+        <tr><td class="font-mono opacity-50">sensor-bh1750-2</td><td>2026-03-15 14:22</td><td class="opacity-60">2026-07-01 09:00</td><td>Auto-generated on provision</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- I2C / wiring history (SCD2) -->
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <h2 class="text-lg font-semibold p-4 border-b border-base-300">Wiring History</h2>
+    <table class="table table-sm">
+      <thead><tr><th>I2C Address</th><th>Mux Path</th><th>Valid From</th><th>Valid To</th></tr></thead>
+      <tbody>
+        <tr class="bg-base-100/50"><td class="font-mono">0x68 (98)</td><td class="font-mono text-xs">[] (direct bus)</td><td>2026-07-01 09:00</td><td class="opacity-60">— (current)</td></tr>
+        <tr><td class="font-mono opacity-50">0x68 (98)</td><td class="font-mono text-xs">[{"muxAddress":112,"muxChannel":3}]</td><td>2026-04-20 11:00</td><td class="opacity-60">2026-07-01 09:00</td></tr>
+        <tr><td class="font-mono opacity-50">0x3C (60)</td><td class="font-mono text-xs">[] (direct bus)</td><td>2026-03-15 14:22</td><td class="opacity-60">2026-04-20 11:00</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Region history (SCD2) -->
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <h2 class="text-lg font-semibold p-4 border-b border-base-300">Location History</h2>
+    <table class="table table-sm">
+      <thead><tr><th>Region</th><th>Valid From</th><th>Valid To</th></tr></thead>
+      <tbody>
+        <tr class="bg-base-100/50"><td><a href="#/region-edit" class="link link-primary text-sm">Room A · Shelf 1</a></td><td>2026-07-01 09:00</td><td class="opacity-60">— (current)</td></tr>
+        <tr><td><a href="#/region-edit" class="link link-primary text-sm opacity-50">Room A · Shelf 2</a></td><td>2026-04-20 11:00</td><td class="opacity-60">2026-07-01 09:00</td></tr>
+        <tr><td><a href="#/region-edit" class="link link-primary text-sm opacity-50">Potting Area · Bench</a></td><td>2026-03-15 14:22</td><td class="opacity-60">2026-04-20 11:00</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="wf-note mt-4">note: this screen combines name/wiring/region SCD2 timelines into one view. Each timeline is independently editable — moving a sensor to a new shelf doesn't affect its I2C address or logical name.</p>

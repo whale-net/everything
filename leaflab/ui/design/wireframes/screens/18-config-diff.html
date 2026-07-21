@@ -1,0 +1,113 @@
+<!-- wf: name="config-diff" title="Config Diff — #47 vs #48" parent="device-edit-config" -->
+
+<div class="breadcrumbs text-sm mb-4">
+  <ul><li><a href="#/devices">Devices</a></li><li><a href="#/device-detail">leaflab-ccdba79f5fac</a></li><li>Config Diff #47 vs #48</li></ul>
+</div>
+
+<div class="flex justify-between items-center mb-6">
+  <h1 class="text-2xl md:text-3xl font-bold">Config Comparison — leaflab-ccdba79f5fac</h1>
+  <div class="flex gap-2"><a href="#/device-edit-config" class="btn btn-secondary btn-sm">Back to Config</a></div>
+</div>
+
+<!-- Header info -->
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-4 flex flex-col md:flex-row gap-4 items-center justify-between">
+    <!-- Left version -->
+    <div class="flex-1 text-center">
+      <span class="text-sm opacity-60 mr-2">From:</span>
+      <span class="font-mono font-bold text-base">#47</span>
+      <span class="text-xs opacity-60 ml-2">Applied 2026-07-19 08:34 · 5 sensors enabled / 6 total</span>
+    </div>
+
+    <!-- Diff arrow -->
+    <div class="flex items-center gap-2 text-primary font-bold text-lg"><svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H3"/></svg></div>
+
+    <!-- Right version -->
+    <div class="flex-1 text-center">
+      <span class="text-sm opacity-60 mr-2">To:</span>
+      <span class="font-mono font-bold text-base">#48</span>
+      <span class="text-xs opacity-60 ml-2">Unpublished preview · 5 sensors enabled / 6 total</span>
+    </div>
+  </div>
+</div>
+
+<!-- Diff table -->
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-0">
+    <h2 class="text-lg font-semibold p-4 border-b border-base-300 flex items-center gap-2"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8b4a0 10l2a2 2 0 010 4H9m6-6v2a2 2 0 01-2 2h-2"/></svg> Sensor Changes</h2>
+
+    <table class="table">
+      <!-- Legend -->
+      <thead><tr class="bg-base-200 text-xs"><th>Sensor ID</th><th>Type</th><th>Status</th><th>Name</th><th>I2C Addr</th><th>Poll (ms)</th><th>Region</th></tr></thead>
+
+      <!-- Added sensor -->
+      <tbody class="bg-success/10">
+        <tr class="hover"><td colspan="7" class="p-0"><table class="w-full"><tr><td class="font-mono text-xs pl-4 py-3">sht3x-hum-2</td>
+          <td>SHT3x · Humidity</td>
+          <td><span class="badge badge-success badge-sm gap-1"><svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3m0 0l-3 3m3-3h-8"/></svg>Added</span></td>
+          <td>SHT3x-H2 (new)</td><td class="font-mono text-xs">0x40 (64)</td><td class="font-mono text-xs">5000</td><td class="text-sm">Room B · Shelf 2</td>
+        </tr></table></td>
+      </tbody>
+
+      <!-- Modified sensor -->
+      <tr class="hover bg-warning/10"><td class="font-mono text-xs pl-4 py-3">bh1750-1</td>
+          <td>BH1750 · Illuminance</td>
+          <td><span class="badge badge-warning badge-sm gap-1"><svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7b8a0 0v5a6 6 0 00-9.6 5H"/></svg>Changed</span></td>
+          <td>BH1750-A1</td><td class="font-mono text-xs">0x68 (98)</td>
+          <td colspan="2"><span class="line-through opacity-50 text-xs">1000</span> → <span class="text-primary font-semibold text-xs">2000 ms</span></td>
+        </tr>
+
+      <!-- Unchanged sensor -->
+      <tr class="hover opacity-60"><td class="font-mono text-xs pl-4 py-3">sht3x-temp-1</td><td>SHT3x · Temperature</td><td colspan="5" class="text-xs opacity-50">No changes</td></tr>
+      <tr class="hover opacity-60"><td class="font-mono text-xs pl-4 py-3">sht3x-temp-2</td><td>SHT3x · Temperature</td><td colspan="5" class="text-xs opacity-50">No changes</td></tr>
+      <tr class="hover opacity-60"><td class="font-mono text-xs pl-4 py-3">sht3x-temp-3</td><td>SHT3x · Temperature</td><td colspan="5" class="text-xs opacity-50">No changes</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Config JSON diff (raw) -->
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-4">
+    <h2 class="text-lg font-semibold mb-3 border-b border-base-300 pb-1">Full Config Diff</h2>
+    <!-- Side-by-side JSON diff placeholder -->
+    <details class="collapse collapse-arrow bg-base-200 rounded-box">
+      <summary class="collapse-title text-sm font-medium opacity-60 flex items-center gap-1"><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>Show Full JSON Diff (click to expand)</summary>
+      <div class="mt-2 p-3 bg-base-300 rounded-box overflow-x-auto text-xs font-mono">
+        <!-- Left (removed) -->
+        <div class="grid grid-cols-2 gap-4">
+          <div><h4 class="text-error text-sm mb-1 opacity-70 font-sans">Removed / Changed from #47</h4>
+            <pre class="opacity-50">{ "device_id": "leaflab-ccdba79f5fac",
+  "sensors": [
+    { "id": "bh1750-1",
+      "poll_interval_ms": <span class="text-error">1000</span>,
+      ...
+    }
+  ]
+}</pre>
+          </div>
+
+          <!-- Right (added) -->
+          <div><h4 class="text-success text-sm mb-1 opacity-70 font-sans">Added / Changed in #48</h4>
+            <pre>{ "device_id": "leaflab-ccdba79f5fac",
+  "sensors": [
+    { "id": "bh1750-1",
+      "poll_interval_ms": <span class="text-success">2000</span>,
+      ...
+    },
+    { "id": "sht3x-hum-2",
+      "name": "SHT3x-H2",
+      "enabled": true,
+      ...
+    }
+  ]
+}</pre>
+          </div>
+        </div>
+
+        <!-- JSON diff is side-by-side: removed/changed on left, added on right. -->
+      </div>
+    </details>
+  </div>
+</div>
+
+<p class="wf-note mt-4">note: config diff compares two versions of the DeviceConfig proto. Added = new sensor in #48 not in #47; Removed = sensor in #47 deleted from #48; Changed = same sensor but different fields (poll interval, region, etc.). Unchanged sensors are collapsed by default.</p>

@@ -1,0 +1,98 @@
+<!-- wf: name="register-mqtt" title="Register Device — Step 3: MQTT Broker" parent="dashboard" -->
+
+<div class="breadcrumbs text-sm mb-4">
+  <ul><li><a href="#/devices">Devices</a></li><li>New Device Provisioning → MQTT</li></ul>
+</div>
+
+<div class="flex justify-between items-center mb-6">
+  <h1 class="text-2xl md:text-3xl font-bold">Step 3 — MQTT Broker Configuration</h1>
+  <a href="#/register-wifi" class="btn btn-secondary btn-sm">< Back to Wi-Fi</a>
+</div>
+
+<!-- Progress stepper -->
+<div class="flex items-center gap-4 mb-8 px-4">
+  <div class="flex items-center gap-2 opacity-50">
+    <span class="w-7 h-7 rounded-full bg-success text-success-content flex items-center justify-center font-bold text-sm"><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg></span>
+    <span class="text-sm font-medium">Serial Number</span>
+  </div>
+  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+  <div class="flex items-center gap-2 opacity-50">
+    <span class="w-7 h-7 rounded-full bg-primary text-primary-content flex items-center justify-center font-bold text-sm"><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg></span>
+    <span class="text-sm font-medium">Wi-Fi Credentials</span>
+  </div>
+  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+  <div class="flex items-center gap-2">
+    <span class="w-7 h-7 rounded-full bg-primary text-primary-content flex items-center justify-center font-bold text-sm">3</span>
+    <span class="text-sm font-medium">MQTT Broker</span>
+  </div>
+  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+  <div class="flex items-center gap-2 opacity-30">
+    <span class="w-7 h-7 rounded-full border-2 flex items-center justify-center font-bold text-sm">4</span>
+    <span class="text-sm font-medium">Verify &amp; Assign</span>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body p-4">
+    <h2 class="text-lg font-semibold mb-3 border-b border-base-300 pb-1">MQTT Broker Settings</h2>
+    <p class="text-sm opacity-70 mb-4">These settings determine how the device connects to your RabbitMQ/MQTT broker for publishing sensor readings and receiving config updates.</p>
+
+    <!-- Device info summary -->
+    <div class="bg-base-200 rounded-box p-3 mb-4 flex items-center gap-3">
+      <span class="text-sm opacity-60">Device:</span>
+      <span class="font-mono text-xs font-medium">leaflab-ccdba79f5fac</span>
+    </div>
+
+    <!-- Broker address -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="flex flex-col gap-1 md:col-span-2">
+        <label class="text-sm opacity-60">Broker Host</label>
+        <input type="text" value="" placeholder="e.g. 192.168.1.42 or mqtt.greenhouse.local" class="border-b border-base-300 focus:border-primary outline-none py-2 w-full text-sm font-mono">
+      </div>
+
+      <div class="flex flex-col gap-1">
+        <label class="text-sm opacity-60">Port</label>
+        <input type="number" value="1883" min="1" max="65535" class="border-b border-base-300 focus:border-primary outline-none py-2 w-full font-mono text-sm">
+      </div>
+    </div>
+
+    <!-- Client ID -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
+      <div class="flex flex-col gap-1 md:col-span-3">
+        <label class="text-sm opacity-60">Client ID</label>
+        <input type="text" value="" placeholder="auto-generated from device serial" disabled class="border-b border-base-300 focus:border-primary outline-none py-2 w-full text-sm font-mono bg-base-200 rounded-box px-3">
+      </div>
+
+      <!-- Generated automatically -->
+    </div>
+
+    <!-- Username / Password (optional) -->
+    <details class="collapse collapse-arrow bg-base-200 rounded-box mt-4">
+      <summary class="collapse-title text-sm font-medium opacity-60 flex items-center gap-1"><svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m-4 0a9 9 0 111.866-15.34l4.5 4.5m0 0v3.052a2.25 2.25 0 01-.743 1.665L9 15.5V17"/></svg>MQTT Authentication (Optional)</summary>
+      <div class="mt-2 space-y-3">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <!-- Username -->
+          <div class="flex flex-col gap-1">
+            <label class="text-sm opacity-60">Username</label>
+            <input type="text" value="" placeholder="e.g. leaflab-sensorboard" class="border-b border-base-300 focus:border-primary outline-none py-2 w-full text-sm">
+          </div>
+
+          <!-- Password -->
+          <div class="flex flex-col gap-1">
+            <label class="text-sm opacity-60">Password</label>
+            <input type="password" value="" placeholder="MQTT password" class="border-b border-base-300 focus:border-primary outline-none py-2 w-full text-sm">
+          </div>
+
+          <!-- TLS/SSL -->
+        </div>
+      </div>
+    </details>
+
+    <p class="wf-note mt-4">note: MQTT broker is typically RabbitMQ with the MQTT plugin. The client ID is auto-generated from the device serial number to ensure uniqueness in MQTT.</p>
+
+    <!-- Broker will be provisioned to the ESP32's NVS storage alongside Wi-Fi credentials. -->
+    <div class="flex gap-2 mt-6 justify-end"><a href="#/register-wifi" class="btn btn-secondary btn-sm">Back</a><button class="btn btn-primary btn-sm">Next: Verify →</button></div>
+  </div>
+</div>
+
+<p class="wf-note mt-4">note: MQTT broker is typically RabbitMQ with the MQTT plugin. The client ID is auto-generated from the device serial number to ensure uniqueness in MQTT.</p>
