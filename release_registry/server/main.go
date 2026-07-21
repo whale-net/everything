@@ -53,11 +53,13 @@ func main() {
 		log.Fatalf("failed to create auth interceptors: %v", err)
 	}
 
-	opts = append(opts, grpc.StreamInterceptor(streamInt))
-	opts = append(opts, grpc.UnaryInterceptor(unaryInt))
-	opts = append(opts, reflection.ServerOption())
+	opts = []grpc.ServerOption{
+		grpc.StreamInterceptor(streamInt),
+		grpc.UnaryInterceptor(unaryInt),
+	}
 
 	srv := grpc.NewServer(opts...)
+	reflection.Register(srv)
 	pb.RegisterRegistryServiceServer(srv, &server{})
 
 	go func() {

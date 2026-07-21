@@ -12,6 +12,8 @@ go_binary(
         "//release_registry/protos:registrypb",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//reflection",
+        "//libs/go/grpcauth",
+        "//release_registry/internal/auth",
     ],
     visibility = ["//visibility:public"],
 )
