@@ -8,7 +8,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "@org_golang_google_grpc//:grpc",
-        "//proto/gen",
+        "//release_registry/protos:registrypb",
         "//libs/go/db",
     ],
 )
