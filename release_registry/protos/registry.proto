@@ -1,11 +1,11 @@
 syntax = "proto3";
 
-package release_registry.v1;
+package release_registry;
 
-option go_package = "github.com/whale-net/everything/release_registry/protos;registrypb";
+option go_package = "github.com/whale-net/everything/release_registry/proto/gen";
 
 // ============================================================================
-// Registry Service — release registry API
+// Registry Service — version registry API
 //
 // The release registry tracks application metadata, git commits, container
 // artifacts and promotes them to environments.  Consumers (ArgoCD plugin,
@@ -13,68 +13,72 @@ option go_package = "github.com/whale-net/everything/release_registry/protos;reg
 // given app + environment.
 // ============================================================================
 
-enum ArtifactKind {
-  ARTIFACT_KIND_UNSPECIFIED = 0;
-  IMAGE                       = 1;
-  HELM_CHART                  = 2;
+service RegistryService {
+  // RegisterApp registers an application with the release registry.
+  rpc RegisterApp(RegisterAppRequest) returns (RegisterAppResponse);
+
+  // RegisterCommit records a git commit so the registry can map commits to versions.
+  rpc RegisterCommit(RegisterCommitRequest) returns (RegisterCommitResponse);
+
+  // RegisterArtifact binds an artifact (image or helm chart) to an app + version.
+  rpc RegisterArtifact(RegisterArtifactRequest) returns (RegisterArtifactResponse);
+
+  // Promote promotes a version of an artifact into the given environment.
+  rpc Promote(PromoteRequest) returns (PromoteResponse);
+
+  // Resolve returns the active version and commit for an app in an environment.
+  rpc Resolve(ResolveRequest) returns (ResolveResponse);
 }
 
-// Application metadata — canonical key is domain + "-" + name (matches
-// tools/bazel/release.bzl's image_name convention).
+// ---------------------------------------------------------------------------
+// Application metadata
+// ---------------------------------------------------------------------------
+
 message AppMetadata {
-  string domain    = 1;  // e.g. "games" or "infra"
-  string name      = 2;  // short app name, e.g. "manmanv2"
-  string registry  = 3;  // container registry host (defaults "ghcr.io")
-  string organization = 4;  // org / namespace (defaults "whale-net")
+  string app_key = 1;       // domain-app format, e.g. "manmanv2-host-manager"
+  string domain  = 2;
+  string name    = 3;
+  optional string registry   = 4;
+  optional string organization = 5;
 }
 
 // ---------------------------------------------------------------------------
 // RPC: RegisterApp
 // ---------------------------------------------------------------------------
 
-message RegisterAppRequest {
-  AppMetadata metadata = 1;
-}
-
-message RegisterAppResponse {
-  string key    = 1;  // canonical "domain-name" key, echoed back
-}
+message RegisterAppRequest { AppMetadata metadata = 1; }
+message RegisterAppResponse { bool success = 1; }
 
 // ---------------------------------------------------------------------------
 // RPC: RegisterCommit
 // ---------------------------------------------------------------------------
 
-// Timestamps use int64 Unix seconds — matching the existing convention across
-// manmanv2 protos (messages.proto, api_messages_*.proto) rather than
-// google.protobuf.Timestamp.  No proto file in this repo imports well-known
-// types yet; keeping it uniform avoids adding a new transitive dependency on
-// rules_proto/google_api for a single field while the registry is still being
-// scaffolded.
-
-message RegisterCommitRequest {
-  string repo     = 1;  // git remote URL or short name
-  string sha      = 2;  // full commit SHA (hex)
-  string ref      = 3;  // branch / tag / ref name
-  int64 timestamp = 4;  // Unix seconds (0 = now on server)
+message CommitRecord {
+  string repo    = 1;         // git remote URL or short name
+  string sha     = 2;         // full commit SHA (hex)
+  string ref     = 3;         // branch / tag / ref name
+  string timestamp = 4;       // RFC3339 or similar
 }
 
-message RegisterCommitResponse {
-  string key        = 1;  // "repo:sha" ack
-  int64 registered_at = 2;  // Unix seconds when the commit was stored
-}
+message RegisterCommitRequest { CommitRecord record = 1; }
+message RegisterCommitResponse { bool success = 1; }
 
 // ---------------------------------------------------------------------------
 // RPC: RegisterArtifact
 // ---------------------------------------------------------------------------
 
+enum ArtifactKind { IMAGE = 0; HELM_CHART = 1; }
+
 message RegisterArtifactRequest {
-  string app       = 1;  // canonical "domain-name" key
-  ArtifactKind kind   = 2;
-  string sha      = 3;  // commit SHA the artifact was built from
+  string app_key   = 1;
+  ArtifactKind kind    = 2;
+  string version     = 3;
+  string commit_sha  = 4;
 }
 
 message RegisterArtifactResponse {
-  string version  = 1;  // computed next version (e.g. "0.1.0")
+  bool success  = 1;
+  string version = 2;       // registry-computed version for FR3/FR8
 }
 
 // ---------------------------------------------------------------------------
@@ -82,28 +86,26 @@ message RegisterArtifactResponse {
 // ---------------------------------------------------------------------------
 
 message PromoteRequest {
-  string app       = 1;  // canonical "domain-name" key
-  string env      = 2;  // e.g. "dev", "staging", "prod"
-  ArtifactKind kind   = 3;
-  string version  = 4;  // the version being promoted
+  string app_key = 1;
+  string env     = 2;         // e.g. "dev", "staging", "prod"
+  string kind    = 3;         // artifact kind (IMAGE or HELM_CHART)
+  string version = 4;
 }
 
-message PromoteResponse {
-  int64 valid_from    = 1;  // Unix seconds — when this promotion became active
-}
+message PromoteResponse { bool success = 1; }
 
 // ---------------------------------------------------------------------------
 // RPC: Resolve
 // ---------------------------------------------------------------------------
 
 message ResolveRequest {
-  string app       = 1;
-  string env      = 2;
-  ArtifactKind kind   = 3;
+  string app_key   = 1;
+  string env       = 2;
+  ArtifactKind kind    = 3;
 }
 
 message ResolveResponse {
-  string version    = 1;
-  string sha        = 2;
-  int64 promoted_at  = 3;  // Unix seconds of the active promotion
+  string version     = 1;
+  string commit_sha  = 2;
+  AppMetadata metadata = 3;
 }

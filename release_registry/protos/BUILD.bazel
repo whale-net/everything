@@ -7,7 +7,7 @@ load("@rules_proto//proto:defs.bzl", "proto_library")
 go_proto_library(
     name = "registrypb",
     compilers = ["@rules_go//proto:go_grpc"],
-    importpath = "github.com/whale-net/everything/release_registry/protos",
+    importpath = "github.com/whale-net/everything/release_registry/proto/gen",
     proto = ":registrypb_proto",
     visibility = ["//visibility:public"],
 )
