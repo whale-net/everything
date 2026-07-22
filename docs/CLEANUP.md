@@ -135,24 +135,24 @@ The cleanup tool can be run via GitHub Actions without manual confirmation:
 
 ### Components
 
-1. **GHCR Client** (`tools/release_helper/ghcr.py`)
+1. **GHCR Client** (`tools/release_helper_go/cmd/ghcr.go`)
    - Interfaces with GitHub Container Registry API
    - Lists, searches, and deletes package versions
    - Handles pagination and error recovery
 
-2. **GitHub Release Client** (`tools/release_helper/github_release.py`)
+2. **GitHub Release Client** (`tools/release_helper_go/cmd/github_release.go`)
    - Interfaces with GitHub Releases API
    - Finds and deletes releases by tag name
    - Maps tags to release IDs
 
-3. **Cleanup Orchestrator** (`tools/release_helper/cleanup.py`)
+3. **Cleanup Orchestrator** (`tools/release_helper_go/cmd/cleanup.go`)
    - Coordinates atomic deletion of tags, releases, and packages
    - Implements retention algorithm
    - Maps tags to releases and GHCR packages
    - Generates cleanup plans and execution results
 
-4. **CLI Command** (`tools/release_helper/cli.py`)
-   - Provides user-friendly interface
+4. **CLI Command** (`tools/release_helper_go/cmd/root.go`)
+   - Provides user-friendly interface (Cobra CLI)
    - Validates inputs and permissions
    - Displays progress and results
 
@@ -277,13 +277,10 @@ The tool automatically maps Git tags to GHCR packages:
 
 ```bash
 # Run all cleanup tests
-bazel test //tools/release_helper:test_cleanup
+bazel test //tools/release_helper_go:cleanup_test
 
-# Run GHCR client tests
-bazel test //tools/release_helper:test_ghcr
-
-# Run with verbose output
-bazel test //tools/release_helper:test_cleanup --test_output=streamed
+# Run GHCR client tests (Go rewrite)
+bazel test //tools/release_helper_go:ghcr_test
 ```
 
 ### Test Coverage
@@ -299,13 +296,12 @@ bazel test //tools/release_helper:test_cleanup --test_output=streamed
 ## Files
 
 ```
-tools/release_helper/
-├── ghcr.py                    # GHCR client (324 lines)
-├── cleanup.py                 # Cleanup orchestration (410 lines)
-├── cli.py                     # CLI integration (modified)
-├── test_ghcr.py              # GHCR tests (26 tests)
-├── test_cleanup.py           # Cleanup tests (21 tests, all passing)
-└── BUILD.bazel               # Build configuration
+tools/release_helper_go/cmd/
+├── ghcr.go                    # GHCR client
+├── cleanup.go                 # Cleanup orchestration
+├── github_release.go          # GitHub Releases API client
+├── root.go                    # Cobra CLI root command
+└── *_test.go                  # Unit tests
 
 .github/workflows/
 └── cleanup-releases.yml      # GitHub Actions workflow

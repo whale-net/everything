@@ -39,18 +39,16 @@ The helm chart release system is integrated into the main CI/CD release workflow
      )
      ```
 
-3. **Helm utilities** (`tools/release_helper/helm.py`)
-   - `list_all_helm_charts()` - List all releasable helm charts
-   - `get_helm_chart_metadata()` - Get metadata for a specific chart
-   - `resolve_app_versions_for_chart()` - Resolve app versions from git tags or use "latest"
-   - `package_helm_chart_for_release()` - Build and package a chart with resolved versions
+3. **Helm utilities** (`tools/release_helper_go/cmd/plan_helm.go`, `build_helm.go`, `unpublish_helm.go`)
+   - Plan helm chart releases with version resolution
+   - Build and package charts with resolved app versions
+   - Unpublish stale helm chart tags
 
-4. **CLI commands** (`tools/release_helper/cli.py`)
-   - `list-helm-charts` - List all charts with metadata
-   - `helm-chart-info <chart>` - Get detailed info about a chart
-   - `resolve-chart-app-versions <chart>` - Show resolved app versions
+4. **CLI commands** (Go rewrite — `tools/release_helper_go/cmd/`)
+   - `list-charts` - List all charts with metadata
    - `build-helm-chart <chart>` - Build and package a chart
    - `plan-helm-release` - Plan a helm chart release (outputs CI matrix)
+   - `unpublish-helm-chart <index-file>` - Unpublish stale helm chart tags
 
 5. **Workflow** (`.github/workflows/release.yml`)
    - Integrated helm chart release in main release workflow
@@ -289,8 +287,8 @@ This separation allows:
 ## File Locations
 
 - **Bazel rules:** `tools/release.bzl`
-- **Python utilities:** `tools/release_helper/helm.py`
-- **CLI commands:** `tools/release_helper/cli.py`
+- **Go utilities:** `tools/release_helper_go/cmd/plan_helm.go`, `build_helm.go`, `unpublish_helm.go`
+- **CLI commands:** `//tools/release_helper_go:release_helper_go` (Cobra CLI)
 - **Workflow:** `.github/workflows/release.yml` (integrated)
 - **Example charts:** `demo/BUILD.bazel`
 
