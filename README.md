@@ -35,7 +35,7 @@ everything/
 │   ├── firmware/           # ESP32 cc_toolchain, board constraints, flash infra
 │   ├── bazel/              # Shared Bazel macros (esp32_firmware(), etc.)
 │   ├── helm/               # Helm chart generation
-│   ├── release_helper/     # Release automation
+│   ├── release_helper_go/ # Release automation (Go rewrite)
 │   └── tilt/               # Local development with Tilt
 ├── docs/                    # Documentation
 ├── .github/workflows/      # CI/CD pipelines
