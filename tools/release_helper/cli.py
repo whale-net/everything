@@ -658,8 +658,14 @@ def plan_helm_release(
             requested = [c.strip() for c in chart_input.split(',')]
             
             for req in requested:
-                # Check if it's a domain or chart name
-                matching = [c for c in all_charts if c['name'] == req or c['domain'] == req]
+                # Check if it's a domain or chart name.
+                # Chart names are stored with "helm-" prefix internally (e.g., "helm-manmanv2-control-services"),
+                # but workflow inputs use the name WITHOUT the prefix (e.g., "manmanv2-control-services").
+                # Match against exact name, domain, or name with "helm-" prefix added.
+                matching = [
+                    c for c in all_charts
+                    if c['name'] == req or c['domain'] == req or c['name'] == f"helm-{req}"
+                ]
                 selected_charts.extend(matching)
             
             # Remove duplicates
