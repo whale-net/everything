@@ -25,6 +25,11 @@ func (h *GameConfigVolumeHandler) CreateGameConfigVolume(ctx context.Context, re
 		volumeType = "bind"
 	}
 
+	isEnabled := true
+	if req.IsEnabled != nil {
+		isEnabled = req.GetIsEnabled()
+	}
+
 	volume := &manman.GameConfigVolume{
 		ConfigID:      req.ConfigId,
 		Name:          req.Name,
@@ -33,6 +38,7 @@ func (h *GameConfigVolumeHandler) CreateGameConfigVolume(ctx context.Context, re
 		HostSubpath:   stringPtr(req.HostSubpath),
 		ReadOnly:      req.ReadOnly,
 		VolumeType:    volumeType,
+		IsEnabled:     isEnabled,
 	}
 
 	created, err := h.repo.Create(ctx, volume)
@@ -86,6 +92,9 @@ func (h *GameConfigVolumeHandler) UpdateGameConfigVolume(ctx context.Context, re
 	if req.VolumeType != "" {
 		volume.VolumeType = req.VolumeType
 	}
+	if req.IsEnabled != nil {
+		volume.IsEnabled = req.GetIsEnabled()
+	}
 
 	if err := h.repo.Update(ctx, volume); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update game config volume: %v", err)
@@ -112,6 +121,7 @@ func gameConfigVolumeToProto(v *manman.GameConfigVolume) *pb.GameConfigVolume {
 		ContainerPath: v.ContainerPath,
 		ReadOnly:      v.ReadOnly,
 		VolumeType:    v.VolumeType,
+		IsEnabled:     v.IsEnabled,
 	}
 
 	if v.Description != nil {

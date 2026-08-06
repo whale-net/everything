@@ -288,12 +288,17 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 
 	volumes := make([]session.VolumeMount, 0, len(cmd.GameConfig.Volumes))
 	for _, v := range cmd.GameConfig.Volumes {
+		if !v.IsEnabled {
+			slog.Info("skipping disabled volume", "session_id", cmd.SessionID, "volume", v.Name)
+			continue
+		}
 		volumes = append(volumes, session.VolumeMount{
 			Name:          v.Name,
 			ContainerPath: v.ContainerPath,
 			HostSubpath:   v.HostSubpath,
 			VolumeType:    v.VolumeType,
 			Options:       v.Options,
+			IsEnabled:     v.IsEnabled,
 		})
 	}
 
