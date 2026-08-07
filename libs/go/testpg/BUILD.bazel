@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "testpg",
+    srcs = ["testpg.go"],
+    importpath = "github.com/whale-net/everything/libs/go/testpg",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/migrate",
+        "@com_github_docker_docker//api/types/container",
+        "@com_github_docker_docker//api/types/image",
+        "@com_github_docker_docker//client",
+        "@com_github_docker_go_connections//nat",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
+go_test(
+    name = "testpg_test",
+    srcs = ["testpg_test.go"],
+    embed = [":testpg"],
+    tags = [
+        "docker",
+        "integration",
+        "manual",  # Don't run with //... - requires Docker daemon
+    ],
+    deps = [
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
