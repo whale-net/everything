@@ -1,0 +1,134 @@
+syntax = "proto3";
+
+package whalenet.appmeta.v1;
+
+option go_package = "github.com/whale-net/everything/tools/appmeta/proto;appmetapb";
+
+// Schema of record for the JSON emitted by the `app_metadata` and
+// `helm_chart_metadata` Starlark rules in //tools/bazel:release.bzl.
+//
+// This package is the single definition of what a release_app manifest
+// contains. Every consumer — release_helper_go, the helm composer, the app
+// registry — decodes into these types instead of maintaining its own struct.
+//
+// WIRE FORMAT: the Starlark rules write plain snake_case JSON. `protojson`
+// accepts proto field names as-is, so no change to the emitted format is
+// required. Always decode with:
+//
+//     protojson.UnmarshalOptions{DiscardUnknown: false}
+//
+// so that any key a Starlark rule emits without a corresponding field here
+// becomes a hard error rather than silent data loss. That check is the
+// anti-drift mechanism; see //tools/appmeta:manifest_contract_test.
+//
+// ADDING A FIELD: add the attr to `app_metadata` in release.bzl, add it to the
+// message below, and extend the fixture in //tools/appmeta/testdata. The
+// contract test fails until all three agree.
+
+// DeployUnit declares how an app reaches an environment. Consumed by the app
+// registry to decide what is legal to promote, and sourced from the
+// `deploy_unit` attribute on release_app.
+enum DeployUnit {
+  DEPLOY_UNIT_UNSPECIFIED = 0;
+
+  // App reaches environments inside a Helm chart. Its images are pinned by the
+  // chart and are not independently promotable.
+  DEPLOY_UNIT_CHART = 1;
+
+  // App is deployed by moving an image reference directly, with no chart in
+  // between (e.g. manmanv2-host-manager).
+  DEPLOY_UNIT_IMAGE = 2;
+
+  // Built and published, but never deployed to an environment.
+  DEPLOY_UNIT_NONE = 3;
+}
+
+// HealthCheck mirrors the "health_check" object in the manifest JSON.
+message HealthCheck {
+  bool enabled = 1;
+  string path = 2;
+}
+
+// Ingress mirrors the "ingress" object in the manifest JSON.
+message Ingress {
+  string host = 1;
+  string tls_secret_name = 2;
+}
+
+// Resources mirrors the "resources" object in the manifest JSON.
+message Resources {
+  string requests_cpu = 1;
+  string requests_memory = 2;
+  string limits_cpu = 3;
+  string limits_memory = 4;
+}
+
+// AppManifest is one `release_app` declaration, as emitted by the
+// `app_metadata` rule. Field numbers are grouped to match the argument groups
+// documented on the release_app macro.
+message AppManifest {
+  // --- identity ---
+  string name = 1;      // app name, dashes only (e.g. "control-api")
+  string domain = 2;    // e.g. "manmanv2"
+  string description = 3;
+  string language = 4;  // "go" | "python"
+
+  // --- image coordinates ---
+  string registry = 10;      // "ghcr.io"
+  string organization = 11;  // "whale-net"
+  string repo_name = 12;     // "<domain>-<name>" unless custom_repo_name is set
+  string version = 13;       // default version from the macro; "latest" normally
+
+  // --- bazel targets ---
+  string binary_target = 20;
+  string image_target = 21;
+  string openapi_spec_target = 22;
+
+  // --- deployment shape ---
+  string app_type = 30;  // external-api | internal-api | worker | job
+  int32 port = 31;
+  int32 replicas = 32;
+  repeated string command = 33;
+  repeated string args = 34;
+
+  HealthCheck health_check = 40;
+  Ingress ingress = 41;
+  Resources resources = 42;
+
+  // --- release/promotion policy ---
+  // Added for the app registry. Defaults to DEPLOY_UNIT_CHART when the
+  // Starlark attr is unset, since charts are the normal delivery path.
+  DeployUnit deploy_unit = 50;
+}
+
+// ChartManifest is one `helm_chart` declaration, as emitted by the
+// `helm_chart_metadata` rule.
+message ChartManifest {
+  string name = 1;
+  string domain = 2;
+  string version = 3;
+  string namespace = 4;
+  string environment = 5;
+
+  // App names composed into this chart. Not "<domain>-<name>" — these are bare
+  // app names, matching what the Starlark rule extracts from the app_metadata
+  // target labels.
+  repeated string apps = 6;
+
+  string chart_target = 7;
+}
+
+// AppManifestSet is the full set of manifests discovered by a `bazel query`
+// sweep. This is what `release_helper_go` produces and what the app registry's
+// ReconcileApps consumes — the registry performs a full replace against it, so
+// partial sets must never be sent.
+message AppManifestSet {
+  repeated AppManifest apps = 1;
+  repeated ChartManifest charts = 2;
+
+  // Commit the sweep was taken at.
+  string git_sha = 3;
+
+  // Unix timestamp of the sweep.
+  int64 discovered_at = 4;
+}
