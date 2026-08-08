@@ -710,23 +710,23 @@ func TestBuildAppConfig_InternalAPIExposeIngress(t *testing.T) {
 	composer := NewComposer(config, "/templates")
 
 	tests := []struct {
-		name               string
-		appType            string
+		name                string
+		appType             string
 		expectExposeIngress bool
 	}{
 		{
-			name:               "Internal API defaults to exposeIngress false",
-			appType:            "internal-api",
+			name:                "Internal API defaults to exposeIngress false",
+			appType:             "internal-api",
 			expectExposeIngress: false,
 		},
 		{
-			name:               "External API has exposeIngress false",
-			appType:            "external-api",
+			name:                "External API has exposeIngress false",
+			appType:             "external-api",
 			expectExposeIngress: false,
 		},
 		{
-			name:               "Worker has exposeIngress false",
-			appType:            "worker",
+			name:                "Worker has exposeIngress false",
+			appType:             "worker",
 			expectExposeIngress: false,
 		},
 	}
@@ -871,39 +871,39 @@ func TestGenerateChart_Golden(t *testing.T) {
 	composer := NewComposer(config, "testdata/templates")
 	composer.apps = []*AppMetadata{
 		{
-			Name:        "api",
-			Domain:      "golden",
-			AppType:     "external-api",
-			Language:    "go",
-			Version:     "v1.2.3",
-			Registry:    "ghcr.io",
+			Name:         "api",
+			Domain:       "golden",
+			AppType:      "external-api",
+			Language:     "go",
+			Version:      "v1.2.3",
+			Registry:     "ghcr.io",
 			Organization: "whale-net",
-			RepoName:    "golden-api",
-			Port:        8080,
-			HealthCheck: &appmetapb.HealthCheck{Enabled: true, Path: "/healthz"},
-			Ingress:     &appmetapb.Ingress{Host: "api.golden.local", TlsSecretName: "golden-tls"},
+			RepoName:     "golden-api",
+			Port:         8080,
+			HealthCheck:  &appmetapb.HealthCheck{Enabled: true, Path: "/healthz"},
+			Ingress:      &appmetapb.Ingress{Host: "api.golden.local", TlsSecretName: "golden-tls"},
 		},
 		{
-			Name:     "worker",
-			Domain:   "golden",
-			AppType:  "worker",
-			Language: "python",
-			Version:  "v1.2.3",
-			Registry: "ghcr.io",
+			Name:         "worker",
+			Domain:       "golden",
+			AppType:      "worker",
+			Language:     "python",
+			Version:      "v1.2.3",
+			Registry:     "ghcr.io",
 			Organization: "whale-net",
-			RepoName: "golden-worker",
-			Command:  []string{"python3"},
-			Args:     []string{"-m", "golden.worker"},
+			RepoName:     "golden-worker",
+			Command:      []string{"python3"},
+			Args:         []string{"-m", "golden.worker"},
 		},
 		{
-			Name:     "migrate",
-			Domain:   "golden",
-			AppType:  "job",
-			Language: "go",
-			Version:  "v1.2.3",
-			Registry: "ghcr.io",
+			Name:         "migrate",
+			Domain:       "golden",
+			AppType:      "job",
+			Language:     "go",
+			Version:      "v1.2.3",
+			Registry:     "ghcr.io",
 			Organization: "whale-net",
-			RepoName: "golden-migrate",
+			RepoName:     "golden-migrate",
 		},
 	}
 
@@ -929,5 +929,132 @@ func TestGenerateChart_Golden(t *testing.T) {
 	}
 	if string(got) != string(want) {
 		t.Errorf("generated values.yaml does not match golden file %s.\n--- got ---\n%s\n--- want ---\n%s", goldenPath, got, want)
+	}
+}
+
+// TestGenerateLockfile_Golden renders the compose-time image lockfile from
+// the same fixed AppManifest fixtures as TestGenerateChart_Golden and
+// byte-compares it against a checked-in golden file. Guards two things at
+// once: the lockfile's shape, and that it never varies across builds of
+// identical inputs (Go map iteration is the historical hazard here — see
+// dd23e807).
+//
+// If the lockfile's shape legitimately changes, regenerate the golden file
+// by running this test with UPDATE_GOLDEN=1 and reviewing the diff.
+func TestGenerateLockfile_Golden(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "composer-lockfile-golden")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := ChartConfig{
+		ChartName:   "golden-chart",
+		Version:     "0.0.0-dev",
+		Environment: "production",
+		Namespace:   "golden-ns",
+		OutputDir:   tmpDir,
+	}
+	composer := NewComposer(config, "testdata/templates")
+	composer.apps = []*AppMetadata{
+		{
+			Name:         "api",
+			Domain:       "golden",
+			AppType:      "external-api",
+			Language:     "go",
+			Version:      "v1.2.3",
+			Registry:     "ghcr.io",
+			Organization: "whale-net",
+			RepoName:     "golden-api",
+			Port:         8080,
+			HealthCheck:  &appmetapb.HealthCheck{Enabled: true, Path: "/healthz"},
+			Ingress:      &appmetapb.Ingress{Host: "api.golden.local", TlsSecretName: "golden-tls"},
+		},
+		{
+			Name:         "worker",
+			Domain:       "golden",
+			AppType:      "worker",
+			Language:     "python",
+			Version:      "v1.2.3",
+			Registry:     "ghcr.io",
+			Organization: "whale-net",
+			RepoName:     "golden-worker",
+			Command:      []string{"python3"},
+			Args:         []string{"-m", "golden.worker"},
+		},
+		{
+			Name:         "migrate",
+			Domain:       "golden",
+			AppType:      "job",
+			Language:     "go",
+			Version:      "v1.2.3",
+			Registry:     "ghcr.io",
+			Organization: "whale-net",
+			RepoName:     "golden-migrate",
+		},
+	}
+
+	if err := composer.generateLockfile(tmpDir); err != nil {
+		t.Fatalf("generateLockfile failed: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(tmpDir, LockfileFileName))
+	if err != nil {
+		t.Fatalf("read generated image lockfile: %v", err)
+	}
+
+	goldenPath := "testdata/golden_image-lockfile.json"
+	if os.Getenv("UPDATE_GOLDEN") != "" {
+		if err := os.WriteFile(goldenPath, got, 0644); err != nil {
+			t.Fatalf("write golden file: %v", err)
+		}
+		t.Skip("UPDATE_GOLDEN set; wrote " + goldenPath)
+	}
+
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden file (run with UPDATE_GOLDEN=1 to create it): %v", err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("generated image lockfile does not match golden file %s.\n--- got ---\n%s\n--- want ---\n%s", goldenPath, got, want)
+	}
+}
+
+// TestGenerateLockfile_Deterministic builds the lockfile several times from
+// the same (deliberately unsorted) app slice and asserts byte-identical
+// output every time — the regression guard for Go's randomized map/slice
+// iteration order leaking into the emitted lockfile.
+func TestGenerateLockfile_Deterministic(t *testing.T) {
+	apps := []*AppMetadata{
+		{Name: "zeta", Domain: "demo", Registry: "ghcr.io", Organization: "whale-net", RepoName: "demo-zeta", Version: "v1.0.0"},
+		{Name: "alpha", Domain: "demo", Registry: "ghcr.io", Organization: "whale-net", RepoName: "demo-alpha", Version: "v1.0.0"},
+		{Name: "mid", Domain: "demo", Registry: "ghcr.io", Organization: "whale-net", RepoName: "demo-mid", Version: "v1.0.0"},
+	}
+
+	var results []string
+	for i := 0; i < 5; i++ {
+		tmpDir, err := os.MkdirTemp("", "composer-lockfile-det")
+		if err != nil {
+			t.Fatalf("Failed to create temp dir: %v", err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		config := ChartConfig{ChartName: "det-chart", Version: "0.0.0-dev", OutputDir: tmpDir}
+		composer := NewComposer(config, "testdata/templates")
+		composer.apps = apps
+
+		if err := composer.generateLockfile(tmpDir); err != nil {
+			t.Fatalf("generateLockfile failed: %v", err)
+		}
+		data, err := os.ReadFile(filepath.Join(tmpDir, LockfileFileName))
+		if err != nil {
+			t.Fatalf("read lockfile: %v", err)
+		}
+		results = append(results, string(data))
+	}
+
+	for i := 1; i < len(results); i++ {
+		if results[i] != results[0] {
+			t.Errorf("lockfile output not deterministic across runs: run 0 vs run %d differ\n--- run 0 ---\n%s\n--- run %d ---\n%s", i, results[0], i, results[i])
+		}
 	}
 }

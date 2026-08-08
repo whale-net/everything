@@ -1,0 +1,26 @@
+{
+  "chart_name": "golden-chart",
+  "images": [
+    {
+      "app_full_name": "golden-api",
+      "domain": "golden",
+      "name": "api",
+      "repository": "ghcr.io/whale-net/golden-api",
+      "version": "v1.2.3"
+    },
+    {
+      "app_full_name": "golden-migrate",
+      "domain": "golden",
+      "name": "migrate",
+      "repository": "ghcr.io/whale-net/golden-migrate",
+      "version": "v1.2.3"
+    },
+    {
+      "app_full_name": "golden-worker",
+      "domain": "golden",
+      "name": "worker",
+      "repository": "ghcr.io/whale-net/golden-worker",
+      "version": "v1.2.3"
+    }
+  ]
+}

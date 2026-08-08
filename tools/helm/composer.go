@@ -1,6 +1,7 @@
 package helm
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,6 +35,37 @@ func GetImageTag(m *AppMetadata) string {
 		return m.Version
 	}
 	return "latest"
+}
+
+// LockfileFileName is the name of the compose-time image lockfile written
+// alongside Chart.yaml in every generated chart.
+const LockfileFileName = "image-lockfile.json"
+
+// ImageLock is one app's image reference as pinned by the chart at compose
+// time. Digests are deliberately absent: resolving a tag to a digest
+// requires a container registry call, which a Bazel action must never make
+// without breaking hermeticity (see docs/DOCKER.md and
+// tools/app_registry/ARCHITECTURE.md's "Chart -> image lockfile" section).
+// The publish-time step, run after images are pushed, resolves each entry's
+// repository+version to a digest and forwards it to
+// ArtifactRegistry.RecordArtifact — see AR-2c.
+type ImageLock struct {
+	// AppFullName is "<domain>-<name>", matching the values.yaml app key and
+	// the app registry's owner_full_name convention.
+	AppFullName string `json:"app_full_name"`
+	Domain      string `json:"domain"`
+	Name        string `json:"name"`
+	// Repository is the image reference without a tag (registry/org/repo).
+	Repository string `json:"repository"`
+	// Version is the tag baked into the chart's values.yaml (imageTag).
+	Version string `json:"version"`
+}
+
+// ChartLockfile is the compose-time lockfile emitted for a chart: every
+// image reference it pins, with no digests. See ImageLock for why.
+type ChartLockfile struct {
+	ChartName string      `json:"chart_name"`
+	Images    []ImageLock `json:"images"`
 }
 
 // HealthCheckConfig defines health check configuration
@@ -323,6 +355,12 @@ func (c *Composer) GenerateChart() error {
 		return fmt.Errorf("failed to generate values.yaml: %w", err)
 	}
 
+	// Generate the compose-time image lockfile (no digests, no network — see
+	// ChartLockfile).
+	if err := c.generateLockfile(chartDir); err != nil {
+		return fmt.Errorf("failed to generate image lockfile: %w", err)
+	}
+
 	// Generate Kubernetes resource templates
 	if err := c.generateResourceTemplates(templatesDir); err != nil {
 		return fmt.Errorf("failed to generate resource templates: %w", err)
@@ -486,6 +524,44 @@ func (c *Composer) generateValuesYaml(chartDir string) error {
 
 	if err := writeValuesYAML(f, valuesData); err != nil {
 		return fmt.Errorf("failed to write values.yaml: %w", err)
+	}
+
+	return nil
+}
+
+// generateLockfile writes the chart's compose-time image lockfile
+// (LockfileFileName) alongside Chart.yaml. Deterministic and hermetic: it is
+// a pure function of the manifests already loaded via LoadMetadata, sorted
+// by app full name so output does not depend on Go's randomized map/slice
+// iteration order (see dd23e807, which fixed this class of bug for
+// values.yaml). No digests are resolved here — see ImageLock.
+func (c *Composer) generateLockfile(chartDir string) error {
+	lock := ChartLockfile{
+		ChartName: c.config.ChartName,
+		Images:    make([]ImageLock, 0, len(c.apps)),
+	}
+	for _, app := range c.apps {
+		lock.Images = append(lock.Images, ImageLock{
+			AppFullName: fmt.Sprintf("%s-%s", app.Domain, app.Name),
+			Domain:      app.Domain,
+			Name:        app.Name,
+			Repository:  GetImage(app),
+			Version:     GetImageTag(app),
+		})
+	}
+	sort.Slice(lock.Images, func(i, j int) bool {
+		return lock.Images[i].AppFullName < lock.Images[j].AppFullName
+	})
+
+	data, err := json.MarshalIndent(lock, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal image lockfile: %w", err)
+	}
+	data = append(data, '\n')
+
+	outputFile := filepath.Join(chartDir, LockfileFileName)
+	if err := os.WriteFile(outputFile, data, 0644); err != nil {
+		return fmt.Errorf("failed to write image lockfile: %w", err)
 	}
 
 	return nil
