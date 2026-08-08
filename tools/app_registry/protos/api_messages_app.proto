@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package appregistry.v1;
+
+option go_package = "github.com/whale-net/everything/tools/app_registry/protos;appregistrypb";
+
+import "tools/app_registry/protos/messages.proto";
+import "tools/appmeta/proto/appmeta.proto";
+
+// ============================================================================
+// Reconciliation
+// ============================================================================
+
+// ReconcileAppsRequest is a FULL replace, not an incremental upsert. The
+// caller sends every manifest in the monorepo; anything the registry knows
+// about that is absent from this set is marked APP_STATUS_MISSING for human
+// triage. Nothing is ever hard-deleted.
+//
+// The payload is the manifest set exactly as `release_helper_go` discovered it
+// from `bazel query` — the registry does not define its own manifest shape, so
+// there is nothing to keep in sync. Adding a field to release_app makes it
+// available here automatically.
+message ReconcileAppsRequest {
+  whalenet.appmeta.v1.AppManifestSet manifests = 1;
+
+  // When true, compute and return the diff without writing anything.
+  bool dry_run = 2;
+
+  // Required. Repeated calls with the same key are a no-op returning the
+  // original result. Use "<workflow_run_id>-<attempt>".
+  string idempotency_key = 3;
+}
+
+message ReconcileAppsResponse {
+  repeated App created_apps = 1;
+  repeated App updated_apps = 2;
+
+  // Apps that fell out of the manifest set and were flagged for triage.
+  repeated App newly_missing_apps = 3;
+
+  // Apps previously MISSING that reappeared; automatically returned to ACTIVE.
+  repeated App recovered_apps = 4;
+
+  repeated Chart created_charts = 5;
+  repeated Chart updated_charts = 6;
+  repeated Chart newly_missing_charts = 7;
+  repeated Chart recovered_charts = 8;
+
+  bool dry_run = 9;
+}
+
+// ============================================================================
+// Reads
+// ============================================================================
+
+message ListAppsRequest {
+  string domain = 1;  // optional filter
+
+  // Defaults to [ACTIVE, MISSING] when empty — archived apps are hidden
+  // unless explicitly asked for.
+  repeated AppStatus statuses = 2;
+
+  whalenet.appmeta.v1.DeployUnit deploy_unit = 3;  // optional filter
+  PageRequest page = 4;
+}
+
+message ListAppsResponse {
+  repeated App apps = 1;
+  PageResponse page = 2;
+}
+
+message GetAppRequest {
+  // Either app_id, or full_name ("<domain>-<name>").
+  string app_id = 1;
+  string full_name = 2;
+}
+
+message GetAppResponse {
+  App app = 1;
+
+  // Charts that compose this app, so a caller can see what it would actually
+  // need to promote.
+  repeated Chart charts = 2;
+}
+
+message ListChartsRequest {
+  string domain = 1;
+  repeated AppStatus statuses = 2;
+  PageRequest page = 3;
+}
+
+message ListChartsResponse {
+  repeated Chart charts = 1;
+  PageResponse page = 2;
+}
+
+// ============================================================================
+// Manual triage of MISSING rows
+// ============================================================================
+
+// SetAppStatusRequest lets a human resolve a MISSING app: archive it if the
+// removal was intentional, or reactivate it if the reconcile was wrong.
+// Transitioning to ACTIVE is only accepted if the app is present in the most
+// recent reconcile.
+message SetAppStatusRequest {
+  string app_id = 1;
+  AppStatus status = 2;
+  string reason = 3;  // required — recorded in the audit log
+}
+
+message SetAppStatusResponse {
+  App app = 1;
+}

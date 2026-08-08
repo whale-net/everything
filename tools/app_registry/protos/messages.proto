@@ -1,0 +1,279 @@
+syntax = "proto3";
+
+package appregistry.v1;
+
+option go_package = "github.com/whale-net/everything/tools/app_registry/protos;appregistrypb";
+
+// DeployUnit and the manifest messages are NOT defined here. They belong to
+// //tools/appmeta/proto, the shared schema of record for release_app manifest
+// JSON, so that release_helper_go and the helm composer can consume them
+// without depending on the registry. See ARCHITECTURE.md "Shared manifest
+// schema".
+import "tools/appmeta/proto/appmeta.proto";
+
+// ============================================================================
+// Enums
+// ============================================================================
+
+// ArtifactKind is the type of published, digest-addressable thing.
+enum ArtifactKind {
+  ARTIFACT_KIND_UNSPECIFIED = 0;
+  ARTIFACT_KIND_IMAGE = 1;
+  ARTIFACT_KIND_CHART = 2;
+}
+
+// Promotability is a DERIVED field the server computes from the owning app's
+// or chart's DeployUnit. Clients (CLI, future UI) should filter on this rather
+// than reimplementing the rule. See ARCHITECTURE.md "Promotability".
+enum Promotability {
+  PROMOTABILITY_UNSPECIFIED = 0;
+
+  // A legal, first-class promotion target.
+  PROMOTABILITY_PROMOTABLE = 1;
+
+  // Reaches environments only by being pinned inside a promotable chart.
+  // Promoting directly is possible but is recorded as an override.
+  PROMOTABILITY_VIA_CHART = 2;
+
+  // Never deployed. Promotion is rejected.
+  PROMOTABILITY_NOT_PROMOTABLE = 3;
+}
+
+// AppStatus tracks reconciliation against the release_app manifests in the
+// monorepo. Rows are never hard-deleted — promotion history must stay
+// queryable for apps that no longer exist.
+enum AppStatus {
+  APP_STATUS_UNSPECIFIED = 0;
+
+  // Present in the most recent manifest reconcile.
+  APP_STATUS_ACTIVE = 1;
+
+  // Absent from the most recent reconcile but not yet triaged by a human.
+  // Surfaced as a work queue: either the app was renamed (fix it) or it was
+  // genuinely removed (archive it).
+  APP_STATUS_MISSING = 2;
+
+  // A human confirmed this app is gone. Excluded from default listings.
+  APP_STATUS_ARCHIVED = 3;
+}
+
+// PromotionState allows the approval gate described in ARCHITECTURE.md to be
+// added later without a schema change. Phase AR-3 only ever writes ACTIVE and
+// SUPERSEDED.
+enum PromotionState {
+  PROMOTION_STATE_UNSPECIFIED = 0;
+  PROMOTION_STATE_PENDING_APPROVAL = 1;
+  PROMOTION_STATE_ACTIVE = 2;
+  PROMOTION_STATE_SUPERSEDED = 3;
+  PROMOTION_STATE_FAILED = 4;
+}
+
+// PromotionAction is the human-meaningful verb recorded on the append-only
+// event log. The SCD2 promotion table answers "what"; this answers "why".
+enum PromotionAction {
+  PROMOTION_ACTION_UNSPECIFIED = 0;
+  PROMOTION_ACTION_PROMOTE = 1;
+  PROMOTION_ACTION_ROLLBACK = 2;
+  PROMOTION_ACTION_OVERRIDE = 3;
+  PROMOTION_ACTION_RETIRE = 4;
+  PROMOTION_ACTION_APPROVE = 5;
+  PROMOTION_ACTION_REJECT = 6;
+}
+
+// ============================================================================
+// Core entities
+// ============================================================================
+
+// App mirrors one release_app manifest in the monorepo. Identity is
+// (domain, name); full_name is the "<domain>-<app>" form already used for
+// image repositories and git tags.
+message App {
+  string app_id = 1;      // registry-assigned UUID, stable across renames
+  string domain = 2;      // e.g. "manmanv2"
+  string name = 3;        // e.g. "control-api"
+  string full_name = 4;   // "<domain>-<name>", derived
+
+  string description = 5;
+  string language = 6;    // "go" | "python"
+  string app_type = 7;    // external-api | internal-api | worker | job
+  whalenet.appmeta.v1.DeployUnit deploy_unit = 8;
+
+  // Bazel label the manifest came from, e.g. "//manmanv2/api:control-api".
+  // Makes the registry row traceable back to source.
+  string bazel_label = 9;
+
+  // Image repository this app publishes to, e.g.
+  // "ghcr.io/whale-net/manmanv2-control-api".
+  string image_repository = 10;
+
+  AppStatus status = 11;
+  int64 first_seen_at = 12;  // Unix timestamp
+  int64 last_seen_at = 13;   // Unix timestamp, updated every reconcile
+}
+
+// Chart is a Helm chart composed from one or more apps. Charts are their own
+// registerable identity because tools/helm composes several apps into one
+// chart, and the chart — not the app — is usually the promotion target.
+message Chart {
+  string chart_id = 1;
+  string domain = 2;
+  string name = 3;
+  string full_name = 4;
+
+  string description = 5;
+
+  // app_ids composed into this chart, per its manifest.
+  repeated string app_ids = 6;
+
+  // Helm OCI repository, e.g. "ghcr.io/whale-net/charts".
+  string chart_repository = 7;
+
+  whalenet.appmeta.v1.DeployUnit deploy_unit = 8;  // normally DEPLOY_UNIT_CHART
+  AppStatus status = 9;
+  int64 first_seen_at = 10;
+  int64 last_seen_at = 11;
+}
+
+// Build is one CI run that produced a set of artifacts. Artifacts always hang
+// off a build so that any deployed digest traces back to a commit and a
+// workflow run.
+message Build {
+  string build_id = 1;
+
+  string git_sha = 2;
+  string git_ref = 3;          // e.g. "refs/heads/main"
+
+  string workflow_run_id = 4;  // GitHub Actions run id
+  int32 workflow_attempt = 5;
+  string actor = 6;            // GitHub actor or service account subject
+
+  int64 started_at = 7;
+  int64 recorded_at = 8;
+}
+
+// Artifact is a published, digest-addressable thing. The digest is the
+// identity; the semver tag is a convenience label that may move.
+message Artifact {
+  string artifact_id = 1;
+  ArtifactKind kind = 2;
+
+  // Exactly one of these is set, depending on kind.
+  string app_id = 3;    // set when kind == IMAGE
+  string chart_id = 4;  // set when kind == CHART
+
+  string repository = 5;  // e.g. "ghcr.io/whale-net/manmanv2-control-api"
+  string version = 6;     // semver tag, e.g. "v1.4.0"
+  string digest = 7;      // "sha256:..." — the real identity, globally unique
+
+  string build_id = 8;
+  int64 published_at = 9;
+
+  // DERIVED by the server from the owning app's/chart's deploy_unit.
+  Promotability promotability = 10;
+
+  // For kind == CHART: the image artifacts this chart pins, resolved to
+  // digests at publish time by tools/helm. Empty for kind == IMAGE.
+  repeated ArtifactLink contains = 11;
+}
+
+// ArtifactLink records that a chart artifact pins a specific image digest.
+// This is what makes "which image digest is prod actually running" answerable
+// without rendering a chart.
+message ArtifactLink {
+  string artifact_id = 1;  // the contained image artifact
+  string app_id = 2;
+  string repository = 3;
+  string version = 4;
+  string digest = 5;
+}
+
+// Environment is a row, not an enum, so ephemeral and regional environments
+// can be added later without a schema or proto change.
+message Environment {
+  string environment_id = 1;
+  string key = 2;           // "dev" | "stage" | "prod" | "prod-eu" | ...
+  string display_name = 3;
+
+  // Ordering for promotion-legality rules (e.g. "must be in stage before
+  // prod"). Higher rank == closer to production. Not enforced in AR-3.
+  int32 rank = 4;
+
+  // When true, Promote lands in PROMOTION_STATE_PENDING_APPROVAL instead of
+  // ACTIVE. Not honored until the approval gate ships.
+  bool requires_approval = 5;
+
+  // Path in the gitops repo this environment's rendered state is written to.
+  string gitops_path = 6;
+
+  // Principals permitted to promote here, checked against the caller's OIDC
+  // claims. Empty means "same as builder role" — only acceptable for dev.
+  repeated string allowed_principals = 7;
+
+  bool archived = 8;
+  int64 created_at = 9;
+}
+
+// Promotion is SCD2 state: what is deployed to an environment right now, and
+// what was deployed at any past instant. Follows the repo-wide valid_from /
+// valid_to convention (see AGENTS.md).
+message Promotion {
+  string promotion_id = 1;
+
+  string environment_id = 2;
+  string environment_key = 3;  // denormalized for readability
+
+  // The promotion target. Exactly one of app_id / chart_id is set, matching
+  // artifact.kind.
+  string app_id = 4;
+  string chart_id = 5;
+  string artifact_id = 6;
+
+  // Denormalized artifact identity so a state dump is readable on its own.
+  string repository = 7;
+  string version = 8;
+  string digest = 9;
+
+  PromotionState state = 10;
+
+  // True when an image belonging to a DEPLOY_UNIT_CHART app was promoted
+  // directly, bypassing its chart. Legal, but reported as drift against the
+  // chart's pinned digest.
+  bool is_override = 11;
+
+  int64 valid_from = 12;
+  int64 valid_to = 13;  // 0 == still current
+}
+
+// PromotionEvent is the append-only audit log. One Promote call writes exactly
+// one event; approvals and rollbacks add further events against the same
+// promotion.
+message PromotionEvent {
+  string event_id = 1;
+  string promotion_id = 2;
+
+  PromotionAction action = 3;
+  string actor = 4;    // OIDC subject or GitHub actor
+  string reason = 5;   // free text, required for prod
+
+  // Set when the writeback was orchestrated by Temporal, so an operator can
+  // jump from an audit row to the workflow history.
+  string temporal_workflow_id = 6;
+  string temporal_run_id = 7;
+
+  int64 occurred_at = 8;
+}
+
+// ============================================================================
+// Shared request plumbing
+// ============================================================================
+
+// Pagination is uniform across all List RPCs.
+message PageRequest {
+  int32 page_size = 1;   // server clamps; 0 means server default
+  string page_token = 2;
+}
+
+message PageResponse {
+  string next_page_token = 1;
+  int32 total_size = 2;
+}

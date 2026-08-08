@@ -1,0 +1,152 @@
+syntax = "proto3";
+
+package appregistry.v1;
+
+option go_package = "github.com/whale-net/everything/tools/app_registry/protos;appregistrypb";
+
+import "tools/app_registry/protos/messages.proto";
+
+// ============================================================================
+// Recording builds and artifacts (the CI write path)
+// ============================================================================
+
+message RecordBuildRequest {
+  string git_sha = 1;
+  string git_ref = 2;
+  string workflow_run_id = 3;
+  int32 workflow_attempt = 4;
+  string actor = 5;
+  int64 started_at = 6;
+
+  // Required. "<workflow_run_id>-<attempt>".
+  string idempotency_key = 7;
+}
+
+message RecordBuildResponse {
+  Build build = 1;
+
+  // True when this build was already recorded and the existing row was
+  // returned unchanged.
+  bool already_recorded = 2;
+}
+
+// ContainedImage is one image a chart pins, as resolved by tools/helm at
+// compose time. Charts must be recorded with digests, not floating tags —
+// this is what makes environment state auditable.
+message ContainedImage {
+  // App this image belongs to, as "<domain>-<name>".
+  string app_full_name = 1;
+  string repository = 2;
+  string version = 3;
+  string digest = 4;
+}
+
+message RecordArtifactRequest {
+  string build_id = 1;
+  ArtifactKind kind = 2;
+
+  // For kind == IMAGE: the app's "<domain>-<name>".
+  // For kind == CHART: the chart's "<domain>-<name>".
+  string owner_full_name = 3;
+
+  string repository = 4;
+  string version = 5;  // semver tag, validated as v<major>.<minor>.<patch>
+  string digest = 6;   // "sha256:..." — required
+
+  // Only valid for kind == CHART. Every referenced image must already be
+  // recorded, or the call fails — a chart may not pin an unknown digest.
+  repeated ContainedImage contains = 7;
+
+  int64 published_at = 8;
+
+  // Required. "<workflow_run_id>-<attempt>-<owner_full_name>-<kind>".
+  string idempotency_key = 9;
+}
+
+message RecordArtifactResponse {
+  Artifact artifact = 1;
+  bool already_recorded = 2;
+}
+
+// ============================================================================
+// Reads
+// ============================================================================
+
+message ListArtifactsRequest {
+  // Filter by owner; "<domain>-<name>" of an app or chart.
+  string owner_full_name = 1;
+  ArtifactKind kind = 2;
+
+  // When set, return only artifacts a caller could legally promote. This is
+  // the filter the CLI uses to answer "what can I promote?".
+  bool promotable_only = 3;
+
+  PageRequest page = 4;
+}
+
+message ListArtifactsResponse {
+  repeated Artifact artifacts = 1;
+  PageResponse page = 2;
+}
+
+message GetArtifactRequest {
+  // Identify by artifact_id, by digest (globally unique), or by the
+  // (owner_full_name, kind, version) triple.
+  string artifact_id = 1;
+  string digest = 2;
+  string owner_full_name = 3;
+  ArtifactKind kind = 4;
+  string version = 5;
+}
+
+message GetArtifactResponse {
+  Artifact artifact = 1;
+  Build build = 2;
+}
+
+// ResolveArtifactRequest walks a chart artifact down to the concrete image
+// digests it pins. This is the incident-time query: given what is in prod,
+// what code is actually running.
+message ResolveArtifactRequest {
+  string artifact_id = 1;
+  string digest = 2;
+}
+
+message ResolveArtifactResponse {
+  Artifact artifact = 1;
+
+  // Flattened image artifacts, each with its originating build so a digest
+  // maps straight back to a commit.
+  repeated Artifact images = 2;
+  repeated Build builds = 3;
+}
+
+// ============================================================================
+// Version allocation (phase AR-5)
+// ============================================================================
+
+// AllocateVersionRequest replaces the `git tag --sort=-version:refname` scan
+// in release_helper_go. Allocation is a transactional insert against a unique
+// (owner, version) constraint, so concurrent CI runs cannot collide.
+message AllocateVersionRequest {
+  string owner_full_name = 1;
+  ArtifactKind kind = 2;
+
+  // "major" | "minor" | "patch". Ignored when explicit_version is set.
+  string increment = 3;
+
+  // Bypass auto-increment and reserve this exact version. Fails if taken.
+  string explicit_version = 4;
+
+  // Required. "<workflow_run_id>-<attempt>-<owner_full_name>".
+  string idempotency_key = 5;
+}
+
+message AllocateVersionResponse {
+  string version = 1;
+
+  // Version this was incremented from; empty for a first release.
+  string previous_version = 2;
+
+  bool already_allocated = 3;
+}
