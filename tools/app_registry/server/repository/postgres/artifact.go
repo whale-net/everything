@@ -127,11 +127,17 @@ func (r *artifactRepo) RecordArtifact(ctx context.Context, a repository.Artifact
 	} else {
 		chartID = a.ChartID
 	}
+	// Resolve the owner's display name *before* the insert. A constraint
+	// violation aborts the surrounding transaction, so any query issued
+	// afterwards fails too and ownerFullName would degrade to the raw UUID —
+	// which is exactly what a client should never be shown.
+	ownerName := r.ownerFullName(ctx, a)
+
 	if _, err := r.ex.Exec(ctx, `
 		INSERT INTO artifact (artifact_id, kind, app_id, chart_id, repository, version, digest, build_id, published_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		a.ArtifactID, string(a.Kind), appID, chartID, a.Repository, a.Version, a.Digest, a.BuildID, a.PublishedAt); err != nil {
-		msg := fmt.Sprintf("artifact %s %s already recorded", r.ownerFullName(ctx, a), a.Version)
+		msg := fmt.Sprintf("artifact %s %s already recorded", ownerName, a.Version)
 		if de, ok := translatePgError(err, msg); ok {
 			return nil, false, de
 		}
