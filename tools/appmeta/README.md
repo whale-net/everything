@@ -84,13 +84,19 @@ without anyone extending the proto. The enforcement is
 `//tools/appmeta:manifest_contract_test`, in both directions:
 
 1. **rule → proto** (`TestAllManifestsDecodeAgainstProto`): discover every
-   `app_metadata` / `helm_chart_metadata` target the way `release_helper_go`
-   does — `bazel query` for labels, then `bazel cquery --output=starlark` over
-   the providers — and unmarshal each result with `DiscardUnknown: false`.
-2. **proto → rule** (`TestFixtureLeavesNoFieldUnset`): the fixture app in
-   `testdata/` sets *every* `release_app` attribute; assert the decoded
-   message has no unset field. Catches a field defined here that the rule
-   never populates.
+   `app_metadata` / `helm_chart_metadata` target the same *shape* of query
+   `release_helper_go` uses for release discovery — `bazel query` for labels,
+   then `bazel cquery --output=starlark` over the providers — and unmarshal
+   each result with `DiscardUnknown: false`. Unlike `release_helper_go`'s
+   `ListAllApps`/`ListAllHelmCharts`, this query does **not** exclude
+   `testonly` targets: it needs to validate the fixture below, not release it.
+2. **proto → rule** (`TestFixtureLeavesNoFieldUnset`): the fixture in
+   `testdata/` calls `app_metadata` directly (not the `release_app` macro) so
+   it creates no image/openapi_spec targets, and is marked `testonly = True`
+   so `ListAllApps` excludes it from `plan --apps all` — a test fixture must
+   never become a real release. It still sets every `app_metadata` attribute;
+   assert the decoded message has no unset field, to catch a field defined
+   here that the rule never populates.
 
 Direction 2 is fully hermetic — it just reads the fixture's built metadata
 JSON as a `data` dependency, so it runs under a normal `bazel test`.
