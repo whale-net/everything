@@ -1,0 +1,51 @@
+# Full-coverage fixture for //tools/appmeta:manifest_contract_test's
+# proto -> rule direction: this release_app sets every release_app attribute,
+# so the resulting AppManifest should have no field left unset. If a new
+# field is added to appmeta.proto but the rule never populates it, extending
+# this fixture is what catches it (see //tools/appmeta/README.md).
+
+load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+py_library(
+    name = "main_lib",
+    srcs = ["__init__.py", "main.py"],
+    deps = [
+        "@pypi//:fastapi",
+        "@pypi//:uvicorn",
+    ],
+    visibility = ["//tools/appmeta/testdata:__pkg__"],
+)
+
+py_binary(
+    name = "fixture-app",
+    srcs = ["main.py"],
+    main = "main.py",
+    deps = [":main_lib"],
+    visibility = ["//visibility:public"],
+)
+
+release_app(
+    name = "fixture-app",
+    language = "python",
+    domain = "appmeta",
+    description = "Full-coverage fixture for the appmeta manifest contract test.",
+    version = "v1.2.3",
+    registry = "ghcr.io",
+    organization = "whale-net",
+    app_type = "external-api",
+    port = 8080,
+    replicas = 3,
+    health_check_enabled = True,
+    health_check_path = "/healthz",
+    ingress_host = "fixture.example.local",
+    ingress_tls_secret = "fixture-tls",
+    command = ["python3"],
+    args = ["-m", "tools.appmeta.testdata.main"],
+    resources_requests_cpu = "100m",
+    resources_requests_memory = "128Mi",
+    resources_limits_cpu = "200m",
+    resources_limits_memory = "256Mi",
+    fastapi_app = "tools.appmeta.testdata.main:app",
+    deploy_unit = "image",
+)

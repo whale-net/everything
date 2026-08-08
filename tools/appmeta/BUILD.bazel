@@ -1,0 +1,36 @@
+load("@rules_go//go:def.bzl", "go_test")
+
+# Anti-drift enforcement for the appmeta schema, both directions — see
+# README.md's "The contract test" section.
+#
+# TestFixtureLeavesNoFieldUnset (proto -> rule) is fully hermetic: it just
+# reads //tools/appmeta/testdata's built metadata JSON as a `data` dep.
+#
+# TestAllManifestsDecodeAgainstProto (rule -> proto) shells out to a real
+# `bazel query`/`bazel cquery` against the whole repo, which a sandboxed
+# bazel-test action cannot do (it only sees its declared inputs). This is the
+# same constraint //tools/scripts:test_cross_compilation works around, and
+# this target follows the same idiom: tagged "manual" so it's excluded from
+# `//tools/...` / `//...` wildcards, and invoked by explicit name in CI.
+go_test(
+    name = "manifest_contract_test",
+    srcs = [
+        "proto_to_rule_test.go",
+        "rule_to_proto_test.go",
+    ],
+    data = [
+        "//tools/appmeta/testdata:fixture-app_metadata",
+    ],
+    tags = [
+        "manual",  # requires a real bazel invocation against the full checkout; see doc comment
+        "no-cache",
+        "no-sandbox",
+        "integration",
+    ],
+    deps = [
+        "//tools/appmeta/proto:appmetapb",
+        "@org_golang_google_protobuf//encoding/protojson",
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_google_protobuf//reflect/protoreflect",
+    ],
+)
