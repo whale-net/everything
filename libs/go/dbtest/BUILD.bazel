@@ -1,0 +1,57 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "dbtest",
+    srcs = ["dbtest.go"],
+    importpath = "github.com/whale-net/everything/libs/go/dbtest",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_testcontainers_testcontainers_go//:testcontainers-go",
+        "@com_github_testcontainers_testcontainers_go//wait",
+        "@com_github_testcontainers_testcontainers_go_modules_postgres//:postgres",
+    ],
+)
+
+# PoC / real integration test proving testcontainers-go can start a real
+# Postgres under Bazel and that it enforces constraints an in-memory fake
+# cannot (a plain UNIQUE index and a partial "current row" unique index).
+#
+# Deliberately NOT part of //... :
+#   - "manual"      keeps it out of `bazel test //...` and other wildcards
+#   - "integration" documents its category (mirrors test_cross_compilation)
+#   - "no-cache"    a container-backed test must not be cached as a stale PASS
+#   - "external"    forces Bazel to always re-run instead of trusting the cache
+#   - "no-sandbox"  the test action needs to reach /var/run/docker.sock and
+#                   the network to pull images; both are blocked by the
+#                   default sandbox
+#   - "requires-network" documents (and in remote/CI configs enforces) that
+#                   this action needs network access, e.g. to pull the
+#                   postgres image
+#
+# Run it explicitly:
+#   bazel test //libs/go/dbtest:postgres_constraints_test \
+#     --test_tag_filters=-manual \
+#     --test_output=all
+#
+# See README.md for the full incantation, required env vars, and what a CI
+# job needs to provide.
+go_test(
+    name = "postgres_constraints_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["postgres_constraints_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":dbtest",
+        "@com_github_jackc_pgx_v5//pgconn",
+    ],
+)
