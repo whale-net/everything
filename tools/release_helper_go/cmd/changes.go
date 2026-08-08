@@ -74,17 +74,19 @@ func DetectChangedApps(baseCommit string, bazel BazelRunner, git GitRunner, fs F
 
 	// Validate labels (remove deleted files / invalid targets)
 	validLabels := validateLabels(fileLabels, bazel)
+	// Validate packages (remove packages whose BUILD file was deleted, e.g. a removed directory)
+	validPkgs := validatePackages(changedPkgs, bazel)
 
-	if len(validLabels) == 0 && len(changedPkgs) == 0 {
+	if len(validLabels) == 0 && len(validPkgs) == 0 {
 		return nil, nil
 	}
 
 	// Build rdeps seed expression, wrapping multi-part unions in parens for Bazel query syntax.
-	queryParts := make([]string, 0, len(validLabels)+len(changedPkgs))
+	queryParts := make([]string, 0, len(validLabels)+len(validPkgs))
 	if len(validLabels) > 0 {
 		queryParts = append(queryParts, strings.Join(validLabels, " + "))
 	}
-	for pkg := range changedPkgs {
+	for _, pkg := range validPkgs {
 		if pkg == "//" {
 			queryParts = append(queryParts, "//...")
 		} else {
@@ -217,6 +219,24 @@ func validateLabels(labels []string, bazel BazelRunner) []string {
 		if out, err := bazel.Run("query", label, "--output=label"); err == nil {
 			if t := strings.TrimSpace(out); t != "" {
 				valid = append(valid, t)
+			}
+		}
+	}
+	return valid
+}
+
+// validatePackages drops packages that no longer exist (e.g. a deleted
+// directory whose BUILD file was among the changed files).
+func validatePackages(packages map[string]struct{}, bazel BazelRunner) []string {
+	var valid []string
+	for pkg := range packages {
+		expr := pkg + "/..."
+		if pkg == "//" {
+			expr = "//..."
+		}
+		if out, err := bazel.Run("query", expr, "--output=label"); err == nil {
+			if strings.TrimSpace(out) != "" {
+				valid = append(valid, pkg)
 			}
 		}
 	}
