@@ -12,6 +12,7 @@ go_library(
         "//libs/go/logging",
         "//tools/app_registry/protos:appregistrypb",
         "//tools/app_registry/server/handlers",
+        "//tools/app_registry/server/repository",
         "//tools/app_registry/server/repository/postgres",
         "@io_opentelemetry_go_contrib_instrumentation_google_golang_org_grpc_otelgrpc//:otelgrpc",
         "@org_golang_google_grpc//:grpc",
@@ -51,6 +52,7 @@ go_test(
     embed = [":api_lib"],
     deps = [
         "//tools/app_registry/protos:appregistrypb",
+        "//tools/app_registry/server/repository/fake",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//credentials/insecure",

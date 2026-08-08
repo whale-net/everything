@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/server/repository/fake"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -28,7 +29,7 @@ func startTestServer(t *testing.T) *grpc.ClientConn {
 
 	lis := bufconn.Listen(bufSize)
 	grpcServer := grpc.NewServer()
-	registerServices(grpcServer)
+	registerServices(grpcServer, fake.New())
 
 	go func() {
 		// Serve returns a non-nil error on Stop()/GracefulStop() too; the
@@ -91,20 +92,43 @@ func assertUnimplementedFromHandler(t *testing.T, rpc, wantMsg string, err error
 // RPC is genuinely unimplemented" — assertUnimplementedFromHandler checks
 // the message text for exactly that reason. A dropped pb.RegisterXxxServer
 // call in main.go fails this test.
+//
+// AppRegistry and ArtifactRegistry are real as of AR-2a, so those two
+// subtests assert a real (empty-but-successful) response against the fake
+// repository instead of Unimplemented — a dropped Register call would now
+// surface as codes.Unavailable/Unimplemented-with-"unknown service" instead,
+// still caught below. PromotionRegistry and EnvironmentRegistry are still
+// Unimplemented until AR-3/AR-4.
 func TestRegisterServices_AllFourServicesReachable(t *testing.T) {
 	conn := startTestServer(t)
 	ctx := context.Background()
 
 	t.Run("AppRegistry", func(t *testing.T) {
 		client := pb.NewAppRegistryClient(conn)
-		_, err := client.ListApps(ctx, &pb.ListAppsRequest{})
-		assertUnimplementedFromHandler(t, "AppRegistry.ListApps", "ListApps not implemented", err)
+		resp, err := client.ListApps(ctx, &pb.ListAppsRequest{})
+		if err != nil {
+			t.Fatalf("AppRegistry.ListApps: expected success against the fake repository, got %v", err)
+		}
+		if len(resp.Apps) != 0 {
+			t.Fatalf("AppRegistry.ListApps: expected no apps in a fresh fake registry, got %d", len(resp.Apps))
+		}
 	})
 
 	t.Run("ArtifactRegistry", func(t *testing.T) {
 		client := pb.NewArtifactRegistryClient(conn)
-		_, err := client.ListArtifacts(ctx, &pb.ListArtifactsRequest{})
-		assertUnimplementedFromHandler(t, "ArtifactRegistry.ListArtifacts", "ListArtifacts not implemented", err)
+		resp, err := client.ListArtifacts(ctx, &pb.ListArtifactsRequest{})
+		if err != nil {
+			t.Fatalf("ArtifactRegistry.ListArtifacts: expected success against the fake repository, got %v", err)
+		}
+		if len(resp.Artifacts) != 0 {
+			t.Fatalf("ArtifactRegistry.ListArtifacts: expected no artifacts in a fresh fake registry, got %d", len(resp.Artifacts))
+		}
+	})
+
+	t.Run("ArtifactRegistry_AllocateVersion_StillUnimplemented", func(t *testing.T) {
+		client := pb.NewArtifactRegistryClient(conn)
+		_, err := client.AllocateVersion(ctx, &pb.AllocateVersionRequest{})
+		assertUnimplementedFromHandler(t, "ArtifactRegistry.AllocateVersion", "AllocateVersion not implemented", err)
 	})
 
 	t.Run("PromotionRegistry", func(t *testing.T) {
