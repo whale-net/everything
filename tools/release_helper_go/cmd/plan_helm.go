@@ -26,11 +26,16 @@ type HelmChartMetadata struct {
 // call by reading the HelmChartMetadataInfo provider.
 const helmChartMetadataStarlarkExpr = `str(target.label) + "\t" + json.encode(providers(target)["//tools/bazel:release.bzl%HelmChartMetadataInfo"].metadata)`
 
+// helmChartMetadataQuery mirrors appMetadataQuery: excludes testonly chart
+// fixtures from release discovery. No such fixture exists yet, but the
+// exclusion costs nothing and keeps the two discovery paths symmetric.
+const helmChartMetadataQuery = "kind(helm_chart_metadata, //...) except attr(testonly, 1, //...)"
+
 // ListAllHelmCharts mirrors ListAllApps: a loading-phase query lists targets
 // so cquery analysis can be scoped, keeping discovery robust to unrelated
 // analysis failures elsewhere in `//...`.
 func ListAllHelmCharts(bazel BazelRunner, _ FileSystem, _ string) ([]HelmChartMetadata, error) {
-	labelsOut, err := bazel.Run("query", "kind(helm_chart_metadata, //...)", "--output=label")
+	labelsOut, err := bazel.Run("query", helmChartMetadataQuery, "--output=label")
 	if err != nil {
 		return nil, fmt.Errorf("bazel query helm_chart_metadata: %w", err)
 	}

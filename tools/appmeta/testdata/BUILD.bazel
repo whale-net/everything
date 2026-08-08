@@ -1,38 +1,47 @@
 # Full-coverage fixture for //tools/appmeta:manifest_contract_test's
-# proto -> rule direction: this release_app sets every release_app attribute,
-# so the resulting AppManifest should have no field left unset. If a new
-# field is added to appmeta.proto but the rule never populates it, extending
-# this fixture is what catches it (see //tools/appmeta/README.md).
+# proto -> rule direction: sets every app_metadata attribute, so the
+# resulting AppManifest should have no field left unset. If a new field is
+# added to appmeta.proto but the rule never populates it, extending this
+# fixture is what catches it (see //tools/appmeta/README.md).
+#
+# This calls the low-level `app_metadata` rule directly instead of the
+# `release_app` macro, for two reasons:
+#   1. `release_app` also creates a multiplatform_image target, so going
+#      through it would give this fixture a real image target CI could try
+#      to build and push to GHCR.
+#   2. `testonly = True` marks the metadata target itself as test-only, so
+#      release discovery (`ListAllApps` in
+#      //tools/release_helper_go/cmd/metadata.go) can query it out with
+#      `except attr(testonly, 1, //...)` — covering this fixture and any
+#      future one without hardcoding a domain name. `release_app` has no
+#      testonly passthrough, so this couldn't be expressed by adding a kwarg
+#      to it; calling app_metadata directly sidesteps that entirely.
+#
+# binary_target / image_target / openapi_spec_target only need to be valid
+# labels — app_metadata stores them as strings (str(label)) and never builds
+# or dereferences them — so a single placeholder filegroup stands in for all
+# three rather than a real binary or image.
 
-load("@rules_python//python:defs.bzl", "py_binary", "py_library")
-load("//tools/bazel:release.bzl", "release_app")
+load("//tools/bazel:release.bzl", "app_metadata")
 
-py_library(
-    name = "main_lib",
-    srcs = ["__init__.py", "main.py"],
-    deps = [
-        "@pypi//:fastapi",
-        "@pypi//:uvicorn",
-    ],
-    visibility = ["//tools/appmeta/testdata:__pkg__"],
+filegroup(
+    name = "placeholder-target",
+    srcs = [],
 )
 
-py_binary(
-    name = "fixture-app",
-    srcs = ["main.py"],
-    main = "main.py",
-    deps = [":main_lib"],
-    visibility = ["//visibility:public"],
-)
-
-release_app(
-    name = "fixture-app",
-    language = "python",
-    domain = "appmeta",
+app_metadata(
+    name = "fixture-app_metadata",
+    app_name = "fixture-app",
+    binary_target = ":placeholder-target",
+    image_target = ":placeholder-target",
+    openapi_spec_target = ":placeholder-target",
     description = "Full-coverage fixture for the appmeta manifest contract test.",
     version = "v1.2.3",
+    language = "python",
     registry = "ghcr.io",
     organization = "whale-net",
+    repo_name = "appmeta-fixture-app",
+    domain = "appmeta",
     app_type = "external-api",
     port = 8080,
     replicas = 3,
@@ -46,6 +55,8 @@ release_app(
     resources_requests_memory = "128Mi",
     resources_limits_cpu = "200m",
     resources_limits_memory = "256Mi",
-    fastapi_app = "tools.appmeta.testdata.main:app",
     deploy_unit = "image",
+    testonly = True,
+    tags = ["release-metadata"],
+    visibility = ["//visibility:public"],
 )

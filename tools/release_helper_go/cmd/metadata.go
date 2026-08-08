@@ -29,7 +29,15 @@ func (m AppMetadata) FullName() string { return m.Domain + "-" + m.Name }
 // pulling metadata from the AppMetadataInfo provider so no actions run.
 const appMetadataStarlarkExpr = `str(target.label) + "\t" + json.encode(providers(target)["//tools/bazel:release.bzl%AppMetadataInfo"].metadata)`
 
-// ListAllApps discovers every app_metadata target via a two-step Bazel call:
+// appMetadataQuery discovers every app_metadata target that is eligible for
+// release. `except attr(testonly, 1, //...)` excludes fixtures like
+// //tools/appmeta/testdata:fixture-app_metadata — testonly is how a fixture
+// opts out of release discovery, so this covers any future fixture too,
+// without hardcoding a domain name next to the "demo" exclusion below.
+const appMetadataQuery = "kind(app_metadata, //...) except attr(testonly, 1, //...)"
+
+// ListAllApps discovers every releasable app_metadata target via a two-step
+// Bazel call:
 //
 //  1. `bazel query` (loading only) lists the metadata target labels.
 //  2. `bazel cquery` scoped to those labels reads the AppMetadataInfo
@@ -39,7 +47,7 @@ const appMetadataStarlarkExpr = `str(target.label) + "\t" + json.encode(provider
 //
 // No metadata JSON files are produced — analysis alone yields the data.
 func ListAllApps(bazel BazelRunner, _ FileSystem, _ string) ([]AppMetadata, error) {
-	labelsOut, err := bazel.Run("query", "kind(app_metadata, //...)", "--output=label")
+	labelsOut, err := bazel.Run("query", appMetadataQuery, "--output=label")
 	if err != nil {
 		return nil, fmt.Errorf("bazel query app_metadata: %w", err)
 	}
@@ -79,7 +87,11 @@ func ListAllApps(bazel BazelRunner, _ FileSystem, _ string) ([]AppMetadata, erro
 		apps = append(apps, meta)
 	}
 
-	sort.Slice(apps, func(i, j int) bool { return apps[i].Name < apps[j].Name })
+	// Sort by full name (domain-name), not just name: two apps in different
+	// domains can share a bare name (e.g. "migration"), and sorting on name
+	// alone leaves their relative order dependent on cquery's output order
+	// rather than deterministic across inputs.
+	sort.Slice(apps, func(i, j int) bool { return apps[i].FullName() < apps[j].FullName() })
 	return apps, nil
 }
 
