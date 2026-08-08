@@ -201,30 +201,24 @@ func (r *Registry) GetChartByFullName(ctx context.Context, fullName string) (*re
 	return nil, repository.ErrNotFound
 }
 
-func (r *Registry) SetAppStatus(ctx context.Context, appID string, status repository.Status, reason string) (*repository.App, error) {
+// SetAppStatus mirrors the postgres implementation: exactly one human-triage
+// transition (missing -> archived) is legal. missing -> active happens
+// automatically via Reconcile's "recovered" path, never through here.
+// archived -> archived is a no-op success so a retried archive call is safe.
+func (r *Registry) SetAppStatus(ctx context.Context, appID string, target repository.Status, reason string) (*repository.App, error) {
 	a, ok := r.state.Apps[appID]
 	if !ok {
 		return nil, repository.ErrNotFound
 	}
-	if status == repository.StatusActive && !r.presentInLatestReconcile(a) {
-		return nil, repository.ErrFailedPrecondition
+	if a.Status == repository.StatusArchived && target == repository.StatusArchived {
+		return &a, nil
 	}
-	a.Status = status
+	if a.Status != repository.StatusMissing || target != repository.StatusArchived {
+		return nil, fmt.Errorf("%w: app %s is %s; only a missing app can be archived", repository.ErrFailedPrecondition, a.FullName(), a.Status)
+	}
+	a.Status = target
 	r.state.Apps[appID] = a
 	return &a, nil
-}
-
-// presentInLatestReconcile mirrors the postgres implementation's rule:
-// an app was present in the most recent Reconcile call iff its LastSeenAt
-// equals the newest LastSeenAt across the whole app table.
-func (r *Registry) presentInLatestReconcile(a repository.App) bool {
-	var max = a.LastSeenAt
-	for _, other := range r.state.Apps {
-		if other.LastSeenAt.After(max) {
-			max = other.LastSeenAt
-		}
-	}
-	return !a.LastSeenAt.Before(max)
 }
 
 // ============================================================================

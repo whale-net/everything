@@ -32,7 +32,6 @@ go_test(
     embed = [":handlers"],
     deps = [
         "//tools/app_registry/protos:appregistrypb",
-        "//tools/app_registry/server/repository",
         "//tools/app_registry/server/repository/fake",
         "//tools/appmeta/proto:appmetapb",
         "@org_golang_google_grpc//codes",

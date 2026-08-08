@@ -217,46 +217,30 @@ func TestReconcileApps_ChartComposesApps(t *testing.T) {
 	}
 }
 
-// TestSetAppStatus_RejectsActivateWhenNotInLatestReconcile covers "only
-// allow -> ACTIVE if present in the latest reconcile."
-func TestSetAppStatus_RejectsActivateWhenNotInLatestReconcile(t *testing.T) {
+// TestSetAppStatus_MissingToArchivedSucceeds covers the only transition a
+// human triggers through this RPC: missing -> archived. missing -> active
+// happens automatically via Reconcile's "recovered" path instead.
+func TestSetAppStatus_MissingToArchivedSucceeds(t *testing.T) {
 	ctx := context.Background()
 	srv := NewAppServer(fake.New())
 
 	created, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
-		Manifests:      manifestSet([]*appmetapb.AppManifest{oneApp("demo", "svc"), oneApp("demo", "other")}, nil),
+		Manifests:      manifestSet([]*appmetapb.AppManifest{oneApp("demo", "svc")}, nil),
 		IdempotencyKey: "run-5-1",
 	})
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	var svcID string
-	for _, a := range created.CreatedApps {
-		if a.Name == "svc" {
-			svcID = a.AppId
-		}
-	}
+	svcID := created.CreatedApps[0].AppId
 
-	// Drop "svc" from the manifest set and archive it once it's MISSING.
+	// Drop "svc" from the manifest set so it becomes MISSING.
 	if _, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
-		Manifests:      manifestSet([]*appmetapb.AppManifest{oneApp("demo", "other")}, nil),
+		Manifests:      manifestSet(nil, nil),
 		IdempotencyKey: "run-5-2",
 	}); err != nil {
 		t.Fatalf("reconcile dropping svc: %v", err)
 	}
 
-	_, err = srv.SetAppStatus(ctx, &pb.SetAppStatusRequest{
-		AppId: svcID, Status: pb.AppStatus_APP_STATUS_ACTIVE, Reason: "manual reactivate",
-	})
-	if err == nil {
-		t.Fatal("expected SetAppStatus(ACTIVE) to fail for an app absent from the latest reconcile")
-	}
-	st, _ := status.FromError(err)
-	if st.Code() != codes.FailedPrecondition {
-		t.Fatalf("expected FailedPrecondition, got %v", st.Code())
-	}
-
-	// Archiving, by contrast, is always legal.
 	archived, err := srv.SetAppStatus(ctx, &pb.SetAppStatusRequest{
 		AppId: svcID, Status: pb.AppStatus_APP_STATUS_ARCHIVED, Reason: "gone for good",
 	})
@@ -265,6 +249,58 @@ func TestSetAppStatus_RejectsActivateWhenNotInLatestReconcile(t *testing.T) {
 	}
 	if archived.App.Status != pb.AppStatus_APP_STATUS_ARCHIVED {
 		t.Fatalf("expected ARCHIVED, got %v", archived.App.Status)
+	}
+
+	// archived -> archived is an idempotent no-op success, not an error.
+	archivedAgain, err := srv.SetAppStatus(ctx, &pb.SetAppStatusRequest{
+		AppId: svcID, Status: pb.AppStatus_APP_STATUS_ARCHIVED, Reason: "gone for good, again",
+	})
+	if err != nil {
+		t.Fatalf("re-archive: %v", err)
+	}
+	if archivedAgain.App.Status != pb.AppStatus_APP_STATUS_ARCHIVED {
+		t.Fatalf("expected ARCHIVED, got %v", archivedAgain.App.Status)
+	}
+}
+
+// TestSetAppStatus_RejectsActiveToArchived covers the FailedPrecondition
+// path: an app must be MISSING before it can be archived.
+func TestSetAppStatus_RejectsActiveToArchived(t *testing.T) {
+	ctx := context.Background()
+	srv := NewAppServer(fake.New())
+
+	created, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      manifestSet([]*appmetapb.AppManifest{oneApp("demo", "svc")}, nil),
+		IdempotencyKey: "run-6-1",
+	})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	svcID := created.CreatedApps[0].AppId
+
+	_, err = srv.SetAppStatus(ctx, &pb.SetAppStatusRequest{
+		AppId: svcID, Status: pb.AppStatus_APP_STATUS_ARCHIVED, Reason: "should not work",
+	})
+	if err == nil {
+		t.Fatal("expected SetAppStatus to fail archiving an ACTIVE app")
+	}
+	st, _ := status.FromError(err)
+	if st.Code() != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v", st.Code())
+	}
+}
+
+// TestSetAppStatus_RejectsActiveTarget covers "ACTIVE is not a legal target
+// at all" — dropped along with the last_seen_at heuristic that used to guard
+// it, since Reconcile's recovered path is the only way back to ACTIVE.
+func TestSetAppStatus_RejectsActiveTarget(t *testing.T) {
+	ctx := context.Background()
+	srv := NewAppServer(fake.New())
+	_, err := srv.SetAppStatus(ctx, &pb.SetAppStatusRequest{
+		AppId: "x", Status: pb.AppStatus_APP_STATUS_ACTIVE, Reason: "manual reactivate",
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument for status ACTIVE, got %v", err)
 	}
 }
 

@@ -130,6 +130,10 @@ func (s *AppServer) ListCharts(ctx context.Context, req *pb.ListChartsRequest) (
 	}, nil
 }
 
+// SetAppStatus is the human-triage path and supports exactly one transition:
+// missing -> archived. Reconcile already handles missing -> active
+// automatically via its "recovered" path, so ACTIVE is not a legal target
+// here — see ARCHITECTURE.md "Triage".
 func (s *AppServer) SetAppStatus(ctx context.Context, req *pb.SetAppStatusRequest) (*pb.SetAppStatusResponse, error) {
 	if req.AppId == "" {
 		return nil, status.Error(codes.InvalidArgument, "app_id is required")
@@ -137,12 +141,11 @@ func (s *AppServer) SetAppStatus(ctx context.Context, req *pb.SetAppStatusReques
 	if req.Reason == "" {
 		return nil, status.Error(codes.InvalidArgument, "reason is required")
 	}
-	target := appStatusFromPB(req.Status)
-	if target != repository.StatusActive && target != repository.StatusArchived {
-		return nil, status.Error(codes.InvalidArgument, "status must be ACTIVE or ARCHIVED")
+	if appStatusFromPB(req.Status) != repository.StatusArchived {
+		return nil, status.Error(codes.InvalidArgument, "status must be ARCHIVED; missing -> active happens automatically via reconcile")
 	}
 
-	app, err := s.repo.Apps().SetAppStatus(ctx, req.AppId, target, req.Reason)
+	app, err := s.repo.Apps().SetAppStatus(ctx, req.AppId, repository.StatusArchived, req.Reason)
 	if err != nil {
 		return nil, mapRepoErr(err)
 	}

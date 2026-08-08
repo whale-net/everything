@@ -533,15 +533,12 @@ func (r *appRepo) GetChartByFullName(ctx context.Context, fullName string) (*rep
 // SetAppStatus
 // ============================================================================
 
-func (r *appRepo) SetAppStatus(ctx context.Context, appID string, status repository.Status, reason string) (*repository.App, error) {
-	row := r.ex.QueryRow(ctx, `
-		SELECT `+appColumns+`, (SELECT MAX(last_seen_at) FROM app) AS max_last_seen
-		FROM app WHERE app_id = $1`, appID)
+func (r *appRepo) SetAppStatus(ctx context.Context, appID string, target repository.Status, reason string) (*repository.App, error) {
+	row := r.ex.QueryRow(ctx, `SELECT `+appColumns+` FROM app WHERE app_id = $1`, appID)
 
 	var a repository.App
 	var deployUnit, dbStatus string
-	var maxLastSeen time.Time
-	if err := row.Scan(&a.AppID, &a.Domain, &a.Name, &a.Description, &a.Language, &a.AppType, &deployUnit, &a.BazelLabel, &a.ImageRepository, &dbStatus, &a.FirstSeenAt, &a.LastSeenAt, &maxLastSeen); err != nil {
+	if err := row.Scan(&a.AppID, &a.Domain, &a.Name, &a.Description, &a.Language, &a.AppType, &deployUnit, &a.BazelLabel, &a.ImageRepository, &dbStatus, &a.FirstSeenAt, &a.LastSeenAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, repository.ErrNotFound
 		}
@@ -550,17 +547,21 @@ func (r *appRepo) SetAppStatus(ctx context.Context, appID string, status reposit
 	a.DeployUnit = deployUnitFromDB(deployUnit)
 	a.Status = repository.Status(dbStatus)
 
-	// "present in the most recent reconcile" is derived, not stored: an app
-	// was touched by the latest Reconcile call iff its last_seen_at equals
-	// the table-wide max (every app present in one reconcile shares the same
-	// last_seen_at, set from a single now := time.Now() in Reconcile).
-	if status == repository.StatusActive && a.LastSeenAt.Before(maxLastSeen) {
-		return nil, repository.ErrFailedPrecondition
+	// SetAppStatus supports exactly one human-triage transition: missing ->
+	// archived. missing -> active happens automatically via Reconcile's
+	// "recovered" path (see ARCHITECTURE.md "Triage"), so it is never legal
+	// here. archived -> archived is a no-op success so a retried archive
+	// call is safe.
+	if a.Status == repository.StatusArchived && target == repository.StatusArchived {
+		return &a, nil
+	}
+	if a.Status != repository.StatusMissing || target != repository.StatusArchived {
+		return nil, fmt.Errorf("%w: app %s is %s; only a missing app can be archived", repository.ErrFailedPrecondition, a.FullName(), a.Status)
 	}
 
-	if _, err := r.ex.Exec(ctx, `UPDATE app SET status = $2 WHERE app_id = $1`, appID, string(status)); err != nil {
+	if _, err := r.ex.Exec(ctx, `UPDATE app SET status = $2 WHERE app_id = $1`, appID, string(target)); err != nil {
 		return nil, err
 	}
-	a.Status = status
+	a.Status = target
 	return &a, nil
 }

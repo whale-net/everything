@@ -55,12 +55,13 @@ type AppRepository interface {
 	GetChartByID(ctx context.Context, chartID string) (*Chart, error)
 	GetChartByFullName(ctx context.Context, fullName string) (*Chart, error)
 
-	// SetAppStatus is the human-triage path. status must be StatusActive or
-	// StatusArchived. Transitioning to StatusActive is rejected with
-	// ErrFailedPrecondition unless appID was present in the most recent
-	// Reconcile call — see postgres implementation for how presence is
-	// derived without a schema change.
-	SetAppStatus(ctx context.Context, appID string, status Status, reason string) (*App, error)
+	// SetAppStatus is the human-triage path and supports exactly one
+	// transition: StatusMissing -> StatusArchived. missing -> active happens
+	// automatically via Reconcile's "recovered" path, so it is never legal
+	// here. archived -> archived is a no-op success (idempotent retry); any
+	// other starting status, or a target other than StatusArchived, fails
+	// with ErrFailedPrecondition.
+	SetAppStatus(ctx context.Context, appID string, target Status, reason string) (*App, error)
 }
 
 // BuildRepository covers the `build` table.
