@@ -138,13 +138,31 @@ consolidation.
 
 ## Chart → image lockfile
 
-`tools/helm/composer.go` already resolves the exact image tags it bakes into a
-chart. It must additionally resolve them to **digests** and emit a lockfile that
-CI forwards to `RecordArtifact(kind = CHART, contains = [...])`.
+Resolving a chart's pinned images to **digests** requires a container registry
+call. A Bazel action must never make that call — it would break hermeticity
+and make chart output non-reproducible, undoing #dd23e807 (which specifically
+made chart builds deterministic). So this is two steps, split across two
+different environments, not one:
 
-Without this, chart promotion cannot answer "which image digest is running",
-and the incident query degrades to rendering charts by hand. This is the
-highest-value part of the recording phase and should not be deferred.
+1. **Compose time (hermetic, no network).** `tools/helm/composer.go` already
+   resolves the exact image repository and tag it bakes into a chart's
+   `values.yaml`. As of AR-2b it additionally writes those same references —
+   full app name, repository, and tag — to `image-lockfile.json` alongside
+   `Chart.yaml` inside the generated chart. This is a pure function of the
+   `AppManifest`s the composer already reads: no digests, no registry access,
+   sorted for deterministic output. `tools/release_helper_go`'s
+   `read-chart-lockfile <chart-name>` command builds a chart and reads this
+   file back out, giving the release path a stable way to get at it without
+   re-deriving anything from the manifests.
+2. **Publish time (has registry access, not yet implemented — AR-2c).** After
+   `release-helm-charts`'s `needs: [plan-release, release, ...]` has pushed
+   every image, a CI step resolves each lockfile entry's repository+tag to a
+   digest and forwards the result to `RecordArtifact(kind = CHART, contains =
+   [...])`.
+
+Without step 2, chart promotion cannot answer "which image digest is
+running," and the incident query degrades to rendering charts by hand. This is
+the highest-value part of the recording phase and should not be deferred.
 
 The server rejects a chart artifact that references an image digest it has never
 recorded — a chart may not pin an unknown artifact.
