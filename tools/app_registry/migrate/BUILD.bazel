@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_binary")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_binary(
+    name = "migration",
+    srcs = ["main.go"],
+    embedsrcs = glob(["migrations/*.sql"]),
+    deps = [
+        "//libs/go/migrate",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata for migration job. domain "app-registry" + name "migration"
+# produces the "app-registry-migration" image/app identity.
+release_app(
+    name = "migration",
+    binary_name = ":migration",
+    language = "go",
+    domain = "app-registry",
+    description = "App Registry database migration runner",
+    app_type = "job",
+)
