@@ -80,18 +80,12 @@ func newBuildHelmChartCmd() *cobra.Command {
 			}
 
 			// Build chart target
-			chartPkg := strings.TrimPrefix(chart.BazelTarget, "//")
-			chartPkg = chartPkg[:strings.Index(chartPkg, ":")]
-			chartTarget := "//" + chartPkg + ":" + strings.TrimPrefix(chart.ChartTarget, ":")
+			chartTarget, chartDir := chartOutputPaths(workspaceRoot, chart)
 
 			fmt.Fprintf(cmd.OutOrStdout(), "Building bazel target: %s\n", chartTarget)
 			if _, err := defaultBazel.Run("build", chartTarget); err != nil {
 				return fmt.Errorf("bazel build %s: %w", chartTarget, err)
 			}
-
-			// Find unpacked chart directory
-			publishedName := strings.TrimPrefix(chart.Name, "helm-")
-			chartDir := filepath.Join(workspaceRoot, "bazel-bin", chartPkg, chart.Name+"_chart", publishedName)
 
 			outDir := outputDir
 			if outDir == "" {
@@ -123,6 +117,22 @@ func newBuildHelmChartCmd() *cobra.Command {
 	cmd.Flags().StringVar(&bumpType, "bump", "patch", "Version bump type: major, minor, or patch")
 
 	return cmd
+}
+
+// chartOutputPaths derives the bazel target and unpacked output directory
+// for a discovered chart, matching how helm_chart in tools/helm/helm.bzl
+// names its outputs (see chart_parent_dir / published_chart_name there).
+// Shared by build-helm-chart and read-chart-lockfile so both agree on where
+// a built chart's files — including composer.go's image-lockfile.json —
+// land.
+func chartOutputPaths(workspaceRoot string, chart HelmChartMetadata) (chartTarget, chartDir string) {
+	chartPkg := strings.TrimPrefix(chart.BazelTarget, "//")
+	chartPkg = chartPkg[:strings.Index(chartPkg, ":")]
+	chartTarget = "//" + chartPkg + ":" + strings.TrimPrefix(chart.ChartTarget, ":")
+
+	publishedName := strings.TrimPrefix(chart.Name, "helm-")
+	chartDir = filepath.Join(workspaceRoot, "bazel-bin", chartPkg, chart.Name+"_chart", publishedName)
+	return chartTarget, chartDir
 }
 
 func findHelmChartByName(name string, charts []HelmChartMetadata) (HelmChartMetadata, error) {
