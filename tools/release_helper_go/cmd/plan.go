@@ -123,6 +123,10 @@ type planParams struct {
 
 func planRelease(p planParams) (*PlanResult, error) {
 	var releaseApps []AppMetadata
+	// perAppVersions holds versions assigned per-app (workflow_dispatch's
+	// auto-increment path assigns a different version to each app). Empty
+	// for every other event type, where every app uses p.version uniformly.
+	perAppVersions := map[string]string{}
 
 	switch p.eventType {
 	case "workflow_dispatch":
@@ -144,7 +148,7 @@ func planRelease(p planParams) (*PlanResult, error) {
 				return nil, err
 			}
 		}
-		if err := assignVersions(releaseApps, p.version, p.incrementMinor, p.incrementPatch, p.git); err != nil {
+		if err := assignVersions(releaseApps, p.version, p.incrementMinor, p.incrementPatch, p.git, perAppVersions); err != nil {
 			return nil, err
 		}
 
@@ -185,23 +189,29 @@ func planRelease(p planParams) (*PlanResult, error) {
 		}
 	}
 
-	return buildPlanResult(releaseApps, p.version, p.eventType), nil
+	return buildPlanResult(releaseApps, p.version, p.eventType, perAppVersions), nil
 }
 
-func buildPlanResult(apps []AppMetadata, version, eventType string) *PlanResult {
+// buildPlanResult assembles the CI matrix. perAppVersions overrides version
+// on a per-app basis (set by assignVersions for workflow_dispatch's
+// auto-increment path); every other app uses version uniformly.
+func buildPlanResult(apps []AppMetadata, version, eventType string, perAppVersions map[string]string) *PlanResult {
 	include := make([]map[string]string, 0, len(apps))
 	appNames := make([]string, 0, len(apps))
 	versions := make(map[string]string, len(apps))
 
 	for _, app := range apps {
-		v := appVersion(app, version)
+		fullName := app.FullName()
+		v := version
+		if assigned, ok := perAppVersions[fullName]; ok {
+			v = assigned
+		}
 		include = append(include, map[string]string{
 			"app":          app.Name,
 			"domain":       app.Domain,
 			"bazel_target": app.BazelTarget,
 			"version":      v,
 		})
-		fullName := app.FullName()
 		appNames = append(appNames, fullName)
 		versions[fullName] = v
 	}
@@ -220,24 +230,15 @@ func buildPlanResult(apps []AppMetadata, version, eventType string) *PlanResult 
 	}
 }
 
-// appVersion returns the version to use for an app. The version may have been
-// auto-incremented and stored in a temporary field via assignVersions.
-func appVersion(app AppMetadata, defaultVersion string) string {
-	// We store the per-app version in the Language field temporarily when using
-	// auto-increment. If it starts with 'v' it was set by assignVersions.
-	if strings.HasPrefix(app.Language, "v") {
-		return app.Language
-	}
-	return defaultVersion
-}
-
-// assignVersions sets per-app versions either from the explicit version flag or
-// by auto-incrementing based on git tags.
-func assignVersions(apps []AppMetadata, version string, minor, patch bool, git GitRunner) error {
+// assignVersions resolves per-app versions either from the explicit version
+// flag or by auto-incrementing based on git tags, recording each into out
+// (keyed by the app's FullName). AppManifest.Version — the manifest's own
+// declared default (normally "latest") — is left untouched: it describes
+// the app definition, not the version being planned for this release.
+func assignVersions(apps []AppMetadata, version string, minor, patch bool, git GitRunner, out map[string]string) error {
 	for i := range apps {
 		if version != "" {
-			// version already validates by caller; stored in Language as sentinel
-			apps[i].Language = version
+			out[apps[i].FullName()] = version
 			continue
 		}
 		if minor || patch {
@@ -249,7 +250,7 @@ func assignVersions(apps []AppMetadata, version string, minor, patch bool, git G
 			if err != nil {
 				return fmt.Errorf("auto-increment for %s: %w", apps[i].FullName(), err)
 			}
-			apps[i].Language = newVer // sentinel
+			out[apps[i].FullName()] = newVer
 		}
 	}
 	return nil
