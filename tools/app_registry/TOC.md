@@ -13,6 +13,7 @@ no business logic yet, every RPC returns `Unimplemented`.
 | [PLAN.md](PLAN.md) | Before starting work — phase definitions (AR-0 … AR-5), scope, and exit criteria |
 | `TODO-<PLAN_ID>.md` | Execution tracking for an in-flight phase; created when that phase starts |
 | [ENV.md](ENV.md) | Configuring, deploying, or debugging server/migration runtime behavior |
+| [TESTING.md](TESTING.md) | Running the registry locally in Tilt for manual integration testing; which checks belong in unit vs Postgres vs Tilt tiers |
 
 ## Components
 
