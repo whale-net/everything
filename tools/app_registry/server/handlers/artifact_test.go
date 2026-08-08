@@ -144,6 +144,46 @@ func TestRecordArtifact_RejectsChartPinningUnrecordedImage(t *testing.T) {
 	}
 }
 
+// TestRecordArtifact_DuplicateOwnerKindVersionIsAlreadyExists covers the
+// unique_violation mapping (SQLSTATE 23505 -> codes.AlreadyExists) that Fix 1
+// adds centrally to the postgres layer: recording a second, differently-
+// digested artifact for an (owner, kind, version) already claimed is a
+// conflict a caller (e.g. AR-5's AllocateVersion) should retry with a
+// different version, not codes.Internal — which would look like a server bug
+// and invite a pointless retry of the exact same request. The fake enforces
+// the same (owner, kind, version) uniqueness postgres's artifact_version_idx
+// does, so this test predicts real behaviour.
+func TestRecordArtifact_DuplicateOwnerKindVersionIsAlreadyExists(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := context.Background()
+	build := recordBuild(t, artifactSrv, "run-dup")
+
+	first := &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Digest: "sha256:first", Version: "v1.2.3",
+		IdempotencyKey: "record-dup-1",
+	}
+	if _, err := artifactSrv.RecordArtifact(ctx, first); err != nil {
+		t.Fatalf("first RecordArtifact: %v", err)
+	}
+
+	// Same owner, kind, and version; a different digest and a fresh
+	// idempotency key, so this is not an idempotent replay — it is a
+	// genuine conflict the unique index rejects.
+	second := &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Digest: "sha256:different", Version: "v1.2.3",
+		IdempotencyKey: "record-dup-2",
+	}
+	_, err := artifactSrv.RecordArtifact(ctx, second)
+	if err == nil {
+		t.Fatal("expected an error recording a duplicate (owner, kind, version) with a different digest")
+	}
+	if status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("expected AlreadyExists, got %v (%v)", status.Code(err), err)
+	}
+}
+
 // TestResolveArtifact_ReturnsImagesForChart is required coverage: resolving
 // a chart artifact returns the correct pinned image artifacts and builds.
 func TestResolveArtifact_ReturnsImagesForChart(t *testing.T) {

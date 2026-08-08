@@ -17,6 +17,7 @@ package fake
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"sync"
 
@@ -261,6 +262,16 @@ func (r *Registry) RecordArtifact(ctx context.Context, a repository.Artifact, co
 			return &out, true, nil
 		}
 	}
+
+	// Mirrors postgres's UNIQUE INDEX artifact_version_idx (owner_id, kind,
+	// version): a fresh digest for an (owner, kind, version) already claimed
+	// by a different artifact is a conflict, not a new row. This is the
+	// AR-5 "someone else took this version" path — see
+	// repository/postgres/errors.go's doc comment.
+	if existing, found := r.findByOwnerKindVersion(a); found {
+		return nil, false, fmt.Errorf("%w: artifact %s %s already recorded", repository.ErrAlreadyExists, r.ownerFullName(existing), existing.Version)
+	}
+
 	a.ArtifactID = uuid.NewString()
 
 	if a.Kind == repository.ArtifactKindChart {
@@ -285,6 +296,26 @@ func (r *Registry) RecordArtifact(ctx context.Context, a repository.Artifact, co
 	out := a
 	out.Promotability = r.derivePromotability(a)
 	return &out, false, nil
+}
+
+// findByOwnerKindVersion looks up an existing artifact sharing a's owner
+// (AppID for images, ChartID for charts), kind, and version — the collision
+// the real artifact_version_idx unique index enforces.
+func (r *Registry) findByOwnerKindVersion(a repository.Artifact) (repository.Artifact, bool) {
+	owner := ownerID(a)
+	for _, existing := range r.state.Artifacts {
+		if existing.Kind == a.Kind && existing.Version == a.Version && ownerID(existing) == owner {
+			return existing, true
+		}
+	}
+	return repository.Artifact{}, false
+}
+
+func ownerID(a repository.Artifact) string {
+	if a.Kind == repository.ArtifactKindImage {
+		return a.AppID
+	}
+	return a.ChartID
 }
 
 func (r *Registry) findImageByDigest(digest string) (*repository.Artifact, error) {

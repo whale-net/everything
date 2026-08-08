@@ -42,6 +42,9 @@ func (r *buildRepo) RecordBuild(ctx context.Context, b repository.Build) (*repos
 		INSERT INTO build (build_id, git_sha, git_ref, workflow_run_id, workflow_attempt, actor, started_at, recorded_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		b.BuildID, b.GitSHA, b.GitRef, b.WorkflowRunID, b.WorkflowAttempt, b.Actor, b.StartedAt, b.RecordedAt); err != nil {
+		if de, ok := translatePgError(err, fmt.Sprintf("build for workflow run %s attempt %d already recorded", b.WorkflowRunID, b.WorkflowAttempt)); ok {
+			return nil, false, de
+		}
 		return nil, false, fmt.Errorf("record build %s attempt %d: %w", b.WorkflowRunID, b.WorkflowAttempt, err)
 	}
 	return &b, false, nil
@@ -128,6 +131,10 @@ func (r *artifactRepo) RecordArtifact(ctx context.Context, a repository.Artifact
 		INSERT INTO artifact (artifact_id, kind, app_id, chart_id, repository, version, digest, build_id, published_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		a.ArtifactID, string(a.Kind), appID, chartID, a.Repository, a.Version, a.Digest, a.BuildID, a.PublishedAt); err != nil {
+		msg := fmt.Sprintf("artifact %s %s already recorded", r.ownerFullName(ctx, a), a.Version)
+		if de, ok := translatePgError(err, msg); ok {
+			return nil, false, de
+		}
 		return nil, false, fmt.Errorf("record artifact %s: %w", a.Digest, err)
 	}
 
@@ -151,6 +158,10 @@ func (r *artifactRepo) RecordArtifact(ctx context.Context, a repository.Artifact
 				INSERT INTO artifact_link (chart_artifact_id, image_artifact_id, app_id, repository, version, digest)
 				VALUES ($1, $2, $3, $4, $5, $6)`,
 				a.ArtifactID, imgArtifactID, imgApp, ci.Repository, ci.Version, ci.Digest); err != nil {
+				msg := fmt.Sprintf("artifact %s already pins image digest %s", a.Digest, ci.Digest)
+				if de, ok := translatePgError(err, msg); ok {
+					return nil, false, de
+				}
 				return nil, false, fmt.Errorf("link chart artifact %s to image %s: %w", a.ArtifactID, ci.Digest, err)
 			}
 			links = append(links, repository.ArtifactLink{
@@ -168,6 +179,27 @@ func (r *artifactRepo) RecordArtifact(ctx context.Context, a repository.Artifact
 		return nil, false, err
 	}
 	return out, false, nil
+}
+
+// ownerFullName resolves a.AppID/a.ChartID to "domain-name" for error
+// messages that must describe a conflict in domain terms. It is only called
+// on the (rare) error path, never the hot insert path, so the extra query is
+// cheap where it matters. Falls back to the raw id if the lookup fails.
+func (r *artifactRepo) ownerFullName(ctx context.Context, a repository.Artifact) string {
+	var row pgx.Row
+	var fallback string
+	if a.Kind == repository.ArtifactKindImage {
+		row = r.ex.QueryRow(ctx, `SELECT domain || '-' || name FROM app WHERE app_id = $1`, a.AppID)
+		fallback = a.AppID
+	} else {
+		row = r.ex.QueryRow(ctx, `SELECT domain || '-' || name FROM chart WHERE chart_id = $1`, a.ChartID)
+		fallback = a.ChartID
+	}
+	var name string
+	if err := row.Scan(&name); err != nil {
+		return fallback
+	}
+	return name
 }
 
 func (r *artifactRepo) loadContains(ctx context.Context, chartArtifactID string) ([]repository.ArtifactLink, error) {

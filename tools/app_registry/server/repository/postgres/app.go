@@ -90,6 +90,9 @@ func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, 
 					VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', $10, $10)`,
 					appID, am.Domain, am.Name, am.Description, am.Language, am.AppType, deployUnitToDB(am.DeployUnit), am.BinaryTarget, imageRepository(am), now)
 				if err != nil {
+					if de, ok := translatePgError(err, fmt.Sprintf("app %s-%s already recorded", am.Domain, am.Name)); ok {
+						return nil, de
+					}
 					return nil, fmt.Errorf("reconcile: insert app %s/%s: %w", am.Domain, am.Name, err)
 				}
 			}
@@ -186,6 +189,9 @@ func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, 
 					INSERT INTO chart (chart_id, domain, name, deploy_unit, status, first_seen_at, last_seen_at)
 					VALUES ($1, $2, $3, 'chart', 'active', $4, $4)`,
 					chartID, cm.Domain, cm.Name, now); err != nil {
+					if de, ok := translatePgError(err, fmt.Sprintf("chart %s-%s already recorded", cm.Domain, cm.Name)); ok {
+						return nil, de
+					}
 					return nil, fmt.Errorf("reconcile: insert chart %s/%s: %w", cm.Domain, cm.Name, err)
 				}
 				if err := r.setChartApps(ctx, chartID, appIDs); err != nil {
