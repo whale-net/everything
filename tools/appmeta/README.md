@@ -21,6 +21,9 @@ drifted:
 | `binary_target`, `openapi_spec_target` | ✅ | ✅ | ❌ |
 | `labels`, `annotations`, `dependencies` | ❌ | ❌ | ✅ phantom (removed separately) |
 
+Charts drift the same way: `HelmChartMetadata` in `plan_helm.go` omits
+`version` and `environment`, both of which `helm_chart_metadata` emits.
+
 The missing `version` field has already cost something real:
 `tools/release_helper_go/cmd/plan.go` stores the release version in the
 `Language` field and reads it back with `strings.HasPrefix(app.Language, "v")`,
@@ -46,9 +49,19 @@ chart.
 
 ## Wire format
 
-The Starlark rules write plain `snake_case` JSON. `protojson` accepts proto
-field names as written, so **no change to the emitted format is required** —
-existing manifests parse as-is.
+The Starlark rules produce plain `snake_case` JSON, delivered two ways from the
+same `metadata` dict:
+
+- the `*_metadata.json` file output (`DefaultInfo`), and
+- the `AppMetadataInfo` / `HelmChartMetadataInfo` Starlark providers, which
+  `release_helper_go` reads via `bazel cquery --output=starlark` with
+  `json.encode(...metadata)` — the discovery path since #444, and the fast one,
+  since it runs no actions.
+
+Both carry identical bytes, so one schema covers both.
+
+`protojson` accepts proto field names as written, so **no change to the emitted
+format is required** — existing manifests parse as-is.
 
 Always decode with:
 
@@ -65,8 +78,11 @@ vanishing — which is exactly how the current drift went unnoticed.
 Shared types alone do not prevent drift; a rule attribute can still be added
 without anyone extending the proto. The enforcement is a test:
 
-1. `bazel query 'kind(app_metadata, //...)'`, build every target, and unmarshal
-   each output with `DiscardUnknown: false`. Catches **rule → proto** drift.
+1. Discover every `app_metadata` / `helm_chart_metadata` target the way
+   `release_helper_go` does — `bazel query` for labels, then `bazel cquery
+   --output=starlark` over the providers — and unmarshal each result with
+   `DiscardUnknown: false`. Catches **rule → proto** drift, and runs no build
+   actions.
 2. A fixture app in `testdata/` sets *every* `release_app` attribute; assert the
    decoded message has no unset field. Catches **proto → rule** drift, i.e. a
    field defined here that the rule never populates.

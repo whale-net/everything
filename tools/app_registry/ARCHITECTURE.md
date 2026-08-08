@@ -254,11 +254,19 @@ When built, `Promote` against a gated environment writes a promotion in
 ## Resolved questions
 
 **1. Chart identity source — already solved, reuse it.**
-`ListAllHelmCharts` in `tools/release_helper_go/cmd/plan_helm.go` runs
-`bazel query "kind(helm_chart_metadata, //...)"` and reads each target's
-`*_chart_metadata.json`, exactly mirroring app discovery. Chart identity comes
-from that existing path; `ChartManifest` in `//tools/appmeta/proto` is the typed
-form of the JSON it already reads. No new discovery mechanism.
+`ListAllHelmCharts` in `tools/release_helper_go/cmd/plan_helm.go` mirrors
+`ListAllApps` exactly: a loading-phase `bazel query` lists the metadata target
+labels, then a `bazel cquery --output=starlark` scoped to those labels reads
+the `HelmChartMetadataInfo` provider. Chart identity comes from that existing
+path. No new discovery mechanism.
+
+Note this changed in #444: discovery reads Starlark **providers**
+(`AppMetadataInfo` / `HelmChartMetadataInfo`) rather than building each
+target's `*_metadata.json`, so no actions run. The provider carries the same
+dict the JSON file does — the cquery expression is literally
+`json.encode(...metadata)` — so `//tools/appmeta/proto` remains the correct
+schema for both delivery mechanisms, and the contract test gets cheaper
+(analysis-only).
 
 **2. Writeback is interface-only for now.**
 Wiring the gitops repo requires changes in another repository that are out of
