@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "cmd",
+    srcs = [
+        "apps.go",
+        "artifacts.go",
+        "client.go",
+        "env.go",
+        "promote.go",
+        "root.go",
+        "util.go",
+    ],
+    importpath = "github.com/whale-net/everything/tools/app_registry/cli/cmd",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/grpcclient",
+        "//tools/app_registry/protos:appregistrypb",
+        "//tools/appmeta/proto:appmetapb",
+        "@com_github_spf13_cobra//:cobra",
+        "@org_golang_google_protobuf//encoding/protojson",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
