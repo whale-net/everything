@@ -6,6 +6,67 @@ agents track execution in a `TODO-<PLAN_ID>.md` alongside this file (e.g.
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md) before executing any phase.
 
+---
+
+## Current status
+
+*Last updated at the end of the AR-2b session. Nothing is merged — every phase
+below is an open PR, held deliberately.*
+
+| Phase | Branch | PR | State |
+|---|---|---|---|
+| AR-M | `ar-m-manifest-schema` | [#495](https://github.com/whale-net/everything/pull/495) | CI green, held |
+| AR-1 | `ar-1-foundations` | [#496](https://github.com/whale-net/everything/pull/496) | CI green, held |
+| AR-2a | `ar-2a-recording` | [#499](https://github.com/whale-net/everything/pull/499) | verified against real Postgres |
+| AR-2b | `ar-2b-lockfile` | [#500](https://github.com/whale-net/everything/pull/500) | verified, charts byte-identical |
+| — | `testcontainers-poc` | [#498](https://github.com/whale-net/everything/pull/498) | independent, off `main` |
+
+Stacked as `main → AR-M → AR-1 → AR-2a → AR-2b` (GitHub stack #501). #498 is
+independent of the stack.
+
+**Why nothing is merged:** the repo owner is deploying the registry and setting
+up its secrets first. AR-M is the only production-behaviour change in the stack
+and is the one worth watching a release cycle on. Note the circularity — AR-M
+cannot be exercised by a release until it is on `main`.
+
+**Merging #496 publishes two new images.** AR-1 adds `app-registry-api` and
+`app-registry-migration` as `release_app` targets, so `apps=all` will build and
+push them. That is intended (you need images to deploy) but is not gated by
+`APP_REGISTRY_CICD_OPT_IN`, which governs whether CI *calls* the registry, not
+whether the registry's own images are built.
+
+### Next up: AR-2c
+
+The remaining AR-2 slice, not started:
+- `.github/workflows/release.yml` — call the CLI after image and chart pushes,
+  every step gated on `if: vars.APP_REGISTRY_CICD_OPT_IN == 'true'`, and
+  `continue-on-error`. Resolve lockfile references to digests after push (AR-2b
+  emits references only — see [#500](https://github.com/whale-net/everything/pull/500)).
+- CLI read commands in `tools/app_registry/cli/`.
+
+Safe to build and merge before the registry is deployed: with the variable
+unset, CI makes no registry calls at all.
+
+### Carry-over items
+
+- **`server/repository/postgres/*.go` has no automated test coverage.** Handler
+  logic is tested against the in-memory fake; the SQL is compile-checked only.
+  Two real bugs (see #499) got through green tests because the fake has no
+  transactions. **Wiring `libs/go/dbtest` (#498) into this package is the
+  highest-value next testing task.**
+- **Auth is unimplemented.** Handlers check no claims; the Tiltfile runs
+  `GRPC_AUTH_MODE=none`. Fine for AR-2 (recording, CI service account), **not**
+  fine for AR-3, whose entire point is that a build credential cannot promote to
+  prod. Settle OIDC config before AR-3.
+- **Transaction-abort hazard for AR-3.** A failed statement aborts the
+  surrounding Postgres transaction, so any error-message or logging code that
+  queries afterwards silently degrades. This bit `RecordArtifact` once already;
+  AR-3's SCD2 close-and-open writes are transactional and will hit the same trap.
+- **Tilt is validated and documented** — see [TESTING.md](TESTING.md). It is the
+  only thing currently exercising the pgx layer.
+- `list-apps --format json` prints `deploy_unit` as an integer. Cosmetic; no CI
+  path reads it.
+
 ## Sequencing rationale
 
 Promotion tracking is additive and low-risk; replacing git-tag version
