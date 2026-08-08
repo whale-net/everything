@@ -19,12 +19,12 @@ The helm chart release system is integrated into the main CI/CD release workflow
 
 ### Components
 
-1. **`helm_chart_metadata` rule** (`tools/release.bzl`)
+1. **`helm_chart_metadata` rule** (`tools/bazel/release.bzl`)
    - Captures metadata about helm charts (name, version, namespace, domain, apps)
    - Allows querying charts with `bazel query "kind(helm_chart_metadata, //...)"`
    - Similar to `app_metadata` for applications
 
-2. **`release_helm_chart` macro** (`tools/release.bzl`)
+2. **`release_helm_chart` macro** (`tools/bazel/release.bzl`)
    - Convenience macro wrapping `helm_chart` and `helm_chart_metadata`
    - Makes charts discoverable and releasable through CI/CD
    - Usage:
@@ -39,20 +39,12 @@ The helm chart release system is integrated into the main CI/CD release workflow
      )
      ```
 
-3. **Helm utilities** (`tools/release_helper/helm.py`)
-   - `list_all_helm_charts()` - List all releasable helm charts
-   - `get_helm_chart_metadata()` - Get metadata for a specific chart
-   - `resolve_app_versions_for_chart()` - Resolve app versions from git tags or use "latest"
-   - `package_helm_chart_for_release()` - Build and package a chart with resolved versions
-
-4. **CLI commands** (`tools/release_helper/cli.py`)
-   - `list-helm-charts` - List all charts with metadata
-   - `helm-chart-info <chart>` - Get detailed info about a chart
-   - `resolve-chart-app-versions <chart>` - Show resolved app versions
-   - `build-helm-chart <chart>` - Build and package a chart
+3. **CLI commands** (`tools/release_helper_go/cmd/build_helm.go`, `plan_helm.go`, `unpublish_helm.go`)
+   - `build-helm-chart <chart>` - Build and package a chart with resolved app versions
    - `plan-helm-release` - Plan a helm chart release (outputs CI matrix)
+   - `unpublish-helm-chart <index-file>` - Remove a chart version from the index
 
-5. **Workflow** (`.github/workflows/release.yml`)
+4. **Workflow** (`.github/workflows/release.yml`)
    - Integrated helm chart release in main release workflow
    - Optional helm chart release after app releases
    - Runs when `helm_charts` input is non-empty
@@ -150,15 +142,6 @@ bazel run //tools:release -- build-helm-chart hello-fastapi \
 ### Local Testing
 
 ```bash
-# List all helm charts
-bazel run //tools:release -- list-helm-charts
-
-# Get chart info
-bazel run //tools:release -- helm-chart-info hello-fastapi
-
-# Check resolved app versions for a chart
-bazel run //tools:release -- resolve-chart-app-versions hello-fastapi --use-released
-
 # Build a chart locally
 bazel run //tools:release -- build-helm-chart hello-fastapi \
   --version v1.0.0 \
@@ -288,9 +271,8 @@ This separation allows:
 
 ## File Locations
 
-- **Bazel rules:** `tools/release.bzl`
-- **Python utilities:** `tools/release_helper/helm.py`
-- **CLI commands:** `tools/release_helper/cli.py`
+- **Bazel rules:** `tools/bazel/release.bzl`
+- **CLI commands:** `tools/release_helper_go/cmd/build_helm.go`, `plan_helm.go`, `unpublish_helm.go`
 - **Workflow:** `.github/workflows/release.yml` (integrated)
 - **Example charts:** `demo/BUILD.bazel`
 
