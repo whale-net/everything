@@ -1,0 +1,60 @@
+# app-registry-migration
+
+Schema migration runner for the App Registry database. Built in **AR-1**.
+
+Not yet implemented.
+
+## Pattern
+
+Follows `manmanv2/migrate` exactly — embedded SQL plus `libs/go/migrate`:
+
+```go
+//go:embed migrations/*.sql
+var migrations embed.FS
+
+func main() { migrate.RunCLI(migrations, "migrations") }
+```
+
+Deployed as a Helm pre-sync job (`app_type: job`), ordered ahead of the API via
+ArgoCD sync waves. See `friendly_computing_machine/docs/argocd-integration.md`.
+
+## Planned migrations
+
+| File | Contents |
+|---|---|
+| `001_initial_schema` | `app`, `chart`, `chart_app`, `build`, `artifact`, `artifact_link`, `idempotency_key`, `domain_adoption` |
+| `002_environments_promotions` | `environment`, `promotion` (SCD2), `promotion_event`, `v_current_promotion` |
+| `003_writeback_outbox` | `writeback_outbox` |
+
+Split this way so AR-2 needs only `001`, AR-3 adds `002`, and AR-4 adds `003` —
+each phase ships an independently applicable migration.
+
+## Required indexes
+
+Do not omit these; they are load-bearing, not optimizations.
+
+```sql
+-- makes double-promotion structurally impossible, and is the hot read path
+CREATE UNIQUE INDEX promotion_current_idx
+  ON promotion (environment_id, target_key)
+  WHERE valid_to IS NULL;
+
+-- historical "state at time T" queries
+CREATE INDEX promotion_window_idx
+  ON promotion (environment_id, target_key, valid_from DESC);
+
+-- digest is the real artifact identity
+CREATE UNIQUE INDEX artifact_digest_idx ON artifact (digest);
+
+-- version allocation collision guard (AR-5 depends on this)
+CREATE UNIQUE INDEX artifact_version_idx ON artifact (owner_id, kind, version);
+```
+
+`domain_adoption` gates the per-domain cutover described in
+[`../ARCHITECTURE.md`](../ARCHITECTURE.md#resolved-questions): one row per
+domain, with a stage of `observe` / `promote` / `allocate`. It ships in `001`
+even though only AR-5 enforces it, so no domain is left without a row when the
+gate turns on.
+
+See the SCD2 section of [`../ARCHITECTURE.md`](../ARCHITECTURE.md#scd2-on-promotion)
+and the repo-wide convention in `AGENTS.md`.

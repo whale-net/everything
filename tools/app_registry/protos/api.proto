@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+package appregistry.v1;
+
+option go_package = "github.com/whale-net/everything/tools/app_registry/protos;appregistrypb";
+
+import "tools/app_registry/protos/api_messages_app.proto";
+import "tools/app_registry/protos/api_messages_artifact.proto";
+import "tools/app_registry/protos/api_messages_environment.proto";
+import "tools/app_registry/protos/api_messages_promotion.proto";
+
+// The registry is split into four services along its authorization boundary,
+// not along its data model. `builder` (the CI service account) may call
+// AppRegistry and ArtifactRegistry. `promoter` (a human, or a
+// human-triggered workflow using an environment-scoped credential) may call
+// PromotionRegistry. `admin` may call EnvironmentRegistry. A credential that
+// can record a build must never be able to promote it.
+
+// ============================================================================
+// AppRegistry — app and chart identity. Role: builder (writes), any (reads).
+// ============================================================================
+service AppRegistry {
+  // Full reconcile from the release_app manifests discovered by bazel query.
+  // Apps absent from the request are marked MISSING, never deleted.
+  rpc ReconcileApps(ReconcileAppsRequest) returns (ReconcileAppsResponse);
+
+  rpc ListApps(ListAppsRequest) returns (ListAppsResponse);
+  rpc GetApp(GetAppRequest) returns (GetAppResponse);
+  rpc ListCharts(ListChartsRequest) returns (ListChartsResponse);
+
+  // Human triage of a MISSING app: archive it or restore it. Role: admin.
+  rpc SetAppStatus(SetAppStatusRequest) returns (SetAppStatusResponse);
+}
+
+// ============================================================================
+// ArtifactRegistry — published builds and artifacts.
+// Role: builder (writes), any (reads).
+// ============================================================================
+service ArtifactRegistry {
+  rpc RecordBuild(RecordBuildRequest) returns (RecordBuildResponse);
+  rpc RecordArtifact(RecordArtifactRequest) returns (RecordArtifactResponse);
+
+  rpc ListArtifacts(ListArtifactsRequest) returns (ListArtifactsResponse);
+  rpc GetArtifact(GetArtifactRequest) returns (GetArtifactResponse);
+
+  // Walk a chart artifact down to the image digests it pins.
+  rpc ResolveArtifact(ResolveArtifactRequest) returns (ResolveArtifactResponse);
+
+  // Phase AR-5: transactional version allocation, replacing git-tag scanning.
+  rpc AllocateVersion(AllocateVersionRequest) returns (AllocateVersionResponse);
+}
+
+// ============================================================================
+// PromotionRegistry — what is deployed where.
+// Role: promoter (writes, environment-scoped), any (reads).
+// ============================================================================
+service PromotionRegistry {
+  rpc Promote(PromoteRequest) returns (PromoteResponse);
+  rpc Rollback(RollbackRequest) returns (RollbackResponse);
+
+  // Current state, or state at any past instant via the SCD2 window. This is
+  // the query the writeback worker and deploy tooling use.
+  rpc GetEnvironmentState(GetEnvironmentStateRequest) returns (GetEnvironmentStateResponse);
+
+  rpc ListPromotions(ListPromotionsRequest) returns (ListPromotionsResponse);
+  rpc ListPromotionEvents(ListPromotionEventsRequest) returns (ListPromotionEventsResponse);
+}
+
+// ============================================================================
+// EnvironmentRegistry — environment definitions. Role: admin.
+// ============================================================================
+service EnvironmentRegistry {
+  rpc UpsertEnvironment(UpsertEnvironmentRequest) returns (UpsertEnvironmentResponse);
+  rpc GetEnvironment(GetEnvironmentRequest) returns (GetEnvironmentResponse);
+  rpc ListEnvironments(ListEnvironmentsRequest) returns (ListEnvironmentsResponse);
+  rpc ArchiveEnvironment(ArchiveEnvironmentRequest) returns (ArchiveEnvironmentResponse);
+}

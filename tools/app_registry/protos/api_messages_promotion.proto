@@ -1,0 +1,158 @@
+syntax = "proto3";
+
+package appregistry.v1;
+
+option go_package = "github.com/whale-net/everything/tools/app_registry/protos;appregistrypb";
+
+import "tools/app_registry/protos/messages.proto";
+
+// ============================================================================
+// Promotion (the human write path)
+// ============================================================================
+
+message PromoteRequest {
+  string environment_key = 1;
+
+  // The artifact being promoted. Identify by artifact_id, by digest, or by
+  // the (owner_full_name, kind, version) triple — the CLI uses the triple.
+  string artifact_id = 2;
+  string digest = 3;
+  string owner_full_name = 4;
+  ArtifactKind kind = 5;
+  string version = 6;
+
+  // Required for environments with rank above dev. Recorded on the audit log.
+  string reason = 7;
+
+  // Acknowledge that this promotes an image belonging to a DEPLOY_UNIT_CHART
+  // app, bypassing its chart. Without this flag such a request is rejected;
+  // with it, the promotion is stored with is_override = true and reported as
+  // drift.
+  bool allow_override = 8;
+
+  // Compute and return the resulting state transition without writing.
+  bool dry_run = 9;
+
+  // Required. Client-generated; makes retries safe.
+  string idempotency_key = 10;
+}
+
+message PromoteResponse {
+  // The newly current promotion.
+  Promotion promotion = 1;
+
+  // The promotion this superseded, with valid_to now set. Empty on a first
+  // promotion. This is what a rollback would target.
+  Promotion superseded = 2;
+
+  PromotionEvent event = 3;
+
+  // Writeback workflow started for this promotion. Empty on dry_run.
+  string temporal_workflow_id = 4;
+
+  bool dry_run = 5;
+  bool already_promoted = 6;
+}
+
+// RollbackRequest is sugar over Promote: it re-promotes whatever was
+// previously current for this target in this environment. Kept as its own RPC
+// because it records PROMOTION_ACTION_ROLLBACK and needs no artifact lookup.
+message RollbackRequest {
+  string environment_key = 1;
+  string owner_full_name = 2;
+  ArtifactKind kind = 3;
+  string reason = 4;
+  bool dry_run = 5;
+  string idempotency_key = 6;
+}
+
+message RollbackResponse {
+  Promotion promotion = 1;
+  Promotion superseded = 2;
+  PromotionEvent event = 3;
+  string temporal_workflow_id = 4;
+  bool dry_run = 5;
+}
+
+// ============================================================================
+// Environment state — the deploy-tooling read path
+// ============================================================================
+
+message GetEnvironmentStateRequest {
+  string environment_key = 1;
+
+  // Optional Unix timestamp. When 0, returns current state. When set, returns
+  // the state as of that instant, via the SCD2 valid_from/valid_to window.
+  int64 at = 2;
+
+  string domain = 3;  // optional filter
+}
+
+// EnvironmentStateEntry is one deployed thing in one environment.
+message EnvironmentStateEntry {
+  Promotion promotion = 1;
+  Artifact artifact = 2;
+
+  // For chart promotions: the image digests the chart pins.
+  repeated ArtifactLink images = 3;
+
+  // Set when an image belonging to this chart was separately promoted with
+  // allow_override, so the running digest differs from the chart's pin.
+  repeated DriftEntry drift = 4;
+}
+
+// DriftEntry reports a divergence between what a chart pins and what is
+// actually promoted.
+message DriftEntry {
+  string app_id = 1;
+  string app_full_name = 2;
+  string chart_pinned_digest = 3;
+  string promoted_digest = 4;
+  string promotion_id = 5;
+}
+
+message GetEnvironmentStateResponse {
+  Environment environment = 1;
+  repeated EnvironmentStateEntry entries = 2;
+
+  // Timestamp the state is valid as of — echoes `at`, or now.
+  int64 as_of = 3;
+
+  // Stable content hash of this state document. The writeback worker uses it
+  // to skip no-op gitops commits.
+  string state_hash = 4;
+}
+
+// ============================================================================
+// History and audit
+// ============================================================================
+
+message ListPromotionsRequest {
+  string environment_key = 1;   // optional filter
+  string owner_full_name = 2;   // optional filter
+
+  // When true, include superseded rows (the full history). Default false
+  // returns only current promotions.
+  bool include_history = 3;
+
+  PageRequest page = 4;
+}
+
+message ListPromotionsResponse {
+  repeated Promotion promotions = 1;
+  PageResponse page = 2;
+}
+
+message ListPromotionEventsRequest {
+  string promotion_id = 1;      // optional filter
+  string environment_key = 2;   // optional filter
+  string owner_full_name = 3;   // optional filter
+  string actor = 4;             // optional filter
+  int64 since = 5;              // optional Unix timestamp
+  PageRequest page = 6;
+}
+
+message ListPromotionEventsResponse {
+  repeated PromotionEvent events = 1;
+  PageResponse page = 2;
+}
