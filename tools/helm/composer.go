@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/template"
 )
@@ -24,9 +25,6 @@ type AppMetadata struct {
 	Port         int               `json:"port,omitempty"`
 	Replicas     int               `json:"replicas,omitempty"`
 	Resources    *ResourceConfig   `json:"resources,omitempty"`
-	Labels       map[string]string `json:"labels,omitempty"`
-	Annotations  map[string]string `json:"annotations,omitempty"`
-	Dependencies []string          `json:"dependencies,omitempty"`
 	HealthCheck  *HealthCheckMeta  `json:"health_check,omitempty"`
 	Ingress      *IngressMeta      `json:"ingress,omitempty"`
 	Command      []string          `json:"command,omitempty"`
@@ -166,8 +164,6 @@ type TemplateData struct {
 	Command     []string
 	Args        []string
 	Env         map[string]string
-	Labels      map[string]string
-	Annotations map[string]string
 }
 
 // ChartConfig represents configuration for chart generation
@@ -573,9 +569,15 @@ func (w *YAMLWriter) WriteMap(key string, m map[string]string) {
 	}
 	w.WriteKey(key)
 	w.indent += 2
-	for k, v := range m {
+	// Sort keys so output is reproducible — Go randomizes map iteration order.
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
 		prefix := strings.Repeat(" ", w.indent)
-		fmt.Fprintf(w.f, "%s%s: %q\n", prefix, k, v)
+		fmt.Fprintf(w.f, "%s%s: %q\n", prefix, k, m[k])
 	}
 	w.indent -= 2
 }
@@ -642,7 +644,16 @@ func writeValuesYAML(f *os.File, data ValuesData) error {
 
 	// Write apps section
 	w.StartSection("apps")
-	for name, app := range data.Apps {
+	// Sort app names so chart output is reproducible — Go randomizes map
+	// iteration order, which otherwise makes values.yaml (and therefore the
+	// published chart digest) vary between builds of identical inputs.
+	appNames := make([]string, 0, len(data.Apps))
+	for name := range data.Apps {
+		appNames = append(appNames, name)
+	}
+	sort.Strings(appNames)
+	for _, name := range appNames {
+		app := data.Apps[name]
 		w.StartSection(name)
 		w.WriteString("type", app.Type)
 		if app.Domain != "" {
