@@ -20,10 +20,9 @@ func (r *realBazelRunner) Run(args ...string) (string, error) {
 	err := cmd.Run()
 	out := strings.TrimSpace(stdout.String())
 	if err != nil {
-		// Bazel emits exit code 7 (and others) for partial results when
-		// `--keep_going` is set; callers that opt into that mode rely on
-		// the captured stdout so we surface both the partial output and
-		// the wrapped error.
+		// Surface any stdout Bazel produced before failing (e.g. partial
+		// query/cquery output) alongside the wrapped error, so callers and
+		// error messages have as much context as possible.
 		return out, fmt.Errorf("%w\n%s", err, strings.TrimSpace(stderr.String()))
 	}
 	return out, nil

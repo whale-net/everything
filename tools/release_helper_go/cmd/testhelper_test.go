@@ -232,12 +232,6 @@ func sampleMetaJSON(name, domain string) []byte {
 	))
 }
 
-// metaPath returns the expected file path for a metadata target in fakeFS.
-// Retained for unit tests that still exercise the per-target build/read path.
-func metaPath(pkg, targetName string) string {
-	return fakeWorkspaceRoot + "/bazel-bin/" + pkg + "/" + targetName + "_metadata.json"
-}
-
 // fakeApp describes a single app for buildFakeInfra. Discovery is driven by
 // cquery output, so we no longer fake per-target builds and JSON files.
 //

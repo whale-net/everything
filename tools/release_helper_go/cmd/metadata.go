@@ -3,7 +3,6 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -25,50 +24,6 @@ type AppMetadata struct {
 
 // FullName returns the canonical "domain-name" identifier.
 func (m AppMetadata) FullName() string { return m.Domain + "-" + m.Name }
-
-// metadataFilePath derives the bazel-bin output path for a metadata target.
-// Target format: //demo/hello_go:hello-go_metadata
-// Output file:   {workspaceRoot}/bazel-bin/demo/hello_go/hello-go_metadata_metadata.json
-func metadataFilePath(workspaceRoot, targetLabel string) (string, error) {
-	// Strip leading "//"
-	if !strings.HasPrefix(targetLabel, "//") {
-		return "", fmt.Errorf("invalid bazel target: %q", targetLabel)
-	}
-	rest := targetLabel[2:]
-	parts := strings.SplitN(rest, ":", 2)
-	if len(parts) != 2 {
-		return "", fmt.Errorf("invalid bazel target (no colon): %q", targetLabel)
-	}
-	packagePath := parts[0]
-	targetName := parts[1]
-	fileName := targetName + "_metadata.json"
-	return filepath.Join(workspaceRoot, "bazel-bin", packagePath, fileName), nil
-}
-
-// GetAppMetadata builds a metadata target and reads its output JSON.
-//
-// This single-target reader uses the on-disk JSON output for backward
-// compatibility with callers that hold a specific target label. Discovery
-// of all apps goes through ListAllApps which is significantly faster.
-func GetAppMetadata(targetLabel string, bazel BazelRunner, fs FileSystem, workspaceRoot string) (AppMetadata, error) {
-	if _, err := bazel.Run("build", targetLabel); err != nil {
-		return AppMetadata{}, fmt.Errorf("bazel build %s: %w", targetLabel, err)
-	}
-	filePath, err := metadataFilePath(workspaceRoot, targetLabel)
-	if err != nil {
-		return AppMetadata{}, err
-	}
-	data, err := fs.ReadFile(filePath)
-	if err != nil {
-		return AppMetadata{}, fmt.Errorf("read metadata file %s: %w", filePath, err)
-	}
-	var meta AppMetadata
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return AppMetadata{}, fmt.Errorf("parse metadata JSON: %w", err)
-	}
-	meta.BazelTarget = targetLabel
-	return meta, nil
-}
 
 // appMetadataStarlarkExpr emits "<label>\t<json>" per matched target,
 // pulling metadata from the AppMetadataInfo provider so no actions run.
@@ -94,13 +49,12 @@ func ListAllApps(bazel BazelRunner, _ FileSystem, _ string) ([]AppMetadata, erro
 		return nil, nil
 	}
 
-	// `--keep_going` lets us survive transitive analysis errors elsewhere in
-	// the workspace (a sibling rule with a stale macro, a missing repo, etc.).
-	// Bazel still prints the labels it successfully analyzed; we only fail
-	// hard if the output is empty.
+	// cquery is scoped to exactly the discovered labels, so any error here
+	// means real metadata is missing — fail hard rather than silently
+	// returning a partial app list to callers that plan releases off it.
 	out, err := bazel.Run("cquery", strings.Join(labels, " + "), "--output=starlark",
-		"--starlark:expr="+appMetadataStarlarkExpr, "--keep_going")
-	if err != nil && out == "" {
+		"--starlark:expr="+appMetadataStarlarkExpr)
+	if err != nil {
 		return nil, fmt.Errorf("bazel cquery app_metadata: %w", err)
 	}
 
@@ -112,13 +66,11 @@ func ListAllApps(bazel BazelRunner, _ FileSystem, _ string) ([]AppMetadata, erro
 		}
 		label, jsonPart, ok := strings.Cut(line, "\t")
 		if !ok {
-			fmt.Printf("Warning: malformed cquery line: %q\n", line)
-			continue
+			return nil, fmt.Errorf("malformed cquery line: %q", line)
 		}
 		var meta AppMetadata
 		if err := json.Unmarshal([]byte(jsonPart), &meta); err != nil {
-			fmt.Printf("Warning: parse metadata for %s: %v\n", label, err)
-			continue
+			return nil, fmt.Errorf("parse metadata for %s: %w", label, err)
 		}
 		meta.BazelTarget = canonicalLabel(label)
 		meta.BinaryTarget = canonicalLabel(meta.BinaryTarget)
