@@ -19,7 +19,7 @@ drifted:
 | `health_check`, `ingress`, `resources`, `command`, `args` | ✅ | ❌ | ✅ |
 | `version` | ✅ | ❌ | ✅ |
 | `binary_target`, `openapi_spec_target` | ✅ | ✅ | ❌ |
-| `labels`, `annotations`, `dependencies` | ❌ | ❌ | ✅ phantom |
+| `labels`, `annotations`, `dependencies` | ❌ | ❌ | ~~✅ phantom~~ removed |
 
 The missing `version` field has already cost something real:
 `tools/release_helper_go/cmd/plan.go` stores the release version in the
@@ -89,8 +89,9 @@ lockfile) — so this rides along rather than being a separate disruption.
 
 1. Land `appmeta.proto` and the contract test against today's rule output.
 2. Replace `helm/composer.go`'s `AppMetadata` with `appmetapb.AppManifest`.
-   Delete the phantom `labels` / `annotations` / `dependencies` fields, or add
-   them to the rule if they were meant to exist.
+   (The phantom `labels` / `annotations` / `dependencies` fields were already
+   deleted, along with the map-ordering nondeterminism that would have
+   prevented golden-output testing of this step.)
 3. Replace `release_helper_go`'s `AppMetadata` with `appmetapb.AppManifest`, and
    **remove the `Language`-as-version hack** in `plan.go` now that `version` is
    a real field.
