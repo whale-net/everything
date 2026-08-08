@@ -1,0 +1,30 @@
+"""App Registry proto — gRPC service definitions."""
+
+load("@rules_go//proto:def.bzl", "go_proto_library")
+load("@rules_proto//proto:defs.bzl", "proto_library")
+
+# Single Go package for all app registry protos, matching the manmanv2 pattern.
+go_proto_library(
+    name = "appregistrypb",
+    compilers = ["@rules_go//proto:go_grpc"],
+    importpath = "github.com/whale-net/everything/tools/app_registry/protos",
+    proto = ":appregistrypb_proto",
+    # The manifest schema is owned by //tools/appmeta/proto, not by the
+    # registry — release_helper_go and the helm composer consume it too.
+    deps = ["//tools/appmeta/proto:appmetapb"],
+    visibility = ["//visibility:public"],
+)
+
+proto_library(
+    name = "appregistrypb_proto",
+    srcs = [
+        "api.proto",
+        "api_messages_app.proto",
+        "api_messages_artifact.proto",
+        "api_messages_environment.proto",
+        "api_messages_promotion.proto",
+        "messages.proto",
+    ],
+    deps = ["//tools/appmeta/proto:appmetapb_proto"],
+    visibility = ["//visibility:public"],
+)

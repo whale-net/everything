@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package appregistry.v1;
+
+option go_package = "github.com/whale-net/everything/tools/app_registry/protos;appregistrypb";
+
+import "tools/app_registry/protos/messages.proto";
+
+// Environments are managed rows rather than a compiled-in enum, so adding
+// prod-eu or a per-PR ephemeral environment is an insert, not a release.
+
+message UpsertEnvironmentRequest {
+  string key = 1;  // immutable identity, e.g. "stage"
+  string display_name = 2;
+  int32 rank = 3;
+  bool requires_approval = 4;
+  string gitops_path = 5;
+  repeated string allowed_principals = 6;
+}
+
+message UpsertEnvironmentResponse {
+  Environment environment = 1;
+  bool created = 2;
+}
+
+message ListEnvironmentsRequest {
+  bool include_archived = 1;
+}
+
+message ListEnvironmentsResponse {
+  // Ordered by rank ascending.
+  repeated Environment environments = 1;
+}
+
+message GetEnvironmentRequest {
+  string key = 1;
+}
+
+message GetEnvironmentResponse {
+  Environment environment = 1;
+}
+
+message ArchiveEnvironmentRequest {
+  string key = 1;
+  string reason = 2;
+}
+
+message ArchiveEnvironmentResponse {
+  Environment environment = 1;
+}
