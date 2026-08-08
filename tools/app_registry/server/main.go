@@ -79,22 +79,7 @@ func run() error {
 		grpc.ChainStreamInterceptor(streamInt),
 	)
 
-	// Register all four App Registry services. Every RPC returns
-	// codes.Unimplemented in AR-1 — see handlers/*.go.
-	pb.RegisterAppRegistryServer(grpcServer, handlers.NewAppServer())
-	pb.RegisterArtifactRegistryServer(grpcServer, handlers.NewArtifactServer())
-	pb.RegisterPromotionRegistryServer(grpcServer, handlers.NewPromotionServer())
-	pb.RegisterEnvironmentRegistryServer(grpcServer, handlers.NewEnvironmentServer())
-
-	// Health check — reports SERVING once the process is up. AR-1 has no
-	// downstream dependency to gate on beyond the DB pool, which is already
-	// required to reach this point.
-	healthServer := health.NewServer()
-	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
-	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
-
-	// Register reflection service (for grpcurl, debugging)
-	reflection.Register(grpcServer)
+	healthServer := registerServices(grpcServer)
 
 	// Start listening
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
@@ -125,6 +110,32 @@ func run() error {
 	}()
 
 	return <-done
+}
+
+// registerServices registers all four App Registry services plus the health
+// and reflection services on grpcServer, and returns the health server so
+// the caller can flip it to NOT_SERVING on shutdown. Split out from run() so
+// it can be exercised directly against a bufconn listener in tests, with no
+// database or gRPC auth setup required — see main_test.go.
+func registerServices(grpcServer *grpc.Server) *health.Server {
+	// Register all four App Registry services. Every RPC returns
+	// codes.Unimplemented in AR-1 — see handlers/*.go.
+	pb.RegisterAppRegistryServer(grpcServer, handlers.NewAppServer())
+	pb.RegisterArtifactRegistryServer(grpcServer, handlers.NewArtifactServer())
+	pb.RegisterPromotionRegistryServer(grpcServer, handlers.NewPromotionServer())
+	pb.RegisterEnvironmentRegistryServer(grpcServer, handlers.NewEnvironmentServer())
+
+	// Health check — reports SERVING once the process is up. AR-1 has no
+	// downstream dependency to gate on beyond the DB pool, which is already
+	// required to reach this point in run().
+	healthServer := health.NewServer()
+	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
+
+	// Register reflection service (for grpcurl, debugging)
+	reflection.Register(grpcServer)
+
+	return healthServer
 }
 
 func getEnv(key, defaultValue string) string {

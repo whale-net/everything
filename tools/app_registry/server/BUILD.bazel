@@ -1,9 +1,11 @@
-load("@rules_go//go:def.bzl", "go_binary")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
 
-go_binary(
-    name = "api",
+go_library(
+    name = "api_lib",
     srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/tools/app_registry/server",
+    visibility = ["//visibility:private"],
     deps = [
         "//libs/go/db",
         "//libs/go/grpcauth",
@@ -17,6 +19,11 @@ go_binary(
         "@org_golang_google_grpc//health/grpc_health_v1",
         "@org_golang_google_grpc//reflection",
     ],
+)
+
+go_binary(
+    name = "api",
+    embed = [":api_lib"],
     visibility = ["//visibility:public"],
 )
 
@@ -31,4 +38,24 @@ release_app(
     description = "App Registry gRPC API",
     app_type = "internal-api",
     port = 50051,
+)
+
+# Smoke test: registerServices() behind a bufconn listener — no TCP port, no
+# Postgres. Asserts all four api.proto services are registered and reachable
+# (codes.Unimplemented, not Unavailable) and the health check reports
+# SERVING. See main_test.go.
+go_test(
+    name = "api_lib_test",
+    size = "small",
+    srcs = ["main_test.go"],
+    embed = [":api_lib"],
+    deps = [
+        "//tools/app_registry/protos:appregistrypb",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//credentials/insecure",
+        "@org_golang_google_grpc//health/grpc_health_v1",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_grpc//test/bufconn",
+    ],
 )
