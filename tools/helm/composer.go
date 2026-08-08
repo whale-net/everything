@@ -1,50 +1,26 @@
 package helm
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"text/template"
+
+	"google.golang.org/protobuf/encoding/protojson"
+
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
 
-// AppMetadata represents the metadata for a single application from release_app
-type AppMetadata struct {
-	Name         string            `json:"name"`
-	AppType      string            `json:"app_type"`
-	Version      string            `json:"version"`
-	Description  string            `json:"description"`
-	Registry     string            `json:"registry"`
-	Organization string            `json:"organization"`
-	RepoName     string            `json:"repo_name"`
-	ImageTarget  string            `json:"image_target"`
-	Domain       string            `json:"domain"`
-	Language     string            `json:"language"`
-	Port         int               `json:"port,omitempty"`
-	Replicas     int               `json:"replicas,omitempty"`
-	Resources    *ResourceConfig   `json:"resources,omitempty"`
-	HealthCheck  *HealthCheckMeta  `json:"health_check,omitempty"`
-	Ingress      *IngressMeta      `json:"ingress,omitempty"`
-	Command      []string          `json:"command,omitempty"`
-	Args         []string          `json:"args,omitempty"`
-}
-
-// HealthCheckMeta represents health check configuration from metadata
-type HealthCheckMeta struct {
-	Enabled bool   `json:"enabled"`
-	Path    string `json:"path"`
-}
-
-// IngressMeta represents ingress configuration from metadata
-type IngressMeta struct {
-	Host          string `json:"host"`
-	TLSSecretName string `json:"tls_secret_name"`
-}
+// AppMetadata is the manifest for a single release_app, decoded from the
+// JSON the app_metadata Starlark rule emits. appmetapb.AppManifest is the
+// schema of record — see //tools/appmeta/README.md — so the composer decodes
+// into it directly instead of maintaining its own struct.
+type AppMetadata = appmetapb.AppManifest
 
 // GetImage returns the full image name (registry/organization/repo_name)
-func (m *AppMetadata) GetImage() string {
+func GetImage(m *AppMetadata) string {
 	if m.Registry != "" && m.Organization != "" && m.RepoName != "" {
 		return fmt.Sprintf("%s/%s/%s", m.Registry, m.Organization, m.RepoName)
 	}
@@ -53,7 +29,7 @@ func (m *AppMetadata) GetImage() string {
 }
 
 // GetImageTag returns the version tag
-func (m *AppMetadata) GetImageTag() string {
+func GetImageTag(m *AppMetadata) string {
 	if m.Version != "" {
 		return m.Version
 	}
@@ -178,7 +154,7 @@ type ChartConfig struct {
 // Composer handles Helm chart composition
 type Composer struct {
 	config        ChartConfig
-	apps          []AppMetadata
+	apps          []*AppMetadata
 	manifests     []ManifestFile
 	templateDir   string
 	templateFuncs template.FuncMap
@@ -289,7 +265,8 @@ func formatYAML(v interface{}, indent int) string {
 	}
 }
 
-// LoadMetadata loads app metadata from JSON files
+// LoadMetadata loads app metadata from JSON files, decoding each against
+// appmetapb.AppManifest — the schema of record for what app_metadata emits.
 func (c *Composer) LoadMetadata(metadataFiles []string) error {
 	for _, file := range metadataFiles {
 		data, err := os.ReadFile(file)
@@ -297,8 +274,8 @@ func (c *Composer) LoadMetadata(metadataFiles []string) error {
 			return fmt.Errorf("failed to read metadata file %s: %w", file, err)
 		}
 
-		var metadata AppMetadata
-		if err := json.Unmarshal(data, &metadata); err != nil {
+		metadata := &AppMetadata{}
+		if err := protojson.Unmarshal(data, metadata); err != nil {
 			return fmt.Errorf("failed to parse metadata file %s: %w", file, err)
 		}
 
@@ -384,8 +361,22 @@ func (c *Composer) generateChartYaml(chartDir string) error {
 	return nil
 }
 
+// resourceConfigFromProto converts the wire Resources message to the local
+// ResourceConfig used for values.yaml rendering.
+func resourceConfigFromProto(r *appmetapb.Resources) ResourceConfig {
+	if r == nil {
+		return ResourceConfig{}
+	}
+	return ResourceConfig{
+		RequestsCPU:    r.RequestsCpu,
+		RequestsMemory: r.RequestsMemory,
+		LimitsCPU:      r.LimitsCpu,
+		LimitsMemory:   r.LimitsMemory,
+	}
+}
+
 // buildAppConfig creates an AppConfig from AppMetadata with smart defaults
-func (c *Composer) buildAppConfig(app AppMetadata) (AppConfig, error) {
+func (c *Composer) buildAppConfig(app *AppMetadata) (AppConfig, error) {
 	appType, err := ResolveAppType(app.Name, app.AppType)
 	if err != nil {
 		return AppConfig{}, fmt.Errorf("failed to resolve app type: %w", err)
@@ -396,15 +387,15 @@ func (c *Composer) buildAppConfig(app AppMetadata) (AppConfig, error) {
 
 	// Use custom resources if provided, otherwise use defaults
 	var resources ResourceConfig
-	if app.Resources != nil && !app.Resources.IsEmpty() {
+	if custom := resourceConfigFromProto(app.Resources); !custom.IsEmpty() {
 		// Merge custom resources with defaults (custom values take precedence)
-		resources = app.Resources.MergeWithDefaults(defaultResources)
+		resources = custom.MergeWithDefaults(defaultResources)
 	} else {
 		resources = defaultResources
 	}
 
 	// Set replicas: use metadata if provided, otherwise default based on type
-	replicas := app.Replicas
+	replicas := int(app.Replicas)
 	if replicas == 0 {
 		replicas = 1
 		if appType == ExternalAPI || appType == InternalAPI {
@@ -413,7 +404,7 @@ func (c *Composer) buildAppConfig(app AppMetadata) (AppConfig, error) {
 	}
 
 	// Set default port
-	port := app.Port
+	port := int(app.Port)
 	if port == 0 && (appType == ExternalAPI || appType == InternalAPI) {
 		port = 8000
 	}
@@ -421,8 +412,8 @@ func (c *Composer) buildAppConfig(app AppMetadata) (AppConfig, error) {
 	config := AppConfig{
 		Type:          appType.String(),
 		Domain:        app.Domain, // Add domain from metadata
-		Image:         app.GetImage(),
-		ImageTag:      app.GetImageTag(),
+		Image:         GetImage(app),
+		ImageTag:      GetImageTag(app),
 		CommitSha:     "", // TODO: Add commit SHA from build metadata
 		Port:          port,
 		Replicas:      replicas,
@@ -452,7 +443,7 @@ func (c *Composer) buildAppConfig(app AppMetadata) (AppConfig, error) {
 	if app.Ingress != nil && app.Ingress.Host != "" {
 		config.Ingress = &AppIngressConfig{
 			Host:          app.Ingress.Host,
-			TLSSecretName: app.Ingress.TLSSecretName,
+			TLSSecretName: app.Ingress.TlsSecretName,
 		}
 	}
 
