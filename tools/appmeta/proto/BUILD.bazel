@@ -1,0 +1,22 @@
+"""Schema of record for release_app manifest JSON.
+
+Consumed by release_helper_go, the helm composer, and the app registry. This
+package must not depend on any of them — it is the shared contract, not a
+component of one consumer.
+"""
+
+load("@rules_go//proto:def.bzl", "go_proto_library")
+load("@rules_proto//proto:defs.bzl", "proto_library")
+
+go_proto_library(
+    name = "appmetapb",
+    importpath = "github.com/whale-net/everything/tools/appmeta/proto",
+    proto = ":appmetapb_proto",
+    visibility = ["//visibility:public"],
+)
+
+proto_library(
+    name = "appmetapb_proto",
+    srcs = ["appmeta.proto"],
+    visibility = ["//visibility:public"],
+)
