@@ -26,9 +26,17 @@ build:ci --guard_against_concurrent_changes
 build:ci --experimental_remote_merkle_tree_cache
 build:ci --remote_timeout=60
 build:ci --remote_cache_compression
-# Download final outputs but not intermediate artifacts - safe for both build and test jobs
-build:ci --remote_download_toplevel
-# For future RBE build-only jobs: download only metadata (not safe for test jobs)
+# Build Without the Bytes: skip downloading intermediate artifacts entirely.
+# Bazel still fetches whatever any *local* action needs (e.g. test binaries
+# when tests run on the runner), so this is safe for test jobs as long as
+# anything CI consumes after Bazel exits is force-downloaded via
+# --remote_download_regex below.
+build:ci --remote_download_minimal
+# Test logs/XMLs/etc. are read by the artifact-upload step in ci.yml; without
+# this regex they'd stay remote and the upload would find an empty directory.
+# Matches every file under any `testlogs/` directory, which is where Bazel
+# places test.log, test.xml, test.outputs/, coverage.dat, etc.
+build:ci --remote_download_regex=.*/testlogs/.*
 build:ci-build-only --remote_download_minimal
 # Skip checking external repo files for modifications - deps are pinned by lockfiles
 build:ci --noexperimental_check_external_repository_files

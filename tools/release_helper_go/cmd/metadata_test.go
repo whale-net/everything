@@ -1,110 +1,9 @@
 package cmd
 
 import (
-	"path/filepath"
+	"fmt"
 	"testing"
 )
-
-func TestMetadataFilePath(t *testing.T) {
-	tests := []struct {
-		target  string
-		want    string
-		wantErr bool
-	}{
-		{
-			target: "//demo/hello_go:hello-go_metadata",
-			want:   filepath.Join("/ws", "bazel-bin", "demo/hello_go", "hello-go_metadata_metadata.json"),
-		},
-		{
-			target: "//manmanv2/api:control-api_metadata",
-			want:   filepath.Join("/ws", "bazel-bin", "manmanv2/api", "control-api_metadata_metadata.json"),
-		},
-		{
-			target:  "invalid-target",
-			wantErr: true,
-		},
-		{
-			target:  "//nodash",
-			wantErr: true,
-		},
-	}
-	for _, tt := range tests {
-		got, err := metadataFilePath("/ws", tt.target)
-		if tt.wantErr {
-			if err == nil {
-				t.Errorf("metadataFilePath(%q): expected error, got %q", tt.target, got)
-			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("metadataFilePath(%q): unexpected error: %v", tt.target, err)
-			continue
-		}
-		if got != tt.want {
-			t.Errorf("metadataFilePath(%q) = %q, want %q", tt.target, got, tt.want)
-		}
-	}
-}
-
-func TestGetAppMetadata(t *testing.T) {
-	target := "//demo/hello_go:hello-go_metadata"
-	path := metaPath("demo/hello_go", "hello-go_metadata")
-	jsonData := sampleMetaJSON("hello-go", "demo")
-
-	fs := newFakeFS().add(path, jsonData)
-	bazel := newFakeBazel(fakeBazelCall{argsContain: []string{"build", target}})
-
-	meta, err := GetAppMetadata(target, bazel, fs, fakeWorkspaceRoot)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if meta.Name != "hello-go" {
-		t.Errorf("Name = %q, want %q", meta.Name, "hello-go")
-	}
-	if meta.Domain != "demo" {
-		t.Errorf("Domain = %q, want %q", meta.Domain, "demo")
-	}
-	if meta.BazelTarget != target {
-		t.Errorf("BazelTarget = %q, want %q", meta.BazelTarget, target)
-	}
-	if meta.Registry != "ghcr.io" {
-		t.Errorf("Registry = %q, want %q", meta.Registry, "ghcr.io")
-	}
-}
-
-func TestGetAppMetadataBuildFails(t *testing.T) {
-	target := "//demo/hello_go:hello-go_metadata"
-	bazel := newFakeBazel() // no matching calls → error
-	fs := newFakeFS()
-
-	_, err := GetAppMetadata(target, bazel, fs, fakeWorkspaceRoot)
-	if err == nil {
-		t.Fatal("expected error when bazel build fails")
-	}
-}
-
-func TestGetAppMetadataFileMissing(t *testing.T) {
-	target := "//demo/hello_go:hello-go_metadata"
-	bazel := newFakeBazel(fakeBazelCall{argsContain: []string{"build", target}})
-	fs := newFakeFS() // no files added
-
-	_, err := GetAppMetadata(target, bazel, fs, fakeWorkspaceRoot)
-	if err == nil {
-		t.Fatal("expected error when metadata file is missing")
-	}
-}
-
-func TestGetAppMetadataInvalidJSON(t *testing.T) {
-	target := "//demo/hello_go:hello-go_metadata"
-	path := metaPath("demo/hello_go", "hello-go_metadata")
-	bazel := newFakeBazel(fakeBazelCall{argsContain: []string{"build", target}})
-	fs := newFakeFS().add(path, []byte("not json"))
-
-	_, err := GetAppMetadata(target, bazel, fs, fakeWorkspaceRoot)
-	if err == nil {
-		t.Fatal("expected error for invalid JSON")
-	}
-}
 
 func TestListAllApps(t *testing.T) {
 	apps := []fakeApp{
@@ -133,12 +32,51 @@ func TestListAllAppsQueryError(t *testing.T) {
 
 	_, err := ListAllApps(bazel, fs, fakeWorkspaceRoot)
 	if err == nil {
-		t.Fatal("expected error when bazel query fails")
+		t.Fatal("expected error when bazel cquery fails")
+	}
+}
+
+func TestListAllAppsCqueryError(t *testing.T) {
+	bazel := newFakeBazel(
+		fakeBazelCall{argsContain: []string{"query", "kind(app_metadata"}, argsNotContain: []string{"cquery"}, output: "//demo/hello_go:hello-go_metadata"},
+		fakeBazelCall{argsContain: []string{"cquery"}, err: fmt.Errorf("analysis error in an unrelated target")},
+	)
+	fs := newFakeFS()
+
+	_, err := ListAllApps(bazel, fs, fakeWorkspaceRoot)
+	if err == nil {
+		t.Fatal("expected error when cquery fails, even partially")
+	}
+}
+
+func TestListAllAppsMalformedLine(t *testing.T) {
+	bazel := newFakeBazel(
+		fakeBazelCall{argsContain: []string{"query", "kind(app_metadata"}, argsNotContain: []string{"cquery"}, output: "//demo/hello_go:hello-go_metadata"},
+		fakeBazelCall{argsContain: []string{"cquery"}, output: "no-tab-in-this-line"},
+	)
+	fs := newFakeFS()
+
+	_, err := ListAllApps(bazel, fs, fakeWorkspaceRoot)
+	if err == nil {
+		t.Fatal("expected error for malformed cquery line")
+	}
+}
+
+func TestListAllAppsInvalidJSON(t *testing.T) {
+	bazel := newFakeBazel(
+		fakeBazelCall{argsContain: []string{"query", "kind(app_metadata"}, argsNotContain: []string{"cquery"}, output: "//demo/hello_go:hello-go_metadata"},
+		fakeBazelCall{argsContain: []string{"cquery"}, output: "@@//demo/hello_go:hello-go_metadata\tnot json"},
+	)
+	fs := newFakeFS()
+
+	_, err := ListAllApps(bazel, fs, fakeWorkspaceRoot)
+	if err == nil {
+		t.Fatal("expected error for invalid metadata JSON")
 	}
 }
 
 func TestListAllAppsEmptyResult(t *testing.T) {
-	bazel := newFakeBazel(fakeBazelCall{argsContain: []string{"kind(app_metadata"}, output: ""})
+	bazel := newFakeBazel(fakeBazelCall{argsContain: []string{"query", "kind(app_metadata"}, argsNotContain: []string{"cquery"}, output: ""})
 	fs := newFakeFS()
 
 	result, err := ListAllApps(bazel, fs, fakeWorkspaceRoot)
@@ -147,6 +85,33 @@ func TestListAllAppsEmptyResult(t *testing.T) {
 	}
 	if len(result) != 0 {
 		t.Errorf("expected 0 apps, got %d", len(result))
+	}
+}
+
+func TestListAllAppsCanonicalizesLabels(t *testing.T) {
+	// cquery emits labels in @@//pkg:name canonical form; ListAllApps must
+	// strip the @@ prefix so downstream rdeps queries get plain //pkg:name.
+	bazel := newFakeBazel(
+		fakeBazelCall{argsContain: []string{"query", "kind(app_metadata"}, argsNotContain: []string{"cquery"}, output: "//demo/hello_go:hello-go_metadata"},
+		fakeBazelCall{argsContain: []string{"cquery"}, output: "@@//demo/hello_go:hello-go_metadata\t" +
+			`{"name":"hello-go","domain":"demo","binary_target":"@@//demo/hello_go:hello-go","image_target":"@@//demo/hello_go:hello-go_image"}`},
+	)
+
+	result, err := ListAllApps(bazel, newFakeFS(), fakeWorkspaceRoot)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 app, got %d", len(result))
+	}
+	if got := result[0].BazelTarget; got != "//demo/hello_go:hello-go_metadata" {
+		t.Errorf("BazelTarget = %q, want stripped form", got)
+	}
+	if got := result[0].BinaryTarget; got != "//demo/hello_go:hello-go" {
+		t.Errorf("BinaryTarget = %q, want stripped form", got)
+	}
+	if got := result[0].ImageTarget; got != "//demo/hello_go:hello-go_image" {
+		t.Errorf("ImageTarget = %q, want stripped form", got)
 	}
 }
 

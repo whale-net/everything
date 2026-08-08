@@ -22,11 +22,6 @@ func sampleHelmMetaJSON(name, domain string, apps []string) []byte {
 	))
 }
 
-// helmMetaPath returns the fakeFS path for a helm chart metadata target.
-func helmMetaPath(pkg, targetName string) string {
-	return fakeWorkspaceRoot + "/bazel-bin/" + pkg + "/" + targetName + "_chart_metadata.json"
-}
-
 type fakeHelmChart struct {
 	pkg        string // e.g., "manmanv2"
 	targetName string // e.g., "manmanv2_chart_chart_metadata"
@@ -38,22 +33,17 @@ type fakeHelmChart struct {
 func buildFakeHelmInfra(charts []fakeHelmChart) (*fakeFS, *fakeBazelRunner) {
 	fs := newFakeFS()
 
-	labels := make([]string, len(charts))
+	queryLines := make([]string, len(charts))
+	cqueryLines := make([]string, len(charts))
 	for i, c := range charts {
-		labels[i] = "//" + c.pkg + ":" + c.targetName
+		plain := "//" + c.pkg + ":" + c.targetName
+		queryLines[i] = plain
+		cqueryLines[i] = "@@" + plain + "\t" + string(sampleHelmMetaJSON(c.name, c.domain, c.apps))
 	}
-	queryOut := strings.Join(labels, "\n")
 
 	bazelCalls := []fakeBazelCall{
-		{argsContain: []string{"kind(helm_chart_metadata"}, output: queryOut},
-	}
-	for _, c := range charts {
-		target := "//" + c.pkg + ":" + c.targetName
-		bazelCalls = append(bazelCalls, fakeBazelCall{
-			argsContain: []string{"build", target},
-		})
-		path := helmMetaPath(c.pkg, c.targetName)
-		fs.add(path, sampleHelmMetaJSON(c.name, c.domain, c.apps))
+		{argsContain: []string{"query", "kind(helm_chart_metadata"}, argsNotContain: []string{"cquery"}, output: strings.Join(queryLines, "\n")},
+		{argsContain: []string{"cquery"}, output: strings.Join(cqueryLines, "\n")},
 	}
 	return fs, newFakeBazel(bazelCalls...)
 }
@@ -69,86 +59,6 @@ func makeTestHelmCharts() ([]fakeHelmChart, *fakeFS, *fakeBazelRunner) {
 	return charts, fs, bazel
 }
 
-// ── HelmChartMetadataFilePath ────────────────────────────────────────────────
-
-func TestHelmChartMetadataFilePath(t *testing.T) {
-	tests := []struct {
-		target  string
-		want    string
-		wantErr bool
-	}{
-		{
-			target: "//manmanv2:manmanv2_chart_chart_metadata",
-			want:   fakeWorkspaceRoot + "/bazel-bin/manmanv2/manmanv2_chart_chart_metadata_chart_metadata.json",
-		},
-		{
-			target: "//friendly_computing_machine:fcm_chart_chart_metadata",
-			want:   fakeWorkspaceRoot + "/bazel-bin/friendly_computing_machine/fcm_chart_chart_metadata_chart_metadata.json",
-		},
-		{target: "invalid", wantErr: true},
-		{target: "//nodash", wantErr: true},
-	}
-	for _, tt := range tests {
-		got, err := helmChartMetadataFilePath(fakeWorkspaceRoot, tt.target)
-		if tt.wantErr {
-			if err == nil {
-				t.Errorf("helmChartMetadataFilePath(%q): expected error, got %q", tt.target, got)
-			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("helmChartMetadataFilePath(%q): unexpected error: %v", tt.target, err)
-			continue
-		}
-		if got != tt.want {
-			t.Errorf("helmChartMetadataFilePath(%q) = %q, want %q", tt.target, got, tt.want)
-		}
-	}
-}
-
-// ── GetHelmChartMetadata ─────────────────────────────────────────────────────
-
-func TestGetHelmChartMetadata(t *testing.T) {
-	target := "//manmanv2:manmanv2_chart_chart_metadata"
-	path := helmMetaPath("manmanv2", "manmanv2_chart_chart_metadata")
-	fs := newFakeFS().add(path, sampleHelmMetaJSON("helm-manmanv2-control-services", "manmanv2", []string{"control-api"}))
-	bazel := newFakeBazel(fakeBazelCall{argsContain: []string{"build", target}})
-
-	meta, err := GetHelmChartMetadata(target, bazel, fs, fakeWorkspaceRoot)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if meta.Name != "helm-manmanv2-control-services" {
-		t.Errorf("Name = %q, want %q", meta.Name, "helm-manmanv2-control-services")
-	}
-	if meta.Domain != "manmanv2" {
-		t.Errorf("Domain = %q, want %q", meta.Domain, "manmanv2")
-	}
-	if meta.BazelTarget != target {
-		t.Errorf("BazelTarget = %q, want %q", meta.BazelTarget, target)
-	}
-}
-
-func TestGetHelmChartMetadataBuildFails(t *testing.T) {
-	target := "//manmanv2:manmanv2_chart_chart_metadata"
-	bazel := newFakeBazel()
-	fs := newFakeFS()
-	_, err := GetHelmChartMetadata(target, bazel, fs, fakeWorkspaceRoot)
-	if err == nil {
-		t.Fatal("expected error when bazel build fails")
-	}
-}
-
-func TestGetHelmChartMetadataFileMissing(t *testing.T) {
-	target := "//manmanv2:manmanv2_chart_chart_metadata"
-	bazel := newFakeBazel(fakeBazelCall{argsContain: []string{"build", target}})
-	fs := newFakeFS()
-	_, err := GetHelmChartMetadata(target, bazel, fs, fakeWorkspaceRoot)
-	if err == nil {
-		t.Fatal("expected error when metadata file is missing")
-	}
-}
-
 // ── ListAllHelmCharts ────────────────────────────────────────────────────────
 
 func TestListAllHelmChartsQueryError(t *testing.T) {
@@ -156,12 +66,24 @@ func TestListAllHelmChartsQueryError(t *testing.T) {
 	fs := newFakeFS()
 	_, err := ListAllHelmCharts(bazel, fs, fakeWorkspaceRoot)
 	if err == nil {
-		t.Fatal("expected error when bazel query fails")
+		t.Fatal("expected error when bazel cquery fails")
+	}
+}
+
+func TestListAllHelmChartsCqueryError(t *testing.T) {
+	bazel := newFakeBazel(
+		fakeBazelCall{argsContain: []string{"query", "kind(helm_chart_metadata"}, argsNotContain: []string{"cquery"}, output: "//manmanv2:manmanv2_chart_chart_metadata"},
+		fakeBazelCall{argsContain: []string{"cquery"}, err: fmt.Errorf("analysis error in an unrelated target")},
+	)
+	fs := newFakeFS()
+	_, err := ListAllHelmCharts(bazel, fs, fakeWorkspaceRoot)
+	if err == nil {
+		t.Fatal("expected error when cquery fails, even partially")
 	}
 }
 
 func TestListAllHelmChartsEmpty(t *testing.T) {
-	bazel := newFakeBazel(fakeBazelCall{argsContain: []string{"kind(helm_chart_metadata"}, output: ""})
+	bazel := newFakeBazel(fakeBazelCall{argsContain: []string{"query", "kind(helm_chart_metadata"}, argsNotContain: []string{"cquery"}, output: ""})
 	fs := newFakeFS()
 	result, err := ListAllHelmCharts(bazel, fs, fakeWorkspaceRoot)
 	if err != nil {

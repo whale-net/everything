@@ -3,8 +3,6 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -21,54 +19,46 @@ type HelmChartMetadata struct {
 	BazelTarget string   `json:"-"`
 }
 
-func helmChartMetadataFilePath(workspaceRoot, targetLabel string) (string, error) {
-	if !strings.HasPrefix(targetLabel, "//") {
-		return "", fmt.Errorf("invalid bazel target: %q", targetLabel)
-	}
-	parts := strings.SplitN(targetLabel[2:], ":", 2)
-	if len(parts) != 2 {
-		return "", fmt.Errorf("invalid bazel target (missing colon): %q", targetLabel)
-	}
-	pkg, name := parts[0], parts[1]
-	return filepath.Join(workspaceRoot, "bazel-bin", pkg, name+"_chart_metadata.json"), nil
-}
+// helmChartMetadataStarlarkExpr extracts helm chart metadata in one cquery
+// call by reading the HelmChartMetadataInfo provider.
+const helmChartMetadataStarlarkExpr = `str(target.label) + "\t" + json.encode(providers(target)["//tools/bazel:release.bzl%HelmChartMetadataInfo"].metadata)`
 
-func GetHelmChartMetadata(targetLabel string, bazel BazelRunner, fs FileSystem, workspaceRoot string) (HelmChartMetadata, error) {
-	if _, err := bazel.Run("build", targetLabel); err != nil {
-		return HelmChartMetadata{}, fmt.Errorf("bazel build %s: %w", targetLabel, err)
-	}
-	path, err := helmChartMetadataFilePath(workspaceRoot, targetLabel)
-	if err != nil {
-		return HelmChartMetadata{}, err
-	}
-	data, err := fs.ReadFile(path)
-	if err != nil {
-		return HelmChartMetadata{}, fmt.Errorf("read %s: %w", path, err)
-	}
-	var m HelmChartMetadata
-	if err := json.Unmarshal(data, &m); err != nil {
-		return HelmChartMetadata{}, fmt.Errorf("parse %s: %w", path, err)
-	}
-	m.BazelTarget = targetLabel
-	return m, nil
-}
-
-func ListAllHelmCharts(bazel BazelRunner, fs FileSystem, workspaceRoot string) ([]HelmChartMetadata, error) {
-	out, err := bazel.Run("query", "kind(helm_chart_metadata, //...)", "--output=label")
+// ListAllHelmCharts mirrors ListAllApps: a loading-phase query lists targets
+// so cquery analysis can be scoped, keeping discovery robust to unrelated
+// analysis failures elsewhere in `//...`.
+func ListAllHelmCharts(bazel BazelRunner, _ FileSystem, _ string) ([]HelmChartMetadata, error) {
+	labelsOut, err := bazel.Run("query", "kind(helm_chart_metadata, //...)", "--output=label")
 	if err != nil {
 		return nil, fmt.Errorf("bazel query helm_chart_metadata: %w", err)
 	}
+	labels := splitNonEmpty(labelsOut)
+	if len(labels) == 0 {
+		return nil, nil
+	}
+
+	// Scoped to exactly the discovered labels — any cquery error means real
+	// metadata is missing, so fail hard rather than silently planning a
+	// release off a partial chart list.
+	out, err := bazel.Run("cquery", strings.Join(labels, " + "), "--output=starlark",
+		"--starlark:expr="+helmChartMetadataStarlarkExpr)
+	if err != nil {
+		return nil, fmt.Errorf("bazel cquery helm_chart_metadata: %w", err)
+	}
 	var charts []HelmChartMetadata
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" || !strings.Contains(line, "_chart_metadata") {
+		if line == "" {
 			continue
 		}
-		m, err := GetHelmChartMetadata(line, bazel, fs, workspaceRoot)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not get metadata for %s: %v\n", line, err)
-			continue
+		label, jsonPart, ok := strings.Cut(line, "\t")
+		if !ok {
+			return nil, fmt.Errorf("malformed cquery line: %q", line)
 		}
+		var m HelmChartMetadata
+		if err := json.Unmarshal([]byte(jsonPart), &m); err != nil {
+			return nil, fmt.Errorf("parse helm metadata for %s: %w", label, err)
+		}
+		m.BazelTarget = canonicalLabel(label)
 		charts = append(charts, m)
 	}
 	sort.Slice(charts, func(i, j int) bool { return charts[i].Name < charts[j].Name })

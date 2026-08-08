@@ -14,13 +14,18 @@ type realBazelRunner struct {
 func (r *realBazelRunner) Run(args ...string) (string, error) {
 	cmd := exec.Command("bazel", args...)
 	cmd.Dir = r.workspaceRoot
-	var stderr bytes.Buffer
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	err := cmd.Run()
+	out := strings.TrimSpace(stdout.String())
 	if err != nil {
-		return "", fmt.Errorf("%w\n%s", err, strings.TrimSpace(stderr.String()))
+		// Surface any stdout Bazel produced before failing (e.g. partial
+		// query/cquery output) alongside the wrapped error, so callers and
+		// error messages have as much context as possible.
+		return out, fmt.Errorf("%w\n%s", err, strings.TrimSpace(stderr.String()))
 	}
-	return strings.TrimSpace(string(out)), nil
+	return out, nil
 }
 
 type realGitRunner struct {
