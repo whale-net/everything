@@ -11,4 +11,4 @@ if [ ! -f "$RELEASE_HELPER_BIN" ]; then
     exit 1
 fi
 
-exec "${RUNFILES_DIR}/_main/tools/release_helper/test_cli_integration.sh"
+exec "${RUNFILES_DIR}/_main/tools/release_helper_go/test_cli_integration.sh"

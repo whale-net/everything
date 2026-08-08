@@ -10,9 +10,10 @@
 set -euo pipefail
 
 # Locate the release_helper binary from Bazel runfiles.
-# RELEASE_HELPER_BIN can be set externally to point to a different binary (e.g., Go rewrite).
+# RELEASE_HELPER_BIN is set by the caller (test_cli_integration_go.sh) to point
+# at the Go binary.
 RUNFILES_DIR="${RUNFILES_DIR:-$0.runfiles}"
-RELEASE_HELPER="${RELEASE_HELPER_BIN:-${RUNFILES_DIR}/_main/tools/release_helper/release_helper}"
+RELEASE_HELPER="${RELEASE_HELPER_BIN:-${RUNFILES_DIR}/_main/tools/release_helper_go/release_helper_go}"
 if [ ! -f "$RELEASE_HELPER" ]; then
     echo "ERROR: Cannot find release_helper binary: $RELEASE_HELPER" >&2
     exit 1

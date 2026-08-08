@@ -40,7 +40,7 @@ sh_test(
     srcs = ["test_cli_integration_go.sh"],
     data = [
         ":release_helper_go",
-        "//tools/release_helper:test_cli_integration.sh",
+        ":test_cli_integration.sh",
     ],
     tags = ["integration"],
 )

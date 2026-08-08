@@ -56,7 +56,7 @@ config_setting(
 # Uses the standard binary - no platform-specific targets needed
 alias(
     name = "release",
-    actual = "//tools/release_helper:release_helper",
+    actual = "//tools/release_helper_go:release_helper_go",
     visibility = ["//visibility:public"],
 )
 
