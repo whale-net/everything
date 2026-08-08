@@ -66,9 +66,10 @@ problem.
   every `app_metadata` target decodes with `DiscardUnknown: false`, and a
   full-coverage fixture app leaves no proto field unset.
 - Migrate `tools/helm/composer.go` to `appmetapb.AppManifest`. The dead
-  `labels` / `annotations` / `dependencies` fields are already gone, as is the
-  map-iteration nondeterminism that would have made the golden-output test
-  below impossible.
+  `labels` / `annotations` / `dependencies` fields and the map-iteration
+  nondeterminism that would have made the golden-output test below impossible
+  are handled separately, in the `helm-deterministic-output` change. That must
+  land before this step.
 - Migrate `tools/release_helper_go` to `appmetapb.AppManifest`.
 - **Remove the `Language`-as-version hack** in `cmd/plan.go` (`apps[i].Language
   = version`, read back via `strings.HasPrefix(app.Language, "v")`), now that
