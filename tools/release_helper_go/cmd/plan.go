@@ -194,9 +194,7 @@ func buildPlanResult(apps []AppMetadata, version, eventType string) *PlanResult 
 	versions := make(map[string]string, len(apps))
 
 	for _, app := range apps {
-		v := app.OpenAPISpecTarget // reuse field as temp; actual version is in BazelTarget context
-		// Version was assigned into a side-channel; use the Version() helper
-		v = appVersion(app, version)
+		v := appVersion(app, version)
 		include = append(include, map[string]string{
 			"app":          app.Name,
 			"domain":       app.Domain,

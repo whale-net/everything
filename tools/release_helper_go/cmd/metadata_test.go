@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 	"testing"
+
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
 
 func TestListAllApps(t *testing.T) {
@@ -116,7 +118,7 @@ func TestListAllAppsCanonicalizesLabels(t *testing.T) {
 }
 
 func TestAppMetadataFullName(t *testing.T) {
-	m := AppMetadata{Name: "hello-go", Domain: "demo"}
+	m := AppMetadata{AppManifest: &appmetapb.AppManifest{Name: "hello-go", Domain: "demo"}}
 	if got := m.FullName(); got != "demo-hello-go" {
 		t.Errorf("FullName() = %q, want %q", got, "demo-hello-go")
 	}

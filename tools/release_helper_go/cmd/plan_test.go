@@ -3,6 +3,8 @@ package cmd
 import (
 	"strings"
 	"testing"
+
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
 
 // ── input validation ──────────────────────────────────────────────────────────
@@ -359,9 +361,9 @@ func TestAutoIncrementVersionWithTags(t *testing.T) {
 
 func TestResolveApps(t *testing.T) {
 	allApps := []AppMetadata{
-		{Name: "hello-go", Domain: "demo", BazelTarget: "//demo/hello_go:hello-go_metadata"},
-		{Name: "hello-python", Domain: "demo", BazelTarget: "//demo/hello_python:hello-python_metadata"},
-		{Name: "control-api", Domain: "manmanv2", BazelTarget: "//manmanv2/api:control-api_metadata"},
+		{AppManifest: &appmetapb.AppManifest{Name: "hello-go", Domain: "demo"}, BazelTarget: "//demo/hello_go:hello-go_metadata"},
+		{AppManifest: &appmetapb.AppManifest{Name: "hello-python", Domain: "demo"}, BazelTarget: "//demo/hello_python:hello-python_metadata"},
+		{AppManifest: &appmetapb.AppManifest{Name: "control-api", Domain: "manmanv2"}, BazelTarget: "//manmanv2/api:control-api_metadata"},
 	}
 
 	tests := []struct {

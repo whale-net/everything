@@ -264,14 +264,14 @@ func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 				}
 
 				// Warn if expected OpenAPI spec is missing.
-				if openapiSpecsDir != "" && meta.OpenAPISpecTarget != "" {
+				if openapiSpecsDir != "" && meta.OpenapiSpecTarget != "" {
 					specFile := filepath.Join(openapiSpecsDir, fullName+"-openapi.json")
 					if _, statErr := os.Stat(specFile); os.IsNotExist(statErr) {
 						warning := fmt.Sprintf(
 							"\n\n---\n\n⚠️ **Warning: OpenAPI Specification Missing**\n\n"+
 								"This app is configured to generate an OpenAPI specification (target: `%s`), "+
 								"but the spec file was not found in the build artifacts.\n",
-							meta.OpenAPISpecTarget,
+							meta.OpenapiSpecTarget,
 						)
 						releaseNotes += warning
 					}

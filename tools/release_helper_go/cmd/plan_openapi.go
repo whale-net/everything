@@ -52,11 +52,11 @@ func newPlanOpenapiBuildsCmd() *cobra.Command {
 			}
 			var appsWithSpecs []specEntry
 			for _, a := range resolved {
-				if a.OpenAPISpecTarget != "" {
+				if a.OpenapiSpecTarget != "" {
 					appsWithSpecs = append(appsWithSpecs, specEntry{
 						App:          a.Name,
 						Domain:       a.Domain,
-						OpenAPITarget: a.OpenAPISpecTarget,
+						OpenAPITarget: a.OpenapiSpecTarget,
 					})
 				}
 			}
