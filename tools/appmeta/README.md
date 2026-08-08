@@ -3,8 +3,10 @@
 Proto definition of the JSON emitted by the `app_metadata` and
 `helm_chart_metadata` Starlark rules in [`//tools/bazel:release.bzl`](../bazel/release.bzl).
 
-**Design stage.** The proto exists; consumers have not been migrated yet. See
-[Migration](#migration) and `//tools/app_registry/PLAN.md` (phase AR-2).
+**Migrated.** `helm/composer.go` and `release_helper_go` both decode into
+`appmetapb.AppManifest` / `appmetapb.ChartManifest`; no hand-written manifest
+struct remains in `tools/`. See [Migration](#migration) and
+`//tools/app_registry/PLAN.md` (phase AR-M).
 
 ## Why this exists
 
@@ -13,7 +15,7 @@ monorepo, and the JSON they produce is a real interface between Starlark and Go.
 That interface had no schema, so each consumer wrote its own struct — and they
 drifted:
 
-| Field | `release.bzl` emits | `release_helper_go` | `helm/composer.go` |
+| Field | `release.bzl` emitted | `release_helper_go` (before) | `helm/composer.go` (before) |
 |---|:---:|:---:|:---:|
 | `description`, `app_type`, `port`, `replicas` | ✅ | ❌ | ✅ |
 | `health_check`, `ingress`, `resources`, `command`, `args` | ✅ | ❌ | ✅ |
@@ -21,16 +23,18 @@ drifted:
 | `binary_target`, `openapi_spec_target` | ✅ | ✅ | ❌ |
 | `labels`, `annotations`, `dependencies` | ❌ | ❌ | ✅ phantom (removed separately) |
 
-Charts drift the same way: `HelmChartMetadata` in `plan_helm.go` omits
+Charts drifted the same way: `HelmChartMetadata` in `plan_helm.go` omitted
 `version` and `environment`, both of which `helm_chart_metadata` emits.
 
-The missing `version` field has already cost something real:
-`tools/release_helper_go/cmd/plan.go` stores the release version in the
-`Language` field and reads it back with `strings.HasPrefix(app.Language, "v")`,
-because the struct it decodes into has nowhere else to put it.
+The missing `version` field cost something real: `tools/release_helper_go/cmd/plan.go`
+stored the release version in the `Language` field and read it back with
+`strings.HasPrefix(app.Language, "v")`, because the struct it decoded into had
+nowhere else to put it. Both consumers now decode `appmetapb.AppManifest` /
+`appmetapb.ChartManifest` directly — see [Migration](#migration) — so this
+table describes the problem this package fixed, not the current state.
 
 Adding the app registry as a third consumer would have made this worse. Instead
-the registry is the forcing function to collapse to one definition.
+the registry is the forcing function that collapsed it to one definition.
 
 ## Dependency direction
 
@@ -76,18 +80,45 @@ vanishing — which is exactly how the current drift went unnoticed.
 ## The contract test
 
 Shared types alone do not prevent drift; a rule attribute can still be added
-without anyone extending the proto. The enforcement is a test:
+without anyone extending the proto. The enforcement is
+`//tools/appmeta:manifest_contract_test`, in both directions:
 
-1. Discover every `app_metadata` / `helm_chart_metadata` target the way
-   `release_helper_go` does — `bazel query` for labels, then `bazel cquery
-   --output=starlark` over the providers — and unmarshal each result with
-   `DiscardUnknown: false`. Catches **rule → proto** drift, and runs no build
-   actions.
-2. A fixture app in `testdata/` sets *every* `release_app` attribute; assert the
-   decoded message has no unset field. Catches **proto → rule** drift, i.e. a
-   field defined here that the rule never populates.
+1. **rule → proto** (`TestAllManifestsDecodeAgainstProto`): discover every
+   `app_metadata` / `helm_chart_metadata` target the way `release_helper_go`
+   does — `bazel query` for labels, then `bazel cquery --output=starlark` over
+   the providers — and unmarshal each result with `DiscardUnknown: false`.
+2. **proto → rule** (`TestFixtureLeavesNoFieldUnset`): the fixture app in
+   `testdata/` sets *every* `release_app` attribute; assert the decoded
+   message has no unset field. Catches a field defined here that the rule
+   never populates.
 
-Both directions fail loudly at `bazel test` time.
+Direction 2 is fully hermetic — it just reads the fixture's built metadata
+JSON as a `data` dependency, so it runs under a normal `bazel test`.
+
+Direction 1 needs a real `bazel query`/`cquery` against the whole checkout,
+which cannot run hermetically inside a sandboxed `bazel test` action: an
+action only sees its declared inputs, not the full source tree, and even
+with sandboxing disabled the test binary's working directory sits under
+Bazel's execroot/cache tree, which is not an ancestor of the real checkout —
+there is no path to walk up to find it. The one thing that does carry the
+real checkout path into a subprocess is `BUILD_WORKSPACE_DIRECTORY`, and
+Bazel only sets that for `bazel run`. So this target is tagged `manual`
+(same idiom as `//tools/scripts:test_cross_compilation`, excluded from
+`//tools/...` and `//...` wildcards) and must be invoked as:
+
+```
+bazel run //tools/appmeta:manifest_contract_test
+```
+
+`bazel test //tools/appmeta:manifest_contract_test` still runs and still
+exercises direction 2; direction 1 skips with an explanatory message rather
+than silently passing. CI invokes the target with `run`, not `test`, so
+direction 1 still executes on every build.
+
+Verified by deliberately adding an undeclared key to the metadata dict in
+`_app_metadata_impl` and confirming `TestAllManifestsDecodeAgainstProto`
+fails for every discovered target with `unknown field "<name>"`, then
+reverting.
 
 ## Adding a field
 
@@ -99,22 +130,37 @@ Three edits, and the contract test fails until all three are done:
 
 ## Migration
 
-Sequenced with AR-2 in `//tools/app_registry/PLAN.md`, which already has to
-touch `release.bzl` (for `deploy_unit`) and `composer.go` (for the chart
-lockfile) — so this rides along rather than being a separate disruption.
+Sequenced as phase AR-M in `//tools/app_registry/PLAN.md`, ahead of AR-2 so the
+registry doesn't add a third manifest representation on top of two that
+already disagreed.
 
-1. Land `appmeta.proto` and the contract test against today's rule output.
-2. Replace `helm/composer.go`'s `AppMetadata` with `appmetapb.AppManifest`.
-   (The phantom `labels` / `annotations` / `dependencies` fields, and the
-   map-ordering nondeterminism that would have prevented golden-output testing
-   of this step, are removed by the separate `helm-deterministic-output`
-   change, which must land first.)
-3. Replace `release_helper_go`'s `AppMetadata` with `appmetapb.AppManifest`, and
-   **remove the `Language`-as-version hack** in `plan.go` now that `version` is
-   a real field.
-4. Add `deploy_unit` to `release_app` and to the proto.
-5. `release_helper_go` emits `AppManifestSet`; the registry's `ReconcileApps`
-   consumes it directly with no conversion.
+**Done:**
 
-Step 3 is the one that changes existing behaviour rather than just types — the
-version-sentinel removal should be its own reviewable commit.
+1. `appmeta.proto` and `//tools/appmeta:manifest_contract_test` against
+   today's rule output.
+2. `helm/composer.go`'s `AppMetadata` replaced with `appmetapb.AppManifest`
+   (`LoadMetadata` decodes with `protojson` instead of `encoding/json`;
+   `GetImage`/`GetImageTag` became package functions since a proto type can't
+   carry methods). Verified byte-identical output for
+   `//demo:all_types_chart`, `//demo:fastapi_chart`, and
+   `//manmanv2:manmanv2_chart` before/after, plus a golden-output regression
+   test (`TestGenerateChart_Golden` in `composer_test.go`).
+3. `release_helper_go`'s `AppMetadata` / `HelmChartMetadata` replaced with
+   thin wrappers around `appmetapb.AppManifest` / `appmetapb.ChartManifest`
+   plus the discovery-time `BazelTarget` label (not part of the manifest
+   JSON). The **`Language`-as-version hack** in `plan.go` is removed —
+   `assignVersions` now records per-app versions into an explicit map instead
+   of overloading the `Language` field with a `"v"`-prefixed sentinel.
+4. `deploy_unit` added to `release_app` and to the proto, mapped from the
+   Starlark attr string (`"chart"` / `"image"` / `"none"`) to the
+   `DeployUnit` enum's JSON name so `protojson` decodes it directly.
+   `manmanv2-host-manager` is the only app set to `"image"` — it runs on bare
+   metal with Docker socket access and is explicitly documented as not
+   deployed via the control-services Helm chart (see
+   `manmanv2/host/DEPLOYMENT.md`). Every other app keeps the `"chart"`
+   default.
+
+**Not yet done (out of AR-M's scope, tracked for AR-2):**
+
+5. `release_helper_go` emitting `AppManifestSet` for the registry's
+   `ReconcileApps` to consume directly.
