@@ -251,13 +251,58 @@ When built, `Promote` against a gated environment writes a promotion in
 `ACTIVE` and enqueues the writeback. Rollback needs nothing new — it is a
 `Promote` to the artifact that SCD2 history already identifies as previous.
 
+## Resolved questions
+
+**1. Chart identity source — already solved, reuse it.**
+`ListAllHelmCharts` in `tools/release_helper_go/cmd/plan_helm.go` runs
+`bazel query "kind(helm_chart_metadata, //...)"` and reads each target's
+`*_chart_metadata.json`, exactly mirroring app discovery. Chart identity comes
+from that existing path; `ChartManifest` in `//tools/appmeta/proto` is the typed
+form of the JSON it already reads. No new discovery mechanism.
+
+**2. Writeback is interface-only for now.**
+Wiring the gitops repo requires changes in another repository that are out of
+scope. AR-4 therefore delivers the *contract* — outbox, workflow, and a
+`Writeback` activity interface — with a stub implementation that renders state
+and writes it locally without publishing anywhere. The real gitops and S3
+activities plug in behind that interface later with no schema or API change.
+
+Consequence: nothing before AR-4 needs Temporal, so the `libs/go/temporal`
+work moves out of AR-1 and into AR-4. That removes the largest unknown from
+the foundations phase.
+
+Consequence: until the real writeback lands, `GetEnvironmentState` is the only
+way to consume promotion state. That is acceptable because no deploy tooling
+depends on it yet — but it means the "registry can be down without blocking a
+deploy" property is untested until AR-4 completes for real.
+
+**3. No backfill; adopt by per-domain cutover.**
+Historical artifacts are not backfilled from git tags or GHCR — history
+accumulates from AR-2 forward.
+
+Adoption is **per domain**, not global. A domain can publish through the
+registry while every other domain stays on the existing tag-based path, which
+allows a fast, low-blast-radius rollout instead of one repo-wide switch.
+
+This needs a `domain_adoption` table keyed by domain, recording which
+capabilities the registry is authoritative for:
+
+| Stage | Meaning |
+|---|---|
+| `observe` | Registry records builds and artifacts. Git tags remain authoritative. Default for every domain from AR-2. |
+| `promote` | Promotion state for this domain is tracked and consumed. |
+| `allocate` | Registry allocates versions for this domain; tag scanning is bypassed. |
+
+Recording (AR-2) is deliberately **not** gated — recording every domain is
+harmless and builds the parity evidence AR-5 depends on. The gate matters from
+AR-3 onward, and most of all at AR-5, where the source of truth actually
+changes hands.
+
+`AllocateVersion` must reject a domain not yet at `allocate`, so a
+misconfigured CI job fails loudly rather than silently allocating from the
+wrong source of truth.
+
 ## Open questions
 
-1. **Chart identity source.** `tools/helm` composes charts from Bazel targets;
-   the exact query for enumerating charts and their member apps needs pinning
-   down before AR-1.
-2. **Gitops repo target.** Which repo/branch the worker commits to, and whether
-   per-environment files or one file per app. Blocks AR-3.
-3. **Migration of existing state.** Backfilling historical artifacts from git
-   tags and GHCR is optional. Recommendation: don't. Start recording from AR-2
-   forward and let history accumulate.
+None blocking. The gitops repo layout is deferred rather than unresolved — it
+is answered when the writeback stub is replaced with the real implementation.

@@ -94,10 +94,6 @@ Migrate it behind a golden-output test comparing rendered charts pre/post.
 **Goal:** everything the service needs to exist, with no business logic.
 
 **Scope**
-- `libs/go/temporal` — client construction, env-driven config, worker bootstrap,
-  logging bridge to `libs/go/logging`. Add `go.temporal.io/sdk` to `go.mod` and
-  `MODULE.bazel`. **This does not exist yet in Go anywhere in the repo** and is
-  the largest unknown in this phase.
 - `tools/app_registry/migrate` — `golang-migrate` runner over embedded SQL,
   following `manmanv2/migrate`. Schema per ARCHITECTURE.md, including the SCD2
   partial unique index and `v_current_promotion`.
@@ -113,9 +109,11 @@ Migrate it behind a golden-output test comparing rendered charts pre/post.
 - Migrations apply and roll back cleanly.
 - Server starts in Tilt and answers reflection + health.
 
-**Risks** — Temporal Go SDK under Bazel with cross-compilation. Read
-`docs/DOCKER.md` before touching image builds; ARM64 breakage is silent at build
-time.
+**Risks** — Read `docs/DOCKER.md` before touching image builds; ARM64 breakage
+is silent at build time.
+
+**Note:** Temporal moved out of this phase into AR-4. Nothing before the
+writeback needs it, and it was the largest unknown here.
 
 ---
 
@@ -172,28 +170,40 @@ compress this — it is the phase that earns the trust AR-5 spends.
 
 ---
 
-## AR-4 — Writeback
+## AR-4 — Writeback interface (stub implementation)
 
-**Goal:** promotion state reaches ArgoCD without anything reading the API
-synchronously.
+**Goal:** establish the contract that carries promotion state out of the
+registry, without wiring it to anything. Publishing targets live in another
+repo and are out of scope.
 
 **Scope**
 - `writeback_outbox` written inside the promotion transaction.
+- `libs/go/temporal` — client construction, env-driven config, worker
+  bootstrap, logging bridge to `libs/go/logging`. Add `go.temporal.io/sdk` to
+  `go.mod` and `MODULE.bazel`. **Not present in Go anywhere in this repo yet**
+  (fcm uses the Python SDK) — the largest unknown in the project, moved here
+  from AR-1 because nothing earlier needs it.
 - `tools/app_registry/worker` — Temporal worker draining the outbox.
-- `WritebackWorkflow` (workflow id = promotion id) with activities: render state
-  → commit to gitops repo → put S3 snapshot → mark outbox done.
-- `state_hash` no-op detection; push-conflict retry.
+- `WritebackWorkflow` (workflow id = promotion id) over a `Writeback`
+  activity interface, with a **stub implementation** that renders environment
+  state and writes it to a local path or object store — publishing nowhere.
+- `state_hash` no-op detection, so the real implementation inherits it.
 - `release_app` for `app-registry-worker`.
-- Point **one non-critical app's** ArgoCD source at registry-written state.
 
 **Exit criteria**
-- A promotion produces a gitops commit and an S3 snapshot within seconds.
-- Killing the worker mid-writeback and restarting completes exactly once.
-- The pilot app deploys end-to-end from a promotion.
-- Registry downtime demonstrably does not block an ArgoCD sync.
+- A promotion enqueues an outbox row in the same transaction and the workflow
+  drains it exactly once, verified by killing the worker mid-run.
+- Rendered state matches `GetEnvironmentState` output.
+- The activity interface is documented well enough that swapping the stub for a
+  gitops committer needs no schema, proto, or workflow change.
 
-**Blocked on** open question 2 in ARCHITECTURE.md (gitops repo target and file
-layout).
+**Explicitly not in scope:** committing to the gitops repo, S3 publication,
+pointing ArgoCD at registry-written state. Those land when the other repo's
+changes are ready.
+
+**Consequence to track:** the "registry can be down without blocking a deploy"
+property is not actually exercised until the real writeback ships. Do not claim
+it as verified before then.
 
 ---
 
@@ -205,18 +215,25 @@ CI now depends on the registry being up.
 **Scope**
 - Implement `ArtifactRegistry.AllocateVersion` against a unique
   `(owner, kind, version)` constraint.
-- Replace `autoIncrementVersion` in `tools/release_helper_go/cmd/plan.go`.
+- Replace `autoIncrementVersion` in `tools/release_helper_go/cmd/plan.go`,
+  gated on the calling domain's adoption stage.
+- **Per-domain cutover.** `AllocateVersion` serves only domains at stage
+  `allocate` and rejects the rest, so a misconfigured CI job fails loudly
+  rather than silently allocating against the wrong source of truth. Cut over
+  one low-traffic domain first, then widen.
 - **Keep writing git tags** as a redundant record and disaster-recovery path.
-- Backfill allocated versions from existing tags at cutover so numbering is
-  continuous.
-- Remove the release workflow's version-allocation concurrency group, now
-  redundant.
+- Seed each domain's starting version from its existing tags at the moment it
+  is promoted to `allocate`, so numbering stays continuous.
+- Remove the release workflow's version-allocation concurrency group once every
+  domain has cut over — not before.
 
 **Exit criteria**
 - Concurrent releases of the same app cannot receive the same version.
 - Allocated versions match what tag-scanning would have produced, verified
   against the AR-2 soak data.
-- A documented, rehearsed fallback to tag-based allocation exists.
+- A domain not at `allocate` still releases through the tag path, unchanged.
+- A documented, rehearsed fallback to tag-based allocation exists — per domain,
+  by moving its stage back.
 
 **Do not start** until AR-2's parity check has been clean across a meaningful
 number of real releases.
