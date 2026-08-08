@@ -135,6 +135,12 @@ authoritative. Nothing depends on the registry yet.
   conversion code — AR-M made this the same type the registry accepts.
 - `.github/workflows/release.yml`: call `app-registry` CLI after image and chart
   pushes. **Best-effort — `continue-on-error`, must never fail a release.**
+- **Every registry step gated on `if: vars.APP_REGISTRY_CICD_OPT_IN == 'true'`.**
+  Default (unset) means CI makes no registry calls whatever, so the pipeline that
+  builds and releases the registry never depends on the registry already being
+  deployed. See ARCHITECTURE.md → "`APP_REGISTRY_CICD_OPT_IN` — the bootstrap
+  kill switch". This is a hard requirement, not a nicety: the repo ships with it
+  off and stays that way until the registry is deployed and its secrets exist.
 - CLI: `apps list`, `apps get`, `artifacts list`, `artifacts resolve`.
 
 **Exit criteria**
