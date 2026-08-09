@@ -2,10 +2,12 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/whale-net/everything/libs/go/semver"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
@@ -17,8 +19,7 @@ import (
 var semverRe = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
 
 // ArtifactServer implements pb.ArtifactRegistryServer, backed by
-// repository.Registry. AllocateVersion stays codes.Unimplemented — that's
-// AR-5.
+// repository.Registry.
 type ArtifactServer struct {
 	pb.UnimplementedArtifactRegistryServer
 	repo repository.Registry
@@ -237,6 +238,119 @@ func (s *ArtifactServer) ResolveArtifact(ctx context.Context, req *pb.ResolveArt
 	}, nil
 }
 
+// maxAllocateVersionAttempts bounds the retry loop below. A collision means
+// a concurrent caller's INSERT into version_allocation won the race for the
+// version this attempt computed (see postgres/errors.go's ErrAlreadyExists
+// doc comment) — retrying recomputes "next" against the now-committed
+// state, so it converges quickly under realistic contention; this is a
+// backstop against a pathological hot loop, not an expected steady state.
+const maxAllocateVersionAttempts = 5
+
+// AllocateVersion implements phase AR-5's version allocation RPC. AR-5a
+// ships this fully working and tested but wired to nothing: no
+// domain_adoption row is ever set to 'allocate' by this change, and
+// tools/release_helper_go/cmd/plan.go's git-tag path (autoIncrementVersion)
+// is untouched — see PLAN.md's AR-5 status for what remains before any
+// domain can actually be cut over.
 func (s *ArtifactServer) AllocateVersion(ctx context.Context, req *pb.AllocateVersionRequest) (*pb.AllocateVersionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "AllocateVersion not implemented")
+	if err := auth.Require(ctx, auth.RoleBuilder); err != nil {
+		return nil, err
+	}
+	kind := artifactKindFromPB(req.Kind)
+	if kind == "" {
+		return nil, status.Error(codes.InvalidArgument, "kind is required")
+	}
+	if req.OwnerFullName == "" {
+		return nil, status.Error(codes.InvalidArgument, "owner_full_name is required")
+	}
+	if req.IdempotencyKey == "" {
+		return nil, status.Error(codes.InvalidArgument, "idempotency_key is required")
+	}
+	if req.ExplicitVersion != "" {
+		// AR-5 addendum item 3: reject a prerelease or build-metadata
+		// version explicitly, rather than half-accepting one and sorting it
+		// wrongly (see libs/go/semver.ParseRelease).
+		if _, err := semver.ParseRelease(req.ExplicitVersion); err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "explicit_version: %v", err)
+		}
+	} else if req.Increment != "major" && req.Increment != "minor" && req.Increment != "patch" {
+		return nil, status.Errorf(codes.InvalidArgument, `increment must be "major", "minor", or "patch" (got %q); or set explicit_version`, req.Increment)
+	}
+
+	domain, ownerID, err := s.resolveOwnerAndDomain(ctx, kind, req.OwnerFullName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Per-domain adoption gate — ARCHITECTURE.md "Resolved questions" #3 and
+	// PLAN.md's AR-5 scope: AllocateVersion serves only domains explicitly
+	// cut over to stage "allocate", so a misconfigured caller fails loudly
+	// rather than silently allocating from the wrong source of truth. No
+	// domain is at "allocate" as of AR-5a.
+	stage, err := s.repo.DomainAdoption().GetStage(ctx, domain)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	if stage != repository.DomainAdoptionStageAllocate {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"domain %q is at adoption stage %q; AllocateVersion only serves domains at stage \"allocate\"", domain, stage)
+	}
+
+	var resp *pb.AllocateVersionResponse
+	var replayed bool
+	for attempt := 0; attempt < maxAllocateVersionAttempts; attempt++ {
+		out, wasReplayed, ferr := runIdempotent(ctx, s.repo, req.IdempotencyKey, "AllocateVersion",
+			func() proto.Message { return &pb.AllocateVersionResponse{} },
+			func(ctx context.Context, r repository.Registry) (proto.Message, error) {
+				alloc, aerr := r.Artifacts().AllocateVersion(ctx, kind, ownerID, req.Increment, req.ExplicitVersion)
+				if aerr != nil {
+					return nil, aerr
+				}
+				return &pb.AllocateVersionResponse{Version: alloc.Version, PreviousVersion: alloc.PreviousVersion}, nil
+			},
+		)
+		if ferr == nil {
+			resp = out.(*pb.AllocateVersionResponse)
+			replayed = wasReplayed
+			err = nil
+			break
+		}
+		err = ferr
+		// An explicit_version collision is a real "fails if taken" per
+		// api_messages_artifact.proto's doc comment — not a race worth
+		// retrying. Only an auto-increment collision (someone else's
+		// concurrent allocation took the version THIS attempt computed) is
+		// retried, in a fresh transaction — the aborted one carries no
+		// partial state to resume from (see postgres/errors.go).
+		if req.ExplicitVersion == "" && errors.Is(ferr, repository.ErrAlreadyExists) {
+			continue
+		}
+		break
+	}
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	if replayed {
+		resp.AlreadyAllocated = true
+	}
+	return resp, nil
+}
+
+// resolveOwnerAndDomain resolves owner_full_name to its owning row's id and
+// domain, for AllocateVersion's storage key and adoption-stage gate
+// respectively. Mirrors resolveOwner but also needs Domain, which
+// resolveOwner's callers (RecordArtifact) don't.
+func (s *ArtifactServer) resolveOwnerAndDomain(ctx context.Context, kind repository.ArtifactKind, ownerFullName string) (domain, ownerID string, err error) {
+	if kind == repository.ArtifactKindImage {
+		app, aerr := s.repo.Apps().GetAppByFullName(ctx, ownerFullName)
+		if aerr != nil {
+			return "", "", status.Errorf(codes.InvalidArgument, "unknown app %q", ownerFullName)
+		}
+		return app.Domain, app.AppID, nil
+	}
+	chart, cerr := s.repo.Apps().GetChartByFullName(ctx, ownerFullName)
+	if cerr != nil {
+		return "", "", status.Errorf(codes.InvalidArgument, "unknown chart %q", ownerFullName)
+	}
+	return chart.Domain, chart.ChartID, nil
 }

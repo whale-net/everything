@@ -7,6 +7,16 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	// Aliased: this package already declares a local (unrelated) `semver`
+	// type in cleanup.go for GHCR tag-retention sorting. That one stays as
+	// is — it's a different concern (sorting existing published tags for
+	// deletion, not allocating new ones) and out of scope for AR-5. This
+	// import is the shared parser plan.go's incrementVersion now delegates
+	// to instead of its own regex/strings.Split logic — see PLAN.md's AR-5
+	// addendum and libs/go/semver's package doc for why it's shared with
+	// tools/app_registry instead of copied a second time.
+	sharedsemver "github.com/whale-net/everything/libs/go/semver"
 )
 
 var validEventTypes = []string{"workflow_dispatch", "tag_push", "pull_request", "push", "fallback"}
@@ -26,6 +36,7 @@ func newPlanCmd() *cobra.Command {
 		eventType      string
 		apps           string
 		version        string
+		incrementMajor bool
 		incrementMinor bool
 		incrementPatch bool
 		baseCommit     string
@@ -47,13 +58,13 @@ func newPlanCmd() *cobra.Command {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Error: format must be one of: json, github\n")
 				return fmt.Errorf("invalid format")
 			}
-			versionOpts := boolCount(version != "", incrementMinor, incrementPatch)
+			versionOpts := boolCount(version != "", incrementMajor, incrementMinor, incrementPatch)
 			if versionOpts > 1 {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Error: --version, --increment-minor, and --increment-patch are mutually exclusive\n")
+				fmt.Fprintf(cmd.ErrOrStderr(), "Error: --version, --increment-major, --increment-minor, and --increment-patch are mutually exclusive\n")
 				return fmt.Errorf("mutually exclusive options")
 			}
 			if eventType == "workflow_dispatch" && versionOpts == 0 {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Error: manual releases require --version, --increment-minor, or --increment-patch\n")
+				fmt.Fprintf(cmd.ErrOrStderr(), "Error: manual releases require --version, --increment-major, --increment-minor, or --increment-patch\n")
 				return fmt.Errorf("missing version option")
 			}
 			if version != "" && version != "latest" && !semverRE.MatchString(version) {
@@ -70,6 +81,7 @@ func newPlanCmd() *cobra.Command {
 				eventType:      eventType,
 				requestedApps:  apps,
 				version:        version,
+				incrementMajor: incrementMajor,
 				incrementMinor: incrementMinor,
 				incrementPatch: incrementPatch,
 				baseCommit:     baseCommit,
@@ -99,6 +111,7 @@ func newPlanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&eventType, "event-type", "", "Type of trigger event")
 	cmd.Flags().StringVar(&apps, "apps", "", "Comma-separated list of apps, domain names, or 'all'")
 	cmd.Flags().StringVar(&version, "version", "", "Release version")
+	cmd.Flags().BoolVar(&incrementMajor, "increment-major", false, "Auto-increment major version")
 	cmd.Flags().BoolVar(&incrementMinor, "increment-minor", false, "Auto-increment minor version")
 	cmd.Flags().BoolVar(&incrementPatch, "increment-patch", false, "Auto-increment patch version")
 	cmd.Flags().StringVar(&baseCommit, "base-commit", "", "Compare changes against this commit")
@@ -111,6 +124,7 @@ type planParams struct {
 	eventType      string
 	requestedApps  string
 	version        string
+	incrementMajor bool
 	incrementMinor bool
 	incrementPatch bool
 	baseCommit     string
@@ -148,7 +162,7 @@ func planRelease(p planParams) (*PlanResult, error) {
 				return nil, err
 			}
 		}
-		if err := assignVersions(releaseApps, p.version, p.incrementMinor, p.incrementPatch, p.git, perAppVersions); err != nil {
+		if err := assignVersions(releaseApps, p.version, p.incrementMajor, p.incrementMinor, p.incrementPatch, p.git, perAppVersions); err != nil {
 			return nil, err
 		}
 
@@ -235,16 +249,19 @@ func buildPlanResult(apps []AppMetadata, version, eventType string, perAppVersio
 // (keyed by the app's FullName). AppManifest.Version — the manifest's own
 // declared default (normally "latest") — is left untouched: it describes
 // the app definition, not the version being planned for this release.
-func assignVersions(apps []AppMetadata, version string, minor, patch bool, git GitRunner, out map[string]string) error {
+func assignVersions(apps []AppMetadata, version string, major, minor, patch bool, git GitRunner, out map[string]string) error {
 	for i := range apps {
 		if version != "" {
 			out[apps[i].FullName()] = version
 			continue
 		}
-		if minor || patch {
-			incrementType := "minor"
-			if patch {
-				incrementType = "patch"
+		if major || minor || patch {
+			incrementType := "patch"
+			switch {
+			case major:
+				incrementType = "major"
+			case minor:
+				incrementType = "minor"
 			}
 			newVer, err := autoIncrementVersion(apps[i].Domain, apps[i].Name, incrementType, git)
 			if err != nil {
@@ -256,7 +273,12 @@ func assignVersions(apps []AppMetadata, version string, minor, patch bool, git G
 	return nil
 }
 
-// autoIncrementVersion computes the next version for an app based on git tags.
+// autoIncrementVersion computes the next version for an app based on git
+// tags. This is the live, git-tag-based path AR-5's AllocateVersion is
+// meant to eventually replace (per domain, once a domain is cut over to
+// adoption stage "allocate") — see tools/app_registry/PLAN.md's AR-5. It is
+// deliberately untouched by AR-5a beyond gaining "major" alongside the
+// pre-existing "minor"/"patch": no call site here talks to the registry.
 func autoIncrementVersion(domain, name, incrementType string, git GitRunner) (string, error) {
 	prefix := fmt.Sprintf("%s-%s.", domain, name)
 	tagsOut, err := git.Run("tag", "--sort=-version:refname", "--list", prefix+"v*")
@@ -277,28 +299,23 @@ func autoIncrementVersion(domain, name, incrementType string, git GitRunner) (st
 	return incrementVersion(ver, incrementType)
 }
 
+// incrementVersion bumps ver (accepting an optional "v" prefix and
+// prerelease suffix, which is stripped — matching this function's
+// pre-existing behaviour) by incrementType ("major", "minor", or "patch"),
+// via the shared libs/go/semver parser rather than a second hand-rolled one.
+// See tools/app_registry/PLAN.md's AR-5 addendum item 1: chart bumping
+// (build_helm.go) already accepted all three; "major" was the one this
+// function was missing.
 func incrementVersion(ver, incrementType string) (string, error) {
-	ver = strings.TrimPrefix(ver, "v")
-	// strip prerelease
-	if idx := strings.Index(ver, "-"); idx >= 0 {
-		ver = ver[:idx]
+	v, err := sharedsemver.Parse(ver)
+	if err != nil {
+		return "", fmt.Errorf("invalid version: %s", strings.TrimPrefix(ver, "v"))
 	}
-	parts := strings.Split(ver, ".")
-	if len(parts) != 3 {
-		return "", fmt.Errorf("invalid version: %s", ver)
+	next, err := v.Increment(incrementType)
+	if err != nil {
+		return "", err
 	}
-	var major, minor, patch int
-	fmt.Sscanf(parts[0], "%d", &major)
-	fmt.Sscanf(parts[1], "%d", &minor)
-	fmt.Sscanf(parts[2], "%d", &patch)
-	switch incrementType {
-	case "minor":
-		return fmt.Sprintf("v%d.%d.0", major, minor+1), nil
-	case "patch":
-		return fmt.Sprintf("v%d.%d.%d", major, minor, patch+1), nil
-	default:
-		return "", fmt.Errorf("unknown increment type: %s", incrementType)
-	}
+	return next.String(), nil
 }
 
 // resolveApps matches requested app names (full, short, or domain) against allApps.
@@ -337,7 +354,9 @@ func resolveApps(requested []string, allApps []AppMetadata) ([]AppMetadata, erro
 				continue
 			}
 			names := make([]string, len(nameApps))
-			for i, a := range nameApps { names[i] = a.FullName() }
+			for i, a := range nameApps {
+				names[i] = a.FullName()
+			}
 			invalid = append(invalid, fmt.Sprintf("%s (ambiguous: %s)", req, strings.Join(names, ", ")))
 			continue
 		}
@@ -388,7 +407,11 @@ func boolCount(bs ...bool) int {
 }
 
 func isValidEventType(et string) bool {
-	for _, v := range validEventTypes { if et == v { return true } }
+	for _, v := range validEventTypes {
+		if et == v {
+			return true
+		}
+	}
 	return false
 }
 

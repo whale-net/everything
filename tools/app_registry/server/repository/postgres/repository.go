@@ -51,6 +51,9 @@ func (r *Registry) Environments() repository.EnvironmentRepository {
 }
 func (r *Registry) Promotions() repository.PromotionRepository { return &promotionRepo{ex: r.ex} }
 func (r *Registry) Writeback() repository.WritebackRepository  { return &writebackRepo{ex: r.ex} }
+func (r *Registry) DomainAdoption() repository.DomainAdoptionRepository {
+	return &domainAdoptionRepo{ex: r.ex}
+}
 
 // WithTx runs fn inside a single Postgres transaction, committing iff fn
 // returns nil and rolling back otherwise. This is the atomicity boundary

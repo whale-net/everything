@@ -90,6 +90,33 @@ type ArtifactRepository interface {
 	// and their originating builds. lookup identifies the chart artifact by
 	// artifact_id or digest.
 	ResolveArtifact(ctx context.Context, lookup ArtifactLookup) (artifact *Artifact, images []Artifact, builds []Build, err error)
+
+	// AllocateVersion reserves the next version for (kind, ownerID) per
+	// ARCHITECTURE.md's version model (AR-5) and PLAN.md's AR-5 addendum:
+	// increment is "major"|"minor"|"patch" and is ignored when
+	// explicitVersion is set. Implementations must perform this as a
+	// transactional INSERT against a unique (owner, kind, version)
+	// constraint so concurrent callers cannot be handed the same version —
+	// see ARCHITECTURE.md and postgres/errors.go's doc comment on
+	// ErrAlreadyExists. Must be called inside Registry.WithTx: a
+	// unique-constraint collision aborts the whole transaction (the
+	// "transaction abort" hazard PLAN.md flags), so a caller retrying on
+	// ErrAlreadyExists MUST do so in a FRESH WithTx call, not the same one —
+	// see server/handlers/artifact.go's AllocateVersion for the retry loop.
+	AllocateVersion(ctx context.Context, kind ArtifactKind, ownerID, increment, explicitVersion string) (*VersionAllocation, error)
+}
+
+// DomainAdoptionRepository covers the `domain_adoption` table (migration
+// 001), which gates the per-domain cutover described in ARCHITECTURE.md
+// "Resolved questions" #3. Recording (AR-2) is never gated on this; only
+// AllocateVersion (AR-5) is.
+type DomainAdoptionRepository interface {
+	// GetStage returns domain's current adoption stage, defaulting to
+	// DomainAdoptionStageObserve when no row exists yet — every domain
+	// starts at "observe" implicitly; a row is written only on explicit
+	// cutover (there is no bulk-seed of one row per domain, unlike
+	// `environment`'s dev/stage/prod seed).
+	GetStage(ctx context.Context, domain string) (DomainAdoptionStage, error)
 }
 
 // IdempotencyRepository stores key -> serialized response for write RPCs.
@@ -225,6 +252,7 @@ type Registry interface {
 	Environments() EnvironmentRepository
 	Promotions() PromotionRepository
 	Writeback() WritebackRepository
+	DomainAdoption() DomainAdoptionRepository
 
 	WithTx(ctx context.Context, fn func(ctx context.Context, r Registry) error) error
 }

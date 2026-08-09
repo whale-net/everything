@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "app.go",
         "artifact.go",
+        "domain_adoption.go",
         "environment.go",
         "errors.go",
         "idempotency.go",
@@ -15,6 +16,7 @@ go_library(
     importpath = "github.com/whale-net/everything/tools/app_registry/server/repository/postgres",
     visibility = ["//visibility:public"],
     deps = [
+        "//libs/go/semver",
         "//tools/app_registry/server/repository",
         "//tools/appmeta/proto:appmetapb",
         "@com_github_google_uuid//:uuid",
@@ -74,5 +76,7 @@ go_test(
         "@com_github_jackc_pgx_v5//pgconn",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@com_github_jackc_pgx_v5//stdlib",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
     ],
 )

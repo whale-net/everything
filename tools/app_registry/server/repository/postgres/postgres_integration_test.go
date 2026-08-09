@@ -19,12 +19,16 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver for the migration runner
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/grpcauth"
@@ -951,5 +955,294 @@ func TestEnvironmentRepo_UpsertCreateThenUpdate(t *testing.T) {
 	}
 	if len(updated.AllowedPrincipals) != 2 {
 		t.Fatalf("expected allowed_principals persisted as a real TEXT[] round-trip, got %+v", updated.AllowedPrincipals)
+	}
+}
+
+// --- 7. version allocation (AR-5a) --------------------------------------
+
+// setDomainAdoptionStage cuts domain over directly via SQL -- there is no
+// RPC to do this in AR-5a (see PLAN.md's AR-5 status), the same way a real
+// operator would today: `INSERT ... ON CONFLICT DO UPDATE` against
+// domain_adoption.
+func setDomainAdoptionStage(t *testing.T, pool *pgxpool.Pool, domain, stage string) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(), `
+		INSERT INTO domain_adoption (domain, stage) VALUES ($1, $2)
+		ON CONFLICT (domain) DO UPDATE SET stage = EXCLUDED.stage`, domain, stage)
+	if err != nil {
+		t.Fatalf("set domain_adoption stage for %s: %v", domain, err)
+	}
+}
+
+// allocateVersionTx runs Artifacts().AllocateVersion inside a real WithTx
+// transaction, exactly as handlers.ArtifactServer.AllocateVersion's retry
+// loop does in production -- the postgres repository method relies on its
+// caller providing transactional scope.
+func allocateVersionTx(t *testing.T, reg *Registry, kind repository.ArtifactKind, ownerID, increment, explicitVersion string) (*repository.VersionAllocation, error) {
+	t.Helper()
+	var out *repository.VersionAllocation
+	err := reg.WithTx(context.Background(), func(ctx context.Context, r repository.Registry) error {
+		var ferr error
+		out, ferr = r.Artifacts().AllocateVersion(ctx, kind, ownerID, increment, explicitVersion)
+		return ferr
+	})
+	return out, err
+}
+
+// TestAllocateVersion_OrderingIsNumericNotLexical is the specific bug
+// PLAN.md's AR-5 addendum item 2 exists to prevent: with a v1.9.0 artifact
+// already recorded, the next patch allocation must be v1.9.1 -- if
+// "latest" were computed by ORDER BY on the TEXT `version` column instead
+// of the version_major/minor/patch integer columns, "v1.9.0" would sort
+// ABOVE "v1.10.0" lexically and this would go wrong the moment a major/minor
+// version reaches double digits. This seeds v1.10.0 as a decoy: if ordering
+// ever reverted to the TEXT column, "v1.10.0" (lexically greater than
+// "v1.9.0") would be picked as "latest" and patched to v1.10.1 -- silently
+// wrong versus the numerically-correct v1.9.1.
+func TestAllocateVersion_OrderingIsNumericNotLexical(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+
+	appID := seedApp(t, pool, "acme", "widget", "image")
+	buildID := seedBuild(t, pool, "run-order")
+	setDomainAdoptionStage(t, pool, "acme", "allocate")
+
+	// Record v1.10.0 FIRST, then v1.9.0 -- insertion order must not matter;
+	// only the numeric columns should. Both use recordArtifactTx so
+	// version_major/minor/patch are populated exactly as production does.
+	if _, _, err := recordArtifactTx(t, reg, repository.Artifact{
+		Kind: repository.ArtifactKindImage, AppID: appID,
+		Repository: "ghcr.io/acme/widget", Version: "v1.10.0",
+		Digest: "sha256:order-v1-10-0", BuildID: buildID,
+	}, nil); err != nil {
+		t.Fatalf("seed v1.10.0: %v", err)
+	}
+	if _, _, err := recordArtifactTx(t, reg, repository.Artifact{
+		Kind: repository.ArtifactKindImage, AppID: appID,
+		Repository: "ghcr.io/acme/widget", Version: "v1.9.0",
+		Digest: "sha256:order-v1-9-0", BuildID: buildID,
+	}, nil); err != nil {
+		t.Fatalf("seed v1.9.0: %v", err)
+	}
+
+	alloc, err := allocateVersionTx(t, reg, repository.ArtifactKindImage, appID, "patch", "")
+	if err != nil {
+		t.Fatalf("AllocateVersion: %v", err)
+	}
+	if alloc.PreviousVersion != "v1.10.0" {
+		t.Fatalf("expected numeric ordering to pick v1.10.0 as latest (not v1.9.0), got previous_version=%q", alloc.PreviousVersion)
+	}
+	if alloc.Version != "v1.10.1" {
+		t.Fatalf("expected the next patch after v1.10.0 to be v1.10.1, got %q (a lexical-ordering bug would produce v1.9.1's sibling from the wrong base)", alloc.Version)
+	}
+}
+
+// TestAllocateVersion_ConcurrentCallsNeverCollide drives real concurrent
+// goroutines, each opening its own transaction via reg.WithTx, racing to
+// allocate the same owner's next patch version. The unique index on
+// version_allocation (owner_id, kind, version) — not application-level
+// locking — is what PLAN.md and ARCHITECTURE.md promise makes this safe;
+// this test would go red if AllocateVersion were changed to compute "next"
+// without that constraint backing it (e.g. reading and returning a version
+// without inserting anything transactionally first).
+func TestAllocateVersion_ConcurrentCallsNeverCollide(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	appID := seedApp(t, pool, "acme", "widget", "image")
+	setDomainAdoptionStage(t, pool, "acme", "allocate")
+
+	const workers = 8
+	var wg sync.WaitGroup
+	versions := make([]string, workers)
+	errs := make([]error, workers)
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			// Mirrors handlers.ArtifactServer.AllocateVersion's retry loop:
+			// a unique-violation aborts the transaction, so each retry opens
+			// a FRESH one via allocateVersionTx.
+			for attempt := 0; attempt < 20; attempt++ {
+				alloc, err := allocateVersionTx(t, reg, repository.ArtifactKindImage, appID, "patch", "")
+				if err == nil {
+					versions[idx] = alloc.Version
+					return
+				}
+				if !errors.Is(err, repository.ErrAlreadyExists) {
+					errs[idx] = err
+					return
+				}
+			}
+			errs[idx] = fmt.Errorf("worker %d: exhausted retries", idx)
+		}(i)
+	}
+	wg.Wait()
+
+	seen := map[string]int{}
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("worker %d: %v", i, err)
+		}
+		seen[versions[i]]++
+	}
+	for v, count := range seen {
+		if count > 1 {
+			t.Fatalf("version %s was allocated %d times concurrently -- expected every one of %d concurrent allocations to be unique, got %v", v, count, workers, versions)
+		}
+	}
+	if len(seen) != workers {
+		t.Fatalf("expected %d distinct versions from %d concurrent allocations, got %d: %v", workers, workers, len(seen), versions)
+	}
+
+	var allocationRows int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM version_allocation WHERE owner_id = $1`, appID).Scan(&allocationRows); err != nil {
+		t.Fatalf("count version_allocation rows: %v", err)
+	}
+	if allocationRows != workers {
+		t.Fatalf("expected exactly %d version_allocation rows (one per successful allocation, no double-writes from retries), found %d", workers, allocationRows)
+	}
+}
+
+// TestAllocateVersion_IdempotencyKeyReplay proves the same idempotency-key
+// replay guarantee ArtifactServer's other write RPCs have, driven through
+// the real handler against real Postgres (not the fake) -- see
+// handlers/artifact_test.go's TestAllocateVersion_IdempotencyKeyReplay for
+// the fake-backed version of this same proof.
+func TestAllocateVersion_IdempotencyKeyReplay(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	seedApp(t, pool, "acme", "widget", "image")
+	setDomainAdoptionStage(t, pool, "acme", "allocate")
+
+	srv := handlers.NewArtifactServer(reg)
+	req := &pb.AllocateVersionRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "acme-widget",
+		Increment: "patch", IdempotencyKey: "replay-key",
+	}
+
+	first, err := srv.AllocateVersion(ctx, req)
+	if err != nil {
+		t.Fatalf("first AllocateVersion: %v", err)
+	}
+	if first.AlreadyAllocated {
+		t.Fatalf("expected already_allocated=false on the first call")
+	}
+
+	second, err := srv.AllocateVersion(ctx, req)
+	if err != nil {
+		t.Fatalf("replayed AllocateVersion: %v", err)
+	}
+	if second.Version != first.Version {
+		t.Fatalf("replay allocated a NEW version instead of returning the stored one: first=%q second=%q", first.Version, second.Version)
+	}
+	if !second.AlreadyAllocated {
+		t.Fatalf("expected already_allocated=true on the replayed call")
+	}
+
+	var allocationRows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM version_allocation`).Scan(&allocationRows); err != nil {
+		t.Fatalf("count version_allocation rows: %v", err)
+	}
+	if allocationRows != 1 {
+		t.Fatalf("idempotency replay double-wrote: expected exactly 1 version_allocation row, found %d", allocationRows)
+	}
+}
+
+// TestAllocateVersion_AdoptionStageGateRejectsNonAllocateDomain proves the
+// per-domain cutover gate end to end through the real handler: a domain
+// with no domain_adoption row (every domain's implicit default -- see
+// migration 001) is rejected, and only after being explicitly cut over does
+// the identical request succeed.
+func TestAllocateVersion_AdoptionStageGateRejectsNonAllocateDomain(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	seedApp(t, pool, "acme", "widget", "image")
+
+	srv := handlers.NewArtifactServer(reg)
+	req := &pb.AllocateVersionRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "acme-widget",
+		Increment: "patch", IdempotencyKey: "gate-1",
+	}
+
+	_, err := srv.AllocateVersion(ctx, req)
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition for a domain with no domain_adoption row, got %v", err)
+	}
+
+	setDomainAdoptionStage(t, pool, "acme", "allocate")
+	resp, err := srv.AllocateVersion(ctx, req)
+	if err != nil {
+		t.Fatalf("expected success once 'acme' is cut over to 'allocate', got %v", err)
+	}
+	if resp.Version != "v0.0.1" {
+		t.Fatalf("expected the first-ever patch allocation to be v0.0.1, got %q", resp.Version)
+	}
+}
+
+// TestMigration004BackfillsVersionColumns proves migration 004's backfill:
+// a pre-existing artifact row (inserted directly via SQL as it would have
+// been before this migration existed) gets its version_major/minor/patch
+// populated correctly, and an unparseable legacy version is backfilled to
+// the documented 0/0/0 sentinel rather than blocking the migration -- see
+// 005_version_allocation.up.sql's comments for the decision.
+//
+// newTestRegistry already applies every migration including 004 before this
+// test runs, so this proves the backfill UPDATE that ran as PART of 004
+// against rows that existed in 001's `artifact` table state at that point
+// in the migration sequence.
+func TestMigration004BackfillsVersionColumns(t *testing.T) {
+	// This needs artifact rows to exist BEFORE migration 004 runs, so it
+	// can't use newTestRegistry (which applies every migration up front).
+	// Instead: apply only 001-003, insert rows directly (bypassing the
+	// version_major/minor/patch columns that don't exist yet), then apply
+	// 004 and assert the backfill.
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	if err != nil {
+		t.Fatalf("open database/sql handle: %v", err)
+	}
+	defer sqlDB.Close()
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	if err := runner.Steps(3); err != nil {
+		t.Fatalf("apply migrations 001-003: %v", err)
+	}
+
+	appID := seedApp(t, db.Pool, "acme", "widget", "image")
+	buildID := seedBuild(t, db.Pool, "run-backfill")
+
+	type seed struct{ digest, version string }
+	seeds := []seed{
+		{"sha256:backfill-clean", "v3.4.5"},
+		{"sha256:backfill-garbage", "not-a-version-at-all"},
+	}
+	for _, s := range seeds {
+		if _, err := db.Pool.Exec(ctx, `
+			INSERT INTO artifact (kind, app_id, repository, version, digest, build_id)
+			VALUES ('image', $1, 'ghcr.io/acme/widget', $2, $3, $4)`,
+			appID, s.version, s.digest, buildID); err != nil {
+			t.Fatalf("seed pre-migration-004 artifact %s: %v", s.digest, err)
+		}
+	}
+
+	if err := runner.Up(); err != nil {
+		t.Fatalf("apply migration 004 (and any later): %v", err)
+	}
+
+	type got struct{ major, minor, patch int }
+	fetch := func(digest string) got {
+		var g got
+		if err := db.Pool.QueryRow(ctx, `SELECT version_major, version_minor, version_patch FROM artifact WHERE digest = $1`, digest).Scan(&g.major, &g.minor, &g.patch); err != nil {
+			t.Fatalf("read back backfilled columns for %s: %v", digest, err)
+		}
+		return g
+	}
+
+	if g := fetch("sha256:backfill-clean"); g != (got{3, 4, 5}) {
+		t.Fatalf("expected v3.4.5 to backfill to (3,4,5), got %+v", g)
+	}
+	if g := fetch("sha256:backfill-garbage"); g != (got{0, 0, 0}) {
+		t.Fatalf("expected an unparseable legacy version to backfill to the documented 0/0/0 sentinel, got %+v", g)
 	}
 }

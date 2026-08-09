@@ -15,6 +15,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//libs/go/grpcauth",
+        "//libs/go/semver",
         "//tools/app_registry/protos:appregistrypb",
         "//tools/app_registry/server/auth",
         "//tools/app_registry/server/repository",
@@ -39,6 +40,7 @@ go_test(
         "//libs/go/grpcauth",
         "//tools/app_registry/protos:appregistrypb",
         "//tools/app_registry/server/auth",
+        "//tools/app_registry/server/repository",
         "//tools/app_registry/server/repository/fake",
         "//tools/appmeta/proto:appmetapb",
         "@org_golang_google_grpc//codes",

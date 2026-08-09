@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	"github.com/whale-net/everything/tools/app_registry/server/repository/fake"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 	"google.golang.org/grpc/codes"
@@ -284,10 +285,198 @@ func TestRecordArtifact_RejectsMissingIdempotencyKey(t *testing.T) {
 	}
 }
 
-func TestArtifactServer_AllocateVersionStillUnimplemented(t *testing.T) {
-	_, artifactSrv, _ := setup(t)
-	_, err := artifactSrv.AllocateVersion(authedCtx(), &pb.AllocateVersionRequest{})
-	if status.Code(err) != codes.Unimplemented {
-		t.Fatalf("expected Unimplemented, got %v", err)
+// setupAllocate builds its own fake registry (rather than reusing setup(t))
+// because AllocateVersion tests need direct access to the fake so they can
+// set a domain's adoption stage via fake.Registry.SetDomainAdoptionStage —
+// there is no RPC to do that in this change (see PLAN.md's AR-5 status).
+func setupAllocate(t *testing.T) (*fake.Registry, *ArtifactServer) {
+	t.Helper()
+	repo := fake.New()
+	appSrv := NewAppServer(repo)
+	artifactSrv := NewArtifactServer(repo)
+	ctx := authedCtx()
+
+	if _, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: manifestSet([]*appmetapb.AppManifest{
+			{Domain: "demo", Name: "image-app", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
+		}, nil),
+		IdempotencyKey: "setup-allocate-1",
+	}); err != nil {
+		t.Fatalf("setupAllocate reconcile: %v", err)
+	}
+	return repo, artifactSrv
+}
+
+// TestAllocateVersion_ValidationErrors covers the request-shape checks that
+// run before the adoption-stage gate or any repository call.
+func TestAllocateVersion_ValidationErrors(t *testing.T) {
+	_, artifactSrv := setupAllocate(t)
+	ctx := authedCtx()
+
+	cases := []struct {
+		name string
+		req  *pb.AllocateVersionRequest
+	}{
+		{"missing kind", &pb.AllocateVersionRequest{OwnerFullName: "demo-image-app", Increment: "patch", IdempotencyKey: "k"}},
+		{"missing owner", &pb.AllocateVersionRequest{Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, Increment: "patch", IdempotencyKey: "k"}},
+		{"missing idempotency key", &pb.AllocateVersionRequest{Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app", Increment: "patch"}},
+		{"bad increment", &pb.AllocateVersionRequest{Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app", Increment: "bogus", IdempotencyKey: "k"}},
+		{"prerelease explicit_version", &pb.AllocateVersionRequest{Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app", ExplicitVersion: "v1.2.3-alpha", IdempotencyKey: "k"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := artifactSrv.AllocateVersion(ctx, tc.req)
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("expected InvalidArgument, got %v", err)
+			}
+		})
+	}
+}
+
+// TestAllocateVersion_AdoptionStageGate proves the per-domain cutover gate:
+// a domain that has never been set to "allocate" (every domain, as of
+// AR-5a — see PLAN.md's AR-5 status) is rejected with FailedPrecondition,
+// and only after the fixture explicitly cuts "demo" over does the same
+// request succeed. This is the mechanism a future phase would use to cut a
+// real domain over — see fake.Registry.SetDomainAdoptionStage's doc comment
+// and postgres_integration_test.go's version of this same proof against a
+// real domain_adoption row.
+func TestAllocateVersion_AdoptionStageGate(t *testing.T) {
+	repo, artifactSrv := setupAllocate(t)
+	ctx := authedCtx()
+
+	req := &pb.AllocateVersionRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Increment: "patch", IdempotencyKey: "gate-1",
+	}
+	_, err := artifactSrv.AllocateVersion(ctx, req)
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition for a domain not at stage 'allocate', got %v", err)
+	}
+
+	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
+	resp, err := artifactSrv.AllocateVersion(ctx, req)
+	if err != nil {
+		t.Fatalf("expected success once 'demo' is cut over to 'allocate', got %v", err)
+	}
+	if resp.Version != "v0.0.1" {
+		t.Fatalf("expected first patch allocation to be v0.0.1, got %q", resp.Version)
+	}
+}
+
+// TestAllocateVersion_IncrementsFromLatestRecordedArtifact proves
+// AllocateVersion accounts for artifacts already recorded via
+// RecordArtifact, not just prior allocations, and that major/minor/patch
+// all behave as PLAN.md's AR-5 addendum item 1 specifies.
+func TestAllocateVersion_IncrementsFromLatestRecordedArtifact(t *testing.T) {
+	cases := []struct {
+		increment string
+		want      string
+	}{
+		{"patch", "v1.2.4"},
+		{"minor", "v1.3.0"},
+		{"major", "v2.0.0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.increment, func(t *testing.T) {
+			// A fresh registry per case: each must increment from the SAME
+			// seeded v1.2.3, not from a previous subtest's allocation.
+			repo, artifactSrv := setupAllocate(t)
+			ctx := authedCtx()
+			repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
+
+			build := recordBuild(t, artifactSrv, "run-allocate-seed-"+tc.increment)
+			if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+				BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+				OwnerFullName: "demo-image-app", Digest: "sha256:seed-" + tc.increment, Version: "v1.2.3",
+				IdempotencyKey: "seed-artifact-" + tc.increment,
+			}); err != nil {
+				t.Fatalf("seed RecordArtifact: %v", err)
+			}
+
+			resp, err := artifactSrv.AllocateVersion(ctx, &pb.AllocateVersionRequest{
+				Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+				Increment: tc.increment, IdempotencyKey: "alloc-" + tc.increment,
+			})
+			if err != nil {
+				t.Fatalf("AllocateVersion(%s): %v", tc.increment, err)
+			}
+			if resp.Version != tc.want {
+				t.Fatalf("AllocateVersion(%s) = %q, want %q", tc.increment, resp.Version, tc.want)
+			}
+			if resp.PreviousVersion != "v1.2.3" {
+				t.Fatalf("AllocateVersion(%s): expected previous_version v1.2.3, got %q", tc.increment, resp.PreviousVersion)
+			}
+		})
+	}
+}
+
+// TestAllocateVersion_IdempotencyKeyReplay proves a repeated call with the
+// same idempotency_key returns the SAME version with already_allocated set,
+// rather than allocating a second version — the AllocateVersion analogue of
+// TestRecordBuild_IdempotencyKeyReplay_DoesNotDoubleWrite.
+func TestAllocateVersion_IdempotencyKeyReplay(t *testing.T) {
+	repo, artifactSrv := setupAllocate(t)
+	ctx := authedCtx()
+	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
+
+	req := &pb.AllocateVersionRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Increment: "patch", IdempotencyKey: "replay-key",
+	}
+	first, err := artifactSrv.AllocateVersion(ctx, req)
+	if err != nil {
+		t.Fatalf("first AllocateVersion: %v", err)
+	}
+	if first.AlreadyAllocated {
+		t.Fatalf("expected already_allocated=false on the first call")
+	}
+
+	second, err := artifactSrv.AllocateVersion(ctx, req)
+	if err != nil {
+		t.Fatalf("replayed AllocateVersion: %v", err)
+	}
+	if second.Version != first.Version {
+		t.Fatalf("replay allocated a different version: first=%q second=%q", first.Version, second.Version)
+	}
+	if !second.AlreadyAllocated {
+		t.Fatalf("expected already_allocated=true on the replayed call")
+	}
+
+	// A DIFFERENT idempotency key must allocate a genuinely new version.
+	third, err := artifactSrv.AllocateVersion(ctx, &pb.AllocateVersionRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Increment: "patch", IdempotencyKey: "different-key",
+	})
+	if err != nil {
+		t.Fatalf("third AllocateVersion: %v", err)
+	}
+	if third.Version == first.Version {
+		t.Fatalf("expected a fresh idempotency key to allocate a NEW version, got the same one: %q", third.Version)
+	}
+}
+
+// TestAllocateVersion_ExplicitVersionCollisionFails proves the "fails if
+// taken" contract for explicit_version from
+// api_messages_artifact.proto's AllocateVersionRequest doc comment.
+func TestAllocateVersion_ExplicitVersionCollisionFails(t *testing.T) {
+	repo, artifactSrv := setupAllocate(t)
+	ctx := authedCtx()
+	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
+
+	req := &pb.AllocateVersionRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		ExplicitVersion: "v5.0.0", IdempotencyKey: "explicit-1",
+	}
+	if _, err := artifactSrv.AllocateVersion(ctx, req); err != nil {
+		t.Fatalf("first explicit allocation: %v", err)
+	}
+
+	_, err := artifactSrv.AllocateVersion(ctx, &pb.AllocateVersionRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		ExplicitVersion: "v5.0.0", IdempotencyKey: "explicit-2",
+	})
+	if status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("expected AlreadyExists for a taken explicit_version, got %v", err)
 	}
 }

@@ -8,9 +8,30 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/whale-net/everything/libs/go/semver"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
+
+// parseVersionTriple parses v into (major, minor, patch) for the
+// version_major/minor/patch columns migration 004 added. Mirrors the
+// migration's own backfill decision exactly (see 005_version_allocation.up.sql):
+// a version that doesn't parse becomes the 0/0/0 sentinel rather than
+// failing the write, so an unparseable/legacy version can never win a
+// "latest" ORDER BY ... DESC query but the row is still written. This is
+// deliberately lenient (unlike AllocateVersion's ParseRelease, which
+// rejects prerelease/build metadata outright) because RecordArtifact
+// already accepts only v<major>.<minor>.<patch> at the handler layer
+// (see handlers/artifact.go's semverRe) — by the time SQL sees a version
+// here it is expected to be clean, but this must never be the reason a
+// write fails.
+func parseVersionTriple(v string) (major, minor, patch int) {
+	parsed, err := semver.Parse(v)
+	if err != nil {
+		return 0, 0, 0
+	}
+	return parsed.Major, parsed.Minor, parsed.Patch
+}
 
 // ============================================================================
 // BuildRepository
@@ -132,11 +153,12 @@ func (r *artifactRepo) RecordArtifact(ctx context.Context, a repository.Artifact
 	// afterwards fails too and ownerFullName would degrade to the raw UUID —
 	// which is exactly what a client should never be shown.
 	ownerName := r.ownerFullName(ctx, a)
+	versionMajor, versionMinor, versionPatch := parseVersionTriple(a.Version)
 
 	if _, err := r.ex.Exec(ctx, `
-		INSERT INTO artifact (artifact_id, kind, app_id, chart_id, repository, version, digest, build_id, published_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		a.ArtifactID, string(a.Kind), appID, chartID, a.Repository, a.Version, a.Digest, a.BuildID, a.PublishedAt); err != nil {
+		INSERT INTO artifact (artifact_id, kind, app_id, chart_id, repository, version, digest, build_id, published_at, version_major, version_minor, version_patch)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		a.ArtifactID, string(a.Kind), appID, chartID, a.Repository, a.Version, a.Digest, a.BuildID, a.PublishedAt, versionMajor, versionMinor, versionPatch); err != nil {
 		msg := fmt.Sprintf("artifact %s %s already recorded", ownerName, a.Version)
 		if de, ok := translatePgError(err, msg); ok {
 			return nil, false, de
@@ -343,4 +365,76 @@ func (r *artifactRepo) ResolveArtifact(ctx context.Context, lookup repository.Ar
 	a.Contains = links
 
 	return a, images, builds, nil
+}
+
+// ============================================================================
+// AllocateVersion (AR-5a)
+// ============================================================================
+
+// AllocateVersion implements repository.ArtifactRepository.AllocateVersion.
+// See that interface's doc comment and migration 004's comments for why this
+// writes to `version_allocation` rather than `artifact`, and
+// server/handlers/artifact.go's AllocateVersion for the retry loop this is
+// designed to be called from (a unique-constraint collision here aborts the
+// surrounding transaction; the caller must retry in a fresh one).
+func (r *artifactRepo) AllocateVersion(ctx context.Context, kind repository.ArtifactKind, ownerID, increment, explicitVersion string) (*repository.VersionAllocation, error) {
+	// "Next" is computed from the highest version already claimed for this
+	// owner+kind, across BOTH the real artifact table (already-published
+	// versions) and version_allocation (reserved but not yet published) --
+	// a version reserved a moment ago by a concurrent caller must not be
+	// handed out again just because RecordArtifact hasn't run yet.
+	row := r.ex.QueryRow(ctx, `
+		SELECT version, version_major, version_minor, version_patch FROM (
+			SELECT version, version_major, version_minor, version_patch
+			  FROM artifact WHERE owner_id = $1 AND kind = $2
+			UNION ALL
+			SELECT version, version_major, version_minor, version_patch
+			  FROM version_allocation WHERE owner_id = $1 AND kind = $2
+		) claimed
+		ORDER BY version_major DESC, version_minor DESC, version_patch DESC
+		LIMIT 1`, ownerID, string(kind))
+
+	var previousVersion string
+	var curMajor, curMinor, curPatch int
+	hasPrevious := true
+	switch err := row.Scan(&previousVersion, &curMajor, &curMinor, &curPatch); {
+	case errors.Is(err, pgx.ErrNoRows):
+		hasPrevious = false
+	case err != nil:
+		return nil, fmt.Errorf("determine current version for allocation: %w", err)
+	}
+
+	var next semver.Version
+	if explicitVersion != "" {
+		v, perr := semver.ParseRelease(explicitVersion)
+		if perr != nil {
+			return nil, fmt.Errorf("%w: %v", repository.ErrInvalidArgument, perr)
+		}
+		next = v
+	} else {
+		base := semver.Version{}
+		if hasPrevious {
+			base = semver.Version{Major: curMajor, Minor: curMinor, Patch: curPatch}
+		}
+		v, ierr := base.Increment(increment)
+		if ierr != nil {
+			return nil, fmt.Errorf("%w: %v", repository.ErrInvalidArgument, ierr)
+		}
+		next = v
+	}
+
+	versionStr := next.String()
+	allocationID := uuid.NewString()
+	if _, err := r.ex.Exec(ctx, `
+		INSERT INTO version_allocation (version_allocation_id, owner_id, kind, version, version_major, version_minor, version_patch)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		allocationID, ownerID, string(kind), versionStr, next.Major, next.Minor, next.Patch); err != nil {
+		msg := fmt.Sprintf("version %s is already allocated or recorded for this owner", versionStr)
+		if de, ok := translatePgError(err, msg); ok {
+			return nil, de
+		}
+		return nil, fmt.Errorf("allocate version %s: %w", versionStr, err)
+	}
+
+	return &repository.VersionAllocation{Version: versionStr, PreviousVersion: previousVersion}, nil
 }

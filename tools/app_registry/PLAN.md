@@ -33,6 +33,10 @@ AR-4b) is now also fully implemented**, stacked on `ar-4a-temporal` /
 workflow, stub activity) is done; the real gitops/S3 publish is deliberately
 still out of scope (see AR-4b below).
 
+**AR-5a (inert foundations) is also done, not merged** — see "AR-5" below
+for what it delivered and what is deliberately still missing before any
+domain can be cut over.
+
 ### AR-3d — CLI + `promote.yml` — done
 
 - `app-registry promote`/`rollback`/`status`/`history`/`diff` filled in
@@ -591,6 +595,85 @@ it as verified before then.
 **Goal:** the registry becomes the version source of truth. Highest risk —
 CI now depends on the registry being up.
 
+### AR-5a — Inert foundations — done, not merged
+
+**Goal:** everything `AllocateVersion` needs, fully implemented and tested,
+with no release able to reach it. See ARCHITECTURE.md's "Version model
+(AR-5a)" for the as-built design.
+
+**Delivered**
+- Migration `005_version_allocation`: `artifact.version_major/minor/patch`
+  (`INT NOT NULL`, backfilled — an unparseable legacy version becomes the
+  documented `0/0/0` sentinel, not a failed deploy) plus
+  `artifact_version_order_idx` for numeric "latest" ordering, and the new
+  `version_allocation` reservation table (own unique index on `(owner_id,
+  kind, version)`, since `AllocateVersionRequest` carries no digest/build_id
+  and `artifact` requires both). `writeback_outbox`'s planned migration
+  number moves from `004` to `005` — see `migrate/README.md`.
+- `libs/go/semver`: the one shared parser/incrementer/comparator. Both
+  `release_helper_go`'s `incrementVersion` (now delegating instead of
+  hand-rolling regex/`strings.Split`) and the registry server consume it —
+  no third copy. `incrementVersion` gained `major`; `plan.go` gained
+  `--increment-major`, purely additive alongside the existing
+  `--increment-minor`/`--increment-patch`.
+- `ArtifactServer.AllocateVersion` fully implemented: validates the request,
+  resolves the owner's domain, checks `domain_adoption.stage == 'allocate'`
+  (`FailedPrecondition` otherwise), then runs a transactional insert into
+  `version_allocation` inside `runIdempotent`'s `WithTx`, retrying in a
+  **fresh** transaction (bounded, 5 attempts) on an auto-increment
+  `ErrAlreadyExists` collision — an `explicit_version` collision is not
+  retried, per the RPC's "fails if taken" contract. Idempotency-key replay
+  sets `already_allocated = true` on the replayed response.
+- `repository.DomainAdoptionRepository.GetStage` (postgres + fake), reading
+  the `domain_adoption` table AR-1's migration already shipped. No write
+  path/RPC exists yet in this change — cutting a domain to `allocate` is a
+  direct `UPDATE domain_adoption` (or a raw INSERT, as the postgres
+  integration tests do) until a real admin path is built.
+- Unit tests (`libs/go/semver`): parse/increment including `major`,
+  rejection of prerelease/build metadata, and the numeric-vs-lexical
+  `Compare` guard directly.
+- Handler tests against the fake (`server/handlers/artifact_test.go`):
+  validation errors, the adoption-stage gate, major/minor/patch increments
+  against a previously recorded artifact, idempotency-key replay, and
+  explicit-version collision.
+- **Real-Postgres integration tests** (mandatory — the fake cannot catch
+  transactional/constraint bugs): `v1.9.0` vs `v1.10.0` ordering (seeded in
+  reverse insertion order — proves the numeric columns, not insertion
+  order, drive "latest"), 8 real concurrent goroutines each opening their
+  own transaction racing to allocate the same owner's next patch (zero
+  collisions, exactly 8 `version_allocation` rows), idempotency-key replay
+  against the real handler, the adoption-stage gate rejecting a domain with
+  no `domain_adoption` row, and migration 004's backfill (a clean version
+  parses correctly, a garbage one backfills to `0/0/0`).
+- **Every guard was deliberately broken and its test confirmed red before
+  reverting**: the ordering index (`ORDER BY version` instead of the
+  integer columns) → `TestAllocateVersion_OrderingIsNumericNotLexical` fails
+  with `previous_version="v1.9.0"` instead of `"v1.10.0"`; the
+  `version_allocation` unique index (made non-unique) →
+  `TestAllocateVersion_ConcurrentCallsNeverCollide` fails with one version
+  allocated 5 times out of 8; the adoption-stage gate (short-circuited with
+  `if false &&`) → both the fake-backed and postgres-backed gate tests fail
+  with `<nil>` instead of `FailedPrecondition`.
+- Docs: this section, ARCHITECTURE.md's "Version model (AR-5a)",
+  `migrate/README.md`'s planned-migrations table.
+
+**Deliberately NOT done — the actual cutover remains AR-5b+**
+- `plan.go`'s `autoIncrementVersion` call site is untouched: the git-tag
+  path is the only one any release can reach, byte-for-byte identical to
+  before this change, for every domain.
+- No domain's `domain_adoption.stage` is set to `allocate` — the table has
+  no rows written by this change at all.
+- No CLI/admin path exists yet to move a domain to `allocate`; that is
+  real, separate scope (probably its own small RPC/CLI surface) before a
+  real cutover can happen without hand-editing the database.
+- Seeding a domain's starting version from its existing tags at cutover
+  time (this section's original scope item) is not implemented — nothing
+  calls it yet, so building it now would be untested and unused.
+- The "allocated versions match tag-scanning" parity check against AR-2 soak
+  data has not been run (the soak itself, gating AR-5's start per this
+  section's own note below, has not happened).
+- The release workflow's version-allocation concurrency group is untouched.
+
 **Scope**
 - Implement `ArtifactRegistry.AllocateVersion` against a unique
   `(owner, kind, version)` constraint.
@@ -616,6 +699,71 @@ CI now depends on the registry being up.
 
 **Do not start** until AR-2's parity check has been clean across a meaningful
 number of real releases.
+
+### Addendum — semver semantics (decided)
+
+Added after an audit of the existing version path found three gaps between
+what `tools/release_helper_go` does today and what the registry needs in order
+to *replace* git tags. These are decided; implement them as specified.
+
+Today `plan.go` parses semver with a regex and bumps by splitting on dots, but
+the "which version is latest" question is answered entirely by
+`git tag --sort=-version:refname` — **git supplies the semver ordering, and it
+disappears along with the tags.**
+
+**1. Major bumps become first-class.** `incrementVersion`'s switch handles only
+`minor` and `patch`; `major` returns `unknown increment type`, and `plan.go`
+exposes only `--increment-minor` / `--increment-patch`. Chart bumping
+(`build_helm.go`) already accepts all three, so the two halves of the release
+system disagree. `AllocateVersionRequest.increment` is already documented as
+`"major" | "minor" | "patch"`.
+
+Add `major` to `incrementVersion` and an `--increment-major` flag to `plan.go`,
+so the tag path and the registry path agree. Note the consequence for AR-5's
+parity exit criterion: allocation is now a **superset** of what tag-scanning
+produced, since the tag path could not express a major bump at all. That is
+intentional — parity is asserted for minor/patch, not for a capability that
+did not previously exist.
+
+**2. Versions get a sortable representation. This is the load-bearing change.**
+`artifact.version` is `TEXT` and the only index is
+`UNIQUE (owner_id, kind, version)` — there is no ordering at all. Once tags are
+gone, "what is the next patch?" is a SQL query, and `ORDER BY version DESC` on
+`TEXT` is **wrong**: lexically `v1.9.0` sorts above `v1.10.0`, so the release
+after `v1.10.0` would be computed as `v1.10.0` again — colliding with the
+unique constraint, or silently renumbering.
+
+Store the parsed version alongside the text:
+
+- `version_major`, `version_minor`, `version_patch` — `INT NOT NULL`,
+  populated at record/allocate time from the same parse.
+- Index `(owner_id, kind, version_major DESC, version_minor DESC,
+  version_patch DESC)` so "latest" and "next major/minor/patch" are one
+  indexed lookup with correct ordering.
+- The `UNIQUE (owner_id, kind, version)` constraint stays on the **text** form
+  — it is the collision guard and must keep matching what is published.
+
+A zero-padded sort key was rejected: it caps each component and reads badly in
+`psql`. The integer triple also makes range queries ("every 1.x of this app")
+expressible, which tags cannot answer without a client-side scan.
+
+Existing rows must be backfilled by the migration. A row whose version does not
+parse is a real condition, not a theoretical one (`plan.go` already tolerates
+unparseable tags by falling back to `v0.0.1`) — the migration must decide
+explicitly and say so in a comment rather than failing the deploy.
+
+**3. Prereleases are not supported, but the door is left open.** The regex
+accepts `v1.2.3-alpha.1` and `incrementVersion` strips the prerelease before
+bumping; build metadata (`+build`) is not accepted at all. Real semver also
+sorts a prerelease *before* its release, which nothing here implements.
+
+Patch releases cover the actual need. Therefore: **`AllocateVersion` rejects a
+prerelease or build-metadata version explicitly**, with an error saying it is
+unsupported — rather than half-accepting one and sorting it wrongly. Leave room
+for it: a later `version_prerelease TEXT` column can be added without changing
+the constraint or the integer triple, and the ordering index would gain a
+trailing term. Do not add the column now; do note the extension point in
+`ARCHITECTURE.md`.
 
 ---
 
