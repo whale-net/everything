@@ -1,7 +1,8 @@
 # App Registry — TOC
 
 gRPC service that records published artifacts and tracks per-environment
-promotion state. Design stage — no implementation yet.
+promotion state. AR-1 (foundations) is landed: schema, server/CLI skeletons —
+no business logic yet, every RPC returns `Unimplemented`.
 
 ## Documents
 
@@ -11,7 +12,8 @@ promotion state. Design stage — no implementation yet.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Before changing the data model, promotability rules, auth split, or writeback mechanism. Contains rejected alternatives and open questions. |
 | [PLAN.md](PLAN.md) | Before starting work — phase definitions (AR-0 … AR-5), scope, and exit criteria |
 | `TODO-<PLAN_ID>.md` | Execution tracking for an in-flight phase; created when that phase starts |
-| `ENV.md` | Not yet written — add when the server gains runtime configuration (AR-1) |
+| [ENV.md](ENV.md) | Configuring, deploying, or debugging server/migration runtime behavior |
+| [TESTING.md](TESTING.md) | Running the registry locally in Tilt for manual integration testing; which checks belong in unit vs Postgres vs Tilt tiers |
 
 ## Components
 
@@ -22,6 +24,7 @@ promotion state. Design stage — no implementation yet.
 | [worker/](worker/) | Temporal worker — gitops writeback (`app-registry-worker`) |
 | [cli/](cli/) | Thin gRPC client — `app-registry` |
 | [migrate/](migrate/) | Schema migrations — `app-registry-migration` |
+| [Tiltfile](Tiltfile) | Local dev — `tilt up` from `tools/app_registry/` |
 
 ## Related
 

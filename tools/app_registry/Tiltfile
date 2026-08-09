@@ -1,0 +1,191 @@
+# App Registry Tiltfile
+# Local development environment for the App Registry.
+#
+# AR-1 scope: migration job + gRPC API, both wired with no business logic
+# (every RPC returns Unimplemented). See ARCHITECTURE.md and PLAN.md.
+
+load('ext://namespace', 'namespace_create')
+load('ext://dotenv', 'dotenv')
+load('../tilt/common.tilt',
+     'build_images_from_apps', 'detect_platform', 'get_bazel_platform', 'get_watch_paths',
+     'setup_dev_util', 'setup_postgres', 'setup_otelcollector',
+     'get_env_bool', 'get_custom_or_default',
+     'print_startup_banner', 'print_footer_info')
+
+# ===========================
+# Configuration
+# ===========================
+
+namespace = 'app-registry-local-dev'
+namespace_create(namespace)
+dotenv()
+
+platform = detect_platform()
+bazel_platform = get_bazel_platform(platform)
+
+print_startup_banner("App Registry", namespace, platform)
+
+# ===========================
+# Infrastructure Setup
+# ===========================
+
+setup_dev_util(namespace)
+
+# PostgreSQL Database
+db_info = setup_postgres(namespace, db_name='app_registry')
+pg_database_url = get_custom_or_default(
+    'BUILD_POSTGRES_ENV',
+    'PG_DATABASE_URL',
+    'postgres://{}:{}@{}:{}/{}?sslmode=disable'.format(
+        db_info['user'], db_info['password'], db_info['host'], db_info['port'], db_info['database']
+    )
+)
+
+# OpenTelemetry Collector
+otel_endpoint = setup_otelcollector(namespace)
+
+print("📊 Infrastructure configured:")
+print("  Postgres:  {}".format("custom" if os.environ.get('BUILD_POSTGRES_ENV') == 'custom' else "local"))
+print("  OTEL:      {}".format(otel_endpoint))
+
+# ===========================
+# Application Configuration
+# ===========================
+
+watch_paths = get_watch_paths('app_registry')
+
+APPS = {
+    'migration': {
+        'enabled_env': 'ENABLE_APP_REGISTRY_MIGRATION',
+        'bazel_target': '//tools/app_registry/migrate:migration_image_load',
+        'image_name': 'app-registry-migration',
+    },
+    'api': {
+        'enabled_env': 'ENABLE_APP_REGISTRY_API',
+        'bazel_target': '//tools/app_registry/server:api_image_load',
+        'image_name': 'app-registry-api',
+    },
+}
+
+# ===========================
+# Bazel Image Building
+# ===========================
+
+build_images_from_apps(APPS, watch_paths, platform)
+
+# ===========================
+# Kubernetes Deployments
+# ===========================
+
+# Database Migration Job — runs ahead of the API, mirroring the ArgoCD
+# pre-sync-wave ordering described in migrate/README.md.
+if get_env_bool('ENABLE_APP_REGISTRY_MIGRATION', default='true'):
+    k8s_yaml(blob("""
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: app-registry-migration
+  namespace: {namespace}
+spec:
+  ttlSecondsAfterFinished: 30
+  template:
+    metadata:
+      labels:
+        app: app-registry-migration
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: migration
+        image: app-registry-migration
+        env:
+        - name: PG_DATABASE_URL
+          value: "{pg_database_url}"
+""".format(namespace=namespace, pg_database_url=pg_database_url)))
+
+    k8s_resource(
+        'app-registry-migration',
+        resource_deps=['postgres-dev'],
+        labels=['app-registry-infrastructure'],
+    )
+    print("🔄 Migration job configured")
+
+# gRPC API
+if get_env_bool('ENABLE_APP_REGISTRY_API', default='true'):
+    k8s_yaml(blob("""
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-registry-api
+  namespace: {namespace}
+spec:
+  selector:
+    app: app-registry-api
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: 50051
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-registry-api
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: app-registry-api
+  template:
+    metadata:
+      labels:
+        app: app-registry-api
+    spec:
+      containers:
+      - name: api
+        image: app-registry-api
+        ports:
+        - containerPort: 50051
+          name: grpc
+        env:
+        - name: PORT
+          value: "50051"
+        - name: PG_DATABASE_URL
+          value: "{pg_database_url}"
+        - name: GRPC_AUTH_MODE
+          value: "none"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "{otel_endpoint}"
+""".format(
+        namespace=namespace,
+        pg_database_url=pg_database_url,
+        otel_endpoint=otel_endpoint,
+    )))
+
+    api_deps = []
+    if get_env_bool('ENABLE_APP_REGISTRY_MIGRATION', default='true'):
+        api_deps.append('app-registry-migration')
+
+    k8s_resource(
+        'app-registry-api',
+        resource_deps=api_deps,
+        port_forwards=['50061:50051'],
+        labels=['app-registry'],
+    )
+    print("🔌 API forwarded to localhost:50061 (gRPC)")
+
+# ===========================
+# Access Information
+# ===========================
+
+print("\n" + "="*60)
+print("📡 Access Information")
+print("="*60)
+print("  PostgreSQL:  localhost:5432 (user: postgres, pass: password)")
+print("  API (gRPC):  localhost:50061")
+print("="*60)
+
+print_footer_info('app-registry')
+
+print("\n🚀 Quick Start:")
+print("  1. tilt up                       # Start migration + API (this)")
+print("  2. grpcurl -plaintext localhost:50061 list   # Confirm reflection")

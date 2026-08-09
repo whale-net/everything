@@ -141,6 +141,7 @@ checks. All rules live server-side so a future UI cannot drift from it.
 
 ## Status
 
-Design stage. No implementation yet. See [PLAN.md](PLAN.md) for phasing and
-[ARCHITECTURE.md](ARCHITECTURE.md) for the data model and the decisions behind
-it.
+AR-1 (foundations) is landed: schema migration, server and CLI skeletons, no
+business logic — every RPC returns `Unimplemented`. See [PLAN.md](PLAN.md) for
+phasing and [ARCHITECTURE.md](ARCHITECTURE.md) for the data model and the
+decisions behind it.
