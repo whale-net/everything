@@ -13,6 +13,15 @@ AppMetadataInfo = provider(
     },
 )
 
+# Valid values for the deploy_unit attr, mapped to the appmetapb.DeployUnit
+# enum's JSON name so protojson (used by //tools/appmeta:manifest_contract_test
+# and all Go consumers) can decode the emitted string directly as the enum.
+_DEPLOY_UNIT_TO_PROTO_ENUM = {
+    "chart": "DEPLOY_UNIT_CHART",
+    "image": "DEPLOY_UNIT_IMAGE",
+    "none": "DEPLOY_UNIT_NONE",
+}
+
 def _app_metadata_impl(ctx):
     """Implementation for app_metadata rule."""
     # Create a JSON file with app metadata
@@ -68,7 +77,17 @@ def _app_metadata_impl(ctx):
     # Add OpenAPI spec target if provided
     if ctx.attr.openapi_spec_target:
         metadata["openapi_spec_target"] = str(ctx.attr.openapi_spec_target.label)
-    
+
+    # deploy_unit declares how the app reaches an environment. Stored as the
+    # appmetapb.DeployUnit enum's JSON name (not the raw attr string) so
+    # protojson can decode it directly; see _DEPLOY_UNIT_TO_PROTO_ENUM above.
+    if ctx.attr.deploy_unit not in _DEPLOY_UNIT_TO_PROTO_ENUM:
+        fail("deploy_unit must be one of {} (got {})".format(
+            sorted(_DEPLOY_UNIT_TO_PROTO_ENUM.keys()),
+            ctx.attr.deploy_unit,
+        ))
+    metadata["deploy_unit"] = _DEPLOY_UNIT_TO_PROTO_ENUM[ctx.attr.deploy_unit]
+
     output = ctx.actions.declare_file(ctx.label.name + "_metadata.json")
     ctx.actions.write(
         output = output,
@@ -107,6 +126,7 @@ app_metadata = rule(
         "resources_limits_cpu": attr.string(default = ""),
         "resources_limits_memory": attr.string(default = ""),
         "openapi_spec_target": attr.label(default = None),
+        "deploy_unit": attr.string(default = "chart", values = ["chart", "image", "none"]),
     },
 )
 
@@ -121,7 +141,7 @@ app_metadata = rule(
 # - OpenAPI config: fastapi_app
 # - Container config: additional_tars
 # Bazel/Starlark does not support nested struct parameters, so they remain flat.
-def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], resources_requests_cpu = "", resources_requests_memory = "", resources_limits_cpu = "", resources_limits_memory = "", fastapi_app = None, additional_tars = None):
+def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], resources_requests_cpu = "", resources_requests_memory = "", resources_limits_cpu = "", resources_limits_memory = "", fastapi_app = None, additional_tars = None, deploy_unit = "chart"):
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
@@ -160,6 +180,10 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         fastapi_app: For FastAPI apps, specify the module path and variable name (e.g., "main:app")
                      to auto-generate OpenAPI specs. Creates a {name}_openapi_spec target.
         additional_tars: Additional tar layers to include in the image (e.g., ["//tools/steamcmd:steamcmd"])
+        deploy_unit: How the app reaches an environment: "chart" (default, bundled into a Helm
+                     chart and not independently promotable), "image" (deployed by moving an image
+                     reference directly, no chart involved, e.g. manmanv2-host-manager), or "none"
+                     (built and published but never deployed).
     """
     # Validate name format - must use dashes, not underscores
     if "_" in name:
@@ -259,6 +283,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         resources_limits_cpu = resources_limits_cpu,
         resources_limits_memory = resources_limits_memory,
         openapi_spec_target = openapi_spec_target_ref,
+        deploy_unit = deploy_unit,
         tags = ["release-metadata"],
         visibility = ["//visibility:public"],
     )

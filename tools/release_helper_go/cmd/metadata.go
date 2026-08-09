@@ -1,25 +1,25 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
+
+	"google.golang.org/protobuf/encoding/protojson"
+
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
 
-// AppMetadata mirrors the JSON produced by the app_metadata Starlark rule.
+// AppMetadata is one release_app manifest, as discovered via bazel cquery.
+// appmetapb.AppManifest — see //tools/appmeta/README.md — is the schema of
+// record for the JSON the app_metadata rule emits; AppMetadata wraps it with
+// the discovery-time Bazel target label, which is not itself part of the
+// manifest.
 type AppMetadata struct {
-	Name              string `json:"name"`
-	Domain            string `json:"domain"`
-	Language          string `json:"language"`
-	Registry          string `json:"registry"`
-	Organization      string `json:"organization"`
-	RepoName          string `json:"repo_name"`
-	ImageTarget       string `json:"image_target"`
-	BinaryTarget      string `json:"binary_target"`
-	OpenAPISpecTarget string `json:"openapi_spec_target,omitempty"`
-	// BazelTarget is the metadata target label — set by ListAllApps, not in JSON.
-	BazelTarget string `json:"-"`
+	*appmetapb.AppManifest
+	// BazelTarget is the metadata target label — set by ListAllApps, not in
+	// the manifest JSON.
+	BazelTarget string `json:"bazel_target,omitempty"`
 }
 
 // FullName returns the canonical "domain-name" identifier.
@@ -29,7 +29,15 @@ func (m AppMetadata) FullName() string { return m.Domain + "-" + m.Name }
 // pulling metadata from the AppMetadataInfo provider so no actions run.
 const appMetadataStarlarkExpr = `str(target.label) + "\t" + json.encode(providers(target)["//tools/bazel:release.bzl%AppMetadataInfo"].metadata)`
 
-// ListAllApps discovers every app_metadata target via a two-step Bazel call:
+// appMetadataQuery discovers every app_metadata target that is eligible for
+// release. `except attr(testonly, 1, //...)` excludes fixtures like
+// //tools/appmeta/testdata:fixture-app_metadata — testonly is how a fixture
+// opts out of release discovery, so this covers any future fixture too,
+// without hardcoding a domain name next to the "demo" exclusion below.
+const appMetadataQuery = "kind(app_metadata, //...) except attr(testonly, 1, //...)"
+
+// ListAllApps discovers every releasable app_metadata target via a two-step
+// Bazel call:
 //
 //  1. `bazel query` (loading only) lists the metadata target labels.
 //  2. `bazel cquery` scoped to those labels reads the AppMetadataInfo
@@ -39,7 +47,7 @@ const appMetadataStarlarkExpr = `str(target.label) + "\t" + json.encode(provider
 //
 // No metadata JSON files are produced — analysis alone yields the data.
 func ListAllApps(bazel BazelRunner, _ FileSystem, _ string) ([]AppMetadata, error) {
-	labelsOut, err := bazel.Run("query", "kind(app_metadata, //...)", "--output=label")
+	labelsOut, err := bazel.Run("query", appMetadataQuery, "--output=label")
 	if err != nil {
 		return nil, fmt.Errorf("bazel query app_metadata: %w", err)
 	}
@@ -68,18 +76,22 @@ func ListAllApps(bazel BazelRunner, _ FileSystem, _ string) ([]AppMetadata, erro
 		if !ok {
 			return nil, fmt.Errorf("malformed cquery line: %q", line)
 		}
-		var meta AppMetadata
-		if err := json.Unmarshal([]byte(jsonPart), &meta); err != nil {
+		manifest := &appmetapb.AppManifest{}
+		if err := protojson.Unmarshal([]byte(jsonPart), manifest); err != nil {
 			return nil, fmt.Errorf("parse metadata for %s: %w", label, err)
 		}
-		meta.BazelTarget = canonicalLabel(label)
+		meta := AppMetadata{AppManifest: manifest, BazelTarget: canonicalLabel(label)}
 		meta.BinaryTarget = canonicalLabel(meta.BinaryTarget)
 		meta.ImageTarget = canonicalLabel(meta.ImageTarget)
-		meta.OpenAPISpecTarget = canonicalLabel(meta.OpenAPISpecTarget)
+		meta.OpenapiSpecTarget = canonicalLabel(meta.OpenapiSpecTarget)
 		apps = append(apps, meta)
 	}
 
-	sort.Slice(apps, func(i, j int) bool { return apps[i].Name < apps[j].Name })
+	// Sort by full name (domain-name), not just name: two apps in different
+	// domains can share a bare name (e.g. "migration"), and sorting on name
+	// alone leaves their relative order dependent on cquery's output order
+	// rather than deterministic across inputs.
+	sort.Slice(apps, func(i, j int) bool { return apps[i].FullName() < apps[j].FullName() })
 	return apps, nil
 }
 

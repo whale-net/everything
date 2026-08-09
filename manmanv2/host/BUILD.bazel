@@ -42,4 +42,7 @@ release_app(
     description = "ManMan host manager (Docker container orchestration)",
     app_type = "worker",
     replicas = 1,
+    # Runs on bare metal with Docker socket access; its image is deployed by
+    # moving the reference directly, never bundled into a Helm chart.
+    deploy_unit = "image",
 )

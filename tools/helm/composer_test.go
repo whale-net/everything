@@ -1,11 +1,14 @@
 package helm
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"google.golang.org/protobuf/encoding/protojson"
+
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
 
 // TestNewComposer tests the Composer constructor
@@ -54,7 +57,7 @@ func TestLoadMetadata(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Create test metadata JSON file
-	testMetadata := AppMetadata{
+	testMetadata := &AppMetadata{
 		Name:        "test-app",
 		AppType:     "worker",
 		Version:     "1.0.0",
@@ -65,7 +68,7 @@ func TestLoadMetadata(t *testing.T) {
 	}
 
 	metadataFile := filepath.Join(tmpDir, "test-app.json")
-	data, err := json.Marshal(testMetadata)
+	data, err := protojson.Marshal(testMetadata)
 	if err != nil {
 		t.Fatalf("Failed to marshal metadata: %v", err)
 	}
@@ -152,12 +155,12 @@ func TestHasExternalAPIs(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		apps     []AppMetadata
+		apps     []*AppMetadata
 		expected bool
 	}{
 		{
 			name: "Has external API",
-			apps: []AppMetadata{
+			apps: []*AppMetadata{
 				{Name: "api", AppType: "external-api"},
 				{Name: "worker", AppType: "worker"},
 			},
@@ -165,7 +168,7 @@ func TestHasExternalAPIs(t *testing.T) {
 		},
 		{
 			name: "No external API",
-			apps: []AppMetadata{
+			apps: []*AppMetadata{
 				{Name: "worker1", AppType: "worker"},
 				{Name: "worker2", AppType: "worker"},
 			},
@@ -173,14 +176,14 @@ func TestHasExternalAPIs(t *testing.T) {
 		},
 		{
 			name: "Has internal API only",
-			apps: []AppMetadata{
+			apps: []*AppMetadata{
 				{Name: "api", AppType: "internal-api"},
 			},
 			expected: false,
 		},
 		{
 			name:     "Empty apps",
-			apps:     []AppMetadata{},
+			apps:     []*AppMetadata{},
 			expected: false,
 		},
 	}
@@ -359,14 +362,14 @@ func TestBuildAppConfig(t *testing.T) {
 
 	tests := []struct {
 		name            string
-		metadata        AppMetadata
+		metadata        *AppMetadata
 		expectReplicas  int
 		expectPort      int
 		expectHealthChk bool
 	}{
 		{
 			name: "External API with defaults",
-			metadata: AppMetadata{
+			metadata: &AppMetadata{
 				Name:        "api",
 				AppType:     "external-api",
 				Registry:    "ghcr.io",
@@ -380,7 +383,7 @@ func TestBuildAppConfig(t *testing.T) {
 		},
 		{
 			name: "Worker with custom port",
-			metadata: AppMetadata{
+			metadata: &AppMetadata{
 				Name:        "worker",
 				AppType:     "worker",
 				Registry:    "ghcr.io",
@@ -395,7 +398,7 @@ func TestBuildAppConfig(t *testing.T) {
 		},
 		{
 			name: "Internal API",
-			metadata: AppMetadata{
+			metadata: &AppMetadata{
 				Name:        "internal",
 				AppType:     "internal-api",
 				Registry:    "ghcr.io",
@@ -410,14 +413,14 @@ func TestBuildAppConfig(t *testing.T) {
 		},
 		{
 			name: "External API with health check enabled",
-			metadata: AppMetadata{
+			metadata: &AppMetadata{
 				Name:        "api-with-health",
 				AppType:     "external-api",
 				Registry:    "ghcr.io",
 				RepoName:    "demo-api-health",
 				Version:     "v1.0.0",
 				ImageTarget: "api_health_image",
-				HealthCheck: &HealthCheckMeta{
+				HealthCheck: &appmetapb.HealthCheck{
 					Enabled: true,
 					Path:    "/api/health",
 				},
@@ -448,12 +451,12 @@ func TestBuildAppConfig(t *testing.T) {
 				t.Errorf("Expected health check: %v, got: %v", tt.expectHealthChk, hasHealthCheck)
 			}
 
-			if config.Image != tt.metadata.GetImage() {
-				t.Errorf("Expected image %s, got %s", tt.metadata.GetImage(), config.Image)
+			if config.Image != GetImage(tt.metadata) {
+				t.Errorf("Expected image %s, got %s", GetImage(tt.metadata), config.Image)
 			}
 
-			if config.ImageTag != tt.metadata.GetImageTag() {
-				t.Errorf("Expected imageTag %s, got %s", tt.metadata.GetImageTag(), config.ImageTag)
+			if config.ImageTag != GetImageTag(tt.metadata) {
+				t.Errorf("Expected imageTag %s, got %s", GetImageTag(tt.metadata), config.ImageTag)
 			}
 		})
 	}
@@ -470,13 +473,13 @@ func TestBuildAppConfig_PythonMemory(t *testing.T) {
 
 	tests := []struct {
 		name               string
-		metadata           AppMetadata
+		metadata           *AppMetadata
 		expectedMemRequest string
 		expectedMemLimit   string
 	}{
 		{
 			name: "Python External API uses reduced memory",
-			metadata: AppMetadata{
+			metadata: &AppMetadata{
 				Name:        "python-api",
 				AppType:     "external-api",
 				Language:    "python",
@@ -490,7 +493,7 @@ func TestBuildAppConfig_PythonMemory(t *testing.T) {
 		},
 		{
 			name: "Python Worker uses reduced memory",
-			metadata: AppMetadata{
+			metadata: &AppMetadata{
 				Name:        "python-worker",
 				AppType:     "worker",
 				Language:    "python",
@@ -504,7 +507,7 @@ func TestBuildAppConfig_PythonMemory(t *testing.T) {
 		},
 		{
 			name: "Go API uses standard memory",
-			metadata: AppMetadata{
+			metadata: &AppMetadata{
 				Name:        "go-api",
 				AppType:     "external-api",
 				Language:    "go",
@@ -615,7 +618,7 @@ func TestGenerateValuesYaml_DomainAppFormat(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Create test metadata for an app with domain and name
-	testMetadata := AppMetadata{
+	testMetadata := &AppMetadata{
 		Name:        "hello-job",
 		Domain:      "demo",
 		AppType:     "job",
@@ -628,7 +631,7 @@ func TestGenerateValuesYaml_DomainAppFormat(t *testing.T) {
 	}
 
 	metadataFile := filepath.Join(tmpDir, "hello-job.json")
-	data, err := json.Marshal(testMetadata)
+	data, err := protojson.Marshal(testMetadata)
 	if err != nil {
 		t.Fatalf("Failed to marshal metadata: %v", err)
 	}
@@ -730,7 +733,7 @@ func TestBuildAppConfig_InternalAPIExposeIngress(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			metadata := AppMetadata{
+			metadata := &AppMetadata{
 				Name:        "test-app",
 				AppType:     tt.appType,
 				Registry:    "ghcr.io",
@@ -839,5 +842,92 @@ func TestWriteValuesYAML_InternalAPIExposeIngress(t *testing.T) {
 		if inExternalAPISection && strings.Contains(line, "exposeIngress:") {
 			t.Error("exposeIngress should not appear for external-api apps")
 		}
+	}
+}
+
+// TestGenerateChart_Golden renders a full chart (Chart.yaml + values.yaml +
+// templates) from a fixed set of AppManifest fixtures covering every app
+// type, and byte-compares the output against a checked-in golden chart.
+// This is the regression guard for the AR-M migration from a hand-written
+// AppMetadata struct to appmetapb.AppManifest: any future change to how the
+// composer reads or renders app metadata should show up here first.
+//
+// If the composer's output legitimately changes, regenerate the golden
+// files by running this test with UPDATE_GOLDEN=1 and reviewing the diff.
+func TestGenerateChart_Golden(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "composer-golden")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	config := ChartConfig{
+		ChartName:   "golden-chart",
+		Version:     "0.0.0-dev",
+		Environment: "production",
+		Namespace:   "golden-ns",
+		OutputDir:   tmpDir,
+	}
+	composer := NewComposer(config, "testdata/templates")
+	composer.apps = []*AppMetadata{
+		{
+			Name:        "api",
+			Domain:      "golden",
+			AppType:     "external-api",
+			Language:    "go",
+			Version:     "v1.2.3",
+			Registry:    "ghcr.io",
+			Organization: "whale-net",
+			RepoName:    "golden-api",
+			Port:        8080,
+			HealthCheck: &appmetapb.HealthCheck{Enabled: true, Path: "/healthz"},
+			Ingress:     &appmetapb.Ingress{Host: "api.golden.local", TlsSecretName: "golden-tls"},
+		},
+		{
+			Name:     "worker",
+			Domain:   "golden",
+			AppType:  "worker",
+			Language: "python",
+			Version:  "v1.2.3",
+			Registry: "ghcr.io",
+			Organization: "whale-net",
+			RepoName: "golden-worker",
+			Command:  []string{"python3"},
+			Args:     []string{"-m", "golden.worker"},
+		},
+		{
+			Name:     "migrate",
+			Domain:   "golden",
+			AppType:  "job",
+			Language: "go",
+			Version:  "v1.2.3",
+			Registry: "ghcr.io",
+			Organization: "whale-net",
+			RepoName: "golden-migrate",
+		},
+	}
+
+	if err := composer.generateValuesYaml(tmpDir); err != nil {
+		t.Fatalf("generateValuesYaml failed: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(tmpDir, "values.yaml"))
+	if err != nil {
+		t.Fatalf("read generated values.yaml: %v", err)
+	}
+
+	goldenPath := "testdata/golden_values.yaml"
+	if os.Getenv("UPDATE_GOLDEN") != "" {
+		if err := os.WriteFile(goldenPath, got, 0644); err != nil {
+			t.Fatalf("write golden file: %v", err)
+		}
+		t.Skip("UPDATE_GOLDEN set; wrote " + goldenPath)
+	}
+
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden file (run with UPDATE_GOLDEN=1 to create it): %v", err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("generated values.yaml does not match golden file %s.\n--- got ---\n%s\n--- want ---\n%s", goldenPath, got, want)
 	}
 }

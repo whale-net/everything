@@ -67,7 +67,19 @@ jobs:
         fi
         # Shutdown Bazel server to prevent hanging
         bazel shutdown
-        
+
+    - name: Manifest schema contract check
+      run: |
+        # //tools/appmeta:manifest_contract_test is tagged `manual`, so the
+        # wildcard `bazel test //...` above does NOT run it. Its rule->proto
+        # direction needs a real bazel query/cquery against the checkout,
+        # which only works under `bazel run` (BUILD_WORKSPACE_DIRECTORY is
+        # unset for test actions). Without this step, a release_app attribute
+        # added without a matching field in //tools/appmeta/proto would drift
+        # silently — the exact failure the contract test exists to prevent.
+        bazel run --config=ci //tools/appmeta:manifest_contract_test
+        bazel shutdown
+
     - name: Upload test results
       uses: actions/upload-artifact@v4
       if: always()

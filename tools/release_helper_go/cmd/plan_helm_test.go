@@ -94,6 +94,32 @@ func TestListAllHelmChartsEmpty(t *testing.T) {
 	}
 }
 
+// TestListAllHelmChartsExcludesTestOnly mirrors
+// TestListAllAppsExcludesTestOnly: the fake only answers a query that
+// excludes testonly targets, so if ListAllHelmCharts ever stops issuing
+// that exclusion, the fake won't match and the test fails loudly instead of
+// silently passing.
+func TestListAllHelmChartsExcludesTestOnly(t *testing.T) {
+	bazel := newFakeBazel(
+		fakeBazelCall{
+			argsContain:    []string{"query", "kind(helm_chart_metadata", "except attr(testonly, 1"},
+			argsNotContain: []string{"cquery"},
+			output:         "//manmanv2:manmanv2_chart_chart_metadata",
+		},
+		fakeBazelCall{argsContain: []string{"cquery"}, output: "@@//manmanv2:manmanv2_chart_chart_metadata\t" +
+			`{"name":"manmanv2-control-services","domain":"manmanv2"}`},
+	)
+	fs := newFakeFS()
+
+	result, err := ListAllHelmCharts(bazel, fs, fakeWorkspaceRoot)
+	if err != nil {
+		t.Fatalf("ListAllHelmCharts did not issue a testonly-excluding query: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("unexpected result: %v", result)
+	}
+}
+
 func TestListAllHelmChartsSorted(t *testing.T) {
 	_, fs, bazel := makeTestHelmCharts()
 	result, err := ListAllHelmCharts(bazel, fs, fakeWorkspaceRoot)

@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 	"testing"
+
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
 
 func TestListAllApps(t *testing.T) {
@@ -20,9 +22,10 @@ func TestListAllApps(t *testing.T) {
 	if len(result) != 3 {
 		t.Fatalf("expected 3 apps, got %d: %v", len(result), result)
 	}
-	// Results are sorted by name
-	if result[0].Name != "control-api" {
-		t.Errorf("expected first app to be 'control-api' (sorted), got %q", result[0].Name)
+	// Results are sorted by full name (domain-name): "demo-hello-go" sorts
+	// before "manmanv2-control-api".
+	if result[0].FullName() != "demo-hello-go" {
+		t.Errorf("expected first app to be 'demo-hello-go' (sorted by full name), got %q", result[0].FullName())
 	}
 }
 
@@ -116,8 +119,35 @@ func TestListAllAppsCanonicalizesLabels(t *testing.T) {
 }
 
 func TestAppMetadataFullName(t *testing.T) {
-	m := AppMetadata{Name: "hello-go", Domain: "demo"}
+	m := AppMetadata{AppManifest: &appmetapb.AppManifest{Name: "hello-go", Domain: "demo"}}
 	if got := m.FullName(); got != "demo-hello-go" {
 		t.Errorf("FullName() = %q, want %q", got, "demo-hello-go")
+	}
+}
+
+// TestListAllAppsExcludesTestOnly is a regression guard for release
+// discovery never surfacing testonly fixtures (e.g.
+// //tools/appmeta/testdata:fixture-app_metadata) as releasable apps. The
+// fake only answers a `bazel query` call that excludes testonly targets —
+// if ListAllApps ever stops issuing that exclusion, this fake won't match
+// the call it makes and the test fails with "no match for args" instead of
+// silently passing.
+func TestListAllAppsExcludesTestOnly(t *testing.T) {
+	bazel := newFakeBazel(
+		fakeBazelCall{
+			argsContain:    []string{"query", "kind(app_metadata", "except attr(testonly, 1"},
+			argsNotContain: []string{"cquery"},
+			output:         "//demo/hello_go:hello-go_metadata",
+		},
+		fakeBazelCall{argsContain: []string{"cquery"}, output: "@@//demo/hello_go:hello-go_metadata\t" +
+			`{"name":"hello-go","domain":"demo"}`},
+	)
+
+	result, err := ListAllApps(bazel, newFakeFS(), fakeWorkspaceRoot)
+	if err != nil {
+		t.Fatalf("ListAllApps did not issue a testonly-excluding query: %v", err)
+	}
+	if len(result) != 1 || result[0].Name != "hello-go" {
+		t.Fatalf("unexpected result: %v", result)
 	}
 }

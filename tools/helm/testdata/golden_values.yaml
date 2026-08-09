@@ -1,0 +1,71 @@
+global:
+  namespace: golden-ns
+  environment: production
+
+apps:
+  golden-api:
+    type: external-api
+    domain: golden
+    image: ghcr.io/whale-net/golden-api
+    imageTag: v1.2.3
+    port: 8080
+    replicas: 2
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+      limits:
+        cpu: 100m
+        memory: 512Mi
+    healthCheck:
+      path: /healthz
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 5
+      successThreshold: 1
+      failureThreshold: 3
+    ingress:
+      host: api.golden.local
+      tlsSecretName: golden-tls
+
+  golden-migrate:
+    type: job
+    domain: golden
+    image: ghcr.io/whale-net/golden-migrate
+    imageTag: v1.2.3
+    replicas: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 200m
+        memory: 512Mi
+
+  golden-worker:
+    type: worker
+    domain: golden
+    image: ghcr.io/whale-net/golden-worker
+    imageTag: v1.2.3
+    replicas: 1
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
+    command:
+      - "python3"
+    args:
+      - "-m"
+      - "golden.worker"
+
+otlp:
+  endpoint: http://otel-collector:4317
+
+ingressDefaults:
+  enabled: true
+
+manifests:
+  enabled: true

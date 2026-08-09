@@ -9,6 +9,10 @@ go_library(
     ],
     importpath = "github.com/whale-net/everything/tools/helm",
     visibility = ["//visibility:public"],
+    deps = [
+        "//tools/appmeta/proto:appmetapb",
+        "@org_golang_google_protobuf//encoding/protojson",
+    ],
 )
 
 # Alias for helm_composer binary (actual binary is in cmd/helm_composer)
@@ -29,7 +33,12 @@ go_test(
 go_test(
     name = "composer_test",
     srcs = ["composer_test.go"],
+    data = glob(["testdata/**"]),
     embed = [":helm_lib"],
+    deps = [
+        "//tools/appmeta/proto:appmetapb",
+        "@org_golang_google_protobuf//encoding/protojson",
+    ],
 )
 
 # Template files used for chart composition
