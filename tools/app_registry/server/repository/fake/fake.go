@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
@@ -35,22 +36,26 @@ type idemEntry struct {
 // (rather than fields directly on Registry) so it round-trips through JSON
 // cleanly for a cheap deep copy.
 type state struct {
-	Apps         map[string]repository.App
-	Charts       map[string]repository.Chart
-	Builds       map[string]repository.Build
-	Artifacts    map[string]repository.Artifact
-	Idempotency  map[string]idemEntry
-	Environments map[string]repository.Environment // keyed by environment_id
+	Apps            map[string]repository.App
+	Charts          map[string]repository.Chart
+	Builds          map[string]repository.Build
+	Artifacts       map[string]repository.Artifact
+	Idempotency     map[string]idemEntry
+	Environments    map[string]repository.Environment    // keyed by environment_id
+	Promotions      map[string]repository.Promotion      // keyed by promotion_id
+	PromotionEvents map[string]repository.PromotionEvent // keyed by event_id
 }
 
 func newState() *state {
 	return &state{
-		Apps:         map[string]repository.App{},
-		Charts:       map[string]repository.Chart{},
-		Builds:       map[string]repository.Build{},
-		Artifacts:    map[string]repository.Artifact{},
-		Idempotency:  map[string]idemEntry{},
-		Environments: map[string]repository.Environment{},
+		Apps:            map[string]repository.App{},
+		Charts:          map[string]repository.Chart{},
+		Builds:          map[string]repository.Build{},
+		Artifacts:       map[string]repository.Artifact{},
+		Idempotency:     map[string]idemEntry{},
+		Environments:    map[string]repository.Environment{},
+		Promotions:      map[string]repository.Promotion{},
+		PromotionEvents: map[string]repository.PromotionEvent{},
 	}
 }
 
@@ -90,6 +95,9 @@ func (r *Registry) Idempotency() repository.IdempotencyRepository { return r }
 // Registry -- Go has no method overloading. Every method still reads/writes
 // r.state, the same map WithTx snapshots.
 func (r *Registry) Environments() repository.EnvironmentRepository { return environmentFake{r} }
+
+// Promotions returns a distinct type for the same reason Environments does.
+func (r *Registry) Promotions() repository.PromotionRepository { return promotionFake{r} }
 
 // WithTx snapshots state, runs fn against a Registry sharing that snapshot,
 // and commits the snapshot back only if fn succeeds — giving the fake the
@@ -544,6 +552,170 @@ func (f environmentFake) findByKey(key string) (repository.Environment, bool) {
 func sortEnvironments(envs []repository.Environment) {
 	sort.Slice(envs, func(i, j int) bool { return envs[i].Rank < envs[j].Rank })
 }
+
+// ============================================================================
+// PromotionRepository
+// ============================================================================
+
+// promotionFake implements repository.PromotionRepository over the same
+// *Registry.state every other repository reads/writes -- see Environments's
+// doc comment for why this can't be methods directly on Registry.
+type promotionFake struct{ r *Registry }
+
+// Promote mirrors postgres's promotionRepo.Promote: close whatever is
+// currently valid_to == nil for (p.EnvironmentID, p.TargetKey), then insert
+// p as the new current row.
+func (f promotionFake) Promote(ctx context.Context, p repository.Promotion) (*repository.Promotion, *repository.Promotion, error) {
+	var superseded *repository.Promotion
+	if existing, ok := f.findCurrent(p.EnvironmentID, p.TargetKey); ok {
+		now := timeNow()
+		existing.ValidTo = &now
+		f.r.state.Promotions[existing.PromotionID] = existing
+		superseded = &existing
+	}
+
+	p.PromotionID = uuid.NewString()
+	p.ValidFrom = timeNow()
+	p.ValidTo = nil
+	if p.State == "" {
+		p.State = repository.PromotionStateActive
+	}
+	f.r.state.Promotions[p.PromotionID] = p
+
+	current := p
+	return &current, superseded, nil
+}
+
+func (f promotionFake) GetCurrent(ctx context.Context, environmentID, targetKey string) (*repository.Promotion, error) {
+	if p, ok := f.findCurrent(environmentID, targetKey); ok {
+		return &p, nil
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (f promotionFake) GetPrevious(ctx context.Context, environmentID, targetKey string) (*repository.Promotion, error) {
+	var best *repository.Promotion
+	for _, p := range f.r.state.Promotions {
+		if p.EnvironmentID != environmentID || p.TargetKey != targetKey || p.ValidTo == nil {
+			continue
+		}
+		if best == nil || p.ValidFrom.After(best.ValidFrom) {
+			cp := p
+			best = &cp
+		}
+	}
+	if best == nil {
+		return nil, repository.ErrNotFound
+	}
+	return best, nil
+}
+
+func (f promotionFake) StateAt(ctx context.Context, environmentID string, at *time.Time) ([]repository.Promotion, error) {
+	var out []repository.Promotion
+	for _, p := range f.r.state.Promotions {
+		if p.EnvironmentID != environmentID {
+			continue
+		}
+		if at == nil {
+			if p.ValidTo == nil {
+				out = append(out, p)
+			}
+			continue
+		}
+		if !p.ValidFrom.After(*at) && (p.ValidTo == nil || p.ValidTo.After(*at)) {
+			out = append(out, p)
+		}
+	}
+	sortPromotions(out)
+	return out, nil
+}
+
+func (f promotionFake) ListPromotions(ctx context.Context, filter repository.PromotionListFilter) ([]repository.Promotion, error) {
+	var out []repository.Promotion
+	for _, p := range f.r.state.Promotions {
+		if filter.EnvironmentKey != "" && p.EnvironmentKey != filter.EnvironmentKey {
+			continue
+		}
+		if filter.OwnerFullName != "" && f.ownerFullName(p) != filter.OwnerFullName {
+			continue
+		}
+		if !filter.IncludeHistory && p.ValidTo != nil {
+			continue
+		}
+		out = append(out, p)
+	}
+	sortPromotions(out)
+	return out, nil
+}
+
+func (f promotionFake) RecordEvent(ctx context.Context, e repository.PromotionEvent) (*repository.PromotionEvent, error) {
+	e.EventID = uuid.NewString()
+	if e.OccurredAt.IsZero() {
+		e.OccurredAt = timeNow()
+	}
+	f.r.state.PromotionEvents[e.EventID] = e
+	return &e, nil
+}
+
+func (f promotionFake) ListEvents(ctx context.Context, filter repository.PromotionEventListFilter) ([]repository.PromotionEvent, error) {
+	var out []repository.PromotionEvent
+	for _, e := range f.r.state.PromotionEvents {
+		if filter.PromotionID != "" && e.PromotionID != filter.PromotionID {
+			continue
+		}
+		if filter.Actor != "" && e.Actor != filter.Actor {
+			continue
+		}
+		if !filter.Since.IsZero() && e.OccurredAt.Before(filter.Since) {
+			continue
+		}
+		if filter.EnvironmentKey != "" || filter.OwnerFullName != "" {
+			p, ok := f.r.state.Promotions[e.PromotionID]
+			if !ok {
+				continue
+			}
+			if filter.EnvironmentKey != "" && p.EnvironmentKey != filter.EnvironmentKey {
+				continue
+			}
+			if filter.OwnerFullName != "" && f.ownerFullName(p) != filter.OwnerFullName {
+				continue
+			}
+		}
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].OccurredAt.After(out[j].OccurredAt) })
+	return out, nil
+}
+
+func (f promotionFake) findCurrent(environmentID, targetKey string) (repository.Promotion, bool) {
+	for _, p := range f.r.state.Promotions {
+		if p.EnvironmentID == environmentID && p.TargetKey == targetKey && p.ValidTo == nil {
+			return p, true
+		}
+	}
+	return repository.Promotion{}, false
+}
+
+func (f promotionFake) ownerFullName(p repository.Promotion) string {
+	if p.Kind == repository.ArtifactKindImage {
+		if app, ok := f.r.state.Apps[p.AppID]; ok {
+			return app.FullName()
+		}
+	} else {
+		if c, ok := f.r.state.Charts[p.ChartID]; ok {
+			return c.FullName()
+		}
+	}
+	return ""
+}
+
+func sortPromotions(promotions []repository.Promotion) {
+	sort.Slice(promotions, func(i, j int) bool { return promotions[i].ValidFrom.After(promotions[j].ValidFrom) })
+}
+
+// timeNow is a thin indirection so a future test could freeze it; today it's
+// just time.Now().UTC(), matching every other fake's timestamp handling.
+func timeNow() time.Time { return time.Now().UTC() }
 
 // ============================================================================
 // helpers shared with reconcile.go

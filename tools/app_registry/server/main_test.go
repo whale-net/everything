@@ -109,12 +109,12 @@ func assertUnimplementedFromHandler(t *testing.T, rpc, wantMsg string, err error
 // the message text for exactly that reason. A dropped pb.RegisterXxxServer
 // call in main.go fails this test.
 //
-// AppRegistry, ArtifactRegistry, and EnvironmentRegistry are real (as of
-// AR-2a and AR-3b respectively), so those subtests assert a real
-// (empty-but-successful) response against the fake repository instead of
-// Unimplemented — a dropped Register call would now surface as
+// AppRegistry, ArtifactRegistry, EnvironmentRegistry, and PromotionRegistry
+// are all real now (AR-2a, AR-3b, AR-3c respectively), so those subtests
+// assert a real (empty-but-successful) response against the fake repository
+// instead of Unimplemented — a dropped Register call would now surface as
 // codes.Unavailable/Unimplemented-with-"unknown service" instead, still
-// caught below. PromotionRegistry is still Unimplemented until AR-3c.
+// caught below.
 func TestRegisterServices_AllFourServicesReachable(t *testing.T) {
 	conn := startTestServer(t)
 	ctx := context.Background()
@@ -149,8 +149,26 @@ func TestRegisterServices_AllFourServicesReachable(t *testing.T) {
 
 	t.Run("PromotionRegistry", func(t *testing.T) {
 		client := pb.NewPromotionRegistryClient(conn)
-		_, err := client.ListPromotions(ctx, &pb.ListPromotionsRequest{})
-		assertUnimplementedFromHandler(t, "PromotionRegistry.ListPromotions", "ListPromotions not implemented", err)
+		resp, err := client.ListPromotions(ctx, &pb.ListPromotionsRequest{})
+		if err != nil {
+			t.Fatalf("PromotionRegistry.ListPromotions: expected success against the fake repository, got %v", err)
+		}
+		if len(resp.Promotions) != 0 {
+			t.Fatalf("PromotionRegistry.ListPromotions: expected no promotions in a fresh fake registry, got %d", len(resp.Promotions))
+		}
+	})
+
+	t.Run("PromotionRegistry_Promote_StillReachable", func(t *testing.T) {
+		client := pb.NewPromotionRegistryClient(conn)
+		// "dev" matches DevRoles' app-registry-promoter-dev grant; a
+		// PermissionDenied here would mean auth never ran, and a "not
+		// registered" error would surface as Unimplemented/Unavailable —
+		// NotFound (unknown environment, since the fake repo is empty) is
+		// the only outcome proving the RPC actually reached the handler.
+		_, err := client.Promote(ctx, &pb.PromoteRequest{EnvironmentKey: "dev", ArtifactId: "nonexistent", IdempotencyKey: "test"})
+		if status.Code(err) != codes.NotFound {
+			t.Fatalf("PromotionRegistry.Promote: expected NotFound (unknown environment) against the fake repository, got %v", err)
+		}
 	})
 
 	t.Run("EnvironmentRegistry", func(t *testing.T) {

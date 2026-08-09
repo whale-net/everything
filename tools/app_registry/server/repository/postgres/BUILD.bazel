@@ -8,6 +8,7 @@ go_library(
         "environment.go",
         "errors.go",
         "idempotency.go",
+        "promotion.go",
         "repository.go",
     ],
     importpath = "github.com/whale-net/everything/tools/app_registry/server/repository/postgres",

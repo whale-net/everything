@@ -176,3 +176,92 @@ type Environment struct {
 	Archived          bool
 	CreatedAt         time.Time
 }
+
+// PromotionState mirrors PromotionState in protos/messages.proto. AR-3c
+// only ever writes PromotionStateActive; the other values are reserved for
+// the approval gate described in ARCHITECTURE.md "Future: approval gate".
+type PromotionState string
+
+const (
+	PromotionStatePendingApproval PromotionState = "pending_approval"
+	PromotionStateActive          PromotionState = "active"
+	PromotionStateSuperseded      PromotionState = "superseded"
+	PromotionStateFailed          PromotionState = "failed"
+)
+
+// PromotionAction mirrors PromotionAction in protos/messages.proto — the
+// human-meaningful verb recorded on promotion_event.
+type PromotionAction string
+
+const (
+	PromotionActionPromote  PromotionAction = "promote"
+	PromotionActionRollback PromotionAction = "rollback"
+	PromotionActionOverride PromotionAction = "override"
+	PromotionActionRetire   PromotionAction = "retire"
+	PromotionActionApprove  PromotionAction = "approve"
+	PromotionActionReject   PromotionAction = "reject"
+)
+
+// TargetKey is the promoted thing's identity, denormalized onto the
+// promotion table so its partial unique index can be expressed without a
+// nullable two-column target (app_id is NULL for chart artifacts and vice
+// versa) — see ARCHITECTURE.md "SCD2 on promotion".
+func TargetKey(kind ArtifactKind, ownerFullName string) string {
+	return string(kind) + ":" + ownerFullName
+}
+
+// Promotion is SCD2 state: what is deployed to an environment right now, or
+// at any past instant. Follows the repo-wide valid_from/valid_to convention
+// — see AGENTS.md "SCD2". AppID/ChartID/Repository/Version/Digest are
+// populated by a join to the promoted artifact at read time — never stored
+// redundantly on the promotion row itself, so there is exactly one place
+// that data can drift from. ValidTo == nil means still current.
+type Promotion struct {
+	PromotionID    string
+	EnvironmentID  string
+	EnvironmentKey string // denormalized at read time, for readability
+	TargetKey      string
+
+	Kind       ArtifactKind
+	AppID      string // set when Kind == ArtifactKindImage
+	ChartID    string // set when Kind == ArtifactKindChart
+	ArtifactID string
+	Repository string
+	Version    string
+	Digest     string
+
+	State      PromotionState
+	IsOverride bool
+
+	ValidFrom time.Time
+	ValidTo   *time.Time
+}
+
+// PromotionEvent is the append-only audit log. NOT SCD2 — see AGENTS.md,
+// event logs get their own shape.
+type PromotionEvent struct {
+	EventID            string
+	PromotionID        string
+	Action             PromotionAction
+	Actor              string
+	Reason             string
+	TemporalWorkflowID string
+	TemporalRunID      string
+	OccurredAt         time.Time
+}
+
+// PromotionListFilter is ListPromotionsRequest's filter set.
+type PromotionListFilter struct {
+	EnvironmentKey string
+	OwnerFullName  string
+	IncludeHistory bool
+}
+
+// PromotionEventListFilter is ListPromotionEventsRequest's filter set.
+type PromotionEventListFilter struct {
+	PromotionID    string
+	EnvironmentKey string
+	OwnerFullName  string
+	Actor          string
+	Since          time.Time
+}
