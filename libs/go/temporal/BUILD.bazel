@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "temporal",
+    srcs = [
+        "client.go",
+        "config.go",
+        "logger.go",
+        "worker.go",
+    ],
+    importpath = "github.com/whale-net/everything/libs/go/temporal",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/logging",
+        "@io_temporal_go_sdk//client",
+        "@io_temporal_go_sdk//log",
+        "@io_temporal_go_sdk//worker",
+    ],
+)
+
+go_test(
+    name = "temporal_test",
+    srcs = [
+        "config_test.go",
+        "logger_test.go",
+    ],
+    embed = [":temporal"],
+    deps = [
+        "//libs/go/logging",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

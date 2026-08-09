@@ -61,6 +61,7 @@ Shared Starlark functions that domains can import:
 - `setup_postgres()`: PostgreSQL database - returns dict with `url`, `host`, `port`, `user`, `password`, `database`, `service_info`
 - `setup_rabbitmq()`: RabbitMQ message queue - returns dict with `host`, `port`, `user`, `password`, `service_info`, `mgmt_service_info`
 - `setup_otelcollector()`: OpenTelemetry Collector
+- `setup_temporal()`: Temporal dev server (`temporal server start-dev`) - returns dict with `host`, `port`, `namespace`, `grpc_target`, `ui_service_info`, `service_info`
 - `setup_nginx_ingress()`: Nginx Ingress Controller
 
 **Image Building:**
@@ -138,6 +139,13 @@ We use the [`whale-net/dev-util`](https://github.com/whale-net/dev-util) Helm re
 - **rabbitmq-dev**: RabbitMQ message queue
 - **otelcollector-dev**: OpenTelemetry Collector
 
+There is no Temporal chart in dev-util — `setup_temporal()` deploys an
+inline Kubernetes manifest (`k8s_yaml(blob(...))`) instead of `helm_resource`.
+It runs `temporal server start-dev` (image `temporalio/temporal`), the
+single-binary Temporal CLI dev server, exposing the gRPC frontend on `7233`
+and the Web UI on `8233`. The older `temporalite` project this replaced is
+archived — its functionality moved into the Temporal CLI.
+
 ### Example Usage
 
 ```starlark
@@ -152,6 +160,11 @@ print("Database at:", db_info['service_info'])
 rmq_info = setup_rabbitmq('my-domain-dev')
 print("RabbitMQ at:", rmq_info['service_info'])
 print("Management UI:", rmq_info['mgmt_service_info'])
+
+# Setup Temporal dev server - returns dict with connection info
+temporal_info = setup_temporal('my-domain-dev')
+print("Temporal gRPC at:", temporal_info['grpc_target'])
+print("Temporal Web UI:", temporal_info['ui_service_info'])
 ```
 
 ## Helper Scripts

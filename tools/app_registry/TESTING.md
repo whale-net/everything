@@ -62,6 +62,7 @@ Namespace `app-registry-local-dev`:
 | `app-registry-migration` | Job — applies migrations, must reach `Complete` |
 | `app-registry-api` | gRPC API on `50051`, forwarded to **`localhost:50061`** |
 | `otel-collector` | Receives traces/logs; app logs surface here |
+| `temporal-dev` | Temporal dev server (`temporal server start-dev`) — gRPC on `7233`, Web UI on `8233`, both forwarded (AR-4a; nothing consumes it yet) |
 
 The API declares `resource_deps` on the migration job, mirroring the ArgoCD
 pre-sync-wave ordering in [`migrate/README.md`](migrate/README.md). If the
@@ -110,6 +111,39 @@ grpcurl -plaintext -d '{}' localhost:50061 appregistry.v1.AppRegistry/ListApps
 > A bare `Unimplemented` with message `unknown service ...` means the service
 > was never registered — a different bug entirely. `server/main_test.go`
 > asserts on the message text for exactly this reason.
+
+## Temporal (AR-4a)
+
+AR-4a adds `libs/go/temporal` (client/worker bootstrap) and a Temporal dev
+server to Tilt, but nothing in `app-registry-api`/`app-registry-migration`
+uses it yet — no outbox, no `WritebackWorkflow`, no `app-registry-worker`
+binary (all AR-4b). This section is for exercising the dev server and the
+library directly; there is no registry-level smoke check for it yet.
+
+`tilt up` forwards the gRPC frontend to `localhost:7233` and the Web UI to
+`localhost:8233`. Confirm the dev server is reachable:
+
+```bash
+temporal operator cluster health --address localhost:7233
+# SERVING
+
+open http://localhost:8233   # Web UI
+```
+
+`libs/go/temporal`'s own unit tests (config parsing, the logging bridge) run
+without a live server:
+
+```bash
+bazel test //libs/go/temporal/...
+```
+
+To exercise a real client connection, point a small program or
+`temporal workflow list --address localhost:7233` at the forwarded port —
+`ConfigFromEnv()`'s `TEMPORAL_HOST` default (`localhost:7233`) matches the
+Tilt port-forward, so no env var is needed when running against `tilt up`
+locally.
+
+Disable the dev server with `ENABLE_TEMPORAL=false` if you don't need it.
 
 ## Inspecting the database
 
