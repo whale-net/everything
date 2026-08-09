@@ -30,9 +30,9 @@ app-registry artifacts record ... --idempotency-key K          # CI
 app-registry builds record ... --idempotency-key K             # CI
 
 app-registry promote <domain-name> <version> --env prod --reason "..."
-                     [--allow-override] [--dry-run] [--idempotency-key K]
+                     [--kind image|chart] [--allow-override] [--dry-run] [--idempotency-key K]
 app-registry rollback <domain-name> --env prod --reason "..."
-                     [--dry-run] [--idempotency-key K]
+                     [--kind image|chart] [--dry-run] [--idempotency-key K]
 app-registry status <env> [--domain D] [--at <RFC3339>]
 app-registry history <domain-name> [--env E]
 app-registry diff <env-a> <env-b>
@@ -45,6 +45,13 @@ promote?" — it filters by the derived promotability described in
 [`../ARCHITECTURE.md`](../ARCHITECTURE.md#promotability).
 
 ### `promote` / `rollback`
+
+Both identify the artifact/target by `owner_full_name` + `kind` (+ `version`
+for `promote`). `--kind` defaults to `image` (the common case — most owners
+are images, not charts) but must be set explicitly to `chart` when promoting
+or rolling back a chart. There is no `unspecified` default: the server
+rejects an unset/invalid kind rather than guessing, since guessing wrong
+could promote or roll back the wrong artifact silently.
 
 `--idempotency-key` is optional on both: if omitted, the CLI generates a UUID
 (`promoteIdempotencyKey` in `promote.go`), matching ARCHITECTURE.md

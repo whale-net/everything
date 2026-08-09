@@ -43,6 +43,14 @@ still out of scope (see AR-4b below).
 for what it delivered and what is deliberately still missing before any
 domain can be cut over.
 
+**Where deferred work is tracked.** Three places, deliberately:
+[Carry-over items](#carry-over-items) for small cross-cutting gaps that
+belong to no single phase; each phase's own **"Deliberately NOT done"**
+subsection for scope that phase consciously left (AR-5's is the
+cutover itself); and "Explicitly out of scope" at the end of this document
+for things no phase will do. If you are picking this up cold, read those
+three before starting anything.
+
 ### AR-3d — CLI + `promote.yml` — done
 
 - `app-registry promote`/`rollback`/`status`/`history`/`diff` filled in
@@ -176,10 +184,12 @@ the `manual` tag excludes the new target from wildcard expansion.
   **Resolved by AR-2d** — see `postgres_integration_test.go`. The SCD2
   `promotion` table's partial unique index is still untested; it doesn't
   exist until AR-3's migration `002` lands (see AR-2d's scope note above).
-- **Auth is unimplemented.** Handlers check no claims; the Tiltfile runs
-  `GRPC_AUTH_MODE=none`. Fine for AR-2 (recording, CI service account), **not**
-  fine for AR-3, whose entire point is that a build credential cannot promote to
-  prod. Settle OIDC config before AR-3.
+- **Auth is unimplemented.** ~~Handlers check no claims; the Tiltfile runs
+  `GRPC_AUTH_MODE=none`.~~ **Resolved by AR-3a** — role model in
+  `server/auth`, enforced on every RPC. Note `GRPC_AUTH_MODE` still
+  *defaults* to `none`, in which the server grants every caller every role;
+  that is intentional (Tilt and local dev depend on it) and is the
+  deployer's responsibility to override. See DEPLOY.md §3.
 - **Transaction-abort hazard for AR-3.** A failed statement aborts the
   surrounding Postgres transaction, so any error-message or logging code that
   queries afterwards silently degrades. This bit `RecordArtifact` once already;
@@ -188,6 +198,23 @@ the `manual` tag excludes the new target from wildcard expansion.
   only thing currently exercising the pgx layer.
 - `list-apps --format json` prints `deploy_unit` as an integer. Cosmetic; no CI
   path reads it.
+- **`promotion_event.temporal_workflow_id` / `temporal_run_id` are never
+  stamped back** (AR-4b). `003_promotion.up.sql`'s schema comment anticipates
+  them, and `WritebackOutbox.EventID` exists precisely so the worker can do
+  it, but nothing writes them — so an operator cannot jump from an audit row
+  to its Temporal workflow history. Needs an `event_id`-keyed update path
+  from the worker.
+- **Temporal `WorkflowIDReusePolicy` is left at the SDK default** (AR-4b),
+  reasoned about in `worker/outbox/drain.go`'s comments but never
+  independently stress-tested. Relevant because workflow id = promotion id,
+  so reuse semantics decide what happens when a promotion is retried.
+- **`--format table` is unimplemented across the whole CLI** — every command
+  falls back to JSON with a `# table format not implemented yet` notice
+  (`cli/cmd/client.go`, `cli/cmd/util.go`). Pre-existing, cosmetic, but the
+  flag is advertised.
+- **No admin/web UI.** Deferred as non-critical for launch. PLAN.md's
+  out-of-scope list notes the CLI is kept thin specifically so a UI can be
+  added without reimplementing rules server-side.
 
 ## Sequencing rationale
 
