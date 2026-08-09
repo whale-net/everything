@@ -35,20 +35,22 @@ type idemEntry struct {
 // (rather than fields directly on Registry) so it round-trips through JSON
 // cleanly for a cheap deep copy.
 type state struct {
-	Apps        map[string]repository.App
-	Charts      map[string]repository.Chart
-	Builds      map[string]repository.Build
-	Artifacts   map[string]repository.Artifact
-	Idempotency map[string]idemEntry
+	Apps         map[string]repository.App
+	Charts       map[string]repository.Chart
+	Builds       map[string]repository.Build
+	Artifacts    map[string]repository.Artifact
+	Idempotency  map[string]idemEntry
+	Environments map[string]repository.Environment // keyed by environment_id
 }
 
 func newState() *state {
 	return &state{
-		Apps:        map[string]repository.App{},
-		Charts:      map[string]repository.Chart{},
-		Builds:      map[string]repository.Build{},
-		Artifacts:   map[string]repository.Artifact{},
-		Idempotency: map[string]idemEntry{},
+		Apps:         map[string]repository.App{},
+		Charts:       map[string]repository.Chart{},
+		Builds:       map[string]repository.Build{},
+		Artifacts:    map[string]repository.Artifact{},
+		Idempotency:  map[string]idemEntry{},
+		Environments: map[string]repository.Environment{},
 	}
 }
 
@@ -81,6 +83,13 @@ func (r *Registry) Apps() repository.AppRepository                { return r }
 func (r *Registry) Builds() repository.BuildRepository            { return r }
 func (r *Registry) Artifacts() repository.ArtifactRepository      { return r }
 func (r *Registry) Idempotency() repository.IdempotencyRepository { return r }
+
+// Environments returns a distinct type, not Registry itself, because
+// EnvironmentRepository.Get/List collide by name with IdempotencyRepository's
+// Get and AppRepository's List-shaped methods if implemented directly on
+// Registry -- Go has no method overloading. Every method still reads/writes
+// r.state, the same map WithTx snapshots.
+func (r *Registry) Environments() repository.EnvironmentRepository { return environmentFake{r} }
 
 // WithTx snapshots state, runs fn against a Registry sharing that snapshot,
 // and commits the snapshot back only if fn succeeds — giving the fake the
@@ -455,6 +464,85 @@ func (r *Registry) Get(ctx context.Context, key string) ([]byte, bool, error) {
 func (r *Registry) Put(ctx context.Context, key, method string, response []byte) error {
 	r.state.Idempotency[key] = idemEntry{Method: method, Response: response}
 	return nil
+}
+
+// ============================================================================
+// EnvironmentRepository
+// ============================================================================
+
+// environmentFake implements repository.EnvironmentRepository over the same
+// *Registry.state every other repository reads/writes -- see Environments's
+// doc comment for why this can't be a set of methods directly on Registry.
+type environmentFake struct{ r *Registry }
+
+// Upsert mirrors postgres's environmentRepo.Upsert: creates by Key, or
+// updates every field but Key (the immutable identity) and Archived (only
+// Archive changes that) if a row already exists.
+func (f environmentFake) Upsert(ctx context.Context, e repository.Environment) (*repository.Environment, bool, error) {
+	if existing, ok := f.findByKey(e.Key); ok {
+		updated := existing
+		updated.DisplayName = e.DisplayName
+		updated.Rank = e.Rank
+		updated.RequiresApproval = e.RequiresApproval
+		updated.GitopsPath = e.GitopsPath
+		updated.AllowedPrincipals = e.AllowedPrincipals
+		f.r.state.Environments[updated.EnvironmentID] = updated
+		return &updated, false, nil
+	}
+
+	e.EnvironmentID = uuid.NewString()
+	e.Archived = false
+	f.r.state.Environments[e.EnvironmentID] = e
+	return &e, true, nil
+}
+
+func (f environmentFake) Get(ctx context.Context, key string) (*repository.Environment, error) {
+	if e, ok := f.findByKey(key); ok {
+		return &e, nil
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (f environmentFake) List(ctx context.Context, includeArchived bool) ([]repository.Environment, error) {
+	var out []repository.Environment
+	for _, e := range f.r.state.Environments {
+		if !includeArchived && e.Archived {
+			continue
+		}
+		out = append(out, e)
+	}
+	sortEnvironments(out)
+	return out, nil
+}
+
+// Archive mirrors postgres's environmentRepo.Archive: archived -> archived
+// is a no-op success so a retried archive call is safe. reason is accepted
+// (and required at the handler layer) but not persisted, same as
+// SetAppStatus's reason today.
+func (f environmentFake) Archive(ctx context.Context, key, reason string) (*repository.Environment, error) {
+	e, ok := f.findByKey(key)
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	if e.Archived {
+		return &e, nil
+	}
+	e.Archived = true
+	f.r.state.Environments[e.EnvironmentID] = e
+	return &e, nil
+}
+
+func (f environmentFake) findByKey(key string) (repository.Environment, bool) {
+	for _, e := range f.r.state.Environments {
+		if e.Key == key {
+			return e, true
+		}
+	}
+	return repository.Environment{}, false
+}
+
+func sortEnvironments(envs []repository.Environment) {
+	sort.Slice(envs, func(i, j int) bool { return envs[i].Rank < envs[j].Rank })
 }
 
 // ============================================================================

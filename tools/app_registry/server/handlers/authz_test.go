@@ -277,3 +277,98 @@ func TestArtifactReads_RequireAuthenticationOnly(t *testing.T) {
 
 	_ = build
 }
+
+// TestUpsertEnvironment_Authorization and TestArchiveEnvironment_Authorization
+// cover EnvironmentRegistry's write RPCs, which require RoleAdmin per
+// ARCHITECTURE.md's Authorization table -- unlike every other service,
+// EnvironmentRegistry has no builder/promoter carve-out at all, so a
+// builder credential (real power over AppRegistry/ArtifactRegistry) must
+// not be able to touch it either.
+func TestUpsertEnvironment_Authorization(t *testing.T) {
+	req := &pb.UpsertEnvironmentRequest{Key: "dev", DisplayName: "Development"}
+
+	t.Run("correct role allowed", func(t *testing.T) {
+		srv := NewEnvironmentServer(fake.New())
+		_, err := srv.UpsertEnvironment(ctxWithRoles(auth.RoleAdmin), req)
+		if err != nil {
+			t.Fatalf("expected admin to be allowed, got %v", err)
+		}
+	})
+
+	t.Run("wrong role is PermissionDenied", func(t *testing.T) {
+		srv := NewEnvironmentServer(fake.New())
+		_, err := srv.UpsertEnvironment(ctxWithRoles(auth.RoleBuilder), req)
+		requireCode(t, err, codes.PermissionDenied, "UpsertEnvironment")
+	})
+
+	t.Run("no claims is Unauthenticated", func(t *testing.T) {
+		srv := NewEnvironmentServer(fake.New())
+		_, err := srv.UpsertEnvironment(context.Background(), req)
+		requireCode(t, err, codes.Unauthenticated, "UpsertEnvironment")
+	})
+}
+
+func TestArchiveEnvironment_Authorization(t *testing.T) {
+	newSrvWithEnv := func(t *testing.T) *EnvironmentServer {
+		t.Helper()
+		srv := NewEnvironmentServer(fake.New())
+		if _, err := srv.UpsertEnvironment(ctxWithRoles(auth.RoleAdmin), &pb.UpsertEnvironmentRequest{Key: "dev"}); err != nil {
+			t.Fatalf("seed environment: %v", err)
+		}
+		return srv
+	}
+	req := &pb.ArchiveEnvironmentRequest{Key: "dev", Reason: "decommissioned"}
+
+	t.Run("correct role allowed", func(t *testing.T) {
+		srv := newSrvWithEnv(t)
+		_, err := srv.ArchiveEnvironment(ctxWithRoles(auth.RoleAdmin), req)
+		if err != nil {
+			t.Fatalf("expected admin to be allowed, got %v", err)
+		}
+	})
+
+	t.Run("wrong role is PermissionDenied", func(t *testing.T) {
+		srv := newSrvWithEnv(t)
+		// A builder credential -- real power over AppRegistry/ArtifactRegistry,
+		// none over EnvironmentRegistry.
+		_, err := srv.ArchiveEnvironment(ctxWithRoles(auth.RoleBuilder), req)
+		requireCode(t, err, codes.PermissionDenied, "ArchiveEnvironment")
+	})
+
+	t.Run("no claims is Unauthenticated", func(t *testing.T) {
+		srv := newSrvWithEnv(t)
+		_, err := srv.ArchiveEnvironment(context.Background(), req)
+		requireCode(t, err, codes.Unauthenticated, "ArchiveEnvironment")
+	})
+}
+
+// TestEnvironmentReads_RequireAuthenticationOnly covers GetEnvironment and
+// ListEnvironments: any authenticated principal, no specific role -- not
+// even RoleAdmin, matching every other service's read RPCs.
+func TestEnvironmentReads_RequireAuthenticationOnly(t *testing.T) {
+	srv := NewEnvironmentServer(fake.New())
+	if _, err := srv.UpsertEnvironment(ctxWithRoles(auth.RoleAdmin), &pb.UpsertEnvironmentRequest{Key: "dev"}); err != nil {
+		t.Fatalf("seed environment: %v", err)
+	}
+
+	// A principal with an unrelated single role still passes.
+	readerCtx := ctxWithRoles(auth.RoleBuilder)
+
+	t.Run("GetEnvironment", func(t *testing.T) {
+		if _, err := srv.GetEnvironment(readerCtx, &pb.GetEnvironmentRequest{Key: "dev"}); err != nil {
+			t.Fatalf("expected any authenticated principal to get an environment, got %v", err)
+		}
+		if _, err := srv.GetEnvironment(context.Background(), &pb.GetEnvironmentRequest{Key: "dev"}); status.Code(err) != codes.Unauthenticated {
+			t.Fatalf("expected Unauthenticated with no claims, got %v", err)
+		}
+	})
+
+	t.Run("ListEnvironments", func(t *testing.T) {
+		if _, err := srv.ListEnvironments(readerCtx, &pb.ListEnvironmentsRequest{}); err != nil {
+			t.Fatalf("expected any authenticated principal to list environments, got %v", err)
+		}
+		if _, err := srv.ListEnvironments(context.Background(), &pb.ListEnvironmentsRequest{}); status.Code(err) != codes.Unauthenticated {
+			t.Fatalf("expected Unauthenticated with no claims, got %v", err)
+		}
+	})
+}
