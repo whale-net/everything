@@ -4,9 +4,9 @@ load("//tools/bazel:release.bzl", "release_app")
 go_binary(
     name = "migration",
     srcs = ["main.go"],
-    embedsrcs = glob(["migrations/*.sql"]),
     deps = [
         "//libs/go/migrate",
+        "//tools/app_registry/migrate/schema",
     ],
     visibility = ["//visibility:public"],
 )

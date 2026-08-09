@@ -1,0 +1,13 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+# Embeds the real golang-migrate SQL so both the migration binary
+# (//tools/app_registry/migrate) and the Postgres integration tests
+# (//tools/app_registry/server/repository/postgres) apply the exact same
+# schema instead of maintaining separate copies. See schema.go.
+go_library(
+    name = "schema",
+    srcs = ["schema.go"],
+    embedsrcs = glob(["migrations/*.sql"]),
+    importpath = "github.com/whale-net/everything/tools/app_registry/migrate/schema",
+    visibility = ["//visibility:public"],
+)

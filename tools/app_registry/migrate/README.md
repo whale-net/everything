@@ -6,13 +6,20 @@ Not yet implemented.
 
 ## Pattern
 
-Follows `manmanv2/migrate` exactly — embedded SQL plus `libs/go/migrate`:
+Follows `manmanv2/migrate` in spirit — embedded SQL plus `libs/go/migrate` —
+with one deviation: the `//go:embed` lives in a small `schema` sub-package
+(`schema.Migrations` / `schema.Dir`) rather than directly in `main.go`, so the
+Postgres integration tests under `server/repository/postgres` can apply the
+same real migrations instead of duplicating the SQL as hand-written DDL.
 
 ```go
+// migrate/schema/schema.go
 //go:embed migrations/*.sql
-var migrations embed.FS
+var Migrations embed.FS
+const Dir = "migrations"
 
-func main() { migrate.RunCLI(migrations, "migrations") }
+// migrate/main.go
+func main() { migrate.RunCLI(schema.Migrations, schema.Dir) }
 ```
 
 Deployed as a Helm pre-sync job (`app_type: job`), ordered ahead of the API via

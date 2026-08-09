@@ -10,33 +10,26 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) before executing any phase.
 
 ## Current status
 
-*Last updated at the end of the AR-2b session. Nothing is merged — every phase
-below is an open PR, held deliberately.*
+*Last updated at the start of the AR-2d/AR-3 session. **AR-M through AR-2c are
+all merged to `main`.***
 
-| Phase | Branch | PR | State |
-|---|---|---|---|
-| AR-M | `ar-m-manifest-schema` | [#495](https://github.com/whale-net/everything/pull/495) | CI green, held |
-| AR-1 | `ar-1-foundations` | [#496](https://github.com/whale-net/everything/pull/496) | CI green, held |
-| AR-2a | `ar-2a-recording` | [#499](https://github.com/whale-net/everything/pull/499) | verified against real Postgres |
-| AR-2b | `ar-2b-lockfile` | [#500](https://github.com/whale-net/everything/pull/500) | verified, charts byte-identical |
-| AR-2c | `ar-2c-cicd-wiring` | (open) | CI unverified — needs a real registry deployment to exercise |
-| — | `testcontainers-poc` | [#498](https://github.com/whale-net/everything/pull/498) | independent, off `main` |
+| Phase | PR | State |
+|---|---|---|
+| AR-M | [#495](https://github.com/whale-net/everything/pull/495) | merged |
+| AR-1 | [#496](https://github.com/whale-net/everything/pull/496) | merged |
+| AR-2a | [#499](https://github.com/whale-net/everything/pull/499) | merged — verified against real Postgres |
+| AR-2b | [#500](https://github.com/whale-net/everything/pull/500) | merged — charts byte-identical |
+| AR-2c | [#502](https://github.com/whale-net/everything/pull/502) | merged — CI path unexercised until the registry is deployed |
+| dbtest | [#498](https://github.com/whale-net/everything/pull/498) | merged — `libs/go/dbtest` available |
 
-Stacked as `main → AR-M → AR-1 → AR-2a → AR-2b → AR-2c` (GitHub stack #501).
-#498 is independent of the stack.
+The registry is being deployed to `dev` by the repo owner. `app-registry-api`
+and `app-registry-migration` images publish from `apps=all`.
+`APP_REGISTRY_CICD_OPT_IN` is still unset, so CI makes no registry calls.
 
-**Why nothing is merged:** the repo owner is deploying the registry and setting
-up its secrets first. AR-M is the only production-behaviour change in the stack
-and is the one worth watching a release cycle on. Note the circularity — AR-M
-cannot be exercised by a release until it is on `main`.
+**Next up:** AR-2d (Postgres repository test coverage — the top carry-over item)
+then AR-3, which is blocked on settling auth.
 
-**Merging #496 publishes two new images.** AR-1 adds `app-registry-api` and
-`app-registry-migration` as `release_app` targets, so `apps=all` will build and
-push them. That is intended (you need images to deploy) but is not gated by
-`APP_REGISTRY_CICD_OPT_IN`, which governs whether CI *calls* the registry, not
-whether the registry's own images are built.
-
-### AR-2c — done, not merged
+### AR-2c — merged
 
 - `.github/workflows/release.yml` calls the CLI after image and chart pushes:
   the `release` job resolves each pushed image's digest
@@ -63,16 +56,60 @@ whether the registry's own images are built.
   (`deploy_unit = "none"`) so `app-registry-cli` publishes as an image and
   can be run via `docker run`/`bazel run` instead of a local build.
 
-Safe to build and merge before the registry is deployed: with the variable
-unset, CI makes no registry calls at all.
+Safe with the registry undeployed: with the variable unset, CI makes no registry
+calls at all.
+
+### AR-2d — Postgres repository test coverage — done, not merged
+
+**Goal:** close the top carry-over gap below. `server/repository/postgres/*.go`
+is compile-checked only; two real bugs shipped past green tests in AR-2a
+because the in-memory fake has no transactions.
+
+**Scope**
+- `server/repository/postgres/postgres_integration_test.go` behind
+  `//go:build integration`, using `libs/go/dbtest`, applying the real
+  migrations (not hand-written DDL) so schema drift is caught too. The real
+  migrations were not reusable as-is: `migrate/main.go`'s `//go:embed` lived
+  in `package main`, which a test package cannot import. Smallest fix: moved
+  `migrate/migrations/` to `migrate/schema/migrations/` behind a new
+  `migrate/schema` package exporting `schema.Migrations embed.FS` /
+  `schema.Dir`; `migrate/main.go` now calls `migrate.RunCLI(schema.Migrations,
+  schema.Dir)`. No SQL duplicated.
+- `go_test` target `postgres_integration_test` copying
+  `//libs/go/dbtest:postgres_constraints_test`'s tag set exactly (`external`,
+  `integration`, `manual`, `no-cache`, `no-sandbox`, `requires-network`),
+  hand-written with a `# keep` marker (gazelle skips `//go:build integration`
+  files, and won't regenerate or remove this rule — verified against a real
+  `bazel run //:gazelle`).
+- Covers the paths the fake cannot: transaction rollback on a failed
+  statement mid-`RecordArtifact` (a duplicate `artifact_link` insert aborts
+  the whole write, no partial artifact row survives), idempotency-key replay
+  returning the stored response without double-writing (proven with a
+  *different* payload on the replay call, so it can't be confused with the
+  natural-key dedup every write already has), the real `artifact_version_idx`
+  unique index rejecting a same-owner/kind/version collision the app-level
+  digest pre-check would miss, and `ResolveArtifact`'s chart→image join.
+- **Deferred, not in this pass:** the SCD2 `promotion_current_idx` partial
+  unique index — the `promotion` table doesn't exist yet (ships in migration
+  `002`, AR-3). Add its test alongside that migration. Also deferred: the CI
+  job invoking the target explicitly (mirroring
+  `//tools/scripts:test_cross_compilation`'s `setup-docker: 'true'` job) —
+  left for a follow-up since it touches `.github/workflows/` outside this
+  change's `tools/app_registry/` scope.
+
+**Exit criteria** — met. Each new test was verified to fail when its
+assertion was deliberately broken (see `TODO-AR-2d.md` and the phase report
+for exact failure output), then reverted. `bazel test //tools/...` and
+`bazel build //tools/...` stay green on a Docker-less path — the `manual` tag
+excludes the new target from wildcard expansion.
 
 ### Carry-over items
 
-- **`server/repository/postgres/*.go` has no automated test coverage.** Handler
-  logic is tested against the in-memory fake; the SQL is compile-checked only.
-  Two real bugs (see #499) got through green tests because the fake has no
-  transactions. **Wiring `libs/go/dbtest` (#498) into this package is the
-  highest-value next testing task.**
+- **`server/repository/postgres/*.go` has no automated test coverage.** ~~Handler
+  logic is tested against the in-memory fake; the SQL is compile-checked only.~~
+  **Resolved by AR-2d** — see `postgres_integration_test.go`. The SCD2
+  `promotion` table's partial unique index is still untested; it doesn't
+  exist until AR-3's migration `002` lands (see AR-2d's scope note above).
 - **Auth is unimplemented.** Handlers check no claims; the Tiltfile runs
   `GRPC_AUTH_MODE=none`. Fine for AR-2 (recording, CI service account), **not**
   fine for AR-3, whose entire point is that a build credential cannot promote to
