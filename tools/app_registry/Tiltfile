@@ -8,7 +8,7 @@ load('ext://namespace', 'namespace_create')
 load('ext://dotenv', 'dotenv')
 load('../tilt/common.tilt',
      'build_images_from_apps', 'detect_platform', 'get_bazel_platform', 'get_watch_paths',
-     'setup_dev_util', 'setup_postgres', 'setup_otelcollector',
+     'setup_dev_util', 'setup_postgres', 'setup_otelcollector', 'setup_temporal',
      'get_env_bool', 'get_custom_or_default',
      'print_startup_banner', 'print_footer_info')
 
@@ -44,9 +44,20 @@ pg_database_url = get_custom_or_default(
 # OpenTelemetry Collector
 otel_endpoint = setup_otelcollector(namespace)
 
+# Temporal dev server — AR-4a foundations only. Nothing consumes this yet
+# (no outbox, no WritebackWorkflow — that's AR-4b); this just makes the
+# server available so libs/go/temporal can be exercised locally.
+if get_env_bool('ENABLE_TEMPORAL', default='true'):
+    temporal_info = setup_temporal(namespace)
+    temporal_host = temporal_info['grpc_target']
+else:
+    temporal_info = None
+    temporal_host = ''
+
 print("📊 Infrastructure configured:")
 print("  Postgres:  {}".format("custom" if os.environ.get('BUILD_POSTGRES_ENV') == 'custom' else "local"))
 print("  OTEL:      {}".format(otel_endpoint))
+print("  Temporal:  {}".format(temporal_host if temporal_info else "disabled"))
 
 # ===========================
 # Application Configuration
@@ -182,6 +193,8 @@ print("📡 Access Information")
 print("="*60)
 print("  PostgreSQL:  localhost:5432 (user: postgres, pass: password)")
 print("  API (gRPC):  localhost:50061")
+if temporal_info:
+    print("  Temporal:    localhost:7233 (gRPC), {} (Web UI)".format(temporal_info['ui_service_info']))
 print("="*60)
 
 print_footer_info('app-registry')

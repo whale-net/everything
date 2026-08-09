@@ -4,6 +4,12 @@
 > `app-registry-migration`. AR-1 ships no business logic, so this only covers
 > connectivity, auth mode, and observability — not yet promotion/writeback
 > configuration (AR-3/AR-4).
+>
+> **AR-4a** adds `libs/go/temporal` (client/worker bootstrap only — no
+> outbox, no workflow, no `app-registry-worker` binary yet; that's AR-4b) and
+> a Temporal dev server in Tilt. Its env vars are listed below for
+> completeness, but nothing in `app-registry-api`/`app-registry-migration`
+> reads them yet.
 
 ## Database
 
@@ -94,12 +100,26 @@ placement rationale:
 variable — the CLI must match whatever the server runs, and the server is
 expected to run `oidc` in every environment these workflows target.
 
+## Temporal (`libs/go/temporal`, AR-4a foundations only)
+
+| Variable | Default | Description |
+|----------|---------|--------------|
+| `TEMPORAL_HOST` | `localhost:7233` | Temporal frontend service `host:port`. Named to match `friendly_computing_machine`'s existing `TEMPORAL_HOST` convention. |
+| `TEMPORAL_NAMESPACE` | `default` | Temporal namespace. |
+| `TEMPORAL_TASK_QUEUE` | *(none)* | Default task queue name; no fallback. |
+
+See [`libs/go/temporal/README.md`](../../libs/go/temporal/README.md) for the
+client/worker API. See
+[`TESTING.md`](TESTING.md#temporal-ar-4a) for exercising a local Temporal
+dev server via Tilt.
+
 ## Local Development (Tilt)
 
 ```bash
 # Enable/disable services (default: true)
 ENABLE_APP_REGISTRY_MIGRATION=true
 ENABLE_APP_REGISTRY_API=true
+ENABLE_TEMPORAL=true
 
 # Infrastructure — set to 'custom' to use an external Postgres
 BUILD_POSTGRES_ENV=default       # or 'custom'
@@ -107,4 +127,5 @@ PG_DATABASE_URL=postgres://...   # if BUILD_POSTGRES_ENV=custom
 ```
 
 Local access (`tilt up` from `tools/app_registry/`): API forwarded to
-`localhost:50061`, Postgres to `localhost:5432`.
+`localhost:50061`, Postgres to `localhost:5432`, Temporal gRPC to
+`localhost:7233` and Web UI to `localhost:8233`.

@@ -463,13 +463,39 @@ scope in a library `manmanv2` also depends on, and is not worth it here.
 registry, without wiring it to anything. Publishing targets live in another
 repo and are out of scope.
 
+**Split into two PRs** once it became clear the Temporal SDK's Bazel
+integration and the outbox/workflow logic were separable risks worth landing
+independently:
+
+| PR | Scope |
+|---|---|
+| **AR-4a** | Temporal Go SDK foundations — get `go.temporal.io/sdk` building under Bazel, `libs/go/temporal` (client/worker bootstrap, env config, logging bridge), and a Temporal dev server in Tilt. No outbox, no workflow, no worker binary. |
+| **AR-4b** | `writeback_outbox`, `tools/app_registry/worker`, `WritebackWorkflow`/`Writeback` activity (stub implementation), `state_hash`, `release_app` for `app-registry-worker`. |
+
+### AR-4a — Temporal Go SDK foundations — done
+
+- Added `go.temporal.io/sdk` (v1.44.0) to `go.mod`; resolved transitively by
+  Bazel's `go_deps.from_file` with **no `gazelle_override` needed** — the
+  dependency tree (`go.temporal.io/api`, grpc-middleware, nexus-rpc,
+  robfig/cron, etc.) built cleanly. Only change to `MODULE.bazel` was adding
+  `io_temporal_go_sdk` to the `go_deps` `use_repo()` list, via `bazel mod
+  tidy`. This was expected to be "the largest unknown in the project" — it
+  turned out not to need any patching.
+- `libs/go/temporal`: `ConfigFromEnv()` (`TEMPORAL_HOST`/`TEMPORAL_NAMESPACE`/
+  `TEMPORAL_TASK_QUEUE`), `NewClient()`, `NewWorker()`, and `NewLogger()` — a
+  thin wrapper around the SDK's own `log.NewStructuredLogger(*slog.Logger)`
+  bridging to `libs/go/logging`. See `libs/go/temporal/README.md`.
+- `tools/tilt/common.tilt`: `setup_temporal()` deploys `temporal server
+  start-dev` (image `temporalio/temporal`) via an inline manifest — the
+  shared dev-util Helm repo has no Temporal chart. Wired into
+  `tools/app_registry/Tiltfile` as `temporal-dev`, matching the resource name
+  `friendly_computing_machine/Tiltfile` already expects at
+  `temporal-dev.<namespace>.svc.cluster.local:7233`.
+
+### AR-4b — Outbox and writeback workflow
+
 **Scope**
 - `writeback_outbox` written inside the promotion transaction.
-- `libs/go/temporal` — client construction, env-driven config, worker
-  bootstrap, logging bridge to `libs/go/logging`. Add `go.temporal.io/sdk` to
-  `go.mod` and `MODULE.bazel`. **Not present in Go anywhere in this repo yet**
-  (fcm uses the Python SDK) — the largest unknown in the project, moved here
-  from AR-1 because nothing earlier needs it.
 - `tools/app_registry/worker` — Temporal worker draining the outbox.
 - `WritebackWorkflow` (workflow id = promotion id) over a `Writeback`
   activity interface, with a **stub implementation** that renders environment

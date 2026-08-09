@@ -399,6 +399,121 @@ def setup_rabbitmq_mqtt_plugin(namespace, resource_name='rabbitmq-dev', labels=[
         labels=labels,
     )
 
+def setup_temporal(namespace, resource_name='temporal-dev', port_forward=True, image='temporalio/temporal:1.8.2'):
+    """
+    Setup a Temporal dev server for local development.
+
+    Unlike setup_postgres()/setup_rabbitmq(), this does NOT use helm_resource:
+    the shared dev-util Helm repo (see setup_dev_util) publishes only
+    postgres-dev, rabbitmq-dev, and otelcollector-dev — there is no Temporal
+    chart. Deploys `temporal server start-dev` (single-binary dev server with
+    its own in-memory/sqlite storage) via an inline Kubernetes manifest
+    instead. `temporalite` — the previous standalone dev-server project — is
+    archived and folded into the Temporal CLI; do not use it.
+
+    Args:
+        namespace: Kubernetes namespace
+        resource_name: K8s resource name. Keep the 'temporal-dev' default —
+            friendly_computing_machine/Tiltfile already points TEMPORAL_HOST
+            at 'temporal-dev.<namespace>.svc.cluster.local:7233' and expects
+            a resource of this name to eventually provide it.
+        port_forward: Whether to forward the gRPC frontend (7233) and Web UI
+            (8233) ports
+        image: Temporal server image (default: temporalio/temporal:1.8.2).
+            Pinned deliberately -- a floating :latest makes every developer's
+            local Temporal a different version, and dev-server storage format
+            changes between releases.
+
+    Returns:
+        Dict with connection info:
+        {
+            'host': 'temporal-dev.namespace.svc.cluster.local',
+            'port': '7233',
+            'namespace': 'default',
+            'grpc_target': 'temporal-dev.namespace.svc.cluster.local:7233',
+            'ui_service_info': 'http://localhost:8233',
+            'service_info': 'localhost:7233 (namespace: default)',
+        }
+
+    Example:
+        temporal_info = setup_temporal('app-registry-local-dev')
+        os.putenv('TEMPORAL_HOST', temporal_info['grpc_target'])
+    """
+    host = '{}.{}.svc.cluster.local'.format(resource_name, namespace)
+
+    k8s_yaml(blob("""
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {resource_name}
+  namespace: {namespace}
+  labels:
+    app: {resource_name}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {resource_name}
+  template:
+    metadata:
+      labels:
+        app: {resource_name}
+    spec:
+      containers:
+      - name: temporal
+        image: {image}
+        args:
+        - server
+        - start-dev
+        - --ip
+        - 0.0.0.0
+        - --namespace
+        - default
+        ports:
+        - name: grpc
+          containerPort: 7233
+        - name: ui
+          containerPort: 8233
+        readinessProbe:
+          tcpSocket:
+            port: 7233
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          tcpSocket:
+            port: 7233
+          initialDelaySeconds: 15
+          periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {resource_name}
+  namespace: {namespace}
+spec:
+  selector:
+    app: {resource_name}
+  ports:
+  - name: grpc
+    port: 7233
+    targetPort: 7233
+  - name: ui
+    port: 8233
+    targetPort: 8233
+""".format(resource_name=resource_name, namespace=namespace, image=image)))
+
+    if port_forward:
+        k8s_resource(workload=resource_name, port_forwards=['7233:7233', '8233:8233'])
+
+    return {
+        'host': host,
+        'port': '7233',
+        'namespace': 'default',
+        'grpc_target': '{}:7233'.format(host),
+        'ui_service_info': 'http://localhost:8233',
+        'service_info': 'localhost:7233 (namespace: default)',
+    }
+
 def setup_otelcollector(namespace, resource_name='otelcollector-dev'):
     """
     Setup OpenTelemetry Collector using dev-util helm chart.
