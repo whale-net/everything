@@ -30,3 +30,43 @@ go_test(
         "@com_github_jackc_pgx_v5//pgconn",
     ],
 )
+
+# Real-Postgres integration coverage for this package -- see
+# postgres_integration_test.go's doc comment and ../../../TESTING.md.
+#
+# Gazelle does not generate this target: postgres_integration_test.go is
+# gated behind `//go:build integration`, which gazelle skips when scanning
+# for go_test srcs. This go_test is hand-written, with EXACTLY the tag set
+# from //libs/go/dbtest:postgres_constraints_test (see that package's
+# BUILD.bazel/README.md for why each tag is required). `# keep` markers tell
+# a later `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //tools/app_registry/server/repository/postgres:postgres_integration_test --test_output=all
+go_test(
+    # keep
+    name = "postgres_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["postgres_integration_test.go"],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "//tools/app_registry/migrate/schema",
+        "//tools/app_registry/protos:appregistrypb",
+        "//tools/app_registry/server/handlers",
+        "//tools/app_registry/server/repository",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)

@@ -1,14 +1,10 @@
 package main
 
 import (
-	"embed"
-
 	"github.com/whale-net/everything/libs/go/migrate"
+	"github.com/whale-net/everything/tools/app_registry/migrate/schema"
 )
 
-//go:embed migrations/*.sql
-var migrations embed.FS
-
 func main() {
-	migrate.RunCLI(migrations, "migrations")
+	migrate.RunCLI(schema.Migrations, schema.Dir)
 }

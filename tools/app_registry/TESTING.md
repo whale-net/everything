@@ -162,6 +162,24 @@ they need the Postgres tier, not this one:
 - `promotion_current_idx` (partial unique, `WHERE valid_to IS NULL`) — what
   makes double-promotion structurally impossible. Needed before AR-3 ships.
 
+### Running the Postgres integration tier (AR-2d)
+
+`server/repository/postgres/postgres_integration_test.go` (behind
+`//go:build integration`) starts a real Postgres container via
+`libs/go/dbtest`, applies the real migrations from `migrate/schema` (the same
+embedded SQL `app-registry-migration` runs — not hand-written DDL), and
+exercises transaction-abort rollback, idempotency-key replay, real
+unique-index enforcement, and the `ResolveArtifact` chart→image join. See
+`libs/go/dbtest/README.md` for the general pattern and its rough edges.
+
+Requires a working Docker daemon. Run it explicitly — it is `manual`-tagged
+and excluded from `bazel test //...`:
+
+```bash
+bazel test //tools/app_registry/server/repository/postgres:postgres_integration_test \
+  --test_output=all
+```
+
 ## Verified
 
 Full chain confirmed on Docker Desktop Kubernetes at AR-1: images build →
