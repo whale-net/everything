@@ -3,15 +3,16 @@
 gRPC service that records published artifacts and tracks per-environment
 promotion state.
 
-**Status: AR-2c complete, nothing merged.** Recording works end to end —
-`ReconcileApps`, `RecordBuild`/`RecordArtifact` and the chart image lockfile are
-implemented and verified against real Postgres. The release workflow now calls
-the CLI's write path after image/chart pushes, gated behind
-`APP_REGISTRY_CICD_OPT_IN`. Promotions, environments and writeback (AR-3/AR-4)
-are still `Unimplemented`.
+**Status: AR-M through AR-2c merged to `main`; AR-3 (Promotion) underway.**
+Recording works end to end — `ReconcileApps`, `RecordBuild`/`RecordArtifact`
+and the chart image lockfile are implemented and verified against real
+Postgres. The release workflow calls the CLI's write path after image/chart
+pushes, gated behind `APP_REGISTRY_CICD_OPT_IN`. The registry is being
+deployed to `dev`. AR-3 is split into a 4-PR stack (auth, environments,
+promotions, CLI); environments and promotions stay `Unimplemented` until
+AR-3b/3c land.
 
-All phases sit in open PRs, held while the service is deployed and its secrets
-configured. **See [PLAN.md](PLAN.md) → "Current status" for the branch/PR map,
+**See [PLAN.md](PLAN.md) → "Current status" for the branch/PR map,
 what is next, and the carry-over items** — start there when picking this up.
 
 ## Documents
@@ -38,6 +39,7 @@ what is next, and the carry-over items** — start there when picking this up.
 
 ## Related
 
+- [`../../libs/go/grpcauth/KEYCLOAK.md`](../../libs/go/grpcauth/KEYCLOAK.md) — Keycloak setup for the role model enforced in `server/auth`; the reference pattern for service-to-service auth in this repo
 - [`../../docs/RELEASE.md`](../../docs/RELEASE.md) — the existing release system this registry indexes
 - [`../appmeta/README.md`](../appmeta/README.md) — **shared manifest schema** (`AppManifest`, `DeployUnit`); the registry consumes it rather than defining its own
 - [`../bazel/release.bzl`](../bazel/release.bzl) — `release_app` manifests, the source of app identity

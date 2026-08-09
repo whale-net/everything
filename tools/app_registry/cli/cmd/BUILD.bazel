@@ -15,6 +15,7 @@ go_library(
     importpath = "github.com/whale-net/everything/tools/app_registry/cli/cmd",
     visibility = ["//visibility:public"],
     deps = [
+        "//libs/go/grpcauth",
         "//libs/go/grpcclient",
         "//tools/app_registry/protos:appregistrypb",
         "//tools/appmeta/proto:appmetapb",

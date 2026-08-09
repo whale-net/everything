@@ -15,6 +15,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//tools/app_registry/protos:appregistrypb",
+        "//tools/app_registry/server/auth",
         "//tools/app_registry/server/repository",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
@@ -28,10 +29,13 @@ go_test(
     srcs = [
         "app_test.go",
         "artifact_test.go",
+        "authz_test.go",
     ],
     embed = [":handlers"],
     deps = [
+        "//libs/go/grpcauth",
         "//tools/app_registry/protos:appregistrypb",
+        "//tools/app_registry/server/auth",
         "//tools/app_registry/server/repository/fake",
         "//tools/appmeta/proto:appmetapb",
         "@org_golang_google_grpc//codes",

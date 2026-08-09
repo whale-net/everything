@@ -11,6 +11,7 @@ go_library(
         "//libs/go/grpcauth",
         "//libs/go/logging",
         "//tools/app_registry/protos:appregistrypb",
+        "//tools/app_registry/server/auth",
         "//tools/app_registry/server/handlers",
         "//tools/app_registry/server/repository",
         "//tools/app_registry/server/repository/postgres",
@@ -55,7 +56,9 @@ go_test(
     srcs = ["main_test.go"],
     embed = [":api_lib"],
     deps = [
+        "//libs/go/grpcauth",
         "//tools/app_registry/protos:appregistrypb",
+        "//tools/app_registry/server/auth",
         "//tools/app_registry/server/repository/fake",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",

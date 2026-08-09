@@ -32,6 +32,15 @@ type ServerConfig struct {
 	Mode      AuthMode
 	IssuerURL string // required for OIDC
 	ClientID  string // expected audience
+
+	// DevRoles overrides the roles carried by the fake Claims injected in
+	// AuthModeNone. Defaults to []string{"admin"} when left empty. Set this
+	// when a service's authorization checks use service-prefixed role names
+	// (e.g. "app-registry-builder") that plain "admin" would never satisfy —
+	// otherwise local/Tilt development and any dev-mode CI path silently fail
+	// every role check. Ignored in AuthModeOIDC, where roles come from the
+	// verified token.
+	DevRoles []string
 }
 
 // ClientConfig holds client-side auth configuration
@@ -50,6 +59,16 @@ type claimsKey struct{}
 func ClaimsFromContext(ctx context.Context) (*Claims, bool) {
 	claims, ok := ctx.Value(claimsKey{}).(*Claims)
 	return claims, ok
+}
+
+// ContextWithClaims returns a context carrying claims exactly as the server
+// interceptor would have set it. Exported so tests in other packages can
+// exercise authorization logic against handlers called directly (bypassing
+// NewServerInterceptors, e.g. against an in-memory fake repository) without
+// duplicating the unexported context key. See
+// tools/app_registry/server/auth for a worked example.
+func ContextWithClaims(ctx context.Context, claims *Claims) context.Context {
+	return context.WithValue(ctx, claimsKey{}, claims)
 }
 
 // oidcVerifier implements TokenVerifier using go-oidc

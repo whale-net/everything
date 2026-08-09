@@ -25,13 +25,26 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/whale-net/everything/libs/go/dbtest"
+	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 	"github.com/whale-net/everything/tools/app_registry/migrate/schema"
+	"github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/handlers"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 )
+
+// authedCtx returns a context carrying a principal holding every app-registry
+// role, as the server interceptor would supply. Tests here exercise repository
+// and idempotency behaviour, not authorization -- the authorization checks
+// themselves are covered by server/auth and server/handlers/authz_test.go.
+func authedCtx() context.Context {
+	return grpcauth.ContextWithClaims(context.Background(), &grpcauth.Claims{
+		Subject: "integration-test",
+		Roles:   auth.AllRoles(),
+	})
+}
 
 // newTestRegistry starts a real Postgres container, applies the real
 // App Registry migrations (migrate/schema.Migrations, the same embed.FS the
@@ -188,7 +201,7 @@ func TestRecordArtifact_ChartLinkFailureRollsBackTransaction(t *testing.T) {
 // returned an equivalent result.
 func TestRecordBuild_IdempotencyKeyReplay_DoesNotDoubleWrite(t *testing.T) {
 	reg, pool := newTestRegistry(t)
-	ctx := context.Background()
+	ctx := authedCtx()
 	srv := handlers.NewArtifactServer(reg)
 
 	first, err := srv.RecordBuild(ctx, &pb.RecordBuildRequest{

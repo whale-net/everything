@@ -7,6 +7,7 @@ import (
 	"time"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -29,6 +30,9 @@ func NewArtifactServer(repo repository.Registry) *ArtifactServer {
 }
 
 func (s *ArtifactServer) RecordBuild(ctx context.Context, req *pb.RecordBuildRequest) (*pb.RecordBuildResponse, error) {
+	if err := auth.Require(ctx, auth.RoleBuilder); err != nil {
+		return nil, err
+	}
 	if req.WorkflowRunId == "" {
 		return nil, status.Error(codes.InvalidArgument, "workflow_run_id is required")
 	}
@@ -73,6 +77,9 @@ func (s *ArtifactServer) RecordBuild(ctx context.Context, req *pb.RecordBuildReq
 }
 
 func (s *ArtifactServer) RecordArtifact(ctx context.Context, req *pb.RecordArtifactRequest) (*pb.RecordArtifactResponse, error) {
+	if err := auth.Require(ctx, auth.RoleBuilder); err != nil {
+		return nil, err
+	}
 	if req.BuildId == "" {
 		return nil, status.Error(codes.InvalidArgument, "build_id is required")
 	}
@@ -150,6 +157,9 @@ func (s *ArtifactServer) resolveOwner(ctx context.Context, r repository.Registry
 }
 
 func (s *ArtifactServer) ListArtifacts(ctx context.Context, req *pb.ListArtifactsRequest) (*pb.ListArtifactsResponse, error) {
+	if err := auth.RequireAuthenticated(ctx); err != nil {
+		return nil, err
+	}
 	artifacts, err := s.repo.Artifacts().ListArtifacts(ctx, repository.ArtifactListFilter{
 		OwnerFullName:  req.OwnerFullName,
 		Kind:           artifactKindFromPB(req.Kind),
@@ -165,6 +175,9 @@ func (s *ArtifactServer) ListArtifacts(ctx context.Context, req *pb.ListArtifact
 }
 
 func (s *ArtifactServer) GetArtifact(ctx context.Context, req *pb.GetArtifactRequest) (*pb.GetArtifactResponse, error) {
+	if err := auth.RequireAuthenticated(ctx); err != nil {
+		return nil, err
+	}
 	lookup, err := artifactLookupFromGetRequest(req)
 	if err != nil {
 		return nil, err
@@ -200,6 +213,9 @@ func artifactLookupFromGetRequest(req *pb.GetArtifactRequest) (repository.Artifa
 var errMissingArtifactLookup = status.Error(codes.InvalidArgument, "artifact_id, digest, or owner_full_name+kind+version is required")
 
 func (s *ArtifactServer) ResolveArtifact(ctx context.Context, req *pb.ResolveArtifactRequest) (*pb.ResolveArtifactResponse, error) {
+	if err := auth.RequireAuthenticated(ctx); err != nil {
+		return nil, err
+	}
 	var lookup repository.ArtifactLookup
 	switch {
 	case req.ArtifactId != "":

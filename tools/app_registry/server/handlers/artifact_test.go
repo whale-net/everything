@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"testing"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
@@ -19,7 +18,7 @@ func setup(t *testing.T) (*AppServer, *ArtifactServer, map[string]*pb.App) {
 	repo := fake.New()
 	appSrv := NewAppServer(repo)
 	artifactSrv := NewArtifactServer(repo)
-	ctx := context.Background()
+	ctx := authedCtx()
 
 	reconcile, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
 		Manifests: manifestSet([]*appmetapb.AppManifest{
@@ -48,7 +47,7 @@ func setup(t *testing.T) (*AppServer, *ArtifactServer, map[string]*pb.App) {
 
 func recordBuild(t *testing.T, srv *ArtifactServer, runID string) *pb.Build {
 	t.Helper()
-	resp, err := srv.RecordBuild(context.Background(), &pb.RecordBuildRequest{
+	resp, err := srv.RecordBuild(authedCtx(), &pb.RecordBuildRequest{
 		GitSha: "abc123", WorkflowRunId: runID, IdempotencyKey: runID + "-build",
 	})
 	if err != nil {
@@ -62,7 +61,7 @@ func recordBuild(t *testing.T, srv *ArtifactServer, runID string) *pb.Build {
 // charts always being PROMOTABLE.
 func TestRecordArtifact_PromotabilityDerivation(t *testing.T) {
 	_, artifactSrv, apps := setup(t)
-	ctx := context.Background()
+	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-promo")
 
 	cases := []struct {
@@ -93,7 +92,7 @@ func TestRecordArtifact_PromotabilityDerivation(t *testing.T) {
 
 func TestRecordArtifact_ChartIsAlwaysPromotable(t *testing.T) {
 	_, artifactSrv, _ := setup(t)
-	ctx := context.Background()
+	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-chart-promo")
 
 	imgResp, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
@@ -125,7 +124,7 @@ func TestRecordArtifact_ChartIsAlwaysPromotable(t *testing.T) {
 // a chart artifact may not reference an image digest that was never recorded.
 func TestRecordArtifact_RejectsChartPinningUnrecordedImage(t *testing.T) {
 	_, artifactSrv, _ := setup(t)
-	ctx := context.Background()
+	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-reject")
 
 	_, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
@@ -155,7 +154,7 @@ func TestRecordArtifact_RejectsChartPinningUnrecordedImage(t *testing.T) {
 // does, so this test predicts real behaviour.
 func TestRecordArtifact_DuplicateOwnerKindVersionIsAlreadyExists(t *testing.T) {
 	_, artifactSrv, _ := setup(t)
-	ctx := context.Background()
+	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-dup")
 
 	first := &pb.RecordArtifactRequest{
@@ -188,7 +187,7 @@ func TestRecordArtifact_DuplicateOwnerKindVersionIsAlreadyExists(t *testing.T) {
 // a chart artifact returns the correct pinned image artifacts and builds.
 func TestResolveArtifact_ReturnsImagesForChart(t *testing.T) {
 	_, artifactSrv, _ := setup(t)
-	ctx := context.Background()
+	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-resolve")
 
 	img, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
@@ -229,7 +228,7 @@ func TestResolveArtifact_ReturnsImagesForChart(t *testing.T) {
 // row, asserted by ListArtifacts count.
 func TestRecordArtifact_IdempotencyReplaysWithoutDoubleWrite(t *testing.T) {
 	_, artifactSrv, _ := setup(t)
-	ctx := context.Background()
+	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-idem")
 
 	req := &pb.RecordArtifactRequest{
@@ -255,7 +254,7 @@ func TestRecordArtifact_IdempotencyReplaysWithoutDoubleWrite(t *testing.T) {
 
 func TestRecordBuild_IdempotencyReplaysWithoutDoubleWrite(t *testing.T) {
 	_, artifactSrv, _ := setup(t)
-	ctx := context.Background()
+	ctx := authedCtx()
 
 	req := &pb.RecordBuildRequest{GitSha: "abc", WorkflowRunId: "dup-run", IdempotencyKey: "dup-key"}
 	first, err := artifactSrv.RecordBuild(ctx, req)
@@ -273,7 +272,7 @@ func TestRecordBuild_IdempotencyReplaysWithoutDoubleWrite(t *testing.T) {
 
 func TestRecordArtifact_RejectsMissingIdempotencyKey(t *testing.T) {
 	_, artifactSrv, _ := setup(t)
-	ctx := context.Background()
+	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-noidem")
 
 	_, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
@@ -287,7 +286,7 @@ func TestRecordArtifact_RejectsMissingIdempotencyKey(t *testing.T) {
 
 func TestArtifactServer_AllocateVersionStillUnimplemented(t *testing.T) {
 	_, artifactSrv, _ := setup(t)
-	_, err := artifactSrv.AllocateVersion(context.Background(), &pb.AllocateVersionRequest{})
+	_, err := artifactSrv.AllocateVersion(authedCtx(), &pb.AllocateVersionRequest{})
 	if status.Code(err) != codes.Unimplemented {
 		t.Fatalf("expected Unimplemented, got %v", err)
 	}

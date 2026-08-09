@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"testing"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
@@ -25,7 +24,7 @@ func oneApp(domain, name string) *appmetapb.AppManifest {
 // TestReconcileApps_FullLifecycle walks create -> update -> absent-marks-MISSING
 // -> reappear-recovers-ACTIVE, matching the AR-2a scope's required coverage.
 func TestReconcileApps_FullLifecycle(t *testing.T) {
-	ctx := context.Background()
+	ctx := authedCtx()
 	srv := NewAppServer(fake.New())
 
 	// 1. create
@@ -92,7 +91,7 @@ func TestReconcileApps_FullLifecycle(t *testing.T) {
 // without mutating the registry: a subsequent real reconcile still sees the
 // app as newly created.
 func TestReconcileApps_DryRunWritesNothing(t *testing.T) {
-	ctx := context.Background()
+	ctx := authedCtx()
 	srv := NewAppServer(fake.New())
 
 	dryResp, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
@@ -132,7 +131,7 @@ func TestReconcileApps_DryRunWritesNothing(t *testing.T) {
 // not re-execute the write — asserted by row count, per AR-2a's required
 // coverage.
 func TestReconcileApps_IdempotencyReplaysWithoutDoubleWrite(t *testing.T) {
-	ctx := context.Background()
+	ctx := authedCtx()
 	srv := NewAppServer(fake.New())
 
 	req := &pb.ReconcileAppsRequest{
@@ -169,7 +168,7 @@ func TestReconcileApps_IdempotencyReplaysWithoutDoubleWrite(t *testing.T) {
 // ChartManifest.apps (bare app names) to app IDs and fail the reconcile if
 // any is unknown."
 func TestReconcileApps_UnknownChartAppFailsWholeReconcile(t *testing.T) {
-	ctx := context.Background()
+	ctx := authedCtx()
 	srv := NewAppServer(fake.New())
 
 	_, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
@@ -196,7 +195,7 @@ func TestReconcileApps_UnknownChartAppFailsWholeReconcile(t *testing.T) {
 // TestReconcileApps_ChartComposesApps covers the happy path of resolving a
 // chart's bare app names to app_ids.
 func TestReconcileApps_ChartComposesApps(t *testing.T) {
-	ctx := context.Background()
+	ctx := authedCtx()
 	srv := NewAppServer(fake.New())
 
 	resp, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
@@ -221,7 +220,7 @@ func TestReconcileApps_ChartComposesApps(t *testing.T) {
 // human triggers through this RPC: missing -> archived. missing -> active
 // happens automatically via Reconcile's "recovered" path instead.
 func TestSetAppStatus_MissingToArchivedSucceeds(t *testing.T) {
-	ctx := context.Background()
+	ctx := authedCtx()
 	srv := NewAppServer(fake.New())
 
 	created, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
@@ -266,7 +265,7 @@ func TestSetAppStatus_MissingToArchivedSucceeds(t *testing.T) {
 // TestSetAppStatus_RejectsActiveToArchived covers the FailedPrecondition
 // path: an app must be MISSING before it can be archived.
 func TestSetAppStatus_RejectsActiveToArchived(t *testing.T) {
-	ctx := context.Background()
+	ctx := authedCtx()
 	srv := NewAppServer(fake.New())
 
 	created, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
@@ -294,7 +293,7 @@ func TestSetAppStatus_RejectsActiveToArchived(t *testing.T) {
 // at all" — dropped along with the last_seen_at heuristic that used to guard
 // it, since Reconcile's recovered path is the only way back to ACTIVE.
 func TestSetAppStatus_RejectsActiveTarget(t *testing.T) {
-	ctx := context.Background()
+	ctx := authedCtx()
 	srv := NewAppServer(fake.New())
 	_, err := srv.SetAppStatus(ctx, &pb.SetAppStatusRequest{
 		AppId: "x", Status: pb.AppStatus_APP_STATUS_ACTIVE, Reason: "manual reactivate",
@@ -305,7 +304,7 @@ func TestSetAppStatus_RejectsActiveTarget(t *testing.T) {
 }
 
 func TestSetAppStatus_RequiresReason(t *testing.T) {
-	ctx := context.Background()
+	ctx := authedCtx()
 	srv := NewAppServer(fake.New())
 	_, err := srv.SetAppStatus(ctx, &pb.SetAppStatusRequest{AppId: "x", Status: pb.AppStatus_APP_STATUS_ARCHIVED})
 	if status.Code(err) != codes.InvalidArgument {

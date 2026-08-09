@@ -23,9 +23,13 @@ func NewServerInterceptors(ctx context.Context, config ServerConfig) (grpc.Unary
 		verifier = v
 	}
 
+	devRoles := config.DevRoles
+	if len(devRoles) == 0 {
+		devRoles = []string{"admin"}
+	}
 	devClaims := &Claims{
 		Subject: "dev-user",
-		Roles:   []string{"admin"},
+		Roles:   devRoles,
 	}
 
 	unary := func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {

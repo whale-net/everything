@@ -7,6 +7,7 @@ import (
 	"context"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -25,6 +26,9 @@ func NewAppServer(repo repository.Registry) *AppServer {
 }
 
 func (s *AppServer) ReconcileApps(ctx context.Context, req *pb.ReconcileAppsRequest) (*pb.ReconcileAppsResponse, error) {
+	if err := auth.Require(ctx, auth.RoleBuilder); err != nil {
+		return nil, err
+	}
 	if req.Manifests == nil {
 		return nil, status.Error(codes.InvalidArgument, "manifests is required")
 	}
@@ -76,6 +80,9 @@ func reconcileResultToPB(r *repository.ReconcileResult, dryRun bool) *pb.Reconci
 }
 
 func (s *AppServer) ListApps(ctx context.Context, req *pb.ListAppsRequest) (*pb.ListAppsResponse, error) {
+	if err := auth.RequireAuthenticated(ctx); err != nil {
+		return nil, err
+	}
 	apps, err := s.repo.Apps().ListApps(ctx, repository.AppListFilter{
 		Domain:     req.Domain,
 		Statuses:   appStatusesFromPB(req.Statuses),
@@ -91,6 +98,9 @@ func (s *AppServer) ListApps(ctx context.Context, req *pb.ListAppsRequest) (*pb.
 }
 
 func (s *AppServer) GetApp(ctx context.Context, req *pb.GetAppRequest) (*pb.GetAppResponse, error) {
+	if err := auth.RequireAuthenticated(ctx); err != nil {
+		return nil, err
+	}
 	app, err := s.lookupApp(ctx, req.AppId, req.FullName)
 	if err != nil {
 		return nil, mapRepoErr(err)
@@ -117,6 +127,9 @@ func (s *AppServer) lookupApp(ctx context.Context, appID, fullName string) (*rep
 }
 
 func (s *AppServer) ListCharts(ctx context.Context, req *pb.ListChartsRequest) (*pb.ListChartsResponse, error) {
+	if err := auth.RequireAuthenticated(ctx); err != nil {
+		return nil, err
+	}
 	charts, err := s.repo.Apps().ListCharts(ctx, repository.ChartListFilter{
 		Domain:   req.Domain,
 		Statuses: appStatusesFromPB(req.Statuses),
@@ -135,6 +148,9 @@ func (s *AppServer) ListCharts(ctx context.Context, req *pb.ListChartsRequest) (
 // automatically via its "recovered" path, so ACTIVE is not a legal target
 // here — see ARCHITECTURE.md "Triage".
 func (s *AppServer) SetAppStatus(ctx context.Context, req *pb.SetAppStatusRequest) (*pb.SetAppStatusResponse, error) {
+	if err := auth.Require(ctx, auth.RoleAdmin); err != nil {
+		return nil, err
+	}
 	if req.AppId == "" {
 		return nil, status.Error(codes.InvalidArgument, "app_id is required")
 	}

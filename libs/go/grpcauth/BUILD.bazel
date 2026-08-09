@@ -11,11 +11,11 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_coreos_go_oidc_v3//oidc",
-        "@org_golang_x_oauth2//:oauth2",
-        "@org_golang_x_oauth2//clientcredentials",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//metadata",
         "@org_golang_google_grpc//status",
+        "@org_golang_x_oauth2//:oauth2",
+        "@org_golang_x_oauth2//clientcredentials",
     ],
 )

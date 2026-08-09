@@ -44,6 +44,22 @@ if ok {
 }
 ```
 
+If your service uses service-prefixed role names (e.g. `app-registry-builder`
+rather than plain `admin`), set `ServerConfig.DevRoles` to the full list of
+roles your handlers check — otherwise `AuthModeNone`'s fake claims (which
+default to `Roles: ["admin"]`) satisfy none of them, and local/Tilt
+development breaks silently. See `tools/app_registry/server/main.go` for a
+worked example.
+
+Testing handlers directly (bypassing the interceptor) against injected
+claims:
+```go
+ctx := grpcauth.ContextWithClaims(context.Background(), &grpcauth.Claims{
+    Subject: "test-user",
+    Roles:   []string{"app-registry-builder"},
+})
+```
+
 ### Client — service account (Host, Log-Processor → API)
 
 Machine-to-machine: fetches a client credentials token once and auto-refreshes it.
@@ -137,6 +153,7 @@ type ServerConfig struct {
     Mode      AuthMode
     IssuerURL string
     ClientID  string
+    DevRoles  []string // AuthModeNone only; defaults to ["admin"]
 }
 
 type ClientConfig struct {
