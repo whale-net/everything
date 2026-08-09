@@ -25,6 +25,7 @@ what is next, and the carry-over items** — start there when picking this up.
 | `TODO-<PLAN_ID>.md` | Execution tracking for an in-flight phase; created when that phase starts |
 | [ENV.md](ENV.md) | Configuring, deploying, or debugging server/migration runtime behavior |
 | [TESTING.md](TESTING.md) | Running the registry locally in Tilt for manual integration testing; which checks belong in unit vs Postgres vs Tilt tiers |
+| [DEPLOY.md](DEPLOY.md) | Deploying for real — which Keycloak clients and roles to create, server env vars, and where each CI secret goes. Start here when standing the service up in an environment. |
 
 ## Components
 
