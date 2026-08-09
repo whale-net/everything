@@ -76,6 +76,24 @@ The CLI fetches and auto-refreshes a client-credentials token via
 KEYCLOAK.md section 6 "CI — GitHub Actions" for the shape of a workflow job
 setting these four variables.
 
+### CI wiring (AR-3d)
+
+`.github/workflows/release.yml`'s recording steps and
+`.github/workflows/promote.yml` set the four CLI variables above from GitHub
+Actions secrets/variables — see [DEPLOY.md](DEPLOY.md) §4 and §6 for the full
+placement rationale:
+
+| GitHub Actions name | Kind | Maps to | Used by |
+|---|---|---|---|
+| `vars.APP_REGISTRY_ADDRESS` | Repository variable | `APP_REGISTRY_ADDRESS` | both |
+| `vars.APP_REGISTRY_AUTH_TOKEN_URL` | Repository variable | `GRPC_AUTH_TOKEN_URL` | both |
+| `secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET` | Repository secret | `GRPC_AUTH_CLIENT_SECRET` (`GRPC_AUTH_CLIENT_ID=app-registry-builder`) | `release.yml` recording steps only |
+| `secrets.APP_REGISTRY_PROMOTER_CLIENT_SECRET` | Environment secret, one per `dev`/`stage`/`prod` GitHub Environment | `GRPC_AUTH_CLIENT_SECRET` (`GRPC_AUTH_CLIENT_ID=app-registry-promoter-<environment>`) | `promote.yml` only |
+
+`GRPC_AUTH_MODE=oidc` is hardcoded in both workflows rather than read from a
+variable — the CLI must match whatever the server runs, and the server is
+expected to run `oidc` in every environment these workflows target.
+
 ## Local Development (Tilt)
 
 ```bash

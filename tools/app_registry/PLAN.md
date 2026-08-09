@@ -26,9 +26,59 @@ The registry is being deployed to `dev` by the repo owner. `app-registry-api`
 and `app-registry-migration` images publish from `apps=all`.
 `APP_REGISTRY_CICD_OPT_IN` is still unset, so CI makes no registry calls.
 
-**Next up:** AR-3d (CLI `promote`/`rollback`/`status`/`history`/`diff` +
-`promote.yml`). AR-2d, AR-3a, AR-3b, and AR-3c are done and stacked on top
-of `main`.
+**AR-3 is now fully implemented** (AR-3a through AR-3d), stacked on top of
+`main` and not yet merged. AR-2d is also done, not merged.
+
+### AR-3d — CLI + `promote.yml` — done
+
+- `app-registry promote`/`rollback`/`status`/`history`/`diff` filled in
+  (`tools/app_registry/cli/cmd/promote.go`) — these commands already existed
+  as an AR-1 skeleton wired to the RPCs AR-3c just implemented; AR-3d is the
+  pass that made them real. `--idempotency-key` on `promote`/`rollback` is
+  now optional: a UUID is generated when omitted
+  (`promoteIdempotencyKey`), matching ARCHITECTURE.md "Idempotency"'s
+  human-promotion convention. `promote`'s `already_promoted` and both
+  commands' `dry_run` are surfaced as explicit stderr notes so neither looks
+  like a write happened. `status` prints every `DriftEntry` as a stderr
+  banner ahead of the JSON body — the failure mode of a drifted environment
+  that looks clean was the whole reason this command exists. `diff` computes
+  its result client-side from two `GetEnvironmentState` calls (per this
+  document's AR-3d scope note below — no server-side diff RPC), matching
+  targets by `image:<app_id>` / `chart:<chart_id>` and omitting entries whose
+  digest agrees on both sides. `history` combines `ListPromotions` and
+  `ListPromotionEvents`, formatted together via a new `printCombinedResponse`
+  helper since no single RPC returns both.
+- Unit tests for `diffEnvironmentStates` (both-empty, only-in-A, only-in-B,
+  digest-differs, identical-digest-omitted) and `promoteIdempotencyKey`
+  (generates when empty, preserves when given) —
+  `tools/app_registry/cli/cmd/promote_test.go`. The identical-digest-omitted
+  guard was verified to actually matter: temporarily forcing the "different"
+  branch unconditionally turned that test red, then reverted.
+- `.github/workflows/promote.yml`: human-triggered `workflow_dispatch`,
+  inputs `environment`/`action` (promote or rollback)/`owner_full_name`/
+  `version`/`reason`/`allow_override`/`dry_run`. Its job declares
+  `environment: ${{ inputs.environment }}` — the security-critical line that
+  scopes the job to that GitHub Environment's `app-registry-promoter-<env>`
+  secret and triggers its required reviewers, per the credential model below.
+  Not `continue-on-error`, unlike the AR-2c recording steps: a failed
+  promotion must fail the run.
+- `.github/workflows/release.yml`: wired the builder credential (repository
+  secret `APP_REGISTRY_BUILDER_CLIENT_SECRET` + repository variable
+  `APP_REGISTRY_AUTH_TOKEN_URL`) into the two existing AR-2c recording steps
+  so they authenticate once the server runs `oidc` — this closes the gap
+  DEPLOY.md §4 flagged (recording silently going stale because
+  `continue-on-error` masked `Unauthenticated`). `continue-on-error` and the
+  `APP_REGISTRY_CICD_OPT_IN` gate are unchanged.
+- Docs: `cli/README.md` (all commands documented, no longer "not yet
+  implemented"), `ENV.md` (new CI-side variable/secret names and their
+  mapping), `DEPLOY.md` (§4 warning resolved, new §6 for `promote.yml`,
+  promoter clients moved from "⏳ later" to "now").
+- **Static-only, not executed:** `promote.yml` and the `release.yml` auth
+  wiring cannot run without a deployed, `oidc`-mode registry and real
+  Keycloak clients/secrets — neither exists yet outside this session. Both
+  were checked for YAML validity only (`python3 -c "import yaml..."`), not
+  run. `bazel test //tools/app_registry/...` and `bazel build
+  //tools/app_registry/...` are green.
 
 ### AR-2c — merged
 

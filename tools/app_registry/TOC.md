@@ -3,16 +3,18 @@
 gRPC service that records published artifacts and tracks per-environment
 promotion state.
 
-**Status: AR-M through AR-2c merged to `main`; AR-3 (Promotion) underway.**
-Recording works end to end — `ReconcileApps`, `RecordBuild`/`RecordArtifact`
-and the chart image lockfile are implemented and verified against real
-Postgres. The release workflow calls the CLI's write path after image/chart
-pushes, gated behind `APP_REGISTRY_CICD_OPT_IN`. The registry is being
-deployed to `dev`. AR-3 is split into a 4-PR stack (auth, environments,
-promotions, CLI). Auth (AR-3a), `EnvironmentRegistry` (AR-3b), and
-`PromotionRegistry` (AR-3c) are done, all verified against real Postgres;
-the CLI's `promote`/`rollback`/`status`/`history`/`diff` commands and the
-human-triggered `promote.yml` workflow (AR-3d) are next.
+**Status: AR-M through AR-2c merged to `main`; AR-3 (Promotion) implemented,
+not yet merged.** Recording works end to end — `ReconcileApps`,
+`RecordBuild`/`RecordArtifact` and the chart image lockfile are implemented
+and verified against real Postgres. The release workflow calls the CLI's
+write path after image/chart pushes, gated behind `APP_REGISTRY_CICD_OPT_IN`.
+The registry is being deployed to `dev`. AR-3 was split into a 4-PR stack
+(auth, environments, promotions, CLI), all now done: auth (AR-3a),
+`EnvironmentRegistry` (AR-3b), and `PromotionRegistry` (AR-3c) are verified
+against real Postgres; AR-3d filled in the CLI's
+`promote`/`rollback`/`status`/`history`/`diff` commands, added
+`.github/workflows/promote.yml` (human-triggered, `environment:`-scoped),
+and wired the builder credential into `release.yml`'s recording steps.
 
 **See [PLAN.md](PLAN.md) → "Current status" for the branch/PR map,
 what is next, and the carry-over items** — start there when picking this up.
