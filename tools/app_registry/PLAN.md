@@ -617,6 +617,71 @@ CI now depends on the registry being up.
 **Do not start** until AR-2's parity check has been clean across a meaningful
 number of real releases.
 
+### Addendum — semver semantics (decided)
+
+Added after an audit of the existing version path found three gaps between
+what `tools/release_helper_go` does today and what the registry needs in order
+to *replace* git tags. These are decided; implement them as specified.
+
+Today `plan.go` parses semver with a regex and bumps by splitting on dots, but
+the "which version is latest" question is answered entirely by
+`git tag --sort=-version:refname` — **git supplies the semver ordering, and it
+disappears along with the tags.**
+
+**1. Major bumps become first-class.** `incrementVersion`'s switch handles only
+`minor` and `patch`; `major` returns `unknown increment type`, and `plan.go`
+exposes only `--increment-minor` / `--increment-patch`. Chart bumping
+(`build_helm.go`) already accepts all three, so the two halves of the release
+system disagree. `AllocateVersionRequest.increment` is already documented as
+`"major" | "minor" | "patch"`.
+
+Add `major` to `incrementVersion` and an `--increment-major` flag to `plan.go`,
+so the tag path and the registry path agree. Note the consequence for AR-5's
+parity exit criterion: allocation is now a **superset** of what tag-scanning
+produced, since the tag path could not express a major bump at all. That is
+intentional — parity is asserted for minor/patch, not for a capability that
+did not previously exist.
+
+**2. Versions get a sortable representation. This is the load-bearing change.**
+`artifact.version` is `TEXT` and the only index is
+`UNIQUE (owner_id, kind, version)` — there is no ordering at all. Once tags are
+gone, "what is the next patch?" is a SQL query, and `ORDER BY version DESC` on
+`TEXT` is **wrong**: lexically `v1.9.0` sorts above `v1.10.0`, so the release
+after `v1.10.0` would be computed as `v1.10.0` again — colliding with the
+unique constraint, or silently renumbering.
+
+Store the parsed version alongside the text:
+
+- `version_major`, `version_minor`, `version_patch` — `INT NOT NULL`,
+  populated at record/allocate time from the same parse.
+- Index `(owner_id, kind, version_major DESC, version_minor DESC,
+  version_patch DESC)` so "latest" and "next major/minor/patch" are one
+  indexed lookup with correct ordering.
+- The `UNIQUE (owner_id, kind, version)` constraint stays on the **text** form
+  — it is the collision guard and must keep matching what is published.
+
+A zero-padded sort key was rejected: it caps each component and reads badly in
+`psql`. The integer triple also makes range queries ("every 1.x of this app")
+expressible, which tags cannot answer without a client-side scan.
+
+Existing rows must be backfilled by the migration. A row whose version does not
+parse is a real condition, not a theoretical one (`plan.go` already tolerates
+unparseable tags by falling back to `v0.0.1`) — the migration must decide
+explicitly and say so in a comment rather than failing the deploy.
+
+**3. Prereleases are not supported, but the door is left open.** The regex
+accepts `v1.2.3-alpha.1` and `incrementVersion` strips the prerelease before
+bumping; build metadata (`+build`) is not accepted at all. Real semver also
+sorts a prerelease *before* its release, which nothing here implements.
+
+Patch releases cover the actual need. Therefore: **`AllocateVersion` rejects a
+prerelease or build-metadata version explicitly**, with an error saying it is
+unsupported — rather than half-accepting one and sorting it wrongly. Leave room
+for it: a later `version_prerelease TEXT` column can be added without changing
+the constraint or the integer triple, and the ordering index would gain a
+trailing term. Do not add the column now; do note the extension point in
+`ARCHITECTURE.md`.
+
 ---
 
 ## Explicitly out of scope
