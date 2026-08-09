@@ -91,11 +91,13 @@ because the in-memory fake has no transactions.
   digest pre-check would miss, and `ResolveArtifact`'s chart→image join.
 - **Deferred, not in this pass:** the SCD2 `promotion_current_idx` partial
   unique index — the `promotion` table doesn't exist yet (ships in migration
-  `002`, AR-3). Add its test alongside that migration. Also deferred: the CI
-  job invoking the target explicitly (mirroring
-  `//tools/scripts:test_cross_compilation`'s `setup-docker: 'true'` job) —
-  left for a follow-up since it touches `.github/workflows/` outside this
-  change's `tools/app_registry/` scope.
+  `002`, AR-3). Add its test alongside that migration.
+- **CI now runs this target** — the `Test Database Integration` job in
+  `.github/workflows/ci.yml`, added after AR-3a. It discovers targets by
+  querying for tests that depend on `//libs/go/dbtest`, so new dbtest-backed
+  tests need no CI change. This closed a real gap: because the target is
+  `manual`, nothing ran it, and AR-3a's auth enforcement broke it in a way only
+  caught by running the stacked branches together by hand.
 
 **Exit criteria** — met. Each new test was verified to fail when its
 assertion was deliberately broken (see `TODO-AR-2d.md` and the phase report

@@ -121,21 +121,39 @@ OOM-killed) will leak the Postgres container instead of it being force-cleaned. 
 abnormal termination. Prefer leaving Ryuk enabled unless you hit a concrete failure that requires
 disabling it.
 
-## What a CI job needs
+## CI
 
-Mirror `//tools/scripts:test_cross_compilation`'s job (`setup-docker: 'true'`), then:
+**These tests already run in CI** — the `Test Database Integration` job in
+[`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml). **You do not need to add
+anything to CI when you write a new dbtest-backed test.** The job discovers its targets by
+query rather than from a hardcoded list:
 
 ```bash
-bazel test //libs/go/dbtest:postgres_constraints_test --test_output=all
+SCOPE='//libs/... + //tools/... + //manmanv2/...'
+bazel query "tests($SCOPE) intersect rdeps($SCOPE, //libs/go/dbtest:dbtest)"
 ```
 
-- Docker must be available to the runner (the "Test Container Architecture" job's
-  `setup-docker: 'true'` step already provides this for other jobs in this repo).
+so any test that depends on this package is picked up the moment it exists. The job fails
+loudly if the query returns nothing, since a silently-empty run would report green while
+testing nothing.
+
+Two gotchas that cost a debugging cycle when this job was written:
+
+- **`bazel query` cannot take `--config=ci`.** Only `build:ci` and `test:ci` are defined in
+  `.bazelrc`, so `bazel query --config=ci` hard-errors with `Config value 'ci' is not defined
+  in any .rc file`. Pass it to `bazel test`, not to the discovery query.
+- **Do not add `--test_tag_filters`.** Combined with explicit labels, Bazel reports
+  `No test targets were found, yet testing was requested` — see the "Running it" section above.
+
+Requirements, if you are mirroring this elsewhere:
+
+- Docker must be available to the runner — `setup-docker: 'true'` on the `setup-build-env`
+  action, the same step `//tools/scripts:test_cross_compilation`'s job uses.
 - Network egress to pull `postgres:16-alpine` (and `testcontainers/ryuk:0.14.0` unless Ryuk is
   disabled) the first time; both are small (Alpine-based) so this is fast even uncached.
 - No new secrets or credentials are required — both images are public.
-- Do **not** add this target to a default `bazel test //...` CI step; invoke it explicitly as its
-  own job/step, same as `test_cross_compilation`.
+- Do **not** add these targets to a default `bazel test //...` CI step; they stay `manual` so
+  that step keeps working on a Docker-less machine.
 
 ## Verifying the constraints are actually being checked
 

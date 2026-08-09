@@ -180,6 +180,12 @@ bazel test //tools/app_registry/server/repository/postgres:postgres_integration_
   --test_output=all
 ```
 
+**CI runs this** in the `Test Database Integration` job
+(`.github/workflows/ci.yml`), which discovers dbtest-backed targets by query —
+a new one needs no CI change. Run it locally before pushing anyway: it is the
+only automated check that exercises the pgx layer, and because it is
+`manual`-tagged, `bazel test //...` will not tell you it is broken.
+
 ## Verified
 
 Full chain confirmed on Docker Desktop Kubernetes at AR-1: images build →
