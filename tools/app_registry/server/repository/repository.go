@@ -174,6 +174,45 @@ type PromotionRepository interface {
 	ListEvents(ctx context.Context, filter PromotionEventListFilter) ([]PromotionEvent, error)
 }
 
+// WritebackRepository covers `writeback_outbox` (AR-4b) -- see
+// ARCHITECTURE.md "Writeback: outbox -> Temporal" and
+// tools/app_registry/worker/README.md. Enqueue participates in the
+// promotion transaction like every other write method in this package;
+// ClaimBatch/MarkDone/MarkFailed are called by the worker against the bare
+// pool (no Registry.WithTx involved -- the worker is a separate process
+// with no promotion write to be atomic with).
+type WritebackRepository interface {
+	// Enqueue writes one outbox row. Callers MUST invoke this inside
+	// Registry.WithTx, in the same transaction as the Promote/RecordEvent
+	// call it follows -- see server/handlers/promotion.go's
+	// enqueueWriteback. o.OutboxID is ignored/generated.
+	Enqueue(ctx context.Context, o WritebackOutbox) (*WritebackOutbox, error)
+
+	// ClaimBatch atomically claims up to limit rows for workerID: every
+	// row currently 'pending', plus every 'claimed' row whose claimed_at
+	// is older than staleAfter (a worker killed mid-run, per AR-4b's exit
+	// criteria, leaves its claims to be reclaimed here). Implementations
+	// must use a single atomic statement (e.g. `UPDATE ... WHERE outbox_id
+	// IN (SELECT ... FOR UPDATE SKIP LOCKED)`) so concurrent workers never
+	// claim the same row twice.
+	ClaimBatch(ctx context.Context, workerID string, limit int, staleAfter time.Duration) ([]WritebackOutbox, error)
+
+	// MarkDone marks outboxID done and records the workflow/run id that
+	// carried it -- called after ExecuteWorkflow has either started the
+	// WritebackWorkflow or confirmed (via Temporal's own dedup) that one
+	// is already running/has run under that workflow id.
+	MarkDone(ctx context.Context, outboxID, workflowID, runID string) error
+
+	// MarkFailed records an error on outboxID and returns it to pending,
+	// so the next ClaimBatch reclaims it immediately rather than waiting
+	// out the staleness window -- distinct from a crash (which leaves the
+	// row 'claimed' until staleAfter elapses).
+	MarkFailed(ctx context.Context, outboxID, errMsg string) error
+
+	// Get returns a single row by id, for tests and observability.
+	Get(ctx context.Context, outboxID string) (*WritebackOutbox, error)
+}
+
 // Registry aggregates the per-entity repositories and provides a
 // unit-of-work boundary. Handlers call WithTx to make a business operation
 // (reconcile, idempotency check-and-store, etc.) atomic: fn receives a
@@ -185,6 +224,7 @@ type Registry interface {
 	Idempotency() IdempotencyRepository
 	Environments() EnvironmentRepository
 	Promotions() PromotionRepository
+	Writeback() WritebackRepository
 
 	WithTx(ctx context.Context, fn func(ctx context.Context, r Registry) error) error
 }

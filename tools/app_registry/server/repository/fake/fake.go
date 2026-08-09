@@ -41,9 +41,10 @@ type state struct {
 	Builds          map[string]repository.Build
 	Artifacts       map[string]repository.Artifact
 	Idempotency     map[string]idemEntry
-	Environments    map[string]repository.Environment    // keyed by environment_id
-	Promotions      map[string]repository.Promotion      // keyed by promotion_id
-	PromotionEvents map[string]repository.PromotionEvent // keyed by event_id
+	Environments    map[string]repository.Environment     // keyed by environment_id
+	Promotions      map[string]repository.Promotion       // keyed by promotion_id
+	PromotionEvents map[string]repository.PromotionEvent  // keyed by event_id
+	WritebackOutbox map[string]repository.WritebackOutbox // keyed by outbox_id
 }
 
 func newState() *state {
@@ -56,6 +57,7 @@ func newState() *state {
 		Environments:    map[string]repository.Environment{},
 		Promotions:      map[string]repository.Promotion{},
 		PromotionEvents: map[string]repository.PromotionEvent{},
+		WritebackOutbox: map[string]repository.WritebackOutbox{},
 	}
 }
 
@@ -98,6 +100,9 @@ func (r *Registry) Environments() repository.EnvironmentRepository { return envi
 
 // Promotions returns a distinct type for the same reason Environments does.
 func (r *Registry) Promotions() repository.PromotionRepository { return promotionFake{r} }
+
+// Writeback returns a distinct type for the same reason Environments does.
+func (r *Registry) Writeback() repository.WritebackRepository { return writebackFake{r} }
 
 // WithTx snapshots state, runs fn against a Registry sharing that snapshot,
 // and commits the snapshot back only if fn succeeds — giving the fake the
@@ -707,6 +712,91 @@ func (f promotionFake) ownerFullName(p repository.Promotion) string {
 		}
 	}
 	return ""
+}
+
+// ============================================================================
+// WritebackRepository
+// ============================================================================
+
+// writebackFake implements repository.WritebackRepository over the same
+// *Registry.state every other repository reads/writes -- see Environments's
+// doc comment for why this can't be methods directly on Registry.
+type writebackFake struct{ r *Registry }
+
+func (f writebackFake) Enqueue(ctx context.Context, o repository.WritebackOutbox) (*repository.WritebackOutbox, error) {
+	o.OutboxID = uuid.NewString()
+	o.Status = repository.WritebackOutboxStatusPending
+	o.CreatedAt = timeNow()
+	f.r.state.WritebackOutbox[o.OutboxID] = o
+	out := o
+	return &out, nil
+}
+
+// ClaimBatch mirrors postgres's writebackRepo.ClaimBatch: pending rows, plus
+// claimed rows whose claimed_at predates staleAfter, oldest created_at
+// first, up to limit.
+func (f writebackFake) ClaimBatch(ctx context.Context, workerID string, limit int, staleAfter time.Duration) ([]repository.WritebackOutbox, error) {
+	staleBefore := timeNow().Add(-staleAfter)
+	var eligible []repository.WritebackOutbox
+	for _, o := range f.r.state.WritebackOutbox {
+		if o.Status == repository.WritebackOutboxStatusPending {
+			eligible = append(eligible, o)
+			continue
+		}
+		if o.Status == repository.WritebackOutboxStatusClaimed && o.ClaimedAt != nil && o.ClaimedAt.Before(staleBefore) {
+			eligible = append(eligible, o)
+		}
+	}
+	sort.Slice(eligible, func(i, j int) bool { return eligible[i].CreatedAt.Before(eligible[j].CreatedAt) })
+	if len(eligible) > limit {
+		eligible = eligible[:limit]
+	}
+
+	claimedAt := timeNow()
+	out := make([]repository.WritebackOutbox, 0, len(eligible))
+	for _, o := range eligible {
+		o.Status = repository.WritebackOutboxStatusClaimed
+		o.ClaimedBy = workerID
+		o.ClaimedAt = &claimedAt
+		o.Attempts++
+		f.r.state.WritebackOutbox[o.OutboxID] = o
+		out = append(out, o)
+	}
+	return out, nil
+}
+
+func (f writebackFake) MarkDone(ctx context.Context, outboxID, workflowID, runID string) error {
+	o, ok := f.r.state.WritebackOutbox[outboxID]
+	if !ok {
+		return repository.ErrNotFound
+	}
+	o.Status = repository.WritebackOutboxStatusDone
+	o.WorkflowID = workflowID
+	completed := timeNow()
+	o.CompletedAt = &completed
+	f.r.state.WritebackOutbox[outboxID] = o
+	return nil
+}
+
+func (f writebackFake) MarkFailed(ctx context.Context, outboxID, errMsg string) error {
+	o, ok := f.r.state.WritebackOutbox[outboxID]
+	if !ok {
+		return repository.ErrNotFound
+	}
+	o.Status = repository.WritebackOutboxStatusPending
+	o.LastError = errMsg
+	o.ClaimedBy = ""
+	o.ClaimedAt = nil
+	f.r.state.WritebackOutbox[outboxID] = o
+	return nil
+}
+
+func (f writebackFake) Get(ctx context.Context, outboxID string) (*repository.WritebackOutbox, error) {
+	o, ok := f.r.state.WritebackOutbox[outboxID]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return &o, nil
 }
 
 func sortPromotions(promotions []repository.Promotion) {

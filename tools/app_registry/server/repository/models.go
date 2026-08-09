@@ -265,3 +265,65 @@ type PromotionEventListFilter struct {
 	Actor          string
 	Since          time.Time
 }
+
+// WritebackOutboxStatus is writeback_outbox.status -- see ARCHITECTURE.md
+// "Writeback: outbox -> Temporal" and AR-4b's PLAN.md scope.
+type WritebackOutboxStatus string
+
+const (
+	// WritebackOutboxStatusPending: written, not yet claimed by a worker.
+	WritebackOutboxStatusPending WritebackOutboxStatus = "pending"
+	// WritebackOutboxStatusClaimed: a worker has claimed this row and is
+	// (or was) starting its WritebackWorkflow. A claim older than the
+	// drain loop's staleness window is eligible to be reclaimed by
+	// ClaimBatch -- see the worker being killed mid-run in AR-4b's exit
+	// criteria.
+	WritebackOutboxStatusClaimed WritebackOutboxStatus = "claimed"
+	// WritebackOutboxStatusDone: the WritebackWorkflow was started (or was
+	// already running/completed under the same workflow id -- Temporal's
+	// dedup, see ARCHITECTURE.md). Terminal; ClaimBatch never selects a
+	// done row again.
+	WritebackOutboxStatusDone WritebackOutboxStatus = "done"
+	// WritebackOutboxStatusFailed: MarkFailed recorded a non-retryable
+	// error. Not currently reachable by drain logic (retryable failures
+	// go back to pending), reserved for a future manual-intervention path.
+	WritebackOutboxStatusFailed WritebackOutboxStatus = "failed"
+)
+
+// WritebackOutbox is one row of the transactional outbox described in
+// ARCHITECTURE.md "Writeback: outbox -> Temporal". Written inside the same
+// transaction as the promotion + promotion_event it carries (see
+// server/handlers/promotion.go's enqueueWriteback) so a promotion and its
+// writeback intent commit or roll back together -- the property this table
+// exists to guarantee.
+type WritebackOutbox struct {
+	OutboxID       string
+	PromotionID    string
+	EnvironmentID  string
+	EnvironmentKey string // denormalized at write time, for worker logging without a join
+	// EventID is the promotion_event this row corresponds to, so the
+	// worker can stamp temporal_workflow_id/temporal_run_id back onto the
+	// audit row once the workflow starts.
+	EventID string
+	// StateHash is stateHash(...) computed inside the SAME transaction
+	// that wrote the promotion -- see server/handlers/promotion.go. The
+	// Writeback activity's Publish method compares this (transitively, via
+	// the RenderedState it derives) against the last-published hash to
+	// skip a no-op write.
+	StateHash string
+	Status    WritebackOutboxStatus
+
+	ClaimedBy string
+	ClaimedAt *time.Time
+
+	// WorkflowID is set once ClaimBatch's caller has (re-)started the
+	// WritebackWorkflow. Always equal to PromotionID in practice (that's
+	// the workflow id convention -- see ARCHITECTURE.md), stored anyway so
+	// a reader never has to assume it.
+	WorkflowID  string
+	CompletedAt *time.Time
+	LastError   string
+	Attempts    int32
+
+	CreatedAt time.Time
+}

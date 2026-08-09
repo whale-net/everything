@@ -27,7 +27,11 @@ and `app-registry-migration` images publish from `apps=all`.
 `APP_REGISTRY_CICD_OPT_IN` is still unset, so CI makes no registry calls.
 
 **AR-3 is now fully implemented** (AR-3a through AR-3d), stacked on top of
-`main` and not yet merged. AR-2d is also done, not merged.
+`main` and not yet merged. AR-2d is also done, not merged. **AR-4 (AR-4a +
+AR-4b) is now also fully implemented**, stacked on `ar-4a-temporal` /
+`main` and not yet merged -- the writeback *contract* (outbox, worker,
+workflow, stub activity) is done; the real gitops/S3 publish is deliberately
+still out of scope (see AR-4b below).
 
 ### AR-3d — CLI + `promote.yml` — done
 
@@ -492,23 +496,85 @@ independently:
   `friendly_computing_machine/Tiltfile` already expects at
   `temporal-dev.<namespace>.svc.cluster.local:7233`.
 
-### AR-4b — Outbox and writeback workflow
+### AR-4b — Outbox and writeback workflow — done, not merged
 
-**Scope**
-- `writeback_outbox` written inside the promotion transaction.
-- `tools/app_registry/worker` — Temporal worker draining the outbox.
-- `WritebackWorkflow` (workflow id = promotion id) over a `Writeback`
-  activity interface, with a **stub implementation** that renders environment
-  state and writes it to a local path or object store — publishing nowhere.
-- `state_hash` no-op detection, so the real implementation inherits it.
-- `release_app` for `app-registry-worker`.
+- Migration `004_writeback_outbox` (up/down): `writeback_outbox` table --
+  `pending`/`claimed`/`done`/`failed` status, `state_hash`, `event_id` FK
+  back to `promotion_event`, partial indexes backing the pending-drain and
+  stale-reclaim queries. Not SCD2 (a work queue, not a dimension) -- see
+  AGENTS.md.
+- `server/handlers/promotion.go`'s `enqueueWriteback`, called from both
+  `Promote`'s and `Rollback`'s write path (never on the `dry_run` or
+  `AlreadyPromoted` short-circuit branches -- no new promotion, nothing to
+  write back), extends AR-3c's existing SCD2 close-and-open transaction
+  rather than opening a second one -- see `repository.Registry.WithTx` and
+  `AGENTS.md` "SCD2". `state_hash` is computed inside that same transaction
+  by the same `stateHash` function `GetEnvironmentState` uses (refactored to
+  take `repository.Promotion` directly, so no proto conversion is needed
+  just to hash), guaranteeing the value on the outbox row agrees with what
+  `GetEnvironmentState` returns immediately after commit.
+- `repository.WritebackRepository` (`Enqueue`/`ClaimBatch`/`MarkDone`/
+  `MarkFailed`/`Get`) + postgres and fake implementations.
+  `ClaimBatch` is one atomic `UPDATE ... WHERE outbox_id IN (SELECT ... FOR
+  UPDATE SKIP LOCKED)` statement claiming every `pending` row plus every
+  `claimed` row whose claim has gone stale.
+- `tools/app_registry/worker` (`app-registry-worker`, `app_type: worker`):
+  `outbox.Drainer` polls `writeback_outbox` directly against Postgres (not
+  through the gRPC API) and calls `client.ExecuteWorkflow` with workflow id
+  = promotion id; `writeback.WritebackWorkflow` over a `Writeback` activity
+  interface (`RenderEnvironmentState`, `Publish`) dispatched by string name,
+  not Go function value, so the workflow depends on the interface, not on
+  which implementation is registered. `writeback.StubActivities` is AR-4b's
+  stub: `RenderEnvironmentState` reads `GetEnvironmentState` over gRPC (never
+  Postgres directly); `Publish` writes to a local path
+  (`WRITEBACK_OUTPUT_DIR`) and is a no-op when a sidecar file shows the
+  `state_hash` already matches. See `worker/README.md` for the full
+  mechanism.
+- Unit tests: `writeback/workflow_test.go` (Temporal SDK `testsuite`,
+  render-then-publish sequencing and render-failure short-circuit),
+  `writeback/stub_test.go` (no-op detection, per-environment isolation),
+  `outbox/drain_test.go` (`Drainer.startWorkflow`'s success /
+  already-started / other-error branches against a mocked
+  `go.temporal.io/sdk/mocks.Client`). Real-Postgres coverage in
+  `postgres_integration_test.go`:
+  `TestWriteback_EnqueueCommitsAtomicallyWithPromotion`,
+  `TestWriteback_EnqueueFailureRollsBackWholeTransaction` (forces the
+  outbox insert to fail an FK check and proves the promotion + event rows
+  written earlier in the same transaction roll back too), and
+  `TestWritebackOutbox_ClaimBatch_SkipsLockedAndReclaimsStale`.
+- `release_app` for `app-registry-worker` added to
+  `//tools/app_registry:app_registry_chart`; cross-compiles to `arm64`
+  cleanly (verified: `bazel build //tools/app_registry/worker:worker_image
+  --platforms=//tools:linux_arm64`). Wired into the Tiltfile
+  (`ENABLE_APP_REGISTRY_WORKER`, depends on migration/API/`temporal-dev`).
+- `go.temporal.io/api` moved from an indirect to a direct `go.mod`
+  dependency (the outbox drain loop imports
+  `go.temporal.io/api/serviceerror` directly), and
+  `io_temporal_go_api` added to `MODULE.bazel`'s `go_deps` `use_repo()` via
+  `bazel mod tidy` -- the same one-line pattern AR-4a used for
+  `io_temporal_go_sdk`.
 
 **Exit criteria**
 - A promotion enqueues an outbox row in the same transaction and the workflow
-  drains it exactly once, verified by killing the worker mid-run.
-- Rendered state matches `GetEnvironmentState` output.
+  drains it exactly once, verified by killing the worker mid-run. **Met** --
+  verified manually (real Postgres + real `temporal server start-dev` in
+  Docker + the real `app-registry-api`/`app-registry-worker` binaries via
+  `bazel run`, not Tilt/k8s): a worker process was made to exit immediately
+  after logging that it had started `WritebackWorkflow` but before calling
+  `MarkDone`, leaving the outbox row `claimed`; a second worker process
+  reclaimed it once `WRITEBACK_CLAIM_STALE_AFTER` elapsed, attached to the
+  *same* still-open workflow run (Temporal's own id-collision handling, not
+  a second execution), and drove it to completion with no duplicate
+  publish. See `TESTING.md`'s "Writeback worker (AR-4b)" section for the
+  full transcript. Not independently verified: a true two-workers-racing
+  claim (the `FOR UPDATE SKIP LOCKED` query's correctness is asserted
+  against real Postgres, not exercised by two concurrent live processes).
+- Rendered state matches `GetEnvironmentState` output. **Met** -- confirmed
+  byte-for-byte in the same manual run (the `state_hash` in the published
+  document and in a live `GetEnvironmentState` call agreed).
 - The activity interface is documented well enough that swapping the stub for a
-  gitops committer needs no schema, proto, or workflow change.
+  gitops committer needs no schema, proto, or workflow change. **Met** --
+  see `worker/README.md`'s "The `Writeback` activity interface" section.
 
 **Explicitly not in scope:** committing to the gitops repo, S3 publication,
 pointing ArgoCD at registry-written state. Those land when the other repo's

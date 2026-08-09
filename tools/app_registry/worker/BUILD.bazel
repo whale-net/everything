@@ -1,0 +1,42 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "worker_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/tools/app_registry/worker",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/db",
+        "//libs/go/grpcauth",
+        "//libs/go/grpcclient",
+        "//libs/go/logging",
+        "//libs/go/temporal",
+        "//tools/app_registry/protos:appregistrypb",
+        "//tools/app_registry/server/repository/postgres",
+        "//tools/app_registry/worker/outbox",
+        "//tools/app_registry/worker/writeback",
+        "@io_temporal_go_sdk//activity",
+        "@io_temporal_go_sdk//worker",
+    ],
+)
+
+go_binary(
+    name = "worker",
+    embed = [":worker_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata. domain "app-registry" + name "worker" produces the
+# "app-registry-worker" image/app identity -- see ARCHITECTURE.md
+# "Writeback: outbox -> Temporal" and ./README.md. app_type "worker": a
+# long-running background process, not an API (no port) and not a
+# run-to-completion job like migrate/cli.
+release_app(
+    name = "worker",
+    binary_name = ":worker",
+    language = "go",
+    domain = "app-registry",
+    description = "App Registry writeback worker (Temporal)",
+    app_type = "worker",
+)

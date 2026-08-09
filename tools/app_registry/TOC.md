@@ -3,18 +3,24 @@
 gRPC service that records published artifacts and tracks per-environment
 promotion state.
 
-**Status: AR-M through AR-2c merged to `main`; AR-3 (Promotion) implemented,
-not yet merged.** Recording works end to end — `ReconcileApps`,
-`RecordBuild`/`RecordArtifact` and the chart image lockfile are implemented
-and verified against real Postgres. The release workflow calls the CLI's
-write path after image/chart pushes, gated behind `APP_REGISTRY_CICD_OPT_IN`.
-The registry is being deployed to `dev`. AR-3 was split into a 4-PR stack
-(auth, environments, promotions, CLI), all now done: auth (AR-3a),
-`EnvironmentRegistry` (AR-3b), and `PromotionRegistry` (AR-3c) are verified
-against real Postgres; AR-3d filled in the CLI's
+**Status: AR-M through AR-2c merged to `main`; AR-3 (Promotion) and AR-4
+(Writeback) implemented, not yet merged.** Recording works end to end —
+`ReconcileApps`, `RecordBuild`/`RecordArtifact` and the chart image
+lockfile are implemented and verified against real Postgres. The release
+workflow calls the CLI's write path after image/chart pushes, gated behind
+`APP_REGISTRY_CICD_OPT_IN`. The registry is being deployed to `dev`. AR-3
+was split into a 4-PR stack (auth, environments, promotions, CLI), all now
+done: auth (AR-3a), `EnvironmentRegistry` (AR-3b), and `PromotionRegistry`
+(AR-3c) are verified against real Postgres; AR-3d filled in the CLI's
 `promote`/`rollback`/`status`/`history`/`diff` commands, added
 `.github/workflows/promote.yml` (human-triggered, `environment:`-scoped),
 and wired the builder credential into `release.yml`'s recording steps.
+AR-4 (split AR-4a/AR-4b) adds a Temporal-backed writeback path: every
+`Promote`/`Rollback` now enqueues a `writeback_outbox` row in the same
+transaction, and `app-registry-worker` drains it into a `WritebackWorkflow`
+that renders environment state to a local path (stub implementation —
+publishing to the gitops repo or S3 is out of scope, see PLAN.md's AR-4b
+section).
 
 **See [PLAN.md](PLAN.md) → "Current status" for the branch/PR map,
 what is next, and the carry-over items** — start there when picking this up.

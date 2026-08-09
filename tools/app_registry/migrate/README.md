@@ -32,10 +32,10 @@ ArgoCD sync waves. See `friendly_computing_machine/docs/argocd-integration.md`.
 | `001_initial_schema` | `app`, `chart`, `chart_app`, `build`, `artifact`, `artifact_link`, `idempotency_key`, `domain_adoption` |
 | `002_environment_registry` | `environment`, seeded with `dev`/`stage`/`prod` |
 | `003_promotion` (AR-3c) | `promotion` (SCD2), `promotion_event`, `v_current_promotion` |
-| `004_writeback_outbox` (planned, AR-4) | `writeback_outbox` |
+| `004_writeback_outbox` (AR-4b) | `writeback_outbox` |
 
 Split this way so AR-2 needs only `001`, AR-3b adds `002`, AR-3c adds `003`,
-and AR-4 adds `004` — each phase ships an independently applicable
+and AR-4b adds `004` — each phase ships an independently applicable
 migration. `002` was originally planned to also carry `promotion`, but
 AR-3b's scope is environments only (no promotion logic), so that table moved
 out to its own migration in AR-3c, which needs `environment.environment_id`

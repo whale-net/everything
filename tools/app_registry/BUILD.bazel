@@ -2,9 +2,12 @@ load("//tools/bazel:release.bzl", "release_helm_chart")
 
 # App Registry app metadata targets included in the chart. The CLI
 # (deploy_unit = "none") is deliberately excluded — it is not deployed.
+# worker (AR-4b) IS deployed -- app_type "worker", a long-running Temporal
+# worker draining writeback_outbox, not a one-shot job.
 APP_REGISTRY_APPS = [
     "//tools/app_registry/server:api_metadata",
     "//tools/app_registry/migrate:migration_metadata",
+    "//tools/app_registry/worker:worker_metadata",
 ]
 
 # App Registry Helm chart. Chart tags use the format

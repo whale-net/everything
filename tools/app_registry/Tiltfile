@@ -1,8 +1,10 @@
 # App Registry Tiltfile
 # Local development environment for the App Registry.
 #
-# AR-1 scope: migration job + gRPC API, both wired with no business logic
-# (every RPC returns Unimplemented). See ARCHITECTURE.md and PLAN.md.
+# migration job + gRPC API + writeback worker (AR-4b) — the worker drains
+# writeback_outbox and runs WritebackWorkflow against the AR-4a Temporal dev
+# server, publishing rendered state to a local path inside its container
+# (WRITEBACK_OUTPUT_DIR) -- see ARCHITECTURE.md and PLAN.md.
 
 load('ext://namespace', 'namespace_create')
 load('ext://dotenv', 'dotenv')
@@ -75,6 +77,11 @@ APPS = {
         'enabled_env': 'ENABLE_APP_REGISTRY_API',
         'bazel_target': '//tools/app_registry/server:api_image_load',
         'image_name': 'app-registry-api',
+    },
+    'worker': {
+        'enabled_env': 'ENABLE_APP_REGISTRY_WORKER',
+        'bazel_target': '//tools/app_registry/worker:worker_image_load',
+        'image_name': 'app-registry-worker',
     },
 }
 
@@ -184,6 +191,71 @@ spec:
     )
     print("🔌 API forwarded to localhost:50061 (gRPC)")
 
+# Writeback worker (AR-4b) — drains writeback_outbox and runs
+# WritebackWorkflow against the Temporal dev server started above. Needs
+# both the API (to read state back via GetEnvironmentState) and Temporal, so
+# it's disabled outright when either is off rather than starting into a
+# guaranteed-crash loop.
+if get_env_bool('ENABLE_APP_REGISTRY_WORKER', default='true') and temporal_info:
+    k8s_yaml(blob("""
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-registry-worker
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: app-registry-worker
+  template:
+    metadata:
+      labels:
+        app: app-registry-worker
+    spec:
+      containers:
+      - name: worker
+        image: app-registry-worker
+        env:
+        - name: PG_DATABASE_URL
+          value: "{pg_database_url}"
+        - name: APP_REGISTRY_ADDRESS
+          value: "app-registry-api:50051"
+        - name: GRPC_AUTH_MODE
+          value: "none"
+        - name: TEMPORAL_HOST
+          value: "{temporal_host}"
+        - name: WRITEBACK_OUTPUT_DIR
+          value: "/tmp/app-registry-writeback"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "{otel_endpoint}"
+""".format(
+        namespace=namespace,
+        pg_database_url=pg_database_url,
+        temporal_host=temporal_host,
+        otel_endpoint=otel_endpoint,
+    )))
+
+    worker_deps = []
+    if get_env_bool('ENABLE_APP_REGISTRY_MIGRATION', default='true'):
+        worker_deps.append('app-registry-migration')
+    if get_env_bool('ENABLE_APP_REGISTRY_API', default='true'):
+        worker_deps.append('app-registry-api')
+    if temporal_info:
+        # setup_temporal's default resource_name -- see common.tilt; the
+        # dict it returns carries connection info, not the resource name
+        # itself, and this Tiltfile never overrides it from the default.
+        worker_deps.append('temporal-dev')
+
+    k8s_resource(
+        'app-registry-worker',
+        resource_deps=worker_deps,
+        labels=['app-registry'],
+    )
+    print("⚙️  Writeback worker configured (task queue: app-registry-writeback)")
+elif get_env_bool('ENABLE_APP_REGISTRY_WORKER', default='true'):
+    print("⚠️  ENABLE_APP_REGISTRY_WORKER is set but Temporal is disabled (ENABLE_TEMPORAL=false) -- worker skipped")
+
 # ===========================
 # Access Information
 # ===========================
@@ -200,5 +272,7 @@ print("="*60)
 print_footer_info('app-registry')
 
 print("\n🚀 Quick Start:")
-print("  1. tilt up                       # Start migration + API (this)")
+print("  1. tilt up                       # Start migration + API + worker (this)")
 print("  2. grpcurl -plaintext localhost:50061 list   # Confirm reflection")
+print("  3. app-registry promote ...      # Promote something, then check the")
+print("     worker's logs and /tmp/app-registry-writeback/<env>.json inside its pod")
