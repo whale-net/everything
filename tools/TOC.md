@@ -7,8 +7,8 @@ Build, release, and development tooling.
 - [helm/README.md](helm/README.md) — Bazel Helm chart generation system (quick start + common patterns)
 - [helm/APP_TYPES.md](helm/APP_TYPES.md) — App type reference (`external-api`, `internal-api`, `worker`, `job`)
 - `//tools:release` — Release automation CLI; see [`docs/RELEASE.md`](../docs/RELEASE.md) for usage
-- [appmeta/README.md](appmeta/README.md) — Proto schema of record for `release_app` manifest JSON, shared by `release_helper_go`, the helm composer, and the app registry (**design stage**, consumers not yet migrated)
-- [app_registry/TOC.md](app_registry/TOC.md) — App Registry: gRPC service indexing published artifacts and tracking per-environment promotion state (**design stage**, not implemented)
+- [appmeta/README.md](appmeta/README.md) — Proto schema of record for `release_app` manifest JSON, shared by `release_helper_go`, the helm composer, and the app registry — consolidated in AR-M and in active use by all three
+- [app_registry/TOC.md](app_registry/TOC.md) — App Registry: gRPC service indexing published artifacts and tracking per-environment promotion state. Recording is live in `release.yml` behind `APP_REGISTRY_CICD_OPT_IN` (off by default); promotion, writeback, and version allocation are fully built but have never run for real — see [`app_registry/OPERATIONS.md`](app_registry/OPERATIONS.md) for the day-2 runbook
 
 ## Local Development
 

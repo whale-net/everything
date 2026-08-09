@@ -1,8 +1,14 @@
 # App Registry — Delivery Plan
 
-Phased build-out of `//tools/app_registry`. Each phase has a **plan ID**; worker
-agents track execution in a `TODO-<PLAN_ID>.md` alongside this file (e.g.
-`TODO-AR-2.md`). Those TODO files are created when a phase starts, not up front.
+Phased build-out of `//tools/app_registry`. Each phase has a **plan ID** (AR-M,
+AR-1, AR-2a…). As-built detail for a completed phase is recorded in that
+phase's section below — this file is the single record, so a reader never has
+to reconcile it against a separate tracking document.
+
+(Earlier phases kept a per-phase `TODO-<PLAN_ID>.md` alongside this file. The
+convention was applied to only half the phases before being dropped; those
+files were retired in AR-6b and anything still load-bearing was folded into
+the phase sections here.)
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md) before executing any phase.
 
@@ -158,11 +164,10 @@ because the in-memory fake has no transactions.
   `manual`, nothing ran it, and AR-3a's auth enforcement broke it in a way only
   caught by running the stacked branches together by hand.
 
-**Exit criteria** — met. Each new test was verified to fail when its
-assertion was deliberately broken (see `TODO-AR-2d.md` and the phase report
-for exact failure output), then reverted. `bazel test //tools/...` and
-`bazel build //tools/...` stay green on a Docker-less path — the `manual` tag
-excludes the new target from wildcard expansion.
+**Exit criteria** — met. Each new test was verified to fail when the
+behaviour it guards was deliberately broken, then reverted. `bazel test
+//tools/...` and `bazel build //tools/...` stay green on a Docker-less path —
+the `manual` tag excludes the new target from wildcard expansion.
 
 ### Carry-over items
 
@@ -345,6 +350,40 @@ criterion is testable from the moment promotion exists:
 | **AR-3c** | `PromotionRegistry` — SCD2 close-and-open, event log, promotability enforcement, `allow_override` + drift reporting. |
 | **AR-3d** | CLI (`promote`, `rollback`, `status`, `history`, `diff`) and the human-triggered `promote.yml` workflow. |
 
+### AR-3a — Auth — done
+
+- `server/auth` package: role constants (`app-registry-builder`,
+  `app-registry-promoter-{dev,stage,prod}`, `app-registry-admin`, matching
+  KEYCLOAK.md exactly) + `Require`/`RequirePromoter`/`RequireAuthenticated`
+  helpers over `grpcauth.ClaimsFromContext` — `codes.Unauthenticated` with no
+  claims, `codes.PermissionDenied` with the wrong role. Roles are flat, no
+  role implies another.
+- Enforced on every RPC that existed at this point: `AppRegistry.ReconcileApps`
+  / `ArtifactRegistry.RecordBuild`/`RecordArtifact` require `RoleBuilder`;
+  `AppRegistry.SetAppStatus` requires `RoleAdmin`; every read RPC requires only
+  `RequireAuthenticated`. `EnvironmentRegistry`/`PromotionRegistry` did not
+  exist yet — AR-3b/AR-3c wire their own RPCs against `RequirePromoter`/
+  `RoleAdmin` directly, unmodified from what this phase built.
+- `libs/go/grpcauth`: added `ServerConfig.DevRoles` (in `none` auth mode, dev
+  claims default to `Roles: ["admin"]`, which satisfies none of
+  `app-registry-*`'s checks; `server/main.go` overrides this with
+  `server/auth.AllRoles()` so local dev and CI running with `GRPC_AUTH_MODE`
+  unset keep working) and exported `ContextWithClaims` for handler tests.
+  Both additive, `manmanv2` unaffected.
+- CLI (`cli/cmd/client.go`) wired to `grpcauth.NewServiceAccountDialOption`
+  from the four `GRPC_AUTH_*` env vars, the same shape `manmanv2/host` and
+  `manmanv2/log-processor` use. `GRPC_AUTH_MODE=none` (the default) is
+  unchanged.
+- Tests: `server/auth/auth_test.go` (the role-check logic itself) and
+  `server/handlers/authz_test.go` (per protected RPC — correct role allowed,
+  wrong role → `PermissionDenied`, no claims → `Unauthenticated`).
+- **Explicitly not done here:** `EnvironmentRegistry`/`PromotionRegistry`
+  business logic (still `Unimplemented` at this point) — AR-3b/AR-3c/AR-3d.
+  No changes to `.github/workflows/release.yml`; wiring real Keycloak
+  secrets into CI came later, in AR-3d.
+- Verification: `bazel test //tools/app_registry/... //libs/go/grpcauth/...`
+  and `bazel build //tools/...` green.
+
 ### AR-3b — `EnvironmentRegistry` — done
 
 - Migration `002_environment_registry` (up/down): `environment` table —
@@ -370,8 +409,17 @@ criterion is testable from the moment promotion exists:
   column. Caught one real bug in the process: pgx encodes a nil Go
   `[]string` as SQL `NULL`, which the `NOT NULL allowed_principals` column
   rejected — fixed by normalizing to `[]string{}` before insert.
-- See [TODO-AR-3b.md](TODO-AR-3b.md) for full execution detail and the
-  deliberate-break verification transcripts.
+- **Seeding decision: migration, not server startup.** The
+  `dev`/`stage`/`prod` seed rows are inserted by migration `002` itself
+  (`INSERT ... ON CONFLICT (key) DO NOTHING`), not by application code at
+  boot. Reasons: it is the same one-shot-DDL-plus-bootstrap-data pattern
+  every other migration in this package uses; `ON CONFLICT DO NOTHING` makes
+  it idempotent and non-destructive even if an operator already
+  hand-edited `dev`'s `allowed_principals` via `UpsertEnvironment` before
+  this migration ran; and `golang-migrate`'s advisory lock already solves
+  the "two replicas starting concurrently" problem that server-startup
+  seeding would have to solve again from scratch. This mirrors the same
+  trade already made for `domain_adoption` in migration `001`.
 
 ### AR-3c — `PromotionRegistry` — done
 
@@ -428,8 +476,6 @@ criterion is testable from the moment promotion exists:
   close-half of close-and-open does not survive when the open-half's INSERT
   fails (verified to actually catch the bug by temporarily bypassing
   `WithTx` in the test and observing the row count drop to zero).
-- See [TODO-AR-3c.md](TODO-AR-3c.md) for full execution detail and the
-  deliberate-break verification transcripts.
 
 ### Credential model (decided)
 

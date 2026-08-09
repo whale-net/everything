@@ -254,6 +254,48 @@ release_app(
 
 The release system will automatically discover and include your app in future releases!
 
+## App Registry Integration
+
+`release.yml` also **records** every released image and chart into the
+[App Registry](../tools/app_registry/TOC.md) — a separate gRPC service that
+indexes published artifacts and, once actually used, tracks per-environment
+promotion state. This is additive on top of everything above, not a
+replacement for it — keep two things straight:
+
+- **Recording is best-effort and opt-in.** Every registry call in
+  `release.yml` is gated behind the repository variable
+  `APP_REGISTRY_CICD_OPT_IN`. Unset — the default, and how this repo ships
+  today — means CI makes **zero** calls to the registry; the pipeline
+  behaves exactly as described everywhere else in this document. Even when
+  the opt-in is `true`, the recording steps are `continue-on-error`: a
+  registry outage warns but never fails a release.
+- **Version allocation is still git-tag based.** Everything under "Version
+  Validation & Protection" above — `autoIncrementVersion`, tag existence
+  checks, `--increment-minor`/`--increment-patch` — is unchanged and remains
+  the sole source of truth for version numbers. The registry has a fully
+  implemented `AllocateVersion` RPC, but nothing calls it yet: no domain has
+  been moved to the adoption stage that permits it, and
+  `tools/release_helper_go/cmd/plan.go` still computes every version from
+  git tags exclusively. See
+  [`tools/app_registry/ARCHITECTURE.md`](../tools/app_registry/ARCHITECTURE.md#version-model-ar-5a)
+  for the as-built detail.
+
+What recording does, when the opt-in is on: after `release`'s image push, a
+step resolves the pushed image's digest and calls `app-registry builds
+record` + `artifacts record --kind image`. After `release-helm-charts`
+publishes a chart, a similar step resolves each of the chart's pinned image
+references to digests and calls `artifacts record --kind chart --contains
+...`. See [`docs/CI_CD.md`](CI_CD.md#app-registry) for exactly where these
+steps sit in the workflow.
+
+Promoting a recorded artifact to an environment (`dev`/`stage`/`prod`) is a
+separate, human-triggered workflow, `promote.yml` — see
+[`docs/CI_CD.md`](CI_CD.md#app-registry) and
+[`tools/app_registry/OPERATIONS.md`](../tools/app_registry/OPERATIONS.md).
+**No promotion has ever run for real**: the workflow and its auth wiring
+exist, but no Keycloak clients or GitHub Environments have been created, so
+it cannot currently succeed.
+
 ## Troubleshooting Releases
 
 ### Check App Discovery

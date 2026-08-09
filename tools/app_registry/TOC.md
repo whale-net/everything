@@ -32,10 +32,10 @@ what is next, and the carry-over items** — start there when picking this up.
 | [README.md](README.md) | Starting point — what the registry is, core concepts, end-to-end flow diagrams |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Before changing the data model, promotability rules, auth split, or writeback mechanism. Contains rejected alternatives and open questions. |
 | [PLAN.md](PLAN.md) | Before starting work — phase definitions (AR-0 … AR-5), scope, and exit criteria |
-| `TODO-<PLAN_ID>.md` | Execution tracking for an in-flight phase; created when that phase starts |
 | [ENV.md](ENV.md) | Configuring, deploying, or debugging server/migration runtime behavior |
 | [TESTING.md](TESTING.md) | Running the registry locally in Tilt for manual integration testing; which checks belong in unit vs Postgres vs Tilt tiers |
 | [DEPLOY.md](DEPLOY.md) | Deploying for real — which Keycloak clients and roles to create, server env vars, and where each CI secret goes. Start here when standing the service up in an environment. |
+| [OPERATIONS.md](OPERATIONS.md) | Day-2 operations — the release → record → promote → verify → rollback lifecycle, how to spot a silently failed recording, how to check drift, and how to tell whether the registry is actually in use yet. Start here once DEPLOY.md is done and you need to ship something through it. |
 
 ## Components
 
