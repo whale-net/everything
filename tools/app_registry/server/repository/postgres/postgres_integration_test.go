@@ -20,10 +20,11 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver for the migration runner
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver for the migration runner
 
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/grpcauth"
@@ -414,6 +415,301 @@ func TestEnvironment_KeyUniqueConstraint(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected exactly 1 'dev' row after the rejected duplicate insert, found %d", count)
+	}
+}
+
+// --- 6. promotion (AR-3c) ---------------------------------------------
+
+// devEnvironmentID looks up the "dev" environment_id seeded by migration
+// 002, which newTestRegistry already applied.
+func devEnvironmentID(t *testing.T, reg *Registry) string {
+	t.Helper()
+	env, err := reg.Environments().Get(context.Background(), "dev")
+	if err != nil {
+		t.Fatalf("get dev environment: %v", err)
+	}
+	return env.EnvironmentID
+}
+
+// promoteTx runs Promotions().Promote inside a real WithTx transaction,
+// exactly as handlers.PromotionServer.Promote does in production.
+func promoteTx(t *testing.T, reg *Registry, p repository.Promotion) (*repository.Promotion, *repository.Promotion, error) {
+	t.Helper()
+	var current, superseded *repository.Promotion
+	err := reg.WithTx(context.Background(), func(ctx context.Context, r repository.Registry) error {
+		var ferr error
+		current, superseded, ferr = r.Promotions().Promote(ctx, p)
+		return ferr
+	})
+	return current, superseded, err
+}
+
+func currentPromotionCount(t *testing.T, pool *pgxpool.Pool, environmentID, targetKey string) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM promotion WHERE environment_id = $1 AND target_key = $2 AND valid_to IS NULL`,
+		environmentID, targetKey).Scan(&n); err != nil {
+		t.Fatalf("count current promotions: %v", err)
+	}
+	return n
+}
+
+// TestPromotion_CurrentIdxRejectsConcurrentCurrentRows proves the real
+// partial unique index promotion_current_idx -- not application logic --
+// makes two "current" rows for the same (environment_id, target_key)
+// structurally impossible. PLAN.md's AR-2d carry-over note flags this
+// exact index as deliberately deferred until the promotion table existed;
+// this is that follow-up.
+func TestPromotion_CurrentIdxRejectsConcurrentCurrentRows(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+
+	envID := devEnvironmentID(t, reg)
+	appID := seedApp(t, pool, "acme", "widget", "image")
+	buildID := seedBuild(t, pool, "run-promo-idx")
+	artifactID := seedArtifact(t, pool, appID, buildID, "sha256:promo-idx", "v1.0.0")
+
+	insert := func() error {
+		_, err := pool.Exec(ctx, `
+			INSERT INTO promotion (environment_id, target_key, artifact_id) VALUES ($1, $2, $3)`,
+			envID, "image:acme-widget", artifactID)
+		return err
+	}
+
+	if err := insert(); err != nil {
+		t.Fatalf("first insert (should succeed, nothing current yet): %v", err)
+	}
+	err := insert()
+	if err == nil {
+		t.Fatalf("expected a second concurrent 'current' row for the same target to be rejected, got nil error")
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		t.Fatalf("expected a *pgconn.PgError, got: %v (%T)", err, err)
+	}
+	if pgErr.Code != sqlStateUniqueViolation {
+		t.Fatalf("expected SQLSTATE %s (unique_violation) from promotion_current_idx, got %s: %v", sqlStateUniqueViolation, pgErr.Code, err)
+	}
+	if n := currentPromotionCount(t, pool, envID, "image:acme-widget"); n != 1 {
+		t.Fatalf("expected exactly 1 current row to survive, found %d", n)
+	}
+}
+
+// seedArtifact inserts a minimal image artifact row directly, for tests that
+// only need a valid artifact_id to hang a promotion off of.
+func seedArtifact(t *testing.T, pool *pgxpool.Pool, appID, buildID, digest, version string) string {
+	t.Helper()
+	var artifactID string
+	err := pool.QueryRow(context.Background(), `
+		INSERT INTO artifact (kind, app_id, repository, version, digest, build_id)
+		VALUES ('image', $1, 'ghcr.io/acme/widget', $2, $3, $4)
+		RETURNING artifact_id`, appID, version, digest, buildID).Scan(&artifactID)
+	if err != nil {
+		t.Fatalf("seed artifact %s: %v", digest, err)
+	}
+	return artifactID
+}
+
+// TestPromotionRepo_PromoteTwice_ExactlyOneCurrentRow proves the SCD2
+// close-and-open write end to end through the repository layer against real
+// Postgres: promoting a second artifact for the same target closes the
+// first row (valid_to set) and leaves exactly one row with valid_to IS
+// NULL.
+func TestPromotionRepo_PromoteTwice_ExactlyOneCurrentRow(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+
+	envID := devEnvironmentID(t, reg)
+	appID := seedApp(t, pool, "acme", "widget", "image")
+	buildID := seedBuild(t, pool, "run-promo-twice")
+	art1 := seedArtifact(t, pool, appID, buildID, "sha256:promo-twice-1", "v1.0.0")
+	art2 := seedArtifact(t, pool, appID, buildID, "sha256:promo-twice-2", "v2.0.0")
+
+	targetKey := "image:acme-widget"
+	first, superseded1, err := promoteTx(t, reg, repository.Promotion{EnvironmentID: envID, TargetKey: targetKey, ArtifactID: art1})
+	if err != nil {
+		t.Fatalf("first promote: %v", err)
+	}
+	if superseded1 != nil {
+		t.Fatalf("expected no superseded row on the first-ever promotion, got %+v", superseded1)
+	}
+
+	second, superseded2, err := promoteTx(t, reg, repository.Promotion{EnvironmentID: envID, TargetKey: targetKey, ArtifactID: art2})
+	if err != nil {
+		t.Fatalf("second promote: %v", err)
+	}
+	if superseded2 == nil || superseded2.PromotionID != first.PromotionID {
+		t.Fatalf("expected the second promote to supersede the first, got %+v", superseded2)
+	}
+	if superseded2.ValidTo == nil {
+		t.Fatalf("expected the superseded row's valid_to to be set")
+	}
+	if second.ValidTo != nil {
+		t.Fatalf("expected the new current row's valid_to to be nil, got %v", second.ValidTo)
+	}
+
+	if n := currentPromotionCount(t, pool, envID, targetKey); n != 1 {
+		t.Fatalf("expected exactly 1 row with valid_to IS NULL after two promotions, found %d", n)
+	}
+	var closedCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM promotion WHERE environment_id = $1 AND target_key = $2 AND valid_to IS NOT NULL`,
+		envID, targetKey).Scan(&closedCount); err != nil {
+		t.Fatalf("count closed rows: %v", err)
+	}
+	if closedCount != 1 {
+		t.Fatalf("expected exactly 1 closed (superseded) row, found %d", closedCount)
+	}
+}
+
+// TestPromotionRepo_StateAt_HistoricalWindow proves the SCD2 "state at time
+// T" window query (StateAt) against real Postgres: a timestamp between two
+// promotions returns the first artifact, not the second -- the exact
+// property GetEnvironmentState --at <T> depends on. Unlike the
+// handler-level tests, this controls valid_from/valid_to directly via SQL
+// so it isn't subject to wall-clock/second-resolution flakiness.
+func TestPromotionRepo_StateAt_HistoricalWindow(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+
+	envID := devEnvironmentID(t, reg)
+	appID := seedApp(t, pool, "acme", "widget", "image")
+	buildID := seedBuild(t, pool, "run-stateat")
+	art1 := seedArtifact(t, pool, appID, buildID, "sha256:stateat-1", "v1.0.0")
+	art2 := seedArtifact(t, pool, appID, buildID, "sha256:stateat-2", "v2.0.0")
+	targetKey := "image:acme-widget"
+
+	t0 := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	t1 := t0.Add(1 * time.Hour)         // v1 promoted
+	t2 := t0.Add(2 * time.Hour)         // v1 superseded by v2
+	between := t0.Add(90 * time.Minute) // strictly between t1 and t2
+
+	var promo1ID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO promotion (environment_id, target_key, artifact_id, valid_from, valid_to)
+		VALUES ($1, $2, $3, $4, $5) RETURNING promotion_id`,
+		envID, targetKey, art1, t1, t2).Scan(&promo1ID); err != nil {
+		t.Fatalf("seed historical promotion 1: %v", err)
+	}
+	var promo2ID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO promotion (environment_id, target_key, artifact_id, valid_from, valid_to)
+		VALUES ($1, $2, $3, $4, NULL) RETURNING promotion_id`,
+		envID, targetKey, art2, t2).Scan(&promo2ID); err != nil {
+		t.Fatalf("seed current promotion 2: %v", err)
+	}
+
+	state, err := reg.Promotions().StateAt(ctx, envID, &between)
+	if err != nil {
+		t.Fatalf("StateAt(between): %v", err)
+	}
+	if len(state) != 1 || state[0].PromotionID != promo1ID || state[0].Digest != "sha256:stateat-1" {
+		t.Fatalf("expected exactly promotion 1 (v1) live at %v, got %+v", between, state)
+	}
+
+	stateNow, err := reg.Promotions().StateAt(ctx, envID, nil)
+	if err != nil {
+		t.Fatalf("StateAt(now): %v", err)
+	}
+	if len(stateNow) != 1 || stateNow[0].PromotionID != promo2ID {
+		t.Fatalf("expected current state to be promotion 2 (v2), got %+v", stateNow)
+	}
+}
+
+// TestPromotionRepo_Rollback_RoundTrips proves GetPrevious + Promote --
+// exactly what handlers.PromotionServer.Rollback composes -- round-trips
+// correctly against real Postgres: rolling back after v1 -> v2 re-promotes
+// v1 and supersedes v2.
+func TestPromotionRepo_Rollback_RoundTrips(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+
+	envID := devEnvironmentID(t, reg)
+	appID := seedApp(t, pool, "acme", "widget", "image")
+	buildID := seedBuild(t, pool, "run-rollback")
+	art1 := seedArtifact(t, pool, appID, buildID, "sha256:rollback-1", "v1.0.0")
+	art2 := seedArtifact(t, pool, appID, buildID, "sha256:rollback-2", "v2.0.0")
+	targetKey := "image:acme-widget"
+
+	v1, _, err := promoteTx(t, reg, repository.Promotion{EnvironmentID: envID, TargetKey: targetKey, ArtifactID: art1})
+	if err != nil {
+		t.Fatalf("promote v1: %v", err)
+	}
+	v2, _, err := promoteTx(t, reg, repository.Promotion{EnvironmentID: envID, TargetKey: targetKey, ArtifactID: art2})
+	if err != nil {
+		t.Fatalf("promote v2: %v", err)
+	}
+
+	previous, err := reg.Promotions().GetPrevious(ctx, envID, targetKey)
+	if err != nil {
+		t.Fatalf("GetPrevious: %v", err)
+	}
+	if previous.PromotionID != v1.PromotionID {
+		t.Fatalf("expected GetPrevious to return v1's promotion %s, got %s", v1.PromotionID, previous.PromotionID)
+	}
+
+	rollback, supersededByRollback, err := promoteTx(t, reg, repository.Promotion{
+		EnvironmentID: envID, TargetKey: targetKey, ArtifactID: previous.ArtifactID,
+	})
+	if err != nil {
+		t.Fatalf("rollback promote: %v", err)
+	}
+	if rollback.ArtifactID != art1 {
+		t.Fatalf("expected rollback to re-promote v1's artifact %s, got %s", art1, rollback.ArtifactID)
+	}
+	if supersededByRollback == nil || supersededByRollback.PromotionID != v2.PromotionID {
+		t.Fatalf("expected rollback to supersede v2's promotion %s, got %+v", v2.PromotionID, supersededByRollback)
+	}
+	if n := currentPromotionCount(t, pool, envID, targetKey); n != 1 {
+		t.Fatalf("expected exactly 1 current row after rollback, found %d", n)
+	}
+}
+
+// TestPromotionRepo_Promote_TransactionAbortLeavesNoPartialWrite covers the
+// hazard AGENTS.md and this phase's assignment both flag explicitly: a
+// failed statement aborts the whole transaction, so the close half of
+// close-and-open must not survive if the open half fails. Here the INSERT
+// is forced to fail by pointing ArtifactID at a nonexistent artifact_id
+// (violates the artifact_id FK) *after* a real prior promotion exists to
+// close -- proving the earlier UPDATE (the close) does not commit on its
+// own when the surrounding transaction as a whole rolls back.
+func TestPromotionRepo_Promote_TransactionAbortLeavesNoPartialWrite(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+
+	envID := devEnvironmentID(t, reg)
+	appID := seedApp(t, pool, "acme", "widget", "image")
+	buildID := seedBuild(t, pool, "run-abort")
+	art1 := seedArtifact(t, pool, appID, buildID, "sha256:abort-1", "v1.0.0")
+	targetKey := "image:acme-widget"
+
+	first, _, err := promoteTx(t, reg, repository.Promotion{EnvironmentID: envID, TargetKey: targetKey, ArtifactID: art1})
+	if err != nil {
+		t.Fatalf("seed first promotion: %v", err)
+	}
+
+	_, _, err = promoteTx(t, reg, repository.Promotion{
+		EnvironmentID: envID, TargetKey: targetKey, ArtifactID: "00000000-0000-0000-0000-000000000000",
+	})
+	if err == nil {
+		t.Fatalf("expected the second promote (nonexistent artifact_id) to fail on the artifact_id FK, got nil error")
+	}
+
+	// The whole transaction -- both the UPDATE that closed `first` and the
+	// failed INSERT -- must have rolled back together. If it didn't, `first`
+	// would now show valid_to set with no new current row: a target
+	// promoted once that now has ZERO current rows, exactly the partial
+	// write PLAN.md and AGENTS.md warn about.
+	if n := currentPromotionCount(t, pool, envID, targetKey); n != 1 {
+		t.Fatalf("expected the original promotion to still be the sole current row after the aborted transaction, found %d current rows", n)
+	}
+	var validTo *time.Time
+	if err := pool.QueryRow(ctx, `SELECT valid_to FROM promotion WHERE promotion_id = $1`, first.PromotionID).Scan(&validTo); err != nil {
+		t.Fatalf("read back first promotion: %v", err)
+	}
+	if validTo != nil {
+		t.Fatalf("expected the original promotion's valid_to to remain NULL after the aborted transaction, got %v", *validTo)
 	}
 }
 

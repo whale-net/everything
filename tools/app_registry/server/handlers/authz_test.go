@@ -372,3 +372,120 @@ func TestEnvironmentReads_RequireAuthenticationOnly(t *testing.T) {
 		}
 	})
 }
+
+// TestPromote_Authorization and TestRollback_Authorization cover
+// PromotionRegistry's write RPCs, which require
+// auth.RequirePromoter(ctx, environment_key) -- an ENVIRONMENT-SCOPED role,
+// not a flat one. This is the credential-model boundary KEYCLOAK.md and
+// ARCHITECTURE.md's Authorization table both describe: a promoter-dev
+// credential must not be able to promote to prod, and a builder credential
+// (real power over AppRegistry/ArtifactRegistry) must not be able to
+// promote anywhere.
+func TestPromote_Authorization(t *testing.T) {
+	newSrv := func(t *testing.T) *PromotionServer {
+		t.Helper()
+		repo := fake.New()
+		envSrv := NewEnvironmentServer(repo)
+		if _, err := envSrv.UpsertEnvironment(ctxWithRoles(auth.RoleAdmin), &pb.UpsertEnvironmentRequest{Key: "dev"}); err != nil {
+			t.Fatalf("seed dev environment: %v", err)
+		}
+		if _, err := envSrv.UpsertEnvironment(ctxWithRoles(auth.RoleAdmin), &pb.UpsertEnvironmentRequest{Key: "prod", Rank: 20}); err != nil {
+			t.Fatalf("seed prod environment: %v", err)
+		}
+		return NewPromotionServer(repo)
+	}
+	req := func(env string) *pb.PromoteRequest {
+		return &pb.PromoteRequest{EnvironmentKey: env, ArtifactId: "nonexistent", Reason: "test", IdempotencyKey: "authz-promote"}
+	}
+
+	t.Run("matching environment role allowed through to business logic", func(t *testing.T) {
+		srv := newSrv(t)
+		// promoter-dev may call Promote against dev -- the request fails
+		// downstream (unknown artifact), which is exactly how we know auth
+		// let it through instead of stopping it.
+		_, err := srv.Promote(ctxWithRoles(auth.RolePromoterDev), req("dev"))
+		if status.Code(err) == codes.Unauthenticated || status.Code(err) == codes.PermissionDenied {
+			t.Fatalf("expected promoter-dev to pass authorization for dev, got %v", err)
+		}
+	})
+
+	t.Run("wrong environment's promoter role is PermissionDenied", func(t *testing.T) {
+		srv := newSrv(t)
+		// promoter-dev holds real power over dev, none over prod -- the
+		// exact per-environment isolation ARCHITECTURE.md depends on.
+		_, err := srv.Promote(ctxWithRoles(auth.RolePromoterDev), req("prod"))
+		requireCode(t, err, codes.PermissionDenied, "Promote(prod) as promoter-dev")
+	})
+
+	t.Run("builder credential cannot promote", func(t *testing.T) {
+		srv := newSrv(t)
+		_, err := srv.Promote(ctxWithRoles(auth.RoleBuilder), req("dev"))
+		requireCode(t, err, codes.PermissionDenied, "Promote as builder")
+	})
+
+	t.Run("no claims is Unauthenticated", func(t *testing.T) {
+		srv := newSrv(t)
+		_, err := srv.Promote(context.Background(), req("dev"))
+		requireCode(t, err, codes.Unauthenticated, "Promote")
+	})
+}
+
+func TestRollback_Authorization(t *testing.T) {
+	repo := fake.New()
+	envSrv := NewEnvironmentServer(repo)
+	if _, err := envSrv.UpsertEnvironment(ctxWithRoles(auth.RoleAdmin), &pb.UpsertEnvironmentRequest{Key: "prod", Rank: 20}); err != nil {
+		t.Fatalf("seed prod environment: %v", err)
+	}
+	srv := NewPromotionServer(repo)
+	req := &pb.RollbackRequest{EnvironmentKey: "prod", OwnerFullName: "demo-svc", Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, Reason: "test", IdempotencyKey: "authz-rollback"}
+
+	t.Run("wrong environment's promoter role is PermissionDenied", func(t *testing.T) {
+		_, err := srv.Rollback(ctxWithRoles(auth.RolePromoterDev), req)
+		requireCode(t, err, codes.PermissionDenied, "Rollback(prod) as promoter-dev")
+	})
+
+	t.Run("no claims is Unauthenticated", func(t *testing.T) {
+		_, err := srv.Rollback(context.Background(), req)
+		requireCode(t, err, codes.Unauthenticated, "Rollback")
+	})
+}
+
+// TestPromotionReads_RequireAuthenticationOnly covers GetEnvironmentState,
+// ListPromotions, and ListPromotionEvents: any authenticated principal, no
+// specific (let alone environment-scoped) role.
+func TestPromotionReads_RequireAuthenticationOnly(t *testing.T) {
+	repo := fake.New()
+	envSrv := NewEnvironmentServer(repo)
+	if _, err := envSrv.UpsertEnvironment(ctxWithRoles(auth.RoleAdmin), &pb.UpsertEnvironmentRequest{Key: "dev"}); err != nil {
+		t.Fatalf("seed dev environment: %v", err)
+	}
+	srv := NewPromotionServer(repo)
+	readerCtx := ctxWithRoles(auth.RoleBuilder)
+
+	t.Run("GetEnvironmentState", func(t *testing.T) {
+		if _, err := srv.GetEnvironmentState(readerCtx, &pb.GetEnvironmentStateRequest{EnvironmentKey: "dev"}); err != nil {
+			t.Fatalf("expected any authenticated principal to read environment state, got %v", err)
+		}
+		if _, err := srv.GetEnvironmentState(context.Background(), &pb.GetEnvironmentStateRequest{EnvironmentKey: "dev"}); status.Code(err) != codes.Unauthenticated {
+			t.Fatalf("expected Unauthenticated with no claims, got %v", err)
+		}
+	})
+
+	t.Run("ListPromotions", func(t *testing.T) {
+		if _, err := srv.ListPromotions(readerCtx, &pb.ListPromotionsRequest{}); err != nil {
+			t.Fatalf("expected any authenticated principal to list promotions, got %v", err)
+		}
+		if _, err := srv.ListPromotions(context.Background(), &pb.ListPromotionsRequest{}); status.Code(err) != codes.Unauthenticated {
+			t.Fatalf("expected Unauthenticated with no claims, got %v", err)
+		}
+	})
+
+	t.Run("ListPromotionEvents", func(t *testing.T) {
+		if _, err := srv.ListPromotionEvents(readerCtx, &pb.ListPromotionEventsRequest{}); err != nil {
+			t.Fatalf("expected any authenticated principal to list promotion events, got %v", err)
+		}
+		if _, err := srv.ListPromotionEvents(context.Background(), &pb.ListPromotionEventsRequest{}); status.Code(err) != codes.Unauthenticated {
+			t.Fatalf("expected Unauthenticated with no claims, got %v", err)
+		}
+	})
+}

@@ -44,10 +44,10 @@ to configure the Keycloak side. In short: `AppRegistry.ReconcileApps`,
 `ArtifactRegistry.RecordBuild`/`RecordArtifact` require
 `app-registry-builder`; `AppRegistry.SetAppStatus` and every
 `EnvironmentRegistry` write (`UpsertEnvironment`/`ArchiveEnvironment`)
-require `app-registry-admin`; all read RPCs require only that the caller is
-authenticated (any role). `PromotionRegistry` stays `Unimplemented` until
-AR-3c, but `server/auth.RequirePromoter` already exists for it to call
-unmodified.
+require `app-registry-admin`; `PromotionRegistry.Promote`/`Rollback`
+require the environment-scoped `app-registry-promoter-<environment_key>`
+via `server/auth.RequirePromoter` (AR-3c); all read RPCs require only that
+the caller is authenticated (any role).
 
 **`GRPC_AUTH_MODE=none` and local/CI dev claims:** `libs/go/grpcauth`'s
 dev-mode claims default to `Roles: ["admin"]`, which satisfies none of this

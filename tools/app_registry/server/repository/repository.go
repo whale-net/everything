@@ -10,6 +10,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
@@ -127,6 +128,52 @@ type EnvironmentRepository interface {
 	Archive(ctx context.Context, key, reason string) (*Environment, error)
 }
 
+// PromotionRepository covers `promotion` (SCD2) and `promotion_event`
+// (append-only) — see ARCHITECTURE.md "SCD2 on promotion". Every method
+// here must be called from inside Registry.WithTx when it participates in a
+// write: none of them open their own transaction, matching every other
+// repository in this package.
+type PromotionRepository interface {
+	// Promote performs the SCD2 close-and-open write described in
+	// AGENTS.md: it closes any current row for (p.EnvironmentID,
+	// p.TargetKey) by setting its valid_to, then inserts p as the new
+	// current row. current is the freshly written row; superseded is the
+	// row that was just closed, or nil if this is the first promotion ever
+	// recorded for this target. The partial unique index
+	// promotion_current_idx is what makes two concurrent callers racing
+	// this method structurally unable to both end up current.
+	Promote(ctx context.Context, p Promotion) (current *Promotion, superseded *Promotion, err error)
+
+	// GetCurrent returns the current (valid_to IS NULL) promotion for
+	// (environmentID, targetKey), or ErrNotFound.
+	GetCurrent(ctx context.Context, environmentID, targetKey string) (*Promotion, error)
+
+	// GetPrevious returns the most recently superseded row for
+	// (environmentID, targetKey) — the state Rollback re-promotes.
+	// ErrNotFound when there is no history to roll back to (the target has
+	// never been promoted, or has been promoted exactly once).
+	GetPrevious(ctx context.Context, environmentID, targetKey string) (*Promotion, error)
+
+	// StateAt returns every target's promotion row valid in environmentID
+	// at instant at. at == nil means "now": rows with valid_to IS NULL —
+	// this is the SCD2 window query from ARCHITECTURE.md "SCD2 on
+	// promotion", parameterized so the same method serves both
+	// GetEnvironmentState's current and historical (`at`) reads.
+	StateAt(ctx context.Context, environmentID string, at *time.Time) ([]Promotion, error)
+
+	// ListPromotions supports ListPromotionsRequest's filters. Ordered by
+	// valid_from descending.
+	ListPromotions(ctx context.Context, filter PromotionListFilter) ([]Promotion, error)
+
+	// RecordEvent appends one row to promotion_event. Not SCD2 — see
+	// AGENTS.md, event logs get their own shape.
+	RecordEvent(ctx context.Context, e PromotionEvent) (*PromotionEvent, error)
+
+	// ListEvents supports ListPromotionEventsRequest's filters. Ordered by
+	// occurred_at descending.
+	ListEvents(ctx context.Context, filter PromotionEventListFilter) ([]PromotionEvent, error)
+}
+
 // Registry aggregates the per-entity repositories and provides a
 // unit-of-work boundary. Handlers call WithTx to make a business operation
 // (reconcile, idempotency check-and-store, etc.) atomic: fn receives a
@@ -137,6 +184,7 @@ type Registry interface {
 	Artifacts() ArtifactRepository
 	Idempotency() IdempotencyRepository
 	Environments() EnvironmentRepository
+	Promotions() PromotionRepository
 
 	WithTx(ctx context.Context, fn func(ctx context.Context, r Registry) error) error
 }

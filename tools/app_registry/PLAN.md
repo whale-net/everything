@@ -26,8 +26,9 @@ The registry is being deployed to `dev` by the repo owner. `app-registry-api`
 and `app-registry-migration` images publish from `apps=all`.
 `APP_REGISTRY_CICD_OPT_IN` is still unset, so CI makes no registry calls.
 
-**Next up:** AR-3c (`PromotionRegistry`). AR-2d, AR-3a, and AR-3b are done
-and stacked on top of `main`.
+**Next up:** AR-3d (CLI `promote`/`rollback`/`status`/`history`/`diff` +
+`promote.yml`). AR-2d, AR-3a, AR-3b, and AR-3c are done and stacked on top
+of `main`.
 
 ### AR-2c — merged
 
@@ -312,6 +313,64 @@ criterion is testable from the moment promotion exists:
   `[]string` as SQL `NULL`, which the `NOT NULL allowed_principals` column
   rejected — fixed by normalizing to `[]string{}` before insert.
 - See [TODO-AR-3b.md](TODO-AR-3b.md) for full execution detail and the
+  deliberate-break verification transcripts.
+
+### AR-3c — `PromotionRegistry` — done
+
+- Migration `003_promotion` (up/down): `promotion` (SCD2 — `valid_from`/
+  `valid_to`, partial unique index `promotion_current_idx ON promotion
+  (environment_id, target_key) WHERE valid_to IS NULL`, plus
+  `promotion_window_idx` for historical/`--at` reads), `promotion_event`
+  (append-only, NOT SCD2 per AGENTS.md), and `v_current_promotion` (pre-joins
+  promotion → artifact → environment for the current-state read path).
+  `target_key` is `"<kind>:<owner_full_name>"`, denormalized so the partial
+  unique index doesn't need a nullable two-column target; everything else
+  about the promoted artifact is read via a join to `artifact` rather than
+  copied onto `promotion`, so there is exactly one place it can drift from.
+- `repository.PromotionRepository` (`Promote`/`GetCurrent`/`GetPrevious`/
+  `StateAt`/`ListPromotions`/`RecordEvent`/`ListEvents`) + postgres and fake
+  implementations. `Promote` performs the SCD2 close-and-open write
+  described in AGENTS.md as three statements (read current, close it, open
+  the new row) that the caller MUST run inside `Registry.WithTx` — none of
+  the repository methods open their own transaction, matching every other
+  repository in this package.
+- All five `PromotionRegistry` RPCs implemented in
+  `server/handlers/promotion.go`. `Promote`/`Rollback` require
+  `auth.RequirePromoter(ctx, environment_key)` (environment-scoped, not a
+  flat role); the read RPCs require `auth.RequireAuthenticated`.
+- Business rules, all enforced in the handler (repository stays free of
+  gRPC/proto concerns, matching the rest of this package):
+  - **Promotability.** `NOT_PROMOTABLE` is rejected outright. `VIA_CHART`
+    requires `allow_override`; when set, the promotion is stored with
+    `is_override = true`.
+  - **Drift reporting.** `GetEnvironmentState` cross-references every
+    `is_override` image promotion against the pinned digest of any chart
+    promotion covering the same app in the same state snapshot, and reports
+    a mismatch as a `DriftEntry` on the chart's `EnvironmentStateEntry`.
+  - **`reason` required above rank 0**, checked against the resolved
+    `Environment.Rank` (dev is rank 0 by convention) — applies to both
+    `Promote` and `Rollback`.
+  - **`already_promoted` short-circuit.** Re-promoting the artifact that is
+    already current is detected before the SCD2 write and returns the
+    existing row instead of creating a redundant history entry — not a
+    correctness requirement from ARCHITECTURE.md, but avoids inflating audit
+    history with no-op repeats. A deliberate design call; the CLI can be
+    made to skip this check if it should be a hard error instead.
+- `Rollback` is `GetPrevious` + `Promote`: it re-promotes whatever
+  `GetPrevious` reports as the most recently superseded row for the target,
+  recording `PROMOTION_ACTION_ROLLBACK`.
+- Postgres integration coverage added, all verified against real Postgres
+  (see `postgres_integration_test.go`): the partial unique index
+  `promotion_current_idx` rejecting two concurrent current rows for the same
+  target (the test AR-2d's carry-over note flagged as deferred until this
+  table existed), promote→promote leaving exactly one current row with the
+  prior row's `valid_to` set, `StateAt` returning the correct historical row
+  for a timestamp strictly between two promotions, `GetPrevious` + `Promote`
+  round-tripping a rollback, and a transaction-abort test proving the
+  close-half of close-and-open does not survive when the open-half's INSERT
+  fails (verified to actually catch the bug by temporarily bypassing
+  `WithTx` in the test and observing the row count drop to zero).
+- See [TODO-AR-3c.md](TODO-AR-3c.md) for full execution detail and the
   deliberate-break verification transcripts.
 
 ### Credential model (decided)

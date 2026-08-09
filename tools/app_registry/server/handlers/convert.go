@@ -229,6 +229,93 @@ func environmentsToPB(envs []repository.Environment) []*pb.Environment {
 	return out
 }
 
+func promotionStateToPB(s repository.PromotionState) pb.PromotionState {
+	switch s {
+	case repository.PromotionStatePendingApproval:
+		return pb.PromotionState_PROMOTION_STATE_PENDING_APPROVAL
+	case repository.PromotionStateActive:
+		return pb.PromotionState_PROMOTION_STATE_ACTIVE
+	case repository.PromotionStateSuperseded:
+		return pb.PromotionState_PROMOTION_STATE_SUPERSEDED
+	case repository.PromotionStateFailed:
+		return pb.PromotionState_PROMOTION_STATE_FAILED
+	default:
+		return pb.PromotionState_PROMOTION_STATE_UNSPECIFIED
+	}
+}
+
+func promotionActionToPB(a repository.PromotionAction) pb.PromotionAction {
+	switch a {
+	case repository.PromotionActionPromote:
+		return pb.PromotionAction_PROMOTION_ACTION_PROMOTE
+	case repository.PromotionActionRollback:
+		return pb.PromotionAction_PROMOTION_ACTION_ROLLBACK
+	case repository.PromotionActionOverride:
+		return pb.PromotionAction_PROMOTION_ACTION_OVERRIDE
+	case repository.PromotionActionRetire:
+		return pb.PromotionAction_PROMOTION_ACTION_RETIRE
+	case repository.PromotionActionApprove:
+		return pb.PromotionAction_PROMOTION_ACTION_APPROVE
+	case repository.PromotionActionReject:
+		return pb.PromotionAction_PROMOTION_ACTION_REJECT
+	default:
+		return pb.PromotionAction_PROMOTION_ACTION_UNSPECIFIED
+	}
+}
+
+func promotionToPB(p repository.Promotion) *pb.Promotion {
+	out := &pb.Promotion{
+		PromotionId:    p.PromotionID,
+		EnvironmentId:  p.EnvironmentID,
+		EnvironmentKey: p.EnvironmentKey,
+		ArtifactId:     p.ArtifactID,
+		Repository:     p.Repository,
+		Version:        p.Version,
+		Digest:         p.Digest,
+		State:          promotionStateToPB(p.State),
+		IsOverride:     p.IsOverride,
+		ValidFrom:      timeToUnix(p.ValidFrom),
+	}
+	if p.Kind == repository.ArtifactKindImage {
+		out.AppId = p.AppID
+	} else {
+		out.ChartId = p.ChartID
+	}
+	if p.ValidTo != nil {
+		out.ValidTo = timeToUnix(*p.ValidTo)
+	}
+	return out
+}
+
+func promotionsToPB(promotions []repository.Promotion) []*pb.Promotion {
+	out := make([]*pb.Promotion, 0, len(promotions))
+	for _, p := range promotions {
+		out = append(out, promotionToPB(p))
+	}
+	return out
+}
+
+func promotionEventToPB(e repository.PromotionEvent) *pb.PromotionEvent {
+	return &pb.PromotionEvent{
+		EventId:            e.EventID,
+		PromotionId:        e.PromotionID,
+		Action:             promotionActionToPB(e.Action),
+		Actor:              e.Actor,
+		Reason:             e.Reason,
+		TemporalWorkflowId: e.TemporalWorkflowID,
+		TemporalRunId:      e.TemporalRunID,
+		OccurredAt:         timeToUnix(e.OccurredAt),
+	}
+}
+
+func promotionEventsToPB(events []repository.PromotionEvent) []*pb.PromotionEvent {
+	out := make([]*pb.PromotionEvent, 0, len(events))
+	for _, e := range events {
+		out = append(out, promotionEventToPB(e))
+	}
+	return out
+}
+
 func containedImagesFromPB(images []*pb.ContainedImage) []repository.ContainedImageInput {
 	out := make([]repository.ContainedImageInput, 0, len(images))
 	for _, ci := range images {
