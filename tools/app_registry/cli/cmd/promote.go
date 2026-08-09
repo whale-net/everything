@@ -25,16 +25,21 @@ func promoteIdempotencyKey(key string) string {
 }
 
 func newPromoteCmd() *cobra.Command {
-	var env, reason string
+	var env, reason, kind string
 	var allowOverride, dryRun bool
 	c := &cobra.Command{
 		Use:   "promote <domain-name> <version>",
 		Short: "Promote an artifact to an environment",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			k, err := parseArtifactKind(kind)
+			if err != nil {
+				return err
+			}
 			req := &pb.PromoteRequest{
 				EnvironmentKey: env,
 				OwnerFullName:  args[0],
+				Kind:           k,
 				Version:        args[1],
 				Reason:         reason,
 				AllowOverride:  allowOverride,
@@ -62,6 +67,7 @@ func newPromoteCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&env, "env", "", "Target environment key, e.g. prod")
 	c.Flags().StringVar(&reason, "reason", "", "Required above dev rank; recorded in the audit log")
+	c.Flags().StringVar(&kind, "kind", "image", "Artifact kind (image|chart); the owner_full_name+version pair is ambiguous without it")
 	c.Flags().BoolVar(&allowOverride, "allow-override", false, "Acknowledge promoting a VIA_CHART artifact directly")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "Compute the resulting state without writing")
 	c.Flags().StringVar(&idempotencyKeyFlag, "idempotency-key", "", "Client-generated; a UUID is generated if omitted (see ARCHITECTURE.md 'Idempotency')")
@@ -70,17 +76,22 @@ func newPromoteCmd() *cobra.Command {
 }
 
 func newRollbackCmd() *cobra.Command {
-	var env, reason string
+	var env, reason, kind string
 	var dryRun bool
 	c := &cobra.Command{
 		Use:   "rollback <domain-name>",
 		Short: "Re-promote whatever was previously current for this target",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			k, err := parseArtifactKind(kind)
+			if err != nil {
+				return err
+			}
 			return withClient(cmd, func(rc *registryClient) error {
 				resp, err := rc.Promotion.Rollback(cmd.Context(), &pb.RollbackRequest{
 					EnvironmentKey: env,
 					OwnerFullName:  args[0],
+					Kind:           k,
 					Reason:         reason,
 					DryRun:         dryRun,
 					IdempotencyKey: promoteIdempotencyKey(idempotencyKeyFlag),
@@ -97,6 +108,7 @@ func newRollbackCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&env, "env", "", "Target environment key, e.g. prod")
 	c.Flags().StringVar(&reason, "reason", "", "Required above dev rank; recorded in the audit log")
+	c.Flags().StringVar(&kind, "kind", "image", "Artifact kind (image|chart) of the target being rolled back")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "Compute the resulting state without writing")
 	c.Flags().StringVar(&idempotencyKeyFlag, "idempotency-key", "", "Client-generated; a UUID is generated if omitted (see ARCHITECTURE.md 'Idempotency')")
 	_ = c.MarkFlagRequired("env")

@@ -31,6 +31,13 @@ on:
       owner_full_name:
         description: 'App or chart identity, as <domain>-<name> (e.g. manmanv2-host-manager)'
         required: true
+      kind:
+        description: 'Which artifact kind owner_full_name refers to. Charts and images can share a name, so this is what disambiguates them.'
+        type: choice
+        options:
+          - image
+          - chart
+        default: image
       version:
         description: 'Version to promote, e.g. v1.4.0. Required for action=promote; ignored for action=rollback.'
         required: false
@@ -100,6 +107,7 @@ jobs:
         GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_PROMOTER_CLIENT_SECRET }}
         ENVIRONMENT: ${{ inputs.environment }}
         OWNER_FULL_NAME: ${{ inputs.owner_full_name }}
+        KIND: ${{ inputs.kind }}
         VERSION: ${{ inputs.version }}
         REASON: ${{ inputs.reason }}
         ALLOW_OVERRIDE: ${{ inputs.allow_override }}
@@ -107,7 +115,7 @@ jobs:
       run: |
         APP_REGISTRY_CLI="$(bazel info bazel-bin --config=ci)/tools/app_registry/cli/app-registry_/app-registry"
 
-        ARGS=(promote "$OWNER_FULL_NAME" "$VERSION" --env "$ENVIRONMENT")
+        ARGS=(promote "$OWNER_FULL_NAME" "$VERSION" --env "$ENVIRONMENT" --kind "$KIND")
         if [[ -n "$REASON" ]]; then
           ARGS+=(--reason "$REASON")
         fi
@@ -130,12 +138,13 @@ jobs:
         GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_PROMOTER_CLIENT_SECRET }}
         ENVIRONMENT: ${{ inputs.environment }}
         OWNER_FULL_NAME: ${{ inputs.owner_full_name }}
+        KIND: ${{ inputs.kind }}
         REASON: ${{ inputs.reason }}
         DRY_RUN: ${{ inputs.dry_run }}
       run: |
         APP_REGISTRY_CLI="$(bazel info bazel-bin --config=ci)/tools/app_registry/cli/app-registry_/app-registry"
 
-        ARGS=(rollback "$OWNER_FULL_NAME" --env "$ENVIRONMENT")
+        ARGS=(rollback "$OWNER_FULL_NAME" --env "$ENVIRONMENT" --kind "$KIND")
         if [[ -n "$REASON" ]]; then
           ARGS+=(--reason "$REASON")
         fi

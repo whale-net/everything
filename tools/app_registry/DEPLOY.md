@@ -47,6 +47,7 @@ every call returns `Unauthenticated`.
 | `app-registry-promoter-dev` | Promote to `dev` (via `promote.yml`) | Same shape, realm role `app-registry-promoter-dev` | **now** — needed before `promote.yml` can run against `dev` |
 | `app-registry-promoter-stage` | Promote to `stage` (via `promote.yml`) | Same shape, realm role `app-registry-promoter-stage` | **now** — needed before `promote.yml` can run against `stage` |
 | `app-registry-promoter-prod` | Promote to `prod` (via `promote.yml`) | Same shape, realm role `app-registry-promoter-prod` | **now** — needed before `promote.yml` can run against `prod` |
+| `app-registry-worker` | The writeback worker's own calls back into the API (`GetEnvironmentState`) | Confidential, **Service accounts roles** only, audience mapper → `app-registry-api`. **No realm role** — those reads only require an authenticated caller | **now, if you run the worker** |
 
 ### Realm roles
 
@@ -61,6 +62,11 @@ app-registry-promoter-stage
 app-registry-promoter-prod
 app-registry-admin
 ```
+
+The `app-registry-worker` client deliberately gets **no** realm role: it only
+reads (`GetEnvironmentState`), and the read RPCs require an authenticated
+caller rather than a specific role. Give it a role only if you later have it
+write.
 
 **Roles are flat — no role implies another.** `app-registry-admin` does *not*
 grant builder. A principal that needs to both record and administer holds both

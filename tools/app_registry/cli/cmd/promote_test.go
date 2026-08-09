@@ -165,3 +165,65 @@ func TestPromoteIdempotencyKey_PreservesProvided(t *testing.T) {
 		t.Fatalf("got %q, want explicit-key", got)
 	}
 }
+
+// TestParseArtifactKind_PromoteRollbackFlag exercises parseArtifactKind with
+// the exact inputs promote/rollback's --kind flag can carry: the two valid
+// strings, the "image" default those commands register, and an invalid
+// value. This is the regression test for the bug where PromoteRequest and
+// RollbackRequest were built without ever setting Kind, so the server always
+// saw ARTIFACT_KIND_UNSPECIFIED and every promotion/rollback failed lookup
+// -- see promoteArtifactLookup / Rollback in
+// server/handlers/promotion.go.
+func TestParseArtifactKind_PromoteRollbackFlag(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    pb.ArtifactKind
+		wantErr bool
+	}{
+		{in: "image", want: pb.ArtifactKind_ARTIFACT_KIND_IMAGE},
+		{in: "chart", want: pb.ArtifactKind_ARTIFACT_KIND_CHART},
+		{in: "bogus", wantErr: true},
+		{in: "", wantErr: true},
+	}
+	for _, tt := range tests {
+		got, err := parseArtifactKind(tt.in)
+		if tt.wantErr {
+			if err == nil {
+				t.Errorf("parseArtifactKind(%q): expected error, got nil (kind=%v)", tt.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("parseArtifactKind(%q): unexpected error: %v", tt.in, err)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("parseArtifactKind(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestNewPromoteCmd_DefaultKindFlagIsImage locks in the --kind default
+// (image, the common case) so a future change to the flag registration is
+// caught here rather than only discovered against a live server.
+func TestNewPromoteCmd_DefaultKindFlagIsImage(t *testing.T) {
+	c := newPromoteCmd()
+	f := c.Flags().Lookup("kind")
+	if f == nil {
+		t.Fatal("expected promote to register a --kind flag")
+	}
+	if f.DefValue != "image" {
+		t.Errorf("--kind default = %q, want %q", f.DefValue, "image")
+	}
+}
+
+func TestNewRollbackCmd_DefaultKindFlagIsImage(t *testing.T) {
+	c := newRollbackCmd()
+	f := c.Flags().Lookup("kind")
+	if f == nil {
+		t.Fatal("expected rollback to register a --kind flag")
+	}
+	if f.DefValue != "image" {
+		t.Errorf("--kind default = %q, want %q", f.DefValue, "image")
+	}
+}
