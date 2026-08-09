@@ -1,8 +1,16 @@
 # App Registry — TOC
 
 gRPC service that records published artifacts and tracks per-environment
-promotion state. AR-1 (foundations) is landed: schema, server/CLI skeletons —
-no business logic yet, every RPC returns `Unimplemented`.
+promotion state.
+
+**Status: AR-2b complete, nothing merged.** Recording works end to end —
+`ReconcileApps`, `RecordBuild`/`RecordArtifact` and the chart image lockfile are
+implemented and verified against real Postgres. Promotions, environments and
+writeback (AR-3/AR-4) are still `Unimplemented`.
+
+All phases sit in open PRs, held while the service is deployed and its secrets
+configured. **See [PLAN.md](PLAN.md) → "Current status" for the branch/PR map,
+what is next, and the carry-over items** — start there when picking this up.
 
 ## Documents
 

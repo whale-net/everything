@@ -11,6 +11,7 @@ go_library(
     importpath = "github.com/whale-net/everything/tools/release_helper_go/cmd",
     deps = [
         "//tools/appmeta/proto:appmetapb",
+        "//tools/helm:helm_lib",
         "@com_github_spf13_cobra//:cobra",
         "@in_gopkg_yaml_v3//:yaml_v3",
         "@org_golang_google_protobuf//encoding/protojson",
@@ -30,6 +31,7 @@ go_test(
     srcs = glob(["cmd/*_test.go"]),
     embed = [":cmd"],
     deps = [
+        "//tools/helm:helm_lib",
         "@com_github_spf13_cobra//:cobra",
     ],
 )

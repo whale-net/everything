@@ -35,6 +35,8 @@ func newTestRoot() *cobra.Command {
 		newListAppsCmd(),
 		newListCmd(),
 		newChangesCmd(),
+		newManifestSetCmd(),
+		newReadChartLockfileCmd(),
 	)
 	return root
 }
@@ -58,7 +60,9 @@ type fakeFS struct {
 	existing map[string]bool   // extra paths that exist but have no content
 }
 
-func newFakeFS() *fakeFS { return &fakeFS{files: make(map[string][]byte), existing: make(map[string]bool)} }
+func newFakeFS() *fakeFS {
+	return &fakeFS{files: make(map[string][]byte), existing: make(map[string]bool)}
+}
 
 func (f *fakeFS) add(path string, content []byte) *fakeFS {
 	f.files[path] = content

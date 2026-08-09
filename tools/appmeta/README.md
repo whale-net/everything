@@ -166,7 +166,8 @@ already disagreed.
    `manmanv2/host/DEPLOYMENT.md`). Every other app keeps the `"chart"`
    default.
 
-**Not yet done (out of AR-M's scope, tracked for AR-2):**
-
-5. `release_helper_go` emitting `AppManifestSet` for the registry's
-   `ReconcileApps` to consume directly.
+5. `release_helper_go manifest-set` emits `AppManifestSet` (apps + charts +
+   `git_sha` + `discovered_at`) via `protojson`, so enums serialize as names.
+   This is what AR-2c's registry recording step passes to `ReconcileApps`
+   directly — no conversion code, since discovery already decodes into
+   `appmetapb` types (AR-2b).
