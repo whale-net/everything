@@ -1,0 +1,149 @@
+name: Promote
+
+# Human-triggered promotion / rollback against the App Registry. See
+# tools/app_registry/PLAN.md -> "AR-3 -> Credential model (decided)" and
+# ARCHITECTURE.md -> "Authorization": the `environment:` declaration on the
+# `promote` job below is the entire security model for this workflow, not a
+# formality. It is what scopes the job to the target GitHub Environment's
+# secrets (so only that environment's `app-registry-promoter-<env>` client
+# secret is readable) and what triggers that environment's required
+# reviewers. A builder credential is never in scope here -- it lives in a
+# repository secret and carries no promoter role regardless.
+#
+# Unlike the best-effort AR-2c recording steps in release.yml, the promote
+# step below is NOT continue-on-error: a promotion that silently fails while
+# the workflow shows green is exactly the failure mode this system exists to
+# prevent.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target GitHub Environment / App Registry environment key (e.g. dev, stage, prod). Must have a matching GitHub Environment with the app-registry-promoter-<environment> secret configured.'
+        required: true
+      action:
+        description: 'promote a specific version, or roll back to whatever was previously current'
+        type: choice
+        options:
+          - promote
+          - rollback
+        default: promote
+      owner_full_name:
+        description: 'App or chart identity, as <domain>-<name> (e.g. manmanv2-host-manager)'
+        required: true
+      version:
+        description: 'Version to promote, e.g. v1.4.0. Required for action=promote; ignored for action=rollback.'
+        required: false
+      reason:
+        description: 'Why -- required above dev rank, recorded in the audit log'
+        required: false
+      allow_override:
+        description: 'Acknowledge promoting a VIA_CHART image directly, bypassing its chart (promote only)'
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Compute the resulting state without writing'
+        type: boolean
+        default: false
+
+jobs:
+  promote:
+    name: ${{ inputs.action }} ${{ inputs.owner_full_name }} -> ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    # This is the security-critical line -- see the header comment above.
+    # It scopes the job to the named GitHub Environment's secrets and
+    # required reviewers.
+    environment: ${{ inputs.environment }}
+    steps:
+    # Every `run:` block in this workflow reads inputs through `env:` rather
+    # than interpolating `${{ inputs.* }}` directly into the script. Direct
+    # interpolation splices attacker-controlled text into bash before the
+    # shell ever sees it, so a crafted owner_full_name or reason would run as
+    # code in a job that holds a promoter client secret. Via `env:` the value
+    # is only ever a shell variable. Keep it that way when editing.
+    - name: Validate inputs
+      env:
+        ACTION: ${{ inputs.action }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        if [[ "$ACTION" == "promote" && -z "$VERSION" ]]; then
+          echo "::error::version is required when action=promote"
+          exit 1
+        fi
+        echo "✅ inputs validated"
+
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'app-registry-cli'
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+
+    - name: Build app-registry CLI
+      run: bazel build --config=ci //tools/app_registry/cli:app-registry
+
+    # Read from *this job's* Environment secrets (scoped by `environment:`
+    # above), never from repository secrets. See DEPLOY.md "Where each
+    # secret goes" -- promoter-<env> client secrets live only on the
+    # matching GitHub Environment.
+    - name: Promote
+      if: inputs.action == 'promote'
+      env:
+        APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+        GRPC_AUTH_MODE: oidc
+        GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+        GRPC_AUTH_CLIENT_ID: app-registry-promoter-${{ inputs.environment }}
+        GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_PROMOTER_CLIENT_SECRET }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        OWNER_FULL_NAME: ${{ inputs.owner_full_name }}
+        VERSION: ${{ inputs.version }}
+        REASON: ${{ inputs.reason }}
+        ALLOW_OVERRIDE: ${{ inputs.allow_override }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: |
+        APP_REGISTRY_CLI="$(bazel info bazel-bin --config=ci)/tools/app_registry/cli/app-registry_/app-registry"
+
+        ARGS=(promote "$OWNER_FULL_NAME" "$VERSION" --env "$ENVIRONMENT")
+        if [[ -n "$REASON" ]]; then
+          ARGS+=(--reason "$REASON")
+        fi
+        if [[ "$ALLOW_OVERRIDE" == "true" ]]; then
+          ARGS+=(--allow-override)
+        fi
+        if [[ "$DRY_RUN" == "true" ]]; then
+          ARGS+=(--dry-run)
+        fi
+
+        "$APP_REGISTRY_CLI" "${ARGS[@]}"
+
+    - name: Rollback
+      if: inputs.action == 'rollback'
+      env:
+        APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+        GRPC_AUTH_MODE: oidc
+        GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+        GRPC_AUTH_CLIENT_ID: app-registry-promoter-${{ inputs.environment }}
+        GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_PROMOTER_CLIENT_SECRET }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        OWNER_FULL_NAME: ${{ inputs.owner_full_name }}
+        REASON: ${{ inputs.reason }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: |
+        APP_REGISTRY_CLI="$(bazel info bazel-bin --config=ci)/tools/app_registry/cli/app-registry_/app-registry"
+
+        ARGS=(rollback "$OWNER_FULL_NAME" --env "$ENVIRONMENT")
+        if [[ -n "$REASON" ]]; then
+          ARGS+=(--reason "$REASON")
+        fi
+        if [[ "$DRY_RUN" == "true" ]]; then
+          ARGS+=(--dry-run)
+        fi
+
+        "$APP_REGISTRY_CLI" "${ARGS[@]}"
+
+    # No continue-on-error anywhere above: a failed promotion must fail the
+    # job loudly, unlike the best-effort recording steps in release.yml.

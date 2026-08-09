@@ -9,10 +9,10 @@ go_proto_library(
     compilers = ["@rules_go//proto:go_grpc"],
     importpath = "github.com/whale-net/everything/tools/app_registry/protos",
     proto = ":appregistrypb_proto",
+    visibility = ["//visibility:public"],
     # The manifest schema is owned by //tools/appmeta/proto, not by the
     # registry — release_helper_go and the helm composer consume it too.
     deps = ["//tools/appmeta/proto:appmetapb"],
-    visibility = ["//visibility:public"],
 )
 
 proto_library(
@@ -25,6 +25,6 @@ proto_library(
         "api_messages_promotion.proto",
         "messages.proto",
     ],
-    deps = ["//tools/appmeta/proto:appmetapb_proto"],
     visibility = ["//visibility:public"],
+    deps = ["//tools/appmeta/proto:appmetapb_proto"],
 )

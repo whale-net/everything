@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_binary")
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
 load("//tools/bazel:release.bzl", "release_app")
 
 go_binary(
@@ -17,10 +17,18 @@ go_binary(
 # published for people and CI to pull.
 release_app(
     name = "cli",
-    binary_name = ":app-registry",
-    language = "go",
-    domain = "app-registry",
-    description = "App Registry CLI",
     app_type = "job",
+    binary_name = ":app-registry",
     deploy_unit = "none",
+    description = "App Registry CLI",
+    domain = "app-registry",
+    language = "go",
+)
+
+go_library(
+    name = "cli_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/tools/app_registry/cli",
+    visibility = ["//visibility:private"],
+    deps = ["//tools/app_registry/cli/cmd"],
 )

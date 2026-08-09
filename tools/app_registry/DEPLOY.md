@@ -8,10 +8,10 @@ which is the *how* — click-by-click Keycloak configuration and the gotchas.
 This document is the *what for this service*: the exact objects, names, and
 secrets.
 
-> **Status: AR-3a.** The role model is merged and enforced on the recording
-> RPCs. Promotion does not exist yet. Anything marked **⏳ later** is defined in
-> code but enforces nothing until AR-3c/AR-3d land — safe to create now, but not
-> yet load-bearing. See [PLAN.md](PLAN.md).
+> **Status: AR-3d.** The role model, `PromotionRegistry`, its CLI commands, and
+> `promote.yml` are all merged. Promoter clients (marked ⏳ below) are safe to
+> create now and are load-bearing the moment `promote.yml` runs against a
+> `oidc`-mode server. See [PLAN.md](PLAN.md).
 
 ---
 
@@ -23,8 +23,9 @@ everything before it is inert.
 1. [Keycloak objects](#1-keycloak-objects)
 2. [Verify a token by hand](#2-verify-a-token-by-hand) ← before touching the deployment
 3. [Server configuration](#3-server-configuration)
-4. [CI credentials](#4-ci-credentials) ← **read the warning first**
+4. [CI credentials](#4-ci-credentials)
 5. [Turn CI recording on](#5-turn-ci-recording-on)
+6. [Promote via `promote.yml`](#6-promote-via-promoteyml)
 
 ---
 
@@ -43,9 +44,9 @@ every call returns `Unauthenticated`.
 | `app-registry-api` | Names the audience. Never obtains a token. | Client authentication **On**, **all** flows unchecked, no roles | **now** |
 | `app-registry-builder` | CI recording (`ReconcileApps`, `RecordBuild`, `RecordArtifact`) | Confidential, **Service accounts roles** only, realm role `app-registry-builder`, audience mapper → `app-registry-api` | **now** |
 | `app-registry-admin` | `EnvironmentRegistry`, `SetAppStatus` | Same shape, realm role `app-registry-admin` | **now** |
-| `app-registry-promoter-dev` | Promote to `dev` | Same shape, realm role `app-registry-promoter-dev` | ⏳ later |
-| `app-registry-promoter-stage` | Promote to `stage` | Same shape, realm role `app-registry-promoter-stage` | ⏳ later |
-| `app-registry-promoter-prod` | Promote to `prod` | Same shape, realm role `app-registry-promoter-prod` | ⏳ later |
+| `app-registry-promoter-dev` | Promote to `dev` (via `promote.yml`) | Same shape, realm role `app-registry-promoter-dev` | **now** — needed before `promote.yml` can run against `dev` |
+| `app-registry-promoter-stage` | Promote to `stage` (via `promote.yml`) | Same shape, realm role `app-registry-promoter-stage` | **now** — needed before `promote.yml` can run against `stage` |
+| `app-registry-promoter-prod` | Promote to `prod` (via `promote.yml`) | Same shape, realm role `app-registry-promoter-prod` | **now** — needed before `promote.yml` can run against `prod` |
 
 ### Realm roles
 
@@ -139,20 +140,23 @@ manifest, deliberately.
 
 ## 4. CI credentials
 
-> ### ⚠️ Read this before enabling `oidc`
+> ### Resolved in AR-3d
 >
-> **`.github/workflows/release.yml` currently sets no `GRPC_AUTH_*` variables
-> at all.** The AR-2c recording steps pass only `APP_REGISTRY_ADDRESS`, so the
-> CLI runs in `none` mode and sends no credentials.
+> Earlier versions of this doc warned that `.github/workflows/release.yml` set
+> no `GRPC_AUTH_*` variables, so the moment the server ran `oidc` the AR-2c
+> recording steps would fail `Unauthenticated` while `continue-on-error` hid
+> it — a release staying green while recording silently went stale.
 >
-> The moment the server runs `oidc`, those calls fail `Unauthenticated`. They
-> are `continue-on-error`, so **the release still succeeds and recording
-> silently stops** — the failure mode is a registry that quietly goes stale, not
-> a red build.
+> The `Record build and artifact in App Registry` and `Record chart artifacts
+> in App Registry` steps now set `GRPC_AUTH_MODE: oidc` and read the builder
+> client's credentials from the repository secret/variable named below. Their
+> `continue-on-error` and `APP_REGISTRY_CICD_OPT_IN` gating are unchanged —
+> recording is still best-effort and still off by default. What changed is
+> that when it *is* on, it can now actually authenticate once the server runs
+> `oidc`.
 >
-> Wiring the builder credential into `release.yml` is an outstanding task. Until
-> it is done, either leave `APP_REGISTRY_CICD_OPT_IN` unset, or accept that
-> recording is off while you exercise auth by hand with the CLI.
+> `promote.yml` (§5 below) exists as of AR-3d too, reading each environment's
+> promoter secret the same way.
 
 Client-side variables the CLI reads (see [ENV.md](ENV.md)):
 
@@ -160,7 +164,7 @@ Client-side variables the CLI reads (see [ENV.md](ENV.md)):
 |---|---|
 | `GRPC_AUTH_MODE` | `oidc` — must match the server |
 | `GRPC_AUTH_TOKEN_URL` | `https://<host>/realms/<realm>/protocol/openid-connect/token` |
-| `GRPC_AUTH_CLIENT_ID` | `app-registry-builder` |
+| `GRPC_AUTH_CLIENT_ID` | `app-registry-builder` (recording) or `app-registry-promoter-<environment>` (promotion) |
 | `GRPC_AUTH_CLIENT_SECRET` | that client's secret |
 
 ### Where each secret goes
@@ -170,23 +174,28 @@ promoting. Getting it wrong defeats the entire credential model.
 
 | Secret | Location | Why |
 |---|---|---|
-| builder client secret | **Repository** secret | Every release job needs it; it grants recording only |
-| `app-registry-promoter-prod` secret ⏳ | **Environment** secret on the `prod` GitHub Environment | Only a job declaring `environment: prod` can read it, and that declaration triggers the environment's required reviewers |
-| `app-registry-promoter-stage` / `-dev` ⏳ | Environment secret on the matching Environment | Same, per environment |
+| builder client secret (`APP_REGISTRY_BUILDER_CLIENT_SECRET`) | **Repository** secret | Every release job needs it; it grants recording only — wired into `release.yml`'s two recording steps |
+| `app-registry-promoter-prod` secret (`APP_REGISTRY_PROMOTER_CLIENT_SECRET`) | **Environment** secret on the `prod` GitHub Environment | Only a job declaring `environment: prod` can read it, and that declaration triggers the environment's required reviewers — `promote.yml` declares `environment: ${{ inputs.environment }}` for exactly this reason |
+| `app-registry-promoter-stage` / `-dev` (`APP_REGISTRY_PROMOTER_CLIENT_SECRET`) | Environment secret on the matching Environment, same secret name, different Environment | Same, per environment — the Environment scoping is what selects the right client, not the secret name |
 | admin client secret | Not in GitHub | Human-operated; keep it out of CI entirely |
 
 **Never put a promoter secret in a repository secret.** A repository secret is
 readable by any workflow, which removes the boundary between building and
 promoting — the one property the whole model exists to provide.
 
-Configure **required reviewers** on the `prod` Environment. That approval, not
-anything in the registry, is the human gate on promotion.
+Configure **required reviewers** on the `prod` Environment (and `stage` if
+desired). That approval, not anything in the registry, is the human gate on
+promotion. Create three GitHub Environments named exactly `dev`, `stage`,
+`prod` — matching the `environment` keys seeded by AR-3b and the promoter
+client names above — each holding its own
+`APP_REGISTRY_PROMOTER_CLIENT_SECRET`.
 
 Repository *variables* (not secrets):
 
 | Variable | Value |
 |---|---|
 | `APP_REGISTRY_ADDRESS` | the API's ingress host:port |
+| `APP_REGISTRY_AUTH_TOKEN_URL` | the Keycloak token endpoint, e.g. `https://<host>/realms/<realm>/protocol/openid-connect/token` — same for every client, so it is a variable, not a secret |
 | `APP_REGISTRY_CICD_OPT_IN` | `true` to enable recording — see below |
 
 ---
@@ -213,18 +222,29 @@ green job.
 
 ---
 
+## 6. Promote via `promote.yml`
+
+`.github/workflows/promote.yml` is a `workflow_dispatch` job with inputs
+`environment`, `action` (`promote`/`rollback`), `owner_full_name`, `version`,
+`reason`, `allow_override`, `dry_run`. Its job declares
+`environment: ${{ inputs.environment }}`, which is what scopes it to that
+GitHub Environment's `APP_REGISTRY_PROMOTER_CLIENT_SECRET` and triggers that
+Environment's required reviewers — see §4's secret table. Unlike the AR-2c
+recording steps it is **not** `continue-on-error`: a failed promotion fails
+the run.
+
+To promote to `prod`: create the `prod` GitHub Environment (§1's client table
+and §4's secret table), configure required reviewers on it, run the workflow
+with `environment: prod`, and approve the run when prompted.
+
+---
+
 ## Not settled yet
 
-Do not build infrastructure around these; they may change in AR-3b/3c/3d.
-
-- **Promoter roles enforce nothing.** `RequirePromoter` exists and is tested,
-  but `PromotionRegistry` is `Unimplemented` until AR-3c. Creating the promoter
-  clients now is harmless, just not yet meaningful.
 - **`allowed_principals`** — ARCHITECTURE.md describes a per-environment
-  narrowing beyond the role check. It lands in AR-3b/3c and may add a second
-  condition the prod promoter must satisfy.
-- **`promote.yml`** does not exist yet (AR-3d). The GitHub Environment names
-  above are the intended design, not a shipped contract.
+  narrowing beyond the role check. It lands alongside `EnvironmentRegistry`
+  admin tooling and may add a second condition the prod promoter must
+  satisfy.
 - **GitHub Actions OIDC** was considered and rejected for now in favour of
   Keycloak service accounts — see PLAN.md → AR-3 → "Credential model". Worth
   revisiting for secretless CI once this is proven.

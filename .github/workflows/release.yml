@@ -401,6 +401,17 @@ jobs:
         DOMAIN: ${{ matrix.domain }}
         VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
         APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+        # Builder credential -- repository secret, deliberately never an
+        # Environment secret (see DEPLOY.md "Where each secret goes"): this
+        # identity can record builds/artifacts but carries no promoter role,
+        # so it cannot promote regardless of who holds it. Without these,
+        # once the server runs GRPC_AUTH_MODE=oidc every call here fails
+        # Unauthenticated -- silently, because this step is
+        # continue-on-error (see DEPLOY.md section 4).
+        GRPC_AUTH_MODE: oidc
+        GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+        GRPC_AUTH_CLIENT_ID: app-registry-builder
+        GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
       run: |
         FULL_APP_NAME="${DOMAIN}-${APP}"
         REPOSITORY="ghcr.io/${{ github.repository_owner }}/${FULL_APP_NAME}"
@@ -915,6 +926,13 @@ jobs:
       env:
         CHARTS: ${{ steps.plan.outputs.charts }}
         APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+        # See the "Record build and artifact in App Registry" step above --
+        # same builder credential, same repository-secret placement, same
+        # reason (DEPLOY.md section 4).
+        GRPC_AUTH_MODE: oidc
+        GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+        GRPC_AUTH_CLIENT_ID: app-registry-builder
+        GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
       run: |
         echo "Building release helper and app-registry CLI..."
         bazel build --config=ci //tools/release_helper_go:release_helper_go //tools/app_registry/cli:app-registry
