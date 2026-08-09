@@ -39,6 +39,12 @@ require (
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/sdk/log v0.16.0
 	go.opentelemetry.io/otel/sdk/metric v1.44.0
+	// go.temporal.io/api: AR-4b's worker/outbox package imports
+	// go.temporal.io/api/serviceerror directly (detecting
+	// WorkflowExecutionAlreadyStarted on a redelivered outbox row -- see
+	// worker/outbox/drain.go), so this moved out of the indirect block
+	// below.
+	go.temporal.io/api v1.62.12
 	go.temporal.io/sdk v1.44.0
 )
 
@@ -73,7 +79,6 @@ require (
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	go.temporal.io/api v1.62.12 // indirect
 	golang.org/x/time v0.12.0 // indirect
 )
 

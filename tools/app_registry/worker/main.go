@@ -1,0 +1,196 @@
+// Command app-registry-worker is the AR-4b Temporal worker: it drains
+// tools/app_registry's writeback_outbox table and runs WritebackWorkflow
+// executions against a stub Writeback activity implementation that renders
+// promotion state and writes it to a local path -- publishing nowhere. See
+// ../ARCHITECTURE.md "Writeback: outbox -> Temporal" and ./README.md.
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/worker"
+
+	"github.com/whale-net/everything/libs/go/db"
+	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/libs/go/grpcclient"
+	"github.com/whale-net/everything/libs/go/logging"
+	temporallib "github.com/whale-net/everything/libs/go/temporal"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/server/repository/postgres"
+	"github.com/whale-net/everything/tools/app_registry/worker/outbox"
+	"github.com/whale-net/everything/tools/app_registry/worker/writeback"
+)
+
+func main() {
+	if err := run(); err != nil {
+		log.Fatalf("Fatal error: %v", err)
+	}
+}
+
+func run() error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logging.Configure(logging.Config{
+		ServiceName:   "app-registry-worker",
+		Domain:        "app-registry",
+		JSONFormat:    true,
+		EnableOTLP:    true,
+		EnableTracing: true,
+	})
+	defer logging.Shutdown(ctx) //nolint:errcheck
+	logger := logging.Get("app-registry-worker")
+
+	// Direct Postgres connection for draining the outbox -- see
+	// outbox.Drainer's Store field doc comment for why this is not routed
+	// through the gRPC API.
+	logger.Info("connecting to database")
+	pool, err := db.NewPool(ctx, "")
+	if err != nil {
+		return fmt.Errorf("connect to database: %w", err)
+	}
+	defer pool.Close()
+	repo := postgres.NewRepository(pool)
+
+	// gRPC client to the App Registry API, used only by StubActivities to
+	// read state via GetEnvironmentState -- see ARCHITECTURE.md "The API
+	// is the write path; git is the delivery path". Any authenticated
+	// credential works; GetEnvironmentState only requires
+	// auth.RequireAuthenticated.
+	registryAddr := getEnv("APP_REGISTRY_ADDRESS", "localhost:50051")
+	authOpt, err := grpcauth.NewServiceAccountDialOption(grpcauth.ClientConfig{
+		Mode:         grpcauth.AuthMode(getEnv("GRPC_AUTH_MODE", "none")),
+		TokenURL:     os.Getenv("GRPC_AUTH_TOKEN_URL"),
+		ClientID:     os.Getenv("GRPC_AUTH_CLIENT_ID"),
+		ClientSecret: os.Getenv("GRPC_AUTH_CLIENT_SECRET"),
+	})
+	if err != nil {
+		return fmt.Errorf("create auth dial option: %w", err)
+	}
+	conn, err := grpcclient.NewClient(ctx, registryAddr, authOpt)
+	if err != nil {
+		return fmt.Errorf("connect to app-registry-api at %s: %w", registryAddr, err)
+	}
+	defer conn.Close() //nolint:errcheck
+	registryClient := pb.NewPromotionRegistryClient(conn.GetConnection())
+
+	// Temporal client + worker, via libs/go/temporal -- see AR-4a.
+	temporalCfg := temporallib.ConfigFromEnv()
+	if temporalCfg.TaskQueue == "" {
+		temporalCfg.TaskQueue = writeback.TaskQueue
+	}
+	logger.Info("connecting to temporal", "host_port", temporalCfg.HostPort, "namespace", temporalCfg.Namespace, "task_queue", temporalCfg.TaskQueue)
+	temporalClient, err := temporallib.NewClient(temporalCfg, temporallib.NewLogger("app-registry-worker"))
+	if err != nil {
+		return fmt.Errorf("connect to temporal: %w", err)
+	}
+	defer temporalClient.Close()
+
+	w := temporallib.NewWorker(temporalClient, temporalCfg.TaskQueue, worker.Options{})
+	w.RegisterWorkflow(writeback.WritebackWorkflow)
+
+	outDir := getEnv("WRITEBACK_OUTPUT_DIR", "/tmp/app-registry-writeback")
+	stub := writeback.NewStubActivities(registryClient, outDir)
+	w.RegisterActivityWithOptions(stub.RenderEnvironmentState, activityOptions(writeback.ActivityRenderEnvironmentState))
+	w.RegisterActivityWithOptions(stub.Publish, activityOptions(writeback.ActivityPublish))
+
+	// Outbox drain loop, running alongside the Temporal worker in this same
+	// process -- see outbox.Drainer.
+	drainer := &outbox.Drainer{
+		Store:        repo.Writeback(),
+		Temporal:     temporalClient,
+		TaskQueue:    temporalCfg.TaskQueue,
+		WorkerID:     workerID(),
+		BatchSize:    getEnvInt("WRITEBACK_BATCH_SIZE", 20),
+		StaleAfter:   getEnvDuration("WRITEBACK_CLAIM_STALE_AFTER", 2*time.Minute),
+		PollInterval: getEnvDuration("WRITEBACK_POLL_INTERVAL", 5*time.Second),
+		Logger:       logger,
+	}
+
+	done := make(chan error, 2)
+	go func() {
+		if err := w.Run(worker.InterruptCh()); err != nil {
+			done <- fmt.Errorf("temporal worker: %w", err)
+			return
+		}
+		done <- nil
+	}()
+	go func() {
+		if err := drainer.Run(ctx); err != nil && ctx.Err() == nil {
+			done <- fmt.Errorf("outbox drainer: %w", err)
+			return
+		}
+		done <- nil
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	select {
+	case <-sigCh:
+		logger.Info("shutting down gracefully")
+		cancel()
+	case err := <-done:
+		cancel()
+		return err
+	}
+	<-done
+	return nil
+}
+
+// activityOptions names an activity registration -- see
+// writeback.ActivityRenderEnvironmentState/ActivityPublish's doc comment on
+// why WritebackWorkflow dispatches by string name rather than a Go method
+// value: the workflow depends on the Writeback interface, not on
+// StubActivities being the implementation behind it.
+func activityOptions(name string) activity.RegisterOptions {
+	return activity.RegisterOptions{Name: name}
+}
+
+func workerID() string {
+	if id := os.Getenv("WORKER_ID"); id != "" {
+		return id
+	}
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		return "app-registry-worker"
+	}
+	return "app-registry-worker-" + host
+}
+
+func getEnv(key, defaultValue string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return defaultValue
+}
+
+func getEnvInt(key string, defaultValue int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return defaultValue
+	}
+	var n int
+	if _, err := fmt.Sscanf(v, "%d", &n); err != nil || n <= 0 {
+		return defaultValue
+	}
+	return n
+}
+
+func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return defaultValue
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return defaultValue
+	}
+	return d
+}

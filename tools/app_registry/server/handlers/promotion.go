@@ -119,6 +119,9 @@ func (s *PromotionServer) Promote(ctx context.Context, req *pb.PromoteRequest) (
 			if eerr != nil {
 				return nil, eerr
 			}
+			if werr := s.enqueueWriteback(ctx, r, *env, current.PromotionID, event.EventID); werr != nil {
+				return nil, werr
+			}
 			out := &pb.PromoteResponse{Promotion: promotionToPB(*current), Event: promotionEventToPB(*event)}
 			if superseded != nil {
 				out.Superseded = promotionToPB(*superseded)
@@ -282,6 +285,9 @@ func (s *PromotionServer) Rollback(ctx context.Context, req *pb.RollbackRequest)
 			if eerr != nil {
 				return nil, eerr
 			}
+			if werr := s.enqueueWriteback(ctx, r, *env, current.PromotionID, event.EventID); werr != nil {
+				return nil, werr
+			}
 			out := &pb.RollbackResponse{Promotion: promotionToPB(*current), Event: promotionEventToPB(*event)}
 			if superseded != nil {
 				out.Superseded = promotionToPB(*superseded)
@@ -325,6 +331,9 @@ func (s *PromotionServer) GetEnvironmentState(ctx context.Context, req *pb.GetEn
 	}
 
 	entries := make([]*pb.EnvironmentStateEntry, 0, len(promotions))
+	// hashed mirrors entries (same filter applied), kept as repository types
+	// so stateHash needs no proto conversion -- see stateHash's doc comment.
+	hashed := make([]repository.Promotion, 0, len(promotions))
 	type chartPin struct {
 		digest string
 		entry  *pb.EnvironmentStateEntry
@@ -350,6 +359,7 @@ func (s *PromotionServer) GetEnvironmentState(ctx context.Context, req *pb.GetEn
 			}
 		}
 		entries = append(entries, entry)
+		hashed = append(hashed, p)
 	}
 
 	for _, p := range promotions {
@@ -384,8 +394,40 @@ func (s *PromotionServer) GetEnvironmentState(ctx context.Context, req *pb.GetEn
 		Environment: environmentToPB(*env),
 		Entries:     entries,
 		AsOf:        asOf,
-		StateHash:   stateHash(entries),
+		StateHash:   stateHash(hashed),
 	}, nil
+}
+
+// enqueueWriteback writes one writeback_outbox row inside the caller's
+// transaction (r is the Registry WithTx handed Promote/Rollback's fn — see
+// AGENTS.md "SCD2" and ARCHITECTURE.md "Writeback: outbox -> Temporal"),
+// extending AR-3c's existing SCD2 close-and-open transaction rather than
+// opening a second one. This is the load-bearing property AR-4b exists to
+// deliver: if the surrounding transaction rolls back, this row is rolled
+// back with it, so a promotion can never exist without a corresponding
+// writeback intent (or vice versa).
+//
+// state_hash is computed here, inside the same transaction, by re-reading
+// StateAt(environmentID, nil) -- so its value is guaranteed consistent with
+// what a GetEnvironmentState call for env.Key would return immediately
+// after this transaction commits. This is what lets the Writeback
+// activity's Publish step (AR-4b, tools/app_registry/worker) detect a
+// no-op without a second registry round trip.
+func (s *PromotionServer) enqueueWriteback(ctx context.Context, r repository.Registry, env repository.Environment, promotionID, eventID string) error {
+	promotions, err := r.Promotions().StateAt(ctx, env.EnvironmentID, nil)
+	if err != nil {
+		return fmt.Errorf("enqueue writeback for promotion %s: read state for hash: %w", promotionID, err)
+	}
+	if _, err := r.Writeback().Enqueue(ctx, repository.WritebackOutbox{
+		PromotionID:    promotionID,
+		EnvironmentID:  env.EnvironmentID,
+		EnvironmentKey: env.Key,
+		EventID:        eventID,
+		StateHash:      stateHash(promotions),
+	}); err != nil {
+		return fmt.Errorf("enqueue writeback for promotion %s: %w", promotionID, err)
+	}
+	return nil
 }
 
 func (s *PromotionServer) ownerDomain(ctx context.Context, p repository.Promotion) (string, error) {
@@ -403,14 +445,29 @@ func (s *PromotionServer) ownerDomain(ctx context.Context, p repository.Promotio
 	return chart.Domain, nil
 }
 
-// stateHash is a stable content hash of entries, used by the writeback
-// worker (AR-4) to skip no-op gitops commits -- see
-// GetEnvironmentStateResponse's doc comment. entries must already be
-// sorted deterministically by the caller.
-func stateHash(entries []*pb.EnvironmentStateEntry) string {
+// stateHash is a stable content hash of promotions' promoted-artifact
+// identity, used by the writeback worker (AR-4b) to skip no-op commits --
+// see GetEnvironmentStateResponse's doc comment and enqueueWriteback, which
+// computes the same hash inside the promotion transaction so the value a
+// worker sees on the outbox row is guaranteed consistent with a subsequent
+// GetEnvironmentState call. Operates on repository.Promotion (not the pb
+// entries) so enqueueWriteback never has to build proto messages just to
+// hash them; Digest is already populated on Promotion by the artifact join
+// done in StateAt (see promotionSelectBase in
+// server/repository/postgres/promotion.go), so this is exactly the same
+// data GetEnvironmentState's entries carry.
+//
+// promotions need not be pre-sorted -- stateHash sorts a local copy by
+// promotion id so the hash is independent of map/query iteration order (see
+// AGENTS.md/PLAN.md's "Workflow determinism" hazard -- this hash ends up
+// inside a Temporal-visible value, so it must never depend on
+// nondeterministic ordering).
+func stateHash(promotions []repository.Promotion) string {
+	sorted := append([]repository.Promotion(nil), promotions...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].PromotionID < sorted[j].PromotionID })
 	h := sha256.New()
-	for _, e := range entries {
-		fmt.Fprintf(h, "%s|%s|%s|%v\n", e.Promotion.PromotionId, e.Artifact.Digest, e.Promotion.State, e.Promotion.IsOverride)
+	for _, p := range sorted {
+		fmt.Fprintf(h, "%s|%s|%s|%v\n", p.PromotionID, p.Digest, p.State, p.IsOverride)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

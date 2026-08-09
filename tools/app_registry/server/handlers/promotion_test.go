@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"context"
 	"testing"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	"github.com/whale-net/everything/tools/app_registry/server/repository/fake"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 	"google.golang.org/grpc/codes"
@@ -20,6 +22,7 @@ type promotionFixture struct {
 	art   *ArtifactServer
 	env   *EnvironmentServer
 	promo *PromotionServer
+	repo  repository.Registry // exposed so tests can assert on the outbox directly
 
 	chartImageDigest string // the digest the chart pins for chart-app
 }
@@ -84,7 +87,7 @@ func newPromotionFixture(t *testing.T) *promotionFixture {
 		}
 	}
 
-	return &promotionFixture{app: appSrv, art: artSrv, env: envSrv, promo: promoSrv, chartImageDigest: "sha256:chartapp-v1"}
+	return &promotionFixture{app: appSrv, art: artSrv, env: envSrv, promo: promoSrv, repo: repo, chartImageDigest: "sha256:chartapp-v1"}
 }
 
 func mustRecordArtifact(t *testing.T, srv *ArtifactServer, req *pb.RecordArtifactRequest) *pb.Artifact {
@@ -417,3 +420,165 @@ func TestGetEnvironmentState_ReportsDrift(t *testing.T) {
 // a handler-level "promote twice, query between them" test flaky by
 // construction -- two Promote calls a few microseconds apart routinely land
 // in the same second.
+
+// TestPromote_EnqueuesWritebackOutbox covers AR-4b: a successful Promote
+// writes one writeback_outbox row in the same call, carrying the same
+// promotion id, the environment key, the promotion_event id, and a
+// state_hash equal to what a subsequent GetEnvironmentState reports -- see
+// server/handlers/promotion.go's enqueueWriteback and
+// ARCHITECTURE.md "Writeback: outbox -> Temporal".
+func TestPromote_EnqueuesWritebackOutbox(t *testing.T) {
+	f := newPromotionFixture(t)
+	ctx := authedCtx()
+
+	resp, err := f.promo.Promote(ctx, promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "outbox-promo"))
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+
+	rows := claimAllOutbox(t, f.repo)
+	if len(rows) != 1 {
+		t.Fatalf("expected exactly 1 outbox row after one promotion, got %d: %+v", len(rows), rows)
+	}
+	row := rows[0]
+	if row.PromotionID != resp.Promotion.PromotionId {
+		t.Fatalf("expected outbox row to carry the new promotion id %s, got %s", resp.Promotion.PromotionId, row.PromotionID)
+	}
+	if row.EnvironmentKey != "dev" {
+		t.Fatalf("expected outbox row environment_key=dev, got %q", row.EnvironmentKey)
+	}
+	if row.EventID != resp.Event.EventId {
+		t.Fatalf("expected outbox row to carry promotion_event id %s, got %s", resp.Event.EventId, row.EventID)
+	}
+	if row.Status != repository.WritebackOutboxStatusClaimed {
+		// claimAllOutbox claims everything it finds -- this just confirms
+		// ClaimBatch actually flipped the status, i.e. the row really was
+		// there to claim.
+		t.Fatalf("expected the claimed row's status to be 'claimed', got %q", row.Status)
+	}
+
+	state, err := f.promo.GetEnvironmentState(ctx, &pb.GetEnvironmentStateRequest{EnvironmentKey: "dev"})
+	if err != nil {
+		t.Fatalf("get environment state: %v", err)
+	}
+	if row.StateHash != state.StateHash {
+		t.Fatalf("expected the outbox row's state_hash (%s) to equal GetEnvironmentState's state_hash (%s) -- see enqueueWriteback's doc comment", row.StateHash, state.StateHash)
+	}
+}
+
+// TestPromote_AlreadyPromoted_DoesNotEnqueueOutbox covers the flip side of
+// TestPromote_AlreadyPromoted_ShortCircuits: a no-op re-promotion writes no
+// promotion_event, so it must not write an outbox row either -- there is
+// nothing new for a workflow to carry.
+func TestPromote_AlreadyPromoted_DoesNotEnqueueOutbox(t *testing.T) {
+	f := newPromotionFixture(t)
+	ctx := authedCtx()
+
+	if _, err := f.promo.Promote(ctx, promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "outbox-again-1")); err != nil {
+		t.Fatalf("first promote: %v", err)
+	}
+	second, err := f.promo.Promote(ctx, promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "outbox-again-2"))
+	if err != nil {
+		t.Fatalf("second promote: %v", err)
+	}
+	if !second.AlreadyPromoted {
+		t.Fatalf("expected already_promoted=true, got %+v", second)
+	}
+
+	rows := claimAllOutbox(t, f.repo)
+	if len(rows) != 1 {
+		t.Fatalf("expected exactly 1 outbox row total (only the first promotion writes one), got %d: %+v", len(rows), rows)
+	}
+}
+
+// TestPromote_DryRun_DoesNotEnqueueOutbox mirrors
+// TestPromote_DryRun_DoesNotWrite for the outbox.
+func TestPromote_DryRun_DoesNotEnqueueOutbox(t *testing.T) {
+	f := newPromotionFixture(t)
+	ctx := authedCtx()
+
+	req := promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "outbox-dryrun")
+	req.DryRun = true
+	if _, err := f.promo.Promote(ctx, req); err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+
+	rows := claimAllOutbox(t, f.repo)
+	if len(rows) != 0 {
+		t.Fatalf("expected dry_run to enqueue no outbox row, found %d: %+v", len(rows), rows)
+	}
+}
+
+// TestRollback_EnqueuesWritebackOutbox covers Rollback's own
+// enqueueWriteback call, symmetric with Promote's.
+func TestRollback_EnqueuesWritebackOutbox(t *testing.T) {
+	f := newPromotionFixture(t)
+	ctx := authedCtx()
+
+	if _, err := f.promo.Promote(ctx, promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "rb-outbox-1")); err != nil {
+		t.Fatalf("promote v1: %v", err)
+	}
+	mustRecordArtifact(t, f.art, &pb.RecordArtifactRequest{
+		BuildId: mustRecordBuild(t, f.art, "run-rb-outbox").BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Digest: "sha256:rb-outbox-v2", Version: "v2.0.0",
+		IdempotencyKey: "rb-outbox-artifact-v2",
+	})
+	v2Req := promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "rb-outbox-2")
+	v2Req.Version = "v2.0.0"
+	if _, err := f.promo.Promote(ctx, v2Req); err != nil {
+		t.Fatalf("promote v2: %v", err)
+	}
+
+	// Drain the two outbox rows written by the promotions above to 'done'
+	// (not just claimed -- a merely-claimed row is still reclaimable, see
+	// ClaimBatch's staleness semantics) so the assertion below is scoped to
+	// what Rollback itself writes.
+	drainOutboxToDone(t, f.repo)
+
+	rbResp, err := f.promo.Rollback(ctx, &pb.RollbackRequest{
+		EnvironmentKey: "dev", OwnerFullName: "demo-image-app", Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, IdempotencyKey: "rb-outbox-rollback",
+	})
+	if err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+
+	rows := claimAllOutbox(t, f.repo)
+	if len(rows) != 1 {
+		t.Fatalf("expected exactly 1 outbox row from the rollback call, got %d: %+v", len(rows), rows)
+	}
+	if rows[0].PromotionID != rbResp.Promotion.PromotionId {
+		t.Fatalf("expected the rollback's outbox row to carry promotion id %s, got %s", rbResp.Promotion.PromotionId, rows[0].PromotionID)
+	}
+}
+
+// claimAllOutbox drains every pending/claimable outbox row from repo via
+// the same WritebackRepository.ClaimBatch a real worker uses -- there is no
+// dedicated "list" RPC for the outbox (it is an internal work queue, not a
+// public API), so tests observe it exactly as the worker would. It leaves
+// claimed rows in status 'claimed', not 'done' -- see drainOutboxToDone for
+// a version that fully retires them.
+func claimAllOutbox(t *testing.T, repo repository.Registry) []repository.WritebackOutbox {
+	t.Helper()
+	rows, err := repo.Writeback().ClaimBatch(context.Background(), "test-inspector", 100, 0)
+	if err != nil {
+		t.Fatalf("claim outbox batch: %v", err)
+	}
+	return rows
+}
+
+// drainOutboxToDone claims every outstanding outbox row and immediately
+// marks each done, simulating a worker that started (and completed) a
+// WritebackWorkflow for it -- used to reset the outbox to empty between
+// test phases so a later assertion counts only rows written after this
+// call.
+func drainOutboxToDone(t *testing.T, repo repository.Registry) []repository.WritebackOutbox {
+	t.Helper()
+	ctx := context.Background()
+	rows := claimAllOutbox(t, repo)
+	for _, row := range rows {
+		if err := repo.Writeback().MarkDone(ctx, row.OutboxID, row.PromotionID, "test-run"); err != nil {
+			t.Fatalf("mark outbox row %s done: %v", row.OutboxID, err)
+		}
+	}
+	return rows
+}

@@ -1,15 +1,13 @@
 # App Registry — Environment Variables
 
-> All environment variables read by `app-registry-api` and
-> `app-registry-migration`. AR-1 ships no business logic, so this only covers
-> connectivity, auth mode, and observability — not yet promotion/writeback
-> configuration (AR-3/AR-4).
+> All environment variables read by `app-registry-api`,
+> `app-registry-migration`, and `app-registry-worker`.
 >
-> **AR-4a** adds `libs/go/temporal` (client/worker bootstrap only — no
-> outbox, no workflow, no `app-registry-worker` binary yet; that's AR-4b) and
-> a Temporal dev server in Tilt. Its env vars are listed below for
-> completeness, but nothing in `app-registry-api`/`app-registry-migration`
-> reads them yet.
+> **AR-4a** added `libs/go/temporal` (client/worker bootstrap) and a
+> Temporal dev server in Tilt. **AR-4b** adds the first real consumer:
+> `app-registry-worker`, which drains `writeback_outbox` and runs
+> `WritebackWorkflow` — see its own section below and
+> [`worker/README.md`](worker/README.md).
 
 ## Database
 
@@ -100,18 +98,35 @@ placement rationale:
 variable — the CLI must match whatever the server runs, and the server is
 expected to run `oidc` in every environment these workflows target.
 
-## Temporal (`libs/go/temporal`, AR-4a foundations only)
+## Temporal (`libs/go/temporal`)
 
 | Variable | Default | Description |
 |----------|---------|--------------|
 | `TEMPORAL_HOST` | `localhost:7233` | Temporal frontend service `host:port`. Named to match `friendly_computing_machine`'s existing `TEMPORAL_HOST` convention. |
 | `TEMPORAL_NAMESPACE` | `default` | Temporal namespace. |
-| `TEMPORAL_TASK_QUEUE` | *(none)* | Default task queue name; no fallback. |
+| `TEMPORAL_TASK_QUEUE` | *(none)* | Default task queue name; no fallback. `app-registry-worker` falls back to `writeback.TaskQueue` (`"app-registry-writeback"`) itself when this is unset — see below. |
 
 See [`libs/go/temporal/README.md`](../../libs/go/temporal/README.md) for the
 client/worker API. See
 [`TESTING.md`](TESTING.md#temporal-ar-4a) for exercising a local Temporal
 dev server via Tilt.
+
+## Worker (`app-registry-worker`, AR-4b)
+
+Every variable above under Database and Temporal also applies (the worker
+needs `PG_DATABASE_URL` to drain the outbox and `TEMPORAL_HOST` to run
+`WritebackWorkflow`). Additionally:
+
+| Variable | Default | Description |
+|----------|---------|--------------|
+| `APP_REGISTRY_ADDRESS` | `localhost:50051` | `app-registry-api` address the stub `Writeback` activity reads state from via `GetEnvironmentState` — see `worker/writeback/stub.go`. Any authenticated credential works; that RPC requires no specific role. |
+| `GRPC_AUTH_MODE` | `none` | `none` or `oidc`, for the client above — same semantics as the CLI's variable of the same name. |
+| `GRPC_AUTH_TOKEN_URL` / `GRPC_AUTH_CLIENT_ID` / `GRPC_AUTH_CLIENT_SECRET` | `""` | Required when `GRPC_AUTH_MODE=oidc` — same as the CLI. |
+| `WRITEBACK_OUTPUT_DIR` | `/tmp/app-registry-writeback` | Local directory the stub `Writeback` activity's `Publish` writes rendered `<environment_key>.json` documents (plus a `.state_hash` sidecar) to. Not a gitops path or S3 bucket — see `worker/README.md`, publishing anywhere is explicitly out of scope for AR-4b. |
+| `WRITEBACK_BATCH_SIZE` | `20` | Max outbox rows claimed per drain pass. |
+| `WRITEBACK_POLL_INTERVAL` | `5s` | Delay between drain passes (Go duration syntax, e.g. `5s`, `500ms`). |
+| `WRITEBACK_CLAIM_STALE_AFTER` | `2m` | How long a `'claimed'` outbox row is left alone before a later pass reclaims it — must exceed `WritebackWorkflow`'s activity `StartToCloseTimeout` (30s) comfortably, or a still-healthy claim gets needlessly reclaimed. This is the knob that makes "worker killed mid-run" recoverable — see `worker/README.md`'s verification section. |
+| `WORKER_ID` | `app-registry-worker-<hostname>` | Recorded in `writeback_outbox.claimed_by`, for operator visibility into which process holds a claim. |
 
 ## Local Development (Tilt)
 
@@ -119,6 +134,7 @@ dev server via Tilt.
 # Enable/disable services (default: true)
 ENABLE_APP_REGISTRY_MIGRATION=true
 ENABLE_APP_REGISTRY_API=true
+ENABLE_APP_REGISTRY_WORKER=true
 ENABLE_TEMPORAL=true
 
 # Infrastructure — set to 'custom' to use an external Postgres
@@ -128,4 +144,9 @@ PG_DATABASE_URL=postgres://...   # if BUILD_POSTGRES_ENV=custom
 
 Local access (`tilt up` from `tools/app_registry/`): API forwarded to
 `localhost:50061`, Postgres to `localhost:5432`, Temporal gRPC to
-`localhost:7233` and Web UI to `localhost:8233`.
+`localhost:7233` and Web UI to `localhost:8233`. The worker has no forwarded
+port (it serves nothing) — inspect it via `tilt logs app-registry-worker` or
+a shell into its pod (`WRITEBACK_OUTPUT_DIR` lives inside the container).
+`ENABLE_APP_REGISTRY_WORKER=true` with `ENABLE_TEMPORAL=false` skips the
+worker (it has nothing to poll) with a printed warning rather than deploying
+into a guaranteed-crash loop.

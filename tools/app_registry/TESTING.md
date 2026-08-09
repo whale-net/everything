@@ -62,7 +62,8 @@ Namespace `app-registry-local-dev`:
 | `app-registry-migration` | Job — applies migrations, must reach `Complete` |
 | `app-registry-api` | gRPC API on `50051`, forwarded to **`localhost:50061`** |
 | `otel-collector` | Receives traces/logs; app logs surface here |
-| `temporal-dev` | Temporal dev server (`temporal server start-dev`) — gRPC on `7233`, Web UI on `8233`, both forwarded (AR-4a; nothing consumes it yet) |
+| `temporal-dev` | Temporal dev server (`temporal server start-dev`) — gRPC on `7233`, Web UI on `8233`, both forwarded |
+| `app-registry-worker` | Temporal worker (AR-4b) — drains `writeback_outbox`, runs `WritebackWorkflow`. No forwarded port; depends on migration, the API, and `temporal-dev` |
 
 The API declares `resource_deps` on the migration job, mirroring the ArgoCD
 pre-sync-wave ordering in [`migrate/README.md`](migrate/README.md). If the
@@ -115,10 +116,9 @@ grpcurl -plaintext -d '{}' localhost:50061 appregistry.v1.AppRegistry/ListApps
 ## Temporal (AR-4a)
 
 AR-4a adds `libs/go/temporal` (client/worker bootstrap) and a Temporal dev
-server to Tilt, but nothing in `app-registry-api`/`app-registry-migration`
-uses it yet — no outbox, no `WritebackWorkflow`, no `app-registry-worker`
-binary (all AR-4b). This section is for exercising the dev server and the
-library directly; there is no registry-level smoke check for it yet.
+server to Tilt. This section is for exercising the dev server and the
+library directly; see "Writeback worker (AR-4b)" below for the actual
+`WritebackWorkflow`.
 
 `tilt up` forwards the gRPC frontend to `localhost:7233` and the Web UI to
 `localhost:8233`. Confirm the dev server is reachable:
@@ -143,7 +143,73 @@ To exercise a real client connection, point a small program or
 Tilt port-forward, so no env var is needed when running against `tilt up`
 locally.
 
-Disable the dev server with `ENABLE_TEMPORAL=false` if you don't need it.
+Disable the dev server with `ENABLE_TEMPORAL=false` if you don't need it —
+this also disables `app-registry-worker` (see below), which has nothing to
+poll without it.
+
+## Writeback worker (AR-4b)
+
+`app-registry-worker` drains `writeback_outbox` and runs one
+`WritebackWorkflow` per row, rendering environment state to a local path
+inside its own container (`WRITEBACK_OUTPUT_DIR`, see [ENV.md](ENV.md)) —
+see [`worker/README.md`](worker/README.md) and
+[ARCHITECTURE.md](ARCHITECTURE.md) "Writeback: outbox -> Temporal" for the
+mechanism.
+
+End-to-end smoke check under `tilt up`:
+
+```bash
+# Promote something (needs a recorded app/artifact and a dev environment
+# first -- see worker/README.md for a full from-scratch script).
+grpcurl -plaintext -d '{
+  "environment_key": "dev", "owner_full_name": "<domain>-<name>",
+  "kind": "ARTIFACT_KIND_IMAGE", "version": "v1.0.0",
+  "idempotency_key": "smoke-1"
+}' localhost:50061 appregistry.v1.PromotionRegistry/Promote
+
+# Confirm the outbox row was written in the same transaction and drained:
+kubectl exec -n app-registry-local-dev postgres-dev-0 -- \
+  psql -U postgres -d app_registry -c \
+  "select outbox_id, status, workflow_id from writeback_outbox order by created_at desc limit 5;"
+# status should reach 'done' within one WRITEBACK_POLL_INTERVAL (default 5s)
+
+# Confirm the workflow ran in Temporal's Web UI (localhost:8233) under
+# workflow id = the promotion id from the Promote response above, and that
+# it rendered the same state GetEnvironmentState reports:
+grpcurl -plaintext -d '{"environment_key": "dev"}' \
+  localhost:50061 appregistry.v1.PromotionRegistry/GetEnvironmentState
+kubectl exec -n app-registry-local-dev deploy/app-registry-worker -- \
+  cat /tmp/app-registry-writeback/dev.json
+```
+
+`worker/writeback`'s and `worker/outbox`'s own unit tests run without a live
+Temporal server, using the SDK's `testsuite` (workflow logic) and a plain
+fake `repository.WritebackRepository` (drain logic):
+
+```bash
+bazel test //tools/app_registry/worker/...
+```
+
+### Verifying "killed mid-run" (AR-4b's exit criterion)
+
+This was verified manually, outside `bazel test` and outside Tilt (no k8s
+overhead needed to exercise the mechanism): real Postgres + a real
+`temporal server start-dev` in Docker, the real `app-registry-api` and
+`app-registry-worker` binaries via `bazel run`, `grpcurl` for the promote
+call. A promotion was made, the worker process was made to exit (`os.Exit`,
+simulating a kill) immediately after it logged that it had started
+`WritebackWorkflow` but *before* it called `MarkDone` — the exact window
+AR-4b's outbox-claim design exists to survive. The outbox row was confirmed
+stuck `'claimed'` with the dead worker's id. A second worker process was
+then started with no special flags: after `WRITEBACK_CLAIM_STALE_AFTER`
+elapsed, it reclaimed the row, called `ExecuteWorkflow` for the same
+workflow id (Temporal transparently attached to the still-running
+execution rather than erroring), and the *same* run id from the first
+attempt completed and published — the outbox row reached `'done'` and
+`/tmp/.../dev.json` updated to the promoted artifact's digest, with no
+duplicate publish. The temporary `os.Exit` hook used to force the crash
+point deterministically was removed from `worker/outbox/drain.go` again
+immediately after; it is not part of the shipped code.
 
 ## Inspecting the database
 
@@ -226,3 +292,18 @@ Full chain confirmed on Docker Desktop Kubernetes at AR-1: images build →
 namespace → Postgres → migration `Complete` in 4s (8 tables created) → API
 starts after it → connects → serves reflection, `SERVING` health, and
 `Unimplemented` from real handlers.
+
+AR-4b's writeback path was verified end to end (real Postgres + real
+Temporal + the real `app-registry-api`/`app-registry-worker` binaries, not
+Tilt/k8s — see "Verifying 'killed mid-run'" above): a `Promote` call
+enqueues exactly one `writeback_outbox` row in the same transaction; the
+worker drains it into a `WritebackWorkflow` whose rendered output matches
+`GetEnvironmentState`; killing the worker between "workflow started" and
+"outbox marked done" leaves the row `'claimed'`, and a second worker process
+reclaims it after the staleness window and drives the *same* workflow run to
+completion with no duplicate publish. Not verified: the real gitops/S3
+publish path (explicitly out of scope for AR-4b) and a true concurrent
+two-workers-racing-one-claim scenario (the `FOR UPDATE SKIP LOCKED` claim
+query's correctness is asserted against real Postgres in
+`postgres_integration_test.go`, not exercised by two live worker
+processes).

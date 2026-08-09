@@ -10,6 +10,7 @@ go_library(
         "idempotency.go",
         "promotion.go",
         "repository.go",
+        "writeback.go",
     ],
     importpath = "github.com/whale-net/everything/tools/app_registry/server/repository/postgres",
     visibility = ["//visibility:public"],

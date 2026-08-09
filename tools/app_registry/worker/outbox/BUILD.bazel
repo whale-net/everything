@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "outbox",
+    srcs = ["drain.go"],
+    importpath = "github.com/whale-net/everything/tools/app_registry/worker/outbox",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//tools/app_registry/server/repository",
+        "//tools/app_registry/worker/writeback",
+        "@io_temporal_go_api//serviceerror",
+        "@io_temporal_go_sdk//client",
+    ],
+)
+
+go_test(
+    name = "outbox_test",
+    srcs = ["drain_test.go"],
+    embed = [":outbox"],
+    deps = [
+        "//tools/app_registry/server/repository",
+        "//tools/app_registry/worker/writeback",
+        "@com_github_stretchr_testify//mock",
+        "@com_github_stretchr_testify//require",
+        "@io_temporal_go_api//serviceerror",
+        "@io_temporal_go_sdk//client",
+        "@io_temporal_go_sdk//mocks",
+    ],
+)

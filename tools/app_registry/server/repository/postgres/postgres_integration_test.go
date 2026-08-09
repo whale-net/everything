@@ -713,6 +713,209 @@ func TestPromotionRepo_Promote_TransactionAbortLeavesNoPartialWrite(t *testing.T
 	}
 }
 
+// --- 7. writeback_outbox (AR-4b) ---------------------------------------
+
+// promoteWithOutboxTx mirrors handlers.PromotionServer.Promote's real
+// write path end to end: Promote (SCD2 close-and-open), RecordEvent, then
+// Enqueue -- all inside one WithTx transaction, exactly like
+// server/handlers/promotion.go's enqueueWriteback. forceBadEventID, when
+// non-empty, is used as the outbox row's event_id instead of the real
+// event's id, so the INSERT trips the event_id foreign key -- used by
+// TestWriteback_EnqueueFailureRollsBackWholeTransaction below to prove the
+// promotion does not survive when the outbox insert fails.
+func promoteWithOutboxTx(t *testing.T, reg *Registry, p repository.Promotion, forceBadEventID string) (*repository.Promotion, *repository.WritebackOutbox, error) {
+	t.Helper()
+	var current *repository.Promotion
+	var outbox *repository.WritebackOutbox
+	err := reg.WithTx(context.Background(), func(ctx context.Context, r repository.Registry) error {
+		var perr error
+		current, _, perr = r.Promotions().Promote(ctx, p)
+		if perr != nil {
+			return perr
+		}
+		event, eerr := r.Promotions().RecordEvent(ctx, repository.PromotionEvent{
+			PromotionID: current.PromotionID,
+			Action:      repository.PromotionActionPromote,
+			Actor:       "integration-test",
+		})
+		if eerr != nil {
+			return eerr
+		}
+		eventID := event.EventID
+		if forceBadEventID != "" {
+			eventID = forceBadEventID
+		}
+		var oerr error
+		outbox, oerr = r.Writeback().Enqueue(ctx, repository.WritebackOutbox{
+			PromotionID:    current.PromotionID,
+			EnvironmentID:  p.EnvironmentID,
+			EnvironmentKey: p.EnvironmentKey,
+			EventID:        eventID,
+			StateHash:      "test-hash",
+		})
+		return oerr
+	})
+	return current, outbox, err
+}
+
+// TestWriteback_EnqueueCommitsAtomicallyWithPromotion proves the core
+// AR-4b property end to end against real Postgres: a promotion and its
+// outbox row are written by the same transaction and both are visible
+// after commit, with the outbox row correctly linked back to the
+// promotion.
+func TestWriteback_EnqueueCommitsAtomicallyWithPromotion(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+
+	envID := devEnvironmentID(t, reg)
+	envKey := "dev"
+	appID := seedApp(t, pool, "acme", "widget", "image")
+	buildID := seedBuild(t, pool, "run-outbox-atomic")
+	art := seedArtifact(t, pool, appID, buildID, "sha256:outbox-atomic", "v1.0.0")
+
+	current, outbox, err := promoteWithOutboxTx(t, reg, repository.Promotion{
+		EnvironmentID: envID, EnvironmentKey: envKey, TargetKey: "image:acme-widget", ArtifactID: art,
+	}, "")
+	if err != nil {
+		t.Fatalf("promote+enqueue: %v", err)
+	}
+	if outbox.PromotionID != current.PromotionID {
+		t.Fatalf("expected outbox row promotion_id %s to match the promotion %s", outbox.PromotionID, current.PromotionID)
+	}
+	if outbox.Status != repository.WritebackOutboxStatusPending {
+		t.Fatalf("expected a freshly enqueued outbox row to be pending, got %q", outbox.Status)
+	}
+
+	// Read back with a fresh query against the pool (not through Registry),
+	// confirming the row genuinely committed rather than only existing in
+	// the transaction-scoped Go struct returned above.
+	var count int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM writeback_outbox WHERE promotion_id = $1 AND status = 'pending'`,
+		current.PromotionID).Scan(&count); err != nil {
+		t.Fatalf("count outbox rows: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 committed pending outbox row for promotion %s, found %d", current.PromotionID, count)
+	}
+}
+
+// TestWriteback_EnqueueFailureRollsBackWholeTransaction is the atomicity
+// hazard in the other direction: a failing outbox insert (event_id foreign
+// key violation, forced via promoteWithOutboxTx's forceBadEventID) must
+// roll back the promotion and promotion_event rows written earlier in the
+// same transaction, too -- otherwise the registry would believe a
+// promotion succeeded with no writeback intent ever recorded for it, the
+// exact split-brain PLAN.md and ARCHITECTURE.md's "Writeback: outbox ->
+// Temporal" warn about.
+func TestWriteback_EnqueueFailureRollsBackWholeTransaction(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+
+	envID := devEnvironmentID(t, reg)
+	appID := seedApp(t, pool, "acme", "widget", "image")
+	buildID := seedBuild(t, pool, "run-outbox-abort")
+	art := seedArtifact(t, pool, appID, buildID, "sha256:outbox-abort", "v1.0.0")
+	targetKey := "image:acme-widget"
+
+	_, _, err := promoteWithOutboxTx(t, reg, repository.Promotion{
+		EnvironmentID: envID, EnvironmentKey: "dev", TargetKey: targetKey, ArtifactID: art,
+	}, "00000000-0000-0000-0000-000000000000")
+	if err == nil {
+		t.Fatalf("expected the outbox insert (bad event_id) to fail the transaction, got nil error")
+	}
+
+	if n := currentPromotionCount(t, pool, envID, targetKey); n != 0 {
+		t.Fatalf("expected the promotion to have rolled back along with the failed outbox insert, found %d current promotion(s)", n)
+	}
+	var eventCount, outboxCount int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM promotion_event`).Scan(&eventCount); err != nil {
+		t.Fatalf("count promotion_event rows: %v", err)
+	}
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM writeback_outbox`).Scan(&outboxCount); err != nil {
+		t.Fatalf("count writeback_outbox rows: %v", err)
+	}
+	if eventCount != 0 {
+		t.Fatalf("expected the promotion_event row written earlier in the same aborted transaction to have rolled back too, found %d", eventCount)
+	}
+	if outboxCount != 0 {
+		t.Fatalf("expected zero writeback_outbox rows after the aborted transaction, found %d", outboxCount)
+	}
+}
+
+// TestWritebackOutbox_ClaimBatch_SkipsLockedAndReclaimsStale exercises the
+// worker-facing side of the outbox against real Postgres: ClaimBatch's
+// single atomic statement (`UPDATE ... WHERE outbox_id IN (SELECT ... FOR
+// UPDATE SKIP LOCKED)`) claims pending rows, a second call claims nothing
+// more (nothing pending, nothing stale yet), and after the claim is treated
+// as stale (staleAfter=0) a second worker successfully reclaims it -- the
+// mechanism that makes a worker killed mid-run (AR-4b's exit criterion)
+// recoverable instead of stuck.
+func TestWritebackOutbox_ClaimBatch_SkipsLockedAndReclaimsStale(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+
+	envID := devEnvironmentID(t, reg)
+	appID := seedApp(t, pool, "acme", "widget", "image")
+	buildID := seedBuild(t, pool, "run-outbox-claim")
+	art := seedArtifact(t, pool, appID, buildID, "sha256:outbox-claim", "v1.0.0")
+
+	current, _, err := promoteWithOutboxTx(t, reg, repository.Promotion{
+		EnvironmentID: envID, EnvironmentKey: "dev", TargetKey: "image:acme-widget", ArtifactID: art,
+	}, "")
+	if err != nil {
+		t.Fatalf("promote+enqueue: %v", err)
+	}
+
+	// worker-a claims the only pending row.
+	claimedA, err := reg.Writeback().ClaimBatch(ctx, "worker-a", 10, time.Hour)
+	if err != nil {
+		t.Fatalf("worker-a claim: %v", err)
+	}
+	if len(claimedA) != 1 || claimedA[0].PromotionID != current.PromotionID {
+		t.Fatalf("expected worker-a to claim exactly the 1 pending row, got %+v", claimedA)
+	}
+
+	// Immediately after: nothing pending, and the claim is fresh (well
+	// within a 1-hour staleness window), so worker-b claims nothing --
+	// this is the "SKIP LOCKED prevents double-claim" property, observed
+	// through the staleness window rather than true concurrency (which
+	// would need two goroutines racing inside the same transaction
+	// window; the UPDATE...SELECT...FOR UPDATE SKIP LOCKED subquery
+	// pattern is what Postgres guarantees atomic here, not this test).
+	claimedB, err := reg.Writeback().ClaimBatch(ctx, "worker-b", 10, time.Hour)
+	if err != nil {
+		t.Fatalf("worker-b claim (should find nothing): %v", err)
+	}
+	if len(claimedB) != 0 {
+		t.Fatalf("expected worker-b to claim nothing while worker-a's claim is fresh, got %+v", claimedB)
+	}
+
+	// A worker killed mid-run leaves its claim stale. staleAfter=0 makes
+	// every claimed row immediately eligible, standing in for "time has
+	// passed the staleness window" without a real sleep.
+	reclaimed, err := reg.Writeback().ClaimBatch(ctx, "worker-c", 10, 0)
+	if err != nil {
+		t.Fatalf("worker-c reclaim: %v", err)
+	}
+	if len(reclaimed) != 1 || reclaimed[0].OutboxID != claimedA[0].OutboxID {
+		t.Fatalf("expected worker-c to reclaim the stale-claimed row, got %+v", reclaimed)
+	}
+	if reclaimed[0].Attempts != 2 {
+		t.Fatalf("expected attempts to increment across the two claims, got %d", reclaimed[0].Attempts)
+	}
+
+	// MarkDone retires it -- no further claim, however stale, picks it up.
+	if err := reg.Writeback().MarkDone(ctx, reclaimed[0].OutboxID, current.PromotionID, "run-1"); err != nil {
+		t.Fatalf("mark done: %v", err)
+	}
+	final, err := reg.Writeback().ClaimBatch(ctx, "worker-d", 10, 0)
+	if err != nil {
+		t.Fatalf("worker-d claim after done: %v", err)
+	}
+	if len(final) != 0 {
+		t.Fatalf("expected a done row to never be reclaimed, got %+v", final)
+	}
+}
+
 // TestEnvironmentRepo_UpsertCreateThenUpdate exercises the repository layer
 // (not raw SQL) end to end against real Postgres: a fresh key creates a row,
 // a repeated key updates every field but Key and Archived.
