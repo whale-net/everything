@@ -5,10 +5,19 @@ name: Promote
 # ARCHITECTURE.md -> "Authorization": the `environment:` declaration on the
 # `promote` job below is the entire security model for this workflow, not a
 # formality. It is what scopes the job to the target GitHub Environment's
-# secrets (so only that environment's `app-registry-promoter-<env>` client
-# secret is readable) and what triggers that environment's required
-# reviewers. A builder credential is never in scope here -- it lives in a
-# repository secret and carries no promoter role regardless.
+# secrets (so only that environment's `APP_REGISTRY_PROMOTER_CLIENT_SECRET`
+# is readable) and what triggers that environment's required reviewers. A
+# builder credential is never in scope here -- it lives in a repository
+# secret and carries no promoter role regardless.
+#
+# `environment` (the GitHub Environment) and `registry_environment` (the
+# Keycloak app-registry-promoter-<key> suffix / App Registry --env) are two
+# separate inputs on purpose: the GitHub Environment name is whatever this
+# repo's Environments happen to be called (e.g. promotion-dev), which need
+# not equal the App Registry's environment key (dev/stage/prod). A caller who
+# mismatches them just fails Keycloak auth -- the wrong client id paired with
+# the right environment's secret does not authenticate -- so decoupling the
+# two does not weaken the security scoping above.
 #
 # Unlike the best-effort AR-2c recording steps in release.yml, the promote
 # step below is NOT continue-on-error: a promotion that silently fails while
@@ -19,7 +28,15 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Target GitHub Environment / App Registry environment key (e.g. dev, stage, prod). Must have a matching GitHub Environment with the app-registry-promoter-<environment> secret configured.'
+        description: 'GitHub Environment this job runs under (controls which APP_REGISTRY_PROMOTER_CLIENT_SECRET and required reviewers apply). May be named anything (e.g. promotion-dev) -- it does not have to match registry_environment.'
+        required: true
+      registry_environment:
+        description: 'App Registry environment key / Keycloak app-registry-promoter-<key> client suffix. Must match a real app-registry-promoter-<key> client regardless of what the GitHub Environment above is named.'
+        type: choice
+        options:
+          - dev
+          - stage
+          - prod
         required: true
       action:
         description: 'promote a specific version, or roll back to whatever was previously current'
@@ -55,11 +72,13 @@ on:
 
 jobs:
   promote:
-    name: ${{ inputs.action }} ${{ inputs.owner_full_name }} -> ${{ inputs.environment }}
+    name: ${{ inputs.action }} ${{ inputs.owner_full_name }} -> ${{ inputs.registry_environment }} (${{ inputs.environment }})
     runs-on: ubuntu-latest
     # This is the security-critical line -- see the header comment above.
     # It scopes the job to the named GitHub Environment's secrets and
-    # required reviewers.
+    # required reviewers. Deliberately the GitHub Environment name, NOT
+    # registry_environment -- the two are allowed to differ (e.g. GitHub
+    # Environment "promotion-dev" vs registry key "dev").
     environment: ${{ inputs.environment }}
     steps:
     # Every `run:` block in this workflow reads inputs through `env:` rather
@@ -95,17 +114,17 @@ jobs:
 
     # Read from *this job's* Environment secrets (scoped by `environment:`
     # above), never from repository secrets. See DEPLOY.md "Where each
-    # secret goes" -- promoter-<env> client secrets live only on the
-    # matching GitHub Environment.
+    # secret goes" -- each GitHub Environment holds the promoter client
+    # secret matching whatever registry_environment its operators pass.
     - name: Promote
       if: inputs.action == 'promote'
       env:
         APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
         GRPC_AUTH_MODE: oidc
         GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-        GRPC_AUTH_CLIENT_ID: app-registry-promoter-${{ inputs.environment }}
+        GRPC_AUTH_CLIENT_ID: app-registry-promoter-${{ inputs.registry_environment }}
         GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_PROMOTER_CLIENT_SECRET }}
-        ENVIRONMENT: ${{ inputs.environment }}
+        ENVIRONMENT: ${{ inputs.registry_environment }}
         OWNER_FULL_NAME: ${{ inputs.owner_full_name }}
         KIND: ${{ inputs.kind }}
         VERSION: ${{ inputs.version }}
@@ -134,9 +153,9 @@ jobs:
         APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
         GRPC_AUTH_MODE: oidc
         GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-        GRPC_AUTH_CLIENT_ID: app-registry-promoter-${{ inputs.environment }}
+        GRPC_AUTH_CLIENT_ID: app-registry-promoter-${{ inputs.registry_environment }}
         GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_PROMOTER_CLIENT_SECRET }}
-        ENVIRONMENT: ${{ inputs.environment }}
+        ENVIRONMENT: ${{ inputs.registry_environment }}
         OWNER_FULL_NAME: ${{ inputs.owner_full_name }}
         KIND: ${{ inputs.kind }}
         REASON: ${{ inputs.reason }}

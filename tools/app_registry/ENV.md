@@ -92,7 +92,7 @@ placement rationale:
 | `vars.APP_REGISTRY_ADDRESS` | Repository variable | `APP_REGISTRY_ADDRESS` | both |
 | `vars.APP_REGISTRY_AUTH_TOKEN_URL` | Repository variable | `GRPC_AUTH_TOKEN_URL` | both |
 | `secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET` | Repository secret | `GRPC_AUTH_CLIENT_SECRET` (`GRPC_AUTH_CLIENT_ID=app-registry-builder`) | `release.yml` recording steps only |
-| `secrets.APP_REGISTRY_PROMOTER_CLIENT_SECRET` | Environment secret, one per `dev`/`stage`/`prod` GitHub Environment | `GRPC_AUTH_CLIENT_SECRET` (`GRPC_AUTH_CLIENT_ID=app-registry-promoter-<environment>`) | `promote.yml` only |
+| `secrets.APP_REGISTRY_PROMOTER_CLIENT_SECRET` | Environment secret, one per GitHub Environment (e.g. `promotion-dev`/`promotion-prod`) | `GRPC_AUTH_CLIENT_SECRET` (`GRPC_AUTH_CLIENT_ID=app-registry-promoter-<registry_environment>`) | `promote.yml` only |
 
 `GRPC_AUTH_MODE=oidc` is hardcoded in both workflows rather than read from a
 variable — the CLI must match whatever the server runs, and the server is

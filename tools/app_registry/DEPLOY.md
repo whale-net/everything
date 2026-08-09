@@ -43,6 +43,19 @@ every call returns `Unauthenticated`.
 |---|---|---|---|
 | `app-registry-api` | Names the audience. Never obtains a token. | Client authentication **On**, **all** flows unchecked, no roles | **now** |
 | `app-registry-builder` | CI recording (`ReconcileApps`, `RecordBuild`, `RecordArtifact`) | Confidential, **Service accounts roles** only, realm role `app-registry-builder`, audience mapper → `app-registry-api` | **now** |
+
+> **Do not split `app-registry-builder` per environment.** Unlike the promoter
+> clients below, recording (`RecordBuild`/`RecordArtifact`) has no
+> environment concept — `release.yml` runs it once per release, before any
+> promotion decision exists, against the single `APP_REGISTRY_ADDRESS`. There
+> is exactly one `app-registry-builder` client and one `app-registry-builder`
+> realm role (`server/auth/auth.go`'s `RoleBuilder`); creating
+> `app-registry-builder-dev` / `-prod` variants has no corresponding code path
+> to select between them and will just leave `release.yml`'s
+> `GRPC_AUTH_CLIENT_ID: app-registry-builder` unable to authenticate. If a
+> per-environment split is ever needed here, it requires a code change in
+> this repo (an environment input to the recording steps) first — do not
+> introduce the split Keycloak-side alone.
 | `app-registry-admin` | `EnvironmentRegistry`, `SetAppStatus` | Same shape, realm role `app-registry-admin` | **now** |
 | `app-registry-promoter-dev` | Promote to `dev` (via `promote.yml`) | Same shape, realm role `app-registry-promoter-dev` | **now** — needed before `promote.yml` can run against `dev` |
 | `app-registry-promoter-stage` | Promote to `stage` (via `promote.yml`) | Same shape, realm role `app-registry-promoter-stage` | **now** — needed before `promote.yml` can run against `stage` |
@@ -231,17 +244,36 @@ green job.
 ## 6. Promote via `promote.yml`
 
 `.github/workflows/promote.yml` is a `workflow_dispatch` job with inputs
-`environment`, `action` (`promote`/`rollback`), `owner_full_name`, `version`,
-`reason`, `allow_override`, `dry_run`. Its job declares
-`environment: ${{ inputs.environment }}`, which is what scopes it to that
-GitHub Environment's `APP_REGISTRY_PROMOTER_CLIENT_SECRET` and triggers that
-Environment's required reviewers — see §4's secret table. Unlike the AR-2c
-recording steps it is **not** `continue-on-error`: a failed promotion fails
-the run.
+`environment`, `registry_environment`, `action` (`promote`/`rollback`),
+`owner_full_name`, `version`, `reason`, `allow_override`, `dry_run`. Its job
+declares `environment: ${{ inputs.environment }}`, which is what scopes it to
+that GitHub Environment's `APP_REGISTRY_PROMOTER_CLIENT_SECRET` and triggers
+that Environment's required reviewers — see §4's secret table. Unlike the
+AR-2c recording steps it is **not** `continue-on-error`: a failed promotion
+fails the run.
 
-To promote to `prod`: create the `prod` GitHub Environment (§1's client table
-and §4's secret table), configure required reviewers on it, run the workflow
-with `environment: prod`, and approve the run when prompted.
+`environment` and `registry_environment` are deliberately two separate
+inputs, not one string doing double duty:
+
+- `environment` is the **GitHub Environment name**, whatever this repo's
+  Environments actually happen to be called (e.g. `promotion-dev`,
+  `promotion-prod`). It only has to match a real GitHub Environment.
+- `registry_environment` is the **App Registry environment key** — it drives
+  both `GRPC_AUTH_CLIENT_ID: app-registry-promoter-${{
+  inputs.registry_environment }}` and the CLI's `--env` flag, and must match
+  one of `dev`/`stage`/`prod` per §1's client table, independent of what the
+  GitHub Environment is named.
+
+Pick both correctly for the target: e.g. `environment: promotion-prod`,
+`registry_environment: prod`. A mismatch (say `registry_environment: dev`
+under `environment: promotion-prod`) doesn't bypass anything — it just fails
+Keycloak authentication, because that GitHub Environment's secret is the
+`prod` client's secret, which does not pair with the `dev` client id.
+
+To promote to `prod`: create the corresponding GitHub Environment (§1's
+client table and §4's secret table), configure required reviewers on it, run
+the workflow with that `environment` and `registry_environment: prod`, and
+approve the run when prompted.
 
 ---
 
