@@ -1,8 +1,9 @@
 name: CI
 
 on:
+  # No branches filter here: stacked PRs target other feature branches, not
+  # just main, and still need CI to run.
   pull_request:
-    branches: [ main ]
   push:
     branches: [ main ]
 
