@@ -26,8 +26,8 @@ The registry is being deployed to `dev` by the repo owner. `app-registry-api`
 and `app-registry-migration` images publish from `apps=all`.
 `APP_REGISTRY_CICD_OPT_IN` is still unset, so CI makes no registry calls.
 
-**Next up:** AR-2d (Postgres repository test coverage — the top carry-over item)
-then AR-3, which is blocked on settling auth.
+**Next up:** AR-3b (`EnvironmentRegistry`). AR-2d and AR-3a are done and stacked
+on top of `main`.
 
 ### AR-2c — merged
 
@@ -274,16 +274,40 @@ compress this — it is the phase that earns the trust AR-5 spends.
 
 **Goal:** promotion state is recorded and queryable. Still nothing consumes it.
 
-**Scope**
-- Implement `EnvironmentRegistry` (all RPCs); seed `dev`/`stage`/`prod`.
-- Implement `PromotionRegistry.Promote`, `Rollback`, `GetEnvironmentState`,
-  `ListPromotions`, `ListPromotionEvents`.
+**Split into a 4-PR stack**, auth first so the "a builder cannot promote" exit
+criterion is testable from the moment promotion exists:
+
+| PR | Scope |
+|---|---|
+| **AR-3a** | Auth only — role model, interceptor plumbing, enforcement on the RPCs that exist today, CLI service-account credentials. No promotion logic. |
+| **AR-3b** | `EnvironmentRegistry` (all RPCs), `dev`/`stage`/`prod` seeding, environment-scoped `allowed_principals`. |
+| **AR-3c** | `PromotionRegistry` — SCD2 close-and-open, event log, promotability enforcement, `allow_override` + drift reporting. |
+| **AR-3d** | CLI (`promote`, `rollback`, `status`, `history`, `diff`) and the human-triggered `promote.yml` workflow. |
+
+### Credential model (decided)
+
+**Keycloak service accounts**, not GitHub Actions OIDC. `libs/go/grpcauth`
+validates a single Keycloak-style issuer and reads roles from
+`realm_access.roles`; teaching it GitHub's issuer and `sub`-claim scoping is real
+scope in a library `manmanv2` also depends on, and is not worth it here.
+
+- One Keycloak client per caller identity: `app-registry-builder`,
+  `app-registry-promoter-{dev,stage,prod}`, `app-registry-admin`.
+- One realm role per identity, service-name-prefixed.
+- **Environment scoping comes from GitHub Environments**, not the token: the
+  `promoter-prod` client secret lives on the `prod` GitHub Environment, so only a
+  job declaring `environment: prod` can read it — and that declaration is what
+  triggers required reviewers. The builder credential is a different client whose
+  token carries no promoter role, so it cannot promote regardless.
+- **Setup guide: [`libs/go/grpcauth/KEYCLOAK.md`](../../libs/go/grpcauth/KEYCLOAK.md)**
+  — realm/client/role configuration step by step, and the reference pattern for
+  service-to-service auth in this repo.
+- Reconsider GitHub OIDC natively (secretless CI) only after this is proven.
+
+**Remaining scope**
 - SCD2 close-and-open in one transaction; promotion event log.
 - Promotability enforcement, including `allow_override` and drift reporting.
-- Environment-scoped authorization; `reason` required above rank 0.
-- CLI: `promote`, `rollback`, `status <env>`, `history`, `diff <env> <env>`.
-- A human-triggered `promote.yml` GitHub workflow using an
-  **environment-scoped OIDC subject**, distinct from the builder credential.
+- `reason` required above rank 0.
 
 **Exit criteria**
 - Promote/rollback round-trips correctly; `GetEnvironmentState --at <T>` returns

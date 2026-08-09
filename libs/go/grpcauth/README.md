@@ -11,6 +11,11 @@ Go library for gRPC authentication/authorization in the manmanv2 platform. Provi
 
 Set `GRPC_AUTH_MODE` consistently across all components. A mismatch (e.g. server=oidc, client=none) causes `codes.Unauthenticated` on every call.
 
+**Setting up the Keycloak side — see [KEYCLOAK.md](KEYCLOAK.md).** Step-by-step
+realm/client/role configuration, the reference pattern for service-to-service
+auth in this repo, and the two gotchas that break every first attempt (roles must
+be *realm* roles; you must add an audience mapper).
+
 ## Usage
 
 ### Server — add interceptors
@@ -37,6 +42,22 @@ claims, ok := grpcauth.ClaimsFromContext(ctx)
 if ok {
     log.Printf("request from %s", claims.Subject)
 }
+```
+
+If your service uses service-prefixed role names (e.g. `app-registry-builder`
+rather than plain `admin`), set `ServerConfig.DevRoles` to the full list of
+roles your handlers check — otherwise `AuthModeNone`'s fake claims (which
+default to `Roles: ["admin"]`) satisfy none of them, and local/Tilt
+development breaks silently. See `tools/app_registry/server/main.go` for a
+worked example.
+
+Testing handlers directly (bypassing the interceptor) against injected
+claims:
+```go
+ctx := grpcauth.ContextWithClaims(context.Background(), &grpcauth.Claims{
+    Subject: "test-user",
+    Roles:   []string{"app-registry-builder"},
+})
 ```
 
 ### Client — service account (Host, Log-Processor → API)
@@ -132,6 +153,7 @@ type ServerConfig struct {
     Mode      AuthMode
     IssuerURL string
     ClientID  string
+    DevRoles  []string // AuthModeNone only; defaults to ["admin"]
 }
 
 type ClientConfig struct {

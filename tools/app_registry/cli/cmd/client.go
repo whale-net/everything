@@ -3,8 +3,10 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/grpcclient"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -26,7 +28,22 @@ type registryClient struct {
 }
 
 func newRegistryClient(ctx context.Context) (*registryClient, error) {
-	conn, err := grpcclient.NewClient(ctx, serverAddr)
+	authOpt, err := grpcauth.NewServiceAccountDialOption(grpcauth.ClientConfig{
+		Mode:         grpcauth.AuthMode(getEnv("GRPC_AUTH_MODE", "none")),
+		TokenURL:     os.Getenv("GRPC_AUTH_TOKEN_URL"),
+		ClientID:     os.Getenv("GRPC_AUTH_CLIENT_ID"),
+		ClientSecret: os.Getenv("GRPC_AUTH_CLIENT_SECRET"),
+		// RequireTransportSecurity left false: TLS is handled independently
+		// by grpcclient.NewClient via GRPC_USE_TLS (see ENV.md); this only
+		// controls whether PerRPCCredentials refuses to send the bearer
+		// token over a plaintext transport, same as manmanv2/host and
+		// manmanv2/log-processor.
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create auth dial option: %w", err)
+	}
+
+	conn, err := grpcclient.NewClient(ctx, serverAddr, authOpt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to app-registry-api at %s: %w", serverAddr, err)
 	}
@@ -42,6 +59,16 @@ func newRegistryClient(ctx context.Context) (*registryClient, error) {
 
 func (c *registryClient) Close() error {
 	return c.conn.Close()
+}
+
+// getEnv reads an environment variable, falling back to defaultValue when
+// unset or empty — matches the convention manmanv2/host and
+// manmanv2/log-processor use for their auth env vars.
+func getEnv(key, defaultValue string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return defaultValue
 }
 
 // printResponse formats a proto response per the --format flag. table is not

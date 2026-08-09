@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "auth",
+    srcs = ["auth.go"],
+    importpath = "github.com/whale-net/everything/tools/app_registry/server/auth",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/grpcauth",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
+go_test(
+    name = "auth_test",
+    size = "small",
+    srcs = ["auth_test.go"],
+    embed = [":auth"],
+    deps = [
+        "//libs/go/grpcauth",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)

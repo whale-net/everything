@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/whale-net/everything/libs/go/grpcauth"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	registryauth "github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/repository/fake"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -19,16 +21,30 @@ import (
 const bufSize = 1024 * 1024
 
 // startTestServer builds the real registerServices() wiring behind a
-// bufconn listener — no TCP port, no Postgres, no gRPC auth. This is the
-// exact registration surface run() uses in production; only the transport
-// and the (absent) DB pool differ, so a missing RegisterXxxServer call or a
-// health server that never flips to SERVING would be caught here exactly as
-// it would in the real binary.
+// bufconn listener — no TCP port, no Postgres. This is the exact
+// registration surface run() uses in production; only the transport and the
+// (absent) DB pool differ, so a missing RegisterXxxServer call or a health
+// server that never flips to SERVING would be caught here exactly as it
+// would in the real binary. The auth interceptor runs in AuthModeNone with
+// DevRoles set to every app-registry role, matching run()'s production
+// wiring (see main.go) — every RPC call below is implicitly authenticated
+// as a superuser, same as local Tilt.
 func startTestServer(t *testing.T) *grpc.ClientConn {
 	t.Helper()
 
+	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(context.Background(), grpcauth.ServerConfig{
+		Mode:     grpcauth.AuthModeNone,
+		DevRoles: registryauth.AllRoles(),
+	})
+	if err != nil {
+		t.Fatalf("failed to create auth interceptors: %v", err)
+	}
+
 	lis := bufconn.Listen(bufSize)
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(unaryInt),
+		grpc.ChainStreamInterceptor(streamInt),
+	)
 	registerServices(grpcServer, fake.New())
 
 	go func() {

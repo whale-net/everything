@@ -35,13 +35,45 @@ Standard `libs/go/logging` environment auto-detection also applies
 (`APP_NAME`, `APP_DOMAIN`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_*_DISABLED`,
 etc.) — see that package's doc comment for the full list.
 
+### Role model (AR-3a)
+
+Server-side enforcement lives in `server/auth`; see
+[`ARCHITECTURE.md`](ARCHITECTURE.md) "Authorization" for the role table and
+[`libs/go/grpcauth/KEYCLOAK.md`](../../libs/go/grpcauth/KEYCLOAK.md) for how
+to configure the Keycloak side. In short: `AppRegistry.ReconcileApps`,
+`ArtifactRegistry.RecordBuild`/`RecordArtifact` require
+`app-registry-builder`; `AppRegistry.SetAppStatus` requires
+`app-registry-admin`; all read RPCs require only that the caller is
+authenticated (any role). `EnvironmentRegistry`/`PromotionRegistry` stay
+`Unimplemented` until AR-3b/3c, but `server/auth.RequirePromoter` already
+exists for them to call unmodified.
+
+**`GRPC_AUTH_MODE=none` and local/CI dev claims:** `libs/go/grpcauth`'s
+dev-mode claims default to `Roles: ["admin"]`, which satisfies none of this
+service's `app-registry-*` role checks. `server/main.go` overrides this via
+`grpcauth.ServerConfig.DevRoles`, set to `server/auth.AllRoles()` — so in
+`none` mode (the Tiltfile default, and the default for any CI path that
+hasn't opted into `oidc`) every request is treated as holding every
+app-registry role, and local dev / the AR-2c CI recording path keep working
+unchanged. This only matters in `none` mode; `oidc` mode always uses the
+token's real roles.
+
 ## CLI (`app-registry`)
 
 | Variable | Default | Description |
 |----------|---------|--------------|
 | `APP_REGISTRY_ADDRESS` | `localhost:50051` | `app-registry-api` address; overridden by `--address` |
 | `GRPC_AUTH_MODE` | `none` | `none` or `oidc` — must match the server |
+| `GRPC_AUTH_TOKEN_URL` | `""` | Keycloak token endpoint; required when `GRPC_AUTH_MODE=oidc` (e.g. `https://auth.example.com/realms/whale/protocol/openid-connect/token`) |
+| `GRPC_AUTH_CLIENT_ID` | `""` | Keycloak service-account client ID (e.g. `app-registry-builder`); required when `GRPC_AUTH_MODE=oidc` |
+| `GRPC_AUTH_CLIENT_SECRET` | `""` | Keycloak service-account client secret; required when `GRPC_AUTH_MODE=oidc` |
 | `GRPC_USE_TLS` / `GRPC_TLS_SKIP_VERIFY` / `GRPC_CA_CERT_PATH` / `GRPC_TLS_SERVER_NAME` | — | TLS options — see `libs/go/grpcclient` |
+
+The CLI fetches and auto-refreshes a client-credentials token via
+`grpcauth.NewServiceAccountDialOption`, the same mechanism
+`manmanv2/host` and `manmanv2/log-processor` use to reach their API. See
+KEYCLOAK.md section 6 "CI — GitHub Actions" for the shape of a workflow job
+setting these four variables.
 
 ## Local Development (Tilt)
 

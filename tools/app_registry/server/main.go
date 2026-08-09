@@ -17,6 +17,7 @@ import (
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	registryauth "github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/handlers"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	"github.com/whale-net/everything/tools/app_registry/server/repository/postgres"
@@ -61,11 +62,17 @@ func run() error {
 	repo := postgres.NewRepository(pool)
 	log.Println("Database connection established")
 
-	// Create auth interceptors
+	// Create auth interceptors. DevRoles matters only in AuthModeNone: it
+	// makes the injected dev Claims carry every app-registry role, not
+	// grpcauth's generic default of ["admin"] (which satisfies none of our
+	// service-prefixed role checks — see server/auth). Without this, local
+	// Tilt and any CI path running with GRPC_AUTH_MODE=none would fail every
+	// write RPC's role check. See ENV.md.
 	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(ctx, grpcauth.ServerConfig{
 		Mode:      grpcauth.AuthMode(grpcAuthMode),
 		IssuerURL: grpcOIDCIssuer,
 		ClientID:  grpcOIDCClientID,
+		DevRoles:  registryauth.AllRoles(),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create auth interceptors: %w", err)
