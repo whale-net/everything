@@ -22,8 +22,9 @@ Cross-cutting documentation for the Bazel build system, release pipeline, and in
 - [RELEASE.md](RELEASE.md) — Release system: `release_app` macro, change detection, multi-arch publishing
 - [HELM.md](HELM.md) — Automatic Helm chart generation from app metadata
 - [HELM_RELEASE.md](HELM_RELEASE.md) — Helm chart release integration with GitHub Actions
-- [CI_CD.md](CI_CD.md) — GitHub Actions workflow overview
+- [CI_CD.md](CI_CD.md) — GitHub Actions workflow overview, including the App Registry recording steps and `promote.yml`
 - [CLEANUP.md](CLEANUP.md) — Tag, release, and GHCR package cleanup tooling
+- [../tools/app_registry/TOC.md](../tools/app_registry/TOC.md) — App Registry: gRPC service indexing published artifacts and tracking per-environment promotion state. Recording is wired into the release pipeline behind an opt-in flag (off by default); promotion and version allocation are built but not yet in real use — see its `OPERATIONS.md` for the day-2 runbook
 
 ## Libraries & Integrations
 

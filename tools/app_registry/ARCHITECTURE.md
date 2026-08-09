@@ -219,7 +219,7 @@ different environments, not one:
    `read-chart-lockfile <chart-name>` command builds a chart and reads this
    file back out, giving the release path a stable way to get at it without
    re-deriving anything from the manifests.
-2. **Publish time (has registry access, not yet implemented — AR-2c).** After
+2. **Publish time (has registry access; implemented in AR-2c).** After
    `release-helm-charts`'s `needs: [plan-release, release, ...]` has pushed
    every image, a CI step resolves each lockfile entry's repository+tag to a
    digest and forwards the result to `RecordArtifact(kind = CHART, contains =

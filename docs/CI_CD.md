@@ -66,3 +66,46 @@ Builds container images to verify they compile correctly (only runs on main bran
 
 ### Build Summary
 Collects and reports the status of all CI jobs
+
+## App Registry
+
+`.github/workflows/release.yml` and a separate `.github/workflows/promote.yml`
+talk to the [App Registry](../tools/app_registry/TOC.md), a gRPC service that
+indexes published artifacts and (once actually used) tracks
+per-environment promotion state. Both are gated and, as of today, dormant —
+see [`tools/app_registry/OPERATIONS.md`](../tools/app_registry/OPERATIONS.md)
+for the operator runbook.
+
+### Recording (`release.yml`)
+
+Two `continue-on-error` steps, both gated on `vars.APP_REGISTRY_CICD_OPT_IN
+== 'true'`:
+
+- **`Record build and artifact in App Registry`** (in the `release` job) —
+  after an image is pushed, resolves its digest and calls `app-registry
+  builds record` + `artifacts record --kind image`.
+- **`Record chart artifacts in App Registry`** (in `release-helm-charts`) —
+  after a chart is published, resolves its pinned images (from the
+  compose-time lockfile) to digests and calls `artifacts record --kind
+  chart --contains ...`.
+
+`APP_REGISTRY_CICD_OPT_IN` is unset by default. With it unset, CI makes no
+registry calls at all — the recording steps do not run. Because they are
+`continue-on-error`, **a failed recording still shows a green job** — check
+the step's own log, not the job status, to know whether it actually
+recorded anything.
+
+### `promote.yml`
+
+A separate, human-triggered `workflow_dispatch` workflow that promotes or
+rolls back a recorded artifact to an environment (`dev`/`stage`/`prod`). Its
+job declares `environment: ${{ inputs.environment }}`, which scopes it to
+that GitHub Environment's `app-registry-promoter-<environment>` secret and
+triggers that environment's required reviewers — this declaration is the
+entire security model, not a formality. Unlike the recording steps above, it
+is **not** `continue-on-error`: a failed promotion fails the run.
+
+**Status: built, never run.** No Keycloak clients and no GitHub Environments
+(`dev`/`stage`/`prod`) exist yet, so `promote.yml` cannot currently succeed.
+See [`tools/app_registry/DEPLOY.md`](../tools/app_registry/DEPLOY.md) for
+what has to exist first.
