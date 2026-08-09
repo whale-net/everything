@@ -33,6 +33,10 @@ AR-4b) is now also fully implemented**, stacked on `ar-4a-temporal` /
 workflow, stub activity) is done; the real gitops/S3 publish is deliberately
 still out of scope (see AR-4b below).
 
+**AR-5a (inert foundations) is also done, not merged** — see "AR-5" below
+for what it delivered and what is deliberately still missing before any
+domain can be cut over.
+
 ### AR-3d — CLI + `promote.yml` — done
 
 - `app-registry promote`/`rollback`/`status`/`history`/`diff` filled in
@@ -590,6 +594,85 @@ it as verified before then.
 
 **Goal:** the registry becomes the version source of truth. Highest risk —
 CI now depends on the registry being up.
+
+### AR-5a — Inert foundations — done, not merged
+
+**Goal:** everything `AllocateVersion` needs, fully implemented and tested,
+with no release able to reach it. See ARCHITECTURE.md's "Version model
+(AR-5a)" for the as-built design.
+
+**Delivered**
+- Migration `005_version_allocation`: `artifact.version_major/minor/patch`
+  (`INT NOT NULL`, backfilled — an unparseable legacy version becomes the
+  documented `0/0/0` sentinel, not a failed deploy) plus
+  `artifact_version_order_idx` for numeric "latest" ordering, and the new
+  `version_allocation` reservation table (own unique index on `(owner_id,
+  kind, version)`, since `AllocateVersionRequest` carries no digest/build_id
+  and `artifact` requires both). `writeback_outbox`'s planned migration
+  number moves from `004` to `005` — see `migrate/README.md`.
+- `libs/go/semver`: the one shared parser/incrementer/comparator. Both
+  `release_helper_go`'s `incrementVersion` (now delegating instead of
+  hand-rolling regex/`strings.Split`) and the registry server consume it —
+  no third copy. `incrementVersion` gained `major`; `plan.go` gained
+  `--increment-major`, purely additive alongside the existing
+  `--increment-minor`/`--increment-patch`.
+- `ArtifactServer.AllocateVersion` fully implemented: validates the request,
+  resolves the owner's domain, checks `domain_adoption.stage == 'allocate'`
+  (`FailedPrecondition` otherwise), then runs a transactional insert into
+  `version_allocation` inside `runIdempotent`'s `WithTx`, retrying in a
+  **fresh** transaction (bounded, 5 attempts) on an auto-increment
+  `ErrAlreadyExists` collision — an `explicit_version` collision is not
+  retried, per the RPC's "fails if taken" contract. Idempotency-key replay
+  sets `already_allocated = true` on the replayed response.
+- `repository.DomainAdoptionRepository.GetStage` (postgres + fake), reading
+  the `domain_adoption` table AR-1's migration already shipped. No write
+  path/RPC exists yet in this change — cutting a domain to `allocate` is a
+  direct `UPDATE domain_adoption` (or a raw INSERT, as the postgres
+  integration tests do) until a real admin path is built.
+- Unit tests (`libs/go/semver`): parse/increment including `major`,
+  rejection of prerelease/build metadata, and the numeric-vs-lexical
+  `Compare` guard directly.
+- Handler tests against the fake (`server/handlers/artifact_test.go`):
+  validation errors, the adoption-stage gate, major/minor/patch increments
+  against a previously recorded artifact, idempotency-key replay, and
+  explicit-version collision.
+- **Real-Postgres integration tests** (mandatory — the fake cannot catch
+  transactional/constraint bugs): `v1.9.0` vs `v1.10.0` ordering (seeded in
+  reverse insertion order — proves the numeric columns, not insertion
+  order, drive "latest"), 8 real concurrent goroutines each opening their
+  own transaction racing to allocate the same owner's next patch (zero
+  collisions, exactly 8 `version_allocation` rows), idempotency-key replay
+  against the real handler, the adoption-stage gate rejecting a domain with
+  no `domain_adoption` row, and migration 004's backfill (a clean version
+  parses correctly, a garbage one backfills to `0/0/0`).
+- **Every guard was deliberately broken and its test confirmed red before
+  reverting**: the ordering index (`ORDER BY version` instead of the
+  integer columns) → `TestAllocateVersion_OrderingIsNumericNotLexical` fails
+  with `previous_version="v1.9.0"` instead of `"v1.10.0"`; the
+  `version_allocation` unique index (made non-unique) →
+  `TestAllocateVersion_ConcurrentCallsNeverCollide` fails with one version
+  allocated 5 times out of 8; the adoption-stage gate (short-circuited with
+  `if false &&`) → both the fake-backed and postgres-backed gate tests fail
+  with `<nil>` instead of `FailedPrecondition`.
+- Docs: this section, ARCHITECTURE.md's "Version model (AR-5a)",
+  `migrate/README.md`'s planned-migrations table.
+
+**Deliberately NOT done — the actual cutover remains AR-5b+**
+- `plan.go`'s `autoIncrementVersion` call site is untouched: the git-tag
+  path is the only one any release can reach, byte-for-byte identical to
+  before this change, for every domain.
+- No domain's `domain_adoption.stage` is set to `allocate` — the table has
+  no rows written by this change at all.
+- No CLI/admin path exists yet to move a domain to `allocate`; that is
+  real, separate scope (probably its own small RPC/CLI surface) before a
+  real cutover can happen without hand-editing the database.
+- Seeding a domain's starting version from its existing tags at cutover
+  time (this section's original scope item) is not implemented — nothing
+  calls it yet, so building it now would be untested and unused.
+- The "allocated versions match tag-scanning" parity check against AR-2 soak
+  data has not been run (the soak itself, gating AR-5's start per this
+  section's own note below, has not happened).
+- The release workflow's version-allocation concurrency group is untouched.
 
 **Scope**
 - Implement `ArtifactRegistry.AllocateVersion` against a unique

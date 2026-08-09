@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/whale-net/everything/libs/go/semver"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
@@ -45,19 +46,31 @@ type state struct {
 	Promotions      map[string]repository.Promotion       // keyed by promotion_id
 	PromotionEvents map[string]repository.PromotionEvent  // keyed by event_id
 	WritebackOutbox map[string]repository.WritebackOutbox // keyed by outbox_id
+	// VersionAllocations mirrors postgres's version_allocation table: the
+	// reservation ledger AllocateVersion writes to, keyed by
+	// "<owner_id>/<kind>/<version>" -- see
+	// repository/postgres/artifact.go's AllocateVersion doc comment for why
+	// this isn't just the Artifacts map.
+	VersionAllocations map[string]repository.VersionAllocation
+	// DomainAdoption mirrors the `domain_adoption` table, keyed by domain.
+	// Absent means DomainAdoptionStageObserve -- see
+	// DomainAdoptionRepository.GetStage's doc comment.
+	DomainAdoption map[string]repository.DomainAdoptionStage
 }
 
 func newState() *state {
 	return &state{
-		Apps:            map[string]repository.App{},
-		Charts:          map[string]repository.Chart{},
-		Builds:          map[string]repository.Build{},
-		Artifacts:       map[string]repository.Artifact{},
-		Idempotency:     map[string]idemEntry{},
-		Environments:    map[string]repository.Environment{},
-		Promotions:      map[string]repository.Promotion{},
-		PromotionEvents: map[string]repository.PromotionEvent{},
-		WritebackOutbox: map[string]repository.WritebackOutbox{},
+		Apps:               map[string]repository.App{},
+		Charts:             map[string]repository.Chart{},
+		Builds:             map[string]repository.Build{},
+		Artifacts:          map[string]repository.Artifact{},
+		Idempotency:        map[string]idemEntry{},
+		Environments:       map[string]repository.Environment{},
+		Promotions:         map[string]repository.Promotion{},
+		PromotionEvents:    map[string]repository.PromotionEvent{},
+		WritebackOutbox:    map[string]repository.WritebackOutbox{},
+		VersionAllocations: map[string]repository.VersionAllocation{},
+		DomainAdoption:     map[string]repository.DomainAdoptionStage{},
 	}
 }
 
@@ -86,6 +99,18 @@ func New() *Registry {
 	return &Registry{mu: &sync.Mutex{}, state: newState()}
 }
 
+// SetDomainAdoptionStage is a test-only fixture setter: there is no RPC to
+// cut a domain over to a new adoption stage in this change (see PLAN.md's
+// AR-5 status — AR-5a ships the gate but no cutover mechanism), so handler
+// tests that need to exercise the "allocate" path reach in here directly,
+// the same way postgres integration tests do via a raw
+// `INSERT INTO domain_adoption` (see postgres_integration_test.go).
+func (r *Registry) SetDomainAdoptionStage(domain string, stage repository.DomainAdoptionStage) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.state.DomainAdoption[domain] = stage
+}
+
 func (r *Registry) Apps() repository.AppRepository                { return r }
 func (r *Registry) Builds() repository.BuildRepository            { return r }
 func (r *Registry) Artifacts() repository.ArtifactRepository      { return r }
@@ -103,6 +128,10 @@ func (r *Registry) Promotions() repository.PromotionRepository { return promotio
 
 // Writeback returns a distinct type for the same reason Environments does.
 func (r *Registry) Writeback() repository.WritebackRepository { return writebackFake{r} }
+
+// DomainAdoption returns a distinct type for the same reason Environments
+// does.
+func (r *Registry) DomainAdoption() repository.DomainAdoptionRepository { return domainAdoptionFake{r} }
 
 // WithTx snapshots state, runs fn against a Registry sharing that snapshot,
 // and commits the snapshot back only if fn succeeds — giving the fake the
@@ -332,6 +361,83 @@ func ownerID(a repository.Artifact) string {
 		return a.AppID
 	}
 	return a.ChartID
+}
+
+// syntheticOwnerArtifact builds a zero artifact carrying just enough (Kind +
+// owner id in the right field + Version) to reuse ownerID()/
+// findByOwnerKindVersion()'s existing owner-matching logic — AllocateVersion
+// only ever has an ownerID, not a full Artifact, to look up with.
+func syntheticOwnerArtifact(kind repository.ArtifactKind, ownerID, version string) repository.Artifact {
+	a := repository.Artifact{Kind: kind, Version: version}
+	if kind == repository.ArtifactKindImage {
+		a.AppID = ownerID
+	} else {
+		a.ChartID = ownerID
+	}
+	return a
+}
+
+// AllocateVersion mirrors postgres's artifactRepo.AllocateVersion: "next" is
+// computed from the highest version already claimed for (ownerID, kind)
+// across both real artifacts and prior allocations, so an
+// allocated-but-not-yet-recorded version is never handed out twice.
+func (r *Registry) AllocateVersion(ctx context.Context, kind repository.ArtifactKind, owner, increment, explicitVersion string) (*repository.VersionAllocation, error) {
+	var hasPrevious bool
+	var previous semver.Version
+	var previousText string
+	consider := func(text string) {
+		v, err := semver.Parse(text)
+		if err != nil {
+			return
+		}
+		if !hasPrevious || semver.Compare(v, previous) > 0 {
+			hasPrevious = true
+			previous = v
+			previousText = text
+		}
+	}
+	for _, a := range r.state.Artifacts {
+		if a.Kind == kind && owner == ownerID(a) {
+			consider(a.Version)
+		}
+	}
+	prefix := owner + "/" + string(kind) + "/"
+	for key, alloc := range r.state.VersionAllocations {
+		if len(key) >= len(prefix) && key[:len(prefix)] == prefix {
+			consider(alloc.Version)
+		}
+	}
+
+	var next semver.Version
+	if explicitVersion != "" {
+		v, err := semver.ParseRelease(explicitVersion)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", repository.ErrInvalidArgument, err)
+		}
+		next = v
+	} else {
+		base := semver.Version{}
+		if hasPrevious {
+			base = previous
+		}
+		v, err := base.Increment(increment)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", repository.ErrInvalidArgument, err)
+		}
+		next = v
+	}
+
+	versionStr := next.String()
+	key := prefix + versionStr
+	if _, exists := r.state.VersionAllocations[key]; exists {
+		return nil, fmt.Errorf("%w: version %s is already allocated or recorded for this owner", repository.ErrAlreadyExists, versionStr)
+	}
+	if _, found := r.findByOwnerKindVersion(syntheticOwnerArtifact(kind, owner, versionStr)); found {
+		return nil, fmt.Errorf("%w: version %s is already allocated or recorded for this owner", repository.ErrAlreadyExists, versionStr)
+	}
+
+	r.state.VersionAllocations[key] = repository.VersionAllocation{Version: versionStr, PreviousVersion: previousText}
+	return &repository.VersionAllocation{Version: versionStr, PreviousVersion: previousText}, nil
 }
 
 func (r *Registry) findImageByDigest(digest string) (*repository.Artifact, error) {
@@ -806,6 +912,27 @@ func sortPromotions(promotions []repository.Promotion) {
 // timeNow is a thin indirection so a future test could freeze it; today it's
 // just time.Now().UTC(), matching every other fake's timestamp handling.
 func timeNow() time.Time { return time.Now().UTC() }
+
+// ============================================================================
+// DomainAdoptionRepository
+// ============================================================================
+
+// domainAdoptionFake implements repository.DomainAdoptionRepository over
+// the same *Registry.state every other repository reads/writes -- see
+// Environments's doc comment for why this can't be a method directly on
+// Registry.
+type domainAdoptionFake struct{ r *Registry }
+
+// GetStage mirrors postgres's domainAdoptionRepo.GetStage: an absent row
+// (the default for every domain in a fresh fake, matching production where
+// domain_adoption seeds no rows automatically) means
+// DomainAdoptionStageObserve.
+func (f domainAdoptionFake) GetStage(ctx context.Context, domain string) (repository.DomainAdoptionStage, error) {
+	if stage, ok := f.r.state.DomainAdoption[domain]; ok {
+		return stage, nil
+	}
+	return repository.DomainAdoptionStageObserve, nil
+}
 
 // ============================================================================
 // helpers shared with reconcile.go

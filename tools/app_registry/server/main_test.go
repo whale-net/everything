@@ -141,10 +141,28 @@ func TestRegisterServices_AllFourServicesReachable(t *testing.T) {
 		}
 	})
 
-	t.Run("ArtifactRegistry_AllocateVersion_StillUnimplemented", func(t *testing.T) {
+	// AllocateVersion is real as of AR-5a (see PLAN.md's AR-5 status), but
+	// still unreachable in production: every domain defaults to adoption
+	// stage "observe" (no domain_adoption row), so an empty request reaches
+	// the real handler and fails validation ("kind is required") rather
+	// than codes.Unimplemented's "unknown service"/"not implemented" —
+	// still enough to prove pb.RegisterArtifactRegistryServer wasn't
+	// dropped, which is this whole test's job. See handlers/artifact_test.go
+	// for AllocateVersion's actual business-logic coverage (gate, retry,
+	// idempotency replay).
+	t.Run("ArtifactRegistry_AllocateVersion_ReachesRealHandler", func(t *testing.T) {
 		client := pb.NewArtifactRegistryClient(conn)
 		_, err := client.AllocateVersion(ctx, &pb.AllocateVersionRequest{})
-		assertUnimplementedFromHandler(t, "ArtifactRegistry.AllocateVersion", "AllocateVersion not implemented", err)
+		st, ok := status.FromError(err)
+		if !ok {
+			t.Fatalf("ArtifactRegistry.AllocateVersion: expected a gRPC status error, got %v", err)
+		}
+		if st.Code() != codes.InvalidArgument {
+			t.Fatalf("ArtifactRegistry.AllocateVersion: expected codes.InvalidArgument, got %v (%v)", st.Code(), err)
+		}
+		if strings.Contains(st.Message(), "unknown service") || strings.Contains(st.Message(), "unknown method") {
+			t.Fatalf("ArtifactRegistry.AllocateVersion: got grpc's own %q — the service was never registered", st.Message())
+		}
 	})
 
 	t.Run("PromotionRegistry", func(t *testing.T) {

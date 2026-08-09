@@ -9,6 +9,7 @@ go_library(
     importpath = "github.com/whale-net/everything/tools/app_registry/server/repository/fake",
     visibility = ["//visibility:public"],
     deps = [
+        "//libs/go/semver",
         "//tools/app_registry/server/repository",
         "//tools/appmeta/proto:appmetapb",
         "@com_github_google_uuid//:uuid",
