@@ -2,7 +2,14 @@ load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "repository",
-    srcs = ["repository.go"],
+    srcs = [
+        "models.go",
+        "promotability.go",
+        "repository.go",
+    ],
     importpath = "github.com/whale-net/everything/tools/app_registry/server/repository",
     visibility = ["//visibility:public"],
+    deps = [
+        "//tools/appmeta/proto:appmetapb",
+    ],
 )

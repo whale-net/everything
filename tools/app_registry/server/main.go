@@ -1,6 +1,7 @@
-// Command app-registry-api is the App Registry's gRPC server. AR-1 wires up
-// the four services from protos/api.proto with no business logic — every RPC
-// returns codes.Unimplemented. See ../ARCHITECTURE.md and ../README.md.
+// Command app-registry-api is the App Registry's gRPC server. AppRegistry and
+// ArtifactRegistry are real as of AR-2a; PromotionRegistry and
+// EnvironmentRegistry still return codes.Unimplemented until AR-3/AR-4. See
+// ../ARCHITECTURE.md and ../README.md.
 package main
 
 import (
@@ -17,6 +18,7 @@ import (
 	"github.com/whale-net/everything/libs/go/logging"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/handlers"
+	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	"github.com/whale-net/everything/tools/app_registry/server/repository/postgres"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
@@ -57,7 +59,6 @@ func run() error {
 	}
 	defer pool.Close()
 	repo := postgres.NewRepository(pool)
-	_ = repo // wired into handlers starting AR-2
 	log.Println("Database connection established")
 
 	// Create auth interceptors
@@ -79,7 +80,7 @@ func run() error {
 		grpc.ChainStreamInterceptor(streamInt),
 	)
 
-	healthServer := registerServices(grpcServer)
+	healthServer := registerServices(grpcServer, repo)
 
 	// Start listening
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
@@ -116,12 +117,15 @@ func run() error {
 // and reflection services on grpcServer, and returns the health server so
 // the caller can flip it to NOT_SERVING on shutdown. Split out from run() so
 // it can be exercised directly against a bufconn listener in tests, with no
-// database or gRPC auth setup required — see main_test.go.
-func registerServices(grpcServer *grpc.Server) *health.Server {
-	// Register all four App Registry services. Every RPC returns
-	// codes.Unimplemented in AR-1 — see handlers/*.go.
-	pb.RegisterAppRegistryServer(grpcServer, handlers.NewAppServer())
-	pb.RegisterArtifactRegistryServer(grpcServer, handlers.NewArtifactServer())
+// real database or gRPC auth setup required — see main_test.go, which passes
+// a fake repository.Registry.
+func registerServices(grpcServer *grpc.Server, repo repository.Registry) *health.Server {
+	// AppRegistry and ArtifactRegistry are real as of AR-2a (AllocateVersion
+	// stays Unimplemented — that's AR-5). PromotionRegistry and
+	// EnvironmentRegistry stay Unimplemented until AR-3/AR-4 — see
+	// handlers/promotion.go, handlers/environment.go.
+	pb.RegisterAppRegistryServer(grpcServer, handlers.NewAppServer(repo))
+	pb.RegisterArtifactRegistryServer(grpcServer, handlers.NewArtifactServer(repo))
 	pb.RegisterPromotionRegistryServer(grpcServer, handlers.NewPromotionServer())
 	pb.RegisterEnvironmentRegistryServer(grpcServer, handlers.NewEnvironmentServer())
 

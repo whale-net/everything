@@ -1,0 +1,221 @@
+package handlers
+
+import (
+	"time"
+
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/server/repository"
+)
+
+func unixToTime(sec int64) time.Time {
+	if sec == 0 {
+		return time.Time{}
+	}
+	return time.Unix(sec, 0).UTC()
+}
+
+func timeToUnix(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
+
+func appStatusToPB(s repository.Status) pb.AppStatus {
+	switch s {
+	case repository.StatusActive:
+		return pb.AppStatus_APP_STATUS_ACTIVE
+	case repository.StatusMissing:
+		return pb.AppStatus_APP_STATUS_MISSING
+	case repository.StatusArchived:
+		return pb.AppStatus_APP_STATUS_ARCHIVED
+	default:
+		return pb.AppStatus_APP_STATUS_UNSPECIFIED
+	}
+}
+
+func appStatusFromPB(s pb.AppStatus) repository.Status {
+	switch s {
+	case pb.AppStatus_APP_STATUS_ACTIVE:
+		return repository.StatusActive
+	case pb.AppStatus_APP_STATUS_MISSING:
+		return repository.StatusMissing
+	case pb.AppStatus_APP_STATUS_ARCHIVED:
+		return repository.StatusArchived
+	default:
+		return ""
+	}
+}
+
+func artifactKindToPB(k repository.ArtifactKind) pb.ArtifactKind {
+	switch k {
+	case repository.ArtifactKindImage:
+		return pb.ArtifactKind_ARTIFACT_KIND_IMAGE
+	case repository.ArtifactKindChart:
+		return pb.ArtifactKind_ARTIFACT_KIND_CHART
+	default:
+		return pb.ArtifactKind_ARTIFACT_KIND_UNSPECIFIED
+	}
+}
+
+func artifactKindFromPB(k pb.ArtifactKind) repository.ArtifactKind {
+	switch k {
+	case pb.ArtifactKind_ARTIFACT_KIND_IMAGE:
+		return repository.ArtifactKindImage
+	case pb.ArtifactKind_ARTIFACT_KIND_CHART:
+		return repository.ArtifactKindChart
+	default:
+		return ""
+	}
+}
+
+func promotabilityToPB(p repository.Promotability) pb.Promotability {
+	switch p {
+	case repository.PromotabilityPromotable:
+		return pb.Promotability_PROMOTABILITY_PROMOTABLE
+	case repository.PromotabilityViaChart:
+		return pb.Promotability_PROMOTABILITY_VIA_CHART
+	case repository.PromotabilityNotPromotable:
+		return pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE
+	default:
+		return pb.Promotability_PROMOTABILITY_UNSPECIFIED
+	}
+}
+
+func appToPB(a repository.App) *pb.App {
+	return &pb.App{
+		AppId:           a.AppID,
+		Domain:          a.Domain,
+		Name:            a.Name,
+		FullName:        a.FullName(),
+		Description:     a.Description,
+		Language:        a.Language,
+		AppType:         a.AppType,
+		DeployUnit:      a.DeployUnit,
+		BazelLabel:      a.BazelLabel,
+		ImageRepository: a.ImageRepository,
+		Status:          appStatusToPB(a.Status),
+		FirstSeenAt:     timeToUnix(a.FirstSeenAt),
+		LastSeenAt:      timeToUnix(a.LastSeenAt),
+	}
+}
+
+func appsToPB(apps []repository.App) []*pb.App {
+	out := make([]*pb.App, 0, len(apps))
+	for _, a := range apps {
+		out = append(out, appToPB(a))
+	}
+	return out
+}
+
+func chartToPB(c repository.Chart) *pb.Chart {
+	return &pb.Chart{
+		ChartId:         c.ChartID,
+		Domain:          c.Domain,
+		Name:            c.Name,
+		FullName:        c.FullName(),
+		Description:     c.Description,
+		AppIds:          c.AppIDs,
+		ChartRepository: c.ChartRepository,
+		DeployUnit:      c.DeployUnit,
+		Status:          appStatusToPB(c.Status),
+		FirstSeenAt:     timeToUnix(c.FirstSeenAt),
+		LastSeenAt:      timeToUnix(c.LastSeenAt),
+	}
+}
+
+func chartsToPB(charts []repository.Chart) []*pb.Chart {
+	out := make([]*pb.Chart, 0, len(charts))
+	for _, c := range charts {
+		out = append(out, chartToPB(c))
+	}
+	return out
+}
+
+func buildToPB(b repository.Build) *pb.Build {
+	var startedAt int64
+	if b.StartedAt != nil {
+		startedAt = timeToUnix(*b.StartedAt)
+	}
+	return &pb.Build{
+		BuildId:         b.BuildID,
+		GitSha:          b.GitSHA,
+		GitRef:          b.GitRef,
+		WorkflowRunId:   b.WorkflowRunID,
+		WorkflowAttempt: b.WorkflowAttempt,
+		Actor:           b.Actor,
+		StartedAt:       startedAt,
+		RecordedAt:      timeToUnix(b.RecordedAt),
+	}
+}
+
+func buildsToPB(builds []repository.Build) []*pb.Build {
+	out := make([]*pb.Build, 0, len(builds))
+	for _, b := range builds {
+		out = append(out, buildToPB(b))
+	}
+	return out
+}
+
+func artifactLinkToPB(l repository.ArtifactLink) *pb.ArtifactLink {
+	return &pb.ArtifactLink{
+		ArtifactId: l.ImageArtifactID,
+		AppId:      l.AppID,
+		Repository: l.Repository,
+		Version:    l.Version,
+		Digest:     l.Digest,
+	}
+}
+
+func artifactToPB(a repository.Artifact) *pb.Artifact {
+	out := &pb.Artifact{
+		ArtifactId:    a.ArtifactID,
+		Kind:          artifactKindToPB(a.Kind),
+		Repository:    a.Repository,
+		Version:       a.Version,
+		Digest:        a.Digest,
+		BuildId:       a.BuildID,
+		PublishedAt:   timeToUnix(a.PublishedAt),
+		Promotability: promotabilityToPB(a.Promotability),
+	}
+	if a.Kind == repository.ArtifactKindImage {
+		out.AppId = a.AppID
+	} else {
+		out.ChartId = a.ChartID
+	}
+	for _, l := range a.Contains {
+		out.Contains = append(out.Contains, artifactLinkToPB(l))
+	}
+	return out
+}
+
+func artifactsToPB(artifacts []repository.Artifact) []*pb.Artifact {
+	out := make([]*pb.Artifact, 0, len(artifacts))
+	for _, a := range artifacts {
+		out = append(out, artifactToPB(a))
+	}
+	return out
+}
+
+func appStatusesFromPB(statuses []pb.AppStatus) []repository.Status {
+	out := make([]repository.Status, 0, len(statuses))
+	for _, s := range statuses {
+		if v := appStatusFromPB(s); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func containedImagesFromPB(images []*pb.ContainedImage) []repository.ContainedImageInput {
+	out := make([]repository.ContainedImageInput, 0, len(images))
+	for _, ci := range images {
+		out = append(out, repository.ContainedImageInput{
+			AppFullName: ci.AppFullName,
+			Repository:  ci.Repository,
+			Version:     ci.Version,
+			Digest:      ci.Digest,
+		})
+	}
+	return out
+}

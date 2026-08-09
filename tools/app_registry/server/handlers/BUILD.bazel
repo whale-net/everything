@@ -1,17 +1,39 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "handlers",
     srcs = [
         "app.go",
         "artifact.go",
+        "convert.go",
         "environment.go",
+        "errors.go",
+        "idempotency.go",
         "promotion.go",
     ],
     importpath = "github.com/whale-net/everything/tools/app_registry/server/handlers",
     visibility = ["//visibility:public"],
     deps = [
         "//tools/app_registry/protos:appregistrypb",
+        "//tools/app_registry/server/repository",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
+
+go_test(
+    name = "handlers_test",
+    size = "small",
+    srcs = [
+        "app_test.go",
+        "artifact_test.go",
+    ],
+    embed = [":handlers"],
+    deps = [
+        "//tools/app_registry/protos:appregistrypb",
+        "//tools/app_registry/server/repository/fake",
+        "//tools/appmeta/proto:appmetapb",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
     ],

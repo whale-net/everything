@@ -1,12 +1,32 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "postgres",
-    srcs = ["repository.go"],
+    srcs = [
+        "app.go",
+        "artifact.go",
+        "errors.go",
+        "idempotency.go",
+        "repository.go",
+    ],
     importpath = "github.com/whale-net/everything/tools/app_registry/server/repository/postgres",
     visibility = ["//visibility:public"],
     deps = [
         "//tools/app_registry/server/repository",
+        "//tools/appmeta/proto:appmetapb",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgconn",
         "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+go_test(
+    name = "postgres_test",
+    srcs = ["errors_test.go"],
+    embed = [":postgres"],
+    deps = [
+        "//tools/app_registry/server/repository",
+        "@com_github_jackc_pgx_v5//pgconn",
     ],
 )
