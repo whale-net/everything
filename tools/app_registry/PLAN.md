@@ -19,10 +19,11 @@ below is an open PR, held deliberately.*
 | AR-1 | `ar-1-foundations` | [#496](https://github.com/whale-net/everything/pull/496) | CI green, held |
 | AR-2a | `ar-2a-recording` | [#499](https://github.com/whale-net/everything/pull/499) | verified against real Postgres |
 | AR-2b | `ar-2b-lockfile` | [#500](https://github.com/whale-net/everything/pull/500) | verified, charts byte-identical |
+| AR-2c | `ar-2c-cicd-wiring` | (open) | CI unverified — needs a real registry deployment to exercise |
 | — | `testcontainers-poc` | [#498](https://github.com/whale-net/everything/pull/498) | independent, off `main` |
 
-Stacked as `main → AR-M → AR-1 → AR-2a → AR-2b` (GitHub stack #501). #498 is
-independent of the stack.
+Stacked as `main → AR-M → AR-1 → AR-2a → AR-2b → AR-2c` (GitHub stack #501).
+#498 is independent of the stack.
 
 **Why nothing is merged:** the repo owner is deploying the registry and setting
 up its secrets first. AR-M is the only production-behaviour change in the stack
@@ -35,14 +36,32 @@ push them. That is intended (you need images to deploy) but is not gated by
 `APP_REGISTRY_CICD_OPT_IN`, which governs whether CI *calls* the registry, not
 whether the registry's own images are built.
 
-### Next up: AR-2c
+### AR-2c — done, not merged
 
-The remaining AR-2 slice, not started:
-- `.github/workflows/release.yml` — call the CLI after image and chart pushes,
-  every step gated on `if: vars.APP_REGISTRY_CICD_OPT_IN == 'true'`, and
-  `continue-on-error`. Resolve lockfile references to digests after push (AR-2b
-  emits references only — see [#500](https://github.com/whale-net/everything/pull/500)).
-- CLI read commands in `tools/app_registry/cli/`.
+- `.github/workflows/release.yml` calls the CLI after image and chart pushes:
+  the `release` job resolves each pushed image's digest
+  (`docker buildx imagetools inspect`) and calls `builds record` +
+  `artifacts record --kind image`; `release-helm-charts` reads the AR-2b
+  compose-time lockfile via `read-chart-lockfile --skip-build`, resolves each
+  pinned image's digest, and calls `artifacts record --kind chart --contains
+  ...`. Every step gated on `if: vars.APP_REGISTRY_CICD_OPT_IN == 'true'` and
+  `continue-on-error: true`.
+- CLI write commands: `app-registry builds record`, `app-registry artifacts
+  record` (the read commands — `apps list/get`, `artifacts
+  list/get/resolve` — already existed from AR-2a).
+- `app-registry-api`'s `app_type` changed from `internal-api` to
+  `external-api`: GitHub Actions runs outside the cluster and needs an
+  ingress path to reach it. No `ingress_host` is set in `release_app` — an
+  explicit host is used as-is in every environment (see
+  `tools/helm/templates/ingress.yaml.tmpl`), so the real hostname belongs in
+  a per-environment values override at deploy time, not baked into the
+  manifest.
+- `tools/app_registry/BUILD.bazel` (new): `release_helm_chart` target
+  `app_registry_chart` bundling the `api` and `migration` app_metadata
+  targets (`deploy_unit = "none"` apps, like the CLI, are excluded).
+- `tools/app_registry/cli/BUILD.bazel`: added a `release_app` for the CLI
+  (`deploy_unit = "none"`) so `app-registry-cli` publishes as an image and
+  can be run via `docker run`/`bazel run` instead of a local build.
 
 Safe to build and merge before the registry is deployed: with the variable
 unset, CI makes no registry calls at all.

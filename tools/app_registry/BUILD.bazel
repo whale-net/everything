@@ -1,0 +1,31 @@
+load("//tools/bazel:release.bzl", "release_helm_chart")
+
+# App Registry app metadata targets included in the chart. The CLI
+# (deploy_unit = "none") is deliberately excluded — it is not deployed.
+APP_REGISTRY_APPS = [
+    "//tools/app_registry/server:api_metadata",
+    "//tools/app_registry/migrate:migration_metadata",
+]
+
+# App Registry Helm chart. Chart tags use the format
+# helm-app-registry-app-registry.vX.Y.Z.
+release_helm_chart(
+    name = "app_registry_chart",
+    apps = APP_REGISTRY_APPS,
+    chart_name = "app-registry",
+    domain = "app-registry",
+    namespace = "app-registry",
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "tiltfile",
+    srcs = ["Tiltfile"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "docs",
+    srcs = glob(["*.md"]),
+    visibility = ["//visibility:public"],
+)

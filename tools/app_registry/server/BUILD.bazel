@@ -29,15 +29,19 @@ go_binary(
 )
 
 # Release metadata. domain "app-registry" + name "api" produces the
-# "app-registry-api" image/app identity. internal-api: reachable in-cluster
-# and by CI only.
+# "app-registry-api" image/app identity. external-api: GitHub Actions is
+# outside the cluster and reaches this over ingress. The actual hostname is
+# supplied per-environment at deploy time (values override), not baked in
+# here — an explicit ingress_host would be used as-is in every environment
+# (see tools/helm/templates/ingress.yaml.tmpl), which only one environment
+# could actually bind.
 release_app(
     name = "api",
     binary_name = ":api",
     language = "go",
     domain = "app-registry",
     description = "App Registry gRPC API",
-    app_type = "internal-api",
+    app_type = "external-api",
     port = 50051,
 )
 

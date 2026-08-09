@@ -3,10 +3,12 @@
 gRPC service that records published artifacts and tracks per-environment
 promotion state.
 
-**Status: AR-2b complete, nothing merged.** Recording works end to end —
+**Status: AR-2c complete, nothing merged.** Recording works end to end —
 `ReconcileApps`, `RecordBuild`/`RecordArtifact` and the chart image lockfile are
-implemented and verified against real Postgres. Promotions, environments and
-writeback (AR-3/AR-4) are still `Unimplemented`.
+implemented and verified against real Postgres. The release workflow now calls
+the CLI's write path after image/chart pushes, gated behind
+`APP_REGISTRY_CICD_OPT_IN`. Promotions, environments and writeback (AR-3/AR-4)
+are still `Unimplemented`.
 
 All phases sit in open PRs, held while the service is deployed and its secrets
 configured. **See [PLAN.md](PLAN.md) → "Current status" for the branch/PR map,

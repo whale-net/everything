@@ -1,4 +1,5 @@
 load("@rules_go//go:def.bzl", "go_binary")
+load("//tools/bazel:release.bzl", "release_app")
 
 go_binary(
     name = "app-registry",
@@ -7,4 +8,19 @@ go_binary(
     deps = [
         "//tools/app_registry/cli/cmd",
     ],
+)
+
+# Release metadata for the CLI. domain "app-registry" + name "cli" produces
+# the "app-registry-cli" image identity, published so it can be run as
+# `docker run ghcr.io/whale-net/app-registry-cli:<version>` instead of
+# requiring a local build. deploy_unit = "none": it is never deployed, only
+# published for people and CI to pull.
+release_app(
+    name = "cli",
+    binary_name = ":app-registry",
+    language = "go",
+    domain = "app-registry",
+    description = "App Registry CLI",
+    app_type = "job",
+    deploy_unit = "none",
 )

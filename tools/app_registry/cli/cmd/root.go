@@ -35,6 +35,7 @@ func init() {
 	rootCmd.AddCommand(
 		newAppsCmd(),
 		newArtifactsCmd(),
+		newBuildsCmd(),
 		newPromoteCmd(),
 		newRollbackCmd(),
 		newStatusCmd(),
