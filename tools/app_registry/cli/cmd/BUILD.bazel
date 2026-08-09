@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "apps.go",
         "artifacts.go",
+        "builds.go",
         "client.go",
         "env.go",
         "promote.go",
