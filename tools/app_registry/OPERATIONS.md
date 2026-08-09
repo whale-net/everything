@@ -94,17 +94,20 @@ see [DEPLOY.md §4](DEPLOY.md#4-ci-credentials).
 ### 3. Promote to an environment
 
 **Requires `promote.yml`'s GitHub Environments and Keycloak promoter clients
-to exist — as of this writing they do not, so this step cannot succeed
-outside Tilt.** Once they do:
+to exist.** Once they do:
 
-- GitHub → Actions → `Promote` → **Run workflow**, filling in `environment`,
-  `action` (`promote`/`rollback`), `owner_full_name`
-  (`<domain>-<name>`), `version` (for `promote`), and `reason` (required
-  above `dev`).
-- The job runs under `environment: <the one you chose>`, which is what
-  gates it on that environment's required reviewers and lets it read that
-  environment's `app-registry-promoter-<env>` secret — approve the run when
-  prompted.
+- GitHub → Actions → `Promote` → **Run workflow**, filling in `environment`
+  (the GitHub Environment, e.g. `promotion-dev`), `registry_environment`
+  (the App Registry key it maps to — `dev`/`stage`/`prod`), `action`
+  (`promote`/`rollback`), `owner_full_name` (`<domain>-<name>`), `version`
+  (for `promote`), and `reason` (required above `dev`). These two
+  environment inputs are separate because the GitHub Environment's name
+  need not match the registry key — see [DEPLOY.md
+  §6](DEPLOY.md#6-promote-via-promoteyml).
+- The job runs under `environment: <the GitHub Environment you chose>`,
+  which is what gates it on that environment's required reviewers and lets
+  it read that environment's `app-registry-promoter-<registry_environment>`
+  secret — approve the run when prompted.
 - Prefer `dry_run: true` first against anything above `dev`: it computes the
   resulting state without writing, using the same authorization and
   promotability checks a real promotion would hit.
