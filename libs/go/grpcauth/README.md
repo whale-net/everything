@@ -11,6 +11,11 @@ Go library for gRPC authentication/authorization in the manmanv2 platform. Provi
 
 Set `GRPC_AUTH_MODE` consistently across all components. A mismatch (e.g. server=oidc, client=none) causes `codes.Unauthenticated` on every call.
 
+**Setting up the Keycloak side — see [KEYCLOAK.md](KEYCLOAK.md).** Step-by-step
+realm/client/role configuration, the reference pattern for service-to-service
+auth in this repo, and the two gotchas that break every first attempt (roles must
+be *realm* roles; you must add an audience mapper).
+
 ## Usage
 
 ### Server — add interceptors
