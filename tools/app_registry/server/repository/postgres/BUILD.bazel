@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "app.go",
         "artifact.go",
+        "environment.go",
         "errors.go",
         "idempotency.go",
         "repository.go",
@@ -68,6 +69,7 @@ go_test(
         "//tools/app_registry/server/auth",
         "//tools/app_registry/server/handlers",
         "//tools/app_registry/server/repository",
+        "@com_github_jackc_pgx_v5//pgconn",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@com_github_jackc_pgx_v5//stdlib",
     ],

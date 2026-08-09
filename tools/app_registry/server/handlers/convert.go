@@ -207,6 +207,28 @@ func appStatusesFromPB(statuses []pb.AppStatus) []repository.Status {
 	return out
 }
 
+func environmentToPB(e repository.Environment) *pb.Environment {
+	return &pb.Environment{
+		EnvironmentId:     e.EnvironmentID,
+		Key:               e.Key,
+		DisplayName:       e.DisplayName,
+		Rank:              e.Rank,
+		RequiresApproval:  e.RequiresApproval,
+		GitopsPath:        e.GitopsPath,
+		AllowedPrincipals: e.AllowedPrincipals,
+		Archived:          e.Archived,
+		CreatedAt:         timeToUnix(e.CreatedAt),
+	}
+}
+
+func environmentsToPB(envs []repository.Environment) []*pb.Environment {
+	out := make([]*pb.Environment, 0, len(envs))
+	for _, e := range envs {
+		out = append(out, environmentToPB(e))
+	}
+	return out
+}
+
 func containedImagesFromPB(images []*pb.ContainedImage) []repository.ContainedImageInput {
 	out := make([]repository.ContainedImageInput, 0, len(images))
 	for _, ci := range images {

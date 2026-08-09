@@ -26,8 +26,8 @@ The registry is being deployed to `dev` by the repo owner. `app-registry-api`
 and `app-registry-migration` images publish from `apps=all`.
 `APP_REGISTRY_CICD_OPT_IN` is still unset, so CI makes no registry calls.
 
-**Next up:** AR-3b (`EnvironmentRegistry`). AR-2d and AR-3a are done and stacked
-on top of `main`.
+**Next up:** AR-3c (`PromotionRegistry`). AR-2d, AR-3a, and AR-3b are done
+and stacked on top of `main`.
 
 ### AR-2c — merged
 
@@ -285,6 +285,34 @@ criterion is testable from the moment promotion exists:
 | **AR-3b** | `EnvironmentRegistry` (all RPCs), `dev`/`stage`/`prod` seeding, environment-scoped `allowed_principals`. |
 | **AR-3c** | `PromotionRegistry` — SCD2 close-and-open, event log, promotability enforcement, `allow_override` + drift reporting. |
 | **AR-3d** | CLI (`promote`, `rollback`, `status`, `history`, `diff`) and the human-triggered `promote.yml` workflow. |
+
+### AR-3b — `EnvironmentRegistry` — done
+
+- Migration `002_environment_registry` (up/down): `environment` table —
+  `key` unique, `rank`, `requires_approval`, `gitops_path`,
+  `allowed_principals TEXT[]`, `archived`, `created_at`. Seeds
+  `dev`(rank 0)/`stage`(rank 10)/`prod`(rank 20) via
+  `INSERT ... ON CONFLICT (key) DO NOTHING`, safe against a database the
+  registry is already deployed to. **No `promotion` table** — that stays in
+  AR-3c's own migration `003`, which needs `environment.environment_id` to
+  exist first as an FK target. `migrate/README.md`'s "Planned migrations"
+  table corrected accordingly.
+- `repository.EnvironmentRepository` (`Upsert`/`Get`/`List`/`Archive`) +
+  postgres and fake implementations. All four `EnvironmentRegistry` RPCs
+  implemented in `server/handlers/environment.go`: writes require
+  `auth.RoleAdmin`, reads require `auth.RequireAuthenticated`. Neither
+  `UpsertEnvironment` nor `ArchiveEnvironment` carries an `idempotency_key`
+  in the proto, so neither goes through `runIdempotent` — same shape as
+  `AppRegistry.SetAppStatus`.
+- Postgres integration coverage added: migration 002 applying/seeding
+  verified against real Postgres (plus a manual up/down/up round-trip
+  outside `bazel test`), the real `UNIQUE (key)` constraint firing, and a
+  full `Upsert` round-trip including the `TEXT[]` `allowed_principals`
+  column. Caught one real bug in the process: pgx encodes a nil Go
+  `[]string` as SQL `NULL`, which the `NOT NULL allowed_principals` column
+  rejected — fixed by normalizing to `[]string{}` before insert.
+- See [TODO-AR-3b.md](TODO-AR-3b.md) for full execution detail and the
+  deliberate-break verification transcripts.
 
 ### Credential model (decided)
 

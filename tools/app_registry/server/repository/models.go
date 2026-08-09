@@ -160,3 +160,19 @@ type ArtifactLookup struct {
 	Kind          ArtifactKind
 	Version       string
 }
+
+// Environment is a promotion target, e.g. "dev"/"stage"/"prod". A row, not
+// an enum, so ephemeral/regional environments are an insert, not a release
+// — see ARCHITECTURE.md "Data model". Key is the immutable identity;
+// Upsert may change every other field but never Key itself.
+type Environment struct {
+	EnvironmentID     string
+	Key               string
+	DisplayName       string
+	Rank              int32
+	RequiresApproval  bool
+	GitopsPath        string
+	AllowedPrincipals []string
+	Archived          bool
+	CreatedAt         time.Time
+}

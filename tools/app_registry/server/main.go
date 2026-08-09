@@ -1,6 +1,6 @@
 // Command app-registry-api is the App Registry's gRPC server. AppRegistry and
-// ArtifactRegistry are real as of AR-2a; PromotionRegistry and
-// EnvironmentRegistry still return codes.Unimplemented until AR-3/AR-4. See
+// ArtifactRegistry are real as of AR-2a; EnvironmentRegistry is real as of
+// AR-3b. PromotionRegistry still returns codes.Unimplemented until AR-3c. See
 // ../ARCHITECTURE.md and ../README.md.
 package main
 
@@ -128,13 +128,13 @@ func run() error {
 // a fake repository.Registry.
 func registerServices(grpcServer *grpc.Server, repo repository.Registry) *health.Server {
 	// AppRegistry and ArtifactRegistry are real as of AR-2a (AllocateVersion
-	// stays Unimplemented — that's AR-5). PromotionRegistry and
-	// EnvironmentRegistry stay Unimplemented until AR-3/AR-4 — see
-	// handlers/promotion.go, handlers/environment.go.
+	// stays Unimplemented — that's AR-5). EnvironmentRegistry is real as of
+	// AR-3b. PromotionRegistry stays Unimplemented until AR-3c — see
+	// handlers/promotion.go.
 	pb.RegisterAppRegistryServer(grpcServer, handlers.NewAppServer(repo))
 	pb.RegisterArtifactRegistryServer(grpcServer, handlers.NewArtifactServer(repo))
 	pb.RegisterPromotionRegistryServer(grpcServer, handlers.NewPromotionServer())
-	pb.RegisterEnvironmentRegistryServer(grpcServer, handlers.NewEnvironmentServer())
+	pb.RegisterEnvironmentRegistryServer(grpcServer, handlers.NewEnvironmentServer(repo))
 
 	// Health check — reports SERVING once the process is up. AR-1 has no
 	// downstream dependency to gate on beyond the DB pool, which is already

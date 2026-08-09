@@ -101,6 +101,32 @@ type IdempotencyRepository interface {
 	Put(ctx context.Context, key, method string, response []byte) error
 }
 
+// EnvironmentRepository covers the `environment` table (AR-3b). Writes
+// require auth.RoleAdmin at the handler layer -- ARCHITECTURE.md's
+// Authorization table gives EnvironmentRegistry no builder/promoter
+// carve-out. UpsertEnvironmentRequest and ArchiveEnvironmentRequest carry no
+// idempotency_key (unlike ReconcileApps/RecordBuild/RecordArtifact), so
+// these methods are not routed through runIdempotent -- same as
+// AppRepository.SetAppStatus, the other admin-only write in this package.
+type EnvironmentRepository interface {
+	// Upsert creates an environment keyed by e.Key, or updates every field
+	// but Key (the immutable identity) if one already exists. created
+	// reports which happened. Does not change Archived -- only Archive does.
+	Upsert(ctx context.Context, e Environment) (env *Environment, created bool, err error)
+
+	Get(ctx context.Context, key string) (*Environment, error)
+
+	// List returns environments ordered by rank ascending. includeArchived
+	// controls whether archived rows are included, matching
+	// ListEnvironmentsRequest.include_archived.
+	List(ctx context.Context, includeArchived bool) ([]Environment, error)
+
+	// Archive marks an environment archived. archived -> archived is a
+	// no-op success, so a retried archive call is safe -- same idempotent
+	// shape as AppRepository.SetAppStatus's archive path.
+	Archive(ctx context.Context, key, reason string) (*Environment, error)
+}
+
 // Registry aggregates the per-entity repositories and provides a
 // unit-of-work boundary. Handlers call WithTx to make a business operation
 // (reconcile, idempotency check-and-store, etc.) atomic: fn receives a
@@ -110,6 +136,7 @@ type Registry interface {
 	Builds() BuildRepository
 	Artifacts() ArtifactRepository
 	Idempotency() IdempotencyRepository
+	Environments() EnvironmentRepository
 
 	WithTx(ctx context.Context, fn func(ctx context.Context, r Registry) error) error
 }

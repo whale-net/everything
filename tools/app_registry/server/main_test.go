@@ -109,12 +109,12 @@ func assertUnimplementedFromHandler(t *testing.T, rpc, wantMsg string, err error
 // the message text for exactly that reason. A dropped pb.RegisterXxxServer
 // call in main.go fails this test.
 //
-// AppRegistry and ArtifactRegistry are real as of AR-2a, so those two
-// subtests assert a real (empty-but-successful) response against the fake
-// repository instead of Unimplemented — a dropped Register call would now
-// surface as codes.Unavailable/Unimplemented-with-"unknown service" instead,
-// still caught below. PromotionRegistry and EnvironmentRegistry are still
-// Unimplemented until AR-3/AR-4.
+// AppRegistry, ArtifactRegistry, and EnvironmentRegistry are real (as of
+// AR-2a and AR-3b respectively), so those subtests assert a real
+// (empty-but-successful) response against the fake repository instead of
+// Unimplemented — a dropped Register call would now surface as
+// codes.Unavailable/Unimplemented-with-"unknown service" instead, still
+// caught below. PromotionRegistry is still Unimplemented until AR-3c.
 func TestRegisterServices_AllFourServicesReachable(t *testing.T) {
 	conn := startTestServer(t)
 	ctx := context.Background()
@@ -155,8 +155,21 @@ func TestRegisterServices_AllFourServicesReachable(t *testing.T) {
 
 	t.Run("EnvironmentRegistry", func(t *testing.T) {
 		client := pb.NewEnvironmentRegistryClient(conn)
-		_, err := client.ListEnvironments(ctx, &pb.ListEnvironmentsRequest{})
-		assertUnimplementedFromHandler(t, "EnvironmentRegistry.ListEnvironments", "ListEnvironments not implemented", err)
+		resp, err := client.ListEnvironments(ctx, &pb.ListEnvironmentsRequest{})
+		if err != nil {
+			t.Fatalf("EnvironmentRegistry.ListEnvironments: expected success against the fake repository, got %v", err)
+		}
+		if len(resp.Environments) != 0 {
+			t.Fatalf("EnvironmentRegistry.ListEnvironments: expected no environments in a fresh fake registry, got %d", len(resp.Environments))
+		}
+	})
+
+	t.Run("EnvironmentRegistry_ArchiveEnvironment_StillReachable", func(t *testing.T) {
+		client := pb.NewEnvironmentRegistryClient(conn)
+		_, err := client.ArchiveEnvironment(ctx, &pb.ArchiveEnvironmentRequest{Key: "nonexistent", Reason: "test"})
+		if status.Code(err) != codes.NotFound {
+			t.Fatalf("EnvironmentRegistry.ArchiveEnvironment: expected codes.NotFound against a fresh fake registry, got %v", err)
+		}
 	})
 }
 

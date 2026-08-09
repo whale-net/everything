@@ -9,8 +9,8 @@ and the chart image lockfile are implemented and verified against real
 Postgres. The release workflow calls the CLI's write path after image/chart
 pushes, gated behind `APP_REGISTRY_CICD_OPT_IN`. The registry is being
 deployed to `dev`. AR-3 is split into a 4-PR stack (auth, environments,
-promotions, CLI); environments and promotions stay `Unimplemented` until
-AR-3b/3c land.
+promotions, CLI). Auth (AR-3a) and `EnvironmentRegistry` (AR-3b) are done;
+`PromotionRegistry` stays `Unimplemented` until AR-3c lands.
 
 **See [PLAN.md](PLAN.md) → "Current status" for the branch/PR map,
 what is next, and the carry-over items** — start there when picking this up.
