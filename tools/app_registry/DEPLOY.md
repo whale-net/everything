@@ -43,6 +43,19 @@ every call returns `Unauthenticated`.
 |---|---|---|---|
 | `app-registry-api` | Names the audience. Never obtains a token. | Client authentication **On**, **all** flows unchecked, no roles | **now** |
 | `app-registry-builder` | CI recording (`ReconcileApps`, `RecordBuild`, `RecordArtifact`) | Confidential, **Service accounts roles** only, realm role `app-registry-builder`, audience mapper → `app-registry-api` | **now** |
+
+> **Do not split `app-registry-builder` per environment.** Unlike the promoter
+> clients below, recording (`RecordBuild`/`RecordArtifact`) has no
+> environment concept — `release.yml` runs it once per release, before any
+> promotion decision exists, against the single `APP_REGISTRY_ADDRESS`. There
+> is exactly one `app-registry-builder` client and one `app-registry-builder`
+> realm role (`server/auth/auth.go`'s `RoleBuilder`); creating
+> `app-registry-builder-dev` / `-prod` variants has no corresponding code path
+> to select between them and will just leave `release.yml`'s
+> `GRPC_AUTH_CLIENT_ID: app-registry-builder` unable to authenticate. If a
+> per-environment split is ever needed here, it requires a code change in
+> this repo (an environment input to the recording steps) first — do not
+> introduce the split Keycloak-side alone.
 | `app-registry-admin` | `EnvironmentRegistry`, `SetAppStatus` | Same shape, realm role `app-registry-admin` | **now** |
 | `app-registry-promoter-dev` | Promote to `dev` (via `promote.yml`) | Same shape, realm role `app-registry-promoter-dev` | **now** — needed before `promote.yml` can run against `dev` |
 | `app-registry-promoter-stage` | Promote to `stage` (via `promote.yml`) | Same shape, realm role `app-registry-promoter-stage` | **now** — needed before `promote.yml` can run against `stage` |
@@ -242,6 +255,19 @@ the run.
 To promote to `prod`: create the `prod` GitHub Environment (§1's client table
 and §4's secret table), configure required reviewers on it, run the workflow
 with `environment: prod`, and approve the run when prompted.
+
+> **The `environment` input name is load-bearing — it must be one string that
+> is simultaneously two things.** `promote.yml` uses `inputs.environment` both
+> as the GitHub Environment to scope secrets/reviewers to (`environment:
+> ${{ inputs.environment }}`) and, via `GRPC_AUTH_CLIENT_ID:
+> app-registry-promoter-${{ inputs.environment }}`, as the suffix that selects
+> the Keycloak promoter client. There is no translation layer between the two.
+> This only works if the GitHub Environment is named *exactly* `dev`, `stage`,
+> or `prod` — matching the `app-registry-promoter-<env>` client names in §1
+> and the `environment` table seeded by AR-3b. Naming a GitHub Environment
+> anything else (e.g. `promotion-dev`) silently breaks the security scoping:
+> the job would either fail to find the right secret, or — if a same-named
+> Keycloak client happens to exist — read the wrong one.
 
 ---
 
