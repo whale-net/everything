@@ -276,6 +276,45 @@ func stripScheme(endpoint string) string {
 	return endpoint
 }
 
+// buildResource constructs the OTel resource attributes shared by the log,
+// trace, and metric exporters. It mirrors the attribute set produced by
+// libs/python/logging's _setup_otlp (service.name, service.namespace,
+// service.version, service.type, deployment.environment, vcs.commit.id, and
+// the Kubernetes downward-API fields) so Go and Python services carry the
+// same resource identity in the collector.
+func buildResource(ctx context.Context, cfg Config) (*resource.Resource, error) {
+	attrs := []attribute.KeyValue{
+		attribute.String("service.name", cfg.ServiceName),
+		attribute.String("service.version", cfg.Version),
+		attribute.String("deployment.environment", cfg.Environment),
+	}
+	if cfg.Domain != "" {
+		attrs = append(attrs, attribute.String("service.namespace", cfg.Domain))
+	}
+	if cfg.AppType != "" {
+		attrs = append(attrs, attribute.String("service.type", cfg.AppType))
+	}
+	if cfg.CommitSHA != "" {
+		attrs = append(attrs, attribute.String("vcs.commit.id", cfg.CommitSHA))
+		instanceID := cfg.CommitSHA
+		if len(instanceID) > 8 {
+			instanceID = instanceID[:8]
+		}
+		attrs = append(attrs, attribute.String("service.instance.id", instanceID))
+	}
+	if cfg.PodName != "" {
+		attrs = append(attrs, attribute.String("k8s.pod.name", cfg.PodName))
+	}
+	if cfg.Namespace != "" {
+		attrs = append(attrs, attribute.String("k8s.namespace.name", cfg.Namespace))
+	}
+	if cfg.NodeName != "" {
+		attrs = append(attrs, attribute.String("k8s.node.name", cfg.NodeName))
+	}
+
+	return resource.New(ctx, resource.WithAttributes(attrs...))
+}
+
 // setupOTLP creates an OTLP gRPC log exporter and registers it as the
 // global OTel LoggerProvider.
 func setupOTLP(cfg Config) error {
@@ -290,13 +329,7 @@ func setupOTLP(cfg Config) error {
 		return fmt.Errorf("create OTLP log exporter: %w", err)
 	}
 
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			attribute.String("service.name", cfg.ServiceName),
-			attribute.String("service.version", cfg.Version),
-			attribute.String("deployment.environment", cfg.Environment),
-		),
-	)
+	res, err := buildResource(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("create OTLP resource: %w", err)
 	}
@@ -313,7 +346,13 @@ func setupOTLP(cfg Config) error {
 
 // emitOTEL sends a log record to the OTel LoggerProvider. Called by the
 // slog handlers when OTLP is enabled. The context carries trace correlation.
-func emitOTEL(ctx context.Context, r slog.Record, cfg Config) {
+//
+// boundAttrs are attributes attached to the handler via slog's WithAttrs
+// (e.g. the "logger" attribute added by Get(name), or any request-scoped
+// attrs added via logger.With(...)). Without these, OTLP-exported records
+// would silently carry fewer attributes than the equivalent stdout JSON
+// line, since only per-call attrs were previously forwarded.
+func emitOTEL(ctx context.Context, r slog.Record, cfg Config, boundAttrs []slog.Attr) {
 	provider := global.GetLoggerProvider()
 	if provider == nil {
 		return
@@ -327,16 +366,39 @@ func emitOTEL(ctx context.Context, r slog.Record, cfg Config) {
 	rec.SetSeverity(slogToOTELSeverity(r.Level))
 	rec.SetSeverityText(r.Level.String())
 
-	// Collect attributes from the slog record.
-	var attrs []otellog.KeyValue
+	// Bound attrs first, then per-call attrs — matching the precedence
+	// used by the JSON/console handlers, where per-call attrs are applied
+	// after (and can override) the handler's bound attrs.
+	attrs := make([]otellog.KeyValue, 0, len(boundAttrs)+r.NumAttrs())
+	for _, a := range boundAttrs {
+		attrs = append(attrs, slogAttrToOTEL(a))
+	}
 	r.Attrs(func(a slog.Attr) bool {
-		attrs = append(attrs, otellog.String(a.Key, a.Value.String()))
+		attrs = append(attrs, slogAttrToOTEL(a))
 		return true
 	})
 	rec.AddAttributes(attrs...)
 
 	// Emit with context so the OTLP exporter can correlate with active span.
 	logger.Emit(ctx, rec)
+}
+
+// slogAttrToOTEL converts a slog.Attr to an OTel log KeyValue, preserving
+// the underlying type instead of flattening everything to a string.
+func slogAttrToOTEL(a slog.Attr) otellog.KeyValue {
+	v := a.Value.Resolve()
+	switch v.Kind() {
+	case slog.KindInt64:
+		return otellog.Int64(a.Key, v.Int64())
+	case slog.KindUint64:
+		return otellog.Int64(a.Key, int64(v.Uint64()))
+	case slog.KindFloat64:
+		return otellog.Float64(a.Key, v.Float64())
+	case slog.KindBool:
+		return otellog.Bool(a.Key, v.Bool())
+	default:
+		return otellog.String(a.Key, v.String())
+	}
 }
 
 func slogToOTELSeverity(l slog.Level) otellog.Severity {
@@ -453,7 +515,7 @@ func (h *jsonHandler) Handle(ctx context.Context, r slog.Record) error {
 
 	// Also emit to OTLP if configured
 	if globalConfig.EnableOTLP {
-		emitOTEL(ctx, r, h.cfg)
+		emitOTEL(ctx, r, h.cfg, h.attrs)
 	}
 
 	return err
@@ -535,7 +597,7 @@ func (h *consoleHandler) Handle(ctx context.Context, r slog.Record) error {
 	_, err := io.WriteString(h.w, line)
 
 	if globalConfig.EnableOTLP {
-		emitOTEL(ctx, r, h.cfg)
+		emitOTEL(ctx, r, h.cfg, h.attrs)
 	}
 
 	return err

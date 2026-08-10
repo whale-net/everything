@@ -34,6 +34,7 @@ ArgoCD sync waves. See `friendly_computing_machine/docs/argocd-integration.md`.
 | `003_promotion` (AR-3c) | `promotion` (SCD2), `promotion_event`, `v_current_promotion` |
 | `004_writeback_outbox` (AR-4b) | `writeback_outbox` |
 | `005_version_allocation` (AR-5a) | `artifact.version_major/minor/patch` + backfill, `artifact_version_order_idx`, `version_allocation` |
+| `006_reconcile_watermark` (issue #545) | `reconcile_watermark` — singleton row guarding `ReconcileApps` against a stale (older-commit) call landing after a newer one |
 
 Split this way so AR-2 needs only `001`, AR-3b adds `002`, AR-3c adds `003`,
 AR-4b adds `004`, and AR-5a adds `005` — each phase ships an independently
@@ -78,6 +79,13 @@ CREATE INDEX artifact_version_order_idx
 -- artifact_version_idx, but on a table that doesn't require a digest/build.
 CREATE UNIQUE INDEX version_allocation_idx ON version_allocation (owner_id, kind, version);
 ```
+
+`reconcile_watermark` (`006`) is seeded with exactly one sentinel row at
+migration time (`id = 1`, `git_sha = ''`, timestamps `0`) rather than left
+empty — `SELECT ... FOR UPDATE` locks only rows it matches, so a genuinely
+empty table gives two concurrent "first ever reconcile" calls nothing to
+serialize against. See the migration's own comments for the full rationale
+and how the sentinel row is distinguished from a "real" watermark.
 
 `domain_adoption` gates the per-domain cutover described in
 [`../ARCHITECTURE.md`](../ARCHITECTURE.md#resolved-questions): one row per

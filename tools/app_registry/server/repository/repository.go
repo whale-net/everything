@@ -10,6 +10,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
@@ -31,6 +32,18 @@ var (
 	// current state (e.g. SetAppStatus(ACTIVE) on an app absent from the
 	// latest reconcile).
 	ErrFailedPrecondition = errors.New("failed precondition")
+
+	// ErrOwnerNotReconciled: RecordArtifact's owner_full_name resolved to no
+	// known app/chart row (see handlers.resolveOwner). It wraps
+	// ErrInvalidArgument (not a sibling of it) so mapRepoErr's existing
+	// errors.Is(err, ErrInvalidArgument) case keeps matching unchanged --
+	// mapRepoErr additionally checks for this more specific sentinel first
+	// to attach a structured apierrors.ReasonOwnerNotReconciled detail,
+	// which the CLI (and, through it, CI) uses to distinguish "app isn't
+	// registered yet" from any other registry failure without parsing the
+	// message text. See issue #547 and ARCHITECTURE.md "Reconcile
+	// watermark" for why this case is common and expected, not a bug.
+	ErrOwnerNotReconciled = fmt.Errorf("%w: owner not reconciled", ErrInvalidArgument)
 )
 
 // AppRepository covers App and Chart identity — the two tables ReconcileApps
@@ -44,7 +57,21 @@ type AppRepository interface {
 	// chart.apps entries are resolved to app_ids and the call fails with
 	// ErrInvalidArgument if any name is unknown. dryRun computes the result
 	// without writing.
-	Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest, dryRun bool) (*ReconcileResult, error)
+	//
+	// source carries the ordering metadata (git_sha / source_committed_at /
+	// discovered_at) this call is checked against the reconcile watermark
+	// with -- see ARCHITECTURE.md "Reconcile watermark", watermark.go's
+	// ShouldApplyReconcile, and issue #545. When dryRun is true, source is
+	// ignored entirely: a dry run must never consult or advance the
+	// watermark. When dryRun is false and the watermark rejects source as
+	// stale, Reconcile returns a result with SkippedStale set and writes
+	// nothing -- a no-op success, not an error (a re-run of an older CI
+	// workflow correctly declining to revert newer state must not fail).
+	// Implementations MUST perform the watermark read (locking, e.g.
+	// `SELECT ... FOR UPDATE`) and the apply-or-skip decision inside the
+	// SAME transaction as the app/chart writes, so two concurrent Reconcile
+	// calls serialize rather than both reading a stale watermark.
+	Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest, source ReconcileSource, dryRun bool) (*ReconcileResult, error)
 
 	ListApps(ctx context.Context, filter AppListFilter) ([]App, error)
 	GetAppByID(ctx context.Context, appID string) (*App, error)

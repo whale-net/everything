@@ -56,6 +56,14 @@ type state struct {
 	// Absent means DomainAdoptionStageObserve -- see
 	// DomainAdoptionRepository.GetStage's doc comment.
 	DomainAdoption map[string]repository.DomainAdoptionStage
+	// Watermark mirrors the singleton reconcile_watermark row (migration
+	// 006). nil means "no watermark yet" -- unlike postgres, the fake has
+	// no seeded-sentinel-row concurrency concern to work around (WithTx
+	// already serializes every call via the outer mutex, see WithTx's doc
+	// comment), so this is a plain nilable pointer rather than a
+	// GitSHA=="" sentinel value. reconcile.go's use of it must still agree
+	// with repository.ShouldApplyReconcile's semantics for nil.
+	Watermark *repository.ReconcileWatermark
 }
 
 func newState() *state {
@@ -165,8 +173,8 @@ func (h txHandle) WithTx(ctx context.Context, fn func(ctx context.Context, reg r
 // AppRepository
 // ============================================================================
 
-func (r *Registry) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest, dryRun bool) (*repository.ReconcileResult, error) {
-	return reconcile(r.state, apps, charts, dryRun)
+func (r *Registry) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest, source repository.ReconcileSource, dryRun bool) (*repository.ReconcileResult, error) {
+	return reconcile(r.state, apps, charts, source, dryRun)
 }
 
 func (r *Registry) ListApps(ctx context.Context, filter repository.AppListFilter) ([]repository.App, error) {
@@ -446,7 +454,8 @@ func (r *Registry) findImageByDigest(digest string) (*repository.Artifact, error
 			return &a, nil
 		}
 	}
-	return nil, repository.ErrInvalidArgument
+	// Mirrors postgres/artifact.go's RecordArtifact chart-links error.
+	return nil, fmt.Errorf("%w: chart pins unrecorded image digest %s", repository.ErrInvalidArgument, digest)
 }
 
 func (r *Registry) ListArtifacts(ctx context.Context, filter repository.ArtifactListFilter) ([]repository.Artifact, error) {
@@ -514,7 +523,8 @@ func (r *Registry) ResolveArtifact(ctx context.Context, lookup repository.Artifa
 		return nil, nil, nil, err
 	}
 	if a.Kind != repository.ArtifactKindChart {
-		return nil, nil, nil, repository.ErrInvalidArgument
+		// Mirrors postgres/artifact.go's ResolveArtifact.
+		return nil, nil, nil, fmt.Errorf("%w: artifact %s is not a chart", repository.ErrInvalidArgument, a.ArtifactID)
 	}
 	cp := *a
 	cp.Promotability = r.derivePromotability(cp)

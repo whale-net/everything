@@ -6,9 +6,9 @@ description: >-
   doesn't know about yet. Must run before any RecordBuild/RecordArtifact
   call that resolves an owner by full name -- see
   tools/app_registry/README.md's recording sequence diagram. Skipping this
-  makes RecordArtifact's owner lookup fail with a bare, contextless
-  InvalidArgument for any never-reconciled app/chart (see issue #539 and
-  its follow-up, #542).
+  makes RecordArtifact's owner lookup fail with an InvalidArgument naming
+  the never-reconciled app/chart (see issue #539, its follow-up #542, and
+  the error-message fix in #548).
 
   Requires RELEASE_HELPER and APP_REGISTRY_CLI env vars already set (see
   .github/actions/download-release-tools).
@@ -43,6 +43,21 @@ runs:
       env:
         GIT_SHA: ${{ inputs.git-sha }}
         IDEMPOTENCY_KEY: ${{ inputs.idempotency-key }}
+      # `manifest-set` resolves AppManifestSet.source_committed_at itself
+      # via `git log -1 --format=%ct "$GIT_SHA"` -- no new flag needed here,
+      # it flows through automatically once release_helper_go supports it
+      # (see tools/app_registry/ARCHITECTURE.md "Reconcile watermark",
+      # issue #545). This resolves fine even though ci.yml's checkout step
+      # for this job uses the default fetch-depth (1): a fetch-depth: 1
+      # checkout of a push event still fetches the full commit object for
+      # github.sha (verified locally -- `git log -1 --format=%ct <sha>`
+      # succeeds against a --depth 1 clone of that sha's tip), just not any
+      # ancestor history, which this call doesn't need. If GIT_SHA is ever
+      # something OTHER than the checked-out tip (e.g. this action is
+      # reused against an arbitrary historical ref), `git log` fails and
+      # manifest-set falls back to source_committed_at = 0 -- see
+      # resolveSourceCommittedAt's doc comment -- rather than failing the
+      # step.
       run: |
         "$RELEASE_HELPER" manifest-set --git-sha "$GIT_SHA" > "$RUNNER_TEMP/manifest-set.json"
         "$APP_REGISTRY_CLI" apps reconcile \

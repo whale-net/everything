@@ -80,6 +80,16 @@ type ReconcileResult struct {
 	UpdatedCharts      []Chart
 	NewlyMissingCharts []Chart
 	RecoveredCharts    []Chart
+
+	// SkippedStale is true when the reconcile watermark rejected this call
+	// as older (in commit order) than the most recently applied one -- see
+	// watermark.go's ShouldApplyReconcile. A no-op success, not an error:
+	// every slice above is empty, and nothing was written. Always false
+	// when the call was a dry run -- dry runs never consult the watermark.
+	SkippedStale bool
+	// CurrentWatermarkGitSHA is the git_sha this call lost to. Populated
+	// only when SkippedStale is true.
+	CurrentWatermarkGitSHA string
 }
 
 // AppListFilter is ListAppsRequest's filter set, decoupled from the proto.

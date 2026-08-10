@@ -13,7 +13,16 @@ import (
 // AGENTS-2a.md's ReconcileApps scope. It is shared logic the postgres
 // implementation mirrors in SQL — see postgres/app.go's Reconcile for the
 // same state machine expressed as UPDATE/INSERT statements.
-func reconcile(s *state, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest, dryRun bool) (*repository.ReconcileResult, error) {
+//
+// source/watermark handling mirrors postgres/app.go exactly (see its doc
+// comments and ARCHITECTURE.md "Reconcile watermark"): a dry run never
+// reads or writes workState.Watermark at all -- it operates on a throwaway
+// clone the caller discards, and the watermark check would be meaningless
+// against it anyway. A real (non-dry-run) call checks
+// repository.ShouldApplyReconcile before doing any diffing, and advances
+// the watermark only after every write below has been computed
+// successfully.
+func reconcile(s *state, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest, source repository.ReconcileSource, dryRun bool) (*repository.ReconcileResult, error) {
 	workState := s
 	if dryRun {
 		workState = s.clone()
@@ -21,6 +30,14 @@ func reconcile(s *state, apps []*appmetapb.AppManifest, charts []*appmetapb.Char
 
 	now := time.Now().UTC()
 	result := &repository.ReconcileResult{}
+
+	if !dryRun {
+		if !repository.ShouldApplyReconcile(source, workState.Watermark) {
+			result.SkippedStale = true
+			result.CurrentWatermarkGitSHA = workState.Watermark.GitSHA
+			return result, nil
+		}
+	}
 
 	presentAppIDs := map[string]bool{}
 	for _, am := range apps {
@@ -128,6 +145,15 @@ func reconcile(s *state, apps []*appmetapb.AppManifest, charts []*appmetapb.Char
 			c.Status = repository.StatusMissing
 			workState.Charts[id] = c
 			result.NewlyMissingCharts = append(result.NewlyMissingCharts, c)
+		}
+	}
+
+	if !dryRun {
+		workState.Watermark = &repository.ReconcileWatermark{
+			GitSHA:            source.GitSHA,
+			SourceCommittedAt: source.SourceCommittedAt,
+			DiscoveredAt:      source.DiscoveredAt,
+			UpdatedAt:         now,
 		}
 	}
 

@@ -1,12 +1,15 @@
 package handlers
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/whale-net/everything/tools/app_registry/apierrors"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	"github.com/whale-net/everything/tools/app_registry/server/repository/fake"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -142,6 +145,133 @@ func TestRecordArtifact_RejectsChartPinningUnrecordedImage(t *testing.T) {
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument, got %v (%v)", status.Code(err), err)
 	}
+	if !strings.Contains(err.Error(), "sha256:neverrecorded") {
+		t.Fatalf("expected error to name the unrecorded digest, got %q", err.Error())
+	}
+}
+
+// TestRecordArtifact_UnknownOwnerNamesTheOwnerAndHintsAtReconcile covers
+// issue #548: resolveOwner used to return the bare repository.ErrInvalidArgument
+// sentinel when the owner_full_name wasn't found, so a caller saw only
+// "invalid argument" with no indication that the app/chart simply hadn't
+// been reconciled yet. The fix must keep the status code InvalidArgument
+// (mapRepoErr's errors.Is mapping must not change) while making the message
+// name the owner and point at reconciliation as the likely cause.
+func TestRecordArtifact_UnknownOwnerNamesTheOwnerAndHintsAtReconcile(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-unknown-owner")
+
+	cases := []struct {
+		name          string
+		kind          pb.ArtifactKind
+		ownerFullName string
+	}{
+		{"unknown app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "demo-never-reconciled-app"},
+		{"unknown chart", pb.ArtifactKind_ARTIFACT_KIND_CHART, "demo-never-reconciled-chart"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+				BuildId: build.BuildId, Kind: tc.kind,
+				OwnerFullName: tc.ownerFullName, Digest: "sha256:" + tc.name, Version: "v1.0.0",
+				IdempotencyKey: "record-" + tc.name,
+			})
+			if err == nil {
+				t.Fatalf("expected an error for unknown owner %q", tc.ownerFullName)
+			}
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("expected InvalidArgument, got %v (%v)", status.Code(err), err)
+			}
+			msg := status.Convert(err).Message()
+			if msg == "invalid argument" {
+				t.Fatalf("expected a message naming the owner, got the bare sentinel message %q", msg)
+			}
+			if !strings.Contains(msg, tc.ownerFullName) {
+				t.Fatalf("expected message to contain owner %q, got %q", tc.ownerFullName, msg)
+			}
+			if !strings.Contains(msg, "reconciled") {
+				t.Fatalf("expected message to hint at reconciliation, got %q", msg)
+			}
+		})
+	}
+}
+
+// TestRecordArtifact_UnknownOwnerCarriesStructuredReason covers issue #547:
+// a caller (the CLI, and through it CI) needs to distinguish "owner not
+// registered yet" from any other InvalidArgument without parsing the human
+// message. mapRepoErr (errors.go) attaches an errdetails.ErrorInfo with
+// Reason == apierrors.ReasonOwnerNotReconciled specifically for this
+// sentinel (repository.ErrOwnerNotReconciled) -- this test locks in that the
+// detail is present, has the right reason and domain, and is absent from an
+// unrelated InvalidArgument (a chart pinning an unrecorded image digest)
+// so the two failure modes stay distinguishable at the status-detail level,
+// not just by coincidence of message text.
+func TestRecordArtifact_UnknownOwnerCarriesStructuredReason(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-structured-reason")
+
+	_, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-never-reconciled-app-2", Digest: "sha256:structuredreason", Version: "v1.0.0",
+		IdempotencyKey: "record-structured-reason",
+	})
+	if err == nil {
+		t.Fatal("expected an error for unknown owner")
+	}
+	reason, domain, found := errorInfoDetail(t, err)
+	if !found {
+		t.Fatalf("expected an errdetails.ErrorInfo detail on the status, got none (err: %v)", err)
+	}
+	if reason != apierrors.ReasonOwnerNotReconciled {
+		t.Errorf("Reason = %q, want %q", reason, apierrors.ReasonOwnerNotReconciled)
+	}
+	if domain != apierrors.ErrorDomain {
+		t.Errorf("Domain = %q, want %q", domain, apierrors.ErrorDomain)
+	}
+}
+
+// TestRecordArtifact_UnrelatedInvalidArgumentHasNoOwnerReason is the
+// negative case for the test above: an InvalidArgument that is NOT the
+// owner-not-reconciled sentinel must not carry
+// apierrors.ReasonOwnerNotReconciled, or a caller classifying on that
+// detail would misdiagnose an unrelated validation failure as "app isn't
+// registered yet".
+func TestRecordArtifact_UnrelatedInvalidArgumentHasNoOwnerReason(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-unrelated-invalid-arg")
+
+	_, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
+		OwnerFullName: "demo-achart", Digest: "sha256:chartunrelated", Version: "v1.0.0",
+		Contains: []*pb.ContainedImage{
+			{AppFullName: "demo-chart-app", Repository: "repo", Version: "v1.0.0", Digest: "sha256:neverrecordedunrelated"},
+		},
+		IdempotencyKey: "record-unrelated-invalid-arg",
+	})
+	if err == nil {
+		t.Fatal("expected an error for a chart pinning an unrecorded image digest")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v (%v)", status.Code(err), err)
+	}
+	if _, _, found := errorInfoDetail(t, err); found {
+		t.Fatalf("expected no errdetails.ErrorInfo detail on an unrelated InvalidArgument, but found one")
+	}
+}
+
+// errorInfoDetail extracts the Reason/Domain of the first errdetails.ErrorInfo
+// detail on a gRPC status error, if any.
+func errorInfoDetail(t *testing.T, err error) (reason, domain string, found bool) {
+	t.Helper()
+	for _, d := range status.Convert(err).Details() {
+		if info, ok := d.(*errdetails.ErrorInfo); ok {
+			return info.Reason, info.Domain, true
+		}
+	}
+	return "", "", false
 }
 
 // TestRecordArtifact_DuplicateOwnerKindVersionIsAlreadyExists covers the
@@ -330,6 +460,34 @@ func TestAllocateVersion_ValidationErrors(t *testing.T) {
 				t.Fatalf("expected InvalidArgument, got %v", err)
 			}
 		})
+	}
+}
+
+// TestAllocateVersion_UnknownOwnerNamesTheOwnerAndHintsAtReconcile covers
+// resolveOwnerAndDomain (artifact.go), the AllocateVersion sibling of
+// resolveOwner fixed for issue #548: an unknown owner must still map to
+// InvalidArgument, but the message must name the owner and hint that it may
+// simply not have been reconciled yet, not just say "unknown app ...".
+func TestAllocateVersion_UnknownOwnerNamesTheOwnerAndHintsAtReconcile(t *testing.T) {
+	_, artifactSrv := setupAllocate(t)
+	ctx := authedCtx()
+
+	_, err := artifactSrv.AllocateVersion(ctx, &pb.AllocateVersionRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-never-reconciled-app",
+		Increment: "patch", IdempotencyKey: "allocate-unknown-owner",
+	})
+	if err == nil {
+		t.Fatal("expected an error for an unknown owner")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v (%v)", status.Code(err), err)
+	}
+	msg := status.Convert(err).Message()
+	if !strings.Contains(msg, "demo-never-reconciled-app") {
+		t.Fatalf("expected message to contain owner name, got %q", msg)
+	}
+	if !strings.Contains(msg, "reconciled") {
+		t.Fatalf("expected message to hint at reconciliation, got %q", msg)
 	}
 }
 

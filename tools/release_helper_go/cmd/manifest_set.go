@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,8 +57,9 @@ callers must not filter it before sending.`,
 			}
 
 			set := &appmetapb.AppManifestSet{
-				GitSha:       sha,
-				DiscoveredAt: time.Now().Unix(),
+				GitSha:            sha,
+				DiscoveredAt:      time.Now().Unix(),
+				SourceCommittedAt: resolveSourceCommittedAt(defaultGit, sha),
 			}
 			for i := range apps {
 				set.Apps = append(set.Apps, apps[i].AppManifest)
@@ -77,4 +79,26 @@ callers must not filter it before sending.`,
 
 	cmd.Flags().StringVar(&gitSHA, "git-sha", "", "Commit SHA to record (default: git rev-parse HEAD)")
 	return cmd
+}
+
+// resolveSourceCommittedAt returns the git committer timestamp (Unix
+// seconds) of sha, for AppManifestSet.source_committed_at -- the app
+// registry's reconcile-watermark ordering key (see appmeta.proto's doc
+// comment on that field and issue #545). Unlike git_sha resolution above,
+// a failure here does NOT fail the command: this field is a correctness
+// improvement over discovered_at, not a hard requirement, and the server
+// falls back to discovered_at when it's 0 (e.g. git unavailable, or sha
+// unresolvable -- a shallow clone missing the commit object). Losing the
+// stronger ordering guarantee for one call is far better than breaking
+// manifest-set entirely.
+func resolveSourceCommittedAt(git GitRunner, sha string) int64 {
+	out, err := git.Run("log", "-1", "--format=%ct", sha)
+	if err != nil {
+		return 0
+	}
+	v, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return v
 }

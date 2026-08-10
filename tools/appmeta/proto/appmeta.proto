@@ -129,6 +129,26 @@ message AppManifestSet {
   // Commit the sweep was taken at.
   string git_sha = 3;
 
-  // Unix timestamp of the sweep.
+  // Unix timestamp of the sweep (i.e. when release_helper_go ran `bazel
+  // query`) -- NOT the commit's position in history. A manually re-run older
+  // CI workflow sweeps at re-run time, so this value is NOT monotonic in
+  // commit order and must not be used to order reconcile calls -- see
+  // source_committed_at below, and issue #545.
   int64 discovered_at = 4;
+
+  // Committer timestamp (Unix seconds) of the commit at git_sha, e.g. `git
+  // log -1 --format=%ct <git_sha>`. This -- not discovered_at -- is the
+  // ordering key the app registry's Reconcile watermark uses to detect a
+  // stale (older-commit) call landing after a newer one: unlike
+  // discovered_at, it reflects the commit's real position in history
+  // regardless of when or how many times it was swept. See
+  // tools/app_registry/ARCHITECTURE.md "Reconcile watermark" and issue #545.
+  //
+  // Zero means "not resolved" -- release_helper_go leaves this unset rather
+  // than failing the manifest-set command when git is unavailable or git_sha
+  // can't be resolved to a commit (e.g. a shallow clone missing the object).
+  // The registry falls back to discovered_at when this is zero, which also
+  // keeps an AppManifestSet produced by a release_helper_go binary that
+  // predates this field working unmodified.
+  int64 source_committed_at = 5;
 }

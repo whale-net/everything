@@ -37,9 +37,9 @@ import (
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/handlers"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
-	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
 
 // authedCtx returns a context carrying a principal holding every app-registry
@@ -1260,17 +1260,32 @@ func TestMigration004BackfillsVersionColumns(t *testing.T) {
 // that boundary holds against real Postgres.
 
 // reconcileTx runs Apps().Reconcile inside a real WithTx transaction, exactly
-// as handlers.AppServer.ReconcileApps does for a non-dry-run call.
+// as handlers.AppServer.ReconcileApps does for a non-dry-run call. It
+// synthesizes a fresh ReconcileSource (issue #545's watermark, see
+// ARCHITECTURE.md "Reconcile watermark") from the current time on every
+// call, so sequential calls in a single test always carry a strictly
+// increasing ordering key and are never rejected as stale -- this test is
+// about chart composition pinning (#544), not the watermark, so it always
+// wants "apply".
 func reconcileTx(t *testing.T, reg *Registry, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest) *repository.ReconcileResult {
 	t.Helper()
+	now := time.Now().UnixNano()
+	source := repository.ReconcileSource{
+		GitSHA:            fmt.Sprintf("test-sha-%d", now),
+		SourceCommittedAt: now,
+		DiscoveredAt:      now,
+	}
 	var result *repository.ReconcileResult
 	err := reg.WithTx(context.Background(), func(ctx context.Context, r repository.Registry) error {
 		var ferr error
-		result, ferr = r.Apps().Reconcile(ctx, apps, charts, false)
+		result, ferr = r.Apps().Reconcile(ctx, apps, charts, source, false)
 		return ferr
 	})
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
+	}
+	if result.SkippedStale {
+		t.Fatalf("reconcile unexpectedly skipped as stale (watermark GitSHA=%s): this helper always synthesizes a strictly newer ordering key, so a stale skip here means the clock went backward or ShouldApplyReconcile regressed", source.GitSHA)
 	}
 	return result
 }
@@ -1469,5 +1484,380 @@ func TestChartArtifact_CompositionPinnedAtRecordTime_SurvivesLaterReconcile(t *t
 	}
 	if len(entry.Drift) != 0 {
 		t.Fatalf("expected no drift entries (nothing was promoted with allow_override), got %+v", entry.Drift)
+	}
+}
+
+// ============================================================================
+// Reconcile watermark (issue #545)
+// ============================================================================
+//
+// These tests exercise exactly what server/repository/fake's reconcile
+// watermark logic cannot: the real migration 006 schema (the seeded
+// sentinel row, the CHECK(id=1) singleton guard), and — most importantly —
+// that SELECT ... FOR UPDATE against the real `reconcile_watermark` row
+// actually serializes two concurrent Reconcile transactions rather than
+// both reading the same stale watermark. See ARCHITECTURE.md "Reconcile
+// watermark" for the full comparison/tie-break rules asserted here.
+
+// reconcileManifests builds an AppManifestSet carrying the ordering
+// metadata Reconcile checks against reconcile_watermark directly, so each
+// test can control git_sha/source_committed_at/discovered_at precisely
+// rather than going through release_helper_go.
+func reconcileManifests(gitSha string, sourceCommittedAt, discoveredAt int64, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest) *appmetapb.AppManifestSet {
+	return &appmetapb.AppManifestSet{
+		GitSha:            gitSha,
+		SourceCommittedAt: sourceCommittedAt,
+		DiscoveredAt:      discoveredAt,
+		Apps:              apps,
+		Charts:            charts,
+	}
+}
+
+func oneAppManifest(domain, name string) *appmetapb.AppManifest {
+	return &appmetapb.AppManifest{
+		Domain: domain, Name: name, Description: "d", Language: "go", AppType: "worker",
+		DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE,
+	}
+}
+
+// watermarkRow reads the singleton reconcile_watermark row directly via
+// SQL, bypassing the repository layer, so assertions are against ground
+// truth rather than re-testing the same code path they're meant to verify.
+func watermarkRow(t *testing.T, pool *pgxpool.Pool) (gitSha string, sourceCommittedAt, discoveredAt int64) {
+	t.Helper()
+	if err := pool.QueryRow(context.Background(),
+		`SELECT git_sha, source_committed_at, discovered_at FROM reconcile_watermark WHERE id = 1`,
+	).Scan(&gitSha, &sourceCommittedAt, &discoveredAt); err != nil {
+		t.Fatalf("read reconcile_watermark: %v", err)
+	}
+	return gitSha, sourceCommittedAt, discoveredAt
+}
+
+func appStatus(t *testing.T, pool *pgxpool.Pool, appID string) string {
+	t.Helper()
+	var status string
+	if err := pool.QueryRow(context.Background(), `SELECT status FROM app WHERE app_id = $1`, appID).Scan(&status); err != nil {
+		t.Fatalf("read app status for %s: %v", appID, err)
+	}
+	return status
+}
+
+// TestMigration006SeedsSentinelWatermarkRow proves migration 006's seed:
+// exactly one row, the documented sentinel (empty git_sha, zero
+// timestamps) -- see that migration's comments for why a seeded sentinel,
+// not a genuinely empty table, is what "no watermark yet" means at the SQL
+// layer.
+func TestMigration006SeedsSentinelWatermarkRow(t *testing.T) {
+	_, pool := newTestRegistry(t)
+
+	var rowCount int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM reconcile_watermark`).Scan(&rowCount); err != nil {
+		t.Fatalf("count reconcile_watermark rows: %v", err)
+	}
+	if rowCount != 1 {
+		t.Fatalf("expected exactly 1 seeded row, found %d", rowCount)
+	}
+
+	gitSha, sourceCommittedAt, discoveredAt := watermarkRow(t, pool)
+	if gitSha != "" || sourceCommittedAt != 0 || discoveredAt != 0 {
+		t.Fatalf("expected the documented sentinel (empty git_sha, zero timestamps), got git_sha=%q source_committed_at=%d discovered_at=%d",
+			gitSha, sourceCommittedAt, discoveredAt)
+	}
+}
+
+// TestReconcileWatermark_FirstCallAppliesAgainstEmptyWatermark proves the
+// "empty table (sentinel row) means accept the first call" guarantee, and
+// that a successful apply advances the watermark to the incoming call's
+// ordering metadata.
+func TestReconcileWatermark_FirstCallAppliesAgainstEmptyWatermark(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	srv := handlers.NewAppServer(reg)
+
+	resp, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      reconcileManifests("sha-1", 1000, 1100, []*appmetapb.AppManifest{oneAppManifest("acme", "widget")}, nil),
+		IdempotencyKey: "watermark-first-1",
+	})
+	if err != nil {
+		t.Fatalf("reconcile against empty watermark: %v", err)
+	}
+	if resp.SkippedStale {
+		t.Fatalf("expected the first-ever reconcile to apply, got SkippedStale=true")
+	}
+	if len(resp.CreatedApps) != 1 {
+		t.Fatalf("expected 1 created app, got %+v", resp.CreatedApps)
+	}
+
+	gitSha, sourceCommittedAt, discoveredAt := watermarkRow(t, pool)
+	if gitSha != "sha-1" || sourceCommittedAt != 1000 || discoveredAt != 1100 {
+		t.Fatalf("expected watermark to advance to (sha-1, 1000, 1100), got (%q, %d, %d)", gitSha, sourceCommittedAt, discoveredAt)
+	}
+}
+
+// TestReconcileWatermark_StaleCallSkippedAndMutatesNothing is the headline
+// scenario from issue #545: an older commit's reconcile call lands AFTER a
+// newer one's, which had correctly flagged an app MISSING. It proves three
+// things a fake-backed test can assert too, but which matter most against
+// real Postgres because they hinge on the transaction actually rolling
+// back cleanly: (1) the call is a no-op success (SkippedStale=true, not an
+// error), (2) it names the commit it lost to, and (3) NOTHING was
+// written -- most importantly, the MISSING flag the newer call set survives
+// completely untouched, proving the stale call didn't revert it.
+func TestReconcileWatermark_StaleCallSkippedAndMutatesNothing(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	srv := handlers.NewAppServer(reg)
+
+	// 1. An early commit reconciles two apps.
+	first, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: reconcileManifests("newer-sha", 2000, 2000,
+			[]*appmetapb.AppManifest{oneAppManifest("acme", "widget"), oneAppManifest("acme", "gadget")}, nil),
+		IdempotencyKey: "stale-1",
+	})
+	if err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	if len(first.CreatedApps) != 2 {
+		t.Fatalf("expected 2 created apps, got %+v", first.CreatedApps)
+	}
+	widgetID, gadgetID := first.CreatedApps[0].AppId, first.CreatedApps[1].AppId
+
+	// 2. A LATER, newer commit correctly drops "gadget" -- it's flagged
+	// MISSING, exactly as ARCHITECTURE.md's triage lifecycle says it should
+	// be.
+	second, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: reconcileManifests("newest-sha", 3000, 3000,
+			[]*appmetapb.AppManifest{oneAppManifest("acme", "widget")}, nil),
+		IdempotencyKey: "stale-2",
+	})
+	if err != nil {
+		t.Fatalf("second (newer) reconcile: %v", err)
+	}
+	if len(second.NewlyMissingApps) != 1 || second.NewlyMissingApps[0].AppId != gadgetID {
+		t.Fatalf("expected gadget (%s) newly missing, got %+v", gadgetID, second.NewlyMissingApps)
+	}
+
+	beforeGadgetStatus := appStatus(t, pool, gadgetID)
+	beforeWidgetStatus := appStatus(t, pool, widgetID)
+	if beforeGadgetStatus != "missing" {
+		t.Fatalf("expected gadget to be MISSING before the stale call, got %q", beforeGadgetStatus)
+	}
+	beforeGitSha, beforeSCA, beforeDA := watermarkRow(t, pool)
+
+	// 3. A STALE call: an older commit (source_committed_at between the
+	// first and second) re-runs -- e.g. a manually re-run older CI
+	// workflow, issue #545's headline case. If applied, this would re-mark
+	// "gadget" ACTIVE, silently reverting the second call's correct MISSING
+	// flag.
+	stale, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: reconcileManifests("older-rerun-sha", 2500, 2500,
+			[]*appmetapb.AppManifest{oneAppManifest("acme", "widget"), oneAppManifest("acme", "gadget")}, nil),
+		IdempotencyKey: "stale-3",
+	})
+	if err != nil {
+		t.Fatalf("stale reconcile call: %v", err)
+	}
+	if !stale.SkippedStale {
+		t.Fatalf("expected the older call to be skipped as stale, got %+v", stale)
+	}
+	if stale.CurrentWatermarkGitSha != "newest-sha" {
+		t.Fatalf("expected current_watermark_git_sha to name the commit it lost to (newest-sha), got %q", stale.CurrentWatermarkGitSha)
+	}
+	if n := len(stale.CreatedApps) + len(stale.UpdatedApps) + len(stale.NewlyMissingApps) + len(stale.RecoveredApps) +
+		len(stale.CreatedCharts) + len(stale.UpdatedCharts) + len(stale.NewlyMissingCharts) + len(stale.RecoveredCharts); n != 0 {
+		t.Fatalf("expected a completely empty result for a skipped-stale call, got %+v", stale)
+	}
+
+	// Prove nothing was mutated: gadget is STILL MISSING (the stale call
+	// did not revert it to ACTIVE), widget is untouched, and the watermark
+	// did not move.
+	if got := appStatus(t, pool, gadgetID); got != "missing" {
+		t.Fatalf("stale call reverted gadget's MISSING flag -- now %q; this is exactly the bug issue #545 exists to prevent", got)
+	}
+	if got := appStatus(t, pool, gadgetID); got != beforeGadgetStatus {
+		t.Fatalf("stale call mutated gadget's status: was %q, now %q", beforeGadgetStatus, got)
+	}
+	if got := appStatus(t, pool, widgetID); got != beforeWidgetStatus {
+		t.Fatalf("stale call mutated widget's status: was %q, now %q", beforeWidgetStatus, got)
+	}
+	gotGitSha, gotSCA, gotDA := watermarkRow(t, pool)
+	if gotGitSha != beforeGitSha || gotSCA != beforeSCA || gotDA != beforeDA {
+		t.Fatalf("stale call advanced the watermark: was (%q,%d,%d), now (%q,%d,%d)",
+			beforeGitSha, beforeSCA, beforeDA, gotGitSha, gotSCA, gotDA)
+	}
+}
+
+// TestReconcileWatermark_EqualOrderingKeyDifferentGitShaApplies proves the
+// deliberate equal-timestamp tie-break: two different commits landing with
+// the same source_committed_at (a same-second merge, or two calls both
+// falling back to discovered_at) must not block each other.
+func TestReconcileWatermark_EqualOrderingKeyDifferentGitShaApplies(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	srv := handlers.NewAppServer(reg)
+
+	if _, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      reconcileManifests("sha-a", 5000, 5000, []*appmetapb.AppManifest{oneAppManifest("acme", "widget")}, nil),
+		IdempotencyKey: "tie-1",
+	}); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+
+	resp, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: reconcileManifests("sha-b", 5000, 5000,
+			[]*appmetapb.AppManifest{oneAppManifest("acme", "widget"), oneAppManifest("acme", "gadget")}, nil),
+		IdempotencyKey: "tie-2",
+	})
+	if err != nil {
+		t.Fatalf("tied-timestamp reconcile: %v", err)
+	}
+	if resp.SkippedStale {
+		t.Fatalf("expected an equal-timestamp, different-git_sha call to apply, got SkippedStale=true")
+	}
+	if len(resp.CreatedApps) != 1 || resp.CreatedApps[0].FullName != "acme-gadget" {
+		t.Fatalf("expected gadget to be newly created, got %+v", resp.CreatedApps)
+	}
+
+	gitSha, sourceCommittedAt, _ := watermarkRow(t, pool)
+	if gitSha != "sha-b" || sourceCommittedAt != 5000 {
+		t.Fatalf("expected watermark to advance to (sha-b, 5000), got (%q, %d)", gitSha, sourceCommittedAt)
+	}
+}
+
+// TestReconcileWatermark_IdenticalGitShaAppliesRegardlessOfTimestamp proves
+// tie-break rule 2: the identical commit reconciled twice always applies,
+// even with an older ordering key the second time (clock skew between two
+// sweeps of the same commit must never produce a false-stale rejection).
+func TestReconcileWatermark_IdenticalGitShaAppliesRegardlessOfTimestamp(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	srv := handlers.NewAppServer(reg)
+
+	if _, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      reconcileManifests("same-sha", 9000, 9000, []*appmetapb.AppManifest{oneAppManifest("acme", "widget")}, nil),
+		IdempotencyKey: "same-1",
+	}); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+
+	resp, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: reconcileManifests("same-sha", 1000, 1000, // older than 9000
+			[]*appmetapb.AppManifest{oneAppManifest("acme", "widget"), oneAppManifest("acme", "gadget")}, nil),
+		IdempotencyKey: "same-2",
+	})
+	if err != nil {
+		t.Fatalf("identical-git_sha reconcile: %v", err)
+	}
+	if resp.SkippedStale {
+		t.Fatalf("expected an identical git_sha call to apply regardless of its (older) timestamp, got SkippedStale=true")
+	}
+	if len(resp.CreatedApps) != 1 || resp.CreatedApps[0].FullName != "acme-gadget" {
+		t.Fatalf("expected gadget to be newly created, got %+v", resp.CreatedApps)
+	}
+
+	gitSha, sourceCommittedAt, _ := watermarkRow(t, pool)
+	if gitSha != "same-sha" || sourceCommittedAt != 1000 {
+		t.Fatalf("expected watermark to be refreshed to (same-sha, 1000), got (%q, %d)", gitSha, sourceCommittedAt)
+	}
+}
+
+// TestReconcileWatermark_DryRunNeverConsultsOrAdvancesWatermark proves dry
+// run is unaffected by the watermark in EITHER direction: a dry run
+// carrying an ordering key far older than the current watermark still
+// computes a normal diff (proving the watermark is never consulted to
+// decide skip-or-apply), and the watermark row is byte-for-byte unchanged
+// afterward (proving it's never advanced either).
+func TestReconcileWatermark_DryRunNeverConsultsOrAdvancesWatermark(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	srv := handlers.NewAppServer(reg)
+
+	if _, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      reconcileManifests("real-sha", 999999, 999999, []*appmetapb.AppManifest{oneAppManifest("acme", "widget")}, nil),
+		IdempotencyKey: "dry-1",
+	}); err != nil {
+		t.Fatalf("real reconcile: %v", err)
+	}
+	beforeGitSha, beforeSCA, beforeDA := watermarkRow(t, pool)
+
+	resp, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: reconcileManifests("dry-run-old-sha", 1, 1,
+			[]*appmetapb.AppManifest{oneAppManifest("acme", "widget"), oneAppManifest("acme", "new-app")}, nil),
+		DryRun: true,
+	})
+	if err != nil {
+		t.Fatalf("dry run reconcile: %v", err)
+	}
+	if resp.SkippedStale {
+		t.Fatalf("dry run must never consult the watermark, so it must never report SkippedStale; got true despite carrying a far-older ordering key")
+	}
+	if len(resp.CreatedApps) != 1 || resp.CreatedApps[0].FullName != "acme-new-app" {
+		t.Fatalf("expected dry run to compute a normal diff (1 created app), got %+v", resp.CreatedApps)
+	}
+
+	gotGitSha, gotSCA, gotDA := watermarkRow(t, pool)
+	if gotGitSha != beforeGitSha || gotSCA != beforeSCA || gotDA != beforeDA {
+		t.Fatalf("dry run advanced the watermark: was (%q,%d,%d), now (%q,%d,%d)",
+			beforeGitSha, beforeSCA, beforeDA, gotGitSha, gotSCA, gotDA)
+	}
+
+	var count int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM app WHERE domain = 'acme' AND name = 'new-app'`).Scan(&count); err != nil {
+		t.Fatalf("count app rows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("dry run must write nothing; found %d 'new-app' rows", count)
+	}
+}
+
+// TestReconcileWatermark_ConcurrentCallsSerializeOnTheLockedRow drives two
+// real concurrent Reconcile calls -- a lower ordering key and a higher
+// one -- through separate goroutines and asserts the final watermark is
+// always the HIGHER key, regardless of which goroutine's transaction
+// happened to start first. Without the SELECT ... FOR UPDATE lock on
+// reconcile_watermark, both transactions could read "no watermark yet"
+// concurrently and both apply, racing on which one's final INSERT ... ON
+// CONFLICT DO UPDATE commits last -- which could non-deterministically
+// leave the LOWER key as the final watermark. That would be exactly the
+// kind of unserialized race issue #545 exists to close, so this test
+// would flake/fail on an unlucky interleaving if the locking read were
+// ever removed or weakened.
+func TestReconcileWatermark_ConcurrentCallsSerializeOnTheLockedRow(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	srv := handlers.NewAppServer(reg)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	errs := make([]error, 2)
+
+	go func() {
+		defer wg.Done()
+		_, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+			Manifests:      reconcileManifests("low-sha", 100, 100, []*appmetapb.AppManifest{oneAppManifest("acme", "widget")}, nil),
+			IdempotencyKey: "race-low",
+		})
+		errs[0] = err
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+			Manifests:      reconcileManifests("high-sha", 200, 200, []*appmetapb.AppManifest{oneAppManifest("acme", "widget")}, nil),
+			IdempotencyKey: "race-high",
+		})
+		errs[1] = err
+	}()
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("goroutine %d: %v", i, err)
+		}
+	}
+
+	gitSha, sourceCommittedAt, _ := watermarkRow(t, pool)
+	if gitSha != "high-sha" || sourceCommittedAt != 200 {
+		t.Fatalf("expected the higher ordering key (high-sha, 200) to win regardless of goroutine scheduling, got (%q, %d) -- this means the two concurrent Reconcile calls were NOT properly serialized by the watermark's locking read",
+			gitSha, sourceCommittedAt)
 	}
 }
