@@ -63,19 +63,24 @@ func newBuildHelmChartCmd() *cobra.Command {
 			}
 
 			// Resolve app versions
-			appVersions := map[string]string{}
+			allApps, err := ListAllApps(defaultBazel, defaultFS, workspaceRoot)
+			if err != nil {
+				return err
+			}
+			var appVersions map[string]string
 			if useReleasedVersions {
-				allApps, err := ListAllApps(defaultBazel, defaultFS, workspaceRoot)
-				if err != nil {
-					return err
-				}
 				appVersions, err = resolveChartAppVersions(chart, allApps, defaultGit)
 				if err != nil {
 					return err
 				}
 			} else {
+				appVersions = map[string]string{}
 				for _, appName := range chart.Apps {
-					appVersions[appName] = "latest"
+					matched, err := findChartApp(appName, chart.Domain, allApps)
+					if err != nil {
+						return err
+					}
+					appVersions[matched.FullName()] = "latest"
 				}
 			}
 
@@ -170,28 +175,41 @@ func autoIncrementHelmVersion(chartName, bumpType string, git GitRunner) (string
 func resolveChartAppVersions(chart HelmChartMetadata, allApps []AppMetadata, git GitRunner) (map[string]string, error) {
 	versions := map[string]string{}
 	for _, appName := range chart.Apps {
-		// Try to find app in allApps by name and domain
-		var matched *AppMetadata
-		for i := range allApps {
-			a := &allApps[i]
-			if a.Name == appName && a.Domain == chart.Domain {
-				matched = a
-				break
-			}
-			if a.Name == appName {
-				matched = a
-			}
-		}
-		if matched == nil {
-			return nil, fmt.Errorf("app %q not found for chart %q", appName, chart.Name)
+		matched, err := findChartApp(appName, chart.Domain, allApps)
+		if err != nil {
+			return nil, err
 		}
 		ver, err := getLatestAppVersion(matched.Domain, matched.Name, git)
 		if err != nil || ver == "" {
 			return nil, fmt.Errorf("no released version for app %q in domain %q", matched.Name, matched.Domain)
 		}
-		versions[matched.Name] = ver
+		versions[matched.FullName()] = ver
 	}
 	return versions, nil
+}
+
+// findChartApp resolves one of a chart's declared app names to its full
+// AppMetadata, preferring a match within the chart's own domain. The
+// returned metadata's FullName() ("<domain>-<name>") is the key composer.go
+// uses for the values.yaml `apps` map, so callers must key appVersions by
+// FullName() rather than the bare app name for packageChartWithVersion's
+// imageTag lookup to find it.
+func findChartApp(appName, chartDomain string, allApps []AppMetadata) (*AppMetadata, error) {
+	var matched *AppMetadata
+	for i := range allApps {
+		a := &allApps[i]
+		if a.Name == appName && a.Domain == chartDomain {
+			matched = a
+			break
+		}
+		if a.Name == appName {
+			matched = a
+		}
+	}
+	if matched == nil {
+		return nil, fmt.Errorf("app %q not found for chart domain %q", appName, chartDomain)
+	}
+	return matched, nil
 }
 
 func getLatestAppVersion(domain, appName string, git GitRunner) (string, error) {
