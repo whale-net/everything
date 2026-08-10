@@ -203,6 +203,35 @@ jobs:
           fi
         fi
 
+    # Registers/updates every release_app and helm_chart manifest as an
+    # app/chart row in the App Registry, once per release run, before any
+    # per-app "Record build and artifact" step needs to resolve one by
+    # owner_full_name. See tools/app_registry/README.md's recording sequence
+    # diagram: ReconcileApps precedes RecordBuild/RecordArtifact. Without
+    # this, RecordArtifact's owner lookup fails for any app/chart never
+    # reconciled -- surfacing as a bare "invalid argument" from
+    # resolveOwner in server/handlers/artifact.go, since an unresolved owner
+    # is indistinguishable, at that layer, from a genuinely malformed
+    # request.
+    #
+    # Best-effort like the recording steps below: continue-on-error so a
+    # registry outage never fails a release.
+    - name: Reconcile apps/charts in App Registry
+      if: ${{ github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
+      continue-on-error: true
+      timeout-minutes: 5
+      env:
+        APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+        GRPC_AUTH_MODE: oidc
+        GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+        GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+      run: |
+        "$RELEASE_HELPER" manifest-set --git-sha "${{ github.sha }}" > "$RUNNER_TEMP/manifest-set.json"
+        "$APP_REGISTRY_CLI" apps reconcile \
+          --from-plan "$RUNNER_TEMP/manifest-set.json" \
+          --idempotency-key "${{ github.run_id }}-${{ github.run_attempt }}-reconcile"
+
   # Plan which apps need OpenAPI spec builds
   plan-openapi-builds:
     name: Plan OpenAPI Builds
