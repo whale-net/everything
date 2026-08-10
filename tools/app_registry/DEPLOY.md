@@ -42,20 +42,16 @@ every call returns `Unauthenticated`.
 | Client ID | Purpose | Config | Needed |
 |---|---|---|---|
 | `app-registry-api` | Names the audience. Never obtains a token. | Client authentication **On**, **all** flows unchecked, no roles | **now** |
-| `app-registry-builder` | CI recording (`ReconcileApps`, `RecordBuild`, `RecordArtifact`) | Confidential, **Service accounts roles** only, realm role `app-registry-builder`, audience mapper → `app-registry-api` | **now** |
+| `app-registry-builder-dev` / `app-registry-builder-prod` | CI recording (`ReconcileApps`, `RecordBuild`, `RecordArtifact`) | Confidential, **Service accounts roles** only, both assigned the single `app-registry-builder` realm role, audience mapper → `app-registry-api` | **now** |
 
-> **Do not split `app-registry-builder` per environment.** Unlike the promoter
-> clients below, recording (`RecordBuild`/`RecordArtifact`) has no
-> environment concept — `release.yml` runs it once per release, before any
-> promotion decision exists, against the single `APP_REGISTRY_ADDRESS`. There
-> is exactly one `app-registry-builder` client and one `app-registry-builder`
-> realm role (`server/auth/auth.go`'s `RoleBuilder`); creating
-> `app-registry-builder-dev` / `-prod` variants has no corresponding code path
-> to select between them and will just leave `release.yml`'s
-> `GRPC_AUTH_CLIENT_ID: app-registry-builder` unable to authenticate. If a
-> per-environment split is ever needed here, it requires a code change in
-> this repo (an environment input to the recording steps) first — do not
-> introduce the split Keycloak-side alone.
+> **Builder clients are environment-scoped, like the promoter clients below**
+> (issue #539). `release.yml`'s recording steps set
+> `GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}`
+> — `APP_REGISTRY_BUILDER_ENV` is a repository variable selecting which
+> builder identity CI authenticates as. Only `dev` is wired up in CI today
+> (hence the fallback); set the repository variable and provision the
+> matching realm role/client before pointing `APP_REGISTRY_ADDRESS` at a prod
+> registry.
 | `app-registry-admin` | `EnvironmentRegistry`, `SetAppStatus` | Same shape, realm role `app-registry-admin` | **now** |
 | `app-registry-promoter-dev` | Promote to `dev` (via `promote.yml`) | Same shape, realm role `app-registry-promoter-dev` | **now** — needed before `promote.yml` can run against `dev` |
 | `app-registry-promoter-stage` | Promote to `stage` (via `promote.yml`) | Same shape, realm role `app-registry-promoter-stage` | **now** — needed before `promote.yml` can run against `stage` |
@@ -103,7 +99,7 @@ mistakes are both invisible until you look at a decoded token.
 TOKEN=$(curl -s -X POST \
   https://<host>/realms/<realm>/protocol/openid-connect/token \
   -d grant_type=client_credentials \
-  -d client_id=app-registry-builder \
+  -d client_id=app-registry-builder-dev \
   -d client_secret=<secret> | jq -r .access_token)
 
 echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | jq '{sub, aud, realm_access}'
@@ -183,7 +179,7 @@ Client-side variables the CLI reads (see [ENV.md](ENV.md)):
 |---|---|
 | `GRPC_AUTH_MODE` | `oidc` — must match the server |
 | `GRPC_AUTH_TOKEN_URL` | `https://<host>/realms/<realm>/protocol/openid-connect/token` |
-| `GRPC_AUTH_CLIENT_ID` | `app-registry-builder` (recording) or `app-registry-promoter-<environment>` (promotion) |
+| `GRPC_AUTH_CLIENT_ID` | `app-registry-builder-<APP_REGISTRY_BUILDER_ENV, default dev>` (recording) or `app-registry-promoter-<environment>` (promotion) |
 | `GRPC_AUTH_CLIENT_SECRET` | that client's secret |
 
 ### Where each secret goes
@@ -213,9 +209,10 @@ Repository *variables* (not secrets):
 
 | Variable | Value |
 |---|---|
-| `APP_REGISTRY_ADDRESS` | the API's ingress host:port |
+| `APP_REGISTRY_ADDRESS` | the API's ingress host:port — **must include the port** (e.g. `dev-app-registry.whalenet.dev:443`); `libs/go/grpcclient`'s TLS auto-detect only fires on `:443` or an `https://` prefix, so a bare hostname dials plaintext against a TLS-only ingress and hangs (issue #539) |
 | `APP_REGISTRY_AUTH_TOKEN_URL` | the Keycloak token endpoint, e.g. `https://<host>/realms/<realm>/protocol/openid-connect/token` — same for every client, so it is a variable, not a secret |
 | `APP_REGISTRY_CICD_OPT_IN` | `true` to enable recording — see below |
+| `APP_REGISTRY_BUILDER_ENV` | which builder client `release.yml` authenticates as: `dev` or `prod`, matching a provisioned `app-registry-builder-<env>` client. Falls back to `dev` when unset — only `dev` is wired up in CI today. |
 
 ---
 

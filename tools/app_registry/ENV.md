@@ -91,12 +91,22 @@ placement rationale:
 |---|---|---|---|
 | `vars.APP_REGISTRY_ADDRESS` | Repository variable | `APP_REGISTRY_ADDRESS` | both |
 | `vars.APP_REGISTRY_AUTH_TOKEN_URL` | Repository variable | `GRPC_AUTH_TOKEN_URL` | both |
-| `secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET` | Repository secret | `GRPC_AUTH_CLIENT_SECRET` (`GRPC_AUTH_CLIENT_ID=app-registry-builder`) | `release.yml` recording steps only |
+| `vars.APP_REGISTRY_BUILDER_ENV` | Repository variable | `GRPC_AUTH_CLIENT_ID=app-registry-builder-<value>`, falls back to `dev` when unset | `release.yml` recording steps only |
+| `secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET` | Repository secret | `GRPC_AUTH_CLIENT_SECRET` | `release.yml` recording steps only |
 | `secrets.APP_REGISTRY_PROMOTER_CLIENT_SECRET` | Environment secret, one per GitHub Environment (e.g. `promotion-dev`/`promotion-prod`) | `GRPC_AUTH_CLIENT_SECRET` (`GRPC_AUTH_CLIENT_ID=app-registry-promoter-<registry_environment>`) | `promote.yml` only |
 
 `GRPC_AUTH_MODE=oidc` is hardcoded in both workflows rather than read from a
 variable — the CLI must match whatever the server runs, and the server is
 expected to run `oidc` in every environment these workflows target.
+
+`vars.APP_REGISTRY_ADDRESS` must include the port (e.g.
+`dev-app-registry.whalenet.dev:443`) — `libs/go/grpcclient`'s TLS
+auto-detect (`shouldUseTLS`) only enables TLS when the address contains
+`:443` or starts with `https://`; a bare hostname dials plaintext against a
+TLS-only ingress and fails to connect (see issue #539). The Keycloak
+clients backing the builder credential are environment-scoped
+(`app-registry-builder-dev` / `app-registry-builder-prod`, mirroring the
+promoter clients) — there is no bare `app-registry-builder` client.
 
 ## Temporal (`libs/go/temporal`)
 
