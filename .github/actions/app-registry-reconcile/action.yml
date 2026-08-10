@@ -1,0 +1,50 @@
+name: 'App Registry: Reconcile Apps/Charts'
+description: >-
+  Discovers every release_app/helm_chart manifest via `release_helper_go
+  manifest-set` and reconciles it into the App Registry via
+  `app-registry apps reconcile`, registering any app/chart the registry
+  doesn't know about yet. Must run before any RecordBuild/RecordArtifact
+  call that resolves an owner by full name -- see
+  tools/app_registry/README.md's recording sequence diagram. Skipping this
+  makes RecordArtifact's owner lookup fail with a bare, contextless
+  InvalidArgument for any never-reconciled app/chart (see issue #539 and
+  its follow-up, #542).
+
+  Requires RELEASE_HELPER and APP_REGISTRY_CLI env vars already set (see
+  .github/actions/download-release-tools).
+
+inputs:
+  address:
+    required: true
+  token-url:
+    required: true
+  client-id:
+    required: true
+  client-secret:
+    required: true
+  git-sha:
+    description: 'Commit SHA to record on the manifest set -- typically github.sha'
+    required: true
+  idempotency-key:
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/app-registry-auth
+      with:
+        address: ${{ inputs.address }}
+        token-url: ${{ inputs.token-url }}
+        client-id: ${{ inputs.client-id }}
+        client-secret: ${{ inputs.client-secret }}
+
+    - name: Reconcile apps/charts
+      shell: bash
+      env:
+        GIT_SHA: ${{ inputs.git-sha }}
+        IDEMPOTENCY_KEY: ${{ inputs.idempotency-key }}
+      run: |
+        "$RELEASE_HELPER" manifest-set --git-sha "$GIT_SHA" > "$RUNNER_TEMP/manifest-set.json"
+        "$APP_REGISTRY_CLI" apps reconcile \
+          --from-plan "$RUNNER_TEMP/manifest-set.json" \
+          --idempotency-key "$IDEMPOTENCY_KEY"

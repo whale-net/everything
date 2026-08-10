@@ -203,34 +203,16 @@ jobs:
           fi
         fi
 
-    # Registers/updates every release_app and helm_chart manifest as an
-    # app/chart row in the App Registry, once per release run, before any
-    # per-app "Record build and artifact" step needs to resolve one by
-    # owner_full_name. See tools/app_registry/README.md's recording sequence
-    # diagram: ReconcileApps precedes RecordBuild/RecordArtifact. Without
-    # this, RecordArtifact's owner lookup fails for any app/chart never
-    # reconciled -- surfacing as a bare "invalid argument" from
-    # resolveOwner in server/handlers/artifact.go, since an unresolved owner
-    # is indistinguishable, at that layer, from a genuinely malformed
-    # request.
-    #
-    # Best-effort like the recording steps below: continue-on-error so a
-    # registry outage never fails a release.
-    - name: Reconcile apps/charts in App Registry
-      if: ${{ github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
-      continue-on-error: true
-      timeout-minutes: 5
-      env:
-        APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
-        GRPC_AUTH_MODE: oidc
-        GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-        GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-      run: |
-        "$RELEASE_HELPER" manifest-set --git-sha "${{ github.sha }}" > "$RUNNER_TEMP/manifest-set.json"
-        "$APP_REGISTRY_CLI" apps reconcile \
-          --from-plan "$RUNNER_TEMP/manifest-set.json" \
-          --idempotency-key "${{ github.run_id }}-${{ github.run_attempt }}-reconcile"
+    # App/chart registration (ReconcileApps) deliberately does NOT run here.
+    # It requires the complete, current manifest set -- anything absent from
+    # what it's given gets flagged MISSING (api.proto's own comment) -- and
+    # this workflow can be dispatched against an arbitrary, possibly old ref
+    # (a hotfix release from an old tag, say). Reconciling that ref's
+    # manifest set would falsely flag every app added since as MISSING.
+    # Reconcile instead runs on every push to main (ci.yml's
+    # "Reconcile apps/charts in App Registry" job), so it only ever sees the
+    # current, complete tree. See ARCHITECTURE.md "Rejected alternatives"
+    # and DEPLOY.md "CI wiring (AR-3d)".
 
   # Plan which apps need OpenAPI spec builds
   plan-openapi-builds:
@@ -457,19 +439,18 @@ jobs:
     # the variable unset (the default), this step is skipped entirely and CI
     # makes no registry calls. continue-on-error so a registry outage never
     # fails a release.
-    - name: Record build and artifact in App Registry
+    - name: Record build in App Registry
       if: ${{ github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
+      id: app-registry-build
       continue-on-error: true
       # Defense in depth against a hung dial (e.g. a misconfigured
       # APP_REGISTRY_ADDRESS pointed at a TLS-only endpoint without a port --
       # see issue #539): bound the whole step so a connectivity problem fails
       # fast instead of blocking the release for hours.
       timeout-minutes: 5
-      env:
-        APP: ${{ matrix.app }}
-        DOMAIN: ${{ matrix.domain }}
-        VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
-        APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+      uses: ./.github/actions/app-registry-record-build
+      with:
+        address: ${{ vars.APP_REGISTRY_ADDRESS }}
         # Builder credential -- repository secret, deliberately never an
         # Environment secret (see DEPLOY.md "Where each secret goes"): this
         # identity can record builds/artifacts but carries no promoter role,
@@ -483,42 +464,31 @@ jobs:
         # app-registry-builder -- see issue #539. APP_REGISTRY_BUILDER_ENV is
         # a repository variable selecting which; only "dev" is wired up in
         # CI today, hence the fallback.
-        GRPC_AUTH_MODE: oidc
-        GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-        GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-      run: |
-        FULL_APP_NAME="${DOMAIN}-${APP}"
-        REPOSITORY="ghcr.io/${{ github.repository_owner }}/${FULL_APP_NAME}"
+        token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+        client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+        git-sha: ${{ github.sha }}
+        git-ref: ${{ github.ref }}
+        workflow-run-id: ${{ github.run_id }}
+        workflow-attempt: ${{ github.run_attempt }}
+        actor: ${{ github.actor }}
+        idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}
 
-        echo "Resolving digest for ${REPOSITORY}:${VERSION}..."
-        DIGEST=$(docker buildx imagetools inspect "${REPOSITORY}:${VERSION}" | awk '/^Digest:/ {print $2; exit}')
-        if [[ -z "$DIGEST" ]]; then
-          echo "::warning::Could not resolve digest for ${REPOSITORY}:${VERSION}; skipping App Registry recording"
-          exit 0
-        fi
-
-        IDEMPOTENCY_PREFIX="${{ github.run_id }}-${{ github.run_attempt }}"
-
-        BUILD_JSON=$("$APP_REGISTRY_CLI" builds record \
-          --git-sha "${{ github.sha }}" \
-          --git-ref "${{ github.ref }}" \
-          --workflow-run-id "${{ github.run_id }}" \
-          --workflow-attempt "${{ github.run_attempt }}" \
-          --actor "${{ github.actor }}" \
-          --idempotency-key "$IDEMPOTENCY_PREFIX")
-        BUILD_ID=$(echo "$BUILD_JSON" | jq -r '.build.buildId')
-
-        "$APP_REGISTRY_CLI" artifacts record \
-          --build-id "$BUILD_ID" \
-          --kind image \
-          --owner "$FULL_APP_NAME" \
-          --repository "$REPOSITORY" \
-          --version "$VERSION" \
-          --digest "$DIGEST" \
-          --idempotency-key "${IDEMPOTENCY_PREFIX}-${FULL_APP_NAME}-image"
-
-        echo "✅ Recorded ${FULL_APP_NAME} ${VERSION} (${DIGEST}) in App Registry"
+    - name: Record image artifact in App Registry
+      if: ${{ github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-build.outputs.build-id != '' }}
+      continue-on-error: true
+      timeout-minutes: 5
+      uses: ./.github/actions/app-registry-record-image
+      with:
+        address: ${{ vars.APP_REGISTRY_ADDRESS }}
+        token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+        client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+        build-id: ${{ steps.app-registry-build.outputs.build-id }}
+        owner-full-name: ${{ matrix.domain }}-${{ matrix.app }}
+        repository: ghcr.io/${{ github.repository_owner }}/${{ matrix.domain }}-${{ matrix.app }}
+        version: ${{ matrix.version || needs.plan-release.outputs.version }}
+        idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.domain }}-${{ matrix.app }}-image
 
     - name: Generate release notes for app
       if: ${{ github.event.inputs.dry_run == 'false' }}
@@ -995,33 +965,48 @@ jobs:
     # the chart have been pushed — see ARCHITECTURE.md "Chart -> image
     # lockfile" for why that resolution can't happen inside the hermetic
     # Bazel action that composes the chart.
-    - name: Record chart artifacts in App Registry
+    - name: Record chart build in App Registry
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true'
+      id: app-registry-build
       continue-on-error: true
-      # See the "Record build and artifact in App Registry" step above -- same
-      # hang risk (issue #539), same fix.
+      # See the "Record build in App Registry" step above -- same hang risk
+      # (issue #539), same fix.
+      timeout-minutes: 5
+      uses: ./.github/actions/app-registry-record-build
+      with:
+        address: ${{ vars.APP_REGISTRY_ADDRESS }}
+        # See the "Record build in App Registry" step above -- same builder
+        # credential, same repository-secret placement, same reason
+        # (DEPLOY.md section 4), same env-scoped client id.
+        token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+        client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+        git-sha: ${{ github.sha }}
+        git-ref: ${{ github.ref }}
+        workflow-run-id: ${{ github.run_id }}
+        workflow-attempt: ${{ github.run_attempt }}
+        actor: ${{ github.actor }}
+        idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}
+
+    - name: Record chart artifacts in App Registry
+      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-build.outputs.build-id != ''
+      continue-on-error: true
+      # See the "Record build in App Registry" step above -- same hang risk
+      # (issue #539), same fix.
       timeout-minutes: 5
       env:
         CHARTS: ${{ steps.plan.outputs.charts }}
         APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
-        # See the "Record build and artifact in App Registry" step above --
-        # same builder credential, same repository-secret placement, same
-        # reason (DEPLOY.md section 4), same env-scoped client id.
+        # See the "Record build in App Registry" step above -- same builder
+        # credential, same repository-secret placement, same reason
+        # (DEPLOY.md section 4), same env-scoped client id.
         GRPC_AUTH_MODE: oidc
         GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
         GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
         GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+        BUILD_ID: ${{ steps.app-registry-build.outputs.build-id }}
       run: |
         IDEMPOTENCY_PREFIX="${{ github.run_id }}-${{ github.run_attempt }}"
-
-        BUILD_JSON=$("$APP_REGISTRY_CLI" builds record \
-          --git-sha "${{ github.sha }}" \
-          --git-ref "${{ github.ref }}" \
-          --workflow-run-id "${{ github.run_id }}" \
-          --workflow-attempt "${{ github.run_attempt }}" \
-          --actor "${{ github.actor }}" \
-          --idempotency-key "$IDEMPOTENCY_PREFIX")
-        BUILD_ID=$(echo "$BUILD_JSON" | jq -r '.build.buildId')
 
         IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
         for CHART in "${CHART_ARRAY[@]}"; do

@@ -1,0 +1,69 @@
+name: 'App Registry: Record Build'
+description: >-
+  Records (or idempotently replays) the Build row for one CI run via
+  `app-registry builds record`. One Build row represents one workflow run,
+  not one app -- callers that pass the same idempotency-key (workflow run
+  id + attempt) safely collapse onto the same row and get the same
+  build-id back, which is how release.yml's per-app matrix jobs all attach
+  their artifacts to a single build.
+
+  Requires APP_REGISTRY_CLI env var already set (see
+  .github/actions/download-release-tools).
+
+inputs:
+  address:
+    required: true
+  token-url:
+    required: true
+  client-id:
+    required: true
+  client-secret:
+    required: true
+  git-sha:
+    required: true
+  git-ref:
+    required: true
+  workflow-run-id:
+    required: true
+  workflow-attempt:
+    required: true
+  actor:
+    required: true
+  idempotency-key:
+    required: true
+
+outputs:
+  build-id:
+    description: 'The recorded (or replayed) build_id'
+    value: ${{ steps.record.outputs.build-id }}
+
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/app-registry-auth
+      with:
+        address: ${{ inputs.address }}
+        token-url: ${{ inputs.token-url }}
+        client-id: ${{ inputs.client-id }}
+        client-secret: ${{ inputs.client-secret }}
+
+    - name: Record build
+      id: record
+      shell: bash
+      env:
+        GIT_SHA: ${{ inputs.git-sha }}
+        GIT_REF: ${{ inputs.git-ref }}
+        WORKFLOW_RUN_ID: ${{ inputs.workflow-run-id }}
+        WORKFLOW_ATTEMPT: ${{ inputs.workflow-attempt }}
+        ACTOR: ${{ inputs.actor }}
+        IDEMPOTENCY_KEY: ${{ inputs.idempotency-key }}
+      run: |
+        BUILD_JSON=$("$APP_REGISTRY_CLI" builds record \
+          --git-sha "$GIT_SHA" \
+          --git-ref "$GIT_REF" \
+          --workflow-run-id "$WORKFLOW_RUN_ID" \
+          --workflow-attempt "$WORKFLOW_ATTEMPT" \
+          --actor "$ACTOR" \
+          --idempotency-key "$IDEMPOTENCY_KEY")
+        BUILD_ID=$(echo "$BUILD_JSON" | jq -r '.build.buildId')
+        echo "build-id=$BUILD_ID" >> "$GITHUB_OUTPUT"

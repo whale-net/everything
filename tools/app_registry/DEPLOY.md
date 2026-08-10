@@ -173,6 +173,32 @@ manifest, deliberately.
 > `promote.yml` (§5 below) exists as of AR-3d too, reading each environment's
 > promoter secret the same way.
 
+These five env vars, and the reconcile/record-build/record-artifact call
+shapes themselves, are duplicated across `release.yml`, `ci.yml`, and
+`promote.yml`. Rather than keep them in sync by hand, they're wired through
+composite actions in `.github/actions/`:
+
+| Action | Wraps |
+|---|---|
+| `app-registry-auth` | Exports the five `APP_REGISTRY_ADDRESS`/`GRPC_AUTH_*` vars from typed inputs. Used directly by `promote.yml`; used internally by the other three below. |
+| `app-registry-reconcile` | `release_helper_go manifest-set` piped into `app-registry apps reconcile`. |
+| `app-registry-record-build` | `app-registry builds record`, outputting `build-id`. |
+| `app-registry-record-image` | Digest resolution (`docker buildx imagetools inspect`) + `app-registry artifacts record --kind image`. |
+
+Any future workflow that needs to record into the App Registry should call
+these instead of re-copying the `env:` block or the bash.
+
+**`app-registry-reconcile` runs from `ci.yml`, not `release.yml`.** It's a
+`build-release-tools` → `reconcile-app-registry` job pair gated
+`if: github.event_name == 'push' && github.ref == 'refs/heads/main'`, so it
+only ever fires once per merge to `main`, against that merge's exact tree.
+It deliberately does **not** run as part of a release: `release.yml` is a
+`workflow_dispatch` that can target any ref, including an old tag for a
+hotfix, and `ReconcileApps` treats whatever manifest set it's given as the
+complete truth -- reconciling an old commit would flag every app added
+since as `MISSING`. See ARCHITECTURE.md "Rejected alternatives" for the
+scoped-registration alternative this ruled out.
+
 Client-side variables the CLI reads (see [ENV.md](ENV.md)):
 
 | Variable | Value |
@@ -189,7 +215,7 @@ promoting. Getting it wrong defeats the entire credential model.
 
 | Secret | Location | Why |
 |---|---|---|
-| builder client secret (`APP_REGISTRY_BUILDER_CLIENT_SECRET`) | **Repository** secret | Every release job needs it; it grants recording only — wired into `release.yml`'s two recording steps |
+| builder client secret (`APP_REGISTRY_BUILDER_CLIENT_SECRET`) | **Repository** secret | Every release job needs it; it grants recording only — wired into `release.yml`'s reconcile/build/artifact recording steps, each a call to one of the `.github/actions/app-registry-*` composite actions (see below) |
 | `app-registry-promoter-prod` secret (`APP_REGISTRY_PROMOTER_CLIENT_SECRET`) | **Environment** secret on the `prod` GitHub Environment | Only a job declaring `environment: prod` can read it, and that declaration triggers the environment's required reviewers — `promote.yml` declares `environment: ${{ inputs.environment }}` for exactly this reason |
 | `app-registry-promoter-stage` / `-dev` (`APP_REGISTRY_PROMOTER_CLIENT_SECRET`) | Environment secret on the matching Environment, same secret name, different Environment | Same, per environment — the Environment scoping is what selects the right client, not the secret name |
 | admin client secret | Not in GitHub | Human-operated; keep it out of CI entirely |
