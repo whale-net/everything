@@ -109,9 +109,6 @@ jobs:
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
 
-    - name: Build app-registry CLI
-      run: bazel build --config=ci //tools/app_registry/cli:app-registry
-
     # Read from *this job's* Environment secrets (scoped by `environment:`
     # above), never from repository secrets. See DEPLOY.md "Where each
     # secret goes" -- each GitHub Environment holds the promoter client
@@ -132,8 +129,6 @@ jobs:
         ALLOW_OVERRIDE: ${{ inputs.allow_override }}
         DRY_RUN: ${{ inputs.dry_run }}
       run: |
-        APP_REGISTRY_CLI="$(bazel info bazel-bin --config=ci)/tools/app_registry/cli/app-registry_/app-registry"
-
         ARGS=(promote "$OWNER_FULL_NAME" "$VERSION" --env "$ENVIRONMENT" --kind "$KIND")
         if [[ -n "$REASON" ]]; then
           ARGS+=(--reason "$REASON")
@@ -145,7 +140,7 @@ jobs:
           ARGS+=(--dry-run)
         fi
 
-        "$APP_REGISTRY_CLI" "${ARGS[@]}"
+        bazel run --config=ci-release //tools/app_registry/cli:app-registry -- "${ARGS[@]}"
 
     - name: Rollback
       if: inputs.action == 'rollback'
@@ -161,8 +156,6 @@ jobs:
         REASON: ${{ inputs.reason }}
         DRY_RUN: ${{ inputs.dry_run }}
       run: |
-        APP_REGISTRY_CLI="$(bazel info bazel-bin --config=ci)/tools/app_registry/cli/app-registry_/app-registry"
-
         ARGS=(rollback "$OWNER_FULL_NAME" --env "$ENVIRONMENT" --kind "$KIND")
         if [[ -n "$REASON" ]]; then
           ARGS+=(--reason "$REASON")
@@ -171,7 +164,7 @@ jobs:
           ARGS+=(--dry-run)
         fi
 
-        "$APP_REGISTRY_CLI" "${ARGS[@]}"
+        bazel run --config=ci-release //tools/app_registry/cli:app-registry -- "${ARGS[@]}"
 
     # No continue-on-error anywhere above: a failed promotion must fail the
     # job loudly, unlike the best-effort recording steps in release.yml.

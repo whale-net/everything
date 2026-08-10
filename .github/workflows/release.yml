@@ -778,10 +778,13 @@ jobs:
         # Create output directory for charts
         mkdir -p /tmp/helm-charts
         
-        # Build the release helper binary first (avoids nested Bazel invocations)
+        # Build the release helper binary first (avoids nested Bazel invocations).
+        # ci-release config: builds from source (no remote cache reads, and
+        # --remote_download_toplevel so the binary actually lands on disk --
+        # plain --config=ci sets --remote_download_minimal, see #530).
         echo "Building release helper..."
-        bazel build --config=ci //tools/release_helper_go:release_helper_go
-        RELEASE_HELPER="$(bazel info bazel-bin --config=ci)/tools/release_helper_go/release_helper_go_/release_helper_go"
+        bazel build --config=ci-release //tools/release_helper_go:release_helper_go
+        RELEASE_HELPER="$(bazel info bazel-bin --config=ci-release)/tools/release_helper_go/release_helper_go_/release_helper_go"
         
         # Parse chart list and build each chart with proper versioning
         CHARTS="${{ steps.plan.outputs.charts }}"
