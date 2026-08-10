@@ -97,7 +97,13 @@ Two `continue-on-error` steps, both gated on `vars.APP_REGISTRY_CICD_OPT_IN
 registry calls at all — the recording steps do not run. Because they are
 `continue-on-error`, **a failed recording still shows a green job** — check
 the step's own log, not the job status, to know whether it actually
-recorded anything.
+recorded anything. As of issue #547, a failed recording also carries a
+`::warning::` annotation and a `$GITHUB_STEP_SUMMARY` entry naming which of
+two cases it is — "app not registered yet" (the release ran ahead of
+`ReconcileApps`) vs. a genuine registry error — so this no longer requires
+opening the log; see
+[`tools/app_registry/OPERATIONS.md` "Release ran ahead of
+reconcile"](../tools/app_registry/OPERATIONS.md#release-ran-ahead-of-reconcile-issue-547).
 
 ### `promote.yml`
 

@@ -1,0 +1,8 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "apierrors",
+    srcs = ["apierrors.go"],
+    importpath = "github.com/whale-net/everything/tools/app_registry/apierrors",
+    visibility = ["//visibility:public"],
+)

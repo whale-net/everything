@@ -439,6 +439,15 @@ jobs:
     # the variable unset (the default), this step is skipped entirely and CI
     # makes no registry calls. continue-on-error so a registry outage never
     # fails a release.
+    #
+    # This can run before main's ReconcileApps has caught up with this
+    # commit (issue #547) -- release.yml deliberately does NOT gate on that,
+    # and does NOT upsert app/chart identity itself; see
+    # tools/app_registry/ARCHITECTURE.md "Rejected alternatives" for the two
+    # options considered and rejected, and OPERATIONS.md for what an
+    # operator does when that happens. The recording actions below classify
+    # that specific failure into its own annotation instead of a generic
+    # registry-error one.
     - name: Record build in App Registry
       if: ${{ github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
       id: app-registry-build
@@ -960,7 +969,16 @@ jobs:
     # tools/app_registry/ARCHITECTURE.md -> "APP_REGISTRY_CICD_OPT_IN": with
     # the variable unset (the default), this step is skipped entirely and CI
     # makes no registry calls. continue-on-error so a registry outage never
-    # fails a release. Resolves each chart's AR-2b compose-time image
+    # fails a release.
+    #
+    # This can run before main's ReconcileApps has caught up with this
+    # commit (issue #547) -- release.yml deliberately does NOT gate on that,
+    # and does NOT upsert app/chart identity itself; see
+    # tools/app_registry/ARCHITECTURE.md "Rejected alternatives" for the two
+    # options considered and rejected, and OPERATIONS.md for what an
+    # operator does when that happens. The recording actions below classify
+    # that specific failure into its own annotation instead of a generic
+    # registry-error one. Resolves each chart's AR-2b compose-time image
     # lockfile (repository+tag, no digests) to digests now that images and
     # the chart have been pushed — see ARCHITECTURE.md "Chart -> image
     # lockfile" for why that resolution can't happen inside the hermetic
@@ -1036,7 +1054,25 @@ jobs:
             jq --argjson e "$ENTRY" '. + [$e]' "$CONTAINS_FILE" > "${CONTAINS_FILE}.tmp" && mv "${CONTAINS_FILE}.tmp" "$CONTAINS_FILE"
           done < <(echo "$LOCKFILE_JSON" | jq -c '.images[]')
 
-          "$APP_REGISTRY_CLI" artifacts record \
+          # issue #547 -- decision: keep recording best-effort/non-blocking
+          # (the whole step is continue-on-error above), but stop treating
+          # "app/chart not registered yet" the same as a genuine registry
+          # outage. The CLI exits 3 (exitOwnerNotReconciled, see
+          # cli/cmd/root.go) specifically for that case, backed by a
+          # structured gRPC status detail
+          # (apierrors.ReasonOwnerNotReconciled) rather than a parsed
+          # message -- see .github/actions/app-registry-record-image's same
+          # classification for the image side of this story, and
+          # tools/app_registry/ARCHITECTURE.md "Rejected alternatives" for
+          # why release.yml deliberately does not self-heal this.
+          #
+          # `continue` (not the step failing outright) after a warning here
+          # is deliberately different from the image action: this loop
+          # records one chart per iteration, and one chart's failure must
+          # not silently skip every chart queued after it under this
+          # step's default `set -e`.
+          set +e
+          RECORD_OUTPUT=$("$APP_REGISTRY_CLI" artifacts record \
             --build-id "$BUILD_ID" \
             --kind chart \
             --owner "$PUBLISHED_NAME" \
@@ -1044,11 +1080,41 @@ jobs:
             --version "$CHART_VERSION" \
             --digest "$CHART_DIGEST" \
             --contains "$CONTAINS_FILE" \
-            --idempotency-key "${IDEMPOTENCY_PREFIX}-${PUBLISHED_NAME}-chart"
-
+            --idempotency-key "${IDEMPOTENCY_PREFIX}-${PUBLISHED_NAME}-chart" 2>&1)
+          RECORD_EXIT=$?
+          set -e
           rm -f "$CONTAINS_FILE"
-          echo "✅ Recorded $PUBLISHED_NAME $CHART_VERSION ($CHART_DIGEST) in App Registry"
+
+          if [[ $RECORD_EXIT -eq 0 ]]; then
+            echo "✅ Recorded $PUBLISHED_NAME $CHART_VERSION ($CHART_DIGEST) in App Registry"
+          elif [[ $RECORD_EXIT -eq 3 ]]; then
+            echo "$RECORD_OUTPUT"
+            echo "::warning title=App Registry: ${PUBLISHED_NAME} not registered yet::${PUBLISHED_NAME} is not registered in the App Registry, so ${CHART_VERSION} was NOT recorded. This release ran ahead of ReconcileApps, which runs on push to main via ci.yml -- wait for main's CI to finish, then re-run this release job to record it (or accept the miss; the chart itself self-heals on the next reconcile, but this specific artifact record will not be backfilled). See tools/app_registry/OPERATIONS.md."
+            {
+              echo "### ⚠️ App Registry: \`${PUBLISHED_NAME}\` not registered yet"
+              echo ""
+              echo "\`${PUBLISHED_NAME}\` \`${CHART_VERSION}\` was **not recorded** in the App Registry."
+              echo ""
+              echo "This release ran ahead of \`ReconcileApps\`, which runs on push to \`main\` via \`ci.yml\`. This is an accepted, documented tradeoff -- see \`tools/app_registry/ARCHITECTURE.md\` (\"Release-vs-reconcile gap\") and \`tools/app_registry/OPERATIONS.md\` (\"Release ran ahead of reconcile\")."
+              echo ""
+              echo "**What to do:** wait for \`main\`'s CI to finish reconciling, then re-run this release job -- or accept the miss (the chart self-heals on the next reconcile; this specific artifact record does not get backfilled)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            RECORDING_HAD_FAILURE=1
+          else
+            echo "$RECORD_OUTPUT"
+            echo "::warning title=App Registry: recording skipped (registry error)::Could not record ${PUBLISHED_NAME} ${CHART_VERSION} in the App Registry -- a registry outage, auth failure, or other transient error (NOT a missing-owner case). Recording is best-effort; the release still succeeded."
+            RECORDING_HAD_FAILURE=1
+          fi
         done
+
+        # Fail this step's own exit status if any chart's recording failed,
+        # matching app-registry-record-image's behavior (a red X on the
+        # step, job still green thanks to this step's continue-on-error) --
+        # but only after every chart in the loop got its own attempt and
+        # its own annotation above, not just the first one.
+        if [[ "${RECORDING_HAD_FAILURE:-0}" -eq 1 ]]; then
+          exit 1
+        fi
 
     - name: Report deployment URL
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'

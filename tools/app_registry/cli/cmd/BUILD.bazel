@@ -17,10 +17,13 @@ go_library(
     deps = [
         "//libs/go/grpcauth",
         "//libs/go/grpcclient",
+        "//tools/app_registry/apierrors",
         "//tools/app_registry/protos:appregistrypb",
         "//tools/appmeta/proto:appmetapb",
         "@com_github_google_uuid//:uuid",
         "@com_github_spf13_cobra//:cobra",
+        "@org_golang_google_genproto_googleapis_rpc//errdetails",
+        "@org_golang_google_grpc//status",
         "@org_golang_google_protobuf//encoding/protojson",
         "@org_golang_google_protobuf//proto",
     ],
@@ -28,7 +31,16 @@ go_library(
 
 go_test(
     name = "cmd_test",
-    srcs = ["promote_test.go"],
+    srcs = [
+        "promote_test.go",
+        "root_test.go",
+    ],
     embed = [":cmd"],
-    deps = ["//tools/app_registry/protos:appregistrypb"],
+    deps = [
+        "//tools/app_registry/apierrors",
+        "//tools/app_registry/protos:appregistrypb",
+        "@org_golang_google_genproto_googleapis_rpc//errdetails",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
 )
