@@ -1,9 +1,13 @@
 name: 'Download Release Tools'
 description: >-
-  Downloads the release_helper_go / app-registry CLI binaries built once by
-  the build-release-tools job and exports RELEASE_HELPER / APP_REGISTRY_CLI
-  env vars pointing at the executables. Avoids every downstream job
-  rebuilding these tools from source (see PR discussion on #530-#532).
+  Downloads whichever of the release_helper_go / app-registry CLI binaries
+  the calling workflow's build-release-tools job produced, and exports
+  RELEASE_HELPER / APP_REGISTRY_CLI env vars for the ones present. Avoids
+  every downstream job rebuilding these tools from source (see PR discussion
+  on #530-#532, #535). Not every workflow needs both binaries -- e.g. ci.yml
+  only builds release_helper_go -- so this only exports a var for a binary
+  that's actually in the artifact.
+
 branding:
   icon: 'download'
   color: 'green'
@@ -26,7 +30,12 @@ runs:
     - name: Make tools executable and export paths
       shell: bash
       run: |
-        chmod +x "${{ runner.temp }}/release-tools/release_helper_go"
-        chmod +x "${{ runner.temp }}/release-tools/app-registry"
-        echo "RELEASE_HELPER=${{ runner.temp }}/release-tools/release_helper_go" >> "$GITHUB_ENV"
-        echo "APP_REGISTRY_CLI=${{ runner.temp }}/release-tools/app-registry" >> "$GITHUB_ENV"
+        DIR="${{ runner.temp }}/release-tools"
+        if [[ -f "$DIR/release_helper_go" ]]; then
+          chmod +x "$DIR/release_helper_go"
+          echo "RELEASE_HELPER=$DIR/release_helper_go" >> "$GITHUB_ENV"
+        fi
+        if [[ -f "$DIR/app-registry" ]]; then
+          chmod +x "$DIR/app-registry"
+          echo "APP_REGISTRY_CLI=$DIR/app-registry" >> "$GITHUB_ENV"
+        fi
