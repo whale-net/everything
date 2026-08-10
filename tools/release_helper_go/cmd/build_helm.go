@@ -269,24 +269,39 @@ func packageChartWithVersion(chartDir, chartName, version, outDir string, appVer
 		}
 	}
 
-	// Update values.yaml imageTag for resolved app versions
+	// Update values.yaml imageTag for resolved app versions. A resolved
+	// version that fails to land in values.yaml is worse than useless — it
+	// silently ships whatever imageTag was baked in at `bazel build` time
+	// (typically "latest"), so every step here fails hard rather than
+	// swallowing the error, unlike the historical version of this code.
 	valuesYaml := filepath.Join(tmpChartDir, "values.yaml")
 	if len(appVersions) > 0 {
-		if data, err := os.ReadFile(valuesYaml); err == nil {
-			var values map[string]interface{}
-			if err := yaml.Unmarshal(data, &values); err == nil {
-				if apps, ok := values["apps"].(map[string]interface{}); ok {
-					for appKey, ver := range appVersions {
-						if appEntry, ok := apps[appKey].(map[string]interface{}); ok {
-							appEntry["imageTag"] = ver
-							fmt.Printf("Updated %s imageTag to %s\n", appKey, ver)
-						}
-					}
-				}
-				if out, err := yaml.Marshal(values); err == nil {
-					_ = os.WriteFile(valuesYaml, out, 0644)
-				}
+		data, err := os.ReadFile(valuesYaml)
+		if err != nil {
+			return "", fmt.Errorf("read values.yaml: %w", err)
+		}
+		var values map[string]interface{}
+		if err := yaml.Unmarshal(data, &values); err != nil {
+			return "", fmt.Errorf("parse values.yaml: %w", err)
+		}
+		apps, ok := values["apps"].(map[string]interface{})
+		if !ok {
+			return "", fmt.Errorf("values.yaml has no \"apps\" map to set imageTag on")
+		}
+		for appKey, ver := range appVersions {
+			appEntry, ok := apps[appKey].(map[string]interface{})
+			if !ok {
+				return "", fmt.Errorf("values.yaml \"apps\" has no entry %q to set imageTag on (chart's apps map may use a different key convention than the resolved app versions)", appKey)
 			}
+			appEntry["imageTag"] = ver
+			fmt.Printf("Updated %s imageTag to %s\n", appKey, ver)
+		}
+		out, err := yaml.Marshal(values)
+		if err != nil {
+			return "", fmt.Errorf("marshal values.yaml: %w", err)
+		}
+		if err := os.WriteFile(valuesYaml, out, 0644); err != nil {
+			return "", fmt.Errorf("write values.yaml: %w", err)
 		}
 	}
 

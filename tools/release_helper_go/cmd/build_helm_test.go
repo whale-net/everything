@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
@@ -69,5 +72,51 @@ func TestFindChartAppPrefersChartDomain(t *testing.T) {
 	}
 	if matched.Domain != "manmanv2" {
 		t.Errorf("expected match in chart's own domain, got domain %q", matched.Domain)
+	}
+}
+
+// ── packageChartWithVersion's values.yaml imageTag guardrail ───────────────
+//
+// These tests only exercise the appVersions-key-mismatch failure path,
+// which returns before packageChartWithVersion ever shells out to `helm
+// package` — the Bazel go_test target has no `helm` binary as a data
+// dependency, so a success-path test would fail on `helm: executable file
+// not found` rather than testing anything meaningful here.
+
+func TestPackageChartWithVersionErrorsOnKeyMismatch(t *testing.T) {
+	chartDir := t.TempDir()
+	writeFile(t, filepath.Join(chartDir, "Chart.yaml"), "name: control-services\nversion: 0.0.0-dev\n")
+	// values.yaml keyed the way composer.go actually keys it.
+	writeFile(t, filepath.Join(chartDir, "values.yaml"), "apps:\n  manmanv2-event-processor:\n    imageTag: latest\n")
+
+	// A bare app name, as the pre-fix resolveChartAppVersions produced,
+	// must not silently no-op against the domain-prefixed values.yaml key.
+	appVersions := map[string]string{"event-processor": "v0.2.18"}
+
+	_, err := packageChartWithVersion(chartDir, "helm-manmanv2-control-services", "v0.2.18", t.TempDir(), appVersions)
+	if err == nil {
+		t.Fatal("expected error when appVersions key doesn't match values.yaml apps key, got nil")
+	}
+	if !strings.Contains(err.Error(), "event-processor") {
+		t.Errorf("expected error to name the unmatched key, got: %v", err)
+	}
+}
+
+func TestPackageChartWithVersionErrorsOnMissingAppsMap(t *testing.T) {
+	chartDir := t.TempDir()
+	writeFile(t, filepath.Join(chartDir, "Chart.yaml"), "name: control-services\nversion: 0.0.0-dev\n")
+	writeFile(t, filepath.Join(chartDir, "values.yaml"), "global:\n  namespace: manmanv2\n")
+
+	appVersions := map[string]string{"manmanv2-event-processor": "v0.2.18"}
+	_, err := packageChartWithVersion(chartDir, "helm-manmanv2-control-services", "v0.2.18", t.TempDir(), appVersions)
+	if err == nil {
+		t.Fatal("expected error when values.yaml has no apps map, got nil")
+	}
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
 	}
 }
