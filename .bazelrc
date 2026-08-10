@@ -37,7 +37,6 @@ build:ci --remote_download_minimal
 # Matches every file under any `testlogs/` directory, which is where Bazel
 # places test.log, test.xml, test.outputs/, coverage.dat, etc.
 build:ci --remote_download_regex=.*/testlogs/.*
-build:ci-build-only --remote_download_minimal
 # Skip checking external repo files for modifications - deps are pinned by lockfiles
 build:ci --noexperimental_check_external_repository_files
 # Hardlink from repository cache instead of copying - reduces I/O on CI runners
@@ -50,18 +49,11 @@ build:ci --java_runtime_version=remotejdk_11
 test:ci --cache_test_results=yes
 test:ci --test_timeout_filters=-eternal
 
-# Container image build optimization for CI (used by docker job in ci.yml)
-# Use toplevel downloads - downloads only the final outputs needed
-# Intermediate layer tars are cached remotely but not downloaded locally in CI
+# Toplevel downloads on top of ci -- use whenever a step needs a real file
+# on disk afterward (image builds, tool binaries, generated specs), since
+# plain ci's --remote_download_minimal above leaves outputs remote-only.
 build:ci-images --config=ci
 build:ci-images --remote_download_toplevel
-
-# Clean release builds - no remote cache reads to prevent cache poisoning
-# Used by the release workflow when publishing images to registry
-# Still uploads results so CI jobs benefit, but never trusts cached artifacts
-build:ci-release --config=ci
-build:ci-release --noremote_accept_cached
-build:ci-release --remote_download_toplevel
 
 # Test configurations
 test --test_output=errors
