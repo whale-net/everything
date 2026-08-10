@@ -423,13 +423,9 @@ jobs:
           exit 0
         fi
 
-        echo "Building app-registry CLI..."
-        bazel build --config=ci-release //tools/app_registry/cli:app-registry
-        APP_REGISTRY_CLI="$(bazel info bazel-bin --config=ci-release)/tools/app_registry/cli/app-registry_/app-registry"
-
         IDEMPOTENCY_PREFIX="${{ github.run_id }}-${{ github.run_attempt }}"
 
-        BUILD_JSON=$("$APP_REGISTRY_CLI" builds record \
+        BUILD_JSON=$(bazel run --config=ci-release //tools/app_registry/cli:app-registry -- builds record \
           --git-sha "${{ github.sha }}" \
           --git-ref "${{ github.ref }}" \
           --workflow-run-id "${{ github.run_id }}" \
@@ -438,7 +434,7 @@ jobs:
           --idempotency-key "$IDEMPOTENCY_PREFIX")
         BUILD_ID=$(echo "$BUILD_JSON" | jq -r '.build.buildId')
 
-        "$APP_REGISTRY_CLI" artifacts record \
+        bazel run --config=ci-release //tools/app_registry/cli:app-registry -- artifacts record \
           --build-id "$BUILD_ID" \
           --kind image \
           --owner "$FULL_APP_NAME" \
@@ -934,14 +930,9 @@ jobs:
         GRPC_AUTH_CLIENT_ID: app-registry-builder
         GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
       run: |
-        echo "Building release helper and app-registry CLI..."
-        bazel build --config=ci-release //tools/release_helper_go:release_helper_go //tools/app_registry/cli:app-registry
-        RELEASE_HELPER="$(bazel info bazel-bin --config=ci-release)/tools/release_helper_go/release_helper_go_/release_helper_go"
-        APP_REGISTRY_CLI="$(bazel info bazel-bin --config=ci-release)/tools/app_registry/cli/app-registry_/app-registry"
-
         IDEMPOTENCY_PREFIX="${{ github.run_id }}-${{ github.run_attempt }}"
 
-        BUILD_JSON=$("$APP_REGISTRY_CLI" builds record \
+        BUILD_JSON=$(bazel run --config=ci-release //tools/app_registry/cli:app-registry -- builds record \
           --git-sha "${{ github.sha }}" \
           --git-ref "${{ github.ref }}" \
           --workflow-run-id "${{ github.run_id }}" \
@@ -964,7 +955,7 @@ jobs:
           echo "Resolving pinned image digests for $CHART..."
           CONTAINS_FILE=$(mktemp)
           echo "[]" > "$CONTAINS_FILE"
-          LOCKFILE_JSON=$("$RELEASE_HELPER" read-chart-lockfile "$CHART" --skip-build)
+          LOCKFILE_JSON=$(bazel run --config=ci-release //tools/release_helper_go:release_helper_go -- read-chart-lockfile "$CHART" --skip-build)
           while read -r img; do
             [[ -z "$img" ]] && continue
             IMG_REPO=$(echo "$img" | jq -r '.repository')
@@ -978,7 +969,7 @@ jobs:
             jq --argjson e "$ENTRY" '. + [$e]' "$CONTAINS_FILE" > "${CONTAINS_FILE}.tmp" && mv "${CONTAINS_FILE}.tmp" "$CONTAINS_FILE"
           done < <(echo "$LOCKFILE_JSON" | jq -c '.images[]')
 
-          "$APP_REGISTRY_CLI" artifacts record \
+          bazel run --config=ci-release //tools/app_registry/cli:app-registry -- artifacts record \
             --build-id "$BUILD_ID" \
             --kind chart \
             --owner "$PUBLISHED_NAME" \
