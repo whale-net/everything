@@ -140,7 +140,7 @@ jobs:
           ARGS+=(--dry-run)
         fi
 
-        bazel run --config=ci-release //tools/app_registry/cli:app-registry -- "${ARGS[@]}"
+        bazel run --config=ci //tools/app_registry/cli:app-registry -- "${ARGS[@]}"
 
     - name: Rollback
       if: inputs.action == 'rollback'
@@ -164,7 +164,7 @@ jobs:
           ARGS+=(--dry-run)
         fi
 
-        bazel run --config=ci-release //tools/app_registry/cli:app-registry -- "${ARGS[@]}"
+        bazel run --config=ci //tools/app_registry/cli:app-registry -- "${ARGS[@]}"
 
     # No continue-on-error anywhere above: a failed promotion must fail the
     # job loudly, unlike the best-effort recording steps in release.yml.

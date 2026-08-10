@@ -1,0 +1,32 @@
+name: 'Download Release Tools'
+description: >-
+  Downloads the release_helper_go / app-registry CLI binaries built once by
+  the build-release-tools job and exports RELEASE_HELPER / APP_REGISTRY_CLI
+  env vars pointing at the executables. Avoids every downstream job
+  rebuilding these tools from source (see PR discussion on #530-#532).
+branding:
+  icon: 'download'
+  color: 'green'
+
+inputs:
+  name:
+    description: 'Artifact name to download'
+    required: false
+    default: 'release-tools'
+
+runs:
+  using: composite
+  steps:
+    - name: Download release tools artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ runner.temp }}/release-tools
+
+    - name: Make tools executable and export paths
+      shell: bash
+      run: |
+        chmod +x "${{ runner.temp }}/release-tools/release_helper_go"
+        chmod +x "${{ runner.temp }}/release-tools/app-registry"
+        echo "RELEASE_HELPER=${{ runner.temp }}/release-tools/release_helper_go" >> "$GITHUB_ENV"
+        echo "APP_REGISTRY_CLI=${{ runner.temp }}/release-tools/app-registry" >> "$GITHUB_ENV"

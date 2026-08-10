@@ -85,11 +85,54 @@ jobs:
         
         echo "✅ Version input validation passed"
 
+  # Build release_helper_go and the app-registry CLI once and share them with
+  # every other job via upload-artifact/download-artifact (see .github/actions/
+  # download-release-tools). Every other job in this workflow used to build
+  # these tools from source itself -- once per matrix leg, once for helm
+  # charts, etc -- which is the same `bazel build --config=ci-release` cost
+  # paid N times per run. ci-release is used here (not plain ci) because it
+  # disables remote-cache reads for a from-source build; consumers of this
+  # binary include release-multiarch and build-helm-chart, which produce the
+  # actual published artifacts, so the whole run inherits that guarantee from
+  # a single build instead of re-deriving it per job.
+  build-release-tools:
+    name: Build Release Tools
+    runs-on: ubuntu-latest
+    needs: validate-inputs
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'release-tools'
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+
+    - name: Build release_helper_go and app-registry CLI
+      run: |
+        bazel build --config=ci-release \
+          //tools/release_helper_go:release_helper_go \
+          //tools/app_registry/cli:app-registry
+        BAZEL_BIN="$(bazel info bazel-bin --config=ci-release)"
+        mkdir -p /tmp/release-tools
+        cp "$BAZEL_BIN/tools/release_helper_go/release_helper_go_/release_helper_go" /tmp/release-tools/release_helper_go
+        cp "$BAZEL_BIN/tools/app_registry/cli/app-registry_/app-registry" /tmp/release-tools/app-registry
+
+    - name: Upload release tools artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-tools
+        path: /tmp/release-tools/
+        retention-days: 1
+
   # Detect what apps have changed and build release plan
   plan-release:
     name: Plan Release
     runs-on: ubuntu-latest
-    needs: validate-inputs
+    needs: [validate-inputs, build-release-tools]
     outputs:
       release-matrix: ${{ steps.plan.outputs.matrix }}
       version: ${{ steps.plan.outputs.version }}
@@ -101,14 +144,9 @@ jobs:
         fetch-depth: 0
         fetch-tags: true
         
-    - name: Setup Build Environment
-      uses: ./.github/actions/setup-build-env
-      with:
-        cache-suffix: 'docker'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-        
+    - name: Download release tools
+      uses: ./.github/actions/download-release-tools
+
     - name: Plan release using release helper tool
       id: plan
       run: |
@@ -123,7 +161,7 @@ jobs:
         # Only plan app release if apps are specified
         if [[ -n "$APPS_INPUT" ]]; then
           # Build the command based on the selected option
-          CMD="bazel run --config=ci //tools/release_helper_go:release_helper_go -- plan --event-type \"$EVENT_TYPE\" --apps \"$APPS_INPUT\" --format github"
+          CMD="\"$RELEASE_HELPER\" plan --event-type \"$EVENT_TYPE\" --apps \"$APPS_INPUT\" --format github"
           
           # Add --include-demo flag if checkbox is selected
           if [[ "$INCLUDE_DEMO" == "true" ]]; then
@@ -171,7 +209,7 @@ jobs:
   plan-openapi-builds:
     name: Plan OpenAPI Builds
     runs-on: ubuntu-latest
-    needs: plan-release
+    needs: [plan-release, build-release-tools]
     if: needs.plan-release.outputs.apps != ''
     outputs:
       openapi-matrix: ${{ steps.plan-openapi.outputs.matrix }}
@@ -179,24 +217,19 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
-    - name: Setup Build Environment
-      uses: ./.github/actions/setup-build-env
-      with:
-        cache-suffix: 'docker'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-        
+
+    - name: Download release tools
+      uses: ./.github/actions/download-release-tools
+
     - name: Plan OpenAPI spec builds
       id: plan-openapi
       env:
         APPS: ${{ needs.plan-release.outputs.apps }}
       run: |
         echo "Planning OpenAPI spec builds for apps: $APPS"
-        
+
         # Use release helper to identify apps with OpenAPI specs
-        PLAN_OUTPUT=$(bazel run --config=ci //tools/release_helper_go:release_helper_go -- plan-openapi-builds --apps "$APPS" --format github)
+        PLAN_OUTPUT=$("$RELEASE_HELPER" plan-openapi-builds --apps "$APPS" --format github)
         
         # Parse output
         echo "$PLAN_OUTPUT" | while IFS= read -r line; do
@@ -298,7 +331,7 @@ jobs:
   release:
     name: Release ${{ matrix.domain }}-${{ matrix.app }}
     runs-on: ubuntu-latest
-    needs: plan-release
+    needs: [plan-release, build-release-tools]
     if: needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
     strategy:
       matrix: ${{ fromJson(needs.plan-release.outputs.release-matrix) }}
@@ -309,7 +342,7 @@ jobs:
       with:
         fetch-depth: 0
         fetch-tags: true
-        
+
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
@@ -318,7 +351,14 @@ jobs:
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-        
+
+    # release_helper_go still invokes Bazel itself to build the per-app
+    # images (release-multiarch), so Setup Build Environment above is still
+    # needed -- this just fetches the already-built release_helper_go /
+    # app-registry binaries instead of rebuilding them in every matrix leg.
+    - name: Download release tools
+      uses: ./.github/actions/download-release-tools
+
     # Configure Git for tagging
     - name: Configure Git
       run: |
@@ -349,14 +389,11 @@ jobs:
         # Use full domain-app format to avoid ambiguity
         FULL_APP_NAME="${DOMAIN}-${APP}"
         echo "Building and releasing $FULL_APP_NAME version $VERSION using multiarch release system"
-        
-        # Build the release helper binary first (avoids nested Bazel invocations)
-        # Use ci-release config: builds from source (no remote cache reads) to prevent cache poisoning
-        echo "Building release helper..."
-        bazel build --config=ci-release //tools/release_helper_go:release_helper_go
 
-        # Execute the release helper directly (not via 'bazel run' to avoid deadlocks)
-        RELEASE_HELPER="$(bazel info bazel-bin --config=ci-release)/tools/release_helper_go/release_helper_go_/release_helper_go"
+        # $RELEASE_HELPER comes from the "Download release tools" step (built
+        # once by build-release-tools, not per matrix leg). Executed directly,
+        # not via 'bazel run', to avoid nested-Bazel-invocation deadlocks --
+        # release-multiarch itself shells out to Bazel to build the images.
 
         # Use release-multiarch with full domain-app name to ensure correct artifact is released
         if [[ "$DRY_RUN" == "true" ]]; then
@@ -425,7 +462,7 @@ jobs:
 
         IDEMPOTENCY_PREFIX="${{ github.run_id }}-${{ github.run_attempt }}"
 
-        BUILD_JSON=$(bazel run --config=ci-release //tools/app_registry/cli:app-registry -- builds record \
+        BUILD_JSON=$("$APP_REGISTRY_CLI" builds record \
           --git-sha "${{ github.sha }}" \
           --git-ref "${{ github.ref }}" \
           --workflow-run-id "${{ github.run_id }}" \
@@ -434,7 +471,7 @@ jobs:
           --idempotency-key "$IDEMPOTENCY_PREFIX")
         BUILD_ID=$(echo "$BUILD_JSON" | jq -r '.build.buildId')
 
-        bazel run --config=ci-release //tools/app_registry/cli:app-registry -- artifacts record \
+        "$APP_REGISTRY_CLI" artifacts record \
           --build-id "$BUILD_ID" \
           --kind image \
           --owner "$FULL_APP_NAME" \
@@ -468,7 +505,7 @@ jobs:
         echo "" >> $GITHUB_STEP_SUMMARY
         
         # Generate release notes using the release helper with full app name
-        RELEASE_NOTES=$(bazel run --config=ci //tools/release_helper_go:release_helper_go -- release-notes "$FULL_APP_NAME" \
+        RELEASE_NOTES=$("$RELEASE_HELPER" release-notes "$FULL_APP_NAME" \
           --current-tag "$TAG_NAME" \
           --format markdown 2>/dev/null || echo "Release notes generation skipped - no previous tags found")
         
@@ -496,7 +533,7 @@ jobs:
   create-github-releases:
     name: Create GitHub Releases
     runs-on: ubuntu-latest
-    needs: [plan-release, release, build-openapi-specs]
+    needs: [plan-release, release, build-openapi-specs, build-release-tools]
     if: always() && !cancelled() && needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null && github.event.inputs.dry_run == 'false' && needs.release.result == 'success' && (needs.build-openapi-specs.result == 'success' || needs.build-openapi-specs.result == 'skipped')
     steps:
     - name: Checkout code
@@ -504,15 +541,10 @@ jobs:
       with:
         fetch-depth: 0
         fetch-tags: true
-        
-    - name: Setup Build Environment
-      uses: ./.github/actions/setup-build-env
-      with:
-        cache-suffix: 'docker'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-    
+
+    - name: Download release tools
+      uses: ./.github/actions/download-release-tools
+
     - name: Download release notes artifacts
       uses: actions/download-artifact@v4
       with:
@@ -553,7 +585,7 @@ jobs:
           ls -la /tmp/openapi-specs/ || echo "No OpenAPI spec files found"
           
           # Create releases for all apps at once, using pre-generated release notes
-          if bazel run --config=ci //tools/release_helper_go:release_helper_go -- create-combined-github-release-with-notes "$VERSION" \
+          if "$RELEASE_HELPER" create-combined-github-release-with-notes "$VERSION" \
             --owner "$GITHUB_REPOSITORY_OWNER" \
             --repo "$GITHUB_REPOSITORY_NAME" \
             --commit "${{ github.sha }}" \
@@ -572,35 +604,43 @@ jobs:
   release-summary:
     name: Release Summary
     runs-on: ubuntu-latest
-    needs: [plan-release, release, create-github-releases, release-helm-charts]
+    needs: [plan-release, release, create-github-releases, release-helm-charts, build-release-tools]
     if: always()
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
-    - name: Setup Build Environment
-      uses: ./.github/actions/setup-build-env
-      with:
-        cache-suffix: 'docker'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-      
+
+    # This job runs with if: always(), including when build-release-tools
+    # itself failed/was skipped -- continue-on-error so a missing artifact
+    # degrades the summary instead of failing this always-run job.
+    - name: Download release tools
+      id: download-tools
+      continue-on-error: true
+      uses: ./.github/actions/download-release-tools
+
     - name: Generate summary using release helper
+      if: steps.download-tools.outcome == 'success'
       run: |
         # Use our release helper tool to generate the summary
         MATRIX='${{ needs.plan-release.outputs.release-matrix }}'
         EVENT_TYPE="workflow_dispatch"
         DRY_RUN="${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}"
-        
-        SUMMARY=$(bazel run //tools/release_helper_go:release_helper_go -- summary \
+
+        SUMMARY=$("$RELEASE_HELPER" summary \
           --matrix "$MATRIX" \
           --version "${{ needs.plan-release.outputs.version }}" \
           --event-type "$EVENT_TYPE" \
           --repository-owner "${{ github.repository_owner }}" \
           $DRY_RUN)
-        
+
         echo "$SUMMARY" >> $GITHUB_STEP_SUMMARY
+
+    - name: Generate fallback summary
+      if: steps.download-tools.outcome != 'success'
+      run: |
+        echo "## Release Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "⚠️ release-tools artifact unavailable (an earlier job likely failed) -- see other job logs for details." >> $GITHUB_STEP_SUMMARY
         
     - name: Add helm chart summary
       if: github.event.inputs.helm_charts != ''
@@ -676,7 +716,7 @@ jobs:
   # Release helm charts (must run after app images are built and tagged)
   release-helm-charts:
     name: Release Helm Charts
-    needs: [plan-release, release, create-github-releases]
+    needs: [plan-release, release, create-github-releases, build-release-tools]
     if: github.event.inputs.helm_charts != '' && (always() && !cancelled())
     runs-on: ubuntu-latest
     permissions:
@@ -702,6 +742,9 @@ jobs:
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+
+    - name: Download release tools
+      uses: ./.github/actions/download-release-tools
 
     # Needed to resolve pinned image tags to digests for App Registry
     # recording below (docker buildx imagetools inspect reads from ghcr.io).
@@ -729,7 +772,7 @@ jobs:
         echo "Using version: $VERSION"
         
         # Build the command with optional --include-demo flag
-        CMD="bazel run --config=ci //tools/release_helper_go:release_helper_go -- plan-helm-release --charts \"$CHARTS_INPUT\" --version \"$VERSION\" --format github"
+        CMD="\"$RELEASE_HELPER\" plan-helm-release --charts \"$CHARTS_INPUT\" --version \"$VERSION\" --format github"
         
         if [[ "$INCLUDE_DEMO" == "true" ]]; then
           CMD="$CMD --include-demo"
@@ -777,15 +820,10 @@ jobs:
         
         # Create output directory for charts
         mkdir -p /tmp/helm-charts
-        
-        # Build the release helper binary first (avoids nested Bazel invocations).
-        # ci-release config: builds from source (no remote cache reads, and
-        # --remote_download_toplevel so the binary actually lands on disk --
-        # plain --config=ci sets --remote_download_minimal, see #530).
-        echo "Building release helper..."
-        bazel build --config=ci-release //tools/release_helper_go:release_helper_go
-        RELEASE_HELPER="$(bazel info bazel-bin --config=ci-release)/tools/release_helper_go/release_helper_go_/release_helper_go"
-        
+
+        # $RELEASE_HELPER comes from the "Download release tools" step above
+        # (built once by build-release-tools, not re-built in this job).
+
         # Parse chart list and build each chart with proper versioning
         CHARTS="${{ steps.plan.outputs.charts }}"
         IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
@@ -935,7 +973,7 @@ jobs:
       run: |
         IDEMPOTENCY_PREFIX="${{ github.run_id }}-${{ github.run_attempt }}"
 
-        BUILD_JSON=$(bazel run --config=ci-release //tools/app_registry/cli:app-registry -- builds record \
+        BUILD_JSON=$("$APP_REGISTRY_CLI" builds record \
           --git-sha "${{ github.sha }}" \
           --git-ref "${{ github.ref }}" \
           --workflow-run-id "${{ github.run_id }}" \
@@ -958,7 +996,7 @@ jobs:
           echo "Resolving pinned image digests for $CHART..."
           CONTAINS_FILE=$(mktemp)
           echo "[]" > "$CONTAINS_FILE"
-          LOCKFILE_JSON=$(bazel run --config=ci-release //tools/release_helper_go:release_helper_go -- read-chart-lockfile "$CHART" --skip-build)
+          LOCKFILE_JSON=$("$RELEASE_HELPER" read-chart-lockfile "$CHART" --skip-build)
           while read -r img; do
             [[ -z "$img" ]] && continue
             IMG_REPO=$(echo "$img" | jq -r '.repository')
@@ -972,7 +1010,7 @@ jobs:
             jq --argjson e "$ENTRY" '. + [$e]' "$CONTAINS_FILE" > "${CONTAINS_FILE}.tmp" && mv "${CONTAINS_FILE}.tmp" "$CONTAINS_FILE"
           done < <(echo "$LOCKFILE_JSON" | jq -c '.images[]')
 
-          bazel run --config=ci-release //tools/app_registry/cli:app-registry -- artifacts record \
+          "$APP_REGISTRY_CLI" artifacts record \
             --build-id "$BUILD_ID" \
             --kind chart \
             --owner "$PUBLISHED_NAME" \
