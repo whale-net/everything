@@ -446,7 +446,8 @@ func (r *Registry) findImageByDigest(digest string) (*repository.Artifact, error
 			return &a, nil
 		}
 	}
-	return nil, repository.ErrInvalidArgument
+	// Mirrors postgres/artifact.go's RecordArtifact chart-links error.
+	return nil, fmt.Errorf("%w: chart pins unrecorded image digest %s", repository.ErrInvalidArgument, digest)
 }
 
 func (r *Registry) ListArtifacts(ctx context.Context, filter repository.ArtifactListFilter) ([]repository.Artifact, error) {
@@ -514,7 +515,8 @@ func (r *Registry) ResolveArtifact(ctx context.Context, lookup repository.Artifa
 		return nil, nil, nil, err
 	}
 	if a.Kind != repository.ArtifactKindChart {
-		return nil, nil, nil, repository.ErrInvalidArgument
+		// Mirrors postgres/artifact.go's ResolveArtifact.
+		return nil, nil, nil, fmt.Errorf("%w: artifact %s is not a chart", repository.ErrInvalidArgument, a.ArtifactID)
 	}
 	cp := *a
 	cp.Promotability = r.derivePromotability(cp)

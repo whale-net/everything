@@ -6,9 +6,9 @@ description: >-
   doesn't know about yet. Must run before any RecordBuild/RecordArtifact
   call that resolves an owner by full name -- see
   tools/app_registry/README.md's recording sequence diagram. Skipping this
-  makes RecordArtifact's owner lookup fail with a bare, contextless
-  InvalidArgument for any never-reconciled app/chart (see issue #539 and
-  its follow-up, #542).
+  makes RecordArtifact's owner lookup fail with an InvalidArgument naming
+  the never-reconciled app/chart (see issue #539, its follow-up #542, and
+  the error-message fix in #548).
 
   Requires RELEASE_HELPER and APP_REGISTRY_CLI env vars already set (see
   .github/actions/download-release-tools).
