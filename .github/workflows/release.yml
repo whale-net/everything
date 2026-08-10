@@ -89,12 +89,20 @@ jobs:
   # every other job via upload-artifact/download-artifact (see .github/actions/
   # download-release-tools). Every other job in this workflow used to build
   # these tools from source itself -- once per matrix leg, once for helm
-  # charts, etc -- which is the same `bazel build --config=ci-release` cost
-  # paid N times per run. ci-release is used here (not plain ci) because it
-  # disables remote-cache reads for a from-source build; consumers of this
-  # binary include release-multiarch and build-helm-chart, which produce the
-  # actual published artifacts, so the whole run inherits that guarantee from
-  # a single build instead of re-deriving it per job.
+  # charts, etc.
+  #
+  # ci-images (cache reads enabled), NOT ci-release: ci-release's
+  # --noremote_accept_cached disables *all* remote-cache reads for the whole
+  # build graph, not just these two Go binaries -- including exec-tool
+  # dependencies like the C++ protobuf toolchain. That turned one run of this
+  # job into a 30+ minute from-source rebuild of libprotobuf that never even
+  # finished (see run 31344551546). It also bought nothing: the actual image/
+  # chart build is a *separate* `bazel` subprocess invocation that
+  # release_helper_go shells out to internally (see cmd/build_image.go,
+  # cmd/runners.go), and those internal calls pass no --config flag at all --
+  # so how *this* tool binary was compiled has zero bearing on whether the
+  # published artifact reads from a stale cache. Purity for the real artifact
+  # would need to be enforced on that inner invocation, not here.
   build-release-tools:
     name: Build Release Tools
     runs-on: ubuntu-latest
@@ -113,10 +121,10 @@ jobs:
 
     - name: Build release_helper_go and app-registry CLI
       run: |
-        bazel build --config=ci-release \
+        bazel build --config=ci-images \
           //tools/release_helper_go:release_helper_go \
           //tools/app_registry/cli:app-registry
-        BAZEL_BIN="$(bazel info bazel-bin --config=ci-release)"
+        BAZEL_BIN="$(bazel info bazel-bin --config=ci-images)"
         mkdir -p /tmp/release-tools
         cp "$BAZEL_BIN/tools/release_helper_go/release_helper_go_/release_helper_go" /tmp/release-tools/release_helper_go
         cp "$BAZEL_BIN/tools/app_registry/cli/app-registry_/app-registry" /tmp/release-tools/app-registry
