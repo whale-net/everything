@@ -75,8 +75,11 @@ To check whether a specific release actually got recorded:
 4. A step that ran, shows a red `X` inline but the **job** is still green —
    this is the silent-failure case. Look for `::warning::` lines (digest
    resolution failed) or a gRPC error (`Unauthenticated`, `Unavailable`,
-   etc.) in the log. The job outcome tells you nothing; only the step log
-   does.
+   `InvalidArgument`, etc.) in the log. An `InvalidArgument` naming an
+   app/chart and asking whether it's been reconciled means the release ran
+   ahead of `ReconcileApps` (see `.github/actions/app-registry-reconcile`,
+   which runs on push to `main` via `ci.yml`) — not a credential or CLI
+   problem. The job outcome tells you nothing; only the step log does.
 
 To confirm from the registry side rather than the log:
 

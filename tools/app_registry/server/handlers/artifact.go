@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -142,17 +143,20 @@ func (s *ArtifactServer) RecordArtifact(ctx context.Context, req *pb.RecordArtif
 // resolveOwner resolves owner_full_name to an app_id or chart_id, depending
 // on kind, wrapping repository.ErrNotFound as ErrInvalidArgument — an
 // unknown owner is a caller mistake, not a "row doesn't exist yet" case.
+// The wrapped message names the owner and hints at the most common cause
+// (see issue #548): a release running ahead of ReconcileApps, which runs on
+// push to main via ci.yml (see .github/actions/app-registry-reconcile).
 func (s *ArtifactServer) resolveOwner(ctx context.Context, r repository.Registry, kind repository.ArtifactKind, ownerFullName string) (string, error) {
 	if kind == repository.ArtifactKindImage {
 		app, err := r.Apps().GetAppByFullName(ctx, ownerFullName)
 		if err != nil {
-			return "", repository.ErrInvalidArgument
+			return "", fmt.Errorf("%w: app %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", repository.ErrInvalidArgument, ownerFullName)
 		}
 		return app.AppID, nil
 	}
 	chart, err := r.Apps().GetChartByFullName(ctx, ownerFullName)
 	if err != nil {
-		return "", repository.ErrInvalidArgument
+		return "", fmt.Errorf("%w: chart %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", repository.ErrInvalidArgument, ownerFullName)
 	}
 	return chart.ChartID, nil
 }
@@ -344,13 +348,13 @@ func (s *ArtifactServer) resolveOwnerAndDomain(ctx context.Context, kind reposit
 	if kind == repository.ArtifactKindImage {
 		app, aerr := s.repo.Apps().GetAppByFullName(ctx, ownerFullName)
 		if aerr != nil {
-			return "", "", status.Errorf(codes.InvalidArgument, "unknown app %q", ownerFullName)
+			return "", "", status.Errorf(codes.InvalidArgument, "app %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", ownerFullName)
 		}
 		return app.Domain, app.AppID, nil
 	}
 	chart, cerr := s.repo.Apps().GetChartByFullName(ctx, ownerFullName)
 	if cerr != nil {
-		return "", "", status.Errorf(codes.InvalidArgument, "unknown chart %q", ownerFullName)
+		return "", "", status.Errorf(codes.InvalidArgument, "chart %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", ownerFullName)
 	}
 	return chart.Domain, chart.ChartID, nil
 }

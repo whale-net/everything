@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"strings"
 	"testing"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
@@ -141,6 +142,56 @@ func TestRecordArtifact_RejectsChartPinningUnrecordedImage(t *testing.T) {
 	}
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument, got %v (%v)", status.Code(err), err)
+	}
+	if !strings.Contains(err.Error(), "sha256:neverrecorded") {
+		t.Fatalf("expected error to name the unrecorded digest, got %q", err.Error())
+	}
+}
+
+// TestRecordArtifact_UnknownOwnerNamesTheOwnerAndHintsAtReconcile covers
+// issue #548: resolveOwner used to return the bare repository.ErrInvalidArgument
+// sentinel when the owner_full_name wasn't found, so a caller saw only
+// "invalid argument" with no indication that the app/chart simply hadn't
+// been reconciled yet. The fix must keep the status code InvalidArgument
+// (mapRepoErr's errors.Is mapping must not change) while making the message
+// name the owner and point at reconciliation as the likely cause.
+func TestRecordArtifact_UnknownOwnerNamesTheOwnerAndHintsAtReconcile(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-unknown-owner")
+
+	cases := []struct {
+		name          string
+		kind          pb.ArtifactKind
+		ownerFullName string
+	}{
+		{"unknown app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "demo-never-reconciled-app"},
+		{"unknown chart", pb.ArtifactKind_ARTIFACT_KIND_CHART, "demo-never-reconciled-chart"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+				BuildId: build.BuildId, Kind: tc.kind,
+				OwnerFullName: tc.ownerFullName, Digest: "sha256:" + tc.name, Version: "v1.0.0",
+				IdempotencyKey: "record-" + tc.name,
+			})
+			if err == nil {
+				t.Fatalf("expected an error for unknown owner %q", tc.ownerFullName)
+			}
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("expected InvalidArgument, got %v (%v)", status.Code(err), err)
+			}
+			msg := status.Convert(err).Message()
+			if msg == "invalid argument" {
+				t.Fatalf("expected a message naming the owner, got the bare sentinel message %q", msg)
+			}
+			if !strings.Contains(msg, tc.ownerFullName) {
+				t.Fatalf("expected message to contain owner %q, got %q", tc.ownerFullName, msg)
+			}
+			if !strings.Contains(msg, "reconciled") {
+				t.Fatalf("expected message to hint at reconciliation, got %q", msg)
+			}
+		})
 	}
 }
 
@@ -330,6 +381,34 @@ func TestAllocateVersion_ValidationErrors(t *testing.T) {
 				t.Fatalf("expected InvalidArgument, got %v", err)
 			}
 		})
+	}
+}
+
+// TestAllocateVersion_UnknownOwnerNamesTheOwnerAndHintsAtReconcile covers
+// resolveOwnerAndDomain (artifact.go), the AllocateVersion sibling of
+// resolveOwner fixed for issue #548: an unknown owner must still map to
+// InvalidArgument, but the message must name the owner and hint that it may
+// simply not have been reconciled yet, not just say "unknown app ...".
+func TestAllocateVersion_UnknownOwnerNamesTheOwnerAndHintsAtReconcile(t *testing.T) {
+	_, artifactSrv := setupAllocate(t)
+	ctx := authedCtx()
+
+	_, err := artifactSrv.AllocateVersion(ctx, &pb.AllocateVersionRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-never-reconciled-app",
+		Increment: "patch", IdempotencyKey: "allocate-unknown-owner",
+	})
+	if err == nil {
+		t.Fatal("expected an error for an unknown owner")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v (%v)", status.Code(err), err)
+	}
+	msg := status.Convert(err).Message()
+	if !strings.Contains(msg, "demo-never-reconciled-app") {
+		t.Fatalf("expected message to contain owner name, got %q", msg)
+	}
+	if !strings.Contains(msg, "reconciled") {
+		t.Fatalf("expected message to hint at reconciliation, got %q", msg)
 	}
 }
 
