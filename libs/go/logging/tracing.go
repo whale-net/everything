@@ -6,10 +6,8 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -42,13 +40,7 @@ func setupTracing(cfg Config) error {
 		return fmt.Errorf("create OTLP trace exporter: %w", err)
 	}
 
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			attribute.String("service.name", cfg.ServiceName),
-			attribute.String("service.version", cfg.Version),
-			attribute.String("deployment.environment", cfg.Environment),
-		),
-	)
+	res, err := buildResource(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("create trace resource: %w", err)
 	}
