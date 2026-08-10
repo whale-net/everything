@@ -87,6 +87,34 @@ These variables take priority over any `Config` field and allow disabling OTEL s
 
 Values are case-insensitive (`true`, `TRUE`, `True` all work).
 
+## OTLP Log Export
+
+When `EnableOTLP` is true, every log record is exported to the OTLP collector
+(`OTLPEndpoint`, gRPC) in addition to stdout — not just traces and metrics.
+Exported records carry the **same attributes as the stdout JSON line**,
+including anything attached via `slog`'s `.With()` (e.g. the `logger`
+attribute added by `Get(name)`, or request-scoped attributes bound in a gRPC
+interceptor). Attribute types (string/int/float/bool) are preserved rather
+than flattened to strings.
+
+The OTel resource attached to logs, traces, and metrics includes:
+
+| Resource attribute | From |
+|---|---|
+| `service.name` | `ServiceName` |
+| `service.namespace` | `Domain` |
+| `service.version` | `Version` |
+| `service.type` | `AppType` |
+| `deployment.environment` | `Environment` |
+| `vcs.commit.id`, `service.instance.id` | `CommitSHA` |
+| `k8s.pod.name` | `PodName` |
+| `k8s.namespace.name` | `Namespace` |
+| `k8s.node.name` | `NodeName` |
+
+This mirrors the resource attributes set by `libs/python/logging`, so Go and
+Python services carry the same identity in the collector. Optional fields
+are omitted from the resource when empty.
+
 ## JSON Output Format
 
 Matches the Python `StructuredFormatter`. When a span is active, `trace_id` and `span_id` are injected automatically:

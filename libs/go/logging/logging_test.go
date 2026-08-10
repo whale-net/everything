@@ -2,13 +2,18 @@ package logging
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	otellog "go.opentelemetry.io/otel/log"
+	"go.opentelemetry.io/otel/log/global"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 )
 
 // configureFresh resets global state and configures with a fresh buffer.
@@ -279,6 +284,116 @@ func TestJSONHandler_MultipleRecords(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(lines[1]), &m2))
 	assert.Equal(t, "first", m1["message"])
 	assert.Equal(t, "second", m2["message"])
+}
+
+// captureExporter is a minimal sdklog.Exporter that retains every record
+// passed to Export so tests can inspect exactly what would have been sent
+// to the OTLP collector.
+type captureExporter struct {
+	records []sdklog.Record
+}
+
+func (c *captureExporter) Export(_ context.Context, records []sdklog.Record) error {
+	for _, r := range records {
+		c.records = append(c.records, r.Clone())
+	}
+	return nil
+}
+
+func (c *captureExporter) Shutdown(context.Context) error   { return nil }
+func (c *captureExporter) ForceFlush(context.Context) error { return nil }
+
+// TestEmitOTEL_IncludesBoundAttrs is a regression test for the bug reported
+// in #549: attributes attached via slog's WithAttrs — including the
+// "logger" attribute every Get(name) call adds — were silently dropped
+// from OTLP-exported records even though they appeared in stdout JSON.
+func TestEmitOTEL_IncludesBoundAttrs(t *testing.T) {
+	capture := &captureExporter{}
+	provider := sdklog.NewLoggerProvider(sdklog.WithProcessor(sdklog.NewSimpleProcessor(capture)))
+	prev := global.GetLoggerProvider()
+	global.SetLoggerProvider(provider)
+	t.Cleanup(func() {
+		_ = provider.Shutdown(context.Background())
+		global.SetLoggerProvider(prev)
+	})
+
+	cfg := Config{ServiceName: "otel-attrs-app"}
+	boundAttrs := []slog.Attr{slog.String("logger", "mypackage")}
+
+	r := slog.NewRecord(time.Now(), slog.LevelInfo, "hello", 0)
+	r.AddAttrs(slog.Int("count", 42), slog.Bool("enabled", true))
+
+	emitOTEL(context.Background(), r, cfg, boundAttrs)
+
+	require.Len(t, capture.records, 1)
+	got := capture.records[0]
+	assert.Equal(t, "hello", got.Body().AsString())
+
+	attrs := map[string]otellog.Value{}
+	got.WalkAttributes(func(kv otellog.KeyValue) bool {
+		attrs[string(kv.Key)] = kv.Value
+		return true
+	})
+
+	require.Contains(t, attrs, "logger", "bound attrs (e.g. from Get(name) or .With()) must reach OTLP")
+	assert.Equal(t, "mypackage", attrs["logger"].AsString())
+
+	require.Contains(t, attrs, "count")
+	assert.Equal(t, int64(42), attrs["count"].AsInt64(), "attribute type should be preserved, not stringified")
+
+	require.Contains(t, attrs, "enabled")
+	assert.Equal(t, true, attrs["enabled"].AsBool())
+}
+
+func TestBuildResource_IncludesFullAttributeSet(t *testing.T) {
+	res, err := buildResource(context.Background(), Config{
+		ServiceName: "svc",
+		Domain:      "api",
+		AppType:     "internal-api",
+		Version:     "v1.2.3",
+		Environment: "staging",
+		CommitSHA:   "abcdef1234567890",
+		PodName:     "svc-abc123",
+		Namespace:   "ns-dev",
+		NodeName:    "node-1",
+	})
+	require.NoError(t, err)
+
+	got := map[string]string{}
+	for _, kv := range res.Attributes() {
+		got[string(kv.Key)] = kv.Value.AsString()
+	}
+
+	assert.Equal(t, "svc", got["service.name"])
+	assert.Equal(t, "api", got["service.namespace"])
+	assert.Equal(t, "internal-api", got["service.type"])
+	assert.Equal(t, "v1.2.3", got["service.version"])
+	assert.Equal(t, "staging", got["deployment.environment"])
+	assert.Equal(t, "abcdef1234567890", got["vcs.commit.id"])
+	assert.Equal(t, "abcdef12", got["service.instance.id"])
+	assert.Equal(t, "svc-abc123", got["k8s.pod.name"])
+	assert.Equal(t, "ns-dev", got["k8s.namespace.name"])
+	assert.Equal(t, "node-1", got["k8s.node.name"])
+}
+
+func TestBuildResource_OmitsEmptyOptionalFields(t *testing.T) {
+	res, err := buildResource(context.Background(), Config{
+		ServiceName: "svc",
+		Version:     "v1",
+		Environment: "dev",
+	})
+	require.NoError(t, err)
+
+	present := map[string]bool{}
+	for _, kv := range res.Attributes() {
+		present[string(kv.Key)] = true
+	}
+	for _, k := range []string{
+		"service.namespace", "service.type", "vcs.commit.id",
+		"service.instance.id", "k8s.pod.name", "k8s.namespace.name", "k8s.node.name",
+	} {
+		assert.False(t, present[k], "unexpected attribute %s", k)
+	}
 }
 
 func TestSlogToOTELSeverity(t *testing.T) {
