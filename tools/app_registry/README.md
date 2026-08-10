@@ -53,19 +53,36 @@ promote, rather than every image ever pushed.
 
 ## Flows
 
+### Reconcile (CI, every push to `main`, decoupled from release)
+
+`ReconcileApps` needs the complete, current manifest set -- anything absent
+from what it's given gets flagged `MISSING` -- so it runs from `ci.yml` on
+every push to `main`, never from `release.yml`, which can be dispatched
+against an arbitrary (possibly older) ref. See ARCHITECTURE.md "Rejected
+alternatives" for why a release-scoped registration call was ruled out.
+
+```mermaid
+sequenceDiagram
+    participant GHA as GitHub Actions (ci.yml, push to main)
+    participant RH as release_helper_go
+    participant REG as app-registry-api
+    participant DB as Postgres
+
+    GHA->>RH: manifest-set (bazel query release_app/helm_chart_metadata)
+    RH-->>GHA: full AppManifestSet
+    GHA->>REG: ReconcileApps(manifests, git_sha)
+    REG->>DB: upsert apps/charts, flag absent as MISSING
+    Note over GHA,REG: best-effort — a registry failure warns,<br/>it does not fail CI
+```
+
 ### Recording (CI, additive and non-blocking)
 
 ```mermaid
 sequenceDiagram
     participant GHA as GitHub Actions
-    participant RH as release_helper_go
     participant REG as app-registry-api
-    participant DB as Postgres
     participant GHCR as GHCR / Helm OCI
 
-    GHA->>RH: plan (bazel query release_app)
-    RH->>REG: ReconcileApps(manifests, git_sha)
-    REG->>DB: upsert apps/charts, flag absent as MISSING
     GHA->>REG: RecordBuild(git_sha, run_id, attempt)
     GHA->>GHCR: push image
     GHCR-->>GHA: digest
@@ -75,6 +92,9 @@ sequenceDiagram
     Note over GHA,REG: best-effort — a registry failure warns,<br/>it does not fail the release
     GHA->>GHA: git tag (still authoritative until AR-5)
 ```
+
+Recording assumes the app/chart being recorded was already reconciled by a
+prior push to `main` — see "Reconcile" above.
 
 ### Promotion and writeback
 

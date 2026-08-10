@@ -1,0 +1,41 @@
+name: 'App Registry Auth'
+description: >-
+  Exports the APP_REGISTRY_ADDRESS / GRPC_AUTH_* env vars the app-registry
+  CLI reads for OIDC service-account auth (see tools/app_registry/ENV.md).
+  Every step in this repo that calls the App Registry needs the same five
+  vars; this collapses that duplication into one place so a future
+  non-release workflow (e.g. recording builds on every main push, not just
+  tagged releases) can reuse it too instead of re-copying the block.
+
+inputs:
+  address:
+    description: 'app-registry-api address (host:port) -- typically vars.APP_REGISTRY_ADDRESS'
+    required: true
+  token-url:
+    description: 'Keycloak token endpoint -- typically vars.APP_REGISTRY_AUTH_TOKEN_URL'
+    required: true
+  client-id:
+    description: 'Keycloak client id, e.g. app-registry-builder-dev or app-registry-promoter-prod'
+    required: true
+  client-secret:
+    description: 'Keycloak client secret for client-id'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Export App Registry auth env
+      shell: bash
+      env:
+        ADDRESS: ${{ inputs.address }}
+        TOKEN_URL: ${{ inputs.token-url }}
+        CLIENT_ID: ${{ inputs.client-id }}
+        CLIENT_SECRET: ${{ inputs.client-secret }}
+      run: |
+        {
+          echo "APP_REGISTRY_ADDRESS=$ADDRESS"
+          echo "GRPC_AUTH_MODE=oidc"
+          echo "GRPC_AUTH_TOKEN_URL=$TOKEN_URL"
+          echo "GRPC_AUTH_CLIENT_ID=$CLIENT_ID"
+          echo "GRPC_AUTH_CLIENT_SECRET=$CLIENT_SECRET"
+        } >> "$GITHUB_ENV"
