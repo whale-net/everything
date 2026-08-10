@@ -7,13 +7,22 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 )
+
+// defaultDialTimeout bounds the blocking dial (grpc.WithBlock below) when the
+// caller's context carries no deadline of its own. Without this, a dial that
+// can never succeed -- e.g. a plaintext handshake against a TLS-only
+// endpoint -- retries forever instead of failing fast. Override with
+// GRPC_DIAL_TIMEOUT (seconds).
+const defaultDialTimeout = 10 * time.Second
 
 // Client manages gRPC connections
 type Client struct {
@@ -45,6 +54,7 @@ type TLSConfig struct {
 //   - GRPC_TLS_SKIP_VERIFY=false (optional): Disable certificate verification (insecure, dev only)
 //   - GRPC_CA_CERT_PATH=/path/to/ca.crt (optional): Custom CA certificate
 //   - GRPC_TLS_SERVER_NAME=api.example.com (optional): Server name for certificate verification
+//   - GRPC_DIAL_TIMEOUT=10 (optional): Seconds to wait for the initial dial when ctx has no deadline (default 10)
 func NewClient(ctx context.Context, address string, extraOpts ...grpc.DialOption) (*Client, error) {
 	// Load TLS config from environment
 	var tlsConfig *TLSConfig
@@ -90,6 +100,21 @@ func NewClientWithTLS(ctx context.Context, address string, tlsConfig *TLSConfig,
 	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
 	opts = append(opts, extraOpts...)
 	opts = append(opts, grpc.WithBlock())
+
+	// grpc.WithBlock() above means DialContext blocks until connected or ctx
+	// is done. If the caller didn't already bound ctx, apply a default so a
+	// dial that can never succeed fails fast instead of hanging forever.
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		timeout := defaultDialTimeout
+		if v := os.Getenv("GRPC_DIAL_TIMEOUT"); v != "" {
+			if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+				timeout = time.Duration(secs) * time.Second
+			}
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 
 	conn, err := grpc.DialContext(ctx, address, opts...)
 	if err != nil {
