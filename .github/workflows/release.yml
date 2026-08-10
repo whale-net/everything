@@ -424,8 +424,8 @@ jobs:
         fi
 
         echo "Building app-registry CLI..."
-        bazel build --config=ci //tools/app_registry/cli:app-registry
-        APP_REGISTRY_CLI="$(bazel info bazel-bin --config=ci)/tools/app_registry/cli/app-registry_/app-registry"
+        bazel build --config=ci-release //tools/app_registry/cli:app-registry
+        APP_REGISTRY_CLI="$(bazel info bazel-bin --config=ci-release)/tools/app_registry/cli/app-registry_/app-registry"
 
         IDEMPOTENCY_PREFIX="${{ github.run_id }}-${{ github.run_attempt }}"
 
@@ -935,9 +935,9 @@ jobs:
         GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
       run: |
         echo "Building release helper and app-registry CLI..."
-        bazel build --config=ci //tools/release_helper_go:release_helper_go //tools/app_registry/cli:app-registry
-        RELEASE_HELPER="$(bazel info bazel-bin --config=ci)/tools/release_helper_go/release_helper_go_/release_helper_go"
-        APP_REGISTRY_CLI="$(bazel info bazel-bin --config=ci)/tools/app_registry/cli/app-registry_/app-registry"
+        bazel build --config=ci-release //tools/release_helper_go:release_helper_go //tools/app_registry/cli:app-registry
+        RELEASE_HELPER="$(bazel info bazel-bin --config=ci-release)/tools/release_helper_go/release_helper_go_/release_helper_go"
+        APP_REGISTRY_CLI="$(bazel info bazel-bin --config=ci-release)/tools/app_registry/cli/app-registry_/app-registry"
 
         IDEMPOTENCY_PREFIX="${{ github.run_id }}-${{ github.run_attempt }}"
 
