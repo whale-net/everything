@@ -35,6 +35,8 @@ ArgoCD sync waves. See `friendly_computing_machine/docs/argocd-integration.md`.
 | `004_writeback_outbox` (AR-4b) | `writeback_outbox` |
 | `005_version_allocation` (AR-5a) | `artifact.version_major/minor/patch` + backfill, `artifact_version_order_idx`, `version_allocation` |
 | `006_reconcile_watermark` (issue #545) | `reconcile_watermark` — singleton row guarding `ReconcileApps` against a stale (older-commit) call landing after a newer one |
+| `007_artifact_lifecycle` (AR-7b, **planned**) | `artifact.state`/`provenance`/`state_changed_at`, nullable `digest`/`build_id`, partial-unique digest index, `version_allocation` folded in and dropped |
+| `008_app_identity_split` (AR-7c, **planned**) | append-only `app_manifest`/`chart_manifest` snapshots, `artifact.manifest_id`/`promotability`, `app`/`chart` lose their mutable metadata, `v_current_app`/`v_current_chart` |
 
 Split this way so AR-2 needs only `001`, AR-3b adds `002`, AR-3c adds `003`,
 AR-4b adds `004`, and AR-5a adds `005` — each phase ships an independently

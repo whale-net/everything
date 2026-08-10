@@ -75,6 +75,12 @@ erDiagram
 | `domain_adoption` | mutable | One row per domain; `stage` ∈ observe/promote/allocate. See "Resolved questions" #3. |
 | `reconcile_watermark` | singleton, mutable | Migration 006 (issue #545). Exactly one row (`id = 1`), seeded as a sentinel. Guards `Reconcile` against a stale (older-commit) call — see "Reconcile watermark" below. |
 
+**Planned (AR-7, issue #558; none of this is built):** `artifact` gains
+`state`/`provenance` with nullable `digest`/`build_id`, absorbing
+`version_allocation`, which is dropped; `app`/`chart` shed their mutable
+metadata to new append-only `app_manifest`/`chart_manifest` snapshot tables and
+a `v_current_app` view. See "Release lifecycle (issue #558)" below.
+
 ### SCD2 on `promotion`
 
 Follows the repo-wide convention in `AGENTS.md` exactly:
@@ -286,6 +292,12 @@ not."
 
 ## Release-vs-reconcile gap (issue #547)
 
+> **Superseded in design, still true as-built.** Issue #558 rejects "accept
+> the gap" as the end state — see "Release lifecycle (issue #558)" below,
+> which closes it by splitting identity assertion from the absence sweep.
+> Everything in this section describes what is deployed today and stays
+> accurate until AR-7c ships.
+
 `ReconcileApps` runs only from `ci.yml` on push to `main` (#543); `release.yml`
 is a `workflow_dispatch` a human triggers, often immediately after merging —
 this is normal usage, not an edge case. That decoupling opens a window: a
@@ -372,6 +384,264 @@ ref" cannot self-heal the way "release right after merging to `main`" can.
 No machinery is planned for this; it is accepted as part of the same
 tradeoff above, not a separate gap to close.
 
+## Release lifecycle (issue #558)
+
+**Status: designed, not built.** Delivery is PLAN.md's AR-7 (AR-7a … AR-7e).
+Nothing in this section is deployed; every table/column/RPC named here is
+proposed. It supersedes "Release-vs-reconcile gap (issue #547)" above, and
+changes what "Availability and bootstrap" below promises — both are
+cross-referenced where that happens.
+
+### The problem: four cross-run orderings, three of them unenforced
+
+A release run and a `main`-push reconcile are separate CI runs with no
+ordering between them. Four orderings must hold for the registry to be
+correct; only one is actually enforced.
+
+| # | Required ordering | Enforced by | Failure |
+|---|---|---|---|
+| 1 | reconcile of commit `C` **before** `RecordArtifact` for an app introduced in `C` | nothing — accepted gap (#547) | exit 3, artifact never recorded and **never backfilled**; that build can never be promoted |
+| 2 | newer reconcile **after** older reconcile | `reconcile_watermark` (#545) + CI concurrency (#546) | solved |
+| 3 | `RecordArtifact(IMAGE, digest D)` **before** any chart pinning `D` | hard server-side reject (`postgres/artifact.go`, "chart pins unrecorded image digest") | chart artifact not recorded |
+| 4 | app rows exist **before** a chart manifest referencing them resolves | `resolveChartApps` fails the **entire** reconcile | repo-wide identity registration wedged, inside a green `main` CI job |
+
+Ordering 3 is the expensive one, because charts pin digests resolved from
+**GHCR by tag** (`docker buildx imagetools inspect ${IMG_REPO}:${IMG_VERSION}`
+in `release.yml`), not from the current run's outputs — so any chart-only
+release pins images published by earlier runs. One image that never got
+recorded (it hit ordering 1, or recording was `continue-on-error` during a
+registry blip) therefore breaks **every future chart release containing that
+app**, permanently: re-running the chart release doesn't fix it (the digest is
+still unrecorded), and reconcile doesn't fix it (reconcile writes identity,
+never artifacts). It only clears when that app is rebuilt and recorded again.
+
+Ordering 4 is the quiet one: one chart manifest naming a removed app, or an
+ambiguous bare app name across two domains, rolls back the whole transaction,
+so the watermark never advances and no app registers at all — while the job
+stays green because the step is `continue-on-error`.
+
+### The principle that resolves it
+
+**The registry is the source of truth for the pipeline. GHCR and the chart
+repository remain the source of truth for artifacts.** Those are different
+claims and keeping them apart is what makes the rest coherent:
+
+- Nothing reads the registry to find out whether an image *exists* — the push
+  is what makes it exist, and the digest the push returned is what gets
+  recorded. A `published` row is proof-of-existence *at the instant it was
+  written*, and deliberately not a live existence check (an image deleted from
+  GHCR afterwards leaves a row that lies; a periodic verifier is a possible
+  later addition, not a guarantee offered now).
+- Because the artifacts themselves survive independently, a registry that is
+  lost, restored from backup, or wrong can be repaired out of band. That path
+  is disaster recovery ("shit is fucked"), not routine maintenance — see
+  "Adoption and disaster recovery" below.
+
+### Artifact lifecycle: `allocated → publishing → published`
+
+The registry stops learning about an artifact *after* the fact. It records the
+intent to publish **before** the push, and completes the record after.
+
+| State | Written by | version | build_id | digest |
+|---|---|---|---|---|
+| `allocated` | `AllocateVersion` (AR-5) | ✓ | — | — |
+| `publishing` | release run, immediately **before** the GHCR/chart push | ✓ | ✓ | — |
+| `published` | release run, after the push, carrying the digest the push returned | ✓ | ✓ | ✓ |
+| `failed` | release run on error, or the reaper on timeout | ✓ | ✓ | — |
+
+**This removes a table rather than adding one.** `version_allocation` exists
+only because `artifact.digest`/`build_id` are `NOT NULL` and allocation
+happens before a build — i.e. it already *is* the `allocated` state, stored
+elsewhere. Migration 007 makes those two columns nullable, adds `state`, folds
+`version_allocation` rows into `artifact`, and drops it. `UNIQUE (owner_id,
+kind, version)` then spans every state, which is strictly stronger than
+today's two-table arrangement: it is the allocation collision guard, and
+"next version" collapses from a max across two tables into one query.
+`artifact_digest_idx` becomes `UNIQUE ... WHERE digest IS NOT NULL`.
+
+Legal transitions, enforced server-side; anything else is `FailedPrecondition`:
+
+- `∅ → allocated` (`AllocateVersion`), `∅ → publishing` (`BeginPublish`
+  without a prior allocation — the pre-cutover path, see below),
+  `allocated → publishing` (`BeginPublish`), `publishing → published`
+  (`RecordArtifact`), `publishing → failed` (`FailPublish`, or the reaper),
+  `failed → publishing` (a later run retrying the same version).
+- `published` is terminal. Re-recording the same digest is an idempotent
+  success; recording a *different* digest for an already-`published` version
+  is rejected — that is a real conflict, not a retry.
+
+**What this buys.** Ordering 3's hard reject stops being a trap: the image row
+exists from `publishing` onward, so a chart failing on "pins an image the
+registry doesn't have" now means the image genuinely was never published,
+which is worth failing on. The registry never reconstructs or infers a record
+it didn't observe (an explicitly rejected alternative — see below).
+
+**The reaper is not optional.** A cancelled workflow leaves a `publishing` row
+forever, and "what is incomplete?" is only a usable recovery query if it does
+not accumulate ghosts. `app-registry-worker` sweeps `publishing` rows older
+than `WRITEBACK`-style configured staleness to `failed` with reason `stale`.
+Ships with AR-7b, not after it.
+
+**Backward compatibility during rollout.** `RecordArtifact` against no
+existing row keeps working, creating the row directly in `published` —
+allowed while a domain is at adoption stage `observe`, rejected at
+`allocate` (where allocation must have happened first). That is what lets CI
+adopt `BeginPublish` per domain instead of in one cutover.
+
+### App identity vs. per-build manifest snapshot
+
+Today `app` carries *mutable metadata* — `deploy_unit`, `image_repository`,
+`bazel_label`, `app_type`, description — and some ref has to author it. Every
+answer to "which ref?" is bad: let any ref write it and it drifts; let only
+`main` write it and releases depend on `main`'s CI (ordering 1). The question
+is removed rather than answered:
+
+- `app` / `chart` become **pure identity**: `(domain, name)`, `status`,
+  first/last-seen provenance. Nothing mutable.
+- The `AppManifest`/`ChartManifest` a run was built from is stored **verbatim**
+  (protojson, `JSONB`) in an append-only `app_manifest` / `chart_manifest`
+  snapshot table, keyed `(owner_id, source_git_sha)` — same commit, same
+  manifest, so writes are naturally idempotent — with `source_committed_at`
+  and whether it came from the `main` sweep or a release run.
+- `artifact.manifest_id` records which snapshot an artifact was built from,
+  and **`artifact.promotability` becomes a stored column** derived from that
+  snapshot at publish time.
+
+Consequences, in order of importance:
+
+1. **A release from any ref writes only facts.** Divergent branch, old tag,
+   unmerged PR — none of them can write mutable state, so there is no drift to
+   bound, observe, or correct, and identity assertion becomes safe from
+   anywhere. This is what closes ordering 1 without the provisional-upsert
+   trade #547 rejected.
+2. **Promotability stops being retroactive.** `RecordArtifact` currently
+   re-reads the owner's *current* `deploy_unit` (`postgres/artifact.go`'s
+   "re-derive promotability against the freshly-read owner deploy_unit"), so
+   editing a `release_app` rule today silently changes the promotability of
+   artifacts published years ago. Deriving from the build's own snapshot is a
+   correctness fix, not a refactor.
+3. **The `main` sweep shrinks to what only it can do**: existence and absence.
+4. **"Value at time T" without SCD2 on `app`.** The per-build snapshot *is*
+   the history, append-only, matching how the rest of this schema works. (This
+   is also why #553's answer — `chart`/`chart_app` are not SCD2 and don't need
+   to be — still holds.)
+
+Cost: reads that want "what does this app look like today" need the newest
+`main` snapshot, via a `v_current_app` view (identity ⋈ latest `main`-sweep
+snapshot), the same pre-joined-view pattern `v_current_promotion` uses.
+`ListApps`/`GetApp` responses are unchanged on the wire.
+
+### `AssertApps` (additive) vs. `ReconcileApps` (absence sweep)
+
+`ReconcileApps` conflates two jobs: assert identity, and assert *absence*.
+Only absence needs a canonical complete tree, and it is identity that releases
+depend on. Split them:
+
+| RPC | Runs from | Writes | Never does |
+|---|---|---|---|
+| `AssertApps` | any ref — `release.yml`, first step of a release | identity rows (`∅→ACTIVE`, `MISSING→ACTIVE` recovered) + manifest snapshots | mark anything `MISSING` |
+| `ReconcileApps` | `main` push only, unchanged watermark | `MISSING` transitions, `chart_app` membership, `main` snapshots | assert identity from a non-canonical ref |
+
+`AssertApps` against an `ARCHIVED` app is **rejected** per item — a human said
+that app is gone for good, and a release resurrecting it silently is worse
+than a red step. `RecordArtifact` against an `ARCHIVED` owner is likewise
+rejected (today it succeeds, which is not intended).
+
+**The sweep becomes partially-applying** (ordering 4): a chart whose apps
+don't resolve is reported as unresolved in `ReconcileAppsResponse` and skipped;
+every other app and chart still applies and the watermark still advances.
+Separately, chart manifests move to **domain-qualified app references**, so
+`resolveChartApps`'s cross-domain ambiguity (`SELECT app_id FROM app WHERE
+name = $1` with more than one match) cannot arise. Both are small, independent
+of everything else here, and fix a failure mode that is silent today — they
+land first (AR-7a).
+
+### The run log: CI orchestrates, the registry records
+
+A release run spans real GHCR pushes, so it cannot be one database
+transaction, and it must not become one: re-pushing eight images because the
+ninth failed is exactly wrong. The saga shape is right, with one boundary held
+firmly — **the registry keeps the saga *log*; it does not *orchestrate* the
+saga.** CI stays the actor that pushes and reports transitions. The moment the
+registry drives steps, design principle 5 ("Record, don't act") breaks and it
+becomes a deployment system. Concretely: no Temporal workflow on the inbound
+path. `writeback_outbox` + Temporal stays what it is — the *outbound* path
+(registry → gitops). Inbound is a state log CI writes to.
+
+**This needs no new tables either.** `build` is already the run aggregate
+(`(workflow_run_id, workflow_attempt)` unique); the artifact rows in
+`allocated`/`publishing`/`published`/`failed` are its children. So:
+
+- "What is incomplete?" = artifacts for this build not in `published`.
+- **Re-running a release job becomes a resume**, not a blind retry: the run log
+  names exactly which children are short of `published`, so the job re-attempts
+  those and then the chart, instead of redoing everything or failing the same
+  way.
+- Exposed as `GetReleaseRun(workflow_run_id[, attempt])` and
+  `app-registry builds status --incomplete` (AR-7d).
+
+**Boundary, stated deliberately:** the registry logs what was *attempted*;
+GitHub logs what was *planned*. A run that dies before reaching an app leaves
+no row for it, and that is visible as a red CI job rather than as registry
+state. Declaring the intended child set up front (a `build_target` table
+written by the plan step) was considered and is **not** in AR-7 — at adoption
+stage `allocate` the allocation step already writes the intent set as
+`allocated` rows, so the gap only exists pre-cutover. See "Open questions".
+
+### Availability, restated per adoption stage
+
+"The registry can be down for hours without blocking a release" and "the
+registry is the source of truth for the pipeline" cannot both hold once
+`publishing` must be written before a push. Rather than add a lever, the
+existing one carries it: `domain_adoption.stage` already means "what is the
+registry authoritative for," so it also means "how critical is it."
+
+| Stage | Recording | Registry outage during a release |
+|---|---|---|
+| `observe` | best-effort, `continue-on-error` | release proceeds; a record may be missing (today's behavior) |
+| `promote` | required — the recording step fails the job | release fails rather than silently skipping a record that later chart releases depend on |
+| `allocate` | release-critical | release cannot proceed; the registry hands out the version number |
+
+At `allocate` the registry is already release-critical whether or not this is
+written down — `AllocateVersion` is in the version path. Per-domain rollback is
+moving the stage back; the global rollback is still
+`APP_REGISTRY_CICD_OPT_IN=false`. This restates, and partially retracts, the
+promise in "Availability and bootstrap" below; that section stays accurate for
+`observe`, which is where every domain is today.
+
+### Adoption and disaster recovery
+
+Charts pin digests resolved from GHCR by tag, so a chart can pin an image
+published before the registry existed, or while the opt-in was off. There is no
+run to resume for those, they will never be in the registry, and under
+"registry is source of truth" the chart correctly — and permanently — fails.
+
+**The way out is an explicit, bounded adoption path** (`AdoptArtifact`, admin
+role only, not the builder credential): record a pre-existing GHCR image or
+chart as `published` with `provenance = 'adopted'` and a required reason.
+`artifact.provenance ∈ ('observed', 'adopted')` makes "which rows did we take
+on faith?" a query rather than an archaeology exercise. It is used lazily —
+when a chart release fails on an unknown pin — not as a bulk backfill, which
+"Resolved questions" #3 still rejects.
+
+The same path is the disaster-recovery path if the registry is lost or
+restored behind: GHCR and the chart repository still hold the artifacts, so
+state is re-adoptable. OPERATIONS.md carries the runbook (AR-7e). The design
+goal is that this is *rare and deliberate*, not a recurring chore — every
+other part of AR-7 exists to keep it that way.
+
+### Rejected alternatives (issue #558)
+
+| Approach | Why rejected |
+|---|---|
+| `AssertApps` upsert alone, keeping `app`'s mutable metadata | Fixes ordering 1 only, and forces the divergent-ref trade (#547) instead of removing it: some ref must author mutable metadata, and every choice of ref is wrong. Moving metadata to per-build snapshots deletes the question. |
+| Infer the missing image artifact from the chart lockfile at chart-record time | Makes the registry *reconstruct* a record it never observed, so "was this published or inferred?" becomes a permanent question on every row. `publishing → published` means the record was always there — less machinery, stronger claim. |
+| One atomic `RecordRelease` RPC (build + assertions + images + charts + links in one transaction) | A release spans real GHCR pushes; it cannot be one database transaction. All-or-nothing would also discard expensive partial progress. The run log gives the same "a re-run is a complete repair" property, as *resume*. |
+| Registry orchestrates the release saga (inbound Temporal workflow) | Breaks "Record, don't act" — the registry would become a deployment system. CI orchestrates; the registry logs. Temporal stays on the outbound writeback path only. |
+| SCD2 on `app` for "what did this app look like at time T" | The append-only per-build manifest snapshot already *is* the history and matches the rest of the schema; SCD2 on identity would add a second history mechanism. Consistent with #553. |
+| A `build_target` table declaring the run's intended children up front | Deferred, not rejected outright — `allocated` rows already carry intent at stage `allocate`. See "Open questions". |
+| Enforce "charts may only pin registry-known images" at chart **compose** time | Deferred (AR-7f). It is the steady state that makes chart builds genuinely hermetic and fails early instead of after every push, but it means no chart can build until every member app has released through the registry once — a real cutover cost that should follow adoption, not precede it. |
+
 ## Promotability
 
 The rule the whole system hangs on. Each app declares its `deploy_unit` in its
@@ -431,6 +701,13 @@ the highest-value part of the recording phase and should not be deferred.
 
 The server rejects a chart artifact that references an image digest it has never
 recorded — a chart may not pin an unknown artifact.
+
+That reject is correct but is a trap today, because charts pin digests
+published by *earlier* runs: one image that never got recorded breaks every
+future chart release containing it, permanently. The artifact lifecycle in
+"Release lifecycle (issue #558)" is what makes the reject safe to keep — the
+image's row exists from `publishing` onward, so failing here means the image
+genuinely was never published.
 
 **This is also the deploy-time idempotency guarantee for a promoted chart's
 app list — see "Resolved questions" #4.** `contains` is a pure function of
@@ -599,6 +876,13 @@ API synchronously**:
 The registry can be down for hours without blocking a release or a deploy. The
 only thing lost is the ability to *make new promotions* during the outage.
 
+> **Scoped to adoption stage `observe` by issue #558.** The claim above holds
+> exactly while a domain's recording is best-effort. At `promote` recording
+> becomes required, and at `allocate` the registry is in the version path and
+> an outage does block that domain's releases — see "Release lifecycle (issue
+> #558)" → "Availability, restated per adoption stage". Every domain is at
+> `observe` today, so nothing here is wrong yet.
+
 ### `APP_REGISTRY_CICD_OPT_IN` — the bootstrap kill switch
 
 "Best-effort" is not enough on its own. The registry is built and released by
@@ -656,6 +940,15 @@ when the opt-in is off, or a registry outage becomes a release outage.
 | Reconcile watermark granularity | one singleton row for the whole registry | a watermark per app/chart row | `Reconcile` is always a full-replace of the complete manifest set (see "Design principles" #1) — there is exactly one meaningful "most recent complete sweep," so a per-row watermark would have to answer a question that cannot arise under this write model ("was this one row from a newer sweep than that one"). |
 | Release-vs-reconcile gap (#547) | accept the gap; make the failure a distinct, actionable annotation instead of silent | a release-time provisional upsert, always superseded by the next real reconcile | Reintroduces a second write path to `app`/`chart`, the exact thing the "App/chart registration" row above already rejected. Unsafe against a `release.yml` ref that diverges from `main` (see "Release-vs-reconcile gap" above): it could write stale metadata that nothing corrects until the next `main` reconcile happens to run. |
 | Release-vs-reconcile gap (#547) | accept the gap; make the failure a distinct, actionable annotation instead of silent | gate `release.yml` on `main`'s reconcile completing first | Avoids a second write path, but every release would block on `main` CI. The repo owner releases immediately after merging as normal practice; this would turn an occasional recording miss into a mandatory wait on every release. |
+
+**Revised by AR-7 (issue #558).** The three rows above about registration and
+the #547 gap rejected a release-time write path *because `app` carries mutable
+metadata that a divergent ref could clobber*. AR-7 removes that premise by
+moving the metadata to per-build manifest snapshots, at which point
+`AssertApps` writes identity and facts only — the objection is answered, not
+overruled. The full-replace/`MISSING` reasoning is untouched: absence still
+belongs to the `main` sweep alone. Issue #558's own rejected alternatives are
+tabled in "Release lifecycle (issue #558)" above.
 
 ## Future: approval gate
 
@@ -802,5 +1095,34 @@ correctness, and is not needed today.
 
 ## Open questions
 
-None blocking. The gitops repo layout is deferred rather than unresolved — it
-is answered when the writeback stub is replaced with the real implementation.
+The gitops repo layout is deferred rather than unresolved — it is answered when
+the writeback stub is replaced with the real implementation.
+
+The rest are AR-7 (issue #558) refinements. None blocks starting AR-7a/AR-7b;
+each is a decision the phase that reaches it must make explicitly rather than
+by default.
+
+1. **Does the run log need a declared intent set pre-cutover?** AR-7 derives
+   "what is incomplete" from artifact rows the run actually attempted, so a run
+   that dies before reaching an app leaves nothing behind (visible only as a
+   red CI job). At stage `allocate` the allocation step writes the intent set
+   as `allocated` rows and the gap closes on its own. The alternative is a
+   `build_target` table written by the plan step — exact at every stage, one
+   more table, and it duplicates something GitHub already knows.
+2. **Should the `main`-push `reconcile-app-registry` job stop being
+   `continue-on-error`?** The wedge in ordering 4 stayed invisible because a
+   red step sits inside a green job. AR-7a makes the sweep partially-applying,
+   which removes the repo-wide blast radius but not the invisibility. The job
+   gates nothing downstream, so failing it red is cheap; it does mean a
+   registry outage turns `main` CI red.
+3. **Where exactly does recording become mandatory?** The stage table above
+   puts it at `promote`. It could equally be at `allocate` only, keeping
+   `promote` best-effort — the tradeoff is how long an unrecorded image can
+   silently accumulate before it breaks a chart release.
+4. **Manifest snapshots as verbatim `JSONB` vs. typed columns.** Verbatim is
+   chosen (it is the appmeta contract, and `protojson` already round-trips it);
+   typed columns would make snapshot-level SQL filtering possible without a
+   `->>` expression index. Revisit only if a real query needs it.
+5. **AR-7f — compose-time enforcement that charts may only pin registry-known
+   images.** The genuine hermeticity fix, deliberately sequenced after
+   adoption. Decide whether it is the steady state or never.
