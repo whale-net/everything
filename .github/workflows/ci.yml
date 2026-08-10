@@ -8,6 +8,44 @@ on:
     branches: [ main ]
 
 jobs:
+  # Build release_helper_go once and share it via upload-artifact/download-
+  # artifact (see .github/actions/download-release-tools) instead of every
+  # job that needs it -- plan-docker, and every leg of the docker matrix --
+  # rebuilding it from source independently. ci-images (not ci-release):
+  # these are throwaway CI-only Docker builds, never pushed, so there's no
+  # "must not read from a possibly-stale cache" concern the way there is for
+  # release.yml's actual published artifacts -- cache reads are pure upside
+  # here. No `needs:` -- runs in parallel with the test jobs below.
+  build-release-tools:
+    name: Build Release Tools
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'release-tools'
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+
+    - name: Build release_helper_go
+      run: |
+        bazel build --config=ci-images //tools/release_helper_go:release_helper_go
+        BAZEL_BIN="$(bazel info bazel-bin --config=ci-images)"
+        mkdir -p /tmp/release-tools
+        cp "$BAZEL_BIN/tools/release_helper_go/release_helper_go_/release_helper_go" /tmp/release-tools/release_helper_go
+        bazel shutdown
+
+    - name: Upload release tools artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-tools
+        path: /tmp/release-tools/
+        retention-days: 1
+
   # # Build job - commented out in favor of merged build+test job below
   # # Uncomment and remove build step from test job to restore separate build/test parallelism
   # build:
@@ -199,7 +237,7 @@ jobs:
   plan-docker:
     name: Plan Docker Builds
     runs-on: ubuntu-latest
-    needs: [test, test-container-arch]
+    needs: [test, test-container-arch, build-release-tools]
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       apps: ${{ steps.plan.outputs.apps }}
@@ -208,15 +246,10 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
-        
-    - name: Setup Build Environment
-      uses: ./.github/actions/setup-build-env
-      with:
-        cache-suffix: 'ci'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-        
+
+    - name: Download release tools
+      uses: ./.github/actions/download-release-tools
+
     - name: Plan Docker builds using release tool
       id: plan
       env:
@@ -242,7 +275,7 @@ jobs:
         
         # Use release helper to plan the Docker builds
         echo "Planning Docker builds using release tool..."
-        PLAN_OUTPUT=$(bazel run --config=ci //tools/release_helper_go:release_helper_go -- plan \
+        PLAN_OUTPUT=$("$RELEASE_HELPER" plan \
           --event-type "$EVENT_TYPE" \
           --base-commit="$BASE_COMMIT" \
           --format github)
@@ -262,27 +295,24 @@ jobs:
             fi
           fi
         done <<< "$PLAN_OUTPUT"
-        
-        # Shutdown Bazel server to prevent hanging
-        bazel shutdown
 
   # Docker job - builds container images using the release tool (main branch only)
   # Note: Images are built but not pushed to registry. Use the Release workflow for publishing.
   docker:
     name: Build ${{ matrix.domain }}-${{ matrix.app }} Image
     runs-on: ubuntu-latest
-    needs: plan-docker
+    needs: [plan-docker, build-release-tools]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.plan-docker.outputs.apps && needs.plan-docker.outputs.apps != 'null'
     strategy:
       matrix: ${{ fromJson(needs.plan-docker.outputs.matrix) }}
       fail-fast: false
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
-      
+
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
@@ -291,7 +321,14 @@ jobs:
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-        
+
+    # release_helper_go's `build` subcommand still shells out to Bazel itself
+    # to build the image, so Setup Build Environment above is still needed --
+    # this just fetches the already-built release_helper_go binary instead of
+    # rebuilding it in every matrix leg.
+    - name: Download release tools
+      uses: ./.github/actions/download-release-tools
+
     - name: Build Docker image for ${{ matrix.domain }}-${{ matrix.app }}
       env:
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
@@ -301,7 +338,7 @@ jobs:
         # Use full domain-app format to avoid ambiguity
         FULL_APP_NAME="${DOMAIN}-${APP}"
         echo "Building Docker image for $FULL_APP_NAME using release tool..."
-        bazel run --config=ci-images //tools/release_helper_go:release_helper_go -- build "$FULL_APP_NAME"
+        "$RELEASE_HELPER" build "$FULL_APP_NAME"
         
         # Show the built Docker image
         echo "Built Docker image for $FULL_APP_NAME:"
