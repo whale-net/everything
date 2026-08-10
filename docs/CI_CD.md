@@ -13,14 +13,17 @@ graph TD
     A[Push/PR] --> B[Build Job]
     A --> C[Test Job]
     C --> D{Test Success?}
-    D -->|Yes| E[Container Arch Test]
     D -->|No| F[Pipeline Fails]
-    B --> G{Build Success?}
-    G -->|Yes| H[Plan Docker]
-    G -->|No| F
-    E --> I{Arch Test Success?}
-    I -->|Yes| H
+    D -->|Yes| E{Main Branch?}
+    E -->|Yes| E1[Container Arch Test]
+    E -->|No| E2[Skip Arch Test]
+    E1 --> I{Arch Test Success?}
     I -->|No| F
+    I -->|Yes| H[Plan Docker]
+    E2 --> H
+    B --> G{Build Success?}
+    G -->|Yes| H
+    G -->|No| F
     H --> J{Main Branch?}
     J -->|Yes| K[Docker Job]
     J -->|No| L[Build Summary]
@@ -31,7 +34,8 @@ graph TD
     
     style B fill:#e1f5fe
     style C fill:#e1f5fe
-    style E fill:#f3e5f5
+    style E1 fill:#f3e5f5
+    style E2 fill:#f0f0f0
     style K fill:#fff3e0
     style F fill:#ffebee
     style O fill:#e8f5e8
@@ -56,7 +60,7 @@ Builds all targets to verify compilation (runs in parallel with Test)
 Runs all unit and integration tests
 
 ### Container Arch Test
-Verifies cross-compilation for multi-architecture containers (critical for ARM64 support)
+Verifies cross-compilation for multi-architecture containers (critical for ARM64 support). Runs on main branch builds only to reduce CI overhead on feature branches.
 
 ### Plan Docker
 Determines which apps need Docker images built based on changes

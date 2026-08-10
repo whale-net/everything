@@ -91,10 +91,12 @@ jobs:
 
   # Container architecture test - verify cross-compilation works correctly
   # Runs in parallel with test job for faster CI
+  # Only runs on main branch to reduce CI overhead on feature branches
   test-container-arch:
     name: Test Container Architecture
     runs-on: ubuntu-latest
-    
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -349,11 +351,19 @@ jobs:
           exit 1
         fi
         
-        # Container arch test must always pass
-        if [[ "$CONTAINER_ARCH_RESULT" != "success" ]]; then
+        # Container arch test must pass on main, but is skipped on PRs
+        if [[ "$CONTAINER_ARCH_RESULT" != "success" && "$CONTAINER_ARCH_RESULT" != "skipped" ]]; then
           echo "❌ **Overall Status: FAILED**" >> $GITHUB_STEP_SUMMARY
           echo "Container architecture test failed - cross-compilation is broken!" >> $GITHUB_STEP_SUMMARY
           echo "::error::Container architecture test failed"
+          exit 1
+        fi
+
+        # On main branch, container arch test should have run and succeeded
+        if [[ "${{ github.event_name }}" == "push" && "$CONTAINER_ARCH_RESULT" == "skipped" ]]; then
+          echo "❌ **Overall Status: FAILED**" >> $GITHUB_STEP_SUMMARY
+          echo "Container architecture test was skipped on main branch but should have run!" >> $GITHUB_STEP_SUMMARY
+          echo "::error::Container architecture test was unexpectedly skipped"
           exit 1
         fi
         
