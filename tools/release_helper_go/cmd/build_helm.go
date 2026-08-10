@@ -63,19 +63,24 @@ func newBuildHelmChartCmd() *cobra.Command {
 			}
 
 			// Resolve app versions
-			appVersions := map[string]string{}
+			allApps, err := ListAllApps(defaultBazel, defaultFS, workspaceRoot)
+			if err != nil {
+				return err
+			}
+			var appVersions map[string]string
 			if useReleasedVersions {
-				allApps, err := ListAllApps(defaultBazel, defaultFS, workspaceRoot)
-				if err != nil {
-					return err
-				}
 				appVersions, err = resolveChartAppVersions(chart, allApps, defaultGit)
 				if err != nil {
 					return err
 				}
 			} else {
+				appVersions = map[string]string{}
 				for _, appName := range chart.Apps {
-					appVersions[appName] = "latest"
+					matched, err := findChartApp(appName, chart.Domain, allApps)
+					if err != nil {
+						return err
+					}
+					appVersions[matched.FullName()] = "latest"
 				}
 			}
 
@@ -170,28 +175,41 @@ func autoIncrementHelmVersion(chartName, bumpType string, git GitRunner) (string
 func resolveChartAppVersions(chart HelmChartMetadata, allApps []AppMetadata, git GitRunner) (map[string]string, error) {
 	versions := map[string]string{}
 	for _, appName := range chart.Apps {
-		// Try to find app in allApps by name and domain
-		var matched *AppMetadata
-		for i := range allApps {
-			a := &allApps[i]
-			if a.Name == appName && a.Domain == chart.Domain {
-				matched = a
-				break
-			}
-			if a.Name == appName {
-				matched = a
-			}
-		}
-		if matched == nil {
-			return nil, fmt.Errorf("app %q not found for chart %q", appName, chart.Name)
+		matched, err := findChartApp(appName, chart.Domain, allApps)
+		if err != nil {
+			return nil, err
 		}
 		ver, err := getLatestAppVersion(matched.Domain, matched.Name, git)
 		if err != nil || ver == "" {
 			return nil, fmt.Errorf("no released version for app %q in domain %q", matched.Name, matched.Domain)
 		}
-		versions[matched.Name] = ver
+		versions[matched.FullName()] = ver
 	}
 	return versions, nil
+}
+
+// findChartApp resolves one of a chart's declared app names to its full
+// AppMetadata, preferring a match within the chart's own domain. The
+// returned metadata's FullName() ("<domain>-<name>") is the key composer.go
+// uses for the values.yaml `apps` map, so callers must key appVersions by
+// FullName() rather than the bare app name for packageChartWithVersion's
+// imageTag lookup to find it.
+func findChartApp(appName, chartDomain string, allApps []AppMetadata) (*AppMetadata, error) {
+	var matched *AppMetadata
+	for i := range allApps {
+		a := &allApps[i]
+		if a.Name == appName && a.Domain == chartDomain {
+			matched = a
+			break
+		}
+		if a.Name == appName {
+			matched = a
+		}
+	}
+	if matched == nil {
+		return nil, fmt.Errorf("app %q not found for chart domain %q", appName, chartDomain)
+	}
+	return matched, nil
 }
 
 func getLatestAppVersion(domain, appName string, git GitRunner) (string, error) {
@@ -251,24 +269,39 @@ func packageChartWithVersion(chartDir, chartName, version, outDir string, appVer
 		}
 	}
 
-	// Update values.yaml imageTag for resolved app versions
+	// Update values.yaml imageTag for resolved app versions. A resolved
+	// version that fails to land in values.yaml is worse than useless — it
+	// silently ships whatever imageTag was baked in at `bazel build` time
+	// (typically "latest"), so every step here fails hard rather than
+	// swallowing the error, unlike the historical version of this code.
 	valuesYaml := filepath.Join(tmpChartDir, "values.yaml")
 	if len(appVersions) > 0 {
-		if data, err := os.ReadFile(valuesYaml); err == nil {
-			var values map[string]interface{}
-			if err := yaml.Unmarshal(data, &values); err == nil {
-				if apps, ok := values["apps"].(map[string]interface{}); ok {
-					for appKey, ver := range appVersions {
-						if appEntry, ok := apps[appKey].(map[string]interface{}); ok {
-							appEntry["imageTag"] = ver
-							fmt.Printf("Updated %s imageTag to %s\n", appKey, ver)
-						}
-					}
-				}
-				if out, err := yaml.Marshal(values); err == nil {
-					_ = os.WriteFile(valuesYaml, out, 0644)
-				}
+		data, err := os.ReadFile(valuesYaml)
+		if err != nil {
+			return "", fmt.Errorf("read values.yaml: %w", err)
+		}
+		var values map[string]interface{}
+		if err := yaml.Unmarshal(data, &values); err != nil {
+			return "", fmt.Errorf("parse values.yaml: %w", err)
+		}
+		apps, ok := values["apps"].(map[string]interface{})
+		if !ok {
+			return "", fmt.Errorf("values.yaml has no \"apps\" map to set imageTag on")
+		}
+		for appKey, ver := range appVersions {
+			appEntry, ok := apps[appKey].(map[string]interface{})
+			if !ok {
+				return "", fmt.Errorf("values.yaml \"apps\" has no entry %q to set imageTag on (chart's apps map may use a different key convention than the resolved app versions)", appKey)
 			}
+			appEntry["imageTag"] = ver
+			fmt.Printf("Updated %s imageTag to %s\n", appKey, ver)
+		}
+		out, err := yaml.Marshal(values)
+		if err != nil {
+			return "", fmt.Errorf("marshal values.yaml: %w", err)
+		}
+		if err := os.WriteFile(valuesYaml, out, 0644); err != nil {
+			return "", fmt.Errorf("write values.yaml: %w", err)
 		}
 	}
 
