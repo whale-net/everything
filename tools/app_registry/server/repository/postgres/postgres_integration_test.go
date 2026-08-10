@@ -37,6 +37,7 @@ import (
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/handlers"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 )
@@ -1244,5 +1245,229 @@ func TestMigration004BackfillsVersionColumns(t *testing.T) {
 	}
 	if g := fetch("sha256:backfill-garbage"); g != (got{0, 0, 0}) {
 		t.Fatalf("expected an unparseable legacy version to backfill to the documented 0/0/0 sentinel, got %+v", g)
+	}
+}
+
+// --- 8. chart composition pinning (issue #544) --------------------------
+//
+// See ARCHITECTURE.md "Resolved questions" #4 for the write-up this test
+// backs. chart_app (rewritten wholesale by every Reconcile, see
+// appRepo.setChartApps) is a live "what does this chart declare today" join
+// -- it is never read on the promotion/writeback render path. What a
+// promoted chart artifact actually renders comes from artifact_link, written
+// once at RecordArtifact time from the CI-supplied contains list (the
+// chart->image lockfile) and never mutated afterwards. This test proves
+// that boundary holds against real Postgres.
+
+// reconcileTx runs Apps().Reconcile inside a real WithTx transaction, exactly
+// as handlers.AppServer.ReconcileApps does for a non-dry-run call.
+func reconcileTx(t *testing.T, reg *Registry, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest) *repository.ReconcileResult {
+	t.Helper()
+	var result *repository.ReconcileResult
+	err := reg.WithTx(context.Background(), func(ctx context.Context, r repository.Registry) error {
+		var ferr error
+		result, ferr = r.Apps().Reconcile(ctx, apps, charts, false)
+		return ferr
+	})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	return result
+}
+
+func chartAppIDs(t *testing.T, pool *pgxpool.Pool, chartID string) []string {
+	t.Helper()
+	rows, err := pool.Query(context.Background(), `SELECT app_id FROM chart_app WHERE chart_id = $1 ORDER BY app_id`, chartID)
+	if err != nil {
+		t.Fatalf("query chart_app for %s: %v", chartID, err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan chart_app row: %v", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func containsDigests(links []repository.ArtifactLink) map[string]bool {
+	out := map[string]bool{}
+	for _, l := range links {
+		out[l.Digest] = true
+	}
+	return out
+}
+
+// TestChartArtifact_CompositionPinnedAtRecordTime_SurvivesLaterReconcile is
+// the regression test for issue #544's central worry, in the owner's own
+// words: "if I were to promote an old version and accidentally reconcile,
+// we'd still be able to deploy the app list based on the digest that was
+// provided."
+//
+// Sequence: reconcile a chart composed of {app-a, app-b}; record and promote
+// a chart artifact pinning {app-a, app-b}'s image digests; reconcile AGAIN
+// with the chart's declared composition changed to {app-a, app-c} (this
+// destructively rewrites chart_app, see appRepo.setChartApps); then assert
+// the ALREADY-RECORDED chart artifact -- read both directly via GetArtifact
+// and through the exact handler GetEnvironmentState calls at promotion/
+// deploy time -- still resolves to {app-a, app-b}'s digests, never app-c's.
+func TestChartArtifact_CompositionPinnedAtRecordTime_SurvivesLaterReconcile(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+
+	// Initial manifest set: chart "acme/widget-chart" composes app-a and app-b.
+	reconcileTx(t, reg,
+		[]*appmetapb.AppManifest{
+			{Domain: "acme", Name: "app-a", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
+			{Domain: "acme", Name: "app-b", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
+			{Domain: "acme", Name: "app-c", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
+		},
+		[]*appmetapb.ChartManifest{
+			{Domain: "acme", Name: "widget-chart", Apps: []string{"app-a", "app-b"}},
+		},
+	)
+
+	chart, err := reg.Apps().GetChartByFullName(ctx, "acme-widget-chart")
+	if err != nil {
+		t.Fatalf("get chart: %v", err)
+	}
+	appA, err := reg.Apps().GetAppByFullName(ctx, "acme-app-a")
+	if err != nil {
+		t.Fatalf("get app-a: %v", err)
+	}
+	appB, err := reg.Apps().GetAppByFullName(ctx, "acme-app-b")
+	if err != nil {
+		t.Fatalf("get app-b: %v", err)
+	}
+
+	if got := chartAppIDs(t, pool, chart.ChartID); len(got) != 2 {
+		t.Fatalf("expected chart_app to seed {app-a, app-b} (2 rows), got %v", got)
+	}
+
+	buildID := seedBuild(t, pool, "run-544")
+
+	imgA := repository.Artifact{
+		Kind: repository.ArtifactKindImage, AppID: appA.AppID,
+		Repository: "ghcr.io/acme/app-a", Version: "v1.0.0", Digest: "sha256:app-a-v1", BuildID: buildID,
+	}
+	imgB := repository.Artifact{
+		Kind: repository.ArtifactKindImage, AppID: appB.AppID,
+		Repository: "ghcr.io/acme/app-b", Version: "v1.0.0", Digest: "sha256:app-b-v1", BuildID: buildID,
+	}
+	if _, _, err := recordArtifactTx(t, reg, imgA, nil); err != nil {
+		t.Fatalf("record app-a image: %v", err)
+	}
+	if _, _, err := recordArtifactTx(t, reg, imgB, nil); err != nil {
+		t.Fatalf("record app-b image: %v", err)
+	}
+
+	// Chart artifact digest D pins exactly {app-a, app-b} at v1.0.0 -- the
+	// chart->image lockfile CI would have produced at this chart's build.
+	chartArtifact := repository.Artifact{
+		Kind: repository.ArtifactKindChart, ChartID: chart.ChartID,
+		Repository: "ghcr.io/acme/widget-chart", Version: "v1.2.3", Digest: "sha256:widget-chart-v1.2.3", BuildID: buildID,
+	}
+	contains := []repository.ContainedImageInput{
+		{Repository: "ghcr.io/acme/app-a", Version: "v1.0.0", Digest: "sha256:app-a-v1"},
+		{Repository: "ghcr.io/acme/app-b", Version: "v1.0.0", Digest: "sha256:app-b-v1"},
+	}
+	if _, _, err := recordArtifactTx(t, reg, chartArtifact, contains); err != nil {
+		t.Fatalf("record chart artifact D: %v", err)
+	}
+
+	// Promote D -- an "old version" from this point forward, exactly the
+	// scenario the issue describes.
+	envID := devEnvironmentID(t, reg)
+	targetKey := repository.TargetKey(repository.ArtifactKindChart, chart.FullName())
+	recorded, err := reg.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{Digest: "sha256:widget-chart-v1.2.3"})
+	if err != nil {
+		t.Fatalf("get chart artifact D: %v", err)
+	}
+	if _, _, err := promoteTx(t, reg, repository.Promotion{
+		EnvironmentID: envID, EnvironmentKey: "dev", TargetKey: targetKey, ArtifactID: recorded.ArtifactID,
+	}); err != nil {
+		t.Fatalf("promote D: %v", err)
+	}
+
+	// Now reconcile again: the chart's DECLARED composition changes to
+	// {app-a, app-c} -- app-b drops out, app-c joins. This is the
+	// "accidentally reconcile" step. It destructively rewrites chart_app.
+	reconcileTx(t, reg,
+		[]*appmetapb.AppManifest{
+			{Domain: "acme", Name: "app-a", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
+			{Domain: "acme", Name: "app-b", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
+			{Domain: "acme", Name: "app-c", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
+		},
+		[]*appmetapb.ChartManifest{
+			{Domain: "acme", Name: "widget-chart", Apps: []string{"app-a", "app-c"}},
+		},
+	)
+
+	// Sanity check: chart_app really did change -- otherwise this test would
+	// prove nothing. GetChartByFullName reads AppIDs off the now-current
+	// chart_app join.
+	updatedChart, err := reg.Apps().GetChartByFullName(ctx, "acme-widget-chart")
+	if err != nil {
+		t.Fatalf("get chart after reconcile: %v", err)
+	}
+	appC, err := reg.Apps().GetAppByFullName(ctx, "acme-app-c")
+	if err != nil {
+		t.Fatalf("get app-c: %v", err)
+	}
+	gotLive := map[string]bool{}
+	for _, id := range updatedChart.AppIDs {
+		gotLive[id] = true
+	}
+	if !gotLive[appA.AppID] || !gotLive[appC.AppID] || gotLive[appB.AppID] {
+		t.Fatalf("expected live chart_app to now be {app-a, app-c} (not app-b) after reconcile, got app_ids=%v", updatedChart.AppIDs)
+	}
+
+	// --- The assertion the issue is actually asking for -----------------
+
+	// 1. Repository layer: re-reading chart artifact D by its digest must
+	//    still resolve to {app-a, app-b}'s image digests, not app-c's.
+	afterReconcile, err := reg.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{Digest: "sha256:widget-chart-v1.2.3"})
+	if err != nil {
+		t.Fatalf("get chart artifact D after reconcile: %v", err)
+	}
+	gotDigests := containsDigests(afterReconcile.Contains)
+	wantDigests := map[string]bool{"sha256:app-a-v1": true, "sha256:app-b-v1": true}
+	if len(gotDigests) != len(wantDigests) || !gotDigests["sha256:app-a-v1"] || !gotDigests["sha256:app-b-v1"] {
+		t.Fatalf("promoted chart artifact D's Contains changed after a later Reconcile: got %v, want {app-a-v1, app-b-v1}", gotDigests)
+	}
+	if gotDigests["sha256:app-c-v1"] {
+		t.Fatalf("promoted chart artifact D picked up app-c after Reconcile changed the chart's live composition -- this is exactly the non-determinism issue #544 warns about")
+	}
+
+	// 2. Handler layer: GetEnvironmentState -- the exact RPC the writeback
+	//    worker and deploy tooling call -- must render the same pinned set,
+	//    not whatever chart_app says today.
+	promotionSrv := handlers.NewPromotionServer(reg)
+	stateResp, err := promotionSrv.GetEnvironmentState(ctx, &pb.GetEnvironmentStateRequest{EnvironmentKey: "dev"})
+	if err != nil {
+		t.Fatalf("GetEnvironmentState: %v", err)
+	}
+	if len(stateResp.Entries) != 1 {
+		t.Fatalf("expected exactly 1 environment state entry for the promoted chart, got %d", len(stateResp.Entries))
+	}
+	entry := stateResp.Entries[0]
+	if entry.Artifact.Digest != "sha256:widget-chart-v1.2.3" {
+		t.Fatalf("expected the rendered entry to be chart artifact D, got digest %s", entry.Artifact.Digest)
+	}
+	renderedDigests := map[string]bool{}
+	for _, img := range entry.Images {
+		renderedDigests[img.Digest] = true
+	}
+	if len(renderedDigests) != 2 || !renderedDigests["sha256:app-a-v1"] || !renderedDigests["sha256:app-b-v1"] {
+		t.Fatalf("GetEnvironmentState rendered a different app list than what was promoted: got %v, want {app-a-v1, app-b-v1}", renderedDigests)
+	}
+	if renderedDigests["sha256:app-c-v1"] {
+		t.Fatalf("GetEnvironmentState rendered app-c's image for an already-promoted chart artifact after a later Reconcile changed chart_app -- deploy-time non-determinism")
+	}
+	if len(entry.Drift) != 0 {
+		t.Fatalf("expected no drift entries (nothing was promoted with allow_override), got %+v", entry.Drift)
 	}
 }

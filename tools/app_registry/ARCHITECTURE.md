@@ -61,11 +61,11 @@ erDiagram
 | Table | Shape | Notes |
 |---|---|---|
 | `app` | mutable, reconciled | `(domain, name)` unique. `status` ∈ active/missing/archived. Never hard-deleted. |
-| `chart` | mutable, reconciled | `(domain, name)` unique. |
-| `chart_app` | join | Which apps a chart composes, per its manifest. |
+| `chart` | mutable, reconciled | `(domain, name)` unique. **Not SCD2** — see "Resolved questions" #4. |
+| `chart_app` | join, current-state only | Which apps a chart *currently* declares, per its latest manifest. Destructively rewritten (`DELETE` + re-`INSERT`) by every `Reconcile`. Informational only — never read on the promotion/writeback render path. **Not SCD2** — see "Resolved questions" #4. |
 | `build` | append-only | `(workflow_run_id, workflow_attempt)` unique. |
 | `artifact` | append-only | `digest` globally unique. `(owner, kind, version)` unique. `version_major/minor/patch` (AR-5a) back numeric ordering — see "Version model" below. |
-| `artifact_link` | append-only | Chart artifact → pinned image artifact. |
+| `artifact_link` | append-only | Chart artifact → pinned image artifact, written once at `RecordArtifact` time and never mutated. This is what makes a promoted chart artifact's rendered app list deterministic — see "Resolved questions" #4. |
 | `environment` | mutable | `key` unique. `rank` orders promotion legality. |
 | `promotion` | **SCD2** | `valid_from` / `valid_to`. Partial unique index on current rows. |
 | `promotion_event` | append-only | Who, why, when, and the Temporal workflow id. |
@@ -231,6 +231,16 @@ the highest-value part of the recording phase and should not be deferred.
 
 The server rejects a chart artifact that references an image digest it has never
 recorded — a chart may not pin an unknown artifact.
+
+**This is also the deploy-time idempotency guarantee for a promoted chart's
+app list — see "Resolved questions" #4.** `contains` is a pure function of
+the manifest set at the moment the chart was *built*, computed hermetically
+by `tools/helm/composer.go` with no registry access; `RecordArtifact` writes
+it into `artifact_link` once, keyed to that specific chart artifact, and
+nothing ever updates or rewrites an `artifact_link` row afterward. A later
+`Reconcile` changing the chart's live `chart_app` composition therefore
+cannot change what an already-recorded (and possibly already-promoted) chart
+artifact renders.
 
 ## Writeback: outbox → Temporal
 
@@ -513,6 +523,77 @@ changes hands.
 `AllocateVersion` must reject a domain not yet at `allocate`, so a
 misconfigured CI job fails loudly rather than silently allocating from the
 wrong source of truth.
+
+**4. `chart`/`chart_app` are not SCD2, and don't need to be — issue #544.**
+
+*Is `chart` SCD2?* No, and it shouldn't be. `chart` is a **mutable,
+reconciled dimension row** — the same shape as `app`: identity
+(`domain`/`name`) is stable, and `Reconcile` overwrites descriptive fields
+and `status` in place (`appRepo.Reconcile`, the `UPDATE chart SET
+status='active', last_seen_at=$2 ...` path). Per AGENTS.md's SCD2 section,
+SCD2 exists to answer "what was the value at time T," backed by a
+`valid_from`/`valid_to` pair and a partial-unique "current" index. Nothing in
+this system ever asks "what did `chart.description` say on Tuesday" — the
+one question anyone actually asks about a chart's history ("what was
+*running* at time T") is already answered by `promotion` (genuinely SCD2) and
+`build`/`artifact` (append-only, timestamped), not by historizing the chart
+row itself. Applying SCD2 here would just be tracking the history of a
+reconciled cache with no reader.
+
+*Is `chart_app` SCD2, or should it be?* This is the one that "kind of seems
+like it could be" — it changes over time and, naively, "what apps did this
+chart compose when it was promoted" sounds like a temporal question. It
+isn't SCD2 today: `appRepo.setChartApps` (`server/repository/postgres/app.go`)
+does a full `DELETE FROM chart_app WHERE chart_id = $1` then re-`INSERT` on
+every `Reconcile` — a current-state-only join, not append-only and not
+soft-deleted, which AGENTS.md's SCD2 section would normally flag as a
+candidate. But it should **not** become SCD2 either, because nothing on the
+deploy-time render path reads `chart_app` at all (traced in full below) — the
+thing that actually needs to be temporally stable already is, via a
+different, simpler mechanism than SCD2.
+
+*Is the deploy-time idempotency worry real?* **No — traced and verified with
+a real-Postgres regression test
+(`TestChartArtifact_CompositionPinnedAtRecordTime_SurvivesLaterReconcile`,
+`server/repository/postgres/postgres_integration_test.go`).** The chart
+→ image lockfile mechanism built for AR-2c (see "Chart → image lockfile"
+above) already solves this, incidentally, for the exact case the issue
+raises:
+
+- A chart artifact's app list is `Artifact.Contains` (`[]ArtifactLink`),
+  populated by `artifactRepo.loadContains`
+  (`server/repository/postgres/artifact.go:233`), which reads **only**
+  `artifact_link WHERE chart_artifact_id = $1` — keyed to one specific,
+  already-published chart artifact, never to the live `chart` row.
+- `artifact_link` rows are written exactly once, inside `RecordArtifact`
+  (`artifact.go:169-201`), from the CI-supplied `contains` list — itself a
+  hermetic function of the manifest set at chart-build time
+  (`tools/helm/composer.go`, no registry or DB access). No code path ever
+  updates or deletes an `artifact_link` row after that insert.
+- `PromotionServer.GetEnvironmentState` (`server/handlers/promotion.go:350-359`)
+  — the exact RPC the writeback worker calls to render what a promoted chart
+  deploys — builds its `Images`/drift computation from
+  `artifact.Contains`, i.e. `artifact_link`. It never joins `chart_app`.
+  `chart_app` only surfaces through `AppIds` on `GetChart`/`ListCharts`
+  responses (`server/handlers/convert.go:118`), a purely informational
+  "what does this chart declare today" read, never consulted by
+  `Promote`/`Rollback`/`GetEnvironmentState`/the writeback workflow.
+
+So: promote chart `v1.2.3` (digest D, pinning images {A, B}), then run a
+`Reconcile` that changes the chart's *declared* composition to {A, C} — the
+already-promoted artifact D still renders {A, B}, because rendering never
+looks at the row `Reconcile` just rewrote. Confirmed against real Postgres,
+not just the fakes: see "Verification" in the PR that introduced this
+section.
+
+**Where this leaves `chart_app`:** it stays as-is, current-state-only, for
+the informational "what does chart X compose right now" question
+(`app-registry chart show`-style reads). It is not wired into anything
+render-critical, so there is nothing to harden. Nothing precludes adding it
+later if a *human-facing* "what did chart X compose at time T" question ever
+needs answering (an SCD2 history table would be the right tool then, per
+AGENTS.md) — but that is a different, lower-stakes question than deploy-time
+correctness, and is not needed today.
 
 ## Open questions
 
