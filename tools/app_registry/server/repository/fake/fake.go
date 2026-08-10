@@ -56,6 +56,14 @@ type state struct {
 	// Absent means DomainAdoptionStageObserve -- see
 	// DomainAdoptionRepository.GetStage's doc comment.
 	DomainAdoption map[string]repository.DomainAdoptionStage
+	// Watermark mirrors the singleton reconcile_watermark row (migration
+	// 006). nil means "no watermark yet" -- unlike postgres, the fake has
+	// no seeded-sentinel-row concurrency concern to work around (WithTx
+	// already serializes every call via the outer mutex, see WithTx's doc
+	// comment), so this is a plain nilable pointer rather than a
+	// GitSHA=="" sentinel value. reconcile.go's use of it must still agree
+	// with repository.ShouldApplyReconcile's semantics for nil.
+	Watermark *repository.ReconcileWatermark
 }
 
 func newState() *state {
@@ -165,8 +173,8 @@ func (h txHandle) WithTx(ctx context.Context, fn func(ctx context.Context, reg r
 // AppRepository
 // ============================================================================
 
-func (r *Registry) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest, dryRun bool) (*repository.ReconcileResult, error) {
-	return reconcile(r.state, apps, charts, dryRun)
+func (r *Registry) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest, source repository.ReconcileSource, dryRun bool) (*repository.ReconcileResult, error) {
+	return reconcile(r.state, apps, charts, source, dryRun)
 }
 
 func (r *Registry) ListApps(ctx context.Context, filter repository.AppListFilter) ([]repository.App, error) {

@@ -68,9 +68,29 @@ func deployUnitToDB(du appmetapb.DeployUnit) string {
 // Reconcile
 // ============================================================================
 
-func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest, dryRun bool) (*repository.ReconcileResult, error) {
+func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest, source repository.ReconcileSource, dryRun bool) (*repository.ReconcileResult, error) {
 	now := time.Now().UTC()
 	result := &repository.ReconcileResult{}
+
+	// Watermark check -- see ARCHITECTURE.md "Reconcile watermark" and
+	// watermark.go's ShouldApplyReconcile. A dry run never consults or
+	// advances the watermark: it writes nothing, so there is nothing to
+	// guard. `SELECT ... FOR UPDATE` locks the singleton row for the
+	// remainder of this transaction, so a second concurrent Reconcile call
+	// blocks here until this one commits or rolls back -- that is what
+	// makes two racing callers serialize instead of both reading the same
+	// stale watermark.
+	if !dryRun {
+		current, err := r.getReconcileWatermark(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("reconcile: read watermark: %w", err)
+		}
+		if !repository.ShouldApplyReconcile(source, current) {
+			result.SkippedStale = true
+			result.CurrentWatermarkGitSHA = current.GitSHA
+			return result, nil
+		}
+	}
 
 	presentAppIDs := map[string]bool{}
 	appIDByKey := map[string]string{} // "domain|name" -> app_id, for chart resolution
@@ -258,7 +278,52 @@ func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, 
 		result.NewlyMissingCharts = append(result.NewlyMissingCharts, c)
 	}
 
+	if !dryRun {
+		if err := r.advanceReconcileWatermark(ctx, source, now); err != nil {
+			return nil, fmt.Errorf("reconcile: advance watermark: %w", err)
+		}
+	}
+
 	return result, nil
+}
+
+// getReconcileWatermark reads and locks the singleton reconcile_watermark
+// row (migration 006) with FOR UPDATE, so the read-compare-write sequence
+// in Reconcile is atomic with respect to a concurrent caller doing the
+// same. Returns nil only if the row is somehow absent -- migration 006
+// seeds exactly one row and nothing in this package ever deletes it, so
+// this is a defensive fallback, not the expected "no watermark yet" signal;
+// that signal is GitSHA == "" on a real row -- see
+// repository.ShouldApplyReconcile's doc comment.
+func (r *appRepo) getReconcileWatermark(ctx context.Context) (*repository.ReconcileWatermark, error) {
+	row := r.ex.QueryRow(ctx, `
+		SELECT git_sha, source_committed_at, discovered_at, updated_at
+		FROM reconcile_watermark WHERE id = 1 FOR UPDATE`)
+	var w repository.ReconcileWatermark
+	if err := row.Scan(&w.GitSHA, &w.SourceCommittedAt, &w.DiscoveredAt, &w.UpdatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &w, nil
+}
+
+// advanceReconcileWatermark overwrites the singleton row with source's
+// ordering metadata. Always an UPDATE in practice (migration 006 seeds the
+// row), but written as an upsert so this stays correct even if the seed row
+// were ever missing.
+func (r *appRepo) advanceReconcileWatermark(ctx context.Context, source repository.ReconcileSource, now time.Time) error {
+	_, err := r.ex.Exec(ctx, `
+		INSERT INTO reconcile_watermark (id, git_sha, source_committed_at, discovered_at, updated_at)
+		VALUES (1, $1, $2, $3, $4)
+		ON CONFLICT (id) DO UPDATE SET
+			git_sha = EXCLUDED.git_sha,
+			source_committed_at = EXCLUDED.source_committed_at,
+			discovered_at = EXCLUDED.discovered_at,
+			updated_at = EXCLUDED.updated_at`,
+		source.GitSHA, source.SourceCommittedAt, source.DiscoveredAt, now)
+	return err
 }
 
 // setChartApps rebuilds chart_app for chartID from scratch.

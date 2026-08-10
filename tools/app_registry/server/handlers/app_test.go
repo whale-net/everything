@@ -216,6 +216,160 @@ func TestReconcileApps_ChartComposesApps(t *testing.T) {
 	}
 }
 
+// ============================================================================
+// Reconcile watermark (issue #545) -- fake-backed handler coverage.
+// See postgres_integration_test.go's "Reconcile watermark" section for the
+// same scenarios exercised against real Postgres (real FOR UPDATE locking,
+// real transaction rollback). These fake-backed versions exist so the
+// business logic (repository.ShouldApplyReconcile and its wiring through
+// the handler/repository layers) is covered by the fast unit tier too, not
+// only the manual Postgres tier.
+// ============================================================================
+
+func manifestSetWithSource(gitSha string, sourceCommittedAt, discoveredAt int64, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest) *appmetapb.AppManifestSet {
+	return &appmetapb.AppManifestSet{
+		GitSha: gitSha, SourceCommittedAt: sourceCommittedAt, DiscoveredAt: discoveredAt,
+		Apps: apps, Charts: charts,
+	}
+}
+
+// TestReconcileApps_StaleCallSkippedWithoutError covers the headline
+// scenario from issue #545: an older commit's call lands after a newer
+// one's and must be a no-op SUCCESS (not an error), naming the commit it
+// lost to, and leaving the newer commit's state (including a MISSING flag)
+// untouched.
+func TestReconcileApps_StaleCallSkippedWithoutError(t *testing.T) {
+	ctx := authedCtx()
+	srv := NewAppServer(fake.New())
+
+	first, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      manifestSetWithSource("newer-sha", 2000, 2000, []*appmetapb.AppManifest{oneApp("demo", "svc")}, nil),
+		IdempotencyKey: "wm-1",
+	})
+	if err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	svcID := first.CreatedApps[0].AppId
+
+	// A newer commit drops "svc" -- correctly MISSING.
+	second, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      manifestSetWithSource("newest-sha", 3000, 3000, nil, nil),
+		IdempotencyKey: "wm-2",
+	})
+	if err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if len(second.NewlyMissingApps) != 1 || second.NewlyMissingApps[0].AppId != svcID {
+		t.Fatalf("expected svc newly missing, got %+v", second.NewlyMissingApps)
+	}
+
+	// A STALE call -- an older commit re-running -- must not revert that.
+	stale, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      manifestSetWithSource("older-rerun-sha", 2500, 2500, []*appmetapb.AppManifest{oneApp("demo", "svc")}, nil),
+		IdempotencyKey: "wm-3",
+	})
+	if err != nil {
+		t.Fatalf("stale reconcile must be a no-op SUCCESS, not an error: %v", err)
+	}
+	if !stale.SkippedStale {
+		t.Fatalf("expected SkippedStale=true for an older-commit call, got %+v", stale)
+	}
+	if stale.CurrentWatermarkGitSha != "newest-sha" {
+		t.Fatalf("expected current_watermark_git_sha=newest-sha, got %q", stale.CurrentWatermarkGitSha)
+	}
+	if len(stale.CreatedApps)+len(stale.UpdatedApps)+len(stale.RecoveredApps) != 0 {
+		t.Fatalf("expected an empty result for a skipped-stale call, got %+v", stale)
+	}
+
+	// svc must STILL be MISSING -- the stale call did not revert it.
+	getResp, err := srv.GetApp(ctx, &pb.GetAppRequest{AppId: svcID})
+	if err != nil {
+		t.Fatalf("get app after stale call: %v", err)
+	}
+	if getResp.App.Status != pb.AppStatus_APP_STATUS_MISSING {
+		t.Fatalf("stale call reverted svc's MISSING flag -- now %v", getResp.App.Status)
+	}
+}
+
+// TestReconcileApps_EqualOrderingKeyDifferentGitShaApplies proves the
+// deliberate equal-timestamp tie-break: two different commits at the same
+// ordering key must not block each other.
+func TestReconcileApps_EqualOrderingKeyDifferentGitShaApplies(t *testing.T) {
+	ctx := authedCtx()
+	srv := NewAppServer(fake.New())
+
+	if _, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      manifestSetWithSource("sha-a", 5000, 5000, []*appmetapb.AppManifest{oneApp("demo", "svc")}, nil),
+		IdempotencyKey: "tie-1",
+	}); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+
+	resp, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: manifestSetWithSource("sha-b", 5000, 5000,
+			[]*appmetapb.AppManifest{oneApp("demo", "svc"), oneApp("demo", "svc2")}, nil),
+		IdempotencyKey: "tie-2",
+	})
+	if err != nil {
+		t.Fatalf("tied-timestamp reconcile: %v", err)
+	}
+	if resp.SkippedStale {
+		t.Fatalf("expected an equal-timestamp, different-git_sha call to apply, got SkippedStale=true")
+	}
+	if len(resp.CreatedApps) != 1 || resp.CreatedApps[0].FullName != "demo-svc2" {
+		t.Fatalf("expected svc2 to be newly created, got %+v", resp.CreatedApps)
+	}
+}
+
+// TestReconcileApps_DryRunNeverConsultsOrAdvancesWatermark proves dry_run
+// is unaffected by the watermark in either direction, mirroring
+// postgres_integration_test.go's version of this proof against real
+// Postgres.
+func TestReconcileApps_DryRunNeverConsultsOrAdvancesWatermark(t *testing.T) {
+	ctx := authedCtx()
+	srv := NewAppServer(fake.New())
+
+	if _, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      manifestSetWithSource("real-sha", 999999, 999999, []*appmetapb.AppManifest{oneApp("demo", "svc")}, nil),
+		IdempotencyKey: "dry-wm-1",
+	}); err != nil {
+		t.Fatalf("real reconcile: %v", err)
+	}
+
+	// A dry run carrying a far-older ordering key must still compute a
+	// normal diff -- if it consulted the watermark, this would come back
+	// SkippedStale with an empty diff instead.
+	dryResp, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: manifestSetWithSource("dry-run-old-sha", 1, 1,
+			[]*appmetapb.AppManifest{oneApp("demo", "svc"), oneApp("demo", "new-app")}, nil),
+		DryRun: true,
+	})
+	if err != nil {
+		t.Fatalf("dry run reconcile: %v", err)
+	}
+	if dryResp.SkippedStale {
+		t.Fatalf("dry run must never consult the watermark, got SkippedStale=true")
+	}
+	if len(dryResp.CreatedApps) != 1 || dryResp.CreatedApps[0].FullName != "demo-new-app" {
+		t.Fatalf("expected dry run to compute a normal diff (1 created app), got %+v", dryResp.CreatedApps)
+	}
+
+	// And a REAL call carrying that same far-older key must still be
+	// rejected as stale -- proving the dry run above did not advance the
+	// watermark.
+	afterDry, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: manifestSetWithSource("dry-run-old-sha", 1, 1,
+			[]*appmetapb.AppManifest{oneApp("demo", "svc"), oneApp("demo", "new-app")}, nil),
+		IdempotencyKey: "dry-wm-2",
+	})
+	if err != nil {
+		t.Fatalf("post-dry-run real reconcile: %v", err)
+	}
+	if !afterDry.SkippedStale {
+		t.Fatalf("expected the same far-older key to still be rejected as stale after the dry run, got SkippedStale=false -- the dry run must have advanced the watermark")
+	}
+}
+
 // TestSetAppStatus_MissingToArchivedSucceeds covers the only transition a
 // human triggers through this RPC: missing -> archived. missing -> active
 // happens automatically via Reconcile's "recovered" path instead.
