@@ -10,6 +10,14 @@ description: >-
   Requires APP_REGISTRY_CLI env var already set (see
   .github/actions/download-release-tools).
 
+  Best-effort: a failure here can only be a registry error (RecordBuild
+  never resolves an owner, so it cannot hit issue #547's "app not
+  registered yet" case -- see server/handlers/artifact.go) -- this step
+  still fails its own exit status (matching release.yml's
+  `continue-on-error: true` on the calling step) with an annotation naming
+  that, and downstream steps that depend on `build-id` are already
+  conditioned on it being non-empty so they skip cleanly.
+
 inputs:
   address:
     required: true
@@ -58,12 +66,34 @@ runs:
         ACTOR: ${{ inputs.actor }}
         IDEMPOTENCY_KEY: ${{ inputs.idempotency-key }}
       run: |
+        # issue #547 -- see the "Best-effort" note above: RecordBuild cannot
+        # hit the owner-not-reconciled case (exit 3, see cli/cmd/root.go),
+        # so any nonzero exit here is a genuine registry error (outage,
+        # auth failure, timeout). Classified the same way as
+        # app-registry-record-image so the two actions read as one story
+        # rather than one having annotations and the other not.
+        set +e
         BUILD_JSON=$("$APP_REGISTRY_CLI" builds record \
           --git-sha "$GIT_SHA" \
           --git-ref "$GIT_REF" \
           --workflow-run-id "$WORKFLOW_RUN_ID" \
           --workflow-attempt "$WORKFLOW_ATTEMPT" \
           --actor "$ACTOR" \
-          --idempotency-key "$IDEMPOTENCY_KEY")
+          --idempotency-key "$IDEMPOTENCY_KEY" 2>&1)
+        RECORD_EXIT=$?
+        set -e
+
+        if [[ $RECORD_EXIT -ne 0 ]]; then
+          echo "$BUILD_JSON"
+          echo "::warning title=App Registry: build recording skipped (registry error)::Could not record this workflow run's build in the App Registry -- a registry outage, auth failure, or other transient error. Recording is best-effort; the release still succeeded. Downstream App Registry steps for this job will skip, since no build-id was returned."
+          {
+            echo "### ⚠️ App Registry: build recording skipped"
+            echo ""
+            echo "RecordBuild failed for workflow run \`${WORKFLOW_RUN_ID}\` (attempt \`${WORKFLOW_ATTEMPT}\`) -- registry error, not a missing-owner case. See tools/app_registry/OPERATIONS.md."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+        fi
+
         BUILD_ID=$(echo "$BUILD_JSON" | jq -r '.build.buildId')
         echo "build-id=$BUILD_ID" >> "$GITHUB_OUTPUT"
+        echo "✅ Recorded build ${BUILD_ID} in App Registry"

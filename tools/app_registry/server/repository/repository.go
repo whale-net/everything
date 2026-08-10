@@ -10,6 +10,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
@@ -31,6 +32,18 @@ var (
 	// current state (e.g. SetAppStatus(ACTIVE) on an app absent from the
 	// latest reconcile).
 	ErrFailedPrecondition = errors.New("failed precondition")
+
+	// ErrOwnerNotReconciled: RecordArtifact's owner_full_name resolved to no
+	// known app/chart row (see handlers.resolveOwner). It wraps
+	// ErrInvalidArgument (not a sibling of it) so mapRepoErr's existing
+	// errors.Is(err, ErrInvalidArgument) case keeps matching unchanged --
+	// mapRepoErr additionally checks for this more specific sentinel first
+	// to attach a structured apierrors.ReasonOwnerNotReconciled detail,
+	// which the CLI (and, through it, CI) uses to distinguish "app isn't
+	// registered yet" from any other registry failure without parsing the
+	// message text. See issue #547 and ARCHITECTURE.md "Reconcile
+	// watermark" for why this case is common and expected, not a bug.
+	ErrOwnerNotReconciled = fmt.Errorf("%w: owner not reconciled", ErrInvalidArgument)
 )
 
 // AppRepository covers App and Chart identity — the two tables ReconcileApps

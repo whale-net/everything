@@ -284,6 +284,94 @@ comments and `ShouldApplyReconcile`'s doc comment; it is invisible above the
 repository interface, which only ever exposes "is there a watermark or
 not."
 
+## Release-vs-reconcile gap (issue #547)
+
+`ReconcileApps` runs only from `ci.yml` on push to `main` (#543); `release.yml`
+is a `workflow_dispatch` a human triggers, often immediately after merging —
+this is normal usage, not an edge case. That decoupling opens a window: a
+release can run, and reach `RecordArtifact`'s owner lookup
+(`resolveOwner`), *before* the corresponding `main`-push reconcile for that
+commit has finished, or even started. If the commit introduces a genuinely
+new app/chart, `resolveOwner` fails exactly the way it does when reconcile
+never ran at all (#539/#542/#548) — now reproducible per-release, not just
+per-outage.
+
+**Decision: accept the gap, make it loud instead of silent (issue #547's
+options 3 + 4). Two other options were considered and rejected:**
+
+- **Not chosen: a release-time provisional upsert (option 1).** Reintroduces
+  a second write path to `app`/`chart` — exactly what the "App/chart
+  registration" row below already rejected for the same reason. It also
+  cannot be made safe against a `release.yml` ref that diverges from `main`
+  (see the second-order case below): a provisional upsert from such a ref
+  would write metadata (`deploy_unit`, `image_repository`, `bazel_label`,
+  description, …) that's only "corrected" whenever the next `main`-push
+  reconcile happens to run, with nothing surfacing the interim drift. Even
+  scoped as "always superseded by the next real reconcile" (which the
+  watermark from issue #545 would make *orderable*, not safe by itself), it
+  is a second mechanism to reason about for a case that resolves itself
+  within one `main`-push cycle anyway.
+- **Not chosen: gate `release.yml` on `main`'s reconcile (option 2).** Avoids
+  a second write path entirely, at the cost of every release blocking on
+  `main` CI. The repo owner releases immediately after merging as normal
+  practice and does not want releases blocking on `main` CI — this would
+  turn a one-off recording miss into a mandatory wait on every release.
+
+**What "accept the gap" means concretely:**
+
+- Releases are never gated on `main`'s reconcile, in either direction —
+  `release.yml` does not wait for it, and does not skip publishing anything
+  because of it.
+- Recording stays best-effort by design (see "Availability and bootstrap"
+  above): a release that runs ahead of reconcile simply does not get that
+  one artifact/build recorded. The image/chart still publishes normally;
+  only the App Registry's record of it is missing.
+- **Identity self-heals; the artifact record does not.** The next
+  `main`-push reconcile registers the app/chart (an app going `MISSING` →
+  reappearing → `ACTIVE` is automatic, see "Triage" below), so a *later*
+  release for the same app records fine. But nothing re-records the specific
+  build/artifact that failed to record the first time — `ReconcileApps`
+  (`server/handlers/app.go`) only ever calls `repository.Registry.Apps().Reconcile`;
+  it has no path to `RecordBuild`/`RecordArtifact`, so there is no mechanism
+  by which a missed release-time record gets filled in after the fact. If
+  that artifact matters (e.g. it needs to be promotable later), the fix is
+  to re-run the release job once `main`'s reconcile has caught up, not to
+  wait for anything automatic.
+- CI makes this failure loud rather than silent: `RecordArtifact` returning
+  the owner-not-reconciled case is classified as its own actionable
+  `::warning::` (naming the app/chart, pointing at `ci.yml`'s
+  `reconcile-app-registry` job, and saying "re-run this release after main's
+  CI completes") distinct from a generic registry-error warning — see
+  `.github/actions/app-registry-record-image/action.yml`,
+  `.github/actions/app-registry-record-build/action.yml`, and `release.yml`'s
+  inline chart-recording loop. The distinguishing signal is a structured
+  gRPC status detail (`apierrors.ReasonOwnerNotReconciled`, set by
+  `mapRepoErr` in `server/handlers/errors.go`) that the CLI (`cli/cmd/root.go`)
+  turns into a distinct process exit code (3) — not a parse of the error
+  message — so CI's classification is robust to message wording changing
+  later. `tools/app_registry/OPERATIONS.md` documents what an operator does
+  when they see it.
+
+**Second-order case: a ref that never becomes part of `main`.**
+`release.yml` can be dispatched against an arbitrary ref — a branch that
+later gets rebased or squashed differently before merging, or an old tag for
+a hotfix. If that ref's manifests differ from what's currently on `main`
+(e.g. a `deploy_unit` or `bazel_label` change that gets reverted before
+merge), there is today no mechanism by which anything from that release
+would ever land in the registry, because `release.yml` never writes app
+identity itself (see "App/chart registration" below) — only `main`-push
+reconcile does, and it reconciles `main`'s current tree, never that ref's.
+Concretely: the artifact/build for that specific run either recorded
+successfully against whatever app/chart state existed on `main` at the time
+(if the owner already existed and its identity metadata happened to still
+match), or it didn't record at all (owner never existed) and, since it never
+merges to `main` in that form, never becomes recordable later either. This
+is arguably correct — nothing *should* write app identity from a
+non-canonical ref — but it does mean "release from an unmerged/divergent
+ref" cannot self-heal the way "release right after merging to `main`" can.
+No machinery is planned for this; it is accepted as part of the same
+tradeoff above, not a separate gap to close.
+
 ## Promotability
 
 The rule the whole system hangs on. Each app declares its `deploy_unit` in its
@@ -556,6 +644,8 @@ when the opt-in is off, or a registry outage becomes a release outage.
 | Reconcile watermark ordering key | `source_committed_at` (git committer timestamp of `git_sha`), fallback to `discovered_at` | `discovered_at` alone | `discovered_at` is sweep time, not commit-history position — a manually re-run older workflow sweeps at re-run time, producing a *newer* `discovered_at` than the newer commit it's racing. That is precisely the headline case issue #545 exists to guard against, so a `discovered_at`-only watermark would not catch it. See "Reconcile watermark" above. |
 | Stale reconcile call | no-op success (`skipped_stale = true`) | `FailedPrecondition` error | A CI re-run of an older commit is doing the *correct* thing by declining to overwrite newer state; failing that workflow run would punish correct behavior and train people to retry (or worse, force-apply) their way past a safety check. A visible response field plus a server-side `Warn` log gives the same "you should know this happened" property as an error without making the workflow red. |
 | Reconcile watermark granularity | one singleton row for the whole registry | a watermark per app/chart row | `Reconcile` is always a full-replace of the complete manifest set (see "Design principles" #1) — there is exactly one meaningful "most recent complete sweep," so a per-row watermark would have to answer a question that cannot arise under this write model ("was this one row from a newer sweep than that one"). |
+| Release-vs-reconcile gap (#547) | accept the gap; make the failure a distinct, actionable annotation instead of silent | a release-time provisional upsert, always superseded by the next real reconcile | Reintroduces a second write path to `app`/`chart`, the exact thing the "App/chart registration" row above already rejected. Unsafe against a `release.yml` ref that diverges from `main` (see "Release-vs-reconcile gap" above): it could write stale metadata that nothing corrects until the next `main` reconcile happens to run. |
+| Release-vs-reconcile gap (#547) | accept the gap; make the failure a distinct, actionable annotation instead of silent | gate `release.yml` on `main`'s reconcile completing first | Avoids a second write path, but every release would block on `main` CI. The repo owner releases immediately after merging as normal practice; this would turn an occasional recording miss into a mandatory wait on every release. |
 
 ## Future: approval gate
 

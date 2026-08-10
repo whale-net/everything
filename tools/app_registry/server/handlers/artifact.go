@@ -141,22 +141,26 @@ func (s *ArtifactServer) RecordArtifact(ctx context.Context, req *pb.RecordArtif
 }
 
 // resolveOwner resolves owner_full_name to an app_id or chart_id, depending
-// on kind, wrapping repository.ErrNotFound as ErrInvalidArgument — an
-// unknown owner is a caller mistake, not a "row doesn't exist yet" case.
-// The wrapped message names the owner and hints at the most common cause
-// (see issue #548): a release running ahead of ReconcileApps, which runs on
-// push to main via ci.yml (see .github/actions/app-registry-reconcile).
+// on kind, wrapping repository.ErrNotFound as ErrOwnerNotReconciled (which
+// itself wraps ErrInvalidArgument — an unknown owner is a caller mistake,
+// not a "row doesn't exist yet" case). The wrapped message names the owner
+// and hints at the most common cause (see issue #548): a release running
+// ahead of ReconcileApps, which runs on push to main via ci.yml (see
+// .github/actions/app-registry-reconcile). mapRepoErr (errors.go) attaches a
+// structured apierrors.ReasonOwnerNotReconciled detail for this specific
+// sentinel (issue #547) so a caller can classify the failure without
+// parsing this message.
 func (s *ArtifactServer) resolveOwner(ctx context.Context, r repository.Registry, kind repository.ArtifactKind, ownerFullName string) (string, error) {
 	if kind == repository.ArtifactKindImage {
 		app, err := r.Apps().GetAppByFullName(ctx, ownerFullName)
 		if err != nil {
-			return "", fmt.Errorf("%w: app %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", repository.ErrInvalidArgument, ownerFullName)
+			return "", fmt.Errorf("%w: app %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", repository.ErrOwnerNotReconciled, ownerFullName)
 		}
 		return app.AppID, nil
 	}
 	chart, err := r.Apps().GetChartByFullName(ctx, ownerFullName)
 	if err != nil {
-		return "", fmt.Errorf("%w: chart %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", repository.ErrInvalidArgument, ownerFullName)
+		return "", fmt.Errorf("%w: chart %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", repository.ErrOwnerNotReconciled, ownerFullName)
 	}
 	return chart.ChartID, nil
 }
