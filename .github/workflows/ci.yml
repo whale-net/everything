@@ -63,6 +63,17 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-release-tools
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Serializes reconcile runs so an older main push's ReconcileApps call
+    # gets cancelled instead of racing a newer one. This job only runs on
+    # push-to-main (see `if:` above), so a constant group -- not one keyed
+    # on ref/workflow -- is what serializes across runs, matching intent.
+    # Partial mitigation only: a manually re-run older workflow run gets
+    # fresh queue timing (not the original push's chronological position),
+    # and an RPC already in flight when cancellation lands still completes.
+    # The real fix is a server-side monotonic ordering guard -- see #545.
+    concurrency:
+      group: app-registry-reconcile
+      cancel-in-progress: true
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
