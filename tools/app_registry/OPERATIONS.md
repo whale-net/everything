@@ -81,6 +81,20 @@ To check whether a specific release actually got recorded:
    which runs on push to `main` via `ci.yml`) — not a credential or CLI
    problem. The job outcome tells you nothing; only the step log does.
 
+**"Why didn't my reconcile apply?" (issue #545).** The `reconcile-app-registry`
+job in `ci.yml` runs green but `app-registry apps list`/`get` still shows
+old state. Check the step's log for `reconcile skipped: this manifest set
+(git_sha=...) is stale relative to the current watermark (git_sha=...)` — the
+CLI prints this to stderr, and the server logs the same event at `Warn`. This
+means the reconcile watermark rejected the call as older (in commit history,
+via `source_committed_at`) than one already applied — almost always a
+manually re-run workflow for an older commit, or a workflow run whose reconcile
+step got queued behind a later push's. **This is expected, correct behavior,
+not a bug**: applying it would have reverted registry state to match the
+older commit. See [ARCHITECTURE.md "Reconcile watermark"](ARCHITECTURE.md#reconcile-watermark-issue-545)
+for the full mechanism, and re-run `ci.yml` for the commit you actually want
+reflected if that's not what already ran.
+
 To confirm from the registry side rather than the log:
 
 ```bash

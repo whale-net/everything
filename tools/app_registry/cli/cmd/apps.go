@@ -132,6 +132,18 @@ func newAppsReconcileCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				// Skipped-stale is a no-op SUCCESS (see
+				// ReconcileAppsResponse.skipped_stale's doc comment) so it
+				// must not fail the command, but it must not be silent
+				// either -- a CI log that only shows a green step for a
+				// call that wrote nothing is exactly the failure mode
+				// issue #545 exists to fix. Mirrors promote.go's
+				// already-promoted/dry-run stderr banners.
+				if resp.SkippedStale {
+					fmt.Fprintf(cmd.ErrOrStderr(),
+						"reconcile skipped: this manifest set (git_sha=%q) is stale relative to the current watermark (git_sha=%q); nothing was written\n",
+						manifests.GitSha, resp.CurrentWatermarkGitSha)
+				}
 				return printResponse(resp)
 			})
 		},

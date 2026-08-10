@@ -47,6 +47,21 @@ message ReconcileAppsResponse {
   repeated Chart recovered_charts = 8;
 
   bool dry_run = 9;
+
+  // True when this call was rejected by the reconcile watermark as older
+  // (in commit order) than the most recently applied call, and was
+  // therefore a no-op success -- nothing above was written, every list is
+  // empty. This is deliberately NOT an error: a re-run of an older CI
+  // workflow doing the right thing (declining to revert newer state) must
+  // not turn the workflow red. See ARCHITECTURE.md "Reconcile watermark"
+  // and issue #545. Never set when dry_run is true -- a dry run never
+  // consults or advances the watermark.
+  bool skipped_stale = 10;
+
+  // The git_sha this call lost to, populated only when skipped_stale is
+  // true -- so a caller/log line can say exactly which commit is currently
+  // recorded instead of just "something newer already applied."
+  string current_watermark_git_sha = 11;
 }
 
 // ============================================================================

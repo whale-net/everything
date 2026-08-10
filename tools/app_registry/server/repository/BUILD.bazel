@@ -6,6 +6,7 @@ go_library(
         "models.go",
         "promotability.go",
         "repository.go",
+        "watermark.go",
     ],
     importpath = "github.com/whale-net/everything/tools/app_registry/server/repository",
     visibility = ["//visibility:public"],

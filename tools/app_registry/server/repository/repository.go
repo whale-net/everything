@@ -44,7 +44,21 @@ type AppRepository interface {
 	// chart.apps entries are resolved to app_ids and the call fails with
 	// ErrInvalidArgument if any name is unknown. dryRun computes the result
 	// without writing.
-	Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest, dryRun bool) (*ReconcileResult, error)
+	//
+	// source carries the ordering metadata (git_sha / source_committed_at /
+	// discovered_at) this call is checked against the reconcile watermark
+	// with -- see ARCHITECTURE.md "Reconcile watermark", watermark.go's
+	// ShouldApplyReconcile, and issue #545. When dryRun is true, source is
+	// ignored entirely: a dry run must never consult or advance the
+	// watermark. When dryRun is false and the watermark rejects source as
+	// stale, Reconcile returns a result with SkippedStale set and writes
+	// nothing -- a no-op success, not an error (a re-run of an older CI
+	// workflow correctly declining to revert newer state must not fail).
+	// Implementations MUST perform the watermark read (locking, e.g.
+	// `SELECT ... FOR UPDATE`) and the apply-or-skip decision inside the
+	// SAME transaction as the app/chart writes, so two concurrent Reconcile
+	// calls serialize rather than both reading a stale watermark.
+	Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest, source ReconcileSource, dryRun bool) (*ReconcileResult, error)
 
 	ListApps(ctx context.Context, filter AppListFilter) ([]App, error)
 	GetAppByID(ctx context.Context, appID string) (*App, error)
