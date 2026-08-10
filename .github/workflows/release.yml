@@ -87,22 +87,12 @@ jobs:
 
   # Build release_helper_go and the app-registry CLI once and share them with
   # every other job via upload-artifact/download-artifact (see .github/actions/
-  # download-release-tools). Every other job in this workflow used to build
-  # these tools from source itself -- once per matrix leg, once for helm
-  # charts, etc.
-  #
-  # ci-images (cache reads enabled), NOT ci-release: ci-release's
-  # --noremote_accept_cached disables *all* remote-cache reads for the whole
-  # build graph, not just these two Go binaries -- including exec-tool
-  # dependencies like the C++ protobuf toolchain. That turned one run of this
-  # job into a 30+ minute from-source rebuild of libprotobuf that never even
-  # finished (see run 31344551546). It also bought nothing: the actual image/
-  # chart build is a *separate* `bazel` subprocess invocation that
-  # release_helper_go shells out to internally (see cmd/build_image.go,
-  # cmd/runners.go), and those internal calls pass no --config flag at all --
-  # so how *this* tool binary was compiled has zero bearing on whether the
-  # published artifact reads from a stale cache. Purity for the real artifact
-  # would need to be enforced on that inner invocation, not here.
+  # download-release-tools), instead of every job rebuilding from source.
+  # ci-images, not ci-release: ci-release's --noremote_accept_cached forces a
+  # from-source rebuild of the whole exec-tool graph (protobuf C++ included)
+  # and buys nothing here -- release_helper_go's internal bazel calls pass no
+  # --config, so this binary's own build cache-hit-ness doesn't affect the
+  # published artifact.
   build-release-tools:
     name: Build Release Tools
     runs-on: ubuntu-latest
