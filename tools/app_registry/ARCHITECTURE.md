@@ -1282,6 +1282,52 @@ only thing lost is the ability to *make new promotions* during the outage.
 > #558)" → "Availability, restated per adoption stage". Every domain is at
 > `observe` today, so nothing here is wrong yet.
 
+### Version skew vs. outage (issue #570)
+
+"Best-effort" above described every registry-call failure as one bucket: a
+`continue-on-error` step goes red, the job stays green, an operator has to
+read the step log to find out why. Issue #569 showed that bucket hides two
+very different failures. `codes.Unavailable`/`DeadlineExceeded`/
+`Unauthenticated` etc. are an **outage** — transient, self-clearing, exactly
+what "best-effort" is designed to absorb. `codes.Unimplemented` is a
+**deployment defect**: CI's `app-registry` CLI is built from the commit being
+released, the server is whatever was last deployed, and if the CLI calls an
+RPC the server predates, retrying the same release does nothing — only
+rolling the server forward (or turning off `APP_REGISTRY_CICD_OPT_IN`) clears
+it. In #569 that ran silently for two releases across two different missing
+RPCs before anyone noticed, because both cases produced the same
+`::warning::`.
+
+The CLI now classifies this centrally instead of every caller string-grepping
+stderr: `cli/cmd/root.go`'s `exitCodeFor` maps a gRPC status of
+`codes.Unimplemented` to `exitVersionSkew` (process exit code 4), distinct
+from the generic exit 1 every other failure (including every outage code
+above) still gets, and from `exitOwnerNotReconciled` (exit 3, issue #547 —
+an *application*-level rejection, not a missing method). Every composite
+action and inline script in `.github/actions/app-registry-*` and
+`release.yml`'s chart-recording loops branches on exit 4 to emit `::error::`
+instead of `::warning::`, naming it a version-skew/deployment defect that
+will not clear on retry rather than "the registry might be down, try again."
+
+This closes the loudness gap `AssertApps`-first-step notwithstanding: even
+though `app-registry-assert` runs before every other registry call in a
+release (AR-7c, see "`AssertApps` (additive) vs. `ReconcileApps`" above), a
+skew there now surfaces immediately rather than only once whichever
+downstream RPC happens to be the first one the deployed server lacks.
+
+**What this does not do:** the steps stay `continue-on-error: true` at
+adoption stage `observe` (every domain, today), same as before — an
+`::error::` annotation is louder than `::warning::` in the run's summary, but
+it does not turn the job red on its own. Making version skew (or any
+recording failure) actually fail the job at `promote`/`allocate` requires CI
+to read a domain's `domain_adoption.stage` per release, which does not exist
+today (see "Availability, restated per adoption stage" above — that table is
+a design target, not current behavior) and is a reasonable fast-follow, not
+part of this change. The `main`-push reconcile sweep (`ci.yml`,
+`app-registry-reconcile`) already fails red on any error including skew,
+uniformly, because it was already NOT `continue-on-error` (AR-7a) — it needed
+no change here.
+
 ### `APP_REGISTRY_CICD_OPT_IN` — the bootstrap kill switch
 
 "Best-effort" is not enough on its own. The registry is built and released by
