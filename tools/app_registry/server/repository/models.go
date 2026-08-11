@@ -226,8 +226,11 @@ type ArtifactLink struct {
 // publishing (BeginPublish with no prior allocation -- the pre-cutover
 // path), allocated -> publishing (BeginPublish), publishing -> published
 // (RecordArtifact), publishing -> failed (FailPublish, or the reaper),
-// failed -> publishing (a later run retrying the same version). published
-// is terminal; anything else is FailedPrecondition.
+// failed -> publishing (a later run retrying the same version), publishing
+// -> publishing (BeginPublish again -- AR-7d, issue #558: an idempotent
+// heartbeat/re-arm of state_changed_at, not a no-op; see BeginPublish's own
+// doc comment for why this exists). published is terminal; anything else
+// is FailedPrecondition.
 type ArtifactState string
 
 const (

@@ -433,12 +433,19 @@ func (s *ArtifactServer) BeginPublish(ctx context.Context, req *pb.BeginPublishR
 	return &pb.BeginPublishResponse{Artifact: artifact}, nil
 }
 
-// beginPublishOne is the shared ∅|allocated|failed -> publishing transition
-// both BeginPublish and BeginPublishBatch (AR-7d, issue #558) drive. Kept as
-// one code path so a target processed by the batch call and the same target
-// later reached by an individual BeginPublish call (idempotency key
-// collision deliberate -- see BeginPublishBatchRequest's doc comment)
-// produce byte-identical stored responses.
+// beginPublishOne is the shared ∅|allocated|failed|publishing -> publishing
+// transition both BeginPublish and BeginPublishBatch (AR-7d, issue #558)
+// drive. Kept as one code path so both RPCs enforce the identical
+// legal-transition table, including the publishing -> publishing heartbeat
+// (see repository.ArtifactRepository.BeginPublish's doc comment).
+//
+// Callers MUST use distinct idempotency keys for the batch call and any
+// later individual call against the same target -- see
+// BeginPublishBatchRequest.idempotency_key_prefix's doc comment for why:
+// unlike every other write RPC here, this one is deliberately called more
+// than once against the same target within one run, and each call must
+// actually re-execute (to refresh state_changed_at, or to revive a row the
+// reaper expired), not replay a cached response from runIdempotent.
 func (s *ArtifactServer) beginPublishOne(ctx context.Context, idempotencyKey string, kind repository.ArtifactKind, ownerID, version, buildID, repositoryHint string) (*pb.Artifact, error) {
 	resp, _, err := runIdempotent(ctx, s.repo, idempotencyKey, "BeginPublish",
 		func() proto.Message { return &pb.BeginPublishResponse{} },
@@ -478,6 +485,16 @@ func (s *ArtifactServer) beginPublishOne(ctx context.Context, idempotencyKey str
 // version, a real state-machine conflict) is reported in its own result and
 // does not block the rest. The RPC itself only fails on a malformed
 // request (missing build_id/idempotency_key_prefix/targets).
+//
+// This is a plan-time declaration, not the whole story: release.yml's
+// per-leg BeginPublish call still runs immediately before that leg's own
+// push (see BeginPublish's own comment and repository.ArtifactRepository.
+// BeginPublish's doc comment on the publishing -> publishing heartbeat) --
+// it re-arms the row's staleness clock right before the work that clock is
+// supposed to bound, and revives a row the stale-row reaper already
+// expired to "failed" while this leg was still queued. Declaring intent up
+// front and keeping the clock accurate per-leg are two different jobs; this
+// RPC only does the first one.
 func (s *ArtifactServer) BeginPublishBatch(ctx context.Context, req *pb.BeginPublishBatchRequest) (*pb.BeginPublishBatchResponse, error) {
 	if err := auth.Require(ctx, auth.RoleBuilder); err != nil {
 		return nil, err
@@ -517,10 +534,15 @@ func (s *ArtifactServer) BeginPublishBatch(ctx context.Context, req *pb.BeginPub
 			continue
 		}
 
-		// Same idempotency-key convention every other per-target write RPC
-		// uses -- see BeginPublishBatchRequest.idempotency_key_prefix's doc
-		// comment for why this is deliberate, not incidental.
-		idemKey := fmt.Sprintf("%s-%s-%s", req.IdempotencyKeyPrefix, t.OwnerFullName, string(kind))
+		// "-intent" suffix: deliberately DIFFERENT from the key the same
+		// target's per-leg BeginPublish call uses
+		// ("<prefix>-<owner>-<kind>", no suffix) -- see
+		// BeginPublishBatchRequest.idempotency_key_prefix's doc comment.
+		// The two calls must NOT share a key, or the per-leg call would
+		// replay this one's cached response via runIdempotent instead of
+		// actually re-executing -- and re-execution is the whole point of
+		// the per-leg call (AR-7d's heartbeat/revive).
+		idemKey := fmt.Sprintf("%s-%s-%s-intent", req.IdempotencyKeyPrefix, t.OwnerFullName, string(kind))
 		artifact, berr := s.beginPublishOne(ctx, idemKey, kind, ownerID, t.Version, req.BuildId, repo)
 		if berr != nil {
 			result.Error = mapRepoErr(berr).Error()

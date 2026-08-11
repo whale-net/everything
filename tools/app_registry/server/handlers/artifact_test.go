@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/whale-net/everything/tools/app_registry/apierrors"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
@@ -1054,41 +1056,123 @@ func TestBeginPublishBatch_PartialApply_UnknownOwnerDoesNotBlockOthers(t *testin
 	}
 }
 
-// TestBeginPublishBatch_SameIdempotencyKeyAsIndividualBeginPublish proves
-// the collision-safety property BeginPublishBatchRequest's doc comment
-// promises: a target the batch already processed, later reached by an
-// individual BeginPublish call using the SAME idempotency-key convention,
-// replays the batch's own stored response instead of hitting "not
-// allocated/failed".
-func TestBeginPublishBatch_SameIdempotencyKeyAsIndividualBeginPublish(t *testing.T) {
-	_, artifactSrv := setupBatch(t)
+// stateChangedAt fetches an artifact's full-precision (sub-second)
+// state_changed_at directly from the repository -- the wire-level
+// Artifact.StateChangedAt (protos/messages.proto's int64, via
+// convert.go's timeToUnix) truncates to whole seconds, which is too coarse
+// to distinguish a heartbeat's refreshed timestamp from the original one
+// within a fast-running unit test.
+func stateChangedAt(t *testing.T, repo repository.Registry, artifactID string) time.Time {
+	t.Helper()
+	a, err := repo.Artifacts().GetArtifact(context.Background(), repository.ArtifactLookup{ArtifactID: artifactID})
+	if err != nil {
+		t.Fatalf("GetArtifact %s: %v", artifactID, err)
+	}
+	return a.StateChangedAt
+}
+
+// TestBeginPublishBatch_ThenPerLegBeginPublish_HeartbeatsRatherThanReplays
+// proves the AR-7d (issue #558) reaping-hazard fix end to end at the
+// handler layer: BeginPublishBatch's derived key carries an "-intent"
+// suffix specifically so it does NOT collide with the per-leg
+// BeginPublish call's own key (see BeginPublishBatchRequest.
+// idempotency_key_prefix's doc comment) -- so the per-leg call genuinely
+// re-executes (a heartbeat, refreshing state_changed_at) instead of
+// replaying the batch's cached response via runIdempotent. Distinguished
+// from a replay by asserting state_changed_at strictly advances between
+// the two calls.
+func TestBeginPublishBatch_ThenPerLegBeginPublish_HeartbeatsRatherThanReplays(t *testing.T) {
+	repo, artifactSrv := setupBatch(t)
 	ctx := authedCtx()
-	build := recordBuild(t, artifactSrv, "run-batch-collide")
+	build := recordBuild(t, artifactSrv, "run-batch-heartbeat")
 
 	batchResp, err := artifactSrv.BeginPublishBatch(ctx, &pb.BeginPublishBatchRequest{
 		BuildId: build.BuildId,
 		Targets: []*pb.BeginPublishBatchTarget{
 			{Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-app-one", Version: "v1.0.0"},
 		},
-		IdempotencyKeyPrefix: "run-batch-collide-1",
+		IdempotencyKeyPrefix: "run-batch-heartbeat-1",
 	})
 	if err != nil {
 		t.Fatalf("BeginPublishBatch: %v", err)
 	}
+	batchArtifact := batchResp.Results[0].Artifact
+	if batchArtifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHING {
+		t.Fatalf("expected the batch write to leave state PUBLISHING, got %v", batchArtifact.State)
+	}
+	beforeHeartbeat := stateChangedAt(t, repo, batchArtifact.ArtifactId)
+	time.Sleep(2 * time.Millisecond) // guarantee a distinguishable state_changed_at
 
-	// The SAME key an individual BeginPublish call for this target, in
-	// this run, would use -- "<prefix>-<owner>-<kind>".
+	// The per-leg call's OWN key convention -- no "-intent" suffix. If this
+	// collided with the batch call's key, runIdempotent would replay the
+	// batch's stored response and state_changed_at would NOT advance.
 	individual, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
 		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-app-one",
 		Version: "v1.0.0", BuildId: build.BuildId,
-		IdempotencyKey: "run-batch-collide-1-demo-app-one-image",
+		IdempotencyKey: "run-batch-heartbeat-1-demo-app-one-image",
 	})
 	if err != nil {
-		t.Fatalf("expected the individual BeginPublish call to replay the batch's response, got error: %v", err)
+		t.Fatalf("expected the per-leg BeginPublish call to heartbeat the publishing row, got error: %v", err)
 	}
-	if individual.Artifact.ArtifactId != batchResp.Results[0].Artifact.ArtifactId {
-		t.Fatalf("expected the replayed artifact to match the batch's, got %s vs %s",
-			individual.Artifact.ArtifactId, batchResp.Results[0].Artifact.ArtifactId)
+	if individual.Artifact.ArtifactId != batchArtifact.ArtifactId {
+		t.Fatalf("expected the heartbeat to touch the SAME row, got %s vs %s",
+			individual.Artifact.ArtifactId, batchArtifact.ArtifactId)
+	}
+	if individual.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHING {
+		t.Fatalf("expected state to remain PUBLISHING after the heartbeat, got %v", individual.Artifact.State)
+	}
+	afterHeartbeat := stateChangedAt(t, repo, individual.Artifact.ArtifactId)
+	if !afterHeartbeat.After(beforeHeartbeat) {
+		t.Fatalf("expected state_changed_at to advance (proving re-execution, not a replay): before=%v after=%v", beforeHeartbeat, afterHeartbeat)
+	}
+}
+
+// TestBeginPublish_HeartbeatOnPublishingRow proves publishing -> publishing
+// directly: a repeat BeginPublish call against an already-"publishing" row
+// is a legal, idempotent heartbeat (refreshing state_changed_at and
+// build_id), not FailedPrecondition -- see
+// repository.ArtifactRepository.BeginPublish's doc comment.
+func TestBeginPublish_HeartbeatOnPublishingRow(t *testing.T) {
+	repo, artifactSrv := setupAllocate(t)
+	ctx := authedCtx()
+	buildA := recordBuild(t, artifactSrv, "run-heartbeat-a")
+
+	first, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Version: "v1.0.0", BuildId: buildA.BuildId, IdempotencyKey: "heartbeat-begin-1",
+	})
+	if err != nil {
+		t.Fatalf("first BeginPublish: %v", err)
+	}
+	if first.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHING {
+		t.Fatalf("expected state PUBLISHING, got %v", first.Artifact.State)
+	}
+	beforeHeartbeat := stateChangedAt(t, repo, first.Artifact.ArtifactId)
+	time.Sleep(2 * time.Millisecond)
+
+	// A second, DIFFERENT run's build -- simulating a re-run's per-leg
+	// call re-arming a row a killed earlier attempt left "publishing".
+	buildB := recordBuildAttempt(t, artifactSrv, "run-heartbeat-a", 2)
+
+	second, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Version: "v1.0.0", BuildId: buildB.BuildId, IdempotencyKey: "heartbeat-begin-2",
+	})
+	if err != nil {
+		t.Fatalf("expected publishing -> publishing to be a legal heartbeat, got error: %v", err)
+	}
+	if second.Artifact.ArtifactId != first.Artifact.ArtifactId {
+		t.Fatalf("expected the heartbeat to touch the SAME row, got %s vs %s", second.Artifact.ArtifactId, first.Artifact.ArtifactId)
+	}
+	if second.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHING {
+		t.Fatalf("expected state to remain PUBLISHING, got %v", second.Artifact.State)
+	}
+	afterHeartbeat := stateChangedAt(t, repo, second.Artifact.ArtifactId)
+	if !afterHeartbeat.After(beforeHeartbeat) {
+		t.Fatalf("expected state_changed_at to advance: before=%v after=%v", beforeHeartbeat, afterHeartbeat)
+	}
+	if second.Artifact.BuildId != buildB.BuildId {
+		t.Fatalf("expected the heartbeat to re-stamp build_id to the new attempt's build, got %q want %q", second.Artifact.BuildId, buildB.BuildId)
 	}
 }
 

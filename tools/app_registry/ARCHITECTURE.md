@@ -773,21 +773,45 @@ Concretely:
   others — the same partial-apply shape AR-7a's `ReconcileApps` established
   for a structurally identical problem (one bad chart must not roll back
   every other app/chart in the same call).
-- **Each target's idempotency key is deliberately the SAME one an
-  individual `BeginPublish` call for that target would use**
-  (`<idempotency_key_prefix>-<owner_full_name>-<kind>`, matching the
-  existing `<workflow_run_id>-<attempt>-...` convention). This is not
-  incidental: it means a stray or duplicate individual `BeginPublish` call
-  for a target the batch already processed — the only place this could
-  arise in practice is if `release.yml`'s own per-leg call were
-  accidentally left in, since `plan-release`'s batch call now runs first —
-  replays the batch's own stored response instead of hitting
-  `FailedPrecondition` (`publishing` is not among `BeginPublish`'s legal
-  starting states). `release.yml`'s per-leg "Begin publish (image)" step
-  was removed from the `release` job's matrix leg for exactly this reason:
-  the batch call already did that work, and the collision-safety property
-  above means even a missed removal would degrade to a harmless replay,
-  not a broken release.
+- **The reaper hazard this up-front write introduces, and the fix.**
+  Stamping `state_changed_at` once, at plan time, for every target has a
+  consequence the original design didn't anticipate: the stale-row
+  reaper's `ARTIFACT_REAPER_TIMEOUT` (see ENV.md) now measures the *whole
+  run*, not one matrix leg, for any target whose leg hasn't started yet.
+  A first version of this phase also removed `release.yml`'s per-leg
+  "Begin publish (image)" step as redundant — but a row the reaper reaps
+  to `failed` before its leg starts cannot be revived by anything: the
+  leg pushes to GHCR anyway and `RecordArtifact` then rejects the
+  completion (`failed → published` is not a legal transition), an
+  unrecorded published image, exactly the failure ordering 3 and the rest
+  of AR-7 exist to prevent. The fix has two parts:
+  - `BeginPublish`'s legal-transition set gains `publishing → publishing`
+    as an idempotent heartbeat/re-arm — it refreshes `state_changed_at`
+    (and `build_id`) without changing state, rather than being rejected as
+    `FailedPrecondition`. Every other illegal transition is still
+    rejected. See `repository.ArtifactRepository.BeginPublish`'s doc
+    comment and `ArtifactState`'s doc comment.
+  - `release.yml`'s per-leg "Begin publish (image)" step is **restored**,
+    immediately before that leg's own push. It now does two jobs a
+    plan-time-only write cannot: re-arm the staleness clock right before
+    the work it bounds (a heartbeat, restoring a one-leg budget for any
+    leg that actually runs), and revive (`failed → publishing`) a row the
+    reaper already expired while the leg was still queued — the
+    already-legal `failed → publishing` retry transition, just triggered
+    by the reaper instead of a whole re-run.
+  - **This means the batch call's and the per-leg call's idempotency keys
+    must NOT collide**, unlike the collision-safety property originally
+    designed here — if they did, `runIdempotent` would replay the batch's
+    cached response for the per-leg call instead of letting it
+    re-execute, silently defeating the heartbeat. So
+    `BeginPublishBatch`'s derived key carries an `-intent` suffix
+    (`<idempotency_key_prefix>-<owner_full_name>-<kind>-intent`),
+    deliberately distinct from the per-leg call's own
+    `<prefix>-<owner_full_name>-<kind>` (no suffix). A stray duplicate
+    individual `BeginPublish` call using the batch's `-intent`-suffixed
+    key would still replay safely; a stray duplicate of the per-leg call
+    itself is exactly the heartbeat this fix wants, so re-executing
+    rather than replaying is correct there too.
 - `GetReleaseRun(workflow_run_id[, attempt])` (`workflow_attempt == 0` means
   "the latest attempt recorded for this run id") returns the `build` row
   plus every `artifact` row sharing its `build_id`, via a new

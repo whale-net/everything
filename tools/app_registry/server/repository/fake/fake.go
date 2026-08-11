@@ -591,8 +591,18 @@ func (r *Registry) BeginPublish(ctx context.Context, kind repository.ArtifactKin
 		return r.insertArtifact(a, nil, repository.ArtifactStatePublishing, versionSource)
 	}
 
-	if existing.State != repository.ArtifactStateAllocated && existing.State != repository.ArtifactStateFailed {
-		return nil, fmt.Errorf("%w: artifact %s %s is %q, not \"allocated\" or \"failed\" -- BeginPublish cannot start from here",
+	// AR-7d (issue #558): publishing -> publishing is a legal, idempotent
+	// heartbeat/re-arm, not a rejection -- see ArtifactState's doc comment.
+	// Needed because AR-7d's plan-time BeginPublishBatch stamps
+	// state_changed_at for every target at plan time, before the release
+	// matrix fans out; without a per-leg heartbeat call re-arming it right
+	// before that target's own push, the stale-row reaper could reap a row
+	// whose leg simply hadn't started yet, using the WHOLE run's duration
+	// as its budget instead of one leg's.
+	if existing.State != repository.ArtifactStateAllocated &&
+		existing.State != repository.ArtifactStateFailed &&
+		existing.State != repository.ArtifactStatePublishing {
+		return nil, fmt.Errorf("%w: artifact %s %s is %q, not \"allocated\", \"failed\", or \"publishing\" -- BeginPublish cannot start from here",
 			repository.ErrFailedPrecondition, r.ownerFullName(existing), version, existing.State)
 	}
 

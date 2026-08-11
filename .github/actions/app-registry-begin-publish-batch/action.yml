@@ -35,7 +35,7 @@ inputs:
     description: 'Path to a JSON array of {"kind","owner","version"} targets'
     required: true
   idempotency-key-prefix:
-    description: '<workflow_run_id>-<attempt> -- each target''s own key is derived as <prefix>-<owner>-<kind>'
+    description: '<workflow_run_id>-<attempt> -- each target''s own key is derived as <prefix>-<owner>-<kind>-intent. The "-intent" suffix is deliberate: it keeps this batch call''s key distinct from the per-leg app-registry-begin-publish step''s key for the same target, so the per-leg call actually re-executes (a heartbeat/revive) instead of replaying this call''s cached response.'
     required: true
 
 runs:

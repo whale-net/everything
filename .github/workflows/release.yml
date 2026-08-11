@@ -527,18 +527,47 @@ jobs:
 
     # AR-7b (issue #558) wrote the allocated|failed|∅ -> publishing
     # transition here, immediately before the push below, per matrix leg.
-    # AR-7d (issue #558) moved that write up front instead: plan-release's
-    # "Begin publish batch in App Registry" step already transitioned this
-    # target to "publishing" before the matrix fanned out (see this job's
-    # `needs: [plan-release, ...]` and ARCHITECTURE.md "The run log" -> "As
-    # built (AR-7d)"), so no per-leg call is needed here -- doing it again
-    # would just be a redundant (if harmless, thanks to the idempotency-key
-    # convention the batch call and this step's Fail publish below share)
-    # round trip. If the batch call itself was skipped (registry outage,
-    # dry_run, or opt-in off), this leg's row simply doesn't exist yet
-    # either, and RecordArtifact's create-directly-as-published fallback
-    # (adoption stage "observe" only, see ARCHITECTURE.md "Backward
-    # compatibility during rollout") still lets the push below succeed.
+    # AR-7d (issue #558) moved the INTENT write up front instead --
+    # plan-release's "Begin publish batch in App Registry" step already
+    # transitioned this target to "publishing" before the matrix fanned out
+    # (see this job's `needs: [plan-release, ...]` and ARCHITECTURE.md "The
+    # run log" -> "As built (AR-7d)") -- but that plan-time write stamps
+    # state_changed_at for every target ONCE, at plan time, not when each
+    # leg actually starts. Without this per-leg call, the stale-row
+    # reaper's ARTIFACT_REAPER_TIMEOUT would have to bound the WHOLE run
+    # rather than one leg (see ENV.md), and a leg the reaper got to first
+    # would push its image to GHCR and then fail to record it -- an
+    # unrecorded published image, exactly what ordering 3 and the rest of
+    # AR-7 exist to prevent. So this step is RESTORED, doing two jobs a
+    # single plan-time write cannot:
+    #   1. Re-arms the staleness clock right before the work it bounds,
+    #      restoring a one-leg budget (publishing -> publishing is a legal,
+    #      idempotent heartbeat -- see repository.ArtifactRepository.
+    #      BeginPublish's doc comment).
+    #   2. Revives (failed -> publishing) a row the reaper already expired
+    #      while this leg was still queued, so the push below still gets
+    #      recorded instead of landing on a dead row.
+    # Its idempotency key deliberately does NOT collide with the batch
+    # call's own key for this target (the batch call appends "-intent"
+    # server-side -- see BeginPublishBatchRequest.idempotency_key_prefix's
+    # doc comment) specifically so this call actually re-executes instead
+    # of replaying the batch's cached response.
+    - name: Begin publish (image) in App Registry
+      if: ${{ github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-build.outputs.build-id != '' }}
+      id: app-registry-begin-publish
+      continue-on-error: true
+      timeout-minutes: 5
+      uses: ./.github/actions/app-registry-begin-publish
+      with:
+        address: ${{ vars.APP_REGISTRY_ADDRESS }}
+        token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+        client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+        kind: image
+        owner-full-name: ${{ matrix.domain }}-${{ matrix.app }}
+        version: ${{ matrix.version || needs.plan-release.outputs.version }}
+        build-id: ${{ steps.app-registry-build.outputs.build-id }}
+        idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.domain }}-${{ matrix.app }}-image
 
     - name: Build and release app using multiarch release
       env:
@@ -568,17 +597,13 @@ jobs:
         fi
 
     # AR-7b (issue #558): publishing -> failed on the error path, so the
-    # row doesn't sit as "publishing" until the reaper times it out.
-    # AR-7d (issue #558) moved the begin-publish write to plan-release (see
-    # above), so there is no per-leg begin-publish step's outcome to gate
-    # on anymore -- gated the same way that write itself effectively was
-    # (dry_run/opt-in/build-id present). If the row was never actually
-    # transitioned to "publishing" (batch call skipped or failed for this
-    # target), this call is a harmless no-op: FailPublish rejects a
-    # missing/non-"publishing" row with FailedPrecondition, and this step
-    # is continue-on-error like every other recording step.
+    # row doesn't sit as "publishing" until the reaper times it out. Gated
+    # on the per-leg "Begin publish (image)" step above actually succeeding
+    # (restored by AR-7d's reaper-hazard fix -- see that step's comment):
+    # only if this leg's own call put/confirmed the row in "publishing" is
+    # there a row here worth failing.
     - name: Fail publish (image) in App Registry
-      if: ${{ failure() && github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-build.outputs.build-id != '' }}
+      if: ${{ failure() && github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-begin-publish.outcome == 'success' }}
       continue-on-error: true
       timeout-minutes: 5
       uses: ./.github/actions/app-registry-fail-publish

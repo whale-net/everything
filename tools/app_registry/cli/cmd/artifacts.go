@@ -232,7 +232,7 @@ func newArtifactsBeginPublishBatchCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&buildID, "build-id", "", "Build id returned by 'builds record'")
 	c.Flags().StringVar(&targetsFile, "targets", "", `Path to a JSON array of {"kind","owner","version"} targets`)
-	c.Flags().StringVar(&idempotencyKeyPrefix, "idempotency-key-prefix", "", "Required. <workflow_run_id>-<attempt> -- each target's own key is derived as <prefix>-<owner>-<kind>")
+	c.Flags().StringVar(&idempotencyKeyPrefix, "idempotency-key-prefix", "", "Required. <workflow_run_id>-<attempt> -- each target's own key is derived as <prefix>-<owner>-<kind>-intent, deliberately distinct from the per-leg BeginPublish call's key")
 	_ = c.MarkFlagRequired("build-id")
 	_ = c.MarkFlagRequired("targets")
 	_ = c.MarkFlagRequired("idempotency-key-prefix")

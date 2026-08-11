@@ -1369,9 +1369,11 @@ Implemented on branch `ar-7c-manifest-snapshot`, stacked on
 
 ### AR-7d — Run log and resume — no schema change — done (not yet merged)
 
-**As built.** Implemented on branch `ar-7d-run-log`, stacked on
-`ar-7b-artifact-lifecycle` (not yet merged). No migration — as the phase
-name promises, no schema change was needed or made.
+**As built.** Implemented on branch `ar-7d-run-log`, originally stacked on
+`ar-7b-artifact-lifecycle` (now merged to `main` as AR-7b — this branch has
+been rebased onto it). No migration — as the phase name promises, no schema
+change was needed or made anywhere in this phase, including in its
+reaper-hazard follow-up fix below.
 
 **What shipped**
 - `GetReleaseRun(workflow_run_id[, attempt])` (new RPC,
@@ -1397,11 +1399,13 @@ name promises, no schema change was needed or made.
   path), processed independently and partially — one bad target (unresolved
   owner, malformed version) is reported in its own result and does not
   block the rest, mirroring AR-7a's `ReconcileApps` partial-apply
-  precedent. Each target's idempotency key is deliberately the same one an
-  individual `BeginPublish` call for it would use
-  (`<prefix>-<owner_full_name>-<kind>`), so a stray duplicate call replays
-  safely instead of hitting `FailedPrecondition`. CLI:
-  `app-registry artifacts begin-publish-batch --targets <json-file>`.
+  precedent. Each target's idempotency key carries an `-intent` suffix
+  (`<prefix>-<owner_full_name>-<kind>-intent`) — deliberately DIFFERENT
+  from the key `release.yml`'s per-leg `BeginPublish` call uses for the
+  same target, so the per-leg call re-executes instead of replaying this
+  call's cached response. See the reaper-hazard fix below for why that
+  matters. CLI: `app-registry artifacts begin-publish-batch --targets
+  <json-file>`.
 - **Writes straight to `publishing`, not `allocated`, adapting the original
   design to migration 007's real constraint.** `artifact_state_shape`
   (shipped by AR-7b, before this phase) requires `build_id IS NULL` for
@@ -1419,14 +1423,37 @@ name promises, no schema change was needed or made.
   the plan step's own matrix JSON into `BeginPublishBatch`'s target shape),
   and `Begin publish batch in App Registry` (new composite action
   `.github/actions/app-registry-begin-publish-batch`, following the
-  existing `app-registry-*` pattern). The `release` job's per-leg "Begin
-  publish (image) in App Registry" step was removed — redundant now that
-  the batch call already wrote the row — and "Fail publish (image)"'s
-  `if:` gate was updated to no longer reference the removed step's
-  outcome. `APP_REGISTRY_CICD_OPT_IN` and `dry_run == 'false'` gating and
-  `continue-on-error: true` semantics are unchanged. Helm charts are
-  deliberately out of scope for the batch call — see "Deliberately NOT
-  done" below.
+  existing `app-registry-*` pattern). `APP_REGISTRY_CICD_OPT_IN` and
+  `dry_run == 'false'` gating and `continue-on-error: true` semantics are
+  unchanged. Helm charts are deliberately out of scope for the batch call
+  — see "Deliberately NOT done" below.
+- **The reaper hazard the up-front write introduces, and its fix** (a
+  follow-up commit within this same phase, not a separate one — see
+  ARCHITECTURE.md's "As built (AR-7d)" note under "The run log" for the
+  full reasoning). Stamping `state_changed_at` once, at plan time, for
+  every target means `ARTIFACT_REAPER_TIMEOUT` now measures the whole run
+  for a target whose leg hasn't started yet, not one leg. An initial
+  version of this phase removed the `release` job's per-leg "Begin publish
+  (image) in App Registry" step as redundant, which left no way to revive
+  a row the reaper reaped while its leg was still queued — the leg would
+  push to GHCR anyway and then have `RecordArtifact` reject the
+  completion (`failed → published` illegal), an unrecorded published
+  image. Fixed by:
+  - `BeginPublish` gains `publishing → publishing` as a legal, idempotent
+    heartbeat (refreshes `state_changed_at`/`build_id`, doesn't change
+    state) instead of `FailedPrecondition` — implemented identically in
+    postgres and the fake.
+  - The `release` job's per-leg "Begin publish (image) in App Registry"
+    step is **restored**, immediately before that leg's own push: it
+    re-arms the staleness clock for the leg about to run, and revives
+    (`failed → publishing`, already a legal transition) a row the reaper
+    expired while queued. "Fail publish (image)"'s `if:` gate is restored
+    to `steps.app-registry-begin-publish.outcome == 'success'` to match.
+  - `BeginPublishBatch`'s derived idempotency key gained the `-intent`
+    suffix described above specifically so it does not collide with the
+    per-leg call's key — a collision would make the per-leg call replay
+    the batch's cached response instead of re-executing, silently
+    defeating the heartbeat.
 - OPERATIONS.md: "A release run didn't complete" runbook — query
   `app-registry builds status <run-id> --incomplete`, interpret each
   artifact's state, then re-run the workflow as a resume (already-published
@@ -1450,24 +1477,38 @@ name promises, no schema change was needed or made.
   `GetBuildByWorkflowRun`'s latest-attempt default and exact-attempt
   lookup, `ListArtifacts`'s `BuildID` filter across
   publishing/published/failed (with an unrelated `allocated` row proven
-  excluded), and the full `GetReleaseRun`-shaped query proving a
-  never-reached app still reports incomplete — all against the real schema
-  and CHECK constraints, not just the fake.
+  excluded), the full `GetReleaseRun`-shaped query proving a never-reached
+  app still reports incomplete, the `publishing → publishing` heartbeat
+  advancing `state_changed_at`/`build_id` without changing state
+  (`TestBeginPublish_Heartbeat_Postgres`), and the reap-then-revive path
+  end to end — plan-time write, backdate past the timeout, `ExpireStale`
+  reaps it to `failed`, the per-leg call revives it
+  (`failed → publishing`), `RecordArtifact` completes it to `published`
+  (`TestBeginPublish_ReapThenRevive_Postgres`) — all against the real
+  schema and CHECK constraints, not just the fake.
 - Handler-level tests (fake-backed) cover `BeginPublishBatch`'s
-  write-every-target behavior, its partial-apply guarantee, its
-  idempotency-key collision-safety with an individual `BeginPublish` call,
-  and `GetReleaseRun`'s completeness across states, the never-reached-app
-  case, an unknown run id (`NotFound`), and the latest-attempt default. CLI
-  unit tests cover the `--incomplete` filter and the `builds status`
-  command's flag surface.
+  write-every-target behavior, its partial-apply guarantee, and
+  `GetReleaseRun`'s completeness across states, the never-reached-app
+  case, an unknown run id (`NotFound`), and the latest-attempt default.
+  Two more cover the reaper-hazard fix: `TestBeginPublish_
+  HeartbeatOnPublishingRow` (a repeat `BeginPublish` against an
+  already-`publishing` row succeeds and advances `state_changed_at`) and
+  `TestBeginPublishBatch_ThenPerLegBeginPublish_HeartbeatsRatherThanReplays`
+  (the batch call's `-intent`-suffixed key and the per-leg call's own key
+  do not collide, so the per-leg call genuinely re-executes rather than
+  replaying — asserted by `state_changed_at` strictly advancing). CLI unit
+  tests cover the `--incomplete` filter and the `builds status` command's
+  flag surface.
 - Several of the new tests (partial-apply, the never-reached-app case, the
-  idempotency-key collision safety, the latest-attempt selection, the
-  `--incomplete` filter, and the postgres `BuildID` filter) were each
-  verified to fail when the behavior they guard was deliberately broken in
-  the handler, the fake, or the postgres implementation, then reverted.
+  latest-attempt selection, the `--incomplete` filter, the postgres
+  `BuildID` filter, the `publishing → publishing` heartbeat, and the
+  reap-then-revive path) were each verified to fail when the behavior they
+  guard was deliberately broken in the handler, the fake, or the postgres
+  implementation, then reverted.
 - The touched/added workflow YAML (`release.yml`,
-  `.github/actions/app-registry-begin-publish-batch/action.yml`) was
-  validated for syntax only (`python3 -c "import yaml,sys;
+  `.github/actions/app-registry-begin-publish-batch/action.yml`,
+  `.github/actions/app-registry-begin-publish/action.yml`) was validated
+  for syntax only (`python3 -c "import yaml,sys;
   yaml.safe_load(open(...))"`) — it cannot be executed in this environment
   (no deployed registry, no real Keycloak clients), same as every other
   App Registry CI phase before it.
@@ -1485,6 +1526,11 @@ name promises, no schema change was needed or made.
   (real Postgres): `BeginPublishBatch`'s up-front `publishing` rows are
   what make this answerable now, closing the gap AR-7b's own scope note
   left open.
+- A target reaped to `failed` before its matrix leg starts (the hazard the
+  up-front write itself introduces) does not turn into an unrecorded
+  published image — proven by `TestBeginPublish_ReapThenRevive_Postgres`:
+  the leg's own `BeginPublish` call revives the row and `RecordArtifact`
+  completes it normally.
 
 ### AR-7e — Adoption and disaster recovery
 

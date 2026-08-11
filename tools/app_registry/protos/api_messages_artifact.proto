@@ -144,15 +144,18 @@ message BeginPublishBatchRequest {
   repeated BeginPublishBatchTarget targets = 2;
 
   // Required. Prefix used to derive each target's own idempotency key as
-  // "<prefix>-<owner_full_name>-<kind>" -- the SAME convention (and,
-  // critically, the SAME resulting key) an individual BeginPublish call
-  // for that target would use. This is deliberate: it means a leftover or
-  // duplicate individual BeginPublish call for a target this batch already
-  // processed replays this call's stored response instead of hitting
-  // "not allocated/failed" -- see ARCHITECTURE.md's as-built note under
-  // "The run log" for why release.yml's per-leg BeginPublish step was
-  // removed in favor of this call, and why keeping this property matters
-  // anyway.
+  // "<prefix>-<owner_full_name>-<kind>-intent" -- the "-intent" suffix is
+  // deliberately DIFFERENT from the key release.yml's per-leg BeginPublish
+  // call uses for the same target ("<prefix>-<owner_full_name>-<kind>", no
+  // suffix). The two calls must NOT collide: BeginPublishBatch declares
+  // the intent set once, up front; the per-leg call runs again later, on
+  // purpose, to refresh state_changed_at (a heartbeat, keeping the
+  // stale-row reaper's timeout scoped to one leg rather than the whole
+  // run) or to revive a row the reaper already expired to "failed" -- see
+  // ArtifactRepository.BeginPublish's doc comment and ARCHITECTURE.md's
+  // as-built note under "The run log". If the two calls shared a key, the
+  // per-leg call would replay BeginPublishBatch's cached response via
+  // idempotency instead of actually re-executing, defeating the heartbeat.
   string idempotency_key_prefix = 3;
 }
 

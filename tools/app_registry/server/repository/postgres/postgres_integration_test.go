@@ -3212,3 +3212,154 @@ func TestGetReleaseRun_Postgres_AppNeverReachedStillReportsIncomplete(t *testing
 		t.Fatalf("expected one published and one still-publishing (incomplete) child, got published=%d publishing=%d", published, publishing)
 	}
 }
+
+// ============================================================================
+// AR-7d follow-up: the reaping hazard BeginPublishBatch's plan-time write
+// introduces, and the publishing -> publishing heartbeat that closes it.
+//
+// BeginPublishBatch stamps state_changed_at for EVERY run target at plan
+// time, before the release matrix fans out -- see ARCHITECTURE.md "The run
+// log" -> "As built (AR-7d)". Without the per-leg BeginPublish call
+// re-arming that clock immediately before each target's own push, a target
+// whose leg is still queued when the reaper's timeout elapses would be
+// reaped to "failed" before it ever runs -- and if the leg then went ahead
+// and pushed anyway, RecordArtifact would reject the completion
+// (postgres/artifact.go's `default: // allocated, failed` branch) AFTER an
+// already-successful GHCR push, which is exactly the failure mode ordering
+// 3 and the rest of AR-7 exist to prevent.
+// ============================================================================
+
+// readStateChangedAt reads one artifact's raw state_changed_at directly --
+// full TIMESTAMPTZ precision, unlike the wire Artifact.StateChangedAt
+// (int64 seconds), needed to prove a heartbeat actually advanced the clock
+// within a fast-running test.
+func readStateChangedAt(t *testing.T, pool *pgxpool.Pool, artifactID string) time.Time {
+	t.Helper()
+	var ts time.Time
+	if err := pool.QueryRow(context.Background(), `SELECT state_changed_at FROM artifact WHERE artifact_id = $1`, artifactID).Scan(&ts); err != nil {
+		t.Fatalf("read state_changed_at for %s: %v", artifactID, err)
+	}
+	return ts
+}
+
+// TestBeginPublish_Heartbeat_Postgres proves publishing -> publishing
+// against real Postgres: a repeat BeginPublish call against an
+// already-"publishing" row is a legal, idempotent heartbeat that advances
+// state_changed_at (and re-stamps build_id) without changing state or
+// tripping artifact_state_shape (migration 007's CHECK constraint, which
+// still requires digest IS NULL / build_id IS NOT NULL for "publishing").
+func TestBeginPublish_Heartbeat_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	appID := seedApp(t, pool, "acme", "heartbeat", "image")
+	buildA := seedBuild(t, pool, "run-heartbeat-pg-a")
+
+	first, err := beginPublishTx(t, reg, repository.ArtifactKindImage, appID, "v1.0.0", buildA, "ghcr.io/acme/heartbeat", repository.VersionSourceTag)
+	if err != nil {
+		t.Fatalf("BeginPublish (∅ -> publishing): %v", err)
+	}
+	if first.State != repository.ArtifactStatePublishing {
+		t.Fatalf("expected state publishing, got %q", first.State)
+	}
+
+	// Backdate so a naive comparison against "now" can't accidentally pass --
+	// the heartbeat must move state_changed_at forward from this, not just
+	// leave it close to what it already was.
+	backdateStateChangedAt(t, pool, first.ArtifactID, time.Hour)
+	backdated := readStateChangedAt(t, pool, first.ArtifactID)
+
+	buildB := seedBuildAttempt(t, pool, "run-heartbeat-pg-a", 2)
+	second, err := beginPublishTx(t, reg, repository.ArtifactKindImage, appID, "v1.0.0", buildB, "ghcr.io/acme/heartbeat", repository.VersionSourceTag)
+	if err != nil {
+		t.Fatalf("expected publishing -> publishing to be a legal heartbeat, got error: %v", err)
+	}
+	if second.ArtifactID != first.ArtifactID {
+		t.Fatalf("expected the heartbeat to touch the SAME row, got %s vs %s", second.ArtifactID, first.ArtifactID)
+	}
+	if second.State != repository.ArtifactStatePublishing {
+		t.Fatalf("expected state to remain publishing, got %q", second.State)
+	}
+	if second.BuildID != buildB {
+		t.Fatalf("expected the heartbeat to re-stamp build_id to the new attempt's build, got %q want %q", second.BuildID, buildB)
+	}
+	afterHeartbeat := readStateChangedAt(t, pool, second.ArtifactID)
+	if !afterHeartbeat.After(backdated) {
+		t.Fatalf("expected state_changed_at to advance past the backdated value: backdated=%v after=%v", backdated, afterHeartbeat)
+	}
+	if state, _, hasDigest, hasBuildID := artifactStateRow(t, pool, second.ArtifactID); state != "publishing" || hasDigest || !hasBuildID {
+		t.Fatalf("expected a shape-valid publishing row (no digest, has build_id) after the heartbeat, got state=%s hasDigest=%v hasBuildID=%v", state, hasDigest, hasBuildID)
+	}
+}
+
+// TestBeginPublish_ReapThenRevive_Postgres is AR-7d's reaping-hazard fix,
+// proven end to end against real Postgres: a target declared by
+// BeginPublishBatch at plan time, reaped to "failed" by the stale-row
+// reaper while its own matrix leg was still queued, is revived by that
+// leg's own BeginPublish call (the already-legal failed -> publishing
+// transition) immediately before its push, and completes normally to
+// "published" via RecordArtifact. Proves the specific hazard the
+// coordinator flagged does not manifest: a reaped row does NOT make
+// RecordArtifact reject the completion after a real push has already
+// happened.
+func TestBeginPublish_ReapThenRevive_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	appID := seedApp(t, pool, "acme", "reap-revive", "image")
+	buildID := seedBuild(t, pool, "run-reap-revive-pg")
+
+	// 1. BeginPublishBatch's plan-time write: ∅ -> publishing, before the
+	// matrix fans out.
+	intent, err := beginPublishTx(t, reg, repository.ArtifactKindImage, appID, "v1.0.0", buildID, "ghcr.io/acme/reap-revive", repository.VersionSourceTag)
+	if err != nil {
+		t.Fatalf("BeginPublishBatch's plan-time write (∅ -> publishing): %v", err)
+	}
+
+	// 2. This target's own matrix leg is still queued when the reaper's
+	// timeout elapses -- backdate past a 30-minute timeout and sweep.
+	backdateStateChangedAt(t, pool, intent.ArtifactID, time.Hour)
+	n, err := reg.Artifacts().ExpireStale(context.Background(), 30*time.Minute)
+	if err != nil {
+		t.Fatalf("ExpireStale: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected exactly 1 row expired, got %d", n)
+	}
+	if state, reason, _, _ := artifactStateRow(t, pool, intent.ArtifactID); state != "failed" || reason != "stale" {
+		t.Fatalf("expected the row to be reaped to failed/stale before the leg ever ran, got state=%s reason=%s", state, reason)
+	}
+
+	// 3. The leg finally runs. Its own per-leg BeginPublish call revives
+	// the row (failed -> publishing) immediately before the push --
+	// exactly what release.yml's restored per-leg step does.
+	revived, err := beginPublishTx(t, reg, repository.ArtifactKindImage, appID, "v1.0.0", buildID, "ghcr.io/acme/reap-revive", repository.VersionSourceTag)
+	if err != nil {
+		t.Fatalf("expected failed -> publishing revival to succeed, got error: %v", err)
+	}
+	if revived.ArtifactID != intent.ArtifactID {
+		t.Fatalf("expected revival to touch the SAME row, got %s vs %s", revived.ArtifactID, intent.ArtifactID)
+	}
+	if revived.State != repository.ArtifactStatePublishing {
+		t.Fatalf("expected state publishing after revival, got %q", revived.State)
+	}
+	if revived.FailReason != "" {
+		t.Fatalf("expected fail_reason cleared after revival, got %q", revived.FailReason)
+	}
+
+	// 4. The push actually happens (simulated), and RecordArtifact
+	// completes it -- this MUST succeed. Before this fix, the row would
+	// still be "failed" at this point and RecordArtifact's `default:
+	// // allocated, failed` branch would reject it with
+	// FailedPrecondition, after a real image was already pushed to GHCR.
+	published, _, err := recordArtifactTx(t, reg, repository.Artifact{
+		Kind: repository.ArtifactKindImage, AppID: appID,
+		Repository: "ghcr.io/acme/reap-revive", Version: "v1.0.0",
+		Digest: "sha256:reap-revive", BuildID: buildID,
+	}, nil)
+	if err != nil {
+		t.Fatalf("RecordArtifact after reap-then-revive: %v", err)
+	}
+	if published.State != repository.ArtifactStatePublished {
+		t.Fatalf("expected state published, got %q", published.State)
+	}
+	if published.Digest != "sha256:reap-revive" {
+		t.Fatalf("expected digest stamped, got %q", published.Digest)
+	}
+}

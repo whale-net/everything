@@ -9,6 +9,20 @@ description: >-
   status), which is what lets this step run unconditionally ahead of every
   push regardless of a domain's adoption stage.
 
+  AR-7d (issue #558) added a second, equally load-bearing purpose: when
+  release.yml's plan-time app-registry-begin-publish-batch step has
+  already put this target in "publishing", this call is a
+  publishing -> publishing heartbeat -- it re-arms state_changed_at right
+  before this leg's own push (so the stale-row reaper's timeout bounds one
+  leg, not the whole run) and revives (failed -> publishing) a row the
+  reaper already expired while this leg was still queued. See
+  tools/app_registry/ARCHITECTURE.md "The run log" -> "As built (AR-7d)"
+  and repository.ArtifactRepository.BeginPublish's doc comment. This only
+  works because this step's idempotency key deliberately does NOT collide
+  with the batch call's key for the same target (the batch call appends
+  "-intent" server-side) -- otherwise this call would replay the batch's
+  cached response instead of re-executing.
+
   Requires APP_REGISTRY_CLI env var already set (see
   .github/actions/download-release-tools).
 
