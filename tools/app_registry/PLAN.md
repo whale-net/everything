@@ -16,7 +16,7 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) before executing any phase.
 
 ## Current status
 
-*Last updated finishing AR-7c (issue #558). **AR-M through AR-7b are all
+*Last updated finishing AR-7e (issue #558). **AR-M through AR-7b are all
 merged to `main`** — see the table below.*
 
 | Phase | PR | State |
@@ -37,6 +37,7 @@ merged to `main`** — see the table below.*
 | AR-7b | [#562](https://github.com/whale-net/everything/pull/562) | merged — artifact lifecycle, migration `007`, `BeginPublish`/`FailPublish`, stale-row reaper |
 | AR-7c | branch `ar-7c-manifest-snapshot`, not yet merged | **implemented** — app identity/manifest-snapshot split, migration `008`, `AssertApps` |
 | AR-7d | branch `ar-7d-run-log`, stacked on `ar-7c-manifest-snapshot`, not yet merged | **implemented** — `GetReleaseRun`, `BeginPublishBatch`, `app-registry builds status`, `release.yml` resume, no schema change |
+| AR-7e | branch `ar-7e-adopt-artifact`, stacked on `ar-7d-run-log`, not yet merged | **implemented** — `AdoptArtifact` (admin-only), `app-registry artifacts adopt`/`list --provenance`, OPERATIONS.md disaster-recovery runbook, no schema change |
 
 The registry is being deployed to `dev` by the repo owner. `app-registry-api`
 and `app-registry-migration` images publish from `apps=all`.
@@ -52,8 +53,8 @@ say "not merged" in places; the table above is authoritative.
 implemented and tested, wired to nothing. See "AR-5" below for what remains
 before any domain can be cut over.
 
-**AR-7 (issue #558): AR-7a and AR-7b are merged to `main`; AR-7c and AR-7d
-are implemented, not yet merged.** The full phase makes a release run
+**AR-7 (issue #558): AR-7a and AR-7b are merged to `main`; AR-7c, AR-7d, and
+AR-7e are implemented, not yet merged.** The full phase makes a release run
 hermetic — no dependency on `main`'s reconcile having gone first — via an
 artifact
 `allocated → publishing → published` lifecycle, an identity/manifest-snapshot
@@ -70,9 +71,12 @@ and the promotability-retroactivity fix (see its subsection). AR-7d adds
 `GetReleaseRun`, the bulk `BeginPublishBatch` RPC that closes the gap AR-7b's
 own "Deliberately NOT done" left open (see AR-7b's section below),
 `app-registry builds status`/`--incomplete`, and `release.yml`'s resume
-behavior. Both phases' exit criteria are met; neither has merged yet.
-AR-7e and AR-7f remain design-only. Design is in ARCHITECTURE.md's "Release
-lifecycle (issue #558)"; delivery is "AR-7" below.
+behavior. AR-7e adds `AdoptArtifact` — an admin-only, per-artifact path for
+recording an artifact the registry never observed being published, used when
+a chart release fails on a pre-registry pin, plus OPERATIONS.md's
+disaster-recovery runbook. All three phases' exit criteria are met; none has
+merged yet. AR-7f remains design-only. Design is in ARCHITECTURE.md's
+"Release lifecycle (issue #558)"; delivery is "AR-7" below.
 
 **Where deferred work is tracked.** Three places, deliberately:
 [Carry-over items](#carry-over-items) for small cross-cutting gaps that
@@ -1534,19 +1538,130 @@ reaper-hazard follow-up fix below.
 
 ### AR-7e — Adoption and disaster recovery
 
-**Scope**
-- `ArtifactRegistry.AdoptArtifact` — admin role only, never the builder
-  credential — recording a pre-existing GHCR image or chart as `published`
-  with `provenance = 'adopted'` and a required reason. CLI
-  `app-registry artifacts adopt`; `artifacts list --provenance adopted`.
-- OPERATIONS.md disaster-recovery runbook: registry restored behind / lost,
-  chart release failing on a pre-registry pin, and the explicit statement that
-  this is a rare deliberate operation, not routine maintenance.
+**As built.** Implemented on branch `ar-7e-adopt-artifact`, stacked on
+`ar-7d-run-log` (which sits on `ar-7c-manifest-snapshot`, on `main`). No
+migration — `artifact.provenance ∈ ('observed', 'adopted')` already exists
+(migration `007`, AR-7b); this phase is the first to ever write `'adopted'`.
 
-**Exit criteria**
+**What shipped**
+- `ArtifactRegistry.AdoptArtifact` (new RPC, `protos/api_messages_artifact.
+  proto`): records a pre-existing GHCR image or chart as `published` with
+  `provenance = ADOPTED` and a required `reason`. **Role: admin ONLY** —
+  `server/handlers/artifact.go`'s `AdoptArtifact` calls
+  `auth.Require(ctx, auth.RoleAdmin)`, deliberately not `auth.RoleBuilder`
+  like every other write RPC in `ArtifactRegistry`. This is the
+  security-critical line of the phase: the builder credential is what every
+  CI job holds, and CI must never be able to assert an artifact into
+  existence that it did not observe being published. Proven by
+  `TestAdoptArtifact_Authorization` (`authz_test.go`): a builder credential
+  is `PermissionDenied`, an admin credential passes through to business
+  logic.
+- **State-collision semantics**, implemented identically in
+  `postgres/artifact.go` and `fake/fake.go`, documented on
+  `repository.ArtifactRepository.AdoptArtifact`'s doc comment:
+  - **Idempotent replay by digest**: an existing `published` row (observed
+    OR previously adopted) with the exact same digest is returned
+    unchanged, `already_recorded = true`. Provenance/state are NEVER
+    rewritten here — adopting a digest that turns out to already be
+    `observed` must not downgrade it to `adopted`; that would corrupt the
+    exact audit trail this RPC exists to provide
+    (`TestAdoptArtifact_NeverDowngradesObservedProvenance`).
+  - **`∅ → published` (adopted)** — the primary case: no row exists for
+    (owner, kind, version) yet.
+  - **`failed → published` (adopted)** — the disaster-recovery case: a run
+    already tried (`BeginPublish` ran, then `FailPublish` or the reaper
+    marked it `failed`), but the artifact demonstrably exists. If the
+    failed row already carries a `build_id` (true when the reaper reaped a
+    `publishing` row; false when it reaped an `allocated` row, which never
+    had one), that REAL `build_id` is reused rather than minting a
+    synthetic one.
+  - **`published` with a different digest → `ErrAlreadyExists`** — a real
+    conflict; adoption never silently overwrites a different recorded
+    digest.
+  - **`allocated` or `publishing` → `ErrFailedPrecondition`** — a live
+    reservation or in-flight publish is not what adoption is for; let it
+    complete, fail, or be reaped first.
+- **A synthetic `build` row**, not a schema change, closes the gap between
+  "no schema change" and `artifact.build_id`'s real foreign key /
+  migration `007`'s `artifact_state_shape` CHECK (`build_id NOT NULL` once
+  `published`) — there is by definition no real CI run behind a
+  pre-registry artifact. `workflow_run_id` is stamped `"adopted:<uuid>"`
+  (non-numeric, can never collide with a real GitHub Actions run id) and
+  `git_ref` carries `"adopted"` as the same at-a-glance marker in `builds
+  status`/`GetReleaseRun` output. `actor` is the calling admin's own
+  identity (`grpcauth.Claims.Subject`), not a service account. Only created
+  when needed — the `failed → published` branch reuses a real `build_id`
+  when the failed row already has one.
+- `ListArtifactsRequest.provenance` (new field) / `ArtifactListFilter.
+  Provenance`: "which rows did we take on faith?" as a query, implemented in
+  both the postgres query and the fake. CLI: `artifacts list --provenance
+  adopted`.
+- CLI (`cli/cmd/artifacts.go`): `app-registry artifacts adopt` (`--kind`,
+  `--owner`, `--repository`, `--version`, `--digest`, `--reason` required,
+  `--contains` for chart adoption, `--idempotency-key` — a UUID is
+  generated if omitted, same as `promote`/`rollback`, since this is a human
+  action, not CI). `artifacts list`'s owner positional argument is now
+  OPTIONAL (`[domain-name]`, was required) so `--provenance adopted` can
+  answer "every adopted row, across every owner" in one call.
+- The audit trail is a required `reason` plus a structured log line
+  (`artifactLog.Info("artifact adopted", ...)` — kind, owner, version,
+  digest, reason, actor, already_recorded), not a new column — mirroring
+  `SetAppStatus`'s identically-shaped `reason` parameter (required,
+  validated, not persisted; see `AppRepository.SetAppStatus`'s doc
+  comment). No schema change stays true.
+- OPERATIONS.md: "Adoption and disaster recovery" runbook — registry
+  restored behind or lost, a chart release failing on a pre-registry pin,
+  and the explicit statement that this is a rare, deliberate operation, not
+  routine maintenance.
+
+**Deliberately NOT done** (per this phase's own scope and the rejected
+alternatives it does not revisit):
+- **No bulk backfill.** `AdoptArtifact` is lazy and per-artifact — one call,
+  one artifact. There is no `--all`/`--sweep` flag, no batch RPC. "Resolved
+  questions" #3 still rejects a bulk backfill of historical GHCR artifacts.
+- **No live GHCR existence verifier.** `AdoptArtifact` records what an
+  operator asserts, with a required reason and an audit trail — it never
+  calls out to GHCR or the chart repository to check that the digest
+  actually exists. `published` stays proof-of-existence at write time, not
+  a liveness check.
+- **No domain-adoption-stage gate.** Unlike `AllocateVersion` (gated to
+  domains at stage `allocate`), `AdoptArtifact` works at any adoption stage
+  — it is an operator recovery mechanism, not part of the per-domain
+  rollout.
+- Compose-time chart hermeticity — AR-7f, unchanged.
+
+**Verified, not merely built:**
+- `bazel build //tools/...` and `bazel test //tools/...` are green.
+- `postgres_integration_test` (`manual`-tagged, requires Docker) was run for
+  real against `postgres:16-alpine`: the synthetic `build` row's shape
+  (`git_ref = "adopted"`, `workflow_run_id` prefixed `"adopted:"`, `actor`
+  stamped), the full unblock-a-chart-pin exit criterion end to end through
+  the handler layer (`TestAdoptArtifact_UnblocksChartPin_Postgres`), the
+  never-downgrade-observed invariant, the different-digest conflict, both
+  live-state rejections (`allocated`, `publishing`), and both `failed`-row
+  sub-cases (reuses an existing `build_id`; mints a synthetic one when the
+  failed row has none) — all against the real schema and CHECK constraints,
+  not just the fake.
+- Handler-level tests (fake-backed) cover the same state-collision matrix,
+  the authorization boundary, chart adoption with `contains`, and the
+  `ListArtifacts` provenance filter.
+- CLI unit tests lock in `artifacts adopt`'s required-flag surface and
+  `artifacts list`'s optional owner argument plus `--provenance` flag.
+- Every new test was verified to fail when the behavior it guards was
+  deliberately broken (the admin-only role check, the never-downgrade
+  invariant, both live-state rejections, the `build_id`-reuse branch, and a
+  CLI flag rename), then reverted.
+
+**Exit criteria — both met**
 - A chart pinning an image published before the registry existed can be
-  unblocked by one documented, audited command, and the adopted row is
-  distinguishable from an observed one in one query.
+  unblocked by one documented, audited command
+  (`TestAdoptArtifact_UnblocksChartPin_Postgres`,
+  `TestAdoptArtifact_UnblocksChartPinningPreRegistryImage`): the chart
+  record fails first on the unrecorded pin, `AdoptArtifact` records the
+  image, and the identical chart record then succeeds.
+- The adopted row is distinguishable from an observed one in one query —
+  `ListArtifacts(provenance=ADOPTED)` / `artifacts list --provenance
+  adopted`.
 
 ### AR-7f — Compose-time chart hermeticity — gated per domain
 

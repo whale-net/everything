@@ -76,6 +76,15 @@ service ArtifactRegistry {
 
   // Phase AR-5: transactional version allocation, replacing git-tag scanning.
   rpc AllocateVersion(AllocateVersionRequest) returns (AllocateVersionResponse);
+
+  // Phase AR-7e (issue #558): the admin-only adoption / disaster-recovery
+  // path -- records a pre-existing GHCR image or chart as published with
+  // provenance ADOPTED and a required reason, for when there is no CI run to
+  // resume (a chart pinning an image published before the registry existed,
+  // or a registry restored behind/lost). Role: admin ONLY -- never the
+  // builder credential a CI job holds; see ARCHITECTURE.md "Authorization"
+  // and "Adoption and disaster recovery".
+  rpc AdoptArtifact(AdoptArtifactRequest) returns (AdoptArtifactResponse);
 }
 
 // ============================================================================

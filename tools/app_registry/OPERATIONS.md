@@ -296,6 +296,105 @@ original if GitHub Actions reused the same run) means every child reached
 at a real, recurring problem (a bad Dockerfile, a registry permissions
 issue) rather than something a second re-run will fix on its own.
 
+## Adoption and disaster recovery
+
+**AR-7e (issue #558).** This is a rare, deliberate operation, not routine
+maintenance — every other part of AR-7 (the artifact lifecycle, the run log,
+`AssertApps`) exists precisely to keep the registry a complete, trustworthy
+record so you never need this section. If you're here often, something
+upstream is wrong and worth fixing (opt-in disabled for a domain that
+actually releases, a registry outage nobody noticed, `AssertApps` not wired
+into a release path) — file it, don't keep reaching for `adopt`.
+
+`ArtifactRegistry.AdoptArtifact` records a pre-existing GHCR image or chart
+as `published` with `provenance = 'adopted'` and a required `reason`, for
+when there is genuinely no CI run to resume — see
+[ARCHITECTURE.md "Adoption and disaster recovery"](ARCHITECTURE.md#adoption-and-disaster-recovery)
+for the design and the exact state-collision rules. **Admin role only** —
+the builder credential every CI job holds cannot call this RPC; see
+["Where each secret goes"](DEPLOY.md#4-ci-credentials) in DEPLOY.md for why
+the admin client secret is human-operated and kept out of CI entirely.
+
+**It is lazy and per-artifact.** There is no bulk/sweep mode — adopt exactly
+the one image or chart that is actually blocking you, with a reason that
+will make sense to someone reading it in six months. It is also not a
+liveness check: `AdoptArtifact` does not go and verify the digest actually
+exists in GHCR or the chart repository. You are asserting it does; get that
+right before you run the command.
+
+### Case 1: a chart release fails on a pre-registry pin
+
+A chart pins images by resolving `${IMG_REPO}:${IMG_VERSION}` to a digest at
+compose time (`tools/helm`), then `RecordArtifact` rejects the chart if any
+pinned digest was never itself recorded — "chart pins unrecorded image
+digest". This happens permanently for an image published before the registry
+existed, or while `APP_REGISTRY_CICD_OPT_IN` was off for that domain: there
+is no run to re-run, and reconcile never writes artifact rows (only
+identity), so the reject never clears on its own.
+
+1. Identify the unrecorded digest from the chart release's failure message,
+   and the app/version it belongs to (`tools/helm`'s lockfile output, or the
+   chart manifest's `contains` entries).
+2. Confirm the image genuinely exists — pull it, or check GHCR directly.
+   `AdoptArtifact` will not do this for you.
+3. Adopt it:
+   ```bash
+   app-registry artifacts adopt \
+     --kind image --owner <domain>-<app> \
+     --repository ghcr.io/whale-net/<domain>-<app> \
+     --version <version> --digest sha256:<digest> \
+     --reason "published <date/context> before the registry existed; confirmed present in GHCR"
+   ```
+   `--idempotency-key` is optional here — a UUID is generated if omitted,
+   the same as `promote`/`rollback` (this is a human action, not CI).
+4. Re-run the chart release. The pin now resolves against a `published` row
+   (`provenance = ADOPTED`) exactly as if it had been observed at publish
+   time.
+
+Adopting a chart directly (kind `chart`) works the same way, with
+`--contains` pointing at a JSON file of its resolved image references — see
+`app-registry artifacts record`'s `--contains` for the file shape; every
+referenced image must already be a `published` artifact (adopted or
+observed), or the call fails the same way `RecordArtifact` would.
+
+### Case 2: the registry is restored behind, or lost entirely
+
+If the registry database is restored from a backup taken before some
+publishes happened, or lost outright and rebuilt from migrations, its
+`artifact` rows no longer match reality — but **GHCR and the chart
+repository are unaffected**: they are the source of truth for artifacts, the
+registry only for the pipeline (see ARCHITECTURE.md "The principle that
+resolves it"). Nothing needs bulk-repairing immediately; the registry is
+simply missing history until something needs it:
+
+- **App/chart identity** (`app`, `chart`, and their manifest snapshots)
+  self-heals on the next `ReconcileApps` (main push) or `AssertApps`
+  (release run) — no adoption needed for identity, only for artifacts.
+- **Artifact rows** only need adopting lazily, the moment something actually
+  needs one that's missing — almost always surfacing as Case 1 above. Do
+  not attempt to walk GHCR and re-adopt everything "to be safe" — that is
+  exactly the bulk backfill this design rejects (see ARCHITECTURE.md
+  "Resolved questions" #3): it manufactures adopted rows for artifacts
+  nothing will ever ask about, with no way to know later which ones were
+  real gaps versus precautionary noise.
+- **Promotion history** (`promotion`, `promotion_event`) has no adoption
+  path at all — it is this registry's own record of what it did, not a
+  mirror of an external source of truth. A restore-behind here is a real
+  gap; there is nothing to reconstruct it from.
+
+### Auditing what was adopted
+
+```bash
+app-registry artifacts list --provenance adopted            # every adopted row, any owner
+app-registry artifacts list <domain-app> --provenance adopted  # scoped to one owner
+```
+
+The `reason` given at adopt time is not stored on the row itself (no schema
+change was needed for this phase — see ARCHITECTURE.md's "As built (AR-7e)"
+note) but is logged structurally by `app-registry-api` at call time, keyed
+by the same digest/owner/version this query returns — cross-reference
+against server logs for the full "why" behind any adopted row.
+
 ## Checking for drift
 
 Drift, here, specifically means: an image was promoted directly

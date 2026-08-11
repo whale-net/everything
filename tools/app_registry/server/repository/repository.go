@@ -272,6 +272,58 @@ type ArtifactRepository interface {
 	// pattern as WritebackRepository.ClaimBatch, a standalone maintenance
 	// sweep with no other write to be atomic with.
 	ExpireStale(ctx context.Context, olderThan time.Duration) (int, error)
+
+	// AdoptArtifact is AR-7e's (issue #558) admin-only adoption /
+	// disaster-recovery path: records a pre-existing GHCR image or chart as
+	// "published" with Provenance ArtifactProvenanceAdopted, for when there
+	// is no run to resume — the artifact was published before the registry
+	// existed, or while the opt-in was off. See ARCHITECTURE.md "Adoption
+	// and disaster recovery". a.Digest identifies the artifact; reason is
+	// required at the handler layer (validated there, not persisted here —
+	// same shape as AppRepository.SetAppStatus's reason parameter) and
+	// actor authors any synthetic `build` row this call creates (see below).
+	//
+	// State-collision semantics, decided for this phase (there is no prior
+	// art to extend — AdoptArtifact is the only writer of Provenance
+	// ArtifactProvenanceAdopted):
+	//
+	//   - Idempotent replay: an existing PUBLISHED row (observed OR
+	//     previously adopted) with this EXACT digest is "already recorded" —
+	//     returned unchanged, alreadyRecorded=true. Adoption must NEVER
+	//     rewrite an existing row's Provenance/State: downgrading an
+	//     "observed" row to "adopted" after the fact would corrupt the exact
+	//     audit trail this RPC exists to provide.
+	//   - ∅ -> published (adopted): the primary case — no row of any kind
+	//     exists yet for (owner, kind, version). A synthetic `build` row is
+	//     created to satisfy artifact.build_id's NOT NULL-once-published
+	//     constraint (migration 007's artifact_state_shape) and its foreign
+	//     key, since by definition there is no real CI run behind a
+	//     pre-registry artifact.
+	//   - failed -> published (adopted): the disaster-recovery case — a run
+	//     already tried (BeginPublish ran, then FailPublish or the reaper
+	//     marked it "failed"), but the artifact demonstrably exists (an
+	//     operator confirms it against GHCR/the chart repo by hand — this
+	//     method never checks). If the failed row already carries a
+	//     build_id (it does whenever the reaper reaped a "publishing" row;
+	//     it does NOT when the reaper reaped an "allocated" row, which never
+	//     had one), that REAL build_id is reused rather than minting a
+	//     synthetic one — the CI run that actually attempted the push is the
+	//     more honest provenance than a synthetic placeholder.
+	//   - published (same digest): folded into the idempotent-replay case
+	//     above.
+	//   - published (different digest): ErrAlreadyExists — a real conflict.
+	//     Adoption must not silently overwrite a different already-recorded
+	//     digest, whether that row is observed or itself previously adopted;
+	//     an operator must investigate by hand.
+	//   - allocated or publishing: ErrFailedPrecondition. A live
+	//     reservation or in-flight publish is not what adoption is for —
+	//     let it complete, fail, or be reaped first (or FailPublish it
+	//     explicitly), then retry. Adopting over live state would silently
+	//     discard whatever process holds it.
+	//
+	// Must be called inside Registry.WithTx — same transactional-write shape
+	// as every other write method here.
+	AdoptArtifact(ctx context.Context, a Artifact, contains []ContainedImageInput, reason, actor string) (artifact *Artifact, alreadyRecorded bool, err error)
 }
 
 // DomainAdoptionRepository covers the `domain_adoption` table (migration

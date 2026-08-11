@@ -374,7 +374,7 @@ func (r *Registry) RecordArtifact(ctx context.Context, a repository.Artifact, co
 			return nil, false, fmt.Errorf("%w: no publishing artifact found for %s %s -- BeginPublish must run before RecordArtifact once a domain has left adoption stage \"observe\"",
 				repository.ErrFailedPrecondition, r.ownerFullName(a), a.Version)
 		}
-		out, err := r.insertArtifact(a, contains, repository.ArtifactStatePublished, repository.VersionSourceTag)
+		out, err := r.insertArtifact(a, contains, repository.ArtifactStatePublished, repository.VersionSourceTag, repository.ArtifactProvenanceObserved)
 		return out, false, err
 	}
 
@@ -415,18 +415,19 @@ func ownerID(a repository.Artifact) string {
 }
 
 // insertArtifact mirrors postgres's artifactRepo.insertArtifact: writes a
-// brand-new artifact row directly in state, with versionSource and
-// Provenance "observed" -- shared by RecordArtifact's direct-create path,
-// BeginPublish's ∅ -> publishing branch, and AllocateVersion's ∅ ->
-// allocated write. As of AR-7c (migration 008), Promotability is resolved
-// and STORED here -- once, only when state is reaching
-// ArtifactStatePublished -- never re-derived on a later read. See
-// repository.Artifact.Promotability's doc comment for why this is the
-// retroactivity fix, not just a refactor.
-func (r *Registry) insertArtifact(a repository.Artifact, contains []repository.ContainedImageInput, state repository.ArtifactState, versionSource repository.VersionSource) (*repository.Artifact, error) {
+// brand-new artifact row directly in state, with the given versionSource/
+// provenance -- shared by RecordArtifact's direct-create path (always
+// ArtifactProvenanceObserved), BeginPublish's ∅ -> publishing branch,
+// AllocateVersion's ∅ -> allocated write, and AdoptArtifact's (AR-7e, issue
+// #558) ∅ -> published branch (ArtifactProvenanceAdopted). As of AR-7c
+// (migration 008), Promotability is resolved and STORED here -- once, only
+// when state is reaching ArtifactStatePublished -- never re-derived on a
+// later read. See repository.Artifact.Promotability's doc comment for why
+// this is the retroactivity fix, not just a refactor.
+func (r *Registry) insertArtifact(a repository.Artifact, contains []repository.ContainedImageInput, state repository.ArtifactState, versionSource repository.VersionSource, provenance repository.ArtifactProvenance) (*repository.Artifact, error) {
 	a.ArtifactID = uuid.NewString()
 	a.State = state
-	a.Provenance = repository.ArtifactProvenanceObserved
+	a.Provenance = provenance
 	a.VersionSource = versionSource
 	a.StateChangedAt = timeNow()
 	if state == repository.ArtifactStatePublished {
@@ -467,6 +468,101 @@ func (r *Registry) completePublish(existing, a repository.Artifact, contains []r
 	}
 	updated.State = repository.ArtifactStatePublished
 	updated.StateChangedAt = timeNow()
+	updated.Promotability = r.derivePromotability(updated)
+
+	if updated.Kind == repository.ArtifactKindChart {
+		links, err := r.linkContains(contains)
+		if err != nil {
+			return nil, err
+		}
+		updated.Contains = links
+	}
+
+	r.state.Artifacts[updated.ArtifactID] = updated
+	out := updated
+	return &out, nil
+}
+
+// ============================================================================
+// AdoptArtifact (AR-7e, issue #558)
+// ============================================================================
+
+// AdoptArtifact mirrors postgres's artifactRepo.AdoptArtifact -- the
+// admin-only adoption / disaster-recovery path. See
+// repository.ArtifactRepository.AdoptArtifact's doc comment for the full
+// state-collision contract.
+func (r *Registry) AdoptArtifact(ctx context.Context, a repository.Artifact, contains []repository.ContainedImageInput, reason, actor string) (*repository.Artifact, bool, error) {
+	// 1. Idempotent replay by digest -- see postgres's AdoptArtifact step 1
+	// for why Provenance/State are never rewritten here.
+	for _, existing := range r.state.Artifacts {
+		if existing.Digest != "" && existing.Digest == a.Digest {
+			out := existing
+			return &out, true, nil
+		}
+	}
+
+	existing, found := r.findByOwnerKindVersion(a.Kind, ownerID(a), a.Version)
+	if !found {
+		out, err := r.adoptNew(a, contains, actor)
+		return out, false, err
+	}
+
+	switch existing.State {
+	case repository.ArtifactStateFailed:
+		out, err := r.completeAdoption(existing, a, contains, actor)
+		return out, false, err
+	case repository.ArtifactStatePublished:
+		return nil, false, fmt.Errorf("%w: artifact %s %s already published with digest %s",
+			repository.ErrAlreadyExists, r.ownerFullName(existing), a.Version, existing.Digest)
+	default: // allocated, publishing
+		return nil, false, fmt.Errorf("%w: artifact %s %s is %q -- AdoptArtifact only applies when there is no row, or the row is \"failed\"; a live allocation/publish must be let run its course (or explicitly failed via FailPublish) before it can be adopted",
+			repository.ErrFailedPrecondition, r.ownerFullName(existing), a.Version, existing.State)
+	}
+}
+
+// createAdoptionBuild mirrors postgres's artifactRepo.createAdoptionBuild:
+// a synthetic `build` row backing an adopted artifact, since by definition
+// there is no real CI run behind a pre-registry artifact.
+func (r *Registry) createAdoptionBuild(actor string) string {
+	buildID := uuid.NewString()
+	r.state.Builds[buildID] = repository.Build{
+		BuildID:         buildID,
+		GitRef:          "adopted",
+		WorkflowRunID:   "adopted:" + uuid.NewString(),
+		WorkflowAttempt: 1,
+		Actor:           actor,
+		RecordedAt:      timeNow(),
+	}
+	return buildID
+}
+
+// adoptNew mirrors postgres's artifactRepo.adoptNew: AdoptArtifact's ∅ ->
+// published(adopted) branch.
+func (r *Registry) adoptNew(a repository.Artifact, contains []repository.ContainedImageInput, actor string) (*repository.Artifact, error) {
+	a.BuildID = r.createAdoptionBuild(actor)
+	return r.insertArtifact(a, contains, repository.ArtifactStatePublished, repository.VersionSourceTag, repository.ArtifactProvenanceAdopted)
+}
+
+// completeAdoption mirrors postgres's artifactRepo.completeAdoption:
+// AdoptArtifact's failed -> published(adopted) branch, reusing the existing
+// row's build_id when it already has one (a "failed" row reaped from
+// "publishing" does; one reaped from "allocated" does not).
+func (r *Registry) completeAdoption(existing, a repository.Artifact, contains []repository.ContainedImageInput, actor string) (*repository.Artifact, error) {
+	updated := existing
+	updated.Digest = a.Digest
+	if existing.BuildID != "" {
+		updated.BuildID = existing.BuildID
+	} else {
+		updated.BuildID = r.createAdoptionBuild(actor)
+	}
+	updated.PublishedAt = a.PublishedAt
+	if updated.PublishedAt.IsZero() {
+		updated.PublishedAt = timeNow()
+	}
+	updated.State = repository.ArtifactStatePublished
+	updated.Provenance = repository.ArtifactProvenanceAdopted
+	updated.StateChangedAt = timeNow()
+	updated.FailReason = ""
 	updated.Promotability = r.derivePromotability(updated)
 
 	if updated.Kind == repository.ArtifactKindChart {
@@ -563,7 +659,7 @@ func (r *Registry) AllocateVersion(ctx context.Context, kind repository.Artifact
 	} else {
 		a.ChartID = owner
 	}
-	if _, err := r.insertArtifact(a, nil, repository.ArtifactStateAllocated, repository.VersionSourceRegistry); err != nil {
+	if _, err := r.insertArtifact(a, nil, repository.ArtifactStateAllocated, repository.VersionSourceRegistry, repository.ArtifactProvenanceObserved); err != nil {
 		return nil, err
 	}
 
@@ -588,7 +684,7 @@ func (r *Registry) BeginPublish(ctx context.Context, kind repository.ArtifactKin
 		} else {
 			a.ChartID = owner
 		}
-		return r.insertArtifact(a, nil, repository.ArtifactStatePublishing, versionSource)
+		return r.insertArtifact(a, nil, repository.ArtifactStatePublishing, versionSource, repository.ArtifactProvenanceObserved)
 	}
 
 	// AR-7d (issue #558): publishing -> publishing is a legal, idempotent
@@ -676,6 +772,10 @@ func (r *Registry) ListArtifacts(ctx context.Context, filter repository.Artifact
 		// GetReleaseRun's (AR-7d, issue #558) filter -- every artifact
 		// hanging off one build, any state.
 		if filter.BuildID != "" && a.BuildID != filter.BuildID {
+			continue
+		}
+		// AR-7e (issue #558): "which rows did we take on faith?" as a query.
+		if filter.Provenance != "" && a.Provenance != filter.Provenance {
 			continue
 		}
 		// Promotability is read directly off the stored row -- see

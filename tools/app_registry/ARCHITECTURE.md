@@ -397,23 +397,25 @@ tradeoff above, not a separate gap to close.
 
 ## Release lifecycle (issue #558)
 
-**Status: AR-7a and AR-7b built and merged to `main` (#561, #562); AR-7c and
-AR-7d built, not yet merged; AR-7e and AR-7f designed, not built.** Delivery
-is PLAN.md's AR-7. Four slices of this section describe real code: AR-7a's —
+**Status: AR-7a and AR-7b built and merged to `main` (#561, #562); AR-7c,
+AR-7d, and AR-7e built, not yet merged; AR-7f designed, not built.** Delivery
+is PLAN.md's AR-7. Five slices of this section describe real code: AR-7a's —
 ordering 4, partial-apply reconcile, domain-qualified chart app references,
 and the `continue-on-error` drop on `ci.yml`'s sweep job — AR-7b's — the
 artifact lifecycle (`allocated → publishing → published → failed`),
 migration `007`, `BeginPublish`/`FailPublish`, `RecordArtifact`'s
 `publishing → published` transition, and the stale-row reaper — AR-7c's —
 migration `008`, the app identity / manifest-snapshot split, `AssertApps`,
-and `artifact`'s stored `manifest_id`/`promotability` — and AR-7d's —
+and `artifact`'s stored `manifest_id`/`promotability` — AR-7d's —
 `GetReleaseRun`, the up-front intent write, `builds status --incomplete`,
-and re-run-as-resume. `AdoptArtifact` and compose-time chart hermeticity
-remain proposed: every table, column and RPC named in those subsections is
-unbuilt. This section supersedes "Release-vs-reconcile gap (issue #547)"
-above — AR-7c closes that gap for real, see the callout there — and changes
-what "Availability and bootstrap" below promises; both are cross-referenced
-where that happens.
+and re-run-as-resume — and AR-7e's — `AdoptArtifact`, its admin-only
+authorization, the `∅|failed → published(adopted)` state-collision rules,
+and `ListArtifacts`' provenance filter. Compose-time chart hermeticity
+(AR-7f) remains proposed: every table, column and RPC named in that
+subsection is unbuilt. This section supersedes "Release-vs-reconcile gap
+(issue #547)" above — AR-7c closes that gap for real, see the callout there
+— and changes what "Availability and bootstrap" below promises; both are
+cross-referenced where that happens.
 
 ### The problem: four cross-run orderings, three of them unenforced
 
@@ -892,6 +894,47 @@ state is re-adoptable. OPERATIONS.md carries the runbook (AR-7e). The design
 goal is that this is *rare and deliberate*, not a recurring chore — every
 other part of AR-7 exists to keep it that way.
 
+**As built (AR-7e).** Everything above is real: `ArtifactRegistry.
+AdoptArtifact` (`server/handlers/artifact.go`), gated on
+`auth.RoleAdmin` — never `auth.RoleBuilder`, the one deliberate exception to
+every other `ArtifactRegistry` write RPC requiring the builder role, because
+this is the single RPC that asserts an artifact into existence rather than
+recording an observed publish. Two decisions this section left implicit and
+the implementation had to make explicit:
+
+- **State-collision semantics**, since `AdoptArtifact` is a new entry point
+  into the same `artifact` state machine `postgres/artifact.go` already
+  enforces, not a separate table. An existing `published` row with the SAME
+  digest (observed or previously adopted) is an idempotent no-op —
+  Provenance/State are never rewritten, so adoption can never downgrade an
+  `observed` row to `adopted` after the fact. A DIFFERENT digest on an
+  already-`published` row is `ErrAlreadyExists`, mirroring
+  `RecordArtifact`'s identical conflict rule. An `allocated` or `publishing`
+  row is `ErrFailedPrecondition` — a live reservation or in-flight publish
+  is not what adoption is for. A `failed` row is the one NEW legal starting
+  state adoption alone can complete (`failed → published(adopted)`) — the
+  disaster-recovery case: a run already tried and gave up, but the artifact
+  demonstrably exists.
+- **`artifact.build_id` is a real foreign key, and migration 007's
+  `artifact_state_shape` CHECK requires it `NOT NULL` once `published` —
+  but by definition there is no CI run behind a pre-registry artifact.**
+  Rather than a schema change (ruled out by this phase's own scope),
+  `AdoptArtifact` writes a synthetic `build` row: `workflow_run_id`
+  `"adopted:<uuid>"` (non-numeric, cannot collide with a real GitHub
+  Actions run id), `git_ref = "adopted"` as the same marker, `actor` the
+  calling admin's own identity. The `failed → published` branch reuses the
+  existing row's `build_id` when it already has one (true whenever the
+  reaper reaped a `publishing` row; false when it reaped an `allocated`
+  row, which never had one) — the real CI run that actually attempted the
+  push is more honest provenance than a synthetic placeholder.
+
+`reason` is required (validated at the handler layer) and logged
+structurally on every call, but — like `SetAppStatusRequest.reason` — not
+stored in a new column: no schema change was needed, matching this section's
+"no backfill" framing. `ListArtifactsRequest.provenance` /
+`ArtifactListFilter.Provenance` make "which rows did we take on faith?" a
+query, satisfying the exit criterion's "distinguishable in one query" half.
+
 ### Relationship to AR-5 (allocation cutover)
 
 **AR-7 does not conflict with what remains of AR-5, and belongs strictly
@@ -1091,11 +1134,11 @@ in `server/auth`:
 
 | Role | Services | Credential |
 |---|---|---|
-| `app-registry-builder` | `AppRegistry` (writes), `ArtifactRegistry` (writes) | Keycloak service account, CI/all workflows |
+| `app-registry-builder` | `AppRegistry` (writes), `ArtifactRegistry` (writes except `AdoptArtifact`) | Keycloak service account, CI/all workflows |
 | `app-registry-promoter-dev` | `PromotionRegistry` (writes), `dev` only | Keycloak service account scoped to the `dev` GitHub Environment; humans |
 | `app-registry-promoter-stage` | `PromotionRegistry` (writes), `stage` only | Keycloak service account scoped to the `stage` GitHub Environment; humans |
 | `app-registry-promoter-prod` | `PromotionRegistry` (writes), `prod` only | Keycloak service account scoped to the `prod` GitHub Environment; a small human group |
-| `app-registry-admin` | `EnvironmentRegistry`, `SetAppStatus` | Human only |
+| `app-registry-admin` | `EnvironmentRegistry`, `SetAppStatus`, `AdoptArtifact` (AR-7e) | Human only |
 | reader | all reads | Any authenticated principal |
 
 Roles are flat and explicit — `app-registry-admin` does not imply

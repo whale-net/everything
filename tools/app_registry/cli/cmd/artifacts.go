@@ -23,6 +23,7 @@ func newArtifactsCmd() *cobra.Command {
 		newArtifactsBeginPublishCmd(),
 		newArtifactsBeginPublishBatchCmd(),
 		newArtifactsFailPublishCmd(),
+		newArtifactsAdoptCmd(),
 	)
 	return artifactsCmd
 }
@@ -282,16 +283,25 @@ func newArtifactsFailPublishCmd() *cobra.Command {
 }
 
 func newArtifactsListCmd() *cobra.Command {
-	var kind string
+	var kind, provenance string
 	var promotableOnly bool
 	c := &cobra.Command{
-		Use:   "list <domain-name>",
-		Short: "List artifacts for an app or chart",
-		Args:  cobra.ExactArgs(1),
+		Use:   "list [domain-name]",
+		Short: "List artifacts, optionally scoped to one app or chart",
+		// domain-name is now OPTIONAL (AR-7e, issue #558): `artifacts list
+		// --provenance adopted` answers "which rows did we take on faith?"
+		// across every owner in one query -- the exit criterion's
+		// "distinguishable in one query" half. ListArtifactsRequest.
+		// owner_full_name has always been an optional filter server-side
+		// (see server/handlers/artifact.go's ListArtifacts); this only
+		// relaxes the CLI's own arg count.
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := &pb.ListArtifactsRequest{
-				OwnerFullName:  args[0],
 				PromotableOnly: promotableOnly,
+			}
+			if len(args) == 1 {
+				req.OwnerFullName = args[0]
 			}
 			if kind != "" {
 				k, err := parseArtifactKind(kind)
@@ -299,6 +309,13 @@ func newArtifactsListCmd() *cobra.Command {
 					return err
 				}
 				req.Kind = k
+			}
+			if provenance != "" {
+				p, err := parseArtifactProvenance(provenance)
+				if err != nil {
+					return err
+				}
+				req.Provenance = p
 			}
 			return withClient(cmd, func(rc *registryClient) error {
 				resp, err := rc.Artifact.ListArtifacts(cmd.Context(), req)
@@ -311,6 +328,80 @@ func newArtifactsListCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&kind, "kind", "", "Filter by kind (image|chart)")
 	c.Flags().BoolVar(&promotableOnly, "promotable", false, "Only artifacts a caller could legally promote")
+	c.Flags().StringVar(&provenance, "provenance", "", "Filter by provenance (observed|adopted)")
+	return c
+}
+
+// newArtifactsAdoptCmd is AR-7e's (issue #558) admin-only adoption /
+// disaster-recovery path: records a pre-existing GHCR image or chart as
+// published, for when there is no CI run to resume -- a chart pinning an
+// image published before the registry existed, or a registry restored
+// behind/lost. See ARCHITECTURE.md "Adoption and disaster recovery" and
+// OPERATIONS.md's disaster-recovery runbook. Deliberately lazy and
+// per-artifact, not a bulk backfill -- there is no --all/--sweep flag here
+// on purpose.
+func newArtifactsAdoptCmd() *cobra.Command {
+	var kind, owner, repository, version, digest, reason, containsFile string
+	var publishedAt int64
+	c := &cobra.Command{
+		Use:   "adopt",
+		Short: "Record a pre-existing artifact as published (admin, disaster recovery)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			k, err := parseArtifactKind(kind)
+			if err != nil {
+				return err
+			}
+			req := &pb.AdoptArtifactRequest{
+				Kind:           k,
+				OwnerFullName:  owner,
+				Repository:     repository,
+				Version:        version,
+				Digest:         digest,
+				Reason:         reason,
+				PublishedAt:    publishedAt,
+				IdempotencyKey: promoteIdempotencyKey(idempotencyKeyFlag),
+			}
+			if containsFile != "" {
+				data, err := os.ReadFile(containsFile)
+				if err != nil {
+					return fmt.Errorf("read --contains %s: %w", containsFile, err)
+				}
+				var images []containedImageJSON
+				if err := json.Unmarshal(data, &images); err != nil {
+					return fmt.Errorf("parse --contains %s: %w", containsFile, err)
+				}
+				for _, img := range images {
+					req.Contains = append(req.Contains, &pb.ContainedImage{
+						AppFullName: img.AppFullName,
+						Repository:  img.Repository,
+						Version:     img.Version,
+						Digest:      img.Digest,
+					})
+				}
+			}
+			return withClient(cmd, func(rc *registryClient) error {
+				resp, err := rc.Artifact.AdoptArtifact(cmd.Context(), req)
+				if err != nil {
+					return err
+				}
+				return printResponse(resp)
+			})
+		},
+	}
+	c.Flags().StringVar(&kind, "kind", "", "Artifact kind (image|chart)")
+	c.Flags().StringVar(&owner, "owner", "", "Owning app or chart, as <domain>-<name>")
+	c.Flags().StringVar(&repository, "repository", "", "Registry repository, e.g. ghcr.io/whale-net/app-registry-api")
+	c.Flags().StringVar(&version, "version", "", "Semver tag, e.g. v1.2.3")
+	c.Flags().StringVar(&digest, "digest", "", `Content digest, "sha256:..."`)
+	c.Flags().StringVar(&reason, "reason", "", "Required. Why this artifact is being adopted instead of observed")
+	c.Flags().Int64Var(&publishedAt, "published-at", 0, "Best-known actual publish time, Unix timestamp (default: now)")
+	c.Flags().StringVar(&containsFile, "contains", "", "kind=chart only: path to a JSON array of resolved image references")
+	c.Flags().StringVar(&idempotencyKeyFlag, "idempotency-key", "", "Client-generated; a UUID is generated if omitted (this is a human action, not CI)")
+	_ = c.MarkFlagRequired("kind")
+	_ = c.MarkFlagRequired("owner")
+	_ = c.MarkFlagRequired("version")
+	_ = c.MarkFlagRequired("digest")
+	_ = c.MarkFlagRequired("reason")
 	return c
 }
 
@@ -370,5 +461,18 @@ func parseArtifactKind(s string) (pb.ArtifactKind, error) {
 		return pb.ArtifactKind_ARTIFACT_KIND_CHART, nil
 	default:
 		return pb.ArtifactKind_ARTIFACT_KIND_UNSPECIFIED, fmt.Errorf("unknown kind %q (want image|chart)", s)
+	}
+}
+
+// parseArtifactProvenance backs `artifacts list --provenance` (AR-7e, issue
+// #558).
+func parseArtifactProvenance(s string) (pb.ArtifactProvenance, error) {
+	switch s {
+	case "observed":
+		return pb.ArtifactProvenance_ARTIFACT_PROVENANCE_OBSERVED, nil
+	case "adopted":
+		return pb.ArtifactProvenance_ARTIFACT_PROVENANCE_ADOPTED, nil
+	default:
+		return pb.ArtifactProvenance_ARTIFACT_PROVENANCE_UNSPECIFIED, fmt.Errorf("unknown provenance %q (want observed|adopted)", s)
 	}
 }

@@ -33,6 +33,7 @@ go_test(
     size = "small",
     srcs = [
         "app_test.go",
+        "artifact_adopt_test.go",
         "artifact_test.go",
         "authz_test.go",
         "environment_test.go",

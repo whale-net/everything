@@ -3,7 +3,8 @@
 Thin gRPC client for the App Registry. Skeleton in **AR-1**, commands added
 alongside the RPCs they call in **AR-2** / **AR-3**. All commands below are
 implemented as of **AR-3d**, plus `artifacts begin-publish`/`fail-publish`
-added in **AR-7b**.
+added in **AR-7b**, and `artifacts adopt` / `artifacts list --provenance`
+added in **AR-7e**.
 
 ## Thin means thin
 
@@ -23,12 +24,13 @@ app-registry apps get <domain-name>
 app-registry apps set-status <domain-name> --status archived --reason "..."
 app-registry apps reconcile --from-plan <file> --idempotency-key K [--dry-run]     # CI
 
-app-registry artifacts list <domain-name> [--kind image|chart] [--promotable]
+app-registry artifacts list [domain-name] [--kind image|chart] [--promotable] [--provenance observed|adopted]
 app-registry artifacts get <domain-name> --version vX.Y.Z
 app-registry artifacts resolve <digest|artifact-id>            # chart -> images
 app-registry artifacts record ... --idempotency-key K          # CI
 app-registry artifacts begin-publish --kind K --owner O --version V --build-id B --idempotency-key K   # CI, AR-7b
 app-registry artifacts fail-publish --kind K --owner O --version V --reason "..." --idempotency-key K  # CI, AR-7b
+app-registry artifacts adopt --kind K --owner O --version V --digest D --reason "..." [--repository R] [--contains file] [--idempotency-key K]  # admin, AR-7e
 
 app-registry builds record ... --idempotency-key K             # CI
 
@@ -45,7 +47,24 @@ app-registry env list | upsert | archive                       # admin
 
 `--promotable` on `artifacts list` is the answer to "what can I actually
 promote?" — it filters by the derived promotability described in
-[`../ARCHITECTURE.md`](../ARCHITECTURE.md#promotability).
+[`../ARCHITECTURE.md`](../ARCHITECTURE.md#promotability). `--provenance
+adopted` (AR-7e) answers "which rows did we take on faith?" — see
+`../OPERATIONS.md`'s "Adoption and disaster recovery". The `[domain-name]`
+positional argument is optional specifically so that query can span every
+owner in one call, not just one.
+
+### `adopt`
+
+Admin-only (never the builder credential CI holds) — see
+[`../ARCHITECTURE.md`](../ARCHITECTURE.md#authorization). Records a
+pre-existing GHCR image or chart as `published` with `provenance = adopted`,
+for when there is no CI run to resume: a chart pinning an image published
+before the registry existed, or a registry restored behind/lost. `--reason`
+is required — the audit trail for a deliberately rare, human-triggered
+operation. `--idempotency-key` is optional (a UUID is generated if omitted,
+same as `promote`/`rollback`). `--contains` (kind `chart` only) takes the
+same JSON-array file shape as `artifacts record --contains`. Full runbook:
+`../OPERATIONS.md`'s "Adoption and disaster recovery".
 
 ### `promote` / `rollback`
 
