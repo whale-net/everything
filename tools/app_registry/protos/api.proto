@@ -24,6 +24,15 @@ service AppRegistry {
   // Apps absent from the request are marked MISSING, never deleted.
   rpc ReconcileApps(ReconcileAppsRequest) returns (ReconcileAppsResponse);
 
+  // AR-7c (issue #558): additive identity + manifest-snapshot write, safe to
+  // call from ANY ref -- the released ref, not just main. Never marks
+  // anything MISSING; rejects (per item) assertion against an ARCHIVED
+  // app/chart. Called as the first step of a release run, closing the
+  // release-vs-reconcile gap (issue #547) without depending on main's
+  // ReconcileApps having gone first. See ARCHITECTURE.md "AssertApps
+  // (additive) vs. ReconcileApps (absence sweep)".
+  rpc AssertApps(AssertAppsRequest) returns (AssertAppsResponse);
+
   rpc ListApps(ListAppsRequest) returns (ListAppsResponse);
   rpc GetApp(GetAppRequest) returns (GetAppResponse);
   rpc ListCharts(ListChartsRequest) returns (ListChartsResponse);

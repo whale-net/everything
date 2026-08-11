@@ -177,6 +177,14 @@ func (r *Registry) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest,
 	return reconcile(r.state, apps, charts, source, dryRun)
 }
 
+// AssertApps mirrors postgres's appRepo.AssertApps -- see
+// repository.AppRepository.AssertApps's doc comment. source is accepted for
+// interface-shape parity with Reconcile but unused: AssertApps never
+// consults or advances the reconcile watermark.
+func (r *Registry) AssertApps(ctx context.Context, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest, source repository.ManifestSource) (*repository.AssertResult, error) {
+	return assertApps(r.state, apps, charts), nil
+}
+
 func (r *Registry) ListApps(ctx context.Context, filter repository.AppListFilter) ([]repository.App, error) {
 	statuses := defaultAppStatuses(filter.Statuses)
 	var out []repository.App
@@ -319,8 +327,13 @@ func (r *Registry) RecordArtifact(ctx context.Context, a repository.Artifact, co
 		// relying on a.Digest never being "" too, which happens to be true
 		// today but shouldn't be load-bearing.
 		if existing.Digest != "" && existing.Digest == a.Digest {
+			// Promotability is STORED as of AR-7c (migration 008, mirrored
+			// here without a real snapshot table) -- see insertArtifact/
+			// completePublish below, which set it ONCE at publish time.
+			// Never re-derived here, which is the whole point: the value on
+			// existing is what a caller gets, unaffected by any deploy_unit
+			// edit made since.
 			out := existing
-			out.Promotability = r.derivePromotability(existing)
 			return &out, true, nil
 		}
 	}
@@ -379,15 +392,24 @@ func ownerID(a repository.Artifact) string {
 // brand-new artifact row directly in state, with versionSource and
 // Provenance "observed" -- shared by RecordArtifact's direct-create path,
 // BeginPublish's ∅ -> publishing branch, and AllocateVersion's ∅ ->
-// allocated write.
+// allocated write. As of AR-7c (migration 008), Promotability is resolved
+// and STORED here -- once, only when state is reaching
+// ArtifactStatePublished -- never re-derived on a later read. See
+// repository.Artifact.Promotability's doc comment for why this is the
+// retroactivity fix, not just a refactor.
 func (r *Registry) insertArtifact(a repository.Artifact, contains []repository.ContainedImageInput, state repository.ArtifactState, versionSource repository.VersionSource) (*repository.Artifact, error) {
 	a.ArtifactID = uuid.NewString()
 	a.State = state
 	a.Provenance = repository.ArtifactProvenanceObserved
 	a.VersionSource = versionSource
 	a.StateChangedAt = timeNow()
-	if state == repository.ArtifactStatePublished && a.PublishedAt.IsZero() {
-		a.PublishedAt = timeNow()
+	if state == repository.ArtifactStatePublished {
+		if a.PublishedAt.IsZero() {
+			a.PublishedAt = timeNow()
+		}
+		a.Promotability = r.derivePromotability(a)
+	} else {
+		a.Promotability = ""
 	}
 
 	if a.Kind == repository.ArtifactKindChart && state == repository.ArtifactStatePublished {
@@ -400,12 +422,13 @@ func (r *Registry) insertArtifact(a repository.Artifact, contains []repository.C
 
 	r.state.Artifacts[a.ArtifactID] = a
 	out := a
-	out.Promotability = r.derivePromotability(a)
 	return &out, nil
 }
 
 // completePublish mirrors postgres's artifactRepo.completePublish: the
-// publishing -> published transition against an EXISTING row.
+// publishing -> published transition against an EXISTING row. Promotability
+// is resolved and stored HERE, at the instant state actually reaches
+// "published" -- see insertArtifact's doc comment above.
 func (r *Registry) completePublish(existing, a repository.Artifact, contains []repository.ContainedImageInput) (*repository.Artifact, error) {
 	updated := existing
 	updated.Digest = a.Digest
@@ -418,6 +441,7 @@ func (r *Registry) completePublish(existing, a repository.Artifact, contains []r
 	}
 	updated.State = repository.ArtifactStatePublished
 	updated.StateChangedAt = timeNow()
+	updated.Promotability = r.derivePromotability(updated)
 
 	if updated.Kind == repository.ArtifactKindChart {
 		links, err := r.linkContains(contains)
@@ -429,7 +453,6 @@ func (r *Registry) completePublish(existing, a repository.Artifact, contains []r
 
 	r.state.Artifacts[updated.ArtifactID] = updated
 	out := updated
-	out.Promotability = r.derivePromotability(updated)
 	return &out, nil
 }
 
@@ -553,7 +576,6 @@ func (r *Registry) BeginPublish(ctx context.Context, kind repository.ArtifactKin
 	existing.FailReason = ""
 	r.state.Artifacts[existing.ArtifactID] = existing
 	out := existing
-	out.Promotability = r.derivePromotability(existing)
 	return &out, nil
 }
 
@@ -573,7 +595,6 @@ func (r *Registry) FailPublish(ctx context.Context, kind repository.ArtifactKind
 	existing.FailReason = reason
 	r.state.Artifacts[existing.ArtifactID] = existing
 	out := existing
-	out.Promotability = r.derivePromotability(existing)
 	return &out, nil
 }
 
@@ -616,7 +637,9 @@ func (r *Registry) ListArtifacts(ctx context.Context, filter repository.Artifact
 				continue
 			}
 		}
-		a.Promotability = r.derivePromotability(a)
+		// Promotability is read directly off the stored row -- see
+		// insertArtifact/completePublish, which set it once at publish time
+		// (AR-7c). Not re-derived here.
 		if filter.PromotableOnly && a.Promotability != repository.PromotabilityPromotable {
 			continue
 		}
@@ -632,7 +655,6 @@ func (r *Registry) GetArtifact(ctx context.Context, lookup repository.ArtifactLo
 		return nil, err
 	}
 	cp := *a
-	cp.Promotability = r.derivePromotability(cp)
 	return &cp, nil
 }
 
@@ -673,7 +695,6 @@ func (r *Registry) ResolveArtifact(ctx context.Context, lookup repository.Artifa
 		return nil, nil, nil, fmt.Errorf("%w: artifact %s is not a chart", repository.ErrInvalidArgument, a.ArtifactID)
 	}
 	cp := *a
-	cp.Promotability = r.derivePromotability(cp)
 
 	var images []repository.Artifact
 	var builds []repository.Build
@@ -682,7 +703,6 @@ func (r *Registry) ResolveArtifact(ctx context.Context, lookup repository.Artifa
 		if !ok {
 			continue
 		}
-		img.Promotability = r.derivePromotability(img)
 		images = append(images, img)
 		if b, ok := r.state.Builds[img.BuildID]; ok {
 			builds = append(builds, b)

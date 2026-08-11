@@ -624,3 +624,253 @@ func TestSetAppStatus_RequiresReason(t *testing.T) {
 		t.Fatalf("expected InvalidArgument when reason is missing, got %v", err)
 	}
 }
+
+// ============================================================================
+// AssertApps (AR-7c, issue #558)
+// ============================================================================
+
+// TestAssertApps_CreatesIdentity covers the additive create path: a brand
+// new app/chart, asserted from what release.yml treats as "the released
+// ref" -- exercised here with no prior ReconcileApps call at all, proving
+// AssertApps needs no main-sweep to have run first.
+func TestAssertApps_CreatesIdentity(t *testing.T) {
+	ctx := authedCtx()
+	srv := NewAppServer(fake.New())
+
+	resp, err := srv.AssertApps(ctx, &pb.AssertAppsRequest{
+		Manifests: manifestSet(
+			[]*appmetapb.AppManifest{oneApp("demo", "svc")},
+			[]*appmetapb.ChartManifest{{Domain: "demo", Name: "chart"}},
+		),
+		IdempotencyKey: "assert-1",
+	})
+	if err != nil {
+		t.Fatalf("assert: %v", err)
+	}
+	if len(resp.CreatedApps) != 1 || resp.CreatedApps[0].Status != pb.AppStatus_APP_STATUS_ACTIVE {
+		t.Fatalf("expected 1 created ACTIVE app, got %+v", resp.CreatedApps)
+	}
+	if len(resp.CreatedCharts) != 1 || resp.CreatedCharts[0].Status != pb.AppStatus_APP_STATUS_ACTIVE {
+		t.Fatalf("expected 1 created ACTIVE chart, got %+v", resp.CreatedCharts)
+	}
+}
+
+// TestAssertApps_NeverMarksMissing proves the defining difference from
+// ReconcileApps: calling AssertApps with an EMPTY manifest set (as a
+// divergent/unmerged ref legitimately might, if the app doesn't exist on
+// that ref) must never mark a previously-asserted app MISSING -- only
+// ReconcileApps's absence sweep does that, and only from main.
+func TestAssertApps_NeverMarksMissing(t *testing.T) {
+	ctx := authedCtx()
+	srv := NewAppServer(fake.New())
+
+	if _, err := srv.AssertApps(ctx, &pb.AssertAppsRequest{
+		Manifests:      manifestSet([]*appmetapb.AppManifest{oneApp("demo", "svc")}, nil),
+		IdempotencyKey: "assert-2-1",
+	}); err != nil {
+		t.Fatalf("first assert: %v", err)
+	}
+
+	resp, err := srv.AssertApps(ctx, &pb.AssertAppsRequest{
+		Manifests:      manifestSet(nil, nil),
+		IdempotencyKey: "assert-2-2",
+	})
+	if err != nil {
+		t.Fatalf("empty-set assert: %v", err)
+	}
+	if len(resp.CreatedApps) != 0 || len(resp.UpdatedApps) != 0 || len(resp.RecoveredApps) != 0 {
+		t.Fatalf("expected an empty-set AssertApps call to touch nothing, got %+v", resp)
+	}
+
+	got, err := srv.GetApp(ctx, &pb.GetAppRequest{FullName: "demo-svc"})
+	if err != nil {
+		t.Fatalf("get app: %v", err)
+	}
+	if got.App.Status != pb.AppStatus_APP_STATUS_ACTIVE {
+		t.Fatalf("expected demo-svc to remain ACTIVE (AssertApps must never mark it MISSING), got %v", got.App.Status)
+	}
+}
+
+// TestAssertApps_RecoversMissingApp: AssertApps shares Reconcile's
+// automatic MISSING -> ACTIVE recovery -- it's an ADDITIVE write path, not
+// a read-only one, so a release for an app main's sweep had flagged
+// MISSING still un-flags it.
+func TestAssertApps_RecoversMissingApp(t *testing.T) {
+	ctx := authedCtx()
+	srv := NewAppServer(fake.New())
+
+	created, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      manifestSet([]*appmetapb.AppManifest{oneApp("demo", "svc")}, nil),
+		IdempotencyKey: "assert-3-1",
+	})
+	if err != nil {
+		t.Fatalf("reconcile create: %v", err)
+	}
+	svcID := created.CreatedApps[0].AppId
+
+	if _, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      manifestSet(nil, nil),
+		IdempotencyKey: "assert-3-2",
+	}); err != nil {
+		t.Fatalf("reconcile drop: %v", err)
+	}
+	if got, _ := srv.GetApp(ctx, &pb.GetAppRequest{AppId: svcID}); got.App.Status != pb.AppStatus_APP_STATUS_MISSING {
+		t.Fatalf("expected svc MISSING after being dropped from the sweep, got %v", got.App.Status)
+	}
+
+	resp, err := srv.AssertApps(ctx, &pb.AssertAppsRequest{
+		Manifests:      manifestSet([]*appmetapb.AppManifest{oneApp("demo", "svc")}, nil),
+		IdempotencyKey: "assert-3-3",
+	})
+	if err != nil {
+		t.Fatalf("assert: %v", err)
+	}
+	if len(resp.RecoveredApps) != 1 || resp.RecoveredApps[0].Status != pb.AppStatus_APP_STATUS_ACTIVE {
+		t.Fatalf("expected svc recovered to ACTIVE, got %+v", resp)
+	}
+}
+
+// TestAssertApps_RejectsArchivedAppPerItem is the exit criterion named in
+// PLAN.md's AR-7c scope: AssertApps against an ARCHIVED app is rejected --
+// but per item, not for the whole call, matching UnresolvedChart's
+// established skip-and-report shape.
+func TestAssertApps_RejectsArchivedAppPerItem(t *testing.T) {
+	ctx := authedCtx()
+	srv := NewAppServer(fake.New())
+
+	created, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: manifestSet(
+			[]*appmetapb.AppManifest{oneApp("demo", "gone"), oneApp("demo", "other")}, nil),
+		IdempotencyKey: "assert-4-1",
+	})
+	if err != nil {
+		t.Fatalf("reconcile create: %v", err)
+	}
+	goneID := created.CreatedApps[0].AppId
+	if created.CreatedApps[0].Name != "gone" {
+		goneID = created.CreatedApps[1].AppId
+	}
+
+	if _, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      manifestSet([]*appmetapb.AppManifest{oneApp("demo", "other")}, nil),
+		IdempotencyKey: "assert-4-2",
+	}); err != nil {
+		t.Fatalf("reconcile drop gone: %v", err)
+	}
+	if _, err := srv.SetAppStatus(ctx, &pb.SetAppStatusRequest{
+		AppId: goneID, Status: pb.AppStatus_APP_STATUS_ARCHIVED, Reason: "gone for good",
+	}); err != nil {
+		t.Fatalf("archive gone: %v", err)
+	}
+
+	resp, err := srv.AssertApps(ctx, &pb.AssertAppsRequest{
+		Manifests: manifestSet(
+			[]*appmetapb.AppManifest{oneApp("demo", "gone"), oneApp("demo", "other")}, nil),
+		IdempotencyKey: "assert-4-3",
+	})
+	if err != nil {
+		t.Fatalf("assert should succeed for the call as a whole: %v", err)
+	}
+	if len(resp.RejectedApps) != 1 || resp.RejectedApps[0].Name != "gone" {
+		t.Fatalf("expected 'gone' rejected as ARCHIVED, got rejected=%+v", resp.RejectedApps)
+	}
+	// The OTHER app in the same call must still apply -- a per-item skip,
+	// not a whole-call failure.
+	if len(resp.UpdatedApps) != 1 || resp.UpdatedApps[0].Name != "other" {
+		t.Fatalf("expected 'other' to still apply in the same call, got updated=%+v", resp.UpdatedApps)
+	}
+
+	got, err := srv.GetApp(ctx, &pb.GetAppRequest{AppId: goneID})
+	if err != nil {
+		t.Fatalf("get archived app: %v", err)
+	}
+	if got.App.Status != pb.AppStatus_APP_STATUS_ARCHIVED {
+		t.Fatalf("AssertApps must not resurrect an ARCHIVED app: expected still ARCHIVED, got %v", got.App.Status)
+	}
+}
+
+// TestAssertApps_ThenRecordArtifact_NoReconcileNeeded is the AR-7c exit
+// criterion closing issue #547's gap: a release from a ref calls AssertApps
+// first, then RecordArtifact for a BRAND NEW app succeeds immediately --
+// with NO ReconcileApps call anywhere in this test. Before AR-7c this
+// sequence would hit ErrOwnerNotReconciled / exit code 3 (see
+// ARCHITECTURE.md "Release-vs-reconcile gap").
+func TestAssertApps_ThenRecordArtifact_NoReconcileNeeded(t *testing.T) {
+	ctx := authedCtx()
+	repo := fake.New()
+	appSrv := NewAppServer(repo)
+	artSrv := NewArtifactServer(repo)
+
+	if _, err := appSrv.AssertApps(ctx, &pb.AssertAppsRequest{
+		Manifests:      manifestSet([]*appmetapb.AppManifest{oneApp("demo", "new-app")}, nil),
+		IdempotencyKey: "assert-5-1",
+	}); err != nil {
+		t.Fatalf("assert: %v", err)
+	}
+
+	build, err := artSrv.RecordBuild(ctx, &pb.RecordBuildRequest{
+		GitSha: "sha1", WorkflowRunId: "run-1", IdempotencyKey: "build-1",
+	})
+	if err != nil {
+		t.Fatalf("record build: %v", err)
+	}
+
+	_, err = artSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-new-app", Version: "v1.0.0", Digest: "sha256:new1",
+		IdempotencyKey: "artifact-1",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact should succeed immediately after AssertApps, with no ReconcileApps ever having run: %v", err)
+	}
+}
+
+// TestRecordArtifact_RejectsArchivedOwner is the second AR-7c exit
+// criterion named in PLAN.md: "RecordArtifact against an ARCHIVED owner is
+// rejected too" -- before AR-7c this succeeded silently.
+func TestRecordArtifact_RejectsArchivedOwner(t *testing.T) {
+	ctx := authedCtx()
+	repo := fake.New()
+	appSrv := NewAppServer(repo)
+	artSrv := NewArtifactServer(repo)
+
+	created, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      manifestSet([]*appmetapb.AppManifest{oneApp("demo", "svc")}, nil),
+		IdempotencyKey: "archived-owner-1",
+	})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	svcID := created.CreatedApps[0].AppId
+
+	if _, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      manifestSet(nil, nil),
+		IdempotencyKey: "archived-owner-2",
+	}); err != nil {
+		t.Fatalf("reconcile drop: %v", err)
+	}
+	if _, err := appSrv.SetAppStatus(ctx, &pb.SetAppStatusRequest{
+		AppId: svcID, Status: pb.AppStatus_APP_STATUS_ARCHIVED, Reason: "gone",
+	}); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+
+	build, err := artSrv.RecordBuild(ctx, &pb.RecordBuildRequest{
+		GitSha: "sha1", WorkflowRunId: "run-1", IdempotencyKey: "build-2",
+	})
+	if err != nil {
+		t.Fatalf("record build: %v", err)
+	}
+
+	_, err = artSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-svc", Version: "v1.0.0", Digest: "sha256:archived1",
+		IdempotencyKey: "artifact-2",
+	})
+	if err == nil {
+		t.Fatal("expected RecordArtifact against an ARCHIVED owner to be rejected")
+	}
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v (%v)", status.Code(err), err)
+	}
+}

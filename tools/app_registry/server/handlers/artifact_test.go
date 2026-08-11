@@ -94,6 +94,74 @@ func TestRecordArtifact_PromotabilityDerivation(t *testing.T) {
 	_ = apps
 }
 
+// TestRecordArtifact_PromotabilityIsNotRetroactive is AR-7c's (issue #558)
+// headline correctness fix, and PLAN.md's AR-7c exit criterion, proven
+// here: editing an app's deploy_unit AFTER an artifact has been published
+// must NOT change that artifact's promotability. Before AR-7c,
+// scanArtifact/derivePromotability re-joined the owner's CURRENT deploy_unit
+// on every read, so this test would have failed -- the published artifact's
+// promotability would have silently flipped from PROMOTABLE to VIA_CHART.
+func TestRecordArtifact_PromotabilityIsNotRetroactive(t *testing.T) {
+	appSrv, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-retro")
+
+	// image-app is DEPLOY_UNIT_IMAGE at publish time -> PROMOTABLE.
+	published, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Digest: "sha256:retro1", Version: "v1.0.0",
+		IdempotencyKey: "record-retro",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact: %v", err)
+	}
+	if published.Artifact.Promotability != pb.Promotability_PROMOTABILITY_PROMOTABLE {
+		t.Fatalf("expected PROMOTABLE at publish time, got %v", published.Artifact.Promotability)
+	}
+
+	// Now edit image-app's deploy_unit to CHART -- a later release_app
+	// change, reconciled through main exactly as it would be in production.
+	if _, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: manifestSet([]*appmetapb.AppManifest{
+			{Domain: "demo", Name: "chart-app", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_CHART},
+			{Domain: "demo", Name: "image-app", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_CHART}, // <- changed
+			{Domain: "demo", Name: "none-app", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE},
+		}, []*appmetapb.ChartManifest{
+			{Domain: "demo", Name: "achart", Apps: []string{"chart-app"}},
+		}),
+		IdempotencyKey: "retro-edit-deploy-unit",
+	}); err != nil {
+		t.Fatalf("reconcile with edited deploy_unit: %v", err)
+	}
+
+	// GetArtifact (a fresh read, not the RecordArtifact response we already
+	// have) must still report PROMOTABLE -- the value stored at publish
+	// time, unaffected by the edit above.
+	reread, err := artifactSrv.GetArtifact(ctx, &pb.GetArtifactRequest{ArtifactId: published.Artifact.ArtifactId})
+	if err != nil {
+		t.Fatalf("GetArtifact: %v", err)
+	}
+	if reread.Artifact.Promotability != pb.Promotability_PROMOTABILITY_PROMOTABLE {
+		t.Fatalf("retroactivity bug: expected the already-published artifact to STAY PROMOTABLE after image-app's deploy_unit changed, got %v", reread.Artifact.Promotability)
+	}
+
+	// A NEW artifact for the SAME (now-edited) app, published after the
+	// edit, correctly reflects the new deploy_unit -- proving the fix is
+	// "frozen at publish time," not "never updates at all."
+	build2 := recordBuild(t, artifactSrv, "run-retro-2")
+	newPub, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build2.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Digest: "sha256:retro2", Version: "v1.0.1",
+		IdempotencyKey: "record-retro-2",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact after edit: %v", err)
+	}
+	if newPub.Artifact.Promotability != pb.Promotability_PROMOTABILITY_VIA_CHART {
+		t.Fatalf("expected a NEW publish after the edit to derive VIA_CHART from the new deploy_unit, got %v", newPub.Artifact.Promotability)
+	}
+}
+
 func TestRecordArtifact_ChartIsAlwaysPromotable(t *testing.T) {
 	_, artifactSrv, _ := setup(t)
 	ctx := authedCtx()

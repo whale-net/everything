@@ -166,11 +166,21 @@ func (s *ArtifactServer) resolveOwner(ctx context.Context, r repository.Registry
 		if aerr != nil {
 			return "", "", fmt.Errorf("%w: app %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", repository.ErrOwnerNotReconciled, ownerFullName)
 		}
+		// AR-7c (issue #558): recording against an ARCHIVED owner is
+		// rejected, same rule AssertApps enforces for identity assertion --
+		// see repository.ErrOwnerArchived's doc comment. Before AR-7c this
+		// succeeded silently, which was not intended.
+		if app.Status == repository.StatusArchived {
+			return "", "", fmt.Errorf("%w: app %q", repository.ErrOwnerArchived, ownerFullName)
+		}
 		return app.AppID, app.Domain, nil
 	}
 	chart, cerr := r.Apps().GetChartByFullName(ctx, ownerFullName)
 	if cerr != nil {
 		return "", "", fmt.Errorf("%w: chart %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", repository.ErrOwnerNotReconciled, ownerFullName)
+	}
+	if chart.Status == repository.StatusArchived {
+		return "", "", fmt.Errorf("%w: chart %q", repository.ErrOwnerArchived, ownerFullName)
 	}
 	return chart.ChartID, chart.Domain, nil
 }
@@ -366,11 +376,21 @@ func (s *ArtifactServer) resolveOwnerAndDomain(ctx context.Context, kind reposit
 		if aerr != nil {
 			return "", "", "", status.Errorf(codes.InvalidArgument, "app %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", ownerFullName)
 		}
+		// AR-7c (issue #558): same ARCHIVED rejection resolveOwner enforces
+		// for RecordArtifact -- see repository.ErrOwnerArchived's doc
+		// comment. Applied here too so BeginPublish/AllocateVersion can't
+		// start a publish against an owner a human has archived.
+		if app.Status == repository.StatusArchived {
+			return "", "", "", mapRepoErr(fmt.Errorf("%w: app %q", repository.ErrOwnerArchived, ownerFullName))
+		}
 		return app.Domain, app.AppID, app.ImageRepository, nil
 	}
 	chart, cerr := s.repo.Apps().GetChartByFullName(ctx, ownerFullName)
 	if cerr != nil {
 		return "", "", "", status.Errorf(codes.InvalidArgument, "chart %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", ownerFullName)
+	}
+	if chart.Status == repository.StatusArchived {
+		return "", "", "", mapRepoErr(fmt.Errorf("%w: chart %q", repository.ErrOwnerArchived, ownerFullName))
 	}
 	return chart.Domain, chart.ChartID, chart.ChartRepository, nil
 }

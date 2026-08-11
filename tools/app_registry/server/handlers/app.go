@@ -145,6 +145,78 @@ func unresolvedChartsToPB(cs []repository.UnresolvedChart) []*pb.UnresolvedChart
 	return out
 }
 
+// AssertApps implements the additive-only counterpart to ReconcileApps
+// (AR-7c, issue #558) -- see repository.AppRepository.AssertApps's doc
+// comment for the full contract. Called from release.yml as the first step
+// of a release run, from whatever ref is being released; unlike
+// ReconcileApps this never checks/advances the reconcile watermark and
+// never requires dry_run handling (AssertApps has no absence sweep to
+// preview).
+func (s *AppServer) AssertApps(ctx context.Context, req *pb.AssertAppsRequest) (*pb.AssertAppsResponse, error) {
+	if err := auth.Require(ctx, auth.RoleBuilder); err != nil {
+		return nil, err
+	}
+	if req.Manifests == nil {
+		return nil, status.Error(codes.InvalidArgument, "manifests is required")
+	}
+	if req.IdempotencyKey == "" {
+		return nil, status.Error(codes.InvalidArgument, "idempotency_key is required")
+	}
+
+	source := repository.ManifestSource{
+		GitSHA:            req.Manifests.GitSha,
+		SourceCommittedAt: req.Manifests.SourceCommittedAt,
+		DiscoveredAt:      req.Manifests.DiscoveredAt,
+	}
+
+	resp, _, err := runIdempotent(ctx, s.repo, req.IdempotencyKey, "AssertApps",
+		func() proto.Message { return &pb.AssertAppsResponse{} },
+		func(ctx context.Context, r repository.Registry) (proto.Message, error) {
+			result, err := r.Apps().AssertApps(ctx, req.Manifests.Apps, req.Manifests.Charts, source)
+			if err != nil {
+				return nil, err
+			}
+			for _, ra := range result.RejectedApps {
+				appLog.Warn("assert: app rejected, ARCHIVED",
+					slog.String("app_domain", ra.Domain), slog.String("app_name", ra.Name), slog.String("reason", ra.Reason))
+			}
+			for _, rc := range result.RejectedCharts {
+				appLog.Warn("assert: chart rejected, ARCHIVED",
+					slog.String("chart_domain", rc.Domain), slog.String("chart_name", rc.Name), slog.String("reason", rc.Reason))
+			}
+			return assertResultToPB(result), nil
+		},
+	)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	return resp.(*pb.AssertAppsResponse), nil
+}
+
+func assertResultToPB(r *repository.AssertResult) *pb.AssertAppsResponse {
+	return &pb.AssertAppsResponse{
+		CreatedApps:     appsToPB(r.CreatedApps),
+		UpdatedApps:     appsToPB(r.UpdatedApps),
+		RecoveredApps:   appsToPB(r.RecoveredApps),
+		CreatedCharts:   chartsToPB(r.CreatedCharts),
+		UpdatedCharts:   chartsToPB(r.UpdatedCharts),
+		RecoveredCharts: chartsToPB(r.RecoveredCharts),
+		RejectedApps:    rejectedOwnersToPB(r.RejectedApps),
+		RejectedCharts:  rejectedOwnersToPB(r.RejectedCharts),
+	}
+}
+
+func rejectedOwnersToPB(rs []repository.RejectedOwner) []*pb.RejectedOwner {
+	if len(rs) == 0 {
+		return nil
+	}
+	out := make([]*pb.RejectedOwner, len(rs))
+	for i, r := range rs {
+		out[i] = &pb.RejectedOwner{Domain: r.Domain, Name: r.Name, Reason: r.Reason}
+	}
+	return out
+}
+
 func (s *AppServer) ListApps(ctx context.Context, req *pb.ListAppsRequest) (*pb.ListAppsResponse, error) {
 	if err := auth.RequireAuthenticated(ctx); err != nil {
 		return nil, err

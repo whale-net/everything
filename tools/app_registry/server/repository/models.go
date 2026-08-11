@@ -35,7 +35,67 @@ const (
 	PromotabilityNotPromotable Promotability = "not_promotable"
 )
 
+// ManifestProvenance mirrors app_manifest.provenance / chart_manifest.provenance
+// (migration 008, AR-7c, issue #558): which call wrote a manifest snapshot.
+// "sweep" is ReconcileApps, running only from main push -- the only
+// provenance v_current_app/v_current_chart read (see ARCHITECTURE.md
+// "AssertApps (additive) vs. ReconcileApps"). "release" is AssertApps,
+// called from release.yml against whatever ref is being released -- kept
+// for audit ("was this artifact's promotability derived from a sweep
+// snapshot or a release-time one?"), never read by the current-state views.
+type ManifestProvenance string
+
+const (
+	ManifestProvenanceSweep   ManifestProvenance = "sweep"
+	ManifestProvenanceRelease ManifestProvenance = "release"
+)
+
+// ManifestSource is the ordering/provenance metadata one Reconcile or
+// AssertApps call carries -- the same three AppManifestSet fields
+// ReconcileSource already wraps (git_sha / source_committed_at /
+// discovered_at), reused here rather than duplicated because AssertApps
+// needs exactly the same triple, just without ever consulting the reconcile
+// watermark. See AppRepository.AssertApps's doc comment.
+type ManifestSource = ReconcileSource
+
+// RejectedOwner is one app or chart AssertApps declined to touch because it
+// is ARCHIVED -- a human said this app/chart is gone for good, and a
+// release silently resurrecting it is worse than a red step (AR-7c, issue
+// #558). Modeled on UnresolvedChart's per-item skip-and-report shape: every
+// other app/chart in the same AssertApps call still applies.
+type RejectedOwner struct {
+	Domain string
+	Name   string
+	Reason string
+}
+
+// AssertResult buckets every App/Chart row touched by one AssertApps call --
+// the additive-only counterpart to ReconcileResult. See
+// AppRepository.AssertApps's doc comment for exactly what each bucket means;
+// unlike ReconcileResult there is no NewlyMissing bucket (AssertApps never
+// marks anything MISSING) and no UnresolvedCharts (AssertApps never resolves
+// chart_app membership -- that stays ReconcileApps-only).
+type AssertResult struct {
+	CreatedApps   []App
+	UpdatedApps   []App // already ACTIVE; only the manifest snapshot changed
+	RecoveredApps []App // MISSING -> ACTIVE
+	RejectedApps  []RejectedOwner
+
+	CreatedCharts   []Chart
+	UpdatedCharts   []Chart
+	RecoveredCharts []Chart
+	RejectedCharts  []RejectedOwner
+}
+
 // App mirrors one release_app manifest. Never hard-deleted.
+//
+// As of migration 008 (AR-7c, issue #558) `app` itself is pure identity
+// (domain, name, status, first/last-seen) -- every field below EXCEPT those
+// is populated by a join to the latest `main`-sweep app_manifest snapshot
+// (v_current_app, in postgres/app.go), not stored directly. This struct's
+// SHAPE is unchanged from before AR-7c on purpose: the wire (App in
+// protos/messages.proto) and every handler/CLI consumer read these fields
+// exactly as before -- only where postgres/app.go sources them from moved.
 type App struct {
 	AppID           string
 	Domain          string
@@ -53,7 +113,12 @@ type App struct {
 
 func (a App) FullName() string { return a.Domain + "-" + a.Name }
 
-// Chart is a Helm chart composing one or more apps.
+// Chart is a Helm chart composing one or more apps. As of migration 008
+// (AR-7c) `chart` itself is pure identity -- see App's doc comment for the
+// same split; v_current_chart supplies Description/ChartRepository/
+// DeployUnit, though for a chart those are (and always were) constants, not
+// values sourced from a manifest -- see migration 008's "Why chart_manifest
+// has no generated columns".
 type Chart struct {
 	ChartID         string
 	Domain          string
@@ -224,8 +289,28 @@ type Artifact struct {
 	// State == ArtifactStateFailed.
 	FailReason string
 
-	// Promotability is DERIVED — computed at read time from the owner's
-	// DeployUnit, never persisted. Populated by repository read methods.
+	// ManifestID is the app_manifest/chart_manifest snapshot (migration 008,
+	// AR-7c) this row's Promotability was derived from -- set once, at the
+	// instant State reaches ArtifactStatePublished, never touched again.
+	// Empty for allocated/publishing/failed rows, and for any row published
+	// before migration 008 (no snapshot exists that honestly corresponds to
+	// what was live when those were originally published -- see migration
+	// 008's backfill comments). No FK: it is a polymorphic reference (an
+	// image artifact's ManifestID names an app_manifest row, a chart
+	// artifact's a chart_manifest row), same reasoning as Artifact not
+	// carrying its own FK-typed owner_id.
+	ManifestID string
+
+	// Promotability is now STORED (migration 008, AR-7c) -- computed ONCE by
+	// repository.DerivePromotability at the instant State reaches
+	// ArtifactStatePublished, from ManifestID's snapshot (or, absent one,
+	// the owner's current v_current_app/v_current_chart deploy_unit -- see
+	// postgres/artifact.go's resolveManifestForPublish). Never recomputed on
+	// read. This is the fix for the retroactivity bug ARCHITECTURE.md
+	// documents: editing an app's deploy_unit after a build was published no
+	// longer changes that build's promotability. Empty/unset for
+	// allocated/publishing/failed rows -- there is nothing to derive it from
+	// until publish.
 	Promotability Promotability
 
 	// Contains is populated only for Kind == ArtifactKindChart.

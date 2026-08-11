@@ -172,6 +172,111 @@ func reconcile(s *state, apps []*appmetapb.AppManifest, charts []*appmetapb.Char
 	return result, nil
 }
 
+// assertApps mirrors postgres/app.go's assertApps -- the additive-only
+// counterpart to reconcile above. See repository.AppRepository.AssertApps's
+// doc comment for the full contract: create-or-recover only, never marks
+// MISSING, never touches chart_app membership, and rejects (per item) any
+// app/chart that is currently ARCHIVED rather than silently resurrecting it.
+// Unlike reconcile, this never consults or advances s.Watermark.
+func assertApps(s *state, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest) *repository.AssertResult {
+	now := time.Now().UTC()
+	result := &repository.AssertResult{}
+
+	for _, am := range apps {
+		id, existing, found := findAppByDomainName(s, am.Domain, am.Name)
+		if !found {
+			id = uuid.NewString()
+			newApp := repository.App{
+				AppID:           id,
+				Domain:          am.Domain,
+				Name:            am.Name,
+				Description:     am.Description,
+				Language:        am.Language,
+				AppType:         am.AppType,
+				DeployUnit:      normalizeDeployUnit(am.DeployUnit),
+				BazelLabel:      am.BinaryTarget,
+				ImageRepository: imageRepository(am),
+				Status:          repository.StatusActive,
+				FirstSeenAt:     now,
+				LastSeenAt:      now,
+			}
+			s.Apps[id] = newApp
+			result.CreatedApps = append(result.CreatedApps, newApp)
+			continue
+		}
+
+		if existing.Status == repository.StatusArchived {
+			result.RejectedApps = append(result.RejectedApps, repository.RejectedOwner{
+				Domain: am.Domain, Name: am.Name,
+				Reason: fmt.Sprintf("app %s/%s is ARCHIVED -- a human archived it deliberately; AssertApps does not resurrect it", am.Domain, am.Name),
+			})
+			continue
+		}
+
+		wasMissing := existing.Status == repository.StatusMissing
+		updated := existing
+		updated.Description = am.Description
+		updated.Language = am.Language
+		updated.AppType = am.AppType
+		updated.DeployUnit = normalizeDeployUnit(am.DeployUnit)
+		updated.BazelLabel = am.BinaryTarget
+		updated.ImageRepository = imageRepository(am)
+		updated.Status = repository.StatusActive
+		updated.LastSeenAt = now
+		s.Apps[id] = updated
+
+		if wasMissing {
+			result.RecoveredApps = append(result.RecoveredApps, updated)
+		} else {
+			result.UpdatedApps = append(result.UpdatedApps, updated)
+		}
+	}
+
+	for _, cm := range charts {
+		id, existing, found := findChartByDomainName(s, cm.Domain, cm.Name)
+		if !found {
+			id = uuid.NewString()
+			newChart := repository.Chart{
+				ChartID:     id,
+				Domain:      cm.Domain,
+				Name:        cm.Name,
+				DeployUnit:  appmetapb.DeployUnit_DEPLOY_UNIT_CHART,
+				Status:      repository.StatusActive,
+				FirstSeenAt: now,
+				LastSeenAt:  now,
+			}
+			s.Charts[id] = newChart
+			result.CreatedCharts = append(result.CreatedCharts, newChart)
+			continue
+		}
+
+		if existing.Status == repository.StatusArchived {
+			result.RejectedCharts = append(result.RejectedCharts, repository.RejectedOwner{
+				Domain: cm.Domain, Name: cm.Name,
+				Reason: fmt.Sprintf("chart %s/%s is ARCHIVED -- a human archived it deliberately; AssertApps does not resurrect it", cm.Domain, cm.Name),
+			})
+			continue
+		}
+
+		wasMissing := existing.Status == repository.StatusMissing
+		updated := existing
+		updated.Status = repository.StatusActive
+		updated.LastSeenAt = now
+		// Deliberately NOT touching updated.AppIDs / chart_app membership --
+		// see AssertApps's doc comment: composition resolution stays
+		// Reconcile-only.
+		s.Charts[id] = updated
+
+		if wasMissing {
+			result.RecoveredCharts = append(result.RecoveredCharts, updated)
+		} else {
+			result.UpdatedCharts = append(result.UpdatedCharts, updated)
+		}
+	}
+
+	return result
+}
+
 func findAppByDomainName(s *state, domain, name string) (string, repository.App, bool) {
 	for id, a := range s.Apps {
 		if a.Domain == domain && a.Name == name {

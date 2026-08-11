@@ -292,11 +292,22 @@ not."
 
 ## Release-vs-reconcile gap (issue #547)
 
-> **Superseded in design, still true as-built.** Issue #558 rejects "accept
-> the gap" as the end state — see "Release lifecycle (issue #558)" below,
-> which closes it by splitting identity assertion from the absence sweep.
-> Everything in this section describes what is deployed today and stays
-> accurate until AR-7c ships.
+> **Closed by AR-7c (built, not yet merged).** Issue #558 rejected "accept
+> the gap" as the end state — see "Release lifecycle (issue #558)" →
+> "AssertApps (additive) vs. ReconcileApps (absence sweep)" below.
+> `release.yml` now calls `AssertApps` as the first App Registry step of
+> every job that later resolves an owner by full name (both the `release`
+> matrix and `release-helm-charts`), so the window this section describes
+> — a release reaching `RecordArtifact`'s owner lookup before that commit's
+> `main`-push reconcile has run — can no longer produce
+> `ReasonOwnerNotReconciled` / exit code 3. Everything below this callout
+> describes the PRE-AR-7c mechanism (the `::warning::` annotation, exit
+> code 3, the "wait and re-run" runbook) — kept for historical/rollback
+> context (a domain that somehow skips the `AssertApps` step, e.g. a
+> workflow YAML that hasn't been updated, still hits this exact path) and
+> because the underlying RPC/exit-code machinery is unchanged, just
+> unreachable through the normal path now. OPERATIONS.md's runbook entry
+> for this has been retired accordingly.
 
 `ReconcileApps` runs only from `ci.yml` on push to `main` (#543); `release.yml`
 is a `workflow_dispatch` a human triggers, often immediately after merging —
@@ -386,20 +397,22 @@ tradeoff above, not a separate gap to close.
 
 ## Release lifecycle (issue #558)
 
-**Status: AR-7a and AR-7b built (not yet merged); AR-7c … AR-7f designed,
-not built.** Delivery is PLAN.md's AR-7. Two slices of this section describe
-real code: AR-7a's — ordering 4, partial-apply reconcile, domain-qualified
-chart app references, and the `continue-on-error` drop on `ci.yml`'s sweep
-job — and AR-7b's — the artifact lifecycle
-(`allocated → publishing → published → failed`), migration `007`,
-`BeginPublish`/`FailPublish`, `RecordArtifact`'s `publishing → published`
-transition, and the stale-row reaper. Everything else here (the app identity
-/ manifest-snapshot split, `AssertApps`, the run log, `AdoptArtifact`,
-compose-time chart hermeticity) is still proposed: every table, column and
-RPC named in those subsections is unbuilt. This section supersedes
-"Release-vs-reconcile gap (issue #547)" above for the artifact lifecycle
-specifically, and changes what "Availability and bootstrap" below promises —
-both are cross-referenced where that happens.
+**Status: AR-7a and AR-7b built and merged to `main` (#561, #562); AR-7c
+built, not yet merged; AR-7d … AR-7f designed, not built.** Delivery is
+PLAN.md's AR-7. Three slices of this section describe real code: AR-7a's —
+ordering 4, partial-apply reconcile, domain-qualified chart app references,
+and the `continue-on-error` drop on `ci.yml`'s sweep job — AR-7b's — the
+artifact lifecycle (`allocated → publishing → published → failed`),
+migration `007`, `BeginPublish`/`FailPublish`, `RecordArtifact`'s
+`publishing → published` transition, and the stale-row reaper — and AR-7c's
+— migration `008`, the app identity / manifest-snapshot split,
+`AssertApps`, and `artifact`'s stored `manifest_id`/`promotability`. The run
+log, `AdoptArtifact`, and compose-time chart hermeticity remain proposed:
+every table, column and RPC named in those subsections is unbuilt. This
+section supersedes "Release-vs-reconcile gap (issue #547)" above — AR-7c
+closes that gap for real, see the callout there — and changes what
+"Availability and bootstrap" below promises; both are cross-referenced where
+that happens.
 
 ### The problem: four cross-run orderings, three of them unenforced
 
@@ -574,13 +587,49 @@ indexable instead of resting on `->>` expression indexes. Fully typed columns
 were rejected: they would reintroduce the hand-maintained duplicate of the
 manifest schema that AR-M spent a phase deleting.
 
+**As built (AR-7c, migration `008`).** Everything above is real. One
+narrowing the design left implicit: **`chart_manifest` gets NEITHER
+generated column**, not "the same two." `ChartManifest` (appmeta.proto)
+carries no `deploy_unit` field at all — a chart's own deploy_unit was
+always the hardcoded `DEPLOY_UNIT_CHART` constant (Reconcile's INSERT, both
+before and after this migration), never sourced from a manifest — and no
+image-repository triple either, so there is no hot path that needs either
+column on that table; `v_current_chart` hardcodes
+`deploy_unit`/`description`/`chart_repository` as constants instead of
+projecting them off `manifest_json`, matching what those columns already
+were (dead/constant) before this migration. `artifact.manifest_id` carries
+no FK, for the same reason `artifact.owner_id` doesn't: it is polymorphic
+(an image artifact's names an `app_manifest` row, a chart artifact's a
+`chart_manifest` row), so referential integrity is enforced in Go
+(`postgres/artifact.go`'s `resolveManifestForPublish`, always run inside the
+same transaction as the write) rather than by the schema.
+`resolveManifestForPublish` prefers the snapshot at the artifact's own
+build's EXACT `git_sha` (typically the one `AssertApps` just wrote for this
+release), falling back to the newest snapshot for the owner on any commit
+when no exact match exists — a deliberate simplification: "derived at
+publish time" means "from the best snapshot known at publish time," not "the
+exact build commit, or fail" (requiring an exact match would make every
+domain's first post-AR-7c publish fail until `AssertApps` runs for it once).
+Migration 008's backfill also computes `artifact.promotability` for every
+row that predates it, from the CURRENT (about-to-be-dropped)
+`app`/`chart.deploy_unit` — the last time this repo ever computes
+promotability via a live join; those rows' `manifest_id` is left `NULL`
+(no snapshot honestly represents what was live when they actually
+published).
+
 ### `AssertApps` (additive) vs. `ReconcileApps` (absence sweep)
 
-**`AssertApps` itself is still proposed, not built** — it is AR-7c. The
-partial-apply and domain-qualified-reference paragraphs below are AR-7a and
-are built (see "Status" above); the split this heading names is not: today
-there is still only `ReconcileApps`, and it still runs exclusively from
-`main` push.
+**`AssertApps` is built (AR-7c, not yet merged).** The partial-apply and
+domain-qualified-reference paragraphs below are AR-7a, built earlier; the
+split this heading names is now real: `AppRegistry.AssertApps`
+(`protos/api.proto`/`api_messages_app.proto`) exists alongside
+`ReconcileApps`, implemented identically in `postgres/app.go`'s
+`appRepo.AssertApps` and `fake/reconcile.go`'s `assertApps`. `release.yml`
+calls it (via the new `.github/actions/app-registry-assert` composite
+action) as the FIRST App Registry step of both the `release` matrix job and
+`release-helm-charts` — ahead of `Record build`/`Begin publish` — so every
+subsequent owner-resolving call in the same job succeeds. See "Release-vs-
+reconcile gap (issue #547)" above for the resulting status of that gap.
 
 `ReconcileApps` conflates two jobs: assert identity, and assert *absence*.
 Only absence needs a canonical complete tree, and it is identity that releases

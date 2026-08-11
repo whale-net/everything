@@ -203,7 +203,7 @@ jobs:
           fi
         fi
 
-    # App/chart registration (ReconcileApps) deliberately does NOT run here.
+    # Full ReconcileApps (the absence sweep) deliberately does NOT run here.
     # It requires the complete, current manifest set -- anything absent from
     # what it's given gets flagged MISSING (api.proto's own comment) -- and
     # this workflow can be dispatched against an arbitrary, possibly old ref
@@ -213,6 +213,12 @@ jobs:
     # "Reconcile apps/charts in App Registry" job), so it only ever sees the
     # current, complete tree. See ARCHITECTURE.md "Rejected alternatives"
     # and DEPLOY.md "CI wiring (AR-3d)".
+    #
+    # AR-7c (issue #558) adds the ADDITIVE-only counterpart, AssertApps,
+    # which IS safe from this arbitrary ref -- see the "Assert apps/charts
+    # in App Registry" step in the `release`/`release-helm-charts` jobs
+    # below, and ARCHITECTURE.md "AssertApps (additive) vs. ReconcileApps
+    # (absence sweep)".
 
   # Plan which apps need OpenAPI spec builds
   plan-openapi-builds:
@@ -368,12 +374,38 @@ jobs:
     - name: Download release tools
       uses: ./.github/actions/download-release-tools
 
+    # AR-7c (issue #558): the FIRST App Registry step of this job,
+    # deliberately ahead of everything else below -- additive identity +
+    # manifest-snapshot assertion from THIS ref, closing issue #547's gap
+    # (a release running ahead of main's ReconcileApps). After this step
+    # succeeds, every RecordBuild/RecordArtifact/BeginPublish call in this
+    # job resolves its owner successfully -- `exit 3` /
+    # ReasonOwnerNotReconciled becomes unreachable from here. Best-effort at
+    # adoption stage "observe" (every domain, today) like every other
+    # recording step -- see ARCHITECTURE.md "Availability, restated per
+    # adoption stage": a registry outage here means the SAME outage would
+    # fail every recording step below it anyway, so continue-on-error keeps
+    # this consistent with them rather than making it a new single point of
+    # release failure.
+    - name: Assert apps/charts in App Registry
+      if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
+      continue-on-error: true
+      timeout-minutes: 5
+      uses: ./.github/actions/app-registry-assert
+      with:
+        address: ${{ vars.APP_REGISTRY_ADDRESS }}
+        token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+        client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+        git-sha: ${{ github.sha }}
+        idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.domain }}-${{ matrix.app }}-assert
+
     # Configure Git for tagging
     - name: Configure Git
       run: |
         git config --global user.name "${{ github.actor }}"
         git config --global user.email "${{ github.actor }}@users.noreply.github.com"
-        
+
     # Login unless it's a manual dispatch with dry_run=true
     # - Manual dispatch with dry_run=false: login (needed for publishing)
     # - Manual dispatch with dry_run=true: skip login (no publishing)
@@ -812,6 +844,23 @@ jobs:
 
     - name: Download release tools
       uses: ./.github/actions/download-release-tools
+
+    # AR-7c (issue #558): same first-step assertion the image release job
+    # does -- see that job's "Assert apps/charts in App Registry" step for
+    # the full rationale. This job has no per-app matrix, so the
+    # idempotency key is scoped to "charts" rather than a domain/app pair.
+    - name: Assert apps/charts in App Registry
+      if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
+      continue-on-error: true
+      timeout-minutes: 5
+      uses: ./.github/actions/app-registry-assert
+      with:
+        address: ${{ vars.APP_REGISTRY_ADDRESS }}
+        token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+        client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+        git-sha: ${{ github.sha }}
+        idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-charts-assert
 
     # Needed to resolve pinned image tags to digests for App Registry
     # recording below (docker buildx imagetools inspect reads from ghcr.io).

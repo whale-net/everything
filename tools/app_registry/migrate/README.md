@@ -36,7 +36,7 @@ ArgoCD sync waves. See `friendly_computing_machine/docs/argocd-integration.md`.
 | `005_version_allocation` (AR-5a) | `artifact.version_major/minor/patch` + backfill, `artifact_version_order_idx`, `version_allocation` |
 | `006_reconcile_watermark` (issue #545) | `reconcile_watermark` — singleton row guarding `ReconcileApps` against a stale (older-commit) call landing after a newer one |
 | `007_artifact_lifecycle` (AR-7b, issue #558) | `artifact.state`/`provenance`/`version_source`/`state_changed_at`/`fail_reason`, nullable `digest`/`build_id`/`published_at`, `artifact_state_shape` CHECK, partial-unique `artifact_digest_idx` (`WHERE digest IS NOT NULL`), `artifact_state_idx` (reaper sweep), `version_allocation` folded into `artifact` as `state = 'allocated'` and dropped |
-| `008_app_identity_split` (AR-7c, **planned**) | append-only `app_manifest`/`chart_manifest` snapshots, `artifact.manifest_id`/`promotability`, `app`/`chart` lose their mutable metadata, `v_current_app`/`v_current_chart` |
+| `008_app_identity_split` (AR-7c, issue #558) | Append-only `app_manifest`/`chart_manifest` snapshots (`(owner_id, source_git_sha)` unique, verbatim protojson `JSONB`; `app_manifest` alone gets stored generated `deploy_unit`/`image_repository` columns — `chart_manifest` gets neither, see the migration's own comments); `artifact.manifest_id` (no FK — polymorphic) and `artifact.promotability` (stored, `artifact_promotability_shape` CHECK ties it to `state = 'published'`); `app`/`chart` lose their mutable metadata columns, becoming pure identity; `v_current_app`/`v_current_chart` views (`v_current_promotion`'s pattern). Backfills one snapshot per existing app/chart row and `artifact.promotability` for every existing published row before dropping the columns those are sourced from. |
 
 Split this way so AR-2 needs only `001`, AR-3b adds `002`, AR-3c adds `003`,
 AR-4b adds `004`, and AR-5a adds `005` — each phase ships an independently
@@ -100,6 +100,15 @@ CREATE INDEX artifact_version_order_idx
 -- regardless of how large the published/failed tail of the table grows.
 CREATE INDEX artifact_state_idx ON artifact (state, state_changed_at)
   WHERE state IN ('allocated', 'publishing');
+
+-- AR-7c (migration 008): backs v_current_app's/v_current_chart's "latest
+-- main-sweep snapshot per owner" LATERAL join -- the hot path every
+-- ListApps/GetApp/ListCharts read, and every RecordBuild/RecordArtifact/
+-- BeginPublish owner-repository lookup, now goes through.
+CREATE INDEX app_manifest_current_idx
+  ON app_manifest (owner_id, provenance, source_committed_at DESC, recorded_at DESC);
+CREATE INDEX chart_manifest_current_idx
+  ON chart_manifest (owner_id, provenance, source_committed_at DESC, recorded_at DESC);
 ```
 
 `reconcile_watermark` (`006`) is seeded with exactly one sentinel row at
