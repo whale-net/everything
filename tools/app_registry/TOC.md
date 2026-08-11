@@ -22,6 +22,13 @@ that renders environment state to a local path (stub implementation —
 publishing to the gitops repo or S3 is out of scope, see PLAN.md's AR-4b
 section).
 
+**AR-7 (issue #558) — release lifecycle — is designed but not built.** It
+closes the release-vs-reconcile coupling with an artifact
+`allocated → publishing → published` lifecycle, an identity/manifest-snapshot
+split of `app`, and a run log that makes a re-run a resume. Read
+ARCHITECTURE.md's "Release lifecycle (issue #558)" before touching recording,
+reconcile, or anything in `release.yml`'s registry steps.
+
 **See [PLAN.md](PLAN.md) → "Current status" for the branch/PR map,
 what is next, and the carry-over items** — start there when picking this up.
 

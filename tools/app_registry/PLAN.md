@@ -16,8 +16,8 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) before executing any phase.
 
 ## Current status
 
-*Last updated at the start of the AR-2d/AR-3 session. **AR-M through AR-2c are
-all merged to `main`.***
+*Last updated in the AR-7 design session (issue #558). **AR-M through AR-6 are
+all merged to `main`** — see the table below.*
 
 | Phase | PR | State |
 |---|---|---|
@@ -27,21 +27,34 @@ all merged to `main`.***
 | AR-2b | [#500](https://github.com/whale-net/everything/pull/500) | merged — charts byte-identical |
 | AR-2c | [#502](https://github.com/whale-net/everything/pull/502) | merged — CI path unexercised until the registry is deployed |
 | dbtest | [#498](https://github.com/whale-net/everything/pull/498) | merged — `libs/go/dbtest` available |
+| AR-2d | [#503](https://github.com/whale-net/everything/pull/503) | merged |
+| AR-3a…AR-3d | [#504](https://github.com/whale-net/everything/pull/504), [#508](https://github.com/whale-net/everything/pull/508), [#509](https://github.com/whale-net/everything/pull/509), [#511](https://github.com/whale-net/everything/pull/511) | merged |
+| AR-4a / AR-4b | [#512](https://github.com/whale-net/everything/pull/512), [#514](https://github.com/whale-net/everything/pull/514) | merged — writeback `Publish` is still the stub |
+| AR-5a | [#513](https://github.com/whale-net/everything/pull/513) | merged — **inert**: no domain at stage `allocate`, `plan.go`'s tag path untouched |
+| AR-6a / AR-6b | [#516](https://github.com/whale-net/everything/pull/516), [#515](https://github.com/whale-net/everything/pull/515) | merged |
+| AR-7 | [#559](https://github.com/whale-net/everything/pull/559) | design only — no implementation |
 
 The registry is being deployed to `dev` by the repo owner. `app-registry-api`
 and `app-registry-migration` images publish from `apps=all`.
 `APP_REGISTRY_CICD_OPT_IN` is still unset, so CI makes no registry calls.
 
-**AR-3 is now fully implemented** (AR-3a through AR-3d), stacked on top of
-`main` and not yet merged. AR-2d is also done, not merged. **AR-4 (AR-4a +
-AR-4b) is now also fully implemented**, stacked on `ar-4a-temporal` /
-`main` and not yet merged -- the writeback *contract* (outbox, worker,
-workflow, stub activity) is done; the real gitops/S3 publish is deliberately
-still out of scope (see AR-4b below).
+**AR-3 (promotion) and AR-4 (writeback) are implemented and merged.** The
+writeback *contract* — outbox, worker, workflow, stub activity — is done; the
+real gitops/S3 publish is deliberately still out of scope (see AR-4b below).
+The per-phase sections below were written while these were still in flight and
+say "not merged" in places; the table above is authoritative.
 
-**AR-5a (inert foundations) is also done, not merged** — see "AR-5" below
-for what it delivered and what is deliberately still missing before any
-domain can be cut over.
+**AR-5a (inert foundations) is merged** — `AllocateVersion` is fully
+implemented and tested, wired to nothing. See "AR-5" below for what remains
+before any domain can be cut over.
+
+**AR-7 (issue #558) is designed, nothing implemented.** It makes a release run
+hermetic — no dependency on `main`'s reconcile having gone first — via an
+artifact `allocated → publishing → published` lifecycle, an identity/manifest-
+snapshot split of `app`, and a run log CI writes to. It is a prerequisite for
+the AR-5 cutover, and AR-7a/AR-7b fix two failure modes that are silent on
+`main` today. Design is in ARCHITECTURE.md's "Release lifecycle (issue #558)";
+delivery is "AR-7" below.
 
 **Where deferred work is tracked.** Three places, deliberately:
 [Carry-over items](#carry-over-items) for small cross-cutting gaps that
@@ -231,12 +244,21 @@ graph LR
     AR1 --> AR2["AR-2<br/>Observe"]
     AR2 --> AR3["AR-3<br/>Promote"]
     AR3 --> AR4["AR-4<br/>Writeback"]
-    AR4 --> AR5["AR-5<br/>Allocate versions"]
+    AR4 --> AR7["AR-7<br/>Release lifecycle"]
+    AR7 --> AR5["AR-5b+<br/>Allocate versions"]
     AR2 -. "soak period" .-> AR3
     style AR0 fill:#e8f5e8
     style ARM fill:#fff4e0
+    style AR7 fill:#fff4e0
     style AR5 fill:#ffe9e9
 ```
+
+**AR-7 (issue #558) sits between AR-4 and the AR-5 cutover**, despite its
+number. AR-5a's inert foundations already landed; the cutover to `allocate`
+must not happen before AR-7, because version allocation happens *before* a
+build exists, so a release will need identity resolved even earlier than it
+does today — the release-vs-reconcile gap gets strictly worse under AR-5, not
+better. AR-7a and AR-7b are independently valuable and can land at any time.
 
 AR-M stands alone and delivers value with or without the registry — it fixes
 drift that exists today. It is sequenced first because AR-2 otherwise adds a
@@ -839,6 +861,201 @@ trailing term. Do not add the column now; do note the extension point in
 `ARCHITECTURE.md`.
 
 ---
+
+## AR-7 — Release lifecycle (issue #558)
+
+**Goal:** make a release run hermetic — it depends on no other CI run having
+gone first — and make an incomplete run recoverable by *resuming* it rather
+than by hand. Read ARCHITECTURE.md's "Release lifecycle (issue #558)" first;
+it carries the design, the four orderings this fixes, and the rejected
+alternatives. This section is delivery only.
+
+**Nothing here is implemented.** The sub-phases are ordered by dependency;
+AR-7a and AR-7b each stand alone and fix a failure mode that is silent today.
+
+### AR-7a — Sweep robustness — no schema change
+
+Independent of everything else in AR-7. Land first.
+
+**Scope**
+- `Reconcile` becomes **partially applying**: a chart whose apps fail to
+  resolve is skipped and reported (new `unresolved_charts` field on
+  `ReconcileAppsResponse`, each entry naming the chart and the offending app
+  reference); every other app and chart applies and the watermark advances.
+  Today one bad manifest rolls the whole transaction back, wedging identity
+  registration repo-wide until someone notices.
+- **Domain-qualified app references in chart manifests.** `resolveChartApps`
+  currently falls back to `SELECT app_id FROM app WHERE name = $1` and fails
+  on more than one match, so adding an app in domain B whose bare name
+  collides with one in domain A that any chart references breaks the sweep.
+  Qualify the reference at the manifest level (`tools/helm` +
+  `//tools/appmeta/proto`), keep bare-name resolution as a deprecated
+  compatibility path for one release cycle, then delete it.
+- **Drop `continue-on-error` from `ci.yml`'s `reconcile-app-registry` job** —
+  any error reds the job (decided in review; see ARCHITECTURE.md
+  "Availability, restated per adoption stage"). The wedge stayed invisible
+  because a red step sat inside a green job. Accepted consequence: with the
+  opt-in on, a registry outage reds `main` CI, and
+  `APP_REGISTRY_CICD_OPT_IN=false` is the lever.
+
+**Exit criteria**
+- A chart manifest naming a nonexistent app leaves every other app/chart
+  registered, advances the watermark, and reports the offending chart.
+- A bare app name that is ambiguous across domains cannot be produced by
+  `tools/helm` at all.
+- Postgres integration test: sweep with one bad chart, assert partial apply
+  (the fake cannot catch the transaction-rollback behavior this changes).
+
+### AR-7b — Artifact lifecycle states — migration `007_artifact_lifecycle`
+
+**Scope**
+- Migration: `artifact.state` (`allocated`/`publishing`/`published`/`failed`),
+  `artifact.provenance` (`observed`/`adopted`), `artifact.version_source`
+  (`registry`/`tag` — which path authored the version), `state_changed_at`;
+  `digest`/`build_id`/`published_at` become nullable;
+  `artifact_digest_idx` becomes `UNIQUE ... WHERE digest IS NOT NULL`;
+  `version_allocation` rows fold into `artifact` as `allocated` and the table
+  is **dropped**. Existing rows backfill to `state = 'published'`,
+  `provenance = 'observed'`. `UNIQUE (owner_id, kind, version)` is unchanged
+  and now spans every state — it keeps doing the allocation-collision job
+  `version_allocation`'s index did.
+- `AllocateVersion` writes an `allocated` artifact row instead of a
+  `version_allocation` row; "next version" becomes one query instead of a max
+  across two tables. Its concurrency test (8 goroutines, zero collisions) must
+  stay green unchanged — that is the regression that matters here.
+- New RPCs: `BeginPublish` (`∅|allocated|failed → publishing`, takes
+  `build_id`) and `FailPublish` (`publishing → failed`, takes a reason).
+  `RecordArtifact` becomes `publishing → published`, and keeps its
+  create-directly-as-`published` path for domains at stage `observe`.
+- Transition enforcement server-side; `published` terminal; re-recording the
+  same digest idempotent, a different digest for a published version rejected.
+- **Stale-`publishing` *and* stale-`allocated` reaper** in
+  `app-registry-worker` (new periodic loop alongside the outbox drainer),
+  timeout configurable, documented in ENV.md. Ships in this phase, not after
+  it — `allocated` rows are written up front now, so a cancelled run would
+  otherwise hold a version number in `UNIQUE (owner_id, kind, version)`
+  forever.
+- **The release plan step writes the intent set** — one `allocated` row per
+  target, before anything is pushed, at *every* adoption stage (decided in
+  review). Pre-cutover the version still comes from the tag path and the row
+  records `version_source = 'tag'`; at `allocate` it is `AllocateVersion`'s
+  own result. This is what makes "is this run complete?" exact in AR-7d
+  rather than only after the AR-5 cutover.
+- `release.yml`: call `BeginPublish` immediately before each image/chart push
+  and `FailPublish` on the error path.
+- Docs: ARCHITECTURE.md's availability-per-stage table becomes reality for
+  `observe`; ENV.md for the reaper; migrate/README.md's migration table.
+
+**Exit criteria**
+- An image row exists in `publishing` before its GHCR push, and a killed
+  release leaves rows that the reaper moves to `failed` within the timeout.
+- A chart pinning an image that was never published still fails — and the
+  failure now names a genuinely unpublished image, not a bookkeeping miss.
+- Postgres integration tests: every legal transition, every illegal one
+  rejected, reaper timeout, and the folded `version_allocation` data.
+
+### AR-7c — App identity / manifest snapshot split — migration `008`
+
+The design change. Depends on AR-7b (it touches the same write path).
+
+**Scope**
+- Migration: append-only `app_manifest` / `chart_manifest`
+  (`(owner_id, source_git_sha)` unique, verbatim protojson `JSONB` plus
+  **stored generated columns** for `deploy_unit` and `image_repository` — the
+  two fields the hot read paths need indexable, decided in review;
+  `source_committed_at`, sweep-vs-release provenance); `artifact.manifest_id`
+  and `artifact.promotability` (stored, derived at publish time);
+  `app`/`chart` drop their mutable metadata columns; `v_current_app` /
+  `v_current_chart` views. Backfill snapshots from the current `app`/`chart`
+  rows against the latest reconciled `git_sha` so nothing loses metadata.
+- New `AppRegistry.AssertApps`: additive identity + snapshot write, safe from
+  any ref, never marks `MISSING`, rejects assertion against an `ARCHIVED` app
+  per item. `RecordArtifact` against an `ARCHIVED` owner is rejected too.
+- `ReconcileApps` keeps the absence sweep, `chart_app` membership, the
+  watermark, and now writes `main`-sweep snapshots.
+- `release.yml` calls `AssertApps` as the first step of the release job, from
+  the released ref — this is what closes #547's gap.
+- Reads (`ListApps`/`GetApp`/promotability) move to the views; wire responses
+  are unchanged.
+- Docs: ARCHITECTURE.md's #547 section moves from "accept the gap" to
+  "closed"; OPERATIONS.md's owner-not-reconciled runbook entry retires.
+
+**Exit criteria**
+- A release from a branch that never merges records its build, artifacts and
+  a manifest snapshot, and writes no mutable state anything else can observe.
+- Editing an app's `deploy_unit` does not change the promotability of an
+  artifact published before the edit (the retroactivity bug, proven by test).
+- `exit 3` / `ReasonOwnerNotReconciled` becomes unreachable from `release.yml`.
+
+### AR-7d — Run log and resume — no schema change
+
+**Scope**
+- `GetReleaseRun(workflow_run_id[, attempt])` returning the build and every
+  child artifact with its state; CLI `app-registry builds status <run-id>`
+  and `--incomplete`.
+- `release.yml` re-run behaves as a **resume**: skip children already
+  `published`, re-attempt the rest, then the chart.
+- OPERATIONS.md: "a release run didn't complete" runbook built on the above.
+
+**Exit criteria**
+- A run killed between two image pushes, re-run, publishes only what was
+  missing and ends with every child `published`.
+- A run killed *before* reaching an app still reports that app as incomplete —
+  AR-7b's up-front intent rows are what make this answerable, at every
+  adoption stage.
+
+### AR-7e — Adoption and disaster recovery
+
+**Scope**
+- `ArtifactRegistry.AdoptArtifact` — admin role only, never the builder
+  credential — recording a pre-existing GHCR image or chart as `published`
+  with `provenance = 'adopted'` and a required reason. CLI
+  `app-registry artifacts adopt`; `artifacts list --provenance adopted`.
+- OPERATIONS.md disaster-recovery runbook: registry restored behind / lost,
+  chart release failing on a pre-registry pin, and the explicit statement that
+  this is a rare deliberate operation, not routine maintenance.
+
+**Exit criteria**
+- A chart pinning an image published before the registry existed can be
+  unblocked by one documented, audited command, and the adopted row is
+  distinguishable from an observed one in one query.
+
+### AR-7f — Compose-time chart hermeticity — gated per domain
+
+Enforce "a chart may only pin images the registry has published" at chart
+**compose** time, so the failure lands before anything is pushed rather than
+after every push. This is the steady state the issue title asks for; it is
+last only because of cutover cost, which the per-domain gate bounds.
+
+**Scope**
+- `tools/helm`'s composer (or the release plan step feeding it) checks each
+  member app's pinned version against the registry and fails the chart build
+  if any is not `published`.
+- **Enforced only for domains at `domain_adoption.stage = 'allocate'`**
+  (decided in review) — the same per-domain gate every other tightening uses,
+  so a domain meets the strict rule only after it has been releasing through
+  the registry anyway. Repo-wide enforcement was rejected: it would block
+  every chart build until every member app had released through the registry
+  at least once.
+- Hermeticity constraint: the check runs in the release path, never inside a
+  Bazel action — see "Chart → image lockfile" in ARCHITECTURE.md.
+
+**Exit criteria**
+- A chart in an `allocate`-stage domain whose member app was never published
+  fails at compose time, naming the app, with nothing pushed.
+- A chart in an `observe`/`promote`-stage domain builds exactly as it does
+  today.
+
+### Deliberately NOT in AR-7
+
+- **A `build_target` table** declaring a run's intended children up front —
+  the plan step's `allocated` rows already are the declaration, at every
+  adoption stage. See ARCHITECTURE.md "The run log".
+- **Bulk backfill of historical GHCR artifacts.** "Resolved questions" #3
+  still stands; AR-7e is lazy and per-artifact, not a sweep.
+- **A live GHCR existence verifier.** `published` is proof-of-existence at
+  write time and deliberately not a liveness check.
+- **Any inbound Temporal workflow.** CI orchestrates; the registry logs.
 
 ## Explicitly out of scope
 
