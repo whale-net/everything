@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/semver"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
@@ -18,6 +21,15 @@ import (
 )
 
 var semverRe = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
+
+// artifactLog is this file's logger name, matching app.go's appLog pattern
+// -- AdoptArtifact (AR-7e, issue #558) is the one write RPC in this file
+// whose audit trail is a log line rather than a stored column (its `reason`
+// is validated as required but not persisted -- see
+// repository.ArtifactRepository.AdoptArtifact's doc comment and
+// AppServer.SetAppStatus's identically-shaped `reason` parameter), so this
+// line is load-bearing, not incidental.
+var artifactLog = logging.Get("app-registry-handlers")
 
 // ArtifactServer implements pb.ArtifactRegistryServer, backed by
 // repository.Registry.
@@ -193,6 +205,7 @@ func (s *ArtifactServer) ListArtifacts(ctx context.Context, req *pb.ListArtifact
 		OwnerFullName:  req.OwnerFullName,
 		Kind:           artifactKindFromPB(req.Kind),
 		PromotableOnly: req.PromotableOnly,
+		Provenance:     artifactProvenanceFromPB(req.Provenance),
 	})
 	if err != nil {
 		return nil, mapRepoErr(err)
@@ -631,4 +644,108 @@ func (s *ArtifactServer) GetReleaseRun(ctx context.Context, req *pb.GetReleaseRu
 		Build:     buildToPB(*build),
 		Artifacts: artifactsToPB(artifacts),
 	}, nil
+}
+
+// AdoptArtifact implements AR-7e's (issue #558) admin-only adoption /
+// disaster-recovery path: records a pre-existing GHCR image or chart as
+// published with provenance ADOPTED and a required reason, for when there is
+// no CI run to resume. See ARCHITECTURE.md "Adoption and disaster recovery"
+// and repository.ArtifactRepository.AdoptArtifact's doc comment for the full
+// state-collision contract.
+//
+// Role: admin ONLY -- deliberately NOT auth.RoleBuilder, unlike every other
+// write RPC in this file. This is the security-critical line of the whole
+// phase: the builder credential is what every CI job holds, and CI must
+// never be able to assert an artifact into existence that it did not
+// observe being published -- see ARCHITECTURE.md "Authorization" and
+// server/handlers/authz_test.go's TestAdoptArtifact_Authorization.
+func (s *ArtifactServer) AdoptArtifact(ctx context.Context, req *pb.AdoptArtifactRequest) (*pb.AdoptArtifactResponse, error) {
+	if err := auth.Require(ctx, auth.RoleAdmin); err != nil {
+		return nil, err
+	}
+	kind := artifactKindFromPB(req.Kind)
+	if kind == "" {
+		return nil, status.Error(codes.InvalidArgument, "kind is required")
+	}
+	if req.OwnerFullName == "" {
+		return nil, status.Error(codes.InvalidArgument, "owner_full_name is required")
+	}
+	if req.Version == "" || !semverRe.MatchString(req.Version) {
+		return nil, status.Errorf(codes.InvalidArgument, "version %q must match v<major>.<minor>.<patch>", req.Version)
+	}
+	if req.Digest == "" || !strings.HasPrefix(req.Digest, "sha256:") {
+		return nil, status.Error(codes.InvalidArgument, `digest is required and must be "sha256:..."`)
+	}
+	if kind == repository.ArtifactKindImage && len(req.Contains) > 0 {
+		return nil, status.Error(codes.InvalidArgument, "contains is only valid for kind == CHART")
+	}
+	// Required -- the audit trail for a deliberately rare, human-triggered
+	// operation. Not persisted to a column (no schema change this phase --
+	// see repository.ArtifactRepository.AdoptArtifact's doc comment); logged
+	// below instead, same shape as AppServer.SetAppStatus's reason.
+	if req.Reason == "" {
+		return nil, status.Error(codes.InvalidArgument, "reason is required")
+	}
+	if req.IdempotencyKey == "" {
+		return nil, status.Error(codes.InvalidArgument, "idempotency_key is required")
+	}
+
+	_, ownerID, _, err := s.resolveOwnerAndDomain(ctx, kind, req.OwnerFullName)
+	if err != nil {
+		return nil, err
+	}
+
+	// actor authors the synthetic `build` row AdoptArtifact may need to
+	// create (see repository.ArtifactRepository.AdoptArtifact's doc
+	// comment) -- the calling admin's own identity, not a service account,
+	// since this credential is human-operated per DEPLOY.md §4's "Where
+	// each secret goes" table.
+	actor := "admin"
+	if claims, ok := grpcauth.ClaimsFromContext(ctx); ok && claims.Subject != "" {
+		actor = claims.Subject
+	}
+
+	resp, _, err := runIdempotent(ctx, s.repo, req.IdempotencyKey, "AdoptArtifact",
+		func() proto.Message { return &pb.AdoptArtifactResponse{} },
+		func(ctx context.Context, r repository.Registry) (proto.Message, error) {
+			a := repository.Artifact{
+				Kind:        kind,
+				Repository:  req.Repository,
+				Version:     req.Version,
+				Digest:      req.Digest,
+				PublishedAt: unixToTime(req.PublishedAt),
+			}
+			if kind == repository.ArtifactKindImage {
+				a.AppID = ownerID
+			} else {
+				a.ChartID = ownerID
+			}
+			artifact, alreadyRecorded, aerr := r.Artifacts().AdoptArtifact(ctx, a, containedImagesFromPB(req.Contains), req.Reason, actor)
+			if aerr != nil {
+				return nil, aerr
+			}
+			return &pb.AdoptArtifactResponse{Artifact: artifactToPB(*artifact), AlreadyRecorded: alreadyRecorded}, nil
+		},
+	)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	out := resp.(*pb.AdoptArtifactResponse)
+
+	// The audit trail: a required reason, an identified actor, and exactly
+	// what was asserted -- structured so "why did we adopt this?" is a log
+	// query, not archaeology. Info, not Debug: every call here is a
+	// deliberate, rare, human-triggered operation (ARCHITECTURE.md "Adoption
+	// and disaster recovery"), worth a durable record even on the happy
+	// path -- unlike ReconcileApps's Warn-on-anomaly-only logging above.
+	artifactLog.Info("artifact adopted",
+		slog.String("kind", string(kind)),
+		slog.String("owner_full_name", req.OwnerFullName),
+		slog.String("version", req.Version),
+		slog.String("digest", req.Digest),
+		slog.String("reason", req.Reason),
+		slog.String("actor", actor),
+		slog.Bool("already_recorded", out.AlreadyRecorded),
+	)
+	return out, nil
 }

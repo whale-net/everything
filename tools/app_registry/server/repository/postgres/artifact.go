@@ -212,7 +212,7 @@ func (r *artifactRepo) RecordArtifact(ctx context.Context, a repository.Artifact
 			return nil, false, fmt.Errorf("%w: no publishing artifact found for %s %s -- BeginPublish must run before RecordArtifact once a domain has left adoption stage \"observe\"",
 				repository.ErrFailedPrecondition, r.ownerFullName(ctx, a), a.Version)
 		}
-		out, _, err := r.insertArtifact(ctx, a, contains, repository.ArtifactStatePublished, repository.VersionSourceTag)
+		out, _, err := r.insertArtifact(ctx, a, contains, repository.ArtifactStatePublished, repository.VersionSourceTag, repository.ArtifactProvenanceObserved)
 		return out, false, err
 	case everr != nil:
 		return nil, false, everr
@@ -360,19 +360,21 @@ func (r *artifactRepo) latestChartManifestID(ctx context.Context, ownerID, prefe
 	return id, nil
 }
 
-// insertArtifact writes a brand-new artifact row directly in state, with
-// versionSource and Provenance "observed" (the only provenance this phase
-// ever writes -- see ArtifactProvenance's doc comment). digest/build_id/
-// published_at are written NULL when the corresponding field on a is empty
-// -- correct for "allocated" (neither) and "publishing" (build_id only);
-// contains is only consulted when state == published (RecordArtifact's
-// direct-create path); BeginPublish and AllocateVersion always pass nil.
-// Shared by RecordArtifact's direct-create path, BeginPublish's ∅ ->
-// publishing branch, and AllocateVersion's ∅ -> allocated write.
-func (r *artifactRepo) insertArtifact(ctx context.Context, a repository.Artifact, contains []repository.ContainedImageInput, state repository.ArtifactState, versionSource repository.VersionSource) (*repository.Artifact, bool, error) {
+// insertArtifact writes a brand-new artifact row directly in state, with the
+// given versionSource/provenance. digest/build_id/published_at are written
+// NULL when the corresponding field on a is empty -- correct for "allocated"
+// (neither) and "publishing" (build_id only); contains is only consulted
+// when state == published (RecordArtifact's direct-create path and
+// AdoptArtifact's ∅ -> published path); BeginPublish and AllocateVersion
+// always pass nil. Shared by RecordArtifact's direct-create path (provenance
+// always ArtifactProvenanceObserved -- the only value this phase ever wrote
+// before AR-7e), BeginPublish's ∅ -> publishing branch, AllocateVersion's
+// ∅ -> allocated write, and AdoptArtifact's (AR-7e, issue #558) ∅ ->
+// published branch (provenance ArtifactProvenanceAdopted).
+func (r *artifactRepo) insertArtifact(ctx context.Context, a repository.Artifact, contains []repository.ContainedImageInput, state repository.ArtifactState, versionSource repository.VersionSource, provenance repository.ArtifactProvenance) (*repository.Artifact, bool, error) {
 	a.ArtifactID = uuid.NewString()
 	a.State = state
-	a.Provenance = repository.ArtifactProvenanceObserved
+	a.Provenance = provenance
 	a.VersionSource = versionSource
 	a.StateChangedAt = time.Now().UTC()
 	if state == repository.ArtifactStatePublished && a.PublishedAt.IsZero() {
@@ -492,6 +494,150 @@ func (r *artifactRepo) completePublish(ctx context.Context, existing, a reposito
 	return r.GetArtifact(ctx, repository.ArtifactLookup{ArtifactID: existing.ArtifactID})
 }
 
+// ============================================================================
+// AdoptArtifact (AR-7e, issue #558)
+// ============================================================================
+
+// AdoptArtifact implements repository.ArtifactRepository.AdoptArtifact --
+// the admin-only adoption / disaster-recovery path. See the interface doc
+// comment for the full state-collision contract this method enforces.
+func (r *artifactRepo) AdoptArtifact(ctx context.Context, a repository.Artifact, contains []repository.ContainedImageInput, reason, actor string) (*repository.Artifact, bool, error) {
+	// 1. Idempotent replay by digest, same shape as RecordArtifact's step 1:
+	// an existing PUBLISHED row (observed OR previously adopted) with this
+	// EXACT digest is "already recorded" -- returned completely unchanged.
+	// Provenance/State are never rewritten here, on purpose: adopting a
+	// digest that turns out to already be an "observed" row must not
+	// downgrade it to "adopted" -- that would corrupt the exact audit trail
+	// this RPC exists to provide.
+	row := r.ex.QueryRow(ctx, artifactSelectBase+` WHERE a.digest = $1`, a.Digest)
+	if existing, err := scanArtifact(row); err == nil {
+		if existing.Kind == repository.ArtifactKindChart {
+			links, lerr := r.loadContains(ctx, existing.ArtifactID)
+			if lerr != nil {
+				return nil, false, lerr
+			}
+			existing.Contains = links
+		}
+		return &existing, true, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, err
+	}
+
+	// 2. No row shares this digest. Look for one by (owner, kind, version).
+	existing, everr := r.findByOwnerKindVersion(ctx, a.Kind, ownerIDOf(a), a.Version)
+	switch {
+	case errors.Is(everr, pgx.ErrNoRows):
+		// ∅ -> published (adopted): the primary case.
+		out, err := r.adoptNew(ctx, a, contains, actor)
+		return out, false, err
+	case everr != nil:
+		return nil, false, everr
+	}
+
+	switch existing.State {
+	case repository.ArtifactStateFailed:
+		// failed -> published (adopted): the disaster-recovery case -- a run
+		// already tried and gave up (or the reaper reaped it), but the
+		// artifact demonstrably exists. See ArtifactRepository.AdoptArtifact's
+		// doc comment for why the existing build_id is reused when present.
+		out, err := r.completeAdoption(ctx, existing, a, contains, actor)
+		return out, false, err
+	case repository.ArtifactStatePublished:
+		// Reached only when the digest lookup in step 1 missed -- a
+		// DIFFERENT digest than what is already published for this
+		// (owner, kind, version). A real conflict, not a retry -- adoption
+		// must not silently overwrite a different recorded digest.
+		return nil, false, fmt.Errorf("%w: artifact %s %s already published with digest %s",
+			repository.ErrAlreadyExists, r.ownerFullName(ctx, existing), a.Version, existing.Digest)
+	default: // allocated, publishing
+		return nil, false, fmt.Errorf("%w: artifact %s %s is %q -- AdoptArtifact only applies when there is no row, or the row is \"failed\"; a live allocation/publish must be let run its course (or explicitly failed via FailPublish) before it can be adopted",
+			repository.ErrFailedPrecondition, r.ownerFullName(ctx, existing), a.Version, existing.State)
+	}
+}
+
+// createAdoptionBuild inserts a synthetic `build` row backing an adopted
+// artifact. AdoptArtifact still needs SOME build_id: migration 007's
+// artifact_state_shape CHECK requires one once a row reaches "published",
+// and artifact.build_id is a real foreign key into `build` -- but by
+// definition there is no CI run behind a pre-registry artifact.
+// workflow_run_id is stamped "adopted:<uuid>", deliberately non-numeric so
+// it can never collide with a real GitHub Actions run id and reads as
+// synthetic at a glance in `builds status`/GetReleaseRun output; git_ref
+// carries the same "adopted" marker. git_sha is empty -- genuinely unknown
+// for a pre-registry artifact. actor is the calling admin's own identity
+// (grpcauth Subject), not a service account.
+func (r *artifactRepo) createAdoptionBuild(ctx context.Context, actor string) (string, error) {
+	buildID := uuid.NewString()
+	now := time.Now().UTC()
+	if _, err := r.ex.Exec(ctx, `
+		INSERT INTO build (build_id, git_sha, git_ref, workflow_run_id, workflow_attempt, actor, recorded_at)
+		VALUES ($1, '', 'adopted', $2, 1, $3, $4)`,
+		buildID, "adopted:"+uuid.NewString(), actor, now); err != nil {
+		return "", fmt.Errorf("create synthetic build for adoption: %w", err)
+	}
+	return buildID, nil
+}
+
+// adoptNew is AdoptArtifact's ∅ -> published(adopted) branch: no row exists
+// at all for (owner, kind, version) yet.
+func (r *artifactRepo) adoptNew(ctx context.Context, a repository.Artifact, contains []repository.ContainedImageInput, actor string) (*repository.Artifact, error) {
+	buildID, err := r.createAdoptionBuild(ctx, actor)
+	if err != nil {
+		return nil, err
+	}
+	a.BuildID = buildID
+	out, _, err := r.insertArtifact(ctx, a, contains, repository.ArtifactStatePublished, repository.VersionSourceTag, repository.ArtifactProvenanceAdopted)
+	return out, err
+}
+
+// completeAdoption is AdoptArtifact's failed -> published(adopted) branch,
+// against an EXISTING "failed" row. If that row already carries a build_id
+// (true whenever the reaper reaped a "publishing" row; false when it reaped
+// an "allocated" row, which never had one), it is reused rather than
+// minting a synthetic one -- the real CI run that actually attempted the
+// push is more honest provenance than a synthetic placeholder. Otherwise
+// falls back to a synthetic build row, same as adoptNew.
+func (r *artifactRepo) completeAdoption(ctx context.Context, existing, a repository.Artifact, contains []repository.ContainedImageInput, actor string) (*repository.Artifact, error) {
+	buildID := existing.BuildID
+	if buildID == "" {
+		var err error
+		buildID, err = r.createAdoptionBuild(ctx, actor)
+		if err != nil {
+			return nil, err
+		}
+	}
+	publishedAt := a.PublishedAt
+	if publishedAt.IsZero() {
+		publishedAt = time.Now().UTC()
+	}
+	now := time.Now().UTC()
+
+	manifestID, promotability, err := r.resolveManifestForPublish(ctx, existing.Kind, ownerIDOf(existing), buildID)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := r.ex.Exec(ctx, `
+		UPDATE artifact SET digest = $1, build_id = $2, published_at = $3, state = 'published', state_changed_at = $4,
+		                     provenance = 'adopted', manifest_id = $5, promotability = $6, fail_reason = ''
+		WHERE artifact_id = $7`,
+		a.Digest, buildID, publishedAt, now, manifestID, string(promotability), existing.ArtifactID); err != nil {
+		msg := fmt.Sprintf("artifact %s already recorded", a.Digest)
+		if de, ok := translatePgError(err, msg); ok {
+			return nil, de
+		}
+		return nil, fmt.Errorf("complete adoption for artifact %s: %w", existing.ArtifactID, err)
+	}
+
+	if existing.Kind == repository.ArtifactKindChart {
+		if err := r.linkContains(ctx, existing.ArtifactID, a.Digest, contains); err != nil {
+			return nil, err
+		}
+	}
+
+	return r.GetArtifact(ctx, repository.ArtifactLookup{ArtifactID: existing.ArtifactID})
+}
+
 // linkContains inserts one artifact_link row per entry in contains,
 // pinning chartArtifactID to each already-PUBLISHED image digest. A chart
 // may not pin an image that either doesn't exist or hasn't reached
@@ -550,7 +696,7 @@ func (r *artifactRepo) BeginPublish(ctx context.Context, kind repository.Artifac
 		} else {
 			a.ChartID = ownerID
 		}
-		out, _, err := r.insertArtifact(ctx, a, nil, repository.ArtifactStatePublishing, versionSource)
+		out, _, err := r.insertArtifact(ctx, a, nil, repository.ArtifactStatePublishing, versionSource, repository.ArtifactProvenanceObserved)
 		return out, err
 	case everr != nil:
 		return nil, everr
@@ -673,6 +819,12 @@ func (r *artifactRepo) ListArtifacts(ctx context.Context, filter repository.Arti
 	if filter.OwnerFullName != "" {
 		args = append(args, filter.OwnerFullName)
 		query += fmt.Sprintf(" AND (app.domain || '-' || app.name = $%d OR chart.domain || '-' || chart.name = $%d)", len(args), len(args))
+	}
+	// AR-7e (issue #558): "which rows did we take on faith?" as a query --
+	// the exit criterion's "distinguishable in one query" half.
+	if filter.Provenance != "" {
+		args = append(args, string(filter.Provenance))
+		query += fmt.Sprintf(" AND a.provenance = $%d", len(args))
 	}
 	// GetReleaseRun's (AR-7d, issue #558) query: every artifact hanging off
 	// one build, any state. Ordered by state_changed_at rather than
@@ -854,7 +1006,7 @@ func (r *artifactRepo) AllocateVersion(ctx context.Context, kind repository.Arti
 	} else {
 		a.ChartID = ownerID
 	}
-	if _, _, err := r.insertArtifact(ctx, a, nil, repository.ArtifactStateAllocated, repository.VersionSourceRegistry); err != nil {
+	if _, _, err := r.insertArtifact(ctx, a, nil, repository.ArtifactStateAllocated, repository.VersionSourceRegistry, repository.ArtifactProvenanceObserved); err != nil {
 		return nil, err
 	}
 

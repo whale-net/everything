@@ -111,6 +111,22 @@ func artifactProvenanceToPB(p repository.ArtifactProvenance) pb.ArtifactProvenan
 	}
 }
 
+// artifactProvenanceFromPB is the inverse of artifactProvenanceToPB --
+// AR-7e (issue #558), backing ListArtifactsRequest.provenance /
+// ArtifactListFilter.Provenance. UNSPECIFIED maps to "" (every provenance,
+// no filter), matching every other *FromPB "no filter" convention in this
+// file (e.g. artifactKindFromPB).
+func artifactProvenanceFromPB(p pb.ArtifactProvenance) repository.ArtifactProvenance {
+	switch p {
+	case pb.ArtifactProvenance_ARTIFACT_PROVENANCE_OBSERVED:
+		return repository.ArtifactProvenanceObserved
+	case pb.ArtifactProvenance_ARTIFACT_PROVENANCE_ADOPTED:
+		return repository.ArtifactProvenanceAdopted
+	default:
+		return ""
+	}
+}
+
 func versionSourceToPB(v repository.VersionSource) pb.VersionSource {
 	switch v {
 	case repository.VersionSourceRegistry:

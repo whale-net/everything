@@ -231,6 +231,14 @@ type ArtifactLink struct {
 // heartbeat/re-arm of state_changed_at, not a no-op; see BeginPublish's own
 // doc comment for why this exists). published is terminal; anything else
 // is FailedPrecondition.
+//
+// AR-7e (issue #558) adds two more transitions, reachable ONLY through
+// ArtifactRepository.AdoptArtifact, never through BeginPublish/
+// RecordArtifact: ∅ -> published and failed -> published, both stamping
+// Provenance ArtifactProvenanceAdopted instead of ArtifactProvenanceObserved.
+// See AdoptArtifact's doc comment for the full state-collision table
+// (including why allocated/publishing reject, and why a same-digest
+// published row is an idempotent no-op rather than a rewrite).
 type ArtifactState string
 
 const (
@@ -341,6 +349,11 @@ type ArtifactListFilter struct {
 	Kind           ArtifactKind
 	PromotableOnly bool
 	BuildID        string
+	// Provenance filters to exactly one of ArtifactProvenanceObserved /
+	// ArtifactProvenanceAdopted when set; empty means every provenance —
+	// AR-7e (issue #558), the query "which rows did we take on faith?" the
+	// exit criterion asks for. See ListArtifactsRequest.provenance.
+	Provenance ArtifactProvenance
 }
 
 // ArtifactLookup identifies an artifact by exactly one of the supported

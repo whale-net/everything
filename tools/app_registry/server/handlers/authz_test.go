@@ -280,6 +280,47 @@ func TestFailPublish_Authorization(t *testing.T) {
 	// artifact_test.go (owner resolution requires a real app).
 }
 
+// TestAdoptArtifact_Authorization covers ArtifactRegistry.AdoptArtifact
+// (AR-7e, issue #558), which requires RoleAdmin -- deliberately NOT
+// RoleBuilder, unlike RecordBuild/RecordArtifact/BeginPublish/FailPublish
+// above. This is the security-critical line of the whole phase: the builder
+// credential is what every CI job holds, and CI must never be able to
+// assert an artifact into existence that it did not observe being
+// published -- see ARCHITECTURE.md "Authorization" and "Adoption and
+// disaster recovery".
+func TestAdoptArtifact_Authorization(t *testing.T) {
+	req := &pb.AdoptArtifactRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-svc",
+		Version: "v1.0.0", Digest: "sha256:authz-adopt", Reason: "authz test",
+		IdempotencyKey: "authz-adopt",
+	}
+
+	t.Run("builder credential is PermissionDenied", func(t *testing.T) {
+		srv := NewArtifactServer(fake.New())
+		// The builder credential holds real power over RecordBuild/
+		// RecordArtifact/BeginPublish/FailPublish -- none over AdoptArtifact.
+		_, err := srv.AdoptArtifact(ctxWithRoles(auth.RoleBuilder), req)
+		requireCode(t, err, codes.PermissionDenied, "AdoptArtifact as builder")
+	})
+
+	t.Run("admin credential allowed through to business logic", func(t *testing.T) {
+		srv := NewArtifactServer(fake.New())
+		// The request fails downstream (unknown owner -- no app named
+		// "demo-svc" was ever reconciled in this fake), which is exactly how
+		// we know auth let it through instead of stopping it.
+		_, err := srv.AdoptArtifact(ctxWithRoles(auth.RoleAdmin), req)
+		if status.Code(err) == codes.Unauthenticated || status.Code(err) == codes.PermissionDenied {
+			t.Fatalf("expected admin to pass authorization for AdoptArtifact, got %v", err)
+		}
+	})
+
+	t.Run("no claims is Unauthenticated", func(t *testing.T) {
+		srv := NewArtifactServer(fake.New())
+		_, err := srv.AdoptArtifact(context.Background(), req)
+		requireCode(t, err, codes.Unauthenticated, "AdoptArtifact")
+	})
+}
+
 // TestArtifactReads_RequireAuthenticationOnly covers ListArtifacts,
 // GetArtifact, and ResolveArtifact: any authenticated principal, no
 // specific role.

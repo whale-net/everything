@@ -202,6 +202,56 @@ message GetReleaseRunResponse {
 }
 
 // ============================================================================
+// Adoption and disaster recovery (AR-7e, issue #558)
+// ============================================================================
+
+// AdoptArtifactRequest is the ∅|failed -> published(provenance=ADOPTED)
+// admin path: records a pre-existing GHCR image or chart -- one that predates
+// the registry, or was pushed while the opt-in was off -- as published,
+// without ever having observed a BeginPublish/RecordArtifact for it. See
+// ARCHITECTURE.md "Adoption and disaster recovery". Lazy and per-artifact,
+// used when a chart release fails on an unknown pin -- NOT a bulk backfill
+// ("Resolved questions" #3 still rejects that), and NOT a live GHCR
+// existence check: this records what an operator asserts, with a required
+// reason, exactly as RecordArtifact records what CI observed.
+message AdoptArtifactRequest {
+  ArtifactKind kind = 1;
+
+  // For kind == IMAGE: the app's "<domain>-<name>".
+  // For kind == CHART: the chart's "<domain>-<name>".
+  string owner_full_name = 2;
+
+  string repository = 3;
+  string version = 4;  // semver tag, validated as v<major>.<minor>.<patch>
+  string digest = 5;    // "sha256:..." — required
+
+  // Only valid for kind == CHART, same shape and validation as
+  // RecordArtifactRequest.contains: every referenced image must already be
+  // a PUBLISHED artifact (adopted or observed), or the call fails.
+  repeated ContainedImage contains = 6;
+
+  // Best-known actual publish time, if known; defaults to now if unset.
+  int64 published_at = 7;
+
+  // Required. Why this artifact is being recorded after the fact instead of
+  // observed at publish time -- the audit trail for a deliberately rare,
+  // human-triggered operation. Never supplied by CI.
+  string reason = 8;
+
+  // Required. Client-generated (e.g. a UUID) -- this is a human action, not
+  // a CI run, so there is no natural <workflow_run_id>-based key.
+  string idempotency_key = 9;
+}
+
+message AdoptArtifactResponse {
+  Artifact artifact = 1;
+
+  // True when an artifact with this exact digest was already published
+  // (observed or previously adopted) and this call was a no-op replay.
+  bool already_recorded = 2;
+}
+
+// ============================================================================
 // Reads
 // ============================================================================
 
@@ -215,6 +265,11 @@ message ListArtifactsRequest {
   bool promotable_only = 3;
 
   PageRequest page = 4;
+
+  // When set, return only artifacts with this provenance -- AR-7e (issue
+  // #558): "which rows did we take on faith?" as a query. Unset (the
+  // default, ARTIFACT_PROVENANCE_UNSPECIFIED) returns every provenance.
+  ArtifactProvenance provenance = 5;
 }
 
 message ListArtifactsResponse {
