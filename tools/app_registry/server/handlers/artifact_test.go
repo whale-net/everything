@@ -809,6 +809,74 @@ func TestArtifactLifecycle_AllocateBeginPublishRecord(t *testing.T) {
 	}
 }
 
+// TestBeginPublishThenRecordArtifact_SharedIdempotencyKey_ExecuteIndependently
+// is a regression test for issue #575: release.yml used to give BeginPublish
+// and RecordArtifact the SAME idempotency key for a release leg. Because
+// BeginPublishResponse and RecordArtifactResponse both put an Artifact at
+// proto field 1 (api_messages_artifact.proto), RecordArtifact's call
+// unmarshaled BeginPublish's already-stored response without error, and
+// runIdempotent treated it as a valid replay of RecordArtifact -- so
+// RecordArtifact's actual write (repository.ArtifactRepository.
+// RecordArtifact's publishing -> published transition, which stamps digest)
+// never ran. This returned OK with no error, silently leaving the row stuck
+// in "publishing" forever. Idempotency lookups are now scoped to (key,
+// method) -- see runIdempotent and repository.IdempotencyRepository.Get --
+// so two different RPCs sharing a key must now execute independently
+// instead of one replaying the other's response.
+func TestBeginPublishThenRecordArtifact_SharedIdempotencyKey_ExecuteIndependently(t *testing.T) {
+	_, artifactSrv := setupAllocate(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-575")
+
+	// The exact collision shape issue #575 traced back to release.yml:
+	// "Begin publish (image)" and "Record image artifact" both used
+	// "${run_id}-${attempt}-${domain}-${app}-image".
+	const sharedKey = "run-575-attempt-1-demo-image-app-image"
+
+	begun, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Version: "v1.0.0", BuildId: build.BuildId, IdempotencyKey: sharedKey,
+	})
+	if err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+	if begun.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHING {
+		t.Fatalf("expected state PUBLISHING after BeginPublish, got %v", begun.Artifact.State)
+	}
+	if begun.Artifact.Digest != "" {
+		t.Fatalf("expected no digest yet after BeginPublish, got %q", begun.Artifact.Digest)
+	}
+
+	recorded, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Digest: "sha256:real-digest", Version: "v1.0.0",
+		IdempotencyKey: sharedKey, // reuses BeginPublish's key -- this is the bug
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact with a key already used by BeginPublish: %v", err)
+	}
+
+	// Pre-fix, RecordArtifact would have replayed BeginPublish's stored
+	// response verbatim: state PUBLISHING, no digest.
+	if recorded.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHED {
+		t.Fatalf("RecordArtifact did not actually execute -- got state %v (bug: cross-method replay of BeginPublish's response)", recorded.Artifact.State)
+	}
+	if recorded.Artifact.Digest != "sha256:real-digest" {
+		t.Fatalf("RecordArtifact did not actually execute -- got digest %q, want sha256:real-digest (bug: cross-method replay of BeginPublish's response)", recorded.Artifact.Digest)
+	}
+
+	// Confirm the stored row itself was updated, not just this response.
+	fetched, err := artifactSrv.GetArtifact(ctx, &pb.GetArtifactRequest{
+		OwnerFullName: "demo-image-app", Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, Version: "v1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("GetArtifact: %v", err)
+	}
+	if fetched.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHED || fetched.Artifact.Digest != "sha256:real-digest" {
+		t.Fatalf("stored artifact row was never updated by RecordArtifact: state=%v digest=%q", fetched.Artifact.State, fetched.Artifact.Digest)
+	}
+}
+
 // TestBeginPublish_NoPriorAllocation_TagPath proves the ∅ -> publishing
 // transition (the pre-cutover path, ARCHITECTURE.md "Backward
 // compatibility during rollout"): no AllocateVersion call happened, so
