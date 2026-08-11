@@ -36,6 +36,7 @@ merged to `main`** — see the table below.*
 | AR-7a | [#561](https://github.com/whale-net/everything/pull/561) | merged — sweep robustness, no schema change |
 | AR-7b | [#562](https://github.com/whale-net/everything/pull/562) | merged — artifact lifecycle, migration `007`, `BeginPublish`/`FailPublish`, stale-row reaper |
 | AR-7c | branch `ar-7c-manifest-snapshot`, not yet merged | **implemented** — app identity/manifest-snapshot split, migration `008`, `AssertApps` |
+| AR-7d | branch `ar-7d-run-log`, stacked on `ar-7c-manifest-snapshot`, not yet merged | **implemented** — `GetReleaseRun`, `BeginPublishBatch`, `app-registry builds status`, `release.yml` resume, no schema change |
 
 The registry is being deployed to `dev` by the repo owner. `app-registry-api`
 and `app-registry-migration` images publish from `apps=all`.
@@ -51,9 +52,10 @@ say "not merged" in places; the table above is authoritative.
 implemented and tested, wired to nothing. See "AR-5" below for what remains
 before any domain can be cut over.
 
-**AR-7 (issue #558): AR-7a and AR-7b are merged to `main`; AR-7c is
-implemented, not yet merged.** The full phase makes a release run hermetic —
-no dependency on `main`'s reconcile having gone first — via an artifact
+**AR-7 (issue #558): AR-7a and AR-7b are merged to `main`; AR-7c and AR-7d
+are implemented, not yet merged.** The full phase makes a release run
+hermetic — no dependency on `main`'s reconcile having gone first — via an
+artifact
 `allocated → publishing → published` lifecycle, an identity/manifest-snapshot
 split of `app`, and a run log CI writes to. AR-7a fixes ordering 4 (see
 ARCHITECTURE.md "The problem: four cross-run orderings"): `ReconcileApps` is
@@ -64,10 +66,13 @@ so a bare-name collision across domains can't break the sweep, and `ci.yml`'s
 artifact lifecycle states, migration `007`, `BeginPublish`/`FailPublish` and
 the stale-row reaper, and its exit criteria are met (see its subsection).
 AR-7c adds `AssertApps`, migration `008`'s identity/manifest-snapshot split,
-and the promotability-retroactivity fix (see its subsection) — its exit
-criteria are met too, but it has not merged yet. AR-7d…AR-7f remain
-design-only. Design is in ARCHITECTURE.md's "Release lifecycle (issue
-#558)"; delivery is "AR-7" below.
+and the promotability-retroactivity fix (see its subsection). AR-7d adds
+`GetReleaseRun`, the bulk `BeginPublishBatch` RPC that closes the gap AR-7b's
+own "Deliberately NOT done" left open (see AR-7b's section below),
+`app-registry builds status`/`--incomplete`, and `release.yml`'s resume
+behavior. Both phases' exit criteria are met; neither has merged yet.
+AR-7e and AR-7f remain design-only. Design is in ARCHITECTURE.md's "Release
+lifecycle (issue #558)"; delivery is "AR-7" below.
 
 **Where deferred work is tracked.** Three places, deliberately:
 [Carry-over items](#carry-over-items) for small cross-cutting gaps that
@@ -884,10 +889,10 @@ it carries the design, the four orderings this fixes, and the rejected
 alternatives. This section is delivery only.
 
 **AR-7a and AR-7b are merged to `main`** ([#561](https://github.com/whale-net/everything/pull/561),
-[#562](https://github.com/whale-net/everything/pull/562)). **AR-7c is
-implemented, not yet merged** (branch `ar-7c-manifest-snapshot`). The
-remaining sub-phases (AR-7d … AR-7f) are ordered by dependency and still
-design only.
+[#562](https://github.com/whale-net/everything/pull/562)). **AR-7c and AR-7d
+are implemented, not yet merged** (branches `ar-7c-manifest-snapshot` and
+`ar-7d-run-log`, stacked in that order). The remaining sub-phases (AR-7e,
+AR-7f) are ordered by dependency and still design only.
 
 ### AR-7a — Sweep robustness — done, merged (#561)
 
@@ -1107,10 +1112,17 @@ reuse. See `migrate/README.md`'s numbering note.
 design consequence; the rest are unchanged scope boundaries from other
 phases):**
 - The plan-stage, before-fan-out intent write for `observe`/`promote`
-  domains — narrowed to "first step of each matrix leg" instead. Left to
-  AR-7d, which owns the run-log/resume machinery this gap actually affects.
-- `AssertApps`, manifest snapshot tables, `GetReleaseRun`, `AdoptArtifact`,
-  compose-time chart enforcement — AR-7c/d/e/f, unchanged.
+  domains — narrowed to "first step of each matrix leg" instead. **Closed
+  by AR-7d** (see its own section below): `plan-release` now calls a new
+  bulk RPC, `BeginPublishBatch`, once before the matrix fans out, writing a
+  `publishing` row (not `allocated` — migration 007's own
+  `artifact_state_shape` CHECK requires `build_id IS NULL` for `allocated`,
+  and an up-front intent row needs to carry one to be queryable by
+  `GetReleaseRun`; see ARCHITECTURE.md's "As built (AR-7d)" note under "The
+  run log" for the full reasoning) for every planned app target.
+- `AssertApps`, manifest snapshot tables, `AdoptArtifact`, compose-time
+  chart enforcement — AR-7c/e/f, unchanged. `GetReleaseRun` itself shipped
+  in AR-7d (see below).
 - Moving any domain to `domain_adoption.stage = 'allocate'` for real — that
   remains a separate, explicit operational action; AR-7b only removes the
   blocker ARCHITECTURE.md's "Relationship to AR-5" named.
@@ -1355,22 +1367,124 @@ Implemented on branch `ar-7c-manifest-snapshot`, stacked on
   `release.yml` — `AssertApps` runs as the first App Registry step of both
   jobs that later resolve an owner by full name, before any such call.
 
-### AR-7d — Run log and resume — no schema change
+### AR-7d — Run log and resume — no schema change — done (not yet merged)
 
-**Scope**
-- `GetReleaseRun(workflow_run_id[, attempt])` returning the build and every
-  child artifact with its state; CLI `app-registry builds status <run-id>`
-  and `--incomplete`.
-- `release.yml` re-run behaves as a **resume**: skip children already
-  `published`, re-attempt the rest, then the chart.
-- OPERATIONS.md: "a release run didn't complete" runbook built on the above.
+**As built.** Implemented on branch `ar-7d-run-log`, stacked on
+`ar-7b-artifact-lifecycle` (not yet merged). No migration — as the phase
+name promises, no schema change was needed or made.
 
-**Exit criteria**
+**What shipped**
+- `GetReleaseRun(workflow_run_id[, attempt])` (new RPC,
+  `protos/api_messages_artifact.proto`): returns the `build` row plus every
+  `artifact` row sharing its `build_id`, any state. `workflow_attempt == 0`
+  resolves to the highest attempt recorded for that run id (a new
+  `BuildRepository.GetBuildByWorkflowRun`, implemented in postgres and the
+  fake); the artifact side reuses `ListArtifacts` with a new `BuildID`
+  field on `ArtifactListFilter` rather than a second query path. Ordered by
+  `state_changed_at` (not `published_at`, which is NULL for anything short
+  of `published`). CLI: `app-registry builds status <run-id>` (`--attempt`,
+  `--incomplete` — the latter is a client-side filter over the response's
+  `artifacts`, not a second server-side field, since it's exactly a filter
+  and nothing more).
+- `BeginPublishBatch(build_id, targets[], idempotency_key_prefix)` (new
+  RPC): the bulk, up-front form of `BeginPublish` that closes the gap
+  AR-7b's own scope note left open. Called once from `release.yml`'s
+  `plan-release` job, before the release matrix fans out, for every planned
+  app target. Each target goes through the identical `∅|allocated|failed →
+  publishing` transition an individual `BeginPublish` call would apply
+  (refactored into a shared `beginPublishOne` in
+  `server/handlers/artifact.go` so both RPCs are provably the same code
+  path), processed independently and partially — one bad target (unresolved
+  owner, malformed version) is reported in its own result and does not
+  block the rest, mirroring AR-7a's `ReconcileApps` partial-apply
+  precedent. Each target's idempotency key is deliberately the same one an
+  individual `BeginPublish` call for it would use
+  (`<prefix>-<owner_full_name>-<kind>`), so a stray duplicate call replays
+  safely instead of hitting `FailedPrecondition`. CLI:
+  `app-registry artifacts begin-publish-batch --targets <json-file>`.
+- **Writes straight to `publishing`, not `allocated`, adapting the original
+  design to migration 007's real constraint.** `artifact_state_shape`
+  (shipped by AR-7b, before this phase) requires `build_id IS NULL` for
+  `state = 'allocated'`; an up-front intent row needs to carry a `build_id`
+  to be findable by `GetReleaseRun`'s `WHERE build_id = $1` query, and "no
+  schema change" (this phase's own boundary) rules out relaxing the CHECK.
+  Going straight to `publishing` satisfies both constraints and is simpler
+  than the originally-designed two-step `∅ → allocated → publishing`. See
+  ARCHITECTURE.md's "As built (AR-7d)" note under "The run log" for the
+  full reasoning. `AllocateVersion`'s own `∅ → allocated` write (the
+  `allocate`-stage path) is untouched.
+- `release.yml`: `plan-release` gained three steps — `Record build in App
+  Registry` (idempotent replay of the same build the matrix legs already
+  record), `Build begin-publish-batch targets file` (a `jq` transform of
+  the plan step's own matrix JSON into `BeginPublishBatch`'s target shape),
+  and `Begin publish batch in App Registry` (new composite action
+  `.github/actions/app-registry-begin-publish-batch`, following the
+  existing `app-registry-*` pattern). The `release` job's per-leg "Begin
+  publish (image) in App Registry" step was removed — redundant now that
+  the batch call already wrote the row — and "Fail publish (image)"'s
+  `if:` gate was updated to no longer reference the removed step's
+  outcome. `APP_REGISTRY_CICD_OPT_IN` and `dry_run == 'false'` gating and
+  `continue-on-error: true` semantics are unchanged. Helm charts are
+  deliberately out of scope for the batch call — see "Deliberately NOT
+  done" below.
+- OPERATIONS.md: "A release run didn't complete" runbook — query
+  `app-registry builds status <run-id> --incomplete`, interpret each
+  artifact's state, then re-run the workflow as a resume (already-published
+  children replay idempotently rather than re-executing).
+
+**Deliberately NOT done:**
+- Extending `BeginPublishBatch` to helm chart targets. The exit criterion
+  this phase closes is stated in terms of an app; `release-helm-charts` is
+  a single job with an internal loop, not a GitHub Actions matrix, so "a
+  leg that never gets scheduled" isn't a failure mode it has the same way.
+  A natural follow-on if that gap is ever observed for charts in practice.
+- `AssertApps`, manifest snapshot tables, `AdoptArtifact`, compose-time
+  chart enforcement — AR-7c/e/f, unchanged.
+- Any change to `AllocateVersion` or the `allocate`-stage cutover path —
+  unaffected by this phase.
+
+**Verified, not merely built:**
+- `bazel build //tools/...` and `bazel test //tools/...` are green.
+- `postgres_integration_test` (`manual`-tagged, requires Docker) was run
+  for real against `postgres:16-alpine` via `libs/go/dbtest`:
+  `GetBuildByWorkflowRun`'s latest-attempt default and exact-attempt
+  lookup, `ListArtifacts`'s `BuildID` filter across
+  publishing/published/failed (with an unrelated `allocated` row proven
+  excluded), and the full `GetReleaseRun`-shaped query proving a
+  never-reached app still reports incomplete — all against the real schema
+  and CHECK constraints, not just the fake.
+- Handler-level tests (fake-backed) cover `BeginPublishBatch`'s
+  write-every-target behavior, its partial-apply guarantee, its
+  idempotency-key collision-safety with an individual `BeginPublish` call,
+  and `GetReleaseRun`'s completeness across states, the never-reached-app
+  case, an unknown run id (`NotFound`), and the latest-attempt default. CLI
+  unit tests cover the `--incomplete` filter and the `builds status`
+  command's flag surface.
+- Several of the new tests (partial-apply, the never-reached-app case, the
+  idempotency-key collision safety, the latest-attempt selection, the
+  `--incomplete` filter, and the postgres `BuildID` filter) were each
+  verified to fail when the behavior they guard was deliberately broken in
+  the handler, the fake, or the postgres implementation, then reverted.
+- The touched/added workflow YAML (`release.yml`,
+  `.github/actions/app-registry-begin-publish-batch/action.yml`) was
+  validated for syntax only (`python3 -c "import yaml,sys;
+  yaml.safe_load(open(...))"`) — it cannot be executed in this environment
+  (no deployed registry, no real Keycloak clients), same as every other
+  App Registry CI phase before it.
+
+**Exit criteria — all met**
 - A run killed between two image pushes, re-run, publishes only what was
-  missing and ends with every child `published`.
-- A run killed *before* reaching an app still reports that app as incomplete —
-  AR-7b's up-front intent rows are what make this answerable, at every
-  adoption stage.
+  missing and ends with every child `published`. `BeginPublishBatch`'s
+  up-front write plus `RecordArtifact`'s idempotent digest-match replay
+  mean a re-run's already-`published` legs are no-ops and only the
+  short-of-`published` legs do real work.
+- A run killed *before* reaching an app still reports that app as
+  incomplete — proven directly by
+  `TestGetReleaseRun_AppNeverReachedStillReportsIncomplete` (fake) and
+  `TestGetReleaseRun_Postgres_AppNeverReachedStillReportsIncomplete`
+  (real Postgres): `BeginPublishBatch`'s up-front `publishing` rows are
+  what make this answerable now, closing the gap AR-7b's own scope note
+  left open.
 
 ### AR-7e — Adoption and disaster recovery
 

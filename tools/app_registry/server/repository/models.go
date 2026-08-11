@@ -325,11 +325,19 @@ type ContainedImageInput struct {
 	Digest      string
 }
 
-// ArtifactListFilter is ListArtifactsRequest's filter set.
+// ArtifactListFilter is ListArtifactsRequest's filter set. BuildID has no
+// corresponding request field on ListArtifactsRequest itself -- it exists
+// so GetReleaseRun (AR-7d, issue #558) can reuse ListArtifacts rather than
+// standing up a second query, filtering on the column every state from
+// "publishing" onward carries (see ArtifactState's doc comment -- an
+// "allocated" row never has one). BeginPublishBatch (AR-7d) writes straight
+// to "publishing", carrying build_id, precisely so a target it covers is
+// never left in "allocated" with nothing to filter on here.
 type ArtifactListFilter struct {
 	OwnerFullName  string
 	Kind           ArtifactKind
 	PromotableOnly bool
+	BuildID        string
 }
 
 // ArtifactLookup identifies an artifact by exactly one of the supported

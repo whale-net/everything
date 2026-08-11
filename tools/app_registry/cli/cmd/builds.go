@@ -10,9 +10,9 @@ import (
 func newBuildsCmd() *cobra.Command {
 	buildsCmd := &cobra.Command{
 		Use:   "builds",
-		Short: "Record CI builds",
+		Short: "Record and inspect CI builds",
 	}
-	buildsCmd.AddCommand(newBuildsRecordCmd())
+	buildsCmd.AddCommand(newBuildsRecordCmd(), newBuildsStatusCmd())
 	return buildsCmd
 }
 
@@ -57,4 +57,54 @@ func newBuildsRecordCmd() *cobra.Command {
 	_ = c.MarkFlagRequired("workflow-run-id")
 	_ = c.MarkFlagRequired("idempotency-key")
 	return c
+}
+
+// newBuildsStatusCmd is the run-log query CLI (AR-7d, issue #558): the
+// build for one CI run plus every artifact hanging off it, in whatever
+// state each is in. This is the "did my release finish, and if not, what's
+// left" command an operator reaches for after a release run is killed or
+// fails partway through -- see OPERATIONS.md "A release run didn't
+// complete".
+func newBuildsStatusCmd() *cobra.Command {
+	var workflowAttempt int
+	var incompleteOnly bool
+	c := &cobra.Command{
+		Use:   "status <workflow-run-id>",
+		Short: "Show a CI run's build and every child artifact's state",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return withClient(cmd, func(rc *registryClient) error {
+				resp, err := rc.Artifact.GetReleaseRun(cmd.Context(), &pb.GetReleaseRunRequest{
+					WorkflowRunId:   args[0],
+					WorkflowAttempt: int32(workflowAttempt),
+				})
+				if err != nil {
+					return err
+				}
+				if incompleteOnly {
+					resp.Artifacts = incompleteArtifacts(resp.Artifacts)
+				}
+				return printResponse(resp)
+			})
+		},
+	}
+	c.Flags().IntVar(&workflowAttempt, "attempt", 0, "GitHub Actions run attempt (default: latest recorded for this run id)")
+	c.Flags().BoolVar(&incompleteOnly, "incomplete", false, "Only show artifacts not yet published")
+	return c
+}
+
+// incompleteArtifacts filters artifacts down to those NOT in state
+// ARTIFACT_STATE_PUBLISHED -- "what is incomplete?" per ARCHITECTURE.md
+// "The run log". A plain slice filter, not a server-side field: it is
+// exactly a filter over GetReleaseRunResponse.artifacts, not separately
+// derived data, so keeping it client-side avoids a second wire shape for
+// the same information.
+func incompleteArtifacts(artifacts []*pb.Artifact) []*pb.Artifact {
+	out := make([]*pb.Artifact, 0, len(artifacts))
+	for _, a := range artifacts {
+		if a.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHED {
+			out = append(out, a)
+		}
+	}
+	return out
 }

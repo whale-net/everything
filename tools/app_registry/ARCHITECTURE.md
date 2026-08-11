@@ -397,22 +397,23 @@ tradeoff above, not a separate gap to close.
 
 ## Release lifecycle (issue #558)
 
-**Status: AR-7a and AR-7b built and merged to `main` (#561, #562); AR-7c
-built, not yet merged; AR-7d … AR-7f designed, not built.** Delivery is
-PLAN.md's AR-7. Three slices of this section describe real code: AR-7a's —
+**Status: AR-7a and AR-7b built and merged to `main` (#561, #562); AR-7c and
+AR-7d built, not yet merged; AR-7e and AR-7f designed, not built.** Delivery
+is PLAN.md's AR-7. Four slices of this section describe real code: AR-7a's —
 ordering 4, partial-apply reconcile, domain-qualified chart app references,
 and the `continue-on-error` drop on `ci.yml`'s sweep job — AR-7b's — the
 artifact lifecycle (`allocated → publishing → published → failed`),
 migration `007`, `BeginPublish`/`FailPublish`, `RecordArtifact`'s
-`publishing → published` transition, and the stale-row reaper — and AR-7c's
-— migration `008`, the app identity / manifest-snapshot split,
-`AssertApps`, and `artifact`'s stored `manifest_id`/`promotability`. The run
-log, `AdoptArtifact`, and compose-time chart hermeticity remain proposed:
-every table, column and RPC named in those subsections is unbuilt. This
-section supersedes "Release-vs-reconcile gap (issue #547)" above — AR-7c
-closes that gap for real, see the callout there — and changes what
-"Availability and bootstrap" below promises; both are cross-referenced where
-that happens.
+`publishing → published` transition, and the stale-row reaper — AR-7c's —
+migration `008`, the app identity / manifest-snapshot split, `AssertApps`,
+and `artifact`'s stored `manifest_id`/`promotability` — and AR-7d's —
+`GetReleaseRun`, the up-front intent write, `builds status --incomplete`,
+and re-run-as-resume. `AdoptArtifact` and compose-time chart hermeticity
+remain proposed: every table, column and RPC named in those subsections is
+unbuilt. This section supersedes "Release-vs-reconcile gap (issue #547)"
+above — AR-7c closes that gap for real, see the callout there — and changes
+what "Availability and bootstrap" below promises; both are cross-referenced
+where that happens.
 
 ### The problem: four cross-run orderings, three of them unenforced
 
@@ -731,6 +732,83 @@ leg. Closing that gap needs either a new RPC or loosening
 `AllocateVersion`'s stage gate, and is deliberately left to AR-7d, which
 owns `GetReleaseRun`/resume semantics — see PLAN.md's AR-7b "Deliberately
 NOT done".
+
+**As built (AR-7d), the gap above is closed — with one adaptation the
+original design didn't anticipate.** The intent write is now genuinely
+up-front: `release.yml`'s `plan-release` job calls a new bulk RPC,
+`BeginPublishBatch`, once, before the release matrix fans out, for every
+planned app target. But it writes straight to `publishing`, not `allocated`
+as this section originally described. Migration 007's own
+`artifact_state_shape` CHECK constraint — shipped by AR-7b, before AR-7d was
+implemented — requires `build_id IS NULL` for `state = 'allocated'` and
+`build_id IS NOT NULL` for `state = 'publishing'`. An intent row written
+before any push has no digest either way, but it can be written with or
+without a `build_id`; the constraint forces the choice, and "no schema
+change" (AR-7d's own scope boundary) rules out relaxing it. Going straight
+to `publishing` is the schema-compatible choice, and it turns out to be the
+more useful one anyway: it means the intent row already carries the
+`build_id` that ties it to a specific run, which an `allocated` row
+structurally cannot. `GetReleaseRun`'s query is exactly `SELECT * FROM
+artifact WHERE build_id = $1` — simple only because every intended target,
+reached or not, already carries that build's id from the moment
+`BeginPublishBatch` runs. `AllocateVersion`'s own `∅ → allocated` write
+(the `allocate`-stage path, still inert — no domain has reached that stage)
+is unaffected; this only changes how the pre-cutover, `observe`/`promote`
+intent row is written.
+
+Concretely:
+
+- `BeginPublishBatch(build_id, targets[], idempotency_key_prefix)`
+  (`protos/api_messages_artifact.proto`) takes a build already recorded by
+  `RecordBuild` (called once from `plan-release`, ahead of the matrix, and
+  again — idempotently, same key — from each matrix leg as before) and a
+  list of `(kind, owner_full_name, version)` targets. Each target is
+  processed independently: `server/handlers/artifact.go`'s
+  `BeginPublishBatch` loops and calls the exact same `beginPublishOne`
+  transition `BeginPublish` itself calls (refactored out so both RPCs are
+  provably the same code path), so `∅|allocated|failed → publishing`'s
+  legal-transition rules are enforced identically either way. A per-target
+  failure (unresolved owner, malformed version) is reported in that
+  target's own `BeginPublishBatchResult.error` and does not block the
+  others — the same partial-apply shape AR-7a's `ReconcileApps` established
+  for a structurally identical problem (one bad chart must not roll back
+  every other app/chart in the same call).
+- **Each target's idempotency key is deliberately the SAME one an
+  individual `BeginPublish` call for that target would use**
+  (`<idempotency_key_prefix>-<owner_full_name>-<kind>`, matching the
+  existing `<workflow_run_id>-<attempt>-...` convention). This is not
+  incidental: it means a stray or duplicate individual `BeginPublish` call
+  for a target the batch already processed — the only place this could
+  arise in practice is if `release.yml`'s own per-leg call were
+  accidentally left in, since `plan-release`'s batch call now runs first —
+  replays the batch's own stored response instead of hitting
+  `FailedPrecondition` (`publishing` is not among `BeginPublish`'s legal
+  starting states). `release.yml`'s per-leg "Begin publish (image)" step
+  was removed from the `release` job's matrix leg for exactly this reason:
+  the batch call already did that work, and the collision-safety property
+  above means even a missed removal would degrade to a harmless replay,
+  not a broken release.
+- `GetReleaseRun(workflow_run_id[, attempt])` (`workflow_attempt == 0` means
+  "the latest attempt recorded for this run id") returns the `build` row
+  plus every `artifact` row sharing its `build_id`, via a new
+  `BuildRepository.GetBuildByWorkflowRun` and a `BuildID` field on
+  `ArtifactListFilter` (reusing `ListArtifacts` rather than a second query
+  path). "What is incomplete?" stays exactly `state != PUBLISHED`, filtered
+  client-side by the CLI's `--incomplete` flag rather than a second
+  response field — it is a filter over `artifacts`, not separately derived
+  data.
+- **Scope: this covers app images only, not helm charts.** The exit
+  criterion this closes is stated in terms of an app ("a run killed before
+  reaching an app"), and `release-helm-charts` already begins publishing
+  each chart before its own push (AR-7b, unchanged) — it is a single job
+  with an internal loop over charts, not a GitHub Actions matrix, so "a leg
+  that never gets scheduled" is not a failure mode it has in the same way a
+  matrix job does. Extending `BeginPublishBatch` to charts is a natural
+  follow-on, not a design change, if that gap is ever observed in practice.
+- `OPERATIONS.md` "A release run didn't complete" is the runbook: query
+  `app-registry builds status <run-id> --incomplete`, then re-run the
+  workflow — a resume, not a blind retry, since every already-`published`
+  child's recording calls replay idempotently rather than re-executing.
 
 ### Availability, restated per adoption stage
 

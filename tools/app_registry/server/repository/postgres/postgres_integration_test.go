@@ -3024,3 +3024,191 @@ func TestMigration008BackfillsSnapshotsFromExistingRows(t *testing.T) {
 		t.Fatalf("expected migration 008 to have dropped app.deploy_unit")
 	}
 }
+
+// ============================================================================
+// AR-7d (issue #558): the run log -- GetBuildByWorkflowRun and the
+// BuildID-filtered ListArtifacts query GetReleaseRun is built from.
+// ============================================================================
+
+// seedBuildAttempt is seedBuild with an explicit workflow_attempt, for the
+// latest-attempt tests below (a re-run shares workflow_run_id but gets a
+// new attempt).
+func seedBuildAttempt(t *testing.T, pool *pgxpool.Pool, workflowRunID string, attempt int32) string {
+	t.Helper()
+	var buildID string
+	err := pool.QueryRow(context.Background(), `
+		INSERT INTO build (git_sha, workflow_run_id, workflow_attempt) VALUES ('deadbeef', $1, $2)
+		RETURNING build_id`, workflowRunID, attempt).Scan(&buildID)
+	if err != nil {
+		t.Fatalf("seed build %s attempt %d: %v", workflowRunID, attempt, err)
+	}
+	return buildID
+}
+
+// TestGetBuildByWorkflowRun_LatestAttemptByDefault proves attempt == 0
+// resolves to the highest workflow_attempt recorded for a run id against
+// real Postgres (not just server/repository/fake's map iteration, which
+// needed the ORDER BY ... DESC LIMIT 1 to be real, not incidental), and
+// that an explicit attempt still selects exactly that one.
+func TestGetBuildByWorkflowRun_LatestAttemptByDefault(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	build1 := seedBuildAttempt(t, pool, "run-attempts-pg", 1)
+	build2 := seedBuildAttempt(t, pool, "run-attempts-pg", 2)
+	build3 := seedBuildAttempt(t, pool, "run-attempts-pg", 3)
+
+	latest, err := reg.Builds().GetBuildByWorkflowRun(context.Background(), "run-attempts-pg", 0)
+	if err != nil {
+		t.Fatalf("GetBuildByWorkflowRun (attempt=0): %v", err)
+	}
+	if latest.BuildID != build3 {
+		t.Fatalf("expected the highest attempt (3)'s build, got %s want %s", latest.BuildID, build3)
+	}
+
+	exact, err := reg.Builds().GetBuildByWorkflowRun(context.Background(), "run-attempts-pg", 1)
+	if err != nil {
+		t.Fatalf("GetBuildByWorkflowRun (attempt=1): %v", err)
+	}
+	if exact.BuildID != build1 {
+		t.Fatalf("expected attempt 1's own build, got %s want %s", exact.BuildID, build1)
+	}
+
+	middle, err := reg.Builds().GetBuildByWorkflowRun(context.Background(), "run-attempts-pg", 2)
+	if err != nil {
+		t.Fatalf("GetBuildByWorkflowRun (attempt=2): %v", err)
+	}
+	if middle.BuildID != build2 {
+		t.Fatalf("expected attempt 2's own build, got %s want %s", middle.BuildID, build2)
+	}
+
+	_, err = reg.Builds().GetBuildByWorkflowRun(context.Background(), "run-does-not-exist-pg", 0)
+	if !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for an unrecorded run id, got %v", err)
+	}
+}
+
+// TestListArtifacts_BuildIDFilter_AcrossAllFourStates proves the
+// BuildID-filtered ListArtifacts query GetReleaseRun is built from returns
+// exactly the artifacts that carry this build's build_id -- publishing,
+// published, and failed all show up; a genuinely unrelated "allocated" row
+// (which structurally can never carry a build_id -- artifact_state_shape,
+// migration 007) is correctly excluded, not silently mis-attributed to
+// this build.
+func TestListArtifacts_BuildIDFilter_AcrossAllFourStates(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+	appAllocated := seedApp(t, pool, "acme", "run-log-allocated", "image")
+	appPublishing := seedApp(t, pool, "acme", "run-log-publishing", "image")
+	appPublished := seedApp(t, pool, "acme", "run-log-published", "image")
+	appFailed := seedApp(t, pool, "acme", "run-log-failed", "image")
+	buildID := seedBuild(t, pool, "run-log-states")
+	setDomainAdoptionStage(t, pool, "acme", "allocate")
+
+	// allocated -- NOT tied to this (or any) build; must not appear below.
+	if _, err := allocateVersionTx(t, reg, repository.ArtifactKindImage, appAllocated, "ghcr.io/acme/run-log-allocated", "patch", ""); err != nil {
+		t.Fatalf("AllocateVersion: %v", err)
+	}
+
+	// publishing.
+	if _, err := beginPublishTx(t, reg, repository.ArtifactKindImage, appPublishing, "v1.0.0", buildID, "ghcr.io/acme/run-log-publishing", repository.VersionSourceTag); err != nil {
+		t.Fatalf("BeginPublish (publishing): %v", err)
+	}
+
+	// published.
+	if _, _, err := recordArtifactTx(t, reg, repository.Artifact{
+		Kind: repository.ArtifactKindImage, AppID: appPublished,
+		Repository: "ghcr.io/acme/run-log-published", Version: "v1.0.0",
+		Digest: "sha256:run-log-published", BuildID: buildID,
+	}, nil); err != nil {
+		t.Fatalf("RecordArtifact (published): %v", err)
+	}
+
+	// failed.
+	if _, err := beginPublishTx(t, reg, repository.ArtifactKindImage, appFailed, "v1.0.0", buildID, "ghcr.io/acme/run-log-failed", repository.VersionSourceTag); err != nil {
+		t.Fatalf("BeginPublish before fail: %v", err)
+	}
+	if _, err := failPublishTx(t, reg, repository.ArtifactKindImage, appFailed, "v1.0.0", "push failed"); err != nil {
+		t.Fatalf("FailPublish: %v", err)
+	}
+
+	artifacts, err := reg.Artifacts().ListArtifacts(ctx, repository.ArtifactListFilter{BuildID: buildID})
+	if err != nil {
+		t.Fatalf("ListArtifacts(BuildID=...): %v", err)
+	}
+	if len(artifacts) != 3 {
+		t.Fatalf("expected exactly 3 artifacts tied to this build (publishing/published/failed), got %d: %+v", len(artifacts), artifacts)
+	}
+	states := map[repository.ArtifactState]int{}
+	for _, a := range artifacts {
+		if a.BuildID != buildID {
+			t.Fatalf("expected every returned artifact to carry this build's id, got %q on %s", a.BuildID, a.ArtifactID)
+		}
+		states[a.State]++
+	}
+	if states[repository.ArtifactStatePublishing] != 1 || states[repository.ArtifactStatePublished] != 1 || states[repository.ArtifactStateFailed] != 1 {
+		t.Fatalf("expected one artifact in each of publishing/published/failed, got %v", states)
+	}
+	if states[repository.ArtifactStateAllocated] != 0 {
+		t.Fatalf("expected the unrelated allocated row to be excluded, got %d", states[repository.ArtifactStateAllocated])
+	}
+}
+
+// TestGetReleaseRun_Postgres_AppNeverReachedStillReportsIncomplete is the
+// full run-log path (BuildRepository.GetBuildByWorkflowRun +
+// ArtifactRepository.ListArtifacts(BuildID=...)) against real Postgres,
+// proving AR-7d's second exit criterion (PLAN.md): a run killed BEFORE
+// reaching an app still reports that app as incomplete. Mirrors
+// server/handlers/artifact_test.go's fake-backed
+// TestGetReleaseRun_AppNeverReachedStillReportsIncomplete, here against the
+// real schema/CHECK constraints instead of the in-memory fake.
+func TestGetReleaseRun_Postgres_AppNeverReachedStillReportsIncomplete(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+	appOne := seedApp(t, pool, "acme", "killed-early-one", "image")
+	appTwo := seedApp(t, pool, "acme", "killed-early-two", "image")
+	buildID := seedBuild(t, pool, "run-killed-early-pg")
+
+	// BeginPublishBatch's up-front intent write, simulated directly at the
+	// repository layer: both targets get a "publishing" row before either
+	// leg's own push.
+	if _, err := beginPublishTx(t, reg, repository.ArtifactKindImage, appOne, "v1.0.0", buildID, "ghcr.io/acme/killed-early-one", repository.VersionSourceTag); err != nil {
+		t.Fatalf("BeginPublish app-one (batch intent): %v", err)
+	}
+	if _, err := beginPublishTx(t, reg, repository.ArtifactKindImage, appTwo, "v1.0.0", buildID, "ghcr.io/acme/killed-early-two", repository.VersionSourceTag); err != nil {
+		t.Fatalf("BeginPublish app-two (batch intent): %v", err)
+	}
+
+	// Only app-one's matrix leg ever "ran". app-two's never starts -- no
+	// further call is made for it, simulating a run killed before that leg
+	// was scheduled.
+	if _, _, err := recordArtifactTx(t, reg, repository.Artifact{
+		Kind: repository.ArtifactKindImage, AppID: appOne,
+		Repository: "ghcr.io/acme/killed-early-one", Version: "v1.0.0",
+		Digest: "sha256:killed-early-one", BuildID: buildID,
+	}, nil); err != nil {
+		t.Fatalf("RecordArtifact app-one: %v", err)
+	}
+
+	build, err := reg.Builds().GetBuildByWorkflowRun(ctx, "run-killed-early-pg", 0)
+	if err != nil {
+		t.Fatalf("GetBuildByWorkflowRun: %v", err)
+	}
+	artifacts, err := reg.Artifacts().ListArtifacts(ctx, repository.ArtifactListFilter{BuildID: build.BuildID})
+	if err != nil {
+		t.Fatalf("ListArtifacts(BuildID=...): %v", err)
+	}
+	if len(artifacts) != 2 {
+		t.Fatalf("expected app-two's never-started leg to still appear as a child artifact, got %d", len(artifacts))
+	}
+	var published, publishing int
+	for _, a := range artifacts {
+		switch a.State {
+		case repository.ArtifactStatePublished:
+			published++
+		case repository.ArtifactStatePublishing:
+			publishing++
+		}
+	}
+	if published != 1 || publishing != 1 {
+		t.Fatalf("expected one published and one still-publishing (incomplete) child, got published=%d publishing=%d", published, publishing)
+	}
+}

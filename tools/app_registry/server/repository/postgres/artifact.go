@@ -83,6 +83,27 @@ func (r *buildRepo) GetBuild(ctx context.Context, buildID string) (*repository.B
 	return &b, nil
 }
 
+// GetBuildByWorkflowRun implements repository.BuildRepository.GetBuildByWorkflowRun
+// -- AR-7d (issue #558), the run log's entry point. attempt == 0 selects
+// the highest workflow_attempt recorded for workflowRunID rather than an
+// exact match.
+func (r *buildRepo) GetBuildByWorkflowRun(ctx context.Context, workflowRunID string, attempt int32) (*repository.Build, error) {
+	var row pgx.Row
+	if attempt > 0 {
+		row = r.ex.QueryRow(ctx, `SELECT `+buildColumns+` FROM build WHERE workflow_run_id = $1 AND workflow_attempt = $2`, workflowRunID, attempt)
+	} else {
+		row = r.ex.QueryRow(ctx, `SELECT `+buildColumns+` FROM build WHERE workflow_run_id = $1 ORDER BY workflow_attempt DESC LIMIT 1`, workflowRunID)
+	}
+	b, err := scanBuild(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, repository.ErrNotFound
+		}
+		return nil, err
+	}
+	return &b, nil
+}
+
 // ============================================================================
 // ArtifactRepository
 // ============================================================================
@@ -640,7 +661,18 @@ func (r *artifactRepo) ListArtifacts(ctx context.Context, filter repository.Arti
 		args = append(args, filter.OwnerFullName)
 		query += fmt.Sprintf(" AND (app.domain || '-' || app.name = $%d OR chart.domain || '-' || chart.name = $%d)", len(args), len(args))
 	}
-	query += " ORDER BY a.published_at"
+	// GetReleaseRun's (AR-7d, issue #558) query: every artifact hanging off
+	// one build, any state. Ordered by state_changed_at rather than
+	// published_at -- published_at is NULL for everything short of
+	// "published" (see artifact_state_shape, migration 007), so it would
+	// leave every in-flight row in an arbitrary relative order.
+	orderBy := "a.published_at"
+	if filter.BuildID != "" {
+		args = append(args, filter.BuildID)
+		query += fmt.Sprintf(" AND a.build_id = $%d", len(args))
+		orderBy = "a.state_changed_at"
+	}
+	query += " ORDER BY " + orderBy
 
 	rows, err := r.ex.Query(ctx, query, args...)
 	if err != nil {

@@ -157,6 +157,14 @@ type BuildRepository interface {
 	// constraint and reports whether the row already existed.
 	RecordBuild(ctx context.Context, b Build) (*Build, bool, error)
 	GetBuild(ctx context.Context, buildID string) (*Build, error)
+
+	// GetBuildByWorkflowRun looks up the build for (workflowRunID, attempt).
+	// attempt == 0 means "the latest attempt recorded for this run id" --
+	// GetReleaseRun's (AR-7d, issue #558) common case, since a caller
+	// checking on a run's status usually doesn't know in advance whether it
+	// has been re-run. Returns ErrNotFound if no build was ever recorded
+	// for this run id (attempt == 0) or this exact (run id, attempt) pair.
+	GetBuildByWorkflowRun(ctx context.Context, workflowRunID string, attempt int32) (*Build, error)
 }
 
 // ArtifactRepository covers `artifact` and `artifact_link`. As of AR-7b
