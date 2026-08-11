@@ -76,7 +76,7 @@ erDiagram
 | `reconcile_watermark` | singleton, mutable | Migration 006 (issue #545). Exactly one row (`id = 1`), seeded as a sentinel. Guards `Reconcile` against a stale (older-commit) call — see "Reconcile watermark" below. |
 
 **Planned (AR-7, issue #558; none of this is built):** `artifact` gains
-`state`/`provenance` with nullable `digest`/`build_id`, absorbing
+`state`/`provenance`/`version_source` with nullable `digest`/`build_id`, absorbing
 `version_allocation`, which is dropped; `app`/`chart` shed their mutable
 metadata to new append-only `app_manifest`/`chart_manifest` snapshot tables and
 a `v_current_app` view. See "Release lifecycle (issue #558)" below.
@@ -531,6 +531,15 @@ Cost: reads that want "what does this app look like today" need the newest
 snapshot), the same pre-joined-view pattern `v_current_promotion` uses.
 `ListApps`/`GetApp` responses are unchanged on the wire.
 
+**Storage: verbatim protojson `JSONB`, plus stored generated columns for the
+fields the hot paths read** (`deploy_unit`, `image_repository`) — decided in
+review of PR #559. The JSONB stays the single source of truth, so a new
+appmeta field needs no migration and cannot drift from the manifest; the
+generated columns keep `v_current_app` and promotability derivation ordinarily
+indexable instead of resting on `->>` expression indexes. Fully typed columns
+were rejected: they would reintroduce the hand-maintained duplicate of the
+manifest schema that AR-M spent a phase deleting.
+
 ### `AssertApps` (additive) vs. `ReconcileApps` (absence sweep)
 
 `ReconcileApps` conflates two jobs: assert identity, and assert *absence*.
@@ -580,13 +589,31 @@ path. `writeback_outbox` + Temporal stays what it is — the *outbound* path
 - Exposed as `GetReleaseRun(workflow_run_id[, attempt])` and
   `app-registry builds status --incomplete` (AR-7d).
 
-**Boundary, stated deliberately:** the registry logs what was *attempted*;
-GitHub logs what was *planned*. A run that dies before reaching an app leaves
-no row for it, and that is visible as a red CI job rather than as registry
-state. Declaring the intended child set up front (a `build_target` table
-written by the plan step) was considered and is **not** in AR-7 — at adoption
-stage `allocate` the allocation step already writes the intent set as
-`allocated` rows, so the gap only exists pre-cutover. See "Open questions".
+**The intent set is written up front, at every adoption stage** (decided in
+review of PR #559). The release plan step writes one `allocated` artifact row
+per target *before* anything is pushed — at stage `allocate` that row is the
+`AllocateVersion` result; at `observe`/`promote` the version still comes from
+the tag path and the registry is merely recording the intent. So "is this run
+complete?" is exact from the first phase rather than only after the AR-5
+cutover, and the cutover itself becomes a change of *who authors the version*,
+not a new write.
+
+Two consequences that are part of the design, not caveats:
+
+- `allocated` means "this run intends to publish this version" — who *chose*
+  the version is a separate axis, `artifact.version_source ∈ ('registry',
+  'tag')`. That column is not bookkeeping for its own sake: AR-5's parity exit
+  criterion ("allocated versions match what tag-scanning would have produced")
+  becomes a query over rows that carry both, instead of a manual comparison
+  against soak data.
+- **The reaper must expire stale `allocated` rows too**, not just
+  `publishing`. A cancelled run would otherwise hold a version number in
+  `UNIQUE (owner_id, kind, version)` forever. Same sweep, same timeout
+  configuration, `failed` with reason `stale`.
+
+Declaring the set in a separate `build_target` table was considered and
+rejected: the `allocated` state already is the declaration, and a second table
+would restate it in a shape that can disagree with what the run actually did.
 
 ### Availability, restated per adoption stage
 
@@ -602,12 +629,27 @@ registry authoritative for," so it also means "how critical is it."
 | `promote` | required — the recording step fails the job | release fails rather than silently skipping a record that later chart releases depend on |
 | `allocate` | release-critical | release cannot proceed; the registry hands out the version number |
 
+Recording becomes mandatory at `promote`, not only at `allocate` (decided in
+review of PR #559): under the artifact lifecycle an unrecorded image is no
+longer merely a missing row — it makes every later chart release pinning it
+reject, so "skip it and carry on" is the expensive option, not the safe one.
+
 At `allocate` the registry is already release-critical whether or not this is
 written down — `AllocateVersion` is in the version path. Per-domain rollback is
 moving the stage back; the global rollback is still
 `APP_REGISTRY_CICD_OPT_IN=false`. This restates, and partially retracts, the
 promise in "Availability and bootstrap" below; that section stays accurate for
 `observe`, which is where every domain is today.
+
+**The `main`-push sweep is not on this scale — it fails red on any error**
+(decided in review of PR #559). `ci.yml`'s `reconcile-app-registry` job drops
+`continue-on-error` entirely: a rejected sweep is our manifests being wrong,
+an unreachable registry is worth knowing about immediately, and the job gates
+nothing downstream, so a red costs attention and nothing else. The consequence
+is deliberate and worth stating plainly: **once the opt-in is on, a registry
+outage turns `main` CI red**, and `APP_REGISTRY_CICD_OPT_IN=false` is the only
+lever that stops it. That is the same kill switch the rest of the integration
+already hangs on, not a new one.
 
 ### Adoption and disaster recovery
 
@@ -630,6 +672,30 @@ state is re-adoptable. OPERATIONS.md carries the runbook (AR-7e). The design
 goal is that this is *rare and deliberate*, not a recurring chore — every
 other part of AR-7 exists to keep it that way.
 
+### Relationship to AR-5 (allocation cutover)
+
+**AR-7 does not conflict with what remains of AR-5, and belongs strictly
+before it.** AR-5a shipped `AllocateVersion` fully implemented and *inert* —
+no domain is at stage `allocate`, `plan.go`'s `autoIncrementVersion` is
+untouched, and `version_allocation` is empty in every environment. That is the
+cheapest possible moment to re-home its storage into `artifact` (AR-7b):
+after a cutover, migration 007 would be folding rows a live release path is
+writing.
+
+What AR-7 does to each of AR-5's remaining items:
+
+| AR-5 leftover | Effect of AR-7 |
+|---|---|
+| Replace `autoIncrementVersion` in `plan.go` | Unchanged in shape — but the plan step is already writing an intent row per target by then (`version_source = 'tag'`), so the cutover flips *who authors the version*, not who writes the row. |
+| Seed each domain's starting version from its tags at cutover | Largely obviated: by cutover the registry already holds tag-derived versions as real `artifact` rows, so "latest" is answerable from the table that `AllocateVersion` reads. |
+| Parity check ("allocated versions match tag-scanning") | Becomes a query rather than a manual comparison against soak logs — `version_source` records which path authored each version, and a shadow allocation can be compared against the recorded tag version while a domain is still at `observe`. |
+| Per-domain cutover gate, rollback by moving the stage back | Unchanged, and now carries two more meanings (recording mandatory at `promote`, compose-time chart enforcement at `allocate`). |
+| Remove the release workflow's version-allocation concurrency group | Unchanged AR-5 concern. AR-7's `UNIQUE (owner_id, kind, version)` across all states is the constraint that makes dropping it safe. |
+
+The one ordering rule: **do not move any domain to `allocate` before AR-7b
+lands.** Everything else in AR-7 can be built, merged, and run while every
+domain sits at `observe`.
+
 ### Rejected alternatives (issue #558)
 
 | Approach | Why rejected |
@@ -639,8 +705,8 @@ other part of AR-7 exists to keep it that way.
 | One atomic `RecordRelease` RPC (build + assertions + images + charts + links in one transaction) | A release spans real GHCR pushes; it cannot be one database transaction. All-or-nothing would also discard expensive partial progress. The run log gives the same "a re-run is a complete repair" property, as *resume*. |
 | Registry orchestrates the release saga (inbound Temporal workflow) | Breaks "Record, don't act" — the registry would become a deployment system. CI orchestrates; the registry logs. Temporal stays on the outbound writeback path only. |
 | SCD2 on `app` for "what did this app look like at time T" | The append-only per-build manifest snapshot already *is* the history and matches the rest of the schema; SCD2 on identity would add a second history mechanism. Consistent with #553. |
-| A `build_target` table declaring the run's intended children up front | Deferred, not rejected outright — `allocated` rows already carry intent at stage `allocate`. See "Open questions". |
-| Enforce "charts may only pin registry-known images" at chart **compose** time | Deferred (AR-7f). It is the steady state that makes chart builds genuinely hermetic and fails early instead of after every push, but it means no chart can build until every member app has released through the registry once — a real cutover cost that should follow adoption, not precede it. |
+| A `build_target` table declaring the run's intended children up front | Rejected: the plan step writes `allocated` rows at every adoption stage (see "The run log"), so that state already *is* the declaration. A second table would restate it in a shape that can disagree with the run. |
+| Enforce "charts may only pin registry-known images" at chart **compose** time, repo-wide | Rejected as a repo-wide switch, kept as a per-domain one (AR-7f): gated on `domain_adoption.stage = 'allocate'`, exactly like every other tightening here. Repo-wide, no chart could build until every member app had released through the registry once; per-domain, a domain only meets the strict rule after it has been releasing through the registry anyway, and chart builds fail before anything is pushed instead of after. |
 
 ## Promotability
 
@@ -1098,31 +1164,13 @@ correctness, and is not needed today.
 The gitops repo layout is deferred rather than unresolved — it is answered when
 the writeback stub is replaced with the real implementation.
 
-The rest are AR-7 (issue #558) refinements. None blocks starting AR-7a/AR-7b;
-each is a decision the phase that reaches it must make explicitly rather than
-by default.
+All five AR-7 (issue #558) refinements that were parked here have been decided
+in review of PR #559 and folded into the sections that own them:
 
-1. **Does the run log need a declared intent set pre-cutover?** AR-7 derives
-   "what is incomplete" from artifact rows the run actually attempted, so a run
-   that dies before reaching an app leaves nothing behind (visible only as a
-   red CI job). At stage `allocate` the allocation step writes the intent set
-   as `allocated` rows and the gap closes on its own. The alternative is a
-   `build_target` table written by the plan step — exact at every stage, one
-   more table, and it duplicates something GitHub already knows.
-2. **Should the `main`-push `reconcile-app-registry` job stop being
-   `continue-on-error`?** The wedge in ordering 4 stayed invisible because a
-   red step sits inside a green job. AR-7a makes the sweep partially-applying,
-   which removes the repo-wide blast radius but not the invisibility. The job
-   gates nothing downstream, so failing it red is cheap; it does mean a
-   registry outage turns `main` CI red.
-3. **Where exactly does recording become mandatory?** The stage table above
-   puts it at `promote`. It could equally be at `allocate` only, keeping
-   `promote` best-effort — the tradeoff is how long an unrecorded image can
-   silently accumulate before it breaks a chart release.
-4. **Manifest snapshots as verbatim `JSONB` vs. typed columns.** Verbatim is
-   chosen (it is the appmeta contract, and `protojson` already round-trips it);
-   typed columns would make snapshot-level SQL filtering possible without a
-   `->>` expression index. Revisit only if a real query needs it.
-5. **AR-7f — compose-time enforcement that charts may only pin registry-known
-   images.** The genuine hermeticity fix, deliberately sequenced after
-   adoption. Decide whether it is the steady state or never.
+| Question | Decision | Where |
+|---|---|---|
+| Declared intent set for a release run | The plan step writes an `allocated` row per target at **every** adoption stage; no `build_target` table | "The run log" |
+| `reconcile-app-registry` and `continue-on-error` | Dropped — the job fails red on any error, with `APP_REGISTRY_CICD_OPT_IN` as the only lever | "Availability, restated per adoption stage" |
+| Where recording becomes mandatory | At `promote`, not only at `allocate` | same |
+| Manifest snapshot storage | Verbatim `JSONB` + stored generated columns for `deploy_unit` / `image_repository` | "App identity vs. per-build manifest snapshot" |
+| AR-7f compose-time chart enforcement | Steady state, gated per domain on `stage = 'allocate'` | "Rejected alternatives (issue #558)" |
