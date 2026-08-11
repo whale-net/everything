@@ -71,3 +71,45 @@ func TestExitCodeFor_NonGRPCErrorFallsBackToOne(t *testing.T) {
 		t.Errorf("exitCodeFor() = %d, want 1", got)
 	}
 }
+
+// TestExitCodeFor_Unimplemented locks in the exit code every
+// app-registry-*/action.yml composite action and release.yml's inline chart
+// loops branch on to distinguish version skew (issue #570) from a plain
+// outage. Changing exitVersionSkew's value without updating those call
+// sites would silently break that branch, same risk exitOwnerNotReconciled's
+// doc comment already calls out for issue #547.
+func TestExitCodeFor_Unimplemented(t *testing.T) {
+	err := status.Error(codes.Unimplemented, "unknown method BeginPublishBatch for service appregistry.v1.ArtifactRegistry")
+	if got := exitCodeFor(err); got != exitVersionSkew {
+		t.Errorf("exitCodeFor() = %d, want %d (exitVersionSkew)", got, exitVersionSkew)
+	}
+}
+
+// TestExitCodeFor_UnimplementedOutranksOwnerNotReconciled is a belt-and-
+// suspenders check: the two carved-out reasons are mutually exclusive in
+// practice (Unimplemented means the server never got far enough to attach
+// an ErrorInfo detail), but isOwnerNotReconciled is checked first in
+// exitCodeFor, so this pins the actual precedence rather than leaving it
+// implicit in the code's dependency line above.
+func TestExitCodeFor_UnimplementedOutranksOwnerNotReconciled(t *testing.T) {
+	err := status.Error(codes.Unimplemented, "unknown method")
+	if isOwnerNotReconciled(err) {
+		t.Fatalf("isOwnerNotReconciled() = true for a plain Unimplemented status, want false")
+	}
+	if got := exitCodeFor(err); got != exitVersionSkew {
+		t.Errorf("exitCodeFor() = %d, want %d (exitVersionSkew)", got, exitVersionSkew)
+	}
+}
+
+// TestExitCodeFor_OtherCodesFallBackToOne covers the specific codes issue
+// #570 says must keep today's best-effort behavior: a plain outage
+// (Unavailable, DeadlineExceeded) or an auth failure must not be
+// misclassified as version skew.
+func TestExitCodeFor_OtherCodesFallBackToOne(t *testing.T) {
+	for _, code := range []codes.Code{codes.Unavailable, codes.DeadlineExceeded, codes.Unauthenticated, codes.PermissionDenied, codes.InvalidArgument} {
+		err := status.Error(code, "some failure")
+		if got := exitCodeFor(err); got != 1 {
+			t.Errorf("exitCodeFor(%s) = %d, want 1", code, got)
+		}
+	}
+}
