@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/whale-net/everything/tools/app_registry/apierrors"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
@@ -941,5 +944,435 @@ func TestRecordArtifact_RejectsAtNonObserveStageWithoutPriorRow(t *testing.T) {
 	})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("expected FailedPrecondition for a direct RecordArtifact create at stage 'promote' with no prior BeginPublish, got %v", err)
+	}
+}
+
+// ============================================================================
+// AR-7d (issue #558): BeginPublishBatch and GetReleaseRun
+// ============================================================================
+
+// setupBatch mirrors setupAllocate but reconciles TWO apps, both with a real
+// ImageRepository (needed for BeginPublish's/BeginPublishBatch's ∅ ->
+// publishing branch, which stamps it onto the artifact row's NOT NULL
+// repository column -- see setupAllocate's own comment for why setup(t)'s
+// apps can't be reused here).
+func setupBatch(t *testing.T) (*fake.Registry, *ArtifactServer) {
+	t.Helper()
+	repo := fake.New()
+	appSrv := NewAppServer(repo)
+	artifactSrv := NewArtifactServer(repo)
+	ctx := authedCtx()
+
+	if _, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: manifestSet([]*appmetapb.AppManifest{
+			{Domain: "demo", Name: "app-one", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE,
+				Registry: "ghcr.io", Organization: "whale-net", RepoName: "demo-app-one"},
+			{Domain: "demo", Name: "app-two", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE,
+				Registry: "ghcr.io", Organization: "whale-net", RepoName: "demo-app-two"},
+		}, nil),
+		IdempotencyKey: "setup-batch-1",
+	}); err != nil {
+		t.Fatalf("setupBatch reconcile: %v", err)
+	}
+	return repo, artifactSrv
+}
+
+// TestBeginPublishBatch_WritesPublishingForEveryTarget proves the core
+// mechanism: one batch call against two targets writes a "publishing" row
+// for BOTH, each carrying the same build_id.
+func TestBeginPublishBatch_WritesPublishingForEveryTarget(t *testing.T) {
+	_, artifactSrv := setupBatch(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-batch-both")
+
+	resp, err := artifactSrv.BeginPublishBatch(ctx, &pb.BeginPublishBatchRequest{
+		BuildId: build.BuildId,
+		Targets: []*pb.BeginPublishBatchTarget{
+			{Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-app-one", Version: "v1.0.0"},
+			{Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-app-two", Version: "v1.0.0"},
+		},
+		IdempotencyKeyPrefix: "run-batch-both-1",
+	})
+	if err != nil {
+		t.Fatalf("BeginPublishBatch: %v", err)
+	}
+	if len(resp.Results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(resp.Results))
+	}
+	for _, r := range resp.Results {
+		if r.Error != "" {
+			t.Fatalf("unexpected per-target error for %s: %s", r.OwnerFullName, r.Error)
+		}
+		if r.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHING {
+			t.Fatalf("expected state PUBLISHING for %s, got %v", r.OwnerFullName, r.Artifact.State)
+		}
+		if r.Artifact.BuildId != build.BuildId {
+			t.Fatalf("expected artifact to carry the batch's build_id for %s, got %q", r.OwnerFullName, r.Artifact.BuildId)
+		}
+		if r.Artifact.VersionSource != pb.VersionSource_VERSION_SOURCE_TAG {
+			t.Fatalf("expected version_source TAG (pre-cutover path) for %s, got %v", r.OwnerFullName, r.Artifact.VersionSource)
+		}
+	}
+}
+
+// TestBeginPublishBatch_PartialApply_UnknownOwnerDoesNotBlockOthers proves
+// the AR-7a-style partial-apply guarantee: one target naming an
+// unreconciled owner fails ONLY that result; the well-formed target in the
+// same call still transitions to publishing.
+func TestBeginPublishBatch_PartialApply_UnknownOwnerDoesNotBlockOthers(t *testing.T) {
+	_, artifactSrv := setupBatch(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-batch-partial")
+
+	resp, err := artifactSrv.BeginPublishBatch(ctx, &pb.BeginPublishBatchRequest{
+		BuildId: build.BuildId,
+		Targets: []*pb.BeginPublishBatchTarget{
+			{Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-app-one", Version: "v1.0.0"},
+			{Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-does-not-exist", Version: "v1.0.0"},
+		},
+		IdempotencyKeyPrefix: "run-batch-partial-1",
+	})
+	if err != nil {
+		t.Fatalf("BeginPublishBatch (request-level) should not fail for a per-target problem: %v", err)
+	}
+	if len(resp.Results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(resp.Results))
+	}
+
+	var good, bad *pb.BeginPublishBatchResult
+	for _, r := range resp.Results {
+		switch r.OwnerFullName {
+		case "demo-app-one":
+			good = r
+		case "demo-does-not-exist":
+			bad = r
+		}
+	}
+	if good == nil || good.Error != "" || good.Artifact == nil || good.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHING {
+		t.Fatalf("expected demo-app-one to succeed despite the other target failing, got %+v", good)
+	}
+	if bad == nil || bad.Error == "" || bad.Artifact != nil {
+		t.Fatalf("expected demo-does-not-exist to fail with an error and no artifact, got %+v", bad)
+	}
+}
+
+// stateChangedAt fetches an artifact's full-precision (sub-second)
+// state_changed_at directly from the repository -- the wire-level
+// Artifact.StateChangedAt (protos/messages.proto's int64, via
+// convert.go's timeToUnix) truncates to whole seconds, which is too coarse
+// to distinguish a heartbeat's refreshed timestamp from the original one
+// within a fast-running unit test.
+func stateChangedAt(t *testing.T, repo repository.Registry, artifactID string) time.Time {
+	t.Helper()
+	a, err := repo.Artifacts().GetArtifact(context.Background(), repository.ArtifactLookup{ArtifactID: artifactID})
+	if err != nil {
+		t.Fatalf("GetArtifact %s: %v", artifactID, err)
+	}
+	return a.StateChangedAt
+}
+
+// TestBeginPublishBatch_ThenPerLegBeginPublish_HeartbeatsRatherThanReplays
+// proves the AR-7d (issue #558) reaping-hazard fix end to end at the
+// handler layer: BeginPublishBatch's derived key carries an "-intent"
+// suffix specifically so it does NOT collide with the per-leg
+// BeginPublish call's own key (see BeginPublishBatchRequest.
+// idempotency_key_prefix's doc comment) -- so the per-leg call genuinely
+// re-executes (a heartbeat, refreshing state_changed_at) instead of
+// replaying the batch's cached response via runIdempotent. Distinguished
+// from a replay by asserting state_changed_at strictly advances between
+// the two calls.
+func TestBeginPublishBatch_ThenPerLegBeginPublish_HeartbeatsRatherThanReplays(t *testing.T) {
+	repo, artifactSrv := setupBatch(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-batch-heartbeat")
+
+	batchResp, err := artifactSrv.BeginPublishBatch(ctx, &pb.BeginPublishBatchRequest{
+		BuildId: build.BuildId,
+		Targets: []*pb.BeginPublishBatchTarget{
+			{Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-app-one", Version: "v1.0.0"},
+		},
+		IdempotencyKeyPrefix: "run-batch-heartbeat-1",
+	})
+	if err != nil {
+		t.Fatalf("BeginPublishBatch: %v", err)
+	}
+	batchArtifact := batchResp.Results[0].Artifact
+	if batchArtifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHING {
+		t.Fatalf("expected the batch write to leave state PUBLISHING, got %v", batchArtifact.State)
+	}
+	beforeHeartbeat := stateChangedAt(t, repo, batchArtifact.ArtifactId)
+	time.Sleep(2 * time.Millisecond) // guarantee a distinguishable state_changed_at
+
+	// The per-leg call's OWN key convention -- no "-intent" suffix. If this
+	// collided with the batch call's key, runIdempotent would replay the
+	// batch's stored response and state_changed_at would NOT advance.
+	individual, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-app-one",
+		Version: "v1.0.0", BuildId: build.BuildId,
+		IdempotencyKey: "run-batch-heartbeat-1-demo-app-one-image",
+	})
+	if err != nil {
+		t.Fatalf("expected the per-leg BeginPublish call to heartbeat the publishing row, got error: %v", err)
+	}
+	if individual.Artifact.ArtifactId != batchArtifact.ArtifactId {
+		t.Fatalf("expected the heartbeat to touch the SAME row, got %s vs %s",
+			individual.Artifact.ArtifactId, batchArtifact.ArtifactId)
+	}
+	if individual.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHING {
+		t.Fatalf("expected state to remain PUBLISHING after the heartbeat, got %v", individual.Artifact.State)
+	}
+	afterHeartbeat := stateChangedAt(t, repo, individual.Artifact.ArtifactId)
+	if !afterHeartbeat.After(beforeHeartbeat) {
+		t.Fatalf("expected state_changed_at to advance (proving re-execution, not a replay): before=%v after=%v", beforeHeartbeat, afterHeartbeat)
+	}
+}
+
+// TestBeginPublish_HeartbeatOnPublishingRow proves publishing -> publishing
+// directly: a repeat BeginPublish call against an already-"publishing" row
+// is a legal, idempotent heartbeat (refreshing state_changed_at and
+// build_id), not FailedPrecondition -- see
+// repository.ArtifactRepository.BeginPublish's doc comment.
+func TestBeginPublish_HeartbeatOnPublishingRow(t *testing.T) {
+	repo, artifactSrv := setupAllocate(t)
+	ctx := authedCtx()
+	buildA := recordBuild(t, artifactSrv, "run-heartbeat-a")
+
+	first, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Version: "v1.0.0", BuildId: buildA.BuildId, IdempotencyKey: "heartbeat-begin-1",
+	})
+	if err != nil {
+		t.Fatalf("first BeginPublish: %v", err)
+	}
+	if first.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHING {
+		t.Fatalf("expected state PUBLISHING, got %v", first.Artifact.State)
+	}
+	beforeHeartbeat := stateChangedAt(t, repo, first.Artifact.ArtifactId)
+	time.Sleep(2 * time.Millisecond)
+
+	// A second, DIFFERENT run's build -- simulating a re-run's per-leg
+	// call re-arming a row a killed earlier attempt left "publishing".
+	buildB := recordBuildAttempt(t, artifactSrv, "run-heartbeat-a", 2)
+
+	second, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Version: "v1.0.0", BuildId: buildB.BuildId, IdempotencyKey: "heartbeat-begin-2",
+	})
+	if err != nil {
+		t.Fatalf("expected publishing -> publishing to be a legal heartbeat, got error: %v", err)
+	}
+	if second.Artifact.ArtifactId != first.Artifact.ArtifactId {
+		t.Fatalf("expected the heartbeat to touch the SAME row, got %s vs %s", second.Artifact.ArtifactId, first.Artifact.ArtifactId)
+	}
+	if second.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHING {
+		t.Fatalf("expected state to remain PUBLISHING, got %v", second.Artifact.State)
+	}
+	afterHeartbeat := stateChangedAt(t, repo, second.Artifact.ArtifactId)
+	if !afterHeartbeat.After(beforeHeartbeat) {
+		t.Fatalf("expected state_changed_at to advance: before=%v after=%v", beforeHeartbeat, afterHeartbeat)
+	}
+	if second.Artifact.BuildId != buildB.BuildId {
+		t.Fatalf("expected the heartbeat to re-stamp build_id to the new attempt's build, got %q want %q", second.Artifact.BuildId, buildB.BuildId)
+	}
+}
+
+// recordBuildAttempt is recordBuild with an explicit workflow_attempt, for
+// tests that need two builds sharing a workflow_run_id (a re-run).
+func recordBuildAttempt(t *testing.T, srv *ArtifactServer, runID string, attempt int32) *pb.Build {
+	t.Helper()
+	resp, err := srv.RecordBuild(authedCtx(), &pb.RecordBuildRequest{
+		GitSha: "abc123", WorkflowRunId: runID, WorkflowAttempt: attempt,
+		IdempotencyKey: fmt.Sprintf("%s-%d-build", runID, attempt),
+	})
+	if err != nil {
+		t.Fatalf("RecordBuild attempt %d: %v", attempt, err)
+	}
+	return resp.Build
+}
+
+// TestGetReleaseRun_ReturnsEveryChildRegardlessOfState proves GetReleaseRun
+// returns the build plus every artifact hanging off it, across every state
+// -- publishing, published, and failed all in the same run.
+func TestGetReleaseRun_ReturnsEveryChildRegardlessOfState(t *testing.T) {
+	_, artifactSrv := setupBatch(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-getrun-states")
+
+	// app-one: fully published.
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-app-one",
+		Version: "v1.0.0", BuildId: build.BuildId, IdempotencyKey: "getrun-states-one-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish app-one: %v", err)
+	}
+	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-app-one", Digest: "sha256:getrun-one", Version: "v1.0.0",
+		IdempotencyKey: "getrun-states-one-record",
+	}); err != nil {
+		t.Fatalf("RecordArtifact app-one: %v", err)
+	}
+
+	// app-two: began publishing, then failed (push error).
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-app-two",
+		Version: "v1.0.0", BuildId: build.BuildId, IdempotencyKey: "getrun-states-two-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish app-two: %v", err)
+	}
+	if _, err := artifactSrv.FailPublish(ctx, &pb.FailPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-app-two",
+		Version: "v1.0.0", Reason: "push failed", IdempotencyKey: "getrun-states-two-fail",
+	}); err != nil {
+		t.Fatalf("FailPublish app-two: %v", err)
+	}
+
+	run, err := artifactSrv.GetReleaseRun(ctx, &pb.GetReleaseRunRequest{WorkflowRunId: "run-getrun-states"})
+	if err != nil {
+		t.Fatalf("GetReleaseRun: %v", err)
+	}
+	if run.Build.BuildId != build.BuildId {
+		t.Fatalf("expected the run's own build, got %s vs %s", run.Build.BuildId, build.BuildId)
+	}
+	if len(run.Artifacts) != 2 {
+		t.Fatalf("expected exactly 2 child artifacts, got %d", len(run.Artifacts))
+	}
+	states := map[string]pb.ArtifactState{}
+	for _, a := range run.Artifacts {
+		states[a.AppId] = a.State
+	}
+	var publishedCount, failedCount int
+	for _, s := range states {
+		switch s {
+		case pb.ArtifactState_ARTIFACT_STATE_PUBLISHED:
+			publishedCount++
+		case pb.ArtifactState_ARTIFACT_STATE_FAILED:
+			failedCount++
+		}
+	}
+	if publishedCount != 1 || failedCount != 1 {
+		t.Fatalf("expected one published and one failed child, got states=%v", states)
+	}
+}
+
+// TestGetReleaseRun_AppNeverReachedStillReportsIncomplete is AR-7d's second
+// exit criterion (PLAN.md): a run killed BEFORE reaching an app still
+// reports that app as incomplete. BeginPublishBatch declares intent for two
+// targets up front; only ONE of them ever gets its own matrix leg (its own
+// BeginPublish/RecordArtifact never run for the other) -- simulating a run
+// that was killed before that leg started at all. GetReleaseRun must still
+// list the never-reached target, in "publishing", not silently omit it.
+func TestGetReleaseRun_AppNeverReachedStillReportsIncomplete(t *testing.T) {
+	_, artifactSrv := setupBatch(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-getrun-killed-early")
+
+	if _, err := artifactSrv.BeginPublishBatch(ctx, &pb.BeginPublishBatchRequest{
+		BuildId: build.BuildId,
+		Targets: []*pb.BeginPublishBatchTarget{
+			{Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-app-one", Version: "v1.0.0"},
+			{Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-app-two", Version: "v1.0.0"},
+		},
+		IdempotencyKeyPrefix: "run-getrun-killed-early-1",
+	}); err != nil {
+		t.Fatalf("BeginPublishBatch: %v", err)
+	}
+
+	// Only app-one's matrix leg ever "ran": it completes normally. app-two's
+	// leg never started -- no further RPC call is made for it at all,
+	// exactly as if the workflow was killed before that leg was scheduled.
+	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-app-one", Digest: "sha256:killed-early-one", Version: "v1.0.0",
+		IdempotencyKey: "getrun-killed-early-one-record",
+	}); err != nil {
+		t.Fatalf("RecordArtifact app-one: %v", err)
+	}
+
+	run, err := artifactSrv.GetReleaseRun(ctx, &pb.GetReleaseRunRequest{WorkflowRunId: "run-getrun-killed-early"})
+	if err != nil {
+		t.Fatalf("GetReleaseRun: %v", err)
+	}
+	if len(run.Artifacts) != 2 {
+		t.Fatalf("expected app-two's never-started leg to still appear as a child artifact, got %d artifacts", len(run.Artifacts))
+	}
+
+	// Check by state rather than owner (AppId is an opaque id): exactly one
+	// artifact should be PUBLISHED (app-one) and one should still be
+	// PUBLISHING (app-two, never reached).
+	var sawIncompleteTwo bool
+	var published, publishing int
+	for _, a := range run.Artifacts {
+		switch a.State {
+		case pb.ArtifactState_ARTIFACT_STATE_PUBLISHED:
+			published++
+		case pb.ArtifactState_ARTIFACT_STATE_PUBLISHING:
+			publishing++
+			sawIncompleteTwo = true
+		}
+	}
+	if published != 1 || publishing != 1 || !sawIncompleteTwo {
+		t.Fatalf("expected exactly one published and one still-publishing (incomplete) child, got published=%d publishing=%d", published, publishing)
+	}
+}
+
+// TestGetReleaseRun_UnknownRunIsNotFound proves a run id with no recorded
+// build returns NotFound rather than an empty-but-successful response --
+// distinguishing "this run never called RecordBuild" from "this run has no
+// artifacts yet".
+func TestGetReleaseRun_UnknownRunIsNotFound(t *testing.T) {
+	_, artifactSrv := setupBatch(t)
+	ctx := authedCtx()
+
+	_, err := artifactSrv.GetReleaseRun(ctx, &pb.GetReleaseRunRequest{WorkflowRunId: "run-does-not-exist"})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound for an unrecorded run id, got %v", err)
+	}
+}
+
+// TestGetReleaseRun_DefaultsToLatestAttempt proves workflow_attempt == 0
+// resolves to the highest attempt recorded for that run id -- the common
+// case for an operator who doesn't know in advance whether a run was
+// re-run -- and that its artifacts are scoped to THAT build, not attempt 1's.
+func TestGetReleaseRun_DefaultsToLatestAttempt(t *testing.T) {
+	_, artifactSrv := setupBatch(t)
+	ctx := authedCtx()
+
+	build1 := recordBuildAttempt(t, artifactSrv, "run-getrun-attempts", 1)
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-app-one",
+		Version: "v1.0.0", BuildId: build1.BuildId, IdempotencyKey: "getrun-attempts-1-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish (attempt 1): %v", err)
+	}
+
+	build2 := recordBuildAttempt(t, artifactSrv, "run-getrun-attempts", 2)
+	if build2.BuildId == build1.BuildId {
+		t.Fatalf("expected a distinct build_id for attempt 2")
+	}
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-app-two",
+		Version: "v1.0.0", BuildId: build2.BuildId, IdempotencyKey: "getrun-attempts-2-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish (attempt 2): %v", err)
+	}
+
+	run, err := artifactSrv.GetReleaseRun(ctx, &pb.GetReleaseRunRequest{WorkflowRunId: "run-getrun-attempts"})
+	if err != nil {
+		t.Fatalf("GetReleaseRun (attempt omitted): %v", err)
+	}
+	if run.Build.BuildId != build2.BuildId {
+		t.Fatalf("expected the latest attempt's build (attempt 2), got build_id %s want %s", run.Build.BuildId, build2.BuildId)
+	}
+	if len(run.Artifacts) != 1 {
+		t.Fatalf("expected exactly 1 artifact scoped to attempt 2's build, got %d", len(run.Artifacts))
+	}
+
+	runAttempt1, err := artifactSrv.GetReleaseRun(ctx, &pb.GetReleaseRunRequest{WorkflowRunId: "run-getrun-attempts", WorkflowAttempt: 1})
+	if err != nil {
+		t.Fatalf("GetReleaseRun (attempt=1): %v", err)
+	}
+	if runAttempt1.Build.BuildId != build1.BuildId {
+		t.Fatalf("expected attempt 1's own build when explicitly requested, got %s want %s", runAttempt1.Build.BuildId, build1.BuildId)
 	}
 }

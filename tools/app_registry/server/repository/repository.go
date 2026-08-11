@@ -157,6 +157,14 @@ type BuildRepository interface {
 	// constraint and reports whether the row already existed.
 	RecordBuild(ctx context.Context, b Build) (*Build, bool, error)
 	GetBuild(ctx context.Context, buildID string) (*Build, error)
+
+	// GetBuildByWorkflowRun looks up the build for (workflowRunID, attempt).
+	// attempt == 0 means "the latest attempt recorded for this run id" --
+	// GetReleaseRun's (AR-7d, issue #558) common case, since a caller
+	// checking on a run's status usually doesn't know in advance whether it
+	// has been re-run. Returns ErrNotFound if no build was ever recorded
+	// for this run id (attempt == 0) or this exact (run id, attempt) pair.
+	GetBuildByWorkflowRun(ctx context.Context, workflowRunID string, attempt int32) (*Build, error)
 }
 
 // ArtifactRepository covers `artifact` and `artifact_link`. As of AR-7b
@@ -215,17 +223,35 @@ type ArtifactRepository interface {
 	// see server/handlers/artifact.go's AllocateVersion for the retry loop.
 	AllocateVersion(ctx context.Context, kind ArtifactKind, ownerID, repository, increment, explicitVersion string) (*VersionAllocation, error)
 
-	// BeginPublish is the ∅|allocated|failed -> publishing transition (see
-	// ArtifactState's doc comment), identified by (kind, ownerID, version).
-	// buildID is stamped on the row. repositoryHint is used only for the
-	// ∅ -> publishing branch (no prior row exists — the pre-cutover path,
-	// or a domain that never called AllocateVersion for this version):
-	// artifact.repository is NOT NULL, so a fresh row needs one from
-	// somewhere, and an existing allocated/failed row already carries its
-	// own from when it was created. versionSource is likewise only used on
-	// the fresh-create branch; an existing row keeps whatever
-	// AllocateVersion (or a prior BeginPublish) already gave it. Any other
-	// starting state (publishing, published) is ErrFailedPrecondition.
+	// BeginPublish is the ∅|allocated|failed|publishing -> publishing
+	// transition (see ArtifactState's doc comment), identified by (kind,
+	// ownerID, version). buildID is stamped on the row (refreshed on every
+	// call, including the publishing -> publishing branch — see below).
+	// repositoryHint is used only for the ∅ -> publishing branch (no prior
+	// row exists — the pre-cutover path, or a domain that never called
+	// AllocateVersion for this version): artifact.repository is NOT NULL,
+	// so a fresh row needs one from somewhere, and an existing
+	// allocated/failed/publishing row already carries its own from when it
+	// was created. versionSource is likewise only used on the fresh-create
+	// branch; an existing row keeps whatever AllocateVersion (or a prior
+	// BeginPublish) already gave it. published is ErrFailedPrecondition.
+	//
+	// publishing -> publishing (AR-7d, issue #558) is a legal, idempotent
+	// heartbeat/re-arm, not a rejection: it refreshes state_changed_at (and
+	// build_id) without changing state. This exists because
+	// BeginPublishBatch (AR-7d) stamps state_changed_at for every run
+	// target at plan time, before the release matrix fans out — a target
+	// whose matrix leg hasn't started yet is "publishing" from the moment
+	// the batch call ran, not from when its own push begins. Without this
+	// heartbeat, the stale-row reaper's timeout would have to cover the
+	// whole run rather than one leg (see ENV.md's ARTIFACT_REAPER_TIMEOUT).
+	// release.yml's per-leg BeginPublish call re-arms the clock immediately
+	// before that leg's own push, restoring a one-leg budget for any leg
+	// that actually runs; it also revives (failed -> publishing) a row the
+	// reaper already expired, so a push that lost the race against the
+	// reaper still gets recorded instead of failing at RecordArtifact after
+	// an already-successful GHCR push.
+	//
 	// Must be called inside Registry.WithTx — same transactional-write
 	// shape as every other write method here.
 	BeginPublish(ctx context.Context, kind ArtifactKind, ownerID, version, buildID, repositoryHint string, versionSource VersionSource) (*Artifact, error)

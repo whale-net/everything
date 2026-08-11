@@ -426,7 +426,28 @@ func (s *ArtifactServer) BeginPublish(ctx context.Context, req *pb.BeginPublishR
 		return nil, err
 	}
 
-	resp, _, err := runIdempotent(ctx, s.repo, req.IdempotencyKey, "BeginPublish",
+	artifact, err := s.beginPublishOne(ctx, req.IdempotencyKey, kind, ownerID, req.Version, req.BuildId, repo)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	return &pb.BeginPublishResponse{Artifact: artifact}, nil
+}
+
+// beginPublishOne is the shared ∅|allocated|failed|publishing -> publishing
+// transition both BeginPublish and BeginPublishBatch (AR-7d, issue #558)
+// drive. Kept as one code path so both RPCs enforce the identical
+// legal-transition table, including the publishing -> publishing heartbeat
+// (see repository.ArtifactRepository.BeginPublish's doc comment).
+//
+// Callers MUST use distinct idempotency keys for the batch call and any
+// later individual call against the same target -- see
+// BeginPublishBatchRequest.idempotency_key_prefix's doc comment for why:
+// unlike every other write RPC here, this one is deliberately called more
+// than once against the same target within one run, and each call must
+// actually re-execute (to refresh state_changed_at, or to revive a row the
+// reaper expired), not replay a cached response from runIdempotent.
+func (s *ArtifactServer) beginPublishOne(ctx context.Context, idempotencyKey string, kind repository.ArtifactKind, ownerID, version, buildID, repositoryHint string) (*pb.Artifact, error) {
+	resp, _, err := runIdempotent(ctx, s.repo, idempotencyKey, "BeginPublish",
 		func() proto.Message { return &pb.BeginPublishResponse{} },
 		func(ctx context.Context, r repository.Registry) (proto.Message, error) {
 			// versionSource is only consulted by the ∅ -> publishing branch
@@ -436,7 +457,7 @@ func (s *ArtifactServer) BeginPublish(ctx context.Context, req *pb.BeginPublishR
 			// release path (ARCHITECTURE.md "Backward compatibility during
 			// rollout") recording intent for a version the git-tag path
 			// chose, not one the registry allocated.
-			artifact, aerr := r.Artifacts().BeginPublish(ctx, kind, ownerID, req.Version, req.BuildId, repo, repository.VersionSourceTag)
+			artifact, aerr := r.Artifacts().BeginPublish(ctx, kind, ownerID, version, buildID, repositoryHint, repository.VersionSourceTag)
 			if aerr != nil {
 				return nil, aerr
 			}
@@ -444,9 +465,94 @@ func (s *ArtifactServer) BeginPublish(ctx context.Context, req *pb.BeginPublishR
 		},
 	)
 	if err != nil {
-		return nil, mapRepoErr(err)
+		return nil, err
 	}
-	return resp.(*pb.BeginPublishResponse), nil
+	return resp.(*pb.BeginPublishResponse).Artifact, nil
+}
+
+// BeginPublishBatch implements the bulk, up-front form of BeginPublish
+// (AR-7d, issue #558): the release plan step calls this ONCE, before the
+// release matrix fans out, so every intended target already has a
+// "publishing" row -- carrying build_id -- before that target's own matrix
+// leg (if it ever starts) runs. This is what closes the gap AR-7b's own
+// scope note left open: a matrix leg that never starts at all previously
+// left no row of any kind, so GetReleaseRun could not distinguish "never
+// started" from "not part of this run". See ARCHITECTURE.md "The run log"
+// -> "As built (AR-7d)".
+//
+// Each target is processed independently, mirroring AR-7a's ReconcileApps
+// partial-apply precedent: one bad target (unknown owner, malformed
+// version, a real state-machine conflict) is reported in its own result and
+// does not block the rest. The RPC itself only fails on a malformed
+// request (missing build_id/idempotency_key_prefix/targets).
+//
+// This is a plan-time declaration, not the whole story: release.yml's
+// per-leg BeginPublish call still runs immediately before that leg's own
+// push (see BeginPublish's own comment and repository.ArtifactRepository.
+// BeginPublish's doc comment on the publishing -> publishing heartbeat) --
+// it re-arms the row's staleness clock right before the work that clock is
+// supposed to bound, and revives a row the stale-row reaper already
+// expired to "failed" while this leg was still queued. Declaring intent up
+// front and keeping the clock accurate per-leg are two different jobs; this
+// RPC only does the first one.
+func (s *ArtifactServer) BeginPublishBatch(ctx context.Context, req *pb.BeginPublishBatchRequest) (*pb.BeginPublishBatchResponse, error) {
+	if err := auth.Require(ctx, auth.RoleBuilder); err != nil {
+		return nil, err
+	}
+	if req.BuildId == "" {
+		return nil, status.Error(codes.InvalidArgument, "build_id is required")
+	}
+	if req.IdempotencyKeyPrefix == "" {
+		return nil, status.Error(codes.InvalidArgument, "idempotency_key_prefix is required")
+	}
+	if len(req.Targets) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "targets is required")
+	}
+
+	results := make([]*pb.BeginPublishBatchResult, 0, len(req.Targets))
+	for _, t := range req.Targets {
+		result := &pb.BeginPublishBatchResult{Kind: t.Kind, OwnerFullName: t.OwnerFullName, Version: t.Version}
+
+		kind := artifactKindFromPB(t.Kind)
+		switch {
+		case kind == "":
+			result.Error = "kind is required"
+		case t.OwnerFullName == "":
+			result.Error = "owner_full_name is required"
+		case t.Version == "" || !semverRe.MatchString(t.Version):
+			result.Error = fmt.Sprintf("version %q must match v<major>.<minor>.<patch>", t.Version)
+		}
+		if result.Error != "" {
+			results = append(results, result)
+			continue
+		}
+
+		_, ownerID, repo, rerr := s.resolveOwnerAndDomain(ctx, kind, t.OwnerFullName)
+		if rerr != nil {
+			result.Error = rerr.Error()
+			results = append(results, result)
+			continue
+		}
+
+		// "-intent" suffix: deliberately DIFFERENT from the key the same
+		// target's per-leg BeginPublish call uses
+		// ("<prefix>-<owner>-<kind>", no suffix) -- see
+		// BeginPublishBatchRequest.idempotency_key_prefix's doc comment.
+		// The two calls must NOT share a key, or the per-leg call would
+		// replay this one's cached response via runIdempotent instead of
+		// actually re-executing -- and re-execution is the whole point of
+		// the per-leg call (AR-7d's heartbeat/revive).
+		idemKey := fmt.Sprintf("%s-%s-%s-intent", req.IdempotencyKeyPrefix, t.OwnerFullName, string(kind))
+		artifact, berr := s.beginPublishOne(ctx, idemKey, kind, ownerID, t.Version, req.BuildId, repo)
+		if berr != nil {
+			result.Error = mapRepoErr(berr).Error()
+		} else {
+			result.Artifact = artifact
+		}
+		results = append(results, result)
+	}
+
+	return &pb.BeginPublishBatchResponse{Results: results}, nil
 }
 
 // FailPublish implements the publishing -> failed transition (AR-7b, issue
@@ -492,4 +598,37 @@ func (s *ArtifactServer) FailPublish(ctx context.Context, req *pb.FailPublishReq
 		return nil, mapRepoErr(err)
 	}
 	return resp.(*pb.FailPublishResponse), nil
+}
+
+// GetReleaseRun implements the run log CI resumes against (AR-7d, issue
+// #558): the build aggregate for (workflow_run_id[, workflow_attempt]) plus
+// every artifact row hanging off it, in whatever state each is in. "What is
+// incomplete?" = artifacts here with State != ARTIFACT_STATE_PUBLISHED --
+// left to the caller (the CLI's --incomplete filter) rather than a second
+// field on the response, since it is exactly a filter over Artifacts, not
+// separately-derived data. See ARCHITECTURE.md "The run log".
+//
+// A read, not a write: no idempotency key, any authenticated principal may
+// call it (matches ListArtifacts/GetArtifact above), same as every other
+// query RPC in this service.
+func (s *ArtifactServer) GetReleaseRun(ctx context.Context, req *pb.GetReleaseRunRequest) (*pb.GetReleaseRunResponse, error) {
+	if err := auth.RequireAuthenticated(ctx); err != nil {
+		return nil, err
+	}
+	if req.WorkflowRunId == "" {
+		return nil, status.Error(codes.InvalidArgument, "workflow_run_id is required")
+	}
+
+	build, err := s.repo.Builds().GetBuildByWorkflowRun(ctx, req.WorkflowRunId, req.WorkflowAttempt)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	artifacts, err := s.repo.Artifacts().ListArtifacts(ctx, repository.ArtifactListFilter{BuildID: build.BuildID})
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	return &pb.GetReleaseRunResponse{
+		Build:     buildToPB(*build),
+		Artifacts: artifactsToPB(artifacts),
+	}, nil
 }

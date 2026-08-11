@@ -55,8 +55,21 @@ service ArtifactRegistry {
   rpc BeginPublish(BeginPublishRequest) returns (BeginPublishResponse);
   rpc FailPublish(FailPublishRequest) returns (FailPublishResponse);
 
+  // Phase AR-7d (issue #558): the bulk, up-front form of BeginPublish --
+  // called once from the release plan step, before the release matrix fans
+  // out, so every intended target has a "publishing" row from the start.
+  // Closes the gap AR-7b's own scope note left open (a matrix leg that
+  // never starts has no row of any kind) -- see ARCHITECTURE.md "The run
+  // log" -> "As built (AR-7d)".
+  rpc BeginPublishBatch(BeginPublishBatchRequest) returns (BeginPublishBatchResponse);
+
   rpc ListArtifacts(ListArtifactsRequest) returns (ListArtifactsResponse);
   rpc GetArtifact(GetArtifactRequest) returns (GetArtifactResponse);
+
+  // Phase AR-7d (issue #558): the run log CI resumes against -- the build
+  // aggregate plus every child artifact and its state. See
+  // ARCHITECTURE.md "The run log".
+  rpc GetReleaseRun(GetReleaseRunRequest) returns (GetReleaseRunResponse);
 
   // Walk a chart artifact down to the image digests it pins.
   rpc ResolveArtifact(ResolveArtifactRequest) returns (ResolveArtifactResponse);

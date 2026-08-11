@@ -311,6 +311,32 @@ func (r *Registry) GetBuild(ctx context.Context, buildID string) (*repository.Bu
 	return &b, nil
 }
 
+// GetBuildByWorkflowRun mirrors postgres's buildRepo.GetBuildByWorkflowRun
+// -- AR-7d (issue #558). attempt == 0 selects the highest workflow_attempt
+// recorded for workflowRunID.
+func (r *Registry) GetBuildByWorkflowRun(ctx context.Context, workflowRunID string, attempt int32) (*repository.Build, error) {
+	var best *repository.Build
+	for _, b := range r.state.Builds {
+		b := b
+		if b.WorkflowRunID != workflowRunID {
+			continue
+		}
+		if attempt > 0 {
+			if b.WorkflowAttempt == attempt {
+				return &b, nil
+			}
+			continue
+		}
+		if best == nil || b.WorkflowAttempt > best.WorkflowAttempt {
+			best = &b
+		}
+	}
+	if best == nil {
+		return nil, repository.ErrNotFound
+	}
+	return best, nil
+}
+
 // ============================================================================
 // ArtifactRepository
 // ============================================================================
@@ -565,8 +591,18 @@ func (r *Registry) BeginPublish(ctx context.Context, kind repository.ArtifactKin
 		return r.insertArtifact(a, nil, repository.ArtifactStatePublishing, versionSource)
 	}
 
-	if existing.State != repository.ArtifactStateAllocated && existing.State != repository.ArtifactStateFailed {
-		return nil, fmt.Errorf("%w: artifact %s %s is %q, not \"allocated\" or \"failed\" -- BeginPublish cannot start from here",
+	// AR-7d (issue #558): publishing -> publishing is a legal, idempotent
+	// heartbeat/re-arm, not a rejection -- see ArtifactState's doc comment.
+	// Needed because AR-7d's plan-time BeginPublishBatch stamps
+	// state_changed_at for every target at plan time, before the release
+	// matrix fans out; without a per-leg heartbeat call re-arming it right
+	// before that target's own push, the stale-row reaper could reap a row
+	// whose leg simply hadn't started yet, using the WHOLE run's duration
+	// as its budget instead of one leg's.
+	if existing.State != repository.ArtifactStateAllocated &&
+		existing.State != repository.ArtifactStateFailed &&
+		existing.State != repository.ArtifactStatePublishing {
+		return nil, fmt.Errorf("%w: artifact %s %s is %q, not \"allocated\", \"failed\", or \"publishing\" -- BeginPublish cannot start from here",
 			repository.ErrFailedPrecondition, r.ownerFullName(existing), version, existing.State)
 	}
 
@@ -637,15 +673,35 @@ func (r *Registry) ListArtifacts(ctx context.Context, filter repository.Artifact
 				continue
 			}
 		}
+		// GetReleaseRun's (AR-7d, issue #558) filter -- every artifact
+		// hanging off one build, any state.
+		if filter.BuildID != "" && a.BuildID != filter.BuildID {
+			continue
+		}
 		// Promotability is read directly off the stored row -- see
 		// insertArtifact/completePublish, which set it once at publish time
-		// (AR-7c). Not re-derived here.
+		// (AR-7c). Deliberately NOT re-derived here: re-deriving is the
+		// retroactivity bug AR-7c fixed (editing a release_app rule would
+		// change the promotability of artifacts published before the edit).
 		if filter.PromotableOnly && a.Promotability != repository.PromotabilityPromotable {
 			continue
 		}
 		out = append(out, a)
 	}
-	sortArtifacts(out)
+	if filter.BuildID != "" {
+		// Mirrors postgres's build_id-filtered ORDER BY state_changed_at --
+		// published_at is empty for everything short of "published", which
+		// sortArtifacts's default ordering would otherwise bunch together
+		// in an arbitrary relative order.
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].StateChangedAt.Equal(out[j].StateChangedAt) {
+				return out[i].ArtifactID < out[j].ArtifactID
+			}
+			return out[i].StateChangedAt.Before(out[j].StateChangedAt)
+		})
+	} else {
+		sortArtifacts(out)
+	}
 	return out, nil
 }
 

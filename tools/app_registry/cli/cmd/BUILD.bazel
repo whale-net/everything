@@ -32,6 +32,7 @@ go_library(
 go_test(
     name = "cmd_test",
     srcs = [
+        "builds_test.go",
         "promote_test.go",
         "root_test.go",
     ],

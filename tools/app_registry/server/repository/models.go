@@ -226,8 +226,11 @@ type ArtifactLink struct {
 // publishing (BeginPublish with no prior allocation -- the pre-cutover
 // path), allocated -> publishing (BeginPublish), publishing -> published
 // (RecordArtifact), publishing -> failed (FailPublish, or the reaper),
-// failed -> publishing (a later run retrying the same version). published
-// is terminal; anything else is FailedPrecondition.
+// failed -> publishing (a later run retrying the same version), publishing
+// -> publishing (BeginPublish again -- AR-7d, issue #558: an idempotent
+// heartbeat/re-arm of state_changed_at, not a no-op; see BeginPublish's own
+// doc comment for why this exists). published is terminal; anything else
+// is FailedPrecondition.
 type ArtifactState string
 
 const (
@@ -325,11 +328,19 @@ type ContainedImageInput struct {
 	Digest      string
 }
 
-// ArtifactListFilter is ListArtifactsRequest's filter set.
+// ArtifactListFilter is ListArtifactsRequest's filter set. BuildID has no
+// corresponding request field on ListArtifactsRequest itself -- it exists
+// so GetReleaseRun (AR-7d, issue #558) can reuse ListArtifacts rather than
+// standing up a second query, filtering on the column every state from
+// "publishing" onward carries (see ArtifactState's doc comment -- an
+// "allocated" row never has one). BeginPublishBatch (AR-7d) writes straight
+// to "publishing", carrying build_id, precisely so a target it covers is
+// never left in "allocated" with nothing to filter on here.
 type ArtifactListFilter struct {
 	OwnerFullName  string
 	Kind           ArtifactKind
 	PromotableOnly bool
+	BuildID        string
 }
 
 // ArtifactLookup identifies an artifact by exactly one of the supported

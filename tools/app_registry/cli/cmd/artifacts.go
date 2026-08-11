@@ -21,6 +21,7 @@ func newArtifactsCmd() *cobra.Command {
 		newArtifactsResolveCmd(),
 		newArtifactsRecordCmd(),
 		newArtifactsBeginPublishCmd(),
+		newArtifactsBeginPublishBatchCmd(),
 		newArtifactsFailPublishCmd(),
 	)
 	return artifactsCmd
@@ -151,6 +152,90 @@ func newArtifactsBeginPublishCmd() *cobra.Command {
 	_ = c.MarkFlagRequired("version")
 	_ = c.MarkFlagRequired("build-id")
 	_ = c.MarkFlagRequired("idempotency-key")
+	return c
+}
+
+// beginPublishBatchTargetJSON is the wire shape --targets expects: a JSON
+// array file, one entry per target BeginPublishBatch should transition to
+// "publishing". Deliberately generic (kind/owner/version) rather than
+// mirroring release_helper_go's plan-matrix shape (domain/app/version)
+// verbatim -- the caller (a jq transform in release.yml's plan-release job)
+// derives owner_full_name = "<domain>-<app>" itself, so this file format
+// stays reusable for a future chart-side batch call too, not just images.
+type beginPublishBatchTargetJSON struct {
+	Kind    string `json:"kind"`
+	Owner   string `json:"owner"`
+	Version string `json:"version"`
+}
+
+// newArtifactsBeginPublishBatchCmd is AR-7d's (issue #558) closing of the
+// gap AR-7b's own scope note left open: called ONCE from the release plan
+// step, before the release matrix fans out, so every intended target
+// already has a "publishing" row -- and therefore shows up in
+// `builds status` -- even if its own matrix leg never starts. See
+// ARCHITECTURE.md "The run log" -> "As built (AR-7d)".
+func newArtifactsBeginPublishBatchCmd() *cobra.Command {
+	var buildID, targetsFile, idempotencyKeyPrefix string
+	c := &cobra.Command{
+		Use:   "begin-publish-batch",
+		Short: "Begin publishing every target of a release run, before the matrix fans out (CI)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			data, err := os.ReadFile(targetsFile)
+			if err != nil {
+				return fmt.Errorf("read --targets %s: %w", targetsFile, err)
+			}
+			var targets []beginPublishBatchTargetJSON
+			if err := json.Unmarshal(data, &targets); err != nil {
+				return fmt.Errorf("parse --targets %s: %w", targetsFile, err)
+			}
+			if len(targets) == 0 {
+				return fmt.Errorf("--targets %s contains no targets", targetsFile)
+			}
+
+			req := &pb.BeginPublishBatchRequest{
+				BuildId:              buildID,
+				IdempotencyKeyPrefix: idempotencyKeyPrefix,
+			}
+			for _, t := range targets {
+				k, err := parseArtifactKind(t.Kind)
+				if err != nil {
+					return fmt.Errorf("target %s: %w", t.Owner, err)
+				}
+				req.Targets = append(req.Targets, &pb.BeginPublishBatchTarget{
+					Kind:          k,
+					OwnerFullName: t.Owner,
+					Version:       t.Version,
+				})
+			}
+
+			return withClient(cmd, func(rc *registryClient) error {
+				resp, err := rc.Artifact.BeginPublishBatch(cmd.Context(), req)
+				if err != nil {
+					return err
+				}
+				failed := 0
+				for _, r := range resp.Results {
+					if r.Error != "" {
+						failed++
+						fmt.Fprintf(os.Stderr, "::warning title=App Registry: begin-publish-batch target failed::%s %s: %s\n", r.OwnerFullName, r.Version, r.Error)
+					}
+				}
+				if err := printResponse(resp); err != nil {
+					return err
+				}
+				if failed > 0 {
+					return fmt.Errorf("%d of %d targets failed begin-publish (see warnings above)", failed, len(resp.Results))
+				}
+				return nil
+			})
+		},
+	}
+	c.Flags().StringVar(&buildID, "build-id", "", "Build id returned by 'builds record'")
+	c.Flags().StringVar(&targetsFile, "targets", "", `Path to a JSON array of {"kind","owner","version"} targets`)
+	c.Flags().StringVar(&idempotencyKeyPrefix, "idempotency-key-prefix", "", "Required. <workflow_run_id>-<attempt> -- each target's own key is derived as <prefix>-<owner>-<kind>-intent, deliberately distinct from the per-leg BeginPublish call's key")
+	_ = c.MarkFlagRequired("build-id")
+	_ = c.MarkFlagRequired("targets")
+	_ = c.MarkFlagRequired("idempotency-key-prefix")
 	return c
 }
 

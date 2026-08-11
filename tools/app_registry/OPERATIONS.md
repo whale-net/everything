@@ -211,6 +211,91 @@ to whatever the SCD2 history shows as the immediately preceding promotion for
 that target — there is no version argument, and no history means rollback is
 rejected outright (nothing to roll back to).
 
+## A release run didn't complete
+
+**AR-7d (issue #558).** A release run spans real GHCR pushes across a GitHub
+Actions matrix — it can be killed, time out, or fail partway through, leaving
+some images pushed and recorded and others not. This is the recovery path:
+find out exactly what's missing, then re-run the workflow to finish only
+that.
+
+**Requires `APP_REGISTRY_CICD_OPT_IN=true`.** With the opt-in off, CI makes
+no registry calls at all (see ["Is the registry actually in use right
+now?"](#is-the-registry-actually-in-use-right-now)), so there is no run log
+to query — fall back to reading the workflow run's job list by hand.
+
+### 1. Ask the registry what's incomplete
+
+```bash
+app-registry builds status <workflow-run-id>              # everything: build + every child artifact's state
+app-registry builds status <workflow-run-id> --incomplete  # only artifacts NOT yet 'published'
+app-registry builds status <workflow-run-id> --attempt 2   # a specific re-run attempt (default: the latest recorded)
+```
+
+`<workflow-run-id>` is the numeric id in the GitHub Actions run URL
+(`.../actions/runs/<workflow-run-id>`), the same value `release.yml` passes
+as `github.run_id`. Each artifact in the output carries a `state`:
+
+| State | Meaning |
+|---|---|
+| `ARTIFACT_STATE_PUBLISHING` | Intent recorded (or the push started), but no digest yet. **Incomplete** — either still running, or was killed before pushing/recording. |
+| `ARTIFACT_STATE_PUBLISHED` | Done. Nothing to do. |
+| `ARTIFACT_STATE_FAILED` | `FailPublish` ran on the error path (or the stale-row reaper timed it out — check `fail_reason`, `"stale"` means the latter). **Incomplete** — needs a re-attempt. |
+| `ARTIFACT_STATE_ALLOCATED` | Reserved a version but never started publishing — only possible for a domain at adoption stage `allocate` (none are, as of this writing; see `domain_adoption`). **Incomplete.** |
+
+An empty response with no `NotFound` error and zero artifacts, for a run
+that definitely built something, most likely means `APP_REGISTRY_CICD_OPT_IN`
+was off for that run — check the run's own logs for skipped App Registry
+steps, same as the "Is the registry actually in use" checks above.
+
+**Why every target shows up, even one whose matrix leg never started at
+all.** `plan-release`'s "Begin publish batch in App Registry" step calls
+`BeginPublishBatch` (`app-registry artifacts begin-publish-batch`) once,
+before the release matrix fans out, transitioning every planned app to
+`publishing` up front. This is what makes a leg that GitHub Actions never
+even got around to scheduling still show up as an incomplete child here —
+without it (AR-7b's original, narrower behavior), that leg would have no row
+at all, indistinguishable from "not part of this run." See
+[ARCHITECTURE.md "The run log"](ARCHITECTURE.md#the-run-log-ci-orchestrates-the-registry-records)
+for the full mechanism.
+
+### 2. Re-run the workflow
+
+Re-run the failed jobs (GitHub Actions → the run → "Re-run failed jobs", or
+"Re-run all jobs" if the plan step itself needs to redo work). This is a
+**resume, not a blind retry**:
+
+- An app already `published` needs no action — `release-multiarch` still
+  runs for it (there is no per-app skip in the build step itself), but the
+  recording calls for it are idempotent replays (same
+  `<workflow_run_id>-<attempt>-<owner>-<kind>` key), not new writes.
+- An app still `publishing` or `failed` re-attempts its push and recording
+  normally — `BeginPublish`'s `failed -> publishing` transition (or a
+  same-target idempotent replay of an already-`publishing` row) picks up
+  right where it left off.
+- The chart release (`release-helm-charts`) runs after every app leg, so it
+  naturally waits for a re-run's app legs to finish before resolving image
+  digests — no separate chart-side action needed.
+
+**Do not manually re-push an already-published image "to be safe."**
+Re-pushing eight images because the ninth failed is exactly the failure mode
+this design avoids — `RecordArtifact`'s different-digest-on-an-already-
+published-version check would reject it anyway if the rebuild produced a
+different digest (a non-reproducible build, its own problem to chase down).
+
+### 3. Confirm it finished
+
+```bash
+app-registry builds status <workflow-run-id> --incomplete
+```
+
+Empty output (after the re-run's own new `--attempt`, or against the
+original if GitHub Actions reused the same run) means every child reached
+`published`. If something is still incomplete after a re-run, re-check step
+1's table — a `FAILED` row with a non-`"stale"` `fail_reason` usually points
+at a real, recurring problem (a bad Dockerfile, a registry permissions
+issue) rather than something a second re-run will fix on its own.
+
 ## Checking for drift
 
 Drift, here, specifically means: an image was promoted directly
