@@ -398,8 +398,8 @@ tradeoff above, not a separate gap to close.
 ## Release lifecycle (issue #558)
 
 **Status: AR-7a and AR-7b built and merged to `main` (#561, #562); AR-7c,
-AR-7d, and AR-7e built, not yet merged; AR-7f designed, not built.** Delivery
-is PLAN.md's AR-7. Five slices of this section describe real code: AR-7a's —
+AR-7d, AR-7e, and AR-7f built, not yet merged.** Delivery is PLAN.md's
+AR-7. Six slices of this section describe real code: AR-7a's —
 ordering 4, partial-apply reconcile, domain-qualified chart app references,
 and the `continue-on-error` drop on `ci.yml`'s sweep job — AR-7b's — the
 artifact lifecycle (`allocated → publishing → published → failed`),
@@ -408,14 +408,15 @@ migration `007`, `BeginPublish`/`FailPublish`, `RecordArtifact`'s
 migration `008`, the app identity / manifest-snapshot split, `AssertApps`,
 and `artifact`'s stored `manifest_id`/`promotability` — AR-7d's —
 `GetReleaseRun`, the up-front intent write, `builds status --incomplete`,
-and re-run-as-resume — and AR-7e's — `AdoptArtifact`, its admin-only
+and re-run-as-resume — AR-7e's — `AdoptArtifact`, its admin-only
 authorization, the `∅|failed → published(adopted)` state-collision rules,
-and `ListArtifacts`' provenance filter. Compose-time chart hermeticity
-(AR-7f) remains proposed: every table, column and RPC named in that
-subsection is unbuilt. This section supersedes "Release-vs-reconcile gap
-(issue #547)" above — AR-7c closes that gap for real, see the callout there
-— and changes what "Availability and bootstrap" below promises; both are
-cross-referenced where that happens.
+and `ListArtifacts`' provenance filter — and AR-7f's —
+`ArtifactRegistry.CheckChartHermeticity` and its call site in
+`tools/release_helper_go`'s `build-helm-chart`, see "Compose-time chart
+hermeticity" below. Every sub-phase of AR-7 is now implemented. This section
+supersedes "Release-vs-reconcile gap (issue #547)" above — AR-7c closes that
+gap for real, see the callout there — and changes what "Availability and
+bootstrap" below promises; both are cross-referenced where that happens.
 
 ### The problem: four cross-run orderings, three of them unenforced
 
@@ -965,6 +966,63 @@ this writing; that cutover is a separate, explicit operational action (see
 "Per-domain cutover gate" in the Version model section above), not part of
 this change.
 
+### Compose-time chart hermeticity (AR-7f, issue #558)
+
+**Built.** The reject in "Chart → image lockfile" below ("a chart may not
+pin an unknown artifact") only fires at *record* time — after the chart has
+already been packaged and pushed to ChartMuseum. AR-7f moves the same rule
+earlier, to *compose* time, for domains that have earned the stricter
+guarantee: `domain_adoption.stage = 'allocate'` (see "Availability, restated
+per adoption stage" above — the same per-domain gate every other AR-7
+tightening in this document uses, and "Rejected alternatives" below for why
+it is per-domain and not repo-wide).
+
+**Where the check runs, and why that is hermetic.** `ArtifactRegistry`
+gained one new read-only RPC, `CheckChartHermeticity(chart_domain, pins)`.
+Server-side (`server/handlers/chart_hermeticity.go`) it reads
+`chart_domain`'s adoption stage; at anything other than `allocate` it
+returns `enforced = false` and does no further work. At `allocate` it looks
+up each pin (`app_full_name`, `version`) via the same `Artifacts().
+GetArtifact` the CLI's `artifacts get` already exposes, and reports a
+violation for anything not found or not yet `ArtifactStatePublished`.
+
+The caller is `tools/release_helper_go`'s `build-helm-chart` command
+(`cmd/chart_hermeticity.go`), called right after it resolves each member
+app's release version and before it packages the chart or anything is
+pushed. This is deliberately **not** inside `tools/helm/composer.go` or any
+Bazel action: `composer.go` runs inside `bazel build` as part of
+`build-helm-chart` a few lines earlier, with zero code changed and zero
+registry access added — it still only bakes `AppMetadata.Version` (usually
+the "latest" placeholder; see "Chart → image lockfile") into the compose-time
+image lockfile, exactly as before AR-7f. `build-helm-chart` itself is a CLI
+binary the release workflow invokes as its own step, outside any Bazel
+action's sandbox — the same place `read-chart-lockfile` and the digest
+resolution it feeds already make a registry call today (AR-2c). Putting the
+new check there keeps the Bazel graph exactly as reproducible as it was:
+no chart build result depends on network state, so nothing poisons the
+remote cache and nothing breaks on a machine with no registry access.
+
+**No-op posture.** `checkChartHermeticity` reads `APP_REGISTRY_CICD_OPT_IN`
+directly and returns immediately — no dial, no RPC — unless it is exactly
+`"true"`, the same bootstrap kill switch every other integration point in
+this document already hangs on (see "`APP_REGISTRY_CICD_OPT_IN`" below).
+That is what keeps `bazel build` — and `build-helm-chart` run without
+`--use-released`, i.e. every contributor's laptop — untouched. A transport
+or auth error talking to the registry (opt-in on, registry unreachable) is
+also **not** fatal: it is logged as a warning and the build proceeds, the
+same best-effort posture release.yml's other App Registry steps have at
+adoption stage `observe`/`promote`. Only an actual `enforced = true`
+response naming violations fails the chart build, and it fails naming every
+offending `app_full_name`/version pair.
+
+**Ships inert.** No domain is at adoption stage `allocate` today (see
+"Relationship to AR-5" above) — `CheckChartHermeticity` always returns
+`enforced = false` in every environment that exists right now, the same way
+AR-5a shipped `AllocateVersion` fully implemented but unreachable. It starts
+to bite the first time a domain's `domain_adoption.stage` row is moved to
+`allocate`, which is a separate, explicit operational action, not part of
+this change.
+
 ### Rejected alternatives (issue #558)
 
 | Approach | Why rejected |
@@ -975,7 +1033,7 @@ this change.
 | Registry orchestrates the release saga (inbound Temporal workflow) | Breaks "Record, don't act" — the registry would become a deployment system. CI orchestrates; the registry logs. Temporal stays on the outbound writeback path only. |
 | SCD2 on `app` for "what did this app look like at time T" | The append-only per-build manifest snapshot already *is* the history and matches the rest of the schema; SCD2 on identity would add a second history mechanism. Consistent with #553. |
 | A `build_target` table declaring the run's intended children up front | Rejected: the plan step writes `allocated` rows at every adoption stage (see "The run log"), so that state already *is* the declaration. A second table would restate it in a shape that can disagree with the run. |
-| Enforce "charts may only pin registry-known images" at chart **compose** time, repo-wide | Rejected as a repo-wide switch, kept as a per-domain one (AR-7f): gated on `domain_adoption.stage = 'allocate'`, exactly like every other tightening here. Repo-wide, no chart could build until every member app had released through the registry once; per-domain, a domain only meets the strict rule after it has been releasing through the registry anyway, and chart builds fail before anything is pushed instead of after. |
+| Enforce "charts may only pin registry-known images" at chart **compose** time, repo-wide | Rejected as a repo-wide switch, kept as a per-domain one (**built as AR-7f**): gated on `domain_adoption.stage = 'allocate'`, exactly like every other tightening here. Repo-wide, no chart could build until every member app had released through the registry once; per-domain, a domain only meets the strict rule after it has been releasing through the registry anyway, and chart builds fail before anything is pushed instead of after. |
 
 ## Promotability
 
@@ -1043,6 +1101,12 @@ future chart release containing it, permanently. The artifact lifecycle in
 "Release lifecycle (issue #558)" is what makes the reject safe to keep — the
 image's row exists from `publishing` onward, so failing here means the image
 genuinely was never published.
+
+This reject fires at *record* time, after the chart is already packaged and
+pushed. "Compose-time chart hermeticity (AR-7f, issue #558)" above moves the
+same rule earlier, before anything is pushed, for domains at adoption stage
+`allocate` — still without a registry call inside the Bazel action that
+composes the chart, for the reason stated at the top of this section.
 
 **This is also the deploy-time idempotency guarantee for a promoted chart's
 app list — see "Resolved questions" #4.** `contains` is a pure function of

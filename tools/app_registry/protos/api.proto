@@ -85,6 +85,14 @@ service ArtifactRegistry {
   // builder credential a CI job holds; see ARCHITECTURE.md "Authorization"
   // and "Adoption and disaster recovery".
   rpc AdoptArtifact(AdoptArtifactRequest) returns (AdoptArtifactResponse);
+
+  // Phase AR-7f (issue #558): compose-time chart hermeticity, gated per
+  // domain. Called from the release path (tools/release_helper_go's
+  // build-helm-chart, never a Bazel action -- see ARCHITECTURE.md "Chart ->
+  // image lockfile") right after a chart's member app versions are resolved
+  // and before the chart is packaged or anything is pushed. Read-only: it
+  // never writes, so it needs no idempotency_key.
+  rpc CheckChartHermeticity(CheckChartHermeticityRequest) returns (CheckChartHermeticityResponse);
 }
 
 // ============================================================================
