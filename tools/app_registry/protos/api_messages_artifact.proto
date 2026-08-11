@@ -69,6 +69,56 @@ message RecordArtifactResponse {
 }
 
 // ============================================================================
+// Artifact lifecycle (phase AR-7b, issue #558)
+//
+// See ARCHITECTURE.md "Artifact lifecycle: allocated -> publishing ->
+// published". RecordArtifact above becomes the publishing -> published
+// transition once these are wired into release.yml; it keeps its
+// create-directly-as-published path for owners whose domain is still at
+// adoption stage "observe".
+// ============================================================================
+
+// BeginPublishRequest is the ∅|allocated|failed -> publishing transition,
+// called immediately before a release run pushes an image or chart.
+message BeginPublishRequest {
+  ArtifactKind kind = 1;
+
+  // For kind == IMAGE: the app's "<domain>-<name>".
+  // For kind == CHART: the chart's "<domain>-<name>".
+  string owner_full_name = 2;
+
+  string version = 3;  // semver tag, validated as v<major>.<minor>.<patch>
+  string build_id = 4;
+
+  // Required. "<workflow_run_id>-<attempt>-<owner_full_name>-<kind>".
+  string idempotency_key = 5;
+}
+
+message BeginPublishResponse {
+  Artifact artifact = 1;
+}
+
+// FailPublishRequest is the publishing -> failed transition, called on
+// release.yml's error path immediately after a BeginPublish for the same
+// target (or by the stale-row reaper, server-side, with reason "stale" --
+// not through this RPC).
+message FailPublishRequest {
+  ArtifactKind kind = 1;
+  string owner_full_name = 2;
+  string version = 3;
+
+  // Required -- why the publish failed.
+  string reason = 4;
+
+  // Required. "<workflow_run_id>-<attempt>-<owner_full_name>-<kind>".
+  string idempotency_key = 5;
+}
+
+message FailPublishResponse {
+  Artifact artifact = 1;
+}
+
+// ============================================================================
 // Reads
 // ============================================================================
 

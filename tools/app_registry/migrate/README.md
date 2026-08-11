@@ -35,7 +35,7 @@ ArgoCD sync waves. See `friendly_computing_machine/docs/argocd-integration.md`.
 | `004_writeback_outbox` (AR-4b) | `writeback_outbox` |
 | `005_version_allocation` (AR-5a) | `artifact.version_major/minor/patch` + backfill, `artifact_version_order_idx`, `version_allocation` |
 | `006_reconcile_watermark` (issue #545) | `reconcile_watermark` — singleton row guarding `ReconcileApps` against a stale (older-commit) call landing after a newer one |
-| `007_artifact_lifecycle` (AR-7b, **planned**) | `artifact.state`/`provenance`/`state_changed_at`, nullable `digest`/`build_id`, partial-unique digest index, `version_allocation` folded in and dropped |
+| `007_artifact_lifecycle` (AR-7b, issue #558) | `artifact.state`/`provenance`/`version_source`/`state_changed_at`/`fail_reason`, nullable `digest`/`build_id`/`published_at`, `artifact_state_shape` CHECK, partial-unique `artifact_digest_idx` (`WHERE digest IS NOT NULL`), `artifact_state_idx` (reaper sweep), `version_allocation` folded into `artifact` as `state = 'allocated'` and dropped |
 | `008_app_identity_split` (AR-7c, **planned**) | append-only `app_manifest`/`chart_manifest` snapshots, `artifact.manifest_id`/`promotability`, `app`/`chart` lose their mutable metadata, `v_current_app`/`v_current_chart` |
 
 Split this way so AR-2 needs only `001`, AR-3b adds `002`, AR-3c adds `003`,
@@ -51,6 +51,15 @@ to `005`. Migration numbers must be unique: golang-migrate fails on a
 duplicate version at **deploy** time, not build time, so a collision is
 invisible to CI.
 
+**Numbering note (AR-7b):** PLAN.md's AR-7 design section names this
+migration `007_artifact_lifecycle` throughout, and that is exactly what it
+is numbered here too — `006` was already taken by `006_reconcile_watermark`
+(issue #545, landed between the AR-7 design session and AR-7b's
+implementation), so there was no free `006` to reuse and no renumbering was
+needed. Called out explicitly because AR-4b/AR-5a's `004` collision above is
+the kind of mistake this note exists to prevent a future phase from
+repeating.
+
 ## Required indexes
 
 Do not omit these; they are load-bearing, not optimizations.
@@ -65,10 +74,17 @@ CREATE UNIQUE INDEX promotion_current_idx
 CREATE INDEX promotion_window_idx
   ON promotion (environment_id, target_key, valid_from DESC);
 
--- digest is the real artifact identity
-CREATE UNIQUE INDEX artifact_digest_idx ON artifact (digest);
+-- digest is the real artifact identity. As of migration 007 (AR-7b), NULL
+-- for every allocated/publishing/failed row (they have no digest yet) --
+-- WHERE digest IS NOT NULL says what is meant: unique among artifacts that
+-- HAVE one.
+CREATE UNIQUE INDEX artifact_digest_idx ON artifact (digest) WHERE digest IS NOT NULL;
 
--- version allocation collision guard (AR-5 depends on this)
+-- version allocation collision guard (AR-5 depends on this). As of
+-- migration 007, this ALSO spans allocated/publishing/failed rows (the
+-- version_allocation table it used to share this job with is gone -- see
+-- "Planned migrations" above), so it now does double duty as both the
+-- published-artifact collision guard and the allocation-collision guard.
 CREATE UNIQUE INDEX artifact_version_idx ON artifact (owner_id, kind, version);
 
 -- numeric ordering for "latest"/"next" -- TEXT ordering on `version` is
@@ -77,9 +93,13 @@ CREATE UNIQUE INDEX artifact_version_idx ON artifact (owner_id, kind, version);
 CREATE INDEX artifact_version_order_idx
   ON artifact (owner_id, kind, version_major DESC, version_minor DESC, version_patch DESC);
 
--- AllocateVersion's reservation ledger -- same collision guard shape as
--- artifact_version_idx, but on a table that doesn't require a digest/build.
-CREATE UNIQUE INDEX version_allocation_idx ON version_allocation (owner_id, kind, version);
+-- AR-7b (migration 007): backs the stale-row reaper's sweep
+-- ("state IN ('allocated','publishing') AND state_changed_at < cutoff") --
+-- see ENV.md's ARTIFACT_REAPER_* variables and worker/README.md. Partial so
+-- it only ever indexes the small, transient set of in-flight rows,
+-- regardless of how large the published/failed tail of the table grows.
+CREATE INDEX artifact_state_idx ON artifact (state, state_changed_at)
+  WHERE state IN ('allocated', 'publishing');
 ```
 
 `reconcile_watermark` (`006`) is seeded with exactly one sentinel row at

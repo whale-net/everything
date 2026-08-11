@@ -111,15 +111,34 @@ type BuildRepository interface {
 	GetBuild(ctx context.Context, buildID string) (*Build, error)
 }
 
-// ArtifactRepository covers `artifact` and `artifact_link`.
+// ArtifactRepository covers `artifact` and `artifact_link`. As of AR-7b
+// (migration 007), `artifact` rows carry the allocated -> publishing ->
+// published -> failed lifecycle described in ArtifactState's doc comment —
+// every method below that writes a row must enforce the legal-transition
+// table there, translating any other starting state into
+// ErrFailedPrecondition.
 type ArtifactRepository interface {
-	// RecordArtifact inserts an artifact, or — if one with the same digest
-	// already exists — returns it unchanged with alreadyRecorded=true (the
-	// digest is the natural key; this mirrors BuildRepository.RecordBuild).
-	// For kind == chart, every entry in contains must already be recorded
+	// RecordArtifact is the publishing -> published transition: it looks
+	// for an existing row by digest first (the natural key — a repeat with
+	// the SAME digest is an idempotent success, alreadyRecorded=true,
+	// mirroring BuildRepository.RecordBuild), then by (owner, kind,
+	// version). A "publishing" row there is completed (digest/published_at
+	// set, state -> published). A "published" row there with a DIFFERENT
+	// digest is a real conflict (ErrAlreadyExists) — a different digest for
+	// an already-published version is rejected, not merged. A "publishing"
+	// row is not found and there is no existing row at all: creating
+	// directly in "published" is allowed only when domainStage ==
+	// DomainAdoptionStageObserve (ARCHITECTURE.md "Backward compatibility
+	// during rollout" — this is what lets CI adopt BeginPublish per domain
+	// instead of in one cutover); any other stage rejects with
+	// ErrFailedPrecondition, since BeginPublish must have run first. An
+	// "allocated" or "failed" row found by (owner, kind, version) is also
+	// ErrFailedPrecondition — those need BeginPublish (allocated/failed ->
+	// publishing) before RecordArtifact can complete them. For kind ==
+	// chart, every entry in contains must already be a PUBLISHED artifact
 	// (matched by digest) or the call fails with ErrInvalidArgument — a
-	// chart may not pin an unknown artifact.
-	RecordArtifact(ctx context.Context, a Artifact, contains []ContainedImageInput) (artifact *Artifact, alreadyRecorded bool, err error)
+	// chart may not pin an unknown or not-yet-published artifact.
+	RecordArtifact(ctx context.Context, a Artifact, contains []ContainedImageInput, domainStage DomainAdoptionStage) (artifact *Artifact, alreadyRecorded bool, err error)
 
 	ListArtifacts(ctx context.Context, filter ArtifactListFilter) ([]Artifact, error)
 	GetArtifact(ctx context.Context, lookup ArtifactLookup) (*Artifact, error)
@@ -132,16 +151,53 @@ type ArtifactRepository interface {
 	// AllocateVersion reserves the next version for (kind, ownerID) per
 	// ARCHITECTURE.md's version model (AR-5) and PLAN.md's AR-5 addendum:
 	// increment is "major"|"minor"|"patch" and is ignored when
-	// explicitVersion is set. Implementations must perform this as a
-	// transactional INSERT against a unique (owner, kind, version)
-	// constraint so concurrent callers cannot be handed the same version —
-	// see ARCHITECTURE.md and postgres/errors.go's doc comment on
-	// ErrAlreadyExists. Must be called inside Registry.WithTx: a
+	// explicitVersion is set. As of AR-7b (migration 007) this writes an
+	// `artifact` row in state "allocated" directly — the ∅ -> allocated
+	// transition — rather than to the now-retired version_allocation
+	// table; repository is the owning app's/chart's stored
+	// image_repository/chart_repository (required because artifact.repository
+	// is NOT NULL even for a digest-less allocated row). Implementations
+	// must perform this as a transactional INSERT against a unique (owner,
+	// kind, version) constraint so concurrent callers cannot be handed the
+	// same version — see ARCHITECTURE.md and postgres/errors.go's doc
+	// comment on ErrAlreadyExists. Must be called inside Registry.WithTx: a
 	// unique-constraint collision aborts the whole transaction (the
 	// "transaction abort" hazard PLAN.md flags), so a caller retrying on
 	// ErrAlreadyExists MUST do so in a FRESH WithTx call, not the same one —
 	// see server/handlers/artifact.go's AllocateVersion for the retry loop.
-	AllocateVersion(ctx context.Context, kind ArtifactKind, ownerID, increment, explicitVersion string) (*VersionAllocation, error)
+	AllocateVersion(ctx context.Context, kind ArtifactKind, ownerID, repository, increment, explicitVersion string) (*VersionAllocation, error)
+
+	// BeginPublish is the ∅|allocated|failed -> publishing transition (see
+	// ArtifactState's doc comment), identified by (kind, ownerID, version).
+	// buildID is stamped on the row. repositoryHint is used only for the
+	// ∅ -> publishing branch (no prior row exists — the pre-cutover path,
+	// or a domain that never called AllocateVersion for this version):
+	// artifact.repository is NOT NULL, so a fresh row needs one from
+	// somewhere, and an existing allocated/failed row already carries its
+	// own from when it was created. versionSource is likewise only used on
+	// the fresh-create branch; an existing row keeps whatever
+	// AllocateVersion (or a prior BeginPublish) already gave it. Any other
+	// starting state (publishing, published) is ErrFailedPrecondition.
+	// Must be called inside Registry.WithTx — same transactional-write
+	// shape as every other write method here.
+	BeginPublish(ctx context.Context, kind ArtifactKind, ownerID, version, buildID, repositoryHint string, versionSource VersionSource) (*Artifact, error)
+
+	// FailPublish is the publishing -> failed transition, identified by
+	// (kind, ownerID, version). reason is stored on FailReason. Any other
+	// starting state is ErrFailedPrecondition. Must be called inside
+	// Registry.WithTx.
+	FailPublish(ctx context.Context, kind ArtifactKind, ownerID, version, reason string) (*Artifact, error)
+
+	// ExpireStale moves every row in state "allocated" or "publishing"
+	// whose state_changed_at is older than olderThan to "failed" with
+	// FailReason "stale" — see ARCHITECTURE.md "The reaper is not
+	// optional": a cancelled release run would otherwise hold a version
+	// number in the (owner, kind, version) unique index forever. Returns
+	// the number of rows moved. Called by app-registry-worker's periodic
+	// reaper loop against the bare pool, NOT inside Registry.WithTx — same
+	// pattern as WritebackRepository.ClaimBatch, a standalone maintenance
+	// sweep with no other write to be atomic with.
+	ExpireStale(ctx context.Context, olderThan time.Duration) (int, error)
 }
 
 // DomainAdoptionRepository covers the `domain_adoption` table (migration

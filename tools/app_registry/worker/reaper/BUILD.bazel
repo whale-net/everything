@@ -1,0 +1,9 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "reaper",
+    srcs = ["reaper.go"],
+    importpath = "github.com/whale-net/everything/tools/app_registry/worker/reaper",
+    visibility = ["//visibility:public"],
+    deps = ["//tools/app_registry/server/repository"],
+)

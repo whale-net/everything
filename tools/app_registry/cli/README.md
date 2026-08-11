@@ -2,7 +2,8 @@
 
 Thin gRPC client for the App Registry. Skeleton in **AR-1**, commands added
 alongside the RPCs they call in **AR-2** / **AR-3**. All commands below are
-implemented as of **AR-3d**.
+implemented as of **AR-3d**, plus `artifacts begin-publish`/`fail-publish`
+added in **AR-7b**.
 
 ## Thin means thin
 
@@ -26,6 +27,8 @@ app-registry artifacts list <domain-name> [--kind image|chart] [--promotable]
 app-registry artifacts get <domain-name> --version vX.Y.Z
 app-registry artifacts resolve <digest|artifact-id>            # chart -> images
 app-registry artifacts record ... --idempotency-key K          # CI
+app-registry artifacts begin-publish --kind K --owner O --version V --build-id B --idempotency-key K   # CI, AR-7b
+app-registry artifacts fail-publish --kind K --owner O --version V --reason "..." --idempotency-key K  # CI, AR-7b
 
 app-registry builds record ... --idempotency-key K             # CI
 

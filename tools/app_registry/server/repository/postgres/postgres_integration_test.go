@@ -118,14 +118,20 @@ func seedBuild(t *testing.T, pool *pgxpool.Pool, workflowRunID string) string {
 // recordArtifactTx runs RecordArtifact inside a real WithTx transaction,
 // exactly as handlers.runIdempotent does in production -- the postgres
 // repository methods rely on their caller providing transactional scope,
-// they do not open one themselves.
+// they do not open one themselves. domainStage is
+// repository.DomainAdoptionStageObserve, matching every domain's implicit
+// default (no domain_adoption row) -- every pre-AR-7b test in this file
+// relies on RecordArtifact's create-directly-as-published backward-compat
+// path, which is legal only at "observe" (see ARCHITECTURE.md "Backward
+// compatibility during rollout"); AR-7b's own tests call
+// r.Artifacts().RecordArtifact directly when they need a different stage.
 func recordArtifactTx(t *testing.T, reg *Registry, a repository.Artifact, contains []repository.ContainedImageInput) (*repository.Artifact, bool, error) {
 	t.Helper()
 	var out *repository.Artifact
 	var already bool
 	err := reg.WithTx(context.Background(), func(ctx context.Context, r repository.Registry) error {
 		var ferr error
-		out, already, ferr = r.Artifacts().RecordArtifact(ctx, a, contains)
+		out, already, ferr = r.Artifacts().RecordArtifact(ctx, a, contains, repository.DomainAdoptionStageObserve)
 		return ferr
 	})
 	return out, already, err
@@ -180,7 +186,7 @@ func TestRecordArtifact_ChartLinkFailureRollsBackTransaction(t *testing.T) {
 	}
 
 	err := reg.WithTx(ctx, func(ctx context.Context, r repository.Registry) error {
-		_, _, ferr := r.Artifacts().RecordArtifact(ctx, chart, contains)
+		_, _, ferr := r.Artifacts().RecordArtifact(ctx, chart, contains, repository.DomainAdoptionStageObserve)
 		return ferr
 	})
 
@@ -280,7 +286,7 @@ func TestRecordArtifact_DuplicateOwnerKindVersionRejectedByRealIndex(t *testing.
 	second.Digest = "sha256:second"
 
 	err := reg.WithTx(ctx, func(ctx context.Context, r repository.Registry) error {
-		_, _, ferr := r.Artifacts().RecordArtifact(ctx, second, nil)
+		_, _, ferr := r.Artifacts().RecordArtifact(ctx, second, nil, repository.DomainAdoptionStageObserve)
 		return ferr
 	})
 	if err == nil {
@@ -503,12 +509,18 @@ func TestPromotion_CurrentIdxRejectsConcurrentCurrentRows(t *testing.T) {
 
 // seedArtifact inserts a minimal image artifact row directly, for tests that
 // only need a valid artifact_id to hang a promotion off of.
+// seedArtifact inserts a minimal, already-PUBLISHED image artifact row
+// directly (bypassing the repository layer), for tests that only need a
+// valid artifact_id to hang a promotion off of. state/provenance/
+// version_source are NOT NULL as of migration 007 (AR-7b) -- state and
+// version_source have no safe default (see that migration's comments), so
+// every raw INSERT in this file must set them explicitly.
 func seedArtifact(t *testing.T, pool *pgxpool.Pool, appID, buildID, digest, version string) string {
 	t.Helper()
 	var artifactID string
 	err := pool.QueryRow(context.Background(), `
-		INSERT INTO artifact (kind, app_id, repository, version, digest, build_id)
-		VALUES ('image', $1, 'ghcr.io/acme/widget', $2, $3, $4)
+		INSERT INTO artifact (kind, app_id, repository, version, digest, build_id, state, provenance, version_source)
+		VALUES ('image', $1, 'ghcr.io/acme/widget', $2, $3, $4, 'published', 'observed', 'tag')
 		RETURNING artifact_id`, appID, version, digest, buildID).Scan(&artifactID)
 	if err != nil {
 		t.Fatalf("seed artifact %s: %v", digest, err)
@@ -978,13 +990,15 @@ func setDomainAdoptionStage(t *testing.T, pool *pgxpool.Pool, domain, stage stri
 // allocateVersionTx runs Artifacts().AllocateVersion inside a real WithTx
 // transaction, exactly as handlers.ArtifactServer.AllocateVersion's retry
 // loop does in production -- the postgres repository method relies on its
-// caller providing transactional scope.
-func allocateVersionTx(t *testing.T, reg *Registry, kind repository.ArtifactKind, ownerID, increment, explicitVersion string) (*repository.VersionAllocation, error) {
+// caller providing transactional scope. repo is the "ghcr.io/..." value
+// AllocateVersion (AR-7b) now stamps onto the allocated artifact row's
+// NOT-NULL repository column.
+func allocateVersionTx(t *testing.T, reg *Registry, kind repository.ArtifactKind, ownerID, repo, increment, explicitVersion string) (*repository.VersionAllocation, error) {
 	t.Helper()
 	var out *repository.VersionAllocation
 	err := reg.WithTx(context.Background(), func(ctx context.Context, r repository.Registry) error {
 		var ferr error
-		out, ferr = r.Artifacts().AllocateVersion(ctx, kind, ownerID, increment, explicitVersion)
+		out, ferr = r.Artifacts().AllocateVersion(ctx, kind, ownerID, repo, increment, explicitVersion)
 		return ferr
 	})
 	return out, err
@@ -1025,7 +1039,7 @@ func TestAllocateVersion_OrderingIsNumericNotLexical(t *testing.T) {
 		t.Fatalf("seed v1.9.0: %v", err)
 	}
 
-	alloc, err := allocateVersionTx(t, reg, repository.ArtifactKindImage, appID, "patch", "")
+	alloc, err := allocateVersionTx(t, reg, repository.ArtifactKindImage, appID, "ghcr.io/acme/widget", "patch", "")
 	if err != nil {
 		t.Fatalf("AllocateVersion: %v", err)
 	}
@@ -1063,7 +1077,7 @@ func TestAllocateVersion_ConcurrentCallsNeverCollide(t *testing.T) {
 			// a unique-violation aborts the transaction, so each retry opens
 			// a FRESH one via allocateVersionTx.
 			for attempt := 0; attempt < 20; attempt++ {
-				alloc, err := allocateVersionTx(t, reg, repository.ArtifactKindImage, appID, "patch", "")
+				alloc, err := allocateVersionTx(t, reg, repository.ArtifactKindImage, appID, "ghcr.io/acme/widget", "patch", "")
 				if err == nil {
 					versions[idx] = alloc.Version
 					return
@@ -1094,12 +1108,20 @@ func TestAllocateVersion_ConcurrentCallsNeverCollide(t *testing.T) {
 		t.Fatalf("expected %d distinct versions from %d concurrent allocations, got %d: %v", workers, workers, len(seen), versions)
 	}
 
+	// AR-7b: version_allocation is gone -- a successful allocation is now an
+	// `artifact` row in state 'allocated' (see migration 007 and
+	// postgres/artifact.go's AllocateVersion). The assertion this test
+	// exists for is otherwise UNCHANGED: exactly one row per successful
+	// concurrent allocation, proving the unique constraint backing
+	// AllocateVersion (now artifact_version_idx alone, doing double duty --
+	// see migration 007's comments) survived the storage move with no
+	// double-writes from retries.
 	var allocationRows int
-	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM version_allocation WHERE owner_id = $1`, appID).Scan(&allocationRows); err != nil {
-		t.Fatalf("count version_allocation rows: %v", err)
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM artifact WHERE owner_id = $1 AND state = 'allocated'`, appID).Scan(&allocationRows); err != nil {
+		t.Fatalf("count allocated artifact rows: %v", err)
 	}
 	if allocationRows != workers {
-		t.Fatalf("expected exactly %d version_allocation rows (one per successful allocation, no double-writes from retries), found %d", workers, allocationRows)
+		t.Fatalf("expected exactly %d allocated artifact rows (one per successful allocation, no double-writes from retries), found %d", workers, allocationRows)
 	}
 }
 
@@ -1139,12 +1161,16 @@ func TestAllocateVersion_IdempotencyKeyReplay(t *testing.T) {
 		t.Fatalf("expected already_allocated=true on the replayed call")
 	}
 
+	// AR-7b: a successful allocation is an `artifact` row in state
+	// 'allocated' (migration 007) -- see
+	// TestAllocateVersion_ConcurrentCallsNeverCollide's comment for why this
+	// query changed from version_allocation.
 	var allocationRows int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM version_allocation`).Scan(&allocationRows); err != nil {
-		t.Fatalf("count version_allocation rows: %v", err)
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM artifact WHERE state = 'allocated'`).Scan(&allocationRows); err != nil {
+		t.Fatalf("count allocated artifact rows: %v", err)
 	}
 	if allocationRows != 1 {
-		t.Fatalf("idempotency replay double-wrote: expected exactly 1 version_allocation row, found %d", allocationRows)
+		t.Fatalf("idempotency replay double-wrote: expected exactly 1 allocated artifact row, found %d", allocationRows)
 	}
 }
 
@@ -2055,5 +2081,400 @@ func TestReconcile_DomainQualifiedAppRefsResolveUnambiguously_Postgres(t *testin
 	}
 	if resp.CreatedCharts[0].AppIds[0] != domainBApp.AppID {
 		t.Fatalf("expected the chart to resolve to domain-b's app (id=%s), got %+v", domainBApp.AppID, resp.CreatedCharts[0].AppIds)
+	}
+}
+
+// --- 9. artifact lifecycle (AR-7b, issue #558) --------------------------
+//
+// See ARCHITECTURE.md "Artifact lifecycle: allocated -> publishing ->
+// published" for the legal-transition table these tests exercise against
+// real Postgres (not just server/repository/fake): ∅ -> allocated
+// (AllocateVersion), ∅ -> publishing / allocated -> publishing / failed ->
+// publishing (BeginPublish), publishing -> published (RecordArtifact),
+// publishing -> failed (FailPublish). published is terminal.
+
+// beginPublishTx runs Artifacts().BeginPublish inside a real WithTx
+// transaction, exactly as handlers.ArtifactServer.BeginPublish does in
+// production.
+func beginPublishTx(t *testing.T, reg *Registry, kind repository.ArtifactKind, ownerID, version, buildID, repositoryHint string, versionSource repository.VersionSource) (*repository.Artifact, error) {
+	t.Helper()
+	var out *repository.Artifact
+	err := reg.WithTx(context.Background(), func(ctx context.Context, r repository.Registry) error {
+		var ferr error
+		out, ferr = r.Artifacts().BeginPublish(ctx, kind, ownerID, version, buildID, repositoryHint, versionSource)
+		return ferr
+	})
+	return out, err
+}
+
+// failPublishTx runs Artifacts().FailPublish inside a real WithTx
+// transaction, exactly as handlers.ArtifactServer.FailPublish does in
+// production.
+func failPublishTx(t *testing.T, reg *Registry, kind repository.ArtifactKind, ownerID, version, reason string) (*repository.Artifact, error) {
+	t.Helper()
+	var out *repository.Artifact
+	err := reg.WithTx(context.Background(), func(ctx context.Context, r repository.Registry) error {
+		var ferr error
+		out, ferr = r.Artifacts().FailPublish(ctx, kind, ownerID, version, reason)
+		return ferr
+	})
+	return out, err
+}
+
+// artifactStateRow reads back state/fail_reason/digest/build_id for one
+// artifact row directly -- assertions the repository.Artifact struct a
+// call returns doesn't need to carry every raw column for.
+func artifactStateRow(t *testing.T, pool *pgxpool.Pool, artifactID string) (state, failReason string, hasDigest, hasBuildID bool) {
+	t.Helper()
+	var digest, buildID *string
+	if err := pool.QueryRow(context.Background(), `
+		SELECT state, fail_reason, digest, build_id FROM artifact WHERE artifact_id = $1`, artifactID).
+		Scan(&state, &failReason, &digest, &buildID); err != nil {
+		t.Fatalf("read artifact state row %s: %v", artifactID, err)
+	}
+	return state, failReason, digest != nil, buildID != nil
+}
+
+// TestArtifactLifecycle_LegalTransitions walks EVERY legal transition in
+// ARCHITECTURE.md's "Artifact lifecycle" table against real Postgres, in
+// one continuous sequence for the same (owner, kind, version): ∅ ->
+// allocated (AllocateVersion), allocated -> publishing (BeginPublish),
+// publishing -> failed (FailPublish), failed -> publishing (BeginPublish
+// retry), publishing -> published (RecordArtifact). A second, independent
+// (owner, kind, version) proves the ∅ -> publishing branch (BeginPublish
+// with no prior allocation, the pre-cutover path) -- and, by coexisting
+// with the first sequence's NULL-digest rows at the same instant, proves
+// artifact_digest_idx's partial `WHERE digest IS NOT NULL` uniqueness
+// doesn't collide multiple digest-less rows.
+func TestArtifactLifecycle_LegalTransitions(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	appID := seedApp(t, pool, "acme", "lifecycle", "image")
+	buildID := seedBuild(t, pool, "run-lifecycle")
+	setDomainAdoptionStage(t, pool, "acme", "allocate")
+
+	// ∅ -> allocated
+	alloc, err := allocateVersionTx(t, reg, repository.ArtifactKindImage, appID, "ghcr.io/acme/lifecycle", "patch", "")
+	if err != nil {
+		t.Fatalf("AllocateVersion (∅ -> allocated): %v", err)
+	}
+	version := alloc.Version
+
+	allocated, err := reg.Artifacts().GetArtifact(context.Background(), repository.ArtifactLookup{
+		OwnerFullName: "acme-lifecycle", Kind: repository.ArtifactKindImage, Version: version,
+	})
+	if err != nil {
+		t.Fatalf("GetArtifact after allocation: %v", err)
+	}
+	if allocated.State != repository.ArtifactStateAllocated {
+		t.Fatalf("expected state allocated, got %q", allocated.State)
+	}
+	if state, _, hasDigest, hasBuildID := artifactStateRow(t, pool, allocated.ArtifactID); state != "allocated" || hasDigest || hasBuildID {
+		t.Fatalf("expected allocated row with NULL digest/build_id, got state=%s hasDigest=%v hasBuildID=%v", state, hasDigest, hasBuildID)
+	}
+
+	// allocated -> publishing
+	publishing, err := beginPublishTx(t, reg, repository.ArtifactKindImage, appID, version, buildID, "", repository.VersionSourceTag)
+	if err != nil {
+		t.Fatalf("BeginPublish (allocated -> publishing): %v", err)
+	}
+	if publishing.State != repository.ArtifactStatePublishing {
+		t.Fatalf("expected state publishing, got %q", publishing.State)
+	}
+	if publishing.VersionSource != repository.VersionSourceRegistry {
+		t.Fatalf("expected version_source to stay REGISTRY from AllocateVersion (BeginPublish's own versionSource arg is ignored on this branch), got %q", publishing.VersionSource)
+	}
+	if state, _, hasDigest, hasBuildID := artifactStateRow(t, pool, publishing.ArtifactID); state != "publishing" || hasDigest || !hasBuildID {
+		t.Fatalf("expected publishing row with NULL digest and a build_id, got state=%s hasDigest=%v hasBuildID=%v", state, hasDigest, hasBuildID)
+	}
+
+	// publishing -> failed
+	failed, err := failPublishTx(t, reg, repository.ArtifactKindImage, appID, version, "push failed")
+	if err != nil {
+		t.Fatalf("FailPublish (publishing -> failed): %v", err)
+	}
+	if failed.State != repository.ArtifactStateFailed {
+		t.Fatalf("expected state failed, got %q", failed.State)
+	}
+	if failed.FailReason != "push failed" {
+		t.Fatalf("expected fail_reason recorded, got %q", failed.FailReason)
+	}
+
+	// failed -> publishing (retry)
+	retried, err := beginPublishTx(t, reg, repository.ArtifactKindImage, appID, version, buildID, "", repository.VersionSourceTag)
+	if err != nil {
+		t.Fatalf("BeginPublish (failed -> publishing): %v", err)
+	}
+	if retried.State != repository.ArtifactStatePublishing {
+		t.Fatalf("expected state publishing after retry, got %q", retried.State)
+	}
+	if retried.FailReason != "" {
+		t.Fatalf("expected fail_reason cleared after a successful retry, got %q", retried.FailReason)
+	}
+
+	// ∅ -> publishing, a SEPARATE (owner, kind, version) -- coexists with
+	// the retried row above, both currently digest-less, while the ORIGINAL
+	// sequence continues below.
+	freshPublishing, err := beginPublishTx(t, reg, repository.ArtifactKindImage, appID, "v9.9.9", buildID, "ghcr.io/acme/lifecycle", repository.VersionSourceTag)
+	if err != nil {
+		t.Fatalf("BeginPublish (∅ -> publishing): %v", err)
+	}
+	if freshPublishing.State != repository.ArtifactStatePublishing {
+		t.Fatalf("expected state publishing for the ∅ -> publishing branch, got %q", freshPublishing.State)
+	}
+	if freshPublishing.VersionSource != repository.VersionSourceTag {
+		t.Fatalf("expected version_source TAG for the ∅ -> publishing branch, got %q", freshPublishing.VersionSource)
+	}
+
+	// publishing -> published
+	published, _, err := recordArtifactTx(t, reg, repository.Artifact{
+		Kind: repository.ArtifactKindImage, AppID: appID,
+		Repository: "ghcr.io/acme/lifecycle", Version: version,
+		Digest: "sha256:lifecycle-final", BuildID: buildID,
+	}, nil)
+	if err != nil {
+		t.Fatalf("RecordArtifact (publishing -> published): %v", err)
+	}
+	if published.State != repository.ArtifactStatePublished {
+		t.Fatalf("expected state published, got %q", published.State)
+	}
+	if published.Digest != "sha256:lifecycle-final" {
+		t.Fatalf("expected digest stamped, got %q", published.Digest)
+	}
+	if state, _, hasDigest, hasBuildID := artifactStateRow(t, pool, published.ArtifactID); state != "published" || !hasDigest || !hasBuildID {
+		t.Fatalf("expected published row with digest and build_id set, got state=%s hasDigest=%v hasBuildID=%v", state, hasDigest, hasBuildID)
+	}
+}
+
+// TestArtifactLifecycle_IllegalTransitionsRejected proves every state that
+// is NOT a legal starting point for BeginPublish/FailPublish/RecordArtifact
+// is rejected against real Postgres (not just server/repository/fake) --
+// FailedPrecondition for an out-of-order transition, AlreadyExists for
+// RecordArtifact's specific different-digest-on-an-already-published-
+// version conflict.
+func TestArtifactLifecycle_IllegalTransitionsRejected(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	appID := seedApp(t, pool, "acme", "illegal", "image")
+	buildID := seedBuild(t, pool, "run-illegal")
+	setDomainAdoptionStage(t, pool, "acme", "allocate")
+
+	t.Run("BeginPublish rejects an already-published row", func(t *testing.T) {
+		if _, _, err := recordArtifactTx(t, reg, repository.Artifact{
+			Kind: repository.ArtifactKindImage, AppID: appID,
+			Repository: "ghcr.io/acme/illegal", Version: "v1.0.0",
+			Digest: "sha256:illegal-published", BuildID: buildID,
+		}, nil); err != nil {
+			t.Fatalf("seed published artifact: %v", err)
+		}
+		_, err := beginPublishTx(t, reg, repository.ArtifactKindImage, appID, "v1.0.0", buildID, "", repository.VersionSourceTag)
+		if !errors.Is(err, repository.ErrFailedPrecondition) {
+			t.Fatalf("expected ErrFailedPrecondition for BeginPublish against a published row, got %v", err)
+		}
+	})
+
+	t.Run("FailPublish rejects an allocated row", func(t *testing.T) {
+		alloc, err := allocateVersionTx(t, reg, repository.ArtifactKindImage, appID, "ghcr.io/acme/illegal", "minor", "")
+		if err != nil {
+			t.Fatalf("AllocateVersion: %v", err)
+		}
+		_, err = failPublishTx(t, reg, repository.ArtifactKindImage, appID, alloc.Version, "should be rejected")
+		if !errors.Is(err, repository.ErrFailedPrecondition) {
+			t.Fatalf("expected ErrFailedPrecondition for FailPublish against an allocated row, got %v", err)
+		}
+	})
+
+	t.Run("RecordArtifact rejects an allocated row with no prior BeginPublish, at a non-observe stage", func(t *testing.T) {
+		alloc, err := allocateVersionTx(t, reg, repository.ArtifactKindImage, appID, "ghcr.io/acme/illegal", "major", "")
+		if err != nil {
+			t.Fatalf("AllocateVersion: %v", err)
+		}
+		err = reg.WithTx(context.Background(), func(ctx context.Context, r repository.Registry) error {
+			_, _, ferr := r.Artifacts().RecordArtifact(ctx, repository.Artifact{
+				Kind: repository.ArtifactKindImage, AppID: appID,
+				Repository: "ghcr.io/acme/illegal", Version: alloc.Version,
+				Digest: "sha256:illegal-skip-publish", BuildID: buildID,
+			}, nil, repository.DomainAdoptionStageAllocate)
+			return ferr
+		})
+		if !errors.Is(err, repository.ErrFailedPrecondition) {
+			t.Fatalf("expected ErrFailedPrecondition for RecordArtifact against an allocated row at domainStage=allocate, got %v", err)
+		}
+	})
+
+	t.Run("RecordArtifact rejects a different digest for an already-published version", func(t *testing.T) {
+		// v9.9.9: distinct from any version the earlier subtests in this
+		// function may have allocated on the same appID (they share `reg`
+		// and run sequentially), so this subtest's own collision is the
+		// only one in play.
+		if _, _, err := recordArtifactTx(t, reg, repository.Artifact{
+			Kind: repository.ArtifactKindImage, AppID: appID,
+			Repository: "ghcr.io/acme/illegal", Version: "v9.9.9",
+			Digest: "sha256:illegal-conflict-original", BuildID: buildID,
+		}, nil); err != nil {
+			t.Fatalf("seed published artifact: %v", err)
+		}
+		_, _, err := recordArtifactTx(t, reg, repository.Artifact{
+			Kind: repository.ArtifactKindImage, AppID: appID,
+			Repository: "ghcr.io/acme/illegal", Version: "v9.9.9",
+			Digest: "sha256:illegal-conflict-different", BuildID: buildID,
+		}, nil)
+		if !errors.Is(err, repository.ErrAlreadyExists) {
+			t.Fatalf("expected ErrAlreadyExists for a different digest on an already-published version, got %v", err)
+		}
+	})
+}
+
+// seedRawArtifact inserts an artifact row directly in the given state,
+// bypassing the repository layer -- for the reaper test below, which needs
+// to control state_changed_at independently of wall-clock time.
+func seedRawArtifact(t *testing.T, pool *pgxpool.Pool, appID string, state repository.ArtifactState, version, buildID string) string {
+	t.Helper()
+	var artifactID string
+	var buildIDArg any
+	if buildID != "" {
+		buildIDArg = buildID
+	}
+	err := pool.QueryRow(context.Background(), `
+		INSERT INTO artifact (kind, app_id, repository, version, build_id, state, provenance, version_source)
+		VALUES ('image', $1, 'ghcr.io/acme/reaper', $2, $3, $4, 'observed', 'tag')
+		RETURNING artifact_id`, appID, version, buildIDArg, string(state)).Scan(&artifactID)
+	if err != nil {
+		t.Fatalf("seed raw artifact %s %s: %v", version, state, err)
+	}
+	return artifactID
+}
+
+// backdateStateChangedAt moves artifactID's state_changed_at back by ago,
+// simulating a row that has been sitting in its current state for a while
+// -- without a real sleep.
+func backdateStateChangedAt(t *testing.T, pool *pgxpool.Pool, artifactID string, ago time.Duration) {
+	t.Helper()
+	// Compute the target timestamp in Go and set it directly, rather than
+	// subtracting a Go time.Duration from state_changed_at in SQL -- pgx
+	// has no implicit conversion from time.Duration to Postgres INTERVAL.
+	target := time.Now().UTC().Add(-ago)
+	if _, err := pool.Exec(context.Background(), `
+		UPDATE artifact SET state_changed_at = $1 WHERE artifact_id = $2`,
+		target, artifactID); err != nil {
+		t.Fatalf("backdate state_changed_at for %s: %v", artifactID, err)
+	}
+}
+
+// TestExpireStale_ReaperTimeout proves ExpireStale (the AR-7b stale-row
+// reaper's sweep) moves BOTH a stale "allocated" row and a stale
+// "publishing" row to "failed" with reason "stale" once their
+// state_changed_at exceeds the timeout, and leaves a FRESH row (well within
+// the timeout) untouched -- see ARCHITECTURE.md "The reaper is not
+// optional": a cancelled release run would otherwise hold a version number
+// in the (owner_id, kind, version) unique index forever.
+func TestExpireStale_ReaperTimeout(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	appID := seedApp(t, pool, "acme", "reaper", "image")
+	buildID := seedBuild(t, pool, "run-reaper")
+
+	staleAllocatedID := seedRawArtifact(t, pool, appID, repository.ArtifactStateAllocated, "v1.0.0", "")
+	stalePublishingID := seedRawArtifact(t, pool, appID, repository.ArtifactStatePublishing, "v1.1.0", buildID)
+	freshAllocatedID := seedRawArtifact(t, pool, appID, repository.ArtifactStateAllocated, "v1.2.0", "")
+
+	backdateStateChangedAt(t, pool, staleAllocatedID, 2*time.Hour)
+	backdateStateChangedAt(t, pool, stalePublishingID, 2*time.Hour)
+	// freshAllocatedID is left at its just-inserted (NOW()) state_changed_at.
+
+	n, err := reg.Artifacts().ExpireStale(context.Background(), time.Hour)
+	if err != nil {
+		t.Fatalf("ExpireStale: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("expected exactly 2 rows expired, got %d", n)
+	}
+
+	if state, reason, _, _ := artifactStateRow(t, pool, staleAllocatedID); state != "failed" || reason != "stale" {
+		t.Fatalf("expected the stale allocated row to be failed/stale, got state=%s reason=%s", state, reason)
+	}
+	if state, reason, _, _ := artifactStateRow(t, pool, stalePublishingID); state != "failed" || reason != "stale" {
+		t.Fatalf("expected the stale publishing row to be failed/stale, got state=%s reason=%s", state, reason)
+	}
+	if state, _, _, _ := artifactStateRow(t, pool, freshAllocatedID); state != "allocated" {
+		t.Fatalf("expected the fresh allocated row to be left alone, got state=%s", state)
+	}
+
+	// A second sweep with nothing newly stale finds nothing left to expire.
+	n2, err := reg.Artifacts().ExpireStale(context.Background(), time.Hour)
+	if err != nil {
+		t.Fatalf("second ExpireStale: %v", err)
+	}
+	if n2 != 0 {
+		t.Fatalf("expected the second sweep to find nothing left to expire, got %d", n2)
+	}
+}
+
+// TestMigration007FoldsVersionAllocationIntoArtifact proves migration 007's
+// fold-in: a pre-existing version_allocation row (inserted directly via
+// SQL, as it would have existed before this migration ran -- see AR-5a)
+// becomes an `artifact` row in state 'allocated', provenance 'observed',
+// version_source 'registry', with its repository DERIVED from the owning
+// app's image_repository (version_allocation itself carried no repository
+// column), and version_allocation itself is dropped afterward.
+func TestMigration007FoldsVersionAllocationIntoArtifact(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	if err != nil {
+		t.Fatalf("open database/sql handle: %v", err)
+	}
+	defer sqlDB.Close()
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	if err := runner.Steps(6); err != nil {
+		t.Fatalf("apply migrations 001-006: %v", err)
+	}
+
+	appID := seedApp(t, db.Pool, "acme", "folded", "image")
+	if _, err := db.Pool.Exec(ctx, `UPDATE app SET image_repository = $1 WHERE app_id = $2`, "ghcr.io/acme/folded", appID); err != nil {
+		t.Fatalf("set image_repository: %v", err)
+	}
+
+	var allocationID string
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO version_allocation (owner_id, kind, version, version_major, version_minor, version_patch)
+		VALUES ($1, 'image', 'v3.4.5', 3, 4, 5)
+		RETURNING version_allocation_id`, appID).Scan(&allocationID); err != nil {
+		t.Fatalf("seed pre-migration-007 version_allocation row: %v", err)
+	}
+
+	if err := runner.Up(); err != nil {
+		t.Fatalf("apply migration 007: %v", err)
+	}
+
+	var state, provenance, versionSource, repo string
+	var digest, buildID *string
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT state, provenance, version_source, repository, digest, build_id
+		FROM artifact WHERE artifact_id = $1`, allocationID).
+		Scan(&state, &provenance, &versionSource, &repo, &digest, &buildID); err != nil {
+		t.Fatalf("read back folded artifact row (expected artifact_id == the old version_allocation_id): %v", err)
+	}
+	if state != "allocated" {
+		t.Fatalf("expected folded row state 'allocated', got %q", state)
+	}
+	if provenance != "observed" {
+		t.Fatalf("expected folded row provenance 'observed', got %q", provenance)
+	}
+	if versionSource != "registry" {
+		t.Fatalf("expected folded row version_source 'registry', got %q", versionSource)
+	}
+	if repo != "ghcr.io/acme/folded" {
+		t.Fatalf("expected folded row repository derived from the owning app's image_repository, got %q", repo)
+	}
+	if digest != nil || buildID != nil {
+		t.Fatalf("expected folded row to carry no digest/build_id, got digest=%v build_id=%v", digest, buildID)
+	}
+
+	var tableExists bool
+	if err := db.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'version_allocation')`).Scan(&tableExists); err != nil {
+		t.Fatalf("check version_allocation table existence: %v", err)
+	}
+	if tableExists {
+		t.Fatalf("expected version_allocation to be dropped by migration 007")
 	}
 }

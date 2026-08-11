@@ -1,0 +1,78 @@
+name: 'App Registry: Begin Publish'
+description: >-
+  Transitions an artifact to "publishing" via `app-registry artifacts
+  begin-publish`, immediately before the image/chart it names is pushed --
+  AR-7b (issue #558), see tools/app_registry/ARCHITECTURE.md "Artifact
+  lifecycle: allocated -> publishing -> published". ∅|allocated|failed ->
+  publishing: works whether or not a prior AllocateVersion call reserved
+  this version (it does not, at every domain today -- see PLAN.md's AR-5a
+  status), which is what lets this step run unconditionally ahead of every
+  push regardless of a domain's adoption stage.
+
+  Requires APP_REGISTRY_CLI env var already set (see
+  .github/actions/download-release-tools).
+
+  Best-effort by default: like app-registry-record-build/-image, this step
+  still fails its own exit status on error (matching the calling step's
+  `continue-on-error: true`), so a caller can branch on
+  `steps.<id>.outcome` to decide whether to attempt FailPublish later.
+
+inputs:
+  address:
+    required: true
+  token-url:
+    required: true
+  client-id:
+    required: true
+  client-secret:
+    required: true
+  kind:
+    description: 'image | chart'
+    required: true
+  owner-full-name:
+    description: '<domain>-<name>, e.g. manmanv2-host-manager'
+    required: true
+  version:
+    description: 'Semver tag, e.g. v1.2.3'
+    required: true
+  build-id:
+    required: true
+  idempotency-key:
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/app-registry-auth
+      with:
+        address: ${{ inputs.address }}
+        token-url: ${{ inputs.token-url }}
+        client-id: ${{ inputs.client-id }}
+        client-secret: ${{ inputs.client-secret }}
+
+    - name: Begin publish
+      shell: bash
+      env:
+        KIND: ${{ inputs.kind }}
+        OWNER: ${{ inputs.owner-full-name }}
+        VERSION: ${{ inputs.version }}
+        BUILD_ID: ${{ inputs.build-id }}
+        IDEMPOTENCY_KEY: ${{ inputs.idempotency-key }}
+      run: |
+        set +e
+        BEGIN_OUTPUT=$("$APP_REGISTRY_CLI" artifacts begin-publish \
+          --kind "$KIND" \
+          --owner "$OWNER" \
+          --version "$VERSION" \
+          --build-id "$BUILD_ID" \
+          --idempotency-key "$IDEMPOTENCY_KEY" 2>&1)
+        BEGIN_EXIT=$?
+        set -e
+
+        if [[ $BEGIN_EXIT -ne 0 ]]; then
+          echo "$BEGIN_OUTPUT"
+          echo "::warning title=App Registry: begin-publish skipped (registry error)::Could not transition ${OWNER} ${VERSION} to 'publishing' in the App Registry -- a registry outage, auth failure, or other transient error. Recording is best-effort; the push still proceeds."
+          exit 1
+        fi
+
+        echo "✅ ${OWNER} ${VERSION} is now 'publishing' in App Registry"

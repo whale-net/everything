@@ -37,21 +37,22 @@ type idemEntry struct {
 // (rather than fields directly on Registry) so it round-trips through JSON
 // cleanly for a cheap deep copy.
 type state struct {
-	Apps            map[string]repository.App
-	Charts          map[string]repository.Chart
-	Builds          map[string]repository.Build
+	Apps   map[string]repository.App
+	Charts map[string]repository.Chart
+	Builds map[string]repository.Build
+	// Artifacts holds every state an artifact row can be in
+	// (allocated/publishing/published/failed -- see
+	// repository.ArtifactState's doc comment). As of AR-7b (migration 007)
+	// this is also where AllocateVersion writes its reservation -- the
+	// separate version_allocation table/map this fake used to mirror is
+	// gone, folded in here exactly as the real schema folded it into
+	// `artifact`.
 	Artifacts       map[string]repository.Artifact
 	Idempotency     map[string]idemEntry
 	Environments    map[string]repository.Environment     // keyed by environment_id
 	Promotions      map[string]repository.Promotion       // keyed by promotion_id
 	PromotionEvents map[string]repository.PromotionEvent  // keyed by event_id
 	WritebackOutbox map[string]repository.WritebackOutbox // keyed by outbox_id
-	// VersionAllocations mirrors postgres's version_allocation table: the
-	// reservation ledger AllocateVersion writes to, keyed by
-	// "<owner_id>/<kind>/<version>" -- see
-	// repository/postgres/artifact.go's AllocateVersion doc comment for why
-	// this isn't just the Artifacts map.
-	VersionAllocations map[string]repository.VersionAllocation
 	// DomainAdoption mirrors the `domain_adoption` table, keyed by domain.
 	// Absent means DomainAdoptionStageObserve -- see
 	// DomainAdoptionRepository.GetStage's doc comment.
@@ -68,17 +69,16 @@ type state struct {
 
 func newState() *state {
 	return &state{
-		Apps:               map[string]repository.App{},
-		Charts:             map[string]repository.Chart{},
-		Builds:             map[string]repository.Build{},
-		Artifacts:          map[string]repository.Artifact{},
-		Idempotency:        map[string]idemEntry{},
-		Environments:       map[string]repository.Environment{},
-		Promotions:         map[string]repository.Promotion{},
-		PromotionEvents:    map[string]repository.PromotionEvent{},
-		WritebackOutbox:    map[string]repository.WritebackOutbox{},
-		VersionAllocations: map[string]repository.VersionAllocation{},
-		DomainAdoption:     map[string]repository.DomainAdoptionStage{},
+		Apps:            map[string]repository.App{},
+		Charts:          map[string]repository.Chart{},
+		Builds:          map[string]repository.Build{},
+		Artifacts:       map[string]repository.Artifact{},
+		Idempotency:     map[string]idemEntry{},
+		Environments:    map[string]repository.Environment{},
+		Promotions:      map[string]repository.Promotion{},
+		PromotionEvents: map[string]repository.PromotionEvent{},
+		WritebackOutbox: map[string]repository.WritebackOutbox{},
+		DomainAdoption:  map[string]repository.DomainAdoptionStage{},
 	}
 }
 
@@ -307,57 +307,61 @@ func (r *Registry) GetBuild(ctx context.Context, buildID string) (*repository.Bu
 // ArtifactRepository
 // ============================================================================
 
-func (r *Registry) RecordArtifact(ctx context.Context, a repository.Artifact, contains []repository.ContainedImageInput) (*repository.Artifact, bool, error) {
+// RecordArtifact mirrors postgres's artifactRepo.RecordArtifact -- the
+// publishing -> published transition, plus (at adoption stage "observe"
+// only) the backward-compatible direct-create path. See
+// repository.ArtifactRepository.RecordArtifact's doc comment for the full
+// state-machine contract.
+func (r *Registry) RecordArtifact(ctx context.Context, a repository.Artifact, contains []repository.ContainedImageInput, domainStage repository.DomainAdoptionStage) (*repository.Artifact, bool, error) {
 	for _, existing := range r.state.Artifacts {
-		if existing.Digest == a.Digest {
+		// digest is empty on every non-published row (mirrors migration
+		// 007's artifact_state_shape CHECK) -- guard explicitly rather than
+		// relying on a.Digest never being "" too, which happens to be true
+		// today but shouldn't be load-bearing.
+		if existing.Digest != "" && existing.Digest == a.Digest {
 			out := existing
 			out.Promotability = r.derivePromotability(existing)
 			return &out, true, nil
 		}
 	}
 
-	// Mirrors postgres's UNIQUE INDEX artifact_version_idx (owner_id, kind,
-	// version): a fresh digest for an (owner, kind, version) already claimed
-	// by a different artifact is a conflict, not a new row. This is the
-	// AR-5 "someone else took this version" path — see
-	// repository/postgres/errors.go's doc comment.
-	if existing, found := r.findByOwnerKindVersion(a); found {
-		return nil, false, fmt.Errorf("%w: artifact %s %s already recorded", repository.ErrAlreadyExists, r.ownerFullName(existing), existing.Version)
-	}
-
-	a.ArtifactID = uuid.NewString()
-
-	if a.Kind == repository.ArtifactKindChart {
-		links := make([]repository.ArtifactLink, 0, len(contains))
-		for _, ci := range contains {
-			img, err := r.findImageByDigest(ci.Digest)
-			if err != nil {
-				return nil, false, err
-			}
-			links = append(links, repository.ArtifactLink{
-				ImageArtifactID: img.ArtifactID,
-				AppID:           img.AppID,
-				Repository:      ci.Repository,
-				Version:         ci.Version,
-				Digest:          ci.Digest,
-			})
+	existing, found := r.findByOwnerKindVersion(a.Kind, ownerID(a), a.Version)
+	if !found {
+		// No row at all for this (owner, kind, version). Creating directly
+		// as "published" is the pre-AR-7b behaviour, kept only for domains
+		// still at adoption stage "observe" -- see ARCHITECTURE.md
+		// "Backward compatibility during rollout".
+		if domainStage != repository.DomainAdoptionStageObserve {
+			return nil, false, fmt.Errorf("%w: no publishing artifact found for %s %s -- BeginPublish must run before RecordArtifact once a domain has left adoption stage \"observe\"",
+				repository.ErrFailedPrecondition, r.ownerFullName(a), a.Version)
 		}
-		a.Contains = links
+		out, err := r.insertArtifact(a, contains, repository.ArtifactStatePublished, repository.VersionSourceTag)
+		return out, false, err
 	}
 
-	r.state.Artifacts[a.ArtifactID] = a
-	out := a
-	out.Promotability = r.derivePromotability(a)
-	return &out, false, nil
+	switch existing.State {
+	case repository.ArtifactStatePublishing:
+		out, err := r.completePublish(existing, a, contains)
+		return out, false, err
+	case repository.ArtifactStatePublished:
+		// Reached only when the digest lookup above missed -- i.e. a
+		// DIFFERENT digest than what is already published for this
+		// (owner, kind, version). A real conflict, not a retry.
+		return nil, false, fmt.Errorf("%w: artifact %s %s already published with digest %s",
+			repository.ErrAlreadyExists, r.ownerFullName(existing), a.Version, existing.Digest)
+	default: // allocated, failed
+		return nil, false, fmt.Errorf("%w: artifact %s %s is %q -- BeginPublish must transition it to \"publishing\" before RecordArtifact can complete it",
+			repository.ErrFailedPrecondition, r.ownerFullName(existing), a.Version, existing.State)
+	}
 }
 
-// findByOwnerKindVersion looks up an existing artifact sharing a's owner
-// (AppID for images, ChartID for charts), kind, and version — the collision
-// the real artifact_version_idx unique index enforces.
-func (r *Registry) findByOwnerKindVersion(a repository.Artifact) (repository.Artifact, bool) {
-	owner := ownerID(a)
+// findByOwnerKindVersion looks up an existing artifact by owner (AppID for
+// images, ChartID for charts), kind, and version — the identity
+// BeginPublish/FailPublish/RecordArtifact all key off of, and the collision
+// the real artifact_version_idx unique index enforces regardless of state.
+func (r *Registry) findByOwnerKindVersion(kind repository.ArtifactKind, owner, version string) (repository.Artifact, bool) {
 	for _, existing := range r.state.Artifacts {
-		if existing.Kind == a.Kind && existing.Version == a.Version && ownerID(existing) == owner {
+		if existing.Kind == kind && existing.Version == version && ownerID(existing) == owner {
 			return existing, true
 		}
 	}
@@ -371,25 +375,95 @@ func ownerID(a repository.Artifact) string {
 	return a.ChartID
 }
 
-// syntheticOwnerArtifact builds a zero artifact carrying just enough (Kind +
-// owner id in the right field + Version) to reuse ownerID()/
-// findByOwnerKindVersion()'s existing owner-matching logic — AllocateVersion
-// only ever has an ownerID, not a full Artifact, to look up with.
-func syntheticOwnerArtifact(kind repository.ArtifactKind, ownerID, version string) repository.Artifact {
-	a := repository.Artifact{Kind: kind, Version: version}
-	if kind == repository.ArtifactKindImage {
-		a.AppID = ownerID
-	} else {
-		a.ChartID = ownerID
+// insertArtifact mirrors postgres's artifactRepo.insertArtifact: writes a
+// brand-new artifact row directly in state, with versionSource and
+// Provenance "observed" -- shared by RecordArtifact's direct-create path,
+// BeginPublish's ∅ -> publishing branch, and AllocateVersion's ∅ ->
+// allocated write.
+func (r *Registry) insertArtifact(a repository.Artifact, contains []repository.ContainedImageInput, state repository.ArtifactState, versionSource repository.VersionSource) (*repository.Artifact, error) {
+	a.ArtifactID = uuid.NewString()
+	a.State = state
+	a.Provenance = repository.ArtifactProvenanceObserved
+	a.VersionSource = versionSource
+	a.StateChangedAt = timeNow()
+	if state == repository.ArtifactStatePublished && a.PublishedAt.IsZero() {
+		a.PublishedAt = timeNow()
 	}
-	return a
+
+	if a.Kind == repository.ArtifactKindChart && state == repository.ArtifactStatePublished {
+		links, err := r.linkContains(contains)
+		if err != nil {
+			return nil, err
+		}
+		a.Contains = links
+	}
+
+	r.state.Artifacts[a.ArtifactID] = a
+	out := a
+	out.Promotability = r.derivePromotability(a)
+	return &out, nil
 }
 
-// AllocateVersion mirrors postgres's artifactRepo.AllocateVersion: "next" is
-// computed from the highest version already claimed for (ownerID, kind)
-// across both real artifacts and prior allocations, so an
+// completePublish mirrors postgres's artifactRepo.completePublish: the
+// publishing -> published transition against an EXISTING row.
+func (r *Registry) completePublish(existing, a repository.Artifact, contains []repository.ContainedImageInput) (*repository.Artifact, error) {
+	updated := existing
+	updated.Digest = a.Digest
+	if a.BuildID != "" {
+		updated.BuildID = a.BuildID
+	}
+	updated.PublishedAt = a.PublishedAt
+	if updated.PublishedAt.IsZero() {
+		updated.PublishedAt = timeNow()
+	}
+	updated.State = repository.ArtifactStatePublished
+	updated.StateChangedAt = timeNow()
+
+	if updated.Kind == repository.ArtifactKindChart {
+		links, err := r.linkContains(contains)
+		if err != nil {
+			return nil, err
+		}
+		updated.Contains = links
+	}
+
+	r.state.Artifacts[updated.ArtifactID] = updated
+	out := updated
+	out.Promotability = r.derivePromotability(updated)
+	return &out, nil
+}
+
+// linkContains mirrors postgres's artifactRepo.linkContains: resolves each
+// contains entry to an already-PUBLISHED image artifact, building the
+// ArtifactLink slice a chart artifact carries. Unlike postgres this fake
+// has no separate artifact_link table to write to -- Contains is stored
+// directly on the chart's Artifact struct (see models.go).
+func (r *Registry) linkContains(contains []repository.ContainedImageInput) ([]repository.ArtifactLink, error) {
+	links := make([]repository.ArtifactLink, 0, len(contains))
+	for _, ci := range contains {
+		img, err := r.findImageByDigest(ci.Digest)
+		if err != nil {
+			return nil, err
+		}
+		links = append(links, repository.ArtifactLink{
+			ImageArtifactID: img.ArtifactID,
+			AppID:           img.AppID,
+			Repository:      ci.Repository,
+			Version:         ci.Version,
+			Digest:          ci.Digest,
+		})
+	}
+	return links, nil
+}
+
+// AllocateVersion mirrors postgres's artifactRepo.AllocateVersion. As of
+// AR-7b this writes the ∅ -> allocated `artifact` row directly (via
+// insertArtifact) instead of to a separate version_allocation map -- "next"
+// is computed from the highest version already claimed for (ownerID, kind)
+// against r.state.Artifacts alone, which now covers both already-published
+// versions and reserved-but-not-yet-published ones in one place, so an
 // allocated-but-not-yet-recorded version is never handed out twice.
-func (r *Registry) AllocateVersion(ctx context.Context, kind repository.ArtifactKind, owner, increment, explicitVersion string) (*repository.VersionAllocation, error) {
+func (r *Registry) AllocateVersion(ctx context.Context, kind repository.ArtifactKind, owner, repo, increment, explicitVersion string) (*repository.VersionAllocation, error) {
 	var hasPrevious bool
 	var previous semver.Version
 	var previousText string
@@ -407,12 +481,6 @@ func (r *Registry) AllocateVersion(ctx context.Context, kind repository.Artifact
 	for _, a := range r.state.Artifacts {
 		if a.Kind == kind && owner == ownerID(a) {
 			consider(a.Version)
-		}
-	}
-	prefix := owner + "/" + string(kind) + "/"
-	for key, alloc := range r.state.VersionAllocations {
-		if len(key) >= len(prefix) && key[:len(prefix)] == prefix {
-			consider(alloc.Version)
 		}
 	}
 
@@ -436,21 +504,99 @@ func (r *Registry) AllocateVersion(ctx context.Context, kind repository.Artifact
 	}
 
 	versionStr := next.String()
-	key := prefix + versionStr
-	if _, exists := r.state.VersionAllocations[key]; exists {
-		return nil, fmt.Errorf("%w: version %s is already allocated or recorded for this owner", repository.ErrAlreadyExists, versionStr)
-	}
-	if _, found := r.findByOwnerKindVersion(syntheticOwnerArtifact(kind, owner, versionStr)); found {
+	if _, found := r.findByOwnerKindVersion(kind, owner, versionStr); found {
 		return nil, fmt.Errorf("%w: version %s is already allocated or recorded for this owner", repository.ErrAlreadyExists, versionStr)
 	}
 
-	r.state.VersionAllocations[key] = repository.VersionAllocation{Version: versionStr, PreviousVersion: previousText}
+	a := repository.Artifact{Kind: kind, Repository: repo, Version: versionStr}
+	if kind == repository.ArtifactKindImage {
+		a.AppID = owner
+	} else {
+		a.ChartID = owner
+	}
+	if _, err := r.insertArtifact(a, nil, repository.ArtifactStateAllocated, repository.VersionSourceRegistry); err != nil {
+		return nil, err
+	}
+
 	return &repository.VersionAllocation{Version: versionStr, PreviousVersion: previousText}, nil
+}
+
+// ============================================================================
+// BeginPublish / FailPublish / ExpireStale (AR-7b)
+// ============================================================================
+
+// BeginPublish mirrors postgres's artifactRepo.BeginPublish -- the
+// ∅|allocated|failed -> publishing transition.
+func (r *Registry) BeginPublish(ctx context.Context, kind repository.ArtifactKind, owner, version, buildID, repositoryHint string, versionSource repository.VersionSource) (*repository.Artifact, error) {
+	existing, found := r.findByOwnerKindVersion(kind, owner, version)
+	if !found {
+		if repositoryHint == "" {
+			return nil, fmt.Errorf("%w: repository is required to begin publishing %s %s with no prior allocation", repository.ErrInvalidArgument, string(kind), version)
+		}
+		a := repository.Artifact{Kind: kind, Repository: repositoryHint, Version: version, BuildID: buildID}
+		if kind == repository.ArtifactKindImage {
+			a.AppID = owner
+		} else {
+			a.ChartID = owner
+		}
+		return r.insertArtifact(a, nil, repository.ArtifactStatePublishing, versionSource)
+	}
+
+	if existing.State != repository.ArtifactStateAllocated && existing.State != repository.ArtifactStateFailed {
+		return nil, fmt.Errorf("%w: artifact %s %s is %q, not \"allocated\" or \"failed\" -- BeginPublish cannot start from here",
+			repository.ErrFailedPrecondition, r.ownerFullName(existing), version, existing.State)
+	}
+
+	existing.BuildID = buildID
+	existing.State = repository.ArtifactStatePublishing
+	existing.StateChangedAt = timeNow()
+	existing.FailReason = ""
+	r.state.Artifacts[existing.ArtifactID] = existing
+	out := existing
+	out.Promotability = r.derivePromotability(existing)
+	return &out, nil
+}
+
+// FailPublish mirrors postgres's artifactRepo.FailPublish -- the
+// publishing -> failed transition.
+func (r *Registry) FailPublish(ctx context.Context, kind repository.ArtifactKind, owner, version, reason string) (*repository.Artifact, error) {
+	existing, found := r.findByOwnerKindVersion(kind, owner, version)
+	if !found {
+		return nil, fmt.Errorf("%w: no artifact found for %s %s %s", repository.ErrFailedPrecondition, string(kind), owner, version)
+	}
+	if existing.State != repository.ArtifactStatePublishing {
+		return nil, fmt.Errorf("%w: artifact %s %s is %q, not \"publishing\" -- FailPublish cannot start from here",
+			repository.ErrFailedPrecondition, r.ownerFullName(existing), version, existing.State)
+	}
+	existing.State = repository.ArtifactStateFailed
+	existing.StateChangedAt = timeNow()
+	existing.FailReason = reason
+	r.state.Artifacts[existing.ArtifactID] = existing
+	out := existing
+	out.Promotability = r.derivePromotability(existing)
+	return &out, nil
+}
+
+// ExpireStale mirrors postgres's artifactRepo.ExpireStale -- the reaper's
+// sweep.
+func (r *Registry) ExpireStale(ctx context.Context, olderThan time.Duration) (int, error) {
+	cutoff := timeNow().Add(-olderThan)
+	n := 0
+	for id, a := range r.state.Artifacts {
+		if (a.State == repository.ArtifactStateAllocated || a.State == repository.ArtifactStatePublishing) && a.StateChangedAt.Before(cutoff) {
+			a.State = repository.ArtifactStateFailed
+			a.StateChangedAt = timeNow()
+			a.FailReason = "stale"
+			r.state.Artifacts[id] = a
+			n++
+		}
+	}
+	return n, nil
 }
 
 func (r *Registry) findImageByDigest(digest string) (*repository.Artifact, error) {
 	for _, a := range r.state.Artifacts {
-		if a.Digest == digest && a.Kind == repository.ArtifactKindImage {
+		if a.Digest == digest && a.Kind == repository.ArtifactKindImage && a.State == repository.ArtifactStatePublished {
 			return &a, nil
 		}
 	}
