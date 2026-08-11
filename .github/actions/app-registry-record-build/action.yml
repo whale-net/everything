@@ -18,6 +18,12 @@ description: >-
   that, and downstream steps that depend on `build-id` are already
   conditioned on it being non-empty so they skip cleanly.
 
+  Version skew (issue #570) is called out separately from a plain outage:
+  the CLI exits 4 (exitVersionSkew, see cli/cmd/root.go) when the deployed
+  app-registry-api doesn't implement RecordBuild at all (codes.Unimplemented)
+  -- a deployment defect that will not clear on retry -- so that case gets
+  an `::error::` annotation instead of the `::warning::` an outage gets.
+
 inputs:
   address:
     required: true
@@ -83,7 +89,16 @@ runs:
         RECORD_EXIT=$?
         set -e
 
-        if [[ $RECORD_EXIT -ne 0 ]]; then
+        if [[ $RECORD_EXIT -eq 4 ]]; then
+          echo "$BUILD_JSON"
+          echo "::error title=App Registry: version skew (RecordBuild not implemented)::The deployed app-registry-api does not implement RecordBuild. This is a CI/server version skew (issue #570), not an outage -- it will NOT clear on retry. Roll app-registry-api forward, or set APP_REGISTRY_CICD_OPT_IN to false until it is deployed. Downstream App Registry steps for this job will skip, since no build-id was returned."
+          {
+            echo "### ❌ App Registry: version skew"
+            echo ""
+            echo "RecordBuild failed for workflow run \`${WORKFLOW_RUN_ID}\` (attempt \`${WORKFLOW_ATTEMPT}\`) -- the deployed server does not implement this RPC. This will not clear on retry. See tools/app_registry/ARCHITECTURE.md#availability-and-bootstrap and OPERATIONS.md."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+        elif [[ $RECORD_EXIT -ne 0 ]]; then
           echo "$BUILD_JSON"
           echo "::warning title=App Registry: build recording skipped (registry error)::Could not record this workflow run's build in the App Registry -- a registry outage, auth failure, or other transient error. Recording is best-effort; the release still succeeded. Downstream App Registry steps for this job will skip, since no build-id was returned."
           {

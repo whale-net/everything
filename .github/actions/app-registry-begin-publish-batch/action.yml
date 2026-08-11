@@ -20,6 +20,10 @@ description: >-
   does NOT block the other targets in the same batch -- see
   cli/cmd/artifacts.go's newArtifactsBeginPublishBatchCmd.
 
+  Version skew (issue #570): if the whole RPC is missing server-side, the
+  CLI exits 4 (exitVersionSkew) and this step escalates to `::error::`
+  instead of `::warning::`, since that will not clear on retry.
+
 inputs:
   address:
     required: true
@@ -64,7 +68,10 @@ runs:
         set -e
 
         echo "$BATCH_OUTPUT"
-        if [[ $BATCH_EXIT -ne 0 ]]; then
+        if [[ $BATCH_EXIT -eq 4 ]]; then
+          echo "::error title=App Registry: version skew (begin-publish-batch not implemented)::The deployed app-registry-api does not implement BeginPublishBatch. This is a CI/server version skew (issue #570), not an outage -- it will NOT clear on retry. Roll app-registry-api forward, or set APP_REGISTRY_CICD_OPT_IN to false until it is deployed. Targets fall back to being recorded per-leg as before; the release still proceeds."
+          exit 1
+        elif [[ $BATCH_EXIT -ne 0 ]]; then
           echo "::warning title=App Registry: begin-publish-batch skipped or partial (registry error)::Could not transition every release target to 'publishing' up front -- a registry outage, auth failure, or a target whose owner isn't reconciled yet. Recording is best-effort; the release still proceeds. Targets left un-declared fall back to being recorded per-leg as before, and won't show up as 'incomplete' in \`app-registry builds status\` if their own leg never runs -- see OPERATIONS.md."
           exit 1
         fi

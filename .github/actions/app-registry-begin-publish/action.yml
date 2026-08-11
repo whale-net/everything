@@ -31,6 +31,11 @@ description: >-
   `continue-on-error: true`), so a caller can branch on
   `steps.<id>.outcome` to decide whether to attempt FailPublish later.
 
+  Version skew (issue #570): the CLI exits 4 (exitVersionSkew, see
+  cli/cmd/root.go) when the deployed server doesn't implement BeginPublish at
+  all -- that gets an `::error::` annotation instead of the `::warning::` a
+  plain outage gets, since it will not clear on retry.
+
 inputs:
   address:
     required: true
@@ -83,7 +88,11 @@ runs:
         BEGIN_EXIT=$?
         set -e
 
-        if [[ $BEGIN_EXIT -ne 0 ]]; then
+        if [[ $BEGIN_EXIT -eq 4 ]]; then
+          echo "$BEGIN_OUTPUT"
+          echo "::error title=App Registry: version skew (begin-publish not implemented)::The deployed app-registry-api does not implement BeginPublish. This is a CI/server version skew (issue #570), not an outage -- it will NOT clear on retry. Roll app-registry-api forward, or set APP_REGISTRY_CICD_OPT_IN to false until it is deployed. The push still proceeds."
+          exit 1
+        elif [[ $BEGIN_EXIT -ne 0 ]]; then
           echo "$BEGIN_OUTPUT"
           echo "::warning title=App Registry: begin-publish skipped (registry error)::Could not transition ${OWNER} ${VERSION} to 'publishing' in the App Registry -- a registry outage, auth failure, or other transient error. Recording is best-effort; the push still proceeds."
           exit 1

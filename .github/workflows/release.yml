@@ -1114,6 +1114,10 @@ jobs:
 
           if [[ $BEGIN_EXIT -eq 0 ]]; then
             echo "✅ ${PUBLISHED_NAME} ${CHART_VERSION} is now 'publishing' in App Registry"
+          elif [[ $BEGIN_EXIT -eq 4 ]]; then
+            echo "$BEGIN_OUTPUT"
+            echo "::error title=App Registry: version skew (begin-publish not implemented)::The deployed app-registry-api does not implement BeginPublish. This is a CI/server version skew (issue #570), not an outage -- it will NOT clear on retry. ${PUBLISHED_NAME} ${CHART_VERSION} was not transitioned to 'publishing'."
+            BEGIN_HAD_FAILURE=1
           else
             echo "$BEGIN_OUTPUT"
             echo "::warning title=App Registry: begin-publish skipped (registry error)::Could not transition ${PUBLISHED_NAME} ${CHART_VERSION} to 'publishing'."
@@ -1268,6 +1272,9 @@ jobs:
 
           if [[ $FAIL_EXIT -eq 0 ]]; then
             echo "⚠️ ${PUBLISHED_NAME} ${CHART_VERSION} marked 'failed' in App Registry"
+          elif [[ $FAIL_EXIT -eq 4 ]]; then
+            echo "$FAIL_OUTPUT"
+            echo "::error title=App Registry: version skew (fail-publish not implemented)::The deployed app-registry-api does not implement FailPublish. This is a CI/server version skew (issue #570), not an outage -- it will NOT clear on retry. ${PUBLISHED_NAME} ${CHART_VERSION} will sit as 'publishing' until the stale-row reaper expires it."
           else
             echo "$FAIL_OUTPUT"
             echo "::warning title=App Registry: fail-publish skipped (registry error)::Could not transition ${PUBLISHED_NAME} ${CHART_VERSION} to 'failed'; it will sit as 'publishing' until the stale-row reaper expires it."
@@ -1388,6 +1395,15 @@ jobs:
               echo "This release ran ahead of \`ReconcileApps\`, which runs on push to \`main\` via \`ci.yml\`. This is an accepted, documented tradeoff -- see \`tools/app_registry/ARCHITECTURE.md\` (\"Release-vs-reconcile gap\") and \`tools/app_registry/OPERATIONS.md\` (\"Release ran ahead of reconcile\")."
               echo ""
               echo "**What to do:** wait for \`main\`'s CI to finish reconciling, then re-run this release job -- or accept the miss (the chart self-heals on the next reconcile; this specific artifact record does not get backfilled)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            RECORDING_HAD_FAILURE=1
+          elif [[ $RECORD_EXIT -eq 4 ]]; then
+            echo "$RECORD_OUTPUT"
+            echo "::error title=App Registry: version skew (artifacts record not implemented)::The deployed app-registry-api does not implement recording a chart artifact. This is a CI/server version skew (issue #570), not an outage -- ${PUBLISHED_NAME} ${CHART_VERSION} was NOT recorded, and it will NOT clear on retry. Roll app-registry-api forward, or set APP_REGISTRY_CICD_OPT_IN to false until it is deployed."
+            {
+              echo "### ❌ App Registry: version skew"
+              echo ""
+              echo "\`${PUBLISHED_NAME}\` \`${CHART_VERSION}\` was **not recorded** -- the deployed server does not implement this RPC. This will not clear on retry. See tools/app_registry/ARCHITECTURE.md#availability-and-bootstrap and OPERATIONS.md."
             } >> "$GITHUB_STEP_SUMMARY"
             RECORDING_HAD_FAILURE=1
           else
