@@ -44,6 +44,19 @@ var (
 	// message text. See issue #547 and ARCHITECTURE.md "Reconcile
 	// watermark" for why this case is common and expected, not a bug.
 	ErrOwnerNotReconciled = fmt.Errorf("%w: owner not reconciled", ErrInvalidArgument)
+
+	// ErrOwnerArchived: a write RPC (RecordArtifact, BeginPublish,
+	// AllocateVersion) targeted an app/chart whose Status is ARCHIVED.
+	// A human archived it deliberately via SetAppStatus (see ARCHITECTURE.md
+	// "Triage: the MISSING/ARCHIVED lifecycle") -- silently resurrecting it
+	// by recording a new build against it would undo that decision without
+	// telling anyone. Wraps ErrFailedPrecondition (well-formed request,
+	// illegal given current state), matching the AssertApps per-item reject
+	// this same rule enforces for identity assertion -- see
+	// AppRepository.AssertApps's doc comment. Distinct from
+	// ErrOwnerNotReconciled (which wraps ErrInvalidArgument -- an unknown
+	// owner is a caller mistake, not a state conflict).
+	ErrOwnerArchived = fmt.Errorf("%w: owner is archived", ErrFailedPrecondition)
 )
 
 // AppRepository covers App and Chart identity — the two tables ReconcileApps
@@ -83,6 +96,41 @@ type AppRepository interface {
 	// SAME transaction as the app/chart writes, so two concurrent Reconcile
 	// calls serialize rather than both reading a stale watermark.
 	Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest, source ReconcileSource, dryRun bool) (*ReconcileResult, error)
+
+	// AssertApps is the additive-only counterpart to Reconcile (AR-7c, issue
+	// #558): identity assert + manifest snapshot write, safe to call from
+	// ANY ref -- a divergent branch, an old tag, an unmerged PR -- because it
+	// NEVER marks anything MISSING and NEVER touches chart_app membership
+	// (that stays Reconcile/main-sweep-only: resolving composition correctly
+	// needs the canonical complete tree, which a release ref is not
+	// guaranteed to be). This is what closes ordering 1 (issue #547) without
+	// the provisional-upsert trade #547's own "Rejected alternatives"
+	// rejected: there is no more mutable metadata for a divergent ref to
+	// clobber, because App/Chart's mutable fields all live in the per-commit
+	// manifest snapshot now (see ARCHITECTURE.md "App identity vs. per-build
+	// manifest snapshot").
+	//
+	// Every app/chart in apps/charts is either created (∅ -> ACTIVE),
+	// recovered (MISSING -> ACTIVE, same automatic recovery Reconcile's
+	// absence sweep triggers), or -- if already ACTIVE -- left with its
+	// identity untouched and just gets a fresh manifest snapshot recorded
+	// (idempotent on (owner_id, source_git_sha); a repeat call for the same
+	// commit writes nothing new). An app/chart that is ARCHIVED is REJECTED
+	// per item, not for the whole call -- see AssertResult.RejectedApps/
+	// RejectedCharts, modeled on ReconcileResult.UnresolvedCharts's
+	// per-item-skip shape: a human archived it on purpose (SetAppStatus,
+	// see ARCHITECTURE.md "Triage"), and a release silently resurrecting it
+	// is worse than a red step. Every other app/chart in the same call still
+	// applies.
+	//
+	// source carries the same ordering/provenance metadata Reconcile's
+	// source does, but AssertApps NEVER consults or advances the reconcile
+	// watermark -- that guard exists to keep an OLDER main sweep from
+	// reverting a NEWER one's absence-sweep result, a concern that does not
+	// apply here (AssertApps never marks anything MISSING, so there is
+	// nothing for a stale call to wrongly revert). Must be called inside
+	// Registry.WithTx.
+	AssertApps(ctx context.Context, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest, source ManifestSource) (*AssertResult, error)
 
 	ListApps(ctx context.Context, filter AppListFilter) ([]App, error)
 	GetAppByID(ctx context.Context, appID string) (*App, error)

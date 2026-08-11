@@ -11,10 +11,17 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 type appRepo struct{ ex dbtx }
 
+// appColumns/chartColumns are read against v_current_app/v_current_chart
+// (migration 008, AR-7c) -- identity ⋈ latest `main`-sweep manifest
+// snapshot, see that migration's comments. Column NAMES and ORDER are
+// unchanged from before AR-7c on purpose: scanApp/scanChart below, and
+// every wire type they feed (App/Chart in protos/messages.proto), are
+// untouched by this split.
 const appColumns = `app_id, domain, name, description, language, app_type, deploy_unit, bazel_label, image_repository, status, first_seen_at, last_seen_at`
 
 func scanApp(row pgx.Row) (repository.App, error) {
@@ -106,23 +113,25 @@ func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, 
 			appID := ""
 			if !dryRun {
 				appID = uuid.NewString()
+				// AR-7c (migration 008): `app` is pure identity now --
+				// description/language/app_type/deploy_unit/bazel_label/
+				// image_repository all live only in the manifest snapshot
+				// below, never on this row -- see appColumns's doc comment.
 				_, err := r.ex.Exec(ctx, `
-					INSERT INTO app (app_id, domain, name, description, language, app_type, deploy_unit, bazel_label, image_repository, status, first_seen_at, last_seen_at)
-					VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', $10, $10)`,
-					appID, am.Domain, am.Name, am.Description, am.Language, am.AppType, deployUnitToDB(am.DeployUnit), am.BinaryTarget, imageRepository(am), now)
+					INSERT INTO app (app_id, domain, name, status, first_seen_at, last_seen_at)
+					VALUES ($1, $2, $3, 'active', $4, $4)`,
+					appID, am.Domain, am.Name, now)
 				if err != nil {
 					if de, ok := translatePgError(err, fmt.Sprintf("app %s-%s already recorded", am.Domain, am.Name)); ok {
 						return nil, de
 					}
 					return nil, fmt.Errorf("reconcile: insert app %s/%s: %w", am.Domain, am.Name, err)
 				}
+				if err := r.upsertAppManifestSnapshot(ctx, appID, am, source, repository.ManifestProvenanceSweep); err != nil {
+					return nil, fmt.Errorf("reconcile: %w", err)
+				}
 			}
-			newApp := repository.App{
-				AppID: appID, Domain: am.Domain, Name: am.Name, Description: am.Description,
-				Language: am.Language, AppType: am.AppType, DeployUnit: normalizeDeployUnit(am.DeployUnit),
-				BazelLabel: am.BinaryTarget, ImageRepository: imageRepository(am),
-				Status: repository.StatusActive, FirstSeenAt: now, LastSeenAt: now,
-			}
+			newApp := appFromManifest(appID, am, repository.StatusActive, now, now)
 			result.CreatedApps = append(result.CreatedApps, newApp)
 			if appID != "" {
 				presentAppIDs[appID] = true
@@ -132,23 +141,14 @@ func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, 
 		}
 
 		wasMissing := existing.Status == repository.StatusMissing
-		updated := *existing
-		updated.Description = am.Description
-		updated.Language = am.Language
-		updated.AppType = am.AppType
-		updated.DeployUnit = normalizeDeployUnit(am.DeployUnit)
-		updated.BazelLabel = am.BinaryTarget
-		updated.ImageRepository = imageRepository(am)
-		updated.Status = repository.StatusActive
-		updated.LastSeenAt = now
+		updated := appFromManifest(existing.AppID, am, repository.StatusActive, existing.FirstSeenAt, now)
 
 		if !dryRun {
-			_, err := r.ex.Exec(ctx, `
-				UPDATE app SET description=$2, language=$3, app_type=$4, deploy_unit=$5, bazel_label=$6, image_repository=$7, status='active', last_seen_at=$8
-				WHERE app_id=$1`,
-				existing.AppID, updated.Description, updated.Language, updated.AppType, deployUnitToDB(updated.DeployUnit), updated.BazelLabel, updated.ImageRepository, now)
-			if err != nil {
+			if _, err := r.ex.Exec(ctx, `UPDATE app SET status='active', last_seen_at=$2 WHERE app_id=$1`, existing.AppID, now); err != nil {
 				return nil, fmt.Errorf("reconcile: update app %s/%s: %w", am.Domain, am.Name, err)
+			}
+			if err := r.upsertAppManifestSnapshot(ctx, existing.AppID, am, source, repository.ManifestProvenanceSweep); err != nil {
+				return nil, fmt.Errorf("reconcile: %w", err)
 			}
 		}
 		presentAppIDs[existing.AppID] = true
@@ -164,7 +164,7 @@ func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, 
 	// Anything active-and-absent becomes MISSING. last_seen_at is
 	// deliberately left untouched — SetAppStatus's "present in the latest
 	// reconcile" check compares it against the table-wide max.
-	rows, err := r.ex.Query(ctx, `SELECT `+appColumns+` FROM app WHERE status = 'active'`)
+	rows, err := r.ex.Query(ctx, `SELECT `+appColumns+` FROM v_current_app WHERE status = 'active'`)
 	if err != nil {
 		return nil, fmt.Errorf("reconcile: scan active apps: %w", err)
 	}
@@ -231,8 +231,8 @@ func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, 
 			if !dryRun {
 				chartID = uuid.NewString()
 				if _, err := r.ex.Exec(ctx, `
-					INSERT INTO chart (chart_id, domain, name, deploy_unit, status, first_seen_at, last_seen_at)
-					VALUES ($1, $2, $3, 'chart', 'active', $4, $4)`,
+					INSERT INTO chart (chart_id, domain, name, status, first_seen_at, last_seen_at)
+					VALUES ($1, $2, $3, 'active', $4, $4)`,
 					chartID, cm.Domain, cm.Name, now); err != nil {
 					if de, ok := translatePgError(err, fmt.Sprintf("chart %s-%s already recorded", cm.Domain, cm.Name)); ok {
 						return nil, de
@@ -242,11 +242,11 @@ func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, 
 				if err := r.setChartApps(ctx, chartID, appIDs); err != nil {
 					return nil, err
 				}
+				if err := r.upsertChartManifestSnapshot(ctx, chartID, cm, source, repository.ManifestProvenanceSweep); err != nil {
+					return nil, fmt.Errorf("reconcile: %w", err)
+				}
 			}
-			newChart := repository.Chart{
-				ChartID: chartID, Domain: cm.Domain, Name: cm.Name, DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_CHART,
-				Status: repository.StatusActive, AppIDs: appIDs, FirstSeenAt: now, LastSeenAt: now,
-			}
+			newChart := chartFromManifest(chartID, cm, appIDs, repository.StatusActive, now, now)
 			result.CreatedCharts = append(result.CreatedCharts, newChart)
 			if chartID != "" {
 				presentChartIDs[chartID] = true
@@ -255,10 +255,7 @@ func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, 
 		}
 
 		wasMissing := existing.Status == repository.StatusMissing
-		updated := *existing
-		updated.AppIDs = appIDs
-		updated.Status = repository.StatusActive
-		updated.LastSeenAt = now
+		updated := chartFromManifest(existing.ChartID, cm, appIDs, repository.StatusActive, existing.FirstSeenAt, now)
 
 		if !dryRun {
 			if _, err := r.ex.Exec(ctx, `UPDATE chart SET status='active', last_seen_at=$2 WHERE chart_id=$1`, existing.ChartID, now); err != nil {
@@ -266,6 +263,9 @@ func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, 
 			}
 			if err := r.setChartApps(ctx, existing.ChartID, appIDs); err != nil {
 				return nil, err
+			}
+			if err := r.upsertChartManifestSnapshot(ctx, existing.ChartID, cm, source, repository.ManifestProvenanceSweep); err != nil {
+				return nil, fmt.Errorf("reconcile: %w", err)
 			}
 		}
 		presentChartIDs[existing.ChartID] = true
@@ -277,7 +277,7 @@ func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, 
 		}
 	}
 
-	crows, err := r.ex.Query(ctx, `SELECT `+chartColumns+` FROM chart WHERE status = 'active'`)
+	crows, err := r.ex.Query(ctx, `SELECT `+chartColumns+` FROM v_current_chart WHERE status = 'active'`)
 	if err != nil {
 		return nil, fmt.Errorf("reconcile: scan active charts: %w", err)
 	}
@@ -306,6 +306,126 @@ func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, 
 	if !dryRun {
 		if err := r.advanceReconcileWatermark(ctx, source, now); err != nil {
 			return nil, fmt.Errorf("reconcile: advance watermark: %w", err)
+		}
+	}
+
+	return result, nil
+}
+
+// ============================================================================
+// AssertApps (AR-7c, issue #558)
+// ============================================================================
+
+// AssertApps implements repository.AppRepository.AssertApps -- see that doc
+// comment for the full contract. Deliberately much smaller than Reconcile:
+// no watermark check, no absence sweep, no chart_app membership write --
+// just create-or-recover identity plus a manifest snapshot, per item,
+// rejecting (not aborting) an ARCHIVED target.
+func (r *appRepo) AssertApps(ctx context.Context, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest, source repository.ManifestSource) (*repository.AssertResult, error) {
+	now := time.Now().UTC()
+	result := &repository.AssertResult{}
+
+	for _, am := range apps {
+		existing, err := r.getAppByDomainName(ctx, am.Domain, am.Name)
+		if err != nil && !errors.Is(err, repository.ErrNotFound) {
+			return nil, fmt.Errorf("assert: look up app %s/%s: %w", am.Domain, am.Name, err)
+		}
+
+		if existing == nil {
+			appID := uuid.NewString()
+			if _, err := r.ex.Exec(ctx, `
+				INSERT INTO app (app_id, domain, name, status, first_seen_at, last_seen_at)
+				VALUES ($1, $2, $3, 'active', $4, $4)`,
+				appID, am.Domain, am.Name, now); err != nil {
+				if de, ok := translatePgError(err, fmt.Sprintf("app %s-%s already recorded", am.Domain, am.Name)); ok {
+					return nil, de
+				}
+				return nil, fmt.Errorf("assert: insert app %s/%s: %w", am.Domain, am.Name, err)
+			}
+			if err := r.upsertAppManifestSnapshot(ctx, appID, am, source, repository.ManifestProvenanceRelease); err != nil {
+				return nil, fmt.Errorf("assert: %w", err)
+			}
+			result.CreatedApps = append(result.CreatedApps, appFromManifest(appID, am, repository.StatusActive, now, now))
+			continue
+		}
+
+		// AR-7c: reject, per item, rather than resurrect an app a human
+		// archived on purpose -- see repository.AppRepository.AssertApps's
+		// doc comment.
+		if existing.Status == repository.StatusArchived {
+			result.RejectedApps = append(result.RejectedApps, repository.RejectedOwner{
+				Domain: am.Domain, Name: am.Name,
+				Reason: fmt.Sprintf("app %s/%s is ARCHIVED -- a human archived it deliberately; AssertApps does not resurrect it", am.Domain, am.Name),
+			})
+			continue
+		}
+
+		wasMissing := existing.Status == repository.StatusMissing
+		if _, err := r.ex.Exec(ctx, `UPDATE app SET status='active', last_seen_at=$2 WHERE app_id=$1`, existing.AppID, now); err != nil {
+			return nil, fmt.Errorf("assert: update app %s/%s: %w", am.Domain, am.Name, err)
+		}
+		if err := r.upsertAppManifestSnapshot(ctx, existing.AppID, am, source, repository.ManifestProvenanceRelease); err != nil {
+			return nil, fmt.Errorf("assert: %w", err)
+		}
+		updated := appFromManifest(existing.AppID, am, repository.StatusActive, existing.FirstSeenAt, now)
+		if wasMissing {
+			result.RecoveredApps = append(result.RecoveredApps, updated)
+		} else {
+			result.UpdatedApps = append(result.UpdatedApps, updated)
+		}
+	}
+
+	for _, cm := range charts {
+		existing, err := r.getChartByDomainName(ctx, cm.Domain, cm.Name)
+		if err != nil && !errors.Is(err, repository.ErrNotFound) {
+			return nil, fmt.Errorf("assert: look up chart %s/%s: %w", cm.Domain, cm.Name, err)
+		}
+
+		if existing == nil {
+			chartID := uuid.NewString()
+			// Deliberately NOT resolving app_refs / writing chart_app here --
+			// see AssertApps's doc comment: composition resolution stays
+			// Reconcile-only, because it needs the canonical complete tree
+			// to be safe, which a release ref is not guaranteed to be.
+			if _, err := r.ex.Exec(ctx, `
+				INSERT INTO chart (chart_id, domain, name, status, first_seen_at, last_seen_at)
+				VALUES ($1, $2, $3, 'active', $4, $4)`,
+				chartID, cm.Domain, cm.Name, now); err != nil {
+				if de, ok := translatePgError(err, fmt.Sprintf("chart %s-%s already recorded", cm.Domain, cm.Name)); ok {
+					return nil, de
+				}
+				return nil, fmt.Errorf("assert: insert chart %s/%s: %w", cm.Domain, cm.Name, err)
+			}
+			if err := r.upsertChartManifestSnapshot(ctx, chartID, cm, source, repository.ManifestProvenanceRelease); err != nil {
+				return nil, fmt.Errorf("assert: %w", err)
+			}
+			result.CreatedCharts = append(result.CreatedCharts, chartFromManifest(chartID, cm, nil, repository.StatusActive, now, now))
+			continue
+		}
+
+		if existing.Status == repository.StatusArchived {
+			result.RejectedCharts = append(result.RejectedCharts, repository.RejectedOwner{
+				Domain: cm.Domain, Name: cm.Name,
+				Reason: fmt.Sprintf("chart %s/%s is ARCHIVED -- a human archived it deliberately; AssertApps does not resurrect it", cm.Domain, cm.Name),
+			})
+			continue
+		}
+
+		wasMissing := existing.Status == repository.StatusMissing
+		if _, err := r.ex.Exec(ctx, `UPDATE chart SET status='active', last_seen_at=$2 WHERE chart_id=$1`, existing.ChartID, now); err != nil {
+			return nil, fmt.Errorf("assert: update chart %s/%s: %w", cm.Domain, cm.Name, err)
+		}
+		if err := r.upsertChartManifestSnapshot(ctx, existing.ChartID, cm, source, repository.ManifestProvenanceRelease); err != nil {
+			return nil, fmt.Errorf("assert: %w", err)
+		}
+		// existing.AppIDs (populated by getChartByDomainName via
+		// chartAppIDs) is left exactly as Reconcile last set it -- AssertApps
+		// never touches chart_app membership.
+		updated := chartFromManifest(existing.ChartID, cm, existing.AppIDs, repository.StatusActive, existing.FirstSeenAt, now)
+		if wasMissing {
+			result.RecoveredCharts = append(result.RecoveredCharts, updated)
+		} else {
+			result.UpdatedCharts = append(result.UpdatedCharts, updated)
 		}
 	}
 
@@ -492,9 +612,43 @@ func imageRepository(am *appmetapb.AppManifest) string {
 // Reads
 // ============================================================================
 
+// identityColumns / scanAppIdentity / getAppByDomainName: as of migration
+// 008 (AR-7c), `app` itself is pure identity, so a write-path lookup that
+// only needs app_id/status (Reconcile's/AssertApps's existing-row check,
+// resolveChartApps's app_ref resolution) queries the bare `app` table
+// directly rather than v_current_app -- there is no reason for a write to
+// pull in a manifest-snapshot join it doesn't need. Every OTHER field on
+// the returned App is left zero-valued; callers of this function must never
+// pass its result to a wire response (appToPB) -- construct that from the
+// AppManifest/ChartManifest already in hand instead (see Reconcile/
+// AssertApps below).
+const identityColumns = `app_id, domain, name, status, first_seen_at, last_seen_at`
+
+func scanAppIdentity(row pgx.Row) (repository.App, error) {
+	var a repository.App
+	var status string
+	if err := row.Scan(&a.AppID, &a.Domain, &a.Name, &status, &a.FirstSeenAt, &a.LastSeenAt); err != nil {
+		return repository.App{}, err
+	}
+	a.Status = repository.Status(status)
+	return a, nil
+}
+
+const chartIdentityColumns = `chart_id, domain, name, status, first_seen_at, last_seen_at`
+
+func scanChartIdentity(row pgx.Row) (repository.Chart, error) {
+	var c repository.Chart
+	var status string
+	if err := row.Scan(&c.ChartID, &c.Domain, &c.Name, &status, &c.FirstSeenAt, &c.LastSeenAt); err != nil {
+		return repository.Chart{}, err
+	}
+	c.Status = repository.Status(status)
+	return c, nil
+}
+
 func (r *appRepo) getAppByDomainName(ctx context.Context, domain, name string) (*repository.App, error) {
-	row := r.ex.QueryRow(ctx, `SELECT `+appColumns+` FROM app WHERE domain = $1 AND name = $2`, domain, name)
-	a, err := scanApp(row)
+	row := r.ex.QueryRow(ctx, `SELECT `+identityColumns+` FROM app WHERE domain = $1 AND name = $2`, domain, name)
+	a, err := scanAppIdentity(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, repository.ErrNotFound
@@ -505,8 +659,8 @@ func (r *appRepo) getAppByDomainName(ctx context.Context, domain, name string) (
 }
 
 func (r *appRepo) getChartByDomainName(ctx context.Context, domain, name string) (*repository.Chart, error) {
-	row := r.ex.QueryRow(ctx, `SELECT `+chartColumns+` FROM chart WHERE domain = $1 AND name = $2`, domain, name)
-	c, err := scanChart(row)
+	row := r.ex.QueryRow(ctx, `SELECT `+chartIdentityColumns+` FROM chart WHERE domain = $1 AND name = $2`, domain, name)
+	c, err := scanChartIdentity(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, repository.ErrNotFound
@@ -517,6 +671,78 @@ func (r *appRepo) getChartByDomainName(ctx context.Context, domain, name string)
 		c.AppIDs = ids
 	}
 	return &c, nil
+}
+
+// ============================================================================
+// Manifest snapshots (migration 008, AR-7c)
+// ============================================================================
+
+// manifestJSONMarshal serializes AppManifest/ChartManifest VERBATIM as
+// protojson for storage in app_manifest.manifest_json / chart_manifest.
+// manifest_json. UseProtoNames keeps keys snake_case, matching the
+// Starlark-emitted JSON these values originated from (ARCHITECTURE.md
+// "Shared manifest schema"). EmitUnpopulated writes every field, including
+// zero-valued ones (e.g. an unset deploy_unit becomes the literal string
+// "DEPLOY_UNIT_UNSPECIFIED" rather than being omitted) -- required for
+// "verbatim" to mean what it says, and for migration 008's generated
+// columns' CASE expressions to see a key that is genuinely always present.
+var manifestJSONMarshal = protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true}
+
+// upsertAppManifestSnapshot writes one app_manifest row keyed
+// (appID, source.GitSHA) -- idempotent via ON CONFLICT DO NOTHING, because
+// the manifest for a given commit cannot change (migration 008's header
+// comment). provenance distinguishes a ReconcileApps sweep (the only kind
+// v_current_app reads) from an AssertApps release-time call.
+func (r *appRepo) upsertAppManifestSnapshot(ctx context.Context, appID string, am *appmetapb.AppManifest, source repository.ManifestSource, provenance repository.ManifestProvenance) error {
+	body, err := manifestJSONMarshal.Marshal(am)
+	if err != nil {
+		return fmt.Errorf("marshal app manifest for %s/%s: %w", am.Domain, am.Name, err)
+	}
+	if _, err := r.ex.Exec(ctx, `
+		INSERT INTO app_manifest (owner_id, source_git_sha, source_committed_at, provenance, manifest_json)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (owner_id, source_git_sha) DO NOTHING`,
+		appID, source.GitSHA, source.SourceCommittedAt, string(provenance), string(body)); err != nil {
+		return fmt.Errorf("record app manifest snapshot for %s/%s: %w", am.Domain, am.Name, err)
+	}
+	return nil
+}
+
+func (r *appRepo) upsertChartManifestSnapshot(ctx context.Context, chartID string, cm *appmetapb.ChartManifest, source repository.ManifestSource, provenance repository.ManifestProvenance) error {
+	body, err := manifestJSONMarshal.Marshal(cm)
+	if err != nil {
+		return fmt.Errorf("marshal chart manifest for %s/%s: %w", cm.Domain, cm.Name, err)
+	}
+	if _, err := r.ex.Exec(ctx, `
+		INSERT INTO chart_manifest (owner_id, source_git_sha, source_committed_at, provenance, manifest_json)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (owner_id, source_git_sha) DO NOTHING`,
+		chartID, source.GitSHA, source.SourceCommittedAt, string(provenance), string(body)); err != nil {
+		return fmt.Errorf("record chart manifest snapshot for %s/%s: %w", cm.Domain, cm.Name, err)
+	}
+	return nil
+}
+
+// appFromManifest/chartFromManifest build the wire-shaped App/Chart struct
+// straight from the AppManifest/ChartManifest just asserted/reconciled --
+// avoiding a redundant read-back through v_current_app/v_current_chart
+// immediately after writing the very row that view would join against.
+// Mirrors exactly what the pre-AR-7c code built inline for
+// CreatedApps/UpdatedApps -- see Reconcile below.
+func appFromManifest(appID string, am *appmetapb.AppManifest, status repository.Status, firstSeenAt, lastSeenAt time.Time) repository.App {
+	return repository.App{
+		AppID: appID, Domain: am.Domain, Name: am.Name, Description: am.Description,
+		Language: am.Language, AppType: am.AppType, DeployUnit: normalizeDeployUnit(am.DeployUnit),
+		BazelLabel: am.BinaryTarget, ImageRepository: imageRepository(am),
+		Status: status, FirstSeenAt: firstSeenAt, LastSeenAt: lastSeenAt,
+	}
+}
+
+func chartFromManifest(chartID string, cm *appmetapb.ChartManifest, appIDs []string, status repository.Status, firstSeenAt, lastSeenAt time.Time) repository.Chart {
+	return repository.Chart{
+		ChartID: chartID, Domain: cm.Domain, Name: cm.Name, DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_CHART,
+		Status: status, AppIDs: appIDs, FirstSeenAt: firstSeenAt, LastSeenAt: lastSeenAt,
+	}
 }
 
 func (r *appRepo) chartAppIDs(ctx context.Context, chartID string) ([]string, error) {
@@ -546,7 +772,7 @@ func (r *appRepo) ListApps(ctx context.Context, filter repository.AppListFilter)
 		statusStrs[i] = string(s)
 	}
 
-	query := `SELECT ` + appColumns + ` FROM app WHERE status = ANY($1)`
+	query := `SELECT ` + appColumns + ` FROM v_current_app WHERE status = ANY($1)`
 	args := []any{statusStrs}
 	if filter.Domain != "" {
 		args = append(args, filter.Domain)
@@ -575,7 +801,7 @@ func (r *appRepo) ListApps(ctx context.Context, filter repository.AppListFilter)
 }
 
 func (r *appRepo) GetAppByID(ctx context.Context, appID string) (*repository.App, error) {
-	row := r.ex.QueryRow(ctx, `SELECT `+appColumns+` FROM app WHERE app_id = $1`, appID)
+	row := r.ex.QueryRow(ctx, `SELECT `+appColumns+` FROM v_current_app WHERE app_id = $1`, appID)
 	a, err := scanApp(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -587,7 +813,7 @@ func (r *appRepo) GetAppByID(ctx context.Context, appID string) (*repository.App
 }
 
 func (r *appRepo) GetAppByFullName(ctx context.Context, fullName string) (*repository.App, error) {
-	row := r.ex.QueryRow(ctx, `SELECT `+appColumns+` FROM app WHERE domain || '-' || name = $1`, fullName)
+	row := r.ex.QueryRow(ctx, `SELECT `+appColumns+` FROM v_current_app WHERE domain || '-' || name = $1`, fullName)
 	a, err := scanApp(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -600,7 +826,7 @@ func (r *appRepo) GetAppByFullName(ctx context.Context, fullName string) (*repos
 
 func (r *appRepo) ChartsForApp(ctx context.Context, appID string) ([]repository.Chart, error) {
 	rows, err := r.ex.Query(ctx, `
-		SELECT `+chartColumns+` FROM chart c
+		SELECT `+chartColumns+` FROM v_current_chart c
 		JOIN chart_app ca ON ca.chart_id = c.chart_id
 		WHERE ca.app_id = $1
 		ORDER BY c.domain, c.name`, appID)
@@ -632,7 +858,7 @@ func (r *appRepo) ListCharts(ctx context.Context, filter repository.ChartListFil
 		statusStrs[i] = string(s)
 	}
 
-	query := `SELECT ` + chartColumns + ` FROM chart WHERE status = ANY($1)`
+	query := `SELECT ` + chartColumns + ` FROM v_current_chart WHERE status = ANY($1)`
 	args := []any{statusStrs}
 	if filter.Domain != "" {
 		args = append(args, filter.Domain)
@@ -660,7 +886,7 @@ func (r *appRepo) ListCharts(ctx context.Context, filter repository.ChartListFil
 }
 
 func (r *appRepo) GetChartByID(ctx context.Context, chartID string) (*repository.Chart, error) {
-	row := r.ex.QueryRow(ctx, `SELECT `+chartColumns+` FROM chart WHERE chart_id = $1`, chartID)
+	row := r.ex.QueryRow(ctx, `SELECT `+chartColumns+` FROM v_current_chart WHERE chart_id = $1`, chartID)
 	c, err := scanChart(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -675,7 +901,7 @@ func (r *appRepo) GetChartByID(ctx context.Context, chartID string) (*repository
 }
 
 func (r *appRepo) GetChartByFullName(ctx context.Context, fullName string) (*repository.Chart, error) {
-	row := r.ex.QueryRow(ctx, `SELECT `+chartColumns+` FROM chart WHERE domain || '-' || name = $1`, fullName)
+	row := r.ex.QueryRow(ctx, `SELECT `+chartColumns+` FROM v_current_chart WHERE domain || '-' || name = $1`, fullName)
 	c, err := scanChart(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -694,7 +920,7 @@ func (r *appRepo) GetChartByFullName(ctx context.Context, fullName string) (*rep
 // ============================================================================
 
 func (r *appRepo) SetAppStatus(ctx context.Context, appID string, target repository.Status, reason string) (*repository.App, error) {
-	row := r.ex.QueryRow(ctx, `SELECT `+appColumns+` FROM app WHERE app_id = $1`, appID)
+	row := r.ex.QueryRow(ctx, `SELECT `+appColumns+` FROM v_current_app WHERE app_id = $1`, appID)
 
 	var a repository.App
 	var deployUnit, dbStatus string

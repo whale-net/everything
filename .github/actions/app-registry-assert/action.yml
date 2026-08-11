@@ -1,0 +1,63 @@
+name: 'App Registry: Assert Apps/Charts'
+description: >-
+  AR-7c (issue #558). Discovers every release_app/helm_chart manifest at the
+  RELEASED ref via `release_helper_go manifest-set` and additively asserts
+  it into the App Registry via `app-registry apps assert` -- identity +
+  manifest snapshot only, safe from any ref (a divergent branch, an old tag,
+  an unmerged PR), because unlike `app-registry-reconcile` this never marks
+  anything MISSING and never depends on `main`'s reconcile having gone
+  first.
+
+  This is what closes issue #547's gap: called as the FIRST step of a
+  release run (before any RecordBuild/RecordArtifact/BeginPublish call that
+  resolves an owner by full name), it guarantees the owner exists by the
+  time those calls run, so `exit 3` / `ReasonOwnerNotReconciled` becomes
+  unreachable from release.yml. See
+  tools/app_registry/ARCHITECTURE.md "AssertApps (additive) vs.
+  ReconcileApps (absence sweep)".
+
+  Requires RELEASE_HELPER and APP_REGISTRY_CLI env vars already set (see
+  .github/actions/download-release-tools).
+
+inputs:
+  address:
+    required: true
+  token-url:
+    required: true
+  client-id:
+    required: true
+  client-secret:
+    required: true
+  git-sha:
+    description: 'Commit SHA to record on the manifest set -- the RELEASED ref, typically github.sha'
+    required: true
+  idempotency-key:
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/app-registry-auth
+      with:
+        address: ${{ inputs.address }}
+        token-url: ${{ inputs.token-url }}
+        client-id: ${{ inputs.client-id }}
+        client-secret: ${{ inputs.client-secret }}
+
+    - name: Assert apps/charts
+      shell: bash
+      env:
+        GIT_SHA: ${{ inputs.git-sha }}
+        IDEMPOTENCY_KEY: ${{ inputs.idempotency-key }}
+      # Same manifest-set discovery app-registry-reconcile uses -- see that
+      # action's comment on why a shallow (fetch-depth: 1) checkout still
+      # resolves source_committed_at for github.sha. Discovering the FULL
+      # manifest set (not just the app/chart being released) is what makes
+      # this additive-safe: AssertApps never marks anything absent from the
+      # set as MISSING, so sending the complete tree costs nothing and
+      # simply means every app/chart at this ref gets a fresh snapshot.
+      run: |
+        "$RELEASE_HELPER" manifest-set --git-sha "$GIT_SHA" > "$RUNNER_TEMP/manifest-set.json"
+        "$APP_REGISTRY_CLI" apps assert \
+          --from-plan "$RUNNER_TEMP/manifest-set.json" \
+          --idempotency-key "$IDEMPOTENCY_KEY"

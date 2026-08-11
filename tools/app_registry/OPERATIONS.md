@@ -73,21 +73,19 @@ To check whether a specific release actually got recorded:
 3. A step that ran and shows `✅ Recorded ... in App Registry` at the end
    succeeded.
 4. A step that ran, shows a red `X` inline but the **job** is still green —
-   this is the silent-failure case. As of issue #547, **you no longer have
-   to read the log to tell which kind of failure this is**: the run's
-   summary page (the `::warning::` annotations GitHub surfaces at the top of
-   the run, and the `$GITHUB_STEP_SUMMARY` section below the job list) now
-   says one of two distinct things:
-   - **`App Registry: <owner> not registered yet`** — the release ran ahead
-     of `ReconcileApps` (see `.github/actions/app-registry-reconcile`, which
-     runs on push to `main` via `ci.yml`). This is expected, not a
-     credential or CLI problem — see ["Release ran ahead of
-     reconcile"](#release-ran-ahead-of-reconcile-issue-547) below for what
-     to do.
+   this is the silent-failure case. The run's summary page (the
+   `::warning::` annotations GitHub surfaces at the top of the run, and the
+   `$GITHUB_STEP_SUMMARY` section below the job list) tells you which kind:
+   - **`App Registry: <owner> not registered yet`** — as of AR-7c (issue
+     #558), this should no longer happen in normal operation: `release.yml`
+     now calls `AssertApps` as the first App Registry step of every job that
+     later resolves an owner by full name (see "AR-7c: AssertApps closed
+     issue #547" below). If you see it anyway, the `AssertApps` step itself
+     probably failed too (a registry outage fails every App Registry step in
+     the same job, `AssertApps` included) — check that step's log first.
    - **`App Registry: recording skipped (registry error)`** — a genuine
      registry outage, auth failure, or timeout. Check the step log for the
-     underlying gRPC error (`Unauthenticated`, `Unavailable`, etc.) the same
-     way as before.
+     underlying gRPC error (`Unauthenticated`, `Unavailable`, etc.).
    The job outcome tells you nothing; only the step log (or now, the run
    summary) does.
 
@@ -105,52 +103,43 @@ older commit. See [ARCHITECTURE.md "Reconcile watermark"](ARCHITECTURE.md#reconc
 for the full mechanism, and re-run `ci.yml` for the commit you actually want
 reflected if that's not what already ran.
 
-### Release ran ahead of reconcile (issue #547)
+### AR-7c: AssertApps closed issue #547
 
-`release.yml` is a human-triggered `workflow_dispatch`, often run immediately
-after merging to `main` — normal usage, not an edge case. `ReconcileApps`
-only runs from `ci.yml` on push to `main` (#543), so there's a real window
-where a release for a genuinely new app/chart can run before that commit's
-reconcile has finished, or even started. This is a **known, accepted
-tradeoff** — see
-[ARCHITECTURE.md "Release-vs-reconcile gap"](ARCHITECTURE.md#release-vs-reconcile-gap-issue-547)
-for the two alternatives (a release-time provisional upsert; gating releases
-on `main`'s reconcile) that were considered and rejected, and why.
+**Retired runbook.** Before AR-7c (issue #558), `release.yml` had no path to
+write app/chart identity itself — `ReconcileApps` only ran from `ci.yml` on
+push to `main`, so a release for a genuinely new app/chart could reach
+`RecordArtifact`'s owner lookup before that commit's reconcile had finished,
+or even started, and fail with a distinct `App Registry: <owner> not
+registered yet` warning (CLI exit code 3, `ReasonOwnerNotReconciled`). This
+runbook entry described what to do about it (wait for `main` CI and re-run,
+or accept the identity self-healing while the specific artifact stayed
+unrecorded).
 
-**How to recognize it:** the recording step (`Record image artifact in App
-Registry`, `Record chart artifacts in App Registry`, or `Record build in App
-Registry`) shows a red `X` but the job is green, and the run carries a
-`::warning::` titled `App Registry: <owner> not registered yet` — plus a
-matching `### ⚠️ App Registry: <owner> not registered yet` section in the
-run's summary (`$GITHUB_STEP_SUMMARY`), so it's visible without opening any
-log. This is a structured signal, not a guess from wording: the CLI exits
-with a distinct code (3) specifically for this case (see `cli/cmd/root.go`'s
-`exitOwnerNotReconciled`), driven by a gRPC status detail the server attaches
-(`apierrors.ReasonOwnerNotReconciled`, set in
-`server/handlers/errors.go`'s `mapRepoErr`) — so it can't be confused with a
-registry outage, auth failure, or any other `InvalidArgument`.
+As of AR-7c, `release.yml` calls the new `AppRegistry.AssertApps` RPC (via
+`.github/actions/app-registry-assert`) as the **first** App Registry step of
+both the `release` matrix job and `release-helm-charts` — before any
+`Record build`/`Begin publish`/`Record artifact` call that resolves an owner
+by full name. `AssertApps` is additive and safe from any ref (see
+ARCHITECTURE.md "AssertApps (additive) vs. ReconcileApps (absence sweep)"),
+so by the time those calls run, the owner's identity already exists.
+`ReasonOwnerNotReconciled` / exit code 3 should no longer be reachable from
+a normal `release.yml` run.
 
-**What to do about it — pick one:**
+**If you still see it:** the `AssertApps` step itself likely failed first —
+a registry outage fails every App Registry step in the same job, this one
+included, and `continue-on-error` on `AssertApps` means that failure can be
+silent too. Check the `Assert apps/charts in App Registry` step's log before
+assuming this is the old #547 gap reopening. The underlying mechanism
+(exit code 3, `apierrors.ReasonOwnerNotReconciled`) is unchanged and still
+fires if `resolveOwner` (`server/handlers/artifact.go`) genuinely can't find
+the owner — it is just no longer reachable through the intended path.
 
-1. **Wait for `main`'s CI to finish**, then re-run the failed release job
-   (GitHub Actions → the run → "Re-run failed jobs"). Once
-   `reconcile-app-registry` (in `ci.yml`) has applied for this commit, the
-   owner exists and the same recording call succeeds.
-2. **Accept the miss.** The app/chart's *identity* self-heals automatically
-   — the next `main`-push reconcile registers it, the same as any
-   previously-`MISSING` app recovering (see "Triage: the MISSING/ARCHIVED
-   lifecycle" in ARCHITECTURE.md). But **the specific build/artifact record
-   for this release is not backfilled by that reconcile or by anything
-   else** — `ReconcileApps` only ever touches `app`/`chart` rows, never
-   `build`/`artifact`. If this artifact needs to be promotable or queryable
-   later, option 1 (re-run) is the only way to get it recorded; there is no
-   automatic recovery path for it.
-
-To confirm from the registry side rather than the log:
+To confirm a specific artifact recorded, from the registry side rather than
+the log:
 
 ```bash
 app-registry artifacts get <domain>-<name> --version vX.Y.Z
-# NotFound means it was never recorded (opt-in off, or the step failed)
+# NotFound means it was never recorded (opt-in off, or a step failed)
 ```
 
 **What a failed silent recording looks like in practice:** a release ships,

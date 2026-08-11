@@ -19,6 +19,7 @@ func newAppsCmd() *cobra.Command {
 		newAppsGetCmd(),
 		newAppsSetStatusCmd(),
 		newAppsReconcileCmd(),
+		newAppsAssertCmd(),
 	)
 	return appsCmd
 }
@@ -155,6 +156,66 @@ func newAppsReconcileCmd() *cobra.Command {
 	_ = c.MarkFlagRequired("from-plan")
 	_ = c.MarkFlagRequired("idempotency-key")
 	return c
+}
+
+// newAppsAssertCmd implements `apps assert` -- AR-7c (issue #558), the
+// additive-only counterpart to `apps reconcile`. Called from release.yml as
+// the first step of a release run, against whatever manifest set that ref
+// discovers -- unlike reconcile it is safe from ANY ref (never marks
+// anything MISSING), so it needs no --dry-run flag: there is no absence
+// sweep to preview.
+func newAppsAssertCmd() *cobra.Command {
+	var fromPlan string
+	c := &cobra.Command{
+		Use:   "assert",
+		Short: "Additively assert app/chart identity + manifest snapshot from any ref (release)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			data, err := os.ReadFile(fromPlan)
+			if err != nil {
+				return fmt.Errorf("failed to read plan file %s: %w", fromPlan, err)
+			}
+			manifests := &appmetapb.AppManifestSet{}
+			if err := unmarshalJSON(data, manifests); err != nil {
+				return fmt.Errorf("failed to parse plan file %s as AppManifestSet: %w", fromPlan, err)
+			}
+			return withClient(cmd, func(rc *registryClient) error {
+				resp, err := rc.App.AssertApps(cmd.Context(), &pb.AssertAppsRequest{
+					Manifests:      manifests,
+					IdempotencyKey: idempotencyKeyFlag,
+				})
+				if err != nil {
+					return err
+				}
+				printRejectedOwnersWarning(cmd, resp.RejectedApps, resp.RejectedCharts)
+				return printResponse(resp)
+			})
+		},
+	}
+	c.Flags().StringVar(&fromPlan, "from-plan", "", "Path to an AppManifestSet JSON file (from bazel query)")
+	c.Flags().StringVar(&idempotencyKeyFlag, "idempotency-key", "", "Required. <workflow_run_id>-<attempt>[-<domain>-<app>]")
+	_ = c.MarkFlagRequired("from-plan")
+	_ = c.MarkFlagRequired("idempotency-key")
+	return c
+}
+
+// printRejectedOwnersWarning renders every app/chart AssertApps declined to
+// touch (ARCHIVED) prominently, on stderr, ahead of the JSON body --
+// mirrors printUnresolvedChartsWarning below: a per-item skip must not be
+// able to hide inside an otherwise-green step.
+func printRejectedOwnersWarning(cmd *cobra.Command, apps, charts []*pb.RejectedOwner) {
+	if len(apps) == 0 && len(charts) == 0 {
+		return
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(),
+		"\n*** REJECTED: %d app(s), %d chart(s) skipped -- ARCHIVED, not resurrected ***\n",
+		len(apps), len(charts))
+	for _, a := range apps {
+		fmt.Fprintf(cmd.ErrOrStderr(), "  - app %s/%s: %s\n", a.Domain, a.Name, a.Reason)
+	}
+	for _, c := range charts {
+		fmt.Fprintf(cmd.ErrOrStderr(), "  - chart %s/%s: %s\n", c.Domain, c.Name, c.Reason)
+	}
+	fmt.Fprintln(cmd.ErrOrStderr())
 }
 
 // printUnresolvedChartsWarning renders every UnresolvedChart in resp

@@ -16,8 +16,8 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) before executing any phase.
 
 ## Current status
 
-*Last updated in the AR-7 design session (issue #558). **AR-M through AR-6 are
-all merged to `main`** — see the table below.*
+*Last updated finishing AR-7c (issue #558). **AR-M through AR-7b are all
+merged to `main`** — see the table below.*
 
 | Phase | PR | State |
 |---|---|---|
@@ -33,8 +33,9 @@ all merged to `main`** — see the table below.*
 | AR-5a | [#513](https://github.com/whale-net/everything/pull/513) | merged — **inert**: no domain at stage `allocate`, `plan.go`'s tag path untouched |
 | AR-6a / AR-6b | [#516](https://github.com/whale-net/everything/pull/516), [#515](https://github.com/whale-net/everything/pull/515) | merged |
 | AR-7 (design) | [#559](https://github.com/whale-net/everything/pull/559) | merged — design + delivery plan only, no implementation |
-| AR-7a | branch `ar-7a-sweep-robustness`, not yet merged | **implemented** — sweep robustness, no schema change |
-| AR-7b | branch `ar-7b-artifact-lifecycle`, not yet merged | **implemented** — artifact lifecycle, migration `007`, `BeginPublish`/`FailPublish`, stale-row reaper |
+| AR-7a | [#561](https://github.com/whale-net/everything/pull/561) | merged — sweep robustness, no schema change |
+| AR-7b | [#562](https://github.com/whale-net/everything/pull/562) | merged — artifact lifecycle, migration `007`, `BeginPublish`/`FailPublish`, stale-row reaper |
+| AR-7c | branch `ar-7c-manifest-snapshot`, not yet merged | **implemented** — app identity/manifest-snapshot split, migration `008`, `AssertApps` |
 
 The registry is being deployed to `dev` by the repo owner. `app-registry-api`
 and `app-registry-migration` images publish from `apps=all`.
@@ -50,11 +51,11 @@ say "not merged" in places; the table above is authoritative.
 implemented and tested, wired to nothing. See "AR-5" below for what remains
 before any domain can be cut over.
 
-**AR-7 (issue #558) is designed; AR-7a and AR-7b are implemented, not yet
-merged.** The full phase makes a release run hermetic — no dependency on
-`main`'s reconcile having gone first — via an artifact `allocated →
-publishing → published` lifecycle, an identity/manifest-snapshot split of
-`app`, and a run log CI writes to. AR-7a fixes ordering 4 (see
+**AR-7 (issue #558): AR-7a and AR-7b are merged to `main`; AR-7c is
+implemented, not yet merged.** The full phase makes a release run hermetic —
+no dependency on `main`'s reconcile having gone first — via an artifact
+`allocated → publishing → published` lifecycle, an identity/manifest-snapshot
+split of `app`, and a run log CI writes to. AR-7a fixes ordering 4 (see
 ARCHITECTURE.md "The problem: four cross-run orderings"): `ReconcileApps` is
 now partially applying (one bad chart is skipped and reported, not a
 whole-sweep rollback), chart manifests carry domain-qualified app references
@@ -62,8 +63,11 @@ so a bare-name collision across domains can't break the sweep, and `ci.yml`'s
 `reconcile-app-registry` job is no longer `continue-on-error`. AR-7b adds the
 artifact lifecycle states, migration `007`, `BeginPublish`/`FailPublish` and
 the stale-row reaper, and its exit criteria are met (see its subsection).
-AR-7c…AR-7f remain design-only. Design is in ARCHITECTURE.md's "Release
-lifecycle (issue #558)"; delivery is "AR-7" below.
+AR-7c adds `AssertApps`, migration `008`'s identity/manifest-snapshot split,
+and the promotability-retroactivity fix (see its subsection) — its exit
+criteria are met too, but it has not merged yet. AR-7d…AR-7f remain
+design-only. Design is in ARCHITECTURE.md's "Release lifecycle (issue
+#558)"; delivery is "AR-7" below.
 
 **Where deferred work is tracked.** Three places, deliberately:
 [Carry-over items](#carry-over-items) for small cross-cutting gaps that
@@ -879,11 +883,13 @@ than by hand. Read ARCHITECTURE.md's "Release lifecycle (issue #558)" first;
 it carries the design, the four orderings this fixes, and the rejected
 alternatives. This section is delivery only.
 
-**AR-7a is implemented, not yet merged** (branch `ar-7a-sweep-robustness`).
-The remaining sub-phases (AR-7b … AR-7f) are ordered by dependency and still
+**AR-7a and AR-7b are merged to `main`** ([#561](https://github.com/whale-net/everything/pull/561),
+[#562](https://github.com/whale-net/everything/pull/562)). **AR-7c is
+implemented, not yet merged** (branch `ar-7c-manifest-snapshot`). The
+remaining sub-phases (AR-7d … AR-7f) are ordered by dependency and still
 design only.
 
-### AR-7a — Sweep robustness — done (not yet merged)
+### AR-7a — Sweep robustness — done, merged (#561)
 
 Independent of everything else in AR-7. Landed first, as planned.
 
@@ -984,7 +990,7 @@ explicitly out of scope — see the ground rules that constrained this phase):
   reintroduced, the not-marked-missing guard removed, and qualified
   resolution disabled), then the break was reverted.
 
-### AR-7b — Artifact lifecycle states — migration `007_artifact_lifecycle` — done
+### AR-7b — Artifact lifecycle states — migration `007_artifact_lifecycle` — done, merged (#562)
 
 **As built.** Implemented on branch `ar-7b-artifact-lifecycle`, not yet
 merged. Migration numbering matched the plan exactly — `007`, not `006`:
@@ -1155,38 +1161,199 @@ phases):**
 - Postgres integration tests: every legal transition, every illegal one
   rejected, reaper timeout, and the folded `version_allocation` data.
 
-### AR-7c — App identity / manifest snapshot split — migration `008`
+### AR-7c — App identity / manifest snapshot split — migration `008` — done (not yet merged)
 
 The design change. Depends on AR-7b (it touches the same write path).
+Implemented on branch `ar-7c-manifest-snapshot`, stacked on
+`ar-7b-artifact-lifecycle` (itself stacked on `ar-7a-sweep-robustness`).
 
-**Scope**
-- Migration: append-only `app_manifest` / `chart_manifest`
-  (`(owner_id, source_git_sha)` unique, verbatim protojson `JSONB` plus
-  **stored generated columns** for `deploy_unit` and `image_repository` — the
-  two fields the hot read paths need indexable, decided in review;
-  `source_committed_at`, sweep-vs-release provenance); `artifact.manifest_id`
-  and `artifact.promotability` (stored, derived at publish time);
-  `app`/`chart` drop their mutable metadata columns; `v_current_app` /
-  `v_current_chart` views. Backfill snapshots from the current `app`/`chart`
-  rows against the latest reconciled `git_sha` so nothing loses metadata.
-- New `AppRegistry.AssertApps`: additive identity + snapshot write, safe from
-  any ref, never marks `MISSING`, rejects assertion against an `ARCHIVED` app
-  per item. `RecordArtifact` against an `ARCHIVED` owner is rejected too.
-- `ReconcileApps` keeps the absence sweep, `chart_app` membership, the
-  watermark, and now writes `main`-sweep snapshots.
-- `release.yml` calls `AssertApps` as the first step of the release job, from
-  the released ref — this is what closes #547's gap.
-- Reads (`ListApps`/`GetApp`/promotability) move to the views; wire responses
-  are unchanged.
-- Docs: ARCHITECTURE.md's #547 section moves from "accept the gap" to
-  "closed"; OPERATIONS.md's owner-not-reconciled runbook entry retires.
+**As built**
+- Migration `008_app_identity_split`: append-only `app_manifest` /
+  `chart_manifest` (`(owner_id, source_git_sha)` unique, verbatim protojson
+  `JSONB` — `UseProtoNames: true, EmitUnpopulated: true`, matching the
+  Starlark-emitted snake_case JSON and writing every field including
+  zero-valued ones), `source_committed_at`, `provenance` ∈
+  `sweep`/`release`. **`app_manifest` gets the two generated columns
+  (`deploy_unit`, `image_repository`); `chart_manifest` gets NEITHER** —
+  `ChartManifest` (appmeta.proto) carries no `deploy_unit` field at all (a
+  chart's own deploy_unit was always the hardcoded `DEPLOY_UNIT_CHART`
+  constant, never sourced from a manifest) and no image-repository triple
+  either, so there is no hot path that needs a generated column on that
+  table — narrower than the scope note's "for `deploy_unit` and
+  `image_repository`" phrasing, which describes the pair as a whole rather
+  than promising both on both tables. `artifact.manifest_id` (nullable
+  `UUID`, deliberately no FK — polymorphic, same reasoning as `owner_id`
+  not being one) and `artifact.promotability` (nullable `TEXT`, a new
+  `artifact_promotability_shape` CHECK ties it to `state = 'published'`,
+  mirroring migration 007's `artifact_state_shape`). `app`/`chart` drop
+  description/language/app_type/deploy_unit/bazel_label/image_repository
+  (app) and description/chart_repository/deploy_unit (chart) — pure
+  identity. `v_current_app`/`v_current_chart` views, following
+  `v_current_promotion`'s pattern exactly, with `appColumns`/`chartColumns`
+  UNCHANGED in name/order so `scanApp`/`scanChart` (postgres/app.go) needed
+  no edits — only their `FROM` clause moved. Write-path lookups
+  (`getAppByDomainName`, `resolveChartApps`) query the bare identity table
+  directly via new `identityColumns`, not the view, since they only ever
+  need `app_id`/`status`. Backfill: one snapshot per existing app/chart row,
+  attributed to `reconcile_watermark`'s current `git_sha` (falling back to
+  the migration-006 sentinel if never reconciled); `image_repository` is
+  reconstructed via `split_part` on the existing concatenated string (safe
+  — none of registry/organization/repo_name legitimately contains `/`);
+  `artifact.promotability` is backfilled for every existing `published` row
+  from the CURRENT (about-to-be-dropped) `app`/`chart.deploy_unit` — the
+  last time this repo ever computes promotability from a live join;
+  `manifest_id` is deliberately left `NULL` for these rows (no snapshot
+  honestly corresponds to what was live when they actually published — see
+  the migration's comments). A real `.down.sql` restores the flat columns,
+  backfilled from the newest snapshot per owner (any provenance), matching
+  `007`'s no-full-history-preservation convention.
+- New `AppRegistry.AssertApps` (`protos/api.proto`,
+  `api_messages_app.proto`): takes the same `AppManifestSet` shape
+  `ReconcileApps` does. Additive only — creates (`∅ → ACTIVE`) or recovers
+  (`MISSING → ACTIVE`) identity and writes/refreshes a manifest snapshot
+  (`provenance = 'release'`); an already-`ACTIVE` app/chart just gets a
+  fresh snapshot. Never consults or advances the reconcile watermark (there
+  is nothing for a stale call to wrongly revert, since nothing is ever
+  marked `MISSING`) and never touches `chart_app` membership — composition
+  resolution stays `ReconcileApps`-only, because it needs the canonical
+  complete tree to be safe. An `ARCHIVED` target is rejected **per item**
+  (`AssertResult.RejectedApps`/`RejectedCharts`, modeled exactly on
+  `UnresolvedChart`'s skip-and-report shape) — every other app/chart in the
+  same call still applies. Implemented identically in `postgres/app.go`
+  (`appRepo.AssertApps`) and `fake/reconcile.go` (`assertApps`).
+  `RecordArtifact`/`BeginPublish`/`AllocateVersion` against an `ARCHIVED`
+  owner are now rejected too (`handlers/artifact.go`'s
+  `resolveOwner`/`resolveOwnerAndDomain`, via a new
+  `repository.ErrOwnerArchived` sentinel → `FailedPrecondition`) — before
+  AR-7c this succeeded silently.
+- `ReconcileApps` unchanged in shape (absence sweep, `chart_app`
+  membership, the watermark) but now ALSO writes a `provenance = 'sweep'`
+  manifest snapshot for every app/chart it creates or updates
+  (`upsertAppManifestSnapshot`/`upsertChartManifestSnapshot`, `ON CONFLICT
+  (owner_id, source_git_sha) DO NOTHING` — naturally idempotent). This is
+  the ONLY provenance `v_current_app`/`v_current_chart` ever read — an
+  `AssertApps` snapshot from a divergent ref must never leak into "what
+  does this app look like today."
+- `artifact.promotability` is now resolved and STORED exactly once, at the
+  instant a row reaches `published` (`postgres/artifact.go`'s
+  `resolveManifestForPublish`, called from `insertArtifact`/
+  `completePublish`) — never recomputed on read. Prefers the manifest
+  snapshot at the artifact's OWN build's exact `git_sha` (typically the one
+  `AssertApps` just wrote for this release); falls back to the newest
+  snapshot for the owner, any commit, when no exact match exists (a domain
+  that hasn't wired `AssertApps` in yet, or a build predating AR-7c) — a
+  deliberate simplification named in ARCHITECTURE.md: "derived at publish
+  time" means "from the best snapshot known at publish time," not
+  "guaranteed to be the exact build commit." A chart artifact's
+  promotability never depends on a snapshot at all (`DerivePromotability(CHART,
+  CHART)` is always `PROMOTABLE` — see the generated-columns note above),
+  so its resolution is a plain lookup for `manifest_id` bookkeeping, no
+  branch. `scanArtifact` reads `artifact.manifest_id`/`promotability`
+  directly; the old `LEFT JOIN app/chart` in `artifactSelectBase` and the
+  live `DerivePromotability` call on every read are gone.
+- `fake/fake.go` mirrors the same "store once at publish time" invariant
+  (it never modeled manifest snapshots at the storage level — `App`/`Chart`
+  stay flat, representing the current-view shape both before and after this
+  phase) — `insertArtifact`/`completePublish` set `Artifact.Promotability`
+  once, `ListArtifacts`/`GetArtifact`/`ResolveArtifact` read it back
+  verbatim instead of calling `derivePromotability` again.
+- CLI: `app-registry apps assert` (`cli/cmd/apps.go`), mirroring `apps
+  reconcile`'s `--from-plan`/`--idempotency-key` shape (no `--dry-run` — no
+  absence sweep to preview), with `printRejectedOwnersWarning` (stderr
+  banner ahead of the JSON body, mirroring `printUnresolvedChartsWarning`).
+- `.github/actions/app-registry-assert` (new composite action, mirroring
+  `app-registry-reconcile`'s `manifest-set` + CLI-call pattern) is called as
+  the FIRST App Registry step of both `release.yml`'s `release` (per-app
+  matrix, one step per leg) and `release-helm-charts` jobs — ahead of
+  `Record build`/`Begin publish`, so every subsequent owner-resolving call
+  in the same job succeeds. `APP_REGISTRY_CICD_OPT_IN` gate and
+  `continue-on-error: true` preserved, matching every other recording step's
+  posture at adoption stage `observe` (every domain, today) — see
+  ARCHITECTURE.md "Availability, restated per adoption stage": a registry
+  outage here would fail every OTHER recording step in the same job anyway,
+  so this isn't a new single point of failure. The stale
+  "ReconcileApps deliberately does NOT run here" comment in `plan-release`
+  is updated to point at `AssertApps` as the ref-safe counterpart, without
+  contradicting the (still-true) reasoning for why the absence sweep can't
+  run there.
+- Reads (`ListApps`/`GetApp`/`ListCharts`) move to `v_current_app`/
+  `v_current_chart`; wire responses are UNCHANGED — `appToPB`/`chartToPB`
+  (`handlers/convert.go`) and the `repository.App`/`Chart` Go structs were
+  not touched, only what SQL populates them.
+- Docs: this section; ARCHITECTURE.md's "Release lifecycle" status line and
+  "App identity vs. per-build manifest snapshot"/"AssertApps" subsections
+  moved from proposed to built; the #547 section's callout box changed from
+  "still true as-built" to "closed by AR-7c"; OPERATIONS.md's "Release ran
+  ahead of reconcile (issue #547)" runbook section retired (replaced with a
+  pointer to AssertApps closing the gap); `migrate/README.md`'s migration
+  table and numbering.
 
-**Exit criteria**
+**Deliberately NOT done / narrowed**
+- `chart_manifest` ships with NO generated columns at all — see the
+  migration note above. If a future phase needs an indexable chart-side
+  field, it gets its own generated column added when that phase actually
+  needs it, not speculatively here.
+- `artifact.manifest_id` is left `NULL` for every artifact published BEFORE
+  migration 008 — there is no historical snapshot that honestly represents
+  what was live when those actually published, and attributing them to the
+  migration-time backfill snapshot would be dishonest metadata. Their
+  `promotability` IS backfilled (from the live join, one last time).
+- `resolveManifestForPublish`'s exact-git_sha-with-fallback behavior means
+  "derived at publish time" is not a hard guarantee of exact-commit
+  attribution for domains that haven't adopted `AssertApps` yet — see the
+  postgres/artifact.go doc comment. This is intentional: requiring an exact
+  match would make every domain's first post-AR-7c publish fail until
+  `AssertApps` runs for it once, which contradicts "additive, safe from any
+  ref."
+- `GetReleaseRun`, `AdoptArtifact`, and compose-time chart hermeticity
+  remain AR-7d/e/f, untouched here.
+
+**Verified, not merely built**
+- `bazel build //tools/...` and `bazel test //tools/...` green.
+- `postgres_integration_test` (`manual`-tagged, Docker) run for real:
+  `AssertApps` create/recover/no-op-empty-set/reject-ARCHIVED-per-item
+  (`TestAssertApps_CreatesIdentityAndSnapshot_Postgres`,
+  `TestAssertApps_RejectsArchivedApp_Postgres`), `RecordArtifact` rejecting
+  an `ARCHIVED` owner (`TestRecordArtifact_RejectsArchivedOwner_Postgres`),
+  the retroactivity fix
+  (`TestRecordArtifact_PromotabilityIsNotRetroactive_Postgres`), `AssertApps`
+  then `RecordArtifact` with NO `ReconcileApps` ever having run
+  (`TestAssertApps_ThenRecordArtifact_NoReconcileNeeded_Postgres`), snapshot
+  idempotency on `(owner_id, source_git_sha)`
+  (`TestAppManifestSnapshot_IdempotentOnOwnerGitSha`), the generated
+  columns, and the migration 008 backfill against a database seeded in the
+  pre-008 shape (`TestMigration008BackfillsSnapshotsFromExistingRows`, using
+  `runner.Steps(7)` then `runner.Up()` — the only way to exercise a backfill
+  against real pre-existing data under this test harness).
+- Mirrored at the handler/fake level
+  (`server/handlers/app_test.go`/`artifact_test.go`):
+  `TestAssertApps_CreatesIdentity`, `TestAssertApps_NeverMarksMissing`,
+  `TestAssertApps_RecoversMissingApp`,
+  `TestAssertApps_RejectsArchivedAppPerItem`,
+  `TestAssertApps_ThenRecordArtifact_NoReconcileNeeded`,
+  `TestRecordArtifact_RejectsArchivedOwner`, and the retroactivity fix
+  (`TestRecordArtifact_PromotabilityIsNotRetroactive`).
+- The retroactivity-fix test was verified to fail when the behavior it
+  guards was deliberately broken: reintroducing a live
+  `derivePromotability` call in the fake's `GetArtifact` (undoing the
+  "store once at publish time" fix) turned
+  `TestRecordArtifact_PromotabilityIsNotRetroactive` red with the exact
+  before/after values the bug would produce, then the break was reverted.
+- The two touched workflow YAMLs (`release.yml`, the new
+  `app-registry-assert/action.yml`) were validated for syntax only
+  (`python3 -c "import yaml,sys; yaml.safe_load(...)"`), same as AR-7b's
+  before it — they cannot be executed in this environment.
+
+**Exit criteria — all met**
 - A release from a branch that never merges records its build, artifacts and
-  a manifest snapshot, and writes no mutable state anything else can observe.
+  a manifest snapshot, and writes no mutable state anything else can observe
+  — `TestAssertApps_ThenRecordArtifact_NoReconcileNeeded_Postgres`.
 - Editing an app's `deploy_unit` does not change the promotability of an
-  artifact published before the edit (the retroactivity bug, proven by test).
-- `exit 3` / `ReasonOwnerNotReconciled` becomes unreachable from `release.yml`.
+  artifact published before the edit (the retroactivity bug, proven by test)
+  — `TestRecordArtifact_PromotabilityIsNotRetroactive[_Postgres]`.
+- `exit 3` / `ReasonOwnerNotReconciled` becomes unreachable from
+  `release.yml` — `AssertApps` runs as the first App Registry step of both
+  jobs that later resolve an owner by full name, before any such call.
 
 ### AR-7d — Run log and resume — no schema change
 

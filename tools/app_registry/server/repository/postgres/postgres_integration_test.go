@@ -24,6 +24,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver for the migration runner
@@ -79,26 +81,83 @@ func newTestRegistry(t *testing.T) (*Registry, *pgxpool.Pool) {
 
 // --- fixtures ---------------------------------------------------------
 
+// seedApp inserts pure identity (migration 008, AR-7c) plus ONE
+// 'sweep'-provenance app_manifest snapshot carrying deployUnit -- so
+// v_current_app (which every read path now goes through) resolves the same
+// deploy_unit callers of this helper have always passed. git_sha is a
+// per-call-unique "seed-<uuid>" value: uniqueness only matters relative to
+// this app's OWN app_id (the unique index is (owner_id, source_git_sha)),
+// and every call here creates a fresh app_id anyway, so a constant literal
+// would already be safe -- the uuid form is used only so a test that seeds
+// the SAME app twice (deliberately, to test update/recovery flows) doesn't
+// have to think about it either.
 func seedApp(t *testing.T, pool *pgxpool.Pool, domain, name, deployUnit string) string {
 	t.Helper()
+	ctx := context.Background()
 	var appID string
-	err := pool.QueryRow(context.Background(), `
-		INSERT INTO app (domain, name, deploy_unit) VALUES ($1, $2, $3)
-		RETURNING app_id`, domain, name, deployUnit).Scan(&appID)
+	err := pool.QueryRow(ctx, `
+		INSERT INTO app (domain, name) VALUES ($1, $2)
+		RETURNING app_id`, domain, name).Scan(&appID)
 	if err != nil {
 		t.Fatalf("seed app %s/%s: %v", domain, name, err)
 	}
+	seedAppManifest(t, pool, appID, domain, name, deployUnit, "seed-"+uuid.NewString())
 	return appID
 }
 
+// seedAppManifest writes one app_manifest snapshot row directly, bypassing
+// protojson -- a raw SQL fixture matching EXACTLY the key shape
+// postgres/app.go's manifestJSONMarshal produces (UseProtoNames,
+// EmitUnpopulated): snake_case keys, deploy_unit as the protojson enum NAME
+// ("DEPLOY_UNIT_IMAGE" etc, matching migration 008's generated-column CASE
+// expression), so tests can seed a specific (owner, git_sha) snapshot
+// directly -- e.g. to test resolveManifestForPublish's exact-commit
+// preference, or app_manifest's (owner_id, source_git_sha) idempotency.
+func seedAppManifest(t *testing.T, pool *pgxpool.Pool, appID, domain, name, deployUnit, gitSHA string) {
+	t.Helper()
+	protoDeployUnit := map[string]string{
+		"image": "DEPLOY_UNIT_IMAGE",
+		"none":  "DEPLOY_UNIT_NONE",
+		"chart": "DEPLOY_UNIT_CHART",
+		"":      "DEPLOY_UNIT_UNSPECIFIED",
+	}[deployUnit]
+	if protoDeployUnit == "" {
+		protoDeployUnit = "DEPLOY_UNIT_UNSPECIFIED"
+	}
+	manifestJSON := fmt.Sprintf(`{"domain":%q,"name":%q,"deploy_unit":%q,"registry":"","organization":"","repo_name":""}`,
+		domain, name, protoDeployUnit)
+	_, err := pool.Exec(context.Background(), `
+		INSERT INTO app_manifest (owner_id, source_git_sha, provenance, manifest_json)
+		VALUES ($1, $2, 'sweep', $3::jsonb)
+		ON CONFLICT (owner_id, source_git_sha) DO NOTHING`,
+		appID, gitSHA, manifestJSON)
+	if err != nil {
+		t.Fatalf("seed app_manifest for %s/%s: %v", domain, name, err)
+	}
+}
+
+// seedChart mirrors seedApp: pure identity plus one 'sweep'-provenance
+// chart_manifest snapshot, so any test that goes on to publish a chart
+// artifact finds a snapshot for resolveManifestForPublish to attribute it
+// to -- without one, RecordArtifact/BeginPublish for a chart kind would
+// fail with ErrFailedPrecondition ("no manifest snapshot recorded").
 func seedChart(t *testing.T, pool *pgxpool.Pool, domain, name string) string {
 	t.Helper()
+	ctx := context.Background()
 	var chartID string
-	err := pool.QueryRow(context.Background(), `
+	err := pool.QueryRow(ctx, `
 		INSERT INTO chart (domain, name) VALUES ($1, $2)
 		RETURNING chart_id`, domain, name).Scan(&chartID)
 	if err != nil {
 		t.Fatalf("seed chart %s/%s: %v", domain, name, err)
+	}
+	manifestJSON := fmt.Sprintf(`{"domain":%q,"name":%q}`, domain, name)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO chart_manifest (owner_id, source_git_sha, provenance, manifest_json)
+		VALUES ($1, $2, 'sweep', $3::jsonb)
+		ON CONFLICT (owner_id, source_git_sha) DO NOTHING`,
+		chartID, "seed-"+uuid.NewString(), manifestJSON); err != nil {
+		t.Fatalf("seed chart_manifest for %s/%s: %v", domain, name, err)
 	}
 	return chartID
 }
@@ -515,12 +574,19 @@ func TestPromotion_CurrentIdxRejectsConcurrentCurrentRows(t *testing.T) {
 // version_source are NOT NULL as of migration 007 (AR-7b) -- state and
 // version_source have no safe default (see that migration's comments), so
 // every raw INSERT in this file must set them explicitly.
+// seedArtifact seeds a 'published' image artifact directly. As of migration
+// 008 (AR-7c), artifact_promotability_shape requires promotability
+// NOT NULL whenever state = 'published' -- 'promotable' here matches
+// seedApp's default "image" deploy_unit (DerivePromotability(IMAGE, IMAGE)
+// = PROMOTABLE). manifest_id is left NULL: these promotion/writeback tests
+// don't exercise manifest attribution, only that an artifact row exists to
+// promote.
 func seedArtifact(t *testing.T, pool *pgxpool.Pool, appID, buildID, digest, version string) string {
 	t.Helper()
 	var artifactID string
 	err := pool.QueryRow(context.Background(), `
-		INSERT INTO artifact (kind, app_id, repository, version, digest, build_id, state, provenance, version_source)
-		VALUES ('image', $1, 'ghcr.io/acme/widget', $2, $3, $4, 'published', 'observed', 'tag')
+		INSERT INTO artifact (kind, app_id, repository, version, digest, build_id, state, provenance, version_source, promotability)
+		VALUES ('image', $1, 'ghcr.io/acme/widget', $2, $3, $4, 'published', 'observed', 'tag', 'promotable')
 		RETURNING artifact_id`, appID, version, digest, buildID).Scan(&artifactID)
 	if err != nil {
 		t.Fatalf("seed artifact %s: %v", digest, err)
@@ -1236,7 +1302,17 @@ func TestMigration004BackfillsVersionColumns(t *testing.T) {
 		t.Fatalf("apply migrations 001-003: %v", err)
 	}
 
-	appID := seedApp(t, db.Pool, "acme", "widget", "image")
+	// Seeded via raw SQL against the pre-migration-008 `app` shape --
+	// app_manifest doesn't exist at migration 3, so seedApp/seedAppManifest
+	// (which target the post-008 schema) can't be used here. Same pattern
+	// as TestMigration007FoldsVersionAllocationIntoArtifact and
+	// TestMigration008BackfillsSnapshotsFromExistingRows below.
+	var appID string
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO app (domain, name, deploy_unit) VALUES ($1, $2, $3)
+		RETURNING app_id`, "acme", "widget", "image").Scan(&appID); err != nil {
+		t.Fatalf("seed pre-migration-008 app row: %v", err)
+	}
 	buildID := seedBuild(t, db.Pool, "run-backfill")
 
 	type seed struct{ digest, version string }
@@ -2429,9 +2505,16 @@ func TestMigration007FoldsVersionAllocationIntoArtifact(t *testing.T) {
 		t.Fatalf("apply migrations 001-006: %v", err)
 	}
 
-	appID := seedApp(t, db.Pool, "acme", "folded", "image")
-	if _, err := db.Pool.Exec(ctx, `UPDATE app SET image_repository = $1 WHERE app_id = $2`, "ghcr.io/acme/folded", appID); err != nil {
-		t.Fatalf("set image_repository: %v", err)
+	// Seeded via raw SQL against the pre-migration-008 `app` shape (still
+	// carrying deploy_unit/image_repository directly -- migration 008 is
+	// what removes them, and app_manifest doesn't exist until it runs) --
+	// deliberately NOT the seedApp/seedAppManifest helpers, which target the
+	// POST-008 schema this test's seed point (migration 6) predates.
+	var appID string
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO app (domain, name, deploy_unit, image_repository) VALUES ($1, $2, 'image', $3)
+		RETURNING app_id`, "acme", "folded", "ghcr.io/acme/folded").Scan(&appID); err != nil {
+		t.Fatalf("seed pre-migration-008 app row: %v", err)
 	}
 
 	var allocationID string
@@ -2476,5 +2559,468 @@ func TestMigration007FoldsVersionAllocationIntoArtifact(t *testing.T) {
 	}
 	if tableExists {
 		t.Fatalf("expected version_allocation to be dropped by migration 007")
+	}
+}
+
+// ============================================================================
+// 10. App identity / manifest snapshot split (AR-7c, migration 008, issue #558)
+// ============================================================================
+
+// appManifestRow reads back one app_manifest row's generated columns plus
+// the raw manifest_json, for asserting the generated-column derivation
+// directly against real Postgres (not just through v_current_app).
+func appManifestRow(t *testing.T, pool *pgxpool.Pool, appID, gitSHA string) (deployUnit, imageRepository string, found bool) {
+	t.Helper()
+	err := pool.QueryRow(context.Background(), `
+		SELECT deploy_unit, image_repository FROM app_manifest WHERE owner_id = $1 AND source_git_sha = $2`,
+		appID, gitSHA).Scan(&deployUnit, &imageRepository)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", false
+	}
+	if err != nil {
+		t.Fatalf("read app_manifest for %s/%s: %v", appID, gitSHA, err)
+	}
+	return deployUnit, imageRepository, true
+}
+
+func appManifestSnapshotCount(t *testing.T, pool *pgxpool.Pool, appID string) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM app_manifest WHERE owner_id = $1`, appID).Scan(&n); err != nil {
+		t.Fatalf("count app_manifest rows for %s: %v", appID, err)
+	}
+	return n
+}
+
+// TestAssertApps_CreatesIdentityAndSnapshot_Postgres proves AR-7c's AssertApps
+// against real Postgres: identity row created, exactly one app_manifest
+// snapshot written, and the generated deploy_unit/image_repository columns
+// resolve correctly straight off manifest_json.
+func TestAssertApps_CreatesIdentityAndSnapshot_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	srv := handlers.NewAppServer(reg)
+
+	am := &appmetapb.AppManifest{
+		Domain: "acme", Name: "assert-svc", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE,
+		Registry: "ghcr.io", Organization: "acme", RepoName: "acme-assert-svc",
+	}
+	resp, err := srv.AssertApps(ctx, &pb.AssertAppsRequest{
+		Manifests:      reconcileManifests("sha-assert-1", 100, 100, []*appmetapb.AppManifest{am}, nil),
+		IdempotencyKey: "assert-pg-1",
+	})
+	if err != nil {
+		t.Fatalf("assert: %v", err)
+	}
+	if len(resp.CreatedApps) != 1 || resp.CreatedApps[0].Status != pb.AppStatus_APP_STATUS_ACTIVE {
+		t.Fatalf("expected 1 created ACTIVE app, got %+v", resp.CreatedApps)
+	}
+	appID := resp.CreatedApps[0].AppId
+
+	if n := appManifestSnapshotCount(t, pool, appID); n != 1 {
+		t.Fatalf("expected exactly 1 app_manifest snapshot, got %d", n)
+	}
+	du, repoCol, found := appManifestRow(t, pool, appID, "sha-assert-1")
+	if !found {
+		t.Fatalf("expected an app_manifest row keyed (owner_id=%s, source_git_sha=sha-assert-1)", appID)
+	}
+	if du != "image" {
+		t.Fatalf("expected the generated deploy_unit column to resolve 'image', got %q", du)
+	}
+	if repoCol != "ghcr.io/acme/acme-assert-svc" {
+		t.Fatalf("expected the generated image_repository column to resolve 'ghcr.io/acme/acme-assert-svc', got %q", repoCol)
+	}
+
+	// The provenance recorded is 'release', not 'sweep' -- AssertApps, not
+	// ReconcileApps.
+	var provenance string
+	if err := pool.QueryRow(ctx, `SELECT provenance FROM app_manifest WHERE owner_id = $1`, appID).Scan(&provenance); err != nil {
+		t.Fatalf("read provenance: %v", err)
+	}
+	if provenance != "release" {
+		t.Fatalf("expected provenance 'release' for an AssertApps snapshot, got %q", provenance)
+	}
+}
+
+// TestAppManifestSnapshot_IdempotentOnOwnerGitSha proves migration 008's
+// UNIQUE (owner_id, source_git_sha) is what makes repeated AssertApps calls
+// for the SAME commit naturally idempotent -- a real release re-run (same
+// git_sha, different idempotency_key) writes no new snapshot row.
+func TestAppManifestSnapshot_IdempotentOnOwnerGitSha(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	srv := handlers.NewAppServer(reg)
+
+	am := oneAppManifest("acme", "idem-svc")
+	first, err := srv.AssertApps(ctx, &pb.AssertAppsRequest{
+		Manifests:      reconcileManifests("sha-idem", 100, 100, []*appmetapb.AppManifest{am}, nil),
+		IdempotencyKey: "assert-idem-1",
+	})
+	if err != nil {
+		t.Fatalf("first assert: %v", err)
+	}
+	appID := first.CreatedApps[0].AppId
+
+	// Re-run with a DIFFERENT idempotency_key (a real second CI attempt, not
+	// a replay) but the SAME git_sha -- this must still write no NEW
+	// snapshot row, because ON CONFLICT (owner_id, source_git_sha) DO
+	// NOTHING is what carries the idempotency here, not the idempotency_key
+	// table.
+	if _, err := srv.AssertApps(ctx, &pb.AssertAppsRequest{
+		Manifests:      reconcileManifests("sha-idem", 100, 100, []*appmetapb.AppManifest{am}, nil),
+		IdempotencyKey: "assert-idem-2",
+	}); err != nil {
+		t.Fatalf("second assert (same git_sha): %v", err)
+	}
+	if n := appManifestSnapshotCount(t, pool, appID); n != 1 {
+		t.Fatalf("expected exactly 1 snapshot after two calls for the SAME git_sha, got %d", n)
+	}
+
+	// A DIFFERENT git_sha for the same owner DOES write a new snapshot.
+	if _, err := srv.AssertApps(ctx, &pb.AssertAppsRequest{
+		Manifests:      reconcileManifests("sha-idem-2", 200, 200, []*appmetapb.AppManifest{am}, nil),
+		IdempotencyKey: "assert-idem-3",
+	}); err != nil {
+		t.Fatalf("third assert (new git_sha): %v", err)
+	}
+	if n := appManifestSnapshotCount(t, pool, appID); n != 2 {
+		t.Fatalf("expected 2 snapshots after a genuinely new commit, got %d", n)
+	}
+}
+
+// TestAssertApps_RejectsArchivedApp_Postgres is PLAN.md's AR-7c exit
+// criterion against real Postgres: AssertApps against an ARCHIVED app is
+// rejected per item, every other app/chart in the same call still applies,
+// and the archived app's status is untouched.
+func TestAssertApps_RejectsArchivedApp_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	appSrv := handlers.NewAppServer(reg)
+
+	created, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: reconcileManifests("sha-arch-1", 100, 100,
+			[]*appmetapb.AppManifest{oneAppManifest("acme", "gone"), oneAppManifest("acme", "stays")}, nil),
+		IdempotencyKey: "arch-pg-1",
+	})
+	if err != nil {
+		t.Fatalf("reconcile create: %v", err)
+	}
+	var goneID string
+	for _, a := range created.CreatedApps {
+		if a.Name == "gone" {
+			goneID = a.AppId
+		}
+	}
+	if goneID == "" {
+		t.Fatalf("expected to find created app 'gone': %+v", created.CreatedApps)
+	}
+
+	if _, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      reconcileManifests("sha-arch-2", 200, 200, []*appmetapb.AppManifest{oneAppManifest("acme", "stays")}, nil),
+		IdempotencyKey: "arch-pg-2",
+	}); err != nil {
+		t.Fatalf("reconcile drop gone: %v", err)
+	}
+	if _, err := appSrv.SetAppStatus(ctx, &pb.SetAppStatusRequest{
+		AppId: goneID, Status: pb.AppStatus_APP_STATUS_ARCHIVED, Reason: "gone for good",
+	}); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+
+	resp, err := appSrv.AssertApps(ctx, &pb.AssertAppsRequest{
+		Manifests: reconcileManifests("sha-arch-3", 300, 300,
+			[]*appmetapb.AppManifest{oneAppManifest("acme", "gone"), oneAppManifest("acme", "stays")}, nil),
+		IdempotencyKey: "arch-pg-3",
+	})
+	if err != nil {
+		t.Fatalf("assert (call itself must succeed): %v", err)
+	}
+	if len(resp.RejectedApps) != 1 || resp.RejectedApps[0].Name != "gone" {
+		t.Fatalf("expected 'gone' rejected, got %+v", resp.RejectedApps)
+	}
+	if len(resp.UpdatedApps) != 1 || resp.UpdatedApps[0].Name != "stays" {
+		t.Fatalf("expected 'stays' to still apply in the same call, got %+v", resp.UpdatedApps)
+	}
+	if got := appStatus(t, pool, goneID); got != "archived" {
+		t.Fatalf("expected 'gone' to remain archived (not resurrected), got %q", got)
+	}
+}
+
+// TestRecordArtifact_RejectsArchivedOwner_Postgres is the OTHER AR-7c exit
+// criterion: "RecordArtifact against an ARCHIVED owner is rejected too" --
+// before AR-7c this succeeded silently.
+func TestRecordArtifact_RejectsArchivedOwner_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	appSrv := handlers.NewAppServer(reg)
+	artSrv := handlers.NewArtifactServer(reg)
+
+	created, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      reconcileManifests("sha-arch-owner-1", 100, 100, []*appmetapb.AppManifest{oneAppManifest("acme", "archowner")}, nil),
+		IdempotencyKey: "arch-owner-pg-1",
+	})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	appID := created.CreatedApps[0].AppId
+
+	if _, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      reconcileManifests("sha-arch-owner-2", 200, 200, nil, nil),
+		IdempotencyKey: "arch-owner-pg-2",
+	}); err != nil {
+		t.Fatalf("reconcile drop: %v", err)
+	}
+	if _, err := appSrv.SetAppStatus(ctx, &pb.SetAppStatusRequest{
+		AppId: appID, Status: pb.AppStatus_APP_STATUS_ARCHIVED, Reason: "gone",
+	}); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+
+	buildID := seedBuild(t, pool, "run-arch-owner")
+	_, err = artSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: buildID, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "acme-archowner", Version: "v1.0.0", Digest: "sha256:archowner1",
+		IdempotencyKey: "arch-owner-artifact-1",
+	})
+	if err == nil {
+		t.Fatal("expected RecordArtifact against an ARCHIVED owner to be rejected")
+	}
+	st, _ := status.FromError(err)
+	if st.Code() != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v (%v)", st.Code(), err)
+	}
+}
+
+// TestAssertApps_ThenRecordArtifact_NoReconcileNeeded_Postgres is AR-7c's
+// central exit criterion against real Postgres: a release from a ref that
+// NEVER merges (simulated here simply as "no ReconcileApps call ever ran")
+// calls AssertApps first, then records its build and artifact successfully
+// -- exit 3 / ReasonOwnerNotReconciled (issue #547) is unreachable. Also
+// proves the "writes no mutable state anything else can observe" half of
+// the exit criterion: app is pure identity, so there is nothing for
+// AssertApps to have mutated beyond the identity row and its own
+// manifest snapshot.
+func TestAssertApps_ThenRecordArtifact_NoReconcileNeeded_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	appSrv := handlers.NewAppServer(reg)
+	artSrv := handlers.NewArtifactServer(reg)
+
+	am := &appmetapb.AppManifest{
+		Domain: "acme", Name: "unmerged-branch-app", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE,
+		Registry: "ghcr.io", Organization: "acme", RepoName: "acme-unmerged-branch-app",
+	}
+	if _, err := appSrv.AssertApps(ctx, &pb.AssertAppsRequest{
+		Manifests:      reconcileManifests("sha-unmerged-1", 100, 100, []*appmetapb.AppManifest{am}, nil),
+		IdempotencyKey: "unmerged-assert-1",
+	}); err != nil {
+		t.Fatalf("assert: %v", err)
+	}
+
+	build, err := artSrv.RecordBuild(ctx, &pb.RecordBuildRequest{
+		GitSha: "sha-unmerged-1", WorkflowRunId: "run-unmerged", IdempotencyKey: "unmerged-build-1",
+	})
+	if err != nil {
+		t.Fatalf("record build: %v", err)
+	}
+
+	artResp, err := artSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "acme-unmerged-branch-app", Version: "v1.0.0", Digest: "sha256:unmerged1",
+		IdempotencyKey: "unmerged-artifact-1",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact should succeed with no ReconcileApps ever having run: %v", err)
+	}
+	if artResp.Artifact.Promotability != pb.Promotability_PROMOTABILITY_PROMOTABLE {
+		t.Fatalf("expected PROMOTABLE (deploy_unit=image), got %v", artResp.Artifact.Promotability)
+	}
+
+	// "no mutable state anything else can observe": ReconcileApps's own
+	// absence sweep has never run, so nothing about `app` beyond identity
+	// (domain/name/status/timestamps) was ever written for this owner --
+	// confirmed by the fact this app never shows up in chart_app (there is
+	// no chart here) and its ONLY manifest snapshot is the AssertApps one
+	// at sha-unmerged-1, never superseded by a 'sweep' snapshot.
+	appID, err := reg.Apps().GetAppByFullName(ctx, "acme-unmerged-branch-app")
+	if err != nil {
+		t.Fatalf("get app: %v", err)
+	}
+	if n := appManifestSnapshotCount(t, pool, appID.AppID); n != 1 {
+		t.Fatalf("expected exactly 1 manifest snapshot (the AssertApps one), got %d", n)
+	}
+}
+
+// TestRecordArtifact_PromotabilityIsNotRetroactive_Postgres is PLAN.md's
+// central AR-7c exit criterion against real Postgres: editing an app's
+// deploy_unit after an artifact was published must not change that
+// artifact's promotability. Mirrors
+// handlers.TestRecordArtifact_PromotabilityIsNotRetroactive but exercised
+// through the real scanArtifact/artifact.promotability column, not the fake.
+func TestRecordArtifact_PromotabilityIsNotRetroactive_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	appSrv := handlers.NewAppServer(reg)
+	artSrv := handlers.NewArtifactServer(reg)
+
+	created, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: reconcileManifests("sha-retro-1", 100, 100,
+			[]*appmetapb.AppManifest{{Domain: "acme", Name: "retro-app", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE}}, nil),
+		IdempotencyKey: "retro-pg-1",
+	})
+	if err != nil {
+		t.Fatalf("reconcile create: %v", err)
+	}
+	_ = created
+
+	buildID := seedBuild(t, pool, "run-retro-pg")
+	published, err := artSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: buildID, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "acme-retro-app", Version: "v1.0.0", Digest: "sha256:retropg1",
+		IdempotencyKey: "retro-pg-artifact-1",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact: %v", err)
+	}
+	if published.Artifact.Promotability != pb.Promotability_PROMOTABILITY_PROMOTABLE {
+		t.Fatalf("expected PROMOTABLE at publish time, got %v", published.Artifact.Promotability)
+	}
+
+	// Edit deploy_unit to CHART via a later reconcile -- a real
+	// release_app.bzl change reaching main.
+	if _, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: reconcileManifests("sha-retro-2", 200, 200,
+			[]*appmetapb.AppManifest{{Domain: "acme", Name: "retro-app", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_CHART}}, nil),
+		IdempotencyKey: "retro-pg-2",
+	}); err != nil {
+		t.Fatalf("reconcile with edited deploy_unit: %v", err)
+	}
+
+	// The stored artifact.promotability column, read directly, must be
+	// unaffected.
+	var storedPromotability string
+	if err := pool.QueryRow(ctx, `SELECT promotability FROM artifact WHERE artifact_id = $1`, published.Artifact.ArtifactId).Scan(&storedPromotability); err != nil {
+		t.Fatalf("read stored promotability: %v", err)
+	}
+	if storedPromotability != "promotable" {
+		t.Fatalf("retroactivity bug: expected the stored artifact.promotability column to STAY 'promotable' after image-app's deploy_unit changed, got %q", storedPromotability)
+	}
+
+	// GetArtifact (the read path) must agree.
+	reread, err := artSrv.GetArtifact(ctx, &pb.GetArtifactRequest{ArtifactId: published.Artifact.ArtifactId})
+	if err != nil {
+		t.Fatalf("GetArtifact: %v", err)
+	}
+	if reread.Artifact.Promotability != pb.Promotability_PROMOTABILITY_PROMOTABLE {
+		t.Fatalf("retroactivity bug via GetArtifact: expected PROMOTABLE, got %v", reread.Artifact.Promotability)
+	}
+}
+
+// TestMigration008BackfillsSnapshotsFromExistingRows applies migrations
+// 001-007 against a fresh database, seeds `app`/`chart` rows in the
+// PRE-008 shape (mutable columns directly on the table, as every
+// pre-AR-7c row in a real deployed environment would be), then applies
+// migration 008 and proves: exactly one app_manifest/chart_manifest
+// snapshot per existing row, attributed to reconcile_watermark's current
+// git_sha, and v_current_app/v_current_chart reproduce the SAME
+// deploy_unit/image_repository/status the pre-migration flat columns held
+// "nothing loses metadata," PLAN.md's AR-7c backfill requirement.
+func TestMigration008BackfillsSnapshotsFromExistingRows(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	if err != nil {
+		t.Fatalf("open database/sql handle: %v", err)
+	}
+	defer sqlDB.Close()
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	if err := runner.Steps(7); err != nil {
+		t.Fatalf("apply migrations 001-007: %v", err)
+	}
+
+	// Seed a pre-AR-7c app/chart pair directly, matching the schema shape
+	// migrations 001-007 produce (deploy_unit/image_repository/
+	// chart_repository still live on the base tables).
+	var appID string
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO app (domain, name, description, language, app_type, deploy_unit, bazel_label, image_repository, status)
+		VALUES ('acme', 'backfill-app', 'a description', 'go', 'worker', 'image', '//acme:bin', 'ghcr.io/acme/backfill-app', 'active')
+		RETURNING app_id`).Scan(&appID); err != nil {
+		t.Fatalf("seed pre-008 app: %v", err)
+	}
+	var chartID string
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO chart (domain, name, status) VALUES ('acme', 'backfill-chart', 'active')
+		RETURNING chart_id`).Scan(&chartID); err != nil {
+		t.Fatalf("seed pre-008 chart: %v", err)
+	}
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO chart_app (chart_id, app_id) VALUES ($1, $2)`, chartID, appID); err != nil {
+		t.Fatalf("seed pre-008 chart_app: %v", err)
+	}
+
+	// Advance the reconcile watermark, exactly as a real prior ReconcileApps
+	// call would have -- migration 008's backfill attributes every
+	// synthesized snapshot to THIS git_sha.
+	if _, err := db.Pool.Exec(ctx, `
+		UPDATE reconcile_watermark SET git_sha = 'sha-pre-008', source_committed_at = 500, discovered_at = 500 WHERE id = 1`); err != nil {
+		t.Fatalf("advance watermark: %v", err)
+	}
+
+	if err := runner.Up(); err != nil {
+		t.Fatalf("apply migration 008: %v", err)
+	}
+
+	// Exactly one snapshot each, attributed to the watermark's git_sha.
+	if n := appManifestSnapshotCount(t, db.Pool, appID); n != 1 {
+		t.Fatalf("expected exactly 1 backfilled app_manifest row, got %d", n)
+	}
+	var appSnapGitSHA string
+	if err := db.Pool.QueryRow(ctx, `SELECT source_git_sha FROM app_manifest WHERE owner_id = $1`, appID).Scan(&appSnapGitSHA); err != nil {
+		t.Fatalf("read backfilled app_manifest git_sha: %v", err)
+	}
+	if appSnapGitSHA != "sha-pre-008" {
+		t.Fatalf("expected the backfilled snapshot attributed to the watermark's git_sha 'sha-pre-008', got %q", appSnapGitSHA)
+	}
+
+	var chartSnapCount int
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM chart_manifest WHERE owner_id = $1`, chartID).Scan(&chartSnapCount); err != nil {
+		t.Fatalf("count backfilled chart_manifest rows: %v", err)
+	}
+	if chartSnapCount != 1 {
+		t.Fatalf("expected exactly 1 backfilled chart_manifest row, got %d", chartSnapCount)
+	}
+
+	// v_current_app reproduces the SAME deploy_unit/image_repository/status
+	// the pre-migration flat columns held -- nothing lost.
+	var deployUnit, imageRepository, status, description string
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT deploy_unit, image_repository, status, description FROM v_current_app WHERE app_id = $1`, appID).
+		Scan(&deployUnit, &imageRepository, &status, &description); err != nil {
+		t.Fatalf("read v_current_app: %v", err)
+	}
+	if deployUnit != "image" {
+		t.Fatalf("expected v_current_app.deploy_unit = 'image' (backfilled), got %q", deployUnit)
+	}
+	if imageRepository != "ghcr.io/acme/backfill-app" {
+		t.Fatalf("expected v_current_app.image_repository backfilled, got %q", imageRepository)
+	}
+	if status != "active" {
+		t.Fatalf("expected v_current_app.status = 'active', got %q", status)
+	}
+	if description != "a description" {
+		t.Fatalf("expected v_current_app.description backfilled, got %q", description)
+	}
+
+	// app/chart no longer carry the dropped columns at all.
+	var appHasDeployUnit bool
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'app' AND column_name = 'deploy_unit')`).
+		Scan(&appHasDeployUnit); err != nil {
+		t.Fatalf("check app.deploy_unit column existence: %v", err)
+	}
+	if appHasDeployUnit {
+		t.Fatalf("expected migration 008 to have dropped app.deploy_unit")
 	}
 }

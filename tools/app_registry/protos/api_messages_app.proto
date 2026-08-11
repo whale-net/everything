@@ -95,6 +95,57 @@ message UnresolvedChart {
 }
 
 // ============================================================================
+// AssertApps (AR-7c, issue #558)
+// ============================================================================
+
+// AssertAppsRequest carries the SAME AppManifestSet shape ReconcileApps
+// does, but is safe from any ref: AssertApps only ever creates or recovers
+// identity + records a manifest snapshot, and never treats an app/chart
+// absent from this set as gone (contrast ReconcileAppsRequest's doc
+// comment). manifests.git_sha/source_committed_at are stored on the
+// snapshot rows this call writes, but -- unlike ReconcileApps -- are never
+// compared against the reconcile watermark.
+message AssertAppsRequest {
+  whalenet.appmeta.v1.AppManifestSet manifests = 1;
+
+  // Required. Repeated calls with the same key are a no-op returning the
+  // original result. Use "<workflow_run_id>-<attempt>-<domain>-<app>" (one
+  // release-job matrix leg's worth), matching the convention
+  // RecordBuild/RecordArtifact already use for CI.
+  string idempotency_key = 2;
+}
+
+message AssertAppsResponse {
+  repeated App created_apps = 1;
+  // Already ACTIVE; only the manifest snapshot changed (or this call was a
+  // no-op replay of an already-recorded (owner, git_sha) pair).
+  repeated App updated_apps = 2;
+  // Previously MISSING, automatically returned to ACTIVE -- same automatic
+  // recovery ReconcileApps's absence sweep triggers.
+  repeated App recovered_apps = 3;
+
+  repeated Chart created_charts = 4;
+  repeated Chart updated_charts = 5;
+  repeated Chart recovered_charts = 6;
+
+  // Apps/charts this call declined to touch because they are ARCHIVED --
+  // see AppRegistry.AssertApps's doc comment. Each entry is SKIPPED, not
+  // fatal: every other app/chart in this call still applied.
+  repeated RejectedOwner rejected_apps = 7;
+  repeated RejectedOwner rejected_charts = 8;
+}
+
+// RejectedOwner names one app or chart AssertApps declined to assert
+// because it is ARCHIVED -- see AssertAppsResponse.rejected_apps/
+// rejected_charts.
+message RejectedOwner {
+  string domain = 1;
+  string name = 2;
+  // Human-readable explanation. Not machine-parsed.
+  string reason = 3;
+}
+
+// ============================================================================
 // Reads
 // ============================================================================
 
