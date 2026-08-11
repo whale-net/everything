@@ -552,6 +552,21 @@ jobs:
     # server-side -- see BeginPublishBatchRequest.idempotency_key_prefix's
     # doc comment) specifically so this call actually re-executes instead
     # of replaying the batch's cached response.
+    #
+    # It also carries its own "-image-begin" suffix, distinct from "Record
+    # image artifact" below's "-image-record" (issue #575): these two calls
+    # used to share one "-image" key, so RecordArtifact's call replayed
+    # THIS step's already-committed BeginPublish response instead of
+    # actually running -- silently, because BeginPublishResponse and
+    # RecordArtifactResponse both put an Artifact at proto field 1, so
+    # unmarshaling one into the other's Go struct never errors. The row was
+    # left stuck in 'publishing' (no digest) until the stale-row reaper
+    # failed it, long after this job reported green. Distinct keys are the
+    # workflow-side half of the fix -- server/repository/postgres/
+    # idempotency.go now also scopes lookups to (key, method), so even a
+    # future accidental key reuse fails safe (re-executes) instead of
+    # silently replaying the wrong RPC's response. See ARCHITECTURE.md
+    # "Idempotency" and issue #575.
     - name: Begin publish (image) in App Registry
       if: ${{ github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-build.outputs.build-id != '' }}
       id: app-registry-begin-publish
@@ -567,7 +582,7 @@ jobs:
         owner-full-name: ${{ matrix.domain }}-${{ matrix.app }}
         version: ${{ matrix.version || needs.plan-release.outputs.version }}
         build-id: ${{ steps.app-registry-build.outputs.build-id }}
-        idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.domain }}-${{ matrix.app }}-image
+        idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.domain }}-${{ matrix.app }}-image-begin
 
     - name: Build and release app using multiarch release
       env:
@@ -652,7 +667,7 @@ jobs:
         owner-full-name: ${{ matrix.domain }}-${{ matrix.app }}
         repository: ghcr.io/${{ github.repository_owner }}/${{ matrix.domain }}-${{ matrix.app }}
         version: ${{ matrix.version || needs.plan-release.outputs.version }}
-        idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.domain }}-${{ matrix.app }}-image
+        idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.domain }}-${{ matrix.app }}-image-record
 
     - name: Generate release notes for app
       if: ${{ github.event.inputs.dry_run == 'false' }}
@@ -1075,6 +1090,16 @@ jobs:
     # below uploads every chart in one step, so this necessarily runs at
     # batch granularity too (coarser than the image job's one-app-per-leg
     # BeginPublish, which the matrix already gives for free).
+    #
+    # Uses its own "-chart-begin" idempotency-key suffix, distinct from
+    # "Record chart artifacts" below's "-chart-record" -- these two calls
+    # used to share one "-chart" key (issue #575), which meant the record
+    # call silently replayed this step's BeginPublish response instead of
+    # running (BeginPublishResponse and RecordArtifactResponse both put an
+    # Artifact at proto field 1, so the wrong unmarshal never errors),
+    # leaving the row stuck in 'publishing' until the stale-row reaper
+    # failed it. See the image job's "Begin publish (image)" step for the
+    # full writeup; same fix, same shape, applied to charts here.
     - name: Begin publish (charts) in App Registry
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-build.outputs.build-id != ''
       id: app-registry-begin-publish
@@ -1108,7 +1133,7 @@ jobs:
             --owner "$PUBLISHED_NAME" \
             --version "$CHART_VERSION" \
             --build-id "$BUILD_ID" \
-            --idempotency-key "${IDEMPOTENCY_PREFIX}-${PUBLISHED_NAME}-chart" 2>&1)
+            --idempotency-key "${IDEMPOTENCY_PREFIX}-${PUBLISHED_NAME}-chart-begin" 2>&1)
           BEGIN_EXIT=$?
           set -e
 
@@ -1370,7 +1395,7 @@ jobs:
             --version "$CHART_VERSION" \
             --digest "$CHART_DIGEST" \
             --contains "$CONTAINS_FILE" \
-            --idempotency-key "${IDEMPOTENCY_PREFIX}-${PUBLISHED_NAME}-chart" 2>&1)
+            --idempotency-key "${IDEMPOTENCY_PREFIX}-${PUBLISHED_NAME}-chart-record" 2>&1)
           RECORD_EXIT=$?
           set -e
           rm -f "$CONTAINS_FILE"
