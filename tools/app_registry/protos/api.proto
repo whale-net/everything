@@ -40,6 +40,12 @@ service ArtifactRegistry {
   rpc RecordBuild(RecordBuildRequest) returns (RecordBuildResponse);
   rpc RecordArtifact(RecordArtifactRequest) returns (RecordArtifactResponse);
 
+  // Phase AR-7b (issue #558): artifact lifecycle, allocated -> publishing ->
+  // published. Called immediately before/after an image or chart push;
+  // RecordArtifact above completes publishing -> published.
+  rpc BeginPublish(BeginPublishRequest) returns (BeginPublishResponse);
+  rpc FailPublish(FailPublishRequest) returns (FailPublishResponse);
+
   rpc ListArtifacts(ListArtifactsRequest) returns (ListArtifactsResponse);
   rpc GetArtifact(GetArtifactRequest) returns (GetArtifactResponse);
 

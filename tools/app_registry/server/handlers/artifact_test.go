@@ -428,7 +428,13 @@ func setupAllocate(t *testing.T) (*fake.Registry, *ArtifactServer) {
 
 	if _, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
 		Manifests: manifestSet([]*appmetapb.AppManifest{
-			{Domain: "demo", Name: "image-app", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
+			// Registry/Organization/RepoName populate App.ImageRepository
+			// (see reconcile.go's imageRepository) -- AR-7b's
+			// AllocateVersion/BeginPublish need a real value here for their
+			// ∅ -> allocated / ∅ -> publishing fresh-create branches, which
+			// stamp it onto the artifact row's NOT NULL repository column.
+			{Domain: "demo", Name: "image-app", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE,
+				Registry: "ghcr.io", Organization: "whale-net", RepoName: "demo-image-app"},
 		}, nil),
 		IdempotencyKey: "setup-allocate-1",
 	}); err != nil {
@@ -541,8 +547,14 @@ func TestAllocateVersion_IncrementsFromLatestRecordedArtifact(t *testing.T) {
 			// seeded v1.2.3, not from a previous subtest's allocation.
 			repo, artifactSrv := setupAllocate(t)
 			ctx := authedCtx()
-			repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
 
+			// Seed while "demo" is still at its implicit default stage
+			// (observe) -- AR-7b's RecordArtifact only allows the
+			// create-directly-as-published path there (see
+			// ARCHITECTURE.md "Backward compatibility during rollout");
+			// cutting the domain to "allocate" happens AFTER seeding,
+			// exactly like a real cutover would (existing artifacts predate
+			// it), and only AllocateVersion's own gate below needs it.
 			build := recordBuild(t, artifactSrv, "run-allocate-seed-"+tc.increment)
 			if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 				BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
@@ -551,6 +563,7 @@ func TestAllocateVersion_IncrementsFromLatestRecordedArtifact(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("seed RecordArtifact: %v", err)
 			}
+			repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
 
 			resp, err := artifactSrv.AllocateVersion(ctx, &pb.AllocateVersionRequest{
 				Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
@@ -636,5 +649,229 @@ func TestAllocateVersion_ExplicitVersionCollisionFails(t *testing.T) {
 	})
 	if status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("expected AlreadyExists for a taken explicit_version, got %v", err)
+	}
+}
+
+// ============================================================================
+// AR-7b: artifact lifecycle state machine (issue #558)
+//
+// See ARCHITECTURE.md "Artifact lifecycle: allocated -> publishing ->
+// published" for the legal-transition table these tests exercise:
+// ∅ -> allocated (AllocateVersion), ∅ -> publishing / allocated ->
+// publishing / failed -> publishing (BeginPublish), publishing -> published
+// (RecordArtifact), publishing -> failed (FailPublish). published is
+// terminal.
+// ============================================================================
+
+// TestArtifactLifecycle_AllocateBeginPublishRecord walks the full
+// allocated -> publishing -> published happy path end to end through the
+// handlers, asserting wire-level State/VersionSource at each step, then
+// proves published is terminal: the same digest replays idempotently, a
+// different digest for the same version is a real conflict.
+func TestArtifactLifecycle_AllocateBeginPublishRecord(t *testing.T) {
+	repo, artifactSrv := setupAllocate(t)
+	ctx := authedCtx()
+	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
+
+	alloc, err := artifactSrv.AllocateVersion(ctx, &pb.AllocateVersionRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Increment: "patch", IdempotencyKey: "lifecycle-allocate",
+	})
+	if err != nil {
+		t.Fatalf("AllocateVersion: %v", err)
+	}
+
+	build := recordBuild(t, artifactSrv, "run-lifecycle")
+
+	begun, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Version: alloc.Version, BuildId: build.BuildId, IdempotencyKey: "lifecycle-begin",
+	})
+	if err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+	if begun.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHING {
+		t.Fatalf("expected state PUBLISHING after BeginPublish, got %v", begun.Artifact.State)
+	}
+	if begun.Artifact.VersionSource != pb.VersionSource_VERSION_SOURCE_REGISTRY {
+		t.Fatalf("expected version_source REGISTRY (inherited from AllocateVersion, not overwritten by BeginPublish's own default), got %v", begun.Artifact.VersionSource)
+	}
+
+	recorded, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Digest: "sha256:lifecycle", Version: alloc.Version,
+		IdempotencyKey: "lifecycle-record",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact: %v", err)
+	}
+	if recorded.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHED {
+		t.Fatalf("expected state PUBLISHED after RecordArtifact, got %v", recorded.Artifact.State)
+	}
+	if recorded.Artifact.Digest != "sha256:lifecycle" {
+		t.Fatalf("expected digest to be stamped, got %q", recorded.Artifact.Digest)
+	}
+
+	// published is terminal: re-recording the SAME digest is an idempotent
+	// success...
+	again, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Digest: "sha256:lifecycle", Version: alloc.Version,
+		IdempotencyKey: "lifecycle-record-replay",
+	})
+	if err != nil {
+		t.Fatalf("re-record same digest: %v", err)
+	}
+	if !again.AlreadyRecorded {
+		t.Fatalf("expected already_recorded=true re-recording the same digest")
+	}
+
+	// ...but a DIFFERENT digest for the same already-published version is a
+	// real conflict, not a retry.
+	_, err = artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Digest: "sha256:lifecycle-different", Version: alloc.Version,
+		IdempotencyKey: "lifecycle-record-conflict",
+	})
+	if status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("expected AlreadyExists for a different digest on an already-published version, got %v", err)
+	}
+}
+
+// TestBeginPublish_NoPriorAllocation_TagPath proves the ∅ -> publishing
+// transition (the pre-cutover path, ARCHITECTURE.md "Backward
+// compatibility during rollout"): no AllocateVersion call happened, so
+// BeginPublish creates the row itself, with version_source TAG.
+func TestBeginPublish_NoPriorAllocation_TagPath(t *testing.T) {
+	_, artifactSrv := setupAllocate(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-begin-no-alloc")
+
+	begun, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Version: "v9.9.9", BuildId: build.BuildId, IdempotencyKey: "begin-no-alloc",
+	})
+	if err != nil {
+		t.Fatalf("BeginPublish with no prior allocation: %v", err)
+	}
+	if begun.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHING {
+		t.Fatalf("expected state PUBLISHING, got %v", begun.Artifact.State)
+	}
+	if begun.Artifact.VersionSource != pb.VersionSource_VERSION_SOURCE_TAG {
+		t.Fatalf("expected version_source TAG for the pre-cutover ∅ -> publishing path, got %v", begun.Artifact.VersionSource)
+	}
+}
+
+// TestBeginPublish_RejectsPublishedRow proves publishing -> published is
+// terminal: BeginPublish against an already-published version is
+// FailedPrecondition, not a silent no-op or re-publish.
+func TestBeginPublish_RejectsPublishedRow(t *testing.T) {
+	_, artifactSrv := setupAllocate(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-begin-on-published")
+
+	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Digest: "sha256:already-published", Version: "v1.0.0",
+		IdempotencyKey: "begin-on-published-seed",
+	}); err != nil {
+		t.Fatalf("seed published artifact: %v", err)
+	}
+
+	_, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Version: "v1.0.0", BuildId: build.BuildId, IdempotencyKey: "begin-on-published",
+	})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition for BeginPublish against a published row, got %v", err)
+	}
+}
+
+// TestFailPublish_RejectsNonPublishingRow proves FailPublish only accepts
+// "publishing" as a starting state -- exercised here against "allocated".
+func TestFailPublish_RejectsNonPublishingRow(t *testing.T) {
+	repo, artifactSrv := setupAllocate(t)
+	ctx := authedCtx()
+	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
+
+	alloc, err := artifactSrv.AllocateVersion(ctx, &pb.AllocateVersionRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Increment: "patch", IdempotencyKey: "fail-on-allocated-seed",
+	})
+	if err != nil {
+		t.Fatalf("AllocateVersion: %v", err)
+	}
+
+	_, err = artifactSrv.FailPublish(ctx, &pb.FailPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Version: alloc.Version, Reason: "should be rejected",
+		IdempotencyKey: "fail-on-allocated",
+	})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition for FailPublish against an allocated row, got %v", err)
+	}
+}
+
+// TestFailPublish_ThenBeginPublishRetries proves failed -> publishing: a
+// later run may retry the same version after a FailPublish, and the retry
+// clears fail_reason.
+func TestFailPublish_ThenBeginPublishRetries(t *testing.T) {
+	_, artifactSrv := setupAllocate(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-retry")
+
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Version: "v1.0.0", BuildId: build.BuildId, IdempotencyKey: "retry-begin-1",
+	}); err != nil {
+		t.Fatalf("first BeginPublish: %v", err)
+	}
+
+	failed, err := artifactSrv.FailPublish(ctx, &pb.FailPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Version: "v1.0.0", Reason: "push failed", IdempotencyKey: "retry-fail",
+	})
+	if err != nil {
+		t.Fatalf("FailPublish: %v", err)
+	}
+	if failed.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_FAILED {
+		t.Fatalf("expected state FAILED, got %v", failed.Artifact.State)
+	}
+	if failed.Artifact.FailReason != "push failed" {
+		t.Fatalf("expected fail_reason to be recorded, got %q", failed.Artifact.FailReason)
+	}
+
+	retried, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Version: "v1.0.0", BuildId: build.BuildId, IdempotencyKey: "retry-begin-2",
+	})
+	if err != nil {
+		t.Fatalf("retry BeginPublish (failed -> publishing): %v", err)
+	}
+	if retried.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHING {
+		t.Fatalf("expected state PUBLISHING after retry, got %v", retried.Artifact.State)
+	}
+	if retried.Artifact.FailReason != "" {
+		t.Fatalf("expected fail_reason cleared after a successful retry, got %q", retried.Artifact.FailReason)
+	}
+}
+
+// TestRecordArtifact_RejectsAtNonObserveStageWithoutPriorRow proves the
+// AR-7b backward-compat boundary precisely: RecordArtifact's
+// create-directly-as-published fallback is legal ONLY at adoption stage
+// observe -- ARCHITECTURE.md "Backward compatibility during rollout".
+func TestRecordArtifact_RejectsAtNonObserveStageWithoutPriorRow(t *testing.T) {
+	repo, artifactSrv := setupAllocate(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-reject-non-observe")
+	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStagePromote)
+
+	_, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Digest: "sha256:reject-non-observe", Version: "v1.0.0",
+		IdempotencyKey: "reject-non-observe",
+	})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition for a direct RecordArtifact create at stage 'promote' with no prior BeginPublish, got %v", err)
 	}
 }

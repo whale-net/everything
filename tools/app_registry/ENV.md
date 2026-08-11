@@ -138,6 +138,19 @@ needs `PG_DATABASE_URL` to drain the outbox and `TEMPORAL_HOST` to run
 | `WRITEBACK_CLAIM_STALE_AFTER` | `2m` | How long a `'claimed'` outbox row is left alone before a later pass reclaims it — must exceed `WritebackWorkflow`'s activity `StartToCloseTimeout` (30s) comfortably, or a still-healthy claim gets needlessly reclaimed. This is the knob that makes "worker killed mid-run" recoverable — see `worker/README.md`'s verification section. |
 | `WORKER_ID` | `app-registry-worker-<hostname>` | Recorded in `writeback_outbox.claimed_by`, for operator visibility into which process holds a claim. |
 
+### Artifact reaper (AR-7b, issue #558)
+
+The stale-row reaper (`worker/reaper`) runs as a third loop in the same
+`app-registry-worker` process, alongside the Temporal worker and the outbox
+drainer, sweeping `artifact` rows stuck in `allocated`/`publishing` to
+`failed` — see ARCHITECTURE.md "The reaper is not optional" and
+`worker/README.md`.
+
+| Variable | Default | Description |
+|----------|---------|--------------|
+| `ARTIFACT_REAPER_TIMEOUT` | `30m` | How long an `artifact` row may sit in `allocated` or `publishing` (measured from `state_changed_at`) before the next sweep moves it to `failed` with `fail_reason = 'stale'`. Go duration syntax. Set comfortably longer than the slowest real release leg (cross-arch image builds included) takes end to end, or an in-flight run gets reaped out from under itself. |
+| `ARTIFACT_REAPER_POLL_INTERVAL` | `5m` | Delay between sweep passes (Go duration syntax). Coarser than `WRITEBACK_POLL_INTERVAL` — this is a background hygiene sweep, not a redelivery loop reacting to a worker crash. |
+
 ## Local Development (Tilt)
 
 ```bash

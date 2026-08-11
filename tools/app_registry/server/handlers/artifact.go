@@ -108,7 +108,16 @@ func (s *ArtifactServer) RecordArtifact(ctx context.Context, req *pb.RecordArtif
 	resp, _, err := runIdempotent(ctx, s.repo, req.IdempotencyKey, "RecordArtifact",
 		func() proto.Message { return &pb.RecordArtifactResponse{} },
 		func(ctx context.Context, r repository.Registry) (proto.Message, error) {
-			owner, err := s.resolveOwner(ctx, r, kind, req.OwnerFullName)
+			owner, domain, err := s.resolveOwner(ctx, r, kind, req.OwnerFullName)
+			if err != nil {
+				return nil, err
+			}
+			// AR-7b: RecordArtifact's direct-create fallback (no prior
+			// BeginPublish) is only legal while this owner's domain is
+			// still at adoption stage "observe" -- see
+			// repository.ArtifactRepository.RecordArtifact's doc comment
+			// and ARCHITECTURE.md "Backward compatibility during rollout".
+			stage, err := r.DomainAdoption().GetStage(ctx, domain)
 			if err != nil {
 				return nil, err
 			}
@@ -127,7 +136,7 @@ func (s *ArtifactServer) RecordArtifact(ctx context.Context, req *pb.RecordArtif
 				a.ChartID = owner
 			}
 
-			artifact, alreadyRecorded, err := r.Artifacts().RecordArtifact(ctx, a, containedImagesFromPB(req.Contains))
+			artifact, alreadyRecorded, err := r.Artifacts().RecordArtifact(ctx, a, containedImagesFromPB(req.Contains), stage)
 			if err != nil {
 				return nil, err
 			}
@@ -140,7 +149,8 @@ func (s *ArtifactServer) RecordArtifact(ctx context.Context, req *pb.RecordArtif
 	return resp.(*pb.RecordArtifactResponse), nil
 }
 
-// resolveOwner resolves owner_full_name to an app_id or chart_id, depending
+// resolveOwner resolves owner_full_name to an app_id or chart_id (and its
+// domain, needed by RecordArtifact's AR-7b adoption-stage check), depending
 // on kind, wrapping repository.ErrNotFound as ErrOwnerNotReconciled (which
 // itself wraps ErrInvalidArgument — an unknown owner is a caller mistake,
 // not a "row doesn't exist yet" case). The wrapped message names the owner
@@ -150,19 +160,19 @@ func (s *ArtifactServer) RecordArtifact(ctx context.Context, req *pb.RecordArtif
 // structured apierrors.ReasonOwnerNotReconciled detail for this specific
 // sentinel (issue #547) so a caller can classify the failure without
 // parsing this message.
-func (s *ArtifactServer) resolveOwner(ctx context.Context, r repository.Registry, kind repository.ArtifactKind, ownerFullName string) (string, error) {
+func (s *ArtifactServer) resolveOwner(ctx context.Context, r repository.Registry, kind repository.ArtifactKind, ownerFullName string) (ownerID, domain string, err error) {
 	if kind == repository.ArtifactKindImage {
-		app, err := r.Apps().GetAppByFullName(ctx, ownerFullName)
-		if err != nil {
-			return "", fmt.Errorf("%w: app %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", repository.ErrOwnerNotReconciled, ownerFullName)
+		app, aerr := r.Apps().GetAppByFullName(ctx, ownerFullName)
+		if aerr != nil {
+			return "", "", fmt.Errorf("%w: app %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", repository.ErrOwnerNotReconciled, ownerFullName)
 		}
-		return app.AppID, nil
+		return app.AppID, app.Domain, nil
 	}
-	chart, err := r.Apps().GetChartByFullName(ctx, ownerFullName)
-	if err != nil {
-		return "", fmt.Errorf("%w: chart %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", repository.ErrOwnerNotReconciled, ownerFullName)
+	chart, cerr := r.Apps().GetChartByFullName(ctx, ownerFullName)
+	if cerr != nil {
+		return "", "", fmt.Errorf("%w: chart %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", repository.ErrOwnerNotReconciled, ownerFullName)
 	}
-	return chart.ChartID, nil
+	return chart.ChartID, chart.Domain, nil
 }
 
 func (s *ArtifactServer) ListArtifacts(ctx context.Context, req *pb.ListArtifactsRequest) (*pb.ListArtifactsResponse, error) {
@@ -285,7 +295,7 @@ func (s *ArtifactServer) AllocateVersion(ctx context.Context, req *pb.AllocateVe
 		return nil, status.Errorf(codes.InvalidArgument, `increment must be "major", "minor", or "patch" (got %q); or set explicit_version`, req.Increment)
 	}
 
-	domain, ownerID, err := s.resolveOwnerAndDomain(ctx, kind, req.OwnerFullName)
+	domain, ownerID, repo, err := s.resolveOwnerAndDomain(ctx, kind, req.OwnerFullName)
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +320,7 @@ func (s *ArtifactServer) AllocateVersion(ctx context.Context, req *pb.AllocateVe
 		out, wasReplayed, ferr := runIdempotent(ctx, s.repo, req.IdempotencyKey, "AllocateVersion",
 			func() proto.Message { return &pb.AllocateVersionResponse{} },
 			func(ctx context.Context, r repository.Registry) (proto.Message, error) {
-				alloc, aerr := r.Artifacts().AllocateVersion(ctx, kind, ownerID, req.Increment, req.ExplicitVersion)
+				alloc, aerr := r.Artifacts().AllocateVersion(ctx, kind, ownerID, repo, req.Increment, req.ExplicitVersion)
 				if aerr != nil {
 					return nil, aerr
 				}
@@ -344,21 +354,122 @@ func (s *ArtifactServer) AllocateVersion(ctx context.Context, req *pb.AllocateVe
 	return resp, nil
 }
 
-// resolveOwnerAndDomain resolves owner_full_name to its owning row's id and
-// domain, for AllocateVersion's storage key and adoption-stage gate
-// respectively. Mirrors resolveOwner but also needs Domain, which
-// resolveOwner's callers (RecordArtifact) don't.
-func (s *ArtifactServer) resolveOwnerAndDomain(ctx context.Context, kind repository.ArtifactKind, ownerFullName string) (domain, ownerID string, err error) {
+// resolveOwnerAndDomain resolves owner_full_name to its owning row's id,
+// domain, and stored repository (image_repository/chart_repository), for
+// AllocateVersion's storage key + adoption-stage gate and, as of AR-7b,
+// BeginPublish's repositoryHint on its ∅ -> publishing branch. Mirrors
+// resolveOwner but also needs Domain/repository, which resolveOwner's
+// caller (RecordArtifact) doesn't.
+func (s *ArtifactServer) resolveOwnerAndDomain(ctx context.Context, kind repository.ArtifactKind, ownerFullName string) (domain, ownerID, repo string, err error) {
 	if kind == repository.ArtifactKindImage {
 		app, aerr := s.repo.Apps().GetAppByFullName(ctx, ownerFullName)
 		if aerr != nil {
-			return "", "", status.Errorf(codes.InvalidArgument, "app %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", ownerFullName)
+			return "", "", "", status.Errorf(codes.InvalidArgument, "app %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", ownerFullName)
 		}
-		return app.Domain, app.AppID, nil
+		return app.Domain, app.AppID, app.ImageRepository, nil
 	}
 	chart, cerr := s.repo.Apps().GetChartByFullName(ctx, ownerFullName)
 	if cerr != nil {
-		return "", "", status.Errorf(codes.InvalidArgument, "chart %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", ownerFullName)
+		return "", "", "", status.Errorf(codes.InvalidArgument, "chart %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", ownerFullName)
 	}
-	return chart.Domain, chart.ChartID, nil
+	return chart.Domain, chart.ChartID, chart.ChartRepository, nil
+}
+
+// BeginPublish implements the ∅|allocated|failed -> publishing transition
+// (AR-7b, issue #558): called immediately before a release run pushes an
+// image or chart. See ArtifactState's doc comment for the full lifecycle
+// and ARCHITECTURE.md "Artifact lifecycle: allocated -> publishing ->
+// published".
+func (s *ArtifactServer) BeginPublish(ctx context.Context, req *pb.BeginPublishRequest) (*pb.BeginPublishResponse, error) {
+	if err := auth.Require(ctx, auth.RoleBuilder); err != nil {
+		return nil, err
+	}
+	kind := artifactKindFromPB(req.Kind)
+	if kind == "" {
+		return nil, status.Error(codes.InvalidArgument, "kind is required")
+	}
+	if req.OwnerFullName == "" {
+		return nil, status.Error(codes.InvalidArgument, "owner_full_name is required")
+	}
+	if req.Version == "" || !semverRe.MatchString(req.Version) {
+		return nil, status.Errorf(codes.InvalidArgument, "version %q must match v<major>.<minor>.<patch>", req.Version)
+	}
+	if req.BuildId == "" {
+		return nil, status.Error(codes.InvalidArgument, "build_id is required")
+	}
+	if req.IdempotencyKey == "" {
+		return nil, status.Error(codes.InvalidArgument, "idempotency_key is required")
+	}
+
+	_, ownerID, repo, err := s.resolveOwnerAndDomain(ctx, kind, req.OwnerFullName)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, _, err := runIdempotent(ctx, s.repo, req.IdempotencyKey, "BeginPublish",
+		func() proto.Message { return &pb.BeginPublishResponse{} },
+		func(ctx context.Context, r repository.Registry) (proto.Message, error) {
+			// versionSource is only consulted by the ∅ -> publishing branch
+			// (no prior AllocateVersion call for this version) -- an
+			// existing allocated/failed row keeps whatever it was already
+			// given. "tag" is correct there: the caller is the pre-cutover
+			// release path (ARCHITECTURE.md "Backward compatibility during
+			// rollout") recording intent for a version the git-tag path
+			// chose, not one the registry allocated.
+			artifact, aerr := r.Artifacts().BeginPublish(ctx, kind, ownerID, req.Version, req.BuildId, repo, repository.VersionSourceTag)
+			if aerr != nil {
+				return nil, aerr
+			}
+			return &pb.BeginPublishResponse{Artifact: artifactToPB(*artifact)}, nil
+		},
+	)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	return resp.(*pb.BeginPublishResponse), nil
+}
+
+// FailPublish implements the publishing -> failed transition (AR-7b, issue
+// #558): called on release.yml's error path immediately after a
+// BeginPublish for the same target.
+func (s *ArtifactServer) FailPublish(ctx context.Context, req *pb.FailPublishRequest) (*pb.FailPublishResponse, error) {
+	if err := auth.Require(ctx, auth.RoleBuilder); err != nil {
+		return nil, err
+	}
+	kind := artifactKindFromPB(req.Kind)
+	if kind == "" {
+		return nil, status.Error(codes.InvalidArgument, "kind is required")
+	}
+	if req.OwnerFullName == "" {
+		return nil, status.Error(codes.InvalidArgument, "owner_full_name is required")
+	}
+	if req.Version == "" || !semverRe.MatchString(req.Version) {
+		return nil, status.Errorf(codes.InvalidArgument, "version %q must match v<major>.<minor>.<patch>", req.Version)
+	}
+	if req.Reason == "" {
+		return nil, status.Error(codes.InvalidArgument, "reason is required")
+	}
+	if req.IdempotencyKey == "" {
+		return nil, status.Error(codes.InvalidArgument, "idempotency_key is required")
+	}
+
+	_, ownerID, _, err := s.resolveOwnerAndDomain(ctx, kind, req.OwnerFullName)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, _, err := runIdempotent(ctx, s.repo, req.IdempotencyKey, "FailPublish",
+		func() proto.Message { return &pb.FailPublishResponse{} },
+		func(ctx context.Context, r repository.Registry) (proto.Message, error) {
+			artifact, aerr := r.Artifacts().FailPublish(ctx, kind, ownerID, req.Version, req.Reason)
+			if aerr != nil {
+				return nil, aerr
+			}
+			return &pb.FailPublishResponse{Artifact: artifactToPB(*artifact)}, nil
+		},
+	)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	return resp.(*pb.FailPublishResponse), nil
 }

@@ -82,6 +82,46 @@ func promotabilityToPB(p repository.Promotability) pb.Promotability {
 	}
 }
 
+// artifactStateToPB, artifactProvenanceToPB, versionSourceToPB: AR-7b
+// (issue #558) artifact lifecycle enum converters. See ArtifactState's doc
+// comment (models.go) for the transitions these values name.
+func artifactStateToPB(s repository.ArtifactState) pb.ArtifactState {
+	switch s {
+	case repository.ArtifactStateAllocated:
+		return pb.ArtifactState_ARTIFACT_STATE_ALLOCATED
+	case repository.ArtifactStatePublishing:
+		return pb.ArtifactState_ARTIFACT_STATE_PUBLISHING
+	case repository.ArtifactStatePublished:
+		return pb.ArtifactState_ARTIFACT_STATE_PUBLISHED
+	case repository.ArtifactStateFailed:
+		return pb.ArtifactState_ARTIFACT_STATE_FAILED
+	default:
+		return pb.ArtifactState_ARTIFACT_STATE_UNSPECIFIED
+	}
+}
+
+func artifactProvenanceToPB(p repository.ArtifactProvenance) pb.ArtifactProvenance {
+	switch p {
+	case repository.ArtifactProvenanceObserved:
+		return pb.ArtifactProvenance_ARTIFACT_PROVENANCE_OBSERVED
+	case repository.ArtifactProvenanceAdopted:
+		return pb.ArtifactProvenance_ARTIFACT_PROVENANCE_ADOPTED
+	default:
+		return pb.ArtifactProvenance_ARTIFACT_PROVENANCE_UNSPECIFIED
+	}
+}
+
+func versionSourceToPB(v repository.VersionSource) pb.VersionSource {
+	switch v {
+	case repository.VersionSourceRegistry:
+		return pb.VersionSource_VERSION_SOURCE_REGISTRY
+	case repository.VersionSourceTag:
+		return pb.VersionSource_VERSION_SOURCE_TAG
+	default:
+		return pb.VersionSource_VERSION_SOURCE_UNSPECIFIED
+	}
+}
+
 func appToPB(a repository.App) *pb.App {
 	return &pb.App{
 		AppId:           a.AppID,
@@ -169,14 +209,19 @@ func artifactLinkToPB(l repository.ArtifactLink) *pb.ArtifactLink {
 
 func artifactToPB(a repository.Artifact) *pb.Artifact {
 	out := &pb.Artifact{
-		ArtifactId:    a.ArtifactID,
-		Kind:          artifactKindToPB(a.Kind),
-		Repository:    a.Repository,
-		Version:       a.Version,
-		Digest:        a.Digest,
-		BuildId:       a.BuildID,
-		PublishedAt:   timeToUnix(a.PublishedAt),
-		Promotability: promotabilityToPB(a.Promotability),
+		ArtifactId:     a.ArtifactID,
+		Kind:           artifactKindToPB(a.Kind),
+		Repository:     a.Repository,
+		Version:        a.Version,
+		Digest:         a.Digest,
+		BuildId:        a.BuildID,
+		PublishedAt:    timeToUnix(a.PublishedAt),
+		Promotability:  promotabilityToPB(a.Promotability),
+		State:          artifactStateToPB(a.State),
+		Provenance:     artifactProvenanceToPB(a.Provenance),
+		VersionSource:  versionSourceToPB(a.VersionSource),
+		StateChangedAt: timeToUnix(a.StateChangedAt),
+		FailReason:     a.FailReason,
 	}
 	if a.Kind == repository.ArtifactKindImage {
 		out.AppId = a.AppID

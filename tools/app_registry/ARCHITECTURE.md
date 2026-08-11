@@ -386,15 +386,20 @@ tradeoff above, not a separate gap to close.
 
 ## Release lifecycle (issue #558)
 
-**Status: AR-7a built (merged); AR-7b … AR-7e designed, not built.** Delivery
-is PLAN.md's AR-7 (AR-7a … AR-7e). AR-7a's slice of this section — ordering
-4, partial-apply reconcile, domain-qualified chart app references, and the
-`continue-on-error` drop on `ci.yml`'s sweep job — describes what is actually
-deployed; everything else here (the artifact lifecycle, the app identity /
-manifest-snapshot split, `AssertApps`, the run log) is still proposed, not
-built. It supersedes "Release-vs-reconcile gap (issue #547)" above, and
-changes what "Availability and bootstrap" below promises — both are
-cross-referenced where that happens.
+**Status: AR-7a and AR-7b built (not yet merged); AR-7c … AR-7f designed,
+not built.** Delivery is PLAN.md's AR-7. Two slices of this section describe
+real code: AR-7a's — ordering 4, partial-apply reconcile, domain-qualified
+chart app references, and the `continue-on-error` drop on `ci.yml`'s sweep
+job — and AR-7b's — the artifact lifecycle
+(`allocated → publishing → published → failed`), migration `007`,
+`BeginPublish`/`FailPublish`, `RecordArtifact`'s `publishing → published`
+transition, and the stale-row reaper. Everything else here (the app identity
+/ manifest-snapshot split, `AssertApps`, the run log, `AdoptArtifact`,
+compose-time chart hermeticity) is still proposed: every table, column and
+RPC named in those subsections is unbuilt. This section supersedes
+"Release-vs-reconcile gap (issue #547)" above for the artifact lifecycle
+specifically, and changes what "Availability and bootstrap" below promises —
+both are cross-referenced where that happens.
 
 ### The problem: four cross-run orderings, three of them unenforced
 
@@ -501,6 +506,21 @@ existing row keeps working, creating the row directly in `published` —
 allowed while a domain is at adoption stage `observe`, rejected at
 `allocate` (where allocation must have happened first). That is what lets CI
 adopt `BeginPublish` per domain instead of in one cutover.
+
+**As built (AR-7b).** Everything above is real: migration `007` ships
+exactly this shape, plus an `artifact.fail_reason TEXT` column (not
+originally named in this design) so `FailPublish`'s caller-supplied reason
+and the reaper's hardcoded `"stale"` are both recorded, not just implied by
+the state transition. One decision this section left implicit and the
+implementation had to make explicit: the direct-create fallback is legal
+**only** at `observe`, not at `promote` too — `promote`'s own row in
+"Availability, restated per adoption stage" below already makes recording
+mandatory there, so a domain at `promote` with no prior `publishing` row
+means `BeginPublish` itself failed (or was skipped), and that must surface
+as a rejection, not a silent fallback to the old behavior. The reaper
+(`worker/reaper`) is a third loop in `app-registry-worker`, alongside the
+outbox drainer, configured via `ENV.md`'s `ARTIFACT_REAPER_TIMEOUT` /
+`ARTIFACT_REAPER_POLL_INTERVAL` — see `worker/README.md`.
 
 ### App identity vs. per-build manifest snapshot
 
@@ -643,6 +663,26 @@ Declaring the set in a separate `build_target` table was considered and
 rejected: the `allocated` state already is the declaration, and a second table
 would restate it in a shape that can disagree with what the run actually did.
 
+**As built (AR-7b), the intent-set write is narrower than "before anything
+is pushed" describes.** No third RPC exists to declare intent independently
+of `BeginPublish` (the phase's scope named exactly two new RPCs,
+`BeginPublish`/`FailPublish`), and `AllocateVersion`'s per-domain gate
+(this document's "Version model" section) structurally cannot serve `observe`/
+`promote` domains — it would misattribute `version_source` to `registry` for
+a version the tag path actually chose. So AR-7b implements the intent write
+as `BeginPublish` called as the **first step of each matrix leg**, strictly
+before that leg's own push, rather than from the plan job before the whole
+matrix fans out. This is `allocated|∅ → publishing` directly, not a separate
+`∅ → allocated` row for `observe`/`promote` domains — the `allocated` state
+in that case is authored by `AllocateVersion` only at `allocate` stage, per
+the table above. The gap this leaves: a matrix leg that never starts at all
+(the job itself failed to schedule) has no row of any kind, so "is this run
+complete?" cannot distinguish that from "not part of this run" for such a
+leg. Closing that gap needs either a new RPC or loosening
+`AllocateVersion`'s stage gate, and is deliberately left to AR-7d, which
+owns `GetReleaseRun`/resume semantics — see PLAN.md's AR-7b "Deliberately
+NOT done".
+
 ### Availability, restated per adoption stage
 
 "The registry can be down for hours without blocking a release" and "the
@@ -723,7 +763,13 @@ What AR-7 does to each of AR-5's remaining items:
 
 The one ordering rule: **do not move any domain to `allocate` before AR-7b
 lands.** Everything else in AR-7 can be built, merged, and run while every
-domain sits at `observe`.
+domain sits at `observe`. **AR-7b has landed** (migration `007`,
+`AllocateVersion` writing `artifact` rows directly, `BeginPublish`/
+`FailPublish`, the reaper) — this rule is satisfied, and a domain may now be
+moved to `allocate` as far as AR-7 is concerned. No domain has been, as of
+this writing; that cutover is a separate, explicit operational action (see
+"Per-domain cutover gate" in the Version model section above), not part of
+this change.
 
 ### Rejected alternatives (issue #558)
 

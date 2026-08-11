@@ -230,6 +230,56 @@ func TestRecordArtifact_Authorization(t *testing.T) {
 	// which now runs authenticated as auth.AllRoles() via authedCtx().
 }
 
+// TestBeginPublish_Authorization and TestFailPublish_Authorization cover
+// ArtifactRegistry's AR-7b (issue #558) write RPCs, which require
+// RoleBuilder -- same boundary as RecordBuild/RecordArtifact: a promoter
+// credential must not be able to touch the artifact lifecycle either.
+func TestBeginPublish_Authorization(t *testing.T) {
+	req := &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-svc",
+		Version: "v1.0.0", BuildId: "authz-begin-publish-build",
+		IdempotencyKey: "authz-begin-publish",
+	}
+
+	t.Run("wrong role is PermissionDenied", func(t *testing.T) {
+		srv := NewArtifactServer(fake.New())
+		_, err := srv.BeginPublish(ctxWithRoles(auth.RolePromoterDev), req)
+		requireCode(t, err, codes.PermissionDenied, "BeginPublish")
+	})
+
+	t.Run("no claims is Unauthenticated", func(t *testing.T) {
+		srv := NewArtifactServer(fake.New())
+		_, err := srv.BeginPublish(context.Background(), req)
+		requireCode(t, err, codes.Unauthenticated, "BeginPublish")
+	})
+
+	// The "correct role allowed" case is covered end-to-end by
+	// artifact_test.go (owner resolution requires a real app).
+}
+
+func TestFailPublish_Authorization(t *testing.T) {
+	req := &pb.FailPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-svc",
+		Version: "v1.0.0", Reason: "ci job cancelled",
+		IdempotencyKey: "authz-fail-publish",
+	}
+
+	t.Run("wrong role is PermissionDenied", func(t *testing.T) {
+		srv := NewArtifactServer(fake.New())
+		_, err := srv.FailPublish(ctxWithRoles(auth.RolePromoterDev), req)
+		requireCode(t, err, codes.PermissionDenied, "FailPublish")
+	})
+
+	t.Run("no claims is Unauthenticated", func(t *testing.T) {
+		srv := NewArtifactServer(fake.New())
+		_, err := srv.FailPublish(context.Background(), req)
+		requireCode(t, err, codes.Unauthenticated, "FailPublish")
+	})
+
+	// The "correct role allowed" case is covered end-to-end by
+	// artifact_test.go (owner resolution requires a real app).
+}
+
 // TestArtifactReads_RequireAuthenticationOnly covers ListArtifacts,
 // GetArtifact, and ResolveArtifact: any authenticated principal, no
 // specific role.

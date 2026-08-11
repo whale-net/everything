@@ -25,6 +25,7 @@ import (
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/repository/postgres"
 	"github.com/whale-net/everything/tools/app_registry/worker/outbox"
+	"github.com/whale-net/everything/tools/app_registry/worker/reaper"
 	"github.com/whale-net/everything/tools/app_registry/worker/writeback"
 )
 
@@ -114,7 +115,17 @@ func run() error {
 		Logger:       logger,
 	}
 
-	done := make(chan error, 2)
+	// Stale-artifact reaper (AR-7b, issue #558), running alongside the
+	// outbox drain loop in this same process -- see reaper.Reaper and
+	// ARCHITECTURE.md "The reaper is not optional".
+	artifactReaper := &reaper.Reaper{
+		Store:        repo.Artifacts(),
+		Timeout:      getEnvDuration("ARTIFACT_REAPER_TIMEOUT", 30*time.Minute),
+		PollInterval: getEnvDuration("ARTIFACT_REAPER_POLL_INTERVAL", 5*time.Minute),
+		Logger:       logger,
+	}
+
+	done := make(chan error, 3)
 	go func() {
 		if err := w.Run(worker.InterruptCh()); err != nil {
 			done <- fmt.Errorf("temporal worker: %w", err)
@@ -125,6 +136,13 @@ func run() error {
 	go func() {
 		if err := drainer.Run(ctx); err != nil && ctx.Err() == nil {
 			done <- fmt.Errorf("outbox drainer: %w", err)
+			return
+		}
+		done <- nil
+	}()
+	go func() {
+		if err := artifactReaper.Run(ctx); err != nil && ctx.Err() == nil {
+			done <- fmt.Errorf("artifact reaper: %w", err)
 			return
 		}
 		done <- nil

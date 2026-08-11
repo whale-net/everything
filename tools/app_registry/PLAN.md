@@ -32,7 +32,9 @@ all merged to `main`** — see the table below.*
 | AR-4a / AR-4b | [#512](https://github.com/whale-net/everything/pull/512), [#514](https://github.com/whale-net/everything/pull/514) | merged — writeback `Publish` is still the stub |
 | AR-5a | [#513](https://github.com/whale-net/everything/pull/513) | merged — **inert**: no domain at stage `allocate`, `plan.go`'s tag path untouched |
 | AR-6a / AR-6b | [#516](https://github.com/whale-net/everything/pull/516), [#515](https://github.com/whale-net/everything/pull/515) | merged |
-| AR-7 | [#559](https://github.com/whale-net/everything/pull/559) | design only — AR-7a implemented (branch `ar-7a-sweep-robustness`, not yet merged); AR-7b…AR-7f not started |
+| AR-7 (design) | [#559](https://github.com/whale-net/everything/pull/559) | merged — design + delivery plan only, no implementation |
+| AR-7a | branch `ar-7a-sweep-robustness`, not yet merged | **implemented** — sweep robustness, no schema change |
+| AR-7b | branch `ar-7b-artifact-lifecycle`, not yet merged | **implemented** — artifact lifecycle, migration `007`, `BeginPublish`/`FailPublish`, stale-row reaper |
 
 The registry is being deployed to `dev` by the repo owner. `app-registry-api`
 and `app-registry-migration` images publish from `apps=all`.
@@ -48,19 +50,20 @@ say "not merged" in places; the table above is authoritative.
 implemented and tested, wired to nothing. See "AR-5" below for what remains
 before any domain can be cut over.
 
-**AR-7 (issue #558) is designed; AR-7a is implemented, not yet merged.** The
-full phase makes a release run hermetic — no dependency on `main`'s reconcile
-having gone first — via an artifact `allocated → publishing → published`
-lifecycle, an identity/manifest-snapshot split of `app`, and a run log CI
-writes to; that part (AR-7b…AR-7f) is still design only. AR-7a, independent of
-the rest, fixes ordering 4 (see ARCHITECTURE.md "The problem: four cross-run
-orderings"): `ReconcileApps` is now partially applying (one bad chart is
-skipped and reported, not a whole-sweep rollback), chart manifests carry
-domain-qualified app references so a bare-name collision across domains can't
-break the sweep, and `ci.yml`'s `reconcile-app-registry` job is no longer
-`continue-on-error`. See "AR-7a" below for the as-built detail. Design for the
-rest of AR-7 is in ARCHITECTURE.md's "Release lifecycle (issue #558)";
-delivery is "AR-7" below.
+**AR-7 (issue #558) is designed; AR-7a and AR-7b are implemented, not yet
+merged.** The full phase makes a release run hermetic — no dependency on
+`main`'s reconcile having gone first — via an artifact `allocated →
+publishing → published` lifecycle, an identity/manifest-snapshot split of
+`app`, and a run log CI writes to. AR-7a fixes ordering 4 (see
+ARCHITECTURE.md "The problem: four cross-run orderings"): `ReconcileApps` is
+now partially applying (one bad chart is skipped and reported, not a
+whole-sweep rollback), chart manifests carry domain-qualified app references
+so a bare-name collision across domains can't break the sweep, and `ci.yml`'s
+`reconcile-app-registry` job is no longer `continue-on-error`. AR-7b adds the
+artifact lifecycle states, migration `007`, `BeginPublish`/`FailPublish` and
+the stale-row reaper, and its exit criteria are met (see its subsection).
+AR-7c…AR-7f remain design-only. Design is in ARCHITECTURE.md's "Release
+lifecycle (issue #558)"; delivery is "AR-7" below.
 
 **Where deferred work is tracked.** Three places, deliberately:
 [Carry-over items](#carry-over-items) for small cross-cutting gaps that
@@ -981,9 +984,132 @@ explicitly out of scope — see the ground rules that constrained this phase):
   reintroduced, the not-marked-missing guard removed, and qualified
   resolution disabled), then the break was reverted.
 
-### AR-7b — Artifact lifecycle states — migration `007_artifact_lifecycle`
+### AR-7b — Artifact lifecycle states — migration `007_artifact_lifecycle` — done
 
-**Scope**
+**As built.** Implemented on branch `ar-7b-artifact-lifecycle`, not yet
+merged. Migration numbering matched the plan exactly — `007`, not `006`:
+`006` was already `006_reconcile_watermark` (issue #545, landed between the
+AR-7 design session and this implementation), so there was no free slot to
+reuse. See `migrate/README.md`'s numbering note.
+
+- Migration `007_artifact_lifecycle`: everything in the original scope
+  below, plus `artifact.fail_reason TEXT` (not originally named) so
+  `FailPublish`'s reason and the reaper's `"stale"` are both actually
+  stored, and a table-level `artifact_state_shape` CHECK tying `state` to
+  which of `digest`/`build_id` may be non-NULL. `version_allocation`'s fold-
+  in derives each folded row's `repository` (NOT NULL, but
+  `version_allocation` never carried one) from the owning app's/chart's
+  stored `image_repository`/`chart_repository` via a `LEFT JOIN` — safe to
+  write as a real derivation rather than a placeholder because the table is
+  empty in every deployed environment (AR-5a is inert), so the fold-in
+  INSERT…SELECT affects zero rows today; see the migration's own comments
+  for the full justification. Existing rows backfill to `state =
+  'published'`, `provenance = 'observed'`, `version_source = 'tag'` (every
+  pre-AR-7b row was written by the git-tag path — AR-5a never authored one).
+  A real `.down.sql` recreates `version_allocation` and reverses every
+  column/index/constraint change, matching `005`'s style; it does not
+  attempt to preserve `allocated`/`publishing`/`failed` rows across the
+  schema change (same tradeoff `003`'s down already makes for `promotion`).
+- `AllocateVersion` writes an `allocated` artifact row directly via a new
+  shared `insertArtifact` helper (postgres and fake both), and now also
+  takes the owner's stored `repository` as a parameter (resolved at the
+  handler layer via `resolveOwnerAndDomain`, extended to return it) since
+  `artifact.repository` is `NOT NULL` even for a digest-less row. "Next
+  version" collapsed from a `UNION ALL` across two tables to one query
+  against `artifact` alone. **Its concurrency test
+  (`TestAllocateVersion_ConcurrentCallsNeverCollide`, 8 goroutines, zero
+  collisions) stays green with its core assertions completely unchanged —
+  the one edit is the final row-count assertion, which now counts
+  `artifact WHERE state = 'allocated'` instead of the dropped
+  `version_allocation` table, because the storage moved, not because the
+  guarantee weakened.**
+- New RPCs `BeginPublish`/`FailPublish`, implemented in the repository
+  interface, postgres, the fake, handlers, and the CLI
+  (`app-registry artifacts begin-publish` / `fail-publish`), wired into
+  `server/auth` exactly like `RecordArtifact` (`RoleBuilder`), with
+  `authz_test.go` coverage. `RecordArtifact` became the
+  `publishing → published` transition (via a new `completePublish` path
+  shared by postgres/fake), keeping its create-directly-as-`published`
+  fallback — but **only at adoption stage `observe`**, rejected at both
+  `promote` and `allocate` (the scope note said "rejected at allocate";
+  `promote` is included too, since recording is already mandatory there —
+  see ARCHITECTURE.md's "As built (AR-7b)" note under "Artifact lifecycle").
+  Every legal/illegal transition and the same-digest-idempotent /
+  different-digest-`AlreadyExists` rule is enforced identically in postgres
+  and the fake, and covered by both a handler-level (fake-backed) test
+  suite and a real-Postgres integration test suite.
+- Stale-row reaper: new `worker/reaper` package, a third loop in
+  `app-registry-worker` alongside the outbox drainer, calling
+  `ArtifactRepository.ExpireStale` on `ARTIFACT_REAPER_TIMEOUT` /
+  `ARTIFACT_REAPER_POLL_INTERVAL` (ENV.md, `worker/README.md`).
+- **The release plan step writes the intent set — narrower than "before
+  anything is pushed" originally described.** No third RPC exists to
+  declare intent independently of `BeginPublish` (the scope named exactly
+  two new RPCs), and `AllocateVersion`'s per-domain gate cannot serve
+  `observe`/`promote` domains without misattributing `version_source`. As
+  built: `BeginPublish` is called as the first step of each matrix leg in
+  `release.yml`, strictly before that leg's own image/chart push, rather
+  than from the plan job before the whole matrix fans out. This satisfies
+  "before that target's own push" but not "before the whole run's fan-out
+  begins" — a matrix leg that never starts at all still has no row of any
+  kind. See ARCHITECTURE.md's as-built note under "The run log" for the
+  full reasoning and why closing that gap is left to AR-7d. **This is the
+  one piece of AR-7b's original scope delivered narrower than described —
+  called out explicitly as "Deliberately NOT done" below, not silently
+  dropped.**
+- `.github/actions/app-registry-begin-publish` / `app-registry-fail-publish`
+  (new composite actions, following `app-registry-record-build`/
+  `app-registry-record-image`'s pattern) and `release.yml` changes: see
+  that file's diff and this phase's report for the exact step reordering
+  (build recording moved ahead of the push so `BeginPublish` has a
+  `build_id` to stamp). `APP_REGISTRY_CICD_OPT_IN` and
+  `dry_run == 'false'` gating and `continue-on-error: true` semantics are
+  unchanged from the existing recording steps — AR-7b does not flip
+  recording from best-effort to mandatory at the workflow-YAML layer for
+  any stage; that tightening is entirely server-side (RecordArtifact's
+  stage-gated fallback above), matching ARCHITECTURE.md's "Availability,
+  restated per adoption stage" table.
+- Docs: this section, ARCHITECTURE.md ("Release lifecycle" status line,
+  "Artifact lifecycle" as-built note, "The run log" as-built note,
+  "Relationship to AR-5" ordering-rule confirmation), ENV.md (reaper
+  variables), `worker/README.md` (reaper section), `migrate/README.md`
+  (migration table + numbering note).
+
+**Verified, not merely built:**
+- `bazel build //tools/app_registry/...` and `bazel test
+  //tools/app_registry/...` (non-`manual` targets) are green.
+- `postgres_integration_test` (`manual`-tagged, requires Docker) was run for
+  real against `postgres:16-alpine` via `libs/go/dbtest` — every legal
+  transition, every illegal one rejected (`TestArtifactLifecycle_
+  LegalTransitions`, `TestArtifactLifecycle_IllegalTransitionsRejected`),
+  the reaper timeout including a fresh row NOT being reaped
+  (`TestExpireStale_ReaperTimeout`), and the `version_allocation` fold-in
+  (`TestMigration007FoldsVersionAllocationIntoArtifact`) all pass, alongside
+  every pre-existing test in that file (a raw-SQL test fixture,
+  `seedArtifact`, needed updating for the new NOT NULL columns — a real,
+  expected fallout of the schema change, not a design change).
+- Several of the new tests (the different-digest-rejected check, BeginPublish
+  rejecting a published row, RecordArtifact's stage gate, and the reaper's
+  cutoff filter) were each verified to fail when the behavior they guard was
+  deliberately broken in the fake or postgres implementation, then reverted.
+- The two touched workflow YAMLs were validated for syntax only
+  (`python3 -c "import yaml,sys; yaml.safe_load(open(...))"`) — they cannot
+  be executed in this environment (no deployed registry, no real Keycloak
+  clients), same as AR-3d's `promote.yml` before it.
+
+**Deliberately NOT done (see "As built" above for the one item with a
+design consequence; the rest are unchanged scope boundaries from other
+phases):**
+- The plan-stage, before-fan-out intent write for `observe`/`promote`
+  domains — narrowed to "first step of each matrix leg" instead. Left to
+  AR-7d, which owns the run-log/resume machinery this gap actually affects.
+- `AssertApps`, manifest snapshot tables, `GetReleaseRun`, `AdoptArtifact`,
+  compose-time chart enforcement — AR-7c/d/e/f, unchanged.
+- Moving any domain to `domain_adoption.stage = 'allocate'` for real — that
+  remains a separate, explicit operational action; AR-7b only removes the
+  blocker ARCHITECTURE.md's "Relationship to AR-5" named.
+
+**Original scope (as designed, for reference)**
 - Migration: `artifact.state` (`allocated`/`publishing`/`published`/`failed`),
   `artifact.provenance` (`observed`/`adopted`), `artifact.version_source`
   (`registry`/`tag` — which path authored the version), `state_changed_at`;

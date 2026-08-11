@@ -153,7 +153,56 @@ type ArtifactLink struct {
 	Digest          string
 }
 
-// Artifact is a published, digest-addressable image or chart.
+// ArtifactState is the AR-7b artifact lifecycle -- see ARCHITECTURE.md
+// "Artifact lifecycle: allocated -> publishing -> published" and migration
+// 007. Legal transitions, enforced server-side in
+// server/repository/postgres/artifact.go and mirrored in
+// server/repository/fake/fake.go: ∅ -> allocated (AllocateVersion), ∅ ->
+// publishing (BeginPublish with no prior allocation -- the pre-cutover
+// path), allocated -> publishing (BeginPublish), publishing -> published
+// (RecordArtifact), publishing -> failed (FailPublish, or the reaper),
+// failed -> publishing (a later run retrying the same version). published
+// is terminal; anything else is FailedPrecondition.
+type ArtifactState string
+
+const (
+	ArtifactStateAllocated  ArtifactState = "allocated"
+	ArtifactStatePublishing ArtifactState = "publishing"
+	ArtifactStatePublished  ArtifactState = "published"
+	ArtifactStateFailed     ArtifactState = "failed"
+)
+
+// ArtifactProvenance mirrors artifact.provenance (migration 007):
+// "observed" (the normal case -- the registry watched this get published)
+// vs "adopted" (AR-7e's AdoptArtifact, not implemented in this phase --
+// see PLAN.md's AR-7e). Every row this phase writes is "observed"; the
+// column exists now so migration 007 doesn't need a second pass later.
+type ArtifactProvenance string
+
+const (
+	ArtifactProvenanceObserved ArtifactProvenance = "observed"
+	ArtifactProvenanceAdopted  ArtifactProvenance = "adopted"
+)
+
+// VersionSource mirrors artifact.version_source (migration 007): which
+// path authored this row's version. "registry" means AllocateVersion (AR-5)
+// reserved it; "tag" means the pre-cutover git-tag path in
+// tools/release_helper_go chose it and the registry is merely recording the
+// intent -- see ARCHITECTURE.md "The run log" and PLAN.md's AR-5 parity
+// exit criterion, which this column turns into a query.
+type VersionSource string
+
+const (
+	VersionSourceRegistry VersionSource = "registry"
+	VersionSourceTag      VersionSource = "tag"
+)
+
+// Artifact is a published, digest-addressable image or chart -- or, as of
+// AR-7b, the record of an in-flight or failed attempt to publish one. See
+// ArtifactState's doc comment for the lifecycle. Digest/BuildID/PublishedAt
+// are empty/zero until State reaches the point migration 007's
+// artifact_state_shape CHECK constraint requires them (BuildID from
+// "publishing" onward, Digest/PublishedAt only once "published").
 type Artifact struct {
 	ArtifactID  string
 	Kind        ArtifactKind
@@ -161,9 +210,19 @@ type Artifact struct {
 	ChartID     string // set when Kind == ArtifactKindChart
 	Repository  string
 	Version     string
-	Digest      string
-	BuildID     string
+	Digest      string // empty until State == ArtifactStatePublished
+	BuildID     string // empty while State == ArtifactStateAllocated
 	PublishedAt time.Time
+
+	State          ArtifactState
+	Provenance     ArtifactProvenance
+	VersionSource  VersionSource
+	StateChangedAt time.Time
+	// FailReason is set by FailPublish (caller-supplied) or the reaper
+	// (hardcoded "stale" -- see ARCHITECTURE.md "The reaper is not
+	// optional"). Free text for operator diagnosis; empty outside
+	// State == ArtifactStateFailed.
+	FailReason string
 
 	// Promotability is DERIVED — computed at read time from the owner's
 	// DeployUnit, never persisted. Populated by repository read methods.

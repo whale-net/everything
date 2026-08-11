@@ -80,6 +80,37 @@ enum PromotionAction {
   PROMOTION_ACTION_REJECT = 6;
 }
 
+// ArtifactState is the AR-7b (issue #558) artifact lifecycle. See
+// ARCHITECTURE.md "Artifact lifecycle: allocated -> publishing ->
+// published". Legal transitions are enforced server-side; ARTIFACT_STATE_
+// PUBLISHED is terminal.
+enum ArtifactState {
+  ARTIFACT_STATE_UNSPECIFIED = 0;
+  ARTIFACT_STATE_ALLOCATED = 1;
+  ARTIFACT_STATE_PUBLISHING = 2;
+  ARTIFACT_STATE_PUBLISHED = 3;
+  ARTIFACT_STATE_FAILED = 4;
+}
+
+// ArtifactProvenance distinguishes an artifact the registry watched get
+// published (OBSERVED, every row this phase writes) from one recorded after
+// the fact via AR-7e's (not yet implemented) AdoptArtifact.
+enum ArtifactProvenance {
+  ARTIFACT_PROVENANCE_UNSPECIFIED = 0;
+  ARTIFACT_PROVENANCE_OBSERVED = 1;
+  ARTIFACT_PROVENANCE_ADOPTED = 2;
+}
+
+// VersionSource records which path authored an artifact's version: the
+// registry's own AllocateVersion (AR-5), or the pre-cutover git-tag scan in
+// tools/release_helper_go. See ARCHITECTURE.md "The run log" -- this is
+// what turns AR-5's parity exit criterion into a query.
+enum VersionSource {
+  VERSION_SOURCE_UNSPECIFIED = 0;
+  VERSION_SOURCE_REGISTRY = 1;
+  VERSION_SOURCE_TAG = 2;
+}
+
 // ============================================================================
 // Core entities
 // ============================================================================
@@ -174,6 +205,17 @@ message Artifact {
   // For kind == CHART: the image artifacts this chart pins, resolved to
   // digests at publish time by tools/helm. Empty for kind == IMAGE.
   repeated ArtifactLink contains = 11;
+
+  // AR-7b (issue #558): the artifact lifecycle. digest/build_id/
+  // published_at above are empty/0 until state reaches the point that
+  // requires them -- see ArtifactState's doc comment.
+  ArtifactState state = 12;
+  ArtifactProvenance provenance = 13;
+  VersionSource version_source = 14;
+  int64 state_changed_at = 15;
+  // Set when state == ARTIFACT_STATE_FAILED: the reason FailPublish (or the
+  // reaper, "stale") recorded. Empty otherwise.
+  string fail_reason = 16;
 }
 
 // ArtifactLink records that a chart artifact pins a specific image digest.

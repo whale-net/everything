@@ -20,6 +20,8 @@ func newArtifactsCmd() *cobra.Command {
 		newArtifactsGetCmd(),
 		newArtifactsResolveCmd(),
 		newArtifactsRecordCmd(),
+		newArtifactsBeginPublishCmd(),
+		newArtifactsFailPublishCmd(),
 	)
 	return artifactsCmd
 }
@@ -105,6 +107,91 @@ func newArtifactsRecordCmd() *cobra.Command {
 	_ = c.MarkFlagRequired("owner")
 	_ = c.MarkFlagRequired("repository")
 	_ = c.MarkFlagRequired("digest")
+	_ = c.MarkFlagRequired("idempotency-key")
+	return c
+}
+
+// newArtifactsBeginPublishCmd is the AR-7b (issue #558) CI write path,
+// called immediately before an image/chart push -- the ∅|allocated|failed
+// -> publishing transition. See ARCHITECTURE.md "Artifact lifecycle:
+// allocated -> publishing -> published".
+func newArtifactsBeginPublishCmd() *cobra.Command {
+	var kind, owner, version, buildID string
+	c := &cobra.Command{
+		Use:   "begin-publish",
+		Short: "Begin publishing an artifact, before the push (CI)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			k, err := parseArtifactKind(kind)
+			if err != nil {
+				return err
+			}
+			req := &pb.BeginPublishRequest{
+				Kind:           k,
+				OwnerFullName:  owner,
+				Version:        version,
+				BuildId:        buildID,
+				IdempotencyKey: idempotencyKeyFlag,
+			}
+			return withClient(cmd, func(rc *registryClient) error {
+				resp, err := rc.Artifact.BeginPublish(cmd.Context(), req)
+				if err != nil {
+					return err
+				}
+				return printResponse(resp)
+			})
+		},
+	}
+	c.Flags().StringVar(&kind, "kind", "", "Artifact kind (image|chart)")
+	c.Flags().StringVar(&owner, "owner", "", "Owning app or chart, as <domain>-<name>")
+	c.Flags().StringVar(&version, "version", "", "Semver tag, e.g. v1.2.3")
+	c.Flags().StringVar(&buildID, "build-id", "", "Build id returned by 'builds record'")
+	c.Flags().StringVar(&idempotencyKeyFlag, "idempotency-key", "", "Required. <workflow_run_id>-<attempt>-<owner>-<kind>")
+	_ = c.MarkFlagRequired("kind")
+	_ = c.MarkFlagRequired("owner")
+	_ = c.MarkFlagRequired("version")
+	_ = c.MarkFlagRequired("build-id")
+	_ = c.MarkFlagRequired("idempotency-key")
+	return c
+}
+
+// newArtifactsFailPublishCmd is the AR-7b (issue #558) CI write path,
+// called on release.yml's error path immediately after a begin-publish for
+// the same target -- the publishing -> failed transition.
+func newArtifactsFailPublishCmd() *cobra.Command {
+	var kind, owner, version, reason string
+	c := &cobra.Command{
+		Use:   "fail-publish",
+		Short: "Mark an in-progress publish as failed (CI)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			k, err := parseArtifactKind(kind)
+			if err != nil {
+				return err
+			}
+			req := &pb.FailPublishRequest{
+				Kind:           k,
+				OwnerFullName:  owner,
+				Version:        version,
+				Reason:         reason,
+				IdempotencyKey: idempotencyKeyFlag,
+			}
+			return withClient(cmd, func(rc *registryClient) error {
+				resp, err := rc.Artifact.FailPublish(cmd.Context(), req)
+				if err != nil {
+					return err
+				}
+				return printResponse(resp)
+			})
+		},
+	}
+	c.Flags().StringVar(&kind, "kind", "", "Artifact kind (image|chart)")
+	c.Flags().StringVar(&owner, "owner", "", "Owning app or chart, as <domain>-<name>")
+	c.Flags().StringVar(&version, "version", "", "Semver tag, e.g. v1.2.3")
+	c.Flags().StringVar(&reason, "reason", "", "Required. Why the publish failed")
+	c.Flags().StringVar(&idempotencyKeyFlag, "idempotency-key", "", "Required. <workflow_run_id>-<attempt>-<owner>-<kind>")
+	_ = c.MarkFlagRequired("kind")
+	_ = c.MarkFlagRequired("owner")
+	_ = c.MarkFlagRequired("version")
+	_ = c.MarkFlagRequired("reason")
 	_ = c.MarkFlagRequired("idempotency-key")
 	return c
 }

@@ -28,10 +28,14 @@ the same promotion's workflow more than once harmless.
 worker/
   main.go               # bootstrap: DB pool, gRPC client to the API, Temporal
                          # client/worker (libs/go/temporal), activity/workflow
-                         # registration, outbox drain loop, graceful shutdown
+                         # registration, outbox drain loop, artifact reaper
+                         # loop, graceful shutdown
   outbox/
     drain.go             # Drainer: ClaimBatch -> ExecuteWorkflow -> MarkDone/MarkFailed
     drain_test.go
+  reaper/
+    reaper.go             # AR-7b (issue #558): periodic sweep of stale
+                           # allocated/publishing artifact rows to failed
   writeback/
     workflow.go          # WritebackWorkflow, the Writeback activity interface,
                           # WritebackInput/RenderedState/PublishResult, task queue
@@ -123,10 +127,35 @@ merely harmless — see `stub_test.go`'s
 `TestStubActivities_Publish_SkipsNoOpWrite`, verified to fail when the check
 is deliberately removed (see the phase report for the transcript).
 
+## Stale-row reaper (AR-7b, issue #558)
+
+A third loop, alongside the outbox drain loop, in this same process:
+`reaper.Reaper` calls `ArtifactRepository.ExpireStale` on a timer, moving
+every `artifact` row still `allocated` or `publishing` after
+`ARTIFACT_REAPER_TIMEOUT` (measured from `state_changed_at`) to `failed`
+with `fail_reason = 'stale'`. See `../ARCHITECTURE.md` "Artifact lifecycle:
+allocated -> publishing -> published" and "The reaper is not optional".
+
+This exists because AR-7b's release plan step writes an `allocated`
+artifact row *before anything is pushed*, at every adoption stage — the
+`UNIQUE (owner_id, kind, version)` index that makes concurrent
+`AllocateVersion` calls collision-safe is the same index that would
+otherwise let a cancelled or crashed release run hold a version number
+forever, permanently blocking that owner's next release. The reaper is what
+turns that hold into a bounded one.
+
+Same shape as `outbox.Drainer`: connects to Postgres directly (not through
+the gRPC API), sweeps once immediately on startup so a worker restart
+doesn't leave an already-stale row idle for a full poll interval, then
+again on every `ARTIFACT_REAPER_POLL_INTERVAL` tick until the process is
+asked to shut down. A sweep error is logged and retried on the next tick,
+never fatal — the worker's dependencies being briefly unreachable must not
+crash-loop the process.
+
 ## Configuration
 
-See [`../ENV.md`](../ENV.md) "Worker (`app-registry-worker`, AR-4b)" for
-every environment variable.
+See [`../ENV.md`](../ENV.md) "Worker (`app-registry-worker`, AR-4b)" and
+"Artifact reaper (AR-7b, issue #558)" for every environment variable.
 
 ## Testing
 
