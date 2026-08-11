@@ -2,6 +2,7 @@ package fake
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -98,9 +99,20 @@ func reconcile(s *state, apps []*appmetapb.AppManifest, charts []*appmetapb.Char
 
 	presentChartIDs := map[string]bool{}
 	for _, cm := range charts {
-		appIDs, err := resolveChartApps(workState, cm)
-		if err != nil {
-			return nil, err
+		appIDs, offending, reason := resolveChartApps(workState, cm)
+		if len(offending) > 0 {
+			// AR-7a: skip this chart, report it, but do not let it be swept
+			// into MISSING -- a chart present in the manifest set but
+			// unresolvable is *present*, not absent. See
+			// ARCHITECTURE.md "AssertApps (additive) vs. ReconcileApps" and
+			// postgres/app.go's Reconcile, which this mirrors.
+			result.UnresolvedCharts = append(result.UnresolvedCharts, repository.UnresolvedChart{
+				Domain: cm.Domain, Name: cm.Name, AppRefs: offending, Reason: reason,
+			})
+			if id, _, found := findChartByDomainName(workState, cm.Domain, cm.Name); found {
+				presentChartIDs[id] = true
+			}
+			continue
 		}
 
 		id, existing, found := findChartByDomainName(workState, cm.Domain, cm.Name)
@@ -178,14 +190,47 @@ func findChartByDomainName(s *state, domain, name string) (string, repository.Ch
 	return "", repository.Chart{}, false
 }
 
-// resolveChartApps resolves ChartManifest.apps (bare app names) to app_ids,
-// per ARCHITECTURE.md/PLAN.md: "fail the reconcile if any is unknown."
-// Same-domain matches are preferred; a cross-domain match is accepted only
-// if it is unique.
-func resolveChartApps(s *state, cm *appmetapb.ChartManifest) ([]string, error) {
-	ids := make([]string, 0, len(cm.Apps))
-	for _, name := range cm.Apps {
-		if id, _, ok := findAppByDomainName(s, cm.Domain, name); ok {
+// resolveChartApps resolves a chart manifest's app references to app_ids,
+// mirroring postgres/app.go's resolveChartApps exactly (see its doc comment
+// for the full rationale). Prefers cm.AppRefs (domain-qualified
+// "<domain>/<name>", never ambiguous); falls back to the DEPRECATED
+// cm.Apps (bare names, same-domain preferred, cross-domain accepted only if
+// unique) when AppRefs is empty -- AR-7a, one release cycle's compatibility.
+//
+// AR-7a: does not fail on an unresolved reference. Returns the ids resolved
+// so far (meaningless if offending is non-empty), every offending reference,
+// and a combined reason string -- the caller downgrades a non-empty
+// offending to a per-chart skip instead of failing the whole reconcile.
+func resolveChartApps(s *state, cm *appmetapb.ChartManifest) (ids []string, offending []string, reason string) {
+	qualified := len(cm.AppRefs) > 0
+	refs := cm.AppRefs
+	if !qualified {
+		refs = cm.Apps
+	}
+
+	ids = make([]string, 0, len(refs))
+	var reasons []string
+
+	for _, ref := range refs {
+		if qualified {
+			domain, name, ok := strings.Cut(ref, "/")
+			if !ok {
+				offending = append(offending, ref)
+				reasons = append(reasons, fmt.Sprintf("app_ref %q is not domain-qualified", ref))
+				continue
+			}
+			if id, _, found := findAppByDomainName(s, domain, name); found {
+				ids = append(ids, id)
+				continue
+			}
+			offending = append(offending, ref)
+			reasons = append(reasons, fmt.Sprintf("app_ref %q not found", ref))
+			continue
+		}
+
+		// DEPRECATED bare-name path -- see doc comment above.
+		name := ref
+		if id, _, found := findAppByDomainName(s, cm.Domain, name); found {
 			ids = append(ids, id)
 			continue
 		}
@@ -197,14 +242,20 @@ func resolveChartApps(s *state, cm *appmetapb.ChartManifest) ([]string, error) {
 		}
 		switch len(matches) {
 		case 0:
-			return nil, fmt.Errorf("%w: chart %s/%s references unknown app %q", repository.ErrInvalidArgument, cm.Domain, cm.Name, name)
+			offending = append(offending, name)
+			reasons = append(reasons, fmt.Sprintf("unknown app %q", name))
 		case 1:
 			ids = append(ids, matches[0])
 		default:
-			return nil, fmt.Errorf("%w: chart %s/%s app name %q is ambiguous across domains", repository.ErrInvalidArgument, cm.Domain, cm.Name, name)
+			offending = append(offending, name)
+			reasons = append(reasons, fmt.Sprintf("app name %q is ambiguous across domains", name))
 		}
 	}
-	return ids, nil
+
+	if len(offending) > 0 {
+		reason = fmt.Sprintf("chart %s/%s: %s", cm.Domain, cm.Name, strings.Join(reasons, "; "))
+	}
+	return ids, offending, reason
 }
 
 func normalizeDeployUnit(du appmetapb.DeployUnit) appmetapb.DeployUnit {

@@ -56,8 +56,19 @@ jobs:
   # against the current, complete tree -- see ARCHITECTURE.md "Rejected
   # alternatives" and DEPLOY.md "CI wiring (AR-3d)" for why this can't
   # safely live in release.yml, which may be dispatched against an
-  # arbitrary, possibly older ref. Best-effort: continue-on-error so a
-  # registry outage never fails main CI.
+  # arbitrary, possibly older ref.
+  #
+  # AR-7a (PLAN.md): NOT continue-on-error. See ARCHITECTURE.md "Availability,
+  # restated per adoption stage" -- the main-push sweep fails red on any
+  # error, deliberately: a rejected sweep means our manifests are wrong, an
+  # unreachable registry is worth knowing about immediately, and this job
+  # gates nothing downstream, so a red here costs attention and nothing else.
+  # Accepted consequence: once APP_REGISTRY_CICD_OPT_IN is 'true', a registry
+  # outage reds this job -- and therefore `main` CI -- until it recovers.
+  # APP_REGISTRY_CICD_OPT_IN=false is the only lever that stops that; it was
+  # previously masked by continue-on-error, which is exactly how the
+  # repo-wide identity-registration wedge (issue #558, ordering 4) stayed
+  # invisible inside a green job.
   reconcile-app-registry:
     name: Reconcile apps/charts in App Registry
     runs-on: ubuntu-latest
@@ -83,7 +94,6 @@ jobs:
 
     - name: Reconcile apps/charts in App Registry
       if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
-      continue-on-error: true
       timeout-minutes: 5
       uses: ./.github/actions/app-registry-reconcile
       with:

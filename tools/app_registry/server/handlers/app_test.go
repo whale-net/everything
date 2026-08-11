@@ -164,31 +164,190 @@ func TestReconcileApps_IdempotencyReplaysWithoutDoubleWrite(t *testing.T) {
 	}
 }
 
-// TestReconcileApps_UnknownChartAppFailsWholeReconcile covers "resolve
-// ChartManifest.apps (bare app names) to app IDs and fail the reconcile if
-// any is unknown."
-func TestReconcileApps_UnknownChartAppFailsWholeReconcile(t *testing.T) {
+// TestReconcileApps_UnknownChartAppSkipsChartOnly is AR-7a's headline
+// scenario: a chart whose apps reference an unknown app no longer fails the
+// whole reconcile (pre-AR-7a: TestReconcileApps_UnknownChartAppFailsWholeReconcile
+// asserted the opposite). It must be reported in unresolved_charts and
+// skipped, while every other app/chart in the same call still applies.
+func TestReconcileApps_UnknownChartAppSkipsChartOnly(t *testing.T) {
 	ctx := authedCtx()
 	srv := NewAppServer(fake.New())
 
-	_, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
-		Manifests: manifestSet(nil, []*appmetapb.ChartManifest{
-			{Domain: "demo", Name: "chart", Apps: []string{"nonexistent"}},
-		}),
+	resp, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: manifestSet(
+			[]*appmetapb.AppManifest{oneApp("demo", "good-app")},
+			[]*appmetapb.ChartManifest{
+				{Domain: "demo", Name: "bad-chart", Apps: []string{"nonexistent"}},
+				{Domain: "demo", Name: "good-chart", Apps: []string{"good-app"}},
+			},
+		),
 		IdempotencyKey: "run-3-1",
 	})
-	if err == nil {
-		t.Fatal("expected an error for a chart referencing an unknown app")
-	}
-	st, _ := status.FromError(err)
-	if st.Code() != codes.InvalidArgument {
-		t.Fatalf("expected InvalidArgument, got %v", st.Code())
+	if err != nil {
+		t.Fatalf("reconcile with one bad chart must not fail the whole call: %v", err)
 	}
 
-	// Nothing should have been written.
-	listResp, _ := srv.ListCharts(ctx, &pb.ListChartsRequest{})
-	if len(listResp.Charts) != 0 {
-		t.Fatalf("failed reconcile must not write a partial chart, got %d charts", len(listResp.Charts))
+	if len(resp.UnresolvedCharts) != 1 {
+		t.Fatalf("expected exactly 1 unresolved chart, got %+v", resp.UnresolvedCharts)
+	}
+	uc := resp.UnresolvedCharts[0]
+	if uc.Domain != "demo" || uc.Name != "bad-chart" {
+		t.Fatalf("expected unresolved chart demo/bad-chart, got %+v", uc)
+	}
+	if len(uc.AppRefs) != 1 || uc.AppRefs[0] != "nonexistent" {
+		t.Fatalf("expected offending app_refs=[nonexistent], got %+v", uc.AppRefs)
+	}
+	if uc.Reason == "" {
+		t.Fatal("expected a non-empty reason")
+	}
+
+	// The good app and good chart still applied, and the bad chart was not
+	// created.
+	if len(resp.CreatedApps) != 1 {
+		t.Fatalf("expected the good app to still be created, got %+v", resp.CreatedApps)
+	}
+	if len(resp.CreatedCharts) != 1 || resp.CreatedCharts[0].Name != "good-chart" {
+		t.Fatalf("expected only good-chart to be created, got %+v", resp.CreatedCharts)
+	}
+
+	listResp, err := srv.ListCharts(ctx, &pb.ListChartsRequest{})
+	if err != nil {
+		t.Fatalf("list charts: %v", err)
+	}
+	if len(listResp.Charts) != 1 || listResp.Charts[0].Name != "good-chart" {
+		t.Fatalf("expected only good-chart to be registered, got %+v", listResp.Charts)
+	}
+}
+
+// TestReconcileApps_UnresolvedChartNotMarkedMissing proves the deliberate
+// semantics called out in ARCHITECTURE.md "AssertApps (additive) vs.
+// ReconcileApps (absence sweep)": a chart that was already registered, and
+// becomes unresolvable in a later reconcile (its manifest now names an app
+// that does not exist), is SKIPPED -- not swept into MISSING as a side
+// effect of not being re-applied this call. A chart present in the manifest
+// set but unresolvable is present, not absent.
+func TestReconcileApps_UnresolvedChartNotMarkedMissing(t *testing.T) {
+	ctx := authedCtx()
+	srv := NewAppServer(fake.New())
+
+	// 1. Register app + chart normally.
+	first, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: manifestSet(
+			[]*appmetapb.AppManifest{oneApp("demo", "svc")},
+			[]*appmetapb.ChartManifest{{Domain: "demo", Name: "chart", Apps: []string{"svc"}}},
+		),
+		IdempotencyKey: "run-5-1",
+	})
+	if err != nil {
+		t.Fatalf("initial reconcile: %v", err)
+	}
+	chartID := first.CreatedCharts[0].ChartId
+
+	// 2. Reconcile again: the chart's manifest now references an app that
+	// does not exist ("svc" renamed without updating the chart) -- an
+	// unresolvable reference. The chart itself is still present in this
+	// call's manifest set, unlike an app/chart that simply drops out.
+	second, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: manifestSet(
+			[]*appmetapb.AppManifest{oneApp("demo", "svc")},
+			[]*appmetapb.ChartManifest{{Domain: "demo", Name: "chart", Apps: []string{"renamed-away"}}},
+		),
+		IdempotencyKey: "run-5-2",
+	})
+	if err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if len(second.UnresolvedCharts) != 1 {
+		t.Fatalf("expected the chart to be reported unresolved, got %+v", second.UnresolvedCharts)
+	}
+	if len(second.NewlyMissingCharts) != 0 {
+		t.Fatalf("an unresolved chart must NOT be swept into newly_missing_charts, got %+v", second.NewlyMissingCharts)
+	}
+
+	listResp, err := srv.ListCharts(ctx, &pb.ListChartsRequest{})
+	if err != nil {
+		t.Fatalf("list charts: %v", err)
+	}
+	found := false
+	for _, c := range listResp.Charts {
+		if c.ChartId == chartID {
+			found = true
+			if c.Status == pb.AppStatus_APP_STATUS_MISSING {
+				t.Fatalf("chart was incorrectly marked MISSING after becoming unresolvable, got %+v", c)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected the chart to still be listed (active, untouched), got %+v", listResp.Charts)
+	}
+}
+
+// TestReconcileApps_DomainQualifiedAppRefsResolveUnambiguously proves
+// AR-7a's fix for cross-domain bare-name ambiguity: two apps sharing a bare
+// name in different domains previously made resolveChartApps fail on the
+// ambiguous bare name; a chart using AppRefs (domain-qualified) instead
+// resolves deterministically to the correct app regardless of the collision.
+func TestReconcileApps_DomainQualifiedAppRefsResolveUnambiguously(t *testing.T) {
+	ctx := authedCtx()
+	srv := NewAppServer(fake.New())
+
+	resp, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: manifestSet(
+			[]*appmetapb.AppManifest{oneApp("domain-a", "shared-name"), oneApp("domain-b", "shared-name")},
+			[]*appmetapb.ChartManifest{
+				{Domain: "domain-b", Name: "chart", AppRefs: []string{"domain-b/shared-name"}},
+			},
+		),
+		IdempotencyKey: "run-6-1",
+	})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(resp.UnresolvedCharts) != 0 {
+		t.Fatalf("expected the domain-qualified ref to resolve without ambiguity, got unresolved=%+v", resp.UnresolvedCharts)
+	}
+	if len(resp.CreatedCharts) != 1 || len(resp.CreatedCharts[0].AppIds) != 1 {
+		t.Fatalf("expected 1 chart composing exactly 1 app, got %+v", resp.CreatedCharts)
+	}
+
+	var domainBAppID string
+	for _, a := range resp.CreatedApps {
+		if a.Domain == "domain-b" {
+			domainBAppID = a.AppId
+		}
+	}
+	if resp.CreatedCharts[0].AppIds[0] != domainBAppID {
+		t.Fatalf("expected the chart to resolve to domain-b's app (id=%s), got %+v", domainBAppID, resp.CreatedCharts[0].AppIds)
+	}
+}
+
+// TestReconcileApps_AmbiguousBareNameSkipsChartNotWholeReconcile proves the
+// deprecated bare-name compatibility path still rejects ambiguity -- but as
+// a per-chart skip now, not a whole-reconcile failure (AR-7a).
+func TestReconcileApps_AmbiguousBareNameSkipsChartNotWholeReconcile(t *testing.T) {
+	ctx := authedCtx()
+	srv := NewAppServer(fake.New())
+
+	resp, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: manifestSet(
+			[]*appmetapb.AppManifest{oneApp("domain-a", "shared-name"), oneApp("domain-b", "shared-name")},
+			[]*appmetapb.ChartManifest{
+				// domain "other" has no app named "shared-name" itself, so
+				// the same-domain preference doesn't disambiguate, and both
+				// domain-a and domain-b match -- genuinely ambiguous.
+				{Domain: "other", Name: "chart", Apps: []string{"shared-name"}},
+			},
+		),
+		IdempotencyKey: "run-7-1",
+	})
+	if err != nil {
+		t.Fatalf("reconcile must not fail the whole call for an ambiguous bare name: %v", err)
+	}
+	if len(resp.UnresolvedCharts) != 1 {
+		t.Fatalf("expected the ambiguous chart to be reported unresolved, got %+v", resp.UnresolvedCharts)
+	}
+	if len(resp.CreatedApps) != 2 {
+		t.Fatalf("expected both apps to still be created despite the ambiguous chart, got %+v", resp.CreatedApps)
 	}
 }
 

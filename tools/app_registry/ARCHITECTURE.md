@@ -386,9 +386,13 @@ tradeoff above, not a separate gap to close.
 
 ## Release lifecycle (issue #558)
 
-**Status: designed, not built.** Delivery is PLAN.md's AR-7 (AR-7a … AR-7e).
-Nothing in this section is deployed; every table/column/RPC named here is
-proposed. It supersedes "Release-vs-reconcile gap (issue #547)" above, and
+**Status: AR-7a built (merged); AR-7b … AR-7e designed, not built.** Delivery
+is PLAN.md's AR-7 (AR-7a … AR-7e). AR-7a's slice of this section — ordering
+4, partial-apply reconcile, domain-qualified chart app references, and the
+`continue-on-error` drop on `ci.yml`'s sweep job — describes what is actually
+deployed; everything else here (the artifact lifecycle, the app identity /
+manifest-snapshot split, `AssertApps`, the run log) is still proposed, not
+built. It supersedes "Release-vs-reconcile gap (issue #547)" above, and
 changes what "Availability and bootstrap" below promises — both are
 cross-referenced where that happens.
 
@@ -403,7 +407,7 @@ correct; only one is actually enforced.
 | 1 | reconcile of commit `C` **before** `RecordArtifact` for an app introduced in `C` | nothing — accepted gap (#547) | exit 3, artifact never recorded and **never backfilled**; that build can never be promoted |
 | 2 | newer reconcile **after** older reconcile | `reconcile_watermark` (#545) + CI concurrency (#546) | solved |
 | 3 | `RecordArtifact(IMAGE, digest D)` **before** any chart pinning `D` | hard server-side reject (`postgres/artifact.go`, "chart pins unrecorded image digest") | chart artifact not recorded |
-| 4 | app rows exist **before** a chart manifest referencing them resolves | `resolveChartApps` fails the **entire** reconcile | repo-wide identity registration wedged, inside a green `main` CI job |
+| 4 | app rows exist **before** a chart manifest referencing them resolves | `resolveChartApps` skips and reports the one bad chart (AR-7a, built) | solved — see below |
 
 Ordering 3 is the expensive one, because charts pin digests resolved from
 **GHCR by tag** (`docker buildx imagetools inspect ${IMG_REPO}:${IMG_VERSION}`
@@ -415,10 +419,20 @@ app**, permanently: re-running the chart release doesn't fix it (the digest is
 still unrecorded), and reconcile doesn't fix it (reconcile writes identity,
 never artifacts). It only clears when that app is rebuilt and recorded again.
 
-Ordering 4 is the quiet one: one chart manifest naming a removed app, or an
-ambiguous bare app name across two domains, rolls back the whole transaction,
-so the watermark never advances and no app registers at all — while the job
-stays green because the step is `continue-on-error`.
+Ordering 4 was the quiet one: one chart manifest naming a removed app, or an
+ambiguous bare app name across two domains, used to roll back the whole
+transaction, so the watermark never advanced and no app registered at all —
+while the job stayed green because the step was `continue-on-error`. **Fixed
+by AR-7a** (built): `resolveChartApps` now reports the bad chart in
+`ReconcileAppsResponse.unresolved_charts` and skips only it; every other
+app/chart in the same call still applies and the watermark still advances.
+Chart manifests also carry a domain-qualified `app_refs` field now (see
+"AssertApps (additive) vs. ReconcileApps (absence sweep)" below), so the
+cross-domain-ambiguity half of this failure mode can no longer be produced by
+`tools/helm` at all — only the deprecated bare-name compatibility path can
+still hit it. And `ci.yml`'s `reconcile-app-registry` job no longer has
+`continue-on-error`, so a genuine registry outage during the sweep is
+visible immediately instead of hiding inside a green step.
 
 ### The principle that resolves it
 
@@ -542,6 +556,12 @@ manifest schema that AR-M spent a phase deleting.
 
 ### `AssertApps` (additive) vs. `ReconcileApps` (absence sweep)
 
+**`AssertApps` itself is still proposed, not built** — it is AR-7c. The
+partial-apply and domain-qualified-reference paragraphs below are AR-7a and
+are built (see "Status" above); the split this heading names is not: today
+there is still only `ReconcileApps`, and it still runs exclusively from
+`main` push.
+
 `ReconcileApps` conflates two jobs: assert identity, and assert *absence*.
 Only absence needs a canonical complete tree, and it is identity that releases
 depend on. Split them:
@@ -556,14 +576,22 @@ that app is gone for good, and a release resurrecting it silently is worse
 than a red step. `RecordArtifact` against an `ARCHIVED` owner is likewise
 rejected (today it succeeds, which is not intended).
 
-**The sweep becomes partially-applying** (ordering 4): a chart whose apps
-don't resolve is reported as unresolved in `ReconcileAppsResponse` and skipped;
-every other app and chart still applies and the watermark still advances.
-Separately, chart manifests move to **domain-qualified app references**, so
+**The sweep is partially-applying** (ordering 4, AR-7a, built): a chart whose
+apps don't resolve is reported as unresolved in
+`ReconcileAppsResponse.unresolved_charts` and skipped; every other app and
+chart still applies and the watermark still advances. A skipped chart is
+deliberately NOT marked `MISSING` as a side effect — it is present in the
+manifest set, just unresolvable, and `ReconcileApps`'s absence sweep only
+means to flag what is genuinely absent. Separately, chart manifests carry
+**domain-qualified app references** (`ChartManifest.app_refs`, `"<domain>/
+<name>"`, emitted by `helm_chart_metadata` in `tools/bazel/release.bzl`), so
 `resolveChartApps`'s cross-domain ambiguity (`SELECT app_id FROM app WHERE
-name = $1` with more than one match) cannot arise. Both are small, independent
-of everything else here, and fix a failure mode that is silent today — they
-land first (AR-7a).
+name = $1` with more than one match) cannot arise from anything `tools/helm`
+produces — only the deprecated `ChartManifest.apps` (bare names) fallback,
+kept for one release cycle's backward compatibility, can still hit it,
+and it is now a per-chart skip there too, not a whole-sweep failure. Both were
+small, independent of everything else here, and fixed a failure mode that was
+silent — they landed first, as AR-7a.
 
 ### The run log: CI orchestrates, the registry records
 
@@ -642,8 +670,9 @@ promise in "Availability and bootstrap" below; that section stays accurate for
 `observe`, which is where every domain is today.
 
 **The `main`-push sweep is not on this scale — it fails red on any error**
-(decided in review of PR #559). `ci.yml`'s `reconcile-app-registry` job drops
-`continue-on-error` entirely: a rejected sweep is our manifests being wrong,
+(decided in review of PR #559, **built in AR-7a**). `ci.yml`'s
+`reconcile-app-registry` job drops `continue-on-error` entirely: a rejected
+sweep is our manifests being wrong,
 an unreachable registry is worth knowing about immediately, and the job gates
 nothing downstream, so a red costs attention and nothing else. The consequence
 is deliberate and worth stating plainly: **once the opt-in is on, a registry

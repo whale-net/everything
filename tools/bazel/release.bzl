@@ -323,6 +323,21 @@ HelmChartMetadataInfo = provider(
 
 def _helm_chart_metadata_impl(ctx):
     """Implementation for helm_chart_metadata rule."""
+
+    # app_refs is domain-qualified ("<domain>/<name>") per app, read from
+    # each app_metadata target's own AppMetadataInfo provider rather than
+    # inferred from the target's package path -- the path is not guaranteed
+    # to match the app's declared `domain` attr, and inferring it would
+    # reintroduce exactly the kind of guess this field exists to remove. See
+    # //tools/app_registry/PLAN.md's AR-7a and appmeta.proto's ChartManifest
+    # doc comment.
+    app_names = []
+    app_refs = []
+    for dep in ctx.attr.apps:
+        info = dep[AppMetadataInfo]
+        app_names.append(info.metadata["name"])
+        app_refs.append("{}/{}".format(info.metadata["domain"], info.metadata["name"]))
+
     # Create a JSON file with helm chart metadata
     metadata = {
         "name": ctx.attr.chart_name,
@@ -330,8 +345,13 @@ def _helm_chart_metadata_impl(ctx):
         "namespace": ctx.attr.namespace,
         "environment": ctx.attr.environment,
         "domain": ctx.attr.domain,
-        "apps": ctx.attr.app_names,  # List of app names this chart includes
+        # DEPRECATED bare names -- kept for one release cycle's backward
+        # compatibility. New consumers should read app_refs. See
+        # ChartManifest.apps's doc comment in appmeta.proto and PLAN.md's
+        # AR-7a.
+        "apps": app_names,
         "chart_target": ctx.attr.chart_target,  # The actual helm_chart target
+        "app_refs": app_refs,  # domain-qualified "<domain>/<name>" references
     }
 
     output = ctx.actions.declare_file(ctx.label.name + "_chart_metadata.json")
@@ -353,7 +373,11 @@ helm_chart_metadata = rule(
         "namespace": attr.string(mandatory = True),
         "environment": attr.string(default = "production"),
         "domain": attr.string(mandatory = True),
-        "app_names": attr.string_list(mandatory = True),
+        # app_metadata targets composed into this chart -- a label_list (not
+        # attr.string_list) so the rule can read each app's real `domain`
+        # attribute off AppMetadataInfo at analysis time instead of parsing
+        # it out of a target label. See AR-7a.
+        "apps": attr.label_list(mandatory = True, providers = [AppMetadataInfo]),
         "chart_target": attr.string(mandatory = True),
     },
 )
@@ -434,20 +458,11 @@ def release_helm_chart(
         **kwargs
     )
     
-    # Extract app names from app_metadata targets
-    # Target format: "//demo/hello_python:hello-python_metadata"
-    app_names = []
-    for app_target in apps:
-        # Extract the app name from the target
-        # Split on : to get the target name, then remove _metadata suffix
-        target_parts = app_target.split(":")
-        if len(target_parts) == 2:
-            target_name = target_parts[1]
-            if target_name.endswith("_metadata"):
-                app_name = target_name[:-9]  # Remove "_metadata"
-                app_names.append(app_name)
-    
-    # Create release metadata for the chart
+    # Create release metadata for the chart. `apps` is passed straight
+    # through as the label list of app_metadata targets -- helm_chart_metadata
+    # reads each app's real `domain` attr off its AppMetadataInfo provider to
+    # emit domain-qualified app_refs, rather than this macro guessing the
+    # domain from the target's package path. See AR-7a.
     helm_chart_metadata(
         name = name + "_chart_metadata",
         chart_name = actual_chart_name,
@@ -455,7 +470,7 @@ def release_helm_chart(
         namespace = namespace,
         environment = environment,
         domain = domain,
-        app_names = app_names,
+        apps = apps,
         chart_target = ":" + name,
         tags = ["helm-release-metadata", "manual", "no_test"],
         visibility = ["//visibility:public"],

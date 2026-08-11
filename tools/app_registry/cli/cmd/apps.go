@@ -144,6 +144,7 @@ func newAppsReconcileCmd() *cobra.Command {
 						"reconcile skipped: this manifest set (git_sha=%q) is stale relative to the current watermark (git_sha=%q); nothing was written\n",
 						manifests.GitSha, resp.CurrentWatermarkGitSha)
 				}
+				printUnresolvedChartsWarning(cmd, resp)
 				return printResponse(resp)
 			})
 		},
@@ -154,6 +155,29 @@ func newAppsReconcileCmd() *cobra.Command {
 	_ = c.MarkFlagRequired("from-plan")
 	_ = c.MarkFlagRequired("idempotency-key")
 	return c
+}
+
+// printUnresolvedChartsWarning renders every UnresolvedChart in resp
+// prominently, on stderr, ahead of the JSON body on stdout -- mirroring
+// promote.go's printDriftWarning. AR-7a made an unresolved chart a per-chart
+// skip rather than a whole-reconcile failure (see
+// ReconcileAppsResponse.unresolved_charts's doc comment), so the command
+// exits 0 and the JSON response looks otherwise healthy; without this, a
+// skipped chart -- and the app identity that never got recorded because of
+// it -- could hide inside a green CI step exactly like the continue-on-error
+// wedge this phase exists to fix.
+func printUnresolvedChartsWarning(cmd *cobra.Command, resp *pb.ReconcileAppsResponse) {
+	if len(resp.UnresolvedCharts) == 0 {
+		return
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(),
+		"\n*** UNRESOLVED CHARTS: %d chart(s) skipped -- their apps references did not fully resolve ***\n",
+		len(resp.UnresolvedCharts))
+	for _, uc := range resp.UnresolvedCharts {
+		fmt.Fprintf(cmd.ErrOrStderr(), "  - %s/%s: %s (offending: %v)\n",
+			uc.Domain, uc.Name, uc.Reason, uc.AppRefs)
+	}
+	fmt.Fprintln(cmd.ErrOrStderr())
 }
 
 func parseAppStatus(s string) (pb.AppStatus, error) {

@@ -90,6 +90,19 @@ func (s *AppServer) ReconcileApps(ctx context.Context, req *pb.ReconcileAppsRequ
 					slog.String("current_watermark_git_sha", result.CurrentWatermarkGitSHA),
 				)
 			}
+			for _, uc := range result.UnresolvedCharts {
+				// Warn, not Error: AR-7a made this a per-chart skip, not a
+				// failed RPC (see ReconcileAppsResponse.unresolved_charts's
+				// doc comment) -- every other app/chart in this call still
+				// applied. A silent skip is still worth surfacing outside
+				// the JSON body, same rationale as skipped_stale above.
+				appLog.Warn("reconcile: chart skipped, apps did not fully resolve",
+					slog.String("chart_domain", uc.Domain),
+					slog.String("chart_name", uc.Name),
+					slog.Any("offending_app_refs", uc.AppRefs),
+					slog.String("reason", uc.Reason),
+				)
+			}
 			return reconcileResultToPB(result, false), nil
 		},
 	)
@@ -112,7 +125,24 @@ func reconcileResultToPB(r *repository.ReconcileResult, dryRun bool) *pb.Reconci
 		DryRun:                 dryRun,
 		SkippedStale:           r.SkippedStale,
 		CurrentWatermarkGitSha: r.CurrentWatermarkGitSHA,
+		UnresolvedCharts:       unresolvedChartsToPB(r.UnresolvedCharts),
 	}
+}
+
+func unresolvedChartsToPB(cs []repository.UnresolvedChart) []*pb.UnresolvedChart {
+	if len(cs) == 0 {
+		return nil
+	}
+	out := make([]*pb.UnresolvedChart, len(cs))
+	for i, c := range cs {
+		out[i] = &pb.UnresolvedChart{
+			Domain:  c.Domain,
+			Name:    c.Name,
+			AppRefs: c.AppRefs,
+			Reason:  c.Reason,
+		}
+	}
+	return out
 }
 
 func (s *AppServer) ListApps(ctx context.Context, req *pb.ListAppsRequest) (*pb.ListAppsResponse, error) {

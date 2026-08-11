@@ -22,7 +22,7 @@
 # or dereferences them — so a single placeholder filegroup stands in for all
 # three rather than a real binary or image.
 
-load("//tools/bazel:release.bzl", "app_metadata")
+load("//tools/bazel:release.bzl", "app_metadata", "helm_chart_metadata")
 
 filegroup(
     name = "placeholder-target",
@@ -31,32 +31,58 @@ filegroup(
 
 app_metadata(
     name = "fixture-app_metadata",
+    testonly = True,
     app_name = "fixture-app",
-    binary_target = ":placeholder-target",
-    image_target = ":placeholder-target",
-    openapi_spec_target = ":placeholder-target",
-    description = "Full-coverage fixture for the appmeta manifest contract test.",
-    version = "v1.2.3",
-    language = "python",
-    registry = "ghcr.io",
-    organization = "whale-net",
-    repo_name = "appmeta-fixture-app",
-    domain = "appmeta",
     app_type = "external-api",
-    port = 8080,
-    replicas = 3,
+    args = [
+        "-m",
+        "tools.appmeta.testdata.main",
+    ],
+    binary_target = ":placeholder-target",
+    command = ["python3"],
+    deploy_unit = "image",
+    description = "Full-coverage fixture for the appmeta manifest contract test.",
+    domain = "appmeta",
     health_check_enabled = True,
     health_check_path = "/healthz",
+    image_target = ":placeholder-target",
     ingress_host = "fixture.example.local",
     ingress_tls_secret = "fixture-tls",
-    command = ["python3"],
-    args = ["-m", "tools.appmeta.testdata.main"],
-    resources_requests_cpu = "100m",
-    resources_requests_memory = "128Mi",
+    language = "python",
+    openapi_spec_target = ":placeholder-target",
+    organization = "whale-net",
+    port = 8080,
+    registry = "ghcr.io",
+    replicas = 3,
+    repo_name = "appmeta-fixture-app",
     resources_limits_cpu = "200m",
     resources_limits_memory = "256Mi",
-    deploy_unit = "image",
-    testonly = True,
+    resources_requests_cpu = "100m",
+    resources_requests_memory = "128Mi",
     tags = ["release-metadata"],
+    version = "v1.2.3",
+    visibility = ["//visibility:public"],
+)
+
+# Full-coverage fixture for the same test's ChartManifest coverage
+# (TestChartFixtureLeavesNoFieldUnset, added in AR-7a alongside app_refs) --
+# calls the low-level `helm_chart_metadata` rule directly, same rationale as
+# fixture-app_metadata above: no real helm_chart/image target, and
+# testonly = True keeps it out of release discovery. Composes
+# fixture-app_metadata itself so app_refs is non-empty (a repeated field
+# with zero elements reads as "unset" to assertNoFieldUnset, same as any
+# other proto3 field) and, since fixture-app_metadata's domain is "appmeta",
+# proves app_refs is domain-qualified rather than copied bare.
+helm_chart_metadata(
+    name = "fixture-helm_chart_metadata",
+    testonly = True,
+    apps = [":fixture-app_metadata"],
+    chart_name = "fixture-chart",
+    chart_target = ":placeholder-target",
+    chart_version = "0.1.0",
+    domain = "appmeta",
+    environment = "production",
+    namespace = "appmeta",
+    tags = ["helm-release-metadata"],
     visibility = ["//visibility:public"],
 )
