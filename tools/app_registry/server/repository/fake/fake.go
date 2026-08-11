@@ -47,8 +47,12 @@ type state struct {
 	// separate version_allocation table/map this fake used to mirror is
 	// gone, folded in here exactly as the real schema folded it into
 	// `artifact`.
-	Artifacts       map[string]repository.Artifact
-	Idempotency     map[string]idemEntry
+	Artifacts map[string]repository.Artifact
+	// Idempotency is keyed by idempotency key, then by method -- mirroring
+	// postgres's composite (idempotency_key, method) primary key (migration
+	// 009, issue #575): a key reused across two different RPCs must resolve
+	// each method independently, never let one replay the other's response.
+	Idempotency     map[string]map[string]idemEntry
 	Environments    map[string]repository.Environment     // keyed by environment_id
 	Promotions      map[string]repository.Promotion       // keyed by promotion_id
 	PromotionEvents map[string]repository.PromotionEvent  // keyed by event_id
@@ -73,7 +77,7 @@ func newState() *state {
 		Charts:          map[string]repository.Chart{},
 		Builds:          map[string]repository.Build{},
 		Artifacts:       map[string]repository.Artifact{},
-		Idempotency:     map[string]idemEntry{},
+		Idempotency:     map[string]map[string]idemEntry{},
 		Environments:    map[string]repository.Environment{},
 		Promotions:      map[string]repository.Promotion{},
 		PromotionEvents: map[string]repository.PromotionEvent{},
@@ -904,8 +908,8 @@ func (r *Registry) derivePromotability(a repository.Artifact) repository.Promota
 // IdempotencyRepository
 // ============================================================================
 
-func (r *Registry) Get(ctx context.Context, key string) ([]byte, bool, error) {
-	e, ok := r.state.Idempotency[key]
+func (r *Registry) Get(ctx context.Context, key, method string) ([]byte, bool, error) {
+	e, ok := r.state.Idempotency[key][method]
 	if !ok {
 		return nil, false, nil
 	}
@@ -913,7 +917,10 @@ func (r *Registry) Get(ctx context.Context, key string) ([]byte, bool, error) {
 }
 
 func (r *Registry) Put(ctx context.Context, key, method string, response []byte) error {
-	r.state.Idempotency[key] = idemEntry{Method: method, Response: response}
+	if r.state.Idempotency[key] == nil {
+		r.state.Idempotency[key] = map[string]idemEntry{}
+	}
+	r.state.Idempotency[key][method] = idemEntry{Method: method, Response: response}
 	return nil
 }
 

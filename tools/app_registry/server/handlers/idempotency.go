@@ -25,7 +25,7 @@ func runIdempotent(
 	fn func(ctx context.Context, r repository.Registry) (proto.Message, error),
 ) (resp proto.Message, replayed bool, err error) {
 	err = reg.WithTx(ctx, func(ctx context.Context, r repository.Registry) error {
-		if raw, found, gerr := r.Idempotency().Get(ctx, key); gerr != nil {
+		if raw, found, gerr := r.Idempotency().Get(ctx, key, method); gerr != nil {
 			return gerr
 		} else if found {
 			msg := newEmpty()
